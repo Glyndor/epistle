@@ -30,11 +30,27 @@ pub enum Command {
 		mailbox: String,
 	},
 	Close,
+	Expunge,
 	Fetch {
 		sequence: SequenceSet,
 		items: Vec<FetchItem>,
 		uid: bool,
 	},
+	Store {
+		sequence: SequenceSet,
+		mode: StoreMode,
+		flags: Vec<String>,
+		silent: bool,
+		uid: bool,
+	},
+}
+
+/// How STORE changes the flag set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreMode {
+	Set,
+	Add,
+	Remove,
 }
 
 /// What FETCH must return per message.
@@ -120,15 +136,20 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 			mailbox: parse_mailbox(&tag, args)?,
 		},
 		"CLOSE" => no_args(&tag, args, Command::Close)?,
+		"EXPUNGE" => no_args(&tag, args, Command::Expunge)?,
 		"FETCH" => parse_fetch(&tag, args, false)?,
+		"STORE" => parse_store(&tag, args, false)?,
 		"UID" => {
 			let (sub, sub_args) = args
 				.split_once(' ')
 				.ok_or_else(|| ParseError::BadArguments(tag.clone()))?;
-			if !sub.eq_ignore_ascii_case("FETCH") {
+			if sub.eq_ignore_ascii_case("FETCH") {
+				parse_fetch(&tag, sub_args, true)?
+			} else if sub.eq_ignore_ascii_case("STORE") {
+				parse_store(&tag, sub_args, true)?
+			} else {
 				return Err(ParseError::Unknown(tag));
 			}
-			parse_fetch(&tag, sub_args, true)?
 		}
 		_ => return Err(ParseError::Unknown(tag)),
 	};
@@ -243,6 +264,41 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	Ok(Command::Fetch {
 		sequence,
 		items,
+		uid,
+	})
+}
+
+fn parse_store(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	let (sequence_text, rest) = args.split_once(' ').ok_or_else(bad)?;
+	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
+
+	let (item, flags_text) = rest.split_once(' ').ok_or_else(bad)?;
+	let item = item.to_ascii_uppercase();
+	let (mode, silent) = match item.as_str() {
+		"FLAGS" => (StoreMode::Set, false),
+		"FLAGS.SILENT" => (StoreMode::Set, true),
+		"+FLAGS" => (StoreMode::Add, false),
+		"+FLAGS.SILENT" => (StoreMode::Add, true),
+		"-FLAGS" => (StoreMode::Remove, false),
+		"-FLAGS.SILENT" => (StoreMode::Remove, true),
+		_ => return Err(bad()),
+	};
+
+	let flags_text = flags_text.trim();
+	let inner = flags_text
+		.strip_prefix('(')
+		.and_then(|t| t.strip_suffix(')'))
+		.unwrap_or(flags_text);
+	let flags: Vec<String> = inner
+		.split_whitespace()
+		.map(|token| token.to_string())
+		.collect();
+	Ok(Command::Store {
+		sequence,
+		mode,
+		flags,
+		silent,
 		uid,
 	})
 }

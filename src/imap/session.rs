@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::smtp::directory::Directory;
 
-use super::command::{Command, FetchItem, ParseError, Tagged};
-use super::mailbox::Snapshot;
+use super::command::{Command, FetchItem, ParseError, StoreMode, Tagged};
+use super::mailbox::{Flag, Snapshot, render_flags};
 
 /// Server output produced by one step: zero or more complete response
 /// lines/literals, ready for the wire.
@@ -34,9 +34,17 @@ impl Output {
 }
 
 enum State {
-	NotAuthenticated { login_failures: u8 },
-	Authenticated { account: String },
-	Selected { account: String, snapshot: Snapshot },
+	NotAuthenticated {
+		login_failures: u8,
+	},
+	Authenticated {
+		account: String,
+	},
+	Selected {
+		account: String,
+		snapshot: Snapshot,
+		read_only: bool,
+	},
 }
 
 /// One IMAP connection's protocol state.
@@ -100,11 +108,19 @@ impl Session {
 			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
 			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),
 			Command::Close => self.close(&tag),
+			Command::Expunge => self.expunge(&tag),
 			Command::Fetch {
 				sequence,
 				items,
 				uid,
 			} => self.fetch(&tag, &sequence, &items, uid),
+			Command::Store {
+				sequence,
+				mode,
+				flags,
+				silent,
+				uid,
+			} => self.store(&tag, &sequence, mode, &flags, silent, uid),
 		}
 	}
 
@@ -178,8 +194,116 @@ impl Session {
 			mode = if read_only { "READ-ONLY" } else { "READ-WRITE" },
 			verb = if read_only { "EXAMINE" } else { "SELECT" },
 		);
-		self.state = State::Selected { account, snapshot };
+		self.state = State::Selected {
+			account,
+			snapshot,
+			read_only,
+		};
 		Output::text(response)
+	}
+
+	fn store(
+		&mut self,
+		tag: &str,
+		sequence: &super::command::SequenceSet,
+		mode: StoreMode,
+		flag_tokens: &[String],
+		silent: bool,
+		uid: bool,
+	) -> Output {
+		let State::Selected {
+			snapshot,
+			read_only,
+			..
+		} = &mut self.state
+		else {
+			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
+		};
+		if *read_only {
+			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+		}
+
+		let mut flags = Vec::with_capacity(flag_tokens.len());
+		for token in flag_tokens {
+			match Flag::parse(token) {
+				Some(flag) => flags.push(flag),
+				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
+			}
+		}
+
+		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let mut response = String::new();
+		for sequence_number in 1..=total {
+			let Some(message) = snapshot.by_sequence(sequence_number) else {
+				continue;
+			};
+			let selector = if uid { message.uid } else { sequence_number };
+			if !sequence.contains(selector, total) {
+				continue;
+			}
+			let message_uid = message.uid;
+			let mut updated: Vec<Flag> = match mode {
+				StoreMode::Set => flags.clone(),
+				StoreMode::Add => {
+					let mut existing = message.flags.clone();
+					for flag in &flags {
+						if !existing.contains(flag) {
+							existing.push(*flag);
+						}
+					}
+					existing
+				}
+				StoreMode::Remove => message
+					.flags
+					.iter()
+					.copied()
+					.filter(|flag| !flags.contains(flag))
+					.collect(),
+			};
+			updated.dedup();
+			let stored = match snapshot.store_flags(sequence_number, updated) {
+				Ok(stored) => render_flags(stored),
+				Err(_) => {
+					return Output::text(format!("{tag} NO cannot store flags\r\n"));
+				}
+			};
+			if !silent {
+				if uid {
+					response.push_str(&format!(
+						"* {sequence_number} FETCH (UID {message_uid} FLAGS {stored})\r\n"
+					));
+				} else {
+					response.push_str(&format!("* {sequence_number} FETCH (FLAGS {stored})\r\n"));
+				}
+			}
+		}
+		response.push_str(&format!("{tag} OK STORE completed\r\n"));
+		Output::text(response)
+	}
+
+	fn expunge(&mut self, tag: &str) -> Output {
+		let State::Selected {
+			snapshot,
+			read_only,
+			..
+		} = &mut self.state
+		else {
+			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
+		};
+		if *read_only {
+			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+		}
+		match snapshot.expunge() {
+			Ok(expunged) => {
+				let mut response = String::new();
+				for sequence_number in expunged {
+					response.push_str(&format!("* {sequence_number} EXPUNGE\r\n"));
+				}
+				response.push_str(&format!("{tag} OK EXPUNGE completed\r\n"));
+				Output::text(response)
+			}
+			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
+		}
 	}
 
 	fn close(&mut self, tag: &str) -> Output {
@@ -219,7 +343,9 @@ impl Session {
 			let mut parts: Vec<Vec<u8>> = Vec::new();
 			for item in items {
 				match item {
-					FetchItem::Flags => parts.push(b"FLAGS ()".to_vec()),
+					FetchItem::Flags => {
+						parts.push(format!("FLAGS {}", render_flags(&message.flags)).into_bytes());
+					}
 					FetchItem::Uid => {
 						parts.push(format!("UID {}", message.uid).into_bytes());
 					}
@@ -405,6 +531,84 @@ mod tests {
 		assert!(text(&output).contains("a3 OK"));
 		let output = session.command_line("a4 FETCH 1 (FLAGS)");
 		assert!(text(&output).contains("a4 BAD"));
+	}
+
+	#[test]
+	fn store_and_expunge_flow() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		deliver(dir.path(), b"two\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 SELECT INBOX");
+
+		let output = session.command_line(r"a3 STORE 1 +FLAGS (\Seen \Deleted)");
+		let response = text(&output);
+		assert!(
+			response.contains(r"* 1 FETCH (FLAGS (\Seen \Deleted))"),
+			"{response}"
+		);
+		assert!(response.contains("a3 OK"), "{response}");
+
+		let output = session.command_line(r"a4 STORE 1 -FLAGS (\Seen)");
+		assert!(text(&output).contains(r"* 1 FETCH (FLAGS (\Deleted))"));
+
+		let output = session.command_line("a5 EXPUNGE");
+		let response = text(&output);
+		assert!(response.contains("* 1 EXPUNGE"), "{response}");
+		assert!(response.contains("a5 OK"), "{response}");
+
+		// Remaining message renumbered to sequence 1.
+		let output = session.command_line("a6 FETCH 1 (BODY[])");
+		assert!(text(&output).contains("two"), "{}", text(&output));
+	}
+
+	#[test]
+	fn silent_store_suppresses_untagged_response() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 SELECT INBOX");
+		let output = session.command_line(r"a3 STORE 1 +FLAGS.SILENT (\Seen)");
+		let response = text(&output);
+		assert!(!response.contains("FETCH"), "{response}");
+		assert!(response.contains("a3 OK"), "{response}");
+	}
+
+	#[test]
+	fn uid_store_reports_uid() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		deliver(dir.path(), b"two\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 SELECT INBOX");
+		let output = session.command_line(r"a3 UID STORE 2 +FLAGS (\Flagged)");
+		let response = text(&output);
+		assert!(
+			response.contains(r"* 2 FETCH (UID 2 FLAGS (\Flagged))"),
+			"{response}"
+		);
+	}
+
+	#[test]
+	fn examine_refuses_store_and_expunge() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 EXAMINE INBOX");
+		let output = session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+		assert!(text(&output).contains("a3 NO"), "{}", text(&output));
+		let output = session.command_line("a4 EXPUNGE");
+		assert!(text(&output).contains("a4 NO"), "{}", text(&output));
+	}
+
+	#[test]
+	fn store_rejects_unsupported_flag() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 SELECT INBOX");
+		let output = session.command_line(r"a3 STORE 1 +FLAGS (\Recent)");
+		assert!(text(&output).contains("a3 BAD"), "{}", text(&output));
 	}
 
 	#[test]

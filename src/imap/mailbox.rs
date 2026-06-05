@@ -19,6 +19,48 @@ pub struct MessageRef {
 	pub uid: u32,
 	id: Uuid,
 	pub size: u64,
+	pub flags: Vec<Flag>,
+}
+
+/// Supported permanent flags (RFC 9051 section 2.3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Flag {
+	Seen,
+	Answered,
+	Flagged,
+	Deleted,
+	Draft,
+}
+
+impl Flag {
+	/// Parse the IMAP flag token.
+	pub fn parse(token: &str) -> Option<Flag> {
+		match token.to_ascii_lowercase().as_str() {
+			"\\seen" => Some(Flag::Seen),
+			"\\answered" => Some(Flag::Answered),
+			"\\flagged" => Some(Flag::Flagged),
+			"\\deleted" => Some(Flag::Deleted),
+			"\\draft" => Some(Flag::Draft),
+			_ => None,
+		}
+	}
+
+	/// The wire representation.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Flag::Seen => "\\Seen",
+			Flag::Answered => "\\Answered",
+			Flag::Flagged => "\\Flagged",
+			Flag::Deleted => "\\Deleted",
+			Flag::Draft => "\\Draft",
+		}
+	}
+}
+
+/// Render a flag list for FETCH/STORE responses.
+pub fn render_flags(flags: &[Flag]) -> String {
+	let tokens: Vec<&str> = flags.iter().map(|flag| flag.as_str()).collect();
+	format!("({})", tokens.join(" "))
 }
 
 impl Snapshot {
@@ -50,11 +92,13 @@ impl Snapshot {
 			let size = std::fs::metadata(account_dir.join(format!("{id}.eml")))
 				.map(|metadata| metadata.len())
 				.unwrap_or(0);
+			let flags = read_flags(&account_dir, *id);
 			messages.push(MessageRef {
 				// Snapshot UIDs: position in the time-ordered listing.
 				uid: u32::try_from(index + 1).unwrap_or(u32::MAX),
 				id: *id,
 				size,
+				flags,
 			});
 		}
 		Ok(Snapshot {
@@ -101,6 +145,54 @@ impl Snapshot {
 	pub fn read(&self, message: &MessageRef) -> std::io::Result<Vec<u8>> {
 		std::fs::read(self.account_dir.join(format!("{}.eml", message.id)))
 	}
+
+	/// Replace the flags of the message at `sequence` (1-based), persisting
+	/// crash-safely. Returns the new flag set.
+	pub fn store_flags(&mut self, sequence: u32, flags: Vec<Flag>) -> std::io::Result<&[Flag]> {
+		let index = usize::try_from(sequence)
+			.ok()
+			.and_then(|s| s.checked_sub(1))
+			.filter(|index| *index < self.messages.len())
+			.ok_or_else(|| std::io::Error::other("no such message"))?;
+		let id = self.messages[index].id;
+		write_flags(&self.account_dir, id, &flags)?;
+		self.messages[index].flags = flags;
+		Ok(&self.messages[index].flags)
+	}
+
+	/// Remove every `\Deleted` message (file + sidecar). Returns the
+	/// sequence numbers expunged, in the order responses must be sent
+	/// (each number is valid at the moment it is emitted).
+	pub fn expunge(&mut self) -> std::io::Result<Vec<u32>> {
+		let mut expunged = Vec::new();
+		let mut index = 0;
+		while index < self.messages.len() {
+			if self.messages[index].flags.contains(&Flag::Deleted) {
+				let id = self.messages[index].id;
+				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
+				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+				self.messages.remove(index);
+				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
+			} else {
+				index += 1;
+			}
+		}
+		Ok(expunged)
+	}
+}
+
+fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {
+	std::fs::read(account_dir.join(format!("{id}.flags")))
+		.ok()
+		.and_then(|bytes| serde_json::from_slice(&bytes).ok())
+		.unwrap_or_default()
+}
+
+fn write_flags(account_dir: &Path, id: Uuid, flags: &[Flag]) -> std::io::Result<()> {
+	let bytes = serde_json::to_vec(flags).map_err(std::io::Error::other)?;
+	let tmp = account_dir.join(format!("{id}.flags.tmp"));
+	std::fs::write(&tmp, &bytes)?;
+	std::fs::rename(&tmp, account_dir.join(format!("{id}.flags")))
 }
 
 #[cfg(test)]
@@ -144,6 +236,65 @@ mod tests {
 		assert_eq!(snapshot.sequence_of_uid(99), None);
 		assert!(snapshot.by_sequence(3).is_none());
 		assert!(snapshot.by_sequence(0).is_none());
+	}
+
+	#[test]
+	fn flags_roundtrip_and_expunge() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), "alice", b"one\r\n");
+		deliver(dir.path(), "alice", b"two\r\n");
+		deliver(dir.path(), "alice", b"three\r\n");
+
+		let mut snapshot = Snapshot::inbox(dir.path(), "alice").expect("snapshot");
+		snapshot
+			.store_flags(1, vec![Flag::Seen, Flag::Deleted])
+			.expect("store");
+		snapshot.store_flags(3, vec![Flag::Deleted]).expect("store");
+
+		// A fresh snapshot reads the persisted flags.
+		let reloaded = Snapshot::inbox(dir.path(), "alice").expect("snapshot");
+		assert_eq!(
+			reloaded.by_sequence(1).expect("seq 1").flags,
+			vec![Flag::Seen, Flag::Deleted]
+		);
+		assert!(reloaded.by_sequence(2).expect("seq 2").flags.is_empty());
+
+		let expunged = snapshot.expunge().expect("expunge");
+		// Both deletions report sequence numbers valid at emission time:
+		// removing seq 1 renumbers old seq 3 to 2.
+		assert_eq!(expunged, vec![1, 2]);
+		assert_eq!(snapshot.len(), 1);
+		assert_eq!(
+			snapshot
+				.read(snapshot.by_sequence(1).expect("seq 1"))
+				.expect("read"),
+			b"two\r\n"
+		);
+
+		// Files are gone on disk too.
+		let after = Snapshot::inbox(dir.path(), "alice").expect("snapshot");
+		assert_eq!(after.len(), 1);
+	}
+
+	#[test]
+	fn store_flags_rejects_bad_sequence() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), "alice", b"one\r\n");
+		let mut snapshot = Snapshot::inbox(dir.path(), "alice").expect("snapshot");
+		assert!(snapshot.store_flags(0, vec![]).is_err());
+		assert!(snapshot.store_flags(2, vec![]).is_err());
+	}
+
+	#[test]
+	fn flag_tokens_parse_and_render() {
+		assert_eq!(Flag::parse("\\Seen"), Some(Flag::Seen));
+		assert_eq!(Flag::parse("\\DELETED"), Some(Flag::Deleted));
+		assert_eq!(Flag::parse("\\Recent"), None);
+		assert_eq!(
+			render_flags(&[Flag::Seen, Flag::Flagged]),
+			"(\\Seen \\Flagged)"
+		);
+		assert_eq!(render_flags(&[]), "()");
 	}
 
 	#[test]
