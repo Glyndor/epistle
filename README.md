@@ -1,9 +1,57 @@
 # mail
 
-Self-hosted mail server — part of the Glyndor stack.
+Self-hosted, headless mail server — SMTP, IMAP and modern email security through an API and CLI. Part of the Glyndor stack.
 
-> 🚧 Early development. No code yet — structure and standards come first.
+[![CI](https://github.com/Glyndor/mail/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/mail/actions/workflows/ci.yml)
 
-## License
+> 🚧 Early development. The SMTP core works; most of the roadmap is still ahead.
+
+```mermaid
+flowchart LR
+	client([SMTP client]) -->|25 / 587 / 465| smtp[SMTP listener]
+	smtp --> session[Session state machine]
+	session --> spool[(Crash-safe spool)]
+	cli[CLI] --> config[Config / fail-closed validation]
+	config --> smtp
+```
+
+## ✨ What works today
+
+- 📨 **SMTP server core** — strict RFC 5321 session handling: HELO/EHLO, MAIL FROM (with `SIZE`/`BODY`), RCPT TO, DATA, RSET, NOOP, QUIT
+- 🛡️ **Smuggling-immune by construction** — bare CR, bare LF or NUL anywhere in the stream closes the connection; CRLF is enforced at the framing layer
+- 🔒 **Secure by default** — listeners bind to localhost unless explicitly configured otherwise; configuration fails closed on any unknown key or invalid value
+- 💾 **Crash-safe spool** — accepted messages are fsynced and atomically renamed before the server answers `250`
+- 🧰 **Operator CLI** — `mail serve`, `mail config-check`, meaningful exit codes
+
+## 🚀 Quick start
+
+```sh
+cargo build --release
+
+cat > mail.toml <<'EOF'
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[[listeners]]
+kind = "smtp"
+EOF
+
+./target/release/mail config-check --config mail.toml
+./target/release/mail serve --config mail.toml
+```
+
+The SMTP listener binds to `127.0.0.1:25` by default — exposing it is an explicit decision:
+
+```toml
+[[listeners]]
+kind = "smtp"
+addr = "0.0.0.0"
+```
+
+## 🗺️ Roadmap
+
+Storage model, SPF/DKIM/DMARC, outbound queue, IMAP4rev2 and the management API are tracked in the [issues](https://github.com/Glyndor/mail/issues).
+
+## 📄 License
 
 [Apache-2.0](LICENSE)
