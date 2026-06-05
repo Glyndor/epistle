@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::smtp::directory::Directory;
 
 use super::command::{Command, FetchItem, ParseError, StoreMode, Tagged};
-use super::mailbox::{Flag, Snapshot, render_flags};
+use super::mailbox::{self, Flag, Snapshot, render_flags};
 
 /// Server output produced by one step: zero or more complete response
 /// lines/literals, ready for the wire.
@@ -15,6 +15,11 @@ pub struct Output {
 	pub bytes: Vec<u8>,
 	/// Close the connection after sending.
 	pub close: bool,
+	/// After sending, read exactly this many literal bytes and feed them
+	/// to [`Session::literal_done`].
+	pub collect_literal: Option<usize>,
+	/// After sending, read lines until `DONE` and call [`Session::idle_done`].
+	pub idle: bool,
 }
 
 impl Output {
@@ -22,6 +27,8 @@ impl Output {
 		Output {
 			bytes: text.into_bytes(),
 			close: false,
+			collect_literal: None,
+			idle: false,
 		}
 	}
 
@@ -29,6 +36,8 @@ impl Output {
 		Output {
 			bytes: text.into_bytes(),
 			close: true,
+			collect_literal: None,
+			idle: false,
 		}
 	}
 }
@@ -53,9 +62,13 @@ pub struct Session {
 	data_dir: PathBuf,
 	directory: Arc<Directory>,
 	state: State,
+	/// In-flight APPEND: (tag, mailbox, flags) while the literal arrives.
+	pending_append: Option<(String, String, Vec<Flag>)>,
+	/// Tag of an in-flight IDLE.
+	idle_tag: Option<String>,
 }
 
-const CAPABILITIES: &str = "IMAP4rev2 AUTH=PLAIN";
+const CAPABILITIES: &str = "IMAP4rev2 AUTH=PLAIN MOVE";
 
 impl Session {
 	/// New session over an established TLS connection.
@@ -65,6 +78,8 @@ impl Session {
 			data_dir,
 			directory,
 			state: State::NotAuthenticated { login_failures: 0 },
+			pending_append: None,
+			idle_tag: None,
 		}
 	}
 
@@ -108,7 +123,30 @@ impl Session {
 			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
 			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),
 			Command::Close => self.close(&tag),
+			Command::Create { mailbox } => self.mailbox_op(&tag, "CREATE", |dir, account| {
+				mailbox::create(dir, account, &mailbox)
+			}),
+			Command::Delete { mailbox } => self.mailbox_op(&tag, "DELETE", |dir, account| {
+				mailbox::delete(dir, account, &mailbox)
+			}),
+			Command::Rename { from, to } => self.mailbox_op(&tag, "RENAME", |dir, account| {
+				mailbox::rename(dir, account, &from, &to)
+			}),
 			Command::Expunge => self.expunge(&tag),
+			Command::Idle => {
+				if self.account().is_none() {
+					return Output::text(format!("{tag} NO not authenticated\r\n"));
+				}
+				let mut output = Output::text("+ idling\r\n".to_string());
+				output.idle = true;
+				self.idle_tag = Some(tag);
+				output
+			}
+			Command::Append {
+				mailbox,
+				flags,
+				size,
+			} => self.append_begin(&tag, &mailbox, &flags, size),
 			Command::Fetch {
 				sequence,
 				items,
@@ -121,6 +159,12 @@ impl Session {
 				silent,
 				uid,
 			} => self.store(&tag, &sequence, mode, &flags, silent, uid),
+			Command::Copy {
+				sequence,
+				mailbox,
+				uid,
+				remove_source,
+			} => self.copy(&tag, &sequence, &mailbox, uid, remove_source),
 		}
 	}
 
@@ -158,27 +202,44 @@ impl Session {
 	}
 
 	fn list(&mut self, tag: &str, pattern: &str) -> Output {
-		if self.account().is_none() {
+		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		}
-		// Only INBOX exists in this slice.
-		let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case("INBOX");
+		};
 		let mut response = String::new();
-		if matches {
-			response.push_str("* LIST () \"/\" INBOX\r\n");
+		for name in mailbox::list(&self.data_dir, &account) {
+			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
+			if matches {
+				response.push_str(&format!("* LIST () \"/\" \"{name}\"\r\n"));
+			}
 		}
 		response.push_str(&format!("{tag} OK LIST completed\r\n"));
 		Output::text(response)
+	}
+
+	/// Run a mailbox management operation in any authenticated state.
+	fn mailbox_op(
+		&mut self,
+		tag: &str,
+		verb: &str,
+		operation: impl FnOnce(&std::path::Path, &str) -> std::io::Result<()>,
+	) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		};
+		match operation(&self.data_dir, &account) {
+			Ok(()) => Output::text(format!("{tag} OK {verb} completed\r\n")),
+			Err(error) => Output::text(format!("{tag} NO {error}\r\n")),
+		}
 	}
 
 	fn select(&mut self, tag: &str, mailbox: &str, read_only: bool) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
-		if !mailbox.eq_ignore_ascii_case("INBOX") {
+		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO no such mailbox\r\n"));
 		}
-		let snapshot = match Snapshot::inbox(&self.data_dir, &account) {
+		let snapshot = match Snapshot::open(&self.data_dir, &account, mailbox) {
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
 		};
@@ -281,6 +342,75 @@ impl Session {
 		Output::text(response)
 	}
 
+	fn copy(
+		&mut self,
+		tag: &str,
+		sequence: &super::command::SequenceSet,
+		target: &str,
+		uid: bool,
+		remove_source: bool,
+	) -> Output {
+		let data_dir = self.data_dir.clone();
+		let State::Selected {
+			account,
+			snapshot,
+			read_only,
+		} = &mut self.state
+		else {
+			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
+		};
+		if remove_source && *read_only {
+			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+		}
+		let account = account.clone();
+		if !mailbox::exists(&data_dir, &account, target) {
+			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
+		}
+
+		// Collect matching sequence numbers first: removal renumbers.
+		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let mut matched = Vec::new();
+		for sequence_number in 1..=total {
+			let Some(message) = snapshot.by_sequence(sequence_number) else {
+				continue;
+			};
+			let selector = if uid { message.uid } else { sequence_number };
+			if sequence.contains(selector, total) {
+				matched.push(sequence_number);
+			}
+		}
+
+		// Copy all before removing any: a failed copy must not lose mail.
+		for sequence_number in &matched {
+			let Some(message) = snapshot.by_sequence(*sequence_number) else {
+				return Output::text(format!("{tag} NO message vanished\r\n"));
+			};
+			let data = match snapshot.read(message) {
+				Ok(data) => data,
+				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
+			};
+			if mailbox::append(&data_dir, &account, target, &message.flags, &data).is_err() {
+				return Output::text(format!("{tag} NO copy failed\r\n"));
+			}
+		}
+
+		let mut response = String::new();
+		if remove_source {
+			// Remove bottom-up so earlier sequence numbers stay valid, but
+			// emit EXPUNGE top-down with renumber-correct values.
+			for (offset, sequence_number) in matched.iter().enumerate() {
+				let current = sequence_number - u32::try_from(offset).unwrap_or(0);
+				if snapshot.remove_at(current).is_err() {
+					return Output::text(format!("{tag} NO move failed\r\n"));
+				}
+				response.push_str(&format!("* {current} EXPUNGE\r\n"));
+			}
+		}
+		let verb = if remove_source { "MOVE" } else { "COPY" };
+		response.push_str(&format!("{tag} OK {verb} completed\r\n"));
+		Output::text(response)
+	}
+
 	fn expunge(&mut self, tag: &str) -> Output {
 		let State::Selected {
 			snapshot,
@@ -303,6 +433,54 @@ impl Session {
 				Output::text(response)
 			}
 			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
+		}
+	}
+
+	fn append_begin(
+		&mut self,
+		tag: &str,
+		mailbox: &str,
+		flag_tokens: &[String],
+		size: usize,
+	) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		};
+		if !mailbox::exists(&self.data_dir, &account, mailbox) {
+			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
+		}
+		let mut flags = Vec::with_capacity(flag_tokens.len());
+		for token in flag_tokens {
+			match Flag::parse(token) {
+				Some(flag) => flags.push(flag),
+				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
+			}
+		}
+		self.pending_append = Some((tag.to_string(), mailbox.to_string(), flags));
+		let mut output = Output::text("+ ready for literal data\r\n".to_string());
+		output.collect_literal = Some(size);
+		output
+	}
+
+	/// Called by the network layer with the complete APPEND literal.
+	pub fn literal_done(&mut self, data: &[u8]) -> Output {
+		let Some((tag, mailbox, flags)) = self.pending_append.take() else {
+			return Output::text("* BAD unexpected literal\r\n".to_string());
+		};
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		};
+		match mailbox::append(&self.data_dir, &account, &mailbox, &flags, data) {
+			Ok(_) => Output::text(format!("{tag} OK APPEND completed\r\n")),
+			Err(_) => Output::text(format!("{tag} NO APPEND failed\r\n")),
+		}
+	}
+
+	/// Called by the network layer when an IDLE ends with DONE.
+	pub fn idle_done(&mut self) -> Output {
+		match self.idle_tag.take() {
+			Some(tag) => Output::text(format!("{tag} OK IDLE terminated\r\n")),
+			None => Output::text("* BAD not idling\r\n".to_string()),
 		}
 	}
 
@@ -382,6 +560,8 @@ impl Session {
 		Output {
 			bytes,
 			close: false,
+			collect_literal: None,
+			idle: false,
 		}
 	}
 }
@@ -456,7 +636,7 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let mut session = logged_in(dir.path());
 		let output = session.command_line(r#"a2 LIST "" "*""#);
-		assert!(text(&output).contains("* LIST () \"/\" INBOX"));
+		assert!(text(&output).contains("* LIST () \"/\" \"INBOX\""));
 		assert!(text(&output).contains("a2 OK"));
 	}
 
@@ -609,6 +789,197 @@ mod tests {
 		session.command_line("a2 SELECT INBOX");
 		let output = session.command_line(r"a3 STORE 1 +FLAGS (\Recent)");
 		assert!(text(&output).contains("a3 BAD"), "{}", text(&output));
+	}
+
+	#[test]
+	fn append_stores_message_with_flags() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = logged_in(dir.path());
+
+		let output = session.command_line(r"a2 APPEND INBOX (\Seen) {14}");
+		assert_eq!(output.collect_literal, Some(14));
+		assert!(text(&output).starts_with("+ "), "{}", text(&output));
+
+		let output = session.literal_done(b"Subject: bye\r\n");
+		assert!(text(&output).contains("a2 OK"), "{}", text(&output));
+
+		// The appended message is visible on SELECT, with its flag.
+		let output = session.command_line("a3 SELECT INBOX");
+		assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
+		let output = session.command_line("a4 FETCH 1 (FLAGS BODY[])");
+		let response = text(&output);
+		assert!(response.contains(r"FLAGS (\Seen)"), "{response}");
+		assert!(response.contains("Subject: bye"), "{response}");
+	}
+
+	#[test]
+	fn append_requires_authentication_and_known_mailbox() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+		let output = session.command_line("a1 APPEND INBOX {5}");
+		assert!(text(&output).contains("a1 NO"));
+		assert_eq!(output.collect_literal, None);
+
+		let mut session = logged_in(dir.path());
+		let output = session.command_line("a2 APPEND Archive {5}");
+		assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
+	}
+
+	#[test]
+	fn unexpected_literal_is_rejected() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = logged_in(dir.path());
+		let output = session.literal_done(b"stray");
+		assert!(text(&output).contains("BAD"), "{}", text(&output));
+	}
+
+	#[test]
+	fn idle_flow() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = logged_in(dir.path());
+		let output = session.command_line("a2 IDLE");
+		assert!(output.idle);
+		assert!(text(&output).starts_with("+ "));
+		let output = session.idle_done();
+		assert!(text(&output).contains("a2 OK"), "{}", text(&output));
+		// A second DONE without IDLE is an error.
+		let output = session.idle_done();
+		assert!(text(&output).contains("BAD"));
+	}
+
+	#[test]
+	fn idle_requires_authentication() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+		let output = session.command_line("a1 IDLE");
+		assert!(text(&output).contains("a1 NO"));
+		assert!(!output.idle);
+	}
+
+	#[test]
+	fn mailbox_lifecycle() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = logged_in(dir.path());
+
+		let output = session.command_line("a2 CREATE Sent");
+		assert!(text(&output).contains("a2 OK"), "{}", text(&output));
+
+		// APPEND into the new mailbox works now.
+		let output = session.command_line("a3 APPEND Sent {10}");
+		assert_eq!(output.collect_literal, Some(10));
+		let output = session.literal_done(b"sent body\n");
+		assert!(text(&output).contains("a3 OK"), "{}", text(&output));
+
+		let output = session.command_line("a4 SELECT Sent");
+		assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
+		session.command_line("a5 CLOSE");
+
+		let output = session.command_line(r#"a6 LIST "" "*""#);
+		let response = text(&output);
+		assert!(response.contains("\"INBOX\""), "{response}");
+		assert!(response.contains("\"Sent\""), "{response}");
+
+		let output = session.command_line("a7 RENAME Sent Outbox");
+		assert!(text(&output).contains("a7 OK"), "{}", text(&output));
+		let output = session.command_line("a8 SELECT Outbox");
+		assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
+		session.command_line("a9 CLOSE");
+
+		let output = session.command_line("b1 DELETE Outbox");
+		assert!(text(&output).contains("b1 OK"), "{}", text(&output));
+		let output = session.command_line("b2 SELECT Outbox");
+		assert!(text(&output).contains("b2 NO"), "{}", text(&output));
+	}
+
+	#[test]
+	fn mailbox_management_guards() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = logged_in(dir.path());
+		// INBOX cannot be created, deleted or renamed.
+		assert!(text(&session.command_line("a2 CREATE INBOX")).contains("a2 NO"));
+		assert!(text(&session.command_line("a3 DELETE INBOX")).contains("a3 NO"));
+		assert!(text(&session.command_line("a4 RENAME INBOX X")).contains("a4 NO"));
+		// Traversal and invalid names are refused.
+		assert!(text(&session.command_line("a5 CREATE ../escape")).contains("a5 NO"));
+		assert!(text(&session.command_line("a6 DELETE missing")).contains("a6 NO"));
+		// Duplicate create fails.
+		session.command_line("a7 CREATE Drafts");
+		assert!(text(&session.command_line("a8 CREATE Drafts")).contains("a8 NO"));
+	}
+
+	#[test]
+	fn copy_preserves_source_and_flags() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 CREATE Archive");
+		session.command_line("a3 SELECT INBOX");
+		session.command_line(r"a4 STORE 1 +FLAGS (\Seen)");
+
+		let output = session.command_line("a5 COPY 1 Archive");
+		assert!(text(&output).contains("a5 OK COPY"), "{}", text(&output));
+
+		// Source intact.
+		let output = session.command_line("a6 FETCH 1 (FLAGS)");
+		assert!(text(&output).contains(r"FLAGS (\Seen)"));
+		session.command_line("a7 CLOSE");
+
+		// Target has the copy with flags.
+		let output = session.command_line("a8 SELECT Archive");
+		assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
+		let output = session.command_line("a9 FETCH 1 (FLAGS BODY[])");
+		let response = text(&output);
+		assert!(response.contains(r"FLAGS (\Seen)"), "{response}");
+		assert!(response.contains("one"), "{response}");
+	}
+
+	#[test]
+	fn move_removes_source_with_expunge() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		deliver(dir.path(), b"two\r\n");
+		deliver(dir.path(), b"three\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 CREATE Trash");
+		session.command_line("a3 SELECT INBOX");
+
+		let output = session.command_line("a4 MOVE 1,3 Trash");
+		let response = text(&output);
+		// Renumbering: removing seq 1 makes old 3 the new 2.
+		assert!(response.contains("* 1 EXPUNGE"), "{response}");
+		assert!(response.contains("* 2 EXPUNGE"), "{response}");
+		assert!(response.contains("a4 OK MOVE"), "{response}");
+
+		let output = session.command_line("a5 FETCH 1 (BODY[])");
+		assert!(text(&output).contains("two"), "{}", text(&output));
+		session.command_line("a6 CLOSE");
+
+		let output = session.command_line("a7 SELECT Trash");
+		assert!(text(&output).contains("* 2 EXISTS"), "{}", text(&output));
+	}
+
+	#[test]
+	fn uid_move_and_guards() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), b"one\r\n");
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 CREATE Trash");
+
+		// MOVE refused on read-only EXAMINE.
+		session.command_line("a3 EXAMINE INBOX");
+		let output = session.command_line("a4 MOVE 1 Trash");
+		assert!(text(&output).contains("a4 NO"), "{}", text(&output));
+		// COPY allowed on read-only.
+		let output = session.command_line("a5 COPY 1 Trash");
+		assert!(text(&output).contains("a5 OK"), "{}", text(&output));
+		session.command_line("a6 CLOSE");
+
+		session.command_line("a7 SELECT INBOX");
+		let output = session.command_line("a8 UID MOVE 1 Trash");
+		assert!(text(&output).contains("a8 OK MOVE"), "{}", text(&output));
+		// Missing target answers TRYCREATE.
+		let output = session.command_line("a9 COPY 1 Nowhere");
+		assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
 	}
 
 	#[test]
