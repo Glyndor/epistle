@@ -1,0 +1,8 @@
+# Build artifacts
+/target/
+
+# Local research notes — never committed
+/research/
+
+# Local environment
+.env
