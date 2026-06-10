@@ -492,7 +492,10 @@ mod tests {
 	#[tokio::test]
 	async fn ptr_does_not_match_and_falls_through() {
 		// ptr: is deprecated; treated as non-matching so the next term decides.
-		let dns = dns_with(&[("example.org", "v=spf1 ptr:example.org ip4:192.0.2.0/24 -all")]);
+		let dns = dns_with(&[(
+			"example.org",
+			"v=spf1 ptr:example.org ip4:192.0.2.0/24 -all",
+		)]);
 		// ptr non-match → ip4 hit → Pass
 		assert_eq!(
 			outcome(&dns, "192.0.2.5", "example.org").await,
