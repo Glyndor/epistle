@@ -72,9 +72,8 @@ fn status_reports_counts_for_inbox() {
 	deliver(dir.path(), b"two\r\n");
 	let mut session = logged_in(dir.path());
 
-	let response = text(
-		&session.command_line("a2 STATUS INBOX (MESSAGES UIDNEXT UIDVALIDITY UNSEEN RECENT)"),
-	);
+	let response =
+		text(&session.command_line("a2 STATUS INBOX (MESSAGES UIDNEXT UIDVALIDITY UNSEEN RECENT)"));
 	assert!(response.contains("MESSAGES 2"), "{response}");
 	assert!(response.contains("UNSEEN 2"), "{response}");
 	assert!(response.contains("RECENT 0"), "{response}");

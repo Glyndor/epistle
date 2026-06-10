@@ -1,5 +1,5 @@
-use super::{mailbox, SearchKey};
 use super::mailbox::Snapshot;
+use super::{SearchKey, mailbox};
 
 /// Format a SystemTime as an IMAP INTERNALDATE string (RFC 3501).
 pub(super) fn format_internaldate(t: std::time::SystemTime) -> String {

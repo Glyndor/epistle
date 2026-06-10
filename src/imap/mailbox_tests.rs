@@ -150,8 +150,7 @@ fn inbox_is_protected() {
 fn ignores_foreign_files() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"mail\r\n");
-	std::fs::write(dir.path().join("accounts/alice/new/notes.txt"), b"not mail")
-		.expect("write");
+	std::fs::write(dir.path().join("accounts/alice/new/notes.txt"), b"not mail").expect("write");
 	let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
 	assert_eq!(snapshot.len(), 1);
 }

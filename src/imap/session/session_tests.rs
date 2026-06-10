@@ -1,5 +1,5 @@
-use super::*;
 use super::helpers::format_internaldate;
+use super::*;
 use std::collections::HashMap;
 
 pub fn directory() -> Arc<Directory> {
@@ -37,7 +37,7 @@ pub fn text(output: &Output) -> String {
 mod basic;
 #[path = "session_tests_commands.rs"]
 mod commands_tests;
-#[path = "session_tests_search.rs"]
-mod search;
 #[path = "session_tests_misc.rs"]
 mod misc;
+#[path = "session_tests_search.rs"]
+mod search;

@@ -23,8 +23,7 @@ impl DnsLookup for TxtDns {
 	fn addresses(
 		&self,
 		_name: &str,
-	) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-	{
+	) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>> {
 		Box::pin(async { Ok(Vec::new()) })
 	}
 

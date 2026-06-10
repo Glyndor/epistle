@@ -1,7 +1,7 @@
 use super::super::command::SequenceSet;
+use super::helpers::{format_internaldate, search_matches};
 use super::mailbox::{self, Flag, Snapshot, render_flags};
 use super::{FetchItem, Output, SearchKey, Session, State, StatusItem, StoreMode};
-use super::helpers::{format_internaldate, search_matches};
 
 impl Session {
 	pub(super) fn store(
@@ -272,12 +272,7 @@ impl Session {
 		}
 	}
 
-	pub(super) fn status(
-		&mut self,
-		tag: &str,
-		mailbox: &str,
-		items: &[StatusItem],
-	) -> Output {
+	pub(super) fn status(&mut self, tag: &str, mailbox: &str, items: &[StatusItem]) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
