@@ -467,7 +467,10 @@ pub(crate) mod tests {
 		let results = verify_message(&dns, modified.as_bytes()).await;
 		// Body hash or sig check fails, but not from expiry short-circuit.
 		assert!(
-			matches!(results[0].outcome, DkimOutcome::Fail | DkimOutcome::PermError),
+			matches!(
+				results[0].outcome,
+				DkimOutcome::Fail | DkimOutcome::PermError
+			),
 			"{results:?}"
 		);
 	}
