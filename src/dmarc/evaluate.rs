@@ -446,9 +446,14 @@ mod tests {
 	async fn pct_sampling_does_not_affect_passing_messages() {
 		// Even pct=0, aligned messages still pass.
 		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=reject; pct=0")]);
-		let outcome =
-			evaluate_inner(&dns, "example.org", (SpfOutcome::Fail, None), &dkim_pass("example.org"), 1)
-				.await;
+		let outcome = evaluate_inner(
+			&dns,
+			"example.org",
+			(SpfOutcome::Fail, None),
+			&dkim_pass("example.org"),
+			1,
+		)
+		.await;
 		assert_eq!(outcome, DmarcOutcome::Pass);
 	}
 
