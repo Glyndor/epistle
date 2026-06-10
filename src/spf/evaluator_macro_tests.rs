@@ -7,7 +7,6 @@ use std::pin::Pin;
 struct FakeDns {
 	txt: HashMap<String, Vec<String>>,
 	addresses: HashMap<String, Vec<IpAddr>>,
-	mx: HashMap<String, Vec<String>>,
 }
 
 impl DnsLookup for FakeDns {
