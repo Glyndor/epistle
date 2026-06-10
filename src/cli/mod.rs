@@ -272,7 +272,6 @@ mod tests {
 
 	#[test]
 	fn token_hash_produces_valid_phc() {
-		use crate::smtp::auth::verify_password;
 		use std::io::Cursor;
 		let result = token_hash_from(Cursor::new("hunter2\n"));
 		assert_eq!(result, ExitCode::SUCCESS);
@@ -281,7 +280,6 @@ mod tests {
 	#[test]
 	fn token_hash_verifies_against_output() {
 		use crate::smtp::auth::verify_password;
-		use std::io::Cursor;
 		// We can't capture stdout directly here, so verify via hash_password round-trip.
 		let hash = crate::smtp::auth::hash_password("my-secret-token").expect("hashes");
 		assert!(hash.starts_with("$argon2id$"));
