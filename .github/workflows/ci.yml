@@ -10,6 +10,6 @@ permissions:
 
 jobs:
   rust:
-    uses: Glyndor/.github/.github/workflows/rust-ci.yml@b85b07c45a1bda03e948bf78c645b5f9f59266dc
+    uses: Glyndor/.github/.github/workflows/rust-ci.yml@b78620146d50fdbc552e1b86740e64d114c58f0f
     with:
       coverage-threshold: 90
