@@ -240,6 +240,12 @@ impl Session {
 
 		let failure = |session: &mut Session| {
 			session.auth_failures += 1;
+			// Security event: log the failure (never the credentials, and no
+			// unknown-user/bad-password distinction — no oracle).
+			tracing::warn!(
+				failures = session.auth_failures,
+				"SMTP authentication failed"
+			);
 			let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
 			if session.auth_failures >= 3 {
 				Action::Close(reply)
