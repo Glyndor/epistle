@@ -1,7 +1,7 @@
 //! TLS material loading: PEM files into a rustls acceptor.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -51,6 +51,51 @@ pub fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
 		.with_single_cert(certs, key)
 		.map_err(|error| TlsError::Invalid(error.to_string()))?;
 	Ok(TlsAcceptor::from(Arc::new(server_config)))
+}
+
+/// Build an acceptor from an in-memory PEM chain and key (e.g. ACME-issued).
+pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor, TlsError> {
+	ensure_crypto_provider();
+	let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
+		.collect::<Result<_, _>>()
+		.map_err(|error| TlsError::Invalid(error.to_string()))?;
+	if certs.is_empty() {
+		return Err(TlsError::NoCertificates("<memory>".into()));
+	}
+	let key = PrivateKeyDer::from_pem_slice(key_pem)
+		.map_err(|error| TlsError::Invalid(error.to_string()))?;
+	let server_config = ServerConfig::builder()
+		.with_no_client_auth()
+		.with_single_cert(certs, key)
+		.map_err(|error| TlsError::Invalid(error.to_string()))?;
+	Ok(TlsAcceptor::from(Arc::new(server_config)))
+}
+
+/// A hot-swappable TLS acceptor. Certificate renewal replaces the active
+/// acceptor without dropping the listener, so new handshakes use the fresh
+/// certificate while in-flight connections finish on the old one.
+#[derive(Clone)]
+pub struct ReloadableAcceptor {
+	inner: Arc<RwLock<TlsAcceptor>>,
+}
+
+impl ReloadableAcceptor {
+	/// Wrap an initial acceptor.
+	pub fn new(acceptor: TlsAcceptor) -> Self {
+		ReloadableAcceptor {
+			inner: Arc::new(RwLock::new(acceptor)),
+		}
+	}
+
+	/// The current acceptor (cheap clone; shares config via `Arc`).
+	pub fn current(&self) -> TlsAcceptor {
+		self.inner.read().expect("tls acceptor lock").clone()
+	}
+
+	/// Swap in a newly issued acceptor.
+	pub fn reload(&self, acceptor: TlsAcceptor) {
+		*self.inner.write().expect("tls acceptor lock") = acceptor;
+	}
 }
 
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, TlsError> {
@@ -107,6 +152,29 @@ pub(crate) mod test_support {
 mod tests {
 	use super::*;
 	use std::path::PathBuf;
+
+	fn self_signed_pem(domain: &str) -> (String, String) {
+		let c = rcgen::generate_simple_self_signed(vec![domain.to_string()]).expect("cert");
+		(c.cert.pem(), c.signing_key.serialize_pem())
+	}
+
+	#[test]
+	fn acceptor_from_pem_builds_and_reloads() {
+		let (cert1, key1) = self_signed_pem("a.example");
+		let a1 = acceptor_from_pem(cert1.as_bytes(), key1.as_bytes()).expect("acceptor 1");
+		let handle = ReloadableAcceptor::new(a1);
+		let _ = handle.current(); // smoke: current acceptor available
+
+		let (cert2, key2) = self_signed_pem("b.example");
+		let a2 = acceptor_from_pem(cert2.as_bytes(), key2.as_bytes()).expect("acceptor 2");
+		handle.reload(a2);
+		let _ = handle.current(); // smoke: still available after reload
+	}
+
+	#[test]
+	fn acceptor_from_pem_rejects_missing_material() {
+		assert!(acceptor_from_pem(b"", b"").is_err());
+	}
 
 	/// Write a self-signed certificate + key pair into `dir`.
 	pub(crate) fn write_self_signed(dir: &Path) -> (PathBuf, PathBuf) {
