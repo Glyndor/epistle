@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Third-party licenses</title>
+		<style>
+			body { font-family: sans-serif; max-width: 60rem; margin: 2rem auto; }
+			.license { border-top: 1px solid #ccc; padding-top: 1rem; }
+			pre { white-space: pre-wrap; background: #f6f6f6; padding: 1rem; }
+		</style>
+	</head>
+	<body>
+		<h1>Third-party licenses</h1>
+		<p>This binary statically links the following third-party crates.</p>
+		{{#each licenses}}
+		<div class="license">
+			<h2>{{name}}</h2>
+			<h3>Used by</h3>
+			<ul>
+				{{#each used_by}}
+				<li>{{crate.name}} {{crate.version}}</li>
+				{{/each}}
+			</ul>
+			<pre>{{text}}</pre>
+		</div>
+		{{/each}}
+	</body>
+</html>
