@@ -110,7 +110,7 @@ impl Session {
 	}
 
 	fn capabilities(&self) -> String {
-		let mut capabilities = String::from("IMAP4rev2 MOVE IDLE LITERAL+");
+		let mut capabilities = String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE");
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
 		}
@@ -270,7 +270,10 @@ impl Session {
 		for name in mailbox::list(&self.data_dir, &account) {
 			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
 			if matches {
-				response.push_str(&format!("* LIST () \"/\" \"{name}\"\r\n"));
+				response.push_str(&format!(
+					"* LIST ({}) \"/\" \"{name}\"\r\n",
+					special_use_attribute(&name)
+				));
 			}
 		}
 		response.push_str(&format!("{tag} OK LIST completed\r\n"));
@@ -371,6 +374,40 @@ impl Session {
 			Ok(()) => Output::text(format!("{tag} OK completed\r\n")),
 			Err(error) => Output::text(format!("{tag} NO {error}\r\n")),
 		}
+	}
+}
+
+/// The RFC 6154 special-use attribute for a well-known mailbox name, or an
+/// empty string. Matching is case-insensitive on the leaf name.
+fn special_use_attribute(name: &str) -> &'static str {
+	match name.to_ascii_lowercase().as_str() {
+		"junk" | "spam" | "rejects" => "\\Junk",
+		"drafts" => "\\Drafts",
+		"sent" => "\\Sent",
+		"trash" | "deleted" => "\\Trash",
+		"archive" => "\\Archive",
+		_ => "",
+	}
+}
+
+#[cfg(test)]
+mod special_use_tests {
+	use super::special_use_attribute;
+
+	#[test]
+	fn well_known_folders_get_attributes() {
+		assert_eq!(special_use_attribute("Junk"), "\\Junk");
+		assert_eq!(special_use_attribute("rejects"), "\\Junk");
+		assert_eq!(special_use_attribute("Drafts"), "\\Drafts");
+		assert_eq!(special_use_attribute("Sent"), "\\Sent");
+		assert_eq!(special_use_attribute("Trash"), "\\Trash");
+		assert_eq!(special_use_attribute("Archive"), "\\Archive");
+	}
+
+	#[test]
+	fn ordinary_folder_has_no_attribute() {
+		assert_eq!(special_use_attribute("INBOX"), "");
+		assert_eq!(special_use_attribute("Projects"), "");
 	}
 }
 
