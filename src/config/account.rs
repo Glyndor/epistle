@@ -13,6 +13,10 @@ pub struct Account {
 	/// argon2id password hash (PHC string). Without it the account is
 	/// receive-only and cannot authenticate.
 	pub password_hash: Option<String>,
+	/// Domains for which this account receives mail addressed to otherwise
+	/// unknown local users (catch-all). Off by default.
+	#[serde(default)]
+	pub catch_all: Vec<String>,
 }
 
 #[cfg(test)]

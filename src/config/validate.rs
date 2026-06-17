@@ -38,6 +38,7 @@ impl Config {
 			.collect();
 		let mut names = HashSet::new();
 		let mut addresses = HashSet::new();
+		let mut catch_all_domains = HashSet::new();
 		for account in &self.accounts {
 			let name = &account.name;
 			// The name becomes a directory under data_dir: keep it boring.
@@ -83,6 +84,19 @@ impl Config {
 				if !addresses.insert(address.to_string().to_ascii_lowercase()) {
 					return Err(ConfigError::Invalid(format!(
 						"address \"{raw}\" is assigned to more than one account"
+					)));
+				}
+			}
+			for raw in &account.catch_all {
+				let domain = raw.to_ascii_lowercase();
+				if !domains.contains(&domain) {
+					return Err(ConfigError::Invalid(format!(
+						"account \"{name}\": catch_all domain \"{raw}\" is not a configured domain"
+					)));
+				}
+				if !catch_all_domains.insert(domain) {
+					return Err(ConfigError::Invalid(format!(
+						"domain \"{raw}\" has more than one catch-all account"
 					)));
 				}
 			}
@@ -187,306 +201,5 @@ fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn config_from(toml: &str) -> Result<Config, ConfigError> {
-		let config: Config =
-			toml::from_str(toml).map_err(|e| ConfigError::Invalid(e.to_string()))?;
-		config.validate()?;
-		Ok(config)
-	}
-
-	#[test]
-	fn accepts_valid_config_with_listeners() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[listeners]]
-kind = "smtp"
-
-[[listeners]]
-kind = "submission"
-"#,
-		);
-		assert!(result.is_ok());
-	}
-
-	#[test]
-	fn rejects_empty_hostname() {
-		let result = config_from(
-			r#"
-hostname = ""
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_unqualified_hostname() {
-		let result = config_from(
-			r#"
-hostname = "localhost"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_hostname_with_invalid_characters() {
-		let result = config_from(
-			r#"
-hostname = "mail.exa mple.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_hostname_with_empty_label() {
-		let result = config_from(
-			r#"
-hostname = "mail..example.org"
-data_dir = "/var/lib/mail"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_overlong_hostname() {
-		let label = "a".repeat(64);
-		let result = config_from(&format!(
-			"hostname = \"{label}.example.org\"\ndata_dir = \"/var/lib/mail\"\n"
-		));
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_relative_data_dir() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "relative/path"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_duplicate_listeners() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[listeners]]
-kind = "smtp"
-
-[[listeners]]
-kind = "smtp"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_submissions_listener_without_tls() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[listeners]]
-kind = "submissions"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn accepts_submissions_listener_with_tls() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[listeners]]
-kind = "submissions"
-
-[tls]
-cert_file = "/etc/mail/cert.pem"
-key_file = "/etc/mail/key.pem"
-"#,
-		);
-		assert!(result.is_ok());
-	}
-
-	#[test]
-	fn rejects_listeners_without_domains() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-
-[[listeners]]
-kind = "smtp"
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_invalid_domain_entry() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["nodot"]
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_duplicate_domains_case_insensitively() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org", "EXAMPLE.org"]
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn accepts_valid_accounts() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = ["alice@example.org", "postmaster@EXAMPLE.org"]
-"#,
-		);
-		assert!(result.is_ok());
-	}
-
-	#[test]
-	fn rejects_account_with_unsafe_name() {
-		for name in ["", "Alice", "a/b", "-x", "a b"] {
-			let result = config_from(&format!(
-				"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\ndomains = [\"example.org\"]\n\n[[accounts]]\nname = \"{name}\"\naddresses = [\"a@example.org\"]\n"
-			));
-			assert!(
-				matches!(result, Err(ConfigError::Invalid(_))),
-				"name {name:?} must be rejected"
-			);
-		}
-	}
-
-	#[test]
-	fn rejects_account_without_addresses() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = []
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_address_outside_domains() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = ["alice@elsewhere.example"]
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_address_claimed_twice() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = ["shared@example.org"]
-
-[[accounts]]
-name = "bob"
-addresses = ["SHARED@example.org"]
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn rejects_duplicate_account_names() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = ["a@example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = ["b@example.org"]
-"#,
-		);
-		assert!(matches!(result, Err(ConfigError::Invalid(_))));
-	}
-
-	#[test]
-	fn accepts_same_port_on_different_addresses() {
-		let result = config_from(
-			r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-domains = ["example.org"]
-
-[[listeners]]
-kind = "smtp"
-addr = "127.0.0.1"
-
-[[listeners]]
-kind = "smtp"
-addr = "127.0.0.2"
-"#,
-		);
-		assert!(result.is_ok());
-	}
-}
+#[path = "validate_tests.rs"]
+mod tests;

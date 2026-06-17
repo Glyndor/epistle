@@ -26,6 +26,10 @@ pub struct Directory {
 	/// Sub-address separators (RFC 5233 detail): `user+tag@domain` is
 	/// delivered to `user@domain`. Empty disables sub-addressing.
 	subaddress_separators: Vec<char>,
+	/// Per-domain catch-all account: mail for an otherwise-unknown local user
+	/// in this domain is delivered here. Absent means unknown users are
+	/// rejected (the secure default).
+	catch_all: HashMap<String, String>,
 }
 
 impl Directory {
@@ -47,7 +51,18 @@ impl Directory {
 			password_hashes: HashMap::new(),
 			// The `+` separator is the de-facto standard, enabled by default.
 			subaddress_separators: vec!['+'],
+			catch_all: HashMap::new(),
 		}
+	}
+
+	/// Attach per-domain catch-all accounts (domain → account name). Domains
+	/// are lowercased to match resolution.
+	pub fn with_catch_all(mut self, catch_all: impl IntoIterator<Item = (String, String)>) -> Self {
+		self.catch_all = catch_all
+			.into_iter()
+			.map(|(domain, account)| (domain.to_ascii_lowercase(), account))
+			.collect();
+		self
 	}
 
 	/// Override the sub-address separators (default `['+']`). An empty list
@@ -112,6 +127,10 @@ impl Directory {
 		if let Some(base) = self.strip_subaddress(address)
 			&& let Some(account) = self.accounts_by_address.get(&base)
 		{
+			return Resolution::Account(account.clone());
+		}
+		// Catch-all: a domain may funnel its unknown local users to one account.
+		if let Some(account) = self.catch_all.get(address.domain()) {
 			return Resolution::Account(account.clone());
 		}
 		Resolution::UnknownUser
@@ -235,6 +254,35 @@ mod tests {
 		// The default `+` no longer applies once overridden.
 		assert_eq!(
 			directory.resolve(&parse("bob+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn catch_all_receives_unknown_local_users() {
+		let directory =
+			directory().with_catch_all([("example.org".to_string(), "bob".to_string())]);
+		// Unknown user falls through to the catch-all account.
+		assert_eq!(
+			directory.resolve(&parse("nobody@example.org")),
+			Resolution::Account("bob".to_string())
+		);
+		// An explicit address still wins over the catch-all.
+		assert_eq!(
+			directory.resolve(&parse("alice@example.org")),
+			Resolution::Account("alice".to_string())
+		);
+		// Catch-all never makes a foreign domain local.
+		assert_eq!(
+			directory.resolve(&parse("nobody@elsewhere.example")),
+			Resolution::NotLocal
+		);
+	}
+
+	#[test]
+	fn without_catch_all_unknown_user_is_rejected() {
+		assert_eq!(
+			directory().resolve(&parse("nobody@example.org")),
 			Resolution::UnknownUser
 		);
 	}
