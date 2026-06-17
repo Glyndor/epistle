@@ -14,6 +14,7 @@ pub enum RejectReason {
 	Dmarc,
 	Reputation,
 	Scanner,
+	Loop,
 }
 
 impl RejectReason {
@@ -24,16 +25,18 @@ impl RejectReason {
 			RejectReason::Dmarc => "dmarc",
 			RejectReason::Reputation => "reputation",
 			RejectReason::Scanner => "scanner",
+			RejectReason::Loop => "loop",
 		}
 	}
 }
 
-const REASONS: [RejectReason; 5] = [
+const REASONS: [RejectReason; 6] = [
 	RejectReason::Dnsbl,
 	RejectReason::Spf,
 	RejectReason::Dmarc,
 	RejectReason::Reputation,
 	RejectReason::Scanner,
+	RejectReason::Loop,
 ];
 
 /// Process-global mail metrics.
@@ -47,6 +50,7 @@ pub struct Metrics {
 	rejected_dmarc: AtomicU64,
 	rejected_reputation: AtomicU64,
 	rejected_scanner: AtomicU64,
+	rejected_loop: AtomicU64,
 }
 
 impl Metrics {
@@ -81,6 +85,7 @@ impl Metrics {
 			RejectReason::Dmarc => &self.rejected_dmarc,
 			RejectReason::Reputation => &self.rejected_reputation,
 			RejectReason::Scanner => &self.rejected_scanner,
+			RejectReason::Loop => &self.rejected_loop,
 		}
 	}
 

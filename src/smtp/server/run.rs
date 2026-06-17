@@ -7,7 +7,10 @@ use tokio::io::AsyncReadExt;
 use crate::smtp::line::LineDecoder;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
-use crate::smtp::trace::{format_auth_results, line_error_reply, received_header, spf_domain};
+use crate::smtp::trace::{
+	RECEIVED_HOP_LIMIT, format_auth_results, line_error_reply, received_header, received_hop_count,
+	spf_domain,
+};
 
 use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, send};
 
@@ -92,6 +95,18 @@ impl Server {
 					send(&mut stream, &reply).await?;
 				}
 				Action::Deliver(reply, mut message) => {
+					// Loop guard: reject mail that has already traversed too many
+					// hops before adding our own Received header (RFC 5321 §6.3).
+					if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
+						tracing::warn!("rejecting message: too many Received hops (mail loop)");
+						self.metrics.rejected(crate::metrics::RejectReason::Loop);
+						send(
+							&mut stream,
+							&Reply::single(554, "5.4.6 too many hops, this message is looping"),
+						)
+						.await?;
+						continue;
+					}
 					// SPF and DKIM apply to unauthenticated mail from a
 					// known peer.
 					let mut auth_headers = String::new();
