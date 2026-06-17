@@ -2,8 +2,11 @@
 //! interpreter that run a user's filter against a delivered message.
 
 pub mod ast;
+pub mod interp;
 pub mod lexer;
 pub mod parser;
 
+#[cfg(test)]
+mod interp_tests;
 #[cfg(test)]
 mod parser_tests;
