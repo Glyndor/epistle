@@ -3,6 +3,7 @@
 //! Currently the JWS request-signing core; HTTP transport, order flow and
 //! challenge handlers build on top.
 
+pub mod client;
 pub mod directory;
 pub mod jws;
 pub mod protocol;
