@@ -15,6 +15,7 @@ pub mod dkim;
 pub mod dmarc;
 pub mod dnsbl;
 pub mod imap;
+pub mod metrics;
 pub mod mtasts;
 pub mod queue;
 pub mod rules;
