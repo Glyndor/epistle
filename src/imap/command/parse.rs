@@ -41,6 +41,17 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 			mailbox: parse_mailbox(&tag, args)?,
 		},
 		"CLOSE" => no_args(&tag, args, Command::Close)?,
+		"UNSELECT" => no_args(&tag, args, Command::Unselect)?,
+		"ENABLE" => {
+			let capabilities: Vec<String> = args
+				.split_ascii_whitespace()
+				.map(|c| c.to_ascii_uppercase())
+				.collect();
+			if capabilities.is_empty() {
+				return Err(ParseError::BadArguments(tag));
+			}
+			Command::Enable { capabilities }
+		}
 		"CREATE" => Command::Create {
 			mailbox: parse_mailbox(&tag, args)?,
 		},

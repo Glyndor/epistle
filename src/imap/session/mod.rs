@@ -113,7 +113,8 @@ impl Session {
 
 	fn capabilities(&self) -> String {
 		let mut capabilities = String::from(
-			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT THREAD=ORDEREDSUBJECT",
+			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -185,6 +186,8 @@ impl Session {
 			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
 			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),
 			Command::Close => self.close(&tag),
+			Command::Unselect => self.unselect(&tag),
+			Command::Enable { capabilities } => self.enable(&tag, &capabilities),
 			Command::Create { mailbox } => self.mailbox_op(&tag, "CREATE", |dir, account| {
 				mailbox::create(dir, account, &mailbox)
 			}),
@@ -357,6 +360,36 @@ impl Session {
 			}
 			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),
 		}
+	}
+
+	/// UNSELECT (RFC 3691): leave the mailbox without expunging \Deleted.
+	fn unselect(&mut self, tag: &str) -> Output {
+		match &self.state {
+			State::Selected { account, .. } => {
+				self.state = State::Authenticated {
+					account: account.clone(),
+				};
+				Output::text(format!("{tag} OK UNSELECT completed\r\n"))
+			}
+			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),
+		}
+	}
+
+	/// ENABLE (RFC 5161): acknowledge the requested extensions. We enable none
+	/// beyond the IMAP4rev2 base, so the ENABLED list echoes only ones we know.
+	fn enable(&mut self, tag: &str, capabilities: &[String]) -> Output {
+		if self.account().is_none() {
+			return Output::text(format!("{tag} BAD ENABLE only after authentication\r\n"));
+		}
+		let enabled: Vec<&str> = capabilities
+			.iter()
+			.filter(|cap| cap.as_str() == "IMAP4REV2")
+			.map(|_| "IMAP4rev2")
+			.collect();
+		Output::text(format!(
+			"* ENABLED {}\r\n{tag} OK ENABLE completed\r\n",
+			enabled.join(" ")
+		))
 	}
 
 	/// Called by the network layer when an IDLE ends with DONE.
