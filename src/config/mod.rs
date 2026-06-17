@@ -41,6 +41,17 @@ pub enum ConfigError {
 	Invalid(String),
 }
 
+/// Log output format.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+	/// Human-readable text (the default).
+	#[default]
+	Text,
+	/// Structured JSON, one object per event.
+	Json,
+}
+
 /// Top-level server configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +100,9 @@ pub struct Config {
 	/// PostgreSQL backing for the antispam engine. Optional until antispam
 	/// persistence is enabled.
 	pub database: Option<Database>,
+	/// Log output format (text or json).
+	#[serde(default)]
+	pub log_format: LogFormat,
 }
 
 impl Config {
