@@ -16,3 +16,7 @@ NOTICES.html
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+
+# cargo-mutants
+/mutants.out/
+/mutants.out.old/
