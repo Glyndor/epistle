@@ -69,6 +69,9 @@ pub struct Config {
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
+	/// URL of an external scanner hook (ClamAV/Rspamd behind HTTP) consulted
+	/// for unauthenticated inbound mail. Absent disables scanning.
+	pub scanner_hook_url: Option<String>,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,

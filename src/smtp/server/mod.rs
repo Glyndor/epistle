@@ -61,6 +61,8 @@ pub struct Server {
 	dnsbl: crate::dnsbl::Dnsbl,
 	/// When set, accepted unauthenticated mail is recorded as ham.
 	reputation: Option<sqlx::PgPool>,
+	/// Optional external scanner hook consulted for unauthenticated mail.
+	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
 	/// Delay applied to first-time unauthenticated senders. Zero disables it.
 	first_time_delay: std::time::Duration,
 	/// If set, DMARC delivery records are written here for aggregate reports.
@@ -80,9 +82,16 @@ impl Server {
 			spf: None,
 			dnsbl: crate::dnsbl::Dnsbl::default(),
 			reputation: None,
+			hook: None,
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
 		}
+	}
+
+	/// Consult an external scanner hook for unauthenticated inbound mail.
+	pub fn with_hook(mut self, hook: Arc<dyn crate::antispam::hook::MailHook>) -> Self {
+		self.hook = Some(hook);
+		self
 	}
 
 	/// Record sender reputation for accepted unauthenticated mail.

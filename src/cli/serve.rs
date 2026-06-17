@@ -68,6 +68,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
+	// Optional external scanner hook.
+	let scanner_hook: Option<Arc<dyn crate::antispam::hook::MailHook>> =
+		match &config.scanner_hook_url {
+			Some(url) => Some(Arc::new(
+				crate::antispam::hook::HttpHook::new(url).map_err(std::io::Error::other)?,
+			)),
+			None => None,
+		};
+
 	// Optional reputation database, migrated at startup.
 	let reputation_pool = match &config.database {
 		Some(db) => Some(
@@ -201,6 +210,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_report_dir(config.data_dir.clone());
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
+				}
+				if let Some(hook) = &scanner_hook {
+					server = server.with_hook(Arc::clone(hook));
 				}
 				if let Some(acceptor) = &tls_acceptor {
 					server = server.with_tls(acceptor.clone(), mode);

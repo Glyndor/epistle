@@ -6,4 +6,5 @@
 
 pub mod bayes;
 pub mod corpus;
+pub mod hook;
 pub mod reputation;

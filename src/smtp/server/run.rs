@@ -305,6 +305,25 @@ impl Server {
 							_ => {}
 						}
 					}
+					// External scanner hook (unauthenticated mail only).
+					if let (Some(hook), None) = (&self.hook, session.authenticated()) {
+						match hook.scan(&message.data).await {
+							crate::antispam::hook::HookVerdict::Reject => {
+								self.train_corpus(&message.data, true);
+								send(
+									&mut stream,
+									&Reply::single(550, "5.7.1 rejected by scanner"),
+								)
+								.await?;
+								continue;
+							}
+							crate::antispam::hook::HookVerdict::Quarantine => {
+								self.train_corpus(&message.data, true);
+								message.mailbox = Some("Rejects".to_string());
+							}
+							crate::antispam::hook::HookVerdict::Accept => {}
+						}
+					}
 					// Accepted unauthenticated mail trains the ham corpus —
 					// unless it was quarantined (already trained as spam).
 					if session.authenticated().is_none() && message.mailbox.is_none() {
