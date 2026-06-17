@@ -1,0 +1,11 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    uses: Glyndor/.github/.github/workflows/dco.yml@b78620146d50fdbc552e1b86740e64d114c58f0f # v1.0.0
