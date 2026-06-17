@@ -85,6 +85,9 @@ pub enum Command {
 	Search {
 		criteria: Vec<SearchKey>,
 		uid: bool,
+		/// `RETURN (...)` options (RFC 4731 ESEARCH). `None` is the legacy
+		/// `* SEARCH` reply; `Some` selects the `* ESEARCH` reply.
+		return_opts: Option<Vec<ReturnOpt>>,
 	},
 	/// `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
 	Sort {
@@ -121,6 +124,15 @@ pub enum StatusItem {
 	Uidnext,
 	Uidvalidity,
 	Unseen,
+}
+
+/// An ESEARCH `RETURN` option (RFC 4731).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnOpt {
+	Min,
+	Max,
+	Count,
+	All,
 }
 
 /// A SORT key (RFC 5256), optionally preceded by REVERSE in the command.

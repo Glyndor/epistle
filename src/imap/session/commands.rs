@@ -1,4 +1,5 @@
-use super::super::command::SequenceSet;
+use super::super::command::{ReturnOpt, SequenceSet};
+use super::codes::{copyuid_code, esearch_line};
 use super::helpers::{format_internaldate, search_matches};
 use super::mailbox::{self, Flag, Snapshot, render_flags};
 use super::{FetchItem, Output, SearchKey, Session, State, StatusItem, StoreMode};
@@ -159,7 +160,13 @@ impl Session {
 		Output::text(response)
 	}
 
-	pub(super) fn search(&mut self, tag: &str, criteria: &[SearchKey], uid: bool) -> Output {
+	pub(super) fn search(
+		&mut self,
+		tag: &str,
+		criteria: &[SearchKey],
+		uid: bool,
+		return_opts: Option<&[ReturnOpt]>,
+	) -> Output {
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
@@ -179,12 +186,18 @@ impl Session {
 			}
 		}
 
-		let mut response = String::from("* SEARCH");
-		for hit in hits {
-			response.push_str(&format!(" {hit}"));
-		}
-		response.push_str(&format!("\r\n{tag} OK SEARCH completed\r\n"));
-		Output::text(response)
+		let body = match return_opts {
+			Some(opts) => esearch_line(tag, uid, &hits, opts),
+			None => {
+				let mut line = String::from("* SEARCH");
+				for hit in &hits {
+					line.push_str(&format!(" {hit}"));
+				}
+				line.push_str("\r\n");
+				line
+			}
+		};
+		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
 	}
 
 	pub(super) fn expunge(&mut self, tag: &str) -> Output {
@@ -426,46 +439,4 @@ impl Session {
 			upgrade_tls: false,
 		}
 	}
-}
-
-/// Build the UIDPLUS `[COPYUID validity src dst] ` response code, or an empty
-/// string if the destination UIDs cannot be resolved. The destination
-/// UIDVALIDITY comes from the target mailbox.
-fn copyuid_code(
-	data_dir: &std::path::Path,
-	account: &str,
-	target: &str,
-	source_uids: &[u32],
-	dest_ids: &[uuid::Uuid],
-) -> String {
-	if dest_ids.is_empty() {
-		return String::new();
-	}
-	let mut validity = 0;
-	let mut dest_uids = Vec::with_capacity(dest_ids.len());
-	for id in dest_ids {
-		match mailbox::appenduid(data_dir, account, target, *id) {
-			Some((uid_validity, uid)) => {
-				validity = uid_validity;
-				dest_uids.push(uid);
-			}
-			None => return String::new(),
-		}
-	}
-	if dest_uids.len() != source_uids.len() {
-		return String::new();
-	}
-	format!(
-		"[COPYUID {validity} {} {}] ",
-		uid_set(source_uids),
-		uid_set(&dest_uids),
-	)
-}
-
-/// Format a UID list as a comma-separated set (no range coalescing).
-fn uid_set(uids: &[u32]) -> String {
-	uids.iter()
-		.map(u32::to_string)
-		.collect::<Vec<_>>()
-		.join(",")
 }

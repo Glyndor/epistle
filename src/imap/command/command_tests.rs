@@ -132,7 +132,8 @@ fn parses_search_or_not() {
 			cmd.command,
 			Command::Search {
 				ref criteria,
-				uid: false
+				uid: false,
+				..
 			} if criteria.len() == 1
 				&& matches!(
 					&criteria[0],
