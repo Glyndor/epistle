@@ -55,6 +55,23 @@ impl AccountKey {
 		json!({ "crv": "P-256", "kty": "EC", "x": x, "y": y })
 	}
 
+	/// The JWK SHA-256 thumbprint (RFC 7638), base64url. Built from the
+	/// required members in lexicographic order with no whitespace.
+	pub fn thumbprint(&self) -> String {
+		let point = self.key_pair.public_key().as_ref();
+		let x = B64.encode(&point[1..33]);
+		let y = B64.encode(&point[33..65]);
+		let canonical = format!(r#"{{"crv":"P-256","kty":"EC","x":"{x}","y":"{y}"}}"#);
+		let digest = ring::digest::digest(&ring::digest::SHA256, canonical.as_bytes());
+		B64.encode(digest.as_ref())
+	}
+
+	/// The key authorization for a challenge `token` (RFC 8555 §8.1):
+	/// `token "." base64url(thumbprint)`.
+	pub fn key_authorization(&self, token: &str) -> String {
+		format!("{token}.{}", self.thumbprint())
+	}
+
 	/// Build a flattened JWS for an ACME request to `url` with anti-replay
 	/// `nonce`. A `key_id` (account URL) selects the `kid` header; without one
 	/// the embedded `jwk` is used (for `newAccount`).
@@ -143,6 +160,19 @@ mod tests {
 		assert_eq!(header["url"], "https://acme.example/order");
 		assert!(header["jwk"].is_object());
 		assert!(header["kid"].is_null());
+	}
+
+	#[test]
+	fn thumbprint_is_stable_and_key_authorization_formats() {
+		let (key, pkcs8) = AccountKey::generate().expect("generate");
+		let restored = AccountKey::from_pkcs8(&pkcs8).expect("restore");
+		// Deterministic for the same key.
+		assert_eq!(key.thumbprint(), restored.thumbprint());
+		// base64url has no padding.
+		assert!(!key.thumbprint().contains('='));
+		// Key authorization is token "." thumbprint.
+		let auth = key.key_authorization("tok123");
+		assert_eq!(auth, format!("tok123.{}", key.thumbprint()));
 	}
 
 	#[test]

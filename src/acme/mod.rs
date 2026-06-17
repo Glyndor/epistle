@@ -3,4 +3,5 @@
 //! Currently the JWS request-signing core; HTTP transport, order flow and
 //! challenge handlers build on top.
 
+pub mod directory;
 pub mod jws;
