@@ -7,11 +7,14 @@
 
 pub mod ams;
 pub mod chain;
+pub mod seal;
 pub mod signature;
 
 #[cfg(test)]
 mod ams_tests;
 #[cfg(test)]
 mod chain_tests;
+#[cfg(test)]
+mod seal_tests;
 #[cfg(test)]
 mod signature_tests;

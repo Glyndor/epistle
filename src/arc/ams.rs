@@ -139,7 +139,7 @@ fn lowest_unused(headers: &[(String, String)], used: &[bool], name: &str) -> Opt
 }
 
 /// Remove the value after `b=`, keeping the tag (RFC 6376 §3.7).
-fn strip_b(value: &str) -> String {
+pub(crate) fn strip_b(value: &str) -> String {
 	value
 		.split(';')
 		.map(|tag| {
