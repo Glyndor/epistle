@@ -15,6 +15,8 @@ pub enum Command {
 	Capability,
 	Noop,
 	Logout,
+	/// `NAMESPACE` (RFC 2342).
+	Namespace,
 	StartTls,
 	Login {
 		username: String,

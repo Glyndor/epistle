@@ -110,7 +110,7 @@ impl Session {
 	}
 
 	fn capabilities(&self) -> String {
-		let mut capabilities = String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE");
+		let mut capabilities = String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE");
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
 		}
@@ -164,6 +164,11 @@ impl Session {
 				output
 			}
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
+			// One personal namespace rooted at "" with the "/" hierarchy
+			// separator; no shared or other-users namespaces (RFC 2342).
+			Command::Namespace => Output::text(format!(
+				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
+			)),
 			Command::Logout => Output::closing(format!(
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
