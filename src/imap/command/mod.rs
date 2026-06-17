@@ -41,6 +41,14 @@ pub enum Command {
 	Enable {
 		capabilities: Vec<String>,
 	},
+	/// `GETQUOTAROOT <mailbox>` (RFC 9208).
+	GetQuotaRoot {
+		mailbox: String,
+	},
+	/// `GETQUOTA <quota-root>` (RFC 9208).
+	GetQuota {
+		root: String,
+	},
 	Create {
 		mailbox: String,
 	},

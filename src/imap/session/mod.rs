@@ -115,7 +115,7 @@ impl Session {
 	fn capabilities(&self) -> String {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH",
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -189,6 +189,8 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH",
 			Command::Close => self.close(&tag),
 			Command::Unselect => self.unselect(&tag),
 			Command::Enable { capabilities } => self.enable(&tag, &capabilities),
+			Command::GetQuotaRoot { mailbox } => self.get_quota_root(&tag, &mailbox),
+			Command::GetQuota { root } => self.get_quota(&tag, &root),
 			Command::Create { mailbox } => self.mailbox_op(&tag, "CREATE", |dir, account| {
 				mailbox::create(dir, account, &mailbox)
 			}),

@@ -356,6 +356,31 @@ pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Opt
 	Some((snapshot.uid_validity(), uid))
 }
 
+/// Total bytes stored for an account: the sum of every message's size across
+/// INBOX and all folders (RFC 9208 STORAGE usage).
+pub fn account_usage(data_dir: &Path, account: &str) -> u64 {
+	let mut total = 0u64;
+	for mailbox in list(data_dir, account) {
+		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
+			continue;
+		};
+		let Ok(entries) = std::fs::read_dir(&dir) else {
+			continue;
+		};
+		for entry in entries.flatten() {
+			if entry
+				.file_name()
+				.to_str()
+				.is_some_and(|name| name.ends_with(".eml"))
+				&& let Ok(meta) = entry.metadata()
+			{
+				total += meta.len();
+			}
+		}
+	}
+	total
+}
+
 /// Subscribe to a mailbox (the mailbox must already exist).
 pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	if !exists(data_dir, account, mailbox) {

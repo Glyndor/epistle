@@ -42,6 +42,19 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		},
 		"CLOSE" => no_args(&tag, args, Command::Close)?,
 		"UNSELECT" => no_args(&tag, args, Command::Unselect)?,
+		"GETQUOTAROOT" => Command::GetQuotaRoot {
+			mailbox: parse_mailbox(&tag, args)?,
+		},
+		"GETQUOTA" => {
+			// The quota-root is an astring that may be the empty string ("").
+			let trimmed = args.trim();
+			if trimmed.is_empty() {
+				return Err(ParseError::BadArguments(tag));
+			}
+			Command::GetQuota {
+				root: trimmed.trim_matches('"').to_string(),
+			}
+		}
 		"ENABLE" => {
 			let capabilities: Vec<String> = args
 				.split_ascii_whitespace()
