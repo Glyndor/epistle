@@ -1,7 +1,10 @@
 [advisories]
 version = 2
-# Deny all known vulnerabilities and unmaintained crates.
-ignore = []
+# Deny all known vulnerabilities and unmaintained crates, except:
+# RUSTSEC-2023-0071 (rsa Marvin attack) is reachable only via sqlx-mysql,
+# which the sqlx `macros` feature pulls unconditionally. We use PostgreSQL
+# only, whose path never touches rsa; no upstream fix exists.
+ignore = ["RUSTSEC-2023-0071"]
 
 [licenses]
 version = 2

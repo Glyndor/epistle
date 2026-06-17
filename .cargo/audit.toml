@@ -1,0 +1,7 @@
+# RUSTSEC-2023-0071 (rsa Marvin attack) reaches us only through sqlx-mysql,
+# which the sqlx `macros` feature pulls in unconditionally for cross-driver
+# macro support. We connect only to PostgreSQL, whose code path never uses
+# the rsa crate, so the timing side-channel is not reachable. No upstream fix
+# exists. Revisit when sqlx stops pulling all drivers behind `macros`.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]
