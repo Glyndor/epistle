@@ -10,7 +10,11 @@ fn append_stores_message_with_flags() {
 	assert!(text(&output).starts_with("+ "), "{}", text(&output));
 
 	let output = session.literal_done(b"Subject: bye\r\n");
-	assert!(text(&output).contains("a2 OK"), "{}", text(&output));
+	let response = text(&output);
+	assert!(response.contains("a2 OK"), "{response}");
+	// UIDPLUS: the response carries the assigned UIDVALIDITY and UID 1.
+	assert!(response.contains("[APPENDUID "), "{response}");
+	assert!(response.contains(" 1] APPEND completed"), "{response}");
 
 	// The appended message is visible on SELECT, with its flag.
 	let output = session.command_line("a3 SELECT INBOX");

@@ -111,7 +111,7 @@ impl Session {
 
 	fn capabilities(&self) -> String {
 		let mut capabilities =
-			String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID");
+			String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS");
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
 		}
