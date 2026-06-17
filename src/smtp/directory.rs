@@ -23,6 +23,9 @@ pub struct Directory {
 	/// argon2id PHC hash per account name. Accounts without one cannot
 	/// authenticate (receive-only).
 	password_hashes: HashMap<String, String>,
+	/// Sub-address separators (RFC 5233 detail): `user+tag@domain` is
+	/// delivered to `user@domain`. Empty disables sub-addressing.
+	subaddress_separators: Vec<char>,
 }
 
 impl Directory {
@@ -42,7 +45,19 @@ impl Directory {
 				.map(|(address, account)| (address.to_ascii_lowercase(), account))
 				.collect(),
 			password_hashes: HashMap::new(),
+			// The `+` separator is the de-facto standard, enabled by default.
+			subaddress_separators: vec!['+'],
 		}
+	}
+
+	/// Override the sub-address separators (default `['+']`). An empty list
+	/// disables sub-addressing entirely.
+	pub fn with_subaddress_separators(
+		mut self,
+		separators: impl IntoIterator<Item = char>,
+	) -> Self {
+		self.subaddress_separators = separators.into_iter().collect();
+		self
 	}
 
 	/// Attach password hashes (account name → argon2id PHC string).
@@ -87,13 +102,36 @@ impl Directory {
 		if !self.domains.contains(address.domain()) {
 			return Resolution::NotLocal;
 		}
-		match self
+		if let Some(account) = self
 			.accounts_by_address
 			.get(&address.to_string().to_ascii_lowercase())
 		{
-			Some(account) => Resolution::Account(account.clone()),
-			None => Resolution::UnknownUser,
+			return Resolution::Account(account.clone());
 		}
+		// Sub-addressing: strip the tag and retry the base address.
+		if let Some(base) = self.strip_subaddress(address)
+			&& let Some(account) = self.accounts_by_address.get(&base)
+		{
+			return Resolution::Account(account.clone());
+		}
+		Resolution::UnknownUser
+	}
+
+	/// The base `local@domain` key (lowercased) once the earliest sub-address
+	/// separator and everything after it are removed, or `None` if the
+	/// address carries no tag.
+	fn strip_subaddress(&self, address: &Address) -> Option<String> {
+		let local = address.local_part();
+		let cut = self
+			.subaddress_separators
+			.iter()
+			.filter_map(|sep| local.find(*sep))
+			.min()?;
+		// A leading separator (e.g. `+tag`) leaves no base local-part.
+		if cut == 0 {
+			return None;
+		}
+		Some(format!("{}@{}", &local[..cut], address.domain()).to_ascii_lowercase())
 	}
 }
 
@@ -145,6 +183,59 @@ mod tests {
 		assert_eq!(
 			empty.resolve(&parse("alice@example.org")),
 			Resolution::NotLocal
+		);
+	}
+
+	#[test]
+	fn subaddressing_resolves_to_base_account() {
+		// bob+anything@example.org delivers to bob.
+		assert_eq!(
+			directory().resolve(&parse("bob+newsletter@example.org")),
+			Resolution::Account("bob".to_string())
+		);
+		// Only the first separator matters; the rest is part of the tag.
+		assert_eq!(
+			directory().resolve(&parse("Bob+a+b@EXAMPLE.org")),
+			Resolution::Account("bob".to_string())
+		);
+	}
+
+	#[test]
+	fn subaddressing_with_unknown_base_is_unknown_user() {
+		assert_eq!(
+			directory().resolve(&parse("carol+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn leading_separator_is_not_a_subaddress() {
+		assert_eq!(
+			directory().resolve(&parse("+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn subaddressing_can_be_disabled() {
+		let directory = directory().with_subaddress_separators([]);
+		assert_eq!(
+			directory.resolve(&parse("bob+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn subaddress_separators_are_configurable() {
+		let directory = directory().with_subaddress_separators(['-']);
+		assert_eq!(
+			directory.resolve(&parse("bob-tag@example.org")),
+			Resolution::Account("bob".to_string())
+		);
+		// The default `+` no longer applies once overridden.
+		assert_eq!(
+			directory.resolve(&parse("bob+tag@example.org")),
+			Resolution::UnknownUser
 		);
 	}
 
