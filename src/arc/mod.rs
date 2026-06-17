@@ -5,9 +5,12 @@
 //! structurally validates the ARC header set; cryptographic verification and
 //! sealing build on it.
 
+pub mod ams;
 pub mod chain;
 pub mod signature;
 
+#[cfg(test)]
+mod ams_tests;
 #[cfg(test)]
 mod chain_tests;
 #[cfg(test)]
