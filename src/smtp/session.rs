@@ -177,7 +177,8 @@ impl Session {
 				reverse_path,
 				size,
 				body: _,
-			} => self.mail_from(reverse_path, size),
+				require_tls,
+			} => self.mail_from(reverse_path, size, require_tls),
 			Command::RcptTo { forward_path } => self.rcpt_to(forward_path),
 			Command::Data => self.data(),
 			Command::Rset => {
@@ -274,6 +275,10 @@ impl Session {
 		if self.tls_active && self.authenticated.is_none() {
 			lines.push("AUTH PLAIN".to_string());
 		}
+		// RFC 8689 §3: only advertise REQUIRETLS on a TLS-protected session.
+		if self.tls_active {
+			lines.push("REQUIRETLS".to_string());
+		}
 		Action::Continue(Reply::new(250, lines))
 	}
 
@@ -288,9 +293,18 @@ impl Session {
 		}
 	}
 
-	fn mail_from(&mut self, reverse_path: String, size: Option<u64>) -> Action {
+	fn mail_from(&mut self, reverse_path: String, size: Option<u64>, require_tls: bool) -> Action {
 		match self.state {
 			State::Greeted => {
+				// RFC 8689 §4.2: REQUIRETLS is only valid once the current
+				// hop is already TLS-protected; otherwise the requirement is
+				// already violated. Fail closed.
+				if require_tls && !self.tls_active {
+					return Action::Continue(Reply::single(
+						530,
+						"5.7.4 REQUIRETLS requires the session to use TLS",
+					));
+				}
 				match (&self.authenticated, Address::parse(&reverse_path)) {
 					// Authenticated senders must use one of their own
 					// addresses — no spoofing, no null path.
