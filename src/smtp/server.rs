@@ -14,6 +14,7 @@ use super::line::{LineDecoder, LineError};
 use super::reply::Reply;
 use super::session::{Action, Session};
 use super::sink::MessageSink;
+use super::trace::{format_auth_results, received_header, spf_domain};
 use crate::directory_store::DirectoryHandle;
 
 /// Read buffer size per connection.
@@ -433,66 +434,6 @@ impl Server {
 			}
 		}
 	}
-}
-
-/// The domain SPF evaluates: the MAIL FROM domain, or the HELO domain for
-/// the null reverse-path (RFC 7208 section 2.4).
-fn spf_domain(reverse_path: &str, helo: Option<&str>) -> Option<String> {
-	if reverse_path.is_empty() {
-		return helo.map(|h| h.to_string());
-	}
-	reverse_path
-		.rsplit_once('@')
-		.map(|(_, domain)| domain.to_ascii_lowercase())
-}
-
-/// Build the RFC 5321 section 4.4 trace header prepended to accepted mail.
-fn received_header(
-	helo: Option<&str>,
-	peer: Option<IpAddr>,
-	hostname: &str,
-	esmtp: bool,
-	tls: bool,
-	auth: bool,
-	now: std::time::SystemTime,
-) -> String {
-	let client = helo.unwrap_or("unknown");
-	let peer = match peer {
-		Some(ip) => format!("[{ip}]"),
-		None => "[unknown]".to_string(),
-	};
-	let protocol = received_protocol(esmtp, tls, auth);
-	format!(
-		"Received: from {client} ({peer})\r\n\tby {hostname} with {protocol};\r\n\t{}\r\n",
-		crate::clock::rfc5322(now)
-	)
-}
-
-/// The `with` protocol keyword for the trace header, per RFC 3848.
-/// Plain HELO is `SMTP`; EHLO is `ESMTP`, gaining an `S` over TLS and an
-/// `A` once authenticated (`ESMTPS`, `ESMTPA`, `ESMTPSA`).
-fn received_protocol(esmtp: bool, tls: bool, auth: bool) -> &'static str {
-	if !esmtp {
-		return "SMTP";
-	}
-	match (tls, auth) {
-		(true, true) => "ESMTPSA",
-		(true, false) => "ESMTPS",
-		(false, true) => "ESMTPA",
-		(false, false) => "ESMTP",
-	}
-}
-
-/// Build a folded `Authentication-Results` header (RFC 8601 §2.2).
-/// Each method result is placed on a separate folded continuation line.
-fn format_auth_results(hostname: &str, methods: &[String]) -> String {
-	let mut out = format!("Authentication-Results: {hostname}");
-	for method in methods {
-		out.push_str(";\r\n\t");
-		out.push_str(method);
-	}
-	out.push_str("\r\n");
-	out
 }
 
 fn line_error_reply(error: &LineError) -> Reply {

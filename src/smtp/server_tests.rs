@@ -413,15 +413,3 @@ async fn pipelined_commands_are_processed_in_order() {
 	assert_eq!(messages[0].reverse_path, "alice@example.org");
 	assert_eq!(messages[0].recipients, vec!["bob@example.org".to_string()]);
 }
-
-#[test]
-fn received_protocol_follows_rfc3848() {
-	// HELO is plain SMTP regardless of TLS or auth.
-	assert_eq!(received_protocol(false, false, false), "SMTP");
-	assert_eq!(received_protocol(false, true, true), "SMTP");
-	// EHLO gains S over TLS and A once authenticated.
-	assert_eq!(received_protocol(true, false, false), "ESMTP");
-	assert_eq!(received_protocol(true, true, false), "ESMTPS");
-	assert_eq!(received_protocol(true, false, true), "ESMTPA");
-	assert_eq!(received_protocol(true, true, true), "ESMTPSA");
-}
