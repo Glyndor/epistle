@@ -10,6 +10,7 @@ use super::mailbox::{self, Flag, Snapshot};
 
 mod commands;
 mod helpers;
+mod sort;
 
 /// Server output produced by one step: zero or more complete response
 /// lines/literals, ready for the wire.
