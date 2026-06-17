@@ -65,6 +65,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"MOVE" => parse_copy(&tag, args, false, true)?,
 		"SEARCH" => super::search::parse_search(&tag, args, false)?,
 		"SORT" => super::search::parse_sort(&tag, args, false)?,
+		"THREAD" => super::search::parse_thread(&tag, args, false)?,
 		"STATUS" => parse_status(&tag, args)?,
 		"SUBSCRIBE" => Command::Subscribe {
 			mailbox: parse_mailbox(&tag, args)?,
@@ -98,6 +99,8 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 				super::search::parse_search(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("SORT") {
 				super::search::parse_sort(&tag, sub_args, true)?
+			} else if sub.eq_ignore_ascii_case("THREAD") {
+				super::search::parse_thread(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("EXPUNGE") {
 				let sequence = super::parse_sequence_set(sub_args)
 					.ok_or_else(|| ParseError::BadArguments(tag.clone()))?;

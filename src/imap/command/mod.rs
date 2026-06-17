@@ -86,6 +86,11 @@ pub enum Command {
 		criteria: Vec<SearchKey>,
 		uid: bool,
 	},
+	/// `THREAD ORDEREDSUBJECT <charset> <search-criteria>` (RFC 5256).
+	Thread {
+		criteria: Vec<SearchKey>,
+		uid: bool,
+	},
 	Status {
 		mailbox: String,
 		items: Vec<StatusItem>,
