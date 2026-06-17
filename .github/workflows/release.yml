@@ -3,19 +3,72 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re-)release, e.g. v0.2.0
+        required: true
+        type: string
 
 permissions: {}
 
 jobs:
+  # Gate every release on promoted, version-matched, advisory-free code.
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Tag matches the crate version
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match crate version v$version"
+            exit 1
+          fi
+
+      - name: Tagged commit is on origin/main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${TAG}^{commit}" origin/main; then
+            echo "::error::$TAG is not reachable from origin/main; only promoted code is released"
+            exit 1
+          fi
+
+      - name: Audit dependencies at release time
+        run: |
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version "^0.22"
+          cargo audit
+
   build:
     name: Build and publish
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
       - name: Install toolchain
         run: |
@@ -25,24 +78,31 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      - name: Generate CycloneDX SBOM
+        run: |
+          command -v cargo-cyclonedx >/dev/null || cargo install --locked cargo-cyclonedx --version "^0.5"
+          cargo cyclonedx --format json --all-features
+
       - name: Prepare artifacts
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp target/release/mail "dist/mail-${GITHUB_REF_NAME}-x86_64-linux"
+          cp target/release/mail "dist/mail-${TAG}-x86_64-linux"
           cp scripts/install.sh dist/install.sh
+          cp mail.cdx.json "dist/mail-${TAG}.cdx.json"
           cd dist
           sha256sum * > SHA256SUMS
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: dist/mail-*
+          subject-path: dist/mail-*-x86_64-linux
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$TAG" \
             --generate-notes \
             --verify-tag \
             dist/*
