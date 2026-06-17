@@ -102,6 +102,7 @@ impl Server {
 							self.dnsbl.check(ip, dns.as_ref()).await
 					{
 						tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
+						self.train_corpus(&message.data, true);
 						send(
 							&mut stream,
 							&Reply::single(554, "5.7.1 client host blocked by DNS blocklist"),
@@ -211,6 +212,7 @@ impl Server {
 
 								match dmarc {
 									crate::dmarc::DmarcOutcome::Reject => {
+										self.train_corpus(&message.data, true);
 										send(
 											&mut stream,
 											&Reply::single(550, "5.7.1 rejected by DMARC policy"),
@@ -291,6 +293,7 @@ impl Server {
 						match screen(pool, Scope::Domain, domain).await {
 							Screen::Reject => {
 								tracing::info!(%domain, "rejecting poor-reputation sender");
+								self.train_corpus(&message.data, true);
 								send(
 									&mut stream,
 									&Reply::single(550, "5.7.1 sender reputation rejected"),
@@ -303,6 +306,10 @@ impl Server {
 							}
 							_ => {}
 						}
+					}
+					// Accepted unauthenticated mail trains the ham corpus.
+					if session.authenticated().is_none() {
+						self.train_corpus(&message.data, false);
 					}
 					let reply = match self.sink.deliver(message) {
 						Ok(()) => {
