@@ -28,6 +28,8 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"CAPABILITY" => no_args(&tag, args, Command::Capability)?,
 		"NOOP" => no_args(&tag, args, Command::Noop)?,
 		"NAMESPACE" => no_args(&tag, args, Command::Namespace)?,
+		// ID carries a parameter list (or NIL) we accept and ignore.
+		"ID" => Command::Id,
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
 		"STARTTLS" => no_args(&tag, args, Command::StartTls)?,
 		"LOGIN" => parse_login(&tag, args)?,

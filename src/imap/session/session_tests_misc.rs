@@ -45,6 +45,21 @@ fn namespace_returns_personal_namespace() {
 }
 
 #[test]
+fn id_returns_server_identity_and_accepts_client_params() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	let output = session.command_line("a1 ID (\"name\" \"Thunderbird\" \"version\" \"128\")");
+	let response = text(&output);
+	assert!(
+		response.contains("* ID (\"name\" \"Glyndor\""),
+		"{response}"
+	);
+	assert!(response.contains("a1 OK ID completed"), "{response}");
+	// NIL parameter list is also accepted.
+	assert!(text(&session.command_line("a2 ID NIL")).contains("a2 OK"));
+}
+
+#[test]
 fn capability_advertises_namespace_and_special_use() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
