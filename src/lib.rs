@@ -18,6 +18,7 @@ pub mod dnsbl;
 pub mod imap;
 pub mod metrics;
 pub mod mtasts;
+pub mod pop3;
 pub mod queue;
 pub mod rules;
 pub mod smtp;
