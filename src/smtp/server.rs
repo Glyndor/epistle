@@ -10,11 +10,11 @@ use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use super::directory::Directory;
-use super::line::{LineDecoder, LineError};
+use super::line::LineDecoder;
 use super::reply::Reply;
 use super::session::{Action, Session};
 use super::sink::MessageSink;
-use super::trace::{format_auth_results, received_header, spf_domain};
+use super::trace::{format_auth_results, line_error_reply, received_header, spf_domain};
 use crate::directory_store::DirectoryHandle;
 
 /// Read buffer size per connection.
@@ -59,6 +59,8 @@ pub struct Server {
 	spf: Option<Arc<dyn crate::spf::DnsLookup>>,
 	/// DNS blocklist zones to screen unauthenticated clients against.
 	dnsbl: crate::dnsbl::Dnsbl,
+	/// When set, accepted unauthenticated mail is recorded as ham.
+	reputation: Option<sqlx::PgPool>,
 	/// If set, DMARC delivery records are written here for aggregate reports.
 	report_dir: Option<std::path::PathBuf>,
 }
@@ -75,8 +77,15 @@ impl Server {
 			directory: DirectoryHandle::new(Directory::default()),
 			spf: None,
 			dnsbl: crate::dnsbl::Dnsbl::default(),
+			reputation: None,
 			report_dir: None,
 		}
+	}
+
+	/// Record sender reputation for accepted unauthenticated mail.
+	pub fn with_reputation_pool(mut self, pool: sqlx::PgPool) -> Self {
+		self.reputation = Some(pool);
+		self
 	}
 
 	/// Enable SPF verification of unauthenticated inbound mail.
@@ -425,8 +434,24 @@ impl Server {
 					stamped.extend_from_slice(auth_headers.as_bytes());
 					stamped.append(&mut message.data);
 					message.data = stamped;
+					let rep_domain = message
+						.reverse_path
+						.rsplit_once('@')
+						.map(|(_, d)| d.to_ascii_lowercase());
 					let reply = match self.sink.deliver(message) {
-						Ok(()) => reply,
+						Ok(()) => {
+							if let (Some(pool), Some(domain), None) =
+								(&self.reputation, rep_domain, session.authenticated())
+							{
+								crate::antispam::reputation::record_in_background(
+									pool.clone(),
+									crate::antispam::reputation::Scope::Domain,
+									domain,
+									false,
+								);
+							}
+							reply
+						}
 						Err(error) => {
 							tracing::warn!(%error, "delivery failed");
 							Reply::single(451, "4.3.0 temporary storage failure, try again")
@@ -457,17 +482,6 @@ impl Server {
 				}
 			}
 		}
-	}
-}
-
-fn line_error_reply(error: &LineError) -> Reply {
-	match error {
-		LineError::BareControlCharacter => Reply::single(
-			554,
-			"5.5.2 bare CR or LF is not allowed, closing connection",
-		),
-		LineError::TooLong => Reply::single(500, "5.5.2 line too long, closing connection"),
-		LineError::NulByte => Reply::single(554, "5.5.2 NUL byte received, closing connection"),
 	}
 }
 

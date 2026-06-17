@@ -2,6 +2,22 @@
 
 use std::net::IpAddr;
 
+use super::line::LineError;
+use super::reply::Reply;
+
+/// The reply sent when the line decoder rejects a malformed line, closing the
+/// connection (RFC 5321 framing violations).
+pub(crate) fn line_error_reply(error: &LineError) -> Reply {
+	match error {
+		LineError::BareControlCharacter => Reply::single(
+			554,
+			"5.5.2 bare CR or LF is not allowed, closing connection",
+		),
+		LineError::TooLong => Reply::single(500, "5.5.2 line too long, closing connection"),
+		LineError::NulByte => Reply::single(554, "5.5.2 NUL byte received, closing connection"),
+	}
+}
+
 /// The domain SPF evaluates: the MAIL FROM domain, or the HELO domain for
 /// the null reverse-path (RFC 7208 section 2.4).
 pub(crate) fn spf_domain(reverse_path: &str, helo: Option<&str>) -> Option<String> {

@@ -418,6 +418,7 @@ async fn implicit_tls_without_acceptor_errors() {
 		directory: DirectoryHandle::new(Directory::default()),
 		spf: None,
 		dnsbl: crate::dnsbl::Dnsbl::default(),
+		reputation: None,
 		report_dir: None,
 	};
 	let (_client, server_stream) = tokio::io::duplex(1024);
