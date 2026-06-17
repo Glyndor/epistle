@@ -112,6 +112,33 @@ impl Server {
 						.await?;
 						continue;
 					}
+					// Greylisting: defer an unseen triplet's first attempt. A real
+					// MTA retries and is then accepted.
+					if let (Some((store, delay)), Some(ip), None) =
+						(&self.greylist, peer, session.authenticated())
+						&& let Some(recipient) = message.recipients.first()
+					{
+						let now = std::time::SystemTime::now()
+							.duration_since(std::time::UNIX_EPOCH)
+							.map(|d| d.as_secs())
+							.unwrap_or(0);
+						let triplet = crate::antispam::greylist::Triplet {
+							client_ip: ip,
+							sender: &message.reverse_path,
+							recipient,
+						};
+						if crate::antispam::greylist::decide(store.as_ref(), &triplet, now, *delay)
+							== crate::antispam::greylist::Decision::Defer
+						{
+							tracing::info!(%ip, "greylisting: deferring first attempt");
+							send(
+								&mut stream,
+								&Reply::single(451, "4.7.1 greylisted, please retry shortly"),
+							)
+							.await?;
+							continue;
+						}
+					}
 					if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated())
 					{
 						let domain = spf_domain(&message.reverse_path, session.helo_domain());

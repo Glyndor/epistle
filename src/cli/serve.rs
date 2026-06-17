@@ -69,6 +69,25 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Shared metrics across SMTP listeners and the metrics endpoint.
 	let metrics = Arc::new(crate::metrics::Metrics::new());
 
+	// Optional greylisting store, shared across SMTP listeners. A background
+	// task prunes stale triplets so the map stays bounded.
+	let greylist = (config.greylist_delay_secs > 0).then(|| {
+		let store = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+		let prune_store = Arc::clone(&store);
+		tokio::spawn(async move {
+			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+			loop {
+				interval.tick().await;
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_secs())
+					.unwrap_or(0);
+				prune_store.prune(now, 86_400);
+			}
+		});
+		store
+	});
+
 	// Optional ARC sealer: seals inbound mail under the server hostname using
 	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed).
 	let arc_sealer = match &config.arc {
@@ -317,6 +336,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				server = server.with_metrics(Arc::clone(&metrics));
 				if let Some(sealer) = &arc_sealer {
 					server = server.with_arc_sealer(Arc::clone(sealer));
+				}
+				if let Some(store) = &greylist {
+					server = server.with_greylist(Arc::clone(store), config.greylist_delay_secs);
 				}
 				if let Some(acceptor) = &reloadable_tls {
 					server = server.with_tls(acceptor.clone(), mode);

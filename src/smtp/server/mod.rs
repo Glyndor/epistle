@@ -70,6 +70,8 @@ pub struct Server {
 	report_dir: Option<std::path::PathBuf>,
 	/// If set, inbound unauthenticated mail is sealed into its ARC chain.
 	arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
+	/// If set, greylist unseen triplets: the store and the delay in seconds.
+	greylist: Option<(Arc<crate::antispam::greylist::MemoryGreylist>, u64)>,
 }
 
 impl Server {
@@ -90,12 +92,23 @@ impl Server {
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
 			arc_sealer: None,
+			greylist: None,
 		}
 	}
 
 	/// Seal inbound unauthenticated mail into its ARC chain (RFC 8617).
 	pub fn with_arc_sealer(mut self, sealer: Arc<crate::arc::sealer::ArcSealer>) -> Self {
 		self.arc_sealer = Some(sealer);
+		self
+	}
+
+	/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
+	pub fn with_greylist(
+		mut self,
+		store: Arc<crate::antispam::greylist::MemoryGreylist>,
+		delay_secs: u64,
+	) -> Self {
+		self.greylist = Some((store, delay_secs));
 		self
 	}
 

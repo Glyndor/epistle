@@ -81,6 +81,11 @@ pub struct Config {
 	/// configured database.
 	#[serde(default)]
 	pub first_time_sender_delay_secs: u64,
+	/// Seconds an unseen (client, sender, recipient) triplet is greylisted
+	/// (deferred with a 451) before a retry is accepted. 0 disables greylisting
+	/// (the default).
+	#[serde(default)]
+	pub greylist_delay_secs: u64,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,

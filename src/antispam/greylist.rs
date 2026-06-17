@@ -7,7 +7,9 @@
 //! is pure given a store and a clock, so it is fully unit-testable; the store
 //! implementation (PostgreSQL) and SMTP wiring are layered on top.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::Mutex;
 
 /// The identity greylisting keys on (RFC-less convention): client IP, envelope
 /// sender, and one recipient.
@@ -64,11 +66,50 @@ pub fn decide(store: &dyn GreylistStore, triplet: &Triplet, now: u64, delay_secs
 	}
 }
 
+/// An in-memory greylist store: a process-local map of first-seen times.
+/// State is ephemeral — a restart re-defers everyone once, which is harmless.
+#[derive(Default)]
+pub struct MemoryGreylist {
+	entries: Mutex<HashMap<String, u64>>,
+}
+
+impl MemoryGreylist {
+	/// An empty store.
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	/// Drop entries first seen more than `max_age` seconds before `now`, so the
+	/// map cannot grow without bound.
+	pub fn prune(&self, now: u64, max_age: u64) {
+		self.entries
+			.lock()
+			.expect("greylist lock")
+			.retain(|_, first_seen| now.saturating_sub(*first_seen) < max_age);
+	}
+}
+
+impl GreylistStore for MemoryGreylist {
+	fn first_seen(&self, key: &str) -> Option<u64> {
+		self.entries
+			.lock()
+			.expect("greylist lock")
+			.get(key)
+			.copied()
+	}
+	fn record(&self, key: &str, now: u64) {
+		self.entries
+			.lock()
+			.expect("greylist lock")
+			.entry(key.to_string())
+			.or_insert(now);
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use std::cell::RefCell;
-	use std::collections::HashMap;
 
 	/// In-memory store for tests.
 	#[derive(Default)]
@@ -122,6 +163,17 @@ mod tests {
 			recipient: "bob@example.net",
 		};
 		assert_eq!(triplet().key(), lower.key());
+	}
+
+	#[test]
+	fn memory_store_roundtrips_and_prunes() {
+		let store = MemoryGreylist::new();
+		assert_eq!(decide(&store, &triplet(), 1000, DELAY), Decision::Defer);
+		// Recorded, so a later retry past the delay is accepted.
+		assert_eq!(decide(&store, &triplet(), 1100, DELAY), Decision::Accept);
+		// Pruning old entries forgets the triplet; it is new again.
+		store.prune(1000 + 86_400, 3600);
+		assert_eq!(store.first_seen(&triplet().key()), None);
 	}
 
 	#[test]

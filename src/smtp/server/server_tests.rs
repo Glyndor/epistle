@@ -431,6 +431,7 @@ async fn implicit_tls_without_acceptor_errors() {
 		first_time_delay: std::time::Duration::ZERO,
 		report_dir: None,
 		arc_sealer: None,
+		greylist: None,
 	};
 	let (_client, server_stream) = tokio::io::duplex(1024);
 	assert!(server.handle(server_stream, None).await.is_err());
