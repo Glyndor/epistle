@@ -8,6 +8,7 @@
 pub mod ams;
 pub mod chain;
 pub mod seal;
+pub mod sealer;
 pub mod signature;
 pub mod validate;
 
@@ -17,6 +18,8 @@ mod ams_tests;
 mod chain_tests;
 #[cfg(test)]
 mod seal_tests;
+#[cfg(test)]
+mod sealer_tests;
 #[cfg(test)]
 mod signature_tests;
 #[cfg(test)]
