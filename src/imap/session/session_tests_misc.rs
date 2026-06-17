@@ -66,6 +66,31 @@ fn capability_advertises_namespace_and_special_use() {
 	let response = text(&session.command_line("a1 CAPABILITY"));
 	assert!(response.contains("NAMESPACE"), "{response}");
 	assert!(response.contains("SPECIAL-USE"), "{response}");
+	assert!(response.contains("UNSELECT"), "{response}");
+	assert!(response.contains("ENABLE"), "{response}");
+}
+
+#[test]
+fn unselect_leaves_mailbox() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	let response = text(&session.command_line("a3 UNSELECT"));
+	assert!(response.contains("a3 OK UNSELECT completed"), "{response}");
+	// No mailbox selected afterwards.
+	assert!(
+		text(&session.command_line("a4 UNSELECT")).contains("a4 BAD"),
+		"second UNSELECT should fail"
+	);
+}
+
+#[test]
+fn enable_acknowledges_capabilities() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a2 ENABLE IMAP4rev2 BOGUS"));
+	assert!(response.contains("* ENABLED IMAP4rev2"), "{response}");
+	assert!(response.contains("a2 OK ENABLE completed"), "{response}");
 }
 
 #[test]

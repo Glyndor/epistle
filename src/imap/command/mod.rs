@@ -35,6 +35,12 @@ pub enum Command {
 		mailbox: String,
 	},
 	Close,
+	/// `UNSELECT` (RFC 3691): leave the selected mailbox without expunging.
+	Unselect,
+	/// `ENABLE <capability>...` (RFC 5161).
+	Enable {
+		capabilities: Vec<String>,
+	},
 	Create {
 		mailbox: String,
 	},
