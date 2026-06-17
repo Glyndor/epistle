@@ -282,6 +282,8 @@ impl Session {
 			"PIPELINING".to_string(),
 			"ENHANCEDSTATUSCODES".to_string(),
 			"8BITMIME".to_string(),
+			// RFC 3461: we parse RET/ENVID and NOTIFY/ORCPT parameters.
+			"DSN".to_string(),
 			format!("SIZE {MAX_MESSAGE_SIZE}"),
 			// RFC 9422: advertise the per-message recipient ceiling we enforce.
 			format!("LIMITS RCPTMAX={MAX_RECIPIENTS}"),
