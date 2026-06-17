@@ -55,6 +55,10 @@ pub struct Config {
 	/// is delivered as `user@target`.
 	#[serde(default)]
 	pub domain_aliases: std::collections::HashMap<String, String>,
+	/// DNS blocklist zones (RFC 5782) screened against unauthenticated
+	/// clients. Empty disables DNSBL screening (the default).
+	#[serde(default)]
+	pub dnsbl_zones: Vec<String>,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
