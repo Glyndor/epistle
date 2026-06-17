@@ -23,10 +23,13 @@ pub struct Outcome {
 	pub discarded: bool,
 }
 
-/// A message as the interpreter sees it: parsed headers and total size.
+/// A message as the interpreter sees it: parsed headers, total size, and the
+/// SMTP envelope (for the `envelope` test).
 pub struct Message {
 	headers: Vec<(String, String)>,
 	size: usize,
+	envelope_from: Option<String>,
+	envelope_to: Vec<String>,
 }
 
 impl Message {
@@ -62,7 +65,16 @@ impl Message {
 		Message {
 			headers,
 			size: raw.len(),
+			envelope_from: None,
+			envelope_to: Vec::new(),
 		}
+	}
+
+	/// Attach the SMTP envelope (MAIL FROM and RCPT TO) for the `envelope` test.
+	pub fn with_envelope(mut self, from: impl Into<String>, to: Vec<String>) -> Self {
+		self.envelope_from = Some(from.into());
+		self.envelope_to = to;
+		self
 	}
 
 	fn header_values(&self, name: &str) -> Vec<&str> {
@@ -161,6 +173,7 @@ fn eval_test(test: &Test, message: &Message) -> bool {
 			.all(|name| !message.header_values(name).is_empty()),
 		"header" => header_test(test, message),
 		"address" => address_test(test, message),
+		"envelope" => envelope_test(test, message),
 		"size" => size_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
@@ -196,13 +209,7 @@ fn address_test(test: &Test, message: &Message) -> bool {
 	let Some((names, keys)) = split_names_keys(&test.args, &[]) else {
 		return false;
 	};
-	let part = if has_tag(&test.args, "localpart") {
-		AddressPart::Local
-	} else if has_tag(&test.args, "domain") {
-		AddressPart::Domain
-	} else {
-		AddressPart::All
-	};
+	let part = address_part(&test.args);
 	for name in &names {
 		for value in message.header_values(name) {
 			let Some(addr) = part.of(&addr_spec(value)) else {
@@ -216,6 +223,46 @@ fn address_test(test: &Test, message: &Message) -> bool {
 		}
 	}
 	false
+}
+
+/// `envelope [comparator] [:all|:localpart|:domain] <envelope-part-list>
+/// <key-list>` (RFC 5228 §5.4). `from` matches MAIL FROM, `to` matches the
+/// RCPT TO addresses.
+fn envelope_test(test: &Test, message: &Message) -> bool {
+	let comparator = comparator(&test.args);
+	let Some((parts, keys)) = split_names_keys(&test.args, &[]) else {
+		return false;
+	};
+	let part = address_part(&test.args);
+	for which in &parts {
+		let addresses: Vec<String> = match which.to_ascii_lowercase().as_str() {
+			"from" => message.envelope_from.clone().into_iter().collect(),
+			"to" => message.envelope_to.clone(),
+			_ => Vec::new(),
+		};
+		for address in addresses {
+			let Some(value) = part.of(&addr_spec(&address)) else {
+				continue;
+			};
+			for key in &keys {
+				if comparator.matches(&value, key) {
+					return true;
+				}
+			}
+		}
+	}
+	false
+}
+
+/// The address-part selected by a tag, defaulting to the whole address.
+fn address_part(args: &[Argument]) -> AddressPart {
+	if has_tag(args, "localpart") {
+		AddressPart::Local
+	} else if has_tag(args, "domain") {
+		AddressPart::Domain
+	} else {
+		AddressPart::All
+	}
 }
 
 #[derive(Clone, Copy)]

@@ -101,7 +101,7 @@ impl LocalDelivery {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
 		for account in &accounts {
-			self.deliver_for_account(account, &message.data, mailbox)?;
+			self.deliver_for_account(account, message, mailbox)?;
 		}
 		Ok(())
 	}
@@ -113,15 +113,16 @@ impl LocalDelivery {
 	fn deliver_for_account(
 		&self,
 		account: &str,
-		data: &[u8],
+		message: &AcceptedMessage,
 		hint: Option<&str>,
 	) -> Result<(), SinkError> {
+		let data = &message.data;
 		if let Some(mailbox) = hint {
 			self.deliver_to_account(account, Some(mailbox), data)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			return Ok(());
 		}
-		let Some(outcome) = self.sieve_outcome(account, data) else {
+		let Some(outcome) = self.sieve_outcome(account, message) else {
 			// No filter (or it failed to compile): normal INBOX delivery.
 			self.deliver_to_account(account, None, data)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
@@ -145,15 +146,18 @@ impl LocalDelivery {
 	/// Evaluate the account's Sieve filter, if present and valid. Any read,
 	/// lex or parse failure yields `None` so delivery falls back to INBOX
 	/// rather than dropping mail.
-	fn sieve_outcome(&self, account: &str, data: &[u8]) -> Option<crate::sieve::interp::Outcome> {
+	fn sieve_outcome(
+		&self,
+		account: &str,
+		message: &AcceptedMessage,
+	) -> Option<crate::sieve::interp::Outcome> {
 		let path = self.accounts_root.join(account).join("filter.sieve");
 		let source = fs::read_to_string(path).ok()?;
 		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
 		let commands = crate::sieve::parser::parse(&tokens).ok()?;
-		Some(crate::sieve::interp::evaluate(
-			&commands,
-			&crate::sieve::interp::Message::parse(data),
-		))
+		let parsed = crate::sieve::interp::Message::parse(&message.data)
+			.with_envelope(message.reverse_path.clone(), message.recipients.clone());
+		Some(crate::sieve::interp::evaluate(&commands, &parsed))
 	}
 }
 

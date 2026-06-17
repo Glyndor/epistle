@@ -132,6 +132,37 @@ fn address_test_matches_parts() {
 }
 
 #[test]
+fn envelope_test_matches_mail_from_and_rcpt_to() {
+	let tokens =
+		tokenize("if envelope :domain :is \"from\" \"bad.example\" { discard; }").expect("lex");
+	let commands = parse(&tokens).expect("parse");
+	let msg = Message::parse(MSG).with_envelope(
+		"spammer@bad.example".to_string(),
+		vec!["bob@example.net".to_string()],
+	);
+	assert!(evaluate(&commands, &msg).discarded);
+
+	let to =
+		parse(&tokenize("if envelope :localpart :is \"to\" \"bob\" { discard; }").expect("lex"))
+			.expect("parse");
+	assert!(evaluate(&to, &msg).discarded);
+
+	// Without a matching envelope it does not fire.
+	let miss = parse(&tokenize("if envelope :is \"from\" \"x@y\" { discard; }").unwrap()).unwrap();
+	assert!(!evaluate(&miss, &msg).discarded);
+}
+
+#[test]
+fn envelope_absent_never_matches() {
+	let commands =
+		parse(&tokenize("if envelope :is \"from\" \"a@b\" { discard; }").unwrap()).unwrap();
+	// No envelope attached: the test is simply false, mail keeps.
+	let outcome = evaluate(&commands, &Message::parse(MSG));
+	assert!(!outcome.discarded);
+	assert!(outcome.keep);
+}
+
+#[test]
 fn stop_halts_execution() {
 	let outcome = run("fileinto \"A\"; stop; fileinto \"B\";", MSG);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
