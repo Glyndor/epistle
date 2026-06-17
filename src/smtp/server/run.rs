@@ -292,14 +292,12 @@ impl Server {
 						use crate::antispam::reputation::{Scope, Screen, screen};
 						match screen(pool, Scope::Domain, domain).await {
 							Screen::Reject => {
-								tracing::info!(%domain, "rejecting poor-reputation sender");
+								// Quarantine rather than hard-reject: poor reputation
+								// is a heuristic, so keep the mail recoverable in the
+								// Rejects mailbox instead of losing it.
+								tracing::info!(%domain, "quarantining poor-reputation sender to Rejects");
 								self.train_corpus(&message.data, true);
-								send(
-									&mut stream,
-									&Reply::single(550, "5.7.1 sender reputation rejected"),
-								)
-								.await?;
-								continue;
+								message.mailbox = Some("Rejects".to_string());
 							}
 							Screen::FirstTime if !self.first_time_delay.is_zero() => {
 								tokio::time::sleep(self.first_time_delay).await;
@@ -307,8 +305,9 @@ impl Server {
 							_ => {}
 						}
 					}
-					// Accepted unauthenticated mail trains the ham corpus.
-					if session.authenticated().is_none() {
+					// Accepted unauthenticated mail trains the ham corpus —
+					// unless it was quarantined (already trained as spam).
+					if session.authenticated().is_none() && message.mailbox.is_none() {
 						self.train_corpus(&message.data, false);
 					}
 					let reply = match self.sink.deliver(message) {

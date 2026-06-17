@@ -159,6 +159,7 @@ mod tests {
 			recipients: vec!["bob@example.org".into()],
 			data: b"Subject: hi\r\n\r\nhello\r\n".to_vec(),
 			require_tls: false,
+			mailbox: None,
 		}
 	}
 

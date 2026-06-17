@@ -128,6 +128,7 @@ pub async fn flush_pending(
 					recipients: vec![to_addr.to_string()],
 					data: email_bytes,
 					require_tls: false,
+					mailbox: None,
 				});
 			}
 			to_remove.push(path);

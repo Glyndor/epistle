@@ -83,7 +83,11 @@ impl MessageSink for SplitDelivery {
 		}
 
 		if !local.is_empty() {
-			let mailbox = self.target_mailbox(&message);
+			// An explicit routing hint (e.g. a screening quarantine) wins over rules.
+			let mailbox = message
+				.mailbox
+				.clone()
+				.or_else(|| self.target_mailbox(&message));
 			let local_message = AcceptedMessage {
 				recipients: local,
 				..message.clone()
@@ -131,6 +135,7 @@ mod tests {
 			recipients: recipients.iter().map(|r| r.to_string()).collect(),
 			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
 			require_tls: false,
+			mailbox: None,
 		}
 	}
 
@@ -177,6 +182,17 @@ mod tests {
 			.expect("deliver");
 		// Routed to Junk, not INBOX.
 		assert_eq!(folder_count(dir.path(), "alice", "Junk"), 1);
+		assert_eq!(inbox_count(dir.path(), "alice"), 0);
+	}
+
+	#[test]
+	fn explicit_mailbox_hint_quarantines_to_that_folder() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
+		let mut msg = message(&["alice@example.org"]);
+		msg.mailbox = Some("Rejects".to_string());
+		sink.deliver(msg).expect("deliver");
+		assert_eq!(folder_count(dir.path(), "alice", "Rejects"), 1);
 		assert_eq!(inbox_count(dir.path(), "alice"), 0);
 	}
 

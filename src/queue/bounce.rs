@@ -54,6 +54,7 @@ The message will not be retried. Headers of the original message follow.\r\n\
 		recipients: vec![original_reverse_path.to_string()],
 		data: body.into_bytes(),
 		require_tls: false,
+		mailbox: None,
 	})
 }
 

@@ -48,6 +48,10 @@ pub struct AcceptedMessage {
 	/// The sender requested REQUIRETLS (RFC 8689): onward delivery must use
 	/// verified TLS.
 	pub require_tls: bool,
+	/// Routing hint set by inbound screening: deliver local copies into this
+	/// mailbox (e.g. `Rejects`) instead of INBOX. `None` leaves routing to
+	/// the delivery rules.
+	pub mailbox: Option<String>,
 }
 
 /// What the network layer must do after a step.
@@ -427,6 +431,7 @@ impl Session {
 				recipients: recipients.clone(),
 				data: body.clone(),
 				require_tls: *require_tls,
+				mailbox: None,
 			};
 			let oversize = *size > MAX_MESSAGE_SIZE;
 			self.state = State::Greeted;
