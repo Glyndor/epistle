@@ -29,6 +29,32 @@ pub(crate) fn spf_domain(reverse_path: &str, helo: Option<&str>) -> Option<Strin
 		.map(|(_, domain)| domain.to_ascii_lowercase())
 }
 
+/// The maximum number of `Received:` trace headers tolerated on inbound mail
+/// before it is treated as a loop (RFC 5321 section 6.3).
+pub(crate) const RECEIVED_HOP_LIMIT: usize = 100;
+
+/// Count the `Received:` header fields already present in a raw message,
+/// scanning only the header block (up to the first blank line). Folded
+/// continuation lines do not start a new header, so they are not counted.
+pub(crate) fn received_hop_count(data: &[u8]) -> usize {
+	let header_end = data
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.map(|p| p + 2)
+		.unwrap_or(data.len());
+	let block = String::from_utf8_lossy(&data[..header_end]);
+	block
+		.split_inclusive('\n')
+		.filter(|line| {
+			let first = line.as_bytes().first();
+			// A new header starts at the line start (no leading WSP).
+			!matches!(first, Some(b' ' | b'\t'))
+				&& line.len() >= 9
+				&& line[..9].eq_ignore_ascii_case("received:")
+		})
+		.count()
+}
+
 /// Build the RFC 5321 section 4.4 trace header prepended to accepted mail.
 pub(crate) fn received_header(
 	helo: Option<&str>,
@@ -81,6 +107,20 @@ pub(crate) fn format_auth_results(hostname: &str, methods: &[String]) -> String 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn counts_received_headers_in_the_block_only() {
+		let data = b"Received: from a\r\nReceived: from b\r\n\tby folded\r\n\
+Subject: hi\r\n\r\nReceived: not a header in the body\r\n";
+		// Two Received headers; the folded continuation and the body line
+		// are not counted.
+		assert_eq!(received_hop_count(data), 2);
+	}
+
+	#[test]
+	fn counts_zero_when_no_received_headers() {
+		assert_eq!(received_hop_count(b"From: a@b\r\n\r\nbody\r\n"), 0);
+	}
 
 	#[test]
 	fn received_protocol_follows_rfc3848() {
