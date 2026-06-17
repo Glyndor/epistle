@@ -3,6 +3,7 @@
 mod bounce;
 pub mod client;
 mod resolver;
+pub mod srs;
 mod worker;
 
 pub use resolver::{Connector, MxConnector};
