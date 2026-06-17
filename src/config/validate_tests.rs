@@ -27,6 +27,23 @@ kind = "submission"
 }
 
 #[test]
+fn parses_quota_bytes() {
+	let config = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+quota_bytes = 1073741824
+
+[[listeners]]
+kind = "smtp"
+"#,
+	)
+	.expect("valid config");
+	assert_eq!(config.quota_bytes, Some(1_073_741_824));
+}
+
+#[test]
 fn rejects_empty_hostname() {
 	let result = config_from(
 		r#"
