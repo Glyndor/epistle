@@ -30,6 +30,9 @@ pub struct Directory {
 	/// in this domain is delivered here. Absent means unknown users are
 	/// rejected (the secure default).
 	catch_all: HashMap<String, String>,
+	/// Domain aliases (alias domain → target domain): mail to `user@alias` is
+	/// resolved as `user@target`.
+	domain_aliases: HashMap<String, String>,
 }
 
 impl Directory {
@@ -52,7 +55,21 @@ impl Directory {
 			// The `+` separator is the de-facto standard, enabled by default.
 			subaddress_separators: vec!['+'],
 			catch_all: HashMap::new(),
+			domain_aliases: HashMap::new(),
 		}
+	}
+
+	/// Attach domain aliases (alias domain → target domain). Both sides are
+	/// lowercased to match resolution.
+	pub fn with_domain_aliases(
+		mut self,
+		aliases: impl IntoIterator<Item = (String, String)>,
+	) -> Self {
+		self.domain_aliases = aliases
+			.into_iter()
+			.map(|(alias, target)| (alias.to_ascii_lowercase(), target.to_ascii_lowercase()))
+			.collect();
+		self
 	}
 
 	/// Attach per-domain catch-all accounts (domain → account name). Domains
@@ -114,23 +131,28 @@ impl Directory {
 
 	/// Resolve a validated address.
 	pub fn resolve(&self, address: &Address) -> Resolution {
-		if !self.domains.contains(address.domain()) {
+		let local = address.local_part();
+		// A domain alias resolves as its target domain.
+		let domain = self
+			.domain_aliases
+			.get(address.domain())
+			.map(String::as_str)
+			.unwrap_or(address.domain());
+		if !self.domains.contains(domain) {
 			return Resolution::NotLocal;
 		}
-		if let Some(account) = self
-			.accounts_by_address
-			.get(&address.to_string().to_ascii_lowercase())
-		{
+		let key = format!("{local}@{domain}").to_ascii_lowercase();
+		if let Some(account) = self.accounts_by_address.get(&key) {
 			return Resolution::Account(account.clone());
 		}
 		// Sub-addressing: strip the tag and retry the base address.
-		if let Some(base) = self.strip_subaddress(address)
+		if let Some(base) = self.strip_subaddress(local, domain)
 			&& let Some(account) = self.accounts_by_address.get(&base)
 		{
 			return Resolution::Account(account.clone());
 		}
 		// Catch-all: a domain may funnel its unknown local users to one account.
-		if let Some(account) = self.catch_all.get(address.domain()) {
+		if let Some(account) = self.catch_all.get(domain) {
 			return Resolution::Account(account.clone());
 		}
 		Resolution::UnknownUser
@@ -138,9 +160,8 @@ impl Directory {
 
 	/// The base `local@domain` key (lowercased) once the earliest sub-address
 	/// separator and everything after it are removed, or `None` if the
-	/// address carries no tag.
-	fn strip_subaddress(&self, address: &Address) -> Option<String> {
-		let local = address.local_part();
+	/// local part carries no tag.
+	fn strip_subaddress(&self, local: &str, domain: &str) -> Option<String> {
 		let cut = self
 			.subaddress_separators
 			.iter()
@@ -150,7 +171,7 @@ impl Directory {
 		if cut == 0 {
 			return None;
 		}
-		Some(format!("{}@{}", &local[..cut], address.domain()).to_ascii_lowercase())
+		Some(format!("{}@{}", &local[..cut], domain).to_ascii_lowercase())
 	}
 }
 
@@ -284,6 +305,34 @@ mod tests {
 		assert_eq!(
 			directory().resolve(&parse("nobody@example.org")),
 			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn domain_alias_resolves_as_target_domain() {
+		let directory = directory()
+			.with_domain_aliases([("alias.example".to_string(), "example.org".to_string())]);
+		assert_eq!(
+			directory.resolve(&parse("alice@alias.example")),
+			Resolution::Account("alice".to_string())
+		);
+		// Sub-addressing still applies through the alias.
+		assert_eq!(
+			directory.resolve(&parse("bob+tag@ALIAS.example")),
+			Resolution::Account("bob".to_string())
+		);
+		// The alias domain is local, so an unknown user is UnknownUser, not NotLocal.
+		assert_eq!(
+			directory.resolve(&parse("nobody@alias.example")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn unaliased_foreign_domain_is_not_local() {
+		assert_eq!(
+			directory().resolve(&parse("alice@alias.example")),
+			Resolution::NotLocal
 		);
 	}
 

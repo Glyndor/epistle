@@ -253,6 +253,51 @@ catch_all = ["example.org"]
 }
 
 #[test]
+fn accepts_domain_alias_to_configured_domain() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[domain_aliases]
+"alias.example" = "example.org"
+"#,
+	);
+	assert!(result.is_ok());
+}
+
+#[test]
+fn rejects_domain_alias_to_unconfigured_target() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[domain_aliases]
+"alias.example" = "elsewhere.example"
+"#,
+	);
+	assert!(matches!(result, Err(ConfigError::Invalid(_))));
+}
+
+#[test]
+fn rejects_domain_alias_that_is_also_a_domain() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org", "second.example"]
+
+[domain_aliases]
+"second.example" = "example.org"
+"#,
+	);
+	assert!(matches!(result, Err(ConfigError::Invalid(_))));
+}
+
+#[test]
 fn rejects_account_with_unsafe_name() {
 	for name in ["", "Alice", "a/b", "-x", "a b"] {
 		let result = config_from(&format!(

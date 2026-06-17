@@ -51,6 +51,10 @@ pub struct Config {
 	/// is configured: without it every recipient would be rejected.
 	#[serde(default)]
 	pub domains: Vec<String>,
+	/// Domain aliases (alias domain → target domain): mail to `user@alias`
+	/// is delivered as `user@target`.
+	#[serde(default)]
+	pub domain_aliases: std::collections::HashMap<String, String>,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
