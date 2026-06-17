@@ -4,6 +4,7 @@
 //! challenge handlers build on top.
 
 pub mod client;
+pub mod csr;
 pub mod directory;
 pub mod http01;
 pub mod jws;
