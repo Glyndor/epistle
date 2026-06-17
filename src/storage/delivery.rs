@@ -101,10 +101,59 @@ impl LocalDelivery {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
 		for account in &accounts {
-			self.deliver_to_account(account, mailbox, &message.data)
-				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			self.deliver_for_account(account, &message.data, mailbox)?;
 		}
 		Ok(())
+	}
+
+	/// Deliver one message to one account. An explicit `hint` mailbox (an
+	/// admin rule or a security quarantine) takes precedence; otherwise the
+	/// account's Sieve filter, if any, decides. With no filter the message
+	/// lands in INBOX.
+	fn deliver_for_account(
+		&self,
+		account: &str,
+		data: &[u8],
+		hint: Option<&str>,
+	) -> Result<(), SinkError> {
+		if let Some(mailbox) = hint {
+			self.deliver_to_account(account, Some(mailbox), data)
+				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			return Ok(());
+		}
+		let Some(outcome) = self.sieve_outcome(account, data) else {
+			// No filter (or it failed to compile): normal INBOX delivery.
+			self.deliver_to_account(account, None, data)
+				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			return Ok(());
+		};
+		if outcome.keep {
+			self.deliver_to_account(account, None, data)
+				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+		}
+		for folder in &outcome.fileinto {
+			if is_safe_mailbox(folder) {
+				self.deliver_to_account(account, Some(folder), data)
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			}
+		}
+		// `redirect` requires the outbound spool and is handled by the routing
+		// layer in a later change; a pure discard leaves nothing to deliver.
+		Ok(())
+	}
+
+	/// Evaluate the account's Sieve filter, if present and valid. Any read,
+	/// lex or parse failure yields `None` so delivery falls back to INBOX
+	/// rather than dropping mail.
+	fn sieve_outcome(&self, account: &str, data: &[u8]) -> Option<crate::sieve::interp::Outcome> {
+		let path = self.accounts_root.join(account).join("filter.sieve");
+		let source = fs::read_to_string(path).ok()?;
+		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
+		let commands = crate::sieve::parser::parse(&tokens).ok()?;
+		Some(crate::sieve::interp::evaluate(
+			&commands,
+			&crate::sieve::interp::Message::parse(data),
+		))
 	}
 }
 
@@ -186,6 +235,79 @@ mod tests {
 		let files = list_inbox(dir.path(), "alice");
 		let content = fs::read(&files[0]).expect("read delivered file");
 		assert_eq!(content, b"Subject: hi\r\n\r\nbody\r\n");
+	}
+
+	fn folder_count(root: &std::path::Path, account: &str, mailbox: &str) -> usize {
+		fs::read_dir(
+			root.join("accounts")
+				.join(account)
+				.join("folders")
+				.join(mailbox)
+				.join("new"),
+		)
+		.map(|entries| entries.count())
+		.unwrap_or(0)
+	}
+
+	fn write_filter(root: &std::path::Path, account: &str, script: &str) {
+		let dir = root.join("accounts").join(account);
+		fs::create_dir_all(&dir).expect("mkdir");
+		fs::write(dir.join("filter.sieve"), script).expect("write filter");
+	}
+
+	#[test]
+	fn sieve_filter_files_into_chosen_folder() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+		write_filter(
+			dir.path(),
+			"alice",
+			"if header :contains \"Subject\" \"hi\" { fileinto \"Filed\"; }",
+		);
+		delivery
+			.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		assert_eq!(folder_count(dir.path(), "alice", "Filed"), 1);
+		assert!(list_inbox(dir.path(), "alice").is_empty());
+	}
+
+	#[test]
+	fn sieve_discard_drops_the_message() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+		write_filter(dir.path(), "alice", "discard;");
+		delivery
+			.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		assert!(list_inbox(dir.path(), "alice").is_empty());
+		assert_eq!(folder_count(dir.path(), "alice", "Filed"), 0);
+	}
+
+	#[test]
+	fn invalid_filter_falls_back_to_inbox() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+		// A syntactically broken script must not drop mail.
+		write_filter(dir.path(), "alice", "if header { oops");
+		delivery
+			.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		assert_eq!(list_inbox(dir.path(), "alice").len(), 1);
+	}
+
+	#[test]
+	fn quarantine_hint_overrides_sieve() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+		write_filter(dir.path(), "alice", "fileinto \"Filed\";");
+		let mut msg = message(&["alice@example.org"]);
+		msg.recipients = vec!["alice@example.org".to_string()];
+		// An explicit hint (e.g. spam quarantine) wins over the user filter.
+		delivery
+			.deliver_routed(&msg, Some("Rejects"))
+			.expect("deliver");
+		assert_eq!(folder_count(dir.path(), "alice", "Rejects"), 1);
+		assert_eq!(folder_count(dir.path(), "alice", "Filed"), 0);
 	}
 
 	#[test]
