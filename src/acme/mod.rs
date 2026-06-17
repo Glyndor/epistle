@@ -5,3 +5,4 @@
 
 pub mod directory;
 pub mod jws;
+pub mod protocol;
