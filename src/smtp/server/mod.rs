@@ -63,6 +63,8 @@ pub struct Server {
 	reputation: Option<sqlx::PgPool>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
+	/// Shared metrics counters.
+	metrics: Arc<crate::metrics::Metrics>,
 	/// Delay applied to first-time unauthenticated senders. Zero disables it.
 	first_time_delay: std::time::Duration,
 	/// If set, DMARC delivery records are written here for aggregate reports.
@@ -83,9 +85,16 @@ impl Server {
 			dnsbl: crate::dnsbl::Dnsbl::default(),
 			reputation: None,
 			hook: None,
+			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
 		}
+	}
+
+	/// Share a metrics registry across listeners and the metrics endpoint.
+	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = metrics;
+		self
 	}
 
 	/// Consult an external scanner hook for unauthenticated inbound mail.

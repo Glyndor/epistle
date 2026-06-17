@@ -22,6 +22,8 @@ pub enum ListenerKind {
 	Imaps,
 	/// IMAP with mandatory STARTTLS upgrade (port 143).
 	Imap,
+	/// Prometheus metrics endpoint (`GET /metrics`).
+	Metrics,
 }
 
 impl ListenerKind {
@@ -34,6 +36,7 @@ impl ListenerKind {
 			ListenerKind::Api => 8025,
 			ListenerKind::Imaps => 993,
 			ListenerKind::Imap => 143,
+			ListenerKind::Metrics => 9090,
 		}
 	}
 }
