@@ -12,3 +12,4 @@ pub mod reply;
 pub mod server;
 pub mod session;
 pub mod sink;
+pub mod trace;
