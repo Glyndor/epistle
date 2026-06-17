@@ -327,6 +327,15 @@ pub fn append(
 	Ok(id)
 }
 
+/// The `(UIDVALIDITY, UID)` assigned to an appended message, for the UIDPLUS
+/// `APPENDUID` response. `None` if the mailbox can no longer be opened or the
+/// message has already vanished.
+pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Option<(u32, u32)> {
+	let snapshot = Snapshot::open(data_dir, account, mailbox).ok()?;
+	let uid = snapshot.messages().find(|message| message.id == id)?.uid;
+	Some((snapshot.uid_validity(), uid))
+}
+
 /// Subscribe to a mailbox (the mailbox must already exist).
 pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	if !exists(data_dir, account, mailbox) {

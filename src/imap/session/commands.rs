@@ -240,7 +240,14 @@ impl Session {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
 		match mailbox::append(&self.data_dir, &account, &mailbox, &flags, data) {
-			Ok(_) => Output::text(format!("{tag} OK APPEND completed\r\n")),
+			Ok(id) => {
+				// UIDPLUS: report the UIDVALIDITY and UID assigned (RFC 4315).
+				let code = match mailbox::appenduid(&self.data_dir, &account, &mailbox, id) {
+					Some((validity, uid)) => format!("[APPENDUID {validity} {uid}] "),
+					None => String::new(),
+				};
+				Output::text(format!("{tag} OK {code}APPEND completed\r\n"))
+			}
 			Err(_) => Output::text(format!("{tag} NO APPEND failed\r\n")),
 		}
 	}
