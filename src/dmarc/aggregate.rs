@@ -127,6 +127,7 @@ pub async fn flush_pending(
 					reverse_path: format!("postmaster@{reporting_domain}"),
 					recipients: vec![to_addr.to_string()],
 					data: email_bytes,
+					require_tls: false,
 				});
 			}
 			to_remove.push(path);

@@ -25,22 +25,29 @@ enum State {
 	/// Greeted; ready for a mail transaction.
 	Greeted,
 	/// MAIL FROM accepted; collecting recipients.
-	ReceivingRecipients { reverse_path: String },
+	ReceivingRecipients {
+		reverse_path: String,
+		require_tls: bool,
+	},
 	/// DATA accepted; collecting message lines.
 	ReceivingData {
 		reverse_path: String,
 		recipients: Vec<String>,
 		size: usize,
 		body: Vec<u8>,
+		require_tls: bool,
 	},
 }
 
 /// A message accepted by the session, ready for delivery.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AcceptedMessage {
 	pub reverse_path: String,
 	pub recipients: Vec<String>,
 	pub data: Vec<u8>,
+	/// The sender requested REQUIRETLS (RFC 8689): onward delivery must use
+	/// verified TLS.
+	pub require_tls: bool,
 }
 
 /// What the network layer must do after a step.
@@ -333,7 +340,10 @@ impl Session {
 						"5.3.4 message exceeds maximum size",
 					));
 				}
-				self.state = State::ReceivingRecipients { reverse_path };
+				self.state = State::ReceivingRecipients {
+					reverse_path,
+					require_tls,
+				};
 				Action::Continue(Reply::ok())
 			}
 			_ => Action::Continue(Reply::bad_sequence()),
@@ -358,13 +368,18 @@ impl Session {
 		}
 		let forward_path = address.to_string();
 		match &mut self.state {
-			State::ReceivingRecipients { reverse_path } => {
+			State::ReceivingRecipients {
+				reverse_path,
+				require_tls,
+			} => {
 				let reverse_path = reverse_path.clone();
+				let require_tls = *require_tls;
 				self.state = State::ReceivingData {
 					reverse_path,
 					recipients: vec![forward_path],
 					size: 0,
 					body: Vec::new(),
+					require_tls,
 				};
 				Action::Continue(Reply::ok())
 			}
@@ -398,6 +413,7 @@ impl Session {
 			recipients,
 			size,
 			body,
+			require_tls,
 		} = &mut self.state
 		else {
 			// Programming error in the network layer; fail the transaction.
@@ -410,6 +426,7 @@ impl Session {
 				reverse_path: reverse_path.clone(),
 				recipients: recipients.clone(),
 				data: body.clone(),
+				require_tls: *require_tls,
 			};
 			let oversize = *size > MAX_MESSAGE_SIZE;
 			self.state = State::Greeted;

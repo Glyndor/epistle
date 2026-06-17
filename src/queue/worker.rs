@@ -202,7 +202,8 @@ impl Worker {
 				},
 				None => None,
 			};
-			let require_tls = policy.is_some();
+			// MTA-STS enforce or a sender's REQUIRETLS both mandate verified TLS.
+			let require_tls = policy.is_some() || entry.envelope.require_tls;
 
 			let (stream, server_name) = match self.connector.connect(&domain, policy.as_ref()).await
 			{
@@ -298,6 +299,7 @@ mod tests {
 				reverse_path: "alice@sender.example".into(),
 				recipients: vec![recipient.to_string()],
 				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
 			})
 			.expect("store");
 		spool

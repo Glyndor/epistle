@@ -104,6 +104,24 @@ fn requiretls_accepted_inside_tls() {
 }
 
 #[test]
+fn requiretls_flows_to_accepted_message() {
+	let mut session = tls_session();
+	session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
+	session.command_line("RCPT TO:<alice@example.org>");
+	session.command_line("DATA");
+	session.data_line(b"Subject: hi");
+	session.data_line(b"");
+	session.data_line(b"body");
+	let Some(Action::Deliver(_, message)) = session.data_line(b".") else {
+		panic!("expected delivery");
+	};
+	assert!(
+		message.require_tls,
+		"REQUIRETLS must reach the accepted message"
+	);
+}
+
+#[test]
 fn auth_with_initial_response_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));

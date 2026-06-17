@@ -107,6 +107,7 @@ mod tests {
 			reverse_path: "sender@elsewhere.example".into(),
 			recipients: recipients.iter().map(|r| r.to_string()).collect(),
 			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+			require_tls: false,
 		}
 	}
 
