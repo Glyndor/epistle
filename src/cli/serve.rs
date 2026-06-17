@@ -64,6 +64,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			.map_err(std::io::Error::other)?;
 		split = split.with_signer(Arc::new(signer));
 	}
+	if let Some(secret) = &config.srs_secret {
+		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
+		split = split.with_srs(srs, config.hostname.clone());
+	}
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Shared metrics across SMTP listeners and the metrics endpoint.

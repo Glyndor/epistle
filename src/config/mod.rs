@@ -86,6 +86,10 @@ pub struct Config {
 	/// (the default).
 	#[serde(default)]
 	pub greylist_delay_secs: u64,
+	/// Secret for Sender Rewriting Scheme (SRS) on forwarded mail. When set,
+	/// redirected/forwarded mail's envelope sender is rewritten so it passes
+	/// SPF at the next hop. Absent disables SRS (the default).
+	pub srs_secret: Option<String>,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
