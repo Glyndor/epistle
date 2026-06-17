@@ -60,6 +60,7 @@ mod tests {
 					reverse_path: format!("a{i}@example.org"),
 					recipients: vec![format!("r{i}@elsewhere.example")],
 					data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
+					require_tls: false,
 				})
 				.expect("store");
 		}

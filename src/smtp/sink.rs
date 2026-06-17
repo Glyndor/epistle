@@ -56,6 +56,7 @@ mod tests {
 			reverse_path: "a@example.org".into(),
 			recipients: vec!["b@example.org".into()],
 			data: b"hello\r\n".to_vec(),
+			require_tls: false,
 		};
 		sink.deliver(message.clone()).expect("delivery succeeds");
 		assert_eq!(sink.messages(), vec![message]);
