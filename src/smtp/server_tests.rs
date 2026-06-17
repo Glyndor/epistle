@@ -384,6 +384,33 @@ async fn serve_accepts_tcp_connections() {
 	task.abort();
 }
 
+#[tokio::test]
+async fn pipelined_commands_are_processed_in_order() {
+	// RFC 2920: the client sends the whole command group in a single write
+	// without waiting for intermediate replies. The server must process each
+	// command in order and deliver the message.
+	let (output, sink) = converse(
+		b"EHLO c.example.org\r\n\
+		  MAIL FROM:<alice@example.org>\r\n\
+		  RCPT TO:<bob@example.org>\r\n\
+		  DATA\r\n\
+		  Subject: hi\r\n\r\nhello\r\n.\r\n\
+		  QUIT\r\n",
+	)
+	.await;
+	let data_idx = output.find("354 ").expect("DATA accepted");
+	let close_idx = output.find("221 ").expect("connection closed");
+	assert!(data_idx < close_idx, "replies out of order: {output}");
+	assert!(
+		output.trim_end().ends_with("221 closing connection"),
+		"{output}"
+	);
+	let messages = sink.messages();
+	assert_eq!(messages.len(), 1);
+	assert_eq!(messages[0].reverse_path, "alice@example.org");
+	assert_eq!(messages[0].recipients, vec!["bob@example.org".to_string()]);
+}
+
 #[test]
 fn received_protocol_follows_rfc3848() {
 	// HELO is plain SMTP regardless of TLS or auth.
