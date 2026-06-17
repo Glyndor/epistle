@@ -94,6 +94,27 @@ fn quota_reports_storage_usage() {
 }
 
 #[test]
+fn append_over_quota_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// A tiny 100-byte quota.
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory())
+		.with_quota_limit(100);
+	// (Authenticate.)
+	session.command_line("a1 LOGIN alice secret");
+	// A 200-byte APPEND exceeds the quota and is refused before the literal.
+	let output = session.command_line("a2 APPEND INBOX {200}");
+	let response = text(&output);
+	assert!(response.contains("a2 NO [OVERQUOTA]"), "{response}");
+	assert_eq!(
+		output.collect_literal, None,
+		"literal must not be collected"
+	);
+	// A small APPEND within quota still works.
+	let output = session.command_line("a3 APPEND INBOX {10}");
+	assert_eq!(output.collect_literal, Some(10));
+}
+
+#[test]
 fn unselect_leaves_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());

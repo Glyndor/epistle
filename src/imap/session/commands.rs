@@ -1,7 +1,4 @@
 use super::super::command::{ReturnOpt, SequenceSet};
-/// Default per-account storage quota in 1024-octet units (5 GiB).
-const DEFAULT_QUOTA_KIB: u64 = 5 * 1024 * 1024;
-
 use super::codes::{copyuid_code, esearch_line};
 use super::helpers::{format_internaldate, search_matches};
 use super::mailbox::{self, Flag, Snapshot, render_flags};
@@ -257,7 +254,8 @@ impl Session {
 	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
 	fn quota_line(&self, account: &str) -> String {
 		let used_kib = mailbox::account_usage(&self.data_dir, account).div_ceil(1024);
-		format!("* QUOTA \"\" (STORAGE {used_kib} {DEFAULT_QUOTA_KIB})\r\n")
+		let limit_kib = self.quota_limit_bytes.div_ceil(1024);
+		format!("* QUOTA \"\" (STORAGE {used_kib} {limit_kib})\r\n")
 	}
 
 	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
@@ -303,6 +301,11 @@ impl Session {
 		};
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
+		}
+		// Quota enforcement (RFC 9208): refuse before reading the literal.
+		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
+		if projected > self.quota_limit_bytes {
+			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
 		}
 		let mut flags = Vec::with_capacity(flag_tokens.len());
 		for token in flag_tokens {
