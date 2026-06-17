@@ -9,3 +9,4 @@ pub mod directory;
 pub mod http01;
 pub mod jws;
 pub mod protocol;
+pub mod transport;
