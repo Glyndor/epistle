@@ -7,3 +7,7 @@ mod verify;
 
 pub use sign::{Signer, SignerError, generate_key};
 pub use verify::{DkimOutcome, DkimResult, verify_message};
+
+// Shared with the ARC implementation (RFC 8617 reuses DKIM's algorithm and
+// canonicalization definitions).
+pub(crate) use signature::{Algorithm, Canon};
