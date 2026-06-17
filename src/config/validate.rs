@@ -14,6 +14,37 @@ impl Config {
 		self.validate_accounts()?;
 		self.validate_api()?;
 		self.validate_listeners()?;
+		self.validate_acme()?;
+		Ok(())
+	}
+
+	fn validate_acme(&self) -> Result<(), ConfigError> {
+		let Some(acme) = &self.acme else {
+			return Ok(());
+		};
+		if !acme.directory_url.starts_with("https://") {
+			return Err(ConfigError::Invalid(
+				"[acme] directory_url must be an https URL".into(),
+			));
+		}
+		if acme.domains.is_empty() {
+			return Err(ConfigError::Invalid(
+				"[acme] requires at least one domain".into(),
+			));
+		}
+		let configured: HashSet<String> = self
+			.domains
+			.iter()
+			.map(|d| d.to_ascii_lowercase())
+			.collect();
+		for domain in &acme.domains {
+			validate_dns_name("acme domain", domain)?;
+			if !configured.contains(&domain.to_ascii_lowercase()) {
+				return Err(ConfigError::Invalid(format!(
+					"[acme] domain \"{domain}\" is not a configured domain"
+				)));
+			}
+		}
 		Ok(())
 	}
 
