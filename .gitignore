@@ -10,3 +10,9 @@
 # Supply-chain artifacts (generated in CI)
 *.cdx.json
 NOTICES.html
+
+# cargo-fuzz
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
