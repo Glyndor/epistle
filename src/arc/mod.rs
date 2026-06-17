@@ -6,6 +6,9 @@
 //! sealing build on it.
 
 pub mod chain;
+pub mod signature;
 
 #[cfg(test)]
 mod chain_tests;
+#[cfg(test)]
+mod signature_tests;
