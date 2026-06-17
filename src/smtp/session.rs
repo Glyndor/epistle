@@ -158,11 +158,13 @@ impl Session {
 		match super::command::parse(line) {
 			Ok(command) => self.apply(command),
 			Err(ParseError::UnknownCommand) => Action::Continue(Reply::syntax_error()),
-			Err(ParseError::LineTooLong) => Action::Continue(Reply::single(500, "line too long")),
+			Err(ParseError::LineTooLong) => {
+				Action::Continue(Reply::single(500, "5.5.2 line too long"))
+			}
 			Err(ParseError::InvalidCharacters) => Action::Continue(Reply::syntax_error()),
 			Err(ParseError::InvalidArguments) => Action::Continue(Reply::invalid_arguments()),
 			Err(ParseError::UnsupportedParameter) => {
-				Action::Continue(Reply::single(555, "parameter not implemented"))
+				Action::Continue(Reply::single(555, "5.5.4 parameter not implemented"))
 			}
 		}
 	}
@@ -205,7 +207,7 @@ impl Session {
 			return Action::Continue(Reply::bad_sequence());
 		}
 		if mechanism != "PLAIN" {
-			return Action::Continue(Reply::single(504, "mechanism not supported"));
+			return Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
 		}
 		match initial {
 			Some(response) => self.verify_plain(&response),
@@ -216,7 +218,7 @@ impl Session {
 	/// Feed the response line of a challenged AUTH (server sent 334).
 	pub fn auth_line(&mut self, line: &str) -> Action {
 		if line == "*" {
-			return Action::Continue(Reply::single(501, "authentication cancelled"));
+			return Action::Continue(Reply::single(501, "5.7.0 authentication cancelled"));
 		}
 		self.verify_plain(line)
 	}
@@ -260,6 +262,7 @@ impl Session {
 		let mut lines = vec![
 			self.hostname.clone(),
 			"PIPELINING".to_string(),
+			"ENHANCEDSTATUSCODES".to_string(),
 			"8BITMIME".to_string(),
 			format!("SIZE {MAX_MESSAGE_SIZE}"),
 			// RFC 9422: advertise the per-message recipient ceiling we enforce.
@@ -276,7 +279,7 @@ impl Session {
 
 	fn start_tls(&mut self) -> Action {
 		if !self.tls_available {
-			return Action::Continue(Reply::single(454, "TLS not available"));
+			return Action::Continue(Reply::single(454, "4.7.0 TLS not available"));
 		}
 		match self.state {
 			// RFC 3207: STARTTLS requires EHLO first and no open transaction.
@@ -300,18 +303,21 @@ impl Session {
 						));
 					}
 					(Some(_), Err(_)) => {
-						return Action::Continue(Reply::single(553, "invalid reverse-path"));
+						return Action::Continue(Reply::single(553, "5.1.7 invalid reverse-path"));
 					}
 					// The null reverse-path (bounces) is legal when
 					// unauthenticated; anything else must parse.
 					(None, Err(_)) if !reverse_path.is_empty() => {
-						return Action::Continue(Reply::single(553, "invalid reverse-path"));
+						return Action::Continue(Reply::single(553, "5.1.7 invalid reverse-path"));
 					}
 					_ => {}
 				}
 				// SIZE is declared up front: reject oversize without DATA.
 				if size.is_some_and(|s| s > MAX_MESSAGE_SIZE as u64) {
-					return Action::Continue(Reply::single(552, "message exceeds maximum size"));
+					return Action::Continue(Reply::single(
+						552,
+						"5.3.4 message exceeds maximum size",
+					));
 				}
 				self.state = State::ReceivingRecipients { reverse_path };
 				Action::Continue(Reply::ok())
@@ -322,7 +328,7 @@ impl Session {
 
 	fn rcpt_to(&mut self, forward_path: String) -> Action {
 		let Ok(address) = Address::parse(&forward_path) else {
-			return Action::Continue(Reply::single(553, "invalid recipient address"));
+			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};
 		match self.directory.resolve(&address) {
 			// Foreign domains are relayed only for authenticated users.
@@ -352,7 +358,7 @@ impl Session {
 				recipients, body, ..
 			} if body.is_empty() => {
 				if recipients.len() >= MAX_RECIPIENTS {
-					return Action::Continue(Reply::single(452, "too many recipients"));
+					return Action::Continue(Reply::single(452, "4.5.3 too many recipients"));
 				}
 				recipients.push(forward_path);
 				Action::Continue(Reply::ok())

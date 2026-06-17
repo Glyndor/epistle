@@ -202,7 +202,7 @@ impl Server {
 					// Auth responses must be ASCII; abort.
 					send(
 						&mut stream,
-						&Reply::single(501, "non-ASCII in AUTH response"),
+						&Reply::single(501, "5.5.2 non-ASCII in AUTH response"),
 					)
 					.await?;
 					return Ok(());
@@ -404,7 +404,7 @@ impl Server {
 						Ok(()) => reply,
 						Err(error) => {
 							tracing::warn!(%error, "delivery failed");
-							Reply::single(451, "temporary storage failure, try again")
+							Reply::single(451, "4.3.0 temporary storage failure, try again")
 						}
 					};
 					send(&mut stream, &reply).await?;
@@ -413,7 +413,7 @@ impl Server {
 					let Some(acceptor) = &self.tls else {
 						// The session only emits UpgradeTls when TLS was
 						// offered; reaching this is a programming error.
-						send(&mut stream, &Reply::single(454, "TLS not available")).await?;
+						send(&mut stream, &Reply::single(454, "4.7.0 TLS not available")).await?;
 						return Ok(());
 					};
 					send(&mut stream, &reply).await?;
@@ -497,11 +497,12 @@ fn format_auth_results(hostname: &str, methods: &[String]) -> String {
 
 fn line_error_reply(error: &LineError) -> Reply {
 	match error {
-		LineError::BareControlCharacter => {
-			Reply::single(554, "bare CR or LF is not allowed, closing connection")
-		}
-		LineError::TooLong => Reply::single(500, "line too long, closing connection"),
-		LineError::NulByte => Reply::single(554, "NUL byte received, closing connection"),
+		LineError::BareControlCharacter => Reply::single(
+			554,
+			"5.5.2 bare CR or LF is not allowed, closing connection",
+		),
+		LineError::TooLong => Reply::single(500, "5.5.2 line too long, closing connection"),
+		LineError::NulByte => Reply::single(554, "5.5.2 NUL byte received, closing connection"),
 	}
 }
 

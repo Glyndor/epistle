@@ -57,7 +57,10 @@ QUIT\r\n";
 		"EHLO reply: {output}"
 	);
 	assert!(output.contains("354 "), "DATA go-ahead: {output}");
-	assert!(output.ends_with("221 closing connection\r\n"), "{output}");
+	assert!(
+		output.ends_with("221 2.0.0 closing connection\r\n"),
+		"{output}"
+	);
 
 	let messages = sink.messages();
 	assert_eq!(messages.len(), 1);
@@ -74,20 +77,20 @@ QUIT\r\n";
 #[tokio::test]
 async fn bare_lf_closes_connection() {
 	let (output, sink) = converse(b"EHLO x.example\nMAIL FROM:<a@b.example>\r\n").await;
-	assert!(output.contains("554 bare CR or LF"), "{output}");
+	assert!(output.contains("554 5.5.2 bare CR or LF"), "{output}");
 	assert!(sink.messages().is_empty());
 }
 
 #[tokio::test]
 async fn bare_cr_closes_connection() {
 	let (output, _) = converse(b"EHLO x\rexample\r\n").await;
-	assert!(output.contains("554 bare CR or LF"), "{output}");
+	assert!(output.contains("554 5.5.2 bare CR or LF"), "{output}");
 }
 
 #[tokio::test]
 async fn nul_byte_closes_connection() {
 	let (output, _) = converse(b"EHLO x\0.example\r\n").await;
-	assert!(output.contains("554 NUL byte"), "{output}");
+	assert!(output.contains("554 5.5.2 NUL byte"), "{output}");
 }
 
 #[tokio::test]
@@ -95,13 +98,13 @@ async fn overlong_line_closes_connection() {
 	let mut script = vec![b'x'; 2000];
 	script.extend_from_slice(b"\r\n");
 	let (output, _) = converse(&script).await;
-	assert!(output.contains("500 line too long"), "{output}");
+	assert!(output.contains("500 5.5.2 line too long"), "{output}");
 }
 
 #[tokio::test]
 async fn out_of_order_commands_are_rejected() {
 	let (output, sink) = converse(b"MAIL FROM:<a@example.org>\r\nQUIT\r\n").await;
-	assert!(output.contains("503 bad sequence"), "{output}");
+	assert!(output.contains("503 5.5.1 bad sequence"), "{output}");
 	assert!(sink.messages().is_empty());
 }
 
@@ -109,7 +112,7 @@ async fn out_of_order_commands_are_rejected() {
 async fn non_utf8_command_gets_syntax_error() {
 	let (output, _) = converse(b"EHLO caf\xC3\xA9.example\r\nQUIT\r\n").await;
 	// Non-ASCII is rejected by the command parser after UTF-8 decoding.
-	assert!(output.contains("500 syntax error"), "{output}");
+	assert!(output.contains("500 5.5.2 syntax error"), "{output}");
 }
 
 #[tokio::test]
@@ -133,7 +136,7 @@ Subject: test\r\n\
 async fn starttls_not_offered_without_acceptor() {
 	let (output, _) = converse(b"EHLO client.example.org\r\nSTARTTLS\r\nQUIT\r\n").await;
 	assert!(!output.contains("250-STARTTLS"), "{output}");
-	assert!(output.contains("454 TLS not available"), "{output}");
+	assert!(output.contains("454 4.7.0 TLS not available"), "{output}");
 }
 
 /// DNS stub serving one SPF TXT record for `sender.example`.
@@ -402,7 +405,7 @@ async fn pipelined_commands_are_processed_in_order() {
 	let close_idx = output.find("221 ").expect("connection closed");
 	assert!(data_idx < close_idx, "replies out of order: {output}");
 	assert!(
-		output.trim_end().ends_with("221 closing connection"),
+		output.trim_end().ends_with("221 2.0.0 closing connection"),
 		"{output}"
 	);
 	let messages = sink.messages();
