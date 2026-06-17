@@ -187,10 +187,10 @@ impl Session {
 			Command::MailFrom {
 				reverse_path,
 				size,
-				body: _,
 				require_tls,
+				..
 			} => self.mail_from(reverse_path, size, require_tls),
-			Command::RcptTo { forward_path } => self.rcpt_to(forward_path),
+			Command::RcptTo { forward_path, .. } => self.rcpt_to(forward_path),
 			Command::Data => self.data(),
 			Command::Rset => {
 				self.reset();
