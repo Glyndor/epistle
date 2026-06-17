@@ -5,4 +5,5 @@
 //! such as DNSBL live in their own modules.
 
 pub mod bayes;
+pub mod corpus;
 pub mod reputation;

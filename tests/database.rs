@@ -130,3 +130,48 @@ async fn reputation_screen_maps_verdicts() {
 		.await
 		.expect("cleanup");
 }
+
+#[tokio::test]
+async fn bayes_corpus_trains_and_scores() {
+	use mail::antispam::corpus;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = mail::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	// Train: several spam messages with a marker token, several ham without.
+	for _ in 0..6 {
+		corpus::train(&pool, "buy cheap viagra now discount", true)
+			.await
+			.expect("train spam");
+		corpus::train(&pool, "project meeting notes attached agenda", false)
+			.await
+			.expect("train ham");
+	}
+
+	let spammy = corpus::score(&pool, "viagra discount cheap")
+		.await
+		.expect("score");
+	let hammy = corpus::score(&pool, "meeting agenda notes")
+		.await
+		.expect("score");
+	assert!(
+		spammy > hammy,
+		"spammy {spammy} should exceed hammy {hammy}"
+	);
+	assert!(spammy > 0.5, "spammy {spammy}");
+
+	// Reset shared corpus so reruns stay deterministic.
+	sqlx::query("DELETE FROM bayes_token")
+		.execute(&pool)
+		.await
+		.expect("clear tokens");
+	sqlx::query("UPDATE bayes_corpus SET ham_messages = 0, spam_messages = 0")
+		.execute(&pool)
+		.await
+		.expect("reset corpus");
+}
