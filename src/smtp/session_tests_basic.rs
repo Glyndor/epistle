@@ -65,6 +65,10 @@ fn ehlo_greeting_advertises_extensions() {
 	assert!(rendered.contains("8BITMIME"), "{rendered}");
 	assert!(rendered.contains("SIZE "), "{rendered}");
 	assert!(rendered.contains("STARTTLS"), "{rendered}");
+	assert!(
+		rendered.contains(&format!("LIMITS RCPTMAX={MAX_RECIPIENTS}")),
+		"{rendered}"
+	);
 	assert!(session.esmtp());
 }
 
