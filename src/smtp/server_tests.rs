@@ -197,6 +197,64 @@ QUIT\r\n";
 	(String::from_utf8(output).expect("ascii"), sink)
 }
 
+/// DNS stub that lists 192.0.2.7 on the `bl.example` blocklist.
+struct ListingDns;
+
+impl crate::spf::DnsLookup for ListingDns {
+	fn txt(&self, _name: &str) -> DnsFuture<'_, Vec<String>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn addresses(&self, name: &str) -> DnsFuture<'_, Vec<std::net::IpAddr>> {
+		let listed = name == "7.2.0.192.bl.example";
+		Box::pin(async move {
+			Ok(if listed {
+				vec!["127.0.0.2".parse().expect("ip")]
+			} else {
+				Vec::new()
+			})
+		})
+	}
+
+	fn mx(&self, _name: &str) -> DnsFuture<'_, Vec<String>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
+#[tokio::test]
+async fn dnsbl_listed_client_is_rejected() {
+	let sink = Arc::new(MemorySink::new());
+	let server = Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
+		.with_directory(test_directory())
+		.with_spf(Arc::new(ListingDns))
+		.with_dnsbl(crate::dnsbl::Dnsbl::new(["bl.example".to_string()]));
+
+	let (client, server_stream) = tokio::io::duplex(64 * 1024);
+	let peer = Some("192.0.2.7".parse().expect("ip"));
+	let task = tokio::spawn(async move { server.handle(server_stream, peer).await });
+
+	let script = b"EHLO c.example.org\r\n\
+MAIL FROM:<eve@sender.example>\r\n\
+RCPT TO:<bob@example.org>\r\n\
+DATA\r\n\
+hi\r\n\
+.\r\n\
+QUIT\r\n";
+	let (mut client_read, mut client_write) = tokio::io::split(client);
+	client_write.write_all(script).await.expect("write");
+	client_write.shutdown().await.expect("shutdown");
+	let mut output = Vec::new();
+	client_read.read_to_end(&mut output).await.expect("read");
+	task.await.expect("task").expect("server result");
+
+	let output = String::from_utf8(output).expect("ascii");
+	assert!(
+		output.contains("554") && output.contains("DNS blocklist"),
+		"{output}"
+	);
+	assert!(sink.messages().is_empty(), "listed client must not deliver");
+}
+
 #[tokio::test]
 async fn spf_fail_rejects_the_message() {
 	let (output, sink) = converse_with_spf("v=spf1 -all").await;
@@ -358,6 +416,7 @@ async fn implicit_tls_without_acceptor_errors() {
 		tls_mode: TlsMode::Implicit,
 		directory: DirectoryHandle::new(Directory::default()),
 		spf: None,
+		dnsbl: crate::dnsbl::Dnsbl::default(),
 		report_dir: None,
 	};
 	let (_client, server_stream) = tokio::io::duplex(1024);

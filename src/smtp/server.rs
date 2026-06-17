@@ -57,6 +57,8 @@ pub struct Server {
 	tls_mode: TlsMode,
 	directory: DirectoryHandle,
 	spf: Option<Arc<dyn crate::spf::DnsLookup>>,
+	/// DNS blocklist zones to screen unauthenticated clients against.
+	dnsbl: crate::dnsbl::Dnsbl,
 	/// If set, DMARC delivery records are written here for aggregate reports.
 	report_dir: Option<std::path::PathBuf>,
 }
@@ -72,6 +74,7 @@ impl Server {
 			tls_mode: TlsMode::Opportunistic,
 			directory: DirectoryHandle::new(Directory::default()),
 			spf: None,
+			dnsbl: crate::dnsbl::Dnsbl::default(),
 			report_dir: None,
 		}
 	}
@@ -79,6 +82,12 @@ impl Server {
 	/// Enable SPF verification of unauthenticated inbound mail.
 	pub fn with_spf(mut self, dns: Arc<dyn crate::spf::DnsLookup>) -> Self {
 		self.spf = Some(dns);
+		self
+	}
+
+	/// Screen unauthenticated clients against the given DNS blocklist zones.
+	pub fn with_dnsbl(mut self, dnsbl: crate::dnsbl::Dnsbl) -> Self {
+		self.dnsbl = dnsbl;
 		self
 	}
 
@@ -234,6 +243,21 @@ impl Server {
 					// SPF and DKIM apply to unauthenticated mail from a
 					// known peer.
 					let mut auth_headers = String::new();
+					// DNSBL screening: reject unauthenticated clients listed on a
+					// configured blocklist before any further processing.
+					if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated())
+						&& !self.dnsbl.is_empty()
+						&& let crate::dnsbl::DnsblOutcome::Listed { zone } =
+							self.dnsbl.check(ip, dns.as_ref()).await
+					{
+						tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
+						send(
+							&mut stream,
+							&Reply::single(554, "5.7.1 client host blocked by DNS blocklist"),
+						)
+						.await?;
+						continue;
+					}
 					if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated())
 					{
 						let domain = spf_domain(&message.reverse_path, session.helo_domain());

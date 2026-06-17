@@ -185,6 +185,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				let mut server = Server::new(&config.hostname, Arc::clone(&sink))
 					.with_directory(directory.clone())
 					.with_spf(Arc::clone(&spf_dns))
+					.with_dnsbl(crate::dnsbl::Dnsbl::new(config.dnsbl_zones.clone()))
 					.with_report_dir(config.data_dir.clone());
 				if let Some(acceptor) = &tls_acceptor {
 					server = server.with_tls(acceptor.clone(), mode);
