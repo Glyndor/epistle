@@ -262,6 +262,8 @@ impl Session {
 			"PIPELINING".to_string(),
 			"8BITMIME".to_string(),
 			format!("SIZE {MAX_MESSAGE_SIZE}"),
+			// RFC 9422: advertise the per-message recipient ceiling we enforce.
+			format!("LIMITS RCPTMAX={MAX_RECIPIENTS}"),
 		];
 		if self.tls_available {
 			lines.push("STARTTLS".to_string());
