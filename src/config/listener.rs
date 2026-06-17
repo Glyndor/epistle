@@ -24,6 +24,8 @@ pub enum ListenerKind {
 	Imap,
 	/// Prometheus metrics endpoint (`GET /metrics`).
 	Metrics,
+	/// ACME HTTP-01 challenge responder (`/.well-known/acme-challenge/*`).
+	Acme,
 }
 
 impl ListenerKind {
@@ -37,6 +39,7 @@ impl ListenerKind {
 			ListenerKind::Imaps => 993,
 			ListenerKind::Imap => 143,
 			ListenerKind::Metrics => 9090,
+			ListenerKind::Acme => 80,
 		}
 	}
 }
