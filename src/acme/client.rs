@@ -108,8 +108,9 @@ impl<T: AcmeTransport> AcmeClient<T> {
 		self.account_url.lock().expect("account lock").is_some()
 	}
 
-	/// Place a certificate order for `domains`.
-	pub async fn new_order(&self, domains: &[String]) -> Result<Order, AcmeError> {
+	/// Place a certificate order for `domains`, returning the order and its URL
+	/// (the `Location` header, used to poll the order's status).
+	pub async fn new_order(&self, domains: &[String]) -> Result<(Order, String), AcmeError> {
 		let payload = protocol::new_order_payload(domains);
 		let response = self
 			.signed_post(
@@ -117,7 +118,12 @@ impl<T: AcmeTransport> AcmeClient<T> {
 				&serde_json::to_vec(&payload).expect("json"),
 			)
 			.await?;
-		serde_json::from_slice(&response.body).map_err(|e| AcmeError::Protocol(e.to_string()))
+		let order: Order = serde_json::from_slice(&response.body)
+			.map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		let url = response
+			.location
+			.ok_or_else(|| AcmeError::Protocol("newOrder response had no Location".into()))?;
+		Ok((order, url))
 	}
 
 	/// Fetch a resource with POST-as-GET (RFC 8555 §6.3: empty payload).
@@ -159,166 +165,85 @@ impl<T: AcmeTransport> AcmeClient<T> {
 	pub async fn download_certificate(&self, certificate_url: &str) -> Result<Vec<u8>, AcmeError> {
 		Ok(self.post_as_get(certificate_url).await?.body)
 	}
+
+	/// Issue a certificate for `domains` end to end via HTTP-01: order, publish
+	/// each challenge's key authorization, validate, finalize a fresh CSR, and
+	/// download the chain. Returns the certificate chain PEM and its key PEM.
+	/// `poll` bounds how many times each pending resource is re-checked.
+	pub async fn obtain_certificate(
+		&self,
+		domains: &[String],
+		http01: &super::http01::ChallengeStore,
+		poll: u32,
+	) -> Result<(String, String), AcmeError> {
+		let (order, order_url) = self.new_order(domains).await?;
+		let mut published = Vec::new();
+
+		for authz_url in &order.authorizations {
+			let authz = self.authorization(authz_url).await?;
+			let challenge = authz
+				.challenge("http-01")
+				.ok_or_else(|| AcmeError::Protocol("no http-01 challenge".into()))?;
+			http01.set(
+				&challenge.token,
+				&self.key.key_authorization(&challenge.token),
+			);
+			published.push(challenge.token.clone());
+			self.respond_challenge(&challenge.url).await?;
+			self.poll_authorization(authz_url, poll).await?;
+		}
+
+		let csr = super::csr::generate(domains).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		let finalized = self.finalize(&order.finalize, &csr.der_b64url).await?;
+		let certificate_url = self.poll_order(&order_url, &finalized, poll).await?;
+		let chain = self.download_certificate(&certificate_url).await?;
+
+		for token in published {
+			http01.remove(&token);
+		}
+		let chain = String::from_utf8(chain).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		Ok((chain, csr.key_pem))
+	}
+
+	/// Re-check an authorization until it is `valid` (or bail on `invalid`).
+	async fn poll_authorization(&self, url: &str, max: u32) -> Result<(), AcmeError> {
+		for _ in 0..max.max(1) {
+			let authz = self.authorization(url).await?;
+			match authz.status.as_str() {
+				"valid" => return Ok(()),
+				"invalid" => return Err(AcmeError::Protocol("authorization invalid".into())),
+				_ => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+			}
+		}
+		Err(AcmeError::Protocol(
+			"authorization not valid in time".into(),
+		))
+	}
+
+	/// Re-check an order until `valid`, returning its certificate URL.
+	async fn poll_order(
+		&self,
+		order_url: &str,
+		initial: &Order,
+		max: u32,
+	) -> Result<String, AcmeError> {
+		let mut order = initial.clone();
+		for attempt in 0..max.max(1) {
+			if let (protocol::OrderStatus::Valid, Some(url)) = (order.status, &order.certificate) {
+				return Ok(url.clone());
+			}
+			if order.status == protocol::OrderStatus::Invalid {
+				return Err(AcmeError::Protocol("order invalid".into()));
+			}
+			if attempt + 1 < max.max(1) {
+				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+				order = self.order_status(order_url).await?;
+			}
+		}
+		Err(AcmeError::Protocol("order not valid in time".into()))
+	}
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use std::collections::HashMap;
-
-	/// Transport returning canned responses keyed by URL, recording POSTs.
-	struct ScriptedTransport {
-		directory: Vec<u8>,
-		posts: Mutex<HashMap<String, PostResponse>>,
-	}
-
-	impl AcmeTransport for ScriptedTransport {
-		fn get(&self, _url: &str) -> Fut<'_, Vec<u8>> {
-			let body = self.directory.clone();
-			Box::pin(async move { Ok(body) })
-		}
-		fn new_nonce(&self, _url: &str) -> Fut<'_, String> {
-			Box::pin(async { Ok("nonce-0".to_string()) })
-		}
-		fn post(&self, url: &str, _jws: &str) -> Fut<'_, PostResponse> {
-			let resp = self
-				.posts
-				.lock()
-				.expect("posts")
-				.get(url)
-				.cloned()
-				.expect("scripted response");
-			Box::pin(async move { Ok(resp) })
-		}
-	}
-
-	fn directory_json() -> Vec<u8> {
-		br#"{
-			"newNonce": "https://acme.example/new-nonce",
-			"newAccount": "https://acme.example/new-acct",
-			"newOrder": "https://acme.example/new-order"
-		}"#
-		.to_vec()
-	}
-
-	#[tokio::test]
-	async fn register_then_order_threads_account_and_parses_order() {
-		let (key, _) = AccountKey::generate().expect("key");
-		let mut posts = HashMap::new();
-		posts.insert(
-			"https://acme.example/new-acct".to_string(),
-			PostResponse {
-				nonce: "nonce-1".to_string(),
-				location: Some("https://acme.example/acct/42".to_string()),
-				status: 201,
-				body: b"{}".to_vec(),
-			},
-		);
-		posts.insert(
-			"https://acme.example/new-order".to_string(),
-			PostResponse {
-				nonce: "nonce-2".to_string(),
-				location: Some("https://acme.example/order/7".to_string()),
-				status: 201,
-				body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
-			},
-		);
-		let transport = ScriptedTransport {
-			directory: directory_json(),
-			posts: Mutex::new(posts),
-		};
-
-		let client = AcmeClient::connect(transport, key, "https://acme.example/dir")
-			.await
-			.expect("connect");
-		assert!(!client.is_registered());
-		client
-			.register(&["admin@example.org".to_string()])
-			.await
-			.expect("register");
-		assert!(client.is_registered());
-
-		let order = client
-			.new_order(&["mail.example.org".to_string()])
-			.await
-			.expect("order");
-		assert_eq!(order.finalize, "https://acme.example/finalize/7");
-		assert_eq!(order.authorizations.len(), 1);
-	}
-
-	fn ok_body(nonce: &str, body: &[u8]) -> PostResponse {
-		PostResponse {
-			nonce: nonce.to_string(),
-			location: None,
-			status: 200,
-			body: body.to_vec(),
-		}
-	}
-
-	#[tokio::test]
-	async fn challenge_finalize_and_certificate_flow() {
-		let (key, _) = AccountKey::generate().expect("key");
-		let mut posts = HashMap::new();
-		posts.insert(
-			"https://acme.example/authz/1".to_string(),
-			ok_body(
-				"n1",
-				br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#,
-			),
-		);
-		posts.insert(
-			"https://acme.example/chal/1".to_string(),
-			ok_body("n2", b"{}"),
-		);
-		posts.insert(
-			"https://acme.example/finalize/7".to_string(),
-			ok_body(
-				"n3",
-				br#"{"status":"processing","finalize":"https://acme.example/finalize/7"}"#,
-			),
-		);
-		posts.insert(
-			"https://acme.example/order/7".to_string(),
-			ok_body("n4", br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#),
-		);
-		posts.insert(
-			"https://acme.example/cert/7".to_string(),
-			ok_body(
-				"n5",
-				b"-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----\n",
-			),
-		);
-		let transport = ScriptedTransport {
-			directory: directory_json(),
-			posts: Mutex::new(posts),
-		};
-		let client = AcmeClient::connect(transport, key, "https://acme.example/dir")
-			.await
-			.expect("connect");
-
-		let authz = client
-			.authorization("https://acme.example/authz/1")
-			.await
-			.expect("authz");
-		let challenge = authz.challenge("http-01").expect("http-01");
-		assert_eq!(challenge.token, "tok");
-
-		client
-			.respond_challenge(&challenge.url)
-			.await
-			.expect("respond");
-		client
-			.finalize("https://acme.example/finalize/7", "Q1NS")
-			.await
-			.expect("finalize");
-
-		let order = client
-			.order_status("https://acme.example/order/7")
-			.await
-			.expect("status");
-		assert_eq!(order.status, protocol::OrderStatus::Valid);
-		let cert_url = order.certificate.expect("cert url");
-		let pem = client.download_certificate(&cert_url).await.expect("cert");
-		assert!(pem.starts_with(b"-----BEGIN CERTIFICATE-----"));
-	}
-}
+#[path = "client_tests.rs"]
+mod tests;
