@@ -369,7 +369,7 @@ impl Server {
 					// Bytes received before the handshake are discarded:
 					// a pipelining client cannot smuggle plaintext commands
 					// into the TLS session.
-					let tls_stream = acceptor.accept(stream).await?;
+					let tls_stream = acceptor.current().accept(stream).await?;
 					stream = Box::new(tls_stream);
 					session.tls_started();
 					decoder = LineDecoder::new();

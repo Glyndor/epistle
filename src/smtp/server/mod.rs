@@ -7,7 +7,6 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tokio_rustls::TlsAcceptor;
 
 use super::directory::Directory;
 use super::reply::Reply;
@@ -53,7 +52,7 @@ pub enum TlsMode {
 pub struct Server {
 	hostname: String,
 	sink: Arc<dyn MessageSink>,
-	tls: Option<TlsAcceptor>,
+	tls: Option<crate::tls::ReloadableAcceptor>,
 	tls_mode: TlsMode,
 	directory: DirectoryHandle,
 	spf: Option<Arc<dyn crate::spf::DnsLookup>>,
@@ -139,8 +138,8 @@ impl Server {
 		self
 	}
 
-	/// Enable TLS with the given acceptor and mode.
-	pub fn with_tls(mut self, acceptor: TlsAcceptor, mode: TlsMode) -> Self {
+	/// Enable TLS with the given hot-reloadable acceptor and mode.
+	pub fn with_tls(mut self, acceptor: crate::tls::ReloadableAcceptor, mode: TlsMode) -> Self {
 		self.tls = Some(acceptor);
 		self.tls_mode = mode;
 		self
@@ -192,7 +191,7 @@ impl Server {
 	{
 		match (self.tls_mode, &self.tls) {
 			(TlsMode::Implicit, Some(acceptor)) => {
-				let tls_stream = acceptor.accept(stream).await?;
+				let tls_stream = acceptor.current().accept(stream).await?;
 				let session = self.new_session().with_tls_active();
 				self.run(Box::new(tls_stream), session, peer).await
 			}

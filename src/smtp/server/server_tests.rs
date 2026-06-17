@@ -322,7 +322,10 @@ async fn starttls_upgrade_and_transaction() {
 	let sink = Arc::new(MemorySink::new());
 	let server = Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
 		.with_directory(test_directory())
-		.with_tls(acceptor, TlsMode::Opportunistic);
+		.with_tls(
+			crate::tls::ReloadableAcceptor::new(acceptor),
+			TlsMode::Opportunistic,
+		);
 
 	let (mut client, server_stream) = tokio::io::duplex(64 * 1024);
 	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
@@ -389,8 +392,10 @@ async fn starttls_upgrade_and_transaction() {
 async fn implicit_tls_serves_inside_handshake() {
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
 	let sink = Arc::new(MemorySink::new());
-	let server = Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
-		.with_tls(acceptor, TlsMode::Implicit);
+	let server = Server::new("mail.example.org", sink as Arc<dyn MessageSink>).with_tls(
+		crate::tls::ReloadableAcceptor::new(acceptor),
+		TlsMode::Implicit,
+	);
 
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
 	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
