@@ -19,6 +19,8 @@ pub struct SplitDelivery {
 	outbound: FsSpool,
 	signer: Option<Arc<crate::dkim::Signer>>,
 	rules: Vec<crate::rules::Rule>,
+	/// SRS rewriter and our domain, for forwarded (redirected) mail.
+	srs: Option<(crate::queue::srs::Srs, String)>,
 }
 
 impl SplitDelivery {
@@ -30,6 +32,7 @@ impl SplitDelivery {
 			directory,
 			signer: None,
 			rules: Vec::new(),
+			srs: None,
 		})
 	}
 
@@ -37,6 +40,32 @@ impl SplitDelivery {
 	pub fn with_signer(mut self, signer: Arc<crate::dkim::Signer>) -> Self {
 		self.signer = Some(signer);
 		self
+	}
+
+	/// Rewrite the sender of forwarded mail via SRS at `our_domain`, so it
+	/// passes SPF at the next hop.
+	pub fn with_srs(mut self, srs: crate::queue::srs::Srs, our_domain: impl Into<String>) -> Self {
+		self.srs = Some((srs, our_domain.into()));
+		self
+	}
+
+	/// The envelope sender to use for mail forwarded to `redirect`: an SRS
+	/// rewrite of the original sender when SRS is enabled, else the original.
+	fn forward_sender(&self, original: &str) -> String {
+		if original.is_empty() {
+			return String::new();
+		}
+		let Some((srs, our_domain)) = &self.srs else {
+			return original.to_string();
+		};
+		let Some((local, domain)) = original.rsplit_once('@') else {
+			return original.to_string();
+		};
+		let now_days = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs() / 86_400)
+			.unwrap_or(0);
+		srs.forward(local, domain, our_domain, now_days)
 	}
 
 	/// Apply these delivery rules to locally delivered mail.
@@ -99,7 +128,7 @@ impl MessageSink for SplitDelivery {
 			// original sender. The null sender is already filtered upstream.
 			for address in redirects {
 				let forwarded = AcceptedMessage {
-					reverse_path: message.reverse_path.clone(),
+					reverse_path: self.forward_sender(&message.reverse_path),
 					recipients: vec![address],
 					data: message.data.clone(),
 					require_tls: false,
@@ -234,6 +263,34 @@ mod tests {
 			entry.envelope.recipients,
 			vec!["forward@example.com".to_string()]
 		);
+	}
+
+	#[test]
+	fn srs_rewrites_the_forwarded_sender() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let account_dir = dir.path().join("accounts").join("alice");
+		fs::create_dir_all(&account_dir).expect("mkdir");
+		fs::write(
+			account_dir.join("filter.sieve"),
+			"redirect \"forward@example.com\";",
+		)
+		.expect("filter");
+		let srs = crate::queue::srs::Srs::new(b"test secret");
+		let sink = SplitDelivery::new(dir.path(), directory())
+			.expect("sink")
+			.with_srs(srs, "relay.example");
+		sink.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		let spool = FsSpool::open(dir.path()).expect("spool");
+		let ids = spool.list().expect("list");
+		let entry = spool.load(ids[0]).expect("load");
+		// The forwarded sender is rewritten to an SRS address at our domain.
+		assert!(
+			entry.envelope.reverse_path.starts_with("SRS0="),
+			"{}",
+			entry.envelope.reverse_path
+		);
+		assert!(entry.envelope.reverse_path.ends_with("@relay.example"));
 	}
 
 	#[test]
