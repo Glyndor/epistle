@@ -67,6 +67,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
+	// Optional reputation database, migrated at startup.
+	let reputation_pool = match &config.database {
+		Some(db) => Some(
+			crate::db::connect(&db.url, db.max_connections)
+				.await
+				.map_err(std::io::Error::other)?,
+		),
+		None => None,
+	};
+
 	// The queue worker drains the outbound spool in the background.
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
 	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(
@@ -187,6 +197,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_spf(Arc::clone(&spf_dns))
 					.with_dnsbl(crate::dnsbl::Dnsbl::new(config.dnsbl_zones.clone()))
 					.with_report_dir(config.data_dir.clone());
+				if let Some(pool) = &reputation_pool {
+					server = server.with_reputation_pool(pool.clone());
+				}
 				if let Some(acceptor) = &tls_acceptor {
 					server = server.with_tls(acceptor.clone(), mode);
 				}

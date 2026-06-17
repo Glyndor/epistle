@@ -95,6 +95,16 @@ pub async fn record(
 	Ok(())
 }
 
+/// Record one observation in the background, logging on failure. Used on the
+/// delivery hot path where reputation must never block or fail mail.
+pub fn record_in_background(pool: PgPool, scope: Scope, value: String, spam: bool) {
+	tokio::spawn(async move {
+		if let Err(error) = record(&pool, scope, &value, spam).await {
+			tracing::warn!(%error, "failed to record reputation");
+		}
+	});
+}
+
 /// Look up the tallies for `value`, or `None` if it has no history.
 pub async fn lookup(
 	pool: &PgPool,
