@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO reputation (id, scope, value, ham_count, spam_count) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (scope, value) DO UPDATE SET ham_count = reputation.ham_count + $4, spam_count = reputation.spam_count + $5, last_seen = now(), updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "805e4c1bc95042ef2857129c093597f5304bf6c55886e650499bd8f654870fca"
+}

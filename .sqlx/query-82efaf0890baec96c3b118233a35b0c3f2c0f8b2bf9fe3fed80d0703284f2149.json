@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ham_count, spam_count FROM reputation WHERE scope = $1 AND value = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ham_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "spam_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "82efaf0890baec96c3b118233a35b0c3f2c0f8b2bf9fe3fed80d0703284f2149"
+}

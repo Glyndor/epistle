@@ -45,3 +45,50 @@ async fn migrations_apply_and_reputation_roundtrips() {
 		.await
 		.expect("cleanup");
 }
+
+#[tokio::test]
+async fn reputation_record_accumulates_and_judges() {
+	use mail::antispam::reputation::{self, Scope, Verdict};
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = mail::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	let value = format!("rep-{}.example", uuid::Uuid::now_v7());
+
+	// No history yet.
+	assert!(
+		reputation::lookup(&pool, Scope::Domain, &value)
+			.await
+			.expect("lookup")
+			.is_none()
+	);
+
+	// Four ham observations, one spam: accumulates and reads back as trusted.
+	for _ in 0..4 {
+		reputation::record(&pool, Scope::Domain, &value, false)
+			.await
+			.expect("record ham");
+	}
+	reputation::record(&pool, Scope::Domain, &value, true)
+		.await
+		.expect("record spam");
+
+	let score = reputation::lookup(&pool, Scope::Domain, &value)
+		.await
+		.expect("lookup")
+		.expect("has history");
+	assert_eq!(score.ham, 4);
+	assert_eq!(score.spam, 1);
+	assert_eq!(score.verdict(), Verdict::Trusted);
+
+	sqlx::query("DELETE FROM reputation WHERE scope = 'domain' AND value = $1")
+		.bind(&value)
+		.execute(&pool)
+		.await
+		.expect("cleanup");
+}
