@@ -17,6 +17,7 @@ pub mod dnsbl;
 pub mod imap;
 pub mod mtasts;
 pub mod queue;
+pub mod rules;
 pub mod smtp;
 pub mod spf;
 pub mod storage;
