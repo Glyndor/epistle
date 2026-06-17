@@ -99,6 +99,39 @@ fn allof_anyof_not_combinators() {
 }
 
 #[test]
+fn address_test_matches_parts() {
+	// Header value with a display name and angle-addr.
+	let msg = b"From: Alice <alice@example.org>\r\nTo: bob@example.net\r\n\r\nx\r\n";
+	let all = run(
+		"if address :is \"From\" \"alice@example.org\" { discard; }",
+		msg,
+	);
+	assert!(all.discarded);
+	let local = run(
+		"if address :localpart :is \"From\" \"alice\" { discard; }",
+		msg,
+	);
+	assert!(local.discarded);
+	let domain = run(
+		"if address :domain :is \"From\" \"example.org\" { discard; }",
+		msg,
+	);
+	assert!(domain.discarded);
+	// Bare address (no display name) still parses.
+	let bare = run(
+		"if address :domain :is \"To\" \"example.net\" { discard; }",
+		msg,
+	);
+	assert!(bare.discarded);
+	// Wrong value does not match.
+	let miss = run(
+		"if address :is \"From\" \"eve@example.org\" { discard; }",
+		msg,
+	);
+	assert!(!miss.discarded);
+}
+
+#[test]
 fn stop_halts_execution() {
 	let outcome = run("fileinto \"A\"; stop; fileinto \"B\";", MSG);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
