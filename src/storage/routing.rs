@@ -11,6 +11,9 @@ use crate::smtp::sink::{MessageSink, SinkError};
 use super::delivery::LocalDelivery;
 use super::spool::FsSpool;
 
+/// How long an SRS-return address stays valid (RFC-less convention).
+const SRS_MAX_AGE_DAYS: u64 = 14;
+
 /// Splits an accepted message between local mailbox delivery and the
 /// outbound spool, according to the directory.
 pub struct SplitDelivery {
@@ -68,6 +71,22 @@ impl SplitDelivery {
 		srs.forward(local, domain, our_domain, now_days)
 	}
 
+	/// If `recipient` is a valid SRS-return address at our domain, the original
+	/// sender it should be forwarded back to; otherwise `None`.
+	fn srs_return(&self, recipient: &str) -> Option<String> {
+		let (srs, our_domain) = self.srs.as_ref()?;
+		let (local, domain) = recipient.rsplit_once('@')?;
+		if !domain.eq_ignore_ascii_case(our_domain) {
+			return None;
+		}
+		let now_days = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs() / 86_400)
+			.unwrap_or(0);
+		let (orig_local, orig_domain) = srs.reverse(local, now_days, SRS_MAX_AGE_DAYS)?;
+		Some(format!("{orig_local}@{orig_domain}"))
+	}
+
 	/// Apply these delivery rules to locally delivered mail.
 	pub fn with_rules(mut self, rules: Vec<crate::rules::Rule>) -> Self {
 		self.rules = rules;
@@ -94,7 +113,14 @@ impl MessageSink for SplitDelivery {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
+		let mut srs_returns = Vec::new();
 		for recipient in &message.recipients {
+			// An SRS-return address forwards the (bounce) message back to the
+			// original sender it encodes.
+			if let Some(original) = self.srs_return(recipient) {
+				srs_returns.push(original);
+				continue;
+			}
 			let address = Address::parse(recipient).map_err(|_| {
 				SinkError::Unavailable(format!("unparseable recipient {recipient}"))
 			})?;
@@ -138,6 +164,19 @@ impl MessageSink for SplitDelivery {
 					.store(&forwarded)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
+		}
+		// Forward SRS-return (bounce) messages back to the original senders.
+		for original in srs_returns {
+			let returned = AcceptedMessage {
+				reverse_path: message.reverse_path.clone(),
+				recipients: vec![original],
+				data: message.data.clone(),
+				require_tls: false,
+				mailbox: None,
+			};
+			self.outbound
+				.store(&returned)
+				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		if !remote.is_empty() {
 			let mut outbound_message = AcceptedMessage {
@@ -291,6 +330,44 @@ mod tests {
 			entry.envelope.reverse_path
 		);
 		assert!(entry.envelope.reverse_path.ends_with("@relay.example"));
+	}
+
+	#[test]
+	fn srs_return_address_forwards_to_original_sender() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let srs = crate::queue::srs::Srs::new(b"test secret");
+		// Encode an SRS-return address for the original sender at our domain.
+		let now_days = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs() / 86_400)
+			.unwrap_or(0);
+		let srs_local = srs
+			.forward("origsender", "origin.example", "relay.example", now_days)
+			.split_once('@')
+			.unwrap()
+			.0
+			.to_string();
+		let sink = SplitDelivery::new(dir.path(), directory())
+			.expect("sink")
+			.with_srs(crate::queue::srs::Srs::new(b"test secret"), "relay.example");
+
+		let bounce = AcceptedMessage {
+			reverse_path: String::new(),
+			recipients: vec![format!("{srs_local}@relay.example")],
+			data: b"Subject: bounce\r\n\r\nfailed\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+		};
+		sink.deliver(bounce).expect("deliver");
+		// The bounce is re-queued to the original sender it encoded.
+		let spool = FsSpool::open(dir.path()).expect("spool");
+		let ids = spool.list().expect("list");
+		assert_eq!(ids.len(), 1);
+		let entry = spool.load(ids[0]).expect("load");
+		assert_eq!(
+			entry.envelope.recipients,
+			vec!["origsender@origin.example".to_string()]
+		);
 	}
 
 	#[test]
