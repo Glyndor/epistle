@@ -196,6 +196,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_directory(directory.clone())
 					.with_spf(Arc::clone(&spf_dns))
 					.with_dnsbl(crate::dnsbl::Dnsbl::new(config.dnsbl_zones.clone()))
+					.with_first_time_delay(config.first_time_sender_delay_secs)
 					.with_report_dir(config.data_dir.clone());
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
