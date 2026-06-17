@@ -159,6 +159,25 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.clone()
 		.map(crate::tls::ReloadableAcceptor::new);
 
+	// ACME automatic renewal: obtain/renew certificates and hot-reload the SMTP
+	// acceptor. Requires a [tls] bootstrap certificate to reload into.
+	if let Some(acme) = &config.acme {
+		match &reloadable_tls {
+			Some(reloadable) => {
+				tokio::spawn(crate::acme::renew::run(
+					acme.directory_url.clone(),
+					acme.contacts.clone(),
+					acme.domains.clone(),
+					challenge_store.clone(),
+					config.data_dir.clone(),
+					reloadable.clone(),
+					u64::from(acme.renew_before_days),
+				));
+			}
+			None => tracing::warn!("[acme] is configured but [tls] is not; skipping ACME renewal"),
+		}
+	}
+
 	let mut tasks = Vec::new();
 	for listener_config in &config.listeners {
 		match listener_config.kind {
