@@ -92,8 +92,23 @@ impl MessageSink for SplitDelivery {
 				recipients: local,
 				..message.clone()
 			};
-			self.local
+			let redirects = self
+				.local
 				.deliver_routed(&local_message, mailbox.as_deref())?;
+			// Queue any Sieve redirects to the outbound spool, preserving the
+			// original sender. The null sender is already filtered upstream.
+			for address in redirects {
+				let forwarded = AcceptedMessage {
+					reverse_path: message.reverse_path.clone(),
+					recipients: vec![address],
+					data: message.data.clone(),
+					require_tls: false,
+					mailbox: None,
+				};
+				self.outbound
+					.store(&forwarded)
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			}
 		}
 		if !remote.is_empty() {
 			let mut outbound_message = AcceptedMessage {
@@ -194,6 +209,31 @@ mod tests {
 		sink.deliver(msg).expect("deliver");
 		assert_eq!(folder_count(dir.path(), "alice", "Rejects"), 1);
 		assert_eq!(inbox_count(dir.path(), "alice"), 0);
+	}
+
+	#[test]
+	fn sieve_redirect_queues_to_the_spool() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let account_dir = dir.path().join("accounts").join("alice");
+		fs::create_dir_all(&account_dir).expect("mkdir");
+		fs::write(
+			account_dir.join("filter.sieve"),
+			"redirect \"forward@example.com\";",
+		)
+		.expect("filter");
+		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
+		sink.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		// Redirect cancels the implicit keep: nothing in INBOX, one in the spool.
+		assert_eq!(inbox_count(dir.path(), "alice"), 0);
+		let spool = FsSpool::open(dir.path()).expect("spool");
+		let ids = spool.list().expect("list");
+		assert_eq!(ids.len(), 1);
+		let entry = spool.load(ids[0]).expect("load");
+		assert_eq!(
+			entry.envelope.recipients,
+			vec!["forward@example.com".to_string()]
+		);
 	}
 
 	#[test]

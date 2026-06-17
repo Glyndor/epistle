@@ -84,11 +84,13 @@ impl LocalDelivery {
 
 	/// Deliver one copy per recipient account into `mailbox` (a named folder),
 	/// or INBOX when `None`. The mailbox name must be a safe single segment.
+	/// Returns the redirect addresses requested by users' Sieve filters, for
+	/// the caller to queue (this sink has no outbound spool).
 	pub fn deliver_routed(
 		&self,
 		message: &AcceptedMessage,
 		mailbox: Option<&str>,
-	) -> Result<(), SinkError> {
+	) -> Result<Vec<String>, SinkError> {
 		if let Some(name) = mailbox
 			&& !is_safe_mailbox(name)
 		{
@@ -100,33 +102,34 @@ impl LocalDelivery {
 		if accounts.is_empty() {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
+		let mut redirects = Vec::new();
 		for account in &accounts {
-			self.deliver_for_account(account, message, mailbox)?;
+			redirects.extend(self.deliver_for_account(account, message, mailbox)?);
 		}
-		Ok(())
+		Ok(redirects)
 	}
 
 	/// Deliver one message to one account. An explicit `hint` mailbox (an
 	/// admin rule or a security quarantine) takes precedence; otherwise the
 	/// account's Sieve filter, if any, decides. With no filter the message
-	/// lands in INBOX.
+	/// lands in INBOX. Returns any redirect addresses the filter requested.
 	fn deliver_for_account(
 		&self,
 		account: &str,
 		message: &AcceptedMessage,
 		hint: Option<&str>,
-	) -> Result<(), SinkError> {
+	) -> Result<Vec<String>, SinkError> {
 		let data = &message.data;
 		if let Some(mailbox) = hint {
 			self.deliver_to_account(account, Some(mailbox), data)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			return Ok(());
+			return Ok(Vec::new());
 		}
 		let Some(outcome) = self.sieve_outcome(account, message) else {
 			// No filter (or it failed to compile): normal INBOX delivery.
 			self.deliver_to_account(account, None, data)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			return Ok(());
+			return Ok(Vec::new());
 		};
 		if outcome.keep {
 			self.deliver_to_account(account, None, data)
@@ -138,9 +141,11 @@ impl LocalDelivery {
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
 		}
-		// `redirect` requires the outbound spool and is handled by the routing
-		// layer in a later change; a pure discard leaves nothing to deliver.
-		Ok(())
+		// Never redirect a bounce (null sender): that risks mail loops.
+		if message.reverse_path.is_empty() {
+			return Ok(Vec::new());
+		}
+		Ok(outcome.redirects)
 	}
 
 	/// Evaluate the account's Sieve filter, if present and valid. Any read,
@@ -173,7 +178,8 @@ fn is_safe_mailbox(name: &str) -> bool {
 
 impl MessageSink for LocalDelivery {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.deliver_routed(&message, None)
+		// Standalone local delivery has no outbound spool; redirects are dropped.
+		self.deliver_routed(&message, None).map(|_| ())
 	}
 }
 
