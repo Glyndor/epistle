@@ -104,6 +104,17 @@ impl Server {
 		self
 	}
 
+	/// Train the Bayesian corpus on a message in the background, when a
+	/// reputation/corpus database is configured. Accepted mail trains ham,
+	/// rejected mail trains spam, so the classifier learns from the server's
+	/// own accept/reject decisions.
+	fn train_corpus(&self, data: &[u8], spam: bool) {
+		if let Some(pool) = &self.reputation {
+			let text = String::from_utf8_lossy(data).into_owned();
+			crate::antispam::corpus::train_in_background(pool.clone(), text, spam);
+		}
+	}
+
 	/// Screen unauthenticated clients against the given DNS blocklist zones.
 	pub fn with_dnsbl(mut self, dnsbl: crate::dnsbl::Dnsbl) -> Self {
 		self.dnsbl = dnsbl;

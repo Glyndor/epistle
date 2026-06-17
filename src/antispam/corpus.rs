@@ -96,3 +96,13 @@ pub async fn score(pool: &PgPool, text: &str) -> Result<f64, sqlx::Error> {
 		corpus,
 	))
 }
+
+/// Train the corpus in the background, logging on failure. Used on the
+/// delivery path so learning never blocks or fails mail.
+pub fn train_in_background(pool: PgPool, text: String, spam: bool) {
+	tokio::spawn(async move {
+		if let Err(error) = train(&pool, &text, spam).await {
+			tracing::warn!(%error, "bayes training failed");
+		}
+	});
+}
