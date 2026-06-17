@@ -62,6 +62,7 @@ fn ehlo_greeting_advertises_extensions() {
 	};
 	let rendered = reply.to_string();
 	assert!(rendered.contains("PIPELINING"), "{rendered}");
+	assert!(rendered.contains("ENHANCEDSTATUSCODES"), "{rendered}");
 	assert!(rendered.contains("8BITMIME"), "{rendered}");
 	assert!(rendered.contains("SIZE "), "{rendered}");
 	assert!(rendered.contains("STARTTLS"), "{rendered}");
