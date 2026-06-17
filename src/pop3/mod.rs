@@ -4,3 +4,7 @@
 //! and network layers build on it.
 
 pub mod command;
+pub mod session;
+
+#[cfg(test)]
+mod session_tests;
