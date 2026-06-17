@@ -260,7 +260,15 @@ impl AccountStore {
 					.map(|account| (account.name.clone(), account.password_hash.clone())),
 			)
 			.collect::<Vec<_>>();
-		Directory::new(self.domains.iter().cloned(), address_accounts).with_password_hashes(hashes)
+		let catch_all = self.static_accounts.iter().flat_map(|account| {
+			account
+				.catch_all
+				.iter()
+				.map(|domain| (domain.clone(), account.name.clone()))
+		});
+		Directory::new(self.domains.iter().cloned(), address_accounts)
+			.with_password_hashes(hashes)
+			.with_catch_all(catch_all)
 	}
 }
 
@@ -290,6 +298,7 @@ mod tests {
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: None,
+			catch_all: Vec::new(),
 		}
 	}
 

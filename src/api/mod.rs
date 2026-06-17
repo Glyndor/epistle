@@ -68,6 +68,7 @@ mod tests {
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: Some("$argon2id$secret".to_string()),
+			catch_all: Vec::new(),
 		}];
 		let store = std::sync::Arc::new(
 			crate::directory_store::AccountStore::open(
