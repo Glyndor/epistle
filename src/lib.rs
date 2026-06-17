@@ -23,6 +23,7 @@ pub mod mtasts;
 pub mod pop3;
 pub mod queue;
 pub mod rules;
+pub mod sieve;
 pub mod smtp;
 pub mod spf;
 pub mod storage;
