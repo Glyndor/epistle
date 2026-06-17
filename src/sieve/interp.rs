@@ -28,6 +28,7 @@ pub struct Outcome {
 pub struct Message {
 	headers: Vec<(String, String)>,
 	size: usize,
+	body: String,
 	envelope_from: Option<String>,
 	envelope_to: Vec<String>,
 }
@@ -40,6 +41,12 @@ impl Message {
 			.position(|w| w == b"\r\n\r\n")
 			.map(|p| p + 2)
 			.unwrap_or(raw.len());
+		let body_start = raw
+			.windows(4)
+			.position(|w| w == b"\r\n\r\n")
+			.map(|p| p + 4)
+			.unwrap_or(raw.len());
+		let body = String::from_utf8_lossy(raw.get(body_start..).unwrap_or(&[])).into_owned();
 		let block = String::from_utf8_lossy(&raw[..header_end]);
 		let mut headers = Vec::new();
 		let mut current: Option<String> = None;
@@ -65,6 +72,7 @@ impl Message {
 		Message {
 			headers,
 			size: raw.len(),
+			body,
 			envelope_from: None,
 			envelope_to: Vec::new(),
 		}
@@ -174,6 +182,7 @@ fn eval_test(test: &Test, message: &Message) -> bool {
 		"header" => header_test(test, message),
 		"address" => address_test(test, message),
 		"envelope" => envelope_test(test, message),
+		"body" => body_test(test, message),
 		"size" => size_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
@@ -292,6 +301,16 @@ fn addr_spec(value: &str) -> String {
 		return value[open + 1..open + close].trim().to_string();
 	}
 	value.trim().to_string()
+}
+
+/// `body [comparator] [:raw|:text] <key-list>` (RFC 5173). The message body is
+/// matched as text against the keys; the `:raw`/`:text`/`:content` transforms
+/// all reduce to the body text here (we do no MIME decoding yet).
+fn body_test(test: &Test, message: &Message) -> bool {
+	let comparator = comparator(&test.args);
+	let keys = strings(&test.args);
+	keys.iter()
+		.any(|key| comparator.matches(&message.body, key))
 }
 
 /// `size :over|:under <number>`.
