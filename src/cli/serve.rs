@@ -69,6 +69,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Shared metrics across SMTP listeners and the metrics endpoint.
 	let metrics = Arc::new(crate::metrics::Metrics::new());
 
+	// ACME HTTP-01 challenge store, shared by the responder listener and (later)
+	// the renewal task that publishes key authorizations into it.
+	let challenge_store = crate::acme::http01::ChallengeStore::new();
+
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
@@ -175,6 +179,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				let listener = TcpListener::bind(addr).await?;
 				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
 				let router = crate::api::router(state);
+				tasks.push(tokio::spawn(async move {
+					axum::serve(listener, router)
+						.await
+						.map_err(std::io::Error::other)
+				}));
+			}
+			ListenerKind::Acme => {
+				let addr = listener_config.socket_addr();
+				let listener = TcpListener::bind(addr).await?;
+				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let router = crate::acme::http01::router(challenge_store.clone());
 				tasks.push(tokio::spawn(async move {
 					axum::serve(listener, router)
 						.await
