@@ -182,7 +182,7 @@ async fn verify_one(
 }
 
 /// Extract the `p=` public key from a key record.
-fn parse_key(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn parse_key(text: &str) -> Option<Vec<u8>> {
 	use base64::Engine;
 	for tag in text.split(';') {
 		let tag = tag.trim();
