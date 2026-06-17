@@ -149,6 +149,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		Some(tls_config) => Some(crate::tls::acceptor(tls_config).map_err(std::io::Error::other)?),
 		None => None,
 	};
+	// SMTP listeners use a hot-reloadable acceptor so renewed certificates
+	// apply without a restart; IMAP keeps the static acceptor for now.
+	let reloadable_tls = tls_acceptor
+		.clone()
+		.map(crate::tls::ReloadableAcceptor::new);
 
 	let mut tasks = Vec::new();
 	for listener_config in &config.listeners {
@@ -245,7 +250,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_hook(Arc::clone(hook));
 				}
 				server = server.with_metrics(Arc::clone(&metrics));
-				if let Some(acceptor) = &tls_acceptor {
+				if let Some(acceptor) = &reloadable_tls {
 					server = server.with_tls(acceptor.clone(), mode);
 				}
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
