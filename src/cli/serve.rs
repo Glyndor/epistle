@@ -56,7 +56,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured.
-	let mut split = SplitDelivery::new(&config.data_dir, directory.clone())?;
+	let mut split =
+		SplitDelivery::new(&config.data_dir, directory.clone())?.with_rules(config.rules.clone());
 	if let Some(dkim) = &config.dkim {
 		let signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
 			.map_err(std::io::Error::other)?;

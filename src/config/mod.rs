@@ -66,6 +66,9 @@ pub struct Config {
 	/// configured database.
 	#[serde(default)]
 	pub first_time_sender_delay_secs: u64,
+	/// Delivery rules: route or flag locally delivered mail by sender/header.
+	#[serde(default)]
+	pub rules: Vec<crate::rules::Rule>,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
