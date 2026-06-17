@@ -6,3 +6,7 @@
 
 # Local environment
 .env
+
+# Supply-chain artifacts (generated in CI)
+*.cdx.json
+NOTICES.html
