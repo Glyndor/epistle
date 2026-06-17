@@ -7,5 +7,6 @@
 pub mod arf;
 pub mod bayes;
 pub mod corpus;
+pub mod greylist;
 pub mod hook;
 pub mod reputation;
