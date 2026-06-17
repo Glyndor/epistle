@@ -61,6 +61,7 @@ mod tests {
 					recipients: vec![format!("r{i}@elsewhere.example")],
 					data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
 					require_tls: false,
+					mailbox: None,
 				})
 				.expect("store");
 		}
