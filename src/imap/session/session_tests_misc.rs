@@ -32,6 +32,28 @@ fn plaintext_session_disables_login_until_starttls() {
 }
 
 #[test]
+fn namespace_returns_personal_namespace() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	let output = session.command_line("a1 NAMESPACE");
+	let response = text(&output);
+	assert!(
+		response.contains("* NAMESPACE ((\"\" \"/\")) NIL NIL"),
+		"{response}"
+	);
+	assert!(response.contains("a1 OK NAMESPACE completed"), "{response}");
+}
+
+#[test]
+fn capability_advertises_namespace_and_special_use() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	let response = text(&session.command_line("a1 CAPABILITY"));
+	assert!(response.contains("NAMESPACE"), "{response}");
+	assert!(response.contains("SPECIAL-USE"), "{response}");
+}
+
+#[test]
 fn starttls_inside_tls_is_bad() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
