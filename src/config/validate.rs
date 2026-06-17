@@ -120,6 +120,26 @@ impl Config {
 				)));
 			}
 		}
+		for (alias, target) in &self.domain_aliases {
+			validate_dns_name("domain alias", alias)?;
+			let alias_lc = alias.to_ascii_lowercase();
+			let target_lc = target.to_ascii_lowercase();
+			if !seen.contains(&target_lc) {
+				return Err(ConfigError::Invalid(format!(
+					"domain alias \"{alias}\" targets \"{target}\", which is not a configured domain"
+				)));
+			}
+			if seen.contains(&alias_lc) {
+				return Err(ConfigError::Invalid(format!(
+					"domain alias \"{alias}\" is also a configured domain"
+				)));
+			}
+			if alias_lc == target_lc {
+				return Err(ConfigError::Invalid(format!(
+					"domain alias \"{alias}\" cannot target itself"
+				)));
+			}
+		}
 		Ok(())
 	}
 

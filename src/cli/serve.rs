@@ -47,6 +47,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		crate::directory_store::AccountStore::open(
 			&config.data_dir,
 			config.domains.clone(),
+			config.domain_aliases.clone(),
 			config.accounts.clone(),
 		)
 		.map_err(|error| std::io::Error::other(error.to_string()))?,

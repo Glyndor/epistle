@@ -74,6 +74,7 @@ mod tests {
 			crate::directory_store::AccountStore::open(
 				dir,
 				vec!["example.org".to_string()],
+				std::collections::HashMap::new(),
 				accounts,
 			)
 			.expect("open store"),
@@ -341,6 +342,7 @@ mod tests {
 			crate::directory_store::AccountStore::open(
 				dir.path(),
 				vec!["example.org".to_string()],
+				std::collections::HashMap::new(),
 				vec![],
 			)
 			.expect("store"),

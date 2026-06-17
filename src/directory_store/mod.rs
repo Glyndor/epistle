@@ -75,6 +75,7 @@ pub enum StoreError {
 pub struct AccountStore {
 	path: PathBuf,
 	domains: Vec<String>,
+	domain_aliases: std::collections::HashMap<String, String>,
 	static_accounts: Vec<Account>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
 	handle: DirectoryHandle,
@@ -86,6 +87,7 @@ impl AccountStore {
 	pub fn open(
 		data_dir: &Path,
 		domains: Vec<String>,
+		domain_aliases: std::collections::HashMap<String, String>,
 		static_accounts: Vec<Account>,
 	) -> Result<Self, StoreError> {
 		let path = data_dir.join("accounts.toml");
@@ -100,6 +102,7 @@ impl AccountStore {
 		let store = AccountStore {
 			path,
 			domains,
+			domain_aliases,
 			static_accounts,
 			dynamic: RwLock::new(dynamic.accounts),
 			handle: DirectoryHandle::new(Directory::default()),
@@ -269,6 +272,7 @@ impl AccountStore {
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
+			.with_domain_aliases(self.domain_aliases.clone())
 	}
 }
 
@@ -303,8 +307,13 @@ mod tests {
 	}
 
 	fn open_store(dir: &Path) -> AccountStore {
-		AccountStore::open(dir, vec!["example.org".to_string()], vec![static_account()])
-			.expect("open store")
+		AccountStore::open(
+			dir,
+			vec!["example.org".to_string()],
+			std::collections::HashMap::new(),
+			vec![static_account()],
+		)
+		.expect("open store")
 	}
 
 	fn dynamic(name: &str, address: &str) -> DynamicAccount {
