@@ -17,6 +17,8 @@ pub enum Command {
 	Logout,
 	/// `NAMESPACE` (RFC 2342).
 	Namespace,
+	/// `ID` (RFC 2971); the client's parameter list is accepted and ignored.
+	Id,
 	StartTls,
 	Login {
 		username: String,

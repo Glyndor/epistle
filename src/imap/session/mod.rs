@@ -110,7 +110,8 @@ impl Session {
 	}
 
 	fn capabilities(&self) -> String {
-		let mut capabilities = String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE");
+		let mut capabilities =
+			String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID");
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
 		}
@@ -168,6 +169,10 @@ impl Session {
 			// separator; no shared or other-users namespaces (RFC 2342).
 			Command::Namespace => Output::text(format!(
 				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
+			)),
+			Command::Id => Output::text(format!(
+				"* ID (\"name\" \"Glyndor\" \"version\" \"{}\")\r\n{tag} OK ID completed\r\n",
+				env!("CARGO_PKG_VERSION"),
 			)),
 			Command::Logout => Output::closing(format!(
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
