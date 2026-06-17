@@ -7,6 +7,7 @@
 mod account;
 mod acme;
 mod api;
+mod arc;
 mod database;
 mod dkim;
 mod listener;
@@ -16,6 +17,7 @@ mod validate;
 pub use account::Account;
 pub use acme::Acme;
 pub use api::Api;
+pub use arc::Arc;
 pub use database::Database;
 pub use dkim::Dkim;
 pub use listener::{Listener, ListenerKind};
@@ -107,6 +109,8 @@ pub struct Config {
 	pub log_format: LogFormat,
 	/// Automatic TLS (ACME). Present enables certificate issuance/renewal.
 	pub acme: Option<Acme>,
+	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
+	pub arc: Option<Arc>,
 }
 
 impl Config {

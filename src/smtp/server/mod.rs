@@ -68,6 +68,8 @@ pub struct Server {
 	first_time_delay: std::time::Duration,
 	/// If set, DMARC delivery records are written here for aggregate reports.
 	report_dir: Option<std::path::PathBuf>,
+	/// If set, inbound unauthenticated mail is sealed into its ARC chain.
+	arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
 }
 
 impl Server {
@@ -87,7 +89,14 @@ impl Server {
 			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
+			arc_sealer: None,
 		}
+	}
+
+	/// Seal inbound unauthenticated mail into its ARC chain (RFC 8617).
+	pub fn with_arc_sealer(mut self, sealer: Arc<crate::arc::sealer::ArcSealer>) -> Self {
+		self.arc_sealer = Some(sealer);
+		self
 	}
 
 	/// Share a metrics registry across listeners and the metrics endpoint.

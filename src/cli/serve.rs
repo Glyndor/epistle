@@ -69,6 +69,21 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Shared metrics across SMTP listeners and the metrics endpoint.
 	let metrics = Arc::new(crate::metrics::Metrics::new());
 
+	// Optional ARC sealer: seals inbound mail under the server hostname using
+	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed).
+	let arc_sealer = match &config.arc {
+		Some(arc) => {
+			let key =
+				crate::dkim::load_ed25519_key(&arc.key_file).map_err(std::io::Error::other)?;
+			Some(Arc::new(crate::arc::sealer::ArcSealer::new(
+				key,
+				config.hostname.clone(),
+				arc.selector.clone(),
+			)))
+		}
+		None => None,
+	};
+
 	// ACME HTTP-01 challenge store, shared by the responder listener and (later)
 	// the renewal task that publishes key authorizations into it.
 	let challenge_store = crate::acme::http01::ChallengeStore::new();
@@ -300,6 +315,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_hook(Arc::clone(hook));
 				}
 				server = server.with_metrics(Arc::clone(&metrics));
+				if let Some(sealer) = &arc_sealer {
+					server = server.with_arc_sealer(Arc::clone(sealer));
+				}
 				if let Some(acceptor) = &reloadable_tls {
 					server = server.with_tls(acceptor.clone(), mode);
 				}
