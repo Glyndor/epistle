@@ -11,6 +11,7 @@ pub mod arc;
 pub mod cli;
 pub mod clock;
 pub mod config;
+pub mod dane;
 pub mod db;
 pub mod directory_store;
 pub mod dkim;
