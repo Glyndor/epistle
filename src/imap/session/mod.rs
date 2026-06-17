@@ -81,7 +81,12 @@ pub struct Session {
 	tls_active: bool,
 	/// Whether STARTTLS can still be offered.
 	tls_available: bool,
+	/// Per-account storage quota in bytes (RFC 9208 STORAGE).
+	quota_limit_bytes: u64,
 }
+
+/// Default per-account storage quota in bytes (5 GiB).
+pub const DEFAULT_QUOTA_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 impl Session {
 	/// New session over an established TLS connection.
@@ -95,7 +100,14 @@ impl Session {
 			idle_tag: None,
 			tls_active: true,
 			tls_available: false,
+			quota_limit_bytes: DEFAULT_QUOTA_BYTES,
 		}
+	}
+
+	/// Set the per-account storage quota (bytes).
+	pub fn with_quota_limit(mut self, bytes: u64) -> Self {
+		self.quota_limit_bytes = bytes;
+		self
 	}
 
 	/// Mark this session as starting in plaintext with STARTTLS available.
