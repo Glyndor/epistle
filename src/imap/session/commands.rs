@@ -212,6 +212,37 @@ impl Session {
 		}
 	}
 
+	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
+		let State::Selected {
+			snapshot,
+			read_only,
+			..
+		} = &mut self.state
+		else {
+			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
+		};
+		if *read_only {
+			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+		}
+		let max_uid = snapshot.messages().map(|m| m.uid).max().unwrap_or(0);
+		let uids: Vec<u32> = snapshot
+			.messages()
+			.map(|m| m.uid)
+			.filter(|uid| sequence.contains(*uid, max_uid))
+			.collect();
+		match snapshot.expunge_uids(&uids) {
+			Ok(expunged) => {
+				let mut response = String::new();
+				for sequence_number in expunged {
+					response.push_str(&format!("* {sequence_number} EXPUNGE\r\n"));
+				}
+				response.push_str(&format!("{tag} OK EXPUNGE completed\r\n"));
+				Output::text(response)
+			}
+			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
+		}
+	}
+
 	pub(super) fn append_begin(
 		&mut self,
 		tag: &str,

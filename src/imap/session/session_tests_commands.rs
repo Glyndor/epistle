@@ -47,6 +47,23 @@ fn unexpected_literal_is_rejected() {
 }
 
 #[test]
+fn uid_expunge_removes_only_listed_deleted_messages() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"one\r\n");
+	deliver(dir.path(), b"two\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1:2 +FLAGS (\Deleted)");
+	// UID EXPUNGE 1 removes only the message with UID 1.
+	let response = text(&session.command_line("a4 UID EXPUNGE 1"));
+	assert!(response.contains("* 1 EXPUNGE"), "{response}");
+	assert!(response.contains("a4 OK EXPUNGE completed"), "{response}");
+	// The second message (UID 2) survives, now at sequence 1.
+	let response = text(&session.command_line("a5 FETCH 1 (UID)"));
+	assert!(response.contains("UID 2"), "{response}");
+}
+
+#[test]
 fn idle_flow() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());

@@ -300,6 +300,26 @@ impl Snapshot {
 		}
 		Ok(expunged)
 	}
+
+	/// Expunge only the `\Deleted` messages whose UID is in `uids` (UIDPLUS
+	/// `UID EXPUNGE`, RFC 4315). Returns the (post-removal) sequence numbers.
+	pub fn expunge_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
+		let mut expunged = Vec::new();
+		let mut index = 0;
+		while index < self.messages.len() {
+			let message = &self.messages[index];
+			if message.flags.contains(&Flag::Deleted) && uids.contains(&message.uid) {
+				let id = message.id;
+				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
+				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+				self.messages.remove(index);
+				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
+			} else {
+				index += 1;
+			}
+		}
+		Ok(expunged)
+	}
 }
 
 /// Append a message to a mailbox crash-safely, with flags.
