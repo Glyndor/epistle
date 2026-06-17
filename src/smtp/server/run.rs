@@ -19,6 +19,7 @@ impl Server {
 		mut session: Session,
 		peer: Option<IpAddr>,
 	) -> std::io::Result<()> {
+		self.metrics.connection();
 		send(&mut stream, &session.greeting()).await?;
 
 		let mut decoder = LineDecoder::new();
@@ -102,6 +103,7 @@ impl Server {
 							self.dnsbl.check(ip, dns.as_ref()).await
 					{
 						tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
+						self.metrics.rejected(crate::metrics::RejectReason::Dnsbl);
 						self.train_corpus(&message.data, true);
 						send(
 							&mut stream,
@@ -129,6 +131,7 @@ impl Server {
 						};
 						match outcome {
 							crate::spf::SpfOutcome::Fail => {
+								self.metrics.rejected(crate::metrics::RejectReason::Spf);
 								send(
 									&mut stream,
 									&Reply::single(550, "5.7.23 SPF validation failed"),
@@ -212,6 +215,7 @@ impl Server {
 
 								match dmarc {
 									crate::dmarc::DmarcOutcome::Reject => {
+										self.metrics.rejected(crate::metrics::RejectReason::Dmarc);
 										self.train_corpus(&message.data, true);
 										send(
 											&mut stream,
@@ -297,6 +301,7 @@ impl Server {
 								// Rejects mailbox instead of losing it.
 								tracing::info!(%domain, "quarantining poor-reputation sender to Rejects");
 								self.train_corpus(&message.data, true);
+								self.metrics.quarantined();
 								message.mailbox = Some("Rejects".to_string());
 							}
 							Screen::FirstTime if !self.first_time_delay.is_zero() => {
@@ -309,6 +314,7 @@ impl Server {
 					if let (Some(hook), None) = (&self.hook, session.authenticated()) {
 						match hook.scan(&message.data).await {
 							crate::antispam::hook::HookVerdict::Reject => {
+								self.metrics.rejected(crate::metrics::RejectReason::Scanner);
 								self.train_corpus(&message.data, true);
 								send(
 									&mut stream,
@@ -318,6 +324,7 @@ impl Server {
 								continue;
 							}
 							crate::antispam::hook::HookVerdict::Quarantine => {
+								self.metrics.quarantined();
 								self.train_corpus(&message.data, true);
 								message.mailbox = Some("Rejects".to_string());
 							}
@@ -331,6 +338,7 @@ impl Server {
 					}
 					let reply = match self.sink.deliver(message) {
 						Ok(()) => {
+							self.metrics.accepted();
 							if let (Some(pool), Some(domain), None) =
 								(&self.reputation, rep_domain, session.authenticated())
 							{

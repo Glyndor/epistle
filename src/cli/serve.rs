@@ -65,6 +65,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	}
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
+	// Shared metrics across SMTP listeners and the metrics endpoint.
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
@@ -172,6 +175,32 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						.map_err(std::io::Error::other)
 				}));
 			}
+			ListenerKind::Metrics => {
+				let addr = listener_config.socket_addr();
+				let listener = TcpListener::bind(addr).await?;
+				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let metrics = Arc::clone(&metrics);
+				let router = axum::Router::new().route(
+					"/metrics",
+					axum::routing::get(move || {
+						let metrics = Arc::clone(&metrics);
+						async move {
+							(
+								[(
+									axum::http::header::CONTENT_TYPE,
+									"text/plain; version=0.0.4",
+								)],
+								metrics.render(),
+							)
+						}
+					}),
+				);
+				tasks.push(tokio::spawn(async move {
+					axum::serve(listener, router)
+						.await
+						.map_err(std::io::Error::other)
+				}));
+			}
 			ListenerKind::Imaps | ListenerKind::Imap => {
 				let Some(acceptor) = &tls_acceptor else {
 					return Err(std::io::Error::other(
@@ -214,6 +243,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(hook) = &scanner_hook {
 					server = server.with_hook(Arc::clone(hook));
 				}
+				server = server.with_metrics(Arc::clone(&metrics));
 				if let Some(acceptor) = &tls_acceptor {
 					server = server.with_tls(acceptor.clone(), mode);
 				}

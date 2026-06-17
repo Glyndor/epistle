@@ -422,6 +422,7 @@ async fn implicit_tls_without_acceptor_errors() {
 		dnsbl: crate::dnsbl::Dnsbl::default(),
 		reputation: None,
 		hook: None,
+		metrics: std::sync::Arc::new(crate::metrics::Metrics::new()),
 		first_time_delay: std::time::Duration::ZERO,
 		report_dir: None,
 	};
