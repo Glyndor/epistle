@@ -266,6 +266,25 @@ impl Server {
 
 								auth_headers
 									.push_str(&format_auth_results(&self.hostname, &methods));
+
+								// ARC: seal this hop so downstream forwarders can
+								// trust our authentication results even if they
+								// break SPF/DKIM. cv reflects any inbound chain.
+								if let Some(sealer) = &self.arc_sealer {
+									let cv =
+										crate::arc::validate::validate(dns.as_ref(), &message.data)
+											.await;
+									let prior = crate::arc::chain::extract(&message.data)
+										.ok()
+										.flatten()
+										.unwrap_or_default();
+									let summary = methods.join("; ");
+									if let Some(arc_headers) =
+										sealer.seal(&message.data, &summary, &prior, cv)
+									{
+										auth_headers.push_str(&arc_headers);
+									}
+								}
 							}
 						}
 					}

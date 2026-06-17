@@ -31,17 +31,9 @@ pub enum SignerError {
 impl Signer {
 	/// Load a PKCS#8 PEM ed25519 private key.
 	pub fn load(selector: &str, key_file: &std::path::Path) -> Result<Self, SignerError> {
-		let pem = std::fs::read_to_string(key_file).map_err(|source| SignerError::Read {
-			path: key_file.display().to_string(),
-			source,
-		})?;
-		let der = pem_body(&pem)
-			.ok_or_else(|| SignerError::InvalidKey(key_file.display().to_string()))?;
-		let key = Ed25519KeyPair::from_pkcs8(&der)
-			.map_err(|_| SignerError::InvalidKey(key_file.display().to_string()))?;
 		Ok(Signer {
 			selector: selector.to_string(),
-			key,
+			key: load_ed25519_key(key_file)?,
 		})
 	}
 
@@ -113,6 +105,19 @@ pub fn generate_key() -> Result<(String, String), SignerError> {
 		BASE64.encode(key.public_key().as_ref())
 	);
 	Ok((pem, record))
+}
+
+/// Load a PKCS#8 PEM ed25519 private key from a file. Shared by DKIM signing
+/// and ARC sealing, which use the same key format.
+pub(crate) fn load_ed25519_key(key_file: &std::path::Path) -> Result<Ed25519KeyPair, SignerError> {
+	let pem = std::fs::read_to_string(key_file).map_err(|source| SignerError::Read {
+		path: key_file.display().to_string(),
+		source,
+	})?;
+	let der =
+		pem_body(&pem).ok_or_else(|| SignerError::InvalidKey(key_file.display().to_string()))?;
+	Ed25519KeyPair::from_pkcs8(&der)
+		.map_err(|_| SignerError::InvalidKey(key_file.display().to_string()))
 }
 
 /// Extract the DER body of a single-block PEM file.
