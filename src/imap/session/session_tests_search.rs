@@ -44,7 +44,11 @@ fn uid_move_and_guards() {
 
 	session.command_line("a7 SELECT INBOX");
 	let output = session.command_line("a8 UID MOVE 1 Trash");
-	assert!(text(&output).contains("MOVE completed"), "{}", text(&output));
+	assert!(
+		text(&output).contains("MOVE completed"),
+		"{}",
+		text(&output)
+	);
 	// Missing target answers TRYCREATE.
 	let output = session.command_line("a9 COPY 1 Nowhere");
 	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
