@@ -71,6 +71,29 @@ fn capability_advertises_namespace_and_special_use() {
 }
 
 #[test]
+fn quota_reports_storage_usage() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@b\r\n\r\nsome bytes\r\n");
+	let mut session = logged_in(dir.path());
+
+	let response = text(&session.command_line("a2 GETQUOTAROOT INBOX"));
+	assert!(response.contains("* QUOTAROOT INBOX \"\""), "{response}");
+	assert!(response.contains("* QUOTA \"\" (STORAGE "), "{response}");
+	assert!(
+		response.contains("a2 OK GETQUOTAROOT completed"),
+		"{response}"
+	);
+
+	let response = text(&session.command_line("a3 GETQUOTA \"\""));
+	assert!(response.contains("STORAGE "), "{response}");
+	assert!(response.contains("a3 OK GETQUOTA completed"), "{response}");
+
+	// GETQUOTA requires authentication.
+	let mut anon = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	assert!(text(&anon.command_line("b1 GETQUOTA \"\"")).contains("b1 NO"));
+}
+
+#[test]
 fn unselect_leaves_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());

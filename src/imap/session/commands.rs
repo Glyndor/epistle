@@ -1,4 +1,7 @@
 use super::super::command::{ReturnOpt, SequenceSet};
+/// Default per-account storage quota in 1024-octet units (5 GiB).
+const DEFAULT_QUOTA_KIB: u64 = 5 * 1024 * 1024;
+
 use super::codes::{copyuid_code, esearch_line};
 use super::helpers::{format_internaldate, search_matches};
 use super::mailbox::{self, Flag, Snapshot, render_flags};
@@ -223,6 +226,38 @@ impl Session {
 			}
 			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
 		}
+	}
+
+	/// GETQUOTAROOT: report the quota root of a mailbox and its quota.
+	pub(super) fn get_quota_root(&self, tag: &str, mailbox: &str) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		};
+		if !mailbox::exists(&self.data_dir, &account, mailbox) {
+			return Output::text(format!("{tag} NO no such mailbox\r\n"));
+		}
+		let quota = self.quota_line(&account);
+		Output::text(format!(
+			"* QUOTAROOT {mailbox} \"\"\r\n{quota}{tag} OK GETQUOTAROOT completed\r\n"
+		))
+	}
+
+	/// GETQUOTA: report the quota for a root (only the empty root exists).
+	pub(super) fn get_quota(&self, tag: &str, root: &str) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		};
+		if !root.is_empty() {
+			return Output::text(format!("{tag} NO unknown quota root\r\n"));
+		}
+		let quota = self.quota_line(&account);
+		Output::text(format!("{quota}{tag} OK GETQUOTA completed\r\n"))
+	}
+
+	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
+	fn quota_line(&self, account: &str) -> String {
+		let used_kib = mailbox::account_usage(&self.data_dir, account).div_ceil(1024);
+		format!("* QUOTA \"\" (STORAGE {used_kib} {DEFAULT_QUOTA_KIB})\r\n")
 	}
 
 	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
