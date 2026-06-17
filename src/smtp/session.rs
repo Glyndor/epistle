@@ -75,6 +75,8 @@ pub struct Session {
 	auth_failures: u8,
 	/// The domain the client announced in HELO/EHLO, for trace headers.
 	helo_domain: Option<String>,
+	/// Whether the client greeted with EHLO (ESMTP) rather than HELO.
+	esmtp: bool,
 	/// Recipient resolution. An empty directory rejects every recipient
 	/// (fail closed).
 	directory: Arc<Directory>,
@@ -91,6 +93,7 @@ impl Session {
 			authenticated: None,
 			auth_failures: 0,
 			helo_domain: None,
+			esmtp: false,
 			directory: Arc::new(Directory::default()),
 		}
 	}
@@ -110,6 +113,11 @@ impl Session {
 	/// The domain announced by the client in HELO/EHLO.
 	pub fn helo_domain(&self) -> Option<&str> {
 		self.helo_domain.as_deref()
+	}
+
+	/// Whether the client greeted with EHLO (ESMTP) rather than plain HELO.
+	pub fn esmtp(&self) -> bool {
+		self.esmtp
 	}
 
 	/// Whether the connection is inside TLS.
@@ -137,6 +145,7 @@ impl Session {
 		self.tls_available = false;
 		self.tls_active = true;
 		self.helo_domain = None;
+		self.esmtp = false;
 	}
 
 	/// The greeting sent when the connection opens.
@@ -160,7 +169,8 @@ impl Session {
 
 	fn apply(&mut self, command: Command) -> Action {
 		match command {
-			Command::Helo { domain } | Command::Ehlo { domain } => self.greet(domain),
+			Command::Helo { domain } => self.greet(domain, false),
+			Command::Ehlo { domain } => self.greet(domain, true),
 			Command::MailFrom {
 				reverse_path,
 				size,
@@ -238,9 +248,15 @@ impl Session {
 		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 	}
 
-	fn greet(&mut self, domain: String) -> Action {
+	fn greet(&mut self, domain: String, esmtp: bool) -> Action {
 		self.state = State::Greeted;
 		self.helo_domain = Some(domain);
+		self.esmtp = esmtp;
+		// Plain HELO (RFC 5321 §4.1.1.1) gets a single-line greeting with no
+		// ESMTP extensions; only EHLO advertises capabilities.
+		if !esmtp {
+			return Action::Continue(Reply::single(250, &self.hostname));
+		}
 		let mut lines = vec![
 			self.hostname.clone(),
 			"PIPELINING".to_string(),

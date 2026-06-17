@@ -40,6 +40,35 @@ fn greeting_announces_hostname() {
 }
 
 #[test]
+fn helo_greeting_has_no_esmtp_extensions() {
+	let mut session = Session::new("mail.example.org")
+		.with_directory(test_directory())
+		.with_tls_available();
+	let Action::Continue(reply) = session.command_line("HELO client.example.org") else {
+		panic!("expected continue");
+	};
+	// Plain SMTP: a single-line greeting, no capability list.
+	assert_eq!(reply.to_string(), "250 mail.example.org\r\n");
+	assert!(!session.esmtp());
+}
+
+#[test]
+fn ehlo_greeting_advertises_extensions() {
+	let mut session = Session::new("mail.example.org")
+		.with_directory(test_directory())
+		.with_tls_available();
+	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
+		panic!("expected continue");
+	};
+	let rendered = reply.to_string();
+	assert!(rendered.contains("PIPELINING"), "{rendered}");
+	assert!(rendered.contains("8BITMIME"), "{rendered}");
+	assert!(rendered.contains("SIZE "), "{rendered}");
+	assert!(rendered.contains("STARTTLS"), "{rendered}");
+	assert!(session.esmtp());
+}
+
+#[test]
 fn full_transaction_delivers_message() {
 	let mut session = greeted();
 	assert_eq!(

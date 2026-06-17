@@ -391,7 +391,9 @@ impl Server {
 						session.helo_domain(),
 						peer,
 						&self.hostname,
+						session.esmtp(),
 						session.tls_active(),
+						session.authenticated().is_some(),
 						std::time::SystemTime::now(),
 					);
 					let mut stamped = header.into_bytes();
@@ -449,7 +451,9 @@ fn received_header(
 	helo: Option<&str>,
 	peer: Option<IpAddr>,
 	hostname: &str,
+	esmtp: bool,
 	tls: bool,
+	auth: bool,
 	now: std::time::SystemTime,
 ) -> String {
 	let client = helo.unwrap_or("unknown");
@@ -457,11 +461,26 @@ fn received_header(
 		Some(ip) => format!("[{ip}]"),
 		None => "[unknown]".to_string(),
 	};
-	let protocol = if tls { "ESMTPS" } else { "ESMTP" };
+	let protocol = received_protocol(esmtp, tls, auth);
 	format!(
 		"Received: from {client} ({peer})\r\n\tby {hostname} with {protocol};\r\n\t{}\r\n",
 		crate::clock::rfc5322(now)
 	)
+}
+
+/// The `with` protocol keyword for the trace header, per RFC 3848.
+/// Plain HELO is `SMTP`; EHLO is `ESMTP`, gaining an `S` over TLS and an
+/// `A` once authenticated (`ESMTPS`, `ESMTPA`, `ESMTPSA`).
+fn received_protocol(esmtp: bool, tls: bool, auth: bool) -> &'static str {
+	if !esmtp {
+		return "SMTP";
+	}
+	match (tls, auth) {
+		(true, true) => "ESMTPSA",
+		(true, false) => "ESMTPS",
+		(false, true) => "ESMTPA",
+		(false, false) => "ESMTP",
+	}
 }
 
 /// Build a folded `Authentication-Results` header (RFC 8601 §2.2).
