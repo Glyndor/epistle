@@ -3,7 +3,9 @@
 //! Opt-in, disabled by default. `command` parses client commands; the session
 //! and network layers build on it.
 
+pub mod backend;
 pub mod command;
+pub mod server;
 pub mod session;
 
 #[cfg(test)]
