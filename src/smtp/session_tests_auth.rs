@@ -262,6 +262,15 @@ fn ehlo_advertises_starttls_when_available() {
 }
 
 #[test]
+fn ehlo_advertises_dsn() {
+	let mut session = Session::new("mail.example.org");
+	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
+		panic!("expected continue");
+	};
+	assert!(reply.to_string().contains("250-DSN\r\n"));
+}
+
+#[test]
 fn ehlo_does_not_advertise_starttls_when_unavailable() {
 	let mut session = greeted_plain();
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
