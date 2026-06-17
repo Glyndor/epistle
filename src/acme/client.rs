@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use super::directory::Directory;
 use super::jws::AccountKey;
-use super::protocol::{self, Order};
+use super::protocol::{self, Authorization, Order};
 
 /// Errors from the ACME flow.
 #[derive(Debug, thiserror::Error)]
@@ -119,6 +119,46 @@ impl<T: AcmeTransport> AcmeClient<T> {
 			.await?;
 		serde_json::from_slice(&response.body).map_err(|e| AcmeError::Protocol(e.to_string()))
 	}
+
+	/// Fetch a resource with POST-as-GET (RFC 8555 §6.3: empty payload).
+	async fn post_as_get(&self, url: &str) -> Result<PostResponse, AcmeError> {
+		self.signed_post(url, b"").await
+	}
+
+	/// Fetch an authorization (its identifier and challenges).
+	pub async fn authorization(&self, url: &str) -> Result<Authorization, AcmeError> {
+		let response = self.post_as_get(url).await?;
+		serde_json::from_slice(&response.body).map_err(|e| AcmeError::Protocol(e.to_string()))
+	}
+
+	/// Tell the CA a challenge is ready to be validated (POST `{}`).
+	pub async fn respond_challenge(&self, challenge_url: &str) -> Result<(), AcmeError> {
+		self.signed_post(challenge_url, b"{}").await.map(|_| ())
+	}
+
+	/// Submit the CSR to finalize the order.
+	pub async fn finalize(
+		&self,
+		finalize_url: &str,
+		csr_der_b64url: &str,
+	) -> Result<Order, AcmeError> {
+		let payload = protocol::finalize_payload(csr_der_b64url);
+		let response = self
+			.signed_post(finalize_url, &serde_json::to_vec(&payload).expect("json"))
+			.await?;
+		serde_json::from_slice(&response.body).map_err(|e| AcmeError::Protocol(e.to_string()))
+	}
+
+	/// Poll an order's current state by URL.
+	pub async fn order_status(&self, order_url: &str) -> Result<Order, AcmeError> {
+		let response = self.post_as_get(order_url).await?;
+		serde_json::from_slice(&response.body).map_err(|e| AcmeError::Protocol(e.to_string()))
+	}
+
+	/// Download the issued certificate chain (PEM).
+	pub async fn download_certificate(&self, certificate_url: &str) -> Result<Vec<u8>, AcmeError> {
+		Ok(self.post_as_get(certificate_url).await?.body)
+	}
 }
 
 #[cfg(test)]
@@ -204,5 +244,81 @@ mod tests {
 			.expect("order");
 		assert_eq!(order.finalize, "https://acme.example/finalize/7");
 		assert_eq!(order.authorizations.len(), 1);
+	}
+
+	fn ok_body(nonce: &str, body: &[u8]) -> PostResponse {
+		PostResponse {
+			nonce: nonce.to_string(),
+			location: None,
+			status: 200,
+			body: body.to_vec(),
+		}
+	}
+
+	#[tokio::test]
+	async fn challenge_finalize_and_certificate_flow() {
+		let (key, _) = AccountKey::generate().expect("key");
+		let mut posts = HashMap::new();
+		posts.insert(
+			"https://acme.example/authz/1".to_string(),
+			ok_body(
+				"n1",
+				br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#,
+			),
+		);
+		posts.insert(
+			"https://acme.example/chal/1".to_string(),
+			ok_body("n2", b"{}"),
+		);
+		posts.insert(
+			"https://acme.example/finalize/7".to_string(),
+			ok_body(
+				"n3",
+				br#"{"status":"processing","finalize":"https://acme.example/finalize/7"}"#,
+			),
+		);
+		posts.insert(
+			"https://acme.example/order/7".to_string(),
+			ok_body("n4", br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#),
+		);
+		posts.insert(
+			"https://acme.example/cert/7".to_string(),
+			ok_body(
+				"n5",
+				b"-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----\n",
+			),
+		);
+		let transport = ScriptedTransport {
+			directory: directory_json(),
+			posts: Mutex::new(posts),
+		};
+		let client = AcmeClient::connect(transport, key, "https://acme.example/dir")
+			.await
+			.expect("connect");
+
+		let authz = client
+			.authorization("https://acme.example/authz/1")
+			.await
+			.expect("authz");
+		let challenge = authz.challenge("http-01").expect("http-01");
+		assert_eq!(challenge.token, "tok");
+
+		client
+			.respond_challenge(&challenge.url)
+			.await
+			.expect("respond");
+		client
+			.finalize("https://acme.example/finalize/7", "Q1NS")
+			.await
+			.expect("finalize");
+
+		let order = client
+			.order_status("https://acme.example/order/7")
+			.await
+			.expect("status");
+		assert_eq!(order.status, protocol::OrderStatus::Valid);
+		let cert_url = order.certificate.expect("cert url");
+		let pem = client.download_certificate(&cert_url).await.expect("cert");
+		assert!(pem.starts_with(b"-----BEGIN CERTIFICATE-----"));
 	}
 }
