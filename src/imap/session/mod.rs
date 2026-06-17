@@ -11,6 +11,7 @@ use super::mailbox::{self, Flag, Snapshot};
 mod commands;
 mod helpers;
 mod sort;
+mod thread;
 
 /// Server output produced by one step: zero or more complete response
 /// lines/literals, ready for the wire.
@@ -111,8 +112,9 @@ impl Session {
 	}
 
 	fn capabilities(&self) -> String {
-		let mut capabilities =
-			String::from("IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT");
+		let mut capabilities = String::from(
+			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT THREAD=ORDEREDSUBJECT",
+		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
 		}
@@ -199,6 +201,7 @@ impl Session {
 				criteria,
 				uid,
 			} => self.sort(&tag, &keys, &criteria, uid),
+			Command::Thread { criteria, uid } => self.thread(&tag, &criteria, uid),
 			Command::Idle => {
 				if self.account().is_none() {
 					return Output::text(format!("{tag} NO not authenticated\r\n"));

@@ -29,6 +29,29 @@ pub(super) fn parse_sort(tag: &str, args: &str, uid: bool) -> Result<Command, Pa
 	})
 }
 
+/// Parse `THREAD <algorithm> <charset> <search-criteria>` (RFC 5256). Only the
+/// ORDEREDSUBJECT algorithm is supported.
+pub(super) fn parse_thread(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	let (algorithm, after) = args.trim().split_once(' ').ok_or_else(bad)?;
+	if !algorithm.eq_ignore_ascii_case("ORDEREDSUBJECT") {
+		return Err(bad());
+	}
+	// A charset token precedes the search criteria; accept and ignore it.
+	let (_charset, criteria_text) = after.trim_start().split_once(' ').ok_or_else(bad)?;
+	let mut criteria = Vec::new();
+	let mut remaining = criteria_text.trim();
+	while !remaining.is_empty() {
+		let (key, next) = parse_search_key(remaining).ok_or_else(bad)?;
+		criteria.push(key);
+		remaining = next.trim_start();
+	}
+	if criteria.is_empty() {
+		return Err(bad());
+	}
+	Ok(Command::Thread { criteria, uid })
+}
+
 fn parse_sort_keys(text: &str) -> Option<Vec<(bool, SortKey)>> {
 	let mut keys = Vec::new();
 	let mut reverse = false;

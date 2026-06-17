@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn thread_groups_by_base_subject() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Two threads: "Project" (msgs 1 & 3) and "Lunch" (msg 2).
+	deliver(dir.path(), b"Subject: Project plan\r\n\r\na\r\n");
+	deliver(dir.path(), b"Subject: Lunch\r\n\r\nb\r\n");
+	deliver(dir.path(), b"Subject: Re: Project plan\r\n\r\nc\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let response = text(&session.command_line("a3 THREAD ORDEREDSUBJECT UTF-8 ALL"));
+	// "Re: Project plan" (3) groups with "Project plan" (1) by base subject.
+	// With equal arrival times the threads fall back to base-subject order, so
+	// "lunch" precedes "project plan".
+	assert!(response.contains("* THREAD (2)(1 3)"), "{response}");
+	assert!(response.contains("a3 OK THREAD completed"), "{response}");
+}
+
+#[test]
+fn thread_respects_search_and_uid() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: One\r\n\r\na\r\n");
+	deliver(dir.path(), b"Subject: Two\r\n\r\nb\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+	// Only the unseen message threads.
+	let response = text(&session.command_line("a4 THREAD ORDEREDSUBJECT UTF-8 UNSEEN"));
+	assert!(response.contains("* THREAD (2)"), "{response}");
+	// UID THREAD returns UIDs.
+	let response = text(&session.command_line("a5 UID THREAD ORDEREDSUBJECT UTF-8 ALL"));
+	assert!(response.contains("* THREAD (1)(2)"), "{response}");
+}
+
+#[test]
 fn move_removes_source_with_expunge() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"one\r\n");
