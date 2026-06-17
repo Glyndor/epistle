@@ -11,6 +11,7 @@ pub mod config;
 pub mod directory_store;
 pub mod dkim;
 pub mod dmarc;
+pub mod dnsbl;
 pub mod imap;
 pub mod mtasts;
 pub mod queue;
