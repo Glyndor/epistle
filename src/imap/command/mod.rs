@@ -80,6 +80,12 @@ pub enum Command {
 		criteria: Vec<SearchKey>,
 		uid: bool,
 	},
+	/// `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
+	Sort {
+		keys: Vec<(bool, SortKey)>,
+		criteria: Vec<SearchKey>,
+		uid: bool,
+	},
 	Status {
 		mailbox: String,
 		items: Vec<StatusItem>,
@@ -104,6 +110,18 @@ pub enum StatusItem {
 	Uidnext,
 	Uidvalidity,
 	Unseen,
+}
+
+/// A SORT key (RFC 5256), optionally preceded by REVERSE in the command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+	Arrival,
+	Cc,
+	Date,
+	From,
+	Size,
+	Subject,
+	To,
 }
 
 /// A single SEARCH criterion; multiple keys AND together.

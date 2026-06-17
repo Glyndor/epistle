@@ -1,6 +1,58 @@
 use super::parse::parse_astring;
-use super::{Command, ParseError, SearchKey, parse_imap_date, parse_sequence_set};
+use super::{Command, ParseError, SearchKey, SortKey, parse_imap_date, parse_sequence_set};
 use crate::imap::mailbox::Flag;
+
+/// Parse `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
+pub(super) fn parse_sort(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	let rest = args.trim().strip_prefix('(').ok_or_else(bad)?;
+	let (key_list, after) = rest.split_once(')').ok_or_else(bad)?;
+	let keys = parse_sort_keys(key_list).ok_or_else(bad)?;
+
+	// A charset token precedes the search criteria; we only support UTF-8/US-ASCII
+	// semantics but accept any token and ignore it.
+	let (_charset, criteria_text) = after.trim_start().split_once(' ').ok_or_else(bad)?;
+	let mut criteria = Vec::new();
+	let mut remaining = criteria_text.trim();
+	while !remaining.is_empty() {
+		let (key, next) = parse_search_key(remaining).ok_or_else(bad)?;
+		criteria.push(key);
+		remaining = next.trim_start();
+	}
+	if keys.is_empty() || criteria.is_empty() {
+		return Err(bad());
+	}
+	Ok(Command::Sort {
+		keys,
+		criteria,
+		uid,
+	})
+}
+
+fn parse_sort_keys(text: &str) -> Option<Vec<(bool, SortKey)>> {
+	let mut keys = Vec::new();
+	let mut reverse = false;
+	for token in text.split_whitespace() {
+		let key = match token.to_ascii_uppercase().as_str() {
+			"REVERSE" => {
+				reverse = true;
+				continue;
+			}
+			"ARRIVAL" => SortKey::Arrival,
+			"CC" => SortKey::Cc,
+			"DATE" => SortKey::Date,
+			"FROM" => SortKey::From,
+			"SIZE" => SortKey::Size,
+			"SUBJECT" => SortKey::Subject,
+			"TO" => SortKey::To,
+			_ => return None,
+		};
+		keys.push((reverse, key));
+		reverse = false;
+	}
+	// A trailing REVERSE with no key is malformed.
+	if reverse { None } else { Some(keys) }
+}
 
 pub(super) fn parse_search(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());

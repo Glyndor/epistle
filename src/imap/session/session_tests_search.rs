@@ -55,6 +55,46 @@ fn uid_move_and_guards() {
 }
 
 #[test]
+fn sort_orders_by_subject_and_size_and_reverse() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: Zebra\r\n\r\nhi\r\n");
+	deliver(
+		dir.path(),
+		b"Subject: Apple\r\n\r\na much longer body than the first message\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// SUBJECT ascending: Apple (2) before Zebra (1).
+	let response = text(&session.command_line("a3 SORT (SUBJECT) UTF-8 ALL"));
+	assert!(response.contains("* SORT 2 1\r\n"), "{response}");
+
+	// REVERSE SUBJECT: Zebra (1) first.
+	let response = text(&session.command_line("a4 SORT (REVERSE SUBJECT) UTF-8 ALL"));
+	assert!(response.contains("* SORT 1 2\r\n"), "{response}");
+
+	// SIZE ascending: the smaller message (1) first.
+	let response = text(&session.command_line("a5 SORT (SIZE) UTF-8 ALL"));
+	assert!(response.contains("* SORT 1 2\r\n"), "{response}");
+
+	// UID SORT returns UIDs.
+	let response = text(&session.command_line("a6 UID SORT (SIZE) UTF-8 ALL"));
+	assert!(response.contains("* SORT 1 2\r\n"), "{response}");
+}
+
+#[test]
+fn sort_respects_search_criteria() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: Apple\r\n\r\nhi\r\n");
+	deliver(dir.path(), b"Subject: Zebra\r\n\r\nhi\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+	let response = text(&session.command_line("a4 SORT (SUBJECT) UTF-8 UNSEEN"));
+	assert!(response.contains("* SORT 2\r\n"), "{response}");
+}
+
+#[test]
 fn search_by_flags_headers_and_text() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(
