@@ -170,3 +170,64 @@ fn quit_in_authorization_closes() {
 	let r = session.handle(Command::Quit);
 	assert!(r.is_final());
 }
+
+#[test]
+fn pass_without_user_errors() {
+	let mut session = Session::new(FakeBackend::new(inbox()));
+	assert!(matches!(
+		session.handle(Command::Pass("x".into())),
+		Response::Err(_)
+	));
+}
+
+#[test]
+fn capa_available_in_both_states() {
+	let mut session = Session::new(FakeBackend::new(inbox()));
+	// Before login.
+	assert!(matches!(
+		session.handle(Command::Capa),
+		Response::Multiline { .. }
+	));
+	login(&mut session);
+	// And after.
+	let Response::Multiline { body, .. } = session.handle(Command::Capa) else {
+		panic!("expected multiline");
+	};
+	assert!(body.windows(4).any(|w| w == b"UIDL"));
+}
+
+#[test]
+fn list_single_and_out_of_range() {
+	let mut session = Session::new(FakeBackend::new(inbox()));
+	login(&mut session);
+	assert_eq!(
+		session.handle(Command::List(Some(1))),
+		Response::Ok("1 26".to_string())
+	);
+	assert!(matches!(
+		session.handle(Command::List(Some(99))),
+		Response::Err(_)
+	));
+}
+
+#[test]
+fn noop_and_user_pass_after_login() {
+	let mut session = Session::new(FakeBackend::new(inbox()));
+	login(&mut session);
+	assert_eq!(session.handle(Command::Noop), Response::Ok(String::new()));
+	// USER/PASS are meaningless once authenticated.
+	assert!(matches!(
+		session.handle(Command::User("bob".into())),
+		Response::Err(_)
+	));
+	assert!(matches!(
+		session.handle(Command::Pass("x".into())),
+		Response::Err(_)
+	));
+}
+
+#[test]
+fn greeting_is_positive() {
+	let session = Session::new(FakeBackend::new(inbox()));
+	assert!(matches!(session.greeting(), Response::Ok(_)));
+}

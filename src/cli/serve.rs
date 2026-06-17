@@ -263,6 +263,22 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				));
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
+			ListenerKind::Pop3s => {
+				let Some(acceptor) = &tls_acceptor else {
+					return Err(std::io::Error::other(
+						"POP3S listener without TLS configured",
+					));
+				};
+				let addr = listener_config.socket_addr();
+				let listener = TcpListener::bind(addr).await?;
+				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let server = Arc::new(crate::pop3::server::Server::new(
+					config.data_dir.clone(),
+					directory.clone(),
+					acceptor.clone(),
+				));
+				tasks.push(tokio::spawn(server.serve(listener)));
+			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
 				let addr = listener_config.socket_addr();
 				let listener = TcpListener::bind(addr).await?;
