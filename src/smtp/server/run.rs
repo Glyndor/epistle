@@ -280,6 +280,30 @@ impl Server {
 						.reverse_path
 						.rsplit_once('@')
 						.map(|(_, d)| d.to_ascii_lowercase());
+					// Reputation screen for unauthenticated senders: reject a
+					// poor reputation, slow down a first-time sender.
+					if let (Some(pool), Some(domain), None) = (
+						&self.reputation,
+						rep_domain.as_deref(),
+						session.authenticated(),
+					) {
+						use crate::antispam::reputation::{Scope, Screen, screen};
+						match screen(pool, Scope::Domain, domain).await {
+							Screen::Reject => {
+								tracing::info!(%domain, "rejecting poor-reputation sender");
+								send(
+									&mut stream,
+									&Reply::single(550, "5.7.1 sender reputation rejected"),
+								)
+								.await?;
+								continue;
+							}
+							Screen::FirstTime if !self.first_time_delay.is_zero() => {
+								tokio::time::sleep(self.first_time_delay).await;
+							}
+							_ => {}
+						}
+					}
 					let reply = match self.sink.deliver(message) {
 						Ok(()) => {
 							if let (Some(pool), Some(domain), None) =

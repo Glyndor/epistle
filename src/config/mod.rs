@@ -61,6 +61,11 @@ pub struct Config {
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]
 	pub dnsbl_zones: Vec<String>,
+	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
+	/// before accepting. 0 disables the slowdown (the default). Requires a
+	/// configured database.
+	#[serde(default)]
+	pub first_time_sender_delay_secs: u64,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,

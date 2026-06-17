@@ -61,6 +61,8 @@ pub struct Server {
 	dnsbl: crate::dnsbl::Dnsbl,
 	/// When set, accepted unauthenticated mail is recorded as ham.
 	reputation: Option<sqlx::PgPool>,
+	/// Delay applied to first-time unauthenticated senders. Zero disables it.
+	first_time_delay: std::time::Duration,
 	/// If set, DMARC delivery records are written here for aggregate reports.
 	report_dir: Option<std::path::PathBuf>,
 }
@@ -78,6 +80,7 @@ impl Server {
 			spf: None,
 			dnsbl: crate::dnsbl::Dnsbl::default(),
 			reputation: None,
+			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
 		}
 	}
@@ -85,6 +88,13 @@ impl Server {
 	/// Record sender reputation for accepted unauthenticated mail.
 	pub fn with_reputation_pool(mut self, pool: sqlx::PgPool) -> Self {
 		self.reputation = Some(pool);
+		self
+	}
+
+	/// Delay first-time unauthenticated senders by `secs` seconds. Zero (the
+	/// default) disables the slowdown.
+	pub fn with_first_time_delay(mut self, secs: u64) -> Self {
+		self.first_time_delay = std::time::Duration::from_secs(secs);
 		self
 	}
 

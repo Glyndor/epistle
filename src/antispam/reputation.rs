@@ -95,6 +95,34 @@ pub async fn record(
 	Ok(())
 }
 
+/// What screening an inbound sender's reputation recommends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+	/// No bad history: accept normally.
+	Allow,
+	/// Bad history dominates: reject.
+	Reject,
+	/// Little or no history: a first-time sender (candidate for slowdown).
+	FirstTime,
+}
+
+/// Screen `value` by looking up its reputation and mapping the verdict. A
+/// lookup error yields `Allow` — a database hiccup must never block mail.
+pub async fn screen(pool: &PgPool, scope: Scope, value: &str) -> Screen {
+	match lookup(pool, scope, value).await {
+		Ok(Some(score)) => match score.verdict() {
+			Verdict::Suspect => Screen::Reject,
+			Verdict::Trusted => Screen::Allow,
+			Verdict::Unknown => Screen::FirstTime,
+		},
+		Ok(None) => Screen::FirstTime,
+		Err(error) => {
+			tracing::warn!(%error, "reputation lookup failed; allowing");
+			Screen::Allow
+		}
+	}
+}
+
 /// Record one observation in the background, logging on failure. Used on the
 /// delivery hot path where reputation must never block or fail mail.
 pub fn record_in_background(pool: PgPool, scope: Scope, value: String, spam: bool) {

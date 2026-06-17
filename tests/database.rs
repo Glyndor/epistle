@@ -92,3 +92,41 @@ async fn reputation_record_accumulates_and_judges() {
 		.await
 		.expect("cleanup");
 }
+
+#[tokio::test]
+async fn reputation_screen_maps_verdicts() {
+	use mail::antispam::reputation::{self, Scope, Screen};
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = mail::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	// Unknown identity: first-time.
+	let fresh = format!("screen-{}.example", uuid::Uuid::now_v7());
+	assert_eq!(
+		reputation::screen(&pool, Scope::Domain, &fresh).await,
+		Screen::FirstTime
+	);
+
+	// Spam-heavy identity: rejected.
+	let bad = format!("bad-{}.example", uuid::Uuid::now_v7());
+	for _ in 0..5 {
+		reputation::record(&pool, Scope::Domain, &bad, true)
+			.await
+			.expect("record spam");
+	}
+	assert_eq!(
+		reputation::screen(&pool, Scope::Domain, &bad).await,
+		Screen::Reject
+	);
+
+	sqlx::query("DELETE FROM reputation WHERE value = $1")
+		.bind(&bad)
+		.execute(&pool)
+		.await
+		.expect("cleanup");
+}
