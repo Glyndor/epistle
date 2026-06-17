@@ -5,6 +5,7 @@
 //! it, and any validation error aborts loading (fail closed).
 
 mod account;
+mod acme;
 mod api;
 mod database;
 mod dkim;
@@ -13,6 +14,7 @@ mod tls;
 mod validate;
 
 pub use account::Account;
+pub use acme::Acme;
 pub use api::Api;
 pub use database::Database;
 pub use dkim::Dkim;
@@ -103,6 +105,8 @@ pub struct Config {
 	/// Log output format (text or json).
 	#[serde(default)]
 	pub log_format: LogFormat,
+	/// Automatic TLS (ACME). Present enables certificate issuance/renewal.
+	pub acme: Option<Acme>,
 }
 
 impl Config {

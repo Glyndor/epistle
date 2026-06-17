@@ -401,3 +401,51 @@ addr = "127.0.0.2"
 	);
 	assert!(result.is_ok());
 }
+
+#[test]
+fn accepts_acme_for_configured_domain() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[acme]
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+domains = ["example.org"]
+"#,
+	);
+	assert!(result.is_ok());
+}
+
+#[test]
+fn rejects_acme_with_unconfigured_domain() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[acme]
+directory_url = "https://acme.example/dir"
+domains = ["other.example"]
+"#,
+	);
+	assert!(matches!(result, Err(ConfigError::Invalid(_))));
+}
+
+#[test]
+fn rejects_acme_with_non_https_directory() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[acme]
+directory_url = "http://acme.example/dir"
+domains = ["example.org"]
+"#,
+	);
+	assert!(matches!(result, Err(ConfigError::Invalid(_))));
+}
