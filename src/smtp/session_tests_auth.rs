@@ -75,6 +75,35 @@ fn ehlo_advertises_auth_only_inside_tls() {
 }
 
 #[test]
+fn ehlo_advertises_requiretls_only_inside_tls() {
+	let mut plain_session = greeted_plain();
+	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
+		panic!("expected continue");
+	};
+	assert!(!reply.to_string().contains("REQUIRETLS"), "{reply}");
+
+	let mut tls = tls_session();
+	let Action::Continue(reply) = tls.command_line("EHLO c.example.org") else {
+		panic!("expected continue");
+	};
+	assert!(reply.to_string().contains("REQUIRETLS"), "{reply}");
+}
+
+#[test]
+fn requiretls_rejected_without_tls() {
+	let mut session = greeted_plain();
+	let action = session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
+	assert_eq!(reply_code(&action), 530);
+}
+
+#[test]
+fn requiretls_accepted_inside_tls() {
+	let mut session = tls_session();
+	let action = session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
+	assert_eq!(reply_code(&action), 250);
+}
+
+#[test]
 fn auth_with_initial_response_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));

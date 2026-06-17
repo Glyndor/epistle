@@ -21,6 +21,8 @@ pub enum Command {
 		size: Option<u64>,
 		/// `BODY=` parameter (RFC 6152).
 		body: Option<Body>,
+		/// `REQUIRETLS` parameter (RFC 8689): the sender mandates TLS.
+		require_tls: bool,
 	},
 	/// `RCPT TO:<forward-path> [parameters]`
 	RcptTo { forward_path: String },
@@ -84,11 +86,12 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 		"EHLO" => parse_domain_arg(args).map(|domain| Command::Ehlo { domain }),
 		"MAIL" => {
 			let (path, params) = parse_path_arg(args, "FROM:")?;
-			let (size, body) = parse_mail_parameters(&params)?;
+			let (size, body, require_tls) = parse_mail_parameters(&params)?;
 			Ok(Command::MailFrom {
 				reverse_path: path,
 				size,
 				body,
+				require_tls,
 			})
 		}
 		"RCPT" => {
@@ -177,9 +180,10 @@ fn parse_path_arg(args: &str, prefix: &str) -> Result<(String, String), ParseErr
 
 /// Parse MAIL parameters: `SIZE=<bytes>` and `BODY=7BIT|8BITMIME` are
 /// implemented; anything else is rejected as unsupported (555).
-fn parse_mail_parameters(params: &str) -> Result<(Option<u64>, Option<Body>), ParseError> {
+fn parse_mail_parameters(params: &str) -> Result<(Option<u64>, Option<Body>, bool), ParseError> {
 	let mut size = None;
 	let mut body = None;
+	let mut require_tls = false;
 	for parameter in params.split_ascii_whitespace() {
 		let (keyword, value) = match parameter.split_once('=') {
 			Some((keyword, value)) => (keyword, Some(value)),
@@ -211,10 +215,17 @@ fn parse_mail_parameters(params: &str) -> Result<(Option<u64>, Option<Body>), Pa
 					return Err(ParseError::InvalidArguments);
 				}
 			}
+			"REQUIRETLS" => {
+				// RFC 8689: a valueless parameter; a value is a syntax error.
+				if value.is_some() || require_tls {
+					return Err(ParseError::InvalidArguments);
+				}
+				require_tls = true;
+			}
 			_ => return Err(ParseError::UnsupportedParameter),
 		}
 	}
-	Ok((size, body))
+	Ok((size, body, require_tls))
 }
 
 #[cfg(test)]
@@ -250,7 +261,8 @@ mod tests {
 			Ok(Command::MailFrom {
 				reverse_path: "alice@example.org".into(),
 				size: None,
-				body: None
+				body: None,
+				require_tls: false
 			})
 		);
 	}
@@ -262,7 +274,8 @@ mod tests {
 			Ok(Command::MailFrom {
 				reverse_path: String::new(),
 				size: None,
-				body: None
+				body: None,
+				require_tls: false
 			})
 		);
 	}
@@ -274,7 +287,8 @@ mod tests {
 			Ok(Command::MailFrom {
 				reverse_path: "a@example.org".into(),
 				size: Some(1000),
-				body: Some(Body::EightBitMime)
+				body: Some(Body::EightBitMime),
+				require_tls: false
 			})
 		);
 		assert_eq!(
@@ -282,8 +296,27 @@ mod tests {
 			Ok(Command::MailFrom {
 				reverse_path: "a@example.org".into(),
 				size: None,
-				body: Some(Body::SevenBit)
+				body: Some(Body::SevenBit),
+				require_tls: false
 			})
+		);
+	}
+
+	#[test]
+	fn parses_requiretls_parameter() {
+		assert_eq!(
+			parse("MAIL FROM:<a@example.org> REQUIRETLS"),
+			Ok(Command::MailFrom {
+				reverse_path: "a@example.org".into(),
+				size: None,
+				body: None,
+				require_tls: true
+			})
+		);
+		// A value on the valueless parameter is a syntax error.
+		assert_eq!(
+			parse("MAIL FROM:<a@example.org> REQUIRETLS=1"),
+			Err(ParseError::InvalidArguments)
 		);
 	}
 
