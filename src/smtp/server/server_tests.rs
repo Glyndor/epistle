@@ -421,6 +421,7 @@ async fn implicit_tls_without_acceptor_errors() {
 		spf: None,
 		dnsbl: crate::dnsbl::Dnsbl::default(),
 		reputation: None,
+		hook: None,
 		first_time_delay: std::time::Duration::ZERO,
 		report_dir: None,
 	};
