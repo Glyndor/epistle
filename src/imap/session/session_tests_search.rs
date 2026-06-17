@@ -15,7 +15,8 @@ fn move_removes_source_with_expunge() {
 	// Renumbering: removing seq 1 makes old 3 the new 2.
 	assert!(response.contains("* 1 EXPUNGE"), "{response}");
 	assert!(response.contains("* 2 EXPUNGE"), "{response}");
-	assert!(response.contains("a4 OK MOVE"), "{response}");
+	assert!(response.contains("a4 OK"), "{response}");
+	assert!(response.contains("MOVE completed"), "{response}");
 
 	let output = session.command_line("a5 FETCH 1 (BODY[])");
 	assert!(text(&output).contains("two"), "{}", text(&output));
@@ -43,7 +44,7 @@ fn uid_move_and_guards() {
 
 	session.command_line("a7 SELECT INBOX");
 	let output = session.command_line("a8 UID MOVE 1 Trash");
-	assert!(text(&output).contains("a8 OK MOVE"), "{}", text(&output));
+	assert!(text(&output).contains("MOVE completed"), "{}", text(&output));
 	// Missing target answers TRYCREATE.
 	let output = session.command_line("a9 COPY 1 Nowhere");
 	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));

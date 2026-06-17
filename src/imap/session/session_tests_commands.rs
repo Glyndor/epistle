@@ -164,7 +164,11 @@ fn copy_preserves_source_and_flags() {
 	session.command_line(r"a4 STORE 1 +FLAGS (\Seen)");
 
 	let output = session.command_line("a5 COPY 1 Archive");
-	assert!(text(&output).contains("a5 OK COPY"), "{}", text(&output));
+	let response = text(&output);
+	assert!(response.contains("a5 OK"), "{response}");
+	// UIDPLUS COPYUID: source and destination UID sets reported.
+	assert!(response.contains("[COPYUID "), "{response}");
+	assert!(response.contains("COPY completed"), "{response}");
 
 	// Source intact.
 	let output = session.command_line("a6 FETCH 1 (FLAGS)");

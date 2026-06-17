@@ -111,6 +111,7 @@ impl Session {
 
 		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
 		let mut matched = Vec::new();
+		let mut source_uids = Vec::new();
 		for sequence_number in 1..=total {
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;
@@ -118,10 +119,12 @@ impl Session {
 			let selector = if uid { message.uid } else { sequence_number };
 			if sequence.contains(selector, total) {
 				matched.push(sequence_number);
+				source_uids.push(message.uid);
 			}
 		}
 
 		// Copy all before removing any: a failed copy must not lose mail.
+		let mut dest_ids = Vec::new();
 		for sequence_number in &matched {
 			let Some(message) = snapshot.by_sequence(*sequence_number) else {
 				return Output::text(format!("{tag} NO message vanished\r\n"));
@@ -130,10 +133,14 @@ impl Session {
 				Ok(data) => data,
 				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
 			};
-			if mailbox::append(&data_dir, &account, target, &message.flags, &data).is_err() {
-				return Output::text(format!("{tag} NO copy failed\r\n"));
+			match mailbox::append(&data_dir, &account, target, &message.flags, &data) {
+				Ok(id) => dest_ids.push(id),
+				Err(_) => return Output::text(format!("{tag} NO copy failed\r\n")),
 			}
 		}
+
+		// UIDPLUS: the source and destination UID sets (RFC 4315).
+		let copyuid = copyuid_code(&data_dir, &account, target, &source_uids, &dest_ids);
 
 		let mut response = String::new();
 		if remove_source {
@@ -148,7 +155,7 @@ impl Session {
 			}
 		}
 		let verb = if remove_source { "MOVE" } else { "COPY" };
-		response.push_str(&format!("{tag} OK {verb} completed\r\n"));
+		response.push_str(&format!("{tag} OK {copyuid}{verb} completed\r\n"));
 		Output::text(response)
 	}
 
@@ -388,4 +395,46 @@ impl Session {
 			upgrade_tls: false,
 		}
 	}
+}
+
+/// Build the UIDPLUS `[COPYUID validity src dst] ` response code, or an empty
+/// string if the destination UIDs cannot be resolved. The destination
+/// UIDVALIDITY comes from the target mailbox.
+fn copyuid_code(
+	data_dir: &std::path::Path,
+	account: &str,
+	target: &str,
+	source_uids: &[u32],
+	dest_ids: &[uuid::Uuid],
+) -> String {
+	if dest_ids.is_empty() {
+		return String::new();
+	}
+	let mut validity = 0;
+	let mut dest_uids = Vec::with_capacity(dest_ids.len());
+	for id in dest_ids {
+		match mailbox::appenduid(data_dir, account, target, *id) {
+			Some((uid_validity, uid)) => {
+				validity = uid_validity;
+				dest_uids.push(uid);
+			}
+			None => return String::new(),
+		}
+	}
+	if dest_uids.len() != source_uids.len() {
+		return String::new();
+	}
+	format!(
+		"[COPYUID {validity} {} {}] ",
+		uid_set(source_uids),
+		uid_set(&dest_uids),
+	)
+}
+
+/// Format a UID list as a comma-separated set (no range coalescing).
+fn uid_set(uids: &[u32]) -> String {
+	uids.iter()
+		.map(u32::to_string)
+		.collect::<Vec<_>>()
+		.join(",")
 }
