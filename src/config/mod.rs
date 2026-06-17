@@ -90,6 +90,9 @@ pub struct Config {
 	/// redirected/forwarded mail's envelope sender is rewritten so it passes
 	/// SPF at the next hop. Absent disables SRS (the default).
 	pub srs_secret: Option<String>,
+	/// Per-account IMAP storage quota in bytes (RFC 9208). Absent uses the
+	/// built-in default (5 GiB).
+	pub quota_bytes: Option<u64>,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,

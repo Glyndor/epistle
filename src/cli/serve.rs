@@ -292,14 +292,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				let addr = listener_config.socket_addr();
 				let listener = TcpListener::bind(addr).await?;
 				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
-				let server = Arc::new(crate::imap::server::Server::new(
+				let mut imap_server = crate::imap::server::Server::new(
 					&config.hostname,
 					config.data_dir.clone(),
 					directory.clone(),
 					acceptor.clone(),
 					mode,
-				));
-				tasks.push(tokio::spawn(server.serve(listener)));
+				);
+				if let Some(bytes) = config.quota_bytes {
+					imap_server = imap_server.with_quota(bytes);
+				}
+				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
 				let Some(acceptor) = &tls_acceptor else {

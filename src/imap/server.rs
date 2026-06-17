@@ -44,6 +44,7 @@ pub struct Server {
 	directory: DirectoryHandle,
 	tls: TlsAcceptor,
 	tls_mode: TlsMode,
+	quota_bytes: u64,
 }
 
 impl Server {
@@ -62,7 +63,14 @@ impl Server {
 			directory,
 			tls,
 			tls_mode,
+			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
 		}
+	}
+
+	/// Set the per-account storage quota applied to sessions.
+	pub fn with_quota(mut self, bytes: u64) -> Self {
+		self.quota_bytes = bytes;
+		self
 	}
 
 	/// Accept connections forever.
@@ -100,7 +108,8 @@ impl Server {
 						&self.hostname,
 						self.data_dir.clone(),
 						self.directory.current(),
-					),
+					)
+					.with_quota_limit(self.quota_bytes),
 				)
 			}
 			TlsMode::StartTls => (
@@ -110,6 +119,7 @@ impl Server {
 					self.data_dir.clone(),
 					self.directory.current(),
 				)
+				.with_quota_limit(self.quota_bytes)
 				.with_starttls(),
 			),
 		};
