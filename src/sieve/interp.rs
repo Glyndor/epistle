@@ -160,6 +160,7 @@ fn eval_test(test: &Test, message: &Message) -> bool {
 			.iter()
 			.all(|name| !message.header_values(name).is_empty()),
 		"header" => header_test(test, message),
+		"address" => address_test(test, message),
 		"size" => size_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
@@ -185,6 +186,65 @@ fn header_test(test: &Test, message: &Message) -> bool {
 		}
 	}
 	false
+}
+
+/// `address [comparator] [:all|:localpart|:domain] <header-names> <key-list>`.
+/// Compares the chosen part of the addresses in the named headers, per
+/// RFC 5228 §5.1. Defaults to the whole address (`:all`).
+fn address_test(test: &Test, message: &Message) -> bool {
+	let comparator = comparator(&test.args);
+	let Some((names, keys)) = split_names_keys(&test.args, &[]) else {
+		return false;
+	};
+	let part = if has_tag(&test.args, "localpart") {
+		AddressPart::Local
+	} else if has_tag(&test.args, "domain") {
+		AddressPart::Domain
+	} else {
+		AddressPart::All
+	};
+	for name in &names {
+		for value in message.header_values(name) {
+			let Some(addr) = part.of(&addr_spec(value)) else {
+				continue;
+			};
+			for key in &keys {
+				if comparator.matches(&addr, key) {
+					return true;
+				}
+			}
+		}
+	}
+	false
+}
+
+#[derive(Clone, Copy)]
+enum AddressPart {
+	All,
+	Local,
+	Domain,
+}
+
+impl AddressPart {
+	/// Extract this part from an `addr-spec` (`local@domain`).
+	fn of(self, addr: &str) -> Option<String> {
+		match self {
+			AddressPart::All => Some(addr.to_string()),
+			AddressPart::Local => addr.rsplit_once('@').map(|(local, _)| local.to_string()),
+			AddressPart::Domain => addr.rsplit_once('@').map(|(_, domain)| domain.to_string()),
+		}
+	}
+}
+
+/// The bare `addr-spec` from a header value: the contents of the last
+/// angle-addr (`Name <a@b>`), or the trimmed value if there is none.
+fn addr_spec(value: &str) -> String {
+	if let Some(open) = value.rfind('<')
+		&& let Some(close) = value[open..].find('>')
+	{
+		return value[open + 1..open + close].trim().to_string();
+	}
+	value.trim().to_string()
 }
 
 /// `size :over|:under <number>`.
