@@ -1,3 +1,5 @@
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use super::*;
 use crate::smtp::sink::MemorySink;
 
