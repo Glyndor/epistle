@@ -1,0 +1,19 @@
+name: Rust audit
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC: catch new RUSTSEC advisories on a fixed tree.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    uses: Glyndor/.github/.github/workflows/rust-audit.yml@b78620146d50fdbc552e1b86740e64d114c58f0f # v1.0.0
