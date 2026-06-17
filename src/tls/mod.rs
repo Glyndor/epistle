@@ -10,6 +10,20 @@ use tokio_rustls::rustls::ServerConfig;
 
 use crate::config::Tls;
 
+/// Install the ring `CryptoProvider` as the process default, once.
+///
+/// Some dependencies (sqlx, reqwest) pull rustls with the aws-lc-rs provider
+/// enabled too; with two providers compiled in, rustls cannot pick one
+/// automatically and its config builders panic. Installing ring explicitly
+/// makes the choice deterministic across the whole process.
+pub fn ensure_crypto_provider() {
+	use std::sync::Once;
+	static INIT: Once = Once::new();
+	INIT.call_once(|| {
+		let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+	});
+}
+
 /// Errors while loading TLS material. Always fatal: the server refuses to
 /// start with broken TLS rather than degrade to plaintext.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +43,7 @@ pub enum TlsError {
 
 /// Build a TLS acceptor from the configured PEM files.
 pub fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
+	ensure_crypto_provider();
 	let certs = load_certs(&config.cert_file)?;
 	let key = load_key(&config.key_file)?;
 	let server_config = ServerConfig::builder()
@@ -79,6 +94,7 @@ pub(crate) mod test_support {
 			.expect("generate certificate");
 		let cert = certified.cert.der().clone();
 		let key = PrivateKeyDer::try_from(certified.signing_key.serialize_der()).expect("key der");
+		super::ensure_crypto_provider();
 		let config = ServerConfig::builder()
 			.with_no_client_auth()
 			.with_single_cert(vec![cert.clone()], key)

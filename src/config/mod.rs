@@ -6,6 +6,7 @@
 
 mod account;
 mod api;
+mod database;
 mod dkim;
 mod listener;
 mod tls;
@@ -13,6 +14,7 @@ mod validate;
 
 pub use account::Account;
 pub use api::Api;
+pub use database::Database;
 pub use dkim::Dkim;
 pub use listener::{Listener, ListenerKind};
 pub use tls::Tls;
@@ -73,6 +75,9 @@ pub struct Config {
 	pub dkim: Option<Dkim>,
 	/// Management API. Required by `api` listeners.
 	pub api: Option<Api>,
+	/// PostgreSQL backing for the antispam engine. Optional until antispam
+	/// persistence is enabled.
+	pub database: Option<Database>,
 }
 
 impl Config {

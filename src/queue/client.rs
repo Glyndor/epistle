@@ -85,6 +85,7 @@ async fn tls_connect(
 ) -> Result<tokio_rustls::client::TlsStream<Box<dyn Stream>>, DeliveryError> {
 	let mut roots = RootCertStore::empty();
 	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+	crate::tls::ensure_crypto_provider();
 	let config = ClientConfig::builder()
 		.with_root_certificates(roots)
 		.with_no_client_auth();

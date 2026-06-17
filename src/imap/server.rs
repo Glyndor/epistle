@@ -304,6 +304,7 @@ mod tests {
 		// Handshake over the same stream.
 		let mut roots = RootCertStore::empty();
 		roots.add(cert).expect("trust cert");
+		crate::tls::ensure_crypto_provider();
 		let config = ClientConfig::builder()
 			.with_root_certificates(roots)
 			.with_no_client_auth();
@@ -348,6 +349,7 @@ mod tests {
 
 		let mut roots = RootCertStore::empty();
 		roots.add(cert).expect("trust cert");
+		crate::tls::ensure_crypto_provider();
 		let config = ClientConfig::builder()
 			.with_root_certificates(roots)
 			.with_no_client_auth();
