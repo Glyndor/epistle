@@ -301,6 +301,7 @@ fn test_connector(
 ) -> tokio_rustls::TlsConnector {
 	let mut roots = tokio_rustls::rustls::RootCertStore::empty();
 	roots.add(cert).expect("trust test certificate");
+	crate::tls::ensure_crypto_provider();
 	let config = tokio_rustls::rustls::ClientConfig::builder()
 		.with_root_certificates(roots)
 		.with_no_client_auth();
