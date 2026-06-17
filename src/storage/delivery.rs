@@ -58,11 +58,21 @@ impl LocalDelivery {
 		Ok(accounts)
 	}
 
-	fn deliver_to_account(&self, account: &str, data: &[u8]) -> std::io::Result<Uuid> {
+	fn deliver_to_account(
+		&self,
+		account: &str,
+		mailbox: Option<&str>,
+		data: &[u8],
+	) -> std::io::Result<Uuid> {
 		let id = Uuid::now_v7();
 		let account_dir = self.accounts_root.join(account);
-		let tmp_dir = account_dir.join("tmp");
-		let new_dir = account_dir.join("new");
+		// INBOX is the account root; named mailboxes live under folders/.
+		let base = match mailbox {
+			Some(name) => account_dir.join("folders").join(name),
+			None => account_dir,
+		};
+		let tmp_dir = base.join("tmp");
+		let new_dir = base.join("new");
 		fs::create_dir_all(&tmp_dir)?;
 		fs::create_dir_all(&new_dir)?;
 
@@ -71,19 +81,46 @@ impl LocalDelivery {
 		fs::rename(&tmp_path, new_dir.join(format!("{id}.eml")))?;
 		Ok(id)
 	}
-}
 
-impl MessageSink for LocalDelivery {
-	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		let accounts = self.accounts_for(&message)?;
+	/// Deliver one copy per recipient account into `mailbox` (a named folder),
+	/// or INBOX when `None`. The mailbox name must be a safe single segment.
+	pub fn deliver_routed(
+		&self,
+		message: &AcceptedMessage,
+		mailbox: Option<&str>,
+	) -> Result<(), SinkError> {
+		if let Some(name) = mailbox
+			&& !is_safe_mailbox(name)
+		{
+			return Err(SinkError::Unavailable(format!(
+				"unsafe mailbox name {name:?}"
+			)));
+		}
+		let accounts = self.accounts_for(message)?;
 		if accounts.is_empty() {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
 		for account in &accounts {
-			self.deliver_to_account(account, &message.data)
+			self.deliver_to_account(account, mailbox, &message.data)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		Ok(())
+	}
+}
+
+/// A mailbox name safe to use as a single path segment.
+fn is_safe_mailbox(name: &str) -> bool {
+	!name.is_empty()
+		&& name.len() <= 64
+		&& !name.starts_with('.')
+		&& name
+			.chars()
+			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' '))
+}
+
+impl MessageSink for LocalDelivery {
+	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
+		self.deliver_routed(&message, None)
 	}
 }
 

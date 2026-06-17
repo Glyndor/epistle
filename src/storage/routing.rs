@@ -18,6 +18,7 @@ pub struct SplitDelivery {
 	local: LocalDelivery,
 	outbound: FsSpool,
 	signer: Option<Arc<crate::dkim::Signer>>,
+	rules: Vec<crate::rules::Rule>,
 }
 
 impl SplitDelivery {
@@ -28,6 +29,7 @@ impl SplitDelivery {
 			outbound: FsSpool::open(data_dir)?,
 			directory,
 			signer: None,
+			rules: Vec::new(),
 		})
 	}
 
@@ -35,6 +37,27 @@ impl SplitDelivery {
 	pub fn with_signer(mut self, signer: Arc<crate::dkim::Signer>) -> Self {
 		self.signer = Some(signer);
 		self
+	}
+
+	/// Apply these delivery rules to locally delivered mail.
+	pub fn with_rules(mut self, rules: Vec<crate::rules::Rule>) -> Self {
+		self.rules = rules;
+		self
+	}
+
+	/// The mailbox local delivery should target for `message`, per the rules:
+	/// an explicit mailbox, or `Junk` for a junk verdict, else INBOX (`None`).
+	fn target_mailbox(&self, message: &AcceptedMessage) -> Option<String> {
+		let sender_domain = message
+			.reverse_path
+			.rsplit_once('@')
+			.map(|(_, domain)| domain.to_ascii_lowercase());
+		let rule = crate::rules::evaluate(&self.rules, &message.data, sender_domain.as_deref())?;
+		match &rule.mailbox {
+			Some(mailbox) => Some(mailbox.clone()),
+			None if rule.junk => Some("Junk".to_string()),
+			None => None,
+		}
 	}
 }
 
@@ -60,10 +83,13 @@ impl MessageSink for SplitDelivery {
 		}
 
 		if !local.is_empty() {
-			self.local.deliver(AcceptedMessage {
+			let mailbox = self.target_mailbox(&message);
+			let local_message = AcceptedMessage {
 				recipients: local,
 				..message.clone()
-			})?;
+			};
+			self.local
+				.deliver_routed(&local_message, mailbox.as_deref())?;
 		}
 		if !remote.is_empty() {
 			let mut outbound_message = AcceptedMessage {
@@ -120,6 +146,38 @@ mod tests {
 			.list()
 			.expect("list")
 			.len()
+	}
+
+	fn folder_count(root: &std::path::Path, account: &str, mailbox: &str) -> usize {
+		fs::read_dir(
+			root.join("accounts")
+				.join(account)
+				.join("folders")
+				.join(mailbox)
+				.join("new"),
+		)
+		.map(|entries| entries.count())
+		.unwrap_or(0)
+	}
+
+	#[test]
+	fn junk_rule_files_into_the_junk_mailbox() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let rule = crate::rules::Rule {
+			sender_domain: Some("example.org".to_string()),
+			header: None,
+			header_contains: None,
+			junk: true,
+			mailbox: None,
+		};
+		let sink = SplitDelivery::new(dir.path(), directory())
+			.expect("sink")
+			.with_rules(vec![rule]);
+		sink.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		// Routed to Junk, not INBOX.
+		assert_eq!(folder_count(dir.path(), "alice", "Junk"), 1);
+		assert_eq!(inbox_count(dir.path(), "alice"), 0);
 	}
 
 	#[test]
