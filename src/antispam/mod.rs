@@ -4,4 +4,5 @@
 //! classifier) live here on top of the PostgreSQL pool; stateless screens
 //! such as DNSBL live in their own modules.
 
+pub mod bayes;
 pub mod reputation;
