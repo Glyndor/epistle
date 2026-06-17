@@ -1,5 +1,7 @@
 use super::parse::parse_astring;
-use super::{Command, ParseError, SearchKey, SortKey, parse_imap_date, parse_sequence_set};
+use super::{
+	Command, ParseError, ReturnOpt, SearchKey, SortKey, parse_imap_date, parse_sequence_set,
+};
 use crate::imap::mailbox::Flag;
 
 /// Parse `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
@@ -79,8 +81,21 @@ fn parse_sort_keys(text: &str) -> Option<Vec<(bool, SortKey)>> {
 
 pub(super) fn parse_search(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
-	let mut criteria = Vec::new();
 	let mut rest = args.trim();
+
+	// Optional ESEARCH `RETURN (...)` block (RFC 4731), before the criteria.
+	let mut return_opts = None;
+	if let Some(after_return) = strip_keyword(rest, "RETURN") {
+		let inner = after_return.trim_start();
+		let close = find_close_paren(inner).ok_or_else(bad)?;
+		if !inner.starts_with('(') {
+			return Err(bad());
+		}
+		return_opts = Some(parse_return_opts(&inner[1..close]).ok_or_else(bad)?);
+		rest = inner[close + 1..].trim_start();
+	}
+
+	let mut criteria = Vec::new();
 	while !rest.is_empty() {
 		let (key, after) = parse_search_key(rest).ok_or_else(bad)?;
 		criteria.push(key);
@@ -89,7 +104,42 @@ pub(super) fn parse_search(tag: &str, args: &str, uid: bool) -> Result<Command, 
 	if criteria.is_empty() {
 		return Err(bad());
 	}
-	Ok(Command::Search { criteria, uid })
+	Ok(Command::Search {
+		criteria,
+		uid,
+		return_opts,
+	})
+}
+
+/// Parse the contents of `RETURN (...)`. An empty list defaults to ALL.
+fn parse_return_opts(text: &str) -> Option<Vec<ReturnOpt>> {
+	let mut opts = Vec::new();
+	for token in text.split_whitespace() {
+		opts.push(match token.to_ascii_uppercase().as_str() {
+			"MIN" => ReturnOpt::Min,
+			"MAX" => ReturnOpt::Max,
+			"COUNT" => ReturnOpt::Count,
+			"ALL" => ReturnOpt::All,
+			_ => return None,
+		});
+	}
+	if opts.is_empty() {
+		opts.push(ReturnOpt::All);
+	}
+	Some(opts)
+}
+
+/// If `s` begins with `keyword` (case-insensitive) followed by whitespace,
+/// return the remainder.
+fn strip_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
+	let rest = s.get(..keyword.len())?;
+	if rest.eq_ignore_ascii_case(keyword) {
+		let tail = &s[keyword.len()..];
+		if tail.starts_with(char::is_whitespace) {
+			return Some(tail);
+		}
+	}
+	None
 }
 
 /// Parse one search-key from the start of `s`, return `(key, remaining)`.

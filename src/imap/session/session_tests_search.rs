@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn esearch_return_options() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
+	deliver(dir.path(), b"Subject: b\r\n\r\ntwo\r\n");
+	deliver(dir.path(), b"Subject: c\r\n\r\nthree\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// COUNT/MIN/MAX over ALL.
+	let response = text(&session.command_line("a3 SEARCH RETURN (MIN MAX COUNT) ALL"));
+	assert!(response.contains("* ESEARCH (TAG \"a3\")"), "{response}");
+	assert!(response.contains("MIN 1"), "{response}");
+	assert!(response.contains("MAX 3"), "{response}");
+	assert!(response.contains("COUNT 3"), "{response}");
+	assert!(response.contains("a3 OK SEARCH completed"), "{response}");
+
+	// ALL returns the matching set; empty RETURN () defaults to ALL.
+	let response = text(&session.command_line("a4 SEARCH RETURN () ALL"));
+	assert!(response.contains("ALL 1,2,3"), "{response}");
+
+	// UID SEARCH RETURN carries the UID marker.
+	let response = text(&session.command_line("a5 UID SEARCH RETURN (COUNT) ALL"));
+	assert!(
+		response.contains("* ESEARCH (TAG \"a5\") UID COUNT 3"),
+		"{response}"
+	);
+}
+
+#[test]
 fn thread_groups_by_base_subject() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// Two threads: "Project" (msgs 1 & 3) and "Lunch" (msg 2).

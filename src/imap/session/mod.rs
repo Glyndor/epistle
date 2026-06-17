@@ -8,6 +8,7 @@ use crate::smtp::directory::Directory;
 use super::command::{Command, FetchItem, ParseError, SearchKey, StatusItem, StoreMode, Tagged};
 use super::mailbox::{self, Flag, Snapshot};
 
+mod codes;
 mod commands;
 mod helpers;
 mod sort;
@@ -114,7 +115,7 @@ impl Session {
 	fn capabilities(&self) -> String {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE",
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -237,7 +238,11 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE",
 				uid,
 				remove_source,
 			} => self.copy(&tag, &sequence, &mailbox, uid, remove_source),
-			Command::Search { criteria, uid } => self.search(&tag, &criteria, uid),
+			Command::Search {
+				criteria,
+				uid,
+				return_opts,
+			} => self.search(&tag, &criteria, uid, return_opts.as_deref()),
 			Command::Status { mailbox, items } => self.status(&tag, &mailbox, &items),
 			Command::Subscribe { mailbox } => self.subscription_op(&tag, |data_dir, account| {
 				mailbox::subscribe(data_dir, account, &mailbox)
