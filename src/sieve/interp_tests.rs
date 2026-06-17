@@ -163,6 +163,18 @@ fn envelope_absent_never_matches() {
 }
 
 #[test]
+fn body_test_matches_content() {
+	let msg = b"Subject: hi\r\n\r\nClaim your free LOTTERY prize now\r\n";
+	let hit = run("if body :contains \"lottery\" { discard; }", msg);
+	assert!(hit.discarded);
+	let miss = run("if body :contains \"invoice\" { discard; }", msg);
+	assert!(!miss.discarded);
+	// :text behaves the same (no MIME decoding yet).
+	let text = run("if body :text :contains \"prize\" { discard; }", msg);
+	assert!(text.discarded);
+}
+
+#[test]
 fn stop_halts_execution() {
 	let outcome = run("fileinto \"A\"; stop; fileinto \"B\";", MSG);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
