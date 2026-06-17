@@ -192,6 +192,7 @@ impl Session {
 				mailbox::rename(dir, account, &from, &to)
 			}),
 			Command::Expunge => self.expunge(&tag),
+			Command::UidExpunge { sequence } => self.uid_expunge(&tag, &sequence),
 			Command::Idle => {
 				if self.account().is_none() {
 					return Output::text(format!("{tag} NO not authenticated\r\n"));

@@ -46,6 +46,10 @@ pub enum Command {
 		to: String,
 	},
 	Expunge,
+	/// `UID EXPUNGE <set>` (RFC 4315): expunge only \Deleted messages in the set.
+	UidExpunge {
+		sequence: SequenceSet,
+	},
 	Idle,
 	/// `APPEND <mailbox> [(flags)] {size}` — the literal body follows.
 	Append {
