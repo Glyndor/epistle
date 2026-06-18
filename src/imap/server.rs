@@ -45,6 +45,7 @@ pub struct Server {
 	tls: TlsAcceptor,
 	tls_mode: TlsMode,
 	quota_bytes: u64,
+	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 }
 
 impl Server {
@@ -64,12 +65,19 @@ impl Server {
 			tls,
 			tls_mode,
 			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
+			oauth: None,
 		}
 	}
 
 	/// Set the per-account storage quota applied to sessions.
 	pub fn with_quota(mut self, bytes: u64) -> Self {
 		self.quota_bytes = bytes;
+		self
+	}
+
+	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
+	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
+		self.oauth = Some(verifier);
 		self
 	}
 
@@ -109,7 +117,8 @@ impl Server {
 						self.data_dir.clone(),
 						self.directory.current(),
 					)
-					.with_quota_limit(self.quota_bytes),
+					.with_quota_limit(self.quota_bytes)
+					.with_oauth(self.oauth.clone()),
 				)
 			}
 			TlsMode::StartTls => (
@@ -120,6 +129,7 @@ impl Server {
 					self.directory.current(),
 				)
 				.with_quota_limit(self.quota_bytes)
+				.with_oauth(self.oauth.clone())
 				.with_starttls(),
 			),
 		};

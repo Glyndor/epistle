@@ -88,9 +88,9 @@ pub struct Session {
 	tls_available: bool,
 	/// Per-account storage quota in bytes (RFC 9208 STORAGE).
 	quota_limit_bytes: u64,
-	/// In-flight SASL AUTHENTICATE exchange and test SCRAM nonce.
 	pending_auth: Option<auth::PendingAuth>,
 	scram_nonce: Option<String>,
+	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -111,6 +111,7 @@ impl Session {
 			quota_limit_bytes: DEFAULT_QUOTA_BYTES,
 			pending_auth: None,
 			scram_nonce: None,
+			oauth: None,
 		}
 	}
 
@@ -143,7 +144,7 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 			capabilities.push_str(" STARTTLS");
 		}
 		if self.tls_active {
-			capabilities.push_str(" AUTH=PLAIN AUTH=SCRAM-SHA-256 SASL-IR");
+			capabilities.push_str(&self.sasl_capability());
 		} else {
 			capabilities.push_str(" LOGINDISABLED");
 		}

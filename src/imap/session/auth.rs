@@ -5,6 +5,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::smtp::scram::{ScramCredentials, ScramServer, username_of};
 
+use crate::smtp::address::Address;
+use crate::smtp::directory::Resolution;
+
 use super::{Output, Session, State};
 
 /// In-flight SASL state between AUTHENTICATE continuation lines.
@@ -27,6 +30,45 @@ impl Session {
 	pub fn with_scram_nonce(mut self, nonce: &str) -> Self {
 		self.scram_nonce = Some(nonce.to_string());
 		self
+	}
+
+	/// Attach an OAuth token verifier (enables OAUTHBEARER/XOAUTH2).
+	pub fn with_oauth(
+		mut self,
+		verifier: Option<std::sync::Arc<crate::oauth::OauthVerifier>>,
+	) -> Self {
+		self.oauth = verifier;
+		self
+	}
+
+	/// The advertised SASL mechanisms, including OAuth when configured.
+	pub(super) fn sasl_capability(&self) -> String {
+		let mut caps = String::from(" AUTH=PLAIN AUTH=SCRAM-SHA-256");
+		if self.oauth.is_some() {
+			caps.push_str(" AUTH=OAUTHBEARER AUTH=XOAUTH2");
+		}
+		caps.push_str(" SASL-IR");
+		caps
+	}
+
+	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token (SASL-IR required).
+	fn oauth_bearer(&mut self, tag: &str, initial: Option<String>) -> Output {
+		let outcome = self.oauth.clone().zip(initial).and_then(|(verifier, enc)| {
+			let token = parse_bearer(&enc)?;
+			let email = verifier.verify(&token, unix_now())?;
+			let address = Address::parse(&email).ok()?;
+			match self.directory.resolve(&address) {
+				Resolution::Account(account) => Some(account),
+				_ => None,
+			}
+		});
+		match outcome {
+			Some(account) => {
+				self.state = State::Authenticated { account };
+				Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
+			}
+			None => self.auth_failure(tag),
+		}
 	}
 
 	/// Begin AUTHENTICATE. AUTHENTICATE requires TLS and the unauthenticated
@@ -57,6 +99,7 @@ impl Session {
 					continuation("")
 				}
 			},
+			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(tag, initial),
 			_ => Output::text(format!("{tag} NO unsupported SASL mechanism\r\n")),
 		}
 	}
@@ -191,4 +234,23 @@ fn continuation(challenge_b64: &str) -> Output {
 
 fn decode(encoded: &str) -> Option<String> {
 	String::from_utf8(BASE64.decode(encoded).ok()?).ok()
+}
+
+/// Extract the bearer token from a base64 OAUTHBEARER/XOAUTH2 initial response.
+fn parse_bearer(encoded: &str) -> Option<String> {
+	let text = decode(encoded)?;
+	let token = text
+		.split("auth=Bearer ")
+		.nth(1)?
+		.split('\x01')
+		.next()?
+		.trim();
+	(!token.is_empty()).then(|| token.to_string())
+}
+
+fn unix_now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
 }

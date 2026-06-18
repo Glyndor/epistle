@@ -317,6 +317,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(bytes) = config.quota_bytes {
 					imap_server = imap_server.with_quota(bytes);
 				}
+				if let Some(verifier) = &oauth_verifier {
+					imap_server = imap_server.with_oauth(Arc::clone(verifier));
+				}
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {

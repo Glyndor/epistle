@@ -114,6 +114,62 @@ fn append_over_quota_is_refused() {
 	assert_eq!(output.collect_literal, Some(10));
 }
 
+#[test]
+fn authenticate_oauthbearer_succeeds() {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+	use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+	use ring::rand::SystemRandom;
+	use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
+
+	let rng = SystemRandom::new();
+	let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+	let pair =
+		EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng).unwrap();
+	let public_b64 = B64.encode(pair.public_key().as_ref());
+	let verifier = std::sync::Arc::new(
+		crate::oauth::OauthVerifier::new("https://idp.example", "mail", "ES256", &public_b64)
+			.expect("verifier"),
+	);
+	let header = B64URL.encode(br#"{"alg":"ES256","typ":"JWT"}"#);
+	let payload = B64URL.encode(
+		serde_json::to_vec(&serde_json::json!({
+			"iss": "https://idp.example",
+			"aud": "mail",
+			"email": "alice@example.org",
+			"exp": 99_999_999_999u64,
+		}))
+		.unwrap(),
+	);
+	let input = format!("{header}.{payload}");
+	let sig = pair.sign(&rng, input.as_bytes()).unwrap();
+	let token = format!("{input}.{}", B64URL.encode(sig.as_ref()));
+	let response = B64.encode(format!(
+		"n,a=alice@example.org,\x01auth=Bearer {token}\x01\x01"
+	));
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory())
+		.with_oauth(Some(verifier));
+	// Capability advertises the OAuth mechanisms when a verifier is configured.
+	assert!(
+		text(&session.command_line("a0 CAPABILITY")).contains("AUTH=OAUTHBEARER"),
+		"capability should advertise OAUTHBEARER"
+	);
+	let response = text(&session.command_line(&format!("a1 AUTHENTICATE OAUTHBEARER {response}")));
+	assert!(
+		response.contains("a1 OK AUTHENTICATE completed"),
+		"{response}"
+	);
+
+	// Without a configured verifier, OAUTHBEARER is refused.
+	let dir2 = tempfile::tempdir().expect("tempdir");
+	let mut s2 = Session::new("mail.example.org", dir2.path().to_path_buf(), directory());
+	let bad = B64.encode("n,a=alice@example.org,\x01auth=Bearer not.a.jwt\x01\x01");
+	let r2 = text(&s2.command_line(&format!("a1 AUTHENTICATE OAUTHBEARER {bad}")));
+	assert!(r2.contains("a1 NO"), "{r2}");
+}
+
 fn scram_directory() -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	let stored =
