@@ -28,7 +28,6 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"CAPABILITY" => no_args(&tag, args, Command::Capability)?,
 		"NOOP" => no_args(&tag, args, Command::Noop)?,
 		"NAMESPACE" => no_args(&tag, args, Command::Namespace)?,
-		// ID carries a parameter list (or NIL) we accept and ignore.
 		"ID" => Command::Id,
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
 		"STARTTLS" => no_args(&tag, args, Command::StartTls)?,
@@ -261,7 +260,6 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
 
 	let items_text = items_text.trim();
-	// Split the items group from an optional `(CHANGEDSINCE n)` modifier.
 	let (items_group, modifier) = if items_text.starts_with('(') {
 		let close = items_text.find(')').ok_or_else(bad)?;
 		(&items_text[..=close], items_text[close + 1..].trim())
@@ -285,6 +283,8 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 			"UID" => items.push(FetchItem::Uid),
 			"INTERNALDATE" => items.push(FetchItem::InternalDate),
 			"MODSEQ" => items.push(FetchItem::ModSeq),
+			"EMAILID" => items.push(FetchItem::EmailId),
+			"THREADID" => items.push(FetchItem::ThreadId),
 			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
 			"BINARY[]" | "BINARY.PEEK[]" => items.push(FetchItem::Binary),
 			"BINARY.SIZE[]" => items.push(FetchItem::BinarySize),
