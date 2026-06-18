@@ -42,6 +42,23 @@ fn discard_drops_the_message() {
 }
 
 #[test]
+fn fileinto_copy_preserves_implicit_keep() {
+	// `:copy` (RFC 3894): the message is filed AND kept in the inbox.
+	let outcome = run("fileinto :copy \"Archive\";", MSG);
+	assert!(outcome.keep, "{outcome:?}");
+	assert_eq!(outcome.fileinto, vec!["Archive".to_string()]);
+
+	// redirect :copy likewise keeps the inbox copy.
+	let outcome = run("redirect :copy \"forward@example.com\";", MSG);
+	assert!(outcome.keep, "{outcome:?}");
+	assert_eq!(outcome.redirects, vec!["forward@example.com".to_string()]);
+
+	// Without :copy the implicit keep is still cancelled.
+	let outcome = run("fileinto \"Archive\";", MSG);
+	assert!(!outcome.keep);
+}
+
+#[test]
 fn imap4flags_set_add_and_remove() {
 	// setflag replaces, addflag unions, removeflag subtracts (RFC 5232).
 	let outcome = run(
