@@ -95,8 +95,7 @@ pub struct Session {
 	directory: Arc<Directory>,
 	/// In-flight SCRAM exchange, between the challenge rounds.
 	pending_scram: Option<scram::PendingScram>,
-	/// In-flight AUTH LOGIN exchange: `None` (idle), `Some(None)` (awaiting the
-	/// username), or `Some(Some(user))` (awaiting the password).
+	/// AUTH LOGIN exchange: idle / awaiting username / awaiting password.
 	pending_login: Option<Option<String>>,
 	/// Test-injected SCRAM server nonce; `None` generates a fresh random one.
 	scram_nonce: Option<String>,
@@ -162,9 +161,8 @@ impl Session {
 		self
 	}
 
-	/// Called by the network layer once the TLS handshake completed.
-	/// Per RFC 3207 the server forgets everything learned before the
-	/// upgrade; the client must greet again.
+	/// Called once the TLS handshake completed. Per RFC 3207 the server forgets
+	/// everything learned before the upgrade; the client must greet again.
 	pub fn tls_started(&mut self) {
 		self.state = State::Connected;
 		self.tls_available = false;
@@ -497,3 +495,6 @@ mod tests_auth;
 #[cfg(test)]
 #[path = "../session_tests_oauth.rs"]
 mod tests_oauth;
+#[cfg(test)]
+#[path = "../session_tests_scram.rs"]
+mod tests_scram;
