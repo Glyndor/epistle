@@ -293,6 +293,7 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 			"INTERNALDATE" => items.push(FetchItem::InternalDate),
 			"MODSEQ" => items.push(FetchItem::ModSeq),
 			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
+			"BINARY[]" | "BINARY.PEEK[]" => items.push(FetchItem::Binary),
 			"ALL" => {
 				items.extend([
 					FetchItem::Flags,

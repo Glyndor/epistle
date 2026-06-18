@@ -81,6 +81,23 @@ fn fetch_returns_flags_size_and_body() {
 }
 
 #[test]
+fn fetch_binary_decodes_base64_body() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// "hello" base64-encoded is "aGVsbG8=".
+	let body = b"Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n";
+	deliver(dir.path(), body);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let output = session.command_line("a3 FETCH 1 (BINARY[])");
+	let response = text(&output);
+	// The 5-byte decoded payload, not the encoded text.
+	assert!(response.contains("BINARY[] {5}"), "{response}");
+	assert!(response.contains("\r\nhello"), "{response}");
+	assert!(response.contains("a3 OK FETCH completed"), "{response}");
+}
+
+#[test]
 fn uid_fetch_filters_by_uid() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"first\r\n");

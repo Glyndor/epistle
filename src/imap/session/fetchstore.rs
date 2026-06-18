@@ -165,6 +165,18 @@ impl Session {
 							return Output::text(format!("{tag} NO message unavailable\r\n"));
 						}
 					},
+					FetchItem::Binary => match snapshot.read(message) {
+						Ok(data) => {
+							let decoded = decode_binary(&data);
+							let mut part =
+								format!("BINARY[] {{{}}}\r\n", decoded.len()).into_bytes();
+							part.extend_from_slice(&decoded);
+							parts.push(part);
+						}
+						Err(_) => {
+							return Output::text(format!("{tag} NO message unavailable\r\n"));
+						}
+					},
 				}
 			}
 
@@ -187,4 +199,54 @@ impl Session {
 			collect_auth: false,
 		}
 	}
+}
+
+/// Decode a message body per its top-level Content-Transfer-Encoding (RFC 3516
+/// `BINARY[]`). Unknown or identity encodings return the body unchanged; a
+/// malformed base64/quoted-printable body falls back to the raw bytes.
+fn decode_binary(raw: &[u8]) -> Vec<u8> {
+	let text = String::from_utf8_lossy(raw);
+	let (headers, body) = text.split_once("\r\n\r\n").unwrap_or(("", &text));
+	let encoding = headers.lines().find_map(|line| {
+		let lower = line.to_ascii_lowercase();
+		lower
+			.strip_prefix("content-transfer-encoding:")
+			.map(|value| value.trim().to_string())
+	});
+	match encoding.as_deref() {
+		Some("base64") => {
+			use base64::Engine;
+			let stripped: String = body.split_whitespace().collect();
+			base64::engine::general_purpose::STANDARD
+				.decode(stripped.as_bytes())
+				.unwrap_or_else(|_| body.as_bytes().to_vec())
+		}
+		Some("quoted-printable") => decode_quoted_printable(body),
+		_ => body.as_bytes().to_vec(),
+	}
+}
+
+/// Decode a quoted-printable body (RFC 2045 §6.7): `=XX` hex escapes and `=`
+/// soft line breaks.
+fn decode_quoted_printable(body: &str) -> Vec<u8> {
+	let bytes = body.as_bytes();
+	let mut out = Vec::with_capacity(bytes.len());
+	let mut i = 0;
+	while i < bytes.len() {
+		if bytes[i] == b'=' && i + 2 < bytes.len() {
+			if bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
+				i += 3; // soft line break
+				continue;
+			}
+			let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+			if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+				out.push(byte);
+				i += 3;
+				continue;
+			}
+		}
+		out.push(bytes[i]);
+		i += 1;
+	}
+	out
 }
