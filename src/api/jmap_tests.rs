@@ -15,7 +15,6 @@ async fn jmap_session_advertises_core_capability() {
 		"{body}"
 	);
 	assert_eq!(body["apiUrl"], "/jmap/api");
-	// The configured account appears.
 	assert!(body["accounts"]["alice"].is_object(), "{body}");
 	// Auth is required.
 	let (status, _) = request(&app, "GET", "/jmap/session", None).await;
@@ -50,7 +49,6 @@ async fn jmap_core_echo_round_trips() {
 	assert_eq!(body["methodResponses"][0][1]["hello"], "world");
 	assert_eq!(body["methodResponses"][0][2], "c1");
 
-	// An unknown method yields an error response, not a failure.
 	let req = serde_json::json!({
 		"using": [],
 		"methodCalls": [["Widget/get", {}, "c2"]],
@@ -66,7 +64,6 @@ async fn jmap_mailbox_set_creates_and_destroys() {
 	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
 	let app = router(test_state(dir.path(), 0));
 
-	// Create a mailbox.
 	let req = serde_json::json!({
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Mailbox/set", {
@@ -78,7 +75,6 @@ async fn jmap_mailbox_set_creates_and_destroys() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["methodResponses"][0][1]["created"]["c1"]["id"], "Work");
 
-	// Mailbox/get now lists it.
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/get", {"accountId": "alice"}, "m2"]],
 	});
@@ -91,7 +87,6 @@ async fn jmap_mailbox_set_creates_and_destroys() {
 		.collect();
 	assert!(names.contains(&"Work".to_string()), "{names:?}");
 
-	// Destroy it.
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "destroy": ["Work"]}, "m3"]],
 	});
@@ -100,15 +95,40 @@ async fn jmap_mailbox_set_creates_and_destroys() {
 }
 
 #[tokio::test]
+async fn jmap_mailbox_query_lists_ids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	let req = serde_json::json!({
+		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Work"}}}, "m1"]],
+	});
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Mailbox/query", {"accountId": "alice"}, "q1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let ids = body["methodResponses"][0][1]["ids"].to_string();
+	assert!(ids.contains("INBOX") && ids.contains("Work"), "{ids}");
+	assert_eq!(body["methodResponses"][0][1]["total"], 2);
+
+	// Unknown account is reported, not a 500.
+	let req = serde_json::json!({
+		"methodCalls": [["Mailbox/query", {"accountId": "nobody"}, "q2"]],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(body["methodResponses"][0][1]["type"], "accountNotFound");
+}
+
+#[tokio::test]
 async fn jmap_mailbox_get_lists_inbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	// Deliver a message so INBOX reports a count.
 	let inbox = dir.path().join("accounts").join("alice").join("new");
 	std::fs::create_dir_all(&inbox).expect("mkdir");
 	std::fs::write(inbox.join(format!("{}.eml", uuid::Uuid::now_v7())), b"x").expect("write");
 
 	let app = router(test_state(dir.path(), 0));
-	// The session advertises the mail capability.
 	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
 	assert!(
 		session["capabilities"]["urn:ietf:params:jmap:mail"].is_object(),
@@ -168,7 +188,6 @@ async fn jmap_email_submission_queues_message() {
 		body["methodResponses"][0][1]["created"]["s1"]["id"].is_string(),
 		"{body}"
 	);
-	// The message landed in the outbound spool.
 	let spool_new = dir.path().join("spool").join("new");
 	let count = std::fs::read_dir(&spool_new)
 		.map(|d| d.count())
@@ -187,7 +206,6 @@ async fn jmap_quota_get_reports_usage() {
 	)
 	.expect("write");
 	let app = router(test_state(dir.path(), 0).with_quota(1_000_000));
-	// Session advertises the quota capability.
 	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
 	assert!(
 		session["capabilities"]["urn:ietf:params:jmap:quota"].is_object(),
@@ -208,7 +226,6 @@ async fn jmap_quota_get_reports_usage() {
 async fn jmap_identity_get_lists_addresses() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	// Session advertises the submission capability.
 	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
 	assert!(
 		session["capabilities"]["urn:ietf:params:jmap:submission"].is_object(),
@@ -237,13 +254,11 @@ async fn jmap_email_copy_duplicates_to_mailbox() {
 	)
 	.expect("write");
 	let app = router(test_state(dir.path(), 0));
-	// Create the destination folder.
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Saved"}}}, "m1"]],
 	});
 	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
 
-	// Copy the email to Saved (source stays in INBOX).
 	let req = serde_json::json!({
 		"methodCalls": [["Email/copy", {
 			"accountId": "alice", "fromAccountId": "alice",
@@ -256,7 +271,6 @@ async fn jmap_email_copy_duplicates_to_mailbox() {
 		body["methodResponses"][0][1]["created"]["k"]["id"].is_string(),
 		"{body}"
 	);
-	// Both INBOX and Saved now have one message.
 	let req = serde_json::json!({
 		"methodCalls": [
 			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "INBOX"}}, "q1"],
@@ -293,7 +307,6 @@ async fn jmap_email_set_creates_message() {
 		.as_str()
 		.expect("created id")
 		.to_string();
-	// Email/get retrieves the stored draft with its subject and body.
 	let req = serde_json::json!({
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id]}, "c2"]],
 	});
@@ -326,7 +339,6 @@ async fn jmap_email_set_destroys_message() {
 		body["methodResponses"][0][1]["destroyed"][0],
 		id.to_string()
 	);
-	// Gone from the mailbox: a follow-up Email/query is empty.
 	let req = serde_json::json!({
 		"methodCalls": [["Email/query", {"accountId": "alice"}, "c2"]],
 	});

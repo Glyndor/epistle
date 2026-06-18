@@ -117,6 +117,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			"Core/echo" => json!([name, args, call_id]),
 			"Mailbox/get" => methods::mailbox_get(&state, &args, &call_id),
 			"Mailbox/set" => methods::mailbox_set(&state, &args, &call_id),
+			"Mailbox/query" => methods::mailbox_query(&state, &args, &call_id),
 			"Email/query" => methods::email_query(&state, &args, &call_id),
 			"Email/get" => methods::email_get(&state, &args, &call_id),
 			"Thread/get" => methods::thread_get(&state, &args, &call_id),
