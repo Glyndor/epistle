@@ -177,6 +177,15 @@ impl Session {
 							return Output::text(format!("{tag} NO message unavailable\r\n"));
 						}
 					},
+					FetchItem::BinarySize => match snapshot.read(message) {
+						Ok(data) => {
+							let size = decode_binary(&data).len();
+							parts.push(format!("BINARY.SIZE[] {size}").into_bytes());
+						}
+						Err(_) => {
+							return Output::text(format!("{tag} NO message unavailable\r\n"));
+						}
+					},
 				}
 			}
 

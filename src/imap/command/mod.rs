@@ -222,6 +222,8 @@ pub enum FetchItem {
 	Body,
 	/// `BINARY[]`: the body decoded per its Content-Transfer-Encoding (RFC 3516).
 	Binary,
+	/// `BINARY.SIZE[]`: the decoded body's size in octets (RFC 3516).
+	BinarySize,
 	InternalDate,
 	/// `MODSEQ`: the message's mod-sequence (CONDSTORE, RFC 7162).
 	ModSeq,
