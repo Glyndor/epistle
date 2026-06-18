@@ -195,6 +195,18 @@ fn status_reports_counts_for_inbox() {
 }
 
 #[test]
+fn status_reports_size() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"hello\r\n");
+	deliver(dir.path(), b"world!\r\n");
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a2 STATUS INBOX (SIZE)"));
+	// "hello\r\n" (7) + "world!\r\n" (8) = 15 octets.
+	assert!(response.contains("SIZE 15"), "{response}");
+	assert!(response.contains("a2 OK STATUS completed"), "{response}");
+}
+
+#[test]
 fn status_requires_authentication_and_existing_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());

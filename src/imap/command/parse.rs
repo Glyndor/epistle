@@ -364,6 +364,7 @@ fn parse_status(tag: &str, args: &str) -> Result<Command, ParseError> {
 			"UIDNEXT" => StatusItem::Uidnext,
 			"UIDVALIDITY" => StatusItem::Uidvalidity,
 			"UNSEEN" => StatusItem::Unseen,
+			"SIZE" => StatusItem::Size,
 			_ => return Err(bad()),
 		};
 		items.push(item);

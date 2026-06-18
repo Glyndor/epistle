@@ -384,15 +384,16 @@ impl Session {
 			if i > 0 {
 				parts.push(' ');
 			}
-			let value: u32 = match item {
-				StatusItem::Messages => snapshot.len() as u32,
+			let value: u64 = match item {
+				StatusItem::Messages => snapshot.len() as u64,
 				StatusItem::Recent => 0,
-				StatusItem::Uidnext => snapshot.uid_next(),
-				StatusItem::Uidvalidity => snapshot.uid_validity(),
+				StatusItem::Uidnext => u64::from(snapshot.uid_next()),
+				StatusItem::Uidvalidity => u64::from(snapshot.uid_validity()),
 				StatusItem::Unseen => snapshot
 					.messages()
 					.filter(|m| !m.flags.contains(&Flag::Seen))
-					.count() as u32,
+					.count() as u64,
+				StatusItem::Size => snapshot.messages().map(|m| m.size).sum(),
 			};
 			let name = match item {
 				StatusItem::Messages => "MESSAGES",
@@ -400,6 +401,7 @@ impl Session {
 				StatusItem::Uidnext => "UIDNEXT",
 				StatusItem::Uidvalidity => "UIDVALIDITY",
 				StatusItem::Unseen => "UNSEEN",
+				StatusItem::Size => "SIZE",
 			};
 			parts.push_str(&format!("{name} {value}"));
 		}

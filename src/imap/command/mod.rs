@@ -132,6 +132,8 @@ pub enum StatusItem {
 	Uidnext,
 	Uidvalidity,
 	Unseen,
+	/// `SIZE` (RFC 8438): total octets of all messages in the mailbox.
+	Size,
 }
 
 /// An ESEARCH `RETURN` option (RFC 4731).
