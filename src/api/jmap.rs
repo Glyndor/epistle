@@ -102,6 +102,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			"Mailbox/get" => mailbox_get(&state, &args, &call_id),
 			"Email/query" => email_query(&state, &args, &call_id),
 			"Email/get" => email_get(&state, &args, &call_id),
+			"Email/set" => email_set(&state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		});
 	}
@@ -211,6 +212,84 @@ fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 		{ "accountId": account, "state": "0", "list": list, "notFound": not_found },
 		call_id,
 	])
+}
+
+/// `Email/set` (RFC 8621 §4.6): apply keyword updates (mark read/flagged etc.).
+/// Only full `keywords` replacement on `update` is supported so far.
+fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let mut updated = serde_json::Map::new();
+	let mut not_updated = serde_json::Map::new();
+	if let Some(update) = args.get("update").and_then(Value::as_object) {
+		for (id, patch) in update {
+			match apply_keywords(state.data_dir(), account, id, patch) {
+				Ok(()) => {
+					updated.insert(id.clone(), Value::Null);
+				}
+				Err(reason) => {
+					not_updated.insert(id.clone(), json!({ "type": reason }));
+				}
+			}
+		}
+	}
+	json!([
+		"Email/set",
+		{ "accountId": account, "oldState": "0", "newState": "0",
+		  "updated": updated, "notUpdated": not_updated },
+		call_id,
+	])
+}
+
+/// Apply a `keywords` replacement to a message, mapping JMAP keywords to IMAP
+/// flags. Returns a JMAP SetError type string on failure.
+fn apply_keywords(
+	data_dir: &std::path::Path,
+	account: &str,
+	id: &str,
+	patch: &Value,
+) -> Result<(), &'static str> {
+	let Some(keywords) = patch.get("keywords").and_then(Value::as_object) else {
+		// Only whole-keywords updates are supported (no patch paths yet).
+		return Err("invalidPatch");
+	};
+	let flags: Vec<crate::imap::mailbox::Flag> = keywords
+		.iter()
+		.filter(|(_, set)| set.as_bool() == Some(true))
+		.filter_map(|(keyword, _)| keyword_to_flag(keyword))
+		.collect();
+	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
+	for mailbox in crate::imap::mailbox::list(data_dir, account) {
+		let Ok(mut snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox)
+		else {
+			continue;
+		};
+		let position = snapshot.messages().position(|m| m.id() == uuid);
+		if let Some(index) = position {
+			let sequence = u32::try_from(index + 1).unwrap_or(u32::MAX);
+			return snapshot
+				.store_flags(sequence, flags)
+				.map(|_| ())
+				.map_err(|_| "serverFail");
+		}
+	}
+	Err("notFound")
+}
+
+/// Map a JMAP keyword to an IMAP flag, or `None` for unsupported keywords.
+fn keyword_to_flag(keyword: &str) -> Option<crate::imap::mailbox::Flag> {
+	use crate::imap::mailbox::Flag;
+	match keyword {
+		"$seen" => Some(Flag::Seen),
+		"$answered" => Some(Flag::Answered),
+		"$flagged" => Some(Flag::Flagged),
+		"$draft" => Some(Flag::Draft),
+		_ => None,
+	}
 }
 
 /// Locate a message by id across the account's mailboxes and build its Email.

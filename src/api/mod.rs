@@ -35,3 +35,7 @@ pub fn router(state: ApiState) -> Router {
 #[cfg(test)]
 #[path = "api_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jmap_tests.rs"]
+mod jmap_tests;
