@@ -134,7 +134,8 @@ impl Session {
 	fn capabilities(&self) -> String {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE",
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE \
+LIST-STATUS",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -203,7 +204,11 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 			)),
 			Command::Login { username, password } => self.login(&tag, &username, &password),
 			Command::Authenticate { mechanism, initial } => self.auth(&tag, &mechanism, initial),
-			Command::List { pattern, .. } => self.list(&tag, &pattern),
+			Command::List {
+				pattern,
+				return_status,
+				..
+			} => self.list(&tag, &pattern, &return_status),
 			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
 			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),
 			Command::Close => self.close(&tag),
@@ -312,24 +317,6 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 			State::NotAuthenticated { .. } => None,
 			State::Authenticated { account } | State::Selected { account, .. } => Some(account),
 		}
-	}
-
-	fn list(&mut self, tag: &str, pattern: &str) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		let mut response = String::new();
-		for name in mailbox::list(&self.data_dir, &account) {
-			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
-			if matches {
-				response.push_str(&format!(
-					"* LIST ({}) \"/\" \"{name}\"\r\n",
-					special_use_attribute(&name)
-				));
-			}
-		}
-		response.push_str(&format!("{tag} OK LIST completed\r\n"));
-		Output::text(response)
 	}
 
 	fn mailbox_op(
@@ -463,7 +450,7 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 
 /// The RFC 6154 special-use attribute for a well-known mailbox name, or an
 /// empty string. Matching is case-insensitive on the leaf name.
-fn special_use_attribute(name: &str) -> &'static str {
+pub(super) fn special_use_attribute(name: &str) -> &'static str {
 	match name.to_ascii_lowercase().as_str() {
 		"junk" | "spam" | "rejects" => "\\Junk",
 		"drafts" => "\\Drafts",

@@ -197,10 +197,33 @@ fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let (reference, rest) = parse_astring(args).ok_or_else(bad)?;
 	let (pattern, rest) = parse_astring(rest).ok_or_else(bad)?;
-	if !rest.trim().is_empty() {
-		return Err(bad());
-	}
-	Ok(Command::List { reference, pattern })
+	let rest = rest.trim();
+	let return_status = if rest.is_empty() {
+		Vec::new()
+	} else {
+		parse_list_return(rest).ok_or_else(bad)?
+	};
+	Ok(Command::List {
+		reference,
+		pattern,
+		return_status,
+	})
+}
+
+/// Parse a `RETURN (STATUS (items...))` LIST modifier (RFC 5819). Only the
+/// STATUS return option is supported; an empty STATUS list yields no items.
+fn parse_list_return(rest: &str) -> Option<Vec<StatusItem>> {
+	let after = rest
+		.strip_prefix("RETURN")
+		.or_else(|| rest.strip_prefix("return"))?;
+	let group = after.trim().strip_prefix('(')?.strip_suffix(')')?.trim();
+	let inner = group
+		.strip_prefix("STATUS")
+		.or_else(|| group.strip_prefix("status"))?
+		.trim()
+		.strip_prefix('(')?
+		.strip_suffix(')')?;
+	parse_status_items(inner)
 }
 
 fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {
@@ -430,21 +453,23 @@ fn parse_status(tag: &str, args: &str) -> Result<Command, ParseError> {
 		.strip_prefix('(')
 		.and_then(|t| t.strip_suffix(')'))
 		.ok_or_else(bad)?;
+	let items = parse_status_items(inner).ok_or_else(bad)?;
+	Ok(Command::Status { mailbox, items })
+}
+
+/// Parse a non-empty space-separated STATUS item list (without parentheses).
+fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
 	let mut items = Vec::new();
 	for word in inner.split_whitespace() {
-		let item = match word.to_ascii_uppercase().as_str() {
+		items.push(match word.to_ascii_uppercase().as_str() {
 			"MESSAGES" => StatusItem::Messages,
 			"RECENT" => StatusItem::Recent,
 			"UIDNEXT" => StatusItem::Uidnext,
 			"UIDVALIDITY" => StatusItem::Uidvalidity,
 			"UNSEEN" => StatusItem::Unseen,
 			"SIZE" => StatusItem::Size,
-			_ => return Err(bad()),
-		};
-		items.push(item);
+			_ => return None,
+		});
 	}
-	if items.is_empty() {
-		return Err(bad());
-	}
-	Ok(Command::Status { mailbox, items })
+	(!items.is_empty()).then_some(items)
 }
