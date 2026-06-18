@@ -293,4 +293,48 @@ mod tests {
 		task.abort();
 		assert!(matches!(result, Err(DeliveryError::Permanent(_))));
 	}
+
+	/// Drive `deliver` against a canned server response (writes are discarded).
+	async fn deliver_against(greeting: &'static [u8]) -> Result<(), DeliveryError> {
+		let stream = tokio::io::join(greeting, tokio::io::sink());
+		deliver(
+			stream,
+			"mx.example.org",
+			"mail.sender.example",
+			"alice@sender.example",
+			&["bob@example.org".to_string()],
+			b"body\r\n",
+			false,
+		)
+		.await
+	}
+
+	#[tokio::test]
+	async fn malformed_greeting_is_transient() {
+		let result = deliver_against(b"not-a-code\r\n").await;
+		assert!(
+			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
+	}
+
+	#[tokio::test]
+	async fn connection_closed_before_greeting_is_transient() {
+		let result = deliver_against(b"").await;
+		assert!(
+			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
+	}
+
+	#[tokio::test]
+	async fn oversized_reply_is_transient() {
+		// 70 KiB with no CRLF: the reply never completes and trips the cap.
+		const HUGE: &[u8] = &[b'a'; 70 * 1024];
+		let result = deliver_against(HUGE).await;
+		assert!(
+			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
+	}
 }
