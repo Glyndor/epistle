@@ -6,7 +6,9 @@
 //! Only the mandatory `Core/echo` method is implemented so far.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -135,4 +137,21 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 		});
 	}
 	Json(Response { method_responses })
+}
+
+/// `GET /jmap/download/{accountId}/{blobId}/{name}` (RFC 8620 §6.2): return the
+/// raw bytes of a stored message. The blob id is the message id.
+pub async fn download(
+	State(state): State<ApiState>,
+	Path((account, blob_id, _name)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return (StatusCode::NOT_FOUND, "account not found").into_response();
+	}
+	match objects::find_email_raw(state.data_dir(), &account, &blob_id) {
+		Some(bytes) => {
+			([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
+		}
+		None => (StatusCode::NOT_FOUND, "blob not found").into_response(),
+	}
 }

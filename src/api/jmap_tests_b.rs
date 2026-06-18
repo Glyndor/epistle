@@ -312,3 +312,38 @@ async fn jmap_changes_methods_report_cannot_calculate() {
 		"{body}"
 	);
 }
+
+#[tokio::test]
+async fn jmap_download_returns_raw_message() {
+	use super::tests::request_raw;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts/alice/new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	let raw = b"From: a@example.org\r\nSubject: dl\r\n\r\nbody\r\n";
+	std::fs::write(inbox.join(format!("{id}.eml")), raw).expect("write");
+	let app = router(test_state(dir.path(), 0));
+
+	let (status, body) = request_raw(
+		&app,
+		&format!("/jmap/download/alice/{id}/msg.eml"),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, raw);
+
+	// Unknown blob and unknown account both 404.
+	let (status, _) = request_raw(
+		&app,
+		&format!("/jmap/download/alice/{}/x", uuid::Uuid::now_v7()),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	let (status, _) = request_raw(&app, &format!("/jmap/download/ghost/{id}/x"), Some(TOKEN)).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	// Without a token the route is unauthorized.
+	let (status, _) = request_raw(&app, &format!("/jmap/download/alice/{id}/x"), None).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

@@ -26,6 +26,10 @@ pub fn router(state: ApiState) -> Router {
 		.route("/.well-known/jmap", get(jmap::session))
 		.route("/jmap/session", get(jmap::session))
 		.route("/jmap/api", post(jmap::api))
+		.route(
+			"/jmap/download/{account_id}/{blob_id}/{name}",
+			get(jmap::download),
+		)
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(
