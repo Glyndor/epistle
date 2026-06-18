@@ -197,6 +197,34 @@ impl Server {
 					output = session.literal_done(&literal);
 					continue;
 				}
+				if output.collect_auth {
+					// Read one SASL continuation line and feed it back.
+					let response = loop {
+						match decoder.next_line() {
+							Ok(Some(line)) => break line,
+							Ok(None) => {
+								let read = match tokio::time::timeout(
+									READ_TIMEOUT,
+									stream.read(&mut buffer),
+								)
+								.await
+								{
+									Ok(Ok(n)) => n,
+									Ok(Err(e)) => return Err(e),
+									Err(_) => return Ok(()),
+								};
+								if read == 0 {
+									return Ok(());
+								}
+								decoder.feed(&buffer[..read]);
+							}
+							Err(_) => return Ok(()),
+						}
+					};
+					let response = String::from_utf8(response).unwrap_or_default();
+					output = session.auth_response(&response);
+					continue;
+				}
 				if output.upgrade_tls {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.

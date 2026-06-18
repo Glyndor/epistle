@@ -477,6 +477,7 @@ impl Session {
 			collect_literal: None,
 			idle: false,
 			upgrade_tls: false,
+			collect_auth: false,
 		}
 	}
 }

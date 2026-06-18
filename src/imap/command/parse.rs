@@ -33,6 +33,17 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
 		"STARTTLS" => no_args(&tag, args, Command::StartTls)?,
 		"LOGIN" => parse_login(&tag, args)?,
+		"AUTHENTICATE" => {
+			let mut parts = args.split_whitespace();
+			let mechanism = parts
+				.next()
+				.ok_or_else(|| ParseError::BadArguments(tag.clone()))?
+				.to_ascii_uppercase();
+			Command::Authenticate {
+				mechanism,
+				initial: parts.next().map(str::to_string),
+			}
+		}
 		"LIST" => parse_list(&tag, args)?,
 		"SELECT" => Command::Select {
 			mailbox: parse_mailbox(&tag, args)?,

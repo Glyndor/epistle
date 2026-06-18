@@ -114,6 +114,89 @@ fn append_over_quota_is_refused() {
 	assert_eq!(output.collect_literal, Some(10));
 }
 
+fn scram_directory() -> Arc<Directory> {
+	use crate::smtp::scram::{ScramCredentials, ScramStored};
+	let stored =
+		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	Arc::new(
+		Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_scram([("alice".to_string(), stored)]),
+	)
+}
+
+#[test]
+fn authenticate_plain_succeeds() {
+	use base64::Engine;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	let response = base64::engine::general_purpose::STANDARD.encode("\0alice\0secret");
+	let output = session.command_line(&format!("a1 AUTHENTICATE PLAIN {response}"));
+	assert!(
+		text(&output).contains("a1 OK AUTHENTICATE completed"),
+		"{}",
+		text(&output)
+	);
+}
+
+#[test]
+fn authenticate_scram_sha256_succeeds() {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+	use ring::{digest, hmac, pbkdf2};
+	use std::num::NonZeroU32;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		scram_directory(),
+	)
+	.with_scram_nonce("SN");
+	let output = session.command_line(&format!(
+		"a1 AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	));
+	assert!(output.collect_auth, "should request a continuation");
+
+	let salt = b"saltsalt";
+	let server_first = format!("r=CNSN,s={},i=4096", B64.encode(salt));
+	let without_proof = "c=biws,r=CNSN";
+	let auth_message = format!("n=alice,r=CN,{server_first},{without_proof}");
+	let mut salted = [0u8; 32];
+	pbkdf2::derive(
+		pbkdf2::PBKDF2_HMAC_SHA256,
+		NonZeroU32::new(4096).unwrap(),
+		salt,
+		b"secret",
+		&mut salted,
+	);
+	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");
+	let stored_key = digest::digest(&digest::SHA256, client_key.as_ref());
+	let client_sig = hmac::sign(
+		&hmac::Key::new(hmac::HMAC_SHA256, stored_key.as_ref()),
+		auth_message.as_bytes(),
+	);
+	let proof: Vec<u8> = client_key
+		.as_ref()
+		.iter()
+		.zip(client_sig.as_ref())
+		.map(|(a, b)| a ^ b)
+		.collect();
+	let client_final = format!("{without_proof},p={}", B64.encode(&proof));
+
+	let output = session.auth_response(&B64.encode(&client_final));
+	let response = text(&output);
+	assert!(response.contains("a1 OK"), "{response}");
+	assert!(response.contains("[SASL "), "{response}");
+}
+
 #[test]
 fn unselect_leaves_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");

@@ -8,6 +8,7 @@ use crate::smtp::directory::Directory;
 use super::command::{Command, FetchItem, ParseError, SearchKey, StatusItem, StoreMode, Tagged};
 use super::mailbox::{self, Flag, Snapshot};
 
+mod auth;
 mod codes;
 mod commands;
 mod helpers;
@@ -28,6 +29,8 @@ pub struct Output {
 	pub idle: bool,
 	/// After sending, perform the TLS handshake and call [`Session::tls_started`].
 	pub upgrade_tls: bool,
+	/// After sending, read one SASL continuation line (AUTHENTICATE).
+	pub collect_auth: bool,
 }
 
 impl Output {
@@ -38,6 +41,7 @@ impl Output {
 			collect_literal: None,
 			idle: false,
 			upgrade_tls: false,
+			collect_auth: false,
 		}
 	}
 
@@ -48,6 +52,7 @@ impl Output {
 			collect_literal: None,
 			idle: false,
 			upgrade_tls: false,
+			collect_auth: false,
 		}
 	}
 }
@@ -83,6 +88,9 @@ pub struct Session {
 	tls_available: bool,
 	/// Per-account storage quota in bytes (RFC 9208 STORAGE).
 	quota_limit_bytes: u64,
+	/// In-flight SASL AUTHENTICATE exchange and test SCRAM nonce.
+	pending_auth: Option<auth::PendingAuth>,
+	scram_nonce: Option<String>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -101,6 +109,8 @@ impl Session {
 			tls_active: true,
 			tls_available: false,
 			quota_limit_bytes: DEFAULT_QUOTA_BYTES,
+			pending_auth: None,
+			scram_nonce: None,
 		}
 	}
 
@@ -133,7 +143,7 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 			capabilities.push_str(" STARTTLS");
 		}
 		if self.tls_active {
-			capabilities.push_str(" AUTH=PLAIN SASL-IR");
+			capabilities.push_str(" AUTH=PLAIN AUTH=SCRAM-SHA-256 SASL-IR");
 		} else {
 			capabilities.push_str(" LOGINDISABLED");
 		}
@@ -195,6 +205,7 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
 			Command::Login { username, password } => self.login(&tag, &username, &password),
+			Command::Authenticate { mechanism, initial } => self.auth(&tag, &mechanism, initial),
 			Command::List { pattern, .. } => self.list(&tag, &pattern),
 			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
 			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),

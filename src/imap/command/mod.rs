@@ -24,6 +24,11 @@ pub enum Command {
 		username: String,
 		password: String,
 	},
+	/// `AUTHENTICATE <mechanism> [initial-response]` (RFC 9051).
+	Authenticate {
+		mechanism: String,
+		initial: Option<String>,
+	},
 	List {
 		reference: String,
 		pattern: String,
