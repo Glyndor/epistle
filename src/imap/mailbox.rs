@@ -219,12 +219,11 @@ impl Snapshot {
 		let highest_modseq = super::modseq::read_counter(&account_dir)
 			.max(messages.iter().map(|m| m.modseq).max().unwrap_or(1))
 			.max(1);
+		let uid_validity = super::uidvalidity::read_or_init(&account_dir);
 		Ok(Snapshot {
 			account_dir,
 			messages,
-			// Derived from the newest message so a changed mailbox between
-			// sessions changes validity. 1 for an empty mailbox.
-			uid_validity: ids.last().map(|id| (id.as_u128() as u32) | 1).unwrap_or(1),
+			uid_validity,
 			highest_modseq,
 		})
 	}

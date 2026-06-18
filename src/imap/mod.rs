@@ -5,3 +5,4 @@ pub mod mailbox;
 mod modseq;
 pub mod server;
 pub mod session;
+mod uidvalidity;

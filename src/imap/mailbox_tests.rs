@@ -13,8 +13,25 @@ fn empty_or_missing_inbox_is_empty() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
 	assert!(snapshot.is_empty());
-	assert_eq!(snapshot.uid_validity(), 1);
+	// UIDVALIDITY is always a nonzero value (RFC 3501).
+	assert!(snapshot.uid_validity() > 0);
 	assert_eq!(snapshot.uid_next(), 1);
+}
+
+#[test]
+fn uid_validity_is_stable_across_sessions() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"first\r\n");
+	let first = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let validity = first.uid_validity();
+	assert!(validity > 0);
+	// Re-opening yields the same value.
+	let again = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	assert_eq!(again.uid_validity(), validity);
+	// Delivering more mail does not change it (the old derived value did).
+	deliver(dir.path(), "alice", b"second\r\n");
+	let grown = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	assert_eq!(grown.uid_validity(), validity);
 }
 
 #[test]
