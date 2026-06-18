@@ -272,3 +272,32 @@ fn unknown_local_user_fails_closed() {
 	assert!(result.is_err());
 	assert_eq!(spool_count(dir.path()), 0);
 }
+
+#[test]
+fn relayed_mail_is_dkim_signed() {
+	use std::io::Write;
+	let dir = tempfile::tempdir().expect("tempdir");
+	// A throwaway DKIM key for the sender domain.
+	let (pem, _record) = crate::dkim::generate_key().expect("key");
+	let mut key_file = tempfile::NamedTempFile::new().expect("key file");
+	key_file.write_all(pem.as_bytes()).expect("write key");
+	let signer =
+		std::sync::Arc::new(crate::dkim::Signer::load("sel", key_file.path()).expect("load"));
+
+	let sink = SplitDelivery::new(dir.path(), directory())
+		.expect("sink")
+		.with_signer(signer);
+	// DKIM refuses to sign without a From header, so include one.
+	let mut msg = message(&["bob@elsewhere.example"]);
+	msg.data = b"From: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n".to_vec();
+	sink.deliver(msg).expect("deliver");
+
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let ids = spool.list().expect("list");
+	assert_eq!(ids.len(), 1);
+	let entry = spool.load(ids[0]).expect("load");
+	let data = String::from_utf8_lossy(&entry.data);
+	// The relayed copy carries a DKIM-Signature for the sender domain.
+	assert!(data.starts_with("DKIM-Signature:"), "{data}");
+	assert!(data.contains("d=example.org"), "{data}");
+}
