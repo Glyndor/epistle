@@ -445,3 +445,27 @@ fn tls_started_resets_session() {
 	assert!(!reply.to_string().contains("STARTTLS"));
 	assert_eq!(reply_code(&session.command_line("STARTTLS")), 454);
 }
+
+#[test]
+fn auth_rejects_malformed_base64() {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+
+	// PLAIN with an undecodable initial response.
+	let mut session = tls_session();
+	assert_eq!(
+		reply_code(&session.command_line("AUTH PLAIN !!!notb64")),
+		535
+	);
+
+	// LOGIN with an undecodable username.
+	let mut session = tls_session();
+	session.command_line("AUTH LOGIN");
+	assert_eq!(reply_code(&session.auth_line("!!!notb64")), 535);
+
+	// LOGIN with a valid username but an undecodable password.
+	let mut session = tls_session();
+	session.command_line("AUTH LOGIN");
+	session.auth_line(&B64.encode("alice"));
+	assert_eq!(reply_code(&session.auth_line("!!!notb64")), 535);
+}
