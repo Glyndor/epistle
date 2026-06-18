@@ -236,6 +236,8 @@ pub enum FetchItem {
 	EmailId,
 	/// `THREADID`: the message's thread id (RFC 8474); singleton == EMAILID.
 	ThreadId,
+	/// `SAVEDATE`: when the message was saved to the mailbox (RFC 8514).
+	SaveDate,
 }
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).

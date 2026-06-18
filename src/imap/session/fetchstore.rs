@@ -172,6 +172,11 @@ impl Session {
 					FetchItem::ThreadId => {
 						parts.push(format!("THREADID ({})", message.id()).into_bytes());
 					}
+					// SAVEDATE (RFC 8514): mailbox save time (the file mtime).
+					FetchItem::SaveDate => {
+						let dt = format_internaldate(message.internal_date);
+						parts.push(format!("SAVEDATE \"{dt}\"").into_bytes());
+					}
 					FetchItem::Body => match snapshot.read(message) {
 						Ok(data) => {
 							let mut part = format!("BODY[] {{{}}}\r\n", data.len()).into_bytes();

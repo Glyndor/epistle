@@ -124,6 +124,10 @@ fn fetch_objectid_returns_stable_ids() {
 		.expect("emailid");
 	assert!(!id.is_empty(), "{response}");
 	assert!(response.contains(&format!("THREADID ({id})")), "{response}");
+
+	// SAVEDATE (RFC 8514) reports the save time as a quoted date.
+	let response = text(&session.command_line("a5 FETCH 1 (SAVEDATE)"));
+	assert!(response.contains("SAVEDATE \""), "{response}");
 }
 
 #[test]
