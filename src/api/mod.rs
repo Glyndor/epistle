@@ -21,6 +21,8 @@ pub fn router(state: ApiState) -> Router {
 	Router::new()
 		.nest("/api/v1", v1::router())
 		// JMAP (RFC 8620): Session discovery and the request-envelope endpoint.
+		// `.well-known/jmap` is the standard autodiscovery path (§2.2).
+		.route("/.well-known/jmap", get(jmap::session))
 		.route("/jmap/session", get(jmap::session))
 		.route("/jmap/api", post(jmap::api))
 		// Deny all CORS: no origins, methods, or headers are allowed.

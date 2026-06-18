@@ -23,6 +23,20 @@ async fn jmap_session_advertises_core_capability() {
 }
 
 #[tokio::test]
+async fn jmap_well_known_serves_session() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	// RFC 8620 §2.2 autodiscovery path returns the Session resource.
+	let (status, body) = request(&app, "GET", "/.well-known/jmap", Some(TOKEN)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["apiUrl"], "/jmap/api");
+	assert!(
+		body["capabilities"]["urn:ietf:params:jmap:core"].is_object(),
+		"{body}"
+	);
+}
+
+#[tokio::test]
 async fn jmap_core_echo_round_trips() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
