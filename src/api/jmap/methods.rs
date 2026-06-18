@@ -47,7 +47,6 @@ fn submit_email(
 		.ok_or("invalidProperties")?;
 	let raw = find_email_raw(state.data_dir(), account, email_id).ok_or("notFound")?;
 	let headers = String::from_utf8_lossy(&raw);
-	// Envelope: explicit mailFrom/rcptTo, else derived from the identity and To.
 	let envelope = submission.get("envelope");
 	let mail_from = envelope
 		.and_then(|e| e.get("mailFrom"))
@@ -259,7 +258,6 @@ pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Valu
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
-	// Only the `inMailbox` filter is supported; absent means INBOX.
 	let mailbox = args
 		.get("filter")
 		.and_then(|f| f.get("inMailbox"))
@@ -270,7 +268,6 @@ pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Valu
 		crate::imap::mailbox::Snapshot::open(state.data_dir(), account, mailbox)
 			.map(|snapshot| snapshot.messages().map(|m| m.id().to_string()).collect())
 			.unwrap_or_default();
-	// JMAP default sort is most-recent first; UUID v7 ids sort by time.
 	ids.reverse();
 	let total = ids.len();
 
@@ -331,6 +328,20 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
+	let mut created = serde_json::Map::new();
+	let mut not_created = serde_json::Map::new();
+	if let Some(create) = args.get("create").and_then(Value::as_object) {
+		for (cid, spec) in create {
+			match create_email(state.data_dir(), account, spec) {
+				Ok(info) => {
+					created.insert(cid.clone(), info);
+				}
+				Err(reason) => {
+					not_created.insert(cid.clone(), json!({ "type": reason }));
+				}
+			}
+		}
+	}
 	let mut updated = serde_json::Map::new();
 	let mut not_updated = serde_json::Map::new();
 	if let Some(update) = args.get("update").and_then(Value::as_object) {
@@ -360,10 +371,45 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	json!([
 		"Email/set",
 		{ "accountId": account, "oldState": "0", "newState": "0",
+		  "created": created, "notCreated": not_created,
 		  "updated": updated, "notUpdated": not_updated,
 		  "destroyed": destroyed, "notDestroyed": not_destroyed },
 		call_id,
 	])
+}
+
+/// Create a message from a JMAP Email object (Email/set create): build an
+/// RFC 5322 message and deliver it to the target mailbox.
+fn create_email(
+	data_dir: &std::path::Path,
+	account: &str,
+	spec: &Value,
+) -> Result<Value, &'static str> {
+	let mailbox = spec
+		.get("mailboxIds")
+		.and_then(Value::as_object)
+		.and_then(|m| m.iter().find(|(_, v)| v.as_bool() == Some(true)))
+		.map(|(name, _)| name.clone())
+		.unwrap_or_else(|| "INBOX".to_string());
+	let flags: Vec<crate::imap::mailbox::Flag> = spec
+		.get("keywords")
+		.and_then(Value::as_object)
+		.map(|kw| {
+			kw.iter()
+				.filter(|(_, v)| v.as_bool() == Some(true))
+				.filter_map(|(k, _)| keyword_to_flag(k))
+				.collect()
+		})
+		.unwrap_or_default();
+	let raw = objects::build_rfc5322(spec);
+	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw)
+		.map_err(|_| "serverFail")?;
+	Ok(json!({
+		"id": id.to_string(),
+		"blobId": id.to_string(),
+		"threadId": id.to_string(),
+		"size": raw.len(),
+	}))
 }
 
 /// Permanently remove a message by id (Email/set destroy).
@@ -393,7 +439,6 @@ fn apply_email_update(
 ) -> Result<(), &'static str> {
 	use crate::imap::mailbox::{self, Flag};
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
-	// The single target mailbox when mailboxIds is set (first true entry).
 	let target = patch
 		.get("mailboxIds")
 		.and_then(Value::as_object)

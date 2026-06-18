@@ -3,6 +3,40 @@
 
 use serde_json::{Value, json};
 
+/// Serialize a JMAP Email submission object into an RFC 5322 message (Email/set
+/// create). Only the common header set and a single text body are emitted.
+pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
+	let addresses = |field: &str| -> Option<String> {
+		let list = spec.get(field)?.as_array()?;
+		let joined: Vec<String> = list
+			.iter()
+			.filter_map(|a| a.get("email").and_then(Value::as_str).map(str::to_string))
+			.collect();
+		(!joined.is_empty()).then(|| joined.join(", "))
+	};
+	let mut headers = String::new();
+	if let Some(from) = addresses("from") {
+		headers.push_str(&format!("From: {from}\r\n"));
+	}
+	if let Some(to) = addresses("to") {
+		headers.push_str(&format!("To: {to}\r\n"));
+	}
+	if let Some(subject) = spec.get("subject").and_then(Value::as_str) {
+		headers.push_str(&format!("Subject: {subject}\r\n"));
+	}
+	// The body is the first bodyValues entry, else empty.
+	let body = spec
+		.get("bodyValues")
+		.and_then(Value::as_object)
+		.and_then(|values| values.values().next())
+		.and_then(|part| part.get("value"))
+		.and_then(Value::as_str)
+		.unwrap_or("");
+	headers.push_str("MIME-Version: 1.0\r\n");
+	headers.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+	format!("{headers}\r\n{body}").into_bytes()
+}
+
 /// Locate a message by id across the account's mailboxes and build its Email.
 pub(super) fn find_email(data_dir: &std::path::Path, account: &str, id: &str) -> Option<Value> {
 	let uuid = uuid::Uuid::parse_str(id).ok()?;
