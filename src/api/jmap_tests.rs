@@ -85,6 +85,27 @@ async fn jmap_mailbox_get_lists_inbox() {
 }
 
 #[tokio::test]
+async fn jmap_identity_get_lists_addresses() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	// Session advertises the submission capability.
+	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	assert!(
+		session["capabilities"]["urn:ietf:params:jmap:submission"].is_object(),
+		"{session}"
+	);
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:submission"],
+		"methodCalls": [["Identity/get", {"accountId": "alice"}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let identity = &body["methodResponses"][0][1]["list"][0];
+	assert_eq!(identity["email"], "alice@example.org");
+	assert_eq!(identity["name"], "alice");
+}
+
+#[tokio::test]
 async fn jmap_email_set_destroys_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let inbox = dir.path().join("accounts").join("alice").join("new");
