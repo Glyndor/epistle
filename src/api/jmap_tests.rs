@@ -229,6 +229,46 @@ async fn jmap_email_set_destroys_message() {
 }
 
 #[tokio::test]
+async fn jmap_email_set_moves_between_mailboxes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"Subject: x\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+	// Create the target folder.
+	let req = serde_json::json!({
+		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c1": {"name": "Work"}}}, "m1"]],
+	});
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+
+	// Move the email to Work.
+	let req = serde_json::json!({
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"update": { id.to_string(): {"mailboxIds": {"Work": true}} },
+		}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(body["methodResponses"][0][1]["updated"][id.to_string()].is_null());
+	// INBOX is now empty; Work has the message.
+	let req = serde_json::json!({
+		"methodCalls": [
+			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "INBOX"}}, "q1"],
+			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "Work"}}, "q2"],
+		],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(body["methodResponses"][0][1]["total"], 0);
+	assert_eq!(body["methodResponses"][1][1]["total"], 1);
+}
+
+#[tokio::test]
 async fn jmap_email_set_updates_keywords() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let inbox = dir.path().join("accounts").join("alice").join("new");
