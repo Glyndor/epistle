@@ -346,4 +346,59 @@ mod tests {
 		let policy = store.policy(&dns, "example.org").await.expect("ok");
 		assert!(policy.is_none());
 	}
+
+	struct FailingFetcher;
+	impl PolicyFetcher for FailingFetcher {
+		fn fetch(&self, _domain: &str) -> FetchFuture<'_> {
+			Box::pin(async { Err(PolicyError::Temporary("unreachable".into())) })
+		}
+	}
+
+	/// A DnsLookup whose TXT query always fails temporarily.
+	struct TempFailDns;
+	impl DnsLookup for TempFailDns {
+		fn txt(
+			&self,
+			_name: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
+			Box::pin(async { Err(DnsFailure::Temporary) })
+		}
+		fn addresses(
+			&self,
+			_name: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
+		{
+			Box::pin(async { Ok(Vec::new()) })
+		}
+		fn mx(
+			&self,
+			_name: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
+			Box::pin(async { Ok(Vec::new()) })
+		}
+	}
+
+	#[tokio::test]
+	async fn txt_lookup_failure_is_temporary_error() {
+		let store = PolicyStore::new(Box::new(CountingFetcher {
+			calls: std::sync::Arc::new(AtomicU32::new(0)),
+		}));
+		let result = store.policy(&TempFailDns, "example.org").await;
+		assert!(matches!(result, Err(PolicyError::Temporary(_))));
+		// Exercise the unused resolver methods so the stub stays covered.
+		assert!(TempFailDns.addresses("x").await.unwrap().is_empty());
+		assert!(TempFailDns.mx("x").await.unwrap().is_empty());
+	}
+
+	#[tokio::test]
+	async fn fetch_failure_propagates() {
+		let mut txt = Map::new();
+		txt.insert(
+			"_mta-sts.example.org".to_string(),
+			vec!["v=STSv1; id=1".to_string()],
+		);
+		let dns = FakeDns { txt };
+		let store = PolicyStore::new(Box::new(FailingFetcher));
+		assert!(store.policy(&dns, "example.org").await.is_err());
+	}
 }
