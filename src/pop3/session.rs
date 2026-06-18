@@ -130,30 +130,9 @@ impl<B: Backend> Session<B> {
 				let Some(user) = self.user.clone() else {
 					return Response::Err("USER required first".to_string());
 				};
-				match self.backend.verify(&user, &pass) {
-					Some(account) => {
-						self.messages = self
-							.backend
-							.load(&account)
-							.into_iter()
-							.map(|(uid, data)| Message {
-								uid,
-								data,
-								deleted: false,
-							})
-							.collect();
-						let count = self.messages.len();
-						self.account = Some(account);
-						self.state = State::Transaction;
-						Response::Ok(format!("mailbox ready, {count} messages"))
-					}
-					None => {
-						// No oracle: same message whether user or pass was wrong.
-						self.user = None;
-						Response::Err("authentication failed".to_string())
-					}
-				}
+				self.login(&user, &pass)
 			}
+			Command::Auth { mechanism, initial } => self.auth(mechanism, initial),
 			Command::Capa => self.capabilities(),
 			Command::Quit => Response::Bye("bye".to_string()),
 			_ => Response::Err("authenticate first".to_string()),
@@ -211,8 +190,8 @@ impl<B: Backend> Session<B> {
 				}
 				Response::Bye("bye".to_string())
 			}
-			// USER/PASS are meaningless after login.
-			Command::User(_) | Command::Pass(_) => {
+			// USER/PASS/AUTH are meaningless after login.
+			Command::User(_) | Command::Pass(_) | Command::Auth { .. } => {
 				Response::Err("already authenticated".to_string())
 			}
 		}
@@ -221,8 +200,59 @@ impl<B: Backend> Session<B> {
 	fn capabilities(&self) -> Response {
 		Response::Multiline {
 			status: "capability list follows".to_string(),
-			body: b"USER\r\nUIDL\r\nTOP\r\n".to_vec(),
+			body: b"USER\r\nUIDL\r\nTOP\r\nSASL PLAIN\r\n".to_vec(),
 		}
+	}
+
+	/// SASL AUTH (RFC 5034): list mechanisms, or verify `AUTH PLAIN <initial>`
+	/// (`\0authcid\0password`). Only the initial-response form is supported.
+	fn auth(&mut self, mechanism: Option<String>, initial: Option<String>) -> Response {
+		let Some(mechanism) = mechanism else {
+			return Response::Multiline {
+				status: "mechanism list follows".to_string(),
+				body: b"PLAIN\r\n".to_vec(),
+			};
+		};
+		if mechanism != "PLAIN" {
+			return Response::Err("unsupported SASL mechanism".to_string());
+		}
+		let account = initial
+			.and_then(|encoded| crate::smtp::auth::parse_plain(&encoded).ok())
+			.and_then(|creds| self.backend.verify(&creds.authcid, &creds.password));
+		match account {
+			Some(account) => self.complete_login(account),
+			None => Response::Err("authentication failed".to_string()),
+		}
+	}
+
+	/// Verify a USER/PASS login and, on success, open the mailbox.
+	fn login(&mut self, user: &str, pass: &str) -> Response {
+		match self.backend.verify(user, pass) {
+			Some(account) => self.complete_login(account),
+			None => {
+				// No oracle: same message whether user or pass was wrong.
+				self.user = None;
+				Response::Err("authentication failed".to_string())
+			}
+		}
+	}
+
+	/// Load `account`'s mailbox and enter the transaction state.
+	fn complete_login(&mut self, account: String) -> Response {
+		self.messages = self
+			.backend
+			.load(&account)
+			.into_iter()
+			.map(|(uid, data)| Message {
+				uid,
+				data,
+				deleted: false,
+			})
+			.collect();
+		let count = self.messages.len();
+		self.account = Some(account);
+		self.state = State::Transaction;
+		Response::Ok(format!("mailbox ready, {count} messages"))
 	}
 
 	fn totals(&self) -> (usize, usize) {
