@@ -255,3 +255,7 @@ where
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "server_tests_auth.rs"]
+mod tests_auth;
