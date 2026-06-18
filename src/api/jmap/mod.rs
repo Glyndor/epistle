@@ -111,6 +111,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
 			"Mailbox/get" => methods::mailbox_get(&state, &args, &call_id),
+			"Mailbox/set" => methods::mailbox_set(&state, &args, &call_id),
 			"Email/query" => methods::email_query(&state, &args, &call_id),
 			"Email/get" => methods::email_get(&state, &args, &call_id),
 			"Email/set" => methods::email_set(&state, &args, &call_id),
