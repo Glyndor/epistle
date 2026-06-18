@@ -250,3 +250,41 @@ async fn jmap_methods_reject_missing_account_id() {
 		);
 	}
 }
+
+#[tokio::test]
+async fn jmap_email_set_reports_unknown_ids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	let ghost = uuid::Uuid::now_v7().to_string();
+
+	// Destroying and updating an absent email report notFound, not a crash.
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"destroy": [ghost],
+			"update": { "missing-id": {"keywords": {"$seen": true}} },
+		}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let result = &body["methodResponses"][0][1];
+	assert_eq!(result["notDestroyed"][&ghost]["type"], "notFound", "{body}");
+	assert_eq!(
+		result["notUpdated"]["missing-id"]["type"], "notFound",
+		"{body}"
+	);
+
+	// A present-but-unknown account is reported as accountNotFound.
+	for method in ["Email/set", "Email/copy"] {
+		let req = serde_json::json!({
+			"methodCalls": [[method, {"accountId": "ghost-account"}, "c2"]],
+		});
+		let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		assert_eq!(
+			body["methodResponses"][0][1]["type"], "accountNotFound",
+			"{method}: {body}"
+		);
+	}
+}
