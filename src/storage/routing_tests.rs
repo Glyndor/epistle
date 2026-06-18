@@ -106,6 +106,21 @@ fn sieve_reject_bounces_and_skips_delivery() {
 }
 
 #[test]
+fn sieve_reject_with_notify_never_sends_no_bounce() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let account_dir = dir.path().join("accounts").join("alice");
+	fs::create_dir_all(&account_dir).expect("mkdir");
+	fs::write(account_dir.join("filter.sieve"), "reject \"no thanks\";").expect("filter");
+	let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
+	let mut msg = message(&["alice@example.org"]);
+	msg.no_dsn = vec!["alice@example.org".to_string()];
+	sink.deliver(msg).expect("deliver");
+	// Rejected, but the sender opted out of failure DSNs: nothing is queued.
+	assert_eq!(inbox_count(dir.path(), "alice"), 0);
+	assert_eq!(spool_count(dir.path()), 0);
+}
+
+#[test]
 fn sieve_vacation_replies_once_and_keeps() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account_dir = dir.path().join("accounts").join("alice");

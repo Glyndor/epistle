@@ -130,10 +130,22 @@ impl Worker {
 				tokio::spawn(async move { webhook.notify(&event).await });
 			}
 		}
+		// Recipients with NOTIFY=NEVER get no failure DSN (RFC 3461). If every
+		// failed recipient opted out, no bounce is generated at all.
+		let dsn_recipients: Vec<String> = entry
+			.envelope
+			.recipients
+			.iter()
+			.filter(|r| !entry.envelope.no_dsn.contains(r))
+			.cloned()
+			.collect();
+		if dsn_recipients.is_empty() {
+			return;
+		}
 		let Some(message) = super::bounce::build(
 			&self.ehlo_hostname,
 			&entry.envelope.reverse_path,
-			&entry.envelope.recipients,
+			&dsn_recipients,
 			reason,
 			&entry.data,
 			std::time::SystemTime::now(),
@@ -278,215 +290,5 @@ enum Outcome {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::queue::resolver::{BoxedStream, ConnectFuture};
-	use crate::smtp::directory::Directory;
-	use crate::smtp::server::Server;
-	use crate::smtp::session::AcceptedMessage;
-	use crate::smtp::sink::{MemorySink, MessageSink};
-
-	/// Connector that hands out duplex pipes served by an in-process server.
-	struct LoopbackConnector {
-		sink: Arc<MemorySink>,
-		/// Domains the fake remote server accepts mail for.
-		domain: String,
-	}
-
-	impl Connector for LoopbackConnector {
-		fn connect(
-			&self,
-			_domain: &str,
-			_policy: Option<&crate::mtasts::Policy>,
-		) -> ConnectFuture<'_> {
-			Box::pin(async move {
-				let directory = crate::directory_store::DirectoryHandle::new(Directory::new(
-					[self.domain.clone()],
-					[(format!("bob@{}", self.domain), "bob".to_string())],
-				));
-				let server = Server::new(
-					"mx.remote.example",
-					self.sink.clone() as Arc<dyn MessageSink>,
-				)
-				.with_directory(directory);
-				let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
-				tokio::spawn(async move { server.handle(server_stream, None).await });
-				Ok((
-					Box::new(client_stream) as BoxedStream,
-					"mx.remote.example".to_string(),
-				))
-			})
-		}
-	}
-
-	/// Connector that always fails with a transient error.
-	struct DownConnector;
-
-	impl Connector for DownConnector {
-		fn connect(
-			&self,
-			_domain: &str,
-			_policy: Option<&crate::mtasts::Policy>,
-		) -> ConnectFuture<'_> {
-			Box::pin(async { Err(DeliveryError::Transient("connection refused".into())) })
-		}
-	}
-
-	fn spool_with_message(dir: &std::path::Path, recipient: &str) -> FsSpool {
-		let spool = FsSpool::open(dir).expect("open spool");
-		spool
-			.store(&AcceptedMessage {
-				reverse_path: "alice@sender.example".into(),
-				recipients: vec![recipient.to_string()],
-				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-				require_tls: false,
-				mailbox: None,
-				no_dsn: Vec::new(),
-			})
-			.expect("store");
-		spool
-	}
-
-	#[tokio::test]
-	async fn delivers_and_clears_the_spool() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = spool_with_message(dir.path(), "bob@remote.example");
-		let sink = Arc::new(MemorySink::new());
-		let connector = Arc::new(LoopbackConnector {
-			sink: sink.clone(),
-			domain: "remote.example".to_string(),
-		});
-
-		let worker = Worker::new(spool, connector, "mail.sender.example");
-		let delivered = worker.pass().await.expect("pass");
-
-		assert_eq!(delivered, 1);
-		assert!(worker.spool.list().expect("list").is_empty());
-		let messages = sink.messages();
-		assert_eq!(messages.len(), 1);
-		assert_eq!(
-			messages[0].recipients,
-			vec!["bob@remote.example".to_string()]
-		);
-	}
-
-	#[tokio::test]
-	async fn permanent_rejection_drops_and_bounces() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		// The loopback server only knows bob@; carol@ gets 550.
-		let spool = spool_with_message(dir.path(), "carol@remote.example");
-		let sink = Arc::new(MemorySink::new());
-		let connector = Arc::new(LoopbackConnector {
-			sink: sink.clone(),
-			domain: "remote.example".to_string(),
-		});
-		let bounce_sink = Arc::new(MemorySink::new());
-		let metrics = Arc::new(crate::metrics::Metrics::new());
-
-		let worker = Worker::new(spool, connector, "mail.sender.example")
-			.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>)
-			.with_metrics(metrics.clone());
-		let delivered = worker.pass().await.expect("pass");
-
-		assert_eq!(delivered, 0);
-		assert!(metrics.render().contains("mail_bounced_total 1\n"));
-		// Dropped, not retried: the spool is empty and nothing arrived.
-		assert!(worker.spool.list().expect("list").is_empty());
-		assert!(sink.messages().is_empty());
-
-		// The sender got a bounce with the null reverse-path.
-		let bounces = bounce_sink.messages();
-		assert_eq!(bounces.len(), 1);
-		assert_eq!(bounces[0].reverse_path, "");
-		assert_eq!(
-			bounces[0].recipients,
-			vec!["alice@sender.example".to_string()]
-		);
-		let body = String::from_utf8(bounces[0].data.clone()).expect("ascii");
-		assert!(body.contains("carol@remote.example"), "{body}");
-	}
-
-	#[tokio::test]
-	async fn retry_exhaustion_bounces_once() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = spool_with_message(dir.path(), "bob@remote.example");
-		let bounce_sink = Arc::new(MemorySink::new());
-		let worker = Worker::new(spool, Arc::new(DownConnector), "mail.sender.example")
-			.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>);
-
-		for round in 0..MAX_ATTEMPTS {
-			// Jump past every backoff window so each pass really retries.
-			worker.set_now(1_000_000 + u64::from(round) * 10_000);
-			let _ = worker.pass().await.expect("pass");
-		}
-		assert!(worker.spool.list().expect("list").is_empty());
-		assert_eq!(bounce_sink.messages().len(), 1);
-	}
-
-	#[tokio::test]
-	async fn transient_failure_keeps_the_entry_until_max_attempts() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = spool_with_message(dir.path(), "bob@remote.example");
-		let worker = Worker::new(spool, Arc::new(DownConnector), "mail.sender.example");
-
-		for round in 0..MAX_ATTEMPTS - 1 {
-			worker.set_now(1_000_000 + u64::from(round) * 10_000);
-			assert_eq!(worker.pass().await.expect("pass"), 0);
-			assert_eq!(worker.spool.list().expect("list").len(), 1);
-		}
-		// Within the backoff window nothing is attempted.
-		assert_eq!(worker.pass().await.expect("pass"), 0);
-		assert_eq!(worker.spool.list().expect("list").len(), 1);
-		// The final attempt gives up and drops the entry.
-		worker.set_now(2_000_000);
-		assert_eq!(worker.pass().await.expect("pass"), 0);
-		assert!(worker.spool.list().expect("list").is_empty());
-	}
-
-	#[tokio::test]
-	async fn permanent_failure_fires_delivery_failed_webhook() {
-		use std::sync::Mutex;
-		let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-		let state = captured.clone();
-		async fn handler(
-			axum::extract::State(state): axum::extract::State<Arc<Mutex<Option<String>>>>,
-			body: String,
-		) -> &'static str {
-			*state.lock().expect("lock") = Some(body);
-			"ok"
-		}
-		let app = axum::Router::new()
-			.route("/hook", axum::routing::post(handler))
-			.with_state(state);
-		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-			.await
-			.expect("bind");
-		let addr = listener.local_addr().expect("addr");
-		tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
-
-		let dir = tempfile::tempdir().expect("tempdir");
-		let spool = spool_with_message(dir.path(), "carol@remote.example");
-		let connector = Arc::new(LoopbackConnector {
-			sink: Arc::new(MemorySink::new()),
-			domain: "remote.example".to_string(),
-		});
-		let webhook =
-			crate::webhook::Webhook::new(&format!("http://{addr}/hook"), None).expect("wh");
-		let worker = Worker::new(spool, connector, "mail.sender.example")
-			.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
-			.with_webhook(Arc::new(webhook));
-		worker.pass().await.expect("pass");
-
-		let mut body = None;
-		for _ in 0..50 {
-			if let Some(b) = captured.lock().expect("lock").clone() {
-				body = Some(b);
-				break;
-			}
-			tokio::time::sleep(Duration::from_millis(10)).await;
-		}
-		let body = body.expect("webhook delivered");
-		assert!(body.contains("delivery_failed"), "{body}");
-		assert!(body.contains("carol@remote.example"), "{body}");
-	}
-}
+#[path = "worker_tests.rs"]
+mod tests;
