@@ -95,6 +95,32 @@ fn flags_roundtrip_and_expunge() {
 }
 
 #[test]
+fn uids_are_persistent_and_survive_expunge() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"one\r\n");
+	deliver(dir.path(), "alice", b"two\r\n");
+	deliver(dir.path(), "alice", b"three\r\n");
+
+	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	assert_eq!(snapshot.uid_next(), 4);
+	// Delete the first message and expunge it.
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("store");
+	snapshot.expunge().expect("expunge");
+
+	// The survivors keep their original UIDs (2, 3) — not renumbered to 1, 2.
+	let reopened = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let uids: Vec<u32> = reopened.messages().map(|m| m.uid).collect();
+	assert_eq!(uids, vec![2, 3]);
+	// uid_next never goes backwards even though a UID was freed.
+	assert_eq!(reopened.uid_next(), 4);
+	// A newly delivered message takes UID 4, never reusing 1.
+	deliver(dir.path(), "alice", b"four\r\n");
+	let grown = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	assert_eq!(grown.messages().last().expect("last").uid, 4);
+	assert_eq!(grown.uid_next(), 5);
+}
+
+#[test]
 fn store_flags_rejects_bad_sequence() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"one\r\n");
