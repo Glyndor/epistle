@@ -41,6 +41,8 @@ pub struct Worker {
 	)>,
 	/// Test override for "now" (epoch seconds); 0 means the real clock.
 	clock: std::sync::atomic::AtomicU64,
+	/// Counters for outbound delivery outcomes (relayed, deferred, bounced).
+	metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 impl Worker {
@@ -53,7 +55,14 @@ impl Worker {
 			bounce_sink: None,
 			mta_sts: None,
 			clock: std::sync::atomic::AtomicU64::new(0),
+			metrics: None,
 		}
+	}
+
+	/// Record outbound delivery outcomes to these process metrics.
+	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
+		self
 	}
 
 	/// Enforce MTA-STS policies on outbound delivery.
@@ -81,6 +90,13 @@ impl Worker {
 			.duration_since(UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0)
+	}
+
+	/// Bump an outbound counter, if metrics are configured.
+	fn metric(&self, bump: impl FnOnce(&crate::metrics::Metrics)) {
+		if let Some(metrics) = &self.metrics {
+			bump(metrics);
+		}
 	}
 
 	/// Deliver bounces for failed mail through this sink.
@@ -140,11 +156,13 @@ impl Worker {
 				Outcome::Delivered => {
 					self.spool.remove(id)?;
 					delivered += 1;
+					self.metric(|m| m.relayed());
 				}
 				Outcome::Dropped(reason) => {
 					tracing::warn!(%id, %reason, "dropping undeliverable message");
 					self.bounce(id, &reason);
 					self.spool.remove(id)?;
+					self.metric(|m| m.bounced());
 				}
 				Outcome::Retry(reason) => {
 					let prior = self
@@ -160,8 +178,10 @@ impl Worker {
 						tracing::warn!(%id, %reason, attempts, "giving up on message");
 						self.bounce(id, &reason);
 						self.spool.remove(id)?;
+						self.metric(|m| m.bounced());
 					} else {
 						tracing::debug!(%id, %reason, attempts, "delivery deferred");
+						self.metric(|m| m.deferred());
 					}
 				}
 			}
@@ -340,12 +360,15 @@ mod tests {
 			domain: "remote.example".to_string(),
 		});
 		let bounce_sink = Arc::new(MemorySink::new());
+		let metrics = Arc::new(crate::metrics::Metrics::new());
 
 		let worker = Worker::new(spool, connector, "mail.sender.example")
-			.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>);
+			.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>)
+			.with_metrics(metrics.clone());
 		let delivered = worker.pass().await.expect("pass");
 
 		assert_eq!(delivered, 0);
+		assert!(metrics.render().contains("mail_bounced_total 1\n"));
 		// Dropped, not retried: the spool is empty and nothing arrived.
 		assert!(worker.spool.list().expect("list").is_empty());
 		assert!(sink.messages().is_empty());

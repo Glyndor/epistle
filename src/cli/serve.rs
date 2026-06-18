@@ -168,7 +168,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			&config.hostname,
 		)
 		.with_bounce_sink(Arc::clone(&sink))
-		.with_mta_sts(mta_sts, Arc::clone(&spf_dns)),
+		.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
+		.with_metrics(metrics.clone()),
 	);
 	tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
 
