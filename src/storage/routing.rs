@@ -197,14 +197,26 @@ impl MessageSink for SplitDelivery {
 					.and_then(|r| r.rsplit_once('@'))
 					.map(|(_, domain)| domain.to_string())
 					.unwrap_or_else(|| "localhost".to_string());
-				if let Some(bounce) = crate::queue::bounce::build(
-					&hostname,
-					&message.reverse_path,
-					&local_message.recipients,
-					&reason,
-					&message.data,
-					std::time::SystemTime::now(),
-				) {
+				// Recipients with NOTIFY=NEVER (RFC 3461) get no failure DSN.
+				let dsn_recipients: Vec<String> = local_message
+					.recipients
+					.iter()
+					.filter(|r| !local_message.no_dsn.contains(r))
+					.cloned()
+					.collect();
+				if let Some(bounce) = (!dsn_recipients.is_empty())
+					.then(|| {
+						crate::queue::bounce::build(
+							&hostname,
+							&message.reverse_path,
+							&dsn_recipients,
+							&reason,
+							&message.data,
+							std::time::SystemTime::now(),
+						)
+					})
+					.flatten()
+				{
 					self.outbound
 						.store(&bounce)
 						.map_err(|error| SinkError::Unavailable(error.to_string()))?;

@@ -28,6 +28,9 @@ pub struct Envelope {
 	/// REQUIRETLS (RFC 8689): onward delivery must use verified TLS.
 	#[serde(default)]
 	pub require_tls: bool,
+	/// Recipients that suppress failure DSNs (`NOTIFY=NEVER`, RFC 3461).
+	#[serde(default)]
+	pub no_dsn: Vec<String>,
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -66,6 +69,7 @@ impl FsSpool {
 			attempts: 0,
 			next_attempt: 0,
 			require_tls: message.require_tls,
+			no_dsn: message.no_dsn.clone(),
 		};
 
 		let tmp_message = self.root.join("tmp").join(format!("{id}.eml"));
