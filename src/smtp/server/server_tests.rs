@@ -111,6 +111,14 @@ async fn out_of_order_commands_are_rejected() {
 }
 
 #[tokio::test]
+async fn too_many_errors_closes_connection() {
+	// A stream of garbage commands trips the abuse guard.
+	let (output, _) = converse(&b"BOGUSCMD\r\n".repeat(25)).await;
+	assert!(output.contains("421"), "{output}");
+	assert!(output.contains("too many errors"), "{output}");
+}
+
+#[tokio::test]
 async fn utf8_command_accepted_but_invalid_bytes_rejected() {
 	// SMTPUTF8 (RFC 6531): a valid UTF-8 (non-ASCII) EHLO domain is accepted.
 	let (output, _) = converse(b"EHLO caf\xC3\xA9.example\r\nQUIT\r\n").await;
