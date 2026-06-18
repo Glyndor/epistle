@@ -85,6 +85,45 @@ async fn jmap_mailbox_get_lists_inbox() {
 }
 
 #[tokio::test]
+async fn jmap_email_submission_queues_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"From: alice@example.org\r\nTo: bob@elsewhere.example\r\nSubject: hi\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:submission"],
+		"methodCalls": [["EmailSubmission/set", {
+			"accountId": "alice",
+			"create": { "s1": {
+				"emailId": id.to_string(),
+				"identityId": "alice@example.org",
+				"envelope": {"mailFrom": {"email": "alice@example.org"},
+					"rcptTo": [{"email": "bob@elsewhere.example"}]},
+			} },
+		}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(
+		body["methodResponses"][0][1]["created"]["s1"]["id"].is_string(),
+		"{body}"
+	);
+	// The message landed in the outbound spool.
+	let spool_new = dir.path().join("spool").join("new");
+	let count = std::fs::read_dir(&spool_new)
+		.map(|d| d.count())
+		.unwrap_or(0);
+	assert!(count >= 1, "expected a spooled message");
+}
+
+#[tokio::test]
 async fn jmap_identity_get_lists_addresses() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
