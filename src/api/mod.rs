@@ -5,6 +5,7 @@
 //! binds to localhost unless explicitly configured otherwise.
 
 mod error;
+mod jmap;
 mod state;
 pub mod v1;
 
@@ -12,12 +13,16 @@ pub use state::ApiState;
 
 use axum::Router;
 use axum::middleware;
+use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
 
 /// Build the API router with authentication applied to every route.
 pub fn router(state: ApiState) -> Router {
 	Router::new()
 		.nest("/api/v1", v1::router())
+		// JMAP (RFC 8620): Session discovery and the request-envelope endpoint.
+		.route("/jmap/session", get(jmap::session))
+		.route("/jmap/api", post(jmap::api))
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(
@@ -154,6 +159,49 @@ mod tests {
 		assert_eq!(body["domains"], 1);
 		assert_eq!(body["accounts"], 1);
 		assert_eq!(body["queue_size"], 2);
+	}
+
+	#[tokio::test]
+	async fn jmap_session_advertises_core_capability() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let app = router(test_state(dir.path(), 0));
+		let (status, body) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+		assert_eq!(status, StatusCode::OK);
+		assert!(
+			body["capabilities"]["urn:ietf:params:jmap:core"].is_object(),
+			"{body}"
+		);
+		assert_eq!(body["apiUrl"], "/jmap/api");
+		// The configured account appears.
+		assert!(body["accounts"]["alice"].is_object(), "{body}");
+		// Auth is required.
+		let (status, _) = request(&app, "GET", "/jmap/session", None).await;
+		assert_eq!(status, StatusCode::UNAUTHORIZED);
+	}
+
+	#[tokio::test]
+	async fn jmap_core_echo_round_trips() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let app = router(test_state(dir.path(), 0));
+		let req = serde_json::json!({
+			"using": ["urn:ietf:params:jmap:core"],
+			"methodCalls": [["Core/echo", {"hello": "world"}, "c1"]],
+		});
+		let (status, body) =
+			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(body["methodResponses"][0][0], "Core/echo");
+		assert_eq!(body["methodResponses"][0][1]["hello"], "world");
+		assert_eq!(body["methodResponses"][0][2], "c1");
+
+		// An unknown method yields an error response, not a failure.
+		let req = serde_json::json!({
+			"using": [],
+			"methodCalls": [["Mailbox/get", {}, "c2"]],
+		});
+		let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		assert_eq!(body["methodResponses"][0][0], "error");
+		assert_eq!(body["methodResponses"][0][1]["type"], "unknownMethod");
 	}
 
 	#[tokio::test]
