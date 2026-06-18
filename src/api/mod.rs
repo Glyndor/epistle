@@ -30,6 +30,7 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
 		)
+		.route("/jmap/upload/{account_id}", post(jmap::upload))
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(

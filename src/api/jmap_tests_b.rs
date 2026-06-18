@@ -347,3 +347,33 @@ async fn jmap_download_returns_raw_message() {
 	let (status, _) = request_raw(&app, &format!("/jmap/download/alice/{id}/x"), None).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn jmap_upload_then_download_round_trips() {
+	use super::tests::{post_raw, request_raw};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	let payload = b"hello blob \x00\x01\x02";
+
+	let (status, body) = post_raw(&app, "/jmap/upload/alice", Some(TOKEN), payload).await;
+	assert_eq!(status, StatusCode::CREATED, "{body}");
+	assert_eq!(body["accountId"], "alice");
+	assert_eq!(body["size"], payload.len());
+	let blob_id = body["blobId"].as_str().expect("blobId").to_string();
+
+	// The uploaded blob downloads byte-for-byte.
+	let (status, got) = request_raw(
+		&app,
+		&format!("/jmap/download/alice/{blob_id}/x"),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(got, payload);
+
+	// Unknown account is rejected; no token is unauthorized.
+	let (status, _) = post_raw(&app, "/jmap/upload/ghost", Some(TOKEN), payload).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	let (status, _) = post_raw(&app, "/jmap/upload/alice", None, payload).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

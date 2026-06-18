@@ -103,6 +103,31 @@ pub(super) async fn request_with_body(
 	(status, json)
 }
 
+/// POST raw bytes (not JSON) and parse the JSON response (for blob upload).
+pub(super) async fn post_raw(
+	app: &Router,
+	path: &str,
+	token: Option<&str>,
+	body: &[u8],
+) -> (StatusCode, serde_json::Value) {
+	let mut builder = Request::builder().method("POST").uri(path);
+	if let Some(token) = token {
+		builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+	}
+	let response = app
+		.clone()
+		.oneshot(builder.body(Body::from(body.to_vec())).expect("request"))
+		.await
+		.expect("response");
+	let status = response.status();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("body");
+	// Error responses are plain text, so fall back to Null when not JSON.
+	let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+	(status, json)
+}
+
 /// Like `request`, but returns the raw response body (for non-JSON endpoints).
 pub(super) async fn request_raw(
 	app: &Router,

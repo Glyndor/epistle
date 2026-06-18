@@ -140,7 +140,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 }
 
 /// `GET /jmap/download/{accountId}/{blobId}/{name}` (RFC 8620 §6.2): return the
-/// raw bytes of a stored message. The blob id is the message id.
+/// raw bytes of a stored message or an uploaded blob, by id.
 pub async fn download(
 	State(state): State<ApiState>,
 	Path((account, blob_id, _name)): Path<(String, String, String)>,
@@ -148,10 +148,48 @@ pub async fn download(
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return (StatusCode::NOT_FOUND, "account not found").into_response();
 	}
-	match objects::find_email_raw(state.data_dir(), &account, &blob_id) {
+	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id)
+		.or_else(|| read_blob(state.data_dir(), &blob_id));
+	match bytes {
 		Some(bytes) => {
 			([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
 		}
 		None => (StatusCode::NOT_FOUND, "blob not found").into_response(),
 	}
+}
+
+/// `POST /jmap/upload/{accountId}` (RFC 8620 §6.1): store an uploaded blob and
+/// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
+pub async fn upload(
+	State(state): State<ApiState>,
+	Path(account): Path<String>,
+	body: axum::body::Bytes,
+) -> impl IntoResponse {
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return (StatusCode::NOT_FOUND, "account not found").into_response();
+	}
+	let blob_id = uuid::Uuid::now_v7().to_string();
+	let dir = state.data_dir().join("blobs");
+	if std::fs::create_dir_all(&dir).is_err() || std::fs::write(dir.join(&blob_id), &body).is_err()
+	{
+		return (StatusCode::INTERNAL_SERVER_ERROR, "cannot store blob").into_response();
+	}
+	(
+		StatusCode::CREATED,
+		Json(json!({
+			"accountId": account,
+			"blobId": blob_id,
+			"type": "application/octet-stream",
+			"size": body.len(),
+		})),
+	)
+		.into_response()
+}
+
+/// Read an uploaded blob by id (rejecting any path separators in the id).
+fn read_blob(data_dir: &std::path::Path, blob_id: &str) -> Option<Vec<u8>> {
+	if uuid::Uuid::parse_str(blob_id).is_err() {
+		return None;
+	}
+	std::fs::read(data_dir.join("blobs").join(blob_id)).ok()
 }
