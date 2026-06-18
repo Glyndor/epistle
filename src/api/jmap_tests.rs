@@ -198,6 +198,41 @@ async fn jmap_identity_get_lists_addresses() {
 }
 
 #[tokio::test]
+async fn jmap_email_set_creates_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"create": { "draft": {
+				"mailboxIds": {"INBOX": true},
+				"keywords": {"$draft": true},
+				"from": [{"email": "alice@example.org"}],
+				"to": [{"email": "bob@elsewhere.example"}],
+				"subject": "Hello",
+				"bodyValues": {"0": {"value": "the body"}},
+			} },
+		}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let id = body["methodResponses"][0][1]["created"]["draft"]["id"]
+		.as_str()
+		.expect("created id")
+		.to_string();
+	// Email/get retrieves the stored draft with its subject and body.
+	let req = serde_json::json!({
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id]}, "c2"]],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let email = &body["methodResponses"][0][1]["list"][0];
+	assert_eq!(email["subject"], "Hello");
+	assert_eq!(email["bodyValues"]["0"]["value"], "the body");
+}
+
+#[tokio::test]
 async fn jmap_email_set_destroys_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let inbox = dir.path().join("accounts").join("alice").join("new");
