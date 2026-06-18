@@ -39,9 +39,12 @@ pub enum Command {
 	},
 	Select {
 		mailbox: String,
+		/// `(QRESYNC (uidvalidity modseq ...))`: resync from this point (RFC 7162).
+		qresync: Option<(u32, u64)>,
 	},
 	Examine {
 		mailbox: String,
+		qresync: Option<(u32, u64)>,
 	},
 	Close,
 	/// `UNSELECT` (RFC 3691): leave the selected mailbox without expunging.
@@ -320,6 +323,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 
 mod parse;
 mod search;
+mod select_params;
 
 pub use parse::parse;
 

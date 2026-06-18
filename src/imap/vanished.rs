@@ -33,8 +33,6 @@ pub(super) fn record_advancing(account_dir: &Path, uids: &[u32]) {
 }
 
 /// UIDs that vanished after `modseq` (for `VANISHED (EARLIER)`), in log order.
-// Consumed by the QRESYNC SELECT path (added next); exercised by tests now.
-#[allow(dead_code)]
 pub(super) fn since(account_dir: &Path, modseq: u64) -> Vec<u32> {
 	let Ok(text) = std::fs::read_to_string(account_dir.join(".vanished")) else {
 		return Vec::new();
