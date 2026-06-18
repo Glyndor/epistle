@@ -291,11 +291,7 @@ LIST-STATUS",
 		let State::NotAuthenticated { login_failures } = &mut self.state else {
 			return Output::text(format!("{tag} BAD already authenticated\r\n"));
 		};
-		let verified = self
-			.directory
-			.credentials(username)
-			.filter(|(_, hash)| crate::smtp::auth::verify_password(hash, password))
-			.map(|(account, _)| account);
+		let verified = self.directory.authenticate(username, password);
 		match verified {
 			Some(account) => {
 				self.state = State::Authenticated { account };
