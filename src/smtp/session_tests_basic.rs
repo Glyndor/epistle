@@ -98,6 +98,27 @@ fn full_transaction_delivers_message() {
 	assert_eq!(message.reverse_path, "alice@example.org");
 	assert_eq!(message.recipients, vec!["bob@example.org".to_string()]);
 	assert_eq!(message.data, b"Subject: hi\r\n\r\nhello\r\n");
+	// Default NOTIFY: nobody opted out of failure DSNs.
+	assert!(message.no_dsn.is_empty());
+}
+
+#[test]
+fn notify_never_marks_recipient_no_dsn() {
+	let mut session = greeted();
+	session.command_line("MAIL FROM:<alice@example.org>");
+	// One recipient opts out of failure DSNs, the other keeps the default.
+	session.command_line("RCPT TO:<bob@example.org> NOTIFY=NEVER");
+	session.command_line("RCPT TO:<c@example.org> NOTIFY=SUCCESS,FAILURE");
+	session.command_line("DATA");
+	let Some(Action::Deliver(_, message)) = session.data_line(b".") else {
+		panic!("expected delivery");
+	};
+	assert_eq!(
+		message.recipients,
+		vec!["bob@example.org".to_string(), "c@example.org".to_string()]
+	);
+	// Only the NOTIFY=NEVER recipient suppresses its failure DSN.
+	assert_eq!(message.no_dsn, vec!["bob@example.org".to_string()]);
 }
 
 #[test]

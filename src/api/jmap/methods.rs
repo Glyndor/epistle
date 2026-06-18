@@ -90,6 +90,7 @@ fn submit_email(
 		data: raw,
 		require_tls: false,
 		mailbox: None,
+		no_dsn: Vec::new(),
 	};
 	state
 		.spool()
