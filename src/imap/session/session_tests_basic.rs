@@ -50,6 +50,15 @@ fn select_reports_exists_and_uidvalidity() {
 	let response = text(&output);
 	assert!(response.contains("* 1 EXISTS"), "{response}");
 	assert!(response.contains("UIDVALIDITY"), "{response}");
+	// All five system flags are advertised, with matching PERMANENTFLAGS.
+	assert!(
+		response.contains("FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)"),
+		"{response}"
+	);
+	assert!(
+		response.contains("[PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)]"),
+		"{response}"
+	);
 	assert!(
 		response.contains("a2 OK [READ-WRITE] SELECT completed"),
 		"{response}"
