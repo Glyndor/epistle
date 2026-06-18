@@ -118,7 +118,6 @@ impl Session {
 		self
 	}
 
-	/// Called by the network layer after the TLS handshake completed.
 	pub fn tls_started(&mut self) {
 		self.tls_active = true;
 		self.tls_available = false;
@@ -360,7 +359,8 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 * OK [UIDNEXT {next}] predicted next UID\r\n\
 * OK [MAILBOXID (M{validity})] mailbox object id\r\n\
 * OK [HIGHESTMODSEQ {modseq}] highest mod-sequence\r\n\
-* FLAGS (\\Seen \\Deleted)\r\n\
+* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)\r\n\
+* OK [PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)] limits\r\n\
 {vanished}{tag} OK [{mode}] {verb} completed\r\n",
 			count = snapshot.len(),
 			validity = snapshot.uid_validity(),
