@@ -348,3 +348,61 @@ async fn authenticate_login_over_tls_drives_continuation() {
 	read_until(&mut tls, "a3 OK").await;
 	task.abort();
 }
+
+#[tokio::test]
+async fn idle_then_done_resumes_command_mode() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		directory(),
+		acceptor,
+		TlsMode::Implicit,
+	);
+	let (client, server_stream) = tokio::io::duplex(64 * 1024);
+	let task = tokio::spawn(async move { server.handle(server_stream).await });
+
+	let mut roots = RootCertStore::empty();
+	roots.add(cert).expect("trust cert");
+	crate::tls::ensure_crypto_provider();
+	let config = ClientConfig::builder()
+		.with_root_certificates(roots)
+		.with_no_client_auth();
+	let connector = TlsConnector::from(Arc::new(config));
+	let name = ServerName::try_from("mail.example.org").expect("name");
+	let mut tls = connector.connect(name, client).await.expect("handshake");
+
+	async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
+		let mut got = String::new();
+		let mut chunk = [0u8; 4096];
+		while !got.contains(needle) {
+			let n = tls.read(&mut chunk).await.expect("read");
+			assert!(n > 0, "closed waiting for {needle:?}: {got}");
+			got.push_str(&String::from_utf8_lossy(&chunk[..n]));
+		}
+		got
+	}
+
+	read_until(&mut tls, "IMAP4rev2 ready").await;
+	tls.write_all(b"a1 LOGIN alice secret\r\n")
+		.await
+		.expect("login");
+	read_until(&mut tls, "a1 OK").await;
+	tls.write_all(b"a2 SELECT INBOX\r\n").await.expect("select");
+	read_until(&mut tls, "a2 OK").await;
+
+	// Enter IDLE, then end it with DONE — the command tag completes.
+	tls.write_all(b"a3 IDLE\r\n").await.expect("idle");
+	read_until(&mut tls, "+ ").await;
+	tls.write_all(b"DONE\r\n").await.expect("done");
+	read_until(&mut tls, "a3 OK").await;
+
+	// Command mode resumed: a NOOP is accepted.
+	tls.write_all(b"a4 NOOP\r\n").await.expect("noop");
+	read_until(&mut tls, "a4 OK").await;
+	tls.write_all(b"a5 LOGOUT\r\n").await.expect("logout");
+	read_until(&mut tls, "a5 OK").await;
+	task.abort();
+}
