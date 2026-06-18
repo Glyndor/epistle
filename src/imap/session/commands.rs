@@ -289,6 +289,36 @@ impl Session {
 		}
 	}
 
+	pub(super) fn list(
+		&mut self,
+		tag: &str,
+		pattern: &str,
+		return_status: &[StatusItem],
+	) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		};
+		let mut response = String::new();
+		for name in mailbox::list(&self.data_dir, &account) {
+			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
+			if !matches {
+				continue;
+			}
+			response.push_str(&format!(
+				"* LIST ({}) \"/\" \"{name}\"\r\n",
+				super::special_use_attribute(&name)
+			));
+			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
+			if !return_status.is_empty()
+				&& let Some(parts) = self.status_parts(&account, &name, return_status)
+			{
+				response.push_str(&format!("* STATUS \"{name}\" ({parts})\r\n"));
+			}
+		}
+		response.push_str(&format!("{tag} OK LIST completed\r\n"));
+		Output::text(response)
+	}
+
 	pub(super) fn status(&mut self, tag: &str, mailbox: &str, items: &[StatusItem]) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
@@ -296,10 +326,23 @@ impl Session {
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO no such mailbox\r\n"));
 		}
-		let snapshot = match Snapshot::open(&self.data_dir, &account, mailbox) {
-			Ok(s) => s,
-			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
+		let Some(parts) = self.status_parts(&account, mailbox, items) else {
+			return Output::text(format!("{tag} NO cannot open mailbox\r\n"));
 		};
+		Output::text(format!(
+			"* STATUS \"{mailbox}\" ({parts})\r\n{tag} OK STATUS completed\r\n"
+		))
+	}
+
+	/// The `ITEM value ...` body of a STATUS response, or `None` if the mailbox
+	/// cannot be opened. Shared by STATUS and LIST ... RETURN (STATUS ...).
+	pub(super) fn status_parts(
+		&self,
+		account: &str,
+		mailbox: &str,
+		items: &[StatusItem],
+	) -> Option<String> {
+		let snapshot = Snapshot::open(&self.data_dir, account, mailbox).ok()?;
 		let mut parts = String::new();
 		for (i, item) in items.iter().enumerate() {
 			if i > 0 {
@@ -326,8 +369,6 @@ impl Session {
 			};
 			parts.push_str(&format!("{name} {value}"));
 		}
-		Output::text(format!(
-			"* STATUS \"{mailbox}\" ({parts})\r\n{tag} OK STATUS completed\r\n"
-		))
+		Some(parts)
 	}
 }

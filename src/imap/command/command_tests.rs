@@ -40,7 +40,8 @@ fn parses_list_and_select() {
 		parse(r#"a1 LIST "" "*""#).expect("parses").command,
 		Command::List {
 			reference: String::new(),
-			pattern: "*".into()
+			pattern: "*".into(),
+			return_status: Vec::new(),
 		}
 	);
 	assert_eq!(
