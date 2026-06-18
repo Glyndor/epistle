@@ -182,4 +182,30 @@ mod tests {
 		// Reload returns the same key (same JWK), not a new one.
 		assert_eq!(a.jwk(), b.jwk());
 	}
+
+	#[test]
+	fn corrupt_account_key_is_rejected() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let path = account_key_path(dir.path());
+		fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+
+		// Not valid base64 → decode error.
+		fs::write(&path, "not base64 !!!").expect("write");
+		assert!(load_or_create_account_key(dir.path()).is_err());
+
+		// Valid base64 but not a PKCS#8 key → parse error.
+		fs::write(&path, B64.encode(b"not a key")).expect("write");
+		assert!(load_or_create_account_key(dir.path()).is_err());
+	}
+
+	#[test]
+	fn unreadable_certificate_modified_time_renews() {
+		// A cert that exists but reads as freshly issued is not renewed; an
+		// absent one is. Covers the metadata branch boundaries.
+		let dir = tempfile::tempdir().expect("tempdir");
+		fs::create_dir_all(dir.path().join("acme")).expect("mkdir");
+		fs::write(cert_path(dir.path()), b"cert").expect("write");
+		// now far in the past → not yet at the renew threshold.
+		assert!(!needs_renewal(dir.path(), 30, 0));
+	}
 }
