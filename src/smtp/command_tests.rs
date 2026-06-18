@@ -101,6 +101,17 @@ fn parses_requiretls_parameter() {
 }
 
 #[test]
+fn accepts_smtputf8_parameter() {
+	// RFC 6531: a valueless parameter accepted on an internationalized sender.
+	assert!(parse("MAIL FROM:<用户@example.org> SMTPUTF8").is_ok());
+	// A value on the valueless parameter is a syntax error.
+	assert_eq!(
+		parse("MAIL FROM:<a@example.org> SMTPUTF8=1"),
+		Err(ParseError::InvalidArguments)
+	);
+}
+
+#[test]
 fn rejects_malformed_parameters() {
 	assert_eq!(
 		parse("MAIL FROM:<a@example.org> SIZE"),
@@ -300,9 +311,12 @@ fn rejects_control_characters() {
 }
 
 #[test]
-fn rejects_non_ascii() {
+fn rejects_control_characters_but_allows_utf8() {
+	// SMTPUTF8 (RFC 6531): non-ASCII UTF-8 is accepted.
+	assert!(parse("MAIL FROM:<用户@example.org>").is_ok());
+	// Control characters remain forbidden (injection guard).
 	assert_eq!(
-		parse("HELO münchen.example"),
+		parse("HELO ex\u{7f}ample"),
 		Err(ParseError::InvalidCharacters)
 	);
 }
