@@ -95,3 +95,19 @@ async fn auth_login_over_starttls_authenticates() {
 	drop(tls);
 	task.abort();
 }
+
+#[tokio::test(start_paused = true)]
+async fn command_timeout_closes_connection() {
+	let sink = Arc::new(MemorySink::new());
+	let server = Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
+		.with_directory(directory_with_password());
+	let (mut client, server_stream) = tokio::io::duplex(64 * 1024);
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
+
+	// Read the greeting, then send nothing: the command timeout (paused clock)
+	// fires and the server closes the connection.
+	assert!(reply(&mut client).await.starts_with("220 "));
+	let mut chunk = [0u8; 16];
+	assert_eq!(client.read(&mut chunk).await.expect("read"), 0);
+	task.await.expect("join").expect("server result");
+}
