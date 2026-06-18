@@ -132,7 +132,7 @@ fn run(
 			Command::If(conditional) => {
 				let mut taken = false;
 				for branch in &conditional.branches {
-					if super::eval::eval_test(&branch.test, message) {
+					if super::eval::eval_test(&branch.test, message, vars) {
 						if run(&branch.body, message, outcome, cancel_implicit, vars) {
 							return true;
 						}
