@@ -301,11 +301,18 @@ impl AccountStore {
 				.clone()
 				.map(|stored| (account.name.clone(), stored))
 		});
+		let totp = dynamic.iter().filter_map(|account| {
+			account
+				.totp_secret
+				.clone()
+				.map(|secret| (account.name.clone(), secret))
+		});
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
 			.with_scram(scram)
+			.with_totp(totp)
 	}
 }
 

@@ -253,7 +253,7 @@ impl Session {
 	}
 
 	fn verify_plain(&mut self, encoded: &str) -> Action {
-		use super::auth::{parse_plain, verify_password};
+		use super::auth::parse_plain;
 
 		let failure = |session: &mut Session| {
 			session.auth_failures += 1;
@@ -274,13 +274,13 @@ impl Session {
 		let Ok(credentials) = parse_plain(encoded) else {
 			return failure(self);
 		};
-		let Some((account, hash)) = self.directory.credentials(&credentials.authcid) else {
-			// Unknown user: same reply as a bad password, no oracle.
+		// Password + any TOTP second factor; no oracle (unknown user == bad pw).
+		let Some(account) = self
+			.directory
+			.authenticate(&credentials.authcid, &credentials.password)
+		else {
 			return failure(self);
 		};
-		if !verify_password(hash, &credentials.password) {
-			return failure(self);
-		}
 		self.authenticated = Some(account);
 		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 	}

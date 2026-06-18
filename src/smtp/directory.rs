@@ -35,6 +35,8 @@ pub struct Directory {
 	domain_aliases: HashMap<String, String>,
 	/// SCRAM credentials per account name, for SCRAM-SHA-256 authentication.
 	scram: HashMap<String, super::scram::ScramStored>,
+	/// Base32 TOTP secret per account name, for two-factor auth (RFC 6238).
+	totp: HashMap<String, String>,
 }
 
 impl Directory {
@@ -59,7 +61,41 @@ impl Directory {
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
 			scram: HashMap::new(),
+			totp: HashMap::new(),
 		}
+	}
+
+	/// Attach TOTP secrets (account name → base32 secret) for two-factor auth.
+	pub fn with_totp(mut self, totp: impl IntoIterator<Item = (String, String)>) -> Self {
+		self.totp = totp
+			.into_iter()
+			.map(|(name, secret)| (name.to_ascii_lowercase(), secret))
+			.collect();
+		self
+	}
+
+	/// Verify a login with its password, enforcing TOTP when the account has a
+	/// secret: the last 6 digits of the password are the current TOTP code.
+	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+		let (account, hash) = self.credentials(login)?;
+		let password = match self.totp.get(&account) {
+			Some(secret) => {
+				let split = password.len().checked_sub(6)?;
+				let (pass, code) = password.split_at(split);
+				let code: u32 = code.parse().ok()?;
+				let bytes = crate::totp::decode_base32_secret(secret)?;
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_secs())
+					.unwrap_or(0);
+				if !crate::totp::verify(&bytes, code, now) {
+					return None;
+				}
+				pass
+			}
+			None => password,
+		};
+		super::auth::verify_password(hash, password).then_some(account)
 	}
 
 	/// Attach SCRAM credentials (account name → stored credentials).
@@ -393,6 +429,43 @@ mod tests {
 		assert!(directory.credentials("mallory").is_none());
 		assert!(directory.credentials("mallory@example.org").is_none());
 		assert!(directory.credentials("alice@elsewhere.example").is_none());
+	}
+
+	#[test]
+	fn authenticate_enforces_totp_second_factor() {
+		let secret = b"12345678901234567890";
+		let directory = Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_totp([("alice".to_string(), crate::totp::encode_base32(secret))]);
+
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		let code = crate::totp::totp(secret, now);
+		// Password followed by the current 6-digit TOTP code.
+		let password = format!("secret{code:06}");
+		assert_eq!(
+			directory.authenticate("alice", &password).as_deref(),
+			Some("alice")
+		);
+		// A wrong code, or the bare password without a code, both fail.
+		assert!(directory.authenticate("alice", "secret000000").is_none());
+		assert!(directory.authenticate("alice", "secret").is_none());
+
+		// An account without a TOTP secret authenticates with just the password.
+		let plain = Directory::new(
+			["example.org".to_string()],
+			[("bob@example.org".to_string(), "bob".to_string())],
+		)
+		.with_password_hashes([("bob".to_string(), crate::smtp::auth::tests::hash("pw"))]);
+		assert_eq!(plain.authenticate("bob", "pw").as_deref(), Some("bob"));
 	}
 
 	#[test]
