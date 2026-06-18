@@ -20,6 +20,18 @@ fn directory() -> DirectoryHandle {
 	)
 }
 
+/// Read from `tls` until `needle` appears in the accumulated output.
+async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
+	let mut got = String::new();
+	let mut chunk = [0u8; 4096];
+	while !got.contains(needle) {
+		let n = tls.read(&mut chunk).await.expect("read");
+		assert!(n > 0, "closed waiting for {needle:?}: {got}");
+		got.push_str(&String::from_utf8_lossy(&chunk[..n]));
+	}
+	got
+}
+
 #[test]
 fn detects_bad_responses() {
 	assert!(is_bad_response(b"a1 BAD invalid arguments\r\n"));
@@ -112,20 +124,6 @@ async fn full_read_session_over_tls() {
 	let connector = TlsConnector::from(Arc::new(config));
 	let name = ServerName::try_from("mail.example.org").expect("name");
 	let mut tls = connector.connect(name, client).await.expect("handshake");
-
-	async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
-		let mut collected = String::new();
-		let mut chunk = [0u8; 4096];
-		while !collected.contains(needle) {
-			let read = tls.read(&mut chunk).await.expect("read");
-			assert!(
-				read > 0,
-				"connection closed waiting for {needle:?}: {collected}"
-			);
-			collected.push_str(&String::from_utf8_lossy(&chunk[..read]));
-		}
-		collected
-	}
 
 	let greeting = read_until(&mut tls, "IMAP4rev2 ready").await;
 	assert!(greeting.starts_with("* OK"), "{greeting}");
@@ -250,17 +248,6 @@ async fn append_with_literal_stores_a_message() {
 	let name = ServerName::try_from("mail.example.org").expect("name");
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
-	async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
-		let mut got = String::new();
-		let mut chunk = [0u8; 4096];
-		while !got.contains(needle) {
-			let n = tls.read(&mut chunk).await.expect("read");
-			assert!(n > 0, "closed waiting for {needle:?}: {got}");
-			got.push_str(&String::from_utf8_lossy(&chunk[..n]));
-		}
-		got
-	}
-
 	read_until(&mut tls, "IMAP4rev2 ready").await;
 	tls.write_all(b"a1 LOGIN alice secret\r\n")
 		.await
@@ -315,17 +302,6 @@ async fn authenticate_login_over_tls_drives_continuation() {
 	let name = ServerName::try_from("mail.example.org").expect("name");
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
-	async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
-		let mut got = String::new();
-		let mut chunk = [0u8; 4096];
-		while !got.contains(needle) {
-			let n = tls.read(&mut chunk).await.expect("read");
-			assert!(n > 0, "closed waiting for {needle:?}: {got}");
-			got.push_str(&String::from_utf8_lossy(&chunk[..n]));
-		}
-		got
-	}
-
 	read_until(&mut tls, "IMAP4rev2 ready").await;
 	// AUTHENTICATE LOGIN exchanges username and password via continuations.
 	tls.write_all(b"a1 AUTHENTICATE LOGIN\r\n")
@@ -373,17 +349,6 @@ async fn idle_then_done_resumes_command_mode() {
 	let connector = TlsConnector::from(Arc::new(config));
 	let name = ServerName::try_from("mail.example.org").expect("name");
 	let mut tls = connector.connect(name, client).await.expect("handshake");
-
-	async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
-		let mut got = String::new();
-		let mut chunk = [0u8; 4096];
-		while !got.contains(needle) {
-			let n = tls.read(&mut chunk).await.expect("read");
-			assert!(n > 0, "closed waiting for {needle:?}: {got}");
-			got.push_str(&String::from_utf8_lossy(&chunk[..n]));
-		}
-		got
-	}
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
 	tls.write_all(b"a1 LOGIN alice secret\r\n")
@@ -433,17 +398,6 @@ async fn idle_poll_pushes_exists_on_new_mail() {
 	let name = ServerName::try_from("mail.example.org").expect("name");
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
-	async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
-		let mut got = String::new();
-		let mut chunk = [0u8; 4096];
-		while !got.contains(needle) {
-			let n = tls.read(&mut chunk).await.expect("read");
-			assert!(n > 0, "closed waiting for {needle:?}: {got}");
-			got.push_str(&String::from_utf8_lossy(&chunk[..n]));
-		}
-		got
-	}
-
 	read_until(&mut tls, "IMAP4rev2 ready").await;
 	tls.write_all(b"a1 LOGIN alice secret\r\n")
 		.await
@@ -487,4 +441,43 @@ async fn idle_read_timeout_sends_bye() {
 	}
 	assert!(seen.contains("BYE idle timeout"), "{seen}");
 	let _ = task.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_times_out_during_idle() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		directory(),
+		acceptor,
+		TlsMode::Implicit,
+	);
+	let (client, server_stream) = tokio::io::duplex(64 * 1024);
+	let task = tokio::spawn(async move { server.handle(server_stream).await });
+
+	let mut roots = RootCertStore::empty();
+	roots.add(cert).expect("trust cert");
+	crate::tls::ensure_crypto_provider();
+	let config = ClientConfig::builder()
+		.with_root_certificates(roots)
+		.with_no_client_auth();
+	let connector = TlsConnector::from(Arc::new(config));
+	let name = ServerName::try_from("mail.example.org").expect("name");
+	let mut tls = connector.connect(name, client).await.expect("handshake");
+
+	read_until(&mut tls, "IMAP4rev2 ready").await;
+	tls.write_all(b"a1 LOGIN alice secret\r\n")
+		.await
+		.expect("login");
+	read_until(&mut tls, "a1 OK").await;
+	tls.write_all(b"a2 SELECT INBOX\r\n").await.expect("select");
+	read_until(&mut tls, "a2 OK").await;
+	tls.write_all(b"a3 IDLE\r\n").await.expect("idle");
+	read_until(&mut tls, "+ ").await;
+	// Stay silent: the idle timeout (paused clock) fires and the server closes.
+	read_until(&mut tls, "BYE idle timeout").await;
+	task.abort();
 }
