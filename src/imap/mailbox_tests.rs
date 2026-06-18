@@ -95,6 +95,22 @@ fn flags_roundtrip_and_expunge() {
 }
 
 #[test]
+fn expunge_logs_vanished_uids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"one\r\n");
+	deliver(dir.path(), "alice", b"two\r\n");
+	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("store");
+	let base = snapshot.highest_modseq();
+	snapshot.expunge().expect("expunge");
+
+	let account_dir = dir.path().join("accounts").join("alice").join("new");
+	// UID 1 vanished after the pre-expunge modseq; nothing vanished "in the future".
+	assert_eq!(super::super::vanished::since(&account_dir, base), vec![1]);
+	assert!(super::super::vanished::since(&account_dir, u64::MAX).is_empty());
+}
+
+#[test]
 fn uids_are_persistent_and_survive_expunge() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"one\r\n");
