@@ -303,12 +303,16 @@ fn relayed_mail_is_dkim_signed() {
 }
 
 #[test]
-fn subject_of_extracts_the_header() {
+fn header_of_extracts_named_header() {
 	assert_eq!(
-		subject_of(b"From: a@b\r\nSubject: Hello there\r\n\r\nbody\r\n").as_deref(),
+		header_of(
+			b"From: a@b\r\nSubject: Hello there\r\n\r\nbody\r\n",
+			"subject"
+		)
+		.as_deref(),
 		Some("Hello there")
 	);
-	assert!(subject_of(b"From: a@b\r\n\r\nno subject\r\n").is_none());
+	assert!(header_of(b"From: a@b\r\n\r\nno subject\r\n", "subject").is_none());
 }
 
 #[tokio::test]
@@ -340,7 +344,9 @@ async fn local_delivery_fires_message_received_webhook() {
 		.with_webhook(Arc::new(webhook));
 
 	let mut msg = message(&["alice@example.org"]);
-	msg.data = b"From: bob@example.net\r\nSubject: ping\r\n\r\nhi\r\n".to_vec();
+	msg.data =
+		b"From: bob@example.net\r\nSubject: ping\r\nMessage-ID: <abc@example.net>\r\n\r\nhi\r\n"
+			.to_vec();
 	sink.deliver(msg).expect("deliver");
 
 	// The notify is fire-and-forget; wait briefly for the spawned task.
@@ -356,4 +362,8 @@ async fn local_delivery_fires_message_received_webhook() {
 	assert!(body.contains("message_received"), "{body}");
 	assert!(body.contains("alice@example.org"), "{body}");
 	assert!(body.contains("\"subject\":\"ping\""), "{body}");
+	assert!(
+		body.contains("\"message_id\":\"<abc@example.net>\""),
+		"{body}"
+	);
 }

@@ -9,9 +9,11 @@ fn message_received_serializes_with_event_tag() {
 		account: "alice".into(),
 		from: "bob@example.net".into(),
 		subject: Some("hi".into()),
+		message_id: Some("<m1@x>".into()),
 	};
 	let json = serde_json::to_string(&event).expect("serialize");
 	assert!(json.contains("\"event\":\"message_received\""), "{json}");
+	assert!(json.contains("\"message_id\":\"<m1@x>\""), "{json}");
 	assert!(json.contains("\"account\":\"alice\""), "{json}");
 	assert!(json.contains("\"subject\":\"hi\""), "{json}");
 }
@@ -65,6 +67,7 @@ async fn delivers_signed_payload() {
 		account: "alice".into(),
 		from: "bob@example.net".into(),
 		subject: None,
+		message_id: None,
 	};
 	webhook.notify(&event).await;
 
@@ -87,6 +90,7 @@ async fn unsigned_delivery_omits_signature_header() {
 			account: "a".into(),
 			from: "b@c".into(),
 			subject: None,
+			message_id: None,
 		})
 		.await;
 	let (_, sig) = captured.lock().expect("lock").clone().expect("request");
@@ -102,6 +106,7 @@ async fn unreachable_endpoint_fails_open() {
 			account: "a".into(),
 			from: "b@c".into(),
 			subject: None,
+			message_id: None,
 		})
 		.await;
 }
