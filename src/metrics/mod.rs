@@ -55,6 +55,9 @@ pub struct Metrics {
 	sieve_rejected: AtomicU64,
 	vacation_sent: AtomicU64,
 	forwarded: AtomicU64,
+	relayed: AtomicU64,
+	deferred: AtomicU64,
+	bounced: AtomicU64,
 }
 
 impl Metrics {
@@ -95,6 +98,21 @@ impl Metrics {
 	/// Count a message forwarded by a Sieve `redirect`.
 	pub fn forwarded(&self) {
 		self.forwarded.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message relayed to a remote server by the outbound queue.
+	pub fn relayed(&self) {
+		self.relayed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an outbound delivery deferred for later retry.
+	pub fn deferred(&self) {
+		self.deferred.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an outbound message bounced (permanently undeliverable).
+	pub fn bounced(&self) {
+		self.bounced.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a rejected message by reason.
@@ -172,6 +190,21 @@ impl Metrics {
 				"Messages forwarded by a Sieve redirect.",
 				&self.forwarded,
 			),
+			(
+				"mail_relayed_total",
+				"Messages relayed to remote servers.",
+				&self.relayed,
+			),
+			(
+				"mail_deferred_total",
+				"Outbound deliveries deferred for retry.",
+				&self.deferred,
+			),
+			(
+				"mail_bounced_total",
+				"Outbound messages permanently bounced.",
+				&self.bounced,
+			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
 			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
@@ -210,10 +243,18 @@ mod tests {
 		m.vacation_sent();
 		m.vacation_sent();
 		m.forwarded();
+		m.relayed();
+		m.relayed();
+		m.relayed();
+		m.deferred();
+		m.bounced();
 		let r = m.render();
 		assert!(r.contains("mail_sieve_rejected_total 1\n"), "{r}");
 		assert!(r.contains("mail_vacation_sent_total 2\n"), "{r}");
 		assert!(r.contains("mail_forwarded_total 1\n"), "{r}");
+		assert!(r.contains("mail_relayed_total 3\n"), "{r}");
+		assert!(r.contains("mail_deferred_total 1\n"), "{r}");
+		assert!(r.contains("mail_bounced_total 1\n"), "{r}");
 		assert!(r.contains("mail_connections_total 2\n"), "{r}");
 		assert!(
 			r.contains("mail_connections_abuse_dropped_total 1\n"),
