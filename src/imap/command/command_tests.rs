@@ -58,11 +58,13 @@ fn parses_fetch_variants() {
 		sequence,
 		items,
 		uid,
+		changed_since,
 	} = parsed.command
 	else {
 		panic!("expected fetch");
 	};
 	assert!(!uid);
+	assert_eq!(changed_since, None);
 	assert_eq!(items, vec![FetchItem::Flags, FetchItem::Rfc822Size]);
 	assert!(sequence.contains(3, 10));
 	assert!(!sequence.contains(6, 10));

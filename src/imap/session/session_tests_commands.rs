@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn fetch_changedsince_filters_by_modseq() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");
+	deliver(dir.path(), b"From: c@d\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	// Bump message 2's mod-sequence (now 2); message 1 stays at 1.
+	session.command_line("a3 STORE 2 +FLAGS (\\Seen)");
+
+	// CHANGEDSINCE 1 returns only message 2, and includes MODSEQ implicitly.
+	let response = text(&session.command_line("a4 FETCH 1:2 (FLAGS) (CHANGEDSINCE 1)"));
+	assert!(response.contains("* 2 FETCH"), "{response}");
+	assert!(!response.contains("* 1 FETCH"), "{response}");
+	assert!(response.contains("MODSEQ (2)"), "{response}");
+}
+
+#[test]
+fn store_unchangedsince_reports_modified() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	// Advance the message's mod-sequence to 2.
+	session.command_line("a3 STORE 1 +FLAGS (\\Flagged)");
+
+	// UNCHANGEDSINCE 1 fails: the message changed since (modseq 2 > 1).
+	let response = text(&session.command_line("a4 STORE 1 (UNCHANGEDSINCE 1) +FLAGS (\\Seen)"));
+	assert!(response.contains("[MODIFIED 1]"), "{response}");
+	// The flag was not applied.
+	let response = text(&session.command_line("a5 FETCH 1 (FLAGS)"));
+	assert!(!response.contains("\\Seen"), "{response}");
+
+	// UNCHANGEDSINCE with a high enough value succeeds and reports the new MODSEQ.
+	let response = text(&session.command_line("a6 STORE 1 (UNCHANGEDSINCE 99) +FLAGS (\\Seen)"));
+	assert!(response.contains("MODSEQ ("), "{response}");
+	assert!(!response.contains("[MODIFIED"), "{response}");
+	assert!(response.contains("\\Seen"), "{response}");
+}
+
+#[test]
 fn condstore_reports_and_advances_modseq() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");

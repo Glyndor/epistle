@@ -11,6 +11,7 @@ use super::mailbox::{self, Flag, Snapshot};
 mod auth;
 mod codes;
 mod commands;
+mod fetchstore;
 mod helpers;
 mod sort;
 mod thread;
@@ -26,7 +27,7 @@ pub struct Output {
 	pub collect_literal: Option<usize>,
 	/// After sending, read lines until `DONE` for [`Session::idle_done`].
 	pub idle: bool,
-	/// After sending, perform the TLS handshake and call [`Session::tls_started`].
+	/// After sending, handshake TLS and call [`Session::tls_started`].
 	pub upgrade_tls: bool,
 	/// After sending, read one SASL continuation line (AUTHENTICATE).
 	pub collect_auth: bool,
@@ -77,9 +78,7 @@ pub struct Session {
 	data_dir: PathBuf,
 	directory: Arc<Directory>,
 	state: State,
-	/// In-flight APPEND: (tag, mailbox, flags) while the literal arrives.
 	pending_append: Option<(String, String, Vec<Flag>)>,
-	/// Tag of an in-flight IDLE.
 	idle_tag: Option<String>,
 	/// Whether the connection is inside TLS (LOGIN refused outside).
 	tls_active: bool,
@@ -247,14 +246,16 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 				sequence,
 				items,
 				uid,
-			} => self.fetch(&tag, &sequence, &items, uid),
+				changed_since,
+			} => self.fetch(&tag, &sequence, &items, uid, changed_since),
 			Command::Store {
 				sequence,
 				mode,
 				flags,
 				silent,
 				uid,
-			} => self.store(&tag, &sequence, mode, &flags, silent, uid),
+				unchanged_since,
+			} => self.store(&tag, &sequence, mode, &flags, silent, uid, unchanged_since),
 			Command::Copy {
 				sequence,
 				mailbox,
