@@ -448,6 +448,9 @@ impl Session {
 						let dt = format_internaldate(message.internal_date);
 						parts.push(format!("INTERNALDATE \"{dt}\"").into_bytes());
 					}
+					FetchItem::ModSeq => {
+						parts.push(format!("MODSEQ ({})", message.modseq).into_bytes());
+					}
 					FetchItem::Body => match snapshot.read(message) {
 						Ok(data) => {
 							let mut part = format!("BODY[] {{{}}}\r\n", data.len()).into_bytes();

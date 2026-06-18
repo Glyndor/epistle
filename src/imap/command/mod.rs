@@ -211,6 +211,8 @@ pub enum FetchItem {
 	/// `BODY[]` / `RFC822`: the full raw message.
 	Body,
 	InternalDate,
+	/// `MODSEQ`: the message's mod-sequence (CONDSTORE, RFC 7162).
+	ModSeq,
 }
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).

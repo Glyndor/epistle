@@ -46,10 +46,10 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		}
 		"LIST" => parse_list(&tag, args)?,
 		"SELECT" => Command::Select {
-			mailbox: parse_mailbox(&tag, args)?,
+			mailbox: parse_mailbox(&tag, strip_select_params(args))?,
 		},
 		"EXAMINE" => Command::Examine {
-			mailbox: parse_mailbox(&tag, args)?,
+			mailbox: parse_mailbox(&tag, strip_select_params(args))?,
 		},
 		"CLOSE" => no_args(&tag, args, Command::Close)?,
 		"UNSELECT" => no_args(&tag, args, Command::Unselect)?,
@@ -212,6 +212,19 @@ fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {
 	Ok(mailbox)
 }
 
+/// Drop a trailing parenthesized SELECT/EXAMINE parameter group, e.g.
+/// `INBOX (CONDSTORE)` (RFC 7162). We always report HIGHESTMODSEQ, so the
+/// parameter only needs to be accepted, not recorded.
+fn strip_select_params(args: &str) -> &str {
+	let trimmed = args.trim_end();
+	if trimmed.ends_with(')')
+		&& let Some(open) = trimmed.rfind('(')
+	{
+		return trimmed[..open].trim_end();
+	}
+	trimmed
+}
+
 fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let (sequence_text, items_text) = args.split_once(' ').ok_or_else(bad)?;
@@ -229,6 +242,7 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 			"RFC822.SIZE" => items.push(FetchItem::Rfc822Size),
 			"UID" => items.push(FetchItem::Uid),
 			"INTERNALDATE" => items.push(FetchItem::InternalDate),
+			"MODSEQ" => items.push(FetchItem::ModSeq),
 			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
 			"ALL" => {
 				items.extend([
