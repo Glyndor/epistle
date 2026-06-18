@@ -34,6 +34,11 @@ pub enum Command {
 	Top(u32, u32),
 	/// `CAPA`
 	Capa,
+	/// `AUTH [mechanism [initial-response]]` (SASL, RFC 5034).
+	Auth {
+		mechanism: Option<String>,
+		initial: Option<String>,
+	},
 }
 
 /// Why a command line failed to parse.
@@ -82,6 +87,10 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 			Ok(Command::Top(n, lines))
 		}
 		"CAPA" => no_args(&args, Command::Capa),
+		"AUTH" => Ok(Command::Auth {
+			mechanism: args.first().map(|m| m.to_ascii_uppercase()),
+			initial: args.get(1).map(|s| s.to_string()),
+		}),
 		_ => Err(ParseError::UnknownCommand),
 	}
 }

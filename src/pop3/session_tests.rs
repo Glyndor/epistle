@@ -61,6 +61,42 @@ fn login(session: &mut Session<FakeBackend>) {
 }
 
 #[test]
+fn sasl_auth_plain_logs_in() {
+	use base64::Engine;
+	let mut session = Session::new(FakeBackend::new(inbox()));
+	// AUTH with no mechanism lists PLAIN.
+	let Response::Multiline { body, .. } = session.handle(Command::Auth {
+		mechanism: None,
+		initial: None,
+	}) else {
+		panic!("expected mechanism list");
+	};
+	assert!(String::from_utf8_lossy(&body).contains("PLAIN"));
+
+	// AUTH PLAIN with the initial response authenticates.
+	let ir = base64::engine::general_purpose::STANDARD.encode("\0alice\0secret");
+	assert!(matches!(
+		session.handle(Command::Auth {
+			mechanism: Some("PLAIN".into()),
+			initial: Some(ir),
+		}),
+		Response::Ok(_)
+	));
+	assert!(matches!(session.handle(Command::Stat), Response::Ok(_)));
+
+	// A wrong password fails.
+	let mut session = Session::new(FakeBackend::new(inbox()));
+	let bad = base64::engine::general_purpose::STANDARD.encode("\0alice\0wrong");
+	assert!(matches!(
+		session.handle(Command::Auth {
+			mechanism: Some("PLAIN".into()),
+			initial: Some(bad),
+		}),
+		Response::Err(_)
+	));
+}
+
+#[test]
 fn rejects_commands_before_authentication() {
 	let mut session = Session::new(FakeBackend::new(inbox()));
 	assert!(matches!(session.handle(Command::Stat), Response::Err(_)));
