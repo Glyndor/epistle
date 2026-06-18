@@ -132,7 +132,6 @@ pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Val
 	])
 }
 
-/// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
 /// `Mailbox/set` (RFC 8621 §2.5): create, rename, and delete mailboxes.
 pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
@@ -191,6 +190,7 @@ pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Valu
 	])
 }
 
+/// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
 pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
@@ -308,7 +308,7 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	let mut not_updated = serde_json::Map::new();
 	if let Some(update) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in update {
-			match apply_keywords(state.data_dir(), account, id, patch) {
+			match apply_email_update(state.data_dir(), account, id, patch) {
 				Ok(()) => {
 					updated.insert(id.clone(), Value::Null);
 				}
@@ -358,35 +358,59 @@ fn destroy_email(data_dir: &std::path::Path, account: &str, id: &str) -> Result<
 
 /// Apply a `keywords` replacement to a message, mapping JMAP keywords to IMAP
 /// flags. Returns a JMAP SetError type string on failure.
-fn apply_keywords(
+fn apply_email_update(
 	data_dir: &std::path::Path,
 	account: &str,
 	id: &str,
 	patch: &Value,
 ) -> Result<(), &'static str> {
-	let Some(keywords) = patch.get("keywords").and_then(Value::as_object) else {
-		// Only whole-keywords updates are supported (no patch paths yet).
-		return Err("invalidPatch");
-	};
-	let flags: Vec<crate::imap::mailbox::Flag> = keywords
-		.iter()
-		.filter(|(_, set)| set.as_bool() == Some(true))
-		.filter_map(|(keyword, _)| keyword_to_flag(keyword))
-		.collect();
+	use crate::imap::mailbox::{self, Flag};
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
-	for mailbox in crate::imap::mailbox::list(data_dir, account) {
-		let Ok(mut snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox)
-		else {
+	// The single target mailbox when mailboxIds is set (first true entry).
+	let target = patch
+		.get("mailboxIds")
+		.and_then(Value::as_object)
+		.and_then(|m| m.iter().find(|(_, v)| v.as_bool() == Some(true)))
+		.map(|(name, _)| name.clone());
+
+	for source in mailbox::list(data_dir, account) {
+		let Ok(mut snapshot) = mailbox::Snapshot::open(data_dir, account, &source) else {
 			continue;
 		};
-		let position = snapshot.messages().position(|m| m.id() == uuid);
-		if let Some(index) = position {
-			let sequence = u32::try_from(index + 1).unwrap_or(u32::MAX);
+		let Some(index) = snapshot.messages().position(|m| m.id() == uuid) else {
+			continue;
+		};
+		let sequence = u32::try_from(index + 1).unwrap_or(u32::MAX);
+		// Read the bytes and current flags before any mutation.
+		let (raw, current_flags) = {
+			let message = snapshot.by_sequence(sequence).ok_or("notFound")?;
+			(
+				snapshot.read(message).map_err(|_| "serverFail")?,
+				message.flags.clone(),
+			)
+		};
+		let flags: Vec<Flag> = match patch.get("keywords").and_then(Value::as_object) {
+			Some(kw) => kw
+				.iter()
+				.filter(|(_, set)| set.as_bool() == Some(true))
+				.filter_map(|(keyword, _)| keyword_to_flag(keyword))
+				.collect(),
+			None => current_flags,
+		};
+		// A different target mailbox means move (append there, drop here).
+		if let Some(target) = &target
+			&& !target.eq_ignore_ascii_case(&source)
+		{
+			mailbox::append(data_dir, account, target, &flags, &raw).map_err(|_| "serverFail")?;
+			return snapshot.remove_at(sequence).map_err(|_| "serverFail");
+		}
+		if patch.get("keywords").is_some() {
 			return snapshot
 				.store_flags(sequence, flags)
 				.map(|_| ())
 				.map_err(|_| "serverFail");
 		}
+		return Ok(());
 	}
 	Err("notFound")
 }
