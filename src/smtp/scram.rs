@@ -44,6 +44,42 @@ impl ScramCredentials {
 	}
 }
 
+/// SCRAM credentials in a form suitable for persistence (base64 fields).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScramStored {
+	/// Base64 salt.
+	pub salt: String,
+	pub iterations: u32,
+	/// Base64 StoredKey (SHA-256 of ClientKey).
+	pub stored_key: String,
+	/// Base64 ServerKey.
+	pub server_key: String,
+}
+
+impl ScramStored {
+	/// Serialize derived credentials for storage.
+	pub fn from_credentials(credentials: &ScramCredentials) -> Self {
+		ScramStored {
+			salt: BASE64.encode(&credentials.salt),
+			iterations: credentials.iterations,
+			stored_key: BASE64.encode(credentials.stored_key),
+			server_key: BASE64.encode(credentials.server_key),
+		}
+	}
+
+	/// Reconstruct credentials, or `None` if any field is malformed.
+	pub fn to_credentials(&self) -> Option<ScramCredentials> {
+		let stored_key = BASE64.decode(&self.stored_key).ok()?.try_into().ok()?;
+		let server_key = BASE64.decode(&self.server_key).ok()?.try_into().ok()?;
+		Some(ScramCredentials {
+			salt: BASE64.decode(&self.salt).ok()?,
+			iterations: self.iterations,
+			stored_key,
+			server_key,
+		})
+	}
+}
+
 /// Why a SCRAM exchange failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScramError {
@@ -213,6 +249,28 @@ mod tests {
 		let proof = client_proof(login_password, &credentials, &auth_message);
 		let client_final = format!("{without_proof},p={}", BASE64.encode(&proof));
 		server.finish(&client_final, &credentials)
+	}
+
+	#[test]
+	fn stored_credentials_roundtrip() {
+		let credentials = ScramCredentials::derive("hunter2", b"saltsalt", 4096);
+		let stored = ScramStored::from_credentials(&credentials);
+		let restored = stored.to_credentials().expect("decode");
+		assert_eq!(restored.salt, credentials.salt);
+		assert_eq!(restored.iterations, credentials.iterations);
+		assert_eq!(restored.stored_key, credentials.stored_key);
+		assert_eq!(restored.server_key, credentials.server_key);
+	}
+
+	#[test]
+	fn malformed_stored_credentials_rejected() {
+		let stored = ScramStored {
+			salt: "not base64!!!".to_string(),
+			iterations: 4096,
+			stored_key: "x".to_string(),
+			server_key: "y".to_string(),
+		};
+		assert!(stored.to_credentials().is_none());
 	}
 
 	#[test]

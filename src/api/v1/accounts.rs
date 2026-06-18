@@ -51,6 +51,7 @@ pub async fn create(
 			name: request.name.clone(),
 			addresses: request.addresses,
 			password_hash,
+			scram: Some(derive_scram(&request.password)),
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created {
@@ -93,11 +94,22 @@ pub async fn set_password(
 	}
 	let hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
+	let scram = derive_scram(&request.password);
 	state
 		.store()
-		.set_password_hash(&name, hash)
+		.set_password_hash(&name, hash, Some(scram))
 		.map_err(store_error)?;
 	Ok(Json(PasswordChanged { updated: name }))
+}
+
+/// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
+/// random salt (RFC 7677 minimum 4096 iterations).
+fn derive_scram(password: &str) -> crate::smtp::scram::ScramStored {
+	use ring::rand::SecureRandom;
+	let mut salt = [0u8; 16];
+	let _ = ring::rand::SystemRandom::new().fill(&mut salt);
+	let credentials = crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096);
+	crate::smtp::scram::ScramStored::from_credentials(&credentials)
 }
 
 fn store_error(error: StoreError) -> ApiError {
