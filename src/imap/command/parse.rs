@@ -268,7 +268,11 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	} else {
 		(items_text, "")
 	};
-	let changed_since = parse_changed_since(modifier, tag)?;
+	let (changed_since, vanished) = parse_fetch_modifier(modifier, tag)?;
+	// VANISHED is only valid on UID FETCH with CHANGEDSINCE (RFC 7162 §3.1.4.1).
+	if vanished && (!uid || changed_since.is_none()) {
+		return Err(bad());
+	}
 	let inner = items_group
 		.strip_prefix('(')
 		.and_then(|t| t.strip_suffix(')'))
@@ -317,26 +321,38 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 		items,
 		uid,
 		changed_since,
+		vanished,
 	})
 }
 
-/// Parse an optional `(CHANGEDSINCE n)` FETCH modifier.
-fn parse_changed_since(modifier: &str, tag: &str) -> Result<Option<u64>, ParseError> {
+/// Parse an optional `(CHANGEDSINCE n [VANISHED])` FETCH modifier, returning the
+/// mod-sequence and whether VANISHED was requested (RFC 7162).
+fn parse_fetch_modifier(modifier: &str, tag: &str) -> Result<(Option<u64>, bool), ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	if modifier.is_empty() {
-		return Ok(None);
+		return Ok((None, false));
 	}
 	let inner = modifier
 		.strip_prefix('(')
 		.and_then(|t| t.strip_suffix(')'))
 		.ok_or_else(bad)?;
 	let mut parts = inner.split_whitespace();
-	match (parts.next(), parts.next(), parts.next()) {
-		(Some(key), Some(value), None) if key.eq_ignore_ascii_case("CHANGEDSINCE") => {
-			Ok(Some(value.parse().map_err(|_| bad())?))
-		}
-		_ => Err(bad()),
+	let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
+		return Err(bad());
+	};
+	if !key.eq_ignore_ascii_case("CHANGEDSINCE") {
+		return Err(bad());
 	}
+	let changed_since = Some(value.parse().map_err(|_| bad())?);
+	let vanished = match parts.next() {
+		None => false,
+		Some(tok) if tok.eq_ignore_ascii_case("VANISHED") => true,
+		Some(_) => return Err(bad()),
+	};
+	if parts.next().is_some() {
+		return Err(bad());
+	}
+	Ok((changed_since, vanished))
 }
 
 fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {

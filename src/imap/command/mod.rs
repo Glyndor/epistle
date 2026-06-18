@@ -89,6 +89,8 @@ pub enum Command {
 		uid: bool,
 		/// CONDSTORE `CHANGEDSINCE n`: only messages with a greater mod-seq.
 		changed_since: Option<u64>,
+		/// QRESYNC `VANISHED`: also report UIDs expunged since `changed_since`.
+		vanished: bool,
 	},
 	Store {
 		sequence: SequenceSet,
