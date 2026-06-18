@@ -23,7 +23,6 @@ pub struct Output {
 	pub close: bool,
 	/// After sending, read this many literal bytes for [`Session::literal_done`].
 	pub collect_literal: Option<usize>,
-	/// After sending, read lines until `DONE` ([`Session::idle_done`]).
 	pub idle: bool,
 	pub upgrade_tls: bool,
 	pub collect_auth: bool,
@@ -248,7 +247,8 @@ LIST-STATUS BINARY QRESYNC",
 				items,
 				uid,
 				changed_since,
-			} => self.fetch(&tag, &sequence, &items, uid, changed_since),
+				vanished,
+			} => self.fetch(&tag, &sequence, &items, uid, changed_since, vanished),
 			Command::Store {
 				sequence,
 				mode,

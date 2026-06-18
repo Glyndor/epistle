@@ -116,6 +116,7 @@ impl Session {
 		items: &[FetchItem],
 		uid: bool,
 		changed_since: Option<u64>,
+		vanished: bool,
 	) -> Output {
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
@@ -123,6 +124,14 @@ impl Session {
 
 		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
 		let mut bytes = Vec::new();
+		// QRESYNC VANISHED: report UIDs expunged since CHANGEDSINCE before FETCHes.
+		if let (true, Some(since)) = (vanished, changed_since) {
+			let uids = snapshot.vanished_since(since);
+			if !uids.is_empty() {
+				let line = format!("* VANISHED (EARLIER) {}\r\n", super::codes::uid_set(&uids));
+				bytes.extend_from_slice(line.as_bytes());
+			}
+		}
 		for sequence_number in 1..=total {
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;

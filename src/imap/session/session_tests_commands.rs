@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn uid_fetch_changedsince_vanished_reports_expunged() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"one\r\n");
+	deliver(dir.path(), b"two\r\n");
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a2 SELECT INBOX"));
+	let modseq: u64 = {
+		let after = response.split("[HIGHESTMODSEQ ").nth(1).expect("modseq");
+		after.split(']').next().unwrap().trim().parse().unwrap()
+	};
+	session.command_line("a3 STORE 1 +FLAGS (\\Deleted)");
+	session.command_line("a4 EXPUNGE");
+
+	// UID FETCH with CHANGEDSINCE ... VANISHED reports the expunged UID.
+	let cmd = format!("a5 UID FETCH 1:* (FLAGS) (CHANGEDSINCE {modseq} VANISHED)");
+	let response = text(&session.command_line(&cmd));
+	assert!(response.contains("* VANISHED (EARLIER) 1"), "{response}");
+
+	// VANISHED without UID (plain FETCH) is rejected.
+	let response = text(&session.command_line("a6 FETCH 1 (FLAGS) (CHANGEDSINCE 1 VANISHED)"));
+	assert!(response.contains("a6 BAD"), "{response}");
+}
+
+#[test]
 fn qresync_select_reports_vanished_uids() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"one\r\n");

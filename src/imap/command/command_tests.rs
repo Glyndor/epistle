@@ -62,6 +62,7 @@ fn parses_fetch_variants() {
 		items,
 		uid,
 		changed_since,
+		..
 	} = parsed.command
 	else {
 		panic!("expected fetch");
