@@ -301,3 +301,59 @@ fn relayed_mail_is_dkim_signed() {
 	assert!(data.starts_with("DKIM-Signature:"), "{data}");
 	assert!(data.contains("d=example.org"), "{data}");
 }
+
+#[test]
+fn subject_of_extracts_the_header() {
+	assert_eq!(
+		subject_of(b"From: a@b\r\nSubject: Hello there\r\n\r\nbody\r\n").as_deref(),
+		Some("Hello there")
+	);
+	assert!(subject_of(b"From: a@b\r\n\r\nno subject\r\n").is_none());
+}
+
+#[tokio::test]
+async fn local_delivery_fires_message_received_webhook() {
+	use std::sync::{Arc, Mutex};
+
+	let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+	let state = captured.clone();
+	async fn handler(
+		axum::extract::State(state): axum::extract::State<Arc<Mutex<Option<String>>>>,
+		body: String,
+	) -> &'static str {
+		*state.lock().expect("lock") = Some(body);
+		"ok"
+	}
+	let app = axum::Router::new()
+		.route("/hook", axum::routing::post(handler))
+		.with_state(state);
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let webhook = crate::webhook::Webhook::new(&format!("http://{addr}/hook"), None).expect("wh");
+	let sink = SplitDelivery::new(dir.path(), directory())
+		.expect("sink")
+		.with_webhook(Arc::new(webhook));
+
+	let mut msg = message(&["alice@example.org"]);
+	msg.data = b"From: bob@example.net\r\nSubject: ping\r\n\r\nhi\r\n".to_vec();
+	sink.deliver(msg).expect("deliver");
+
+	// The notify is fire-and-forget; wait briefly for the spawned task.
+	let mut body = None;
+	for _ in 0..50 {
+		if let Some(b) = captured.lock().expect("lock").clone() {
+			body = Some(b);
+			break;
+		}
+		tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+	}
+	let body = body.expect("webhook delivered");
+	assert!(body.contains("message_received"), "{body}");
+	assert!(body.contains("alice@example.org"), "{body}");
+	assert!(body.contains("\"subject\":\"ping\""), "{body}");
+}
