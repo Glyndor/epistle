@@ -254,3 +254,7 @@ fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 #[path = "validate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "validate_tests_b.rs"]
+mod tests_b;
