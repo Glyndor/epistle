@@ -4,6 +4,101 @@ use serde_json::{Value, json};
 
 use super::super::state::ApiState;
 
+/// `EmailSubmission/set` (RFC 8621 §7.5): queue stored emails for delivery.
+pub(super) fn email_submission_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let mut created = serde_json::Map::new();
+	let mut not_created = serde_json::Map::new();
+	if let Some(create) = args.get("create").and_then(Value::as_object) {
+		for (creation_id, submission) in create {
+			match submit_email(state, account, submission) {
+				Ok(id) => {
+					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
+				}
+				Err(reason) => {
+					not_created.insert(creation_id.clone(), json!({ "type": reason }));
+				}
+			}
+		}
+	}
+	json!([
+		"EmailSubmission/set",
+		{ "accountId": account, "oldState": "0", "newState": "0",
+		  "created": created, "notCreated": not_created },
+		call_id,
+	])
+}
+
+/// Queue one submission: read its email, build the envelope, spool it.
+fn submit_email(
+	state: &ApiState,
+	account: &str,
+	submission: &Value,
+) -> Result<String, &'static str> {
+	let email_id = submission
+		.get("emailId")
+		.and_then(Value::as_str)
+		.ok_or("invalidProperties")?;
+	let raw = find_email_raw(state.data_dir(), account, email_id).ok_or("notFound")?;
+	let headers = String::from_utf8_lossy(&raw);
+	// Envelope: explicit mailFrom/rcptTo, else derived from the identity and To.
+	let envelope = submission.get("envelope");
+	let mail_from = envelope
+		.and_then(|e| e.get("mailFrom"))
+		.and_then(|m| m.get("email"))
+		.and_then(Value::as_str)
+		.or_else(|| submission.get("identityId").and_then(Value::as_str))
+		.unwrap_or("")
+		.to_string();
+	let recipients: Vec<String> = match envelope
+		.and_then(|e| e.get("rcptTo"))
+		.and_then(Value::as_array)
+	{
+		Some(list) => list
+			.iter()
+			.filter_map(|r| r.get("email").and_then(Value::as_str))
+			.map(str::to_string)
+			.collect(),
+		None => header_value(&headers, "to")
+			.map(|to| to.split(',').map(|a| a.trim().to_string()).collect())
+			.unwrap_or_default(),
+	};
+	if recipients.is_empty() {
+		return Err("noRecipients");
+	}
+	let message = crate::smtp::session::AcceptedMessage {
+		reverse_path: mail_from,
+		recipients,
+		data: raw,
+		require_tls: false,
+		mailbox: None,
+	};
+	state
+		.spool()
+		.store(&message)
+		.map(|id| id.to_string())
+		.map_err(|_| "serverFail")
+}
+
+/// Raw bytes of a stored message by id (for submission).
+fn find_email_raw(data_dir: &std::path::Path, account: &str, id: &str) -> Option<Vec<u8>> {
+	let uuid = uuid::Uuid::parse_str(id).ok()?;
+	for mailbox in crate::imap::mailbox::list(data_dir, account) {
+		let Ok(snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox) else {
+			continue;
+		};
+		if let Some(message) = snapshot.messages().find(|m| m.id() == uuid) {
+			return snapshot.read(message).ok();
+		}
+	}
+	None
+}
+
 /// `Identity/get` (RFC 8621 §6.1): the account's sending identities, one per
 /// configured address.
 pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Value {

@@ -114,6 +114,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			"Email/get" => methods::email_get(&state, &args, &call_id),
 			"Email/set" => methods::email_set(&state, &args, &call_id),
 			"Identity/get" => methods::identity_get(&state, &args, &call_id),
+			"EmailSubmission/set" => methods::email_submission_set(&state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		});
 	}
