@@ -197,11 +197,50 @@ mod tests {
 		// An unknown method yields an error response, not a failure.
 		let req = serde_json::json!({
 			"using": [],
-			"methodCalls": [["Mailbox/get", {}, "c2"]],
+			"methodCalls": [["Widget/get", {}, "c2"]],
 		});
 		let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
 		assert_eq!(body["methodResponses"][0][0], "error");
 		assert_eq!(body["methodResponses"][0][1]["type"], "unknownMethod");
+	}
+
+	#[tokio::test]
+	async fn jmap_mailbox_get_lists_inbox() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		// Deliver a message so INBOX reports a count.
+		let inbox = dir.path().join("accounts").join("alice").join("new");
+		std::fs::create_dir_all(&inbox).expect("mkdir");
+		std::fs::write(inbox.join(format!("{}.eml", uuid::Uuid::now_v7())), b"x").expect("write");
+
+		let app = router(test_state(dir.path(), 0));
+		// The session advertises the mail capability.
+		let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+		assert!(
+			session["capabilities"]["urn:ietf:params:jmap:mail"].is_object(),
+			"{session}"
+		);
+
+		let req = serde_json::json!({
+			"using": ["urn:ietf:params:jmap:mail"],
+			"methodCalls": [["Mailbox/get", {"accountId": "alice", "ids": null}, "c1"]],
+		});
+		let (status, body) =
+			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		assert_eq!(status, StatusCode::OK);
+		let response = &body["methodResponses"][0];
+		assert_eq!(response[0], "Mailbox/get");
+		let inbox = &response[1]["list"][0];
+		assert_eq!(inbox["name"], "INBOX");
+		assert_eq!(inbox["role"], "inbox");
+		assert_eq!(inbox["totalEmails"], 1);
+
+		// An unknown account is reported, not a 500.
+		let req = serde_json::json!({
+			"methodCalls": [["Mailbox/get", {"accountId": "nobody"}, "c2"]],
+		});
+		let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		assert_eq!(body["methodResponses"][0][0], "error");
+		assert_eq!(body["methodResponses"][0][1]["type"], "accountNotFound");
 	}
 
 	#[tokio::test]
