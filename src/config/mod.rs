@@ -14,6 +14,7 @@ mod listener;
 mod oauth;
 mod tls;
 mod validate;
+mod webhook;
 
 pub use account::Account;
 pub use acme::Acme;
@@ -24,6 +25,7 @@ pub use dkim::Dkim;
 pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
 pub use tls::Tls;
+pub use webhook::Webhook;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
@@ -127,6 +129,8 @@ pub struct Config {
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
 	pub oauth: Option<Oauth>,
+	/// Outbound event webhooks. Present enables notifications.
+	pub webhook: Option<Webhook>,
 }
 
 impl Config {
