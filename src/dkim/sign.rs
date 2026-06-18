@@ -389,4 +389,48 @@ mod tests {
 		assert!(signed.contains("s=sel;"), "{signed}");
 		assert!(signed.contains("s=rsa;"), "{signed}");
 	}
+
+	#[test]
+	fn signs_folded_header_and_empty_body() {
+		let (signer, _) = temp_signer();
+		// A folded From header and no trailing blank line / body.
+		let message = b"From: Alice\r\n <alice@example.org>\r\nSubject: hi\r\n";
+		let header = signer.sign("example.org", message).expect("signs");
+		assert!(header.starts_with("DKIM-Signature:"), "{header}");
+	}
+
+	#[test]
+	fn sign_rejects_non_utf8_headers() {
+		let (signer, _) = temp_signer();
+		assert!(
+			signer
+				.sign("example.org", b"From: \xff\xfe\r\n\r\nbody\r\n")
+				.is_none()
+		);
+	}
+
+	#[test]
+	fn with_rsa_rejects_invalid_key() {
+		let (signer, _) = temp_signer();
+		let mut bad = tempfile::NamedTempFile::new().expect("temp file");
+		bad.write_all(b"-----BEGIN PRIVATE KEY-----\nnotbase64!!!\n-----END PRIVATE KEY-----\n")
+			.expect("write");
+		assert!(signer.with_rsa("rsa", bad.path()).is_err());
+		// A missing file fails too.
+		let (signer, _) = temp_signer();
+		assert!(
+			signer
+				.with_rsa("rsa", std::path::Path::new("/nonexistent"))
+				.is_err()
+		);
+	}
+
+	#[tokio::test]
+	async fn resolver_stub_methods_are_inert() {
+		let dns = OneKeyDns {
+			records: HashMap::new(),
+		};
+		assert!(dns.addresses("x").await.expect("ok").is_empty());
+		assert!(dns.mx("x").await.expect("ok").is_empty());
+	}
 }
