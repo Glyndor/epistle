@@ -14,6 +14,25 @@ fn run(script: &str, raw: &[u8]) -> Outcome {
 }
 
 #[test]
+fn matches_captures_into_numbered_variables() {
+	// `:matches` wildcards populate ${1}.. (RFC 5229); "*@*" on a To header.
+	let outcome = run(
+		"if header :matches \"to\" \"*@*\" { fileinto \"${2}/${1}\"; }",
+		MSG,
+	);
+	// MSG's To is bob@example.net → ${1}=bob, ${2}=example.net.
+	assert_eq!(outcome.fileinto, vec!["example.net/bob".to_string()]);
+
+	// "a*c" on "abcbc": the trailing `c` anchors to the last c, so ${1}="bcb".
+	let raw = b"Subject: abcbc\r\n\r\nx\r\n";
+	let outcome = run(
+		"if header :matches \"subject\" \"a*c\" { fileinto \"${1}\"; }",
+		raw,
+	);
+	assert_eq!(outcome.fileinto, vec!["bcb".to_string()]);
+}
+
+#[test]
 fn set_variable_expands_in_fileinto() {
 	// A variable set earlier expands into a later fileinto target (RFC 5229).
 	let outcome = run(

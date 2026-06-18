@@ -1,29 +1,62 @@
 //! Sieve test evaluation: `eval_test` and the per-test predicates (header,
 //! address, envelope, body, size, date), the comparator, and glob matching.
 
+use std::collections::HashMap;
+
 use super::ast::{Argument, Test};
 use super::interp::{has_tag, strings};
 use super::message::Message;
 
-pub(super) fn eval_test(test: &Test, message: &Message) -> bool {
+pub(super) fn eval_test(
+	test: &Test,
+	message: &Message,
+	vars: &mut HashMap<String, String>,
+) -> bool {
 	match test.name.as_str() {
 		"true" => true,
 		"false" => false,
-		"not" => !test.children.first().is_some_and(|c| eval_test(c, message)),
-		"allof" => test.children.iter().all(|c| eval_test(c, message)),
-		"anyof" => test.children.iter().any(|c| eval_test(c, message)),
+		"not" => !test
+			.children
+			.first()
+			.is_some_and(|c| eval_test(c, message, vars)),
+		"allof" => test.children.iter().all(|c| eval_test(c, message, vars)),
+		"anyof" => test.children.iter().any(|c| eval_test(c, message, vars)),
 		"exists" => strings(&test.args)
 			.iter()
 			.all(|name| !message.header_values(name).is_empty()),
-		"header" => header_test(test, message),
-		"address" => address_test(test, message),
-		"envelope" => envelope_test(test, message),
-		"body" => body_test(test, message),
+		"header" => header_test(test, message, vars),
+		"address" => address_test(test, message, vars),
+		"envelope" => envelope_test(test, message, vars),
+		"body" => body_test(test, message, vars),
 		"size" => size_test(test, message),
 		"date" => date_test(test, message),
 		"currentdate" => currentdate_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
+	}
+}
+
+/// Match `value` against `key` with `comparator`; on a successful `:matches`,
+/// store the wildcard captures as `${0..}` (RFC 5229 §6).
+fn matches_capturing(
+	comparator: Comparator,
+	value: &str,
+	key: &str,
+	vars: &mut HashMap<String, String>,
+) -> bool {
+	if let Comparator::Matches = comparator {
+		match glob_captures(&key.to_ascii_lowercase(), &value.to_ascii_lowercase()) {
+			Some(captures) => {
+				vars.insert("0".to_string(), value.to_string());
+				for (index, capture) in captures.into_iter().enumerate() {
+					vars.insert((index + 1).to_string(), capture);
+				}
+				true
+			}
+			None => false,
+		}
+	} else {
+		comparator.matches(value, key)
 	}
 }
 
@@ -67,7 +100,7 @@ fn currentdate_test(test: &Test, message: &Message) -> bool {
 }
 
 /// `header [comparator] <header-names> <key-list>`.
-fn header_test(test: &Test, message: &Message) -> bool {
+fn header_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
 	let comparator = comparator(&test.args);
 	let strings = strings(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args, &strings) else {
@@ -76,7 +109,7 @@ fn header_test(test: &Test, message: &Message) -> bool {
 	for name in &names {
 		for value in message.header_values(name) {
 			for key in &keys {
-				if comparator.matches(value, key) {
+				if matches_capturing(comparator, value, key, vars) {
 					return true;
 				}
 			}
@@ -86,7 +119,7 @@ fn header_test(test: &Test, message: &Message) -> bool {
 }
 
 /// `address [comparator] [:all|:localpart|:domain] <header-names> <key-list>`.
-fn address_test(test: &Test, message: &Message) -> bool {
+fn address_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
 	let comparator = comparator(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args, &[]) else {
 		return false;
@@ -98,7 +131,7 @@ fn address_test(test: &Test, message: &Message) -> bool {
 				continue;
 			};
 			for key in &keys {
-				if comparator.matches(&addr, key) {
+				if matches_capturing(comparator, &addr, key, vars) {
 					return true;
 				}
 			}
@@ -109,7 +142,7 @@ fn address_test(test: &Test, message: &Message) -> bool {
 
 /// `envelope [comparator] [part] <envelope-part-list> <key-list>` (RFC 5228
 /// §5.4): `from` matches MAIL FROM, `to` matches RCPT TO.
-fn envelope_test(test: &Test, message: &Message) -> bool {
+fn envelope_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
 	let comparator = comparator(&test.args);
 	let Some((parts, keys)) = split_names_keys(&test.args, &[]) else {
 		return false;
@@ -126,7 +159,7 @@ fn envelope_test(test: &Test, message: &Message) -> bool {
 				continue;
 			};
 			for key in &keys {
-				if comparator.matches(&value, key) {
+				if matches_capturing(comparator, &value, key, vars) {
 					return true;
 				}
 			}
@@ -175,11 +208,11 @@ fn addr_spec(value: &str) -> String {
 }
 
 /// `body [comparator] [:raw|:text] <key-list>` (RFC 5173): body text vs keys.
-fn body_test(test: &Test, message: &Message) -> bool {
+fn body_test(test: &Test, message: &Message, vars: &mut HashMap<String, String>) -> bool {
 	let comparator = comparator(&test.args);
 	strings(&test.args)
 		.iter()
-		.any(|key| comparator.matches(&message.body, key))
+		.any(|key| matches_capturing(comparator, &message.body, key, vars))
 }
 
 /// `size :over|:under <number>`.
@@ -252,6 +285,45 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 		}
 	}
 	dp[t.len()]
+}
+
+/// Glob match returning the substrings captured by each `*`/`?` wildcard, in
+/// order, or `None` if the pattern does not match. `*` is non-greedy (matches
+/// the shortest run), giving the RFC 5229 leftmost capture assignment.
+fn glob_captures(pattern: &str, text: &str) -> Option<Vec<String>> {
+	let p: Vec<char> = pattern.chars().collect();
+	let t: Vec<char> = text.chars().collect();
+	let mut captures = Vec::new();
+	capture_rec(&p, 0, &t, 0, &mut captures).then_some(captures)
+}
+
+fn capture_rec(p: &[char], pi: usize, t: &[char], ti: usize, caps: &mut Vec<String>) -> bool {
+	if pi == p.len() {
+		return ti == t.len();
+	}
+	match p[pi] {
+		'*' => {
+			// Try the shortest run first so earlier wildcards capture the least.
+			for split in ti..=t.len() {
+				caps.push(t[ti..split].iter().collect());
+				if capture_rec(p, pi + 1, t, split, caps) {
+					return true;
+				}
+				caps.pop();
+			}
+			false
+		}
+		'?' if ti < t.len() => {
+			caps.push(t[ti].to_string());
+			if capture_rec(p, pi + 1, t, ti + 1, caps) {
+				return true;
+			}
+			caps.pop();
+			false
+		}
+		c if ti < t.len() && t[ti] == c => capture_rec(p, pi + 1, t, ti + 1, caps),
+		_ => false,
+	}
 }
 
 /// Split the argument strings into (header-names, keys). The first string
