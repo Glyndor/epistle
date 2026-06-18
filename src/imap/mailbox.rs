@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// A snapshot of one mailbox at SELECT time. Sequence numbers are positions
-/// in `messages` (1-based); UIDs derive from the time-ordered UUID v7 names.
+/// in `messages` (1-based); UIDs are persistent, assigned in arrival order.
 #[derive(Debug)]
 pub struct Snapshot {
 	account_dir: PathBuf,
 	messages: Vec<MessageRef>,
 	uid_validity: u32,
+	/// Next UID to assign (one past the highest assigned), persisted.
+	uid_next: u32,
 	/// Highest mod-sequence in the mailbox (CONDSTORE, RFC 7162).
 	highest_modseq: u64,
 }
@@ -195,8 +197,12 @@ impl Snapshot {
 		}
 		ids.sort();
 
+		// Persistent UIDs in arrival order: existing read back, new ones take the
+		// next counter value (monotonic, never reused even after expunge).
+		let initial_counter = super::uid::read_counter(&account_dir);
+		let mut uid_counter = initial_counter;
 		let mut messages = Vec::with_capacity(ids.len());
-		for (index, id) in ids.iter().enumerate() {
+		for id in ids.iter() {
 			let meta = std::fs::metadata(account_dir.join(format!("{id}.eml")));
 			let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
 			let internal_date = meta
@@ -204,16 +210,17 @@ impl Snapshot {
 				.ok()
 				.and_then(|m| m.modified().ok())
 				.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-			let flags = read_flags(&account_dir, *id);
 			messages.push(MessageRef {
-				// Snapshot UIDs: position in the time-ordered listing.
-				uid: u32::try_from(index + 1).unwrap_or(u32::MAX),
+				uid: super::uid::assign_or_read(&account_dir, *id, &mut uid_counter),
 				id: *id,
 				size,
-				flags,
+				flags: read_flags(&account_dir, *id),
 				internal_date,
 				modseq: super::modseq::read_message(&account_dir, *id),
 			});
+		}
+		if uid_counter > initial_counter {
+			let _ = super::uid::write_counter(&account_dir, uid_counter);
 		}
 		// HIGHESTMODSEQ is the persisted counter, never below any message's.
 		let highest_modseq = super::modseq::read_counter(&account_dir)
@@ -224,6 +231,7 @@ impl Snapshot {
 			account_dir,
 			messages,
 			uid_validity,
+			uid_next: uid_counter + 1,
 			highest_modseq,
 		})
 	}
@@ -250,9 +258,9 @@ impl Snapshot {
 		self.messages.iter()
 	}
 
-	/// Next UID a new message would get.
+	/// Next UID a new message would get (the persisted counter, never reused).
 	pub fn uid_next(&self) -> u32 {
-		u32::try_from(self.messages.len() + 1).unwrap_or(u32::MAX)
+		self.uid_next
 	}
 
 	/// Message by 1-based sequence number.
@@ -303,6 +311,7 @@ impl Snapshot {
 		let id = self.messages[index].id;
 		std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
 		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
 		self.messages.remove(index);
 		Ok(())
 	}
@@ -318,6 +327,7 @@ impl Snapshot {
 				let id = self.messages[index].id;
 				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
 				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
 				self.messages.remove(index);
 				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
 			} else {
@@ -338,6 +348,7 @@ impl Snapshot {
 				let id = message.id;
 				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
 				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
 				self.messages.remove(index);
 				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
 			} else {
