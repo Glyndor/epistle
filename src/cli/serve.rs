@@ -60,8 +60,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let mut split =
 		SplitDelivery::new(&config.data_dir, directory.clone())?.with_rules(config.rules.clone());
 	if let Some(dkim) = &config.dkim {
-		let signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
+		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
 			.map_err(std::io::Error::other)?;
+		if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
+			signer = signer
+				.with_rsa(selector, key_file)
+				.map_err(std::io::Error::other)?;
+		}
 		split = split.with_signer(Arc::new(signer));
 	}
 	if let Some(secret) = &config.srs_secret {
