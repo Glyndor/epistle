@@ -233,6 +233,18 @@ fn date_test_matches_header_parts() {
 }
 
 #[test]
+fn currentdate_test_uses_injected_now() {
+	// 2026-06-17 14:30:05 UTC.
+	let commands =
+		parse(&tokenize("if currentdate \"year\" \"2026\" { discard; }").unwrap()).unwrap();
+	let message = Message::parse(MSG).with_now(1_781_724_605);
+	assert!(evaluate(&commands, &message).discarded);
+
+	let miss = parse(&tokenize("if currentdate \"year\" \"1999\" { discard; }").unwrap()).unwrap();
+	assert!(!evaluate(&miss, &message).discarded);
+}
+
+#[test]
 fn stop_halts_execution() {
 	let outcome = run("fileinto \"A\"; stop; fileinto \"B\";", MSG);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);

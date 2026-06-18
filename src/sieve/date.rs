@@ -5,6 +5,25 @@
 /// cannot be parsed or the part is unsupported.
 pub(super) fn extract_part(header_value: &str, part: &str) -> Option<String> {
 	let (year, month, day, hour, minute, second) = parse(header_value)?;
+	format_part(year, month, day, hour, minute, second, part)
+}
+
+/// Extract a date-part from a Unix timestamp in UTC (Sieve `currentdate`).
+pub(super) fn extract_part_from_unix(now: u64, part: &str) -> Option<String> {
+	let (year, month, day, hour, minute, second) = civil_from_unix(now);
+	format_part(year, month, day, hour, minute, second, part)
+}
+
+/// Render the requested date-part from numeric components.
+fn format_part(
+	year: u32,
+	month: u32,
+	day: u32,
+	hour: u32,
+	minute: u32,
+	second: u32,
+	part: &str,
+) -> Option<String> {
 	Some(match part.to_ascii_lowercase().as_str() {
 		"year" => format!("{year:04}"),
 		"month" => format!("{month:02}"),
@@ -16,6 +35,27 @@ pub(super) fn extract_part(header_value: &str, part: &str) -> Option<String> {
 		"time" => format!("{hour:02}:{minute:02}:{second:02}"),
 		_ => return None,
 	})
+}
+
+/// Civil date (UTC) from a Unix timestamp (Howard Hinnant's algorithm).
+fn civil_from_unix(secs: u64) -> (u32, u32, u32, u32, u32, u32) {
+	let days = (secs / 86_400) as i64;
+	let sod = secs % 86_400;
+	let (hour, minute, second) = (
+		(sod / 3600) as u32,
+		((sod % 3600) / 60) as u32,
+		(sod % 60) as u32,
+	);
+	let z = days + 719_468;
+	let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+	let doe = z - era * 146_097;
+	let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+	let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	let mp = (5 * doy + 2) / 153;
+	let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+	let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+	let year = (yoe + era * 400 + i64::from(month <= 2)) as u32;
+	(year, month, day, hour, minute, second)
 }
 
 /// Parse `[Day, ]D Mon YYYY HH:MM:SS [zone]` into its numeric components.
@@ -74,5 +114,25 @@ mod tests {
 	fn rejects_garbage_and_unknown_parts() {
 		assert!(extract_part("not a date", "year").is_none());
 		assert!(extract_part(DATE, "weekday").is_none());
+	}
+
+	#[test]
+	fn unix_components_match_known_timestamp() {
+		// 1781724605 = 2026-06-17 19:30:05 UTC.
+		let ts = 1_781_724_605;
+		assert_eq!(
+			extract_part_from_unix(ts, "date").as_deref(),
+			Some("2026-06-17")
+		);
+		assert_eq!(
+			extract_part_from_unix(ts, "time").as_deref(),
+			Some("19:30:05")
+		);
+		assert_eq!(extract_part_from_unix(ts, "year").as_deref(), Some("2026"));
+		// Epoch.
+		assert_eq!(
+			extract_part_from_unix(0, "date").as_deref(),
+			Some("1970-01-01")
+		);
 	}
 }
