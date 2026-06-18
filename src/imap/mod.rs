@@ -7,3 +7,4 @@ pub mod server;
 pub mod session;
 mod uid;
 mod uidvalidity;
+mod vanished;

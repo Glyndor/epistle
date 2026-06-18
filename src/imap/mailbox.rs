@@ -197,8 +197,7 @@ impl Snapshot {
 		}
 		ids.sort();
 
-		// Persistent UIDs in arrival order: existing read back, new ones take the
-		// next counter value (monotonic, never reused even after expunge).
+		// Persistent UIDs in arrival order, monotonic and never reused.
 		let initial_counter = super::uid::read_counter(&account_dir);
 		let mut uid_counter = initial_counter;
 		let mut messages = Vec::with_capacity(ids.len());
@@ -308,54 +307,51 @@ impl Snapshot {
 			.and_then(|s| s.checked_sub(1))
 			.filter(|index| *index < self.messages.len())
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
-		let id = self.messages[index].id;
-		std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
-		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
-		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
+		let uid = self.messages[index].uid;
+		self.remove_files(self.messages[index].id);
 		self.messages.remove(index);
+		super::vanished::record_advancing(&self.account_dir, &[uid]);
 		Ok(())
 	}
 
-	/// Remove every `\Deleted` message (file + sidecar). Returns the
-	/// sequence numbers expunged, in the order responses must be sent
-	/// (each number is valid at the moment it is emitted).
+	/// Remove every `\Deleted` message. Returns the expunged sequence numbers
+	/// in emission order (each valid at the moment it is sent).
 	pub fn expunge(&mut self) -> std::io::Result<Vec<u32>> {
-		let mut expunged = Vec::new();
-		let mut index = 0;
-		while index < self.messages.len() {
-			if self.messages[index].flags.contains(&Flag::Deleted) {
-				let id = self.messages[index].id;
-				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
-				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
-				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
-				self.messages.remove(index);
-				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
-			} else {
-				index += 1;
-			}
-		}
-		Ok(expunged)
+		self.expunge_where(|_| true)
 	}
 
-	/// Expunge only the `\Deleted` messages whose UID is in `uids` (UIDPLUS
-	/// `UID EXPUNGE`, RFC 4315). Returns the (post-removal) sequence numbers.
+	/// Expunge only `\Deleted` messages whose UID is in `uids` (UID EXPUNGE,
+	/// RFC 4315).
 	pub fn expunge_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
+		self.expunge_where(|uid| uids.contains(&uid))
+	}
+
+	/// Expunge every `\Deleted` message whose UID passes `keep`, logging the
+	/// vanished UIDs for QRESYNC.
+	fn expunge_where(&mut self, keep: impl Fn(u32) -> bool) -> std::io::Result<Vec<u32>> {
 		let mut expunged = Vec::new();
+		let mut vanished = Vec::new();
 		let mut index = 0;
 		while index < self.messages.len() {
 			let message = &self.messages[index];
-			if message.flags.contains(&Flag::Deleted) && uids.contains(&message.uid) {
-				let id = message.id;
-				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
-				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
-				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
+			if message.flags.contains(&Flag::Deleted) && keep(message.uid) {
+				vanished.push(message.uid);
+				self.remove_files(message.id);
 				self.messages.remove(index);
 				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
 			} else {
 				index += 1;
 			}
 		}
+		super::vanished::record_advancing(&self.account_dir, &vanished);
 		Ok(expunged)
+	}
+
+	/// Remove a message's `.eml` and its `.flags`/`.uid` sidecars.
+	fn remove_files(&self, id: Uuid) {
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.eml")));
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
 	}
 }
 
