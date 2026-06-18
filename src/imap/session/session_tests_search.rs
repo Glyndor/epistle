@@ -165,6 +165,75 @@ fn sort_orders_by_subject_and_size_and_reverse() {
 }
 
 #[test]
+fn sort_by_address_headers_and_date() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(
+		dir.path(),
+		b"From: zoe@example.org\r\nTo: yan@example.org\r\nCc: wim@example.org\r\nSubject: x\r\n\r\na\r\n",
+	);
+	deliver(
+		dir.path(),
+		b"From: amy@example.org\r\nTo: bob@example.org\r\nCc: cat@example.org\r\nSubject: y\r\n\r\nb\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// FROM ascending: amy (2) before zoe (1).
+	assert!(
+		text(&session.command_line("a3 SORT (FROM) UTF-8 ALL")).contains("* SORT 2 1\r\n"),
+		"FROM"
+	);
+	// TO ascending: bob (2) before yan (1).
+	assert!(
+		text(&session.command_line("a4 SORT (TO) UTF-8 ALL")).contains("* SORT 2 1\r\n"),
+		"TO"
+	);
+	// CC ascending: cat (2) before wim (1).
+	assert!(
+		text(&session.command_line("a5 SORT (CC) UTF-8 ALL")).contains("* SORT 2 1\r\n"),
+		"CC"
+	);
+	// DATE and ARRIVAL fall back to internal date: delivery order 1, 2.
+	assert!(
+		text(&session.command_line("a6 SORT (DATE) UTF-8 ALL")).contains("* SORT 1 2\r\n"),
+		"DATE"
+	);
+	assert!(
+		text(&session.command_line("a7 SORT (ARRIVAL) UTF-8 ALL")).contains("* SORT 1 2\r\n"),
+		"ARRIVAL"
+	);
+}
+
+#[test]
+fn sort_strips_reply_prefix_and_breaks_ties_by_secondary_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Same base subject "Plan": the "Re:" prefix must be ignored, so the tie
+	// is broken by the secondary SIZE key (smaller first).
+	deliver(
+		dir.path(),
+		b"From: a@example.org\r\nSubject: Re: Plan\r\n\r\nlonger body here yes\r\n",
+	);
+	deliver(
+		dir.path(),
+		b"From: a@example.org\r\nSubject: Plan\r\n\r\nx\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let response = text(&session.command_line("a3 SORT (SUBJECT SIZE) UTF-8 ALL"));
+	// Equal subjects, so the smaller message (2) sorts before (1).
+	assert!(response.contains("* SORT 2 1\r\n"), "{response}");
+}
+
+#[test]
+fn sort_without_selected_mailbox_is_bad() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a2 SORT (SUBJECT) UTF-8 ALL"));
+	assert!(response.contains("a2 BAD"), "{response}");
+}
+
+#[test]
 fn sort_respects_search_criteria() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"Subject: Apple\r\n\r\nhi\r\n");
