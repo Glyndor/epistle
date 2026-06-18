@@ -2,9 +2,11 @@
 
 Self-hosted, headless mail server — SMTP, IMAP and modern email security through an API and CLI. Part of the Glyndor stack.
 
-[![CI](https://github.com/Glyndor/mail/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/mail/actions/workflows/ci.yml)
+[![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
 
-> 🚧 Early development. The SMTP core works; most of the roadmap is still ahead.
+> Secure by default and fail-closed. SMTP/IMAP/POP3/JMAP, full email
+> authentication, Sieve filtering, automatic TLS and antispam are implemented and
+> tested; see the feature list below.
 
 ```mermaid
 flowchart LR
@@ -72,9 +74,17 @@ kind = "smtp"
 addr = "0.0.0.0"
 ```
 
+## ✨ Features
+
+- **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).
+- **Authentication** — SASL PLAIN/LOGIN/SCRAM-SHA-256/OAUTHBEARER with TOTP two-factor, all over TLS.
+- **Email security** — SPF, DKIM (sign + verify, ed25519 + RSA), DMARC with aggregate reports, ARC, MTA-STS, DANE and TLS-RPT.
+- **Filtering** — Sieve (tests, actions, variables, vacation) plus greylisting, DNSBL, Bayesian and reputation antispam.
+- **Operations** — automatic TLS via ACME, a management API, outbound webhooks, Prometheus metrics, and a CLI (`serve`, `export`/`import`, `queue`, `accounts`, `account-add`, `dkim-keygen`, `token-hash`).
+
 ## 🗺️ Roadmap
 
-Mailbox model (flags/quotas), DSN bounces, MTA-STS/DANE, IMAP4rev2 and the management API are tracked in the [issues](https://github.com/Glyndor/mail/issues).
+Remaining work — an LDAP directory backend, IMAP `COMPRESS`, DSN `NOTIFY` honoring and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
 
 ## 📄 License
 
