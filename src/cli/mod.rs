@@ -1,5 +1,6 @@
 //! Command-line interface: argument parsing and command dispatch.
 
+mod export;
 mod serve;
 
 use std::path::PathBuf;
@@ -38,6 +39,15 @@ enum Command {
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
 	},
+	/// Export an account's mailboxes to an mbox stream on stdout (backup).
+	Export {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name to export.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
 	/// Reads the plaintext token from stdin (one line). Prints a
@@ -61,6 +71,13 @@ impl Cli {
 					println!("configuration is valid");
 					ExitCode::SUCCESS
 				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Export { config, account } => match Config::load(&config) {
+				Ok(config) => export::run(&config.data_dir, &account),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -263,6 +280,33 @@ mod tests {
 		let cli = Cli::try_parse_from(["mail", "serve", "--config", "/nonexistent/mail.toml"])
 			.expect("parses");
 		assert_eq!(cli.run(), ExitCode::FAILURE);
+	}
+
+	#[test]
+	fn parses_export_command() {
+		let cli = Cli::try_parse_from([
+			"mail",
+			"export",
+			"--config",
+			"/etc/mail.toml",
+			"--account",
+			"alice",
+		])
+		.expect("export parses");
+		assert!(matches!(cli.command, Command::Export { .. }));
+	}
+
+	#[test]
+	fn export_writes_mbox_for_account() {
+		// A body whose line starts with "From " must be mboxrd-quoted.
+		let mut buf = Vec::new();
+		export::write_entry(&mut buf, "INBOX", b"Subject: hi\r\n\r\nFrom the desk\r\n")
+			.expect("write entry");
+		let text = String::from_utf8(buf).expect("utf8");
+		assert!(text.starts_with("From MAILER-DAEMON@localhost"), "{text}");
+		assert!(text.contains("X-Mailbox: INBOX"), "{text}");
+		// The body's "From " line is quoted to ">From ".
+		assert!(text.contains(">From the desk"), "{text}");
 	}
 
 	#[test]
