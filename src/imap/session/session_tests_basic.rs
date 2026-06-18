@@ -112,6 +112,23 @@ fn fetch_binary_decodes_base64_body() {
 }
 
 #[test]
+fn fetch_binary_decodes_quoted_printable_body() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// `=20` is a space; `=\r\n` is a soft line break that vanishes.
+	let body = b"Content-Transfer-Encoding: quoted-printable\r\n\r\nHello=20World=\r\nNext\r\n";
+	deliver(dir.path(), body);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let output = session.command_line("a3 FETCH 1 (BINARY[])");
+	let response = text(&output);
+	// The soft break joins the lines: "Hello World" + "Next".
+	assert!(response.contains("Hello World"), "{response}");
+	assert!(response.contains("Next"), "{response}");
+	assert!(response.contains("a3 OK FETCH completed"), "{response}");
+}
+
+#[test]
 fn fetch_objectid_returns_stable_ids() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"Subject: x\r\n\r\nbody\r\n");
