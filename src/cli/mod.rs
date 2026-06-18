@@ -87,7 +87,9 @@ impl Cli {
 				}
 			},
 			Command::Export { config, account } => match Config::load(&config) {
-				Ok(config) => export::run(&config.data_dir, &account),
+				Ok(config) => {
+					export::run(&config.data_dir, &account, &mut std::io::stdout().lock())
+				}
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -324,6 +326,49 @@ mod tests {
 		assert!(text.contains("X-Mailbox: INBOX"), "{text}");
 		// The body's "From " line is quoted to ">From ".
 		assert!(text.contains(">From the desk"), "{text}");
+	}
+
+	#[test]
+	fn export_run_streams_account_mailboxes() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let new = dir.path().join("accounts").join("alice").join("new");
+		std::fs::create_dir_all(&new).expect("mkdir");
+		std::fs::write(
+			new.join(format!("{}.eml", uuid::Uuid::now_v7())),
+			b"Subject: one\r\n\r\nbody\r\n",
+		)
+		.expect("write");
+		let mut out = Vec::new();
+		assert_eq!(
+			export::run(dir.path(), "alice", &mut out),
+			ExitCode::SUCCESS
+		);
+		let text = String::from_utf8(out).expect("utf8");
+		assert!(text.starts_with("From MAILER-DAEMON@localhost"), "{text}");
+		assert!(text.contains("Subject: one"), "{text}");
+
+		// An account with no mail yields an empty stream.
+		let mut empty = Vec::new();
+		assert_eq!(
+			export::run(dir.path(), "nobody", &mut empty),
+			ExitCode::SUCCESS
+		);
+		assert!(empty.is_empty());
+
+		// A sink that errors makes export report failure.
+		struct FailWriter;
+		impl std::io::Write for FailWriter {
+			fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+				Err(std::io::Error::other("boom"))
+			}
+			fn flush(&mut self) -> std::io::Result<()> {
+				Err(std::io::Error::other("boom"))
+			}
+		}
+		assert_eq!(
+			export::run(dir.path(), "alice", &mut FailWriter),
+			ExitCode::FAILURE
+		);
 	}
 
 	#[test]
