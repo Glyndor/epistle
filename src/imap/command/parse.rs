@@ -285,6 +285,7 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 			"MODSEQ" => items.push(FetchItem::ModSeq),
 			"EMAILID" => items.push(FetchItem::EmailId),
 			"THREADID" => items.push(FetchItem::ThreadId),
+			"SAVEDATE" => items.push(FetchItem::SaveDate),
 			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
 			"BINARY[]" | "BINARY.PEEK[]" => items.push(FetchItem::Binary),
 			"BINARY.SIZE[]" => items.push(FetchItem::BinarySize),
@@ -308,11 +309,10 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	if items.is_empty() {
 		return Err(bad());
 	}
-	// UID FETCH must always report the UID (RFC 9051 section 6.4.8).
+	// UID FETCH must always report the UID (RFC 9051).
 	if uid && !items.contains(&FetchItem::Uid) {
 		items.push(FetchItem::Uid);
 	}
-	// CHANGEDSINCE implies MODSEQ in the response (RFC 7162 section 3.1.4.1).
 	if changed_since.is_some() && !items.contains(&FetchItem::ModSeq) {
 		items.push(FetchItem::ModSeq);
 	}
