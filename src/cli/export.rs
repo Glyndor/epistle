@@ -9,9 +9,7 @@ use std::process::ExitCode;
 use crate::imap::mailbox::{self, Snapshot};
 
 /// Write every message in `account`'s mailboxes to `out` as one mbox stream.
-pub fn run(data_dir: &Path, account: &str) -> ExitCode {
-	let stdout = std::io::stdout();
-	let mut out = std::io::BufWriter::new(stdout.lock());
+pub(super) fn run(data_dir: &Path, account: &str, out: &mut impl Write) -> ExitCode {
 	let mut count = 0u64;
 	for name in mailbox::list(data_dir, account) {
 		let Ok(snapshot) = Snapshot::open(data_dir, account, &name) else {
@@ -21,7 +19,7 @@ pub fn run(data_dir: &Path, account: &str) -> ExitCode {
 			let Ok(data) = snapshot.read(message) else {
 				continue;
 			};
-			if write_entry(&mut out, &name, &data).is_err() {
+			if write_entry(out, &name, &data).is_err() {
 				eprintln!("error: writing mbox stream");
 				return ExitCode::FAILURE;
 			}
