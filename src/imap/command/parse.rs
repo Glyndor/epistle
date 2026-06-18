@@ -46,10 +46,12 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		}
 		"LIST" => parse_list(&tag, args)?,
 		"SELECT" => Command::Select {
-			mailbox: parse_mailbox(&tag, strip_select_params(args))?,
+			mailbox: parse_mailbox(&tag, select_params::strip_select_params(args))?,
+			qresync: select_params::parse_qresync(args),
 		},
 		"EXAMINE" => Command::Examine {
-			mailbox: parse_mailbox(&tag, strip_select_params(args))?,
+			mailbox: parse_mailbox(&tag, select_params::strip_select_params(args))?,
+			qresync: select_params::parse_qresync(args),
 		},
 		"CLOSE" => no_args(&tag, args, Command::Close)?,
 		"UNSELECT" => no_args(&tag, args, Command::Unselect)?,
@@ -251,19 +253,6 @@ fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {
 		return Err(bad());
 	}
 	Ok(mailbox)
-}
-
-/// Drop a trailing parenthesized SELECT/EXAMINE parameter group, e.g.
-/// `INBOX (CONDSTORE)` (RFC 7162). We always report HIGHESTMODSEQ, so the
-/// parameter only needs to be accepted, not recorded.
-fn strip_select_params(args: &str) -> &str {
-	let trimmed = args.trim_end();
-	if trimmed.ends_with(')')
-		&& let Some(open) = trimmed.rfind('(')
-	{
-		return trimmed[..open].trim_end();
-	}
-	trimmed
 }
 
 fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {

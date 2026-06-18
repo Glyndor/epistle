@@ -16,8 +16,7 @@ mod helpers;
 mod sort;
 mod thread;
 
-/// Server output produced by one step: zero or more complete response
-/// lines/literals, ready for the wire.
+/// Server output produced by one step: complete response lines/literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Output {
 	pub bytes: Vec<u8>,
@@ -135,7 +134,7 @@ impl Session {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
 THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
-LIST-STATUS BINARY",
+LIST-STATUS BINARY QRESYNC",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -190,8 +189,7 @@ LIST-STATUS BINARY",
 				output
 			}
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
-			// One personal namespace rooted at "" with the "/" hierarchy
-			// separator; no shared or other-users namespaces (RFC 2342).
+			// One personal namespace rooted at "" with "/" separator (RFC 2342).
 			Command::Namespace => Output::text(format!(
 				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
 			)),
@@ -210,8 +208,8 @@ LIST-STATUS BINARY",
 				select_subscribed,
 				..
 			} => self.list(&tag, &pattern, &return_status, select_subscribed),
-			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
-			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),
+			Command::Select { mailbox, qresync } => self.select(&tag, &mailbox, false, qresync),
+			Command::Examine { mailbox, qresync } => self.select(&tag, &mailbox, true, qresync),
 			Command::Close => self.close(&tag),
 			Command::Unselect => self.unselect(&tag),
 			Command::Enable { capabilities } => self.enable(&tag, &capabilities),
@@ -331,7 +329,13 @@ LIST-STATUS BINARY",
 		}
 	}
 
-	fn select(&mut self, tag: &str, mailbox: &str, read_only: bool) -> Output {
+	fn select(
+		&mut self,
+		tag: &str,
+		mailbox: &str,
+		read_only: bool,
+		qresync: Option<(u32, u64)>,
+	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
@@ -342,13 +346,25 @@ LIST-STATUS BINARY",
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
 		};
+		// QRESYNC: report vanished UIDs, but only if UIDVALIDITY still matches.
+		let vanished = match qresync {
+			Some((uid_validity, modseq)) if uid_validity == snapshot.uid_validity() => {
+				let uids = snapshot.vanished_since(modseq);
+				if uids.is_empty() {
+					String::new()
+				} else {
+					format!("* VANISHED (EARLIER) {}\r\n", codes::uid_set(&uids))
+				}
+			}
+			_ => String::new(),
+		};
 		let response = format!(
 			"* {count} EXISTS\r\n\
 * OK [UIDVALIDITY {validity}] UIDs valid\r\n\
 * OK [UIDNEXT {next}] predicted next UID\r\n\
 * OK [HIGHESTMODSEQ {modseq}] highest mod-sequence\r\n\
 * FLAGS (\\Seen \\Deleted)\r\n\
-{tag} OK [{mode}] {verb} completed\r\n",
+{vanished}{tag} OK [{mode}] {verb} completed\r\n",
 			count = snapshot.len(),
 			validity = snapshot.uid_validity(),
 			next = snapshot.uid_next(),

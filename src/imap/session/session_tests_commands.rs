@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn qresync_select_reports_vanished_uids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"one\r\n");
+	deliver(dir.path(), b"two\r\n");
+	let mut session = logged_in(dir.path());
+
+	// First SELECT: capture UIDVALIDITY and the current HIGHESTMODSEQ.
+	let response = text(&session.command_line("a2 SELECT INBOX"));
+	let field = |key: &str| -> u64 {
+		let after = response.split(&format!("[{key} ")).nth(1).expect("field");
+		after
+			.split(']')
+			.next()
+			.unwrap()
+			.trim()
+			.parse()
+			.expect("number")
+	};
+	let validity = field("UIDVALIDITY");
+	let modseq = field("HIGHESTMODSEQ");
+
+	// Expunge message 1, then resync from the captured point.
+	session.command_line("a3 STORE 1 +FLAGS (\\Deleted)");
+	session.command_line("a4 EXPUNGE");
+	let cmd = format!("a5 SELECT INBOX (QRESYNC ({validity} {modseq}))");
+	let response = text(&session.command_line(&cmd));
+	assert!(response.contains("* VANISHED (EARLIER) 1"), "{response}");
+
+	// A mismatched UIDVALIDITY yields no VANISHED (the cache is moot).
+	let cmd = format!("a6 SELECT INBOX (QRESYNC ({} {modseq}))", validity + 2);
+	let response = text(&session.command_line(&cmd));
+	assert!(!response.contains("VANISHED"), "{response}");
+
+	assert!(
+		text(&session.command_line("a7 CAPABILITY")).contains("QRESYNC"),
+		"capability should advertise QRESYNC"
+	);
+}
+
+#[test]
 fn fetch_changedsince_filters_by_modseq() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");

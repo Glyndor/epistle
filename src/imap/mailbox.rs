@@ -197,7 +197,6 @@ impl Snapshot {
 		}
 		ids.sort();
 
-		// Persistent UIDs in arrival order, monotonic and never reused.
 		let initial_counter = super::uid::read_counter(&account_dir);
 		let mut uid_counter = initial_counter;
 		let mut messages = Vec::with_capacity(ids.len());
@@ -238,6 +237,11 @@ impl Snapshot {
 	/// The mailbox's highest mod-sequence (CONDSTORE).
 	pub fn highest_modseq(&self) -> u64 {
 		self.highest_modseq
+	}
+
+	/// UIDs expunged after `modseq` (QRESYNC `VANISHED (EARLIER)`, RFC 7162).
+	pub fn vanished_since(&self, modseq: u64) -> Vec<u32> {
+		super::vanished::since(&self.account_dir, modseq)
 	}
 
 	pub fn len(&self) -> usize {

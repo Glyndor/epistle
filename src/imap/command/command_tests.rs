@@ -48,7 +48,8 @@ fn parses_list_and_select() {
 	assert_eq!(
 		parse("a2 SELECT INBOX").expect("parses").command,
 		Command::Select {
-			mailbox: "INBOX".into()
+			mailbox: "INBOX".into(),
+			qresync: None,
 		}
 	);
 }
