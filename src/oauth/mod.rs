@@ -131,4 +131,33 @@ mod tests {
 			Err(BuildError::BadKey)
 		));
 	}
+
+	#[test]
+	fn builds_rs256_verifier() {
+		// The RS256 algorithm arm is accepted; the key bytes are decoded lazily.
+		let verifier = OauthVerifier::new("i", "a", "rs256", "AAAA").expect("build");
+		assert!(format!("{verifier:?}").contains("OauthVerifier"));
+	}
+
+	#[test]
+	fn falls_back_to_sub_when_email_absent() {
+		let rng = SystemRandom::new();
+		let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+		let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+			.unwrap();
+		let public_b64 = B64.encode(pair.public_key().as_ref());
+		let verifier =
+			OauthVerifier::new("https://idp.example", "mail", "ES256", &public_b64).expect("build");
+		let token = signed_token(
+			&pair,
+			&rng,
+			&serde_json::json!({
+				"iss": "https://idp.example",
+				"aud": "mail",
+				"sub": "user-123",
+				"exp": 2000,
+			}),
+		);
+		assert_eq!(verifier.verify(&token, 1000).as_deref(), Some("user-123"));
+	}
 }
