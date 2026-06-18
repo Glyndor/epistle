@@ -66,6 +66,18 @@ enum Command {
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
 	},
+	/// Create a mail account, reading the password from stdin (one line).
+	AccountAdd {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name.
+		#[arg(long, value_name = "NAME")]
+		name: String,
+		/// An email address for the account (repeatable).
+		#[arg(long = "address", value_name = "ADDR", required = true)]
+		addresses: Vec<String>,
+	},
 	/// List the outbound delivery queue.
 	Queue {
 		/// Path to the configuration file.
@@ -123,6 +135,17 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::AccountAdd {
+				config,
+				name,
+				addresses,
+			} => match Config::load(&config) {
+				Ok(config) => accounts::add(&config, &name, addresses, std::io::stdin().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
 			Command::Queue { config } => match Config::load(&config) {
 				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
 				Err(error) => {
@@ -140,24 +163,31 @@ fn token_hash() -> ExitCode {
 	token_hash_from(std::io::stdin().lock())
 }
 
-fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
-	let line = reader.lines().next();
-	let token = match line {
-		Some(Ok(t)) => t,
+/// Read one non-empty line (CR-trimmed) from `reader`, or a FAILURE code.
+pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCode> {
+	let value = match reader.lines().next() {
+		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
 		Some(Err(error)) => {
 			eprintln!("error: reading stdin: {error}");
-			return ExitCode::FAILURE;
+			return Err(ExitCode::FAILURE);
 		}
 		None => {
-			eprintln!("error: no input — pipe or type the token on stdin");
-			return ExitCode::FAILURE;
+			eprintln!("error: no input — pipe or type the value on stdin");
+			return Err(ExitCode::FAILURE);
 		}
 	};
-	let token = token.trim_end_matches('\r').to_owned();
-	if token.is_empty() {
-		eprintln!("error: token must not be empty");
-		return ExitCode::FAILURE;
+	if value.is_empty() {
+		eprintln!("error: input must not be empty");
+		return Err(ExitCode::FAILURE);
 	}
+	Ok(value)
+}
+
+fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
+	let token = match read_line(reader) {
+		Ok(token) => token,
+		Err(code) => return code,
+	};
 	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
 	let hex = digest
 		.as_ref()

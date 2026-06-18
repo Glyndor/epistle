@@ -78,7 +78,6 @@ fn dkim_keygen_writes_key_and_refuses_overwrite() {
 	let pem = std::fs::read_to_string(&out).expect("key written");
 	assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----"));
 
-	// Second run must refuse to overwrite the existing key.
 	let cli = Cli::try_parse_from([
 		"mail",
 		"dkim-keygen",
@@ -133,14 +132,12 @@ fn parses_export_command() {
 
 #[test]
 fn export_writes_mbox_for_account() {
-	// A body whose line starts with "From " must be mboxrd-quoted.
 	let mut buf = Vec::new();
 	export::write_entry(&mut buf, "INBOX", b"Subject: hi\r\n\r\nFrom the desk\r\n")
 		.expect("write entry");
 	let text = String::from_utf8(buf).expect("utf8");
 	assert!(text.starts_with("From MAILER-DAEMON@localhost"), "{text}");
 	assert!(text.contains("X-Mailbox: INBOX"), "{text}");
-	// The body's "From " line is quoted to ">From ".
 	assert!(text.contains(">From the desk"), "{text}");
 }
 
@@ -163,7 +160,6 @@ fn export_run_streams_account_mailboxes() {
 	assert!(text.starts_with("From MAILER-DAEMON@localhost"), "{text}");
 	assert!(text.contains("Subject: one"), "{text}");
 
-	// An account with no mail yields an empty stream.
 	let mut empty = Vec::new();
 	assert_eq!(
 		export::run(dir.path(), "nobody", &mut empty),
@@ -171,7 +167,6 @@ fn export_run_streams_account_mailboxes() {
 	);
 	assert!(empty.is_empty());
 
-	// A sink that errors makes export report failure.
 	struct FailWriter;
 	impl std::io::Write for FailWriter {
 		fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
@@ -206,17 +201,14 @@ fn import_delivers_mbox_messages_to_inbox() {
 	use std::io::Cursor;
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
-	// Two entries; the second body has a quoted ">From " line to unquote.
 	let mbox = "From MAILER-DAEMON@localhost\r\nX-Mailbox: INBOX\r\nSubject: one\r\n\r\nbody1\r\n\r\nFrom MAILER-DAEMON@localhost\r\nSubject: two\r\n\r\n>From the desk\r\n\r\n";
 	assert_eq!(
 		import::run(dir.path(), "alice", Cursor::new(mbox)),
 		ExitCode::SUCCESS
 	);
-	// Both messages landed in INBOX.
 	let snapshot =
 		crate::imap::mailbox::Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
 	assert_eq!(snapshot.len(), 2);
-	// The X-Mailbox header was stripped; ">From " was unquoted to "From ".
 	let bodies: Vec<String> = snapshot
 		.messages()
 		.map(|m| String::from_utf8_lossy(&snapshot.read(m).expect("read")).into_owned())
@@ -255,7 +247,6 @@ fn accounts_list_prints_configured_accounts() {
 	assert!(text.contains("alice\tstatic\talice@example.org"), "{text}");
 	assert!(text.contains("1 accounts"), "{text}");
 
-	// An unwritable data_dir (a file) makes the store fail to open.
 	let file = tempfile::NamedTempFile::new().expect("file");
 	let bad = write_config(&format!(
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n",
@@ -264,6 +255,91 @@ fn accounts_list_prints_configured_accounts() {
 	let config = crate::config::Config::load(bad.path()).expect("config");
 	let mut out = Vec::new();
 	assert_eq!(accounts::list(&config, &mut out), ExitCode::FAILURE);
+}
+
+#[test]
+fn parses_account_add_command() {
+	let cli = Cli::try_parse_from([
+		"mail",
+		"account-add",
+		"--config",
+		"/etc/mail.toml",
+		"--name",
+		"bob",
+		"--address",
+		"bob@example.org",
+	])
+	.expect("account-add parses");
+	assert!(matches!(cli.command, Command::AccountAdd { .. }));
+}
+
+#[test]
+fn account_add_creates_and_validates() {
+	use std::io::Cursor;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let cfg = write_config(&format!(
+		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n",
+		dir.path()
+	));
+	let config = crate::config::Config::load(cfg.path()).expect("config");
+
+	assert_eq!(
+		accounts::add(
+			&config,
+			"bob",
+			vec!["bob@example.org".into()],
+			Cursor::new("\n")
+		),
+		ExitCode::FAILURE
+	);
+	assert_eq!(
+		accounts::add(
+			&config,
+			"bob",
+			vec!["bob@example.org".into()],
+			Cursor::new("short")
+		),
+		ExitCode::FAILURE
+	);
+	assert_eq!(
+		accounts::add(
+			&config,
+			"bob",
+			vec!["bob@example.org".into()],
+			Cursor::new("a-long-password")
+		),
+		ExitCode::SUCCESS
+	);
+	let mut out = Vec::new();
+	accounts::list(&config, &mut out);
+	assert!(String::from_utf8_lossy(&out).contains("bob\tdynamic\tbob@example.org"));
+	// A duplicate name is rejected by the store.
+	assert_eq!(
+		accounts::add(
+			&config,
+			"bob",
+			vec!["bob2@example.org".into()],
+			Cursor::new("a-long-password")
+		),
+		ExitCode::FAILURE
+	);
+
+	// An unwritable data_dir (a file) makes the store fail to open.
+	let file = tempfile::NamedTempFile::new().expect("file");
+	let bad = write_config(&format!(
+		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n",
+		file.path()
+	));
+	let bad = crate::config::Config::load(bad.path()).expect("config");
+	assert_eq!(
+		accounts::add(
+			&bad,
+			"eve",
+			vec!["eve@example.org".into()],
+			Cursor::new("a-long-password")
+		),
+		ExitCode::FAILURE
+	);
 }
 
 #[test]
