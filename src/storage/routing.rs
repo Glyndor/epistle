@@ -138,7 +138,6 @@ impl MessageSink for SplitDelivery {
 		}
 
 		if !local.is_empty() {
-			// An explicit routing hint (e.g. a screening quarantine) wins over rules.
 			let mailbox = message
 				.mailbox
 				.clone()
@@ -150,7 +149,6 @@ impl MessageSink for SplitDelivery {
 			let delivered = self
 				.local
 				.deliver_routed(&local_message, mailbox.as_deref())?;
-			// A Sieve `reject` bounces the reason back to a non-null sender.
 			if let Some(reason) = delivered.reject {
 				let hostname = local_message
 					.recipients
@@ -171,8 +169,7 @@ impl MessageSink for SplitDelivery {
 						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 				}
 			}
-			// Queue any Sieve redirects to the outbound spool, preserving the
-			// original sender. The null sender is already filtered upstream.
+			// Queue Sieve redirects, preserving the (non-null) original sender.
 			for address in delivered.redirects {
 				let forwarded = AcceptedMessage {
 					reverse_path: self.forward_sender(&message.reverse_path),
@@ -183,6 +180,11 @@ impl MessageSink for SplitDelivery {
 				};
 				self.outbound
 					.store(&forwarded)
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			}
+			for reply in delivered.replies {
+				self.outbound
+					.store(&reply)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
 		}
@@ -325,6 +327,36 @@ mod tests {
 			entry.envelope.recipients,
 			vec!["alice@example.org".to_string()]
 		);
+	}
+
+	#[test]
+	fn sieve_vacation_replies_once_and_keeps() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let account_dir = dir.path().join("accounts").join("alice");
+		fs::create_dir_all(&account_dir).expect("mkdir");
+		fs::write(account_dir.join("filter.sieve"), "vacation \"I am away\";").expect("filter");
+		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
+
+		let mut msg = message(&["alice@example.org"]);
+		msg.reverse_path = "bob@example.net".into();
+		sink.deliver(msg).expect("deliver");
+		// Kept in INBOX, one null-sender autoresponse queued to the sender.
+		assert_eq!(inbox_count(dir.path(), "alice"), 1);
+		let spool = FsSpool::open(dir.path()).expect("spool");
+		let ids = spool.list().expect("list");
+		assert_eq!(ids.len(), 1);
+		let reply = spool.load(ids[0]).expect("load");
+		assert!(reply.envelope.reverse_path.is_empty(), "null sender");
+		assert_eq!(
+			reply.envelope.recipients,
+			vec!["bob@example.net".to_string()]
+		);
+
+		// A second message from the same sender is deduped: no new reply.
+		let mut again = message(&["alice@example.org"]);
+		again.reverse_path = "bob@example.net".into();
+		sink.deliver(again).expect("deliver");
+		assert_eq!(spool.list().expect("list").len(), 1);
 	}
 
 	#[test]

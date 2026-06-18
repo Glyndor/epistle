@@ -1,5 +1,8 @@
 //! Local delivery: accepted inbound messages land in account mailboxes.
 
+#[path = "delivery_vacation.rs"]
+mod vacation;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +23,8 @@ use super::spool::write_sync;
 pub struct Delivered {
 	pub redirects: Vec<String>,
 	pub reject: Option<String>,
+	/// Autoresponses (e.g. Sieve vacation) to queue to the outbound spool.
+	pub replies: Vec<AcceptedMessage>,
 }
 
 /// Delivers messages into `data_dir/accounts/<account>/new/`, one crash-safe
@@ -118,6 +123,7 @@ impl LocalDelivery {
 			let one = self.deliver_for_account(account, message, mailbox)?;
 			delivered.redirects.extend(one.redirects);
 			delivered.reject = delivered.reject.or(one.reject);
+			delivered.replies.extend(one.replies);
 		}
 		Ok(delivered)
 	}
@@ -149,8 +155,8 @@ impl LocalDelivery {
 		if let Some(reason) = outcome.reject {
 			let reject = (!message.reverse_path.is_empty()).then_some(reason);
 			return Ok(Delivered {
-				redirects: Vec::new(),
 				reject,
+				..Delivered::default()
 			});
 		}
 		if outcome.keep {
@@ -163,13 +169,22 @@ impl LocalDelivery {
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
 		}
+		// vacation (RFC 5230): an autoresponse alongside normal delivery.
+		let replies = outcome
+			.vacation
+			.and_then(|request| self.vacation_reply(account, message, &request))
+			.into_iter()
+			.collect();
 		// Never redirect a bounce (null sender): that risks mail loops.
-		if message.reverse_path.is_empty() {
-			return Ok(Delivered::default());
-		}
+		let redirects = if message.reverse_path.is_empty() {
+			Vec::new()
+		} else {
+			outcome.redirects
+		};
 		Ok(Delivered {
-			redirects: outcome.redirects,
+			redirects,
 			reject: None,
+			replies,
 		})
 	}
 

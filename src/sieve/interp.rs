@@ -20,6 +20,22 @@ pub struct Outcome {
 	/// The message was rejected (reject/ereject, RFC 5429): the reason is
 	/// bounced to the sender and the message is not delivered.
 	pub reject: Option<String>,
+	/// A `vacation` autoresponse to send in addition to normal delivery
+	/// (RFC 5230), subject to the caller's suppression and dedup rules.
+	pub vacation: Option<VacationRequest>,
+}
+
+/// A parsed `vacation` action (RFC 5230). The caller decides whether to send.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VacationRequest {
+	/// The reply body (`:reason`, the positional argument).
+	pub reason: String,
+	/// An explicit `:subject`, else derived from the original.
+	pub subject: Option<String>,
+	/// An explicit `:from`, else the responding user's address.
+	pub from: Option<String>,
+	/// At most one reply per sender per this many days (`:days`, default 7).
+	pub days: u64,
 }
 
 pub use super::message::Message;
@@ -59,6 +75,9 @@ fn run(
 						*cancel_implicit = true;
 					}
 				}
+				// vacation (RFC 5230): autoresponse alongside normal delivery
+				// (does not cancel the implicit keep).
+				"vacation" => outcome.vacation = parse_vacation(args),
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
 						outcome.fileinto.push(target);
@@ -136,6 +155,46 @@ fn eval_test(test: &Test, message: &Message) -> bool {
 		// Unknown test: fail safe.
 		_ => false,
 	}
+}
+
+/// Parse a `vacation` action's arguments (RFC 5230): the tagged `:days`,
+/// `:subject`, `:from` (others ignored) and the positional reason string.
+fn parse_vacation(args: &[Argument]) -> Option<VacationRequest> {
+	let mut request = VacationRequest {
+		days: 7,
+		..VacationRequest::default()
+	};
+	let mut reason = None;
+	let mut iter = args.iter();
+	while let Some(arg) = iter.next() {
+		match arg {
+			Argument::Tag(tag) => match tag.as_str() {
+				"days" => {
+					if let Some(Argument::Number(days)) = iter.next() {
+						request.days = *days;
+					}
+				}
+				"subject" => {
+					if let Some(Argument::Str(value)) = iter.next() {
+						request.subject = Some(value.clone());
+					}
+				}
+				"from" => {
+					if let Some(Argument::Str(value)) = iter.next() {
+						request.from = Some(value.clone());
+					}
+				}
+				// `:handle` / `:addresses` carry a value that is not the reason.
+				"handle" | "addresses" => {
+					iter.next();
+				}
+				_ => {}
+			},
+			Argument::Str(value) => reason = Some(value.clone()),
+			_ => {}
+		}
+	}
+	reason.map(|reason| VacationRequest { reason, ..request })
 }
 
 /// `date [comparator] <header-name> <date-part> <key-list>` (RFC 5260).
