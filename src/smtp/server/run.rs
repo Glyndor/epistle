@@ -96,6 +96,7 @@ impl Server {
 					if reply.code() >= 400 {
 						error_streak += 1;
 						if error_streak >= MAX_ERROR_STREAK {
+							self.metrics.abuse_dropped();
 							send(
 								&mut stream,
 								&Reply::single(421, "4.7.0 too many errors, closing connection"),
