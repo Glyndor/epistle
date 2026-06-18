@@ -115,6 +115,18 @@ async fn requests_without_token_are_rejected() {
 }
 
 #[tokio::test]
+async fn healthz_is_unauthenticated() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	// Liveness probe needs no token.
+	let (status, _) = request(&app, "GET", "/healthz", None).await;
+	assert_eq!(status, StatusCode::OK);
+	// The authenticated surface still rejects tokenless requests.
+	let (status, _) = request(&app, "GET", "/api/v1/status", None).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn status_reports_counts() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 2));
