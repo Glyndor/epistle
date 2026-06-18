@@ -107,6 +107,21 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		None => None,
 	};
 
+	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
+	// configuration is fatal (fail closed rather than silently disable it).
+	let oauth_verifier = match &config.oauth {
+		Some(oauth) => Some(Arc::new(
+			crate::oauth::OauthVerifier::new(
+				&oauth.issuer,
+				&oauth.audience,
+				&oauth.algorithm,
+				&oauth.public_key,
+			)
+			.map_err(|e| std::io::Error::other(format!("oauth config: {e:?}")))?,
+		)),
+		None => None,
+	};
+
 	// ACME HTTP-01 challenge store, shared by the responder listener and (later)
 	// the renewal task that publishes key authorizations into it.
 	let challenge_store = crate::acme::http01::ChallengeStore::new();
@@ -346,6 +361,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				if let Some(store) = &greylist {
 					server = server.with_greylist(Arc::clone(store), config.greylist_delay_secs);
+				}
+				if let Some(verifier) = &oauth_verifier {
+					server = server.with_oauth(Arc::clone(verifier));
 				}
 				if let Some(acceptor) = &reloadable_tls {
 					server = server.with_tls(acceptor.clone(), mode);

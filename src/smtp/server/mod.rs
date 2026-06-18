@@ -72,6 +72,8 @@ pub struct Server {
 	arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
 	/// If set, greylist unseen triplets: the store and the delay in seconds.
 	greylist: Option<(Arc<crate::antispam::greylist::MemoryGreylist>, u64)>,
+	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
+	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 }
 
 impl Server {
@@ -93,7 +95,14 @@ impl Server {
 			report_dir: None,
 			arc_sealer: None,
 			greylist: None,
+			oauth: None,
 		}
+	}
+
+	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
+	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
+		self.oauth = Some(verifier);
+		self
 	}
 
 	/// Seal inbound unauthenticated mail into its ARC chain (RFC 8617).
@@ -182,7 +191,11 @@ impl Server {
 	}
 
 	fn new_session(&self) -> Session {
-		Session::new(&self.hostname).with_directory(self.directory.current())
+		let session = Session::new(&self.hostname).with_directory(self.directory.current());
+		match &self.oauth {
+			Some(verifier) => session.with_oauth(Arc::clone(verifier)),
+			None => session,
+		}
 	}
 
 	/// Accept connections forever. Each connection runs in its own task.
