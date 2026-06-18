@@ -52,6 +52,29 @@ fn greeted_plain() -> Session {
 }
 
 #[test]
+fn auth_login_authenticates() {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+	let mut session = tls_session();
+	// AUTH LOGIN prompts for the username, then the password.
+	let action = session.command_line("AUTH LOGIN");
+	assert_eq!(reply_code(&action), 334);
+	let action = session.auth_line(&B64.encode("alice"));
+	assert_eq!(reply_code(&action), 334);
+	let action = session.auth_line(&B64.encode("secret"));
+	assert_eq!(reply_code(&action), 235);
+	assert_eq!(session.authenticated(), Some("alice"));
+
+	// A wrong password fails (no oracle).
+	let mut session = tls_session();
+	session.command_line("AUTH LOGIN");
+	session.auth_line(&B64.encode("alice"));
+	let action = session.auth_line(&B64.encode("wrong"));
+	assert_eq!(reply_code(&action), 535);
+	assert_eq!(session.authenticated(), None);
+}
+
+#[test]
 fn scram_sha256_authenticates() {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	use base64::Engine;
@@ -300,7 +323,7 @@ fn auth_after_success_is_bad_sequence() {
 #[test]
 fn unsupported_mechanism_gets_504() {
 	let mut session = tls_session();
-	assert_eq!(reply_code(&session.command_line("AUTH LOGIN")), 504);
+	assert_eq!(reply_code(&session.command_line("AUTH CRAM-MD5")), 504);
 }
 
 #[test]
