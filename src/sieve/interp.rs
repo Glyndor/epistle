@@ -21,6 +21,8 @@ pub struct Outcome {
 	pub redirects: Vec<String>,
 	/// The message was explicitly discarded.
 	pub discarded: bool,
+	/// IMAP flags set on the delivered message (imap4flags, RFC 5232).
+	pub flags: Vec<String>,
 }
 
 /// A message as the interpreter sees it: parsed headers, total size, and the
@@ -143,6 +145,19 @@ fn run(
 					}
 				}
 				"stop" => return true,
+				// imap4flags (RFC 5232): set/add/remove IMAP flags for delivery.
+				"setflag" => outcome.flags = flag_list(args),
+				"addflag" => {
+					for flag in flag_list(args) {
+						if !outcome.flags.contains(&flag) {
+							outcome.flags.push(flag);
+						}
+					}
+				}
+				"removeflag" => {
+					let remove = flag_list(args);
+					outcome.flags.retain(|flag| !remove.contains(flag));
+				}
 				// `require` and any unsupported action: no-op.
 				_ => {}
 			},
@@ -384,6 +399,15 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 		}
 	}
 	dp[t.len()]
+}
+
+/// Flag tokens from a flag-list argument: each string may hold several
+/// space-separated flags (RFC 5232 section 3).
+fn flag_list(args: &[Argument]) -> Vec<String> {
+	strings(args)
+		.iter()
+		.flat_map(|s| s.split_whitespace().map(str::to_string))
+		.collect()
 }
 
 fn first_str(args: &[Argument]) -> Option<String> {
