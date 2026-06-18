@@ -78,3 +78,82 @@ impl Backend for MailboxBackend {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::collections::HashMap;
+
+	fn backend(dir: &std::path::Path) -> MailboxBackend {
+		let directory = DirectoryHandle::new(
+			crate::smtp::directory::Directory::new(
+				["example.org".to_string()],
+				[("alice@example.org".to_string(), "alice".to_string())],
+			)
+			.with_password_hashes(HashMap::from([(
+				"alice".to_string(),
+				crate::smtp::auth::tests::hash("secret"),
+			)])),
+		);
+		MailboxBackend::new(directory, dir.to_path_buf())
+	}
+
+	#[test]
+	fn verify_checks_credentials_without_oracle() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let backend = backend(dir.path());
+		assert_eq!(
+			backend.verify("alice@example.org", "secret").as_deref(),
+			Some("alice")
+		);
+		// Wrong password and unknown user both fail the same way.
+		assert!(backend.verify("alice@example.org", "wrong").is_none());
+		assert!(backend.verify("ghost@example.org", "secret").is_none());
+	}
+
+	#[test]
+	fn load_returns_messages_in_arrival_order() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let backend = backend(dir.path());
+		// No INBOX yet → empty.
+		assert!(backend.load("alice").is_empty());
+
+		crate::imap::mailbox::append(
+			dir.path(),
+			"alice",
+			"INBOX",
+			&[],
+			b"Subject: one\r\n\r\na\r\n",
+		)
+		.expect("append one");
+		crate::imap::mailbox::append(
+			dir.path(),
+			"alice",
+			"INBOX",
+			&[],
+			b"Subject: two\r\n\r\nb\r\n",
+		)
+		.expect("append two");
+
+		let messages = backend.load("alice");
+		assert_eq!(messages.len(), 2);
+		// UUIDv7 stems sort in arrival order.
+		assert!(messages[0].1.windows(3).any(|w| w == b"one"));
+		assert!(messages[1].1.windows(3).any(|w| w == b"two"));
+	}
+
+	#[test]
+	fn remove_deletes_named_messages() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let backend = backend(dir.path());
+		crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], b"x\r\n").expect("append");
+		let messages = backend.load("alice");
+		assert_eq!(messages.len(), 1);
+		let uid = messages[0].0.clone();
+
+		backend.remove("alice", &[uid]);
+		assert!(backend.load("alice").is_empty());
+		// Removing from a missing account is a harmless no-op.
+		backend.remove("nobody", &["whatever".to_string()]);
+	}
+}
