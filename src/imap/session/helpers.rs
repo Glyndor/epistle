@@ -78,6 +78,7 @@ pub(super) fn search_matches(
 		}
 		SearchKey::Larger(n) => message.size > u64::from(*n),
 		SearchKey::Smaller(n) => message.size < u64::from(*n),
+		SearchKey::ModSeq(n) => message.modseq >= *n,
 	}
 }
 

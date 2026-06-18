@@ -196,6 +196,8 @@ pub enum SearchKey {
 	Larger(u32),
 	/// RFC 2822 size strictly less than n octets.
 	Smaller(u32),
+	/// CONDSTORE `MODSEQ n`: mod-sequence at or above n (RFC 7162).
+	ModSeq(u64),
 }
 
 /// How STORE changes the flag set.

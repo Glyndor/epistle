@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn search_by_modseq() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");
+	deliver(dir.path(), b"From: c@d\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	// Bump message 2's mod-sequence (now 2); message 1 stays at 1.
+	session.command_line("a3 STORE 2 +FLAGS (\\Seen)");
+
+	// MODSEQ 2 matches only the changed message.
+	let response = text(&session.command_line("a4 SEARCH MODSEQ 2"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+
+	// MODSEQ 1 matches both.
+	let response = text(&session.command_line("a5 SEARCH MODSEQ 1"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+}
+
+#[test]
 fn esearch_return_options() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
