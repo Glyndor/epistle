@@ -20,6 +20,8 @@ pub enum WebhookEvent {
 		from: String,
 		/// `Subject` header, if present.
 		subject: Option<String>,
+		/// `Message-ID` header, if present (for receiver-side correlation).
+		message_id: Option<String>,
 	},
 }
 

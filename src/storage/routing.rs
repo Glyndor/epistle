@@ -56,7 +56,8 @@ impl SplitDelivery {
 		crate::webhook::WebhookEvent::MessageReceived {
 			account: recipient.to_string(),
 			from: message.reverse_path.clone(),
-			subject: subject_of(&message.data),
+			subject: header_of(&message.data, "subject"),
+			message_id: header_of(&message.data, "message-id"),
 		}
 	}
 
@@ -269,13 +270,13 @@ impl MessageSink for SplitDelivery {
 	}
 }
 
-/// The `Subject` header value from a raw message's header block, if present.
-fn subject_of(data: &[u8]) -> Option<String> {
+/// The value of header `field` from a raw message's header block, if present.
+fn header_of(data: &[u8], field: &str) -> Option<String> {
 	let text = String::from_utf8_lossy(data);
 	let headers = text.split("\r\n\r\n").next().unwrap_or(&text);
 	for line in headers.split("\r\n") {
 		if let Some((name, value)) = line.split_once(':')
-			&& name.trim().eq_ignore_ascii_case("subject")
+			&& name.trim().eq_ignore_ascii_case(field)
 		{
 			return Some(value.trim().to_string());
 		}
