@@ -18,7 +18,8 @@ use tower_http::cors::CorsLayer;
 
 /// Build the API router with authentication applied to every route.
 pub fn router(state: ApiState) -> Router {
-	Router::new()
+	// Authenticated surface: every route requires the bearer token.
+	let authenticated = Router::new()
 		.nest("/api/v1", v1::router())
 		// JMAP (RFC 8620): Session discovery and the request-envelope endpoint.
 		// `.well-known/jmap` is the standard autodiscovery path (§2.2).
@@ -30,7 +31,15 @@ pub fn router(state: ApiState) -> Router {
 		.layer(middleware::from_fn_with_state(
 			state.clone(),
 			state::require_bearer_token,
-		))
+		));
+	// Unauthenticated liveness probe (reveals nothing) for load balancers and
+	// orchestrators; merged outside the auth layer.
+	Router::new()
+		.route(
+			"/healthz",
+			get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }),
+		)
+		.merge(authenticated)
 		.with_state(state)
 }
 
