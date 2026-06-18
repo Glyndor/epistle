@@ -9,6 +9,8 @@ struct FakeDns {
 	addresses: HashMap<String, Vec<IpAddr>>,
 	mx: HashMap<String, Vec<String>>,
 	fail_txt: bool,
+	fail_addresses: bool,
+	fail_mx: bool,
 }
 
 impl DnsLookup for FakeDns {
@@ -28,7 +30,11 @@ impl DnsLookup for FakeDns {
 		&self,
 		name: &str,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DnsFailure>> + Send + '_>> {
-		let result = Ok(self.addresses.get(name).cloned().unwrap_or_default());
+		let result = if self.fail_addresses {
+			Err(DnsFailure::Temporary)
+		} else {
+			Ok(self.addresses.get(name).cloned().unwrap_or_default())
+		};
 		Box::pin(async move { result })
 	}
 
@@ -36,7 +42,11 @@ impl DnsLookup for FakeDns {
 		&self,
 		name: &str,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-		let result = Ok(self.mx.get(name).cloned().unwrap_or_default());
+		let result = if self.fail_mx {
+			Err(DnsFailure::Temporary)
+		} else {
+			Ok(self.mx.get(name).cloned().unwrap_or_default())
+		};
 		Box::pin(async move { result })
 	}
 }
@@ -272,5 +282,80 @@ async fn bare_ptr_does_not_match_and_falls_through() {
 	assert_eq!(
 		outcome(&dns, "192.0.2.5", "example.org").await,
 		SpfOutcome::SoftFail
+	);
+}
+
+#[test]
+fn outcome_keywords_cover_all_variants() {
+	assert_eq!(SpfOutcome::None.as_str(), "none");
+	assert_eq!(SpfOutcome::Neutral.as_str(), "neutral");
+	assert_eq!(SpfOutcome::Pass.as_str(), "pass");
+	assert_eq!(SpfOutcome::Fail.as_str(), "fail");
+	assert_eq!(SpfOutcome::SoftFail.as_str(), "softfail");
+	assert_eq!(SpfOutcome::TempError.as_str(), "temperror");
+	assert_eq!(SpfOutcome::PermError.as_str(), "permerror");
+}
+
+#[tokio::test]
+async fn ip4_mechanism_ignores_ipv6_connection() {
+	// An ip4 directive cannot match an IPv6 client; evaluation falls to -all.
+	let dns = dns_with(&[("example.org", "v=spf1 ip4:192.0.2.0/24 -all")]);
+	assert_eq!(
+		outcome(&dns, "2001:db8::1", "example.org").await,
+		SpfOutcome::Fail
+	);
+}
+
+#[tokio::test]
+async fn ip6_mechanism_ignores_ipv4_connection() {
+	let dns = dns_with(&[("example.org", "v=spf1 ip6:2001:db8::/32 -all")]);
+	assert_eq!(
+		outcome(&dns, "192.0.2.1", "example.org").await,
+		SpfOutcome::Fail
+	);
+}
+
+#[tokio::test]
+async fn a_mechanism_dns_failure_is_temperror() {
+	let mut dns = dns_with(&[("example.org", "v=spf1 a -all")]);
+	dns.fail_addresses = true;
+	assert_eq!(
+		outcome(&dns, "192.0.2.1", "example.org").await,
+		SpfOutcome::TempError
+	);
+}
+
+#[tokio::test]
+async fn mx_mechanism_dns_failure_is_temperror() {
+	let mut dns = dns_with(&[("example.org", "v=spf1 mx -all")]);
+	dns.fail_mx = true;
+	assert_eq!(
+		outcome(&dns, "192.0.2.1", "example.org").await,
+		SpfOutcome::TempError
+	);
+}
+
+#[tokio::test]
+async fn mx_exchanger_address_failure_is_temperror() {
+	let mut dns = dns_with(&[("example.org", "v=spf1 mx -all")]);
+	dns.mx.insert(
+		"example.org".to_string(),
+		vec!["mail.example.org".to_string()],
+	);
+	dns.fail_addresses = true;
+	assert_eq!(
+		outcome(&dns, "192.0.2.1", "example.org").await,
+		SpfOutcome::TempError
+	);
+}
+
+#[tokio::test]
+async fn exhausting_the_dns_budget_is_permerror() {
+	// More than MAX_DNS_MECHANISMS (10) DNS-consuming `a` terms → permerror.
+	let many_a = "v=spf1 a a a a a a a a a a a -all";
+	let dns = dns_with(&[("example.org", many_a)]);
+	assert_eq!(
+		outcome(&dns, "192.0.2.1", "example.org").await,
+		SpfOutcome::PermError
 	);
 }
