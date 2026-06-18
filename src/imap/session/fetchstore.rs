@@ -164,6 +164,14 @@ impl Session {
 					FetchItem::ModSeq => {
 						parts.push(format!("MODSEQ ({})", message.modseq).into_bytes());
 					}
+					// OBJECTID (RFC 8474): the stable message UUID; each message is
+					// its own singleton thread, so THREADID equals EMAILID.
+					FetchItem::EmailId => {
+						parts.push(format!("EMAILID ({})", message.id()).into_bytes());
+					}
+					FetchItem::ThreadId => {
+						parts.push(format!("THREADID ({})", message.id()).into_bytes());
+					}
 					FetchItem::Body => match snapshot.read(message) {
 						Ok(data) => {
 							let mut part = format!("BODY[] {{{}}}\r\n", data.len()).into_bytes();

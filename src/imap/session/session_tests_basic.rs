@@ -103,6 +103,30 @@ fn fetch_binary_decodes_base64_body() {
 }
 
 #[test]
+fn fetch_objectid_returns_stable_ids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: x\r\n\r\nbody\r\n");
+	let mut session = logged_in(dir.path());
+	// SELECT exposes a stable MAILBOXID and CAPABILITY advertises OBJECTID.
+	let response = text(&session.command_line("a2 SELECT INBOX"));
+	assert!(response.contains("[MAILBOXID (M"), "{response}");
+	assert!(
+		text(&session.command_line("a3 CAPABILITY")).contains("OBJECTID"),
+		"objectid"
+	);
+
+	// EMAILID and THREADID return the message's stable UUID (equal for singletons).
+	let response = text(&session.command_line("a4 FETCH 1 (EMAILID THREADID)"));
+	let id = response
+		.split("EMAILID (")
+		.nth(1)
+		.and_then(|s| s.split(')').next())
+		.expect("emailid");
+	assert!(!id.is_empty(), "{response}");
+	assert!(response.contains(&format!("THREADID ({id})")), "{response}");
+}
+
+#[test]
 fn uid_fetch_filters_by_uid() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"first\r\n");

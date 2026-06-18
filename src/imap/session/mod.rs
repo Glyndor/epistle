@@ -21,7 +21,6 @@ mod thread;
 pub struct Output {
 	pub bytes: Vec<u8>,
 	pub close: bool,
-	/// After sending, read this many literal bytes for [`Session::literal_done`].
 	pub collect_literal: Option<usize>,
 	pub idle: bool,
 	pub upgrade_tls: bool,
@@ -130,7 +129,7 @@ impl Session {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
 THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
-LIST-STATUS BINARY QRESYNC",
+LIST-STATUS BINARY QRESYNC OBJECTID",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -359,6 +358,7 @@ LIST-STATUS BINARY QRESYNC",
 			"* {count} EXISTS\r\n\
 * OK [UIDVALIDITY {validity}] UIDs valid\r\n\
 * OK [UIDNEXT {next}] predicted next UID\r\n\
+* OK [MAILBOXID (M{validity})] mailbox object id\r\n\
 * OK [HIGHESTMODSEQ {modseq}] highest mod-sequence\r\n\
 * FLAGS (\\Seen \\Deleted)\r\n\
 {vanished}{tag} OK [{mode}] {verb} completed\r\n",

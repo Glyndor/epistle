@@ -232,6 +232,10 @@ pub enum FetchItem {
 	InternalDate,
 	/// `MODSEQ`: the message's mod-sequence (CONDSTORE, RFC 7162).
 	ModSeq,
+	/// `EMAILID`: the message's stable object id (RFC 8474).
+	EmailId,
+	/// `THREADID`: the message's thread id (RFC 8474); singleton == EMAILID.
+	ThreadId,
 }
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).
