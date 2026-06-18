@@ -247,6 +247,9 @@ async fn jmap_email_get_parses_message() {
 	assert_eq!(email["subject"], "Hi there");
 	assert_eq!(email["from"][0]["email"], "Alice <a@example.org>");
 	assert_eq!(email["preview"], "the body");
+	// bodyValues exposes the decoded text body (RFC 8621 §4.1.4).
+	assert_eq!(email["bodyValues"]["0"]["value"], "the body\r\n");
+	assert_eq!(email["textBody"][0]["type"], "text/plain");
 	let req = serde_json::json!({
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": ["not-a-uuid"]}, "c2"]],
 	});

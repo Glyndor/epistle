@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use super::state::ApiState;
 
 mod methods;
+mod objects;
 
 /// JMAP core capability URN.
 const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
