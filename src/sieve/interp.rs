@@ -135,13 +135,18 @@ fn run(
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
 						outcome.fileinto.push(target);
-						*cancel_implicit = true;
+						// `:copy` (RFC 3894) leaves the implicit keep in place.
+						if !has_tag(args, "copy") {
+							*cancel_implicit = true;
+						}
 					}
 				}
 				"redirect" => {
 					if let Some(target) = first_str(args) {
 						outcome.redirects.push(target);
-						*cancel_implicit = true;
+						if !has_tag(args, "copy") {
+							*cancel_implicit = true;
+						}
 					}
 				}
 				"stop" => return true,
