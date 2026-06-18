@@ -71,6 +71,21 @@ fn capability_advertises_namespace_and_special_use() {
 }
 
 #[test]
+fn status_reports_deleted_and_mailboxid() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"one\r\n");
+	deliver(dir.path(), b"two\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Deleted)");
+	// STATUS exposes the DELETED count and a stable MAILBOXID (OBJECTID).
+	let response = text(&session.command_line("a4 STATUS INBOX (MESSAGES DELETED MAILBOXID)"));
+	assert!(response.contains("MESSAGES 2"), "{response}");
+	assert!(response.contains("DELETED 1"), "{response}");
+	assert!(response.contains("MAILBOXID (M"), "{response}");
+}
+
+#[test]
 fn quota_reports_storage_usage() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"From: a@b\r\n\r\nsome bytes\r\n");
