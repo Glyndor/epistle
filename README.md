@@ -84,7 +84,7 @@ addr = "0.0.0.0"
 
 ## 🗺️ Roadmap
 
-Remaining work — an LDAP directory backend, IMAP `COMPRESS`, DSN `NOTIFY` honoring and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
+Remaining work — an LDAP directory backend, IMAP `COMPRESS`, and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
 
 ## 📄 License
 
