@@ -55,10 +55,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	);
 	let directory = account_store.handle();
 
+	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured.
-	let mut split =
-		SplitDelivery::new(&config.data_dir, directory.clone())?.with_rules(config.rules.clone());
+	let mut split = SplitDelivery::new(&config.data_dir, directory.clone())?
+		.with_rules(config.rules.clone())
+		.with_metrics(metrics.clone());
 	if let Some(dkim) = &config.dkim {
 		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
 			.map_err(std::io::Error::other)?;
@@ -74,9 +78,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		split = split.with_srs(srs, config.hostname.clone());
 	}
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
-
-	// Shared metrics across SMTP listeners and the metrics endpoint.
-	let metrics = Arc::new(crate::metrics::Metrics::new());
 
 	// Optional greylisting store, shared across SMTP listeners. A background
 	// task prunes stale triplets so the map stays bounded.
