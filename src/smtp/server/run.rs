@@ -14,6 +14,10 @@ use crate::smtp::trace::{
 
 use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, send};
 
+/// Consecutive error replies before the connection is dropped (abuse guard,
+/// akin to Postfix's `smtpd_hard_error_limit`).
+const MAX_ERROR_STREAK: u32 = 20;
+
 impl Server {
 	/// The protocol loop over an established (plain or TLS) stream.
 	pub(super) async fn run(
@@ -28,6 +32,8 @@ impl Server {
 		let mut decoder = LineDecoder::new();
 		let mut mode = Mode::Commands;
 		let mut buffer = [0u8; READ_BUFFER];
+		// Consecutive error replies; too many means an abusive client.
+		let mut error_streak = 0u32;
 
 		loop {
 			let line = match decoder.next_line() {
@@ -85,7 +91,23 @@ impl Server {
 
 			mode = Mode::Commands;
 			match action {
-				Action::Continue(reply) => send(&mut stream, &reply).await?,
+				Action::Continue(reply) => {
+					// Abuse guard: disconnect a client that only produces errors.
+					if reply.code() >= 400 {
+						error_streak += 1;
+						if error_streak >= MAX_ERROR_STREAK {
+							send(
+								&mut stream,
+								&Reply::single(421, "4.7.0 too many errors, closing connection"),
+							)
+							.await?;
+							return Ok(());
+						}
+					} else {
+						error_streak = 0;
+					}
+					send(&mut stream, &reply).await?;
+				}
 				Action::CollectData(reply) => {
 					mode = Mode::Data;
 					send(&mut stream, &reply).await?;
