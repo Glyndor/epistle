@@ -119,3 +119,64 @@ async fn unknown_signing_key_fails() {
 	let dns = dns_for(&new_key());
 	assert_eq!(validate(&dns, &raw).await, ChainValidation::Fail);
 }
+
+#[tokio::test]
+async fn structurally_broken_chain_fails() {
+	// A lone, malformed ARC-Seal (no matching AMS/AAR) is not extractable.
+	let mut raw = b"ARC-Seal: i=oops; nonsense\r\n".to_vec();
+	raw.extend_from_slice(MESSAGE);
+	let dns = dns_for(&new_key());
+	assert_eq!(validate(&dns, &raw).await, ChainValidation::Fail);
+}
+
+#[tokio::test]
+async fn malformed_message_signature_fails() {
+	let key = new_key();
+	let raw = sealed_message(&key, ChainValidation::None);
+	// Replace the AMS header value with garbage that cannot parse.
+	let text = String::from_utf8(raw).expect("utf8");
+	let broken = text
+		.lines()
+		.map(|line| {
+			if line.starts_with("ARC-Message-Signature:") {
+				"ARC-Message-Signature: not a real signature".to_string()
+			} else {
+				line.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join("\r\n");
+	let dns = dns_for(&key);
+	assert_eq!(
+		validate(&dns, broken.as_bytes()).await,
+		ChainValidation::Fail
+	);
+}
+
+#[tokio::test]
+async fn tampered_seal_signature_fails() {
+	let key = new_key();
+	let raw = sealed_message(&key, ChainValidation::None);
+	// Corrupt a byte inside the ARC-Seal's b= value: the AMS still verifies,
+	// so validation must reach and reject the seal.
+	let text = String::from_utf8(raw).expect("utf8");
+	let broken = text
+		.lines()
+		.map(|line| {
+			if let Some(idx) = line.find("ARC-Seal:").and(line.rfind("b=")) {
+				let mut bytes = line.as_bytes().to_vec();
+				let flip = idx + 2;
+				bytes[flip] = if bytes[flip] == b'A' { b'B' } else { b'A' };
+				String::from_utf8(bytes).expect("utf8")
+			} else {
+				line.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join("\r\n");
+	let dns = dns_for(&key);
+	assert_eq!(
+		validate(&dns, broken.as_bytes()).await,
+		ChainValidation::Fail
+	);
+}
