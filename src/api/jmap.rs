@@ -100,6 +100,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
 			"Mailbox/get" => mailbox_get(&state, &args, &call_id),
+			"Email/query" => email_query(&state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		});
 	}
@@ -136,6 +137,43 @@ fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	json!([
 		"Mailbox/get",
 		{ "accountId": account, "state": "0", "list": list, "notFound": [] },
+		call_id,
+	])
+}
+
+/// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
+fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	// Only the `inMailbox` filter is supported; absent means INBOX.
+	let mailbox = args
+		.get("filter")
+		.and_then(|f| f.get("inMailbox"))
+		.and_then(Value::as_str)
+		.unwrap_or("INBOX");
+
+	let mut ids: Vec<String> =
+		crate::imap::mailbox::Snapshot::open(state.data_dir(), account, mailbox)
+			.map(|snapshot| snapshot.messages().map(|m| m.id().to_string()).collect())
+			.unwrap_or_default();
+	// JMAP default sort is most-recent first; UUID v7 ids sort by time.
+	ids.reverse();
+	let total = ids.len();
+
+	json!([
+		"Email/query",
+		{
+			"accountId": account,
+			"queryState": "0",
+			"canCalculateChanges": false,
+			"position": 0,
+			"total": total,
+			"ids": ids,
+		},
 		call_id,
 	])
 }
