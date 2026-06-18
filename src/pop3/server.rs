@@ -163,4 +163,62 @@ mod tests {
 		assert!(seen.contains("too many errors"), "{seen}");
 		let _ = task.await;
 	}
+
+	async fn read_chunk(client: &mut tokio::io::DuplexStream) -> String {
+		let mut chunk = [0u8; 4096];
+		let read = client.read(&mut chunk).await.expect("read");
+		String::from_utf8_lossy(&chunk[..read]).to_string()
+	}
+
+	#[tokio::test]
+	async fn quit_after_greeting_closes_cleanly() {
+		let (mut client, server) = duplex(64 * 1024);
+		let task = tokio::spawn(async move { run(server, backend()).await });
+		let greeting = read_chunk(&mut client).await;
+		assert!(greeting.starts_with("+OK"), "{greeting}");
+		client.write_all(b"QUIT\r\n").await.expect("write");
+		let bye = read_chunk(&mut client).await;
+		assert!(bye.starts_with("+OK"), "{bye}");
+		// The server closed: the next read yields EOF.
+		let mut chunk = [0u8; 16];
+		assert_eq!(client.read(&mut chunk).await.expect("read"), 0);
+		assert!(task.await.expect("join").is_ok());
+	}
+
+	#[tokio::test]
+	async fn eof_ends_the_session() {
+		let (mut client, server) = duplex(64 * 1024);
+		let task = tokio::spawn(async move { run(server, backend()).await });
+		let _ = read_chunk(&mut client).await;
+		drop(client); // client hangs up before any command.
+		assert!(task.await.expect("join").is_ok());
+	}
+
+	#[tokio::test]
+	async fn overlong_line_is_rejected() {
+		let (mut client, server) = duplex(256 * 1024);
+		let task = tokio::spawn(async move { run(server, backend()).await });
+		let _ = read_chunk(&mut client).await;
+		// A line far longer than the protocol allows.
+		let huge = vec![b'A'; 100 * 1024];
+		client.write_all(&huge).await.expect("write");
+		client.write_all(b"\r\n").await.expect("write");
+		let reply = read_chunk(&mut client).await;
+		assert!(reply.contains("line too long"), "{reply}");
+		let _ = task.await;
+	}
+
+	#[tokio::test]
+	async fn non_ascii_command_is_rejected() {
+		let (mut client, server) = duplex(64 * 1024);
+		let task = tokio::spawn(async move { run(server, backend()).await });
+		let _ = read_chunk(&mut client).await;
+		client.write_all(&[0xff, 0xfe]).await.expect("write");
+		client.write_all(b"\r\n").await.expect("write");
+		let reply = read_chunk(&mut client).await;
+		assert!(reply.contains("non-ASCII"), "{reply}");
+		// The session stays open after a non-final error; hang up to end it.
+		drop(client);
+		let _ = task.await;
+	}
 }
