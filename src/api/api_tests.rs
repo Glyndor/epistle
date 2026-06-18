@@ -103,6 +103,28 @@ pub(super) async fn request_with_body(
 	(status, json)
 }
 
+/// Like `request`, but returns the raw response body (for non-JSON endpoints).
+pub(super) async fn request_raw(
+	app: &Router,
+	path: &str,
+	token: Option<&str>,
+) -> (StatusCode, Vec<u8>) {
+	let mut builder = Request::builder().method("GET").uri(path);
+	if let Some(token) = token {
+		builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+	}
+	let response = app
+		.clone()
+		.oneshot(builder.body(Body::empty()).expect("request"))
+		.await
+		.expect("response");
+	let status = response.status();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("body");
+	(status, bytes.to_vec())
+}
+
 #[tokio::test]
 async fn requests_without_token_are_rejected() {
 	let dir = tempfile::tempdir().expect("tempdir");
