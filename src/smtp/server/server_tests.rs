@@ -432,6 +432,7 @@ async fn implicit_tls_without_acceptor_errors() {
 		report_dir: None,
 		arc_sealer: None,
 		greylist: None,
+		oauth: None,
 	};
 	let (_client, server_stream) = tokio::io::duplex(1024);
 	assert!(server.handle(server_stream, None).await.is_err());

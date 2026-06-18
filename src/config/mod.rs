@@ -11,6 +11,7 @@ mod arc;
 mod database;
 mod dkim;
 mod listener;
+mod oauth;
 mod tls;
 mod validate;
 
@@ -21,6 +22,7 @@ pub use arc::Arc;
 pub use database::Database;
 pub use dkim::Dkim;
 pub use listener::{Listener, ListenerKind};
+pub use oauth::Oauth;
 pub use tls::Tls;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -123,6 +125,8 @@ pub struct Config {
 	pub acme: Option<Acme>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
+	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
+	pub oauth: Option<Oauth>,
 }
 
 impl Config {

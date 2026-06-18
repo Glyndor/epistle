@@ -11,6 +11,7 @@ use super::command::{Command, ParseError};
 use super::directory::{Directory, Resolution};
 use super::reply::Reply;
 
+mod oauth;
 mod scram;
 
 /// Maximum accepted message size in bytes until quotas exist.
@@ -78,25 +79,24 @@ pub enum Action {
 pub struct Session {
 	hostname: String,
 	state: State,
-	/// Whether STARTTLS can be offered (TLS configured, not yet active).
+	/// Whether STARTTLS can be offered (configured, not yet active).
 	tls_available: bool,
 	/// Whether the connection is already inside TLS.
 	tls_active: bool,
-	/// Account name once AUTH succeeded.
 	authenticated: Option<String>,
 	/// Failed authentication attempts on this connection.
 	auth_failures: u8,
-	/// The domain the client announced in HELO/EHLO, for trace headers.
+	/// Domain the client announced in HELO/EHLO, for trace headers.
 	helo_domain: Option<String>,
 	/// Whether the client greeted with EHLO (ESMTP) rather than HELO.
 	esmtp: bool,
-	/// Recipient resolution. An empty directory rejects every recipient
-	/// (fail closed).
+	/// Recipient resolution; an empty directory rejects everything (fail closed).
 	directory: Arc<Directory>,
 	/// In-flight SCRAM exchange, between the challenge rounds.
 	pending_scram: Option<scram::PendingScram>,
 	/// Test-injected SCRAM server nonce; `None` generates a fresh random one.
 	scram_nonce: Option<String>,
+	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 }
 
 impl Session {
@@ -114,6 +114,7 @@ impl Session {
 			directory: Arc::new(Directory::default()),
 			pending_scram: None,
 			scram_nonce: None,
+			oauth: None,
 		}
 	}
 
@@ -215,10 +216,7 @@ impl Session {
 	fn auth(&mut self, mechanism: &str, initial: Option<String>) -> Action {
 		if !self.tls_active {
 			// Credentials never cross plaintext.
-			return Action::Continue(Reply::single(
-				538,
-				"5.7.11 encryption required for authentication",
-			));
+			return Action::Continue(Reply::single(538, "5.7.11 encryption required for auth"));
 		}
 		if self.authenticated.is_some() {
 			return Action::Continue(Reply::bad_sequence());
@@ -232,6 +230,7 @@ impl Session {
 				None => Action::CollectAuthResponse(Reply::single(334, "")),
 			},
 			"SCRAM-SHA-256" => self.scram_begin(initial),
+			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(mechanism, initial),
 			_ => Action::Continue(Reply::single(504, "5.5.4 mechanism not supported")),
 		}
 	}
@@ -310,7 +309,7 @@ impl Session {
 			lines.push("STARTTLS".to_string());
 		}
 		if self.tls_active && self.authenticated.is_none() {
-			lines.push("AUTH SCRAM-SHA-256 PLAIN".to_string());
+			lines.push(self.auth_capability());
 		}
 		// RFC 8689 §3: only advertise REQUIRETLS on a TLS-protected session.
 		if self.tls_active {
@@ -495,3 +494,6 @@ mod tests_basic;
 #[cfg(test)]
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
+#[cfg(test)]
+#[path = "../session_tests_oauth.rs"]
+mod tests_oauth;
