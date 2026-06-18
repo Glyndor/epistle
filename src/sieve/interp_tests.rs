@@ -355,3 +355,38 @@ fn envelope_unknown_part_never_matches() {
 		.with_envelope("a@b.example".to_string(), vec!["c@d.example".to_string()]);
 	assert!(!evaluate(&commands, &message).discarded);
 }
+
+#[test]
+fn reject_sets_reason_and_cancels_keep() {
+	let outcome = run("if exists \"From\" { reject \"go away\"; }", MSG);
+	assert_eq!(outcome.reject.as_deref(), Some("go away"));
+	assert!(!outcome.keep);
+}
+
+#[test]
+fn vacation_parses_all_tags() {
+	let script = "vacation :days 3 :subject \"Away\" :from \"me@example.org\" \
+:handle \"h1\" \"I am on holiday\";";
+	let outcome = run(script, MSG);
+	let v = outcome.vacation.expect("vacation request");
+	assert_eq!(v.days, 3);
+	assert_eq!(v.subject.as_deref(), Some("Away"));
+	assert_eq!(v.from.as_deref(), Some("me@example.org"));
+	assert_eq!(v.reason, "I am on holiday");
+	// vacation does not cancel the implicit keep.
+	assert!(outcome.keep);
+}
+
+#[test]
+fn else_branch_runs_when_no_test_matches() {
+	let script = "if header :is \"Subject\" \"nope\" { fileinto \"A\"; } else { fileinto \"B\"; }";
+	let outcome = run(script, MSG);
+	assert_eq!(outcome.fileinto, vec!["B".to_string()]);
+}
+
+#[test]
+fn stop_inside_if_halts_remaining_commands() {
+	let script = "if exists \"From\" { fileinto \"A\"; stop; } fileinto \"B\";";
+	let outcome = run(script, MSG);
+	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
+}
