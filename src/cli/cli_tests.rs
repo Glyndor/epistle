@@ -228,6 +228,45 @@ fn import_delivers_mbox_messages_to_inbox() {
 }
 
 #[test]
+fn parses_accounts_command() {
+	let cli = Cli::try_parse_from(["mail", "accounts", "--config", "/etc/mail.toml"])
+		.expect("accounts parses");
+	assert!(matches!(cli.command, Command::Accounts { .. }));
+}
+
+fn write_config(toml: &str) -> tempfile::NamedTempFile {
+	let mut file = tempfile::NamedTempFile::new().expect("temp file");
+	file.write_all(toml.as_bytes()).expect("write");
+	file
+}
+
+#[test]
+fn accounts_list_prints_configured_accounts() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let cfg = write_config(&format!(
+		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n\n\
+[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\n",
+		dir.path()
+	));
+	let config = crate::config::Config::load(cfg.path()).expect("config");
+	let mut out = Vec::new();
+	assert_eq!(accounts::list(&config, &mut out), ExitCode::SUCCESS);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(text.contains("alice\tstatic\talice@example.org"), "{text}");
+	assert!(text.contains("1 accounts"), "{text}");
+
+	// An unwritable data_dir (a file) makes the store fail to open.
+	let file = tempfile::NamedTempFile::new().expect("file");
+	let bad = write_config(&format!(
+		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n",
+		file.path()
+	));
+	let config = crate::config::Config::load(bad.path()).expect("config");
+	let mut out = Vec::new();
+	assert_eq!(accounts::list(&config, &mut out), ExitCode::FAILURE);
+}
+
+#[test]
 fn parses_queue_command() {
 	let cli =
 		Cli::try_parse_from(["mail", "queue", "--config", "/etc/mail.toml"]).expect("queue parses");

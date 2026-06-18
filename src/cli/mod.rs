@@ -1,5 +1,6 @@
 //! Command-line interface: argument parsing and command dispatch.
 
+mod accounts;
 mod export;
 mod import;
 mod queue;
@@ -59,6 +60,12 @@ enum Command {
 		#[arg(long, value_name = "NAME")]
 		account: String,
 	},
+	/// List the configured mail accounts.
+	Accounts {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
 	/// List the outbound delivery queue.
 	Queue {
 		/// Path to the configuration file.
@@ -104,6 +111,13 @@ impl Cli {
 			},
 			Command::Import { config, account } => match Config::load(&config) {
 				Ok(config) => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Accounts { config } => match Config::load(&config) {
+				Ok(config) => accounts::list(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
