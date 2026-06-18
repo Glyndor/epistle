@@ -33,6 +33,8 @@ pub struct Directory {
 	/// Domain aliases (alias domain → target domain): mail to `user@alias` is
 	/// resolved as `user@target`.
 	domain_aliases: HashMap<String, String>,
+	/// SCRAM credentials per account name, for SCRAM-SHA-256 authentication.
+	scram: HashMap<String, super::scram::ScramStored>,
 }
 
 impl Directory {
@@ -56,7 +58,35 @@ impl Directory {
 			subaddress_separators: vec!['+'],
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
+			scram: HashMap::new(),
 		}
+	}
+
+	/// Attach SCRAM credentials (account name → stored credentials).
+	pub fn with_scram(
+		mut self,
+		scram: impl IntoIterator<Item = (String, super::scram::ScramStored)>,
+	) -> Self {
+		self.scram = scram
+			.into_iter()
+			.map(|(name, stored)| (name.to_ascii_lowercase(), stored))
+			.collect();
+		self
+	}
+
+	/// Resolve a login to its SCRAM credentials, or `None` when the identity is
+	/// unknown or has no SCRAM credentials.
+	pub fn scram_credentials(&self, login: &str) -> Option<super::scram::ScramCredentials> {
+		let account = if login.contains('@') {
+			let address = Address::parse(login).ok()?;
+			match self.resolve(&address) {
+				Resolution::Account(account) => account,
+				_ => return None,
+			}
+		} else {
+			login.to_ascii_lowercase()
+		};
+		self.scram.get(&account)?.to_credentials()
 	}
 
 	/// Attach domain aliases (alias domain → target domain). Both sides are

@@ -50,6 +50,9 @@ pub struct DynamicAccount {
 	pub name: String,
 	pub addresses: Vec<String>,
 	pub password_hash: String,
+	/// SCRAM credentials, derived from the password at set time (RFC 5802).
+	#[serde(default)]
+	pub scram: Option<crate::smtp::scram::ScramStored>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -204,14 +207,20 @@ impl AccountStore {
 		Ok(())
 	}
 
-	/// Replace the password hash of a dynamic account.
-	pub fn set_password_hash(&self, name: &str, hash: String) -> Result<(), StoreError> {
+	/// Replace the password hash (and SCRAM credentials) of a dynamic account.
+	pub fn set_password_hash(
+		&self,
+		name: &str,
+		hash: String,
+		scram: Option<crate::smtp::scram::ScramStored>,
+	) -> Result<(), StoreError> {
 		let mut dynamic = self.dynamic.write().expect("store lock");
 		let account = dynamic
 			.iter_mut()
 			.find(|account| account.name == name)
 			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 		account.password_hash = hash;
+		account.scram = scram;
 		self.persist(&dynamic)?;
 		drop(dynamic);
 		self.handle.replace(self.build_directory());
@@ -269,10 +278,19 @@ impl AccountStore {
 				.iter()
 				.map(|domain| (domain.clone(), account.name.clone()))
 		});
+		// SCRAM credentials only exist for dynamic accounts (derived from the
+		// plaintext password at set time).
+		let scram = dynamic.iter().filter_map(|account| {
+			account
+				.scram
+				.clone()
+				.map(|stored| (account.name.clone(), stored))
+		});
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
+			.with_scram(scram)
 	}
 }
 
@@ -321,6 +339,7 @@ mod tests {
 			name: name.to_string(),
 			addresses: vec![address.to_string()],
 			password_hash: "$argon2id$stub".to_string(),
+			scram: None,
 		}
 	}
 
@@ -403,7 +422,7 @@ mod tests {
 
 		let real_hash = crate::smtp::auth::tests::hash("secret");
 		store
-			.set_password_hash("bob", real_hash)
+			.set_password_hash("bob", real_hash, None)
 			.expect("set password");
 		let directory = store.handle().current();
 		let (account, hash) = directory.credentials("bob").expect("credentials");
