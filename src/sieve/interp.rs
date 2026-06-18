@@ -204,9 +204,30 @@ fn eval_test(test: &Test, message: &Message) -> bool {
 		"envelope" => envelope_test(test, message),
 		"body" => body_test(test, message),
 		"size" => size_test(test, message),
+		"date" => date_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
 	}
+}
+
+/// `date [comparator] <header-name> <date-part> <key-list>` (RFC 5260). The
+/// chosen part of the named header's date is compared against the keys.
+fn date_test(test: &Test, message: &Message) -> bool {
+	let comparator = comparator(&test.args);
+	let strings = strings(&test.args);
+	// Arguments are: header-name, date-part, then one or more keys.
+	if strings.len() < 3 {
+		return false;
+	}
+	let (header, part, keys) = (&strings[0], &strings[1], &strings[2..]);
+	for value in message.header_values(header) {
+		if let Some(extracted) = super::date::extract_part(value, part)
+			&& keys.iter().any(|key| comparator.matches(&extracted, key))
+		{
+			return true;
+		}
+	}
+	false
 }
 
 /// `header [comparator] <header-names> <key-list>`.

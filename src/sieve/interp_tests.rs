@@ -216,6 +216,23 @@ fn body_test_matches_content() {
 }
 
 #[test]
+fn date_test_matches_header_parts() {
+	let msg = b"Date: Wed, 17 Jun 2026 14:30:05 +0000\r\nSubject: hi\r\n\r\nbody\r\n";
+	// The Date header's year matches.
+	let hit = run("if date \"Date\" \"year\" \"2026\" { discard; }", msg);
+	assert!(hit.discarded);
+	// A wrong month does not match.
+	let miss = run("if date \"Date\" \"month\" \"12\" { discard; }", msg);
+	assert!(!miss.discarded);
+	// :is on the assembled date.
+	let date = run(
+		"if date :is \"Date\" \"date\" \"2026-06-17\" { discard; }",
+		msg,
+	);
+	assert!(date.discarded);
+}
+
+#[test]
 fn stop_halts_execution() {
 	let outcome = run("fileinto \"A\"; stop; fileinto \"B\";", MSG);
 	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
