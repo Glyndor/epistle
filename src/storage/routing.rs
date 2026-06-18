@@ -26,6 +26,8 @@ pub struct SplitDelivery {
 	srs: Option<(crate::queue::srs::Srs, String)>,
 	/// Counters for Sieve delivery outcomes (reject, vacation, redirect).
 	metrics: Option<Arc<crate::metrics::Metrics>>,
+	/// Outbound webhook for delivery events (fire-and-forget, advisory).
+	webhook: Option<Arc<crate::webhook::Webhook>>,
 }
 
 impl SplitDelivery {
@@ -39,7 +41,23 @@ impl SplitDelivery {
 			rules: Vec::new(),
 			srs: None,
 			metrics: None,
+			webhook: None,
 		})
+	}
+
+	/// Fire delivery-event notifications to this webhook.
+	pub fn with_webhook(mut self, webhook: Arc<crate::webhook::Webhook>) -> Self {
+		self.webhook = Some(webhook);
+		self
+	}
+
+	/// Build a `MessageReceived` event for `recipient` from the raw message.
+	fn message_event(recipient: &str, message: &AcceptedMessage) -> crate::webhook::WebhookEvent {
+		crate::webhook::WebhookEvent::MessageReceived {
+			account: recipient.to_string(),
+			from: message.reverse_path.clone(),
+			subject: subject_of(&message.data),
+		}
 	}
 
 	/// Record Sieve delivery outcomes to these process metrics.
@@ -158,6 +176,16 @@ impl MessageSink for SplitDelivery {
 			let delivered = self
 				.local
 				.deliver_routed(&local_message, mailbox.as_deref())?;
+			// Notify the webhook for messages that actually landed (not rejected).
+			if delivered.reject.is_none()
+				&& let Some(webhook) = &self.webhook
+			{
+				for recipient in &local_message.recipients {
+					let webhook = webhook.clone();
+					let event = Self::message_event(recipient, &local_message);
+					tokio::spawn(async move { webhook.notify(&event).await });
+				}
+			}
 			if let Some(reason) = delivered.reject {
 				if let Some(metrics) = &self.metrics {
 					metrics.sieve_rejected();
@@ -239,6 +267,20 @@ impl MessageSink for SplitDelivery {
 		}
 		Ok(())
 	}
+}
+
+/// The `Subject` header value from a raw message's header block, if present.
+fn subject_of(data: &[u8]) -> Option<String> {
+	let text = String::from_utf8_lossy(data);
+	let headers = text.split("\r\n\r\n").next().unwrap_or(&text);
+	for line in headers.split("\r\n") {
+		if let Some((name, value)) = line.split_once(':')
+			&& name.trim().eq_ignore_ascii_case("subject")
+		{
+			return Some(value.trim().to_string());
+		}
+	}
+	None
 }
 
 #[cfg(test)]

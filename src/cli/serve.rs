@@ -77,6 +77,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
 		split = split.with_srs(srs, config.hostname.clone());
 	}
+	if let Some(webhook) = &config.webhook {
+		let poster = crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
+			.map_err(std::io::Error::other)?;
+		split = split.with_webhook(Arc::new(poster));
+	}
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
