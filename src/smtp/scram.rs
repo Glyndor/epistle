@@ -90,6 +90,7 @@ pub enum ScramError {
 }
 
 /// Server-side SCRAM-SHA-256 state machine: feed `first` then `finish`.
+#[derive(Debug)]
 pub struct ScramServer {
 	server_nonce: String,
 	client_first_bare: Option<String>,
@@ -203,6 +204,12 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 /// comma.
 fn tag<'a>(message: &'a str, key: &str) -> Option<&'a str> {
 	message.split(',').find_map(|field| field.strip_prefix(key))
+}
+
+/// The username (`n=` tag) from a client-first message, before any exchange.
+pub fn username_of(client_first: &str) -> Option<String> {
+	let bare = nth_comma_rest(client_first, 2)?;
+	tag(bare, "n=").map(str::to_string)
 }
 
 /// Everything after the `n`-th comma in `text`.
