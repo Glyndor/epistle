@@ -42,6 +42,30 @@ fn discard_drops_the_message() {
 }
 
 #[test]
+fn imap4flags_set_add_and_remove() {
+	// setflag replaces, addflag unions, removeflag subtracts (RFC 5232).
+	let outcome = run(
+		"setflag \"\\\\Seen \\\\Flagged\"; addflag \"\\\\Answered\"; removeflag \"\\\\Flagged\";",
+		MSG,
+	);
+	assert!(
+		outcome.flags.contains(&"\\Seen".to_string()),
+		"{:?}",
+		outcome.flags
+	);
+	assert!(
+		outcome.flags.contains(&"\\Answered".to_string()),
+		"{:?}",
+		outcome.flags
+	);
+	assert!(
+		!outcome.flags.contains(&"\\Flagged".to_string()),
+		"{:?}",
+		outcome.flags
+	);
+}
+
+#[test]
 fn header_contains_files_into_junk() {
 	let script = "if header :contains \"Subject\" \"sale\" { fileinto \"Junk\"; }";
 	let outcome = run(script, MSG);

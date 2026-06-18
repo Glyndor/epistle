@@ -63,6 +63,7 @@ impl LocalDelivery {
 		account: &str,
 		mailbox: Option<&str>,
 		data: &[u8],
+		flags: &[String],
 	) -> std::io::Result<Uuid> {
 		let id = Uuid::now_v7();
 		let account_dir = self.accounts_root.join(account);
@@ -79,6 +80,8 @@ impl LocalDelivery {
 		let tmp_path = tmp_dir.join(format!("{id}.eml"));
 		write_sync(&tmp_path, data)?;
 		fs::rename(&tmp_path, new_dir.join(format!("{id}.eml")))?;
+		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
+		write_flag_sidecar(&new_dir, id, flags);
 		Ok(id)
 	}
 
@@ -121,23 +124,23 @@ impl LocalDelivery {
 	) -> Result<Vec<String>, SinkError> {
 		let data = &message.data;
 		if let Some(mailbox) = hint {
-			self.deliver_to_account(account, Some(mailbox), data)
+			self.deliver_to_account(account, Some(mailbox), data, &[])
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			return Ok(Vec::new());
 		}
 		let Some(outcome) = self.sieve_outcome(account, message) else {
 			// No filter (or it failed to compile): normal INBOX delivery.
-			self.deliver_to_account(account, None, data)
+			self.deliver_to_account(account, None, data, &[])
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			return Ok(Vec::new());
 		};
 		if outcome.keep {
-			self.deliver_to_account(account, None, data)
+			self.deliver_to_account(account, None, data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		for folder in &outcome.fileinto {
 			if is_safe_mailbox(folder) {
-				self.deliver_to_account(account, Some(folder), data)
+				self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
 		}
@@ -167,6 +170,21 @@ impl LocalDelivery {
 }
 
 /// A mailbox name safe to use as a single path segment.
+/// Persist Sieve-assigned flags as the message's IMAP `.flags` sidecar, so a
+/// `setflag`/`addflag` filter is reflected when the mailbox is opened.
+fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_tokens: &[String]) {
+	let flags: Vec<crate::imap::mailbox::Flag> = flag_tokens
+		.iter()
+		.filter_map(|token| crate::imap::mailbox::Flag::parse(token))
+		.collect();
+	if flags.is_empty() {
+		return;
+	}
+	if let Ok(bytes) = serde_json::to_vec(&flags) {
+		let _ = write_sync(&new_dir.join(format!("{id}.flags")), &bytes);
+	}
+}
+
 fn is_safe_mailbox(name: &str) -> bool {
 	!name.is_empty()
 		&& name.len() <= 64
@@ -279,6 +297,25 @@ mod tests {
 			.expect("deliver");
 		assert_eq!(folder_count(dir.path(), "alice", "Filed"), 1);
 		assert!(list_inbox(dir.path(), "alice").is_empty());
+	}
+
+	#[test]
+	fn sieve_imap4flags_writes_flag_sidecar() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+		write_filter(dir.path(), "alice", "addflag \"\\\\Seen\"; keep;");
+		delivery
+			.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		// The delivered message carries a .flags sidecar with \Seen.
+		let new_dir = dir.path().join("accounts").join("alice").join("new");
+		let sidecar = fs::read_dir(&new_dir)
+			.expect("new dir")
+			.map(|e| e.expect("entry").path())
+			.find(|p| p.extension().is_some_and(|ext| ext == "flags"))
+			.expect("flags sidecar written");
+		let body = fs::read_to_string(sidecar).expect("read sidecar");
+		assert!(body.contains("Seen"), "{body}");
 	}
 
 	#[test]
