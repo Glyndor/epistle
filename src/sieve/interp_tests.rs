@@ -14,6 +14,21 @@ fn run(script: &str, raw: &[u8]) -> Outcome {
 }
 
 #[test]
+fn set_variable_expands_in_fileinto() {
+	// A variable set earlier expands into a later fileinto target (RFC 5229).
+	let outcome = run(
+		"require \"variables\"; set \"box\" \"Work\"; fileinto \"Archive/${box}\";",
+		MSG,
+	);
+	assert_eq!(outcome.fileinto, vec!["Archive/Work".to_string()]);
+	// fileinto cancelled the implicit keep.
+	assert!(!outcome.keep);
+	// An unset variable expands to empty.
+	let outcome = run("fileinto \"X${missing}Y\";", MSG);
+	assert_eq!(outcome.fileinto, vec!["XY".to_string()]);
+}
+
+#[test]
 fn empty_script_keeps_implicitly() {
 	let outcome = run("", MSG);
 	assert!(outcome.keep);
