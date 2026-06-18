@@ -22,6 +22,10 @@ pub fn router() -> Router<ApiState> {
 			"/accounts/{name}/password",
 			axum::routing::put(accounts::set_password),
 		)
+		.route(
+			"/accounts/{name}/totp",
+			axum::routing::post(accounts::enroll_totp).delete(accounts::disable_totp),
+		)
 		.route("/accounts/{name}/mailboxes", get(mailboxes::list))
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))

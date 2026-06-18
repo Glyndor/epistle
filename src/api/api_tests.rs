@@ -250,6 +250,42 @@ async fn account_create_delete_and_password_flow() {
 }
 
 #[tokio::test]
+async fn totp_enrollment_stores_a_valid_secret() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	request_with_body(
+		&app,
+		"POST",
+		"/api/v1/accounts",
+		Some(TOKEN),
+		Some(serde_json::json!({
+			"name": "bob", "addresses": ["bob@example.org"], "password": "a-long-password"
+		})),
+	)
+	.await;
+
+	let (status, body) = request(&app, "POST", "/api/v1/accounts/bob/totp", Some(TOKEN)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let secret = body["secret"].as_str().expect("secret");
+	// A valid base32 TOTP secret that decodes.
+	assert!(
+		crate::totp::decode_base32_secret(secret).is_some(),
+		"{secret}"
+	);
+	assert!(
+		body["otpauth_uri"]
+			.as_str()
+			.unwrap_or("")
+			.contains("otpauth://totp/"),
+		"{body}"
+	);
+
+	// Disabling clears it.
+	let (status, _) = request(&app, "DELETE", "/api/v1/accounts/bob/totp", Some(TOKEN)).await;
+	assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn account_creation_validates_input() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));

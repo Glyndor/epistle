@@ -53,6 +53,9 @@ pub struct DynamicAccount {
 	/// SCRAM credentials, derived from the password at set time (RFC 5802).
 	#[serde(default)]
 	pub scram: Option<crate::smtp::scram::ScramStored>,
+	/// Base32 TOTP secret for two-factor auth (RFC 6238). Absent disables 2FA.
+	#[serde(default)]
+	pub totp_secret: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -227,6 +230,18 @@ impl AccountStore {
 		Ok(())
 	}
 
+	/// Set or clear a dynamic account's base32 TOTP secret (RFC 6238).
+	pub fn set_totp(&self, name: &str, secret: Option<String>) -> Result<(), StoreError> {
+		let mut dynamic = self.dynamic.write().expect("store lock");
+		let account = dynamic
+			.iter_mut()
+			.find(|account| account.name == name)
+			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+		account.totp_secret = secret;
+		self.persist(&dynamic)?;
+		Ok(())
+	}
+
 	fn persist(&self, dynamic: &[DynamicAccount]) -> Result<(), StoreError> {
 		let file = DynamicFile {
 			accounts: dynamic.to_vec(),
@@ -340,6 +355,7 @@ mod tests {
 			addresses: vec![address.to_string()],
 			password_hash: "$argon2id$stub".to_string(),
 			scram: None,
+			totp_secret: None,
 		}
 	}
 
