@@ -176,10 +176,19 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 		"UNANSWERED" => (SearchKey::FlagIs(Flag::Answered, false), after),
 		"DRAFT" => (SearchKey::FlagIs(Flag::Draft, true), after),
 		"UNDRAFT" => (SearchKey::FlagIs(Flag::Draft, false), after),
-		"FROM" | "TO" | "SUBJECT" => {
+		"FROM" | "TO" | "SUBJECT" | "CC" | "BCC" => {
 			let (needle, rest) = parse_astring(after)?;
 			(
 				SearchKey::Header(upper.to_ascii_lowercase(), needle.to_ascii_lowercase()),
+				rest.trim_start(),
+			)
+		}
+		// Generic header search: HEADER <field-name> <value>.
+		"HEADER" => {
+			let (field, rest) = parse_astring(after)?;
+			let (value, rest) = parse_astring(rest.trim_start())?;
+			(
+				SearchKey::Header(field.to_ascii_lowercase(), value.to_ascii_lowercase()),
 				rest.trim_start(),
 			)
 		}
