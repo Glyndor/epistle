@@ -55,7 +55,6 @@ fn id_returns_server_identity_and_accepts_client_params() {
 		"{response}"
 	);
 	assert!(response.contains("a1 OK ID completed"), "{response}");
-	// NIL parameter list is also accepted.
 	assert!(text(&session.command_line("a2 ID NIL")).contains("a2 OK"));
 }
 
@@ -111,10 +110,8 @@ fn quota_reports_storage_usage() {
 #[test]
 fn append_over_quota_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	// A tiny 100-byte quota.
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory())
 		.with_quota_limit(100);
-	// (Authenticate.)
 	session.command_line("a1 LOGIN alice secret");
 	// A 200-byte APPEND exceeds the quota and is refused before the literal.
 	let output = session.command_line("a2 APPEND INBOX {200}");
@@ -214,6 +211,26 @@ fn authenticate_plain_succeeds() {
 		"{}",
 		text(&output)
 	);
+}
+
+#[test]
+fn authenticate_login_succeeds() {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	// AUTHENTICATE LOGIN: username prompt, password prompt, then success.
+	assert!(text(&session.command_line("a1 AUTHENTICATE LOGIN")).starts_with("+ "));
+	assert!(text(&session.auth_response(&B64.encode("alice"))).starts_with("+ "));
+	let ok = text(&session.auth_response(&B64.encode("secret")));
+	assert!(ok.contains("a1 OK AUTHENTICATE completed"), "{ok}");
+
+	// A wrong password fails.
+	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	session.command_line("a2 AUTHENTICATE LOGIN");
+	session.auth_response(&B64.encode("alice"));
+	let no = text(&session.auth_response(&B64.encode("wrong")));
+	assert!(no.contains("a2 NO"), "{no}");
 }
 
 #[test]
