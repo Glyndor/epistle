@@ -37,6 +37,7 @@ pub struct Webhook {
 	client: reqwest::Client,
 	url: String,
 	secret: Option<String>,
+	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 }
 
 impl Webhook {
@@ -49,7 +50,14 @@ impl Webhook {
 			client,
 			url: url.to_string(),
 			secret,
+			metrics: None,
 		})
+	}
+
+	/// Record delivery outcomes to these process metrics.
+	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
+		self
 	}
 
 	/// Deliver `event`. Fails open: transport/serialization errors are logged,
@@ -69,8 +77,18 @@ impl Webhook {
 		if let Some(secret) = &self.secret {
 			request = request.header("X-Webhook-Signature", sign(secret, &body));
 		}
-		if let Err(error) = request.body(body).send().await {
-			tracing::warn!(%error, "webhook delivery failed");
+		match request.body(body).send().await {
+			Ok(_) => {
+				if let Some(metrics) = &self.metrics {
+					metrics.webhook_sent();
+				}
+			}
+			Err(error) => {
+				tracing::warn!(%error, "webhook delivery failed");
+				if let Some(metrics) = &self.metrics {
+					metrics.webhook_failed();
+				}
+			}
 		}
 	}
 }
