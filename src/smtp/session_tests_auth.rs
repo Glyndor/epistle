@@ -52,6 +52,108 @@ fn greeted_plain() -> Session {
 }
 
 #[test]
+fn scram_sha256_authenticates() {
+	use crate::smtp::scram::{ScramCredentials, ScramStored};
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+	use ring::{digest, hmac, pbkdf2};
+	use std::num::NonZeroU32;
+
+	let salt = b"saltsalt";
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive("secret", salt, 4096));
+	let directory = Arc::new(
+		Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_scram([("alice".to_string(), stored)]),
+	);
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory)
+		.with_tls_active()
+		.with_scram_nonce("SN");
+	session.command_line("EHLO client.example.org");
+
+	// AUTH SCRAM-SHA-256 with the client-first as the initial response.
+	let action = session.command_line(&format!(
+		"AUTH SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	));
+	assert_eq!(reply_code(&action), 334);
+
+	// The server-first is deterministic given the fixed nonce and salt.
+	let server_first = format!("r=CNSN,s={},i=4096", B64.encode(salt));
+	let without_proof = "c=biws,r=CNSN";
+	let auth_message = format!("n=alice,r=CN,{server_first},{without_proof}");
+
+	// Client computes its proof from the password.
+	let mut salted = [0u8; 32];
+	pbkdf2::derive(
+		pbkdf2::PBKDF2_HMAC_SHA256,
+		NonZeroU32::new(4096).unwrap(),
+		salt,
+		b"secret",
+		&mut salted,
+	);
+	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");
+	let stored_key = digest::digest(&digest::SHA256, client_key.as_ref());
+	let client_sig = hmac::sign(
+		&hmac::Key::new(hmac::HMAC_SHA256, stored_key.as_ref()),
+		auth_message.as_bytes(),
+	);
+	let proof: Vec<u8> = client_key
+		.as_ref()
+		.iter()
+		.zip(client_sig.as_ref())
+		.map(|(a, b)| a ^ b)
+		.collect();
+	let client_final = format!("{without_proof},p={}", B64.encode(&proof));
+
+	let action = session.auth_line(&B64.encode(&client_final));
+	assert_eq!(reply_code(&action), 235);
+	assert_eq!(session.authenticated(), Some("alice"));
+}
+
+#[test]
+fn scram_sha256_wrong_password_fails() {
+	use crate::smtp::scram::{ScramCredentials, ScramStored};
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as B64;
+
+	let stored =
+		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	let directory = Arc::new(
+		Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_scram([("alice".to_string(), stored)]),
+	);
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory)
+		.with_tls_active()
+		.with_scram_nonce("SN");
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!(
+		"AUTH SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	));
+	// A bogus (well-formed but wrong) proof of 32 zero bytes fails.
+	let bad = format!("c=biws,r=CNSN,p={}", B64.encode([0u8; 32]));
+	let action = session.auth_line(&B64.encode(&bad));
+	assert_eq!(reply_code(&action), 535);
+	assert_eq!(session.authenticated(), None);
+}
+
+#[test]
 fn auth_rejected_outside_tls() {
 	let mut session = greeted_plain();
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
@@ -65,13 +167,16 @@ fn ehlo_advertises_auth_only_inside_tls() {
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(!reply.to_string().contains("AUTH PLAIN"));
+	assert!(!reply.to_string().contains("AUTH "));
 
 	let mut tls = tls_session();
 	let Action::Continue(reply) = tls.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(reply.to_string().contains("AUTH PLAIN"), "{reply}");
+	assert!(
+		reply.to_string().contains("AUTH SCRAM-SHA-256 PLAIN"),
+		"{reply}"
+	);
 }
 
 #[test]

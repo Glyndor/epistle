@@ -11,6 +11,8 @@ use super::command::{Command, ParseError};
 use super::directory::{Directory, Resolution};
 use super::reply::Reply;
 
+mod scram;
+
 /// Maximum accepted message size in bytes until quotas exist.
 pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
 
@@ -91,6 +93,10 @@ pub struct Session {
 	/// Recipient resolution. An empty directory rejects every recipient
 	/// (fail closed).
 	directory: Arc<Directory>,
+	/// In-flight SCRAM exchange, between the challenge rounds.
+	pending_scram: Option<scram::PendingScram>,
+	/// Test-injected SCRAM server nonce; `None` generates a fresh random one.
+	scram_nonce: Option<String>,
 }
 
 impl Session {
@@ -106,6 +112,8 @@ impl Session {
 			helo_domain: None,
 			esmtp: false,
 			directory: Arc::new(Directory::default()),
+			pending_scram: None,
+			scram_nonce: None,
 		}
 	}
 
@@ -218,21 +226,31 @@ impl Session {
 		if self.state != State::Greeted {
 			return Action::Continue(Reply::bad_sequence());
 		}
-		if mechanism != "PLAIN" {
-			return Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
-		}
-		match initial {
-			Some(response) => self.verify_plain(&response),
-			None => Action::CollectAuthResponse(Reply::single(334, "")),
+		match mechanism {
+			"PLAIN" => match initial {
+				Some(response) => self.verify_plain(&response),
+				None => Action::CollectAuthResponse(Reply::single(334, "")),
+			},
+			"SCRAM-SHA-256" => self.scram_begin(initial),
+			_ => Action::Continue(Reply::single(504, "5.5.4 mechanism not supported")),
 		}
 	}
 
 	/// Feed the response line of a challenged AUTH (server sent 334).
 	pub fn auth_line(&mut self, line: &str) -> Action {
 		if line == "*" {
+			self.pending_scram = None;
 			return Action::Continue(Reply::single(501, "5.7.0 authentication cancelled"));
 		}
-		self.verify_plain(line)
+		match self.pending_scram.take() {
+			Some(scram::PendingScram::ClientFirst) => self.scram_client_first(line),
+			Some(scram::PendingScram::ClientFinal {
+				server,
+				credentials,
+				account,
+			}) => self.scram_client_final(line, *server, *credentials, &account),
+			None => self.verify_plain(line),
+		}
 	}
 
 	fn verify_plain(&mut self, encoded: &str) -> Action {
@@ -292,7 +310,7 @@ impl Session {
 			lines.push("STARTTLS".to_string());
 		}
 		if self.tls_active && self.authenticated.is_none() {
-			lines.push("AUTH PLAIN".to_string());
+			lines.push("AUTH SCRAM-SHA-256 PLAIN".to_string());
 		}
 		// RFC 8689 §3: only advertise REQUIRETLS on a TLS-protected session.
 		if self.tls_active {
@@ -471,9 +489,9 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "session_tests_basic.rs"]
+#[path = "../session_tests_basic.rs"]
 mod tests_basic;
 
 #[cfg(test)]
-#[path = "session_tests_auth.rs"]
+#[path = "../session_tests_auth.rs"]
 mod tests_auth;
