@@ -147,12 +147,33 @@ impl MessageSink for SplitDelivery {
 				recipients: local,
 				..message.clone()
 			};
-			let redirects = self
+			let delivered = self
 				.local
 				.deliver_routed(&local_message, mailbox.as_deref())?;
+			// A Sieve `reject` bounces the reason back to a non-null sender.
+			if let Some(reason) = delivered.reject {
+				let hostname = local_message
+					.recipients
+					.first()
+					.and_then(|r| r.rsplit_once('@'))
+					.map(|(_, domain)| domain.to_string())
+					.unwrap_or_else(|| "localhost".to_string());
+				if let Some(bounce) = crate::queue::bounce::build(
+					&hostname,
+					&message.reverse_path,
+					&local_message.recipients,
+					&reason,
+					&message.data,
+					std::time::SystemTime::now(),
+				) {
+					self.outbound
+						.store(&bounce)
+						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+				}
+			}
 			// Queue any Sieve redirects to the outbound spool, preserving the
 			// original sender. The null sender is already filtered upstream.
-			for address in redirects {
+			for address in delivered.redirects {
 				let forwarded = AcceptedMessage {
 					reverse_path: self.forward_sender(&message.reverse_path),
 					recipients: vec![address],
@@ -277,6 +298,33 @@ mod tests {
 		sink.deliver(msg).expect("deliver");
 		assert_eq!(folder_count(dir.path(), "alice", "Rejects"), 1);
 		assert_eq!(inbox_count(dir.path(), "alice"), 0);
+	}
+
+	#[test]
+	fn sieve_reject_bounces_and_skips_delivery() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let account_dir = dir.path().join("accounts").join("alice");
+		fs::create_dir_all(&account_dir).expect("mkdir");
+		fs::write(account_dir.join("filter.sieve"), "reject \"no thanks\";").expect("filter");
+		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
+		sink.deliver(message(&["alice@example.org"]))
+			.expect("deliver");
+		// Rejected: nothing delivered, one DSN bounce queued to the sender.
+		assert_eq!(inbox_count(dir.path(), "alice"), 0);
+		let spool = FsSpool::open(dir.path()).expect("spool");
+		let ids = spool.list().expect("list");
+		assert_eq!(ids.len(), 1);
+		let entry = spool.load(ids[0]).expect("load");
+		// A DSN uses the null reverse-path and goes to the original sender.
+		assert!(
+			entry.envelope.reverse_path.is_empty(),
+			"{:?}",
+			entry.envelope
+		);
+		assert_eq!(
+			entry.envelope.recipients,
+			vec!["alice@example.org".to_string()]
+		);
 	}
 
 	#[test]

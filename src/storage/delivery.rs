@@ -14,6 +14,14 @@ use crate::smtp::sink::{MessageSink, SinkError};
 
 use super::spool::write_sync;
 
+/// What local delivery produced: redirect addresses for the caller to queue,
+/// and a Sieve reject reason to bounce (if any).
+#[derive(Debug, Default)]
+pub struct Delivered {
+	pub redirects: Vec<String>,
+	pub reject: Option<String>,
+}
+
 /// Delivers messages into `data_dir/accounts/<account>/new/`, one crash-safe
 /// copy per distinct recipient account.
 #[derive(Debug)]
@@ -93,7 +101,7 @@ impl LocalDelivery {
 		&self,
 		message: &AcceptedMessage,
 		mailbox: Option<&str>,
-	) -> Result<Vec<String>, SinkError> {
+	) -> Result<Delivered, SinkError> {
 		if let Some(name) = mailbox
 			&& !is_safe_mailbox(name)
 		{
@@ -105,11 +113,13 @@ impl LocalDelivery {
 		if accounts.is_empty() {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
-		let mut redirects = Vec::new();
+		let mut delivered = Delivered::default();
 		for account in &accounts {
-			redirects.extend(self.deliver_for_account(account, message, mailbox)?);
+			let one = self.deliver_for_account(account, message, mailbox)?;
+			delivered.redirects.extend(one.redirects);
+			delivered.reject = delivered.reject.or(one.reject);
 		}
-		Ok(redirects)
+		Ok(delivered)
 	}
 
 	/// Deliver one message to one account. An explicit `hint` mailbox (an
@@ -121,19 +131,28 @@ impl LocalDelivery {
 		account: &str,
 		message: &AcceptedMessage,
 		hint: Option<&str>,
-	) -> Result<Vec<String>, SinkError> {
+	) -> Result<Delivered, SinkError> {
 		let data = &message.data;
 		if let Some(mailbox) = hint {
 			self.deliver_to_account(account, Some(mailbox), data, &[])
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			return Ok(Vec::new());
+			return Ok(Delivered::default());
 		}
 		let Some(outcome) = self.sieve_outcome(account, message) else {
 			// No filter (or it failed to compile): normal INBOX delivery.
 			self.deliver_to_account(account, None, data, &[])
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			return Ok(Vec::new());
+			return Ok(Delivered::default());
 		};
+		// reject/ereject: refuse without delivering; the caller bounces the
+		// reason to a non-null sender.
+		if let Some(reason) = outcome.reject {
+			let reject = (!message.reverse_path.is_empty()).then_some(reason);
+			return Ok(Delivered {
+				redirects: Vec::new(),
+				reject,
+			});
+		}
 		if outcome.keep {
 			self.deliver_to_account(account, None, data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
@@ -146,9 +165,12 @@ impl LocalDelivery {
 		}
 		// Never redirect a bounce (null sender): that risks mail loops.
 		if message.reverse_path.is_empty() {
-			return Ok(Vec::new());
+			return Ok(Delivered::default());
 		}
-		Ok(outcome.redirects)
+		Ok(Delivered {
+			redirects: outcome.redirects,
+			reject: None,
+		})
 	}
 
 	/// Evaluate the account's Sieve filter, if present and valid. Any read,

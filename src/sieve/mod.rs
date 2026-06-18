@@ -5,6 +5,7 @@ pub mod ast;
 mod date;
 pub mod interp;
 pub mod lexer;
+mod message;
 pub mod parser;
 pub mod vacation;
 
