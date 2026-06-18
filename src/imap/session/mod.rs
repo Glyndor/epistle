@@ -22,10 +22,9 @@ pub struct Output {
 	pub bytes: Vec<u8>,
 	/// Close the connection after sending.
 	pub close: bool,
-	/// After sending, read exactly this many literal bytes and feed them
-	/// to [`Session::literal_done`].
+	/// After sending, read this many literal bytes for [`Session::literal_done`].
 	pub collect_literal: Option<usize>,
-	/// After sending, read lines until `DONE` and call [`Session::idle_done`].
+	/// After sending, read lines until `DONE` for [`Session::idle_done`].
 	pub idle: bool,
 	/// After sending, perform the TLS handshake and call [`Session::tls_started`].
 	pub upgrade_tls: bool,
@@ -82,11 +81,9 @@ pub struct Session {
 	pending_append: Option<(String, String, Vec<Flag>)>,
 	/// Tag of an in-flight IDLE.
 	idle_tag: Option<String>,
-	/// Whether the connection is inside TLS. LOGIN is refused outside.
+	/// Whether the connection is inside TLS (LOGIN refused outside).
 	tls_active: bool,
-	/// Whether STARTTLS can still be offered.
 	tls_available: bool,
-	/// Per-account storage quota in bytes (RFC 9208 STORAGE).
 	quota_limit_bytes: u64,
 	pending_auth: Option<auth::PendingAuth>,
 	scram_nonce: Option<String>,
@@ -138,7 +135,7 @@ impl Session {
 	fn capabilities(&self) -> String {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE",
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE",
 		);
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
@@ -364,11 +361,13 @@ THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZ
 			"* {count} EXISTS\r\n\
 * OK [UIDVALIDITY {validity}] UIDs valid\r\n\
 * OK [UIDNEXT {next}] predicted next UID\r\n\
+* OK [HIGHESTMODSEQ {modseq}] highest mod-sequence\r\n\
 * FLAGS (\\Seen \\Deleted)\r\n\
 {tag} OK [{mode}] {verb} completed\r\n",
 			count = snapshot.len(),
 			validity = snapshot.uid_validity(),
 			next = snapshot.uid_next(),
+			modseq = snapshot.highest_modseq(),
 			mode = if read_only { "READ-ONLY" } else { "READ-WRITE" },
 			verb = if read_only { "EXAMINE" } else { "SELECT" },
 		);

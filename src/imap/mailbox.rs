@@ -12,6 +12,8 @@ pub struct Snapshot {
 	account_dir: PathBuf,
 	messages: Vec<MessageRef>,
 	uid_validity: u32,
+	/// Highest mod-sequence in the mailbox (CONDSTORE, RFC 7162).
+	highest_modseq: u64,
 }
 
 /// One message in the snapshot.
@@ -23,6 +25,8 @@ pub struct MessageRef {
 	pub flags: Vec<Flag>,
 	/// File mtime; used for INTERNALDATE.
 	pub internal_date: std::time::SystemTime,
+	/// Mod-sequence of the last flag change (CONDSTORE, RFC 7162).
+	pub modseq: u64,
 }
 
 /// Supported permanent flags (RFC 9051 section 2.3.2).
@@ -201,15 +205,26 @@ impl Snapshot {
 				size,
 				flags,
 				internal_date,
+				modseq: super::modseq::read_message(&account_dir, *id),
 			});
 		}
+		// HIGHESTMODSEQ is the persisted counter, never below any message's.
+		let highest_modseq = super::modseq::read_counter(&account_dir)
+			.max(messages.iter().map(|m| m.modseq).max().unwrap_or(1))
+			.max(1);
 		Ok(Snapshot {
 			account_dir,
 			messages,
 			// Derived from the newest message so a changed mailbox between
 			// sessions changes validity. 1 for an empty mailbox.
 			uid_validity: ids.last().map(|id| (id.as_u128() as u32) | 1).unwrap_or(1),
+			highest_modseq,
 		})
+	}
+
+	/// The mailbox's highest mod-sequence (CONDSTORE).
+	pub fn highest_modseq(&self) -> u64 {
+		self.highest_modseq
 	}
 
 	pub fn len(&self) -> usize {
@@ -263,7 +278,12 @@ impl Snapshot {
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
 		let id = self.messages[index].id;
 		write_flags(&self.account_dir, id, &flags)?;
+		// A flag change advances the mailbox mod-sequence and stamps the message.
+		let modseq = super::modseq::next_counter(&self.account_dir)?;
+		let _ = super::modseq::write_message(&self.account_dir, id, modseq);
+		self.highest_modseq = self.highest_modseq.max(modseq);
 		self.messages[index].flags = flags;
+		self.messages[index].modseq = modseq;
 		Ok(&self.messages[index].flags)
 	}
 

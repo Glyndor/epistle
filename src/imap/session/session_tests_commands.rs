@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn condstore_reports_and_advances_modseq() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");
+	let mut session = logged_in(dir.path());
+
+	// SELECT (CONDSTORE) is accepted and reports HIGHESTMODSEQ.
+	let response = text(&session.command_line("a2 SELECT INBOX (CONDSTORE)"));
+	assert!(response.contains("[HIGHESTMODSEQ "), "{response}");
+	assert!(
+		response.contains("a2 OK [READ-WRITE] SELECT completed"),
+		"{response}"
+	);
+
+	// FETCH MODSEQ returns a parenthesized mod-sequence.
+	let response = text(&session.command_line("a3 FETCH 1 (MODSEQ)"));
+	assert!(response.contains("MODSEQ (1)"), "{response}");
+
+	// A STORE advances the message's mod-sequence.
+	session.command_line("a4 STORE 1 +FLAGS (\\Seen)");
+	let response = text(&session.command_line("a5 FETCH 1 (MODSEQ)"));
+	assert!(response.contains("MODSEQ (2)"), "{response}");
+
+	// Capability advertises CONDSTORE.
+	assert!(
+		text(&session.command_line("a6 CAPABILITY")).contains("CONDSTORE"),
+		"capability should advertise CONDSTORE"
+	);
+}
+
+#[test]
 fn append_stores_message_with_flags() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
