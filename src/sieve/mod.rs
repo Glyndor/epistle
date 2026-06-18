@@ -8,6 +8,7 @@ pub mod lexer;
 mod message;
 pub mod parser;
 pub mod vacation;
+mod vars;
 
 #[cfg(test)]
 mod interp_tests;

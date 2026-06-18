@@ -44,7 +44,14 @@ pub use super::message::Message;
 pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	let mut outcome = Outcome::default();
 	let mut cancel_implicit = false;
-	run(script, message, &mut outcome, &mut cancel_implicit);
+	let mut vars = std::collections::HashMap::new();
+	run(
+		script,
+		message,
+		&mut outcome,
+		&mut cancel_implicit,
+		&mut vars,
+	);
 	// Implicit keep applies unless an action cancelled it.
 	if !cancel_implicit {
 		outcome.keep = true;
@@ -52,12 +59,15 @@ pub fn evaluate(script: &[Command], message: &Message) -> Outcome {
 	outcome
 }
 
+use super::vars::expand;
+
 /// Returns true if a `stop` was executed (halts further commands).
 fn run(
 	commands: &[Command],
 	message: &Message,
 	outcome: &mut Outcome,
 	cancel_implicit: &mut bool,
+	vars: &mut std::collections::HashMap<String, String>,
 ) -> bool {
 	for command in commands {
 		match command {
@@ -67,12 +77,19 @@ fn run(
 					outcome.discarded = true;
 					*cancel_implicit = true;
 				}
-				// reject / ereject (RFC 5429): refuse the message, bouncing the
-				// reason to the sender; cancels the implicit keep.
+				// reject / ereject (RFC 5429): refuse + bounce; cancels keep.
 				"reject" | "ereject" => {
 					if let Some(reason) = first_str(args) {
-						outcome.reject = Some(reason);
+						outcome.reject = Some(expand(&reason, vars));
 						*cancel_implicit = true;
+					}
+				}
+				// set (RFC 5229): store a variable for later `${name}` expansion.
+				"set" => {
+					let strings = strings(args);
+					if let [name, value, ..] = strings.as_slice() {
+						let value = expand(value, vars);
+						vars.insert(name.clone(), value);
 					}
 				}
 				// vacation (RFC 5230): autoresponse alongside normal delivery
@@ -80,7 +97,7 @@ fn run(
 				"vacation" => outcome.vacation = parse_vacation(args),
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
-						outcome.fileinto.push(target);
+						outcome.fileinto.push(expand(&target, vars));
 						// `:copy` (RFC 3894) leaves the implicit keep in place.
 						if !has_tag(args, "copy") {
 							*cancel_implicit = true;
@@ -89,7 +106,7 @@ fn run(
 				}
 				"redirect" => {
 					if let Some(target) = first_str(args) {
-						outcome.redirects.push(target);
+						outcome.redirects.push(expand(&target, vars));
 						if !has_tag(args, "copy") {
 							*cancel_implicit = true;
 						}
@@ -116,7 +133,7 @@ fn run(
 				let mut taken = false;
 				for branch in &conditional.branches {
 					if eval_test(&branch.test, message) {
-						if run(&branch.body, message, outcome, cancel_implicit) {
+						if run(&branch.body, message, outcome, cancel_implicit, vars) {
 							return true;
 						}
 						taken = true;
@@ -125,7 +142,7 @@ fn run(
 				}
 				if !taken
 					&& let Some(body) = &conditional.otherwise
-					&& run(body, message, outcome, cancel_implicit)
+					&& run(body, message, outcome, cancel_implicit, vars)
 				{
 					return true;
 				}
