@@ -237,12 +237,42 @@ fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
 			}
 		}
 	}
+	let mut destroyed = Vec::new();
+	let mut not_destroyed = serde_json::Map::new();
+	if let Some(ids) = args.get("destroy").and_then(Value::as_array) {
+		for id in ids.iter().filter_map(Value::as_str) {
+			match destroy_email(state.data_dir(), account, id) {
+				Ok(()) => destroyed.push(Value::String(id.to_string())),
+				Err(reason) => {
+					not_destroyed.insert(id.to_string(), json!({ "type": reason }));
+				}
+			}
+		}
+	}
 	json!([
 		"Email/set",
 		{ "accountId": account, "oldState": "0", "newState": "0",
-		  "updated": updated, "notUpdated": not_updated },
+		  "updated": updated, "notUpdated": not_updated,
+		  "destroyed": destroyed, "notDestroyed": not_destroyed },
 		call_id,
 	])
+}
+
+/// Permanently remove a message by id (Email/set destroy).
+fn destroy_email(data_dir: &std::path::Path, account: &str, id: &str) -> Result<(), &'static str> {
+	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
+	for mailbox in crate::imap::mailbox::list(data_dir, account) {
+		let Ok(mut snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox)
+		else {
+			continue;
+		};
+		let position = snapshot.messages().position(|m| m.id() == uuid);
+		if let Some(index) = position {
+			let sequence = u32::try_from(index + 1).unwrap_or(u32::MAX);
+			return snapshot.remove_at(sequence).map_err(|_| "serverFail");
+		}
+	}
+	Err("notFound")
 }
 
 /// Apply a `keywords` replacement to a message, mapping JMAP keywords to IMAP
