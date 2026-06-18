@@ -80,7 +80,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let webhook = match &config.webhook {
 		Some(webhook) => Some(Arc::new(
 			crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
-				.map_err(std::io::Error::other)?,
+				.map_err(std::io::Error::other)?
+				.with_metrics(metrics.clone()),
 		)),
 		None => None,
 	};

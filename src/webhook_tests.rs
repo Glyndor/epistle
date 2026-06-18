@@ -110,3 +110,41 @@ async fn unreachable_endpoint_fails_open() {
 		})
 		.await;
 }
+
+#[tokio::test]
+async fn records_delivery_metrics() {
+	use std::sync::Arc;
+	let captured: Captured = Arc::new(std::sync::Mutex::new(None));
+	let url = mock_server(captured).await;
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+
+	// A successful delivery bumps webhook_sent.
+	let ok = Webhook::new(&url, None)
+		.expect("wh")
+		.with_metrics(metrics.clone());
+	ok.notify(&WebhookEvent::DeliveryFailed {
+		recipient: "x@y".into(),
+		reason: "boom".into(),
+	})
+	.await;
+	assert!(
+		metrics.render().contains("mail_webhook_sent_total 1\n"),
+		"{}",
+		metrics.render()
+	);
+
+	// An unreachable endpoint bumps webhook_failed.
+	let bad = Webhook::new("http://127.0.0.1:1/hook", None)
+		.expect("wh")
+		.with_metrics(metrics.clone());
+	bad.notify(&WebhookEvent::DeliveryFailed {
+		recipient: "x@y".into(),
+		reason: "boom".into(),
+	})
+	.await;
+	assert!(
+		metrics.render().contains("mail_webhook_failed_total 1\n"),
+		"{}",
+		metrics.render()
+	);
+}

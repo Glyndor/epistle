@@ -58,6 +58,8 @@ pub struct Metrics {
 	relayed: AtomicU64,
 	deferred: AtomicU64,
 	bounced: AtomicU64,
+	webhook_sent: AtomicU64,
+	webhook_failed: AtomicU64,
 }
 
 impl Metrics {
@@ -113,6 +115,16 @@ impl Metrics {
 	/// Count an outbound message bounced (permanently undeliverable).
 	pub fn bounced(&self) {
 		self.bounced.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a webhook event delivered successfully.
+	pub fn webhook_sent(&self) {
+		self.webhook_sent.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a webhook event that failed to deliver (advisory; mail unaffected).
+	pub fn webhook_failed(&self) {
+		self.webhook_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a rejected message by reason.
@@ -204,6 +216,16 @@ impl Metrics {
 				"mail_bounced_total",
 				"Outbound messages permanently bounced.",
 				&self.bounced,
+			),
+			(
+				"mail_webhook_sent_total",
+				"Webhook events delivered successfully.",
+				&self.webhook_sent,
+			),
+			(
+				"mail_webhook_failed_total",
+				"Webhook events that failed to deliver.",
+				&self.webhook_failed,
 			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
