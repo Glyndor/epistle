@@ -33,6 +33,8 @@ pub fn text(output: &Output) -> String {
 	String::from_utf8_lossy(&output.bytes).to_string()
 }
 
+#[path = "session_tests_auth.rs"]
+mod auth;
 #[path = "session_tests_basic.rs"]
 mod basic;
 #[path = "session_tests_commands.rs"]
