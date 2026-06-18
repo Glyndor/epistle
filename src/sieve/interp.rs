@@ -1,12 +1,6 @@
 //! Sieve interpreter (RFC 5228 §2.10, §5): evaluate a script against a message
-//! to decide where it is delivered.
-//!
-//! Supported tests: `true`/`false`, `exists`, `header`, `size`, and the
-//! `allof`/`anyof`/`not` combinators with the `:is`/`:contains`/`:matches`
-//! comparators. Supported actions: `keep`, `discard`, `fileinto`, `redirect`,
-//! `stop` (and `require`, which is a no-op at run time). Unknown tests evaluate
-//! to false and unknown actions are ignored, so an unsupported script fails
-//! safe rather than misdelivering.
+//! to decide where it is delivered. Unknown tests evaluate to false and unknown
+//! actions are ignored, so an unsupported script fails safe.
 
 use super::ast::{Argument, Command, Test};
 
@@ -33,6 +27,8 @@ pub struct Message {
 	body: String,
 	envelope_from: Option<String>,
 	envelope_to: Vec<String>,
+	/// Evaluation time (Unix seconds) for `currentdate`; tests inject it.
+	now: Option<u64>,
 }
 
 impl Message {
@@ -77,6 +73,7 @@ impl Message {
 			body,
 			envelope_from: None,
 			envelope_to: Vec::new(),
+			now: None,
 		}
 	}
 
@@ -84,6 +81,12 @@ impl Message {
 	pub fn with_envelope(mut self, from: impl Into<String>, to: Vec<String>) -> Self {
 		self.envelope_from = Some(from.into());
 		self.envelope_to = to;
+		self
+	}
+
+	/// Fix the evaluation time (Unix seconds) used by `currentdate` (tests).
+	pub fn with_now(mut self, now: u64) -> Self {
+		self.now = Some(now);
 		self
 	}
 
@@ -205,13 +208,13 @@ fn eval_test(test: &Test, message: &Message) -> bool {
 		"body" => body_test(test, message),
 		"size" => size_test(test, message),
 		"date" => date_test(test, message),
+		"currentdate" => currentdate_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
 	}
 }
 
-/// `date [comparator] <header-name> <date-part> <key-list>` (RFC 5260). The
-/// chosen part of the named header's date is compared against the keys.
+/// `date [comparator] <header-name> <date-part> <key-list>` (RFC 5260).
 fn date_test(test: &Test, message: &Message) -> bool {
 	let comparator = comparator(&test.args);
 	let strings = strings(&test.args);
@@ -228,6 +231,28 @@ fn date_test(test: &Test, message: &Message) -> bool {
 		}
 	}
 	false
+}
+
+/// `currentdate [comparator] <date-part> <key-list>` (RFC 5260): compares the
+/// chosen part of the current (UTC) date against the keys.
+fn currentdate_test(test: &Test, message: &Message) -> bool {
+	let comparator = comparator(&test.args);
+	let strings = strings(&test.args);
+	if strings.len() < 2 {
+		return false;
+	}
+	let now = message.now.unwrap_or_else(|| {
+		std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0)
+	});
+	let Some(extracted) = super::date::extract_part_from_unix(now, &strings[0]) else {
+		return false;
+	};
+	strings[1..]
+		.iter()
+		.any(|key| comparator.matches(&extracted, key))
 }
 
 /// `header [comparator] <header-names> <key-list>`.
@@ -252,8 +277,6 @@ fn header_test(test: &Test, message: &Message) -> bool {
 }
 
 /// `address [comparator] [:all|:localpart|:domain] <header-names> <key-list>`.
-/// Compares the chosen part of the addresses in the named headers, per
-/// RFC 5228 §5.1. Defaults to the whole address (`:all`).
 fn address_test(test: &Test, message: &Message) -> bool {
 	let comparator = comparator(&test.args);
 	let Some((names, keys)) = split_names_keys(&test.args, &[]) else {
@@ -275,9 +298,8 @@ fn address_test(test: &Test, message: &Message) -> bool {
 	false
 }
 
-/// `envelope [comparator] [:all|:localpart|:domain] <envelope-part-list>
-/// <key-list>` (RFC 5228 §5.4). `from` matches MAIL FROM, `to` matches the
-/// RCPT TO addresses.
+/// `envelope [comparator] [part] <envelope-part-list> <key-list>` (RFC 5228
+/// §5.4): `from` matches MAIL FROM, `to` matches RCPT TO.
 fn envelope_test(test: &Test, message: &Message) -> bool {
 	let comparator = comparator(&test.args);
 	let Some((parts, keys)) = split_names_keys(&test.args, &[]) else {
@@ -333,8 +355,7 @@ impl AddressPart {
 	}
 }
 
-/// The bare `addr-spec` from a header value: the contents of the last
-/// angle-addr (`Name <a@b>`), or the trimmed value if there is none.
+/// The bare `addr-spec` from a header value (the last angle-addr, else trimmed).
 fn addr_spec(value: &str) -> String {
 	if let Some(open) = value.rfind('<')
 		&& let Some(close) = value[open..].find('>')
@@ -344,9 +365,8 @@ fn addr_spec(value: &str) -> String {
 	value.trim().to_string()
 }
 
-/// `body [comparator] [:raw|:text] <key-list>` (RFC 5173). The message body is
-/// matched as text against the keys; the `:raw`/`:text`/`:content` transforms
-/// all reduce to the body text here (we do no MIME decoding yet).
+/// `body [comparator] [:raw|:text] <key-list>` (RFC 5173): body text vs keys
+/// (the transforms all reduce to body text; no MIME decoding yet).
 fn body_test(test: &Test, message: &Message) -> bool {
 	let comparator = comparator(&test.args);
 	let keys = strings(&test.args);
@@ -427,8 +447,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 	dp[t.len()]
 }
 
-/// Flag tokens from a flag-list argument: each string may hold several
-/// space-separated flags (RFC 5232 section 3).
+/// Flag tokens from a flag-list argument (each string may hold several flags).
 fn flag_list(args: &[Argument]) -> Vec<String> {
 	strings(args)
 		.iter()
