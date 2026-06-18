@@ -23,6 +23,13 @@ pub enum WebhookEvent {
 		/// `Message-ID` header, if present (for receiver-side correlation).
 		message_id: Option<String>,
 	},
+	/// Outbound delivery to a recipient permanently failed (a bounce was queued).
+	DeliveryFailed {
+		/// The recipient that could not be reached.
+		recipient: String,
+		/// The failure reason (remote response or local error).
+		reason: String,
+	},
 }
 
 /// Posts events to a configured endpoint with a bounded timeout.

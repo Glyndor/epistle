@@ -77,10 +77,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
 		split = split.with_srs(srs, config.hostname.clone());
 	}
-	if let Some(webhook) = &config.webhook {
-		let poster = crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
-			.map_err(std::io::Error::other)?;
-		split = split.with_webhook(Arc::new(poster));
+	let webhook = match &config.webhook {
+		Some(webhook) => Some(Arc::new(
+			crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
+				.map_err(std::io::Error::other)?,
+		)),
+		None => None,
+	};
+	if let Some(webhook) = &webhook {
+		split = split.with_webhook(Arc::clone(webhook));
 	}
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
@@ -166,16 +171,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			std::io::Error::other(format!("cannot build MTA-STS fetcher: {error:?}"))
 		})?,
 	)));
-	let worker = Arc::new(
-		crate::queue::Worker::new(
-			crate::storage::FsSpool::open(&config.data_dir)?,
-			connector,
-			&config.hostname,
-		)
-		.with_bounce_sink(Arc::clone(&sink))
-		.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
-		.with_metrics(metrics.clone()),
-	);
+	let mut worker = crate::queue::Worker::new(
+		crate::storage::FsSpool::open(&config.data_dir)?,
+		connector,
+		&config.hostname,
+	)
+	.with_bounce_sink(Arc::clone(&sink))
+	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
+	.with_metrics(metrics.clone());
+	if let Some(webhook) = &webhook {
+		worker = worker.with_webhook(Arc::clone(webhook));
+	}
+	let worker = Arc::new(worker);
 	tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
 
 	// DMARC aggregate report flush: once per hour, queue reports for

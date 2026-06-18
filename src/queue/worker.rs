@@ -43,6 +43,8 @@ pub struct Worker {
 	clock: std::sync::atomic::AtomicU64,
 	/// Counters for outbound delivery outcomes (relayed, deferred, bounced).
 	metrics: Option<Arc<crate::metrics::Metrics>>,
+	/// Webhook for delivery-failure events (fire-and-forget, advisory).
+	webhook: Option<Arc<crate::webhook::Webhook>>,
 }
 
 impl Worker {
@@ -56,7 +58,14 @@ impl Worker {
 			mta_sts: None,
 			clock: std::sync::atomic::AtomicU64::new(0),
 			metrics: None,
+			webhook: None,
 		}
+	}
+
+	/// Fire delivery-failure events to this webhook.
+	pub fn with_webhook(mut self, webhook: Arc<crate::webhook::Webhook>) -> Self {
+		self.webhook = Some(webhook);
+		self
 	}
 
 	/// Record outbound delivery outcomes to these process metrics.
@@ -110,6 +119,17 @@ impl Worker {
 		let Ok(entry) = self.spool.load(id) else {
 			return;
 		};
+		// Advisory webhook: notify per recipient that delivery failed.
+		if let Some(webhook) = &self.webhook {
+			for recipient in &entry.envelope.recipients {
+				let webhook = webhook.clone();
+				let event = crate::webhook::WebhookEvent::DeliveryFailed {
+					recipient: recipient.clone(),
+					reason: reason.to_string(),
+				};
+				tokio::spawn(async move { webhook.notify(&event).await });
+			}
+		}
 		let Some(message) = super::bounce::build(
 			&self.ehlo_hostname,
 			&entry.envelope.reverse_path,
@@ -420,5 +440,52 @@ mod tests {
 		worker.set_now(2_000_000);
 		assert_eq!(worker.pass().await.expect("pass"), 0);
 		assert!(worker.spool.list().expect("list").is_empty());
+	}
+
+	#[tokio::test]
+	async fn permanent_failure_fires_delivery_failed_webhook() {
+		use std::sync::Mutex;
+		let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+		let state = captured.clone();
+		async fn handler(
+			axum::extract::State(state): axum::extract::State<Arc<Mutex<Option<String>>>>,
+			body: String,
+		) -> &'static str {
+			*state.lock().expect("lock") = Some(body);
+			"ok"
+		}
+		let app = axum::Router::new()
+			.route("/hook", axum::routing::post(handler))
+			.with_state(state);
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("bind");
+		let addr = listener.local_addr().expect("addr");
+		tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+
+		let dir = tempfile::tempdir().expect("tempdir");
+		let spool = spool_with_message(dir.path(), "carol@remote.example");
+		let connector = Arc::new(LoopbackConnector {
+			sink: Arc::new(MemorySink::new()),
+			domain: "remote.example".to_string(),
+		});
+		let webhook =
+			crate::webhook::Webhook::new(&format!("http://{addr}/hook"), None).expect("wh");
+		let worker = Worker::new(spool, connector, "mail.sender.example")
+			.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
+			.with_webhook(Arc::new(webhook));
+		worker.pass().await.expect("pass");
+
+		let mut body = None;
+		for _ in 0..50 {
+			if let Some(b) = captured.lock().expect("lock").clone() {
+				body = Some(b);
+				break;
+			}
+			tokio::time::sleep(Duration::from_millis(10)).await;
+		}
+		let body = body.expect("webhook delivered");
+		assert!(body.contains("delivery_failed"), "{body}");
+		assert!(body.contains("carol@remote.example"), "{body}");
 	}
 }
