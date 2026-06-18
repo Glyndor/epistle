@@ -85,6 +85,36 @@ fn submit_email(
 		.map_err(|_| "serverFail")
 }
 
+/// `Quota/get` (RFC 9425): the account's storage quota in octets.
+pub(super) fn quota_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let used = crate::imap::mailbox::account_usage(state.data_dir(), account);
+	let limit = state.quota_limit();
+	let mut quota = serde_json::Map::from_iter([
+		("id".to_string(), json!("mail")),
+		("resourceType".to_string(), json!("octets")),
+		("used".to_string(), json!(used)),
+		("scope".to_string(), json!("account")),
+		("name".to_string(), json!("Mail storage")),
+		("types".to_string(), json!(["Mail"])),
+	]);
+	// A configured limit is the hard limit; 0 means unlimited (omit it).
+	quota.insert(
+		"limit".to_string(),
+		if limit > 0 { json!(limit) } else { Value::Null },
+	);
+	json!([
+		"Quota/get",
+		{ "accountId": account, "state": "0", "list": [quota], "notFound": [] },
+		call_id,
+	])
+}
+
 /// `Identity/get` (RFC 8621 §6.1): the account's sending identities, one per
 /// configured address.
 pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Value {

@@ -177,6 +177,34 @@ async fn jmap_email_submission_queues_message() {
 }
 
 #[tokio::test]
+async fn jmap_quota_get_reports_usage() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	std::fs::write(
+		inbox.join(format!("{}.eml", uuid::Uuid::now_v7())),
+		b"hello",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0).with_quota(1_000_000));
+	// Session advertises the quota capability.
+	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	assert!(
+		session["capabilities"]["urn:ietf:params:jmap:quota"].is_object(),
+		"{session}"
+	);
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:quota"],
+		"methodCalls": [["Quota/get", {"accountId": "alice"}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let quota = &body["methodResponses"][0][1]["list"][0];
+	assert_eq!(quota["limit"], 1_000_000);
+	assert!(quota["used"].as_u64().expect("used") >= 5, "{quota}");
+}
+
+#[tokio::test]
 async fn jmap_identity_get_lists_addresses() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));

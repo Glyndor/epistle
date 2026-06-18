@@ -26,6 +26,8 @@ struct Inner {
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<AuthLimiter>,
+	/// Per-account storage quota in bytes; 0 means unlimited.
+	quota_limit: std::sync::atomic::AtomicU64,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -93,8 +95,24 @@ impl ApiState {
 				store,
 				spool,
 				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
+				quota_limit: std::sync::atomic::AtomicU64::new(0),
 			}),
 		}
+	}
+
+	/// Set the per-account storage quota in bytes (0 = unlimited).
+	pub fn with_quota(self, bytes: u64) -> Self {
+		self.inner
+			.quota_limit
+			.store(bytes, std::sync::atomic::Ordering::Relaxed);
+		self
+	}
+
+	/// The configured per-account storage quota in bytes (0 = unlimited).
+	pub fn quota_limit(&self) -> u64 {
+		self.inner
+			.quota_limit
+			.load(std::sync::atomic::Ordering::Relaxed)
 	}
 
 	pub fn domains(&self) -> &[String] {
