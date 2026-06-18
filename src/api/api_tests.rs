@@ -206,6 +206,36 @@ async fn jmap_mailbox_get_lists_inbox() {
 }
 
 #[tokio::test]
+async fn jmap_email_get_parses_message() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"From: Alice <a@example.org>\r\nTo: b@example.net\r\nSubject: Hi there\r\n\r\nthe body\r\n",
+	)
+	.expect("write");
+
+	let app = router(test_state(dir.path(), 0));
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id.to_string()]}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let email = &body["methodResponses"][0][1]["list"][0];
+	assert_eq!(email["subject"], "Hi there");
+	assert_eq!(email["from"][0]["email"], "Alice <a@example.org>");
+	assert_eq!(email["preview"], "the body");
+	let req = serde_json::json!({
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": ["not-a-uuid"]}, "c2"]],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(body["methodResponses"][0][1]["notFound"][0], "not-a-uuid");
+}
+
+#[tokio::test]
 async fn jmap_email_query_returns_ids() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let inbox = dir.path().join("accounts").join("alice").join("new");
