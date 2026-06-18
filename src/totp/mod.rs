@@ -48,6 +48,26 @@ pub fn verify(secret: &[u8], code: u32, now_secs: u64) -> bool {
 	})
 }
 
+/// Encode bytes as an RFC 4648 base32 string (no padding).
+pub fn encode_base32(bytes: &[u8]) -> String {
+	const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+	let mut out = String::new();
+	let mut bits = 0u32;
+	let mut nbits = 0u32;
+	for &byte in bytes {
+		bits = (bits << 8) | u32::from(byte);
+		nbits += 8;
+		while nbits >= 5 {
+			nbits -= 5;
+			out.push(ALPHABET[((bits >> nbits) & 0x1f) as usize] as char);
+		}
+	}
+	if nbits > 0 {
+		out.push(ALPHABET[((bits << (5 - nbits)) & 0x1f) as usize] as char);
+	}
+	out
+}
+
 /// Decode an RFC 4648 base32 secret (no padding required, case-insensitive).
 pub fn decode_base32_secret(secret: &str) -> Option<Vec<u8>> {
 	const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

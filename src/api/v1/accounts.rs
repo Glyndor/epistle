@@ -52,6 +52,7 @@ pub async fn create(
 			addresses: request.addresses,
 			password_hash,
 			scram: Some(derive_scram(&request.password)),
+			totp_secret: None,
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created {
@@ -110,6 +111,49 @@ fn derive_scram(password: &str) -> crate::smtp::scram::ScramStored {
 	let _ = ring::rand::SystemRandom::new().fill(&mut salt);
 	let credentials = crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096);
 	crate::smtp::scram::ScramStored::from_credentials(&credentials)
+}
+
+/// The enrolled TOTP secret and its `otpauth://` provisioning URI.
+#[derive(Serialize)]
+pub struct TotpEnrolled {
+	secret: String,
+	otpauth_uri: String,
+}
+
+/// POST `/accounts/{name}/totp`: generate and store a fresh TOTP secret (2FA).
+pub async fn enroll_totp(
+	State(state): State<ApiState>,
+	Path(name): Path<String>,
+) -> Result<Json<TotpEnrolled>, ApiError> {
+	use ring::rand::SecureRandom;
+	let mut bytes = [0u8; 20];
+	ring::rand::SystemRandom::new()
+		.fill(&mut bytes)
+		.map_err(|_| ApiError::internal())?;
+	let secret = crate::totp::encode_base32(&bytes);
+	state
+		.store()
+		.set_totp(&name, Some(secret.clone()))
+		.map_err(store_error)?;
+	let issuer = state
+		.domains()
+		.first()
+		.map(String::as_str)
+		.unwrap_or("mail");
+	let otpauth_uri = format!("otpauth://totp/{issuer}:{name}?secret={secret}&issuer={issuer}");
+	Ok(Json(TotpEnrolled {
+		secret,
+		otpauth_uri,
+	}))
+}
+
+/// DELETE `/accounts/{name}/totp`: disable two-factor auth for the account.
+pub async fn disable_totp(
+	State(state): State<ApiState>,
+	Path(name): Path<String>,
+) -> Result<Json<PasswordChanged>, ApiError> {
+	state.store().set_totp(&name, None).map_err(store_error)?;
+	Ok(Json(PasswordChanged { updated: name }))
 }
 
 fn store_error(error: StoreError) -> ApiError {
