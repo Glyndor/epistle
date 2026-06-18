@@ -95,6 +95,11 @@ fn fetch_binary_decodes_base64_body() {
 	assert!(response.contains("BINARY[] {5}"), "{response}");
 	assert!(response.contains("\r\nhello"), "{response}");
 	assert!(response.contains("a3 OK FETCH completed"), "{response}");
+
+	// BINARY.SIZE[] reports the decoded length without the data.
+	let output = session.command_line("a4 FETCH 1 (BINARY.SIZE[])");
+	let response = text(&output);
+	assert!(response.contains("BINARY.SIZE[] 5"), "{response}");
 }
 
 #[test]
