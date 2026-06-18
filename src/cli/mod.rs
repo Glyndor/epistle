@@ -1,6 +1,7 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod export;
+mod import;
 mod serve;
 
 use std::path::PathBuf;
@@ -48,6 +49,15 @@ enum Command {
 		#[arg(long, value_name = "NAME")]
 		account: String,
 	},
+	/// Import an mbox stream from stdin into an account's INBOX (migration).
+	Import {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name to import into.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
 	/// Reads the plaintext token from stdin (one line). Prints a
@@ -78,6 +88,13 @@ impl Cli {
 			},
 			Command::Export { config, account } => match Config::load(&config) {
 				Ok(config) => export::run(&config.data_dir, &account),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Import { config, account } => match Config::load(&config) {
+				Ok(config) => import::run(&config.data_dir, &account, std::io::stdin().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -307,6 +324,46 @@ mod tests {
 		assert!(text.contains("X-Mailbox: INBOX"), "{text}");
 		// The body's "From " line is quoted to ">From ".
 		assert!(text.contains(">From the desk"), "{text}");
+	}
+
+	#[test]
+	fn parses_import_command() {
+		let cli = Cli::try_parse_from([
+			"mail",
+			"import",
+			"--config",
+			"/etc/mail.toml",
+			"--account",
+			"alice",
+		])
+		.expect("import parses");
+		assert!(matches!(cli.command, Command::Import { .. }));
+	}
+
+	#[test]
+	fn import_delivers_mbox_messages_to_inbox() {
+		use std::io::Cursor;
+		let dir = tempfile::tempdir().expect("tempdir");
+		std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+		// Two entries; the second body has a quoted ">From " line to unquote.
+		let mbox = "From MAILER-DAEMON@localhost\r\nX-Mailbox: INBOX\r\nSubject: one\r\n\r\nbody1\r\n\r\nFrom MAILER-DAEMON@localhost\r\nSubject: two\r\n\r\n>From the desk\r\n\r\n";
+		assert_eq!(
+			import::run(dir.path(), "alice", Cursor::new(mbox)),
+			ExitCode::SUCCESS
+		);
+		// Both messages landed in INBOX.
+		let snapshot =
+			crate::imap::mailbox::Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+		assert_eq!(snapshot.len(), 2);
+		// The X-Mailbox header was stripped; ">From " was unquoted to "From ".
+		let bodies: Vec<String> = snapshot
+			.messages()
+			.map(|m| String::from_utf8_lossy(&snapshot.read(m).expect("read")).into_owned())
+			.collect();
+		let joined = bodies.join("\n");
+		assert!(!joined.contains("X-Mailbox"), "{joined}");
+		assert!(joined.contains("From the desk"), "{joined}");
+		assert!(!joined.contains(">From the desk"), "{joined}");
 	}
 
 	#[test]
