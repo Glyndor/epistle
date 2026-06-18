@@ -215,4 +215,34 @@ bh=aGF z aA==; b=c2 ln";
 		assert_eq!(signature.body_length, Some(100));
 		assert_eq!(signature.expiration, Some(12345));
 	}
+
+	#[test]
+	fn rejects_remaining_missing_tags() {
+		// Missing a=, s=, bh=, b= each individually.
+		assert!(parse("v=1; d=example.org; s=sel; h=from; bh=aGFzaA==; b=c2ln").is_err());
+		assert!(parse("v=1; a=rsa-sha256; d=example.org; h=from; bh=aGFzaA==; b=c2ln").is_err());
+		assert!(parse("v=1; a=rsa-sha256; d=example.org; s=sel; h=from; b=c2ln").is_err());
+		assert!(parse("v=1; a=rsa-sha256; d=example.org; s=sel; h=from; bh=aGFzaA==").is_err());
+	}
+
+	#[test]
+	fn rejects_malformed_tag_values() {
+		// Invalid base64 in bh= and b=.
+		assert!(parse("v=1; a=rsa-sha256; d=e.org; s=sel; h=from; bh=@@@; b=c2ln").is_err());
+		assert!(parse("v=1; a=rsa-sha256; d=e.org; s=sel; h=from; bh=aGFzaA==; b=@@@").is_err());
+		// Unknown canonicalization.
+		assert!(
+			parse(
+				"v=1; a=rsa-sha256; c=weird/relaxed; d=e.org; s=sel; h=from; bh=aGFzaA==; b=c2ln"
+			)
+			.is_err()
+		);
+		// Non-numeric l= and x=.
+		assert!(
+			parse("v=1; a=rsa-sha256; d=e.org; s=sel; h=from; bh=aGFzaA==; b=c2ln; l=x").is_err()
+		);
+		assert!(
+			parse("v=1; a=rsa-sha256; d=e.org; s=sel; h=from; bh=aGFzaA==; b=c2ln; x=y").is_err()
+		);
+	}
 }
