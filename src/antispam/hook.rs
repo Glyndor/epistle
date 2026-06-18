@@ -140,4 +140,30 @@ mod tests {
 		let hook: Box<dyn MailHook> = Box::new(StubHook(HookVerdict::Quarantine));
 		assert_eq!(hook.scan(b"msg").await, HookVerdict::Quarantine);
 	}
+
+	#[tokio::test]
+	async fn http_hook_posts_and_parses_verdict() {
+		// A tiny in-process server stands in for the external scanner.
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("bind");
+		let addr = listener.local_addr().expect("addr");
+		let app = axum::Router::new().route(
+			"/scan",
+			axum::routing::post(|| async { r#"{"action":"quarantine"}"# }),
+		);
+		tokio::spawn(async move {
+			axum::serve(listener, app).await.expect("serve");
+		});
+
+		let hook = HttpHook::new(&format!("http://{addr}/scan")).expect("hook");
+		assert_eq!(hook.scan(b"raw message").await, HookVerdict::Quarantine);
+	}
+
+	#[tokio::test]
+	async fn http_hook_fails_open_when_unreachable() {
+		// Port 1 on localhost refuses immediately: the hook must accept.
+		let hook = HttpHook::new("http://127.0.0.1:1/scan").expect("hook");
+		assert_eq!(hook.scan(b"raw message").await, HookVerdict::Accept);
+	}
 }
