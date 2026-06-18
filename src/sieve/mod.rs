@@ -3,6 +3,7 @@
 
 pub mod ast;
 mod date;
+mod eval;
 pub mod interp;
 pub mod lexer;
 mod message;
