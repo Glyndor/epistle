@@ -353,31 +353,32 @@ impl Session {
 		items: &[StatusItem],
 	) -> Option<String> {
 		let snapshot = Snapshot::open(&self.data_dir, account, mailbox).ok()?;
+		let count_flag = |flag: Flag| {
+			snapshot
+				.messages()
+				.filter(|m| m.flags.contains(&flag))
+				.count()
+		};
 		let mut parts = String::new();
 		for (i, item) in items.iter().enumerate() {
 			if i > 0 {
 				parts.push(' ');
 			}
-			let value: u64 = match item {
-				StatusItem::Messages => snapshot.len() as u64,
-				StatusItem::Recent => 0,
-				StatusItem::Uidnext => u64::from(snapshot.uid_next()),
-				StatusItem::Uidvalidity => u64::from(snapshot.uid_validity()),
-				StatusItem::Unseen => snapshot
-					.messages()
-					.filter(|m| !m.flags.contains(&Flag::Seen))
-					.count() as u64,
-				StatusItem::Size => snapshot.messages().map(|m| m.size).sum(),
+			let rendered = match item {
+				StatusItem::Messages => format!("MESSAGES {}", snapshot.len()),
+				StatusItem::Recent => "RECENT 0".to_string(),
+				StatusItem::Uidnext => format!("UIDNEXT {}", snapshot.uid_next()),
+				StatusItem::Uidvalidity => format!("UIDVALIDITY {}", snapshot.uid_validity()),
+				StatusItem::Unseen => {
+					format!("UNSEEN {}", snapshot.len() - count_flag(Flag::Seen))
+				}
+				StatusItem::Size => {
+					format!("SIZE {}", snapshot.messages().map(|m| m.size).sum::<u64>())
+				}
+				StatusItem::Deleted => format!("DELETED {}", count_flag(Flag::Deleted)),
+				StatusItem::MailboxId => format!("MAILBOXID (M{})", snapshot.uid_validity()),
 			};
-			let name = match item {
-				StatusItem::Messages => "MESSAGES",
-				StatusItem::Recent => "RECENT",
-				StatusItem::Uidnext => "UIDNEXT",
-				StatusItem::Uidvalidity => "UIDVALIDITY",
-				StatusItem::Unseen => "UNSEEN",
-				StatusItem::Size => "SIZE",
-			};
-			parts.push_str(&format!("{name} {value}"));
+			parts.push_str(&rendered);
 		}
 		Some(parts)
 	}

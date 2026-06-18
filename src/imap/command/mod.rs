@@ -152,6 +152,10 @@ pub enum StatusItem {
 	Unseen,
 	/// `SIZE` (RFC 8438): total octets of all messages in the mailbox.
 	Size,
+	/// `DELETED`: count of messages flagged `\Deleted` (RFC 9051).
+	Deleted,
+	/// `MAILBOXID`: the mailbox's stable object id (OBJECTID, RFC 8474).
+	MailboxId,
 }
 
 /// An ESEARCH `RETURN` option (RFC 4731).

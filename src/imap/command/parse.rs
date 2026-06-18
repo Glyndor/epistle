@@ -58,7 +58,6 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 			mailbox: parse_mailbox(&tag, args)?,
 		},
 		"GETQUOTA" => {
-			// The quota-root is an astring that may be the empty string ("").
 			let trimmed = args.trim();
 			if trimmed.is_empty() {
 				return Err(ParseError::BadArguments(tag));
@@ -363,7 +362,6 @@ fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
 	}
 	let rest = rest.trim();
 
-	// Optional flag list, then the literal size.
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
 		(
@@ -493,6 +491,8 @@ fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
 			"UIDVALIDITY" => StatusItem::Uidvalidity,
 			"UNSEEN" => StatusItem::Unseen,
 			"SIZE" => StatusItem::Size,
+			"DELETED" => StatusItem::Deleted,
+			"MAILBOXID" => StatusItem::MailboxId,
 			_ => return None,
 		});
 	}
