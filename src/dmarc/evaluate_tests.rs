@@ -272,3 +272,40 @@ async fn relaxed_alignment_uses_psl_for_co_uk() {
 	.await;
 	assert_eq!(outcome, DmarcOutcome::Pass);
 }
+
+#[test]
+fn outcome_keywords_cover_all_variants() {
+	assert_eq!(DmarcOutcome::Pass.as_str(), "pass");
+	assert_eq!(DmarcOutcome::Reject.as_str(), "fail");
+	assert_eq!(DmarcOutcome::Fail.as_str(), "fail");
+	assert_eq!(DmarcOutcome::None.as_str(), "none");
+	assert_eq!(DmarcOutcome::TempError.as_str(), "temperror");
+	assert_eq!(DmarcOutcome::PermError.as_str(), "permerror");
+}
+
+#[test]
+fn from_domain_rejects_non_utf8_and_spaces() {
+	// Invalid UTF-8 in the header block.
+	assert_eq!(from_domain(b"From: \xff\xfe@x\r\n\r\n"), None);
+	// A space inside the domain is not a valid hostname.
+	assert_eq!(from_domain(b"From: a@ex ample.org\r\n\r\n"), None);
+}
+
+#[tokio::test]
+async fn multiple_dmarc_records_yield_no_policy() {
+	let dns = dns(&[
+		("_dmarc.example.org", "v=DMARC1; p=reject"),
+		("_dmarc.example.org", "v=DMARC1; p=none"),
+	]);
+	// Two records → as if none published → None.
+	let outcome = evaluate(&dns, "example.org", (SpfOutcome::Fail, None), &[]).await;
+	assert_eq!(outcome, DmarcOutcome::None);
+}
+
+#[tokio::test]
+async fn subdomain_policy_applies_via_org_lookup() {
+	// No record on the subdomain; the org domain sp= applies.
+	let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=none; sp=reject")]);
+	let outcome = evaluate(&dns, "sub.example.org", (SpfOutcome::Fail, None), &[]).await;
+	assert_eq!(outcome, DmarcOutcome::Reject);
+}
