@@ -80,6 +80,8 @@ pub enum Command {
 		sequence: SequenceSet,
 		items: Vec<FetchItem>,
 		uid: bool,
+		/// CONDSTORE `CHANGEDSINCE n`: only messages with a greater mod-seq.
+		changed_since: Option<u64>,
 	},
 	Store {
 		sequence: SequenceSet,
@@ -87,6 +89,8 @@ pub enum Command {
 		flags: Vec<String>,
 		silent: bool,
 		uid: bool,
+		/// CONDSTORE `UNCHANGEDSINCE n`: skip messages whose mod-seq exceeds it.
+		unchanged_since: Option<u64>,
 	},
 	Copy {
 		sequence: SequenceSet,

@@ -231,10 +231,18 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
 
 	let items_text = items_text.trim();
-	let inner = items_text
+	// Split the items group from an optional `(CHANGEDSINCE n)` modifier.
+	let (items_group, modifier) = if items_text.starts_with('(') {
+		let close = items_text.find(')').ok_or_else(bad)?;
+		(&items_text[..=close], items_text[close + 1..].trim())
+	} else {
+		(items_text, "")
+	};
+	let changed_since = parse_changed_since(modifier, tag)?;
+	let inner = items_group
 		.strip_prefix('(')
 		.and_then(|t| t.strip_suffix(')'))
-		.unwrap_or(items_text);
+		.unwrap_or(items_group);
 	let mut items = Vec::new();
 	for word in inner.split_whitespace() {
 		match word.to_ascii_uppercase().as_str() {
@@ -268,11 +276,35 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	if uid && !items.contains(&FetchItem::Uid) {
 		items.push(FetchItem::Uid);
 	}
+	// CHANGEDSINCE implies MODSEQ in the response (RFC 7162 section 3.1.4.1).
+	if changed_since.is_some() && !items.contains(&FetchItem::ModSeq) {
+		items.push(FetchItem::ModSeq);
+	}
 	Ok(Command::Fetch {
 		sequence,
 		items,
 		uid,
+		changed_since,
 	})
+}
+
+/// Parse an optional `(CHANGEDSINCE n)` FETCH modifier.
+fn parse_changed_since(modifier: &str, tag: &str) -> Result<Option<u64>, ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	if modifier.is_empty() {
+		return Ok(None);
+	}
+	let inner = modifier
+		.strip_prefix('(')
+		.and_then(|t| t.strip_suffix(')'))
+		.ok_or_else(bad)?;
+	let mut parts = inner.split_whitespace();
+	match (parts.next(), parts.next(), parts.next()) {
+		(Some(key), Some(value), None) if key.eq_ignore_ascii_case("CHANGEDSINCE") => {
+			Ok(Some(value.parse().map_err(|_| bad())?))
+		}
+		_ => Err(bad()),
+	}
 }
 
 fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
@@ -340,6 +372,22 @@ fn parse_store(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	let (sequence_text, rest) = args.split_once(' ').ok_or_else(bad)?;
 	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
 
+	// Optional leading `(UNCHANGEDSINCE n)` modifier (RFC 7162).
+	let rest = rest.trim();
+	let (unchanged_since, rest) = if rest.starts_with('(') {
+		let close = rest.find(')').ok_or_else(bad)?;
+		let mut parts = rest[1..close].split_whitespace();
+		let value = match (parts.next(), parts.next(), parts.next()) {
+			(Some(key), Some(value), None) if key.eq_ignore_ascii_case("UNCHANGEDSINCE") => {
+				value.parse().map_err(|_| bad())?
+			}
+			_ => return Err(bad()),
+		};
+		(Some(value), rest[close + 1..].trim())
+	} else {
+		(None, rest)
+	};
+
 	let (item, flags_text) = rest.split_once(' ').ok_or_else(bad)?;
 	let item = item.to_ascii_uppercase();
 	let (mode, silent) = match item.as_str() {
@@ -367,6 +415,7 @@ fn parse_store(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 		flags,
 		silent,
 		uid,
+		unchanged_since,
 	})
 }
 
