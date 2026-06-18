@@ -256,6 +256,14 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 			let n: u32 = n_str.parse().ok()?;
 			(SearchKey::Smaller(n), rest)
 		}
+		"MODSEQ" => {
+			let (n_str, rest) = match after.split_once(|c: char| c.is_ascii_whitespace()) {
+				Some((n, r)) => (n, r.trim_start()),
+				None => (after, ""),
+			};
+			let n: u64 = n_str.parse().ok()?;
+			(SearchKey::ModSeq(n), rest)
+		}
 		_ => {
 			let set = parse_sequence_set(word)?;
 			(SearchKey::Sequence(set), after)
