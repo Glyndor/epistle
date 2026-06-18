@@ -266,6 +266,30 @@ pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value
 	])
 }
 
+/// `Mailbox/query` (RFC 8621 §2.3): the account's mailbox ids, sorted by name.
+pub(super) fn mailbox_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let ids: Vec<String> = crate::imap::mailbox::list(state.data_dir(), account);
+	let total = ids.len();
+	json!([
+		"Mailbox/query",
+		{
+			"accountId": account,
+			"queryState": "0",
+			"canCalculateChanges": false,
+			"position": 0,
+			"total": total,
+			"ids": ids,
+		},
+		call_id,
+	])
+}
+
 /// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
 pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
