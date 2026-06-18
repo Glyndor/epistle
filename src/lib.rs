@@ -18,6 +18,7 @@ pub mod dkim;
 pub mod dmarc;
 pub mod dnsbl;
 pub mod imap;
+pub mod jwt;
 pub mod metrics;
 pub mod mtasts;
 pub mod pop3;
