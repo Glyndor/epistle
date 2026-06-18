@@ -61,6 +61,45 @@ async fn jmap_core_echo_round_trips() {
 }
 
 #[tokio::test]
+async fn jmap_mailbox_set_creates_and_destroys() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+
+	// Create a mailbox.
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Mailbox/set", {
+			"accountId": "alice",
+			"create": { "c1": {"name": "Work", "parentId": null} },
+		}, "m1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["methodResponses"][0][1]["created"]["c1"]["id"], "Work");
+
+	// Mailbox/get now lists it.
+	let req = serde_json::json!({
+		"methodCalls": [["Mailbox/get", {"accountId": "alice"}, "m2"]],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let names: Vec<_> = body["methodResponses"][0][1]["list"]
+		.as_array()
+		.expect("list")
+		.iter()
+		.map(|m| m["name"].as_str().unwrap_or("").to_string())
+		.collect();
+	assert!(names.contains(&"Work".to_string()), "{names:?}");
+
+	// Destroy it.
+	let req = serde_json::json!({
+		"methodCalls": [["Mailbox/set", {"accountId": "alice", "destroy": ["Work"]}, "m3"]],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(body["methodResponses"][0][1]["destroyed"][0], "Work");
+}
+
+#[tokio::test]
 async fn jmap_mailbox_get_lists_inbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// Deliver a message so INBOX reports a count.

@@ -133,6 +133,64 @@ pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Val
 }
 
 /// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
+/// `Mailbox/set` (RFC 8621 §2.5): create, rename, and delete mailboxes.
+pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let dir = state.data_dir();
+	let mut created = serde_json::Map::new();
+	let mut not_created = serde_json::Map::new();
+	if let Some(create) = args.get("create").and_then(Value::as_object) {
+		for (cid, spec) in create {
+			match spec.get("name").and_then(Value::as_str) {
+				Some(name) if crate::imap::mailbox::create(dir, account, name).is_ok() => {
+					created.insert(cid.clone(), json!({ "id": name }));
+				}
+				_ => {
+					not_created.insert(cid.clone(), json!({ "type": "invalidProperties" }));
+				}
+			}
+		}
+	}
+	let mut updated = serde_json::Map::new();
+	let mut not_updated = serde_json::Map::new();
+	if let Some(update) = args.get("update").and_then(Value::as_object) {
+		for (id, patch) in update {
+			match patch.get("name").and_then(Value::as_str) {
+				Some(name) if crate::imap::mailbox::rename(dir, account, id, name).is_ok() => {
+					updated.insert(id.clone(), Value::Null);
+				}
+				_ => {
+					not_updated.insert(id.clone(), json!({ "type": "invalidProperties" }));
+				}
+			}
+		}
+	}
+	let mut destroyed = Vec::new();
+	let mut not_destroyed = serde_json::Map::new();
+	if let Some(ids) = args.get("destroy").and_then(Value::as_array) {
+		for id in ids.iter().filter_map(Value::as_str) {
+			if crate::imap::mailbox::delete(dir, account, id).is_ok() {
+				destroyed.push(Value::String(id.to_string()));
+			} else {
+				not_destroyed.insert(id.to_string(), json!({ "type": "notFound" }));
+			}
+		}
+	}
+	json!([
+		"Mailbox/set",
+		{ "accountId": account, "oldState": "0", "newState": "0",
+		  "created": created, "notCreated": not_created,
+		  "updated": updated, "notUpdated": not_updated,
+		  "destroyed": destroyed, "notDestroyed": not_destroyed },
+		call_id,
+	])
+}
+
 pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
