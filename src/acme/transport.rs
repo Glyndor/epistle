@@ -98,3 +98,83 @@ impl AcmeTransport for HttpTransport {
 		})
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use axum::http::{HeaderName, StatusCode};
+	use axum::response::IntoResponse;
+	use axum::routing::{get, head, post};
+
+	/// Spawn an in-process ACME-like server and return its base URL.
+	async fn mock_server() -> String {
+		async fn directory() -> &'static str {
+			r#"{"newNonce":"/nonce"}"#
+		}
+		async fn nonce() -> impl IntoResponse {
+			([(HeaderName::from_static("replay-nonce"), "nonce-1")], "")
+		}
+		async fn order() -> impl IntoResponse {
+			(
+				StatusCode::CREATED,
+				[
+					(HeaderName::from_static("replay-nonce"), "nonce-2"),
+					(HeaderName::from_static("location"), "/order/1"),
+				],
+				r#"{"status":"pending"}"#,
+			)
+		}
+		let app = axum::Router::new()
+			.route("/dir", get(directory))
+			.route("/nonce", head(nonce))
+			.route("/order", post(order));
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("bind");
+		let addr = listener.local_addr().expect("addr");
+		tokio::spawn(async move {
+			axum::serve(listener, app).await.expect("serve");
+		});
+		format!("http://{addr}")
+	}
+
+	#[tokio::test]
+	async fn get_nonce_and_post_round_trip() {
+		let base = mock_server().await;
+		let transport = HttpTransport::new().expect("transport");
+
+		let body = transport.get(&format!("{base}/dir")).await.expect("get");
+		assert!(body.starts_with(b"{\"newNonce\""));
+
+		let nonce = transport
+			.new_nonce(&format!("{base}/nonce"))
+			.await
+			.expect("nonce");
+		assert_eq!(nonce, "nonce-1");
+
+		let response = transport
+			.post(&format!("{base}/order"), "signed-jws")
+			.await
+			.expect("post");
+		assert_eq!(response.status, 201);
+		assert_eq!(response.nonce, "nonce-2");
+		assert_eq!(response.location.as_deref(), Some("/order/1"));
+		assert!(response.body.starts_with(b"{\"status\""));
+	}
+
+	#[tokio::test]
+	async fn new_nonce_without_header_errors() {
+		// /dir answers GET but not a HEAD with a nonce header.
+		let base = mock_server().await;
+		let transport = HttpTransport::new().expect("transport");
+		assert!(transport.new_nonce(&format!("{base}/dir")).await.is_err());
+	}
+
+	#[tokio::test]
+	async fn unreachable_endpoint_is_transport_error() {
+		let transport = HttpTransport::new().expect("transport");
+		assert!(transport.get("http://127.0.0.1:1/dir").await.is_err());
+		assert!(transport.new_nonce("http://127.0.0.1:1/n").await.is_err());
+		assert!(transport.post("http://127.0.0.1:1/o", "j").await.is_err());
+	}
+}
