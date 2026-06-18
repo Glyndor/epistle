@@ -11,6 +11,7 @@ use super::command::{Command, ParseError};
 use super::directory::{Directory, Resolution};
 use super::reply::Reply;
 
+mod login;
 mod oauth;
 mod scram;
 
@@ -94,6 +95,9 @@ pub struct Session {
 	directory: Arc<Directory>,
 	/// In-flight SCRAM exchange, between the challenge rounds.
 	pending_scram: Option<scram::PendingScram>,
+	/// In-flight AUTH LOGIN exchange: `None` (idle), `Some(None)` (awaiting the
+	/// username), or `Some(Some(user))` (awaiting the password).
+	pending_login: Option<Option<String>>,
 	/// Test-injected SCRAM server nonce; `None` generates a fresh random one.
 	scram_nonce: Option<String>,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
@@ -113,6 +117,7 @@ impl Session {
 			esmtp: false,
 			directory: Arc::new(Directory::default()),
 			pending_scram: None,
+			pending_login: None,
 			scram_nonce: None,
 			oauth: None,
 		}
@@ -231,7 +236,26 @@ impl Session {
 			},
 			"SCRAM-SHA-256" => self.scram_begin(initial),
 			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(mechanism, initial),
+			"LOGIN" => match initial {
+				// Initial response is the username; prompt for the password.
+				Some(user) => self.login_username(&user),
+				None => {
+					self.pending_login = Some(None);
+					Action::CollectAuthResponse(Reply::single(334, "VXNlcm5hbWU6"))
+				}
+			},
 			_ => Action::Continue(Reply::single(504, "5.5.4 mechanism not supported")),
+		}
+	}
+
+	/// Common AUTH failure: count it, no oracle, close after three.
+	fn auth_fail(&mut self) -> Action {
+		self.auth_failures += 1;
+		let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
+		if self.auth_failures >= 3 {
+			Action::Close(reply)
+		} else {
+			Action::Continue(reply)
 		}
 	}
 
@@ -239,7 +263,15 @@ impl Session {
 	pub fn auth_line(&mut self, line: &str) -> Action {
 		if line == "*" {
 			self.pending_scram = None;
+			self.pending_login = None;
 			return Action::Continue(Reply::single(501, "5.7.0 authentication cancelled"));
+		}
+		// AUTH LOGIN's two-step username/password exchange.
+		if let Some(state) = self.pending_login.take() {
+			return match state {
+				None => self.login_username(line),
+				Some(user) => self.login_password(&user, line),
+			};
 		}
 		match self.pending_scram.take() {
 			Some(scram::PendingScram::ClientFirst) => self.scram_client_first(line),
@@ -250,39 +282,6 @@ impl Session {
 			}) => self.scram_client_final(line, *server, *credentials, &account),
 			None => self.verify_plain(line),
 		}
-	}
-
-	fn verify_plain(&mut self, encoded: &str) -> Action {
-		use super::auth::parse_plain;
-
-		let failure = |session: &mut Session| {
-			session.auth_failures += 1;
-			// Security event: log the failure (never the credentials, and no
-			// unknown-user/bad-password distinction — no oracle).
-			tracing::warn!(
-				failures = session.auth_failures,
-				"SMTP authentication failed"
-			);
-			let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
-			if session.auth_failures >= 3 {
-				Action::Close(reply)
-			} else {
-				Action::Continue(reply)
-			}
-		};
-
-		let Ok(credentials) = parse_plain(encoded) else {
-			return failure(self);
-		};
-		// Password + any TOTP second factor; no oracle (unknown user == bad pw).
-		let Some(account) = self
-			.directory
-			.authenticate(&credentials.authcid, &credentials.password)
-		else {
-			return failure(self);
-		};
-		self.authenticated = Some(account);
-		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
 	}
 
 	fn greet(&mut self, domain: String, esmtp: bool) -> Action {
