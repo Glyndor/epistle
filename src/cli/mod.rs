@@ -243,3 +243,7 @@ fn dkim_keygen(out: &std::path::Path) -> ExitCode {
 #[cfg(test)]
 #[path = "cli_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_tests_b.rs"]
+mod tests_b;
