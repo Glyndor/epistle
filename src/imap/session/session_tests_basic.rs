@@ -37,7 +37,7 @@ fn list_shows_inbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	let output = session.command_line(r#"a2 LIST "" "*""#);
-	assert!(text(&output).contains("* LIST () \"/\" \"INBOX\""));
+	assert!(text(&output).contains("* LIST (\\Subscribed) \"/\" \"INBOX\""));
 	assert!(text(&output).contains("a2 OK"));
 }
 

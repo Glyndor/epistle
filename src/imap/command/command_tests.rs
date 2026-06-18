@@ -42,6 +42,7 @@ fn parses_list_and_select() {
 			reference: String::new(),
 			pattern: "*".into(),
 			return_status: Vec::new(),
+			select_subscribed: false,
 		}
 	);
 	assert_eq!(

@@ -134,7 +134,7 @@ impl Session {
 	fn capabilities(&self) -> String {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE \
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
 LIST-STATUS",
 		);
 		if self.tls_available {
@@ -207,8 +207,9 @@ LIST-STATUS",
 			Command::List {
 				pattern,
 				return_status,
+				select_subscribed,
 				..
-			} => self.list(&tag, &pattern, &return_status),
+			} => self.list(&tag, &pattern, &return_status, select_subscribed),
 			Command::Select { mailbox } => self.select(&tag, &mailbox, false),
 			Command::Examine { mailbox } => self.select(&tag, &mailbox, true),
 			Command::Close => self.close(&tag),

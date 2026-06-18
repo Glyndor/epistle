@@ -402,6 +402,31 @@ fn subscribe_and_lsub_flow() {
 }
 
 #[test]
+fn list_extended_subscribed_selection_and_attribute() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 CREATE Sent");
+	session.command_line("a3 SUBSCRIBE Sent");
+
+	// Plain LIST annotates subscribed mailboxes with \Subscribed (Sent also
+	// carries its \Sent special-use attribute).
+	let response = text(&session.command_line(r#"a4 LIST "" "*""#));
+	assert!(
+		response
+			.lines()
+			.any(|l| l.contains("\"Sent\"") && l.contains("\\Subscribed")),
+		"{response}"
+	);
+
+	// (SUBSCRIBED) lists only subscribed mailboxes (not the unsubscribed one).
+	session.command_line("a5 CREATE Work");
+	let response = text(&session.command_line(r#"a6 LIST (SUBSCRIBED) "" "*""#));
+	assert!(response.contains("\"Sent\""), "{response}");
+	assert!(!response.contains("\"Work\""), "{response}");
+	assert!(response.contains("a6 OK LIST completed"), "{response}");
+}
+
+#[test]
 fn internaldate_is_not_epoch() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"From: a@x.example\r\n\r\nhi\r\n");

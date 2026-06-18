@@ -195,6 +195,23 @@ fn parse_login(tag: &str, args: &str) -> Result<Command, ParseError> {
 
 fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
+	// Optional leading `(SUBSCRIBED)` selection group (LIST-EXTENDED, RFC 5258).
+	let args = args.trim_start();
+	let (select_subscribed, args) = if let Some(after) = args.strip_prefix('(') {
+		let close = after.find(')').ok_or_else(bad)?;
+		let selection = after[..close].to_ascii_uppercase();
+		for option in after[..close].split_whitespace() {
+			if !option.eq_ignore_ascii_case("SUBSCRIBED") {
+				return Err(bad());
+			}
+		}
+		(
+			selection.contains("SUBSCRIBED"),
+			after[close + 1..].trim_start(),
+		)
+	} else {
+		(false, args)
+	};
 	let (reference, rest) = parse_astring(args).ok_or_else(bad)?;
 	let (pattern, rest) = parse_astring(rest).ok_or_else(bad)?;
 	let rest = rest.trim();
@@ -207,6 +224,7 @@ fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 		reference,
 		pattern,
 		return_status,
+		select_subscribed,
 	})
 }
 
