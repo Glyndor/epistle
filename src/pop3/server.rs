@@ -221,4 +221,15 @@ mod tests {
 		drop(client);
 		let _ = task.await;
 	}
+
+	#[tokio::test(start_paused = true)]
+	async fn idle_timeout_closes_connection() {
+		let (mut client, server) = duplex(64 * 1024);
+		let task = tokio::spawn(async move { run(server, backend()).await });
+		let _ = read_chunk(&mut client).await; // greeting
+		// Send nothing: the read timeout (paused clock) fires and closes.
+		let mut chunk = [0u8; 16];
+		assert_eq!(client.read(&mut chunk).await.expect("read"), 0);
+		assert!(task.await.expect("join").is_ok());
+	}
 }

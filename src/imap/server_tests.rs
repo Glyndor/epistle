@@ -470,3 +470,21 @@ async fn idle_poll_pushes_exists_on_new_mail() {
 	read_until(&mut tls, "a3 OK").await;
 	task.abort();
 }
+
+#[tokio::test(start_paused = true)]
+async fn idle_read_timeout_sends_bye() {
+	let (mut client, task) = plaintext_server();
+	assert!(read_chunk(&mut client).await.starts_with("* OK"));
+	// Send nothing: the read timeout (paused clock) fires and the server closes.
+	let mut seen = String::new();
+	loop {
+		let mut chunk = [0u8; 4096];
+		let n = client.read(&mut chunk).await.expect("read");
+		if n == 0 {
+			break;
+		}
+		seen.push_str(&String::from_utf8_lossy(&chunk[..n]));
+	}
+	assert!(seen.contains("BYE idle timeout"), "{seen}");
+	let _ = task.await;
+}
