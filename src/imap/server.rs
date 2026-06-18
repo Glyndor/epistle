@@ -33,6 +33,14 @@ const READ_TIMEOUT: Duration = Duration::from_secs(1800);
 /// How often to poll for new messages during IDLE.
 const IDLE_POLL: Duration = Duration::from_secs(30);
 
+/// Consecutive `BAD` responses before the connection is dropped (abuse guard).
+const MAX_ERROR_STREAK: u32 = 20;
+
+/// Whether a server response is a `BAD` protocol error (abuse signal).
+fn is_bad_response(bytes: &[u8]) -> bool {
+	bytes.windows(5).any(|window| window == b" BAD ")
+}
+
 /// Anything the connection loop can read from and write to.
 trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
@@ -140,6 +148,8 @@ impl Server {
 
 		let mut decoder = LineDecoder::new();
 		let mut buffer = [0u8; 4096];
+		// Consecutive BAD responses; too many means an abusive client.
+		let mut error_streak = 0u32;
 		loop {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
@@ -176,10 +186,25 @@ impl Server {
 			let Ok(line) = String::from_utf8(line) else {
 				stream.write_all(b"* BAD non-ASCII command\r\n").await?;
 				stream.flush().await?;
+				error_streak += 1;
+				if error_streak >= MAX_ERROR_STREAK {
+					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					return Ok(());
+				}
 				continue;
 			};
 
 			let mut output = session.command_line(&line);
+			// Abuse guard: drop a client that only produces BAD responses.
+			if is_bad_response(&output.bytes) {
+				error_streak += 1;
+				if error_streak >= MAX_ERROR_STREAK {
+					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					return Ok(());
+				}
+			} else {
+				error_streak = 0;
+			}
 			loop {
 				stream.write_all(&output.bytes).await?;
 				stream.flush().await?;
@@ -319,6 +344,15 @@ mod tests {
 				crate::smtp::auth::tests::hash("secret"),
 			)])),
 		)
+	}
+
+	#[test]
+	fn detects_bad_responses() {
+		assert!(is_bad_response(b"a1 BAD invalid arguments\r\n"));
+		assert!(is_bad_response(b"* BAD malformed command\r\n"));
+		// Successful and NO responses are not abuse signals.
+		assert!(!is_bad_response(b"a1 OK LOGIN completed\r\n"));
+		assert!(!is_bad_response(b"a1 NO LOGIN failed\r\n"));
 	}
 
 	#[tokio::test]
