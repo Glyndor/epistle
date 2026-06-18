@@ -20,15 +20,12 @@ mod thread;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Output {
 	pub bytes: Vec<u8>,
-	/// Close the connection after sending.
 	pub close: bool,
 	/// After sending, read this many literal bytes for [`Session::literal_done`].
 	pub collect_literal: Option<usize>,
-	/// After sending, read lines until `DONE` for [`Session::idle_done`].
+	/// After sending, read lines until `DONE` ([`Session::idle_done`]).
 	pub idle: bool,
-	/// After sending, handshake TLS and call [`Session::tls_started`].
 	pub upgrade_tls: bool,
-	/// After sending, read one SASL continuation line (AUTHENTICATE).
 	pub collect_auth: bool,
 }
 
@@ -406,16 +403,19 @@ LIST-STATUS BINARY QRESYNC",
 		}
 	}
 
-	/// ENABLE (RFC 5161): acknowledge the requested extensions. We enable none
-	/// beyond the IMAP4rev2 base, so the ENABLED list echoes only ones we know.
+	/// ENABLE (RFC 5161): echo only the extensions we support (RFC 7162).
 	fn enable(&mut self, tag: &str, capabilities: &[String]) -> Output {
 		if self.account().is_none() {
 			return Output::text(format!("{tag} BAD ENABLE only after authentication\r\n"));
 		}
 		let enabled: Vec<&str> = capabilities
 			.iter()
-			.filter(|cap| cap.as_str() == "IMAP4REV2")
-			.map(|_| "IMAP4rev2")
+			.filter_map(|cap| match cap.as_str() {
+				"IMAP4REV2" => Some("IMAP4rev2"),
+				"CONDSTORE" => Some("CONDSTORE"),
+				"QRESYNC" => Some("QRESYNC"),
+				_ => None,
+			})
 			.collect();
 		Output::text(format!(
 			"* ENABLED {}\r\n{tag} OK ENABLE completed\r\n",

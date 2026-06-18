@@ -274,6 +274,14 @@ fn enable_acknowledges_capabilities() {
 	let response = text(&session.command_line("a2 ENABLE IMAP4rev2 BOGUS"));
 	assert!(response.contains("* ENABLED IMAP4rev2"), "{response}");
 	assert!(response.contains("a2 OK ENABLE completed"), "{response}");
+	// CONDSTORE and QRESYNC are real capabilities and are echoed; unknown ones
+	// (BOGUS) are not.
+	let response = text(&session.command_line("a3 ENABLE QRESYNC CONDSTORE BOGUS"));
+	assert!(
+		response.contains("* ENABLED QRESYNC CONDSTORE"),
+		"{response}"
+	);
+	assert!(!response.contains("BOGUS"), "{response}");
 }
 
 #[test]
