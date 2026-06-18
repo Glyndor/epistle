@@ -34,6 +34,8 @@ pub enum Command {
 		pattern: String,
 		/// `RETURN (STATUS (...))` items to report inline (LIST-STATUS, RFC 5819).
 		return_status: Vec<StatusItem>,
+		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
+		select_subscribed: bool,
 	},
 	Select {
 		mailbox: String,

@@ -294,20 +294,30 @@ impl Session {
 		tag: &str,
 		pattern: &str,
 		return_status: &[StatusItem],
+		select_subscribed: bool,
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
+		let subscribed: std::collections::HashSet<String> =
+			mailbox::list_subscribed(&self.data_dir, &account)
+				.into_iter()
+				.collect();
 		let mut response = String::new();
 		for name in mailbox::list(&self.data_dir, &account) {
 			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
-			if !matches {
+			// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists only subscribed boxes.
+			if !matches || (select_subscribed && !subscribed.contains(&name)) {
 				continue;
 			}
-			response.push_str(&format!(
-				"* LIST ({}) \"/\" \"{name}\"\r\n",
-				super::special_use_attribute(&name)
-			));
+			let mut attributes = super::special_use_attribute(&name).to_string();
+			if subscribed.contains(&name) {
+				if !attributes.is_empty() {
+					attributes.push(' ');
+				}
+				attributes.push_str("\\Subscribed");
+			}
+			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n"));
 			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
 			if !return_status.is_empty()
 				&& let Some(parts) = self.status_parts(&account, &name, return_status)
