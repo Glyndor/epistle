@@ -111,10 +111,13 @@ async fn out_of_order_commands_are_rejected() {
 }
 
 #[tokio::test]
-async fn non_utf8_command_gets_syntax_error() {
+async fn utf8_command_accepted_but_invalid_bytes_rejected() {
+	// SMTPUTF8 (RFC 6531): a valid UTF-8 (non-ASCII) EHLO domain is accepted.
 	let (output, _) = converse(b"EHLO caf\xC3\xA9.example\r\nQUIT\r\n").await;
-	// Non-ASCII is rejected by the command parser after UTF-8 decoding.
-	assert!(output.contains("500 5.5.2 syntax error"), "{output}");
+	assert!(output.contains("250"), "{output}");
+	// Invalid UTF-8 bytes are rejected, never greeted with 250.
+	let (output, _) = converse(b"EHLO caf\xFF.example\r\nQUIT\r\n").await;
+	assert!(!output.contains("250 caf"), "{output}");
 }
 
 #[tokio::test]

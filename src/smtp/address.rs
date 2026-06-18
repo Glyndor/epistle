@@ -63,7 +63,13 @@ fn validate_local_part(local_part: &str) -> Result<(), AddressError> {
 	if local_part.is_empty() || local_part.len() > MAX_LOCAL_PART {
 		return Err(AddressError::InvalidLocalPart);
 	}
-	let valid_atom_char = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-/=?^_`{|}~".contains(c);
+	// Internationalized local parts (RFC 6531/SMTPUTF8): atom characters plus
+	// any non-ASCII, non-control UTF-8 (control characters stay forbidden).
+	let valid_atom_char = |c: char| {
+		c.is_ascii_alphanumeric()
+			|| "!#$%&'*+-/=?^_`{|}~".contains(c)
+			|| (!c.is_ascii() && !c.is_control())
+	};
 	for atom in local_part.split('.') {
 		if atom.is_empty() || !atom.chars().all(valid_atom_char) {
 			return Err(AddressError::InvalidLocalPart);
@@ -81,7 +87,9 @@ fn validate_domain(domain: &str) -> Result<(), AddressError> {
 			&& label.len() <= 63
 			&& !label.starts_with('-')
 			&& !label.ends_with('-')
-			&& label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+			&& label.chars().all(|c| {
+				c.is_ascii_alphanumeric() || c == '-' || (!c.is_ascii() && !c.is_control())
+			});
 		if !valid {
 			return Err(AddressError::InvalidDomain);
 		}
@@ -92,6 +100,16 @@ fn validate_domain(domain: &str) -> Result<(), AddressError> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn parses_internationalized_address() {
+		// SMTPUTF8 (RFC 6531): UTF-8 in the local part and domain labels.
+		let address = Address::parse("用户@例え.example").expect("valid utf-8 address");
+		assert_eq!(address.local_part(), "用户");
+		assert_eq!(address.domain(), "例え.example");
+		// Control characters are still rejected.
+		assert!(Address::parse("a\u{7f}b@example.org").is_err());
+	}
 
 	#[test]
 	fn parses_simple_address() {

@@ -104,7 +104,9 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 	if line.len() > MAX_COMMAND_LINE {
 		return Err(ParseError::LineTooLong);
 	}
-	if line.chars().any(|c| !c.is_ascii() || c.is_ascii_control()) {
+	// Control characters are always forbidden (CR/LF/NUL injection); non-ASCII
+	// UTF-8 is allowed so SMTPUTF8 (RFC 6531) addresses can be parsed.
+	if line.chars().any(char::is_control) {
 		return Err(ParseError::InvalidCharacters);
 	}
 
@@ -253,6 +255,14 @@ fn parse_mail_parameters(params: &str) -> Result<MailParams, ParseError> {
 					return Err(ParseError::InvalidArguments);
 				}
 				out.require_tls = true;
+			}
+			"SMTPUTF8" => {
+				// RFC 6531: a valueless parameter declaring an internationalized
+				// transaction. UTF-8 addresses are accepted regardless; this just
+				// must not be rejected as unknown.
+				if value.is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
 			}
 			"RET" => {
 				let value = value.ok_or(ParseError::InvalidArguments)?;

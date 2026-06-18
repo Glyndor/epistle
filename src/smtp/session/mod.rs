@@ -299,6 +299,7 @@ impl Session {
 			"PIPELINING".to_string(),
 			"ENHANCEDSTATUSCODES".to_string(),
 			"8BITMIME".to_string(),
+			"SMTPUTF8".to_string(), // RFC 6531: internationalized addresses.
 			// RFC 3461: we parse RET/ENVID and NOTIFY/ORCPT parameters.
 			"DSN".to_string(),
 			format!("SIZE {MAX_MESSAGE_SIZE}"),
