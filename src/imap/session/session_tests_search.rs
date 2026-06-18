@@ -195,6 +195,30 @@ fn search_by_flags_headers_and_text() {
 }
 
 #[test]
+fn search_by_generic_header_and_cc() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(
+		dir.path(),
+		b"From: a@x.example\r\nCc: team@x.example\r\nMessage-ID: <abc@x>\r\n\r\nbody\r\n",
+	);
+	deliver(dir.path(), b"From: b@y.example\r\n\r\nother\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// Generic HEADER search on an arbitrary field.
+	let response = text(&session.command_line("a3 SEARCH HEADER Message-ID abc"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// CC is now a recognized header search key.
+	let response = text(&session.command_line("a4 SEARCH CC team"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// A header miss returns nothing.
+	let response = text(&session.command_line("a5 SEARCH HEADER Message-ID nope"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+}
+
+#[test]
 fn uid_search_returns_uids() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"From: a@x.example\r\n\r\none\r\n");
