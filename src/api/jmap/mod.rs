@@ -22,6 +22,8 @@ const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
 const MAIL_CAPABILITY: &str = "urn:ietf:params:jmap:mail";
 /// JMAP submission capability URN (RFC 8621 §7) — carries identities.
 const SUBMISSION_CAPABILITY: &str = "urn:ietf:params:jmap:submission";
+/// JMAP quota capability URN (RFC 9425).
+const QUOTA_CAPABILITY: &str = "urn:ietf:params:jmap:quota";
 
 /// `GET /jmap/session`: the Session resource (RFC 8620 §2).
 pub async fn session(State(state): State<ApiState>) -> Json<Value> {
@@ -36,7 +38,8 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 					"isPersonal": true,
 					"isReadOnly": false,
 					"accountCapabilities": {
-						CORE_CAPABILITY: {}, MAIL_CAPABILITY: {}, SUBMISSION_CAPABILITY: {},
+						CORE_CAPABILITY: {}, MAIL_CAPABILITY: {},
+						SUBMISSION_CAPABILITY: {}, QUOTA_CAPABILITY: {},
 					},
 				}),
 			)
@@ -73,6 +76,7 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 				"maxDelayedSend": 0u32,
 				"submissionExtensions": {},
 			},
+			QUOTA_CAPABILITY: {},
 		},
 		"accounts": accounts,
 		"primaryAccounts": primary,
@@ -119,6 +123,7 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			"Email/set" => email::email_set(&state, &args, &call_id),
 			"Email/copy" => email::email_copy(&state, &args, &call_id),
 			"Identity/get" => methods::identity_get(&state, &args, &call_id),
+			"Quota/get" => methods::quota_get(&state, &args, &call_id),
 			"EmailSubmission/set" => methods::email_submission_set(&state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		});

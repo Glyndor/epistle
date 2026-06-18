@@ -253,7 +253,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					config.domains.clone(),
 					Arc::clone(&account_store),
 					crate::storage::FsSpool::open(&config.data_dir)?,
-				);
+				)
+				.with_quota(config.quota_bytes.unwrap_or(0));
 				let addr = listener_config.socket_addr();
 				let listener = TcpListener::bind(addr).await?;
 				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
