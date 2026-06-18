@@ -299,3 +299,59 @@ else { keep; }";
 	let outcome = run(script, MSG);
 	assert_eq!(outcome.fileinto, vec!["Junk".to_string()]);
 }
+
+#[test]
+fn true_and_false_literal_tests() {
+	assert!(run("if true { discard; }", MSG).discarded);
+	assert!(!run("if false { discard; }", MSG).discarded);
+}
+
+#[test]
+fn currentdate_matches_wildcards() {
+	// `:matches` routes through the glob comparator (not capture extraction).
+	let message = Message::parse(MSG).with_now(1_781_724_605); // 2026-06-17.
+	let hit =
+		parse(&tokenize("if currentdate :matches \"year\" \"20*\" { discard; }").unwrap()).unwrap();
+	assert!(evaluate(&hit, &message).discarded);
+	// A single-character `?` wildcard.
+	let q = parse(&tokenize("if currentdate :matches \"year\" \"2?26\" { discard; }").unwrap())
+		.unwrap();
+	assert!(evaluate(&q, &message).discarded);
+	// Non-matching pattern keeps the message.
+	let miss =
+		parse(&tokenize("if currentdate :matches \"year\" \"19*\" { discard; }").unwrap()).unwrap();
+	assert!(!evaluate(&miss, &message).discarded);
+}
+
+#[test]
+fn matches_question_mark_and_backtracking_captures() {
+	// `?` captures one char and `*` backtracks to satisfy a trailing literal.
+	let outcome = run(
+		"if header :matches \"Subject\" \"?ig*today\" { fileinto \"${1}/${2}\"; }",
+		MSG,
+	);
+	// ${1} is the `?` (b), ${2} the `*` run between "ig" and "today".
+	// Capture comparison is case-insensitive, so captures are lowercased.
+	assert_eq!(outcome.fileinto, vec!["b/ sale ".to_string()]);
+}
+
+#[test]
+fn matches_with_no_wildcard_is_exact() {
+	// A pattern without wildcards matches only the whole value.
+	let hit = run(
+		"if header :matches \"Subject\" \"Big SALE today\" { discard; }",
+		MSG,
+	);
+	assert!(hit.discarded);
+	let miss = run("if header :matches \"Subject\" \"Big\" { discard; }", MSG);
+	assert!(!miss.discarded);
+}
+
+#[test]
+fn envelope_unknown_part_never_matches() {
+	let commands =
+		parse(&tokenize("if envelope :is \"bogus\" \"x\" { discard; }").unwrap()).unwrap();
+	let message = Message::parse(MSG)
+		.with_envelope("a@b.example".to_string(), vec!["c@d.example".to_string()]);
+	assert!(!evaluate(&commands, &message).discarded);
+}
