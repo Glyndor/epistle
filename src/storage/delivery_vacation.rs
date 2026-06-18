@@ -132,6 +132,7 @@ mod tests {
 			data: format!("{headers}\r\n\r\nbody\r\n").into_bytes(),
 			require_tls: false,
 			mailbox: None,
+			no_dsn: Vec::new(),
 		}
 	}
 

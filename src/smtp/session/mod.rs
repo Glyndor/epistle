@@ -21,59 +21,10 @@ pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
 /// Maximum number of accepted recipients per transaction (RFC 5321 minimum).
 pub const MAX_RECIPIENTS: usize = 100;
 
-/// Where the session is in the SMTP dialogue.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum State {
-	/// Connection open, no HELO/EHLO yet.
-	Connected,
-	/// Greeted; ready for a mail transaction.
-	Greeted,
-	/// MAIL FROM accepted; collecting recipients.
-	ReceivingRecipients {
-		reverse_path: String,
-		require_tls: bool,
-	},
-	/// DATA accepted; collecting message lines.
-	ReceivingData {
-		reverse_path: String,
-		recipients: Vec<String>,
-		size: usize,
-		body: Vec<u8>,
-		require_tls: bool,
-	},
-}
-
-/// A message accepted by the session, ready for delivery.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AcceptedMessage {
-	pub reverse_path: String,
-	pub recipients: Vec<String>,
-	pub data: Vec<u8>,
-	/// The sender requested REQUIRETLS (RFC 8689): onward delivery must use
-	/// verified TLS.
-	pub require_tls: bool,
-	/// Routing hint set by inbound screening: deliver local copies into this
-	/// mailbox (e.g. `Rejects`) instead of INBOX. `None` leaves routing to
-	/// the delivery rules.
-	pub mailbox: Option<String>,
-}
-
-/// What the network layer must do after a step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-	/// Send the reply and keep reading commands.
-	Continue(Reply),
-	/// Send the reply and switch to reading data lines.
-	CollectData(Reply),
-	/// Send the reply, hand the message to delivery, keep reading commands.
-	Deliver(Reply, AcceptedMessage),
-	/// Send the reply, then upgrade the connection to TLS (RFC 3207).
-	UpgradeTls(Reply),
-	/// Send the 334 challenge and read one authentication response line.
-	CollectAuthResponse(Reply),
-	/// Send the reply and close the connection.
-	Close(Reply),
-}
+#[path = "types.rs"]
+mod types;
+use types::State;
+pub use types::{AcceptedMessage, Action};
 
 /// SMTP session state machine.
 #[derive(Debug)]
@@ -202,7 +153,11 @@ impl Session {
 				require_tls,
 				..
 			} => self.mail_from(reverse_path, size, require_tls),
-			Command::RcptTo { forward_path, .. } => self.rcpt_to(forward_path),
+			Command::RcptTo {
+				forward_path,
+				notify,
+				..
+			} => self.rcpt_to(forward_path, notify),
 			Command::Data => self.data(),
 			Command::Rset => {
 				self.reset();
@@ -377,7 +332,7 @@ impl Session {
 		}
 	}
 
-	fn rcpt_to(&mut self, forward_path: String) -> Action {
+	fn rcpt_to(&mut self, forward_path: String, notify: Option<super::command::Notify>) -> Action {
 		let Ok(address) = Address::parse(&forward_path) else {
 			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};
@@ -394,6 +349,12 @@ impl Session {
 			Resolution::Account(_) => {}
 		}
 		let forward_path = address.to_string();
+		// Suppress failure DSNs for NOTIFY=NEVER or a NOTIFY without FAILURE (RFC 3461).
+		use super::command::Notify;
+		let suppresses_dsn = matches!(
+			notify,
+			Some(Notify::Never | Notify::On { failure: false, .. })
+		);
 		match &mut self.state {
 			State::ReceivingRecipients {
 				reverse_path,
@@ -401,9 +362,15 @@ impl Session {
 			} => {
 				let reverse_path = reverse_path.clone();
 				let require_tls = *require_tls;
+				let no_dsn = if suppresses_dsn {
+					vec![forward_path.clone()]
+				} else {
+					Vec::new()
+				};
 				self.state = State::ReceivingData {
 					reverse_path,
 					recipients: vec![forward_path],
+					no_dsn,
 					size: 0,
 					body: Vec::new(),
 					require_tls,
@@ -411,10 +378,16 @@ impl Session {
 				Action::Continue(Reply::ok())
 			}
 			State::ReceivingData {
-				recipients, body, ..
+				recipients,
+				no_dsn,
+				body,
+				..
 			} if body.is_empty() => {
 				if recipients.len() >= MAX_RECIPIENTS {
 					return Action::Continue(Reply::single(452, "4.5.3 too many recipients"));
+				}
+				if suppresses_dsn {
+					no_dsn.push(forward_path.clone());
 				}
 				recipients.push(forward_path);
 				Action::Continue(Reply::ok())
@@ -438,6 +411,7 @@ impl Session {
 		let State::ReceivingData {
 			reverse_path,
 			recipients,
+			no_dsn,
 			size,
 			body,
 			require_tls,
@@ -452,6 +426,7 @@ impl Session {
 			let message = AcceptedMessage {
 				reverse_path: reverse_path.clone(),
 				recipients: recipients.clone(),
+				no_dsn: no_dsn.clone(),
 				data: body.clone(),
 				require_tls: *require_tls,
 				mailbox: None,

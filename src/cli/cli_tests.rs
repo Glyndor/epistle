@@ -313,7 +313,6 @@ fn account_add_creates_and_validates() {
 	let mut out = Vec::new();
 	accounts::list(&config, &mut out);
 	assert!(String::from_utf8_lossy(&out).contains("bob\tdynamic\tbob@example.org"));
-	// A duplicate name is rejected by the store.
 	assert_eq!(
 		accounts::add(
 			&config,
@@ -324,7 +323,6 @@ fn account_add_creates_and_validates() {
 		ExitCode::FAILURE
 	);
 
-	// An unwritable data_dir (a file) makes the store fail to open.
 	let file = tempfile::NamedTempFile::new().expect("file");
 	let bad = write_config(&format!(
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n",
@@ -367,6 +365,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 			data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			no_dsn: Vec::new(),
 		})
 		.expect("store");
 	// A bounce uses the null reverse-path, shown as <>.
@@ -377,6 +376,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 			data: b"x\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			no_dsn: Vec::new(),
 		})
 		.expect("store");
 	// A corrupt entry is listed but skipped on load.

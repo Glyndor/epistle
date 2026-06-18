@@ -218,6 +218,7 @@ impl MessageSink for SplitDelivery {
 					data: message.data.clone(),
 					require_tls: false,
 					mailbox: None,
+					no_dsn: Vec::new(),
 				};
 				self.outbound
 					.store(&forwarded)
@@ -243,6 +244,7 @@ impl MessageSink for SplitDelivery {
 				data: message.data.clone(),
 				require_tls: false,
 				mailbox: None,
+				no_dsn: Vec::new(),
 			};
 			self.outbound
 				.store(&returned)

@@ -17,6 +17,7 @@ fn message(recipients: &[&str]) -> AcceptedMessage {
 		data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
 		require_tls: false,
 		mailbox: None,
+		no_dsn: Vec::new(),
 	}
 }
 
@@ -212,6 +213,7 @@ fn srs_return_address_forwards_to_original_sender() {
 		data: b"Subject: bounce\r\n\r\nfailed\r\n".to_vec(),
 		require_tls: false,
 		mailbox: None,
+		no_dsn: Vec::new(),
 	};
 	sink.deliver(bounce).expect("deliver");
 	// The bounce is re-queued to the original sender it encoded.

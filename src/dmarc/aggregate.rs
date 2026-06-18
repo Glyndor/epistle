@@ -129,6 +129,7 @@ pub async fn flush_pending(
 					data: email_bytes,
 					require_tls: false,
 					mailbox: None,
+					no_dsn: Vec::new(),
 				});
 			}
 			to_remove.push(path);
