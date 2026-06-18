@@ -1,116 +1,43 @@
-//! JMAP (RFC 8620) foundation: the Session resource and the Core/echo method.
-//!
-//! This is the minimal, spec-valid entry point that opens the JMAP roadmap:
-//! a client fetches the Session object to discover capabilities and the API
-//! URL, then POSTs a request envelope whose method calls are dispatched here.
-//! Only the mandatory `Core/echo` method is implemented so far.
+//! JMAP method handlers (RFC 8621): Mailbox and Email objects.
 
-use axum::Json;
-use axum::extract::State;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::state::ApiState;
+use super::super::state::ApiState;
 
-/// JMAP core capability URN.
-const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
-/// JMAP mail capability URN (RFC 8621).
-const MAIL_CAPABILITY: &str = "urn:ietf:params:jmap:mail";
-
-/// `GET /jmap/session`: the Session resource (RFC 8620 §2).
-pub async fn session(State(state): State<ApiState>) -> Json<Value> {
-	let accounts: serde_json::Map<String, Value> = state
-		.accounts()
-		.into_iter()
-		.map(|account| {
-			(
-				account.name.clone(),
-				json!({
-					"name": account.name,
-					"isPersonal": true,
-					"isReadOnly": false,
-					"accountCapabilities": { CORE_CAPABILITY: {}, MAIL_CAPABILITY: {} },
-				}),
-			)
+/// `Identity/get` (RFC 8621 §6.1): the account's sending identities, one per
+/// configured address.
+pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	let list: Vec<Value> = view
+		.addresses
+		.iter()
+		.map(|address| {
+			json!({
+				"id": address,
+				"name": view.name,
+				"email": address,
+				"replyTo": null,
+				"bcc": null,
+				"textSignature": "",
+				"htmlSignature": "",
+				"mayDelete": false,
+			})
 		})
 		.collect();
-	let primary: serde_json::Map<String, Value> = accounts
-		.keys()
-		.next()
-		.map(|id| (CORE_CAPABILITY.to_string(), Value::String(id.clone())))
-		.into_iter()
-		.collect();
-
-	Json(json!({
-		"capabilities": {
-			CORE_CAPABILITY: {
-				"maxSizeUpload": 50_000_000u64,
-				"maxConcurrentUpload": 4u32,
-				"maxSizeRequest": 10_000_000u64,
-				"maxConcurrentRequests": 4u32,
-				"maxCallsInRequest": 16u32,
-				"maxObjectsInGet": 500u32,
-				"maxObjectsInSet": 500u32,
-				"collationAlgorithms": [],
-			},
-			MAIL_CAPABILITY: {
-				"maxMailboxesPerEmail": null,
-				"maxMailboxDepth": null,
-				"maxSizeMailboxName": 128u32,
-				"maxSizeAttachmentsPerEmail": 50_000_000u64,
-				"emailQuerySortOptions": [],
-				"mayCreateTopLevelMailbox": true,
-			},
-		},
-		"accounts": accounts,
-		"primaryAccounts": primary,
-		"username": "",
-		"apiUrl": "/jmap/api",
-		"downloadUrl": "/jmap/download/{accountId}/{blobId}/{name}",
-		"uploadUrl": "/jmap/upload/{accountId}",
-		"eventSourceUrl": "/jmap/eventsource",
-		"state": "0",
-	}))
-}
-
-/// One method call `[name, arguments, callId]` (RFC 8620 §3.2).
-#[derive(Deserialize)]
-pub struct MethodCall(String, Value, String);
-
-/// A JMAP request envelope (RFC 8620 §3.3). The `using` capability list is
-/// accepted and ignored until capability negotiation is implemented.
-#[derive(Deserialize)]
-pub struct Request {
-	#[serde(rename = "methodCalls")]
-	pub method_calls: Vec<MethodCall>,
-}
-
-/// A JMAP response envelope.
-#[derive(Serialize)]
-pub struct Response {
-	#[serde(rename = "methodResponses")]
-	pub method_responses: Vec<Value>,
-}
-
-/// `POST /jmap/api`: dispatch each method call, returning the responses.
-pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) -> Json<Response> {
-	let mut method_responses = Vec::with_capacity(request.method_calls.len());
-	for MethodCall(name, args, call_id) in request.method_calls {
-		method_responses.push(match name.as_str() {
-			// Core/echo returns its arguments unchanged (RFC 8620 §4).
-			"Core/echo" => json!([name, args, call_id]),
-			"Mailbox/get" => mailbox_get(&state, &args, &call_id),
-			"Email/query" => email_query(&state, &args, &call_id),
-			"Email/get" => email_get(&state, &args, &call_id),
-			"Email/set" => email_set(&state, &args, &call_id),
-			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
-		});
-	}
-	Json(Response { method_responses })
+	json!([
+		"Identity/get",
+		{ "accountId": account, "state": "0", "list": list, "notFound": [] },
+		call_id,
+	])
 }
 
 /// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
-fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
@@ -144,7 +71,7 @@ fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 }
 
 /// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
-fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
@@ -181,7 +108,7 @@ fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
 }
 
 /// `Email/get` (RFC 8621 §4.1): return parsed Email objects by id.
-fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
@@ -216,7 +143,7 @@ fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
 
 /// `Email/set` (RFC 8621 §4.6): apply keyword updates (mark read/flagged etc.).
 /// Only full `keywords` replacement on `update` is supported so far.
-fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
