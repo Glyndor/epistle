@@ -253,3 +253,81 @@ async fn challenge_finalize_and_certificate_flow() {
 	let pem = client.download_certificate(&cert_url).await.expect("cert");
 	assert!(pem.starts_with(b"-----BEGIN CERTIFICATE-----"));
 }
+
+/// Build the account + order posts shared by the failure-path tests, with the
+/// authorization queue supplied by the caller.
+fn order_posts(
+	authz: Vec<PostResponse>,
+) -> HashMap<String, std::collections::VecDeque<PostResponse>> {
+	let mut posts: HashMap<String, std::collections::VecDeque<PostResponse>> = HashMap::new();
+	posts.insert(
+		"https://acme.example/new-acct".to_string(),
+		vec![PostResponse {
+			nonce: "n".into(),
+			location: Some("https://acme.example/acct/1".into()),
+			status: 201,
+			body: b"{}".to_vec(),
+		}]
+		.into(),
+	);
+	posts.insert(
+		"https://acme.example/new-order".to_string(),
+		vec![PostResponse {
+			nonce: "n".into(),
+			location: Some("https://acme.example/order/7".into()),
+			status: 201,
+			body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
+		}]
+		.into(),
+	);
+	posts.insert(
+		"https://acme.example/chal/1".to_string(),
+		vec![ok_body("n", b"{}")].into(),
+	);
+	posts.insert("https://acme.example/authz/1".to_string(), authz.into());
+	posts
+}
+
+async fn registered_client(
+	posts: HashMap<String, std::collections::VecDeque<PostResponse>>,
+) -> AcmeClient<SequencedTransport> {
+	let (key, _) = AccountKey::generate().expect("key");
+	let transport = SequencedTransport {
+		directory: directory_json(),
+		posts: Mutex::new(posts),
+	};
+	let client = AcmeClient::connect(transport, key, "https://acme.example/dir")
+		.await
+		.expect("connect");
+	client
+		.register(&["admin@example.org".to_string()])
+		.await
+		.expect("register");
+	client
+}
+
+#[tokio::test]
+async fn obtain_fails_when_authorization_invalid() {
+	let authz = vec![
+		ok_body("n", br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#),
+		ok_body("n", br#"{"status":"invalid","challenges":[]}"#),
+	];
+	let client = registered_client(order_posts(authz)).await;
+	let store = crate::acme::http01::ChallengeStore::new();
+	let result = client
+		.obtain_certificate(&["mail.example.org".to_string()], &store, 3)
+		.await;
+	assert!(result.is_err(), "invalid authorization must abort");
+}
+
+#[tokio::test]
+async fn obtain_times_out_when_authorization_never_valid() {
+	// Authorization stays pending forever: polling exhausts its budget.
+	let authz = vec![ok_body("n", br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#)];
+	let client = registered_client(order_posts(authz)).await;
+	let store = crate::acme::http01::ChallengeStore::new();
+	let result = client
+		.obtain_certificate(&["mail.example.org".to_string()], &store, 2)
+		.await;
+	assert!(result.is_err(), "perpetual pending must time out");
+}
