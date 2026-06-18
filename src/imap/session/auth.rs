@@ -23,6 +23,10 @@ pub(super) enum PendingAuth {
 		credentials: Box<ScramCredentials>,
 		account: String,
 	},
+	/// AUTH=LOGIN: awaiting the base64 username.
+	LoginUser { tag: String },
+	/// AUTH=LOGIN: awaiting the base64 password for `user`.
+	LoginPass { tag: String, user: String },
 }
 
 impl Session {
@@ -43,7 +47,7 @@ impl Session {
 
 	/// The advertised SASL mechanisms, including OAuth when configured.
 	pub(super) fn sasl_capability(&self) -> String {
-		let mut caps = String::from(" AUTH=PLAIN AUTH=SCRAM-SHA-256");
+		let mut caps = String::from(" AUTH=PLAIN AUTH=LOGIN AUTH=SCRAM-SHA-256");
 		if self.oauth.is_some() {
 			caps.push_str(" AUTH=OAUTHBEARER AUTH=XOAUTH2");
 		}
@@ -99,8 +103,42 @@ impl Session {
 					continuation("")
 				}
 			},
+			"LOGIN" => match initial {
+				// SASL-IR initial response is the username.
+				Some(user) => self.login_user(tag, &user),
+				None => {
+					self.pending_auth = Some(PendingAuth::LoginUser {
+						tag: tag.to_string(),
+					});
+					continuation("VXNlcm5hbWU6")
+				}
+			},
 			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(tag, initial),
 			_ => Output::text(format!("{tag} NO unsupported SASL mechanism\r\n")),
+		}
+	}
+
+	/// AUTH=LOGIN: record the username and prompt for the password.
+	fn login_user(&mut self, tag: &str, encoded: &str) -> Output {
+		let Some(user) = decode(encoded) else {
+			return self.auth_failure(tag);
+		};
+		self.pending_auth = Some(PendingAuth::LoginPass {
+			tag: tag.to_string(),
+			user,
+		});
+		continuation("UGFzc3dvcmQ6")
+	}
+
+	/// AUTH=LOGIN: verify the password (plus any TOTP) against the username.
+	fn login_pass(&mut self, tag: &str, user: &str, encoded: &str) -> Output {
+		let verified = decode(encoded).and_then(|pass| self.directory.authenticate(user, &pass));
+		match verified {
+			Some(account) => {
+				self.state = State::Authenticated { account };
+				Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
+			}
+			None => self.auth_failure(tag),
 		}
 	}
 
@@ -120,6 +158,8 @@ impl Session {
 				credentials,
 				account,
 			}) => self.scram_final(&tag, line, *server, *credentials, &account),
+			Some(PendingAuth::LoginUser { tag }) => self.login_user(&tag, line),
+			Some(PendingAuth::LoginPass { tag, user }) => self.login_pass(&tag, &user, line),
 			None => Output::text("* BAD unexpected authentication response\r\n".to_string()),
 		}
 	}
@@ -208,8 +248,14 @@ impl Session {
 
 	fn pending_auth_tag(&self) -> String {
 		match &self.pending_auth {
-			Some(PendingAuth::Plain { tag } | PendingAuth::ScramFirst { tag }) => tag.clone(),
-			Some(PendingAuth::ScramFinal { tag, .. }) => tag.clone(),
+			Some(
+				PendingAuth::Plain { tag }
+				| PendingAuth::ScramFirst { tag }
+				| PendingAuth::LoginUser { tag },
+			) => tag.clone(),
+			Some(PendingAuth::ScramFinal { tag, .. } | PendingAuth::LoginPass { tag, .. }) => {
+				tag.clone()
+			}
 			None => "*".to_string(),
 		}
 	}
