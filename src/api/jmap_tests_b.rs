@@ -288,3 +288,27 @@ async fn jmap_email_set_reports_unknown_ids() {
 		);
 	}
 }
+
+#[tokio::test]
+async fn jmap_changes_methods_report_cannot_calculate() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	for method in ["Mailbox/changes", "Email/changes", "Thread/changes"] {
+		let req = serde_json::json!({ "methodCalls": [[method, {"accountId": "alice"}, "c1"]] });
+		let (status, body) =
+			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(
+			body["methodResponses"][0][1]["type"], "cannotCalculateChanges",
+			"{method}: {body}"
+		);
+	}
+	// Without an account it is invalidArguments.
+	let req = serde_json::json!({ "methodCalls": [["Email/changes", {}, "c2"]] });
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(
+		body["methodResponses"][0][1]["type"], "invalidArguments",
+		"{body}"
+	);
+}

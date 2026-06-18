@@ -5,6 +5,19 @@ use serde_json::{Value, json};
 use super::super::state::ApiState;
 use super::objects;
 
+/// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
+/// this server does not maintain a change log (`canCalculateChanges` is false),
+/// so the spec-correct response is the `cannotCalculateChanges` error.
+pub(super) fn cannot_calculate_changes(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	json!(["error", { "type": "cannotCalculateChanges" }, call_id])
+}
+
 /// `EmailSubmission/set` (RFC 8621 §7.5): queue stored emails for delivery.
 pub(super) fn email_submission_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {

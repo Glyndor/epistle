@@ -121,6 +121,11 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			"Email/query" => methods::email_query(&state, &args, &call_id),
 			"Email/get" => methods::email_get(&state, &args, &call_id),
 			"Thread/get" => methods::thread_get(&state, &args, &call_id),
+			// We do not track a change log, so /changes is not calculable
+			// (RFC 8620 §5.2); report it per spec rather than unknownMethod.
+			"Mailbox/changes" | "Email/changes" | "Thread/changes" => {
+				methods::cannot_calculate_changes(&state, &args, &call_id)
+			}
 			"Email/set" => email::email_set(&state, &args, &call_id),
 			"Email/copy" => email::email_copy(&state, &args, &call_id),
 			"Identity/get" => methods::identity_get(&state, &args, &call_id),
