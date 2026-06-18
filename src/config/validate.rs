@@ -15,6 +15,24 @@ impl Config {
 		self.validate_api()?;
 		self.validate_listeners()?;
 		self.validate_acme()?;
+		self.validate_webhook()?;
+		Ok(())
+	}
+
+	fn validate_webhook(&self) -> Result<(), ConfigError> {
+		let Some(webhook) = &self.webhook else {
+			return Ok(());
+		};
+		// Event payloads carry message metadata, so require TLS — except for a
+		// loopback endpoint, which never leaves the host.
+		let loopback = ["http://127.0.0.1", "http://[::1]", "http://localhost"]
+			.iter()
+			.any(|prefix| webhook.url.starts_with(prefix));
+		if !webhook.url.starts_with("https://") && !loopback {
+			return Err(ConfigError::Invalid(
+				"[webhook] url must be https (or a loopback http endpoint)".into(),
+			));
+		}
 		Ok(())
 	}
 

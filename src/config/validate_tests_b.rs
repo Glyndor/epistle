@@ -66,3 +66,26 @@ fn rejects_listeners_missing_required_sections() {
 	// api listener without [api].
 	assert!(invalid(&format!("{BASE}\n[[listeners]]\nkind = \"api\"\n")));
 }
+
+#[test]
+fn webhook_url_must_be_https_or_loopback() {
+	use super::*;
+	fn ok(toml: &str) -> bool {
+		toml::from_str::<Config>(toml).is_ok_and(|c| c.validate().is_ok())
+	}
+	// Plaintext http to a remote host is rejected (leaks metadata).
+	assert!(invalid(&format!(
+		"{BASE}\n[webhook]\nurl = \"http://hooks.example/x\"\n"
+	)));
+	// https is accepted.
+	assert!(ok(&format!(
+		"{BASE}\n[webhook]\nurl = \"https://hooks.example/x\"\n"
+	)));
+	// Loopback http is allowed (never leaves the host).
+	assert!(ok(&format!(
+		"{BASE}\n[webhook]\nurl = \"http://127.0.0.1:9000/x\"\n"
+	)));
+	assert!(ok(&format!(
+		"{BASE}\n[webhook]\nurl = \"http://localhost/x\"\n"
+	)));
+}
