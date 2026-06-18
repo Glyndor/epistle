@@ -337,6 +337,30 @@ async fn jmap_email_get_parses_message() {
 }
 
 #[tokio::test]
+async fn jmap_thread_get_returns_singleton_thread() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"Subject: x\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Thread/get", {"accountId": "alice", "ids": [id.to_string(), "missing"]}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let thread = &body["methodResponses"][0][1]["list"][0];
+	assert_eq!(thread["id"], id.to_string());
+	assert_eq!(thread["emailIds"][0], id.to_string());
+	assert_eq!(body["methodResponses"][0][1]["notFound"][0], "missing");
+}
+
+#[tokio::test]
 async fn jmap_email_query_returns_ids() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let inbox = dir.path().join("accounts").join("alice").join("new");

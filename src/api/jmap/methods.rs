@@ -224,6 +224,33 @@ pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Valu
 	])
 }
 
+/// `Thread/get` (RFC 8621 §3): each email is its own singleton thread (no
+/// server-side threading yet), so a thread's id and its one email id match.
+pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let mut list = Vec::new();
+	let mut not_found = Vec::new();
+	if let Some(ids) = args.get("ids").and_then(Value::as_array) {
+		for id in ids.iter().filter_map(Value::as_str) {
+			if objects::find_email(state.data_dir(), account, id).is_some() {
+				list.push(json!({ "id": id, "emailIds": [id] }));
+			} else {
+				not_found.push(Value::String(id.to_string()));
+			}
+		}
+	}
+	json!([
+		"Thread/get",
+		{ "accountId": account, "state": "0", "list": list, "notFound": not_found },
+		call_id,
+	])
+}
+
 /// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
 pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
