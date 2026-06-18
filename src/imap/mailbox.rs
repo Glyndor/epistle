@@ -29,6 +29,13 @@ pub struct MessageRef {
 	pub modseq: u64,
 }
 
+impl MessageRef {
+	/// The message's stable UUID (its on-disk `<id>.eml` name).
+	pub fn id(&self) -> Uuid {
+		self.id
+	}
+}
+
 /// Supported permanent flags (RFC 9051 section 2.3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Flag {
