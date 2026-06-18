@@ -2,6 +2,7 @@
 
 mod export;
 mod import;
+mod queue;
 mod serve;
 
 use std::path::PathBuf;
@@ -58,6 +59,12 @@ enum Command {
 		#[arg(long, value_name = "NAME")]
 		account: String,
 	},
+	/// List the outbound delivery queue.
+	Queue {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
 	/// Reads the plaintext token from stdin (one line). Prints a
@@ -95,6 +102,13 @@ impl Cli {
 			},
 			Command::Import { config, account } => match Config::load(&config) {
 				Ok(config) => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Queue { config } => match Config::load(&config) {
+				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -364,6 +378,36 @@ mod tests {
 		assert!(!joined.contains("X-Mailbox"), "{joined}");
 		assert!(joined.contains("From the desk"), "{joined}");
 		assert!(!joined.contains(">From the desk"), "{joined}");
+	}
+
+	#[test]
+	fn parses_queue_command() {
+		let cli = Cli::try_parse_from(["mail", "queue", "--config", "/etc/mail.toml"])
+			.expect("queue parses");
+		assert!(matches!(cli.command, Command::Queue { .. }));
+	}
+
+	#[test]
+	fn queue_list_reports_spooled_messages() {
+		use crate::smtp::session::AcceptedMessage;
+		use crate::storage::FsSpool;
+		let dir = tempfile::tempdir().expect("tempdir");
+		let spool = FsSpool::open(dir.path()).expect("spool");
+		spool
+			.store(&AcceptedMessage {
+				reverse_path: "bob@example.org".into(),
+				recipients: vec!["carol@elsewhere.example".into()],
+				data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+			})
+			.expect("store");
+		let mut out = Vec::new();
+		assert_eq!(queue::list(dir.path(), &mut out), ExitCode::SUCCESS);
+		let text = String::from_utf8(out).expect("utf8");
+		assert!(text.contains("from=bob@example.org"), "{text}");
+		assert!(text.contains("to=carol@elsewhere.example"), "{text}");
+		assert!(text.contains("1 queued"), "{text}");
 	}
 
 	#[test]
