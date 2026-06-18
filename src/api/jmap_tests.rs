@@ -198,6 +198,49 @@ async fn jmap_identity_get_lists_addresses() {
 }
 
 #[tokio::test]
+async fn jmap_email_copy_duplicates_to_mailbox() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"Subject: x\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+	// Create the destination folder.
+	let req = serde_json::json!({
+		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Saved"}}}, "m1"]],
+	});
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+
+	// Copy the email to Saved (source stays in INBOX).
+	let req = serde_json::json!({
+		"methodCalls": [["Email/copy", {
+			"accountId": "alice", "fromAccountId": "alice",
+			"create": { "k": {"emailId": id.to_string(), "mailboxIds": {"Saved": true}} },
+		}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(
+		body["methodResponses"][0][1]["created"]["k"]["id"].is_string(),
+		"{body}"
+	);
+	// Both INBOX and Saved now have one message.
+	let req = serde_json::json!({
+		"methodCalls": [
+			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "INBOX"}}, "q1"],
+			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "Saved"}}, "q2"],
+		],
+	});
+	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(body["methodResponses"][0][1]["total"], 1);
+	assert_eq!(body["methodResponses"][1][1]["total"], 1);
+}
+
+#[tokio::test]
 async fn jmap_email_set_creates_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");

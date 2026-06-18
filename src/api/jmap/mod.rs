@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use super::state::ApiState;
 
+mod email;
 mod methods;
 mod objects;
 
@@ -115,7 +116,8 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			"Email/query" => methods::email_query(&state, &args, &call_id),
 			"Email/get" => methods::email_get(&state, &args, &call_id),
 			"Thread/get" => methods::thread_get(&state, &args, &call_id),
-			"Email/set" => methods::email_set(&state, &args, &call_id),
+			"Email/set" => email::email_set(&state, &args, &call_id),
+			"Email/copy" => email::email_copy(&state, &args, &call_id),
 			"Identity/get" => methods::identity_get(&state, &args, &call_id),
 			"EmailSubmission/set" => methods::email_submission_set(&state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),

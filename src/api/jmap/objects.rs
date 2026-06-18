@@ -37,6 +37,24 @@ pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
 	format!("{headers}\r\n{body}").into_bytes()
 }
 
+/// Raw bytes of a stored message by id, searching the account's mailboxes.
+pub(super) fn find_email_raw(
+	data_dir: &std::path::Path,
+	account: &str,
+	id: &str,
+) -> Option<Vec<u8>> {
+	let uuid = uuid::Uuid::parse_str(id).ok()?;
+	for mailbox in crate::imap::mailbox::list(data_dir, account) {
+		let Ok(snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox) else {
+			continue;
+		};
+		if let Some(message) = snapshot.messages().find(|m| m.id() == uuid) {
+			return snapshot.read(message).ok();
+		}
+	}
+	None
+}
+
 /// Locate a message by id across the account's mailboxes and build its Email.
 pub(super) fn find_email(data_dir: &std::path::Path, account: &str, id: &str) -> Option<Value> {
 	let uuid = uuid::Uuid::parse_str(id).ok()?;
