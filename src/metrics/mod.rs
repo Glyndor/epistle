@@ -51,11 +51,17 @@ pub struct Metrics {
 	rejected_reputation: AtomicU64,
 	rejected_scanner: AtomicU64,
 	rejected_loop: AtomicU64,
+	abuse_dropped: AtomicU64,
 }
 
 impl Metrics {
 	pub fn new() -> Self {
 		Self::default()
+	}
+
+	/// Count a connection dropped by the error-streak abuse guard.
+	pub fn abuse_dropped(&self) {
+		self.abuse_dropped.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count an accepted inbound SMTP connection.
@@ -122,6 +128,15 @@ impl Metrics {
 				self.counter(reason).load(Ordering::Relaxed)
 			));
 		}
+
+		out.push_str(
+			"# HELP mail_connections_abuse_dropped_total Connections dropped for too many errors.\n",
+		);
+		out.push_str("# TYPE mail_connections_abuse_dropped_total counter\n");
+		out.push_str(&format!(
+			"mail_connections_abuse_dropped_total {}\n",
+			self.abuse_dropped.load(Ordering::Relaxed)
+		));
 		out
 	}
 }
@@ -151,8 +166,13 @@ mod tests {
 		m.rejected(RejectReason::Dnsbl);
 		m.rejected(RejectReason::Dnsbl);
 		m.rejected(RejectReason::Dmarc);
+		m.abuse_dropped();
 		let r = m.render();
 		assert!(r.contains("mail_connections_total 2\n"), "{r}");
+		assert!(
+			r.contains("mail_connections_abuse_dropped_total 1\n"),
+			"{r}"
+		);
 		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
 		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
 		assert!(
