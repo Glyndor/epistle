@@ -58,6 +58,32 @@ pub struct DynamicAccount {
 	pub totp_secret: Option<String>,
 }
 
+impl DynamicAccount {
+	/// Build an account from a plaintext password, deriving the argon2id hash
+	/// and SCRAM-SHA-256 credentials (fresh random salt, RFC 7677 ≥4096 rounds).
+	pub fn with_password(
+		name: String,
+		addresses: Vec<String>,
+		password: &str,
+	) -> Result<Self, StoreError> {
+		use ring::rand::SecureRandom;
+		let password_hash = crate::smtp::auth::hash_password(password)
+			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
+		let mut salt = [0u8; 16];
+		let _ = ring::rand::SystemRandom::new().fill(&mut salt);
+		let scram = crate::smtp::scram::ScramStored::from_credentials(
+			&crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096),
+		);
+		Ok(DynamicAccount {
+			name,
+			addresses,
+			password_hash,
+			scram: Some(scram),
+			totp_secret: None,
+		})
+	}
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct DynamicFile {
 	#[serde(default)]
