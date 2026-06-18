@@ -21,6 +21,7 @@ pub mod imap;
 pub mod jwt;
 pub mod metrics;
 pub mod mtasts;
+pub mod oauth;
 pub mod pop3;
 pub mod queue;
 pub mod rules;
