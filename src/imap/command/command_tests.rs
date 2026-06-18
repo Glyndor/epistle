@@ -268,3 +268,62 @@ fn sequence_set_reversed_range_is_normalized() {
 fn parse_sequence_set_empty_input_returns_none() {
 	assert_eq!(super::parse_sequence_set(""), None);
 }
+
+#[test]
+fn rejects_commands_with_bad_arguments() {
+	for line in [
+		"a LOGIN onlyuser",
+		"a LOGIN",
+		"a SELECT",
+		"a CREATE",
+		"a DELETE",
+		"a RENAME onlyone",
+		"a SUBSCRIBE",
+		"a UNSUBSCRIBE",
+		"a STATUS INBOX",
+		"a STATUS INBOX (BOGUS)",
+		"a FETCH",
+		"a FETCH 1",
+		"a STORE 1",
+		"a STORE 1 +FLAGS",
+		"a COPY 1",
+		"a MOVE 1",
+		"a APPEND",
+		"a GETQUOTA",
+		"a LSUB \"\"",
+		"a CAPABILITY extra",
+		"a NOOP extra",
+	] {
+		assert!(parse(line).is_err(), "expected error for {line:?}");
+	}
+}
+
+#[test]
+fn rejects_uid_without_valid_subcommand() {
+	assert!(parse("a UID").is_err());
+	assert!(parse("a UID BOGUS 1").is_err());
+}
+
+#[test]
+fn parses_uid_fetch_and_search() {
+	assert!(matches!(
+		parse("a UID FETCH 1 (FLAGS)").expect("parses").command,
+		Command::Fetch { uid: true, .. }
+	));
+	assert!(matches!(
+		parse("a UID SEARCH ALL").expect("parses").command,
+		Command::Search { uid: true, .. }
+	));
+}
+
+#[test]
+fn parses_id_nil_and_enable() {
+	assert!(matches!(
+		parse("a ID NIL").expect("parses").command,
+		Command::Id
+	));
+	assert!(matches!(
+		parse("a ENABLE CONDSTORE QRESYNC").expect("parses").command,
+		Command::Enable { .. }
+	));
+}
