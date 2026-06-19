@@ -195,7 +195,11 @@ impl Session {
 		let Some((account, _)) = self.directory.credentials(&username) else {
 			return self.auth_failure(tag);
 		};
-		let mut server = ScramServer::new(self.fresh_nonce());
+		let Some(nonce) = self.fresh_nonce() else {
+			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			return self.auth_failure(tag);
+		};
+		let mut server = ScramServer::new(nonce);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
 			return self.auth_failure(tag);
 		};
@@ -260,14 +264,15 @@ impl Session {
 		}
 	}
 
-	fn fresh_nonce(&self) -> String {
+	fn fresh_nonce(&self) -> Option<String> {
 		if let Some(nonce) = &self.scram_nonce {
-			return nonce.clone();
+			return Some(nonce.clone());
 		}
 		use ring::rand::SecureRandom;
 		let mut bytes = [0u8; 18];
-		let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
-		BASE64.encode(bytes)
+		// Fail closed if the CSPRNG cannot produce a nonce.
+		ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
+		Some(BASE64.encode(bytes))
 	}
 }
 
