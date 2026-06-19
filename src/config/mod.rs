@@ -45,6 +45,10 @@ pub enum ConfigError {
 		path: PathBuf,
 		source: Box<toml::de::Error>,
 	},
+	#[error("config file {path} is group/world-accessible (mode {mode:#o}); restrict it to 0600")]
+	InsecurePermissions { path: PathBuf, mode: u32 },
+	#[error("config references undefined environment variable ${{{0}}}")]
+	MissingEnv(String),
 	#[error("invalid configuration: {0}")]
 	Invalid(String),
 }
@@ -134,14 +138,22 @@ pub struct Config {
 }
 
 impl Config {
-	/// Load and validate a configuration file. Fails closed: any read,
-	/// parse or validation error aborts loading.
+	/// Load and validate a configuration file. Fails closed: insecure
+	/// permissions, a read, parse or validation error, or an undefined
+	/// referenced environment variable all abort loading.
+	///
+	/// Secrets should not be written into the file directly: any `${VAR}` in
+	/// the file is substituted from the process environment at load time, so
+	/// credentials (e.g. the database password) can stay in the environment or
+	/// a secret store rather than on disk.
 	pub fn load(path: &Path) -> Result<Self, ConfigError> {
+		check_permissions(path)?;
 		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
 			path: path.to_path_buf(),
 			source,
 		})?;
-		let config: Config = toml::from_str(&raw).map_err(|source| ConfigError::Parse {
+		let expanded = expand_env(&raw)?;
+		let config: Config = toml::from_str(&expanded).map_err(|source| ConfigError::Parse {
 			path: path.to_path_buf(),
 			source: Box::new(source),
 		})?;
@@ -153,6 +165,54 @@ impl Config {
 	pub const fn default_bind_addr() -> IpAddr {
 		IpAddr::V4(Ipv4Addr::LOCALHOST)
 	}
+}
+
+/// Substitute every `${VAR}` in the raw config with its environment value.
+/// Fails closed: a referenced variable that is not set aborts the load, so a
+/// missing secret can never silently become an empty string.
+fn expand_env(raw: &str) -> Result<String, ConfigError> {
+	let mut out = String::with_capacity(raw.len());
+	let mut rest = raw;
+	while let Some(start) = rest.find("${") {
+		out.push_str(&rest[..start]);
+		let after = &rest[start + 2..];
+		let end = after
+			.find('}')
+			.ok_or_else(|| ConfigError::Invalid("unterminated ${...} in config".to_string()))?;
+		let var = &after[..end];
+		let value = std::env::var(var).map_err(|_| ConfigError::MissingEnv(var.to_string()))?;
+		out.push_str(&value);
+		rest = &after[end + 1..];
+	}
+	out.push_str(rest);
+	Ok(out)
+}
+
+/// Reject a config file that is readable or writable by group or others: it may
+/// hold secrets (or `${VAR}` references aside, paths and tokens), so it must be
+/// owner-only. Best effort on non-Unix platforms.
+#[cfg(unix)]
+fn check_permissions(path: &Path) -> Result<(), ConfigError> {
+	use std::os::unix::fs::PermissionsExt;
+	let mode = std::fs::metadata(path)
+		.map_err(|source| ConfigError::Read {
+			path: path.to_path_buf(),
+			source,
+		})?
+		.permissions()
+		.mode();
+	if mode & 0o077 != 0 {
+		return Err(ConfigError::InsecurePermissions {
+			path: path.to_path_buf(),
+			mode: mode & 0o777,
+		});
+	}
+	Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_permissions(_path: &Path) -> Result<(), ConfigError> {
+	Ok(())
 }
 
 #[cfg(test)]
@@ -177,6 +237,55 @@ data_dir = "/var/lib/mail"
 		let config = Config::load(file.path()).expect("valid config loads");
 		assert_eq!(config.hostname, "mail.example.org");
 		assert!(config.listeners.is_empty());
+	}
+
+	#[test]
+	fn expands_environment_variables() {
+		// SAFETY: the variable name is unique to this test, so no other test
+		// reads or writes it concurrently.
+		unsafe { std::env::set_var("EPISTLE_TEST_HOSTNAME", "mail.expanded.example") };
+		let file = write_temp(
+			r#"
+hostname = "${EPISTLE_TEST_HOSTNAME}"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		let config = Config::load(file.path()).expect("config loads");
+		assert_eq!(config.hostname, "mail.expanded.example");
+		// SAFETY: same uniquely-named variable as set above.
+		unsafe { std::env::remove_var("EPISTLE_TEST_HOSTNAME") };
+	}
+
+	#[test]
+	fn rejects_undefined_environment_variable() {
+		let file = write_temp(
+			r#"
+hostname = "${EPISTLE_DEFINITELY_UNSET_VAR_XYZ}"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		assert!(matches!(
+			Config::load(file.path()),
+			Err(ConfigError::MissingEnv(_))
+		));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn rejects_group_or_world_accessible_config() {
+		use std::os::unix::fs::PermissionsExt;
+		let file = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
+			.expect("chmod");
+		assert!(matches!(
+			Config::load(file.path()),
+			Err(ConfigError::InsecurePermissions { .. })
+		));
 	}
 
 	#[test]

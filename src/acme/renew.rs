@@ -47,20 +47,37 @@ pub fn load_or_create_account_key(data_dir: &Path) -> Result<AccountKey, AcmeErr
 	if let Some(parent) = path.parent() {
 		fs::create_dir_all(parent).map_err(|e| AcmeError::Transport(e.to_string()))?;
 	}
-	fs::write(&path, B64.encode(&der)).map_err(|e| AcmeError::Transport(e.to_string()))?;
-	restrict(&path);
+	write_secret(&path, B64.encode(&der).as_bytes())
+		.map_err(|e| AcmeError::Transport(e.to_string()))?;
 	Ok(key)
 }
 
-/// Restrict a secret file to owner-only (0600) on Unix; best effort elsewhere.
-fn restrict(path: &Path) {
+/// Write a secret file owner-only (0600) without a readable window: create a
+/// sibling temp file `0600` up front, write and fsync it, then atomically
+/// rename it onto the target. Best effort (plain write) on non-Unix.
+fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 	#[cfg(unix)]
 	{
-		use std::os::unix::fs::PermissionsExt;
-		let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+		use std::io::Write;
+		use std::os::unix::fs::OpenOptionsExt;
+		let tmp = path.with_extension("tmp");
+		// Clear any stale temp so create_new (which guarantees a fresh 0600
+		// file) cannot fail on a leftover from a crashed write.
+		let _ = fs::remove_file(&tmp);
+		let mut file = fs::OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.mode(0o600)
+			.open(&tmp)?;
+		file.write_all(contents)?;
+		file.sync_all()?;
+		fs::rename(&tmp, path)?;
+		Ok(())
 	}
 	#[cfg(not(unix))]
-	let _ = path;
+	{
+		fs::write(path, contents)
+	}
 }
 
 /// Whether a certificate should be (re)issued now: absent, unreadable, or
@@ -106,8 +123,8 @@ async fn issue(
 	let dir = data_dir.join("acme");
 	fs::create_dir_all(&dir).map_err(|e| AcmeError::Transport(e.to_string()))?;
 	fs::write(cert_path(data_dir), &chain).map_err(|e| AcmeError::Transport(e.to_string()))?;
-	fs::write(key_path(data_dir), &key_pem).map_err(|e| AcmeError::Transport(e.to_string()))?;
-	restrict(&key_path(data_dir));
+	write_secret(&key_path(data_dir), key_pem.as_bytes())
+		.map_err(|e| AcmeError::Transport(e.to_string()))?;
 
 	let acceptor = crate::tls::acceptor_from_pem(chain.as_bytes(), key_pem.as_bytes())
 		.map_err(|e| AcmeError::Protocol(e.to_string()))?;
@@ -181,6 +198,22 @@ mod tests {
 		let b = load_or_create_account_key(dir.path()).expect("reload");
 		// Reload returns the same key (same JWK), not a new one.
 		assert_eq!(a.jwk(), b.jwk());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn account_key_is_written_owner_only() {
+		use std::os::unix::fs::PermissionsExt;
+		let dir = tempfile::tempdir().expect("tempdir");
+		load_or_create_account_key(dir.path()).expect("create");
+		let mode = fs::metadata(account_key_path(dir.path()))
+			.expect("metadata")
+			.permissions()
+			.mode();
+		// No group/other bits: the key never had a readable window.
+		assert_eq!(mode & 0o077, 0, "key mode {mode:#o} is too permissive");
+		// The temp file used for the atomic write is cleaned up.
+		assert!(!account_key_path(dir.path()).with_extension("tmp").exists());
 	}
 
 	#[test]
