@@ -55,6 +55,18 @@ jobs:
           command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version "^0.22"
           cargo audit
 
+      - name: Tag has no published release yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Releases are immutable: refuse to re-publish an existing one. The
+          # workflow_dispatch path may only re-run a tag whose release failed.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::a release for $TAG already exists; releases are immutable, cut a new patch instead"
+            exit 1
+          fi
+
   build:
     name: Build and publish
     needs: verify
@@ -92,6 +104,26 @@ jobs:
           cp mail.cdx.json "dist/mail-${TAG}.cdx.json"
           cd dist
           sha256sum * > SHA256SUMS
+
+      - name: Sign artifacts with the org Ed25519 key
+        env:
+          RELEASE_SIGN_KEY: ${{ secrets.RELEASE_SIGN_KEY }}
+        run: |
+          set -euo pipefail
+          # Fail closed: never publish unsigned artifacts. Verifiers and the
+          # apt archive trust this org Ed25519 signature.
+          if [ -z "${RELEASE_SIGN_KEY:-}" ]; then
+            echo "::error::RELEASE_SIGN_KEY secret is not configured; refusing to release unsigned artifacts."
+            exit 1
+          fi
+          # Install the signing dependencies into an isolated, hash-pinned
+          # virtualenv so a system-managed cryptography cannot break the pin.
+          python3 -m venv "$RUNNER_TEMP/signvenv"
+          venv_py="$RUNNER_TEMP/signvenv/bin/python"
+          "$venv_py" -m pip install --quiet --require-hashes -r .github/scripts/sign-requirements.txt
+          # The key is read from RELEASE_SIGN_KEY in the environment, not argv.
+          "$venv_py" .github/scripts/sign.py "dist/mail-${TAG}-x86_64-linux"
+          "$venv_py" .github/scripts/sign.py dist/SHA256SUMS
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
