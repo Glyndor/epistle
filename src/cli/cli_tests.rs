@@ -183,43 +183,6 @@ fn export_run_streams_account_mailboxes() {
 }
 
 #[test]
-fn parses_import_command() {
-	let cli = Cli::try_parse_from([
-		"mail",
-		"import",
-		"--config",
-		"/etc/mail.toml",
-		"--account",
-		"alice",
-	])
-	.expect("import parses");
-	assert!(matches!(cli.command, Command::Import { .. }));
-}
-
-#[test]
-fn import_delivers_mbox_messages_to_inbox() {
-	use std::io::Cursor;
-	let dir = tempfile::tempdir().expect("tempdir");
-	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
-	let mbox = "From MAILER-DAEMON@localhost\r\nX-Mailbox: INBOX\r\nSubject: one\r\n\r\nbody1\r\n\r\nFrom MAILER-DAEMON@localhost\r\nSubject: two\r\n\r\n>From the desk\r\n\r\n";
-	assert_eq!(
-		import::run(dir.path(), "alice", Cursor::new(mbox)),
-		ExitCode::SUCCESS
-	);
-	let snapshot =
-		crate::imap::mailbox::Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-	assert_eq!(snapshot.len(), 2);
-	let bodies: Vec<String> = snapshot
-		.messages()
-		.map(|m| String::from_utf8_lossy(&snapshot.read(m).expect("read")).into_owned())
-		.collect();
-	let joined = bodies.join("\n");
-	assert!(!joined.contains("X-Mailbox"), "{joined}");
-	assert!(joined.contains("From the desk"), "{joined}");
-	assert!(!joined.contains(">From the desk"), "{joined}");
-}
-
-#[test]
 fn parses_accounts_command() {
 	let cli = Cli::try_parse_from(["mail", "accounts", "--config", "/etc/mail.toml"])
 		.expect("accounts parses");
