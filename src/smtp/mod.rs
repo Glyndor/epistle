@@ -6,9 +6,13 @@
 pub mod address;
 pub mod auth;
 pub mod command;
+#[cfg(test)]
+mod command_tests;
 pub mod directory;
 pub mod line;
 pub mod reply;
+pub mod scram;
 pub mod server;
 pub mod session;
 pub mod sink;
+pub mod trace;

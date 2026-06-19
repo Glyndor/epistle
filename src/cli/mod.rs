@@ -1,5 +1,9 @@
 //! Command-line interface: argument parsing and command dispatch.
 
+mod accounts;
+mod export;
+mod import;
+mod queue;
 mod serve;
 
 use std::path::PathBuf;
@@ -38,6 +42,53 @@ enum Command {
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
 	},
+	/// Export an account's mailboxes to an mbox stream on stdout (backup).
+	Export {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name to export.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+	},
+	/// Import an mbox stream from stdin into an account's INBOX (migration).
+	Import {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name to import into.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+	},
+	/// List the configured mail accounts.
+	Accounts {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Create a mail account, reading the password from stdin (one line).
+	AccountAdd {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name.
+		#[arg(long, value_name = "NAME")]
+		name: String,
+		/// An email address for the account (repeatable).
+		#[arg(long = "address", value_name = "ADDR", required = true)]
+		addresses: Vec<String>,
+	},
+	/// List the outbound delivery queue.
+	Queue {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Hash a bearer token for use in `[api] token_hash`.
+	///
+	/// Reads the plaintext token from stdin (one line). Prints a
+	/// `sha256:<hex>` string to stdout, ready to paste into the config file.
+	TokenHash,
 }
 
 impl Cli {
@@ -61,9 +112,93 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Export { config, account } => match Config::load(&config) {
+				Ok(config) => {
+					export::run(&config.data_dir, &account, &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Import { config, account } => match Config::load(&config) {
+				Ok(config) => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Accounts { config } => match Config::load(&config) {
+				Ok(config) => accounts::list(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::AccountAdd {
+				config,
+				name,
+				addresses,
+			} => match Config::load(&config) {
+				Ok(config) => accounts::add(&config, &name, addresses, std::io::stdin().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Queue { config } => match Config::load(&config) {
+				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
 			Command::DkimKeygen { out } => dkim_keygen(&out),
+			Command::TokenHash => token_hash(),
 		}
 	}
+}
+
+fn token_hash() -> ExitCode {
+	token_hash_from(std::io::stdin().lock())
+}
+
+/// Read one non-empty line (CR-trimmed) from `reader`, or a FAILURE code.
+pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCode> {
+	let value = match reader.lines().next() {
+		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
+		Some(Err(error)) => {
+			eprintln!("error: reading stdin: {error}");
+			return Err(ExitCode::FAILURE);
+		}
+		None => {
+			eprintln!("error: no input — pipe or type the value on stdin");
+			return Err(ExitCode::FAILURE);
+		}
+	};
+	if value.is_empty() {
+		eprintln!("error: input must not be empty");
+		return Err(ExitCode::FAILURE);
+	}
+	Ok(value)
+}
+
+fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
+	let token = match read_line(reader) {
+		Ok(token) => token,
+		Err(code) => return code,
+	};
+	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
+	let hex = digest
+		.as_ref()
+		.iter()
+		.fold(String::with_capacity(64), |mut s, b| {
+			use std::fmt::Write;
+			write!(s, "{b:02x}").ok();
+			s
+		});
+	println!("sha256:{hex}");
+	ExitCode::SUCCESS
 }
 
 fn dkim_keygen(out: &std::path::Path) -> ExitCode {
@@ -106,121 +241,9 @@ fn dkim_keygen(out: &std::path::Path) -> ExitCode {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use clap::CommandFactory;
-	use std::io::Write;
+#[path = "cli_tests.rs"]
+mod tests;
 
-	#[test]
-	fn cli_definition_is_consistent() {
-		Cli::command().debug_assert();
-	}
-
-	#[test]
-	fn parses_serve_command() {
-		let cli = Cli::try_parse_from(["mail", "serve", "--config", "/etc/mail.toml"])
-			.expect("serve parses");
-		assert!(matches!(cli.command, Command::Serve { .. }));
-	}
-
-	#[test]
-	fn parses_config_check_command() {
-		let cli = Cli::try_parse_from(["mail", "config-check", "--config", "/etc/mail.toml"])
-			.expect("config-check parses");
-		assert!(matches!(cli.command, Command::ConfigCheck { .. }));
-	}
-
-	#[test]
-	fn rejects_missing_config_argument() {
-		assert!(Cli::try_parse_from(["mail", "serve"]).is_err());
-	}
-
-	#[test]
-	fn rejects_unknown_subcommand() {
-		assert!(Cli::try_parse_from(["mail", "destroy"]).is_err());
-	}
-
-	#[test]
-	fn config_check_accepts_valid_file() {
-		let mut file = tempfile::NamedTempFile::new().expect("temp file");
-		file.write_all(b"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n")
-			.expect("write");
-		let cli = Cli::try_parse_from([
-			"mail",
-			"config-check",
-			"--config",
-			file.path().to_str().expect("utf-8 path"),
-		])
-		.expect("parses");
-		assert_eq!(cli.run(), ExitCode::SUCCESS);
-	}
-
-	#[test]
-	fn config_check_rejects_invalid_file() {
-		let mut file = tempfile::NamedTempFile::new().expect("temp file");
-		file.write_all(b"hostname = \"localhost\"\ndata_dir = \"/var/lib/mail\"\n")
-			.expect("write");
-		let cli = Cli::try_parse_from([
-			"mail",
-			"config-check",
-			"--config",
-			file.path().to_str().expect("utf-8 path"),
-		])
-		.expect("parses");
-		assert_eq!(cli.run(), ExitCode::FAILURE);
-	}
-
-	#[test]
-	fn dkim_keygen_writes_key_and_refuses_overwrite() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let out = dir.path().join("dkim.pem");
-		let cli = Cli::try_parse_from([
-			"mail",
-			"dkim-keygen",
-			"--out",
-			out.to_str().expect("utf-8 path"),
-		])
-		.expect("parses");
-		assert_eq!(cli.run(), ExitCode::SUCCESS);
-		let pem = std::fs::read_to_string(&out).expect("key written");
-		assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----"));
-
-		// Second run must refuse to overwrite the existing key.
-		let cli = Cli::try_parse_from([
-			"mail",
-			"dkim-keygen",
-			"--out",
-			out.to_str().expect("utf-8 path"),
-		])
-		.expect("parses");
-		assert_eq!(cli.run(), ExitCode::FAILURE);
-	}
-
-	#[cfg(unix)]
-	#[test]
-	fn dkim_keygen_sets_owner_only_permissions() {
-		use std::os::unix::fs::PermissionsExt;
-		let dir = tempfile::tempdir().expect("tempdir");
-		let out = dir.path().join("dkim.pem");
-		let cli = Cli::try_parse_from([
-			"mail",
-			"dkim-keygen",
-			"--out",
-			out.to_str().expect("utf-8 path"),
-		])
-		.expect("parses");
-		assert_eq!(cli.run(), ExitCode::SUCCESS);
-		let mode = std::fs::metadata(&out)
-			.expect("metadata")
-			.permissions()
-			.mode();
-		assert_eq!(mode & 0o777, 0o600);
-	}
-
-	#[test]
-	fn serve_fails_on_missing_config() {
-		let cli = Cli::try_parse_from(["mail", "serve", "--config", "/nonexistent/mail.toml"])
-			.expect("parses");
-		assert_eq!(cli.run(), ExitCode::FAILURE);
-	}
-}
+#[cfg(test)]
+#[path = "cli_tests_b.rs"]
+mod tests_b;

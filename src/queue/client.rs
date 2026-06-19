@@ -42,6 +42,7 @@ pub async fn deliver<S>(
 	reverse_path: &str,
 	recipients: &[String],
 	data: &[u8],
+	require_tls: bool,
 ) -> Result<(), DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -51,6 +52,12 @@ where
 
 	conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 	let offers_starttls = conn.last_reply_contains("STARTTLS");
+	if require_tls && !offers_starttls {
+		// MTA-STS enforce: never downgrade to plaintext; retry later.
+		return Err(DeliveryError::Transient(
+			"MTA-STS enforce but remote offers no STARTTLS".into(),
+		));
+	}
 
 	if offers_starttls {
 		conn.command("STARTTLS", 220).await?;
@@ -78,6 +85,7 @@ async fn tls_connect(
 ) -> Result<tokio_rustls::client::TlsStream<Box<dyn Stream>>, DeliveryError> {
 	let mut roots = RootCertStore::empty();
 	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+	crate::tls::ensure_crypto_provider();
 	let config = ClientConfig::builder()
 		.with_root_certificates(roots)
 		.with_no_client_auth();
@@ -223,7 +231,7 @@ mod tests {
 		use crate::smtp::sink::{MemorySink, MessageSink};
 
 		let sink = Arc::new(MemorySink::new());
-		let directory = Arc::new(Directory::new(
+		let directory = crate::directory_store::DirectoryHandle::new(Directory::new(
 			["example.org".to_string()],
 			[("bob@example.org".to_string(), "bob".to_string())],
 		));
@@ -240,6 +248,7 @@ mod tests {
 			"alice@sender.example",
 			&["bob@example.org".to_string()],
 			b"Subject: hi\r\n\r\n.leading dot\r\nbody\r\n",
+			false,
 		)
 		.await
 		.expect("delivery succeeds");
@@ -260,8 +269,12 @@ mod tests {
 		use crate::smtp::sink::{MemorySink, MessageSink};
 
 		let sink = Arc::new(MemorySink::new());
-		let server = Server::new("mx.example.org", sink as Arc<dyn MessageSink>)
-			.with_directory(Arc::new(Directory::new(["example.org".to_string()], [])));
+		let server = Server::new("mx.example.org", sink as Arc<dyn MessageSink>).with_directory(
+			crate::directory_store::DirectoryHandle::new(Directory::new(
+				["example.org".to_string()],
+				[],
+			)),
+		);
 
 		let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
 		let task = tokio::spawn(async move { server.handle(server_stream, None).await });
@@ -273,10 +286,55 @@ mod tests {
 			"alice@sender.example",
 			&["unknown@example.org".to_string()],
 			b"body\r\n",
+			false,
 		)
 		.await;
 
 		task.abort();
 		assert!(matches!(result, Err(DeliveryError::Permanent(_))));
+	}
+
+	/// Drive `deliver` against a canned server response (writes are discarded).
+	async fn deliver_against(greeting: &'static [u8]) -> Result<(), DeliveryError> {
+		let stream = tokio::io::join(greeting, tokio::io::sink());
+		deliver(
+			stream,
+			"mx.example.org",
+			"mail.sender.example",
+			"alice@sender.example",
+			&["bob@example.org".to_string()],
+			b"body\r\n",
+			false,
+		)
+		.await
+	}
+
+	#[tokio::test]
+	async fn malformed_greeting_is_transient() {
+		let result = deliver_against(b"not-a-code\r\n").await;
+		assert!(
+			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
+	}
+
+	#[tokio::test]
+	async fn connection_closed_before_greeting_is_transient() {
+		let result = deliver_against(b"").await;
+		assert!(
+			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
+	}
+
+	#[tokio::test]
+	async fn oversized_reply_is_transient() {
+		// 70 KiB with no CRLF: the reply never completes and trips the cap.
+		const HUGE: &[u8] = &[b'a'; 70 * 1024];
+		let result = deliver_against(HUGE).await;
+		assert!(
+			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
 	}
 }

@@ -1,130 +1,7 @@
-//! IMAP command parsing (RFC 9051 section 6), strict subset.
+use super::*;
 
-/// Maximum command line length accepted.
-pub const MAX_COMMAND_LINE: usize = 8192;
-
-/// A parsed client command with its tag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tagged {
-	pub tag: String,
-	pub command: Command,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Command {
-	Capability,
-	Noop,
-	Logout,
-	Login {
-		username: String,
-		password: String,
-	},
-	List {
-		reference: String,
-		pattern: String,
-	},
-	Select {
-		mailbox: String,
-	},
-	Examine {
-		mailbox: String,
-	},
-	Close,
-	Create {
-		mailbox: String,
-	},
-	Delete {
-		mailbox: String,
-	},
-	Rename {
-		from: String,
-		to: String,
-	},
-	Expunge,
-	Idle,
-	/// `APPEND <mailbox> [(flags)] {size}` — the literal body follows.
-	Append {
-		mailbox: String,
-		flags: Vec<String>,
-		size: usize,
-	},
-	Fetch {
-		sequence: SequenceSet,
-		items: Vec<FetchItem>,
-		uid: bool,
-	},
-	Store {
-		sequence: SequenceSet,
-		mode: StoreMode,
-		flags: Vec<String>,
-		silent: bool,
-		uid: bool,
-	},
-	Copy {
-		sequence: SequenceSet,
-		mailbox: String,
-		uid: bool,
-		/// MOVE removes the source messages after copying.
-		remove_source: bool,
-	},
-}
-
-/// How STORE changes the flag set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StoreMode {
-	Set,
-	Add,
-	Remove,
-}
-
-/// What FETCH must return per message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchItem {
-	Flags,
-	Rfc822Size,
-	Uid,
-	/// `BODY[]` / `RFC822`: the full raw message.
-	Body,
-	InternalDate,
-}
-
-/// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SequenceSet {
-	pub ranges: Vec<(u32, Option<u32>)>,
-}
-
-impl SequenceSet {
-	/// Whether `value` (a sequence number or UID) is included, given the
-	/// maximum existing value for `*`.
-	pub fn contains(&self, value: u32, max: u32) -> bool {
-		self.ranges.iter().any(|(start, end)| {
-			let start = *start;
-			let end = end.unwrap_or(start);
-			let (low, high) = if start == 0 {
-				(max, end.min(max).max(max))
-			} else if end == 0 {
-				(start.min(max), max)
-			} else if start <= end {
-				(start, end)
-			} else {
-				(end, start)
-			};
-			value >= low && value <= high
-		})
-	}
-}
-
-/// Why a line failed to parse.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseError {
-	/// No tag or malformed structure: answered with `* BAD`.
-	Malformed,
-	/// Valid tag but unknown/unsupported command: tagged `BAD`.
-	Unknown(String),
-	/// Valid tag, known command, bad arguments: tagged `BAD`.
-	BadArguments(String),
-}
+/// Maximum literal size accepted for APPEND (matches the SMTP cap).
+pub const MAX_APPEND_SIZE: usize = 25 * 1024 * 1024;
 
 /// Parse one command line.
 pub fn parse(line: &str) -> Result<Tagged, ParseError> {
@@ -150,16 +27,55 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 	let command = match verb.to_ascii_uppercase().as_str() {
 		"CAPABILITY" => no_args(&tag, args, Command::Capability)?,
 		"NOOP" => no_args(&tag, args, Command::Noop)?,
+		"NAMESPACE" => no_args(&tag, args, Command::Namespace)?,
+		"ID" => Command::Id,
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
+		"STARTTLS" => no_args(&tag, args, Command::StartTls)?,
 		"LOGIN" => parse_login(&tag, args)?,
+		"AUTHENTICATE" => {
+			let mut parts = args.split_whitespace();
+			let mechanism = parts
+				.next()
+				.ok_or_else(|| ParseError::BadArguments(tag.clone()))?
+				.to_ascii_uppercase();
+			Command::Authenticate {
+				mechanism,
+				initial: parts.next().map(str::to_string),
+			}
+		}
 		"LIST" => parse_list(&tag, args)?,
 		"SELECT" => Command::Select {
-			mailbox: parse_mailbox(&tag, args)?,
+			mailbox: parse_mailbox(&tag, select_params::strip_select_params(args))?,
+			qresync: select_params::parse_qresync(args),
 		},
 		"EXAMINE" => Command::Examine {
-			mailbox: parse_mailbox(&tag, args)?,
+			mailbox: parse_mailbox(&tag, select_params::strip_select_params(args))?,
+			qresync: select_params::parse_qresync(args),
 		},
 		"CLOSE" => no_args(&tag, args, Command::Close)?,
+		"UNSELECT" => no_args(&tag, args, Command::Unselect)?,
+		"GETQUOTAROOT" => Command::GetQuotaRoot {
+			mailbox: parse_mailbox(&tag, args)?,
+		},
+		"GETQUOTA" => {
+			let trimmed = args.trim();
+			if trimmed.is_empty() {
+				return Err(ParseError::BadArguments(tag));
+			}
+			Command::GetQuota {
+				root: trimmed.trim_matches('"').to_string(),
+			}
+		}
+		"ENABLE" => {
+			let capabilities: Vec<String> = args
+				.split_ascii_whitespace()
+				.map(|c| c.to_ascii_uppercase())
+				.collect();
+			if capabilities.is_empty() {
+				return Err(ParseError::BadArguments(tag));
+			}
+			Command::Enable { capabilities }
+		}
 		"CREATE" => Command::Create {
 			mailbox: parse_mailbox(&tag, args)?,
 		},
@@ -182,6 +98,26 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"STORE" => parse_store(&tag, args, false)?,
 		"COPY" => parse_copy(&tag, args, false, false)?,
 		"MOVE" => parse_copy(&tag, args, false, true)?,
+		"SEARCH" => super::search::parse_search(&tag, args, false)?,
+		"SORT" => super::search::parse_sort(&tag, args, false)?,
+		"THREAD" => super::search::parse_thread(&tag, args, false)?,
+		"STATUS" => parse_status(&tag, args)?,
+		"SUBSCRIBE" => Command::Subscribe {
+			mailbox: parse_mailbox(&tag, args)?,
+		},
+		"UNSUBSCRIBE" => Command::Unsubscribe {
+			mailbox: parse_mailbox(&tag, args)?,
+		},
+		"LSUB" => {
+			let (reference, rest) =
+				parse_astring(args).ok_or_else(|| ParseError::BadArguments(tag.clone()))?;
+			let (pattern, rest) =
+				parse_astring(rest).ok_or_else(|| ParseError::BadArguments(tag.clone()))?;
+			if !rest.trim().is_empty() {
+				return Err(ParseError::BadArguments(tag));
+			}
+			Command::Lsub { reference, pattern }
+		}
 		"UID" => {
 			let (sub, sub_args) = args
 				.split_once(' ')
@@ -194,6 +130,16 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 				parse_copy(&tag, sub_args, true, false)?
 			} else if sub.eq_ignore_ascii_case("MOVE") {
 				parse_copy(&tag, sub_args, true, true)?
+			} else if sub.eq_ignore_ascii_case("SEARCH") {
+				super::search::parse_search(&tag, sub_args, true)?
+			} else if sub.eq_ignore_ascii_case("SORT") {
+				super::search::parse_sort(&tag, sub_args, true)?
+			} else if sub.eq_ignore_ascii_case("THREAD") {
+				super::search::parse_thread(&tag, sub_args, true)?
+			} else if sub.eq_ignore_ascii_case("EXPUNGE") {
+				let sequence = super::parse_sequence_set(sub_args)
+					.ok_or_else(|| ParseError::BadArguments(tag.clone()))?;
+				Command::UidExpunge { sequence }
 			} else {
 				return Err(ParseError::Unknown(tag));
 			}
@@ -212,7 +158,7 @@ fn no_args(tag: &str, args: &str, command: Command) -> Result<Command, ParseErro
 }
 
 /// An astring: quoted string or bare atom. Literals are not supported yet.
-fn parse_astring(input: &str) -> Option<(String, &str)> {
+pub(super) fn parse_astring(input: &str) -> Option<(String, &str)> {
 	let input = input.trim_start();
 	if let Some(rest) = input.strip_prefix('"') {
 		let mut value = String::new();
@@ -249,12 +195,53 @@ fn parse_login(tag: &str, args: &str) -> Result<Command, ParseError> {
 
 fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
+	// Optional leading `(SUBSCRIBED)` selection group (LIST-EXTENDED, RFC 5258).
+	let args = args.trim_start();
+	let (select_subscribed, args) = if let Some(after) = args.strip_prefix('(') {
+		let close = after.find(')').ok_or_else(bad)?;
+		let selection = after[..close].to_ascii_uppercase();
+		for option in after[..close].split_whitespace() {
+			if !option.eq_ignore_ascii_case("SUBSCRIBED") {
+				return Err(bad());
+			}
+		}
+		(
+			selection.contains("SUBSCRIBED"),
+			after[close + 1..].trim_start(),
+		)
+	} else {
+		(false, args)
+	};
 	let (reference, rest) = parse_astring(args).ok_or_else(bad)?;
 	let (pattern, rest) = parse_astring(rest).ok_or_else(bad)?;
-	if !rest.trim().is_empty() {
-		return Err(bad());
-	}
-	Ok(Command::List { reference, pattern })
+	let rest = rest.trim();
+	let return_status = if rest.is_empty() {
+		Vec::new()
+	} else {
+		parse_list_return(rest).ok_or_else(bad)?
+	};
+	Ok(Command::List {
+		reference,
+		pattern,
+		return_status,
+		select_subscribed,
+	})
+}
+
+/// Parse a `RETURN (STATUS (items...))` LIST modifier (RFC 5819). Only the
+/// STATUS return option is supported; an empty STATUS list yields no items.
+fn parse_list_return(rest: &str) -> Option<Vec<StatusItem>> {
+	let after = rest
+		.strip_prefix("RETURN")
+		.or_else(|| rest.strip_prefix("return"))?;
+	let group = after.trim().strip_prefix('(')?.strip_suffix(')')?.trim();
+	let inner = group
+		.strip_prefix("STATUS")
+		.or_else(|| group.strip_prefix("status"))?
+		.trim()
+		.strip_prefix('(')?
+		.strip_suffix(')')?;
+	parse_status_items(inner)
 }
 
 fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {
@@ -272,10 +259,21 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
 
 	let items_text = items_text.trim();
-	let inner = items_text
+	let (items_group, modifier) = if items_text.starts_with('(') {
+		let close = items_text.find(')').ok_or_else(bad)?;
+		(&items_text[..=close], items_text[close + 1..].trim())
+	} else {
+		(items_text, "")
+	};
+	let (changed_since, vanished) = parse_fetch_modifier(modifier, tag)?;
+	// VANISHED is only valid on UID FETCH with CHANGEDSINCE (RFC 7162 §3.1.4.1).
+	if vanished && (!uid || changed_since.is_none()) {
+		return Err(bad());
+	}
+	let inner = items_group
 		.strip_prefix('(')
 		.and_then(|t| t.strip_suffix(')'))
-		.unwrap_or(items_text);
+		.unwrap_or(items_group);
 	let mut items = Vec::new();
 	for word in inner.split_whitespace() {
 		match word.to_ascii_uppercase().as_str() {
@@ -283,7 +281,13 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 			"RFC822.SIZE" => items.push(FetchItem::Rfc822Size),
 			"UID" => items.push(FetchItem::Uid),
 			"INTERNALDATE" => items.push(FetchItem::InternalDate),
+			"MODSEQ" => items.push(FetchItem::ModSeq),
+			"EMAILID" => items.push(FetchItem::EmailId),
+			"THREADID" => items.push(FetchItem::ThreadId),
+			"SAVEDATE" => items.push(FetchItem::SaveDate),
 			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
+			"BINARY[]" | "BINARY.PEEK[]" => items.push(FetchItem::Binary),
+			"BINARY.SIZE[]" => items.push(FetchItem::BinarySize),
 			"ALL" => {
 				items.extend([
 					FetchItem::Flags,
@@ -304,19 +308,51 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	if items.is_empty() {
 		return Err(bad());
 	}
-	// UID FETCH must always report the UID (RFC 9051 section 6.4.8).
+	// UID FETCH must always report the UID (RFC 9051).
 	if uid && !items.contains(&FetchItem::Uid) {
 		items.push(FetchItem::Uid);
+	}
+	if changed_since.is_some() && !items.contains(&FetchItem::ModSeq) {
+		items.push(FetchItem::ModSeq);
 	}
 	Ok(Command::Fetch {
 		sequence,
 		items,
 		uid,
+		changed_since,
+		vanished,
 	})
 }
 
-/// Maximum literal size accepted for APPEND (matches the SMTP cap).
-pub const MAX_APPEND_SIZE: usize = 25 * 1024 * 1024;
+/// Parse an optional `(CHANGEDSINCE n [VANISHED])` FETCH modifier, returning the
+/// mod-sequence and whether VANISHED was requested (RFC 7162).
+fn parse_fetch_modifier(modifier: &str, tag: &str) -> Result<(Option<u64>, bool), ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	if modifier.is_empty() {
+		return Ok((None, false));
+	}
+	let inner = modifier
+		.strip_prefix('(')
+		.and_then(|t| t.strip_suffix(')'))
+		.ok_or_else(bad)?;
+	let mut parts = inner.split_whitespace();
+	let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
+		return Err(bad());
+	};
+	if !key.eq_ignore_ascii_case("CHANGEDSINCE") {
+		return Err(bad());
+	}
+	let changed_since = Some(value.parse().map_err(|_| bad())?);
+	let vanished = match parts.next() {
+		None => false,
+		Some(tok) if tok.eq_ignore_ascii_case("VANISHED") => true,
+		Some(_) => return Err(bad()),
+	};
+	if parts.next().is_some() {
+		return Err(bad());
+	}
+	Ok((changed_since, vanished))
+}
 
 fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
@@ -326,7 +362,6 @@ fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
 	}
 	let rest = rest.trim();
 
-	// Optional flag list, then the literal size.
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
 		(
@@ -383,6 +418,22 @@ fn parse_store(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 	let (sequence_text, rest) = args.split_once(' ').ok_or_else(bad)?;
 	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
 
+	// Optional leading `(UNCHANGEDSINCE n)` modifier (RFC 7162).
+	let rest = rest.trim();
+	let (unchanged_since, rest) = if rest.starts_with('(') {
+		let close = rest.find(')').ok_or_else(bad)?;
+		let mut parts = rest[1..close].split_whitespace();
+		let value = match (parts.next(), parts.next(), parts.next()) {
+			(Some(key), Some(value), None) if key.eq_ignore_ascii_case("UNCHANGEDSINCE") => {
+				value.parse().map_err(|_| bad())?
+			}
+			_ => return Err(bad()),
+		};
+		(Some(value), rest[close + 1..].trim())
+	} else {
+		(None, rest)
+	};
+
 	let (item, flags_text) = rest.split_once(' ').ok_or_else(bad)?;
 	let item = item.to_ascii_uppercase();
 	let (mode, silent) = match item.as_str() {
@@ -410,152 +461,40 @@ fn parse_store(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 		flags,
 		silent,
 		uid,
+		unchanged_since,
 	})
 }
 
-/// Parse `1`, `1:5`, `1:*`, `*`, comma-separated. `0` encodes `*` here.
-fn parse_sequence_set(text: &str) -> Option<SequenceSet> {
-	let mut ranges = Vec::new();
-	for part in text.split(',') {
-		let (start, end) = match part.split_once(':') {
-			Some((start, end)) => (parse_seq_number(start)?, Some(parse_seq_number(end)?)),
-			None => (parse_seq_number(part)?, None),
-		};
-		ranges.push((start, end));
+fn parse_status(tag: &str, args: &str) -> Result<Command, ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	let (mailbox, rest) = parse_astring(args).ok_or_else(bad)?;
+	if mailbox.is_empty() {
+		return Err(bad());
 	}
-	if ranges.is_empty() {
-		return None;
-	}
-	Some(SequenceSet { ranges })
+	let rest = rest.trim();
+	let inner = rest
+		.strip_prefix('(')
+		.and_then(|t| t.strip_suffix(')'))
+		.ok_or_else(bad)?;
+	let items = parse_status_items(inner).ok_or_else(bad)?;
+	Ok(Command::Status { mailbox, items })
 }
 
-fn parse_seq_number(text: &str) -> Option<u32> {
-	if text == "*" {
-		return Some(0);
+/// Parse a non-empty space-separated STATUS item list (without parentheses).
+fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
+	let mut items = Vec::new();
+	for word in inner.split_whitespace() {
+		items.push(match word.to_ascii_uppercase().as_str() {
+			"MESSAGES" => StatusItem::Messages,
+			"RECENT" => StatusItem::Recent,
+			"UIDNEXT" => StatusItem::Uidnext,
+			"UIDVALIDITY" => StatusItem::Uidvalidity,
+			"UNSEEN" => StatusItem::Unseen,
+			"SIZE" => StatusItem::Size,
+			"DELETED" => StatusItem::Deleted,
+			"MAILBOXID" => StatusItem::MailboxId,
+			_ => return None,
+		});
 	}
-	let value: u32 = text.parse().ok()?;
-	if value == 0 { None } else { Some(value) }
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn parses_simple_commands() {
-		assert_eq!(
-			parse("a1 CAPABILITY").expect("parses").command,
-			Command::Capability
-		);
-		assert_eq!(parse("a2 noop").expect("parses").command, Command::Noop);
-		assert_eq!(parse("a3 LOGOUT").expect("parses").tag, "a3".to_string());
-	}
-
-	#[test]
-	fn parses_login_with_quoted_strings() {
-		let parsed = parse(r#"a1 LOGIN "alice" "p@ss w\"ord""#).expect("parses");
-		assert_eq!(
-			parsed.command,
-			Command::Login {
-				username: "alice".into(),
-				password: "p@ss w\"ord".into()
-			}
-		);
-	}
-
-	#[test]
-	fn parses_login_with_atoms() {
-		let parsed = parse("a1 LOGIN alice@example.org secret").expect("parses");
-		assert_eq!(
-			parsed.command,
-			Command::Login {
-				username: "alice@example.org".into(),
-				password: "secret".into()
-			}
-		);
-	}
-
-	#[test]
-	fn parses_list_and_select() {
-		assert_eq!(
-			parse(r#"a1 LIST "" "*""#).expect("parses").command,
-			Command::List {
-				reference: String::new(),
-				pattern: "*".into()
-			}
-		);
-		assert_eq!(
-			parse("a2 SELECT INBOX").expect("parses").command,
-			Command::Select {
-				mailbox: "INBOX".into()
-			}
-		);
-	}
-
-	#[test]
-	fn parses_fetch_variants() {
-		let parsed = parse("a1 FETCH 1:5 (FLAGS RFC822.SIZE)").expect("parses");
-		let Command::Fetch {
-			sequence,
-			items,
-			uid,
-		} = parsed.command
-		else {
-			panic!("expected fetch");
-		};
-		assert!(!uid);
-		assert_eq!(items, vec![FetchItem::Flags, FetchItem::Rfc822Size]);
-		assert!(sequence.contains(3, 10));
-		assert!(!sequence.contains(6, 10));
-
-		let parsed = parse("a2 UID FETCH 1:* (BODY[])").expect("parses");
-		let Command::Fetch { items, uid, .. } = parsed.command else {
-			panic!("expected fetch");
-		};
-		assert!(uid);
-		assert!(items.contains(&FetchItem::Body));
-		assert!(items.contains(&FetchItem::Uid));
-	}
-
-	#[test]
-	fn sequence_star_means_max() {
-		let set = parse_sequence_set("*").expect("parses");
-		assert!(set.contains(7, 7));
-		assert!(!set.contains(6, 7));
-		let set = parse_sequence_set("3:*").expect("parses");
-		assert!(set.contains(3, 7));
-		assert!(set.contains(7, 7));
-		assert!(!set.contains(2, 7));
-	}
-
-	#[test]
-	fn rejects_malformed_lines() {
-		assert_eq!(parse("CAPABILITY"), Err(ParseError::Malformed));
-		assert_eq!(parse(""), Err(ParseError::Malformed));
-		assert_eq!(parse("ta!g NOOP"), Err(ParseError::Malformed));
-	}
-
-	#[test]
-	fn unknown_commands_keep_the_tag() {
-		assert_eq!(
-			parse("a1 STARTTLS"),
-			Err(ParseError::Unknown("a1".to_string()))
-		);
-	}
-
-	#[test]
-	fn rejects_bad_arguments() {
-		assert_eq!(
-			parse("a1 LOGIN onlyuser"),
-			Err(ParseError::BadArguments("a1".to_string()))
-		);
-		assert_eq!(
-			parse("a1 FETCH 0 (FLAGS)"),
-			Err(ParseError::BadArguments("a1".to_string()))
-		);
-		assert_eq!(
-			parse("a1 FETCH 1 (BOGUS)"),
-			Err(ParseError::BadArguments("a1".to_string()))
-		);
-	}
+	(!items.is_empty()).then_some(items)
 }

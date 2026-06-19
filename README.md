@@ -2,9 +2,11 @@
 
 Self-hosted, headless mail server — SMTP, IMAP and modern email security through an API and CLI. Part of the Glyndor stack.
 
-[![CI](https://github.com/Glyndor/mail/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/mail/actions/workflows/ci.yml)
+[![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
 
-> 🚧 Early development. The SMTP core works; most of the roadmap is still ahead.
+> Secure by default and fail-closed. SMTP/IMAP/POP3/JMAP, full email
+> authentication, Sieve filtering, automatic TLS and antispam are implemented and
+> tested; see the feature list below.
 
 ```mermaid
 flowchart LR
@@ -34,7 +36,15 @@ flowchart LR
 - 💾 **Crash-safe writes** — accepted messages are fsynced and atomically renamed into the mailbox before the server answers `250`
 - 🧰 **Operator CLI** — `mail serve`, `mail config-check`, `mail dkim-keygen`, meaningful exit codes
 
-## 🚀 Quick start
+## Install
+
+```sh
+curl -fsSL https://glyndor.net/install/mail | sh
+```
+
+Installs the latest release binary to `/usr/local/bin`. Override with `INSTALL_DIR=/path/to/bin`.
+
+## 🚀 Quick start (from source)
 
 ```sh
 cargo build --release
@@ -64,9 +74,28 @@ kind = "smtp"
 addr = "0.0.0.0"
 ```
 
+### Configuration secrets
+
+The config file must be owner-only — `mail` refuses to load a file that is group- or world-accessible (`chmod 600 mail.toml`). Keep secrets out of the file itself: any `${VAR}` is substituted from the process environment at load time, and a referenced variable that is unset fails the load (never a silent empty value). For example, source the database password from the environment instead of writing it on disk:
+
+```toml
+[database]
+url = "postgres://mail:${MAIL_DB_PASSWORD}@db/mail"
+```
+
+Substitution happens before the TOML is parsed, so a substituted value must not contain TOML metacharacters (`"`, newlines); percent-encode such characters in a connection URL.
+
+## ✨ Features
+
+- **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).
+- **Authentication** — SASL PLAIN/LOGIN/SCRAM-SHA-256/OAUTHBEARER with TOTP two-factor, all over TLS.
+- **Email security** — SPF, DKIM (sign + verify, ed25519 + RSA), DMARC with aggregate reports, ARC, MTA-STS, DANE and TLS-RPT.
+- **Filtering** — Sieve (tests, actions, variables, vacation) plus greylisting, DNSBL, Bayesian and reputation antispam.
+- **Operations** — automatic TLS via ACME, a management API, outbound webhooks, Prometheus metrics, and a CLI (`serve`, `export`/`import`, `queue`, `accounts`, `account-add`, `dkim-keygen`, `token-hash`).
+
 ## 🗺️ Roadmap
 
-Mailbox model (flags/quotas), DSN bounces, MTA-STS/DANE, IMAP4rev2 and the management API are tracked in the [issues](https://github.com/Glyndor/mail/issues).
+Remaining work — an LDAP directory backend, IMAP `COMPRESS`, and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
 
 ## 📄 License
 

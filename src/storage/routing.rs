@@ -2,32 +2,69 @@
 
 use std::sync::Arc;
 
+use crate::directory_store::DirectoryHandle;
 use crate::smtp::address::Address;
-use crate::smtp::directory::{Directory, Resolution};
+use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
 use super::delivery::LocalDelivery;
 use super::spool::FsSpool;
 
+/// How long an SRS-return address stays valid (RFC-less convention).
+const SRS_MAX_AGE_DAYS: u64 = 14;
+
 /// Splits an accepted message between local mailbox delivery and the
 /// outbound spool, according to the directory.
 pub struct SplitDelivery {
-	directory: Arc<Directory>,
+	directory: DirectoryHandle,
 	local: LocalDelivery,
 	outbound: FsSpool,
 	signer: Option<Arc<crate::dkim::Signer>>,
+	rules: Vec<crate::rules::Rule>,
+	/// SRS rewriter and our domain, for forwarded (redirected) mail.
+	srs: Option<(crate::queue::srs::Srs, String)>,
+	/// Counters for Sieve delivery outcomes (reject, vacation, redirect).
+	metrics: Option<Arc<crate::metrics::Metrics>>,
+	/// Outbound webhook for delivery events (fire-and-forget, advisory).
+	webhook: Option<Arc<crate::webhook::Webhook>>,
 }
 
 impl SplitDelivery {
 	/// Create the routing sink rooted at `data_dir`.
-	pub fn new(data_dir: &std::path::Path, directory: Arc<Directory>) -> std::io::Result<Self> {
+	pub fn new(data_dir: &std::path::Path, directory: DirectoryHandle) -> std::io::Result<Self> {
 		Ok(SplitDelivery {
-			local: LocalDelivery::new(data_dir, Arc::clone(&directory))?,
+			local: LocalDelivery::new(data_dir, directory.clone())?,
 			outbound: FsSpool::open(data_dir)?,
 			directory,
 			signer: None,
+			rules: Vec::new(),
+			srs: None,
+			metrics: None,
+			webhook: None,
 		})
+	}
+
+	/// Fire delivery-event notifications to this webhook.
+	pub fn with_webhook(mut self, webhook: Arc<crate::webhook::Webhook>) -> Self {
+		self.webhook = Some(webhook);
+		self
+	}
+
+	/// Build a `MessageReceived` event for `recipient` from the raw message.
+	fn message_event(recipient: &str, message: &AcceptedMessage) -> crate::webhook::WebhookEvent {
+		crate::webhook::WebhookEvent::MessageReceived {
+			account: recipient.to_string(),
+			from: message.reverse_path.clone(),
+			subject: header_of(&message.data, "subject"),
+			message_id: header_of(&message.data, "message-id"),
+		}
+	}
+
+	/// Record Sieve delivery outcomes to these process metrics.
+	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
+		self
 	}
 
 	/// Sign outbound messages with this DKIM signer.
@@ -35,17 +72,87 @@ impl SplitDelivery {
 		self.signer = Some(signer);
 		self
 	}
+
+	/// Rewrite the sender of forwarded mail via SRS at `our_domain`, so it
+	/// passes SPF at the next hop.
+	pub fn with_srs(mut self, srs: crate::queue::srs::Srs, our_domain: impl Into<String>) -> Self {
+		self.srs = Some((srs, our_domain.into()));
+		self
+	}
+
+	/// The envelope sender to use for mail forwarded to `redirect`: an SRS
+	/// rewrite of the original sender when SRS is enabled, else the original.
+	fn forward_sender(&self, original: &str) -> String {
+		if original.is_empty() {
+			return String::new();
+		}
+		let Some((srs, our_domain)) = &self.srs else {
+			return original.to_string();
+		};
+		let Some((local, domain)) = original.rsplit_once('@') else {
+			return original.to_string();
+		};
+		let now_days = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs() / 86_400)
+			.unwrap_or(0);
+		srs.forward(local, domain, our_domain, now_days)
+	}
+
+	/// If `recipient` is a valid SRS-return address at our domain, the original
+	/// sender it should be forwarded back to; otherwise `None`.
+	fn srs_return(&self, recipient: &str) -> Option<String> {
+		let (srs, our_domain) = self.srs.as_ref()?;
+		let (local, domain) = recipient.rsplit_once('@')?;
+		if !domain.eq_ignore_ascii_case(our_domain) {
+			return None;
+		}
+		let now_days = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs() / 86_400)
+			.unwrap_or(0);
+		let (orig_local, orig_domain) = srs.reverse(local, now_days, SRS_MAX_AGE_DAYS)?;
+		Some(format!("{orig_local}@{orig_domain}"))
+	}
+
+	/// Apply these delivery rules to locally delivered mail.
+	pub fn with_rules(mut self, rules: Vec<crate::rules::Rule>) -> Self {
+		self.rules = rules;
+		self
+	}
+
+	/// The mailbox local delivery should target for `message`, per the rules:
+	/// an explicit mailbox, or `Junk` for a junk verdict, else INBOX (`None`).
+	fn target_mailbox(&self, message: &AcceptedMessage) -> Option<String> {
+		let sender_domain = message
+			.reverse_path
+			.rsplit_once('@')
+			.map(|(_, domain)| domain.to_ascii_lowercase());
+		let rule = crate::rules::evaluate(&self.rules, &message.data, sender_domain.as_deref())?;
+		match &rule.mailbox {
+			Some(mailbox) => Some(mailbox.clone()),
+			None if rule.junk => Some("Junk".to_string()),
+			None => None,
+		}
+	}
 }
 
 impl MessageSink for SplitDelivery {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
+		let mut srs_returns = Vec::new();
 		for recipient in &message.recipients {
+			// An SRS-return address forwards the (bounce) message back to the
+			// original sender it encodes.
+			if let Some(original) = self.srs_return(recipient) {
+				srs_returns.push(original);
+				continue;
+			}
 			let address = Address::parse(recipient).map_err(|_| {
 				SinkError::Unavailable(format!("unparseable recipient {recipient}"))
 			})?;
-			match self.directory.resolve(&address) {
+			match self.directory.current().resolve(&address) {
 				Resolution::Account(_) => local.push(recipient.clone()),
 				Resolution::NotLocal => remote.push(recipient.clone()),
 				// The session rejected unknown local users; drift here is
@@ -59,10 +166,101 @@ impl MessageSink for SplitDelivery {
 		}
 
 		if !local.is_empty() {
-			self.local.deliver(AcceptedMessage {
+			let mailbox = message
+				.mailbox
+				.clone()
+				.or_else(|| self.target_mailbox(&message));
+			let local_message = AcceptedMessage {
 				recipients: local,
 				..message.clone()
-			})?;
+			};
+			let delivered = self
+				.local
+				.deliver_routed(&local_message, mailbox.as_deref())?;
+			// Notify the webhook for messages that actually landed (not rejected).
+			if delivered.reject.is_none()
+				&& let Some(webhook) = &self.webhook
+			{
+				for recipient in &local_message.recipients {
+					let webhook = webhook.clone();
+					let event = Self::message_event(recipient, &local_message);
+					tokio::spawn(async move { webhook.notify(&event).await });
+				}
+			}
+			if let Some(reason) = delivered.reject {
+				if let Some(metrics) = &self.metrics {
+					metrics.sieve_rejected();
+				}
+				let hostname = local_message
+					.recipients
+					.first()
+					.and_then(|r| r.rsplit_once('@'))
+					.map(|(_, domain)| domain.to_string())
+					.unwrap_or_else(|| "localhost".to_string());
+				// Recipients with NOTIFY=NEVER (RFC 3461) get no failure DSN.
+				let dsn_recipients: Vec<String> = local_message
+					.recipients
+					.iter()
+					.filter(|r| !local_message.no_dsn.contains(r))
+					.cloned()
+					.collect();
+				if let Some(bounce) = (!dsn_recipients.is_empty())
+					.then(|| {
+						crate::queue::bounce::build(
+							&hostname,
+							&message.reverse_path,
+							&dsn_recipients,
+							&reason,
+							&message.data,
+							std::time::SystemTime::now(),
+						)
+					})
+					.flatten()
+				{
+					self.outbound
+						.store(&bounce)
+						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+				}
+			}
+			// Queue Sieve redirects, preserving the (non-null) original sender.
+			for address in delivered.redirects {
+				let forwarded = AcceptedMessage {
+					reverse_path: self.forward_sender(&message.reverse_path),
+					recipients: vec![address],
+					data: message.data.clone(),
+					require_tls: false,
+					mailbox: None,
+					no_dsn: Vec::new(),
+				};
+				self.outbound
+					.store(&forwarded)
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+				if let Some(metrics) = &self.metrics {
+					metrics.forwarded();
+				}
+			}
+			for reply in delivered.replies {
+				self.outbound
+					.store(&reply)
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+				if let Some(metrics) = &self.metrics {
+					metrics.vacation_sent();
+				}
+			}
+		}
+		// Forward SRS-return (bounce) messages back to the original senders.
+		for original in srs_returns {
+			let returned = AcceptedMessage {
+				reverse_path: message.reverse_path.clone(),
+				recipients: vec![original],
+				data: message.data.clone(),
+				require_tls: false,
+				mailbox: None,
+				no_dsn: Vec::new(),
+			};
+			self.outbound
+				.store(&returned)
+				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		if !remote.is_empty() {
 			let mut outbound_message = AcceptedMessage {
@@ -86,85 +284,20 @@ impl MessageSink for SplitDelivery {
 	}
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use std::fs;
-
-	fn directory() -> Arc<Directory> {
-		Arc::new(Directory::new(
-			["example.org".to_string()],
-			[("alice@example.org".to_string(), "alice".to_string())],
-		))
-	}
-
-	fn message(recipients: &[&str]) -> AcceptedMessage {
-		AcceptedMessage {
-			reverse_path: "alice@example.org".into(),
-			recipients: recipients.iter().map(|r| r.to_string()).collect(),
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+/// The value of header `field` from a raw message's header block, if present.
+fn header_of(data: &[u8], field: &str) -> Option<String> {
+	let text = String::from_utf8_lossy(data);
+	let headers = text.split("\r\n\r\n").next().unwrap_or(&text);
+	for line in headers.split("\r\n") {
+		if let Some((name, value)) = line.split_once(':')
+			&& name.trim().eq_ignore_ascii_case(field)
+		{
+			return Some(value.trim().to_string());
 		}
 	}
-
-	fn inbox_count(root: &std::path::Path, account: &str) -> usize {
-		fs::read_dir(root.join("accounts").join(account).join("new"))
-			.map(|entries| entries.count())
-			.unwrap_or(0)
-	}
-
-	fn spool_count(root: &std::path::Path) -> usize {
-		FsSpool::open(root)
-			.expect("open spool")
-			.list()
-			.expect("list")
-			.len()
-	}
-
-	#[test]
-	fn local_only_message_skips_the_spool() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-		sink.deliver(message(&["alice@example.org"]))
-			.expect("deliver");
-		assert_eq!(inbox_count(dir.path(), "alice"), 1);
-		assert_eq!(spool_count(dir.path()), 0);
-	}
-
-	#[test]
-	fn remote_only_message_goes_to_the_spool() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-		sink.deliver(message(&["bob@elsewhere.example"]))
-			.expect("deliver");
-		assert_eq!(inbox_count(dir.path(), "alice"), 0);
-		assert_eq!(spool_count(dir.path()), 1);
-	}
-
-	#[test]
-	fn mixed_message_is_split() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-		sink.deliver(message(&["alice@example.org", "bob@elsewhere.example"]))
-			.expect("deliver");
-		assert_eq!(inbox_count(dir.path(), "alice"), 1);
-
-		let spool = FsSpool::open(dir.path()).expect("spool");
-		let ids = spool.list().expect("list");
-		assert_eq!(ids.len(), 1);
-		let entry = spool.load(ids[0]).expect("load");
-		// Only the remote recipient is queued for outbound delivery.
-		assert_eq!(
-			entry.envelope.recipients,
-			vec!["bob@elsewhere.example".to_string()]
-		);
-	}
-
-	#[test]
-	fn unknown_local_user_fails_closed() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-		let result = sink.deliver(message(&["stranger@example.org"]));
-		assert!(result.is_err());
-		assert_eq!(spool_count(dir.path()), 0);
-	}
+	None
 }
+
+#[cfg(test)]
+#[path = "routing_tests.rs"]
+mod tests;

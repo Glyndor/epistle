@@ -54,27 +54,27 @@ impl fmt::Display for Reply {
 /// Frequently used replies.
 impl Reply {
 	pub fn ok() -> Self {
-		Reply::single(250, "ok")
+		Reply::single(250, "2.0.0 ok")
 	}
 
 	pub fn closing() -> Self {
-		Reply::single(221, "closing connection")
+		Reply::single(221, "2.0.0 closing connection")
 	}
 
 	pub fn syntax_error() -> Self {
-		Reply::single(500, "syntax error")
+		Reply::single(500, "5.5.2 syntax error")
 	}
 
 	pub fn invalid_arguments() -> Self {
-		Reply::single(501, "invalid arguments")
+		Reply::single(501, "5.5.4 invalid arguments")
 	}
 
 	pub fn bad_sequence() -> Self {
-		Reply::single(503, "bad sequence of commands")
+		Reply::single(503, "5.5.1 bad sequence of commands")
 	}
 
 	pub fn vrfy_not_disclosed() -> Self {
-		Reply::single(252, "cannot verify, send some mail and find out")
+		Reply::single(252, "2.1.5 cannot verify, send some mail and find out")
 	}
 
 	pub fn start_mail_input() -> Self {
@@ -88,7 +88,7 @@ mod tests {
 
 	#[test]
 	fn renders_single_line_with_crlf() {
-		assert_eq!(Reply::ok().to_string(), "250 ok\r\n");
+		assert_eq!(Reply::ok().to_string(), "250 2.0.0 ok\r\n");
 	}
 
 	#[test]

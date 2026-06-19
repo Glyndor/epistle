@@ -100,6 +100,28 @@ pub async fn evaluate(
 	spf: (SpfOutcome, Option<&str>),
 	dkim: &[DkimResult],
 ) -> DmarcOutcome {
+	evaluate_inner(dns, from_domain, spf, dkim, sample_pct()).await
+}
+
+/// Draws a random number in [1, 100] for pct= sampling.
+fn sample_pct() -> u8 {
+	use ring::rand::{SecureRandom, SystemRandom};
+	let rng = SystemRandom::new();
+	let mut buf = [0u8; 1];
+	// Ignore fill errors — on failure the result is 0, which causes
+	// non-sampled treatment (safe: slightly over-permissive, not under).
+	let _ = rng.fill(&mut buf);
+	(buf[0] % 100) + 1
+}
+
+/// Testable inner evaluator that accepts an explicit pct roll (1–100).
+async fn evaluate_inner(
+	dns: &dyn DnsLookup,
+	from_domain: &str,
+	spf: (SpfOutcome, Option<&str>),
+	dkim: &[DkimResult],
+	pct_roll: u8,
+) -> DmarcOutcome {
 	let (record, applied_policy) = match fetch_record(dns, from_domain).await {
 		Ok(Some(found)) => found,
 		Ok(None) => return DmarcOutcome::None,
@@ -123,7 +145,15 @@ pub async fn evaluate(
 	}
 	match applied_policy {
 		Policy::None => DmarcOutcome::Fail,
-		Policy::Quarantine | Policy::Reject => DmarcOutcome::Reject,
+		// RFC 7489 §6.6.2: apply policy only to pct% of failing messages;
+		// non-sampled messages are treated as if policy were "none".
+		Policy::Quarantine | Policy::Reject => {
+			if record.pct < 100 && pct_roll > record.pct {
+				DmarcOutcome::Fail
+			} else {
+				DmarcOutcome::Reject
+			}
+		}
 	}
 }
 
@@ -178,10 +208,16 @@ fn aligned(mode: Alignment, identifier: &str, from_domain: &str) -> bool {
 	}
 }
 
-/// Approximate the organizational domain as the registrable suffix of two
-/// labels. A public-suffix list would be exact; this heuristic is recorded
-/// as a limitation in #15 (it is wrong for e.g. `co.uk` registrations).
+/// Return the organizational (registrable) domain using the Mozilla PSL.
+/// Falls back to the rightmost two labels when the PSL returns no result.
 fn organizational_domain(domain: &str) -> String {
+	use psl::Psl;
+	if let Some(d) = psl::List.domain(domain.as_bytes())
+		&& let Ok(s) = std::str::from_utf8(d.as_bytes())
+	{
+		return s.to_ascii_lowercase();
+	}
+	// Fallback: two-label heuristic (covers plain TLDs like .com, .org).
 	let labels: Vec<&str> = domain.split('.').collect();
 	if labels.len() <= 2 {
 		return domain.to_string();
@@ -190,193 +226,5 @@ fn organizational_domain(domain: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use std::collections::HashMap;
-	use std::pin::Pin;
-
-	struct TxtDns {
-		records: HashMap<String, Vec<String>>,
-		fail: bool,
-	}
-
-	impl DnsLookup for TxtDns {
-		fn txt(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let result = if self.fail {
-				Err(DnsFailure::Temporary)
-			} else {
-				Ok(self.records.get(name).cloned().unwrap_or_default())
-			};
-			Box::pin(async move { result })
-		}
-
-		fn addresses(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-		{
-			Box::pin(async { Ok(Vec::new()) })
-		}
-
-		fn mx(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			Box::pin(async { Ok(Vec::new()) })
-		}
-	}
-
-	fn dns(records: &[(&str, &str)]) -> TxtDns {
-		let mut map: HashMap<String, Vec<String>> = HashMap::new();
-		for (name, value) in records {
-			map.entry(name.to_string())
-				.or_default()
-				.push(value.to_string());
-		}
-		TxtDns {
-			records: map,
-			fail: false,
-		}
-	}
-
-	fn dkim_pass(domain: &str) -> Vec<DkimResult> {
-		vec![DkimResult {
-			outcome: DkimOutcome::Pass,
-			domain: Some(domain.to_string()),
-		}]
-	}
-
-	#[test]
-	fn extracts_from_domain() {
-		assert_eq!(
-			from_domain(b"From: Alice <alice@Example.ORG>\r\n\r\nbody"),
-			Some("example.org".to_string())
-		);
-		assert_eq!(
-			from_domain(b"Subject: x\r\nFrom: bob@example.org\r\n\r\n"),
-			Some("example.org".to_string())
-		);
-		assert_eq!(
-			from_domain(b"From: folded\r\n <carol@example.org>\r\n\r\n"),
-			Some("example.org".to_string())
-		);
-	}
-
-	#[test]
-	fn duplicate_from_headers_refuse_extraction() {
-		let raw = b"From: a@one.example\r\nFrom: b@two.example\r\n\r\nbody";
-		assert_eq!(from_domain(raw), None);
-	}
-
-	#[test]
-	fn missing_or_malformed_from_is_none() {
-		assert_eq!(from_domain(b"Subject: x\r\n\r\nbody"), None);
-		assert_eq!(from_domain(b"From: no-address-here\r\n\r\n"), None);
-	}
-
-	#[tokio::test]
-	async fn aligned_dkim_passes() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=reject")]);
-		let outcome = evaluate(
-			&dns,
-			"example.org",
-			(SpfOutcome::Fail, None),
-			&dkim_pass("example.org"),
-		)
-		.await;
-		assert_eq!(outcome, DmarcOutcome::Pass);
-	}
-
-	#[tokio::test]
-	async fn aligned_spf_passes() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=reject")]);
-		let outcome = evaluate(
-			&dns,
-			"example.org",
-			(SpfOutcome::Pass, Some("mail.example.org")),
-			&[],
-		)
-		.await;
-		// Relaxed alignment: mail.example.org aligns with example.org.
-		assert_eq!(outcome, DmarcOutcome::Pass);
-	}
-
-	#[tokio::test]
-	async fn strict_spf_alignment_requires_exact_match() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=reject; aspf=s")]);
-		let outcome = evaluate(
-			&dns,
-			"example.org",
-			(SpfOutcome::Pass, Some("mail.example.org")),
-			&[],
-		)
-		.await;
-		assert_eq!(outcome, DmarcOutcome::Reject);
-	}
-
-	#[tokio::test]
-	async fn unaligned_with_reject_policy_rejects() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=reject")]);
-		let outcome = evaluate(
-			&dns,
-			"example.org",
-			(SpfOutcome::Pass, Some("elsewhere.example")),
-			&dkim_pass("elsewhere.example"),
-		)
-		.await;
-		assert_eq!(outcome, DmarcOutcome::Reject);
-	}
-
-	#[tokio::test]
-	async fn quarantine_is_treated_as_reject() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=quarantine")]);
-		let outcome = evaluate(&dns, "example.org", (SpfOutcome::Fail, None), &[]).await;
-		assert_eq!(outcome, DmarcOutcome::Reject);
-	}
-
-	#[tokio::test]
-	async fn policy_none_records_failure_without_reject() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=none")]);
-		let outcome = evaluate(&dns, "example.org", (SpfOutcome::Fail, None), &[]).await;
-		assert_eq!(outcome, DmarcOutcome::Fail);
-	}
-
-	#[tokio::test]
-	async fn no_record_is_none() {
-		let dns = dns(&[]);
-		let outcome = evaluate(
-			&dns,
-			"example.org",
-			(SpfOutcome::Pass, Some("example.org")),
-			&[],
-		)
-		.await;
-		assert_eq!(outcome, DmarcOutcome::None);
-	}
-
-	#[tokio::test]
-	async fn subdomain_falls_back_to_organizational_policy() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=reject; sp=none")]);
-		let outcome = evaluate(&dns, "news.example.org", (SpfOutcome::Fail, None), &[]).await;
-		// sp=none applies to the subdomain: fail without reject.
-		assert_eq!(outcome, DmarcOutcome::Fail);
-	}
-
-	#[tokio::test]
-	async fn malformed_record_is_permerror() {
-		let dns = dns(&[("_dmarc.example.org", "v=DMARC1; p=bogus")]);
-		let outcome = evaluate(&dns, "example.org", (SpfOutcome::Fail, None), &[]).await;
-		assert_eq!(outcome, DmarcOutcome::PermError);
-	}
-
-	#[tokio::test]
-	async fn dns_failure_is_temperror() {
-		let mut dns = dns(&[]);
-		dns.fail = true;
-		let outcome = evaluate(&dns, "example.org", (SpfOutcome::Fail, None), &[]).await;
-		assert_eq!(outcome, DmarcOutcome::TempError);
-	}
-}
+#[path = "evaluate_tests.rs"]
+mod tests;

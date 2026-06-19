@@ -12,6 +12,12 @@ pub struct Dkim {
 	pub selector: String,
 	/// ed25519 private key, PKCS#8 PEM.
 	pub key_file: PathBuf,
+	/// Optional RSA selector for an additional rsa-sha256 signature (RFC 8463).
+	#[serde(default)]
+	pub rsa_selector: Option<String>,
+	/// Optional RSA private key (PKCS#8 PEM) paired with `rsa_selector`.
+	#[serde(default)]
+	pub rsa_key_file: Option<PathBuf>,
 }
 
 #[cfg(test)]

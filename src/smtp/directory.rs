@@ -23,6 +23,20 @@ pub struct Directory {
 	/// argon2id PHC hash per account name. Accounts without one cannot
 	/// authenticate (receive-only).
 	password_hashes: HashMap<String, String>,
+	/// Sub-address separators (RFC 5233 detail): `user+tag@domain` is
+	/// delivered to `user@domain`. Empty disables sub-addressing.
+	subaddress_separators: Vec<char>,
+	/// Per-domain catch-all account: mail for an otherwise-unknown local user
+	/// in this domain is delivered here. Absent means unknown users are
+	/// rejected (the secure default).
+	catch_all: HashMap<String, String>,
+	/// Domain aliases (alias domain → target domain): mail to `user@alias` is
+	/// resolved as `user@target`.
+	domain_aliases: HashMap<String, String>,
+	/// SCRAM credentials per account name, for SCRAM-SHA-256 authentication.
+	scram: HashMap<String, super::scram::ScramStored>,
+	/// Base32 TOTP secret per account name, for two-factor auth (RFC 6238).
+	totp: HashMap<String, String>,
 }
 
 impl Directory {
@@ -42,7 +56,106 @@ impl Directory {
 				.map(|(address, account)| (address.to_ascii_lowercase(), account))
 				.collect(),
 			password_hashes: HashMap::new(),
+			// The `+` separator is the de-facto standard, enabled by default.
+			subaddress_separators: vec!['+'],
+			catch_all: HashMap::new(),
+			domain_aliases: HashMap::new(),
+			scram: HashMap::new(),
+			totp: HashMap::new(),
 		}
+	}
+
+	/// Attach TOTP secrets (account name → base32 secret) for two-factor auth.
+	pub fn with_totp(mut self, totp: impl IntoIterator<Item = (String, String)>) -> Self {
+		self.totp = totp
+			.into_iter()
+			.map(|(name, secret)| (name.to_ascii_lowercase(), secret))
+			.collect();
+		self
+	}
+
+	/// Verify a login with its password, enforcing TOTP when the account has a
+	/// secret: the last 6 digits of the password are the current TOTP code.
+	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+		let (account, hash) = self.credentials(login)?;
+		let password = match self.totp.get(&account) {
+			Some(secret) => {
+				let split = password.len().checked_sub(6)?;
+				let (pass, code) = password.split_at(split);
+				let code: u32 = code.parse().ok()?;
+				let bytes = crate::totp::decode_base32_secret(secret)?;
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_secs())
+					.unwrap_or(0);
+				if !crate::totp::verify(&bytes, code, now) {
+					return None;
+				}
+				pass
+			}
+			None => password,
+		};
+		super::auth::verify_password(hash, password).then_some(account)
+	}
+
+	/// Attach SCRAM credentials (account name → stored credentials).
+	pub fn with_scram(
+		mut self,
+		scram: impl IntoIterator<Item = (String, super::scram::ScramStored)>,
+	) -> Self {
+		self.scram = scram
+			.into_iter()
+			.map(|(name, stored)| (name.to_ascii_lowercase(), stored))
+			.collect();
+		self
+	}
+
+	/// Resolve a login to its SCRAM credentials, or `None` when the identity is
+	/// unknown or has no SCRAM credentials.
+	pub fn scram_credentials(&self, login: &str) -> Option<super::scram::ScramCredentials> {
+		let account = if login.contains('@') {
+			let address = Address::parse(login).ok()?;
+			match self.resolve(&address) {
+				Resolution::Account(account) => account,
+				_ => return None,
+			}
+		} else {
+			login.to_ascii_lowercase()
+		};
+		self.scram.get(&account)?.to_credentials()
+	}
+
+	/// Attach domain aliases (alias domain → target domain). Both sides are
+	/// lowercased to match resolution.
+	pub fn with_domain_aliases(
+		mut self,
+		aliases: impl IntoIterator<Item = (String, String)>,
+	) -> Self {
+		self.domain_aliases = aliases
+			.into_iter()
+			.map(|(alias, target)| (alias.to_ascii_lowercase(), target.to_ascii_lowercase()))
+			.collect();
+		self
+	}
+
+	/// Attach per-domain catch-all accounts (domain → account name). Domains
+	/// are lowercased to match resolution.
+	pub fn with_catch_all(mut self, catch_all: impl IntoIterator<Item = (String, String)>) -> Self {
+		self.catch_all = catch_all
+			.into_iter()
+			.map(|(domain, account)| (domain.to_ascii_lowercase(), account))
+			.collect();
+		self
+	}
+
+	/// Override the sub-address separators (default `['+']`). An empty list
+	/// disables sub-addressing entirely.
+	pub fn with_subaddress_separators(
+		mut self,
+		separators: impl IntoIterator<Item = char>,
+	) -> Self {
+		self.subaddress_separators = separators.into_iter().collect();
+		self
 	}
 
 	/// Attach password hashes (account name → argon2id PHC string).
@@ -84,16 +197,47 @@ impl Directory {
 
 	/// Resolve a validated address.
 	pub fn resolve(&self, address: &Address) -> Resolution {
-		if !self.domains.contains(address.domain()) {
+		let local = address.local_part();
+		// A domain alias resolves as its target domain.
+		let domain = self
+			.domain_aliases
+			.get(address.domain())
+			.map(String::as_str)
+			.unwrap_or(address.domain());
+		if !self.domains.contains(domain) {
 			return Resolution::NotLocal;
 		}
-		match self
-			.accounts_by_address
-			.get(&address.to_string().to_ascii_lowercase())
-		{
-			Some(account) => Resolution::Account(account.clone()),
-			None => Resolution::UnknownUser,
+		let key = format!("{local}@{domain}").to_ascii_lowercase();
+		if let Some(account) = self.accounts_by_address.get(&key) {
+			return Resolution::Account(account.clone());
 		}
+		// Sub-addressing: strip the tag and retry the base address.
+		if let Some(base) = self.strip_subaddress(local, domain)
+			&& let Some(account) = self.accounts_by_address.get(&base)
+		{
+			return Resolution::Account(account.clone());
+		}
+		// Catch-all: a domain may funnel its unknown local users to one account.
+		if let Some(account) = self.catch_all.get(domain) {
+			return Resolution::Account(account.clone());
+		}
+		Resolution::UnknownUser
+	}
+
+	/// The base `local@domain` key (lowercased) once the earliest sub-address
+	/// separator and everything after it are removed, or `None` if the
+	/// local part carries no tag.
+	fn strip_subaddress(&self, local: &str, domain: &str) -> Option<String> {
+		let cut = self
+			.subaddress_separators
+			.iter()
+			.filter_map(|sep| local.find(*sep))
+			.min()?;
+		// A leading separator (e.g. `+tag`) leaves no base local-part.
+		if cut == 0 {
+			return None;
+		}
+		Some(format!("{}@{}", &local[..cut], domain).to_ascii_lowercase())
 	}
 }
 
@@ -148,6 +292,116 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn subaddressing_resolves_to_base_account() {
+		// bob+anything@example.org delivers to bob.
+		assert_eq!(
+			directory().resolve(&parse("bob+newsletter@example.org")),
+			Resolution::Account("bob".to_string())
+		);
+		// Only the first separator matters; the rest is part of the tag.
+		assert_eq!(
+			directory().resolve(&parse("Bob+a+b@EXAMPLE.org")),
+			Resolution::Account("bob".to_string())
+		);
+	}
+
+	#[test]
+	fn subaddressing_with_unknown_base_is_unknown_user() {
+		assert_eq!(
+			directory().resolve(&parse("carol+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn leading_separator_is_not_a_subaddress() {
+		assert_eq!(
+			directory().resolve(&parse("+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn subaddressing_can_be_disabled() {
+		let directory = directory().with_subaddress_separators([]);
+		assert_eq!(
+			directory.resolve(&parse("bob+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn subaddress_separators_are_configurable() {
+		let directory = directory().with_subaddress_separators(['-']);
+		assert_eq!(
+			directory.resolve(&parse("bob-tag@example.org")),
+			Resolution::Account("bob".to_string())
+		);
+		// The default `+` no longer applies once overridden.
+		assert_eq!(
+			directory.resolve(&parse("bob+tag@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn catch_all_receives_unknown_local_users() {
+		let directory =
+			directory().with_catch_all([("example.org".to_string(), "bob".to_string())]);
+		// Unknown user falls through to the catch-all account.
+		assert_eq!(
+			directory.resolve(&parse("nobody@example.org")),
+			Resolution::Account("bob".to_string())
+		);
+		// An explicit address still wins over the catch-all.
+		assert_eq!(
+			directory.resolve(&parse("alice@example.org")),
+			Resolution::Account("alice".to_string())
+		);
+		// Catch-all never makes a foreign domain local.
+		assert_eq!(
+			directory.resolve(&parse("nobody@elsewhere.example")),
+			Resolution::NotLocal
+		);
+	}
+
+	#[test]
+	fn without_catch_all_unknown_user_is_rejected() {
+		assert_eq!(
+			directory().resolve(&parse("nobody@example.org")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn domain_alias_resolves_as_target_domain() {
+		let directory = directory()
+			.with_domain_aliases([("alias.example".to_string(), "example.org".to_string())]);
+		assert_eq!(
+			directory.resolve(&parse("alice@alias.example")),
+			Resolution::Account("alice".to_string())
+		);
+		// Sub-addressing still applies through the alias.
+		assert_eq!(
+			directory.resolve(&parse("bob+tag@ALIAS.example")),
+			Resolution::Account("bob".to_string())
+		);
+		// The alias domain is local, so an unknown user is UnknownUser, not NotLocal.
+		assert_eq!(
+			directory.resolve(&parse("nobody@alias.example")),
+			Resolution::UnknownUser
+		);
+	}
+
+	#[test]
+	fn unaliased_foreign_domain_is_not_local() {
+		assert_eq!(
+			directory().resolve(&parse("alice@alias.example")),
+			Resolution::NotLocal
+		);
+	}
+
 	fn directory_with_credentials() -> Directory {
 		directory().with_password_hashes([("alice".to_string(), "$argon2id$stub".to_string())])
 	}
@@ -175,6 +429,43 @@ mod tests {
 		assert!(directory.credentials("mallory").is_none());
 		assert!(directory.credentials("mallory@example.org").is_none());
 		assert!(directory.credentials("alice@elsewhere.example").is_none());
+	}
+
+	#[test]
+	fn authenticate_enforces_totp_second_factor() {
+		let secret = b"12345678901234567890";
+		let directory = Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_totp([("alice".to_string(), crate::totp::encode_base32(secret))]);
+
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		let code = crate::totp::totp(secret, now);
+		// Password followed by the current 6-digit TOTP code.
+		let password = format!("secret{code:06}");
+		assert_eq!(
+			directory.authenticate("alice", &password).as_deref(),
+			Some("alice")
+		);
+		// A wrong code, or the bare password without a code, both fail.
+		assert!(directory.authenticate("alice", "secret000000").is_none());
+		assert!(directory.authenticate("alice", "secret").is_none());
+
+		// An account without a TOTP secret authenticates with just the password.
+		let plain = Directory::new(
+			["example.org".to_string()],
+			[("bob@example.org".to_string(), "bob".to_string())],
+		)
+		.with_password_hashes([("bob".to_string(), crate::smtp::auth::tests::hash("pw"))]);
+		assert_eq!(plain.authenticate("bob", "pw").as_deref(), Some("bob"));
 	}
 
 	#[test]

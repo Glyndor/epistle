@@ -1,0 +1,303 @@
+//! Server-side metrics in Prometheus text format.
+//!
+//! The mail server owns the counters and exposes them; dashboards live in the
+//! admin panel. Counters are process-global atomics, cheap to bump on the hot
+//! path, and rendered on demand for the `/metrics` endpoint.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Why an inbound message was rejected, for the per-reason counter label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectReason {
+	Dnsbl,
+	Spf,
+	Dmarc,
+	Reputation,
+	Scanner,
+	Loop,
+}
+
+impl RejectReason {
+	fn label(self) -> &'static str {
+		match self {
+			RejectReason::Dnsbl => "dnsbl",
+			RejectReason::Spf => "spf",
+			RejectReason::Dmarc => "dmarc",
+			RejectReason::Reputation => "reputation",
+			RejectReason::Scanner => "scanner",
+			RejectReason::Loop => "loop",
+		}
+	}
+}
+
+const REASONS: [RejectReason; 6] = [
+	RejectReason::Dnsbl,
+	RejectReason::Spf,
+	RejectReason::Dmarc,
+	RejectReason::Reputation,
+	RejectReason::Scanner,
+	RejectReason::Loop,
+];
+
+/// Process-global mail metrics.
+#[derive(Debug, Default)]
+pub struct Metrics {
+	connections: AtomicU64,
+	accepted: AtomicU64,
+	quarantined: AtomicU64,
+	rejected_dnsbl: AtomicU64,
+	rejected_spf: AtomicU64,
+	rejected_dmarc: AtomicU64,
+	rejected_reputation: AtomicU64,
+	rejected_scanner: AtomicU64,
+	rejected_loop: AtomicU64,
+	abuse_dropped: AtomicU64,
+	sieve_rejected: AtomicU64,
+	vacation_sent: AtomicU64,
+	forwarded: AtomicU64,
+	relayed: AtomicU64,
+	deferred: AtomicU64,
+	bounced: AtomicU64,
+	webhook_sent: AtomicU64,
+	webhook_failed: AtomicU64,
+}
+
+impl Metrics {
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	/// Count a connection dropped by the error-streak abuse guard.
+	pub fn abuse_dropped(&self) {
+		self.abuse_dropped.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an accepted inbound SMTP connection.
+	pub fn connection(&self) {
+		self.connections.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a delivered message.
+	pub fn accepted(&self) {
+		self.accepted.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message quarantined to Rejects.
+	pub fn quarantined(&self) {
+		self.quarantined.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message refused by a Sieve `reject`/`ereject`.
+	pub fn sieve_rejected(&self) {
+		self.sieve_rejected.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a Sieve `vacation` autoresponse sent.
+	pub fn vacation_sent(&self) {
+		self.vacation_sent.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message forwarded by a Sieve `redirect`.
+	pub fn forwarded(&self) {
+		self.forwarded.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message relayed to a remote server by the outbound queue.
+	pub fn relayed(&self) {
+		self.relayed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an outbound delivery deferred for later retry.
+	pub fn deferred(&self) {
+		self.deferred.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an outbound message bounced (permanently undeliverable).
+	pub fn bounced(&self) {
+		self.bounced.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a webhook event delivered successfully.
+	pub fn webhook_sent(&self) {
+		self.webhook_sent.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a webhook event that failed to deliver (advisory; mail unaffected).
+	pub fn webhook_failed(&self) {
+		self.webhook_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a rejected message by reason.
+	pub fn rejected(&self, reason: RejectReason) {
+		self.counter(reason).fetch_add(1, Ordering::Relaxed);
+	}
+
+	fn counter(&self, reason: RejectReason) -> &AtomicU64 {
+		match reason {
+			RejectReason::Dnsbl => &self.rejected_dnsbl,
+			RejectReason::Spf => &self.rejected_spf,
+			RejectReason::Dmarc => &self.rejected_dmarc,
+			RejectReason::Reputation => &self.rejected_reputation,
+			RejectReason::Scanner => &self.rejected_scanner,
+			RejectReason::Loop => &self.rejected_loop,
+		}
+	}
+
+	/// Render all counters in Prometheus text exposition format.
+	pub fn render(&self) -> String {
+		let mut out = String::new();
+		out.push_str("# HELP mail_connections_total Accepted SMTP connections.\n");
+		out.push_str("# TYPE mail_connections_total counter\n");
+		out.push_str(&format!(
+			"mail_connections_total {}\n",
+			self.connections.load(Ordering::Relaxed)
+		));
+
+		out.push_str("# HELP mail_messages_accepted_total Delivered inbound messages.\n");
+		out.push_str("# TYPE mail_messages_accepted_total counter\n");
+		out.push_str(&format!(
+			"mail_messages_accepted_total {}\n",
+			self.accepted.load(Ordering::Relaxed)
+		));
+
+		out.push_str("# HELP mail_messages_quarantined_total Messages filed to Rejects.\n");
+		out.push_str("# TYPE mail_messages_quarantined_total counter\n");
+		out.push_str(&format!(
+			"mail_messages_quarantined_total {}\n",
+			self.quarantined.load(Ordering::Relaxed)
+		));
+
+		out.push_str("# HELP mail_messages_rejected_total Rejected inbound messages by reason.\n");
+		out.push_str("# TYPE mail_messages_rejected_total counter\n");
+		for reason in REASONS {
+			out.push_str(&format!(
+				"mail_messages_rejected_total{{reason=\"{}\"}} {}\n",
+				reason.label(),
+				self.counter(reason).load(Ordering::Relaxed)
+			));
+		}
+
+		out.push_str(
+			"# HELP mail_connections_abuse_dropped_total Connections dropped for too many errors.\n",
+		);
+		out.push_str("# TYPE mail_connections_abuse_dropped_total counter\n");
+		out.push_str(&format!(
+			"mail_connections_abuse_dropped_total {}\n",
+			self.abuse_dropped.load(Ordering::Relaxed)
+		));
+
+		for (name, help, counter) in [
+			(
+				"mail_sieve_rejected_total",
+				"Messages refused by a Sieve reject.",
+				&self.sieve_rejected,
+			),
+			(
+				"mail_vacation_sent_total",
+				"Sieve vacation autoresponses sent.",
+				&self.vacation_sent,
+			),
+			(
+				"mail_forwarded_total",
+				"Messages forwarded by a Sieve redirect.",
+				&self.forwarded,
+			),
+			(
+				"mail_relayed_total",
+				"Messages relayed to remote servers.",
+				&self.relayed,
+			),
+			(
+				"mail_deferred_total",
+				"Outbound deliveries deferred for retry.",
+				&self.deferred,
+			),
+			(
+				"mail_bounced_total",
+				"Outbound messages permanently bounced.",
+				&self.bounced,
+			),
+			(
+				"mail_webhook_sent_total",
+				"Webhook events delivered successfully.",
+				&self.webhook_sent,
+			),
+			(
+				"mail_webhook_failed_total",
+				"Webhook events that failed to deliver.",
+				&self.webhook_failed,
+			),
+		] {
+			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
+			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
+		}
+		out
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn renders_zero_counters() {
+		let rendered = Metrics::new().render();
+		assert!(rendered.contains("mail_connections_total 0\n"));
+		assert!(rendered.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 0\n"));
+		// Every reason label is present.
+		for label in ["dnsbl", "spf", "dmarc", "reputation", "scanner"] {
+			assert!(rendered.contains(&format!("reason=\"{label}\"")), "{label}");
+		}
+	}
+
+	#[test]
+	fn counts_events() {
+		let m = Metrics::new();
+		m.connection();
+		m.connection();
+		m.accepted();
+		m.quarantined();
+		m.rejected(RejectReason::Dnsbl);
+		m.rejected(RejectReason::Dnsbl);
+		m.rejected(RejectReason::Dmarc);
+		m.abuse_dropped();
+		m.sieve_rejected();
+		m.vacation_sent();
+		m.vacation_sent();
+		m.forwarded();
+		m.relayed();
+		m.relayed();
+		m.relayed();
+		m.deferred();
+		m.bounced();
+		let r = m.render();
+		assert!(r.contains("mail_sieve_rejected_total 1\n"), "{r}");
+		assert!(r.contains("mail_vacation_sent_total 2\n"), "{r}");
+		assert!(r.contains("mail_forwarded_total 1\n"), "{r}");
+		assert!(r.contains("mail_relayed_total 3\n"), "{r}");
+		assert!(r.contains("mail_deferred_total 1\n"), "{r}");
+		assert!(r.contains("mail_bounced_total 1\n"), "{r}");
+		assert!(r.contains("mail_connections_total 2\n"), "{r}");
+		assert!(
+			r.contains("mail_connections_abuse_dropped_total 1\n"),
+			"{r}"
+		);
+		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
+		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
+		assert!(
+			r.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 2\n"),
+			"{r}"
+		);
+		assert!(
+			r.contains("mail_messages_rejected_total{reason=\"dmarc\"} 1\n"),
+			"{r}"
+		);
+	}
+
+	#[test]
+	fn render_is_valid_exposition_with_help_and_type() {
+		let r = Metrics::new().render();
+		assert!(r.contains("# TYPE mail_connections_total counter"));
+		assert!(r.contains("# HELP mail_messages_accepted_total"));
+	}
+}

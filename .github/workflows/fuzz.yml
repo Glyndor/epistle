@@ -1,0 +1,45 @@
+name: Fuzz
+
+on:
+  schedule:
+    # Nightly short fuzz run to surface parser panics on a fixed tree.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/smtp/**"
+      - "fuzz/**"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: cargo fuzz
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [smtp_command, smtp_line, smtp_address]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            fuzz/target
+          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.toml') }}
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+
+      - name: Fuzz ${{ matrix.target }}
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60 -timeout=10

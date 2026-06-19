@@ -1,0 +1,392 @@
+//! Tests for the Sieve interpreter.
+
+use super::interp::{Message, Outcome, evaluate};
+use super::lexer::tokenize;
+use super::parser::parse;
+
+const MSG: &[u8] =
+	b"From: alice@example.org\r\nTo: bob@example.net\r\nSubject: Big SALE today\r\n\r\nbuy\r\n";
+
+fn run(script: &str, raw: &[u8]) -> Outcome {
+	let tokens = tokenize(script).expect("lex");
+	let commands = parse(&tokens).expect("parse");
+	evaluate(&commands, &Message::parse(raw))
+}
+
+#[test]
+fn matches_captures_into_numbered_variables() {
+	// `:matches` wildcards populate ${1}.. (RFC 5229); "*@*" on a To header.
+	let outcome = run(
+		"if header :matches \"to\" \"*@*\" { fileinto \"${2}/${1}\"; }",
+		MSG,
+	);
+	// MSG's To is bob@example.net → ${1}=bob, ${2}=example.net.
+	assert_eq!(outcome.fileinto, vec!["example.net/bob".to_string()]);
+
+	// "a*c" on "abcbc": the trailing `c` anchors to the last c, so ${1}="bcb".
+	let raw = b"Subject: abcbc\r\n\r\nx\r\n";
+	let outcome = run(
+		"if header :matches \"subject\" \"a*c\" { fileinto \"${1}\"; }",
+		raw,
+	);
+	assert_eq!(outcome.fileinto, vec!["bcb".to_string()]);
+}
+
+#[test]
+fn set_variable_expands_in_fileinto() {
+	// A variable set earlier expands into a later fileinto target (RFC 5229).
+	let outcome = run(
+		"require \"variables\"; set \"box\" \"Work\"; fileinto \"Archive/${box}\";",
+		MSG,
+	);
+	assert_eq!(outcome.fileinto, vec!["Archive/Work".to_string()]);
+	// fileinto cancelled the implicit keep.
+	assert!(!outcome.keep);
+	// An unset variable expands to empty.
+	let outcome = run("fileinto \"X${missing}Y\";", MSG);
+	assert_eq!(outcome.fileinto, vec!["XY".to_string()]);
+}
+
+#[test]
+fn empty_script_keeps_implicitly() {
+	let outcome = run("", MSG);
+	assert!(outcome.keep);
+	assert!(outcome.fileinto.is_empty());
+}
+
+#[test]
+fn fileinto_cancels_implicit_keep() {
+	let outcome = run("fileinto \"Archive\";", MSG);
+	assert!(!outcome.keep);
+	assert_eq!(outcome.fileinto, vec!["Archive".to_string()]);
+}
+
+#[test]
+fn explicit_keep_with_fileinto_keeps_both() {
+	let outcome = run("fileinto \"Archive\"; keep;", MSG);
+	assert!(outcome.keep);
+	assert_eq!(outcome.fileinto, vec!["Archive".to_string()]);
+}
+
+#[test]
+fn discard_drops_the_message() {
+	let outcome = run("discard;", MSG);
+	assert!(!outcome.keep);
+	assert!(outcome.discarded);
+}
+
+#[test]
+fn fileinto_copy_preserves_implicit_keep() {
+	// `:copy` (RFC 3894): the message is filed AND kept in the inbox.
+	let outcome = run("fileinto :copy \"Archive\";", MSG);
+	assert!(outcome.keep, "{outcome:?}");
+	assert_eq!(outcome.fileinto, vec!["Archive".to_string()]);
+
+	// redirect :copy likewise keeps the inbox copy.
+	let outcome = run("redirect :copy \"forward@example.com\";", MSG);
+	assert!(outcome.keep, "{outcome:?}");
+	assert_eq!(outcome.redirects, vec!["forward@example.com".to_string()]);
+
+	// Without :copy the implicit keep is still cancelled.
+	let outcome = run("fileinto \"Archive\";", MSG);
+	assert!(!outcome.keep);
+}
+
+#[test]
+fn imap4flags_set_add_and_remove() {
+	// setflag replaces, addflag unions, removeflag subtracts (RFC 5232).
+	let outcome = run(
+		"setflag \"\\\\Seen \\\\Flagged\"; addflag \"\\\\Answered\"; removeflag \"\\\\Flagged\";",
+		MSG,
+	);
+	assert!(
+		outcome.flags.contains(&"\\Seen".to_string()),
+		"{:?}",
+		outcome.flags
+	);
+	assert!(
+		outcome.flags.contains(&"\\Answered".to_string()),
+		"{:?}",
+		outcome.flags
+	);
+	assert!(
+		!outcome.flags.contains(&"\\Flagged".to_string()),
+		"{:?}",
+		outcome.flags
+	);
+}
+
+#[test]
+fn header_contains_files_into_junk() {
+	let script = "if header :contains \"Subject\" \"sale\" { fileinto \"Junk\"; }";
+	let outcome = run(script, MSG);
+	assert_eq!(outcome.fileinto, vec!["Junk".to_string()]);
+	assert!(!outcome.keep);
+}
+
+#[test]
+fn header_is_requires_exact_value() {
+	let hit = run("if header :is \"To\" \"bob@example.net\" { discard; }", MSG);
+	assert!(hit.discarded);
+	let miss = run("if header :is \"To\" \"bob\" { discard; }", MSG);
+	assert!(!miss.discarded);
+}
+
+#[test]
+fn matches_uses_wildcards() {
+	let outcome = run(
+		"if header :matches \"Subject\" \"Big*today\" { discard; }",
+		MSG,
+	);
+	assert!(outcome.discarded);
+}
+
+#[test]
+fn size_over_and_under() {
+	let over = run("if size :over 10 { discard; }", MSG);
+	assert!(over.discarded);
+	let under = run("if size :under 10 { discard; }", MSG);
+	assert!(!under.discarded);
+}
+
+#[test]
+fn exists_test() {
+	let yes = run("if exists [\"From\", \"Subject\"] { fileinto \"X\"; }", MSG);
+	assert_eq!(yes.fileinto, vec!["X".to_string()]);
+	let no = run("if exists \"Reply-To\" { fileinto \"X\"; }", MSG);
+	assert!(no.fileinto.is_empty());
+}
+
+#[test]
+fn allof_anyof_not_combinators() {
+	let allof = run(
+		"if allof (exists \"From\", header :contains \"Subject\" \"sale\") { discard; }",
+		MSG,
+	);
+	assert!(allof.discarded);
+	let anyof = run(
+		"if anyof (exists \"Reply-To\", header :is \"To\" \"bob@example.net\") { discard; }",
+		MSG,
+	);
+	assert!(anyof.discarded);
+	let not = run("if not exists \"Reply-To\" { discard; }", MSG);
+	assert!(not.discarded);
+}
+
+#[test]
+fn address_test_matches_parts() {
+	// Header value with a display name and angle-addr.
+	let msg = b"From: Alice <alice@example.org>\r\nTo: bob@example.net\r\n\r\nx\r\n";
+	let all = run(
+		"if address :is \"From\" \"alice@example.org\" { discard; }",
+		msg,
+	);
+	assert!(all.discarded);
+	let local = run(
+		"if address :localpart :is \"From\" \"alice\" { discard; }",
+		msg,
+	);
+	assert!(local.discarded);
+	let domain = run(
+		"if address :domain :is \"From\" \"example.org\" { discard; }",
+		msg,
+	);
+	assert!(domain.discarded);
+	// Bare address (no display name) still parses.
+	let bare = run(
+		"if address :domain :is \"To\" \"example.net\" { discard; }",
+		msg,
+	);
+	assert!(bare.discarded);
+	// Wrong value does not match.
+	let miss = run(
+		"if address :is \"From\" \"eve@example.org\" { discard; }",
+		msg,
+	);
+	assert!(!miss.discarded);
+}
+
+#[test]
+fn envelope_test_matches_mail_from_and_rcpt_to() {
+	let tokens =
+		tokenize("if envelope :domain :is \"from\" \"bad.example\" { discard; }").expect("lex");
+	let commands = parse(&tokens).expect("parse");
+	let msg = Message::parse(MSG).with_envelope(
+		"spammer@bad.example".to_string(),
+		vec!["bob@example.net".to_string()],
+	);
+	assert!(evaluate(&commands, &msg).discarded);
+
+	let to =
+		parse(&tokenize("if envelope :localpart :is \"to\" \"bob\" { discard; }").expect("lex"))
+			.expect("parse");
+	assert!(evaluate(&to, &msg).discarded);
+
+	// Without a matching envelope it does not fire.
+	let miss = parse(&tokenize("if envelope :is \"from\" \"x@y\" { discard; }").unwrap()).unwrap();
+	assert!(!evaluate(&miss, &msg).discarded);
+}
+
+#[test]
+fn envelope_absent_never_matches() {
+	let commands =
+		parse(&tokenize("if envelope :is \"from\" \"a@b\" { discard; }").unwrap()).unwrap();
+	// No envelope attached: the test is simply false, mail keeps.
+	let outcome = evaluate(&commands, &Message::parse(MSG));
+	assert!(!outcome.discarded);
+	assert!(outcome.keep);
+}
+
+#[test]
+fn body_test_matches_content() {
+	let msg = b"Subject: hi\r\n\r\nClaim your free LOTTERY prize now\r\n";
+	let hit = run("if body :contains \"lottery\" { discard; }", msg);
+	assert!(hit.discarded);
+	let miss = run("if body :contains \"invoice\" { discard; }", msg);
+	assert!(!miss.discarded);
+	// :text behaves the same (no MIME decoding yet).
+	let text = run("if body :text :contains \"prize\" { discard; }", msg);
+	assert!(text.discarded);
+}
+
+#[test]
+fn date_test_matches_header_parts() {
+	let msg = b"Date: Wed, 17 Jun 2026 14:30:05 +0000\r\nSubject: hi\r\n\r\nbody\r\n";
+	// The Date header's year matches.
+	let hit = run("if date \"Date\" \"year\" \"2026\" { discard; }", msg);
+	assert!(hit.discarded);
+	// A wrong month does not match.
+	let miss = run("if date \"Date\" \"month\" \"12\" { discard; }", msg);
+	assert!(!miss.discarded);
+	// :is on the assembled date.
+	let date = run(
+		"if date :is \"Date\" \"date\" \"2026-06-17\" { discard; }",
+		msg,
+	);
+	assert!(date.discarded);
+}
+
+#[test]
+fn currentdate_test_uses_injected_now() {
+	// 2026-06-17 14:30:05 UTC.
+	let commands =
+		parse(&tokenize("if currentdate \"year\" \"2026\" { discard; }").unwrap()).unwrap();
+	let message = Message::parse(MSG).with_now(1_781_724_605);
+	assert!(evaluate(&commands, &message).discarded);
+
+	let miss = parse(&tokenize("if currentdate \"year\" \"1999\" { discard; }").unwrap()).unwrap();
+	assert!(!evaluate(&miss, &message).discarded);
+}
+
+#[test]
+fn stop_halts_execution() {
+	let outcome = run("fileinto \"A\"; stop; fileinto \"B\";", MSG);
+	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
+}
+
+#[test]
+fn redirect_records_address() {
+	let outcome = run("redirect \"forward@example.com\";", MSG);
+	assert_eq!(outcome.redirects, vec!["forward@example.com".to_string()]);
+	assert!(!outcome.keep);
+}
+
+#[test]
+fn elsif_else_chain() {
+	let script = "if size :over 100000 { fileinto \"Big\"; } \
+elsif header :contains \"Subject\" \"sale\" { fileinto \"Junk\"; } \
+else { keep; }";
+	let outcome = run(script, MSG);
+	assert_eq!(outcome.fileinto, vec!["Junk".to_string()]);
+}
+
+#[test]
+fn true_and_false_literal_tests() {
+	assert!(run("if true { discard; }", MSG).discarded);
+	assert!(!run("if false { discard; }", MSG).discarded);
+}
+
+#[test]
+fn currentdate_matches_wildcards() {
+	// `:matches` routes through the glob comparator (not capture extraction).
+	let message = Message::parse(MSG).with_now(1_781_724_605); // 2026-06-17.
+	let hit =
+		parse(&tokenize("if currentdate :matches \"year\" \"20*\" { discard; }").unwrap()).unwrap();
+	assert!(evaluate(&hit, &message).discarded);
+	// A single-character `?` wildcard.
+	let q = parse(&tokenize("if currentdate :matches \"year\" \"2?26\" { discard; }").unwrap())
+		.unwrap();
+	assert!(evaluate(&q, &message).discarded);
+	// Non-matching pattern keeps the message.
+	let miss =
+		parse(&tokenize("if currentdate :matches \"year\" \"19*\" { discard; }").unwrap()).unwrap();
+	assert!(!evaluate(&miss, &message).discarded);
+}
+
+#[test]
+fn matches_question_mark_and_backtracking_captures() {
+	// `?` captures one char and `*` backtracks to satisfy a trailing literal.
+	let outcome = run(
+		"if header :matches \"Subject\" \"?ig*today\" { fileinto \"${1}/${2}\"; }",
+		MSG,
+	);
+	// ${1} is the `?` (b), ${2} the `*` run between "ig" and "today".
+	// Capture comparison is case-insensitive, so captures are lowercased.
+	assert_eq!(outcome.fileinto, vec!["b/ sale ".to_string()]);
+}
+
+#[test]
+fn matches_with_no_wildcard_is_exact() {
+	// A pattern without wildcards matches only the whole value.
+	let hit = run(
+		"if header :matches \"Subject\" \"Big SALE today\" { discard; }",
+		MSG,
+	);
+	assert!(hit.discarded);
+	let miss = run("if header :matches \"Subject\" \"Big\" { discard; }", MSG);
+	assert!(!miss.discarded);
+}
+
+#[test]
+fn envelope_unknown_part_never_matches() {
+	let commands =
+		parse(&tokenize("if envelope :is \"bogus\" \"x\" { discard; }").unwrap()).unwrap();
+	let message = Message::parse(MSG)
+		.with_envelope("a@b.example".to_string(), vec!["c@d.example".to_string()]);
+	assert!(!evaluate(&commands, &message).discarded);
+}
+
+#[test]
+fn reject_sets_reason_and_cancels_keep() {
+	let outcome = run("if exists \"From\" { reject \"go away\"; }", MSG);
+	assert_eq!(outcome.reject.as_deref(), Some("go away"));
+	assert!(!outcome.keep);
+}
+
+#[test]
+fn vacation_parses_all_tags() {
+	let script = "vacation :days 3 :subject \"Away\" :from \"me@example.org\" \
+:handle \"h1\" \"I am on holiday\";";
+	let outcome = run(script, MSG);
+	let v = outcome.vacation.expect("vacation request");
+	assert_eq!(v.days, 3);
+	assert_eq!(v.subject.as_deref(), Some("Away"));
+	assert_eq!(v.from.as_deref(), Some("me@example.org"));
+	assert_eq!(v.reason, "I am on holiday");
+	// vacation does not cancel the implicit keep.
+	assert!(outcome.keep);
+}
+
+#[test]
+fn else_branch_runs_when_no_test_matches() {
+	let script = "if header :is \"Subject\" \"nope\" { fileinto \"A\"; } else { fileinto \"B\"; }";
+	let outcome = run(script, MSG);
+	assert_eq!(outcome.fileinto, vec!["B".to_string()]);
+}
+
+#[test]
+fn stop_inside_if_halts_remaining_commands() {
+	let script = "if exists \"From\" { fileinto \"A\"; stop; } fileinto \"B\";";
+	let outcome = run(script, MSG);
+	assert_eq!(outcome.fileinto, vec!["A".to_string()]);
+}

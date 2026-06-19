@@ -2,46 +2,105 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
-use crate::smtp::directory::Directory;
+use crate::directory_store::DirectoryHandle;
 use crate::smtp::line::{LineDecoder, LineError};
 
 use super::session::Session;
 
-/// IMAP server: one instance per `imaps` listener.
+/// How a listener negotiates TLS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsMode {
+	/// TLS handshake before any IMAP traffic (`imaps`, 993).
+	Implicit,
+	/// Plaintext greeting; STARTTLS upgrade required before LOGIN (`imap`, 143).
+	StartTls,
+}
+
+/// Maximum concurrent IMAP connections per listener.
+const MAX_CONNECTIONS: usize = 500;
+
+/// Idle read timeout. RFC 9051 §5.4 recommends the server close the connection
+/// after 30 minutes of inactivity; we enforce it to kill Slowloris sessions.
+const READ_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// How often to poll for new messages during IDLE.
+const IDLE_POLL: Duration = Duration::from_secs(30);
+
+/// Consecutive `BAD` responses before the connection is dropped (abuse guard).
+const MAX_ERROR_STREAK: u32 = 20;
+
+/// Whether a server response is a `BAD` protocol error (abuse signal).
+fn is_bad_response(bytes: &[u8]) -> bool {
+	bytes.windows(5).any(|window| window == b" BAD ")
+}
+
+/// Anything the connection loop can read from and write to.
+trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
+
+/// IMAP server: one instance per listener.
 pub struct Server {
 	hostname: String,
 	data_dir: PathBuf,
-	directory: Arc<Directory>,
+	directory: DirectoryHandle,
 	tls: TlsAcceptor,
+	tls_mode: TlsMode,
+	quota_bytes: u64,
+	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 }
 
 impl Server {
-	/// Create a server. TLS is mandatory: LOGIN never crosses plaintext.
+	/// Create a server. TLS material is mandatory either way: LOGIN never
+	/// crosses plaintext.
 	pub fn new(
 		hostname: &str,
 		data_dir: PathBuf,
-		directory: Arc<Directory>,
+		directory: DirectoryHandle,
 		tls: TlsAcceptor,
+		tls_mode: TlsMode,
 	) -> Self {
 		Server {
 			hostname: hostname.to_string(),
 			data_dir,
 			directory,
 			tls,
+			tls_mode,
+			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
+			oauth: None,
 		}
+	}
+
+	/// Set the per-account storage quota applied to sessions.
+	pub fn with_quota(mut self, bytes: u64) -> Self {
+		self.quota_bytes = bytes;
+		self
+	}
+
+	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
+	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
+		self.oauth = Some(verifier);
+		self
 	}
 
 	/// Accept connections forever.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 		loop {
 			let (stream, peer) = listener.accept().await?;
+			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
+				tracing::warn!(%peer, "IMAP connection limit reached, dropping");
+				continue;
+			};
 			let server = Arc::clone(&self);
 			tokio::spawn(async move {
+				let _permit = permit;
 				tracing::debug!(%peer, "imap connection accepted");
 				if let Err(error) = server.handle(stream).await {
 					tracing::debug!(%peer, %error, "imap connection ended with error");
@@ -50,17 +109,38 @@ impl Server {
 		}
 	}
 
-	/// Drive one connection: TLS handshake, then the command loop.
+	/// Drive one connection: TLS handshake (or plaintext with STARTTLS),
+	/// then the command loop.
 	pub async fn handle<S>(&self, stream: S) -> std::io::Result<()>
 	where
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 	{
-		let mut stream = self.tls.accept(stream).await?;
-		let mut session = Session::new(
-			&self.hostname,
-			self.data_dir.clone(),
-			Arc::clone(&self.directory),
-		);
+		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
+			TlsMode::Implicit => {
+				let tls = self.tls.accept(stream).await?;
+				(
+					Box::new(tls),
+					Session::new(
+						&self.hostname,
+						self.data_dir.clone(),
+						self.directory.current(),
+					)
+					.with_quota_limit(self.quota_bytes)
+					.with_oauth(self.oauth.clone()),
+				)
+			}
+			TlsMode::StartTls => (
+				Box::new(stream),
+				Session::new(
+					&self.hostname,
+					self.data_dir.clone(),
+					self.directory.current(),
+				)
+				.with_quota_limit(self.quota_bytes)
+				.with_oauth(self.oauth.clone())
+				.with_starttls(),
+			),
+		};
 
 		let greeting = session.greeting();
 		stream.write_all(&greeting.bytes).await?;
@@ -68,11 +148,22 @@ impl Server {
 
 		let mut decoder = LineDecoder::new();
 		let mut buffer = [0u8; 4096];
+		// Consecutive BAD responses; too many means an abusive client.
+		let mut error_streak = 0u32;
 		loop {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
 				Ok(None) => {
-					let read = stream.read(&mut buffer).await?;
+					let read =
+						match tokio::time::timeout(READ_TIMEOUT, stream.read(&mut buffer)).await {
+							Ok(Ok(n)) => n,
+							Ok(Err(e)) => return Err(e),
+							Err(_) => {
+								tracing::debug!("IMAP idle timeout, closing connection");
+								let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+								return Ok(());
+							}
+						};
 					if read == 0 {
 						return Ok(());
 					}
@@ -95,10 +186,25 @@ impl Server {
 			let Ok(line) = String::from_utf8(line) else {
 				stream.write_all(b"* BAD non-ASCII command\r\n").await?;
 				stream.flush().await?;
+				error_streak += 1;
+				if error_streak >= MAX_ERROR_STREAK {
+					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					return Ok(());
+				}
 				continue;
 			};
 
 			let mut output = session.command_line(&line);
+			// Abuse guard: drop a client that only produces BAD responses.
+			if is_bad_response(&output.bytes) {
+				error_streak += 1;
+				if error_streak >= MAX_ERROR_STREAK {
+					let _ = stream.write_all(b"* BYE too many errors\r\n").await;
+					return Ok(());
+				}
+			} else {
+				error_streak = 0;
+			}
 			loop {
 				stream.write_all(&output.bytes).await?;
 				stream.flush().await?;
@@ -126,8 +232,46 @@ impl Server {
 					output = session.literal_done(&literal);
 					continue;
 				}
+				if output.collect_auth {
+					// Read one SASL continuation line and feed it back.
+					let response = loop {
+						match decoder.next_line() {
+							Ok(Some(line)) => break line,
+							Ok(None) => {
+								let read = match tokio::time::timeout(
+									READ_TIMEOUT,
+									stream.read(&mut buffer),
+								)
+								.await
+								{
+									Ok(Ok(n)) => n,
+									Ok(Err(e)) => return Err(e),
+									Err(_) => return Ok(()),
+								};
+								if read == 0 {
+									return Ok(());
+								}
+								decoder.feed(&buffer[..read]);
+							}
+							Err(_) => return Ok(()),
+						}
+					};
+					let response = String::from_utf8(response).unwrap_or_default();
+					output = session.auth_response(&response);
+					continue;
+				}
+				if output.upgrade_tls {
+					// Pre-handshake bytes are dropped: nothing buffered in
+					// plaintext can leak into the TLS session.
+					let tls = self.tls.accept(stream).await?;
+					stream = Box::new(tls);
+					session.tls_started();
+					decoder = LineDecoder::new();
+					break;
+				}
 				if output.idle {
-					// Read lines until DONE.
+					// Poll for new messages at IDLE_POLL intervals; close after READ_TIMEOUT.
+					let idle_start = tokio::time::Instant::now();
 					loop {
 						match decoder.next_line() {
 							Ok(Some(line)) => {
@@ -137,7 +281,32 @@ impl Server {
 								// Anything else during IDLE is ignored.
 							}
 							Ok(None) => {
-								let read = stream.read(&mut buffer).await?;
+								if idle_start.elapsed() >= READ_TIMEOUT {
+									tracing::debug!("IMAP idle timeout during IDLE, closing");
+									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									return Ok(());
+								}
+								let read =
+									match tokio::time::timeout(IDLE_POLL, stream.read(&mut buffer))
+										.await
+									{
+										Ok(Ok(n)) => n,
+										Ok(Err(e)) => return Err(e),
+										Err(_) => {
+											// Poll interval expired; check for new messages.
+											if let Some(notification) = session.check_idle() {
+												if stream
+													.write_all(&notification.bytes)
+													.await
+													.is_err()
+												{
+													return Ok(());
+												}
+												let _ = stream.flush().await;
+											}
+											continue;
+										}
+									};
 								if read == 0 {
 									return Ok(());
 								}
@@ -156,93 +325,5 @@ impl Server {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use std::collections::HashMap;
-
-	use tokio_rustls::TlsConnector;
-	use tokio_rustls::rustls::pki_types::ServerName;
-	use tokio_rustls::rustls::{ClientConfig, RootCertStore};
-
-	fn directory() -> Arc<Directory> {
-		Arc::new(
-			Directory::new(
-				["example.org".to_string()],
-				[("alice@example.org".to_string(), "alice".to_string())],
-			)
-			.with_password_hashes(HashMap::from([(
-				"alice".to_string(),
-				crate::smtp::auth::tests::hash("secret"),
-			)])),
-		)
-	}
-
-	#[tokio::test]
-	async fn full_read_session_over_tls() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let inbox = dir.path().join("accounts/alice/new");
-		std::fs::create_dir_all(&inbox).expect("dirs");
-		let id = uuid::Uuid::now_v7();
-		std::fs::write(
-			inbox.join(format!("{id}.eml")),
-			b"From: b@x.example\r\nSubject: hi\r\n\r\nhello\r\n",
-		)
-		.expect("write");
-
-		let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
-		let server = Server::new(
-			"mail.example.org",
-			dir.path().to_path_buf(),
-			directory(),
-			acceptor,
-		);
-
-		let (client, server_stream) = tokio::io::duplex(64 * 1024);
-		let task = tokio::spawn(async move { server.handle(server_stream).await });
-
-		let mut roots = RootCertStore::empty();
-		roots.add(cert).expect("trust cert");
-		let config = ClientConfig::builder()
-			.with_root_certificates(roots)
-			.with_no_client_auth();
-		let connector = TlsConnector::from(Arc::new(config));
-		let name = ServerName::try_from("mail.example.org").expect("name");
-		let mut tls = connector.connect(name, client).await.expect("handshake");
-
-		async fn read_until(tls: &mut (impl AsyncRead + Unpin), needle: &str) -> String {
-			let mut collected = String::new();
-			let mut chunk = [0u8; 4096];
-			while !collected.contains(needle) {
-				let read = tls.read(&mut chunk).await.expect("read");
-				assert!(
-					read > 0,
-					"connection closed waiting for {needle:?}: {collected}"
-				);
-				collected.push_str(&String::from_utf8_lossy(&chunk[..read]));
-			}
-			collected
-		}
-
-		let greeting = read_until(&mut tls, "IMAP4rev2 ready").await;
-		assert!(greeting.starts_with("* OK"), "{greeting}");
-
-		tls.write_all(b"a1 LOGIN alice secret\r\n")
-			.await
-			.expect("login");
-		read_until(&mut tls, "a1 OK").await;
-
-		tls.write_all(b"a2 SELECT INBOX\r\n").await.expect("select");
-		let select = read_until(&mut tls, "a2 OK").await;
-		assert!(select.contains("* 1 EXISTS"), "{select}");
-
-		tls.write_all(b"a3 FETCH 1 (BODY[])\r\n")
-			.await
-			.expect("fetch");
-		let fetch = read_until(&mut tls, "a3 OK").await;
-		assert!(fetch.contains("Subject: hi"), "{fetch}");
-
-		tls.write_all(b"a4 LOGOUT\r\n").await.expect("logout");
-		read_until(&mut tls, "a4 OK").await;
-		task.abort();
-	}
-}
+#[path = "server_tests.rs"]
+mod tests;

@@ -1,0 +1,45 @@
+name: Mutation testing
+
+on:
+  schedule:
+    # Weekly, Sunday 04:00 UTC: surface gaps where tests miss real regressions.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: cargo mutants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-mutants-${{ runner.os }}
+
+      - name: Install cargo-mutants
+        run: command -v cargo-mutants >/dev/null || cargo install cargo-mutants --locked
+
+      # Advisory, not a gate: report surviving mutants without failing the run.
+      - name: Run cargo mutants
+        continue-on-error: true
+        run: cargo mutants --no-shuffle --timeout-multiplier 3
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutants-report
+          path: mutants.out/
+          if-no-files-found: warn

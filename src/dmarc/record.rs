@@ -23,6 +23,12 @@ pub struct Record {
 	pub subdomain_policy: Policy,
 	pub dkim_alignment: Alignment,
 	pub spf_alignment: Alignment,
+	/// Percentage of messages subject to the policy (0–100, default 100).
+	pub pct: u8,
+	/// Aggregate report recipients parsed from `rua=` (RFC 7489 §6.3).
+	/// Each element is a URI scheme and address (e.g. `mailto:dmarc@example.org`).
+	/// `!maxsize` suffixes are stripped; empty if the tag was absent.
+	pub rua: Vec<String>,
 }
 
 /// Parse a `v=DMARC1` TXT record. Returns `None` for records that are not
@@ -37,6 +43,8 @@ pub fn parse(text: &str) -> Option<Result<Record, ()>> {
 	let mut subdomain_policy = None;
 	let mut dkim_alignment = Alignment::Relaxed;
 	let mut spf_alignment = Alignment::Relaxed;
+	let mut pct: u8 = 100;
+	let mut rua: Vec<String> = Vec::new();
 
 	for tag in tags {
 		if tag.is_empty() {
@@ -63,7 +71,12 @@ pub fn parse(text: &str) -> Option<Result<Record, ()>> {
 				Some(parsed) => spf_alignment = parsed,
 				None => return Some(Err(())),
 			},
-			// rua/ruf/pct/fo/rf/ri and unknown tags are ignored for now.
+			"pct" => match value.parse::<u8>() {
+				Ok(v) => pct = v.min(100),
+				Err(_) => return Some(Err(())),
+			},
+			"rua" => rua = parse_duri_list(value),
+			// ruf/fo/rf/ri and unknown tags are ignored.
 			_ => {}
 		}
 	}
@@ -77,6 +90,8 @@ pub fn parse(text: &str) -> Option<Result<Record, ()>> {
 		subdomain_policy: subdomain_policy.unwrap_or(policy),
 		dkim_alignment,
 		spf_alignment,
+		pct,
+		rua,
 	}))
 }
 
@@ -95,6 +110,30 @@ fn parse_alignment(value: &str) -> Option<Alignment> {
 		"s" => Some(Alignment::Strict),
 		_ => None,
 	}
+}
+
+/// Parse a DURI list (`rua=`/`ruf=`) into a list of URI strings.
+/// Strips optional `!maxsize` suffixes (RFC 7489 §6.3) and ignores blanks.
+fn parse_duri_list(value: &str) -> Vec<String> {
+	value
+		.split(',')
+		.filter_map(|uri| {
+			let uri = uri.trim();
+			if uri.is_empty() {
+				return None;
+			}
+			// Strip optional `!NNNk`/`!NNNm`/`!NNN` max-size suffix.
+			let uri = match uri.rfind('!') {
+				Some(bang) => uri[..bang].trim_end(),
+				None => uri,
+			};
+			if uri.is_empty() {
+				None
+			} else {
+				Some(uri.to_ascii_lowercase())
+			}
+		})
+		.collect()
 }
 
 #[cfg(test)]
@@ -122,11 +161,76 @@ mod tests {
 	}
 
 	#[test]
-	fn ignores_reporting_tags() {
+	fn parses_pct() {
+		let record = parse("v=DMARC1; p=quarantine; pct=50")
+			.expect("is dmarc")
+			.expect("valid");
+		assert_eq!(record.policy, Policy::Quarantine);
+		assert_eq!(record.pct, 50);
+	}
+
+	#[test]
+	fn pct_defaults_to_100() {
+		let record = parse("v=DMARC1; p=reject")
+			.expect("is dmarc")
+			.expect("valid");
+		assert_eq!(record.pct, 100);
+	}
+
+	#[test]
+	fn pct_clamped_to_100() {
+		let record = parse("v=DMARC1; p=reject; pct=200")
+			.expect("is dmarc")
+			.expect("valid");
+		assert_eq!(record.pct, 100);
+	}
+
+	#[test]
+	fn pct_zero_parsed() {
+		let record = parse("v=DMARC1; p=reject; pct=0")
+			.expect("is dmarc")
+			.expect("valid");
+		assert_eq!(record.pct, 0);
+	}
+
+	#[test]
+	fn pct_non_numeric_is_error() {
+		assert_eq!(parse("v=DMARC1; p=reject; pct=all"), Some(Err(())));
+	}
+
+	#[test]
+	fn parses_rua_single() {
+		let record = parse("v=DMARC1; p=none; rua=mailto:agg@example.org")
+			.expect("is dmarc")
+			.expect("valid");
+		assert_eq!(record.rua, vec!["mailto:agg@example.org"]);
+	}
+
+	#[test]
+	fn parses_rua_multiple_and_strips_maxsize() {
+		let record = parse("v=DMARC1; p=reject; rua=mailto:a@example.org!10m,mailto:b@example.net")
+			.expect("is dmarc")
+			.expect("valid");
+		assert_eq!(
+			record.rua,
+			vec!["mailto:a@example.org", "mailto:b@example.net"]
+		);
+	}
+
+	#[test]
+	fn rua_defaults_to_empty() {
+		let record = parse("v=DMARC1; p=none").expect("is dmarc").expect("valid");
+		assert!(record.rua.is_empty());
+	}
+
+	#[test]
+	fn parses_rua_and_pct_together() {
 		let record = parse("v=DMARC1; p=quarantine; rua=mailto:agg@example.org; pct=50")
 			.expect("is dmarc")
 			.expect("valid");
 		assert_eq!(record.policy, Policy::Quarantine);
+		assert_eq!(record.pct, 50);
+		assert_eq!(record.rua, vec!["mailto:agg@example.org"]);
 	}
 
 	#[test]

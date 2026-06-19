@@ -25,6 +25,12 @@ pub struct Envelope {
 	/// Epoch seconds before which delivery must not be retried.
 	#[serde(default)]
 	pub next_attempt: u64,
+	/// REQUIRETLS (RFC 8689): onward delivery must use verified TLS.
+	#[serde(default)]
+	pub require_tls: bool,
+	/// Recipients that suppress failure DSNs (`NOTIFY=NEVER`, RFC 3461).
+	#[serde(default)]
+	pub no_dsn: Vec<String>,
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -62,6 +68,8 @@ impl FsSpool {
 			recipients: message.recipients.clone(),
 			attempts: 0,
 			next_attempt: 0,
+			require_tls: message.require_tls,
+			no_dsn: message.no_dsn.clone(),
 		};
 
 		let tmp_message = self.root.join("tmp").join(format!("{id}.eml"));
@@ -154,6 +162,9 @@ mod tests {
 			reverse_path: "alice@example.org".into(),
 			recipients: vec!["bob@example.org".into()],
 			data: b"Subject: hi\r\n\r\nhello\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+			no_dsn: Vec::new(),
 		}
 	}
 
@@ -172,6 +183,16 @@ mod tests {
 			vec!["bob@example.org".to_string()]
 		);
 		assert_eq!(entry.data, sample_message().data);
+	}
+
+	#[test]
+	fn store_preserves_require_tls() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let spool = FsSpool::open(dir.path()).expect("open spool");
+		let mut message = sample_message();
+		message.require_tls = true;
+		let id = spool.store(&message).expect("store");
+		assert!(spool.load(id).expect("load").envelope.require_tls);
 	}
 
 	#[test]

@@ -6,12 +6,16 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// A snapshot of one mailbox at SELECT time. Sequence numbers are positions
-/// in `messages` (1-based); UIDs derive from the time-ordered UUID v7 names.
+/// in `messages` (1-based); UIDs are persistent, assigned in arrival order.
 #[derive(Debug)]
 pub struct Snapshot {
 	account_dir: PathBuf,
 	messages: Vec<MessageRef>,
 	uid_validity: u32,
+	/// Next UID to assign (one past the highest assigned), persisted.
+	uid_next: u32,
+	/// Highest mod-sequence in the mailbox (CONDSTORE, RFC 7162).
+	highest_modseq: u64,
 }
 
 /// One message in the snapshot.
@@ -21,6 +25,17 @@ pub struct MessageRef {
 	id: Uuid,
 	pub size: u64,
 	pub flags: Vec<Flag>,
+	/// File mtime; used for INTERNALDATE.
+	pub internal_date: std::time::SystemTime,
+	/// Mod-sequence of the last flag change (CONDSTORE, RFC 7162).
+	pub modseq: u64,
+}
+
+impl MessageRef {
+	/// The message's stable UUID (its on-disk `<id>.eml` name).
+	pub fn id(&self) -> Uuid {
+		self.id
+	}
 }
 
 /// Supported permanent flags (RFC 9051 section 2.3.2).
@@ -182,27 +197,51 @@ impl Snapshot {
 		}
 		ids.sort();
 
+		let initial_counter = super::uid::read_counter(&account_dir);
+		let mut uid_counter = initial_counter;
 		let mut messages = Vec::with_capacity(ids.len());
-		for (index, id) in ids.iter().enumerate() {
-			let size = std::fs::metadata(account_dir.join(format!("{id}.eml")))
-				.map(|metadata| metadata.len())
-				.unwrap_or(0);
-			let flags = read_flags(&account_dir, *id);
+		for id in ids.iter() {
+			let meta = std::fs::metadata(account_dir.join(format!("{id}.eml")));
+			let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+			let internal_date = meta
+				.as_ref()
+				.ok()
+				.and_then(|m| m.modified().ok())
+				.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 			messages.push(MessageRef {
-				// Snapshot UIDs: position in the time-ordered listing.
-				uid: u32::try_from(index + 1).unwrap_or(u32::MAX),
+				uid: super::uid::assign_or_read(&account_dir, *id, &mut uid_counter),
 				id: *id,
 				size,
-				flags,
+				flags: read_flags(&account_dir, *id),
+				internal_date,
+				modseq: super::modseq::read_message(&account_dir, *id),
 			});
 		}
+		if uid_counter > initial_counter {
+			let _ = super::uid::write_counter(&account_dir, uid_counter);
+		}
+		// HIGHESTMODSEQ is the persisted counter, never below any message's.
+		let highest_modseq = super::modseq::read_counter(&account_dir)
+			.max(messages.iter().map(|m| m.modseq).max().unwrap_or(1))
+			.max(1);
+		let uid_validity = super::uidvalidity::read_or_init(&account_dir);
 		Ok(Snapshot {
 			account_dir,
 			messages,
-			// Derived from the newest message so a changed mailbox between
-			// sessions changes validity. 1 for an empty mailbox.
-			uid_validity: ids.last().map(|id| (id.as_u128() as u32) | 1).unwrap_or(1),
+			uid_validity,
+			uid_next: uid_counter + 1,
+			highest_modseq,
 		})
+	}
+
+	/// The mailbox's highest mod-sequence (CONDSTORE).
+	pub fn highest_modseq(&self) -> u64 {
+		self.highest_modseq
+	}
+
+	/// UIDs expunged after `modseq` (QRESYNC `VANISHED (EARLIER)`, RFC 7162).
+	pub fn vanished_since(&self, modseq: u64) -> Vec<u32> {
+		super::vanished::since(&self.account_dir, modseq)
 	}
 
 	pub fn len(&self) -> usize {
@@ -217,9 +256,14 @@ impl Snapshot {
 		self.uid_validity
 	}
 
-	/// Next UID a new message would get.
+	/// Iterator over all messages in sequence order.
+	pub fn messages(&self) -> impl Iterator<Item = &MessageRef> {
+		self.messages.iter()
+	}
+
+	/// Next UID a new message would get (the persisted counter, never reused).
 	pub fn uid_next(&self) -> u32 {
-		u32::try_from(self.messages.len() + 1).unwrap_or(u32::MAX)
+		self.uid_next
 	}
 
 	/// Message by 1-based sequence number.
@@ -251,7 +295,12 @@ impl Snapshot {
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
 		let id = self.messages[index].id;
 		write_flags(&self.account_dir, id, &flags)?;
+		// A flag change advances the mailbox mod-sequence and stamps the message.
+		let modseq = super::modseq::next_counter(&self.account_dir)?;
+		let _ = super::modseq::write_message(&self.account_dir, id, modseq);
+		self.highest_modseq = self.highest_modseq.max(modseq);
 		self.messages[index].flags = flags;
+		self.messages[index].modseq = modseq;
 		Ok(&self.messages[index].flags)
 	}
 
@@ -262,31 +311,51 @@ impl Snapshot {
 			.and_then(|s| s.checked_sub(1))
 			.filter(|index| *index < self.messages.len())
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
-		let id = self.messages[index].id;
-		std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
-		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+		let uid = self.messages[index].uid;
+		self.remove_files(self.messages[index].id);
 		self.messages.remove(index);
+		super::vanished::record_advancing(&self.account_dir, &[uid]);
 		Ok(())
 	}
 
-	/// Remove every `\Deleted` message (file + sidecar). Returns the
-	/// sequence numbers expunged, in the order responses must be sent
-	/// (each number is valid at the moment it is emitted).
+	/// Remove every `\Deleted` message. Returns the expunged sequence numbers
+	/// in emission order (each valid at the moment it is sent).
 	pub fn expunge(&mut self) -> std::io::Result<Vec<u32>> {
+		self.expunge_where(|_| true)
+	}
+
+	/// Expunge only `\Deleted` messages whose UID is in `uids` (UID EXPUNGE,
+	/// RFC 4315).
+	pub fn expunge_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
+		self.expunge_where(|uid| uids.contains(&uid))
+	}
+
+	/// Expunge every `\Deleted` message whose UID passes `keep`, logging the
+	/// vanished UIDs for QRESYNC.
+	fn expunge_where(&mut self, keep: impl Fn(u32) -> bool) -> std::io::Result<Vec<u32>> {
 		let mut expunged = Vec::new();
+		let mut vanished = Vec::new();
 		let mut index = 0;
 		while index < self.messages.len() {
-			if self.messages[index].flags.contains(&Flag::Deleted) {
-				let id = self.messages[index].id;
-				std::fs::remove_file(self.account_dir.join(format!("{id}.eml")))?;
-				let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+			let message = &self.messages[index];
+			if message.flags.contains(&Flag::Deleted) && keep(message.uid) {
+				vanished.push(message.uid);
+				self.remove_files(message.id);
 				self.messages.remove(index);
 				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
 			} else {
 				index += 1;
 			}
 		}
+		super::vanished::record_advancing(&self.account_dir, &vanished);
 		Ok(expunged)
+	}
+
+	/// Remove a message's `.eml` and its `.flags`/`.uid` sidecars.
+	fn remove_files(&self, id: Uuid) {
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.eml")));
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
+		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
 	}
 }
 
@@ -315,6 +384,103 @@ pub fn append(
 	Ok(id)
 }
 
+/// The `(UIDVALIDITY, UID)` assigned to an appended message, for the UIDPLUS
+/// `APPENDUID` response. `None` if the mailbox can no longer be opened or the
+/// message has already vanished.
+pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Option<(u32, u32)> {
+	let snapshot = Snapshot::open(data_dir, account, mailbox).ok()?;
+	let uid = snapshot.messages().find(|message| message.id == id)?.uid;
+	Some((snapshot.uid_validity(), uid))
+}
+
+/// Total bytes stored for an account: the sum of every message's size across
+/// INBOX and all folders (RFC 9208 STORAGE usage).
+pub fn account_usage(data_dir: &Path, account: &str) -> u64 {
+	let mut total = 0u64;
+	for mailbox in list(data_dir, account) {
+		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
+			continue;
+		};
+		let Ok(entries) = std::fs::read_dir(&dir) else {
+			continue;
+		};
+		for entry in entries.flatten() {
+			if entry
+				.file_name()
+				.to_str()
+				.is_some_and(|name| name.ends_with(".eml"))
+				&& let Ok(meta) = entry.metadata()
+			{
+				total += meta.len();
+			}
+		}
+	}
+	total
+}
+
+/// Subscribe to a mailbox (the mailbox must already exist).
+pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
+	if !exists(data_dir, account, mailbox) {
+		return Err(std::io::Error::other("no such mailbox"));
+	}
+	let normalized = if mailbox.eq_ignore_ascii_case("INBOX") {
+		"INBOX".to_string()
+	} else {
+		mailbox.to_string()
+	};
+	let mut subs = list_subscribed(data_dir, account);
+	if !subs.iter().any(|s| s.eq_ignore_ascii_case(&normalized)) {
+		subs.push(normalized);
+		write_subscriptions(data_dir, account, &subs)?;
+	}
+	Ok(())
+}
+
+/// Remove a subscription. Silently succeeds if not subscribed.
+pub fn unsubscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
+	let subs: Vec<String> = list_subscribed(data_dir, account)
+		.into_iter()
+		.filter(|s| !s.eq_ignore_ascii_case(mailbox))
+		.collect();
+	write_subscriptions(data_dir, account, &subs)
+}
+
+/// Subscribed mailboxes; INBOX is always subscribed.
+pub fn list_subscribed(data_dir: &Path, account: &str) -> Vec<String> {
+	let path = data_dir
+		.join("accounts")
+		.join(account)
+		.join(".subscriptions");
+	let mut names: Vec<String> = std::fs::read_to_string(&path)
+		.unwrap_or_default()
+		.lines()
+		.filter(|l| !l.is_empty())
+		.map(str::to_string)
+		.collect();
+	if !names.iter().any(|n| n.eq_ignore_ascii_case("INBOX")) {
+		names.insert(0, "INBOX".to_string());
+	}
+	names
+}
+
+fn write_subscriptions(data_dir: &Path, account: &str, names: &[String]) -> std::io::Result<()> {
+	let path = data_dir
+		.join("accounts")
+		.join(account)
+		.join(".subscriptions");
+	if let Some(parent) = path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+	std::fs::write(
+		&path,
+		names.iter().fold(String::new(), |mut s, n| {
+			s.push_str(n);
+			s.push('\n');
+			s
+		}),
+	)
+}
+
 fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {
 	std::fs::read(account_dir.join(format!("{id}.flags")))
 		.ok()
@@ -330,162 +496,5 @@ fn write_flags(account_dir: &Path, id: Uuid, flags: &[Flag]) -> std::io::Result<
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn deliver(dir: &Path, account: &str, body: &[u8]) -> Uuid {
-		let new_dir = dir.join("accounts").join(account).join("new");
-		std::fs::create_dir_all(&new_dir).expect("create dirs");
-		let id = Uuid::now_v7();
-		std::fs::write(new_dir.join(format!("{id}.eml")), body).expect("write");
-		id
-	}
-
-	#[test]
-	fn empty_or_missing_inbox_is_empty() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		assert!(snapshot.is_empty());
-		assert_eq!(snapshot.uid_validity(), 1);
-		assert_eq!(snapshot.uid_next(), 1);
-	}
-
-	#[test]
-	fn messages_are_ordered_and_readable() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		deliver(dir.path(), "alice", b"first\r\n");
-		deliver(dir.path(), "alice", b"second\r\n");
-
-		let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		assert_eq!(snapshot.len(), 2);
-
-		let first = snapshot.by_sequence(1).expect("seq 1");
-		let second = snapshot.by_sequence(2).expect("seq 2");
-		assert_eq!(first.uid, 1);
-		assert_eq!(second.uid, 2);
-		assert_eq!(snapshot.read(first).expect("read"), b"first\r\n");
-		assert_eq!(snapshot.read(second).expect("read"), b"second\r\n");
-		assert_eq!(first.size, 7);
-		assert_eq!(snapshot.sequence_of_uid(2), Some(2));
-		assert_eq!(snapshot.sequence_of_uid(99), None);
-		assert!(snapshot.by_sequence(3).is_none());
-		assert!(snapshot.by_sequence(0).is_none());
-	}
-
-	#[test]
-	fn flags_roundtrip_and_expunge() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		deliver(dir.path(), "alice", b"one\r\n");
-		deliver(dir.path(), "alice", b"two\r\n");
-		deliver(dir.path(), "alice", b"three\r\n");
-
-		let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		snapshot
-			.store_flags(1, vec![Flag::Seen, Flag::Deleted])
-			.expect("store");
-		snapshot.store_flags(3, vec![Flag::Deleted]).expect("store");
-
-		// A fresh snapshot reads the persisted flags.
-		let reloaded = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		assert_eq!(
-			reloaded.by_sequence(1).expect("seq 1").flags,
-			vec![Flag::Seen, Flag::Deleted]
-		);
-		assert!(reloaded.by_sequence(2).expect("seq 2").flags.is_empty());
-
-		let expunged = snapshot.expunge().expect("expunge");
-		// Both deletions report sequence numbers valid at emission time:
-		// removing seq 1 renumbers old seq 3 to 2.
-		assert_eq!(expunged, vec![1, 2]);
-		assert_eq!(snapshot.len(), 1);
-		assert_eq!(
-			snapshot
-				.read(snapshot.by_sequence(1).expect("seq 1"))
-				.expect("read"),
-			b"two\r\n"
-		);
-
-		// Files are gone on disk too.
-		let after = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		assert_eq!(after.len(), 1);
-	}
-
-	#[test]
-	fn store_flags_rejects_bad_sequence() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		deliver(dir.path(), "alice", b"one\r\n");
-		let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		assert!(snapshot.store_flags(0, vec![]).is_err());
-		assert!(snapshot.store_flags(2, vec![]).is_err());
-	}
-
-	#[test]
-	fn flag_tokens_parse_and_render() {
-		assert_eq!(Flag::parse("\\Seen"), Some(Flag::Seen));
-		assert_eq!(Flag::parse("\\DELETED"), Some(Flag::Deleted));
-		assert_eq!(Flag::parse("\\Recent"), None);
-		assert_eq!(
-			render_flags(&[Flag::Seen, Flag::Flagged]),
-			"(\\Seen \\Flagged)"
-		);
-		assert_eq!(render_flags(&[]), "()");
-	}
-
-	#[test]
-	fn name_validation() {
-		assert!(valid_name("Sent"));
-		assert!(valid_name("My Folder.2024"));
-		assert!(!valid_name("INBOX"));
-		assert!(!valid_name("inbox"));
-		assert!(!valid_name("../up"));
-		assert!(!valid_name("a/b"));
-		assert!(!valid_name(".hidden"));
-		assert!(!valid_name(""));
-		assert!(!valid_name("trailing "));
-	}
-
-	#[test]
-	fn create_list_rename_delete_roundtrip() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		create(dir.path(), "alice", "Sent").expect("create");
-		assert!(exists(dir.path(), "alice", "Sent"));
-		assert!(create(dir.path(), "alice", "Sent").is_err());
-
-		append(dir.path(), "alice", "Sent", &[Flag::Seen], b"sent\r\n").expect("append");
-		let snapshot = Snapshot::open(dir.path(), "alice", "Sent").expect("open");
-		assert_eq!(snapshot.len(), 1);
-		assert_eq!(
-			snapshot.by_sequence(1).expect("seq").flags,
-			vec![Flag::Seen]
-		);
-
-		assert_eq!(list(dir.path(), "alice"), vec!["INBOX", "Sent"]);
-
-		rename(dir.path(), "alice", "Sent", "Outbox").expect("rename");
-		assert!(!exists(dir.path(), "alice", "Sent"));
-		assert!(exists(dir.path(), "alice", "Outbox"));
-
-		delete(dir.path(), "alice", "Outbox").expect("delete");
-		assert!(!exists(dir.path(), "alice", "Outbox"));
-		assert!(delete(dir.path(), "alice", "Outbox").is_err());
-	}
-
-	#[test]
-	fn inbox_is_protected() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		assert!(create(dir.path(), "alice", "INBOX").is_err());
-		assert!(delete(dir.path(), "alice", "INBOX").is_err());
-		assert!(rename(dir.path(), "alice", "INBOX", "X").is_err());
-		assert!(exists(dir.path(), "alice", "INBOX"));
-	}
-
-	#[test]
-	fn ignores_foreign_files() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		deliver(dir.path(), "alice", b"mail\r\n");
-		std::fs::write(dir.path().join("accounts/alice/new/notes.txt"), b"not mail")
-			.expect("write");
-		let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
-		assert_eq!(snapshot.len(), 1);
-	}
-}
+#[path = "mailbox_tests.rs"]
+mod tests;

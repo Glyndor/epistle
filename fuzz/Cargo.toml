@@ -1,0 +1,36 @@
+[package]
+name = "mail-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mail = { path = ".." }
+
+[[bin]]
+name = "smtp_command"
+path = "fuzz_targets/smtp_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "smtp_line"
+path = "fuzz_targets/smtp_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "smtp_address"
+path = "fuzz_targets/smtp_address.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the parent crate's workspace.
+[workspace]

@@ -21,9 +21,21 @@ pub enum Command {
 		size: Option<u64>,
 		/// `BODY=` parameter (RFC 6152).
 		body: Option<Body>,
+		/// `REQUIRETLS` parameter (RFC 8689): the sender mandates TLS.
+		require_tls: bool,
+		/// `RET=` parameter (RFC 3461): how much of the message a DSN returns.
+		ret: Option<Ret>,
+		/// `ENVID=` parameter (RFC 3461): envelope identifier echoed in DSNs.
+		envid: Option<String>,
 	},
 	/// `RCPT TO:<forward-path> [parameters]`
-	RcptTo { forward_path: String },
+	RcptTo {
+		forward_path: String,
+		/// `NOTIFY=` parameter (RFC 3461): when to send a DSN for this recipient.
+		notify: Option<Notify>,
+		/// `ORCPT=` parameter (RFC 3461): the original recipient address.
+		orcpt: Option<String>,
+	},
 	/// `DATA`
 	Data,
 	/// `RSET`
@@ -50,6 +62,28 @@ pub enum Body {
 	EightBitMime,
 }
 
+/// `RET=` parameter values (RFC 3461): whether a DSN returns the full message
+/// or only its headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ret {
+	Full,
+	Headers,
+}
+
+/// `NOTIFY=` parameter (RFC 3461): the events that warrant a DSN. `Never` is
+/// mutually exclusive with the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notify {
+	/// `NOTIFY=NEVER`: suppress all DSNs for this recipient.
+	Never,
+	/// A selection of `SUCCESS`/`FAILURE`/`DELAY`.
+	On {
+		success: bool,
+		failure: bool,
+		delay: bool,
+	},
+}
+
 /// Why a command line failed to parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -70,7 +104,9 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 	if line.len() > MAX_COMMAND_LINE {
 		return Err(ParseError::LineTooLong);
 	}
-	if line.chars().any(|c| !c.is_ascii() || c.is_ascii_control()) {
+	// Control characters are always forbidden (CR/LF/NUL injection); non-ASCII
+	// UTF-8 is allowed so SMTPUTF8 (RFC 6531) addresses can be parsed.
+	if line.chars().any(char::is_control) {
 		return Err(ParseError::InvalidCharacters);
 	}
 
@@ -84,20 +120,24 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 		"EHLO" => parse_domain_arg(args).map(|domain| Command::Ehlo { domain }),
 		"MAIL" => {
 			let (path, params) = parse_path_arg(args, "FROM:")?;
-			let (size, body) = parse_mail_parameters(&params)?;
+			let mail = parse_mail_parameters(&params)?;
 			Ok(Command::MailFrom {
 				reverse_path: path,
-				size,
-				body,
+				size: mail.size,
+				body: mail.body,
+				require_tls: mail.require_tls,
+				ret: mail.ret,
+				envid: mail.envid,
 			})
 		}
 		"RCPT" => {
 			let (path, params) = parse_path_arg(args, "TO:")?;
-			// No RCPT parameters (DSN extensions) are implemented yet.
-			if !params.is_empty() {
-				return Err(ParseError::UnsupportedParameter);
-			}
-			Ok(Command::RcptTo { forward_path: path })
+			let (notify, orcpt) = parse_rcpt_parameters(&params)?;
+			Ok(Command::RcptTo {
+				forward_path: path,
+				notify,
+				orcpt,
+			})
 		}
 		"DATA" => parse_no_args(args, Command::Data),
 		"RSET" => parse_no_args(args, Command::Rset),
@@ -175,11 +215,135 @@ fn parse_path_arg(args: &str, prefix: &str) -> Result<(String, String), ParseErr
 	Ok((path.to_string(), after_close.trim().to_string()))
 }
 
-/// Parse MAIL parameters: `SIZE=<bytes>` and `BODY=7BIT|8BITMIME` are
-/// implemented; anything else is rejected as unsupported (555).
-fn parse_mail_parameters(params: &str) -> Result<(Option<u64>, Option<Body>), ParseError> {
-	let mut size = None;
-	let mut body = None;
+/// Parsed MAIL FROM parameters.
+#[derive(Default)]
+struct MailParams {
+	size: Option<u64>,
+	body: Option<Body>,
+	require_tls: bool,
+	ret: Option<Ret>,
+	envid: Option<String>,
+}
+
+/// Parse MAIL parameters: `SIZE`, `BODY`, `REQUIRETLS`, and the DSN `RET`/
+/// `ENVID` (RFC 3461) are implemented; anything else is rejected (555).
+fn parse_mail_parameters(params: &str) -> Result<MailParams, ParseError> {
+	let mut out = MailParams::default();
+	for (keyword, value) in split_parameters(params)? {
+		match keyword.to_ascii_uppercase().as_str() {
+			"SIZE" => {
+				let value = value.ok_or(ParseError::InvalidArguments)?;
+				let parsed: u64 = value.parse().map_err(|_| ParseError::InvalidArguments)?;
+				if out.size.replace(parsed).is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			"BODY" => {
+				let value = value.ok_or(ParseError::InvalidArguments)?;
+				let parsed = match value.to_ascii_uppercase().as_str() {
+					"7BIT" => Body::SevenBit,
+					"8BITMIME" => Body::EightBitMime,
+					_ => return Err(ParseError::InvalidArguments),
+				};
+				if out.body.replace(parsed).is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			"REQUIRETLS" => {
+				// RFC 8689: a valueless parameter; a value is a syntax error.
+				if value.is_some() || out.require_tls {
+					return Err(ParseError::InvalidArguments);
+				}
+				out.require_tls = true;
+			}
+			"SMTPUTF8" => {
+				// RFC 6531: a valueless parameter declaring an internationalized
+				// transaction. UTF-8 addresses are accepted regardless; this just
+				// must not be rejected as unknown.
+				if value.is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			"RET" => {
+				let value = value.ok_or(ParseError::InvalidArguments)?;
+				let parsed = match value.to_ascii_uppercase().as_str() {
+					"FULL" => Ret::Full,
+					"HDRS" => Ret::Headers,
+					_ => return Err(ParseError::InvalidArguments),
+				};
+				if out.ret.replace(parsed).is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			"ENVID" => {
+				let value = value.ok_or(ParseError::InvalidArguments)?;
+				if out.envid.replace(value.to_string()).is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			_ => return Err(ParseError::UnsupportedParameter),
+		}
+	}
+	Ok(out)
+}
+
+/// Parse RCPT parameters: the DSN `NOTIFY`/`ORCPT` (RFC 3461).
+fn parse_rcpt_parameters(params: &str) -> Result<(Option<Notify>, Option<String>), ParseError> {
+	let mut notify = None;
+	let mut orcpt = None;
+	for (keyword, value) in split_parameters(params)? {
+		match keyword.to_ascii_uppercase().as_str() {
+			"NOTIFY" => {
+				let value = value.ok_or(ParseError::InvalidArguments)?;
+				if notify.replace(parse_notify(value)?).is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			"ORCPT" => {
+				let value = value.ok_or(ParseError::InvalidArguments)?;
+				if orcpt.replace(value.to_string()).is_some() {
+					return Err(ParseError::InvalidArguments);
+				}
+			}
+			_ => return Err(ParseError::UnsupportedParameter),
+		}
+	}
+	Ok((notify, orcpt))
+}
+
+/// `NOTIFY=NEVER` or a comma list of `SUCCESS`/`FAILURE`/`DELAY` (RFC 3461).
+fn parse_notify(value: &str) -> Result<Notify, ParseError> {
+	let mut success = false;
+	let mut failure = false;
+	let mut delay = false;
+	let mut never = false;
+	for token in value.split(',') {
+		match token.to_ascii_uppercase().as_str() {
+			"NEVER" => never = true,
+			"SUCCESS" => success = true,
+			"FAILURE" => failure = true,
+			"DELAY" => delay = true,
+			_ => return Err(ParseError::InvalidArguments),
+		}
+	}
+	// NEVER is mutually exclusive with the others.
+	if never {
+		if success || failure || delay {
+			return Err(ParseError::InvalidArguments);
+		}
+		return Ok(Notify::Never);
+	}
+	Ok(Notify::On {
+		success,
+		failure,
+		delay,
+	})
+}
+
+/// Split ESMTP parameters into `(keyword, optional value)` pairs, validating
+/// the keyword charset.
+fn split_parameters(params: &str) -> Result<Vec<(&str, Option<&str>)>, ParseError> {
+	let mut out = Vec::new();
 	for parameter in params.split_ascii_whitespace() {
 		let (keyword, value) = match parameter.split_once('=') {
 			Some((keyword, value)) => (keyword, Some(value)),
@@ -192,251 +356,7 @@ fn parse_mail_parameters(params: &str) -> Result<(Option<u64>, Option<Body>), Pa
 		{
 			return Err(ParseError::InvalidArguments);
 		}
-		match keyword.to_ascii_uppercase().as_str() {
-			"SIZE" => {
-				let value = value.ok_or(ParseError::InvalidArguments)?;
-				let parsed: u64 = value.parse().map_err(|_| ParseError::InvalidArguments)?;
-				if size.replace(parsed).is_some() {
-					return Err(ParseError::InvalidArguments);
-				}
-			}
-			"BODY" => {
-				let value = value.ok_or(ParseError::InvalidArguments)?;
-				let parsed = match value.to_ascii_uppercase().as_str() {
-					"7BIT" => Body::SevenBit,
-					"8BITMIME" => Body::EightBitMime,
-					_ => return Err(ParseError::InvalidArguments),
-				};
-				if body.replace(parsed).is_some() {
-					return Err(ParseError::InvalidArguments);
-				}
-			}
-			_ => return Err(ParseError::UnsupportedParameter),
-		}
+		out.push((keyword, value));
 	}
-	Ok((size, body))
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn parses_helo_and_ehlo() {
-		assert_eq!(
-			parse("HELO client.example.org"),
-			Ok(Command::Helo {
-				domain: "client.example.org".into()
-			})
-		);
-		assert_eq!(
-			parse("ehlo client.example.org"),
-			Ok(Command::Ehlo {
-				domain: "client.example.org".into()
-			})
-		);
-	}
-
-	#[test]
-	fn rejects_helo_without_domain() {
-		assert_eq!(parse("HELO"), Err(ParseError::InvalidArguments));
-		assert_eq!(parse("HELO "), Err(ParseError::InvalidArguments));
-	}
-
-	#[test]
-	fn parses_mail_from() {
-		assert_eq!(
-			parse("MAIL FROM:<alice@example.org>"),
-			Ok(Command::MailFrom {
-				reverse_path: "alice@example.org".into(),
-				size: None,
-				body: None
-			})
-		);
-	}
-
-	#[test]
-	fn parses_null_reverse_path() {
-		assert_eq!(
-			parse("MAIL FROM:<>"),
-			Ok(Command::MailFrom {
-				reverse_path: String::new(),
-				size: None,
-				body: None
-			})
-		);
-	}
-
-	#[test]
-	fn parses_size_and_body_parameters() {
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> SIZE=1000 BODY=8BITMIME"),
-			Ok(Command::MailFrom {
-				reverse_path: "a@example.org".into(),
-				size: Some(1000),
-				body: Some(Body::EightBitMime)
-			})
-		);
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> body=7bit"),
-			Ok(Command::MailFrom {
-				reverse_path: "a@example.org".into(),
-				size: None,
-				body: Some(Body::SevenBit)
-			})
-		);
-	}
-
-	#[test]
-	fn rejects_malformed_parameters() {
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> SIZE"),
-			Err(ParseError::InvalidArguments)
-		);
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> SIZE=abc"),
-			Err(ParseError::InvalidArguments)
-		);
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> BODY=BINARYMIME"),
-			Err(ParseError::InvalidArguments)
-		);
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> SIZE=1 SIZE=2"),
-			Err(ParseError::InvalidArguments)
-		);
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> =5"),
-			Err(ParseError::InvalidArguments)
-		);
-	}
-
-	#[test]
-	fn rejects_unsupported_parameters() {
-		assert_eq!(
-			parse("MAIL FROM:<a@example.org> AUTH=<>"),
-			Err(ParseError::UnsupportedParameter)
-		);
-		assert_eq!(
-			parse("RCPT TO:<b@example.org> NOTIFY=SUCCESS"),
-			Err(ParseError::UnsupportedParameter)
-		);
-	}
-
-	#[test]
-	fn parses_rcpt_to_case_insensitively() {
-		assert_eq!(
-			parse("rcpt to:<bob@example.org>"),
-			Ok(Command::RcptTo {
-				forward_path: "bob@example.org".into()
-			})
-		);
-	}
-
-	#[test]
-	fn rejects_paths_without_angle_brackets() {
-		assert_eq!(
-			parse("MAIL FROM:alice@example.org"),
-			Err(ParseError::InvalidArguments)
-		);
-	}
-
-	#[test]
-	fn rejects_nested_angle_brackets() {
-		assert_eq!(
-			parse("MAIL FROM:<<alice@example.org>>"),
-			Err(ParseError::InvalidArguments)
-		);
-	}
-
-	#[test]
-	fn rejects_garbage_after_path() {
-		assert_eq!(
-			parse("MAIL FROM:<alice@example.org>junk"),
-			Err(ParseError::InvalidArguments)
-		);
-	}
-
-	#[test]
-	fn parses_bare_commands() {
-		assert_eq!(parse("DATA"), Ok(Command::Data));
-		assert_eq!(parse("RSET"), Ok(Command::Rset));
-		assert_eq!(parse("QUIT"), Ok(Command::Quit));
-		assert_eq!(parse("NOOP"), Ok(Command::Noop));
-		assert_eq!(parse("STARTTLS"), Ok(Command::StartTls));
-	}
-
-	#[test]
-	fn rejects_arguments_on_bare_commands() {
-		assert_eq!(parse("DATA now"), Err(ParseError::InvalidArguments));
-		assert_eq!(parse("QUIT bye"), Err(ParseError::InvalidArguments));
-		assert_eq!(parse("STARTTLS x"), Err(ParseError::InvalidArguments));
-	}
-
-	#[test]
-	fn vrfy_parses_regardless_of_argument() {
-		assert_eq!(parse("VRFY alice"), Ok(Command::Vrfy));
-		assert_eq!(parse("VRFY"), Ok(Command::Vrfy));
-	}
-
-	#[test]
-	fn parses_auth_with_and_without_initial_response() {
-		assert_eq!(
-			parse("AUTH PLAIN dGVzdA=="),
-			Ok(Command::Auth {
-				mechanism: "PLAIN".into(),
-				initial: Some("dGVzdA==".into())
-			})
-		);
-		assert_eq!(
-			parse("auth plain"),
-			Ok(Command::Auth {
-				mechanism: "PLAIN".into(),
-				initial: None
-			})
-		);
-		assert_eq!(
-			parse("AUTH PLAIN ="),
-			Ok(Command::Auth {
-				mechanism: "PLAIN".into(),
-				initial: Some(String::new())
-			})
-		);
-	}
-
-	#[test]
-	fn rejects_malformed_auth() {
-		assert_eq!(parse("AUTH"), Err(ParseError::InvalidArguments));
-		assert_eq!(parse("AUTH PLAIN a b"), Err(ParseError::InvalidArguments));
-		assert_eq!(
-			parse("AUTH PL@IN dGVzdA=="),
-			Err(ParseError::InvalidArguments)
-		);
-	}
-
-	#[test]
-	fn rejects_unknown_verbs() {
-		assert_eq!(parse("EXPN list"), Err(ParseError::UnknownCommand));
-		assert_eq!(parse(""), Err(ParseError::UnknownCommand));
-	}
-
-	#[test]
-	fn rejects_control_characters() {
-		assert_eq!(parse("NOOP\r"), Err(ParseError::InvalidCharacters));
-		assert_eq!(parse("NO\0OP"), Err(ParseError::InvalidCharacters));
-	}
-
-	#[test]
-	fn rejects_non_ascii() {
-		assert_eq!(
-			parse("HELO münchen.example"),
-			Err(ParseError::InvalidCharacters)
-		);
-	}
-
-	#[test]
-	fn rejects_overlong_lines() {
-		let line = format!("HELO {}", "a".repeat(MAX_COMMAND_LINE));
-		assert_eq!(parse(&line), Err(ParseError::LineTooLong));
-	}
+	Ok(out)
 }

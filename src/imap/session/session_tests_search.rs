@@ -1,0 +1,412 @@
+use super::*;
+
+#[test]
+fn search_by_modseq() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@b\r\n\r\none\r\n");
+	deliver(dir.path(), b"From: c@d\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	// Bump message 2's mod-sequence (now 2); message 1 stays at 1.
+	session.command_line("a3 STORE 2 +FLAGS (\\Seen)");
+
+	// MODSEQ 2 matches only the changed message.
+	let response = text(&session.command_line("a4 SEARCH MODSEQ 2"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+
+	// MODSEQ 1 matches both.
+	let response = text(&session.command_line("a5 SEARCH MODSEQ 1"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+}
+
+#[test]
+fn esearch_return_options() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
+	deliver(dir.path(), b"Subject: b\r\n\r\ntwo\r\n");
+	deliver(dir.path(), b"Subject: c\r\n\r\nthree\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// COUNT/MIN/MAX over ALL.
+	let response = text(&session.command_line("a3 SEARCH RETURN (MIN MAX COUNT) ALL"));
+	assert!(response.contains("* ESEARCH (TAG \"a3\")"), "{response}");
+	assert!(response.contains("MIN 1"), "{response}");
+	assert!(response.contains("MAX 3"), "{response}");
+	assert!(response.contains("COUNT 3"), "{response}");
+	assert!(response.contains("a3 OK SEARCH completed"), "{response}");
+
+	// ALL returns the matching set; empty RETURN () defaults to ALL.
+	let response = text(&session.command_line("a4 SEARCH RETURN () ALL"));
+	assert!(response.contains("ALL 1,2,3"), "{response}");
+
+	// UID SEARCH RETURN carries the UID marker.
+	let response = text(&session.command_line("a5 UID SEARCH RETURN (COUNT) ALL"));
+	assert!(
+		response.contains("* ESEARCH (TAG \"a5\") UID COUNT 3"),
+		"{response}"
+	);
+}
+
+#[test]
+fn thread_groups_by_base_subject() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Two threads: "Project" (msgs 1 & 3) and "Lunch" (msg 2).
+	deliver(dir.path(), b"Subject: Project plan\r\n\r\na\r\n");
+	deliver(dir.path(), b"Subject: Lunch\r\n\r\nb\r\n");
+	deliver(dir.path(), b"Subject: Re: Project plan\r\n\r\nc\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let response = text(&session.command_line("a3 THREAD ORDEREDSUBJECT UTF-8 ALL"));
+	// "Re: Project plan" (3) groups with "Project plan" (1) by base subject.
+	// With equal arrival times the threads fall back to base-subject order, so
+	// "lunch" precedes "project plan".
+	assert!(response.contains("* THREAD (2)(1 3)"), "{response}");
+	assert!(response.contains("a3 OK THREAD completed"), "{response}");
+}
+
+#[test]
+fn thread_respects_search_and_uid() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: One\r\n\r\na\r\n");
+	deliver(dir.path(), b"Subject: Two\r\n\r\nb\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+	// Only the unseen message threads.
+	let response = text(&session.command_line("a4 THREAD ORDEREDSUBJECT UTF-8 UNSEEN"));
+	assert!(response.contains("* THREAD (2)"), "{response}");
+	// UID THREAD returns UIDs.
+	let response = text(&session.command_line("a5 UID THREAD ORDEREDSUBJECT UTF-8 ALL"));
+	assert!(response.contains("* THREAD (1)(2)"), "{response}");
+}
+
+#[test]
+fn move_removes_source_with_expunge() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"one\r\n");
+	deliver(dir.path(), b"two\r\n");
+	deliver(dir.path(), b"three\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 CREATE Trash");
+	session.command_line("a3 SELECT INBOX");
+
+	let output = session.command_line("a4 MOVE 1,3 Trash");
+	let response = text(&output);
+	// Renumbering: removing seq 1 makes old 3 the new 2.
+	assert!(response.contains("* 1 EXPUNGE"), "{response}");
+	assert!(response.contains("* 2 EXPUNGE"), "{response}");
+	assert!(response.contains("a4 OK"), "{response}");
+	assert!(response.contains("MOVE completed"), "{response}");
+
+	let output = session.command_line("a5 FETCH 1 (BODY[])");
+	assert!(text(&output).contains("two"), "{}", text(&output));
+	session.command_line("a6 CLOSE");
+
+	let output = session.command_line("a7 SELECT Trash");
+	assert!(text(&output).contains("* 2 EXISTS"), "{}", text(&output));
+}
+
+#[test]
+fn uid_move_and_guards() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"one\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 CREATE Trash");
+
+	// MOVE refused on read-only EXAMINE.
+	session.command_line("a3 EXAMINE INBOX");
+	let output = session.command_line("a4 MOVE 1 Trash");
+	assert!(text(&output).contains("a4 NO"), "{}", text(&output));
+	// COPY allowed on read-only.
+	let output = session.command_line("a5 COPY 1 Trash");
+	assert!(text(&output).contains("a5 OK"), "{}", text(&output));
+	session.command_line("a6 CLOSE");
+
+	session.command_line("a7 SELECT INBOX");
+	let output = session.command_line("a8 UID MOVE 1 Trash");
+	assert!(
+		text(&output).contains("MOVE completed"),
+		"{}",
+		text(&output)
+	);
+	// Missing target answers TRYCREATE.
+	let output = session.command_line("a9 COPY 1 Nowhere");
+	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
+}
+
+#[test]
+fn sort_orders_by_subject_and_size_and_reverse() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: Zebra\r\n\r\nhi\r\n");
+	deliver(
+		dir.path(),
+		b"Subject: Apple\r\n\r\na much longer body than the first message\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// SUBJECT ascending: Apple (2) before Zebra (1).
+	let response = text(&session.command_line("a3 SORT (SUBJECT) UTF-8 ALL"));
+	assert!(response.contains("* SORT 2 1\r\n"), "{response}");
+
+	// REVERSE SUBJECT: Zebra (1) first.
+	let response = text(&session.command_line("a4 SORT (REVERSE SUBJECT) UTF-8 ALL"));
+	assert!(response.contains("* SORT 1 2\r\n"), "{response}");
+
+	// SIZE ascending: the smaller message (1) first.
+	let response = text(&session.command_line("a5 SORT (SIZE) UTF-8 ALL"));
+	assert!(response.contains("* SORT 1 2\r\n"), "{response}");
+
+	// UID SORT returns UIDs.
+	let response = text(&session.command_line("a6 UID SORT (SIZE) UTF-8 ALL"));
+	assert!(response.contains("* SORT 1 2\r\n"), "{response}");
+}
+
+#[test]
+fn sort_by_address_headers_and_date() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(
+		dir.path(),
+		b"From: zoe@example.org\r\nTo: yan@example.org\r\nCc: wim@example.org\r\nSubject: x\r\n\r\na\r\n",
+	);
+	deliver(
+		dir.path(),
+		b"From: amy@example.org\r\nTo: bob@example.org\r\nCc: cat@example.org\r\nSubject: y\r\n\r\nb\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// FROM ascending: amy (2) before zoe (1).
+	assert!(
+		text(&session.command_line("a3 SORT (FROM) UTF-8 ALL")).contains("* SORT 2 1\r\n"),
+		"FROM"
+	);
+	// TO ascending: bob (2) before yan (1).
+	assert!(
+		text(&session.command_line("a4 SORT (TO) UTF-8 ALL")).contains("* SORT 2 1\r\n"),
+		"TO"
+	);
+	// CC ascending: cat (2) before wim (1).
+	assert!(
+		text(&session.command_line("a5 SORT (CC) UTF-8 ALL")).contains("* SORT 2 1\r\n"),
+		"CC"
+	);
+	// DATE and ARRIVAL fall back to internal date: delivery order 1, 2.
+	assert!(
+		text(&session.command_line("a6 SORT (DATE) UTF-8 ALL")).contains("* SORT 1 2\r\n"),
+		"DATE"
+	);
+	assert!(
+		text(&session.command_line("a7 SORT (ARRIVAL) UTF-8 ALL")).contains("* SORT 1 2\r\n"),
+		"ARRIVAL"
+	);
+}
+
+#[test]
+fn sort_strips_reply_prefix_and_breaks_ties_by_secondary_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// Same base subject "Plan": the "Re:" prefix must be ignored, so the tie
+	// is broken by the secondary SIZE key (smaller first).
+	deliver(
+		dir.path(),
+		b"From: a@example.org\r\nSubject: Re: Plan\r\n\r\nlonger body here yes\r\n",
+	);
+	deliver(
+		dir.path(),
+		b"From: a@example.org\r\nSubject: Plan\r\n\r\nx\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let response = text(&session.command_line("a3 SORT (SUBJECT SIZE) UTF-8 ALL"));
+	// Equal subjects, so the smaller message (2) sorts before (1).
+	assert!(response.contains("* SORT 2 1\r\n"), "{response}");
+}
+
+#[test]
+fn sort_without_selected_mailbox_is_bad() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a2 SORT (SUBJECT) UTF-8 ALL"));
+	assert!(response.contains("a2 BAD"), "{response}");
+}
+
+#[test]
+fn sort_respects_search_criteria() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: Apple\r\n\r\nhi\r\n");
+	deliver(dir.path(), b"Subject: Zebra\r\n\r\nhi\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+	let response = text(&session.command_line("a4 SORT (SUBJECT) UTF-8 UNSEEN"));
+	assert!(response.contains("* SORT 2\r\n"), "{response}");
+}
+
+#[test]
+fn search_by_flags_headers_and_text() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(
+		dir.path(),
+		b"From: alice@example.org\r\nSubject: project update\r\n\r\nquarterly numbers\r\n",
+	);
+	deliver(
+		dir.path(),
+		b"From: bob@example.org\r\nSubject: lunch\r\n\r\ntacos tomorrow\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+
+	let response = text(&session.command_line("a4 SEARCH UNSEEN"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+
+	let response = text(&session.command_line("a5 SEARCH FROM alice"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	let response = text(&session.command_line(r#"a6 SEARCH SUBJECT "project update""#));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	let response = text(&session.command_line("a7 SEARCH TEXT tacos"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+
+	// AND semantics: seen + from alice = 1; unseen + from alice = none.
+	let response = text(&session.command_line("a8 SEARCH SEEN FROM alice"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+	let response = text(&session.command_line("a9 SEARCH UNSEEN FROM alice"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+
+	let response = text(&session.command_line("b1 SEARCH ALL"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+}
+
+#[test]
+fn search_by_generic_header_and_cc() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(
+		dir.path(),
+		b"From: a@x.example\r\nCc: team@x.example\r\nMessage-ID: <abc@x>\r\n\r\nbody\r\n",
+	);
+	deliver(dir.path(), b"From: b@y.example\r\n\r\nother\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// Generic HEADER search on an arbitrary field.
+	let response = text(&session.command_line("a3 SEARCH HEADER Message-ID abc"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// CC is now a recognized header search key.
+	let response = text(&session.command_line("a4 SEARCH CC team"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// A header miss returns nothing.
+	let response = text(&session.command_line("a5 SEARCH HEADER Message-ID nope"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+}
+
+#[test]
+fn uid_search_returns_uids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@x.example\r\n\r\none\r\n");
+	deliver(dir.path(), b"From: a@x.example\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Deleted)");
+	session.command_line("a4 EXPUNGE");
+
+	// One message left: sequence 1, but UID 2.
+	let response = text(&session.command_line("a5 UID SEARCH ALL"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+	let response = text(&session.command_line("a6 SEARCH UID 2"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+}
+
+#[test]
+fn search_requires_selection_and_valid_criteria() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	let response = text(&session.command_line("a2 SEARCH ALL"));
+	assert!(response.contains("a2 BAD"), "{response}");
+	session.command_line("a3 SELECT INBOX");
+	let response = text(&session.command_line("a4 SEARCH BOGUSKEY"));
+	assert!(response.contains("a4 BAD"), "{response}");
+}
+
+#[test]
+fn search_or_not() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@example.org\r\n\r\none\r\n");
+	deliver(dir.path(), b"From: b@example.org\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	session.command_line(r"a3 STORE 1 +FLAGS (\Seen)");
+
+	// OR SEEN FLAGGED → message 1 (seen) only
+	let response = text(&session.command_line("a4 SEARCH OR SEEN FLAGGED"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// OR SEEN UNSEEN → all
+	let response = text(&session.command_line("a5 SEARCH OR SEEN UNSEEN"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+
+	// NOT SEEN → message 2
+	let response = text(&session.command_line("a6 SEARCH NOT SEEN"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+
+	// Nested: OR (NOT SEEN) FLAGGED → message 2
+	let response = text(&session.command_line("a7 SEARCH OR (NOT SEEN) FLAGGED"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+}
+
+#[test]
+fn search_date_criteria() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@example.org\r\n\r\nbody\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// SINCE epoch: all messages match (files exist after 1970).
+	let response = text(&session.command_line("a3 SEARCH SINCE 1-Jan-1970"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// BEFORE far future: all messages match.
+	let response = text(&session.command_line("a4 SEARCH BEFORE 1-Jan-2200"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// SINCE far future: no messages match.
+	let response = text(&session.command_line("a5 SEARCH SINCE 1-Jan-2200"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+
+	// BEFORE epoch: no messages match (files are newer than 1970-01-01).
+	let response = text(&session.command_line("a6 SEARCH BEFORE 1-Jan-1970"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+}
+
+#[test]
+fn search_larger_smaller() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let short = b"From: a@example.org\r\n\r\nhi\r\n";
+	let long = b"From: b@example.org\r\n\r\nThis is a much longer message body.\r\n";
+	deliver(dir.path(), short);
+	deliver(dir.path(), long);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// LARGER 5 → both messages (both > 5 bytes).
+	let response = text(&session.command_line("a3 SEARCH LARGER 5"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+
+	// LARGER 50 → only the long message (60 bytes > 50; short is 27 bytes).
+	let response = text(&session.command_line("a4 SEARCH LARGER 50"));
+	assert!(response.contains("* SEARCH 2\r\n"), "{response}");
+
+	// SMALLER 50 → only the short message (27 bytes < 50; long is 60 bytes).
+	let response = text(&session.command_line("a5 SEARCH SMALLER 50"));
+	assert!(response.contains("* SEARCH 1\r\n"), "{response}");
+
+	// SMALLER 5 → no messages (both > 5 bytes).
+	let response = text(&session.command_line("a6 SEARCH SMALLER 5"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+}

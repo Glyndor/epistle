@@ -20,6 +20,14 @@ pub enum ListenerKind {
 	Api,
 	/// IMAP over implicit TLS (port 993).
 	Imaps,
+	/// IMAP with mandatory STARTTLS upgrade (port 143).
+	Imap,
+	/// POP3 over implicit TLS (port 995). Plaintext POP3 is not offered.
+	Pop3s,
+	/// Prometheus metrics endpoint (`GET /metrics`).
+	Metrics,
+	/// ACME HTTP-01 challenge responder (`/.well-known/acme-challenge/*`).
+	Acme,
 }
 
 impl ListenerKind {
@@ -31,6 +39,10 @@ impl ListenerKind {
 			ListenerKind::Submissions => 465,
 			ListenerKind::Api => 8025,
 			ListenerKind::Imaps => 993,
+			ListenerKind::Imap => 143,
+			ListenerKind::Pop3s => 995,
+			ListenerKind::Metrics => 9090,
+			ListenerKind::Acme => 80,
 		}
 	}
 }
@@ -64,6 +76,8 @@ mod tests {
 		assert_eq!(ListenerKind::Smtp.default_port(), 25);
 		assert_eq!(ListenerKind::Submission.default_port(), 587);
 		assert_eq!(ListenerKind::Submissions.default_port(), 465);
+		assert_eq!(ListenerKind::Imaps.default_port(), 993);
+		assert_eq!(ListenerKind::Pop3s.default_port(), 995);
 	}
 
 	#[test]

@@ -10,6 +10,9 @@ permissions:
 
 jobs:
   rust:
-    uses: Glyndor/.github/.github/workflows/rust-ci.yml@b85b07c45a1bda03e948bf78c645b5f9f59266dc
+    uses: Glyndor/.github/.github/workflows/rust-ci.yml@f72a52755c737ad4ae0a61e56ac43e2edc7280c5 # v1.1.0
     with:
       coverage-threshold: 90
+      # The reputation and db modules are exercised by the Database workflow
+      # (Postgres service), not the no-DB coverage job; exclude them here.
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/(transport|renew)|pop3/(backend|server))\\.rs"

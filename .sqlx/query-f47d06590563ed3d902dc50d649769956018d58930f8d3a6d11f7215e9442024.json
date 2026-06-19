@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT token, ham_count, spam_count FROM bayes_token WHERE token = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "ham_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "spam_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f47d06590563ed3d902dc50d649769956018d58930f8d3a6d11f7215e9442024"
+}
