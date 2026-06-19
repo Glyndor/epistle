@@ -8,6 +8,7 @@ fn reply_code(action: &Action) -> u16 {
 		| Action::CollectAuthResponse(r)
 		| Action::Close(r) => r.code(),
 		Action::Deliver(r, _) => r.code(),
+		Action::CollectChunk { .. } => 0,
 	}
 }
 
