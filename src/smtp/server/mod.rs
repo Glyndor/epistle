@@ -252,6 +252,35 @@ where
 	writer.flush().await
 }
 
+/// Read exactly `size` bytes for a BDAT chunk (RFC 3030): first drain bytes
+/// already buffered in the decoder, then read from the stream, feeding any
+/// overshoot (the next pipelined command) back into the decoder. Returns
+/// `Ok(None)` if the peer closes or times out before `size` bytes arrive.
+async fn read_chunk(
+	stream: &mut Box<dyn Connection>,
+	decoder: &mut crate::smtp::line::LineDecoder,
+	size: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+	use tokio::io::AsyncReadExt;
+	let mut chunk = decoder.take_buffered(size);
+	let mut buffer = [0u8; READ_BUFFER];
+	while chunk.len() < size {
+		let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer)).await {
+			Ok(Ok(0)) | Err(_) => return Ok(None),
+			Ok(Ok(n)) => n,
+			Ok(Err(error)) => return Err(error),
+		};
+		let need = size - chunk.len();
+		if read <= need {
+			chunk.extend_from_slice(&buffer[..read]);
+		} else {
+			chunk.extend_from_slice(&buffer[..need]);
+			decoder.feed(&buffer[need..read]);
+		}
+	}
+	Ok(Some(chunk))
+}
+
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;

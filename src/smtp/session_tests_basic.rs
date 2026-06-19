@@ -27,6 +27,8 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 		| Action::CollectAuthResponse(r)
 		| Action::Close(r) => r.code(),
 		Action::Deliver(r, _) => r.code(),
+		// A BDAT chunk read carries no reply.
+		Action::CollectChunk { .. } => 0,
 	}
 }
 
@@ -100,6 +102,72 @@ fn full_transaction_delivers_message() {
 	assert_eq!(message.data, b"Subject: hi\r\n\r\nhello\r\n");
 	// Default NOTIFY: nobody opted out of failure DSNs.
 	assert!(message.no_dsn.is_empty());
+}
+
+#[test]
+fn bdat_chunks_deliver_message() {
+	let mut session = greeted();
+	session.command_line("MAIL FROM:<alice@example.org>");
+	session.command_line("RCPT TO:<bob@example.org>");
+	// First (non-final) chunk asks the network layer to read its bytes.
+	let Action::CollectChunk { size, last } = session.command_line("BDAT 12") else {
+		panic!("expected CollectChunk");
+	};
+	assert_eq!((size, last), (12, false));
+	let cont = session.bdat_chunk(b"Subject: hi\n", false);
+	assert_eq!(reply_code(&cont), 250);
+	// Final chunk delivers the accumulated body verbatim (no dot-stuffing).
+	let Action::CollectChunk { size, last } = session.command_line("BDAT 5 LAST") else {
+		panic!("expected final CollectChunk");
+	};
+	assert_eq!((size, last), (5, true));
+	let Action::Deliver(reply, message) = session.bdat_chunk(b"hello", true) else {
+		panic!("expected delivery");
+	};
+	assert_eq!(reply.code(), 250);
+	assert_eq!(message.data, b"Subject: hi\nhello");
+	assert_eq!(message.recipients, vec!["bob@example.org".to_string()]);
+}
+
+#[test]
+fn bdat_before_recipients_discards_then_rejects() {
+	let mut session = greeted();
+	session.command_line("MAIL FROM:<alice@example.org>");
+	// No RCPT yet: the chunk octets are still read (so they can't be parsed as
+	// commands — RFC 3030), then the command is rejected with 503.
+	let Action::CollectChunk { size, .. } = session.command_line("BDAT 5 LAST") else {
+		panic!("expected the chunk to be consumed before rejection");
+	};
+	assert_eq!(size, 5);
+	assert_eq!(reply_code(&session.bdat_chunk(b"hello", true)), 503);
+}
+
+#[test]
+fn bdat_locks_out_data_and_rcpt() {
+	let mut session = greeted();
+	session.command_line("MAIL FROM:<alice@example.org>");
+	session.command_line("RCPT TO:<bob@example.org>");
+	let Action::CollectChunk { .. } = session.command_line("BDAT 3") else {
+		panic!("expected CollectChunk");
+	};
+	session.bdat_chunk(b"abc", false);
+	// Once chunking has begun, DATA and further RCPT are invalid (RFC 3030).
+	assert_eq!(reply_code(&session.command_line("DATA")), 503);
+	assert_eq!(
+		reply_code(&session.command_line("RCPT TO:<c@example.org>")),
+		503
+	);
+}
+
+#[test]
+fn bdat_over_max_chunk_aborts() {
+	let mut session = greeted();
+	session.command_line("MAIL FROM:<alice@example.org>");
+	session.command_line("RCPT TO:<bob@example.org>");
+	let huge = MAX_MESSAGE_SIZE + 1;
+	let action = session.command_line(&format!("BDAT {huge} LAST"));
+	assert!(matches!(action, Action::Close(_)));
+	assert_eq!(reply_code(&action), 552);
 }
 
 #[test]

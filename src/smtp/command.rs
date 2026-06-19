@@ -38,6 +38,9 @@ pub enum Command {
 	},
 	/// `DATA`
 	Data,
+	/// `BDAT <size> [LAST]` (RFC 3030 CHUNKING): a length-prefixed chunk of the
+	/// message; `LAST` marks the final chunk.
+	Bdat { size: usize, last: bool },
 	/// `RSET`
 	Rset,
 	/// `NOOP`
@@ -140,6 +143,7 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 			})
 		}
 		"DATA" => parse_no_args(args, Command::Data),
+		"BDAT" => parse_bdat(args),
 		"RSET" => parse_no_args(args, Command::Rset),
 		"NOOP" => Ok(Command::Noop),
 		"QUIT" => parse_no_args(args, Command::Quit),
@@ -148,6 +152,26 @@ pub fn parse(line: &str) -> Result<Command, ParseError> {
 		"AUTH" => parse_auth(args),
 		_ => Err(ParseError::UnknownCommand),
 	}
+}
+
+/// Parse `BDAT <size> [LAST]` (RFC 3030): a decimal chunk size and an optional
+/// case-insensitive `LAST` marker.
+fn parse_bdat(args: &str) -> Result<Command, ParseError> {
+	let mut parts = args.split_ascii_whitespace();
+	let size: usize = parts
+		.next()
+		.ok_or(ParseError::InvalidArguments)?
+		.parse()
+		.map_err(|_| ParseError::InvalidArguments)?;
+	let last = match parts.next() {
+		None => false,
+		Some(token) if token.eq_ignore_ascii_case("LAST") => true,
+		Some(_) => return Err(ParseError::InvalidArguments),
+	};
+	if parts.next().is_some() {
+		return Err(ParseError::InvalidArguments);
+	}
+	Ok(Command::Bdat { size, last })
 }
 
 /// Parse `AUTH <mechanism> [initial-response]`. An initial response of `=`

@@ -14,7 +14,7 @@ pub(super) enum State {
 		reverse_path: String,
 		require_tls: bool,
 	},
-	/// DATA accepted; collecting message lines.
+	/// Recipients accepted; collecting message data via DATA or BDAT.
 	ReceivingData {
 		reverse_path: String,
 		recipients: Vec<String>,
@@ -23,6 +23,9 @@ pub(super) enum State {
 		size: usize,
 		body: Vec<u8>,
 		require_tls: bool,
+		/// Whether a BDAT chunk has begun (RFC 3030): once true, DATA and RCPT
+		/// are no longer valid in this transaction.
+		chunking: bool,
 	},
 }
 
@@ -51,6 +54,9 @@ pub enum Action {
 	Continue(Reply),
 	/// Send the reply and switch to reading data lines.
 	CollectData(Reply),
+	/// Read exactly `size` raw bytes (a BDAT chunk, RFC 3030) with no reply
+	/// first, then feed them to `Session::bdat_chunk`.
+	CollectChunk { size: usize, last: bool },
 	/// Send the reply, hand the message to delivery, keep reading commands.
 	Deliver(Reply, AcceptedMessage),
 	/// Send the reply, then upgrade the connection to TLS (RFC 3207).
