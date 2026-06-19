@@ -12,6 +12,7 @@ pub mod v1;
 pub use state::ApiState;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
@@ -30,7 +31,13 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
 		)
-		.route("/jmap/upload/{account_id}", post(jmap::upload))
+		// Allow the upload route a body limit matching maxSizeUpload (plus a
+		// small margin so the handler returns the spec's limit error rather
+		// than a bare transport 413); other routes keep the default cap.
+		.route(
+			"/jmap/upload/{account_id}",
+			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE + 1_048_576)),
+		)
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(
