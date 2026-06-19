@@ -11,6 +11,7 @@ use super::command::{Command, ParseError};
 use super::directory::{Directory, Resolution};
 use super::reply::Reply;
 
+mod bdat;
 mod login;
 mod oauth;
 mod scram;
@@ -159,6 +160,7 @@ impl Session {
 				..
 			} => self.rcpt_to(forward_path, notify),
 			Command::Data => self.data(),
+			Command::Bdat { size, last } => self.bdat(size, last),
 			Command::Rset => {
 				self.reset();
 				Action::Continue(Reply::ok())
@@ -252,6 +254,7 @@ impl Session {
 			"ENHANCEDSTATUSCODES".to_string(),
 			"8BITMIME".to_string(),
 			"SMTPUTF8".to_string(), // RFC 6531: internationalized addresses.
+			"CHUNKING".to_string(), // RFC 3030: BDAT length-prefixed message data.
 			// RFC 3461: we parse RET/ENVID and NOTIFY/ORCPT parameters.
 			"DSN".to_string(),
 			format!("SIZE {MAX_MESSAGE_SIZE}"),
@@ -374,15 +377,19 @@ impl Session {
 					size: 0,
 					body: Vec::new(),
 					require_tls,
+					chunking: false,
 				};
 				Action::Continue(Reply::ok())
 			}
+			// More recipients are accepted only before message data starts; once
+			// a BDAT chunk has begun (RFC 3030) RCPT is no longer valid.
 			State::ReceivingData {
 				recipients,
 				no_dsn,
 				body,
+				chunking,
 				..
-			} if body.is_empty() => {
+			} if body.is_empty() && !*chunking => {
 				if recipients.len() >= MAX_RECIPIENTS {
 					return Action::Continue(Reply::single(452, "4.5.3 too many recipients"));
 				}
@@ -398,7 +405,9 @@ impl Session {
 
 	fn data(&mut self) -> Action {
 		match &self.state {
-			State::ReceivingData { body, .. } if body.is_empty() => {
+			// DATA and BDAT are mutually exclusive (RFC 3030): refuse DATA once a
+			// BDAT chunk has begun, or after any data has been collected.
+			State::ReceivingData { body, chunking, .. } if body.is_empty() && !*chunking => {
 				Action::CollectData(Reply::start_mail_input())
 			}
 			_ => Action::Continue(Reply::bad_sequence()),
@@ -415,6 +424,7 @@ impl Session {
 			size,
 			body,
 			require_tls,
+			..
 		} = &mut self.state
 		else {
 			// Programming error in the network layer; fail the transaction.

@@ -19,6 +19,39 @@ fn parses_helo_and_ehlo() {
 }
 
 #[test]
+fn parses_bdat() {
+	assert_eq!(
+		parse("BDAT 1024"),
+		Ok(Command::Bdat {
+			size: 1024,
+			last: false
+		})
+	);
+	assert_eq!(
+		parse("BDAT 0 LAST"),
+		Ok(Command::Bdat {
+			size: 0,
+			last: true
+		})
+	);
+	assert_eq!(
+		parse("BDAT 50 last"),
+		Ok(Command::Bdat {
+			size: 50,
+			last: true
+		})
+	);
+	// Missing size, non-numeric size, or junk trailing tokens are rejected.
+	assert_eq!(parse("BDAT"), Err(ParseError::InvalidArguments));
+	assert_eq!(parse("BDAT abc"), Err(ParseError::InvalidArguments));
+	assert_eq!(parse("BDAT 10 NOPE"), Err(ParseError::InvalidArguments));
+	assert_eq!(
+		parse("BDAT 10 LAST extra"),
+		Err(ParseError::InvalidArguments)
+	);
+}
+
+#[test]
 fn rejects_helo_without_domain() {
 	assert_eq!(parse("HELO"), Err(ParseError::InvalidArguments));
 	assert_eq!(parse("HELO "), Err(ParseError::InvalidArguments));

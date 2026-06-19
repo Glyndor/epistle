@@ -12,7 +12,7 @@ use crate::smtp::trace::{
 	spf_domain,
 };
 
-use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, send};
+use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
 
 /// Consecutive error replies before the connection is dropped (abuse guard,
 /// akin to Postfix's `smtpd_hard_error_limit`).
@@ -85,11 +85,22 @@ impl Server {
 					Mode::Data => unreachable!(),
 				}
 			};
-			let Some(action) = action else {
+			let Some(mut action) = action else {
 				continue;
 			};
 
 			mode = Mode::Commands;
+			// Resolve BDAT chunk reads (RFC 3030) into a terminal action that the
+			// dispatch below already handles (Continue for a non-final chunk,
+			// Deliver for the LAST chunk — so the full delivery path still runs).
+			while let Action::CollectChunk { size, last } = action {
+				let chunk = match read_chunk(&mut stream, &mut decoder, size).await {
+					Ok(Some(chunk)) => chunk,
+					Ok(None) => return Ok(()), // client closed mid-chunk
+					Err(error) => return Err(error),
+				};
+				action = session.bdat_chunk(&chunk, last);
+			}
 			match action {
 				Action::Continue(reply) => {
 					// Abuse guard: disconnect a client that only produces errors.
@@ -113,6 +124,8 @@ impl Server {
 					mode = Mode::Data;
 					send(&mut stream, &reply).await?;
 				}
+				// BDAT chunk reads are resolved into a terminal action above.
+				Action::CollectChunk { .. } => unreachable!("BDAT chunk resolved before dispatch"),
 				Action::CollectAuthResponse(reply) => {
 					mode = Mode::Auth;
 					send(&mut stream, &reply).await?;
