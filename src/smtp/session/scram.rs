@@ -57,7 +57,11 @@ impl Session {
 			return self.scram_failure();
 		};
 
-		let mut server = ScramServer::new(self.fresh_nonce());
+		let Some(nonce) = self.fresh_nonce() else {
+			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			return self.scram_failure();
+		};
+		let mut server = ScramServer::new(nonce);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
 			return self.scram_failure();
 		};
@@ -111,14 +115,15 @@ impl Session {
 	}
 
 	/// The SCRAM server nonce: the injected one in tests, else fresh randomness.
-	fn fresh_nonce(&self) -> String {
+	/// `None` if the CSPRNG fails (fail closed).
+	fn fresh_nonce(&self) -> Option<String> {
 		if let Some(nonce) = &self.scram_nonce {
-			return nonce.clone();
+			return Some(nonce.clone());
 		}
 		use ring::rand::SecureRandom;
 		let mut bytes = [0u8; 18];
-		let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
-		BASE64.encode(bytes)
+		ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
+		Some(BASE64.encode(bytes))
 	}
 }
 
