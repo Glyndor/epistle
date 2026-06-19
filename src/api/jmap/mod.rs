@@ -7,12 +7,20 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::state::ApiState;
+
+/// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
+/// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
+/// `urn:ietf:params:jmap:error:limit` problem-details response.
+pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
+
+/// Default media type when none is supplied or recorded (RFC 8620 §6.1).
+const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 
 mod email;
 mod methods;
@@ -140,18 +148,114 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 }
 
 /// `GET /jmap/download/{accountId}/{blobId}/{name}` (RFC 8620 §6.2): return the
-/// raw bytes of a stored message. The blob id is the message id.
+/// raw bytes of a stored message or an uploaded blob, by id.
 pub async fn download(
 	State(state): State<ApiState>,
 	Path((account, blob_id, _name)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
 	if !state.accounts().iter().any(|a| a.name == account) {
-		return (StatusCode::NOT_FOUND, "account not found").into_response();
+		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	match objects::find_email_raw(state.data_dir(), &account, &blob_id) {
+	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id)
+		.or_else(|| read_blob(state.data_dir(), &blob_id));
+	match bytes {
 		Some(bytes) => {
-			([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
+			// Serve the media type recorded at upload time; stored messages and
+			// legacy blobs without a sidecar fall back to octet-stream.
+			let content_type = read_blob_type(state.data_dir(), &blob_id)
+				.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_string());
+			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
 		}
-		None => (StatusCode::NOT_FOUND, "blob not found").into_response(),
+		None => jmap_error(StatusCode::NOT_FOUND, "notFound", "blob not found"),
 	}
+}
+
+/// `POST /jmap/upload/{accountId}` (RFC 8620 §6.1): store an uploaded blob and
+/// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
+pub async fn upload(
+	State(state): State<ApiState>,
+	Path(account): Path<String>,
+	headers: HeaderMap,
+	body: axum::body::Bytes,
+) -> impl IntoResponse {
+	if !state.accounts().iter().any(|a| a.name == account) {
+		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
+	}
+	// Reject anything over the advertised maxSizeUpload with the spec's limit
+	// error (RFC 8620 §6.1) rather than a transport-level 413.
+	if body.len() > MAX_UPLOAD_SIZE {
+		return (
+			StatusCode::PAYLOAD_TOO_LARGE,
+			Json(json!({
+				"type": "urn:ietf:params:jmap:error:limit",
+				"limit": "maxSizeUpload",
+				"status": 413,
+				"detail": "upload exceeds maxSizeUpload",
+			})),
+		)
+			.into_response();
+	}
+	// The blob's media type is the request Content-Type, echoed back and
+	// persisted so downloads serve it (RFC 8620 §6.1).
+	let content_type = headers
+		.get(header::CONTENT_TYPE)
+		.and_then(|value| value.to_str().ok())
+		.filter(|value| !value.is_empty())
+		.unwrap_or(DEFAULT_BLOB_TYPE)
+		.to_string();
+	let blob_id = uuid::Uuid::now_v7().to_string();
+	let dir = state.data_dir().join("blobs");
+	if std::fs::create_dir_all(&dir).is_err()
+		|| std::fs::write(dir.join(&blob_id), &body).is_err()
+		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
+	{
+		return jmap_error(
+			StatusCode::INTERNAL_SERVER_ERROR,
+			"serverFail",
+			"cannot store blob",
+		);
+	}
+	(
+		StatusCode::OK,
+		Json(json!({
+			"accountId": account,
+			"blobId": blob_id,
+			"type": content_type,
+			"size": body.len(),
+		})),
+	)
+		.into_response()
+}
+
+/// Build a JMAP problem-details error response (RFC 8620 §3.6.1): a JSON body
+/// `{ "type": "urn:ietf:params:jmap:error:<kind>", ... }` with the HTTP status.
+fn jmap_error(status: StatusCode, kind: &str, detail: &str) -> axum::response::Response {
+	(
+		status,
+		Json(json!({
+			"type": format!("urn:ietf:params:jmap:error:{kind}"),
+			"status": status.as_u16(),
+			"detail": detail,
+		})),
+	)
+		.into_response()
+}
+
+/// Read an uploaded blob by id (rejecting any path separators in the id).
+fn read_blob(data_dir: &std::path::Path, blob_id: &str) -> Option<Vec<u8>> {
+	if uuid::Uuid::parse_str(blob_id).is_err() {
+		return None;
+	}
+	std::fs::read(data_dir.join("blobs").join(blob_id)).ok()
+}
+
+/// Read the recorded media type of an uploaded blob, if any (the `.type`
+/// sidecar written at upload time). Returns `None` for stored messages.
+fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
+	if uuid::Uuid::parse_str(blob_id).is_err() {
+		return None;
+	}
+	std::fs::read_to_string(data_dir.join("blobs").join(format!("{blob_id}.type")))
+		.ok()
+		.filter(|value| !value.is_empty())
 }
