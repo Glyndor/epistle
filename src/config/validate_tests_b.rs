@@ -14,11 +14,29 @@ const BASE: &str =
 	"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\ndomains = [\"example.org\"]\n";
 
 #[test]
-fn rejects_non_argon2id_secrets() {
-	// [api] token_hash must be argon2id.
+fn validates_api_token_hash_format() {
+	// A well-formed `sha256:<64-hex>` token hash (what `mail token-hash`
+	// emits) is accepted.
+	let hex = "a".repeat(64);
+	assert!(!invalid(&format!(
+		"{BASE}\n[api]\ntoken_hash = \"sha256:{hex}\"\n"
+	)));
+	// A malformed sha256 (wrong length / non-hex) is rejected.
 	assert!(invalid(&format!(
 		"{BASE}\n[api]\ntoken_hash = \"sha256:deadbeef\"\n"
 	)));
+	assert!(invalid(&format!(
+		"{BASE}\n[api]\ntoken_hash = \"sha256:{}\"\n",
+		"z".repeat(64)
+	)));
+	// A plaintext / unrecognized hash is rejected.
+	assert!(invalid(&format!(
+		"{BASE}\n[api]\ntoken_hash = \"plaintext\"\n"
+	)));
+}
+
+#[test]
+fn rejects_non_argon2id_account_password() {
 	// account password_hash must be argon2id.
 	assert!(invalid(&format!(
 		"{BASE}\n[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\npassword_hash = \"plaintext\"\n"

@@ -68,11 +68,18 @@ impl Config {
 
 	fn validate_api(&self) -> Result<(), ConfigError> {
 		if let Some(api) = &self.api {
+			// Accept both token-hash formats the runtime understands: the
+			// `sha256:<64-hex>` form emitted by `mail token-hash` (the current
+			// default), and a legacy argon2id PHC string.
+			let sha256 = api
+				.token_hash
+				.strip_prefix("sha256:")
+				.is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
 			let argon2id = api.token_hash.starts_with("$argon2id$")
 				&& argon2::password_hash::PasswordHash::new(&api.token_hash).is_ok();
-			if !argon2id {
+			if !sha256 && !argon2id {
 				return Err(ConfigError::Invalid(
-					"[api] token_hash must be an argon2id PHC string".into(),
+					"[api] token_hash must be a `sha256:<hex>` (from `mail token-hash`) or argon2id PHC string".into(),
 				));
 			}
 		}
