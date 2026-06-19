@@ -3,6 +3,7 @@
 mod accounts;
 mod export;
 mod import;
+mod mobileconfig;
 mod queue;
 mod serve;
 mod verify;
@@ -71,6 +72,16 @@ enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
+	},
+	/// Print an Apple `.mobileconfig` profile for an account (for the user to
+	/// install on iOS/macOS to auto-configure Mail).
+	Mobileconfig {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name.
+		#[arg(long, value_name = "NAME")]
+		account: String,
 	},
 	/// List the configured mail accounts.
 	Accounts {
@@ -149,6 +160,13 @@ impl Cli {
 			},
 			Command::Verify { config } => match Config::load(&config) {
 				Ok(config) => verify::run(&config.data_dir, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Mobileconfig { config, account } => match Config::load(&config) {
+				Ok(config) => mobileconfig::run(&config, &account, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
