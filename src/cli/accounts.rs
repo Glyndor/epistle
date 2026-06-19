@@ -43,8 +43,9 @@ pub(super) fn add(
 		Ok(password) => password,
 		Err(code) => return code,
 	};
-	if password.len() < 12 {
-		eprintln!("error: password must be at least 12 characters");
+	let password_chars = password.chars().count();
+	if !(12..=64).contains(&password_chars) {
+		eprintln!("error: password must be between 12 and 64 characters");
 		return ExitCode::FAILURE;
 	}
 	let store = match AccountStore::open(

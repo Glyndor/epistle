@@ -70,7 +70,9 @@ impl DynamicAccount {
 		let password_hash = crate::smtp::auth::hash_password(password)
 			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
 		let mut salt = [0u8; 16];
-		let _ = ring::rand::SystemRandom::new().fill(&mut salt);
+		ring::rand::SystemRandom::new()
+			.fill(&mut salt)
+			.map_err(|_| StoreError::Invalid("cannot generate salt".to_string()))?;
 		let scram = crate::smtp::scram::ScramStored::from_credentials(
 			&crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096),
 		);
