@@ -33,16 +33,27 @@ pub struct Created {
 
 /// Minimum password length accepted by the API.
 const MIN_PASSWORD: usize = 12;
+/// Maximum password length: a DoS ceiling on the Argon2 input, generous enough
+/// that no real passphrase or password-manager output is rejected.
+const MAX_PASSWORD: usize = 64;
+
+/// Enforce the global password length policy (12–64 characters, counted as
+/// Unicode scalar values so multibyte input is never silently truncated).
+fn check_password(password: &str) -> Result<(), ApiError> {
+	let chars = password.chars().count();
+	if !(MIN_PASSWORD..=MAX_PASSWORD).contains(&chars) {
+		return Err(ApiError::invalid_input(
+			"Password must be between 12 and 64 characters.",
+		));
+	}
+	Ok(())
+}
 
 pub async fn create(
 	State(state): State<ApiState>,
 	Json(request): Json<CreateAccount>,
 ) -> Result<Json<Created>, ApiError> {
-	if request.password.len() < MIN_PASSWORD {
-		return Err(ApiError::invalid_input(
-			"Password must be at least 12 characters.",
-		));
-	}
+	check_password(&request.password)?;
 	let password_hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
 	state
@@ -51,7 +62,7 @@ pub async fn create(
 			name: request.name.clone(),
 			addresses: request.addresses,
 			password_hash,
-			scram: Some(derive_scram(&request.password)),
+			scram: Some(derive_scram(&request.password)?),
 			totp_secret: None,
 		})
 		.map_err(store_error)?;
@@ -88,14 +99,10 @@ pub async fn set_password(
 	Path(name): Path<String>,
 	Json(request): Json<SetPassword>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
-	if request.password.len() < MIN_PASSWORD {
-		return Err(ApiError::invalid_input(
-			"Password must be at least 12 characters.",
-		));
-	}
+	check_password(&request.password)?;
 	let hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
-	let scram = derive_scram(&request.password);
+	let scram = derive_scram(&request.password)?;
 	state
 		.store()
 		.set_password_hash(&name, hash, Some(scram))
@@ -104,13 +111,18 @@ pub async fn set_password(
 }
 
 /// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
-/// random salt (RFC 7677 minimum 4096 iterations).
-fn derive_scram(password: &str) -> crate::smtp::scram::ScramStored {
+/// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the CSPRNG
+/// cannot produce a salt rather than storing a predictable one.
+fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ApiError> {
 	use ring::rand::SecureRandom;
 	let mut salt = [0u8; 16];
-	let _ = ring::rand::SystemRandom::new().fill(&mut salt);
+	ring::rand::SystemRandom::new()
+		.fill(&mut salt)
+		.map_err(|_| ApiError::internal())?;
 	let credentials = crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096);
-	crate::smtp::scram::ScramStored::from_credentials(&credentials)
+	Ok(crate::smtp::scram::ScramStored::from_credentials(
+		&credentials,
+	))
 }
 
 /// The enrolled TOTP secret and its `otpauth://` provisioning URI.
