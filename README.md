@@ -74,6 +74,17 @@ kind = "smtp"
 addr = "0.0.0.0"
 ```
 
+### Configuration secrets
+
+The config file must be owner-only — `mail` refuses to load a file that is group- or world-accessible (`chmod 600 mail.toml`). Keep secrets out of the file itself: any `${VAR}` is substituted from the process environment at load time, and a referenced variable that is unset fails the load (never a silent empty value). For example, source the database password from the environment instead of writing it on disk:
+
+```toml
+[database]
+url = "postgres://mail:${MAIL_DB_PASSWORD}@db/mail"
+```
+
+Substitution happens before the TOML is parsed, so a substituted value must not contain TOML metacharacters (`"`, newlines); percent-encode such characters in a connection URL.
+
 ## ✨ Features
 
 - **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).
