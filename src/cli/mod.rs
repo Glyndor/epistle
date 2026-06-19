@@ -51,7 +51,8 @@ enum Command {
 		#[arg(long, value_name = "NAME")]
 		account: String,
 	},
-	/// Import an mbox stream from stdin into an account's INBOX (migration).
+	/// Import mail into an account (migration): an mbox stream from stdin, or a
+	/// Maildir tree with `--maildir`.
 	Import {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
@@ -59,6 +60,10 @@ enum Command {
 		/// The account name to import into.
 		#[arg(long, value_name = "NAME")]
 		account: String,
+		/// Import from a Maildir directory tree (incl. nested Dovecot folders)
+		/// instead of an mbox stream on stdin.
+		#[arg(long, value_name = "DIR")]
+		maildir: Option<PathBuf>,
 	},
 	/// List the configured mail accounts.
 	Accounts {
@@ -121,8 +126,15 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Import { config, account } => match Config::load(&config) {
-				Ok(config) => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+			Command::Import {
+				config,
+				account,
+				maildir,
+			} => match Config::load(&config) {
+				Ok(config) => match maildir {
+					Some(dir) => import::run_maildir(&config.data_dir, &account, &dir),
+					None => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+				},
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
