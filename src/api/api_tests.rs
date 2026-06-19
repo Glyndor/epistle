@@ -338,6 +338,20 @@ async fn account_creation_validates_input() {
 	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 
+	// Over-long password (>64 chars): the DoS ceiling rejects it.
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/accounts",
+		Some(TOKEN),
+		Some(serde_json::json!({
+			"name": "bob", "addresses": ["bob@example.org"], "password": "x".repeat(65)
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	assert_eq!(body["error"]["code"], "invalid_input");
+
 	// Foreign domain.
 	let (status, _) = request_with_body(
 		&app,
