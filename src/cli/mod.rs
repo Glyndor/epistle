@@ -6,6 +6,7 @@ mod import;
 mod mobileconfig;
 mod queue;
 mod serve;
+mod srv;
 mod verify;
 
 use std::path::PathBuf;
@@ -82,6 +83,12 @@ enum Command {
 		/// The account name.
 		#[arg(long, value_name = "NAME")]
 		account: String,
+	},
+	/// Print the RFC 6186 service-discovery SRV records to publish in DNS.
+	SrvRecords {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
 	},
 	/// List the configured mail accounts.
 	Accounts {
@@ -167,6 +174,13 @@ impl Cli {
 			},
 			Command::Mobileconfig { config, account } => match Config::load(&config) {
 				Ok(config) => mobileconfig::run(&config, &account, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::SrvRecords { config } => match Config::load(&config) {
+				Ok(config) => srv::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
