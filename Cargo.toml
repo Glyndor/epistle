@@ -1,6 +1,6 @@
 [package]
 name = "mail"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 license = "Apache-2.0"
 description = "Self-hosted, headless mail server: SMTP, IMAP and modern email security through an API and CLI."
@@ -37,7 +37,12 @@ lto = "thin"
 strip = "symbols"
 
 [dev-dependencies]
+criterion = "0.8.2"
 serde_json = "1.0.150"
 tempfile = "3.27.0"
 tokio = { version = "1.52.3", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
+
+[[bench]]
+name = "parsers"
+harness = false
