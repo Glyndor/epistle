@@ -5,6 +5,7 @@ mod export;
 mod import;
 mod queue;
 mod serve;
+mod verify;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +65,12 @@ enum Command {
 		/// instead of an mbox stream on stdin.
 		#[arg(long, value_name = "DIR")]
 		maildir: Option<PathBuf>,
+	},
+	/// Verify on-disk data integrity (run before an upgrade).
+	Verify {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
 	},
 	/// List the configured mail accounts.
 	Accounts {
@@ -135,6 +142,13 @@ impl Cli {
 					Some(dir) => import::run_maildir(&config.data_dir, &account, &dir),
 					None => import::run(&config.data_dir, &account, std::io::stdin().lock()),
 				},
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Verify { config } => match Config::load(&config) {
+				Ok(config) => verify::run(&config.data_dir, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
