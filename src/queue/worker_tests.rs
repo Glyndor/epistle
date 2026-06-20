@@ -1,6 +1,7 @@
 //! Outbound queue worker tests.
 
 use super::*;
+use crate::queue::SuppressionList;
 use crate::queue::resolver::{BoxedStream, ConnectFuture};
 use crate::smtp::directory::Directory;
 use crate::smtp::server::Server;
@@ -164,6 +165,45 @@ async fn transient_failure_defers_within_window() {
 		assert_eq!(worker.pass().await.expect("pass"), 0);
 		assert_eq!(worker.spool.list().expect("list").len(), 1);
 	}
+}
+
+#[tokio::test]
+async fn permanent_failure_suppresses_then_drops_silently() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// carol@ is unknown to the loopback server → permanent 550.
+	let spool = spool_with_message(dir.path(), "carol@remote.example");
+	let sink = Arc::new(MemorySink::new());
+	let connector = Arc::new(LoopbackConnector {
+		sink: sink.clone(),
+		domain: "remote.example".to_string(),
+	});
+	let bounce_sink = Arc::new(MemorySink::new());
+	let suppression = SuppressionList::open(dir.path()).expect("suppression");
+	let worker = Worker::new(spool, connector, "mail.sender.example")
+		.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>)
+		.with_suppression(suppression);
+
+	// First send: permanent failure → one bounce, and carol@ is suppressed.
+	assert_eq!(worker.pass().await.expect("pass"), 0);
+	assert_eq!(bounce_sink.messages().len(), 1);
+	let suppression = SuppressionList::open(dir.path()).expect("suppression");
+	assert!(suppression.is_suppressed("carol@remote.example"));
+
+	// A new message to the suppressed recipient is dropped with no new bounce.
+	worker
+		.spool
+		.store(&AcceptedMessage {
+			reverse_path: "alice@sender.example".into(),
+			recipients: vec!["carol@remote.example".to_string()],
+			data: b"Subject: again\r\n\r\nx\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+			no_dsn: Vec::new(),
+		})
+		.expect("store");
+	assert_eq!(worker.pass().await.expect("pass"), 0);
+	assert!(worker.spool.list().expect("list").is_empty());
+	assert_eq!(bounce_sink.messages().len(), 1, "no second bounce");
 }
 
 #[tokio::test]
