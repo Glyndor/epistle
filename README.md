@@ -109,6 +109,7 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 
 - [Configuration reference](docs/configuration.md) — the TOML file, every section and key, listener kinds, and a full example.
 - [CLI reference](docs/cli.md) — every `mail` command, plus the outbound retry/suppression policy.
+- [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
 
 ## 🗺️ Roadmap
 
