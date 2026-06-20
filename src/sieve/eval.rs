@@ -168,12 +168,21 @@ fn envelope_test(test: &Test, message: &Message, vars: &mut HashMap<String, Stri
 	false
 }
 
+/// The subaddress separator (RFC 5233). `user+detail@domain`: `+` splits the
+/// local-part into the `:user` and `:detail` sub-parts.
+const SUBADDRESS_SEPARATOR: char = '+';
+
 /// The address-part selected by a tag, defaulting to the whole address.
+/// `:user`/`:detail` are the subaddress parts (RFC 5233).
 fn address_part(args: &[Argument]) -> AddressPart {
 	if has_tag(args, "localpart") {
 		AddressPart::Local
 	} else if has_tag(args, "domain") {
 		AddressPart::Domain
+	} else if has_tag(args, "user") {
+		AddressPart::User
+	} else if has_tag(args, "detail") {
+		AddressPart::Detail
 	} else {
 		AddressPart::All
 	}
@@ -184,15 +193,29 @@ enum AddressPart {
 	All,
 	Local,
 	Domain,
+	/// Local-part before the first separator (RFC 5233 `:user`).
+	User,
+	/// Local-part after the first separator (RFC 5233 `:detail`).
+	Detail,
 }
 
 impl AddressPart {
-	/// Extract this part from an `addr-spec` (`local@domain`).
+	/// Extract this part from an `addr-spec` (`local@domain`). For `:detail`,
+	/// `None` means the address has no detail sub-part, so no key can match.
 	fn of(self, addr: &str) -> Option<String> {
+		let local = || addr.rsplit_once('@').map_or(addr, |(local, _)| local);
 		match self {
 			AddressPart::All => Some(addr.to_string()),
 			AddressPart::Local => addr.rsplit_once('@').map(|(local, _)| local.to_string()),
 			AddressPart::Domain => addr.rsplit_once('@').map(|(_, domain)| domain.to_string()),
+			AddressPart::User => Some(
+				local()
+					.split_once(SUBADDRESS_SEPARATOR)
+					.map_or_else(|| local().to_string(), |(user, _)| user.to_string()),
+			),
+			AddressPart::Detail => local()
+				.split_once(SUBADDRESS_SEPARATOR)
+				.map(|(_, detail)| detail.to_string()),
 		}
 	}
 }
