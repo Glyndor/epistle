@@ -6,6 +6,7 @@ mod export;
 mod import;
 mod mobileconfig;
 mod queue;
+mod report_abuse;
 mod serve;
 mod srv;
 mod verify;
@@ -100,6 +101,13 @@ enum Command {
 		/// The domain (defaults to the first configured domain).
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
+	},
+	/// Read an offending message on stdin and print an RFC 5965 ARF abuse
+	/// report (send it to the offending sender's abuse address).
+	ReportAbuse {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
 	},
 	/// List the configured mail accounts.
 	Accounts {
@@ -201,6 +209,17 @@ impl Cli {
 				Ok(config) => {
 					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
 				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ReportAbuse { config } => match Config::load(&config) {
+				Ok(config) => report_abuse::run(
+					&config,
+					std::io::stdin().lock(),
+					&mut std::io::stdout().lock(),
+				),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
