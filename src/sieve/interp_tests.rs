@@ -207,6 +207,26 @@ fn address_test_matches_parts() {
 }
 
 #[test]
+fn address_subaddress_user_and_detail() {
+	// RFC 5233: `user+detail@domain` splits the local-part on `+`.
+	let msg = b"From: ken+sieve@example.org\r\n\r\nx\r\n";
+	let user = run("if address :user :is \"From\" \"ken\" { discard; }", msg);
+	assert!(user.discarded);
+	let detail = run(
+		"if address :detail :is \"From\" \"sieve\" { discard; }",
+		msg,
+	);
+	assert!(detail.discarded);
+	// No separator: :user is the whole local-part, :detail has no value.
+	let plain = b"From: ken@example.org\r\n\r\nx\r\n";
+	assert!(run("if address :user :is \"From\" \"ken\" { discard; }", plain).discarded);
+	assert!(
+		!run("if address :detail :is \"From\" \"\" { discard; }", plain).discarded,
+		"absent detail must not match any key, including the empty string"
+	);
+}
+
+#[test]
 fn envelope_test_matches_mail_from_and_rcpt_to() {
 	let tokens =
 		tokenize("if envelope :domain :is \"from\" \"bad.example\" { discard; }").expect("lex");
