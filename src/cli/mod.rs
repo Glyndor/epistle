@@ -2,6 +2,7 @@
 
 mod accounts;
 mod autoconfig;
+mod autodiscover;
 mod export;
 mod import;
 mod mobileconfig;
@@ -95,6 +96,16 @@ enum Command {
 	/// Print the Thunderbird autoconfig XML for a domain (host it at
 	/// `autoconfig.<domain>/mail/config-v1.1.xml`).
 	Autoconfig {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The domain (defaults to the first configured domain).
+		#[arg(long, value_name = "DOMAIN")]
+		domain: Option<String>,
+	},
+	/// Print the Microsoft Autodiscover v1 XML for a domain (host it at
+	/// `autodiscover.<domain>/autodiscover/autodiscover.xml`).
+	Autodiscover {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
@@ -208,6 +219,15 @@ impl Cli {
 			Command::Autoconfig { config, domain } => match Config::load(&config) {
 				Ok(config) => {
 					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Autodiscover { config, domain } => match Config::load(&config) {
+				Ok(config) => {
+					autodiscover::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
 				}
 				Err(error) => {
 					eprintln!("error: {error}");
