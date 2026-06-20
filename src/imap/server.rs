@@ -54,6 +54,8 @@ pub struct Server {
 	tls_mode: TlsMode,
 	quota_bytes: u64,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` hash; enables AUTH=SCRAM-SHA-256-PLUS.
+	cbind_data: Option<Vec<u8>>,
 }
 
 impl Server {
@@ -74,6 +76,7 @@ impl Server {
 			tls_mode,
 			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
 			oauth: None,
+			cbind_data: None,
 		}
 	}
 
@@ -87,6 +90,28 @@ impl Server {
 	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
 		self.oauth = Some(verifier);
 		self
+	}
+
+	/// Provide the `tls-server-end-point` certificate hash, enabling
+	/// AUTH=SCRAM-SHA-256-PLUS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
+		self
+	}
+
+	/// Build a session with this server's quota, OAuth and channel-binding.
+	fn new_session(&self) -> Session {
+		let mut session = Session::new(
+			&self.hostname,
+			self.data_dir.clone(),
+			self.directory.current(),
+		)
+		.with_quota_limit(self.quota_bytes)
+		.with_oauth(self.oauth.clone());
+		if let Some(cbind) = &self.cbind_data {
+			session = session.with_channel_binding(cbind.clone());
+		}
+		session
 	}
 
 	/// Accept connections forever.
@@ -118,28 +143,9 @@ impl Server {
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
 				let tls = self.tls.accept(stream).await?;
-				(
-					Box::new(tls),
-					Session::new(
-						&self.hostname,
-						self.data_dir.clone(),
-						self.directory.current(),
-					)
-					.with_quota_limit(self.quota_bytes)
-					.with_oauth(self.oauth.clone()),
-				)
+				(Box::new(tls), self.new_session())
 			}
-			TlsMode::StartTls => (
-				Box::new(stream),
-				Session::new(
-					&self.hostname,
-					self.data_dir.clone(),
-					self.directory.current(),
-				)
-				.with_quota_limit(self.quota_bytes)
-				.with_oauth(self.oauth.clone())
-				.with_starttls(),
-			),
+			TlsMode::StartTls => (Box::new(stream), self.new_session().with_starttls()),
 		};
 
 		let greeting = session.greeting();

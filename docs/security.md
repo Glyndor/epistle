@@ -20,7 +20,9 @@ the controls in place and how to report a vulnerability.
   reversible.
 - **SCRAM-SHA-256** authenticates without the password crossing the wire, and
   **SCRAM-SHA-256-PLUS** adds TLS channel binding (`tls-server-end-point`) with
-  downgrade rejection (RFC 5802 §6).
+  downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
+  certificate is configured; under ACME (where the certificate is renewed at
+  runtime) it is omitted and clients use SCRAM-SHA-256.
 - **OAuth2/OIDC** (OAUTHBEARER/XOAUTH2) bearer tokens are verified against the
   configured issuer/audience/key.
 - **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths.

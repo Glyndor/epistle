@@ -53,6 +53,19 @@ pub fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
 	Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
 
+/// The `tls-server-end-point` channel binding (RFC 5929) for
+/// SCRAM-SHA-256-PLUS: the SHA-256 of the server's leaf certificate (DER).
+/// Returns `None` if the certificate cannot be read.
+///
+/// SHA-256 is used unconditionally; a certificate signed with a different hash
+/// is not supported for channel binding (clients fall back to plain SCRAM).
+pub fn tls_server_end_point(config: &Tls) -> Option<Vec<u8>> {
+	let certs = load_certs(&config.cert_file).ok()?;
+	let leaf = certs.first()?;
+	let digest = ring::digest::digest(&ring::digest::SHA256, leaf.as_ref());
+	Some(digest.as_ref().to_vec())
+}
+
 /// Build an acceptor from an in-memory PEM chain and key (e.g. ACME-issued).
 pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor, TlsError> {
 	ensure_crypto_provider();
