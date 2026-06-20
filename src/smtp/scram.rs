@@ -89,6 +89,28 @@ pub enum ScramError {
 	AuthenticationFailed,
 }
 
+/// Channel-binding policy for an exchange (RFC 5802 §6, RFC 5929).
+///
+/// The default, `Unsupported`, is plain SCRAM-SHA-256 with no binding check —
+/// used on cleartext links and unchanged from before. The other two are used on
+/// TLS, where the server also advertises `SCRAM-SHA-256-PLUS`: `Supported` is
+/// the non-PLUS mechanism (a client that asks for it must not bind, and a `y`
+/// flag is rejected as a downgrade), and `Required` is the `-PLUS` mechanism
+/// (the client must bind to the given data — the `tls-server-end-point`, i.e.
+/// the hash of the server's certificate).
+#[derive(Debug, Clone, Default)]
+pub enum ChannelBinding {
+	/// No channel binding offered (cleartext); the `c=` field is not checked.
+	#[default]
+	Unsupported,
+	/// TLS, plain SCRAM-SHA-256: the client must send `n,,` (no binding); `y`
+	/// or `p` is rejected.
+	Supported,
+	/// TLS, SCRAM-SHA-256-PLUS: the client must bind to this data
+	/// (`tls-server-end-point`).
+	Required(Vec<u8>),
+}
+
 /// Server-side SCRAM-SHA-256 state machine: feed `first` then `finish`.
 #[derive(Debug)]
 pub struct ScramServer {
@@ -96,18 +118,31 @@ pub struct ScramServer {
 	client_first_bare: Option<String>,
 	server_first: Option<String>,
 	combined_nonce: Option<String>,
+	channel_binding: ChannelBinding,
+	/// The GS2 header (`<flag>,<authzid>,`) from the client-first message,
+	/// captured so the client's `c=` can be verified against it.
+	gs2_header: Option<String>,
 }
 
 impl ScramServer {
 	/// Create a server with a freshly generated server nonce (caller supplies
-	/// randomness so the core stays pure and testable).
+	/// randomness so the core stays pure and testable). Channel binding is
+	/// unsupported unless set with [`ScramServer::with_channel_binding`].
 	pub fn new(server_nonce: impl Into<String>) -> Self {
 		ScramServer {
 			server_nonce: server_nonce.into(),
 			client_first_bare: None,
 			server_first: None,
 			combined_nonce: None,
+			channel_binding: ChannelBinding::Unsupported,
+			gs2_header: None,
 		}
+	}
+
+	/// Set the channel-binding policy for this exchange.
+	pub fn with_channel_binding(mut self, channel_binding: ChannelBinding) -> Self {
+		self.channel_binding = channel_binding;
+		self
 	}
 
 	/// Process the client-first message (`n,,n=user,r=nonce`), returning the
@@ -117,9 +152,24 @@ impl ScramServer {
 		client_first: &str,
 		credentials: &ScramCredentials,
 	) -> Result<(String, String), ScramError> {
-		// Strip the GS2 channel-binding header (`n,,` / `y,,`): the bare part
-		// is everything after the second comma.
+		// Strip the GS2 channel-binding header (`<flag>,<authzid>,`): the bare
+		// part is everything after the second comma.
 		let bare = nth_comma_rest(client_first, 2).ok_or(ScramError::Malformed)?;
+		let gs2_header = &client_first[..client_first.len() - bare.len()];
+
+		// Enforce the channel-binding flag for this policy (RFC 5802 §6).
+		let flag = client_first.split(',').next().unwrap_or("");
+		match self.channel_binding {
+			// Plain SCRAM on a link that also offers -PLUS: the client must not
+			// claim binding. `y` (saw no -PLUS) is a downgrade; `p` is wrong.
+			ChannelBinding::Supported if flag != "n" => return Err(ScramError::Malformed),
+			// -PLUS: the client must bind to tls-server-end-point.
+			ChannelBinding::Required(_) if flag != "p=tls-server-end-point" => {
+				return Err(ScramError::Malformed);
+			}
+			_ => {}
+		}
+
 		let username = tag(bare, "n=").ok_or(ScramError::Malformed)?;
 		let client_nonce = tag(bare, "r=").ok_or(ScramError::Malformed)?;
 
@@ -133,6 +183,7 @@ impl ScramServer {
 		self.client_first_bare = Some(bare.to_string());
 		self.server_first = Some(server_first.clone());
 		self.combined_nonce = Some(combined_nonce);
+		self.gs2_header = Some(gs2_header.to_string());
 		Ok((username.to_string(), server_first))
 	}
 
@@ -155,6 +206,23 @@ impl ScramServer {
 		// The nonce must be echoed unchanged.
 		if tag(client_final, "r=") != Some(combined_nonce.as_str()) {
 			return Err(ScramError::Malformed);
+		}
+
+		// Verify the channel binding: `c=` must be base64(gs2-header || data),
+		// where data is the tls-server-end-point for -PLUS and empty otherwise.
+		// `Unsupported` keeps the prior behavior (no `c=` check).
+		if !matches!(self.channel_binding, ChannelBinding::Unsupported) {
+			let gs2_header = self.gs2_header.as_deref().ok_or(ScramError::Malformed)?;
+			let cbind = BASE64
+				.decode(tag(client_final, "c=").ok_or(ScramError::Malformed)?)
+				.map_err(|_| ScramError::Malformed)?;
+			let mut expected = gs2_header.as_bytes().to_vec();
+			if let ChannelBinding::Required(data) = &self.channel_binding {
+				expected.extend_from_slice(data);
+			}
+			if cbind != expected {
+				return Err(ScramError::Malformed);
+			}
 		}
 		let proof = BASE64
 			.decode(tag(client_final, "p=").ok_or(ScramError::Malformed)?)
@@ -323,5 +391,75 @@ mod tests {
 			server.first("garbage", &credentials),
 			Err(ScramError::Malformed)
 		);
+	}
+
+	/// Drive a full exchange with an explicit GS2 header and channel-binding
+	/// data, returning the server-final or the first error.
+	fn run_cb_exchange(
+		cb: ChannelBinding,
+		client_header: &str,
+		client_cbind: &[u8],
+	) -> Result<String, ScramError> {
+		let credentials = ScramCredentials::derive("hunter2", b"saltsalt", 4096);
+		let mut server = ScramServer::new("servernonce").with_channel_binding(cb);
+		let client_first = format!("{client_header}n=alice,r=clientnonce");
+		let (_, server_first) = server.first(&client_first, &credentials)?;
+		let mut c = client_header.as_bytes().to_vec();
+		c.extend_from_slice(client_cbind);
+		let without_proof = format!("c={},r=clientnonceservernonce", BASE64.encode(&c));
+		let auth_message = format!("n=alice,r=clientnonce,{server_first},{without_proof}");
+		let proof = client_proof("hunter2", &credentials, &auth_message);
+		let client_final = format!("{without_proof},p={}", BASE64.encode(&proof));
+		server.finish(&client_final, &credentials)
+	}
+
+	const CERT_HASH: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+	#[test]
+	fn plus_with_correct_binding_authenticates() {
+		let result = run_cb_exchange(
+			ChannelBinding::Required(CERT_HASH.to_vec()),
+			"p=tls-server-end-point,,",
+			CERT_HASH,
+		);
+		assert!(result.expect("authenticated").starts_with("v="));
+	}
+
+	#[test]
+	fn plus_with_wrong_binding_fails() {
+		let result = run_cb_exchange(
+			ChannelBinding::Required(CERT_HASH.to_vec()),
+			"p=tls-server-end-point,,",
+			b"a-different-32-byte-certificate!!",
+		);
+		assert_eq!(result, Err(ScramError::Malformed));
+	}
+
+	#[test]
+	fn plus_requires_the_p_flag() {
+		// A -PLUS exchange where the client does not actually bind.
+		let result = run_cb_exchange(ChannelBinding::Required(CERT_HASH.to_vec()), "n,,", b"");
+		assert_eq!(result, Err(ScramError::Malformed));
+	}
+
+	#[test]
+	fn supported_rejects_downgrade_flag() {
+		// `y,,` on the non-PLUS mechanism when the server offers -PLUS is a
+		// downgrade attempt.
+		let result = run_cb_exchange(ChannelBinding::Supported, "y,,", b"");
+		assert_eq!(result, Err(ScramError::Malformed));
+	}
+
+	#[test]
+	fn supported_accepts_unbound_client() {
+		let result = run_cb_exchange(ChannelBinding::Supported, "n,,", b"");
+		assert!(result.expect("authenticated").starts_with("v="));
+	}
+
+	#[test]
+	fn supported_rejects_tampered_binding() {
+		// The header says `n,,` but the c= carries extra bytes.
+		let result = run_cb_exchange(ChannelBinding::Supported, "n,,", b"extra");
+		assert_eq!(result, Err(ScramError::Malformed));
 	}
 }
