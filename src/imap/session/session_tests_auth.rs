@@ -91,3 +91,93 @@ fn authenticate_when_already_authenticated_is_bad() {
 	let out = text(&session.command_line("b AUTHENTICATE PLAIN"));
 	assert!(out.contains("b BAD"), "{out}");
 }
+
+/// A 32-byte stand-in for the tls-server-end-point certificate hash.
+const CERT_HASH: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+#[test]
+fn authenticate_scram_plus_succeeds() {
+	use ring::{digest, hmac, pbkdf2};
+	use std::num::NonZeroU32;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		scram_directory(),
+	)
+	.with_scram_nonce("SN")
+	.with_channel_binding(CERT_HASH.to_vec());
+
+	let header = "p=tls-server-end-point,,";
+	let output = session.command_line(&format!(
+		"a1 AUTHENTICATE SCRAM-SHA-256-PLUS {}",
+		B64.encode(format!("{header}n=alice,r=CN"))
+	));
+	assert!(output.collect_auth, "bound -PLUS requests a continuation");
+
+	// c = base64(gs2-header || tls-server-end-point).
+	let mut cbind = header.as_bytes().to_vec();
+	cbind.extend_from_slice(CERT_HASH);
+	let without_proof = format!("c={},r=CNSN", B64.encode(&cbind));
+	let salt = b"saltsalt";
+	let server_first = format!("r=CNSN,s={},i=4096", B64.encode(salt));
+	let auth_message = format!("n=alice,r=CN,{server_first},{without_proof}");
+	let mut salted = [0u8; 32];
+	pbkdf2::derive(
+		pbkdf2::PBKDF2_HMAC_SHA256,
+		NonZeroU32::new(4096).unwrap(),
+		salt,
+		b"secret",
+		&mut salted,
+	);
+	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");
+	let stored_key = digest::digest(&digest::SHA256, client_key.as_ref());
+	let client_sig = hmac::sign(
+		&hmac::Key::new(hmac::HMAC_SHA256, stored_key.as_ref()),
+		auth_message.as_bytes(),
+	);
+	let proof: Vec<u8> = client_key
+		.as_ref()
+		.iter()
+		.zip(client_sig.as_ref())
+		.map(|(a, b)| a ^ b)
+		.collect();
+	let client_final = format!("{without_proof},p={}", B64.encode(&proof));
+	let response = text(&session.auth_response(&B64.encode(&client_final)));
+	assert!(response.contains("a1 OK"), "{response}");
+}
+
+#[test]
+fn authenticate_scram_plus_unavailable_without_binding() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		scram_directory(),
+	);
+	// No certificate hash configured → -PLUS is not offered.
+	let response = text(&session.command_line(&format!(
+		"a1 AUTHENTICATE SCRAM-SHA-256-PLUS {}",
+		B64.encode("p=tls-server-end-point,,n=alice,r=CN")
+	)));
+	assert!(response.contains("a1 NO"), "{response}");
+}
+
+#[test]
+fn authenticate_scram_rejects_downgrade_when_bound() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = Session::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		scram_directory(),
+	)
+	.with_scram_nonce("SN")
+	.with_channel_binding(CERT_HASH.to_vec());
+	// Plain SCRAM with `y,,` on a link that offers -PLUS is a downgrade.
+	let response = text(&session.command_line(&format!(
+		"a1 AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("y,,n=alice,r=CN")
+	)));
+	assert!(response.contains("a1 NO"), "{response}");
+}

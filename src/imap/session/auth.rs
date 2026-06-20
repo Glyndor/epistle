@@ -3,7 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use crate::smtp::scram::{ScramCredentials, ScramServer, username_of};
+use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
@@ -14,8 +14,11 @@ use super::{Output, Session, State};
 pub(super) enum PendingAuth {
 	/// Tag stashed while awaiting the PLAIN response (`+ `).
 	Plain { tag: String },
-	/// Awaiting the SCRAM client-first message.
-	ScramFirst { tag: String },
+	/// Awaiting the SCRAM client-first message (with its channel-binding policy).
+	ScramFirst {
+		tag: String,
+		binding: ChannelBinding,
+	},
 	/// Awaiting the SCRAM client-final message.
 	ScramFinal {
 		tag: String,
@@ -47,12 +50,47 @@ impl Session {
 
 	/// The advertised SASL mechanisms, including OAuth when configured.
 	pub(super) fn sasl_capability(&self) -> String {
-		let mut caps = String::from(" AUTH=PLAIN AUTH=LOGIN AUTH=SCRAM-SHA-256");
+		let mut caps = String::new();
+		// Channel binding (-PLUS) is offered only with a certificate hash to bind.
+		if self.cbind_data.is_some() {
+			caps.push_str(" AUTH=SCRAM-SHA-256-PLUS");
+		}
+		caps.push_str(" AUTH=PLAIN AUTH=LOGIN AUTH=SCRAM-SHA-256");
 		if self.oauth.is_some() {
 			caps.push_str(" AUTH=OAUTHBEARER AUTH=XOAUTH2");
 		}
 		caps.push_str(" SASL-IR");
 		caps
+	}
+
+	/// The advertised IMAP capabilities, including SASL mechanisms and the
+	/// STARTTLS/LOGINDISABLED state.
+	pub(super) fn capabilities(&self) -> String {
+		let mut capabilities = String::from(
+			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
+LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
+		);
+		if self.tls_available {
+			capabilities.push_str(" STARTTLS");
+		}
+		if self.tls_active {
+			capabilities.push_str(&self.sasl_capability());
+		} else {
+			capabilities.push_str(" LOGINDISABLED");
+		}
+		capabilities
+	}
+
+	/// The channel-binding policy for a SCRAM exchange (mirrors the SMTP side):
+	/// `-PLUS` binds to the certificate hash; plain SCRAM over a bound link
+	/// rejects downgrades; without a binding it is unsupported.
+	fn scram_binding(&self, plus: bool) -> ChannelBinding {
+		match (&self.cbind_data, plus) {
+			(Some(hash), true) => ChannelBinding::Required(hash.clone()),
+			(Some(_), false) => ChannelBinding::Supported,
+			(None, _) => ChannelBinding::Unsupported,
+		}
 	}
 
 	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token (SASL-IR required).
@@ -94,15 +132,10 @@ impl Session {
 					continuation("")
 				}
 			},
-			"SCRAM-SHA-256" => match initial {
-				Some(client_first) => self.scram_first(tag, &client_first),
-				None => {
-					self.pending_auth = Some(PendingAuth::ScramFirst {
-						tag: tag.to_string(),
-					});
-					continuation("")
-				}
-			},
+			"SCRAM-SHA-256" => self.scram_begin(tag, initial, false),
+			"SCRAM-SHA-256-PLUS" if self.cbind_data.is_some() => {
+				self.scram_begin(tag, initial, true)
+			}
 			"LOGIN" => match initial {
 				// SASL-IR initial response is the username.
 				Some(user) => self.login_user(tag, &user),
@@ -151,7 +184,7 @@ impl Session {
 		}
 		match self.pending_auth.take() {
 			Some(PendingAuth::Plain { tag }) => self.auth_plain(&tag, line),
-			Some(PendingAuth::ScramFirst { tag }) => self.scram_first(&tag, line),
+			Some(PendingAuth::ScramFirst { tag, binding }) => self.scram_first(&tag, line, binding),
 			Some(PendingAuth::ScramFinal {
 				tag,
 				server,
@@ -182,7 +215,23 @@ impl Session {
 		}
 	}
 
-	fn scram_first(&mut self, tag: &str, encoded: &str) -> Output {
+	/// Begin SCRAM-SHA-256(-PLUS): process the optional SASL-IR client-first, or
+	/// prompt for it with an empty continuation.
+	fn scram_begin(&mut self, tag: &str, initial: Option<String>, plus: bool) -> Output {
+		let binding = self.scram_binding(plus);
+		match initial {
+			Some(client_first) => self.scram_first(tag, &client_first, binding),
+			None => {
+				self.pending_auth = Some(PendingAuth::ScramFirst {
+					tag: tag.to_string(),
+					binding,
+				});
+				continuation("")
+			}
+		}
+	}
+
+	fn scram_first(&mut self, tag: &str, encoded: &str, binding: ChannelBinding) -> Output {
 		let Some(client_first) = decode(encoded) else {
 			return self.auth_failure(tag);
 		};
@@ -199,7 +248,7 @@ impl Session {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
 			return self.auth_failure(tag);
 		};
-		let mut server = ScramServer::new(nonce);
+		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
 			return self.auth_failure(tag);
 		};
@@ -254,7 +303,7 @@ impl Session {
 		match &self.pending_auth {
 			Some(
 				PendingAuth::Plain { tag }
-				| PendingAuth::ScramFirst { tag }
+				| PendingAuth::ScramFirst { tag, .. }
 				| PendingAuth::LoginUser { tag },
 			) => tag.clone(),
 			Some(PendingAuth::ScramFinal { tag, .. } | PendingAuth::LoginPass { tag, .. }) => {
