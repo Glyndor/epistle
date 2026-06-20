@@ -85,6 +85,18 @@ url = "postgres://mail:${MAIL_DB_PASSWORD}@db/mail"
 
 Substitution happens before the TOML is parsed, so a substituted value must not contain TOML metacharacters (`"`, newlines); percent-encode such characters in a connection URL.
 
+### Privilege separation
+
+Binding the mail ports (25, 465, 587, 993, 143, 995, 80) needs root, but the server should not keep that privilege. With a `[privileges]` section, `mail` drops to an unprivileged user once every listener is bound and before it serves a single connection, so a later compromise cannot act as root:
+
+```toml
+[privileges]
+user = "glyndor-mail"
+group = "glyndor-mail"  # optional; defaults to the user's primary group
+```
+
+The drop fails closed: if the user/group cannot be resolved, the process is not root, or the drop cannot be verified (including that root can no longer be regained), the server refuses to start. Omit the section to run as whoever launched the process (for example under a systemd `User=`).
+
 ## ✨ Features
 
 - **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).

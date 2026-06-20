@@ -12,6 +12,7 @@ mod database;
 mod dkim;
 mod listener;
 mod oauth;
+mod privileges;
 mod tls;
 mod validate;
 mod webhook;
@@ -24,6 +25,7 @@ pub use database::Database;
 pub use dkim::Dkim;
 pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
+pub use privileges::Privileges;
 pub use tls::Tls;
 pub use webhook::Webhook;
 
@@ -135,6 +137,9 @@ pub struct Config {
 	pub oauth: Option<Oauth>,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
+	/// Unprivileged user/group to drop to after privileged ports are bound.
+	/// Absent leaves the process running as whoever started it.
+	pub privileges: Option<Privileges>,
 }
 
 impl Config {

@@ -397,6 +397,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		}
 	}
 
+	// All privileged ports are now bound; drop OS privileges before serving any
+	// connection so a later compromise cannot act as root (no-op when
+	// `[privileges]` is unset). Fails closed: a failed drop aborts startup.
+	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
+
 	// Run until the first listener fails or a shutdown signal is received.
 	let shutdown = async {
 		tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
