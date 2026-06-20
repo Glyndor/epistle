@@ -186,40 +186,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let worker = Arc::new(worker);
 	tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
 
-	// DMARC aggregate report flush: once per hour, queue reports for
-	// completed days that have accumulated delivery records.
-	{
-		let data_dir = config.data_dir.clone();
-		let hostname = config.hostname.clone();
-		let spool = crate::storage::FsSpool::open(&config.data_dir)?;
-		let dns = Arc::clone(&spf_dns);
-		tokio::spawn(async move {
-			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-			interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-			loop {
-				interval.tick().await;
-				let ts = std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.map(|d| d.as_secs())
-					.unwrap_or(0);
-				let today = crate::dmarc::aggregate::unix_to_day(ts);
-				let messages = crate::dmarc::aggregate::flush_pending(
-					&data_dir,
-					&today,
-					&hostname,
-					&format!("postmaster@{hostname}"),
-					&hostname,
-					dns.as_ref(),
-				)
-				.await;
-				for message in messages {
-					if let Err(e) = spool.store(&message) {
-						tracing::warn!(%e, "failed to queue DMARC report");
-					}
-				}
-			}
-		});
-	}
+	// DMARC aggregate report flush runs hourly in the background.
+	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
 
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	let tls_acceptor = match &config.tls {
@@ -353,6 +321,22 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				let listener = TcpListener::bind(addr).await?;
 				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
 				let server = Arc::new(crate::pop3::server::Server::new(
+					config.data_dir.clone(),
+					directory.clone(),
+					acceptor.clone(),
+				));
+				tasks.push(tokio::spawn(server.serve(listener)));
+			}
+			ListenerKind::ManageSieve => {
+				let Some(acceptor) = &tls_acceptor else {
+					return Err(std::io::Error::other(
+						"ManageSieve listener without TLS configured",
+					));
+				};
+				let addr = listener_config.socket_addr();
+				let listener = TcpListener::bind(addr).await?;
+				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let server = Arc::new(crate::managesieve::server::Server::new(
 					config.data_dir.clone(),
 					directory.clone(),
 					acceptor.clone(),

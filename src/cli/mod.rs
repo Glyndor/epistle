@@ -9,6 +9,7 @@ mod mobileconfig;
 mod queue;
 mod report_abuse;
 mod serve;
+mod serve_tasks;
 mod srv;
 mod verify;
 

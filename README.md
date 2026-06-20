@@ -102,7 +102,7 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 - **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).
 - **Authentication** — SASL PLAIN/LOGIN/SCRAM-SHA-256/OAUTHBEARER with TOTP two-factor, all over TLS.
 - **Email security** — SPF, DKIM (sign + verify, ed25519 + RSA), DMARC with aggregate reports, ARC, MTA-STS, DANE and TLS-RPT.
-- **Filtering** — Sieve (tests, actions, variables, vacation) plus greylisting, DNSBL, Bayesian and reputation antispam.
+- **Filtering** — Sieve (tests, actions, variables, vacation) with remote script management over ManageSieve (RFC 5804), plus greylisting, DNSBL, Bayesian and reputation antispam.
 - **Operations** — automatic TLS via ACME, a management API, outbound webhooks, Prometheus metrics, and a CLI (`serve`, `export`/`import`, `queue`, `accounts`, `account-add`, `dkim-keygen`, `token-hash`).
 
 ## 🗺️ Roadmap

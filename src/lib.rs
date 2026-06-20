@@ -19,6 +19,7 @@ pub mod dmarc;
 pub mod dnsbl;
 pub mod imap;
 pub mod jwt;
+pub mod managesieve;
 pub mod metrics;
 pub mod mtasts;
 pub mod oauth;

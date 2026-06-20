@@ -24,6 +24,8 @@ pub enum ListenerKind {
 	Imap,
 	/// POP3 over implicit TLS (port 995). Plaintext POP3 is not offered.
 	Pop3s,
+	/// ManageSieve with mandatory STARTTLS upgrade (port 4190).
+	ManageSieve,
 	/// Prometheus metrics endpoint (`GET /metrics`).
 	Metrics,
 	/// ACME HTTP-01 challenge responder (`/.well-known/acme-challenge/*`).
@@ -41,6 +43,7 @@ impl ListenerKind {
 			ListenerKind::Imaps => 993,
 			ListenerKind::Imap => 143,
 			ListenerKind::Pop3s => 995,
+			ListenerKind::ManageSieve => 4190,
 			ListenerKind::Metrics => 9090,
 			ListenerKind::Acme => 80,
 		}
