@@ -67,6 +67,6 @@ fn no_domains_fails() {
 fn hostname_is_xml_escaped() {
 	// A hostname can never contain `<`, but the emitter must still escape
 	// defensively so a future caller cannot inject markup.
-	let xml = build_autodiscover("a<b&c");
+	let xml = crate::autodiscovery::autodiscover("a<b&c");
 	assert!(xml.contains("a&lt;b&amp;c"), "{xml}");
 }

@@ -8,6 +8,7 @@ pub mod acme;
 pub mod antispam;
 pub mod api;
 pub mod arc;
+pub mod autodiscovery;
 pub mod cli;
 pub mod clock;
 pub mod config;

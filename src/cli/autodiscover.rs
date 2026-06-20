@@ -37,59 +37,12 @@ pub(super) fn run(
 		}
 	}
 
-	let xml = build_autodiscover(&config.hostname);
+	let xml = crate::autodiscovery::autodiscover(&config.hostname);
 	if out.write_all(xml.as_bytes()).is_err() {
 		eprintln!("error: writing autodiscover");
 		return ExitCode::FAILURE;
 	}
 	ExitCode::SUCCESS
-}
-
-/// Build the Autodiscover v1 POX response: IMAP over implicit TLS (993) and SMTP
-/// submission over STARTTLS (587), both authenticated. `<SSL>on</SSL>` marks an
-/// encrypted transport; `<Encryption>` distinguishes implicit TLS from STARTTLS.
-fn build_autodiscover(hostname: &str) -> String {
-	let host = escape(hostname);
-	format!(
-		r#"<?xml version="1.0" encoding="utf-8"?>
-<Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
-	<Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
-		<Account>
-			<AccountType>email</AccountType>
-			<Action>settings</Action>
-			<Protocol>
-				<Type>IMAP</Type>
-				<Server>{host}</Server>
-				<Port>993</Port>
-				<SSL>on</SSL>
-				<Encryption>SSL</Encryption>
-				<SPA>off</SPA>
-				<AuthRequired>on</AuthRequired>
-			</Protocol>
-			<Protocol>
-				<Type>SMTP</Type>
-				<Server>{host}</Server>
-				<Port>587</Port>
-				<SSL>on</SSL>
-				<Encryption>TLS</Encryption>
-				<SPA>off</SPA>
-				<AuthRequired>on</AuthRequired>
-			</Protocol>
-		</Account>
-	</Response>
-</Autodiscover>
-"#
-	)
-}
-
-/// Escape the five XML special characters for safe interpolation.
-fn escape(value: &str) -> String {
-	value
-		.replace('&', "&amp;")
-		.replace('<', "&lt;")
-		.replace('>', "&gt;")
-		.replace('"', "&quot;")
-		.replace('\'', "&apos;")
 }
 
 #[cfg(test)]

@@ -3,8 +3,6 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
-
 use crate::config::{Config, ListenerKind};
 use crate::smtp::server::{Server, TlsMode};
 use crate::smtp::sink::MessageSink;
@@ -247,9 +245,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open(&config.data_dir)?,
 				)
 				.with_quota(config.quota_bytes.unwrap_or(0));
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let router = crate::api::router(state);
 				tasks.push(tokio::spawn(async move {
 					axum::serve(listener, router)
@@ -258,9 +254,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}));
 			}
 			ListenerKind::Acme => {
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let router = crate::acme::http01::router(challenge_store.clone());
 				tasks.push(tokio::spawn(async move {
 					axum::serve(listener, router)
@@ -269,9 +263,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}));
 			}
 			ListenerKind::Metrics => {
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let metrics = Arc::clone(&metrics);
 				let router = axum::Router::new().route(
 					"/metrics",
@@ -304,9 +296,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					ListenerKind::Imap => crate::imap::server::TlsMode::StartTls,
 					_ => crate::imap::server::TlsMode::Implicit,
 				};
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let mut imap_server = crate::imap::server::Server::new(
 					&config.hostname,
 					config.data_dir.clone(),
@@ -331,9 +321,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						"POP3S listener without TLS configured",
 					));
 				};
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let server = Arc::new(crate::pop3::server::Server::new(
 					config.data_dir.clone(),
 					directory.clone(),
@@ -341,15 +329,23 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				));
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
+			ListenerKind::Autoconfig => {
+				let listener = super::serve_tasks::bind(listener_config).await?;
+				let router =
+					crate::autodiscovery::router(config.hostname.clone(), config.domains.clone());
+				tasks.push(tokio::spawn(async move {
+					axum::serve(listener, router)
+						.await
+						.map_err(std::io::Error::other)
+				}));
+			}
 			ListenerKind::ManageSieve => {
 				let Some(acceptor) = &tls_acceptor else {
 					return Err(std::io::Error::other(
 						"ManageSieve listener without TLS configured",
 					));
 				};
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let server = Arc::new(crate::managesieve::server::Server::new(
 					config.data_dir.clone(),
 					directory.clone(),
@@ -358,9 +354,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
-				let addr = listener_config.socket_addr();
-				let listener = TcpListener::bind(addr).await?;
-				tracing::info!(%addr, kind = ?listener_config.kind, "listening");
+				let listener = super::serve_tasks::bind(listener_config).await?;
 				let mode = match listener_config.kind {
 					ListenerKind::Submissions => TlsMode::Implicit,
 					_ => TlsMode::Opportunistic,
@@ -438,6 +432,7 @@ mod tests {
 	use crate::config::Listener;
 	use crate::smtp::sink::MemorySink;
 	use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	use tokio::net::TcpListener;
 
 	fn test_config(data_dir: &Path, listeners: Vec<Listener>) -> Config {
 		let toml = format!(

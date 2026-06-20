@@ -30,6 +30,8 @@ pub enum ListenerKind {
 	Metrics,
 	/// ACME HTTP-01 challenge responder (`/.well-known/acme-challenge/*`).
 	Acme,
+	/// Client autodiscovery: Thunderbird autoconfig + Microsoft Autodiscover.
+	Autoconfig,
 }
 
 impl ListenerKind {
@@ -46,6 +48,7 @@ impl ListenerKind {
 			ListenerKind::ManageSieve => 4190,
 			ListenerKind::Metrics => 9090,
 			ListenerKind::Acme => 80,
+			ListenerKind::Autoconfig => 8091,
 		}
 	}
 }

@@ -39,7 +39,10 @@ flags.
 ## Client autodiscovery
 
 These print documents the operator publishes so clients configure themselves
-from just an email address and password.
+from just an email address and password. Thunderbird autoconfig and Microsoft
+Autodiscover can also be served **live** by adding an `autoconfig` listener (see
+the [configuration reference](configuration.md)) and pointing the
+`autoconfig.<domain>`/`autodiscover.<domain>` subdomains at it.
 
 | Command | What it does |
 |---|---|

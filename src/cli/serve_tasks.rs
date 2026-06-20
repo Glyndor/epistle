@@ -3,7 +3,17 @@
 
 use std::sync::Arc;
 
-use crate::config::Config;
+use tokio::net::TcpListener;
+
+use crate::config::{Config, Listener};
+
+/// Bind a listener's socket and log it. Shared by every `serve` listener arm.
+pub(super) async fn bind(listener: &Listener) -> std::io::Result<TcpListener> {
+	let addr = listener.socket_addr();
+	let bound = TcpListener::bind(addr).await?;
+	tracing::info!(%addr, kind = ?listener.kind, "listening");
+	Ok(bound)
+}
 
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with
 /// accumulated delivery records, build the reports and queue them on the
