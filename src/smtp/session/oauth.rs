@@ -21,7 +21,13 @@ impl Session {
 	/// The advertised `AUTH` capability line, including the OAuth mechanisms
 	/// when a verifier is configured.
 	pub(super) fn auth_capability(&self) -> String {
-		let mut mechs = String::from("AUTH SCRAM-SHA-256 PLAIN LOGIN");
+		// SCRAM-SHA-256-PLUS (channel binding) is offered only when the
+		// connection has a known certificate hash to bind to.
+		let mut mechs = String::from("AUTH");
+		if self.cbind_data.is_some() {
+			mechs.push_str(" SCRAM-SHA-256-PLUS");
+		}
+		mechs.push_str(" SCRAM-SHA-256 PLAIN LOGIN");
 		if self.oauth.is_some() {
 			mechs.push_str(" OAUTHBEARER XOAUTH2");
 		}

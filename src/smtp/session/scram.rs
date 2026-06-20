@@ -4,14 +4,15 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use super::super::reply::Reply;
-use super::super::scram::{ScramCredentials, ScramServer, username_of};
+use super::super::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 use super::{Action, Session};
 
 /// In-flight SCRAM state between AUTH rounds.
 #[derive(Debug)]
 pub(super) enum PendingScram {
-	/// Server sent `334 ` (empty); awaiting the client-first message.
-	ClientFirst,
+	/// Server sent `334 ` (empty); awaiting the client-first message. Carries
+	/// the channel-binding policy chosen for the mechanism the client picked.
+	ClientFirst(ChannelBinding),
 	/// Server sent the server-first challenge; awaiting the client-final.
 	ClientFinal {
 		server: Box<ScramServer>,
@@ -27,13 +28,25 @@ impl Session {
 		self
 	}
 
-	/// Begin SCRAM-SHA-256: process the optional initial client-first, or
+	/// The channel-binding policy for a SCRAM exchange: `-PLUS` binds to the
+	/// certificate hash; plain SCRAM over a bound link rejects downgrades;
+	/// without a known binding (cleartext) it is unsupported.
+	pub(super) fn scram_binding(&self, plus: bool) -> ChannelBinding {
+		match (&self.cbind_data, plus) {
+			(Some(hash), true) => ChannelBinding::Required(hash.clone()),
+			(Some(_), false) => ChannelBinding::Supported,
+			(None, _) => ChannelBinding::Unsupported,
+		}
+	}
+
+	/// Begin SCRAM-SHA-256(-PLUS): process the optional initial client-first, or
 	/// prompt for it with an empty challenge.
-	pub(super) fn scram_begin(&mut self, initial: Option<String>) -> Action {
+	pub(super) fn scram_begin(&mut self, initial: Option<String>, plus: bool) -> Action {
+		let binding = self.scram_binding(plus);
 		match initial {
-			Some(client_first) => self.scram_client_first(&client_first),
+			Some(client_first) => self.scram_client_first(&client_first, binding),
 			None => {
-				self.pending_scram = Some(PendingScram::ClientFirst);
+				self.pending_scram = Some(PendingScram::ClientFirst(binding));
 				Action::CollectAuthResponse(Reply::single(334, ""))
 			}
 		}
@@ -41,7 +54,7 @@ impl Session {
 
 	/// Process the base64 client-first message: look up the user's SCRAM
 	/// credentials and answer with the server-first challenge.
-	pub(super) fn scram_client_first(&mut self, encoded: &str) -> Action {
+	pub(super) fn scram_client_first(&mut self, encoded: &str, binding: ChannelBinding) -> Action {
 		let Some(client_first) = decode(encoded) else {
 			return self.scram_failure();
 		};
@@ -61,7 +74,7 @@ impl Session {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
 			return self.scram_failure();
 		};
-		let mut server = ScramServer::new(nonce);
+		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
 			return self.scram_failure();
 		};

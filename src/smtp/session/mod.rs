@@ -52,6 +52,9 @@ pub struct Session {
 	/// Test-injected SCRAM server nonce; `None` generates a fresh random one.
 	scram_nonce: Option<String>,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` channel-binding data (the server certificate
+	/// hash) when the connection is TLS; enables SCRAM-SHA-256-PLUS.
+	cbind_data: Option<Vec<u8>>,
 }
 
 impl Session {
@@ -71,7 +74,16 @@ impl Session {
 			pending_login: None,
 			scram_nonce: None,
 			oauth: None,
+			cbind_data: None,
 		}
+	}
+
+	/// Provide the `tls-server-end-point` channel-binding data (the server
+	/// certificate hash), enabling SCRAM-SHA-256-PLUS. Set by the network layer
+	/// once the connection is TLS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
+		self
 	}
 
 	/// The authenticated account, if AUTH succeeded.
@@ -189,7 +201,8 @@ impl Session {
 				Some(response) => self.verify_plain(&response),
 				None => Action::CollectAuthResponse(Reply::single(334, "")),
 			},
-			"SCRAM-SHA-256" => self.scram_begin(initial),
+			"SCRAM-SHA-256" => self.scram_begin(initial, false),
+			"SCRAM-SHA-256-PLUS" if self.cbind_data.is_some() => self.scram_begin(initial, true),
 			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(mechanism, initial),
 			"LOGIN" => match initial {
 				// Initial response is the username; prompt for the password.
@@ -229,7 +242,9 @@ impl Session {
 			};
 		}
 		match self.pending_scram.take() {
-			Some(scram::PendingScram::ClientFirst) => self.scram_client_first(line),
+			Some(scram::PendingScram::ClientFirst(binding)) => {
+				self.scram_client_first(line, binding)
+			}
 			Some(scram::PendingScram::ClientFinal {
 				server,
 				credentials,
