@@ -31,6 +31,10 @@ pub struct Envelope {
 	/// Recipients that suppress failure DSNs (`NOTIFY=NEVER`, RFC 3461).
 	#[serde(default)]
 	pub no_dsn: Vec<String>,
+	/// Whether the "delivery delayed" warning DSN has already been sent, so it
+	/// is sent at most once (RFC 5321 §4.5.4.1).
+	#[serde(default)]
+	pub delay_warned: bool,
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -70,6 +74,7 @@ impl FsSpool {
 			next_attempt: 0,
 			require_tls: message.require_tls,
 			no_dsn: message.no_dsn.clone(),
+			delay_warned: false,
 		};
 
 		let tmp_message = self.root.join("tmp").join(format!("{id}.eml"));
@@ -127,6 +132,17 @@ impl FsSpool {
 		write_sync(&tmp, &bytes)?;
 		fs::rename(&tmp, self.root.join("new").join(format!("{id}.json")))?;
 		Ok(entry.envelope.attempts)
+	}
+
+	/// Mark the delay-warning DSN as sent, crash-safely, so it is sent once.
+	pub fn mark_delay_warned(&self, id: Uuid) -> std::io::Result<()> {
+		let mut entry = self.load(id)?;
+		entry.envelope.delay_warned = true;
+		let tmp = self.root.join("tmp").join(format!("{id}.json"));
+		let bytes = serde_json::to_vec(&entry.envelope).map_err(std::io::Error::other)?;
+		write_sync(&tmp, &bytes)?;
+		fs::rename(&tmp, self.root.join("new").join(format!("{id}.json")))?;
+		Ok(())
 	}
 
 	/// Remove a spooled message after successful processing.

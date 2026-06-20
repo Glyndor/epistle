@@ -103,6 +103,9 @@ pub struct Config {
 	/// Per-account IMAP storage quota in bytes (RFC 9208). Absent uses the
 	/// built-in default (5 GiB).
 	pub quota_bytes: Option<u64>,
+	/// Outbound give-up window in seconds: undelivered mail older than this is
+	/// bounced to the sender. Absent uses the built-in default (5 days).
+	pub queue_give_up_secs: Option<u64>,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,

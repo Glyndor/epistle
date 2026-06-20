@@ -119,41 +119,75 @@ async fn permanent_rejection_drops_and_bounces() {
 	assert!(body.contains("carol@remote.example"), "{body}");
 }
 
+/// Creation epoch of the single spooled message, from its UUIDv7 id.
+fn created_at(spool: &FsSpool) -> u64 {
+	let id = spool.list().expect("list")[0];
+	id.get_timestamp().expect("v7 timestamp").to_unix().0
+}
+
 #[tokio::test]
-async fn retry_exhaustion_bounces_once() {
+async fn expired_message_bounces_once() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let created = created_at(&spool);
+	let bounce_sink = Arc::new(MemorySink::new());
+	// A 1-hour give-up window for the test (well under the 4h delay warning).
+	let worker = Worker::new(spool, Arc::new(DownConnector), "mail.sender.example")
+		.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>)
+		.with_max_age(3600);
+
+	// Within the window: deferred, kept, no bounce.
+	worker.set_now(created + 60);
+	assert_eq!(worker.pass().await.expect("pass"), 0);
+	assert_eq!(worker.spool.list().expect("list").len(), 1);
+	assert!(bounce_sink.messages().is_empty());
+
+	// Past the window: bounced (Action: failed) and removed.
+	worker.set_now(created + 3601);
+	assert_eq!(worker.pass().await.expect("pass"), 0);
+	assert!(worker.spool.list().expect("list").is_empty());
+	let bounces = bounce_sink.messages();
+	assert_eq!(bounces.len(), 1);
+	let body = String::from_utf8(bounces[0].data.clone()).expect("ascii");
+	assert!(body.contains("Action: failed"), "{body}");
+}
+
+#[tokio::test]
+async fn transient_failure_defers_within_window() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let created = created_at(&spool);
+	// Default 5-day window; retry across the first few hours, all kept.
+	let worker = Worker::new(spool, Arc::new(DownConnector), "mail.sender.example");
+	for hours in [0u64, 1, 2, 3] {
+		worker.set_now(created + hours * 3600 + 1);
+		assert_eq!(worker.pass().await.expect("pass"), 0);
+		assert_eq!(worker.spool.list().expect("list").len(), 1);
+	}
+}
+
+#[tokio::test]
+async fn delay_warning_sent_once_after_threshold() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let created = created_at(&spool);
 	let bounce_sink = Arc::new(MemorySink::new());
 	let worker = Worker::new(spool, Arc::new(DownConnector), "mail.sender.example")
 		.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>);
 
-	for round in 0..MAX_ATTEMPTS {
-		// Jump past every backoff window so each pass really retries.
-		worker.set_now(1_000_000 + u64::from(round) * 10_000);
-		let _ = worker.pass().await.expect("pass");
-	}
-	assert!(worker.spool.list().expect("list").is_empty());
-	assert_eq!(bounce_sink.messages().len(), 1);
-}
-
-#[tokio::test]
-async fn transient_failure_keeps_the_entry_until_max_attempts() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let spool = spool_with_message(dir.path(), "bob@remote.example");
-	let worker = Worker::new(spool, Arc::new(DownConnector), "mail.sender.example");
-
-	for round in 0..MAX_ATTEMPTS - 1 {
-		worker.set_now(1_000_000 + u64::from(round) * 10_000);
-		assert_eq!(worker.pass().await.expect("pass"), 0);
-		assert_eq!(worker.spool.list().expect("list").len(), 1);
-	}
-	// Within the backoff window nothing is attempted.
+	// Past the 4h delay-warning threshold: one "delayed" DSN, message kept.
+	worker.set_now(created + 14_401);
 	assert_eq!(worker.pass().await.expect("pass"), 0);
 	assert_eq!(worker.spool.list().expect("list").len(), 1);
-	// The final attempt gives up and drops the entry.
-	worker.set_now(2_000_000);
-	assert_eq!(worker.pass().await.expect("pass"), 0);
-	assert!(worker.spool.list().expect("list").is_empty());
+	let messages = bounce_sink.messages();
+	assert_eq!(messages.len(), 1);
+	let body = String::from_utf8(messages[0].data.clone()).expect("ascii");
+	assert!(body.contains("Action: delayed"), "{body}");
+
+	// A later retry does not send a second warning.
+	worker.set_now(created + 18_000);
+	let _ = worker.pass().await.expect("pass");
+	assert_eq!(bounce_sink.messages().len(), 1);
 }
 
 #[tokio::test]
