@@ -76,6 +76,7 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `api` | 8025 | Management HTTP API. Requires `[api]`. |
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
 | `acme` | 80 | ACME HTTP-01 challenge responder. |
+| `autoconfig` | 8091 | Serves Thunderbird autoconfig + Microsoft Autodiscover. Point `autoconfig.<domain>`/`autodiscover.<domain>` here (behind your TLS proxy). |
 
 ## Sections
 
