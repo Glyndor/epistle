@@ -81,6 +81,9 @@ pub struct Session {
 	pending_auth: Option<auth::PendingAuth>,
 	scram_nonce: Option<String>,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` channel-binding data (server certificate hash)
+	/// when known; enables AUTH=SCRAM-SHA-256-PLUS.
+	cbind_data: Option<Vec<u8>>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -102,12 +105,20 @@ impl Session {
 			pending_auth: None,
 			scram_nonce: None,
 			oauth: None,
+			cbind_data: None,
 		}
 	}
 
 	/// Set the per-account storage quota (bytes).
 	pub fn with_quota_limit(mut self, bytes: u64) -> Self {
 		self.quota_limit_bytes = bytes;
+		self
+	}
+
+	/// Provide the `tls-server-end-point` channel-binding data (server
+	/// certificate hash), enabling AUTH=SCRAM-SHA-256-PLUS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
 		self
 	}
 
@@ -122,23 +133,6 @@ impl Session {
 		self.tls_active = true;
 		self.tls_available = false;
 		self.state = State::NotAuthenticated { login_failures: 0 };
-	}
-
-	fn capabilities(&self) -> String {
-		let mut capabilities = String::from(
-			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
-LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
-		);
-		if self.tls_available {
-			capabilities.push_str(" STARTTLS");
-		}
-		if self.tls_active {
-			capabilities.push_str(&self.sasl_capability());
-		} else {
-			capabilities.push_str(" LOGINDISABLED");
-		}
-		capabilities
 	}
 
 	/// The greeting sent when the connection opens.

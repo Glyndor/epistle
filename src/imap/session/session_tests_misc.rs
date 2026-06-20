@@ -182,23 +182,6 @@ fn authenticate_oauthbearer_succeeds() {
 	assert!(r2.contains("a1 NO"), "{r2}");
 }
 
-fn scram_directory() -> Arc<Directory> {
-	use crate::smtp::scram::{ScramCredentials, ScramStored};
-	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
-	Arc::new(
-		Directory::new(
-			["example.org".to_string()],
-			[("alice@example.org".to_string(), "alice".to_string())],
-		)
-		.with_password_hashes([(
-			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
-		)])
-		.with_scram([("alice".to_string(), stored)]),
-	)
-}
-
 #[test]
 fn authenticate_plain_succeeds() {
 	use base64::Engine;
