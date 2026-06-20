@@ -202,6 +202,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.clone()
 		.map(crate::tls::ReloadableAcceptor::new);
 
+	// SCRAM-SHA-256-PLUS channel binding (tls-server-end-point). Offered only
+	// with a static [tls] certificate: under ACME the certificate is reloaded at
+	// runtime, which would make a fixed hash stale, so -PLUS stays off there and
+	// clients fall back to plain SCRAM.
+	let channel_binding = match (&config.tls, &config.acme) {
+		(Some(tls), None) => crate::tls::tls_server_end_point(tls),
+		_ => None,
+	};
+
 	// ACME automatic renewal: obtain/renew certificates and hot-reload the SMTP
 	// acceptor. Requires a [tls] bootstrap certificate to reload into.
 	if let Some(acme) = &config.acme {
@@ -311,6 +320,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(verifier) = &oauth_verifier {
 					imap_server = imap_server.with_oauth(Arc::clone(verifier));
 				}
+				if let Some(cbind) = &channel_binding {
+					imap_server = imap_server.with_channel_binding(cbind.clone());
+				}
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
@@ -377,6 +389,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				if let Some(acceptor) = &reloadable_tls {
 					server = server.with_tls(acceptor.clone(), mode);
+				}
+				if let Some(cbind) = &channel_binding {
+					server = server.with_channel_binding(cbind.clone());
 				}
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}

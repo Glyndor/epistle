@@ -428,22 +428,10 @@ async fn implicit_tls_serves_inside_handshake() {
 #[tokio::test]
 async fn implicit_tls_without_acceptor_errors() {
 	let sink = Arc::new(MemorySink::new());
+	// Implicit TLS with no acceptor: only `tls_mode` differs from the default.
 	let server = Server {
-		hostname: "mail.example.org".to_string(),
-		sink: sink as Arc<dyn MessageSink>,
-		tls: None,
 		tls_mode: TlsMode::Implicit,
-		directory: DirectoryHandle::new(Directory::default()),
-		spf: None,
-		dnsbl: crate::dnsbl::Dnsbl::default(),
-		reputation: None,
-		hook: None,
-		metrics: std::sync::Arc::new(crate::metrics::Metrics::new()),
-		first_time_delay: std::time::Duration::ZERO,
-		report_dir: None,
-		arc_sealer: None,
-		greylist: None,
-		oauth: None,
+		..Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
 	};
 	let (_client, server_stream) = tokio::io::duplex(1024);
 	assert!(server.handle(server_stream, None).await.is_err());
