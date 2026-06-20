@@ -227,6 +227,42 @@ fn address_subaddress_user_and_detail() {
 }
 
 #[test]
+fn relational_value_and_count() {
+	// RFC 5231 :value with i;ascii-numeric: numeric comparison of the localpart.
+	let msg = b"From: 500@example.org\r\n\r\nx\r\n";
+	let value = run(
+		"if address :value \"gt\" :comparator \"i;ascii-numeric\" :localpart \"from\" \"100\" { discard; }",
+		msg,
+	);
+	assert!(value.discarded);
+	// 50 is not > 100.
+	let low = b"From: 50@example.org\r\n\r\nx\r\n";
+	assert!(
+		!run(
+			"if address :value \"gt\" :comparator \"i;ascii-numeric\" :localpart \"from\" \"100\" { discard; }",
+			low,
+		)
+		.discarded
+	);
+
+	// :count compares the number of matching header values.
+	let many = b"Received: a\r\nReceived: b\r\nReceived: c\r\nFrom: x@y.example\r\n\r\nx\r\n";
+	let counted = run(
+		"if header :count \"ge\" :comparator \"i;ascii-numeric\" \"received\" \"2\" { discard; }",
+		many,
+	);
+	assert!(counted.discarded);
+	let one = b"Received: a\r\nFrom: x@y.example\r\n\r\nx\r\n";
+	assert!(
+		!run(
+			"if header :count \"ge\" :comparator \"i;ascii-numeric\" \"received\" \"2\" { discard; }",
+			one,
+		)
+		.discarded
+	);
+}
+
+#[test]
 fn envelope_test_matches_mail_from_and_rcpt_to() {
 	let tokens =
 		tokenize("if envelope :domain :is \"from\" \"bad.example\" { discard; }").expect("lex");
