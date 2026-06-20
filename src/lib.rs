@@ -23,6 +23,7 @@ pub mod metrics;
 pub mod mtasts;
 pub mod oauth;
 pub mod pop3;
+pub mod privdrop;
 pub mod queue;
 pub mod rules;
 pub mod sieve;

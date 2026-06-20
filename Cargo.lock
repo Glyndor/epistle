@@ -1521,6 +1521,7 @@ dependencies = [
  "criterion",
  "flate2",
  "hickory-resolver",
+ "libc",
  "psl",
  "rcgen",
  "reqwest",

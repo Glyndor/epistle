@@ -16,6 +16,28 @@ impl Config {
 		self.validate_listeners()?;
 		self.validate_acme()?;
 		self.validate_webhook()?;
+		self.validate_privileges()?;
+		Ok(())
+	}
+
+	fn validate_privileges(&self) -> Result<(), ConfigError> {
+		let Some(privileges) = &self.privileges else {
+			return Ok(());
+		};
+		if privileges.user.trim().is_empty() {
+			return Err(ConfigError::Invalid(
+				"[privileges] user must not be empty".into(),
+			));
+		}
+		if privileges
+			.group
+			.as_ref()
+			.is_some_and(|g| g.trim().is_empty())
+		{
+			return Err(ConfigError::Invalid(
+				"[privileges] group must not be empty when set".into(),
+			));
+		}
 		Ok(())
 	}
 
