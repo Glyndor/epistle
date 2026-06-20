@@ -105,6 +105,11 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 - **Filtering** — Sieve (tests, actions, variables, vacation) with remote script management over ManageSieve (RFC 5804), plus greylisting, DNSBL, Bayesian and reputation antispam.
 - **Operations** — automatic TLS via ACME, a management API, outbound webhooks, Prometheus metrics, and a CLI (`serve`, `export`/`import`, `queue`, `accounts`, `account-add`, `dkim-keygen`, `token-hash`).
 
+## 📚 Documentation
+
+- [Configuration reference](docs/configuration.md) — the TOML file, every section and key, listener kinds, and a full example.
+- [CLI reference](docs/cli.md) — every `mail` command, plus the outbound retry/suppression policy.
+
 ## 🗺️ Roadmap
 
 Remaining work — an LDAP directory backend, IMAP `COMPRESS`, and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
