@@ -180,7 +180,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	.with_bounce_sink(Arc::clone(&sink))
 	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
 	.with_metrics(metrics.clone())
-	.with_max_age(config.queue_give_up_secs.unwrap_or(0));
+	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
+	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?);
 	if let Some(webhook) = &webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}

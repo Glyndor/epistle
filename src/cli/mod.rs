@@ -11,6 +11,7 @@ mod report_abuse;
 mod serve;
 mod serve_tasks;
 mod srv;
+mod suppression;
 mod verify;
 
 use std::path::PathBuf;
@@ -113,6 +114,16 @@ enum Command {
 		/// The domain (defaults to the first configured domain).
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
+	},
+	/// List the outbound suppression list (addresses that hard-bounced), or
+	/// remove one with `--remove`.
+	Suppression {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// Remove this address from the suppression list instead of listing.
+		#[arg(long, value_name = "ADDRESS")]
+		remove: Option<String>,
 	},
 	/// Read an offending message on stdin and print an RFC 5965 ARF abuse
 	/// report (send it to the offending sender's abuse address).
@@ -220,6 +231,15 @@ impl Cli {
 			Command::Autoconfig { config, domain } => match Config::load(&config) {
 				Ok(config) => {
 					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Suppression { config, remove } => match Config::load(&config) {
+				Ok(config) => {
+					suppression::run(&config, remove.as_deref(), &mut std::io::stdout().lock())
 				}
 				Err(error) => {
 					eprintln!("error: {error}");

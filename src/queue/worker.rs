@@ -52,6 +52,8 @@ pub struct Worker {
 	webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// Give-up window in seconds: a message older than this is bounced.
 	max_age_secs: u64,
+	/// Suppression list: recipients that hard-bounced are not retried.
+	suppression: Option<super::SuppressionList>,
 }
 
 impl Worker {
@@ -67,6 +69,7 @@ impl Worker {
 			metrics: None,
 			webhook: None,
 			max_age_secs: DEFAULT_MAX_AGE_SECS,
+			suppression: None,
 		}
 	}
 
@@ -77,6 +80,24 @@ impl Worker {
 			self.max_age_secs = secs;
 		}
 		self
+	}
+
+	/// Skip (and record) recipients on this suppression list.
+	pub fn with_suppression(mut self, suppression: super::SuppressionList) -> Self {
+		self.suppression = Some(suppression);
+		self
+	}
+
+	/// Record every recipient of a permanently failed entry on the suppression
+	/// list, so future mail to them is not even attempted.
+	fn suppress_entry(&self, id: uuid::Uuid) {
+		if let Some(suppression) = &self.suppression
+			&& let Ok(entry) = self.spool.load(id)
+		{
+			for recipient in &entry.envelope.recipients {
+				suppression.suppress(recipient);
+			}
+		}
 	}
 
 	/// Fire delivery-failure events to this webhook.
@@ -253,8 +274,15 @@ impl Worker {
 				Outcome::Dropped(reason) => {
 					tracing::warn!(%id, %reason, "dropping undeliverable message");
 					self.bounce(id, &reason);
+					self.suppress_entry(id);
 					self.spool.remove(id)?;
 					self.metric(|m| m.bounced());
+				}
+				Outcome::Suppressed => {
+					// Every recipient is already suppressed (hard-bounced
+					// before): drop silently, with no second bounce.
+					tracing::debug!(%id, "dropping message to suppressed recipients");
+					self.spool.remove(id)?;
 				}
 				Outcome::Retry(reason) => {
 					let prior = self
@@ -290,9 +318,25 @@ impl Worker {
 			Err(error) => return Outcome::Retry(format!("spool read failed: {error}")),
 		};
 
+		// Skip recipients on the suppression list (they hard-bounced before);
+		// if that leaves none, drop the message without a second bounce.
+		let recipients: Vec<&String> = entry
+			.envelope
+			.recipients
+			.iter()
+			.filter(|r| {
+				self.suppression
+					.as_ref()
+					.is_none_or(|s| !s.is_suppressed(r))
+			})
+			.collect();
+		if recipients.is_empty() {
+			return Outcome::Suppressed;
+		}
+
 		// Group recipients by domain: one conversation per exchanger.
 		let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-		for recipient in &entry.envelope.recipients {
+		for recipient in recipients {
 			let Ok(address) = Address::parse(recipient) else {
 				return Outcome::Dropped(format!("unparseable recipient {recipient}"));
 			};
@@ -350,6 +394,8 @@ enum Outcome {
 	Delivered,
 	Retry(String),
 	Dropped(String),
+	/// Every recipient is suppressed; drop without bouncing.
+	Suppressed,
 }
 
 #[cfg(test)]
