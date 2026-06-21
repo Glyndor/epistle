@@ -24,7 +24,7 @@ use crate::config::Config;
 /// Headless mail server: SMTP, IMAP and modern email security through an
 /// API and CLI.
 #[derive(Debug, Parser)]
-#[command(name = "mail", version, disable_help_subcommand = true)]
+#[command(name = "epistle", version, disable_help_subcommand = true)]
 pub struct Cli {
 	#[command(subcommand)]
 	command: Command,

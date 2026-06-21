@@ -14,7 +14,7 @@ async fn migrations_apply_and_reputation_roundtrips() {
 		return;
 	};
 
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -48,13 +48,13 @@ async fn migrations_apply_and_reputation_roundtrips() {
 
 #[tokio::test]
 async fn reputation_record_accumulates_and_judges() {
-	use mail::antispam::reputation::{self, Scope, Verdict};
+	use epistle::antispam::reputation::{self, Scope, Verdict};
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -95,13 +95,13 @@ async fn reputation_record_accumulates_and_judges() {
 
 #[tokio::test]
 async fn reputation_screen_maps_verdicts() {
-	use mail::antispam::reputation::{self, Scope, Screen};
+	use epistle::antispam::reputation::{self, Scope, Screen};
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -133,13 +133,13 @@ async fn reputation_screen_maps_verdicts() {
 
 #[tokio::test]
 async fn bayes_corpus_trains_and_scores() {
-	use mail::antispam::corpus;
+	use epistle::antispam::corpus;
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 

@@ -22,8 +22,8 @@ mod tests {
 
 	#[test]
 	fn parses_user_only() {
-		let privileges: Privileges = toml::from_str(r#"user = "glyndor-mail""#).expect("parse");
-		assert_eq!(privileges.user, "glyndor-mail");
+		let privileges: Privileges = toml::from_str(r#"user = "glyndor-epistle""#).expect("parse");
+		assert_eq!(privileges.user, "glyndor-epistle");
 		assert!(privileges.group.is_none());
 	}
 

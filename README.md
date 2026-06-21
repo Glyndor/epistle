@@ -1,4 +1,4 @@
-# mail
+# epistle
 
 Self-hosted, headless mail server — SMTP, IMAP and modern email security through an API and CLI. Part of the Glyndor stack.
 
@@ -28,18 +28,18 @@ flowchart LR
 - 🛡️ **Smuggling-immune by construction** — bare CR, bare LF or NUL anywhere in the stream closes the connection; CRLF is enforced at the framing layer
 - 🚫 **No relay, no ghosts** — recipients outside the configured `domains` answer `550 5.7.1`, unknown users in local domains answer `550 5.1.1`; with nothing configured everything is denied (fail closed)
 - ✅ **Full authentication chain** — SPF (RFC 7208) with `fail` rejection, DKIM verification (RFC 6376, rsa + ed25519), DMARC alignment and policy enforcement (RFC 7489); results recorded in `Authentication-Results`
-- ✍️ **DKIM signing** — outbound mail signed with ed25519; `mail dkim-keygen` generates the key and prints the DNS record
+- ✍️ **DKIM signing** — outbound mail signed with ed25519; `epistle dkim-keygen` generates the key and prints the DNS record
 - 🔑 **Submission with AUTH** — `AUTH PLAIN` over TLS only, argon2id password hashes, no user-enumeration oracle; authenticated users relay from their own addresses
 - 📤 **Outbound queue** — MX resolution, opportunistic STARTTLS, per-domain delivery with retry/backoff semantics
 - 📬 **Local delivery** — accepted mail lands once per recipient account under `data_dir/accounts/<name>/new/`
 - 🔒 **Secure by default** — listeners bind to localhost unless explicitly configured otherwise; configuration fails closed on any unknown key or invalid value
 - 💾 **Crash-safe writes** — accepted messages are fsynced and atomically renamed into the mailbox before the server answers `250`
-- 🧰 **Operator CLI** — `mail serve`, `mail config-check`, `mail dkim-keygen`, meaningful exit codes
+- 🧰 **Operator CLI** — `epistle serve`, `epistle config-check`, `epistle dkim-keygen`, meaningful exit codes
 
 ## Install
 
 ```sh
-curl -fsSL https://glyndor.net/install/mail | sh
+curl -fsSL https://glyndor.net/install/epistle | sh
 ```
 
 Installs the latest release binary to `/usr/local/bin`. Override with `INSTALL_DIR=/path/to/bin`.
@@ -62,8 +62,8 @@ addresses = ["alice@example.org", "postmaster@example.org"]
 kind = "smtp"
 EOF
 
-./target/release/mail config-check --config mail.toml
-./target/release/mail serve --config mail.toml
+./target/release/epistle config-check --config mail.toml
+./target/release/epistle serve --config mail.toml
 ```
 
 The SMTP listener binds to `127.0.0.1:25` by default — exposing it is an explicit decision:
@@ -76,7 +76,7 @@ addr = "0.0.0.0"
 
 ### Configuration secrets
 
-The config file must be owner-only — `mail` refuses to load a file that is group- or world-accessible (`chmod 600 mail.toml`). Keep secrets out of the file itself: any `${VAR}` is substituted from the process environment at load time, and a referenced variable that is unset fails the load (never a silent empty value). For example, source the database password from the environment instead of writing it on disk:
+The config file must be owner-only — `epistle` refuses to load a file that is group- or world-accessible (`chmod 600 mail.toml`). Keep secrets out of the file itself: any `${VAR}` is substituted from the process environment at load time, and a referenced variable that is unset fails the load (never a silent empty value). For example, source the database password from the environment instead of writing it on disk:
 
 ```toml
 [database]
@@ -87,12 +87,12 @@ Substitution happens before the TOML is parsed, so a substituted value must not 
 
 ### Privilege separation
 
-Binding the mail ports (25, 465, 587, 993, 143, 995, 80) needs root, but the server should not keep that privilege. With a `[privileges]` section, `mail` drops to an unprivileged user once every listener is bound and before it serves a single connection, so a later compromise cannot act as root:
+Binding the mail ports (25, 465, 587, 993, 143, 995, 80) needs root, but the server should not keep that privilege. With a `[privileges]` section, `epistle` drops to an unprivileged user once every listener is bound and before it serves a single connection, so a later compromise cannot act as root:
 
 ```toml
 [privileges]
-user = "glyndor-mail"
-group = "glyndor-mail"  # optional; defaults to the user's primary group
+user = "glyndor-epistle"
+group = "glyndor-epistle"  # optional; defaults to the user's primary group
 ```
 
 The drop fails closed: if the user/group cannot be resolved, the process is not root, or the drop cannot be verified (including that root can no longer be regained), the server refuses to start. Omit the section to run as whoever launched the process (for example under a systemd `User=`).
@@ -108,7 +108,7 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 ## 📚 Documentation
 
 - [Configuration reference](docs/configuration.md) — the TOML file, every section and key, listener kinds, and a full example.
-- [CLI reference](docs/cli.md) — every `mail` command, plus the outbound retry/suppression policy.
+- [CLI reference](docs/cli.md) — every `epistle` command, plus the outbound retry/suppression policy.
 - [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
 - [Security](docs/security.md) — the transport, authentication, anti-abuse and at-rest controls, and how to report a vulnerability.
 

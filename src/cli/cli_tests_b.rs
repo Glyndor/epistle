@@ -25,7 +25,7 @@ fn export_dispatch_succeeds_for_existing_account() {
 	let cfg = config_at(dir.path());
 	let path = cfg.path().to_str().expect("utf8");
 	assert_eq!(
-		run(&["mail", "export", "--config", path, "--account", "alice"]),
+		run(&["epistle", "export", "--config", path, "--account", "alice"]),
 		ExitCode::SUCCESS
 	);
 }
@@ -35,7 +35,10 @@ fn queue_dispatch_succeeds() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let cfg = config_at(dir.path());
 	let path = cfg.path().to_str().expect("utf8");
-	assert_eq!(run(&["mail", "queue", "--config", path]), ExitCode::SUCCESS);
+	assert_eq!(
+		run(&["epistle", "queue", "--config", path]),
+		ExitCode::SUCCESS
+	);
 }
 
 #[test]
@@ -44,7 +47,7 @@ fn accounts_dispatch_succeeds() {
 	let cfg = config_at(dir.path());
 	let path = cfg.path().to_str().expect("utf8");
 	assert_eq!(
-		run(&["mail", "accounts", "--config", path]),
+		run(&["epistle", "accounts", "--config", path]),
 		ExitCode::SUCCESS
 	);
 }
@@ -53,10 +56,17 @@ fn accounts_dispatch_succeeds() {
 fn dispatch_reports_config_load_failure() {
 	// A nonexistent config file makes every config-taking command fail.
 	for args in [
-		vec!["mail", "export", "--config", "/nope.toml", "--account", "a"],
-		vec!["mail", "queue", "--config", "/nope.toml"],
-		vec!["mail", "accounts", "--config", "/nope.toml"],
-		vec!["mail", "config-check", "--config", "/nope.toml"],
+		vec![
+			"epistle",
+			"export",
+			"--config",
+			"/nope.toml",
+			"--account",
+			"a",
+		],
+		vec!["epistle", "queue", "--config", "/nope.toml"],
+		vec!["epistle", "accounts", "--config", "/nope.toml"],
+		vec!["epistle", "config-check", "--config", "/nope.toml"],
 	] {
 		assert_eq!(run(&args), ExitCode::FAILURE, "{args:?}");
 	}
@@ -64,7 +74,7 @@ fn dispatch_reports_config_load_failure() {
 #[test]
 fn parses_import_command() {
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"import",
 		"--config",
 		"/etc/mail.toml",

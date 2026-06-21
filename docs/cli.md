@@ -1,40 +1,40 @@
 # CLI reference
 
-All administration is done through the `mail` command. Every command that needs
-configuration takes `--config <FILE>`. Run `mail <command> --help` for the exact
+All administration is done through the `epistle` command. Every command that needs
+configuration takes `--config <FILE>`. Run `epistle <command> --help` for the exact
 flags.
 
 ## Running the server
 
 | Command | What it does |
 |---|---|
-| `mail serve --config F` | Bind the configured listeners and run. |
-| `mail config-check --config F` | Validate the configuration and exit. |
-| `mail verify --config F` | Check on-disk data integrity (run before an upgrade). |
+| `epistle serve --config F` | Bind the configured listeners and run. |
+| `epistle config-check --config F` | Validate the configuration and exit. |
+| `epistle verify --config F` | Check on-disk data integrity (run before an upgrade). |
 
 ## Keys and tokens
 
 | Command | What it does |
 |---|---|
-| `mail dkim-keygen --out F` | Generate an Ed25519 DKIM key and print the DNS record value. |
-| `mail token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
+| `epistle dkim-keygen --out F` | Generate an Ed25519 DKIM key and print the DNS record value. |
+| `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
 ## Accounts
 
 | Command | What it does |
 |---|---|
-| `mail accounts --config F` | List configured accounts. |
-| `mail account-add --config F --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
+| `epistle accounts --config F` | List configured accounts. |
+| `epistle account-add --config F --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
 
 ## Mail in and out
 
 | Command | What it does |
 |---|---|
-| `mail export --config F --account N` | Export an account's mailboxes as an mbox stream on stdout. |
-| `mail import --config F --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
-| `mail queue --config F` | List the outbound delivery queue. |
-| `mail suppression --config F [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
-| `mail report-abuse --config F` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
+| `epistle export --config F --account N` | Export an account's mailboxes as an mbox stream on stdout. |
+| `epistle import --config F --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
+| `epistle queue --config F` | List the outbound delivery queue. |
+| `epistle suppression --config F [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
+| `epistle report-abuse --config F` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 
 ## Client autodiscovery
 
@@ -46,10 +46,10 @@ the [configuration reference](configuration.md)) and pointing the
 
 | Command | What it does |
 |---|---|
-| `mail srv-records --config F` | Print the RFC 6186 SRV records to publish in DNS. |
-| `mail autoconfig --config F [--domain D]` | Thunderbird autoconfig XML — host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
-| `mail autodiscover --config F [--domain D]` | Microsoft Autodiscover v1 XML — host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
-| `mail mobileconfig --config F --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |
+| `epistle srv-records --config F` | Print the RFC 6186 SRV records to publish in DNS. |
+| `epistle autoconfig --config F [--domain D]` | Thunderbird autoconfig XML — host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
+| `epistle autodiscover --config F [--domain D]` | Microsoft Autodiscover v1 XML — host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
+| `epistle mobileconfig --config F --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |
 
 ## Outbound retry policy
 
@@ -59,4 +59,4 @@ days) — not by attempt count, so a recipient whose server is down for hours do
 not lose mail. A single "delivery delayed" warning DSN is sent at ~4h. A
 permanent (5xx) failure bounces immediately and adds the recipient to the
 suppression list, after which mail to that address is dropped without retrying
-(clear it with `mail suppression --remove`).
+(clear it with `epistle suppression --remove`).

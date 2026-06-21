@@ -1,11 +1,11 @@
 # Configuration
 
-`epistle` (the `mail` binary) is configured with a single TOML file, passed to
+`epistle` is configured with a single TOML file, passed to
 every command with `--config`:
 
 ```sh
-mail serve --config /etc/epistle/mail.toml
-mail config-check --config /etc/epistle/mail.toml   # validate without starting
+epistle serve --config /etc/epistle/mail.toml
+epistle config-check --config /etc/epistle/mail.toml   # validate without starting
 ```
 
 The file must be owner-only — the server refuses to load a file that is group-
@@ -94,7 +94,7 @@ Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for rece
 | Key | Meaning |
 |---|---|
 | `selector` | Ed25519 selector (the `s=` tag). |
-| `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `mail dkim-keygen`. |
+| `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
 | `rsa_selector` | Optional RSA selector. |
 | `rsa_key_file` | Optional RSA private key. |
 
@@ -103,7 +103,7 @@ Management API (consumed by `epistle-panel`). Closed by default.
 
 | Key | Meaning |
 |---|---|
-| `token_hash` | `sha256:<hex>` (from `mail token-hash`) or an argon2id PHC string. |
+| `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
 
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes).
@@ -186,8 +186,8 @@ selector = "ed1"
 key_file = "/etc/epistle/dkim/ed1.pem"
 
 [privileges]
-user  = "glyndor-mail"
-group = "glyndor-mail"
+user  = "glyndor-epistle"
+group = "glyndor-epistle"
 
 [[listeners]]
 kind = "smtp"

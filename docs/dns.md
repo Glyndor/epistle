@@ -7,9 +7,9 @@ publish for a domain. The examples use:
 - mail hostname **`mail.example.org`** (the one name the server HELOs with)
 - public IP **`203.0.113.10`** (and `2001:db8::10` for IPv6)
 
-Several values are generated for you — `mail dkim-keygen` (DKIM),
-`mail srv-records` (SRV), `mail autoconfig` / `mail autodiscover` (client setup).
-After publishing, verify with `mail config-check` and an external checker.
+Several values are generated for you — `epistle dkim-keygen` (DKIM),
+`epistle srv-records` (SRV), `epistle autoconfig` / `epistle autodiscover` (client setup).
+After publishing, verify with `epistle config-check` and an external checker.
 
 ## Records at a glance
 
@@ -18,7 +18,7 @@ After publishing, verify with `mail config-check` and an external checker.
 | Host | `mail.example.org` | A / AAAA | `203.0.113.10` / `2001:db8::10` |
 | Mail exchanger | `example.org` | MX | `10 mail.example.org.` |
 | SPF | `example.org` | TXT | `v=spf1 mx -all` |
-| DKIM | `<selector>._domainkey.example.org` | TXT | from `mail dkim-keygen` |
+| DKIM | `<selector>._domainkey.example.org` | TXT | from `epistle dkim-keygen` |
 | DMARC | `_dmarc.example.org` | TXT | `v=DMARC1; p=quarantine; rua=mailto:dmarc@example.org` |
 | MTA-STS | `_mta-sts.example.org` | TXT | `v=STSv1; id=20260101000000` |
 | TLS-RPT | `_smtp._tls.example.org` | TXT | `v=TLSRPTv1; rua=mailto:tlsrpt@example.org` |
@@ -26,7 +26,7 @@ After publishing, verify with `mail config-check` and an external checker.
 | Client autoconfig | `autoconfig.example.org` | A/CNAME | the host |
 | Client autodiscover | `autodiscover.example.org` | A/CNAME | the host |
 
-Plus the **SRV** records printed by `mail srv-records`.
+Plus the **SRV** records printed by `epistle srv-records`.
 
 ## The essential four
 
@@ -51,7 +51,7 @@ fail) is recommended once you are sure every sender is listed.
 Sign outbound mail. Generate the key and record:
 
 ```sh
-mail dkim-keygen --out /etc/epistle/dkim/ed1.pem
+epistle dkim-keygen --out /etc/epistle/dkim/ed1.pem
 ```
 
 Publish the printed TXT at `ed1._domainkey.example.org`, and configure
@@ -97,11 +97,11 @@ so senders authenticate your TLS certificate without relying on a public CA.
 
 So users configure a client from just their address and password:
 
-- Publish the **SRV** records from `mail srv-records` (submission, IMAP(S),
+- Publish the **SRV** records from `epistle srv-records` (submission, IMAP(S),
   POP3S, ManageSieve, and the autodiscover SRV).
 - Point `autoconfig.example.org` and `autodiscover.example.org` at the host, and
-  serve the documents from `mail autoconfig` / `mail autodiscover` there.
-- Hand users the Apple profile from `mail mobileconfig` for iOS/macOS.
+  serve the documents from `epistle autoconfig` / `epistle autodiscover` there.
+- Hand users the Apple profile from `epistle mobileconfig` for iOS/macOS.
 
 ## BIMI (optional)
 

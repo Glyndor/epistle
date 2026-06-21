@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mail::smtp::line::LineDecoder;
+use epistle::smtp::line::LineDecoder;
 
 // The CRLF line decoder must handle arbitrary byte streams without panicking,
 // draining every line it can (the SMTP-smuggling-hardened path).
