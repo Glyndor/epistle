@@ -101,6 +101,8 @@ Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for rece
 | `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
 | `rsa_selector` | Optional RSA selector. |
 | `rsa_key_file` | Optional RSA private key. |
+| `rotate_days` | Automatic key rotation interval in days. Requires a `[dns]` provider to publish the new selector's TXT. Absent disables rotation. |
+| `rotate_overlap_days` | Days the previous selector's TXT stays published after a rotation so in-flight mail still verifies (default `7`). |
 
 ### `[api]`
 Management API (consumed by `epistle-panel`). Closed by default.

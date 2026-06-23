@@ -303,7 +303,7 @@ fn relayed_mail_is_dkim_signed() {
 
 	let sink = SplitDelivery::new(dir.path(), directory())
 		.expect("sink")
-		.with_signer(signer);
+		.with_signer(crate::dkim::ReloadableSigner::new(signer));
 	// DKIM refuses to sign without a From header, so include one.
 	let mut msg = message(&["bob@elsewhere.example"]);
 	msg.data = b"From: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n".to_vec();
