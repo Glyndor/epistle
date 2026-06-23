@@ -179,16 +179,35 @@ impl Server {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
 				Ok(None) => {
-					let read =
-						match tokio::time::timeout(READ_TIMEOUT, stream.read(&mut buffer)).await {
-							Ok(Ok(n)) => n,
+					// With NOTIFY active (RFC 5465), poll the selected mailbox at
+					// IDLE_POLL intervals while waiting for the next command and
+					// push unsolicited EXISTS/EXPUNGE, bounded by READ_TIMEOUT.
+					let wait_start = tokio::time::Instant::now();
+					let read = loop {
+						let poll = if session.notify_active() {
+							IDLE_POLL.min(READ_TIMEOUT)
+						} else {
+							READ_TIMEOUT
+						};
+						match tokio::time::timeout(poll, stream.read(&mut buffer)).await {
+							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
-								tracing::debug!("IMAP idle timeout, closing connection");
-								let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
-								return Ok(());
+								if !session.notify_active() || wait_start.elapsed() >= READ_TIMEOUT
+								{
+									tracing::debug!("IMAP idle timeout, closing connection");
+									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									return Ok(());
+								}
+								if let Some(notification) = session.check_notify() {
+									if stream.write_all(&notification.bytes).await.is_err() {
+										return Ok(());
+									}
+									let _ = stream.flush().await;
+								}
 							}
-						};
+						}
+					};
 					if read == 0 {
 						return Ok(());
 					}

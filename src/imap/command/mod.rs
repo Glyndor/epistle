@@ -193,6 +193,37 @@ pub enum Command {
 		mailbox: String,
 		items: Vec<(String, Option<String>)>,
 	},
+	/// `NOTIFY SET [STATUS] (<event-group> ...)` / `NOTIFY NONE` (RFC 5465).
+	Notify(NotifyRequest),
+}
+
+/// A parsed `NOTIFY` request (RFC 5465 §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyRequest {
+	/// `NOTIFY NONE`: disable all unsolicited event notifications.
+	None,
+	/// `NOTIFY SET [STATUS] (...)`: enable notifications. `status` records the
+	/// `STATUS` return modifier. `selected` holds the events requested for the
+	/// `selected` mailbox specifier (the only specifier fully supported); other
+	/// specifiers are accepted and ignored.
+	Set {
+		status: bool,
+		selected: Vec<NotifyEvent>,
+	},
+}
+
+/// A NOTIFY message event (RFC 5465 §6). Only the events the server can deliver
+/// for the selected mailbox are modelled; unknown events are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyEvent {
+	/// `MessageNew`: a message was added to the mailbox.
+	MessageNew,
+	/// `MessageExpunge`: a message was removed from the mailbox.
+	MessageExpunge,
+	/// `FlagChange`: a message's flags changed.
+	FlagChange,
+	/// `AnnotationChange`: a message annotation changed.
+	AnnotationChange,
 }
 
 /// Items that can be requested in a STATUS command.
@@ -411,6 +442,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 mod acl;
 mod literal;
 mod metadata;
+mod notify;
 mod parse;
 mod search;
 mod select_params;

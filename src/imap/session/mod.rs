@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use crate::smtp::directory::Directory;
 
-use super::command::{Command, FetchItem, ParseError, SearchKey, StatusItem, StoreMode, Tagged};
+use super::command::{
+	Command, FetchItem, NotifyEvent, ParseError, SearchKey, StatusItem, StoreMode, Tagged,
+};
 use super::mailbox::{self, Flag, Snapshot};
 
 mod acl;
@@ -44,12 +46,8 @@ impl Output {
 
 	fn closing(text: String) -> Self {
 		Output {
-			bytes: text.into_bytes(),
 			close: true,
-			collect_literal: None,
-			idle: false,
-			upgrade_tls: false,
-			collect_auth: false,
+			..Output::text(text)
 		}
 	}
 }
@@ -90,6 +88,9 @@ pub struct Session {
 	/// responses use UID forms (UIDFETCH, VANISHED).
 	uidonly: bool,
 	idle_tag: Option<String>,
+	/// NOTIFY (RFC 5465) events requested for the selected mailbox. `None` means
+	/// NOTIFY is not active; an empty set means notifications are explicitly off.
+	notify_selected: Option<Vec<NotifyEvent>>,
 	/// Whether the connection is inside TLS (LOGIN refused outside).
 	tls_active: bool,
 	tls_available: bool,
@@ -119,6 +120,7 @@ impl Session {
 			pending_append: None,
 			uidonly: false,
 			idle_tag: None,
+			notify_selected: None,
 			tls_active: true,
 			tls_available: false,
 			quota_limit_bytes: DEFAULT_QUOTA_BYTES,
@@ -343,6 +345,7 @@ impl Session {
 				self.get_metadata(&tag, &mailbox, &entries)
 			}
 			Command::SetMetadata { mailbox, items } => self.set_metadata(&tag, &mailbox, &items),
+			Command::Notify(request) => self.notify(&tag, request),
 		}
 	}
 
