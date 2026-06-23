@@ -214,6 +214,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	if let Some(acme) = &config.acme {
 		match &reloadable_tls {
 			Some(reloadable) => {
+				// When a DNS provider is configured, refresh the TLSA record on
+				// every certificate rotation.
+				let tlsa = config
+					.dns
+					.as_ref()
+					.and_then(|dns| dns.build())
+					.map(|provider| (provider, config.hostname.clone()));
 				tokio::spawn(crate::acme::renew::run(
 					acme.directory_url.clone(),
 					acme.contacts.clone(),
@@ -222,6 +229,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					config.data_dir.clone(),
 					reloadable.clone(),
 					u64::from(acme.renew_before_days),
+					tlsa,
 				));
 			}
 			None => tracing::warn!("[acme] is configured but [tls] is not; skipping ACME renewal"),

@@ -1,7 +1,8 @@
 //! A Cloudflare DNS provider (RFC-less, vendor API) implementing
 //! [`DnsProvider`]. It authenticates with a zone-scoped API token and supports
-//! the content-based record kinds epistle publishes (TXT/A/AAAA/CNAME);
-//! structured kinds (MX/SRV/TLSA) return [`ProviderError::Unsupported`] for now.
+//! the record kinds epistle publishes — TXT/A/AAAA/CNAME via a `content` field
+//! and TLSA via a structured `data` object; MX/SRV (priorities/weights) return
+//! [`ProviderError::Unsupported`] for now.
 
 use std::pin::Pin;
 
@@ -64,14 +65,59 @@ impl CloudflareProvider {
 		self
 	}
 
-	/// The content kinds Cloudflare accepts via a plain `content` field.
-	fn content_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+	/// The Cloudflare record type for a kind we can publish. TXT/A/AAAA/CNAME
+	/// go through a plain `content` field; TLSA uses a structured `data` object;
+	/// MX/SRV (which need priorities/weights) are not yet supported.
+	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A | RecordKind::Aaaa | RecordKind::Txt | RecordKind::Cname => {
-				Ok(kind.as_str())
-			}
-			RecordKind::Mx | RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::A
+			| RecordKind::Aaaa
+			| RecordKind::Txt
+			| RecordKind::Cname
+			| RecordKind::Tlsa => Ok(kind.as_str()),
+			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
 		}
+	}
+
+	/// The Cloudflare record body for a record: TLSA carries a structured
+	/// `data` object (`usage selector matching_type certificate`), everything
+	/// else a plain `content` string.
+	fn record_body(kind: &str, record: &DnsRecord) -> Result<String, ProviderError> {
+		let value = if record.kind == RecordKind::Tlsa {
+			let mut parts = record.value.split_whitespace();
+			let usage: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or(ProviderError::Unsupported)?;
+			let selector: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or(ProviderError::Unsupported)?;
+			let matching: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or(ProviderError::Unsupported)?;
+			let cert = parts.next().ok_or(ProviderError::Unsupported)?;
+			serde_json::json!({
+				"type": kind,
+				"name": record.name,
+				"ttl": record.ttl,
+				"data": {
+					"usage": usage,
+					"selector": selector,
+					"matching_type": matching,
+					"certificate": cert,
+				},
+			})
+		} else {
+			serde_json::json!({
+				"type": kind,
+				"name": record.name,
+				"content": record.value,
+				"ttl": record.ttl,
+			})
+		};
+		Ok(value.to_string())
 	}
 
 	/// Reject a record the token is not scoped for, before any network call.
@@ -124,15 +170,9 @@ impl CloudflareProvider {
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::content_kind(record.kind)?;
+		let kind = Self::api_kind(record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
-		let body = serde_json::json!({
-			"type": kind,
-			"name": record.name,
-			"content": record.value,
-			"ttl": record.ttl,
-		})
-		.to_string();
+		let body = Self::record_body(kind, &record)?;
 		let existing = self.find_record(&zone_id, &record.name, kind).await?;
 		let request = match &existing {
 			Some(id) => self
@@ -154,7 +194,7 @@ impl CloudflareProvider {
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
-		let kind = Self::content_kind(record.kind)?;
+		let kind = Self::api_kind(record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let Some(id) = self.find_record(&zone_id, &record.name, kind).await? else {
 			return Ok(()); // already absent: idempotent.

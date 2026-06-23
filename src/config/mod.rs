@@ -10,6 +10,7 @@ mod api;
 mod arc;
 mod database;
 mod dkim;
+mod dns;
 mod listener;
 mod oauth;
 mod privileges;
@@ -23,6 +24,7 @@ pub use api::Api;
 pub use arc::Arc;
 pub use database::Database;
 pub use dkim::Dkim;
+pub use dns::Dns;
 pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
 pub use privileges::Privileges;
@@ -134,6 +136,9 @@ pub struct Config {
 	pub log_format: LogFormat,
 	/// Automatic TLS (ACME). Present enables certificate issuance/renewal.
 	pub acme: Option<Acme>,
+	/// DNS provider for record automation (e.g. TLSA refresh on cert rotation).
+	#[serde(default)]
+	pub dns: Option<Dns>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
