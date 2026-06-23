@@ -145,18 +145,23 @@ async fn bayes_corpus_trains_and_scores() {
 
 	// Train: several spam messages with a marker token, several ham without.
 	for _ in 0..6 {
-		corpus::train(&pool, "buy cheap viagra now discount", true)
+		corpus::train(&pool, corpus::SHARED, "buy cheap viagra now discount", true)
 			.await
 			.expect("train spam");
-		corpus::train(&pool, "project meeting notes attached agenda", false)
-			.await
-			.expect("train ham");
+		corpus::train(
+			&pool,
+			corpus::SHARED,
+			"project meeting notes attached agenda",
+			false,
+		)
+		.await
+		.expect("train ham");
 	}
 
-	let spammy = corpus::score(&pool, "viagra discount cheap")
+	let spammy = corpus::score(&pool, corpus::SHARED, "viagra discount cheap")
 		.await
 		.expect("score");
-	let hammy = corpus::score(&pool, "meeting agenda notes")
+	let hammy = corpus::score(&pool, corpus::SHARED, "meeting agenda notes")
 		.await
 		.expect("score");
 	assert!(
@@ -165,13 +170,74 @@ async fn bayes_corpus_trains_and_scores() {
 	);
 	assert!(spammy > 0.5, "spammy {spammy}");
 
-	// Reset shared corpus so reruns stay deterministic.
-	sqlx::query("DELETE FROM bayes_token")
+	// Reset the shared corpus so reruns stay deterministic.
+	sqlx::query("DELETE FROM bayes_token WHERE scope = ''")
 		.execute(&pool)
 		.await
 		.expect("clear tokens");
-	sqlx::query("UPDATE bayes_corpus SET ham_messages = 0, spam_messages = 0")
+	sqlx::query("UPDATE bayes_corpus SET ham_messages = 0, spam_messages = 0 WHERE scope = ''")
 		.execute(&pool)
 		.await
 		.expect("reset corpus");
+}
+
+#[tokio::test]
+async fn bayes_per_account_corpora_are_isolated() {
+	use epistle::antispam::corpus;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	// Alice trains a distinctive marker token as spam.
+	for _ in 0..6 {
+		corpus::train(&pool, "alice@example.org", "zzzmarker special offer", true)
+			.await
+			.expect("train alice spam");
+		corpus::train(
+			&pool,
+			"alice@example.org",
+			"ordinary message body text",
+			false,
+		)
+		.await
+		.expect("train alice ham");
+	}
+
+	// Alice scores the marker as spammy; an untrained account and the shared
+	// corpus are unaffected (per-account isolation).
+	let alice = corpus::score(&pool, "alice@example.org", "zzzmarker offer")
+		.await
+		.expect("score alice");
+	let bob = corpus::score(&pool, "bob@example.org", "zzzmarker offer")
+		.await
+		.expect("score bob");
+	let shared = corpus::score(&pool, corpus::SHARED, "zzzmarker offer")
+		.await
+		.expect("score shared");
+	assert!(alice > 0.5, "alice {alice}");
+	// Alice's training raised the marker's score only for Alice; untrained
+	// scopes are unaffected and an untrained account matches the untrained
+	// shared corpus exactly (full isolation).
+	assert!(
+		alice > bob,
+		"alice {alice} should exceed untrained bob {bob}"
+	);
+	assert!(
+		(bob - shared).abs() < f64::EPSILON,
+		"bob {bob} vs shared {shared}"
+	);
+
+	sqlx::query("DELETE FROM bayes_token WHERE scope = 'alice@example.org'")
+		.execute(&pool)
+		.await
+		.expect("clear alice tokens");
+	sqlx::query("DELETE FROM bayes_corpus WHERE scope = 'alice@example.org'")
+		.execute(&pool)
+		.await
+		.expect("clear alice corpus");
 }
