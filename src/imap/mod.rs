@@ -1,5 +1,6 @@
 //! IMAP4rev2 server (RFC 9051), read-only core.
 
+pub mod acl;
 pub mod command;
 pub mod mailbox;
 mod modseq;

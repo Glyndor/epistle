@@ -157,6 +157,30 @@ pub enum Command {
 		reference: String,
 		pattern: String,
 	},
+	/// `SETACL <mailbox> <identifier> <rights>` (RFC 4314).
+	SetAcl {
+		mailbox: String,
+		identifier: String,
+		rights: String,
+	},
+	/// `DELETEACL <mailbox> <identifier>` (RFC 4314).
+	DeleteAcl {
+		mailbox: String,
+		identifier: String,
+	},
+	/// `GETACL <mailbox>` (RFC 4314).
+	GetAcl {
+		mailbox: String,
+	},
+	/// `LISTRIGHTS <mailbox> <identifier>` (RFC 4314).
+	ListRights {
+		mailbox: String,
+		identifier: String,
+	},
+	/// `MYRIGHTS <mailbox>` (RFC 4314).
+	MyRights {
+		mailbox: String,
+	},
 }
 
 /// Items that can be requested in a STATUS command.
@@ -372,6 +396,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 	Some((year, month, day))
 }
 
+mod acl;
 mod literal;
 mod parse;
 mod search;
