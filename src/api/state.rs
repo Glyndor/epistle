@@ -31,6 +31,10 @@ struct Inner {
 	/// Labeled bearer API keys, loaded from `api_keys.toml`; any non-expired,
 	/// IP-permitted key authenticates alongside the configured token.
 	api_keys: Vec<super::api_keys::ApiKey>,
+	/// Session-scoped PushSubscription objects (RFC 8620 §7.2). Held in memory:
+	/// real out-of-band delivery is out of scope, so these only need to round-trip
+	/// through `PushSubscription/get`/`set`. Keyed by subscription id.
+	push_subscriptions: std::sync::Mutex<Vec<serde_json::Value>>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -105,6 +109,7 @@ impl ApiState {
 				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
+				push_subscriptions: std::sync::Mutex::new(Vec::new()),
 			}),
 		}
 	}
@@ -151,6 +156,40 @@ impl ApiState {
 
 	pub fn data_dir(&self) -> &std::path::Path {
 		&self.inner.data_dir
+	}
+
+	/// The current PushSubscription objects (RFC 8620 §7.2), cloned out for a
+	/// `PushSubscription/get`.
+	pub fn push_subscriptions(&self) -> Vec<serde_json::Value> {
+		self.inner
+			.push_subscriptions
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.clone()
+	}
+
+	/// Run `f` against the mutable PushSubscription store, returning its result.
+	/// Used by `PushSubscription/set` to create and destroy subscriptions.
+	pub fn with_push_subscriptions<R>(
+		&self,
+		f: impl FnOnce(&mut Vec<serde_json::Value>) -> R,
+	) -> R {
+		let mut guard = self
+			.inner
+			.push_subscriptions
+			.lock()
+			.unwrap_or_else(|p| p.into_inner());
+		f(&mut guard)
+	}
+
+	/// A cheap, opaque state token for an account's mail, derived from total
+	/// stored bytes. It changes whenever a message is added, removed, or resized,
+	/// which is enough for the connection-scoped WebSocket push (RFC 8887 §5) to
+	/// signal "something changed" to the client that made the change. It is not a
+	/// JMAP change-log cursor (we do not track one — see `/changes`).
+	pub fn account_state(&self, account: &str) -> String {
+		let usage = crate::imap::mailbox::account_usage(&self.inner.data_dir, account);
+		format!("{usage}")
 	}
 
 	/// Whether `token` from `client_ip` authorizes a request: the configured

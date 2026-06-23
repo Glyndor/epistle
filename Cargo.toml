@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 argon2 = "0.5.3"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 flate2 = "1.1.9"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
