@@ -49,7 +49,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			config.domain_aliases.clone(),
 			config.accounts.clone(),
 		)
-		.map_err(|error| std::io::Error::other(error.to_string()))?,
+		.map_err(|error| std::io::Error::other(error.to_string()))?
+		.with_domain_quotas(config.domain_quotas.clone()),
 	);
 	let directory = account_store.handle();
 
@@ -143,6 +144,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
+
+	// Optional per-account submission rate limiter, shared across SMTP listeners.
+	let send_limiter = config
+		.submission_rate_limit_per_min
+		.map(|per_min| Arc::new(crate::smtp::ratelimit::SendLimiter::new(per_min, 60)));
 
 	// Optional external scanner hook.
 	let scanner_hook: Option<Arc<dyn crate::antispam::hook::MailHook>> =
@@ -394,6 +400,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				if let Some(store) = &greylist {
 					server = server.with_greylist(Arc::clone(store), config.greylist_delay_secs);
+				}
+				if let Some(limiter) = &send_limiter {
+					server = server.with_send_limiter(Arc::clone(limiter));
 				}
 				if let Some(verifier) = &oauth_verifier {
 					server = server.with_oauth(Arc::clone(verifier));

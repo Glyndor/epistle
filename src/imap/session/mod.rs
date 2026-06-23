@@ -126,10 +126,19 @@ impl Session {
 		}
 	}
 
-	/// Set the per-account storage quota (bytes).
+	/// Set the default storage quota (bytes) used when an account has no
+	/// per-account or per-domain quota of its own.
 	pub fn with_quota_limit(mut self, bytes: u64) -> Self {
 		self.quota_limit_bytes = bytes;
 		self
+	}
+
+	/// The storage quota in force for the authenticated account: its own /
+	/// domain quota from the directory, else the server default.
+	fn effective_quota(&self) -> u64 {
+		self.account()
+			.and_then(|account| self.directory.quota_for(account))
+			.unwrap_or(self.quota_limit_bytes)
 	}
 
 	/// Provide the `tls-server-end-point` channel-binding data (server

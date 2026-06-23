@@ -78,6 +78,8 @@ pub struct Server {
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
 	cbind_data: Option<Vec<u8>>,
+	/// Shared per-account submission rate limiter for authenticated senders.
+	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
 }
 
 impl Server {
@@ -102,7 +104,14 @@ impl Server {
 			greylist: None,
 			oauth: None,
 			cbind_data: None,
+			send_limiter: None,
 		}
+	}
+
+	/// Attach a shared per-account submission rate limiter.
+	pub fn with_send_limiter(mut self, limiter: Arc<crate::smtp::ratelimit::SendLimiter>) -> Self {
+		self.send_limiter = Some(limiter);
+		self
 	}
 
 	/// Provide the `tls-server-end-point` certificate hash, enabling
@@ -216,6 +225,9 @@ impl Server {
 		}
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
+		}
+		if let Some(limiter) = &self.send_limiter {
+			session = session.with_send_limiter(Arc::clone(limiter));
 		}
 		session
 	}

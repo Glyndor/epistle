@@ -17,6 +17,10 @@ pub struct Account {
 	/// unknown local users (catch-all). Off by default.
 	#[serde(default)]
 	pub catch_all: Vec<String>,
+	/// Storage quota in bytes for this account. Absent falls back to the
+	/// domain quota, then the server default.
+	#[serde(default)]
+	pub quota_bytes: Option<u64>,
 }
 
 #[cfg(test)]

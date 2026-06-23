@@ -37,6 +37,12 @@ pub struct Directory {
 	scram: HashMap<String, super::scram::ScramStored>,
 	/// Base32 TOTP secret per account name, for two-factor auth (RFC 6238).
 	totp: HashMap<String, String>,
+	/// Storage quota (bytes) per account name; absent falls back to the domain
+	/// quota, then the server default.
+	account_quotas: HashMap<String, u64>,
+	/// Default storage quota (bytes) per domain, applied to accounts in that
+	/// domain without their own quota.
+	domain_quotas: HashMap<String, u64>,
 }
 
 impl Directory {
@@ -62,6 +68,8 @@ impl Directory {
 			domain_aliases: HashMap::new(),
 			scram: HashMap::new(),
 			totp: HashMap::new(),
+			account_quotas: HashMap::new(),
+			domain_quotas: HashMap::new(),
 		}
 	}
 
@@ -72,6 +80,41 @@ impl Directory {
 			.map(|(name, secret)| (name.to_ascii_lowercase(), secret))
 			.collect();
 		self
+	}
+
+	/// Attach per-account storage quotas (account name → bytes).
+	pub fn with_account_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
+		self.account_quotas = quotas
+			.into_iter()
+			.map(|(name, bytes)| (name.to_ascii_lowercase(), bytes))
+			.collect();
+		self
+	}
+
+	/// Attach per-domain default storage quotas (domain → bytes).
+	pub fn with_domain_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
+		self.domain_quotas = quotas
+			.into_iter()
+			.map(|(domain, bytes)| (domain.to_ascii_lowercase(), bytes))
+			.collect();
+		self
+	}
+
+	/// The storage quota for an account: its own quota, else the quota of a
+	/// hosted domain it has an address in, else `None` (use the server default).
+	pub fn quota_for(&self, account: &str) -> Option<u64> {
+		let account = account.to_ascii_lowercase();
+		if let Some(bytes) = self.account_quotas.get(&account) {
+			return Some(*bytes);
+		}
+		if self.domain_quotas.is_empty() {
+			return None;
+		}
+		self.accounts_by_address
+			.iter()
+			.filter(|(_, name)| name.eq_ignore_ascii_case(&account))
+			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
+			.find_map(|domain| self.domain_quotas.get(domain).copied())
 	}
 
 	/// Verify a login with its password, enforcing TOTP when the account has a
@@ -257,6 +300,26 @@ mod tests {
 
 	fn parse(raw: &str) -> Address {
 		Address::parse(raw).expect("valid address")
+	}
+
+	#[test]
+	fn quota_resolves_account_then_domain_then_none() {
+		let directory = directory()
+			.with_account_quotas([("alice".to_string(), 1000)])
+			.with_domain_quotas([("example.org".to_string(), 500)]);
+		// Account quota wins.
+		assert_eq!(directory.quota_for("alice"), Some(1000));
+		// bob has no account quota -> the domain default applies.
+		assert_eq!(directory.quota_for("bob"), Some(500));
+		// Case-insensitive on the account name.
+		assert_eq!(directory.quota_for("ALICE"), Some(1000));
+		// An unknown account with no hosted address -> no quota.
+		assert_eq!(directory.quota_for("nobody"), None);
+	}
+
+	#[test]
+	fn quota_is_none_without_any_configured() {
+		assert_eq!(directory().quota_for("alice"), None);
 	}
 
 	#[test]

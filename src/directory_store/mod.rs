@@ -111,6 +111,8 @@ pub struct AccountStore {
 	domains: Vec<String>,
 	domain_aliases: std::collections::HashMap<String, String>,
 	static_accounts: Vec<Account>,
+	/// Default storage quota (bytes) per domain.
+	domain_quotas: std::collections::HashMap<String, u64>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
 	handle: DirectoryHandle,
 }
@@ -138,11 +140,19 @@ impl AccountStore {
 			domains,
 			domain_aliases,
 			static_accounts,
+			domain_quotas: std::collections::HashMap::new(),
 			dynamic: RwLock::new(dynamic.accounts),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
 		Ok(store)
+	}
+
+	/// Set the per-domain default storage quotas and rebuild the directory.
+	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
+		self.domain_quotas = quotas;
+		self.handle.replace(self.build_directory());
+		self
 	}
 
 	/// The hot-reloadable handle shared with servers and delivery.
@@ -335,12 +345,19 @@ impl AccountStore {
 				.clone()
 				.map(|secret| (account.name.clone(), secret))
 		});
+		let account_quotas = self.static_accounts.iter().filter_map(|account| {
+			account
+				.quota_bytes
+				.map(|bytes| (account.name.clone(), bytes))
+		});
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
 			.with_scram(scram)
 			.with_totp(totp)
+			.with_account_quotas(account_quotas)
+			.with_domain_quotas(self.domain_quotas.clone())
 	}
 }
 
@@ -371,6 +388,7 @@ mod tests {
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: None,
 			catch_all: Vec::new(),
+			quota_bytes: None,
 		}
 	}
 

@@ -470,3 +470,24 @@ fn auth_rejects_malformed_base64() {
 	session.auth_line(&B64.encode("alice"));
 	assert_eq!(reply_code(&session.auth_line("!!!notb64")), 535);
 }
+
+#[test]
+fn submission_rate_limit_defers_over_the_limit() {
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(1, 60));
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active()
+		.with_send_limiter(limiter);
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	assert_eq!(session.authenticated(), Some("alice"));
+
+	// First authenticated submission is within the limit.
+	let first = session.command_line("MAIL FROM:<alice@example.org>");
+	assert_eq!(reply_code(&first), 250);
+	session.command_line("RSET");
+
+	// The second within the window exceeds the per-account limit -> 4xx defer.
+	let second = session.command_line("MAIL FROM:<alice@example.org>");
+	assert_eq!(reply_code(&second), 450);
+}

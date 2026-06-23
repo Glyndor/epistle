@@ -55,6 +55,8 @@ pub struct Session {
 	/// `tls-server-end-point` channel-binding data (the server certificate
 	/// hash) when the connection is TLS; enables SCRAM-SHA-256-PLUS.
 	cbind_data: Option<Vec<u8>>,
+	/// Shared per-account submission rate limiter (authenticated senders).
+	send_limiter: Option<std::sync::Arc<super::ratelimit::SendLimiter>>,
 }
 
 impl Session {
@@ -75,7 +77,17 @@ impl Session {
 			scram_nonce: None,
 			oauth: None,
 			cbind_data: None,
+			send_limiter: None,
 		}
+	}
+
+	/// Attach a shared per-account submission rate limiter.
+	pub fn with_send_limiter(
+		mut self,
+		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
+	) -> Self {
+		self.send_limiter = Some(limiter);
+		self
 	}
 
 	/// Provide the `tls-server-end-point` channel-binding data (the server
@@ -333,6 +345,16 @@ impl Session {
 					}
 					_ => {}
 				}
+				// Per-account submission rate limit for authenticated senders.
+				if let Some(account) = self.authenticated.clone()
+					&& let Some(limiter) = &self.send_limiter
+					&& !limiter.check(&account, unix_now())
+				{
+					return Action::Continue(Reply::single(
+						450,
+						"4.7.1 sending rate limit exceeded; retry later",
+					));
+				}
 				// SIZE is declared up front: reject oversize without DATA.
 				if size.is_some_and(|s| s > MAX_MESSAGE_SIZE as u64) {
 					return Action::Continue(Reply::single(
@@ -483,6 +505,14 @@ impl Session {
 			self.state = State::Greeted;
 		}
 	}
+}
+
+/// Current time in epoch seconds (for rate-limit windows).
+fn unix_now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
 }
 
 #[cfg(test)]
