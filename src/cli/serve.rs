@@ -10,14 +10,6 @@ use crate::storage::SplitDelivery;
 
 /// Run the server with a validated configuration.
 pub fn run(config: Config) -> ExitCode {
-	let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-		.unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-	let builder = tracing_subscriber::fmt().with_env_filter(filter);
-	match config.log_format {
-		crate::config::LogFormat::Json => builder.json().init(),
-		crate::config::LogFormat::Text => builder.init(),
-	}
-
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {
@@ -25,7 +17,20 @@ pub fn run(config: Config) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	match runtime.block_on(serve(config)) {
+	// Initialise tracing inside the runtime so the OTLP batch exporter (if any)
+	// can spawn its background task. The provider is held for a clean shutdown.
+	let _guard = runtime.enter();
+	let otel_provider = super::tracing_setup::init_tracing(&config);
+
+	let result = runtime.block_on(serve(config));
+
+	// Flush any buffered spans to the collector before exiting.
+	if let Some(provider) = otel_provider
+		&& let Err(error) = provider.shutdown()
+	{
+		tracing::warn!(%error, "otel provider shutdown failed");
+	}
+	match result {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(error) => {
 			eprintln!("error: {error}");

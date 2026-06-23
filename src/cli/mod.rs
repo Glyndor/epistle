@@ -14,6 +14,7 @@ mod serve;
 mod serve_tasks;
 mod srv;
 mod suppression;
+mod tracing_setup;
 mod verify;
 mod verify_dns;
 
