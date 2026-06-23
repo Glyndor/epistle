@@ -11,6 +11,7 @@ mod state;
 pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeyStore};
+pub use jmap::reclaim_blobs;
 pub use state::ApiState;
 
 use axum::Router;

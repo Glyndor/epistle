@@ -276,6 +276,31 @@ pub async fn upload(
 		)
 			.into_response();
 	}
+	// Enforce the account's storage quota before persisting (RFC 8620 §6.1:
+	// upload may be refused once a limit is reached). A configured limit is the
+	// hard cap; 0 means unlimited. Fail closed — reject when the blob would push
+	// usage over the limit. We answer with the JMAP limit error rather than a
+	// bare 413: the type is `urn:ietf:params:jmap:error:limit` (the only limit
+	// error core defines) and `limit: "storage"` names the resource that was
+	// hit, distinguishing an over-quota rejection from the per-request
+	// `maxSizeUpload` one above. The HTTP status is 507 Insufficient Storage,
+	// the closest standard code for "would exceed the account's storage".
+	let limit = state.quota_limit();
+	if limit > 0 {
+		let usage = account_usage_bytes(state.data_dir(), &account);
+		if usage.saturating_add(body.len() as u64) > limit {
+			return (
+				StatusCode::INSUFFICIENT_STORAGE,
+				Json(json!({
+					"type": "urn:ietf:params:jmap:error:limit",
+					"limit": "storage",
+					"status": 507,
+					"detail": "upload would exceed the account storage quota",
+				})),
+			)
+				.into_response();
+		}
+	}
 	// The blob's media type is the request Content-Type, echoed back and
 	// persisted so downloads serve it (RFC 8620 §6.1).
 	let content_type = headers
@@ -339,4 +364,68 @@ fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
 	std::fs::read_to_string(data_dir.join("blobs").join(format!("{blob_id}.type")))
 		.ok()
 		.filter(|value| !value.is_empty())
+}
+
+/// Bytes counted against an account's storage quota: its stored mail (every
+/// message across INBOX and folders) plus the uploaded blob store. JMAP blobs
+/// live in one shared `<data_dir>/blobs` pool that is not partitioned per
+/// account, so the whole pool is counted — a conservative, fail-closed choice
+/// that never under-counts usage when enforcing the quota on upload.
+pub fn account_usage_bytes(data_dir: &std::path::Path, account: &str) -> u64 {
+	crate::imap::mailbox::account_usage(data_dir, account)
+		.saturating_add(blobs_usage_bytes(data_dir))
+}
+
+/// Total size in bytes of the uploaded blob store, counting blob payloads and
+/// their `.type` sidecars under `<data_dir>/blobs`.
+fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
+	let mut total = 0u64;
+	let Ok(entries) = std::fs::read_dir(data_dir.join("blobs")) else {
+		return 0;
+	};
+	for entry in entries.flatten() {
+		if let Ok(meta) = entry.metadata()
+			&& meta.is_file()
+		{
+			total = total.saturating_add(meta.len());
+		}
+	}
+	total
+}
+
+/// Reclaim transient uploaded blobs (RFC 8620 §6.1: an uploaded blob that is
+/// not referenced may be deleted). Delete every blob — payload and its `.type`
+/// sidecar — whose payload was last modified more than `ttl` ago, returning the
+/// number of blobs removed. Only the upload store under `<data_dir>/blobs` is
+/// touched; stored mail under `<data_dir>/accounts` is never affected.
+pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> usize {
+	let dir = data_dir.join("blobs");
+	let Ok(entries) = std::fs::read_dir(&dir) else {
+		return 0;
+	};
+	let now = std::time::SystemTime::now();
+	let mut removed = 0;
+	for entry in entries.flatten() {
+		let name = entry.file_name();
+		// Sidecars are reclaimed alongside their payload, not on their own.
+		if name.to_str().is_some_and(|name| name.ends_with(".type")) {
+			continue;
+		}
+		// Only act on well-formed blob ids; ignore anything else in the dir.
+		let Some(blob_id) = name.to_str().filter(|id| uuid::Uuid::parse_str(id).is_ok()) else {
+			continue;
+		};
+		let expired = entry
+			.metadata()
+			.and_then(|meta| meta.modified())
+			.ok()
+			.and_then(|modified| now.duration_since(modified).ok())
+			.is_some_and(|age| age > ttl);
+		if expired {
+			let _ = std::fs::remove_file(dir.join(blob_id));
+			let _ = std::fs::remove_file(dir.join(format!("{blob_id}.type")));
+			removed += 1;
+		}
+	}
+	removed
 }
