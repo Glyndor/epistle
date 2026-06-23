@@ -34,6 +34,12 @@ impl ArcSealer {
 		}
 	}
 
+	/// The domain this sealer signs under (its `d=`), used to detect a chain we
+	/// already sealed and avoid adding a duplicate instance from the same domain.
+	pub fn domain(&self) -> &str {
+		&self.domain
+	}
+
 	/// Seal `raw_message`, given the chain already present (`prior`), this
 	/// hop's authentication results, and the chain-validation status the
 	/// verifier computed for `prior`. Returns the three ARC header lines
