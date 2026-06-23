@@ -38,22 +38,9 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
-      # Dovecot as the reference IMAP peer. The official image starts an IMAP
-      # listener on 143 with its default configuration.
-      dovecot:
-        image: dovecot/dovecot:latest
-        ports:
-          - 1143:143
-        options: >-
-          --health-cmd "nc -z 127.0.0.1 143 || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
     env:
       INTEROP_POSTFIX_HOST: localhost
       INTEROP_POSTFIX_PORT: "1025"
-      INTEROP_DOVECOT_HOST: localhost
-      INTEROP_DOVECOT_IMAP_PORT: "1143"
       # The interop tests bind epistle's own servers in-process and migrate
       # nothing, but a compile can still touch sqlx; keep the macros offline.
       SQLX_OFFLINE: "true"
