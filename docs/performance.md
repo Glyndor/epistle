@@ -196,3 +196,60 @@ the growing per-iteration `Snapshot::open` scan takes over. The absolute figures
 are storage- and machine-dependent (an SSD with fast `fsync` shifts them
 sharply); reproduce locally and read the flamegraph for the relative shape
 rather than the headline number.
+
+## The mailbox metadata index
+
+The profiling pass above identified `Snapshot::open` as the cost that scales
+with mailbox size: a cheap `read_dir` followed, **per message**, by opening the
+`.uid`, `.flags` and `.modseq` sidecars plus a `metadata()` call for the size.
+[Issue #236](https://github.com/Glyndor/epistle/issues/236) addresses that
+directly with a per-mailbox metadata index — a rebuildable read-acceleration
+cache that keeps the filesystem-first store fast at scale **without an external
+database** and **without adding write amplification**. It lives in
+`src/imap/index.rs` and is wired into `Snapshot::open`.
+
+### What it is
+
+One compact text file per mailbox, `<mailbox_dir>/.index`, holding everything
+`Snapshot::open` gathers per message — UUID, UID, plaintext size, internaldate,
+mod-sequence and flags — one record per line, in the same UUID-sorted order the
+scan produces. It is versioned (`EPISTLE-MAILBOX-INDEX 1`) and carries a
+generation stamp. The `.eml` files and their sidecars remain the **canonical
+source of truth**; the index is a derived cache that can be deleted and rebuilt
+at any time with no loss of correctness. No new dependency: the format is
+hand-rolled line text, not JSON.
+
+### How `open` decides fresh-vs-rebuild
+
+The generation stamp is **the mailbox's highest mod-sequence plus its `.eml`
+count**, both read cheaply: the mod-sequence is the persisted `.modseqctr`
+counter (one small read, the same counter RFC 7162 already maintains and that
+every flag change / append / expunge bumps), and the count is a single
+`read_dir` pass with no per-file work. On open, epistle reads the current
+generation and the index header. If the index exists, parses, has the current
+version, and its stamp matches the current generation, the snapshot is built
+straight from the index — skipping all the per-message sidecar reads. Otherwise
+it falls back to the full filesystem scan (unchanged) and writes a fresh index
+stamped with the generation it just observed.
+
+### Why it does not add write amplification
+
+The index is written **only on a rebuild**, never per mutation. A flag change
+keeps writing just the `.flags` sidecar and bumps the mod-sequence (as before);
+the index is simply left stale — its stamp no longer matches — and is rebuilt on
+the next open that needs it. Appends and expunges change the `.eml` count, which
+likewise invalidates the stamp. So a burst of `STORE`s costs the same disk
+writes it did before; the index is amortised across the reads that follow, not
+paid on every write.
+
+### Fail closed
+
+The filesystem is always the truth. A missing, unreadable, unparseable,
+wrong-version, truncated or stale index is treated as absent: open silently
+falls back to the authoritative scan and rebuilds. A single malformed record
+invalidates the whole file. A corrupt index can therefore never produce wrong
+mailbox contents — when in any doubt, the scan wins. The index write is atomic
+(temp file + rename) and a failed index write never fails the open, because the
+snapshot has already succeeded from the scan. The index path is active by
+default, so the full IMAP test suite (deliver → open → FETCH/STORE/SEARCH/
+EXPUNGE) runs through it as the correctness net.

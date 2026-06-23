@@ -2,6 +2,7 @@
 
 pub mod acl;
 pub mod command;
+mod index;
 pub mod mailbox;
 pub mod metadata;
 mod modseq;
