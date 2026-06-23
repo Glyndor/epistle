@@ -6,10 +6,13 @@ use std::process::ExitCode;
 use crate::config::Config;
 use crate::queue::SuppressionList;
 
-/// List suppressed addresses, or remove `remove` if given.
+/// List suppressed addresses, or remove `remove` if given. With `account`, the
+/// operation targets that sending account's per-account list instead of the
+/// global one.
 pub(super) fn run(
 	config: &Config,
 	remove: Option<&str>,
+	account: Option<&str>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let list = match SuppressionList::open(&config.data_dir) {
@@ -20,14 +23,22 @@ pub(super) fn run(
 		}
 	};
 	if let Some(address) = remove {
-		if let Err(error) = list.remove(address) {
+		let result = match account {
+			Some(account) => list.remove_for(account, address),
+			None => list.remove(address),
+		};
+		if let Err(error) = result {
 			eprintln!("error: cannot remove {address}: {error}");
 			return ExitCode::FAILURE;
 		}
 		let _ = writeln!(out, "removed {address}");
 		return ExitCode::SUCCESS;
 	}
-	for address in list.list() {
+	let addresses = match account {
+		Some(account) => list.list_for(account),
+		None => list.list(),
+	};
+	for address in addresses {
 		if writeln!(out, "{address}").is_err() {
 			return ExitCode::FAILURE;
 		}
