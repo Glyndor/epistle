@@ -47,3 +47,7 @@ tower = { version = "0.5.3", features = ["util"] }
 [[bench]]
 name = "parsers"
 harness = false
+
+[[bench]]
+name = "queue"
+harness = false
