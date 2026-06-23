@@ -2,6 +2,7 @@
 //! what epistle expects, and report drift. Read-only — it never changes DNS,
 //! so it is safe to run anytime and needs no provider credentials.
 
+pub mod cloudflare;
 pub mod provider;
 pub mod records;
 
