@@ -44,6 +44,10 @@ pub enum JwtError {
 	AlgorithmMismatch,
 	/// The signature did not verify against the key.
 	BadSignature,
+	/// `exp` is missing or not a number: a bearer token must have a bounded
+	/// lifetime, so one without a usable `exp` is rejected (never accepted as
+	/// non-expiring).
+	MissingExpiry,
 	/// `exp` is in the past.
 	Expired,
 	/// `nbf` is in the future.
@@ -109,9 +113,13 @@ pub fn validate(
 }
 
 fn check_claims(claims: &Value, validation: &Validation) -> Result<(), JwtError> {
-	if let Some(exp) = claims.get("exp").and_then(Value::as_u64)
-		&& validation.now >= exp
-	{
+	// A bearer token MUST carry a bounded lifetime: a missing or non-numeric
+	// `exp` is rejected outright rather than treated as "never expires".
+	let exp = claims
+		.get("exp")
+		.and_then(Value::as_u64)
+		.ok_or(JwtError::MissingExpiry)?;
+	if validation.now >= exp {
 		return Err(JwtError::Expired);
 	}
 	if let Some(nbf) = claims.get("nbf").and_then(Value::as_u64)

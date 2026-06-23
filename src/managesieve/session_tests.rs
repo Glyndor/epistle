@@ -108,6 +108,31 @@ fn auth_succeeds_over_tls_and_bad_credentials_fail() {
 }
 
 #[test]
+fn repeated_auth_failures_close_the_connection() {
+	let (mut s, _dir) = session(true);
+	let bad = || Command::Authenticate {
+		mechanism: "PLAIN".to_string(),
+		initial: Some({
+			use base64::Engine;
+			base64::engine::general_purpose::STANDARD.encode("\0alice@example.org\0wrong")
+		}),
+	};
+	// First two failures keep the connection open.
+	assert_eq!(
+		s.handle(bad()),
+		Response::No(Some("Authentication failed.".to_string()))
+	);
+	assert_eq!(
+		s.handle(bad()),
+		Response::No(Some("Authentication failed.".to_string()))
+	);
+	// The third closes it, so an attacker cannot keep guessing on one connection.
+	let third = s.handle(bad());
+	assert!(matches!(third, Response::Bye(_)), "{third:?}");
+	assert!(third.is_final());
+}
+
+#[test]
 fn starttls_signals_upgrade_then_refuses_repeat() {
 	let (mut s, _dir) = session(false);
 	let response = s.handle(Command::StartTls);

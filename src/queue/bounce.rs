@@ -75,6 +75,13 @@ fn build_report(
 		return None;
 	}
 
+	// The reason is the remote MTA's SMTP reply, attacker-influenced and read
+	// with its line breaks intact. Sanitize before it reaches any DSN header or
+	// body: a raw CR/LF would inject forged headers into the bounce we send back
+	// to the (attacker-chosen) original sender (header injection / DSN
+	// smuggling). Collapse all control characters to spaces and cap the length.
+	let reason = &sanitize_reason(reason);
+
 	let date = clock::rfc5322(now);
 	let boundary = format!(
 		"=_dsn_{}",
@@ -168,6 +175,19 @@ Content-Type: message/rfc822-headers\r\n\
 		mailbox: None,
 		no_dsn: Vec::new(),
 	})
+}
+
+/// Sanitize a remote MTA's reply for safe inclusion in a DSN. Every control
+/// character (CR, LF, TAB, NUL, …) is replaced with a single space so it cannot
+/// break out of a header line or inject new headers, and the result is capped to
+/// bound the bounce size. The reply is otherwise attacker-influenced text.
+fn sanitize_reason(reason: &str) -> String {
+	const MAX_REASON_LEN: usize = 512;
+	reason
+		.chars()
+		.map(|c| if c.is_control() { ' ' } else { c })
+		.take(MAX_REASON_LEN)
+		.collect()
 }
 
 /// The enhanced status code (RFC 3463, `class.subject.detail`) carried in the
@@ -344,6 +364,48 @@ mod tests {
 			)
 			.is_none()
 		);
+	}
+
+	#[test]
+	fn sanitizes_crlf_in_reason_to_prevent_header_injection() {
+		// A hostile/compromised remote MTA returns a reply whose line contains a
+		// CRLF and a forged header. It must not appear as a real header (or any
+		// new line) in the DSN we generate.
+		let bounce = build(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			"550 rejected\r\nBcc: attacker@evil.example\r\nX-Injected: yes",
+			original(),
+			UNIX_EPOCH,
+		)
+		.expect("bounce built");
+		let body = String::from_utf8(bounce.data).expect("ascii");
+		// The injected header must never appear at the start of a line.
+		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
+		assert!(!body.contains("\r\nX-Injected: yes"), "{body}");
+		// The control characters are flattened to spaces, so the reason text is
+		// still present on a single line.
+		assert!(
+			body.contains("550 rejected  Bcc: attacker@evil.example  X-Injected: yes"),
+			"{body}"
+		);
+	}
+
+	#[test]
+	fn caps_reason_length() {
+		let bounce = build(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			&"x".repeat(5_000),
+			original(),
+			UNIX_EPOCH,
+		)
+		.expect("bounce built");
+		let body = String::from_utf8(bounce.data).expect("ascii");
+		// The reason appears twice (header + text part); each is capped to 512.
+		assert!(!body.contains(&"x".repeat(513)), "reason not capped");
 	}
 
 	#[test]

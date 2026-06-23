@@ -116,6 +116,34 @@ fn audience_array_matches() {
 }
 
 #[test]
+fn token_without_exp_is_rejected() {
+	let k = key();
+	// A well-signed token with the right issuer/audience but no `exp` must NOT
+	// be accepted as a non-expiring bearer token (ASVS V3.5).
+	let token = sign(
+		&k,
+		&serde_json::json!({"iss": "https://issuer.example", "aud": "mail"}),
+	);
+	assert_eq!(
+		validate(&token, Algorithm::Es256, &k.public, &validation(1000)),
+		Err(JwtError::MissingExpiry)
+	);
+}
+
+#[test]
+fn token_with_non_numeric_exp_is_rejected() {
+	let k = key();
+	let token = sign(
+		&k,
+		&serde_json::json!({"iss": "https://issuer.example", "aud": "mail", "exp": "soon"}),
+	);
+	assert_eq!(
+		validate(&token, Algorithm::Es256, &k.public, &validation(1000)),
+		Err(JwtError::MissingExpiry)
+	);
+}
+
+#[test]
 fn algorithm_mismatch_rejected() {
 	let k = key();
 	let token = sign(&k, &claims(2000));

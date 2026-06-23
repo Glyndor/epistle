@@ -213,15 +213,24 @@ fn txt_record(name: &str, value: &str) -> DnsRecord {
 	}
 }
 
-/// Write a key file with `0600` permissions (private key material).
+/// Write a new key file with `0600` permissions (private key material).
+///
+/// The file is created with the restrictive mode from the start — never written
+/// world/group-readable and then tightened — so the private key never exists
+/// with permissive bits, even briefly. The path carries a fresh per-rotation
+/// selector, so it must not already exist; `create_new` makes that an error
+/// rather than overwriting (fail closed: rotation is retried on the next tick).
 fn write_key(path: &std::path::Path, pem: &str) -> std::io::Result<()> {
-	std::fs::write(path, pem)?;
+	use std::io::Write;
+
+	let mut options = std::fs::OpenOptions::new();
+	options.write(true).create_new(true);
 	#[cfg(unix)]
 	{
-		use std::os::unix::fs::PermissionsExt;
-		std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(0o600);
 	}
-	Ok(())
+	options.open(path)?.write_all(pem.as_bytes())
 }
 
 /// A rotation failure (logged; rotation is retried on the next tick).
