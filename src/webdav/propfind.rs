@@ -18,6 +18,9 @@ pub struct Entry {
 	/// Whether this collection is a CardDAV addressbook — adds the
 	/// `<C:addressbook/>` resourcetype alongside `<D:collection/>`.
 	pub is_addressbook: bool,
+	/// Whether this collection is a CalDAV calendar — adds the
+	/// `<CAL:calendar/>` resourcetype alongside `<D:collection/>`.
+	pub is_calendar: bool,
 	/// Byte length for a non-collection; ignored for collections.
 	pub length: u64,
 	/// Last-modified time, if known.
@@ -34,7 +37,8 @@ pub struct Entry {
 pub fn multistatus(entries: &[Entry]) -> String {
 	let mut body = String::from(
 		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\n",
+		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\" \
+		xmlns:CAL=\"urn:ietf:params:xml:ns:caldav\">\n",
 	);
 	for entry in entries {
 		body.push_str(&response(entry));
@@ -47,6 +51,8 @@ pub fn multistatus(entries: &[Entry]) -> String {
 fn response(entry: &Entry) -> String {
 	let resourcetype = if entry.is_collection && entry.is_addressbook {
 		"<D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>"
+	} else if entry.is_collection && entry.is_calendar {
+		"<D:resourcetype><D:collection/><CAL:calendar/></D:resourcetype>"
 	} else if entry.is_collection {
 		"<D:resourcetype><D:collection/></D:resourcetype>"
 	} else {
@@ -128,33 +134,46 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 }
 
 /// Build the discovery `207 Multi-Status` for `href` (typically a principal or
-/// home path) answering the CardDAV bootstrap props: `current-user-principal`,
-/// `principal-URL` and `addressbook-home-set`. They all point a client at
-/// `account_home` (e.g. `/<account>/`) as the principal and addressbook home —
-/// pragmatic, and enough for autodiscovery to land in the account tree.
+/// home path) answering the CardDAV and CalDAV bootstrap props:
+/// `current-user-principal`, `principal-URL`, `addressbook-home-set`,
+/// `calendar-home-set`, and the RFC 6638 scheduling `schedule-outbox-URL` /
+/// `schedule-inbox-URL`. The principal and the two homes all point a client at
+/// `account_home` (e.g. `/<account>/`); the Outbox and Inbox point at the
+/// conventional `<home>outbox/` and `<home>inbox/`. Pragmatic, and enough for
+/// autodiscovery to land in the account tree.
 pub fn discovery(href: &str, account_home: &str) -> String {
 	let href = escape(href);
 	let home = escape(account_home);
+	let outbox = escape(&format!("{}outbox/", account_home));
+	let inbox = escape(&format!("{}inbox/", account_home));
 	format!(
 		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\n\
+		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\" \
+		xmlns:CAL=\"urn:ietf:params:xml:ns:caldav\">\n\
 		\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
 		\t\t\t\t<D:current-user-principal><D:href>{home}</D:href></D:current-user-principal>\n\
 		\t\t\t\t<D:principal-URL><D:href>{home}</D:href></D:principal-URL>\n\
 		\t\t\t\t<C:addressbook-home-set><D:href>{home}</D:href></C:addressbook-home-set>\n\
+		\t\t\t\t<CAL:calendar-home-set><D:href>{home}</D:href></CAL:calendar-home-set>\n\
+		\t\t\t\t<CAL:schedule-outbox-URL><D:href>{outbox}</D:href></CAL:schedule-outbox-URL>\n\
+		\t\t\t\t<CAL:schedule-inbox-URL><D:href>{inbox}</D:href></CAL:schedule-inbox-URL>\n\
 		\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n\
 		</D:multistatus>\n"
 	)
 }
 
-/// Whether a PROPFIND request body asks for any of the CardDAV discovery props
-/// (`current-user-principal`, `principal-URL`, `addressbook-home-set`). A body
+/// Whether a PROPFIND request body asks for any of the CardDAV/CalDAV discovery
+/// props (`current-user-principal`, `principal-URL`, `addressbook-home-set`,
+/// `calendar-home-set`, `schedule-outbox-URL`, `schedule-inbox-URL`). A body
 /// requesting one of these is answered with [`discovery`] rather than the
 /// filesystem walk.
 pub fn wants_discovery(body: &str) -> bool {
 	body.contains("current-user-principal")
 		|| body.contains("principal-URL")
 		|| body.contains("addressbook-home-set")
+		|| body.contains("calendar-home-set")
+		|| body.contains("schedule-outbox-URL")
+		|| body.contains("schedule-inbox-URL")
 }
 
 /// Escape the XML special characters for safe interpolation into the body.
