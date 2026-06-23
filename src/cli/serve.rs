@@ -273,7 +273,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.api
 					.as_ref()
 					.ok_or_else(|| std::io::Error::other("api listener without [api] section"))?;
-				let state = crate::api::ApiState::new(
+				let mut state = crate::api::ApiState::new(
 					&api.token_hash,
 					config.data_dir.clone(),
 					config.domains.clone(),
@@ -282,6 +282,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				)
 				.with_quota(config.quota_bytes.unwrap_or(0))
 				.with_crypto(crypto.clone());
+				// Built-in OAuth authorization server, when a signing key is set.
+				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
+					state = state.with_authz(authz);
+				}
 				let listener = super::serve_tasks::bind(listener_config).await?;
 				let router = crate::api::router(state);
 				tasks.push(tokio::spawn(async move {

@@ -37,6 +37,10 @@ struct Inner {
 	push_subscriptions: std::sync::Mutex<Vec<serde_json::Value>>,
 	/// At-rest crypto for stored message bodies and uploaded blobs.
 	crypto: MessageCrypto,
+	/// The built-in OAuth 2.0 authorization server, present only when a signing
+	/// key is configured. When `None`, the `/oauth/*` grant routes are not mounted
+	/// and no tokens are issued (fail closed).
+	authz: Option<Arc<super::oauth::AuthzServer>>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -113,8 +117,36 @@ impl ApiState {
 				api_keys,
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
 				crypto: MessageCrypto::disabled(),
+				authz: None,
 			}),
 		}
+	}
+
+	/// Attach the built-in OAuth authorization server. Must be set before the
+	/// state is shared (it rebuilds the `Arc` inner). When unset, the `/oauth/*`
+	/// grant routes are absent and no tokens are issued.
+	pub fn with_authz(mut self, authz: super::oauth::AuthzServer) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.authz = Some(Arc::new(authz));
+		}
+		self
+	}
+
+	/// The built-in OAuth authorization server, when configured.
+	pub fn authz(&self) -> Option<&super::oauth::AuthzServer> {
+		self.inner.authz.as_deref()
+	}
+
+	/// Authenticate `login`/`password` against the account directory, returning
+	/// the resolved account identity. Used by the OAuth approval/authorize
+	/// endpoints to bind a grant to a real account. Fail-closed and free of any
+	/// user-enumeration oracle (see [`crate::smtp::directory::Directory::authenticate`]).
+	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+		self.inner
+			.store
+			.handle()
+			.current()
+			.authenticate(login, password)
 	}
 
 	/// Replace the at-rest crypto used for stored messages and blobs. Must be set

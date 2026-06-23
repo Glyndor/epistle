@@ -21,7 +21,10 @@ mod util;
 mod verify;
 mod verify_dns;
 
-use util::{dkim_keygen, generate_secret, message_crypto, read_line, storage_keygen, token_hash};
+use util::{
+	dkim_keygen, generate_secret, message_crypto, oauth_keygen, read_line, storage_keygen,
+	token_hash,
+};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -63,6 +66,10 @@ enum Command {
 	/// stdout. Store it off the data disk (an env var or a key file), then point
 	/// `[storage]` at it; never written into data_dir.
 	StorageKeygen,
+	/// Generate an ES256 key pair for the built-in OAuth authorization server and
+	/// print it to stdout: the base64 PKCS#8 private key for `[oauth] signing_key`
+	/// and the matching base64 public point for `[oauth] public_key`.
+	OauthKeygen,
 	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
 	/// a Maildir tree with `--maildir`.
 	Export {
@@ -456,6 +463,7 @@ impl Cli {
 			},
 			Command::DkimKeygen { out } => dkim_keygen(&out),
 			Command::StorageKeygen => storage_keygen(),
+			Command::OauthKeygen => oauth_keygen(),
 			Command::TokenHash => token_hash(),
 			Command::AppPasswordCreate {
 				config,

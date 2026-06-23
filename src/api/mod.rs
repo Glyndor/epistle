@@ -7,6 +7,7 @@
 pub mod api_keys;
 mod error;
 mod jmap;
+pub mod oauth;
 mod state;
 pub mod v1;
 
@@ -52,13 +53,23 @@ pub fn router(state: ApiState) -> Router {
 		));
 	// Unauthenticated liveness probe (reveals nothing) for load balancers and
 	// orchestrators; merged outside the auth layer.
-	Router::new()
+	let mut public = Router::new()
 		.route(
 			"/healthz",
 			get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }),
 		)
-		.merge(authenticated)
-		.with_state(state)
+		.merge(authenticated);
+	// OAuth 2.0 authorization-server grant endpoints (RFC 8628 device flow + RFC
+	// 7636 PKCE). Mounted only when a signing key is configured; the endpoints
+	// self-authenticate (codes / account credentials), so they sit OUTSIDE the
+	// API bearer middleware. With no signing key, the routes are absent entirely
+	// (fail closed — no path can issue an unsigned token).
+	if state.authz().is_some() {
+		public = public
+			.merge(oauth::public_router())
+			.merge(oauth::authenticated_router());
+	}
+	public.with_state(state)
 }
 
 #[cfg(test)]
