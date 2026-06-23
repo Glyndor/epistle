@@ -21,6 +21,19 @@ pub struct Account {
 	/// domain quota, then the server default.
 	#[serde(default)]
 	pub quota_bytes: Option<u64>,
+	/// External addresses this account's mail is also forwarded to. Empty
+	/// (the default) disables forwarding.
+	#[serde(default)]
+	pub forward: Vec<String>,
+	/// Keep the local copy when forwarding. True (the default) is safe: mail
+	/// is never lost. Set false for pure forwarding (no local mailbox copy).
+	#[serde(default = "default_true")]
+	pub forward_keep_local: bool,
+}
+
+/// Serde default for boolean fields that default to true.
+fn default_true() -> bool {
+	true
 }
 
 #[cfg(test)]

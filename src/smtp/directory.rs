@@ -43,6 +43,9 @@ pub struct Directory {
 	/// Default storage quota (bytes) per domain, applied to accounts in that
 	/// domain without their own quota.
 	domain_quotas: HashMap<String, u64>,
+	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
+	/// account is also queued to each target; `keep_local` keeps the local copy.
+	forwards: HashMap<String, (Vec<String>, bool)>,
 }
 
 impl Directory {
@@ -70,6 +73,7 @@ impl Directory {
 			totp: HashMap::new(),
 			account_quotas: HashMap::new(),
 			domain_quotas: HashMap::new(),
+			forwards: HashMap::new(),
 		}
 	}
 
@@ -98,6 +102,26 @@ impl Directory {
 			.map(|(domain, bytes)| (domain.to_ascii_lowercase(), bytes))
 			.collect();
 		self
+	}
+
+	/// Attach per-account forwarding: account name → (target addresses,
+	/// keep_local).
+	pub fn with_forwards(
+		mut self,
+		forwards: impl IntoIterator<Item = (String, (Vec<String>, bool))>,
+	) -> Self {
+		self.forwards = forwards
+			.into_iter()
+			.map(|(name, spec)| (name.to_ascii_lowercase(), spec))
+			.collect();
+		self
+	}
+
+	/// The forwarding spec for an account: `(targets, keep_local)`.
+	pub fn forwards(&self, account: &str) -> Option<(&[String], bool)> {
+		self.forwards
+			.get(&account.to_ascii_lowercase())
+			.map(|(targets, keep)| (targets.as_slice(), *keep))
 	}
 
 	/// The storage quota for an account: its own quota, else the quota of a
