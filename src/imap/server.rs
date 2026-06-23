@@ -56,6 +56,8 @@ pub struct Server {
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables AUTH=SCRAM-SHA-256-PLUS.
 	cbind_data: Option<Vec<u8>>,
+	/// Max concurrent connections for this listener (back-pressure cap).
+	max_connections: usize,
 }
 
 impl Server {
@@ -77,7 +79,16 @@ impl Server {
 			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
 			oauth: None,
 			cbind_data: None,
+			max_connections: MAX_CONNECTIONS,
 		}
+	}
+
+	/// Cap concurrent connections for this listener (0 keeps the default).
+	pub fn with_max_connections(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_connections = max;
+		}
+		self
 	}
 
 	/// Set the per-account storage quota applied to sessions.
@@ -116,7 +127,7 @@ impl Server {
 
 	/// Accept connections forever.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {

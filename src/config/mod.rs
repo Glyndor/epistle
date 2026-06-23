@@ -147,6 +147,10 @@ pub struct Config {
 	/// disables per-account submission rate limiting.
 	#[serde(default)]
 	pub submission_rate_limit_per_min: Option<u32>,
+	/// Max concurrent connections per listener (back-pressure cap). Absent
+	/// uses each protocol's built-in default. Excess connections are dropped.
+	#[serde(default)]
+	pub max_connections_per_listener: Option<usize>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
@@ -345,5 +349,35 @@ surprise = true
 	#[test]
 	fn default_bind_is_loopback() {
 		assert!(Config::default_bind_addr().is_loopback());
+	}
+
+	#[test]
+	fn max_connections_per_listener_parses_and_defaults_none() {
+		let default = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		assert_eq!(
+			Config::load(default.path())
+				.expect("loads")
+				.max_connections_per_listener,
+			None
+		);
+
+		let set = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+max_connections_per_listener = 2048
+"#,
+		);
+		assert_eq!(
+			Config::load(set.path())
+				.expect("loads")
+				.max_connections_per_listener,
+			Some(2048)
+		);
 	}
 }

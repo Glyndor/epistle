@@ -150,6 +150,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.submission_rate_limit_per_min
 		.map(|per_min| Arc::new(crate::smtp::ratelimit::SendLimiter::new(per_min, 60)));
 
+	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
+	let max_conn = config.max_connections_per_listener.unwrap_or(0);
+
 	// Optional external scanner hook.
 	let scanner_hook: Option<Arc<dyn crate::antispam::hook::MailHook>> =
 		match &config.scanner_hook_url {
@@ -327,6 +330,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					imap_server = imap_server.with_channel_binding(cbind.clone());
 				}
+				imap_server = imap_server.with_max_connections(max_conn);
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
@@ -336,11 +340,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					));
 				};
 				let listener = super::serve_tasks::bind(listener_config).await?;
-				let server = Arc::new(crate::pop3::server::Server::new(
-					config.data_dir.clone(),
-					directory.clone(),
-					acceptor.clone(),
-				));
+				let server = Arc::new(
+					crate::pop3::server::Server::new(
+						config.data_dir.clone(),
+						directory.clone(),
+						acceptor.clone(),
+					)
+					.with_max_connections(max_conn),
+				);
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
 			ListenerKind::Autoconfig => {
@@ -360,11 +367,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					));
 				};
 				let listener = super::serve_tasks::bind(listener_config).await?;
-				let server = Arc::new(crate::managesieve::server::Server::new(
-					config.data_dir.clone(),
-					directory.clone(),
-					acceptor.clone(),
-				));
+				let server = Arc::new(
+					crate::managesieve::server::Server::new(
+						config.data_dir.clone(),
+						directory.clone(),
+						acceptor.clone(),
+					)
+					.with_max_connections(max_conn),
+				);
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
@@ -378,6 +388,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_spf(Arc::clone(&spf_dns))
 					.with_dnsbl(crate::dnsbl::Dnsbl::new(config.dnsbl_zones.clone()))
 					.with_first_time_delay(config.first_time_sender_delay_secs)
+					.with_max_connections(max_conn)
 					.with_report_dir(config.data_dir.clone());
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());

@@ -80,6 +80,8 @@ pub struct Server {
 	cbind_data: Option<Vec<u8>>,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
+	/// Max concurrent connections for this listener (back-pressure cap).
+	max_connections: usize,
 }
 
 impl Server {
@@ -105,12 +107,21 @@ impl Server {
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
+			max_connections: MAX_CONNECTIONS,
 		}
 	}
 
 	/// Attach a shared per-account submission rate limiter.
 	pub fn with_send_limiter(mut self, limiter: Arc<crate::smtp::ratelimit::SendLimiter>) -> Self {
 		self.send_limiter = Some(limiter);
+		self
+	}
+
+	/// Cap concurrent connections for this listener (0 keeps the default).
+	pub fn with_max_connections(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_connections = max;
+		}
 		self
 	}
 
@@ -234,7 +245,7 @@ impl Server {
 
 	/// Accept connections forever. Each connection runs in its own task.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
