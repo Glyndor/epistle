@@ -19,6 +19,9 @@ pub use app_passwords::{AppPassword, AppPasswordStore};
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
+pub mod ldap;
+pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
+
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
 pub struct DirectoryHandle {
@@ -129,6 +132,12 @@ pub struct AccountStore {
 	/// Static config and dynamic accounts take precedence over these on a name
 	/// or address conflict.
 	sql_accounts: RwLock<Vec<SqlAccount>>,
+	/// Accounts loaded from the LDAP directory backend, refreshed periodically.
+	/// Lowest precedence: static, dynamic and SQL accounts all win on conflict.
+	ldap_accounts: RwLock<Vec<LdapAccount>>,
+	/// Live LDAP authenticator (a worker thread), shared into every rebuilt
+	/// directory so per-request binds work after a refresh.
+	ldap_auth: Option<Arc<LdapAuthenticator>>,
 	handle: DirectoryHandle,
 }
 
@@ -163,6 +172,8 @@ impl AccountStore {
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
 			sql_accounts: RwLock::new(Vec::new()),
+			ldap_accounts: RwLock::new(Vec::new()),
+			ldap_auth: None,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -195,6 +206,22 @@ impl AccountStore {
 	/// accounts keep precedence on conflict.
 	pub fn set_sql_accounts(&self, accounts: Vec<SqlAccount>) {
 		*self.sql_accounts.write().expect("store lock") = accounts;
+		self.handle.replace(self.build_directory());
+	}
+
+	/// Attach the live LDAP authenticator at construction and rebuild the
+	/// directory so per-request LDAP binds are wired in (builder form).
+	pub fn with_ldap_authenticator(mut self, ldap: Arc<LdapAuthenticator>) -> Self {
+		self.ldap_auth = Some(ldap);
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Replace the LDAP-sourced resolution accounts and rebuild the directory.
+	/// Called by the background refresh task; static, dynamic and SQL accounts all
+	/// keep precedence on conflict.
+	pub fn set_ldap_accounts(&self, accounts: Vec<LdapAccount>) {
+		*self.ldap_accounts.write().expect("store lock") = accounts;
 		self.handle.replace(self.build_directory());
 	}
 
@@ -338,10 +365,11 @@ impl AccountStore {
 	fn build_directory(&self) -> Directory {
 		let dynamic = self.dynamic.read().expect("store lock");
 		let sql = self.sql_accounts.read().expect("store lock");
-		// SQL accounts are listed first so static config and dynamic accounts,
-		// chained after, take precedence on a name or address collision (the
-		// directory's maps keep the last writer).
-		let address_accounts = sql
+		let ldap = self.ldap_accounts.read().expect("store lock");
+		// LDAP accounts are listed first, then SQL, so static config and dynamic
+		// accounts chained after take precedence on a name or address collision
+		// (the directory's maps keep the last writer): static > dynamic > SQL > LDAP.
+		let address_accounts = ldap
 			.iter()
 			.flat_map(|account| {
 				account
@@ -349,6 +377,12 @@ impl AccountStore {
 					.iter()
 					.map(|address| (address.clone(), account.name.clone()))
 			})
+			.chain(sql.iter().flat_map(|account| {
+				account
+					.addresses
+					.iter()
+					.map(|address| (address.clone(), account.name.clone()))
+			}))
 			.chain(self.static_accounts.iter().flat_map(|account| {
 				account
 					.addresses
@@ -439,6 +473,7 @@ impl AccountStore {
 			.with_forwards(forwards)
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
+			.with_ldap(self.ldap_auth.clone())
 	}
 }
 

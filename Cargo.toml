@@ -14,6 +14,7 @@ flate2 = "1.1.9"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
 hickory-resolver = { version = "0.26.1", features = ["dnssec-ring"] }
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
 libc = "0.2.186"
 psl = "2.1.212"
 rcgen = "0.14.8"

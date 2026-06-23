@@ -46,18 +46,22 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	}
 
 	// Recipient resolution and credentials: static config plus the
-	// API-managed dynamic accounts, hot-swapped on mutation.
-	let account_store = Arc::new(
-		crate::directory_store::AccountStore::open(
-			&config.data_dir,
-			config.domains.clone(),
-			config.domain_aliases.clone(),
-			config.accounts.clone(),
-		)
-		.map_err(|error| std::io::Error::other(error.to_string()))?
-		.with_domain_quotas(config.domain_quotas.clone())
-		.with_aliases(config.alias.clone()),
-	);
+	// API-managed dynamic accounts, hot-swapped on mutation. An optional live
+	// LDAP authenticator is attached here so per-request binds work immediately.
+	let ldap_auth = super::serve_tasks::build_ldap_authenticator(&config);
+	let mut store = crate::directory_store::AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map_err(|error| std::io::Error::other(error.to_string()))?
+	.with_domain_quotas(config.domain_quotas.clone())
+	.with_aliases(config.alias.clone());
+	if let Some(auth) = ldap_auth {
+		store = store.with_ldap_authenticator(auth);
+	}
+	let account_store = Arc::new(store);
 	let directory = account_store.handle();
 
 	// At-rest message encryption, loaded once and shared. Fail closed: with
@@ -184,6 +188,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
 		.await?;
+
+	// Optional LDAP directory backend: load the resolution set and refresh it.
+	super::serve_tasks::spawn_ldap_directory(&config, Arc::clone(&account_store)).await?;
 
 	// The queue worker drains the outbound spool in the background.
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);

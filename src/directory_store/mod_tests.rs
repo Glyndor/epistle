@@ -123,6 +123,39 @@ fn password_change_swaps_credentials() {
 }
 
 #[test]
+fn ldap_accounts_resolve_and_refresh_with_static_precedence() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+
+	// An LDAP-sourced account resolves like any other source.
+	store.set_ldap_accounts(vec![LdapAccount {
+		name: "carol".to_string(),
+		addresses: vec!["carol@example.org".to_string()],
+	}]);
+	assert_eq!(
+		resolves(&store.handle(), "carol@example.org"),
+		Resolution::Account("carol".to_string())
+	);
+
+	// Static config wins over an LDAP account claiming the same address.
+	store.set_ldap_accounts(vec![LdapAccount {
+		name: "ldap-alice".to_string(),
+		addresses: vec!["alice@example.org".to_string()],
+	}]);
+	assert_eq!(
+		resolves(&store.handle(), "alice@example.org"),
+		Resolution::Account("alice".to_string())
+	);
+
+	// A refresh replaces the previous LDAP set entirely.
+	store.set_ldap_accounts(Vec::new());
+	assert_eq!(
+		resolves(&store.handle(), "carol@example.org"),
+		Resolution::UnknownUser
+	);
+}
+
+#[test]
 fn account_views_mark_origin() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = open_store(dir.path());

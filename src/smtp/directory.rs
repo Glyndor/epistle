@@ -68,6 +68,10 @@ pub struct Directory {
 	/// Secondary app passwords per account name. Each entry is tried when the
 	/// primary password check fails (see [`Directory::authenticate_with_ip`]).
 	app_passwords: HashMap<String, Vec<crate::directory_store::AppPassword>>,
+	/// Optional live LDAP/AD authenticator. Consulted only when the local
+	/// credential path yields no match, so local and SQL accounts never incur an
+	/// LDAP round trip (see [`Directory::authenticate_with_ip`]).
+	ldap: Option<std::sync::Arc<crate::directory_store::LdapAuthenticator>>,
 }
 
 impl Directory {
@@ -98,7 +102,19 @@ impl Directory {
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
+			ldap: None,
 		}
+	}
+
+	/// Attach a live LDAP/AD authenticator, consulted by
+	/// [`Directory::authenticate_with_ip`] only after the local credential path
+	/// fails. Shared behind an `Arc` so directory rebuilds keep one worker thread.
+	pub fn with_ldap(
+		mut self,
+		ldap: Option<std::sync::Arc<crate::directory_store::LdapAuthenticator>>,
+	) -> Self {
+		self.ldap = ldap;
+		self
 	}
 
 	/// Attach per-account app passwords (account name → list). Account keys are
@@ -226,7 +242,32 @@ impl Directory {
 	/// known account whose primary and every app password mismatch — both end in
 	/// `None`. The app-password fallback runs only for a resolved account, so it
 	/// does not change the unknown-vs-known timing class.
+	///
+	/// LDAP is consulted last and only when the local credential path yields no
+	/// match: local and SQL accounts authenticate without an LDAP round trip, and
+	/// an LDAP-only login (no local entry) still gets a live bind. The LDAP path
+	/// fails closed to `None` (unknown user and bad password are indistinguishable).
 	pub fn authenticate_with_ip(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+	) -> Option<String> {
+		if let Some(account) = self.authenticate_local(login, password, ip) {
+			return Some(account);
+		}
+		// Local/SQL credentials did not match: try the live LDAP bind, if any.
+		if let Some(ldap) = &self.ldap {
+			return ldap.authenticate(login, password);
+		}
+		None
+	}
+
+	/// The local credential path: primary password (with TOTP when set), then the
+	/// account's app passwords. `None` when the login is unknown locally or no
+	/// local secret matches. Split out so [`Directory::authenticate_with_ip`] can
+	/// fall back to LDAP afterwards.
+	fn authenticate_local(
 		&self,
 		login: &str,
 		password: &str,

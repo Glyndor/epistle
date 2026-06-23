@@ -12,6 +12,7 @@ mod arc;
 mod database;
 mod dkim;
 mod dns;
+mod ldap;
 mod listener;
 mod oauth;
 mod otel;
@@ -31,6 +32,7 @@ pub use arc::Arc;
 pub use database::Database;
 pub use dkim::Dkim;
 pub use dns::Dns;
+pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
 pub use otel::Otel;
@@ -175,6 +177,10 @@ pub struct Config {
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
 	pub oauth: Option<Oauth>,
+	/// LDAP / Active Directory directory backend. Present enables authenticating
+	/// non-local logins against the LDAP server and loading its users for
+	/// recipient resolution.
+	pub ldap: Option<Ldap>,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
 	/// Unprivileged user/group to drop to after privileged ports are bound.
