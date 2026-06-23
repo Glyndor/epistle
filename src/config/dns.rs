@@ -7,6 +7,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::dns::cloudflare::CloudflareProvider;
+use crate::dns::desec::DesecProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
 
 /// DNS provider settings. When present with a usable token, record automation
@@ -36,6 +37,7 @@ impl Dns {
 	pub fn build(&self) -> Option<Arc<dyn DnsProvider>> {
 		match self.provider.to_ascii_lowercase().as_str() {
 			"cloudflare" => Some(Arc::new(CloudflareProvider::new(self.secret()?))),
+			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
 			_ => None,
 		}
 	}
@@ -102,6 +104,13 @@ mod tests {
 		let rendered = format!("{dns:?}");
 		assert!(!rendered.contains("super-secret"), "{rendered}");
 		assert!(rendered.contains("***"), "{rendered}");
+	}
+
+	#[test]
+	fn desec_with_token_builds() {
+		let dns: Dns =
+			toml::from_str("provider = \"desec\"\nzone = \"example.org\"\ntoken = \"t\"").unwrap();
+		assert!(dns.build().is_some());
 	}
 
 	#[test]
