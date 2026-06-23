@@ -94,8 +94,14 @@ impl Worker {
 		if let Some(suppression) = &self.suppression
 			&& let Ok(entry) = self.spool.load(id)
 		{
+			let account = &entry.envelope.reverse_path;
 			for recipient in &entry.envelope.recipients {
 				suppression.suppress(recipient);
+				// Also record under the sending account so an operator can see
+				// per-account bounces.
+				if !account.is_empty() {
+					suppression.suppress_for(account, recipient);
+				}
 			}
 		}
 	}
@@ -318,8 +324,10 @@ impl Worker {
 			Err(error) => return Outcome::Retry(format!("spool read failed: {error}")),
 		};
 
-		// Skip recipients on the suppression list (they hard-bounced before);
-		// if that leaves none, drop the message without a second bounce.
+		// Skip recipients suppressed globally or for this sending account (they
+		// hard-bounced before); if that leaves none, drop without a second
+		// bounce.
+		let account = &entry.envelope.reverse_path;
 		let recipients: Vec<&String> = entry
 			.envelope
 			.recipients
@@ -327,7 +335,7 @@ impl Worker {
 			.filter(|r| {
 				self.suppression
 					.as_ref()
-					.is_none_or(|s| !s.is_suppressed(r))
+					.is_none_or(|s| !s.is_suppressed(r) && !s.is_suppressed_for(account, r))
 			})
 			.collect();
 		if recipients.is_empty() {

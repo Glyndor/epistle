@@ -124,6 +124,9 @@ enum Command {
 		/// Remove this address from the suppression list instead of listing.
 		#[arg(long, value_name = "ADDRESS")]
 		remove: Option<String>,
+		/// Operate on this sending account's per-account list, not the global one.
+		#[arg(long, value_name = "ACCOUNT")]
+		account: Option<String>,
 	},
 	/// Read an offending message on stdin and print an RFC 5965 ARF abuse
 	/// report (send it to the offending sender's abuse address).
@@ -237,10 +240,17 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Suppression { config, remove } => match Config::load(&config) {
-				Ok(config) => {
-					suppression::run(&config, remove.as_deref(), &mut std::io::stdout().lock())
-				}
+			Command::Suppression {
+				config,
+				remove,
+				account,
+			} => match Config::load(&config) {
+				Ok(config) => suppression::run(
+					&config,
+					remove.as_deref(),
+					account.as_deref(),
+					&mut std::io::stdout().lock(),
+				),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
