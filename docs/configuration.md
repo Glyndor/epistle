@@ -163,6 +163,14 @@ Drop OS privileges after binding ports (run the daemon unprivileged).
 | `user` | Unprivileged user to switch to (must exist). |
 | `group` | Optional; defaults to the user's primary group. |
 
+### `[otel]`
+OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HTTP to a collector.
+
+| Key | Meaning |
+|---|---|
+| `endpoint` | OTLP/HTTP endpoint of the collector (e.g. `http://localhost:4318`). |
+| `service_name` | `service.name` resource attribute (default `epistle`). |
+
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 

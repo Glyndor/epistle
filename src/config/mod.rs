@@ -14,6 +14,7 @@ mod dkim;
 mod dns;
 mod listener;
 mod oauth;
+mod otel;
 mod privileges;
 mod tls;
 mod transport;
@@ -30,6 +31,7 @@ pub use dkim::Dkim;
 pub use dns::Dns;
 pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
+pub use otel::Otel;
 pub use privileges::Privileges;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
@@ -159,6 +161,9 @@ pub struct Config {
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
 	pub transport: Vec<Transport>,
+	/// OpenTelemetry OTLP trace export. Present enables span export.
+	#[serde(default)]
+	pub otel: Option<Otel>,
 	/// Multi-target aliases: an address that delivers to several accounts.
 	#[serde(default)]
 	pub alias: Vec<Alias>,
