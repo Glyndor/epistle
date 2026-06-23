@@ -16,6 +16,7 @@ mod listener;
 mod oauth;
 mod otel;
 mod privileges;
+mod queue;
 mod storage;
 mod tls;
 mod transport;
@@ -34,6 +35,7 @@ pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
+pub use queue::{OutboundTls, Queue};
 pub use storage::Storage;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
@@ -183,6 +185,10 @@ pub struct Config {
 	/// transparent ChaCha20-Poly1305 encryption of stored message files.
 	#[serde(default)]
 	pub storage: Option<Storage>,
+	/// Outbound queue settings (currently the STARTTLS authentication mode).
+	/// Absent uses the secure defaults (strict outbound TLS).
+	#[serde(default)]
+	pub queue: Queue,
 }
 
 impl Config {
@@ -365,6 +371,55 @@ surprise = true
 		let file = write_temp("hostname = ");
 		assert!(matches!(
 			Config::load(file.path()),
+			Err(ConfigError::Parse { .. })
+		));
+	}
+
+	#[test]
+	fn outbound_tls_defaults_strict_and_parses() {
+		// Absent [queue] section: strict (fail closed, back-compatible).
+		let default = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		assert_eq!(
+			Config::load(default.path())
+				.expect("loads")
+				.queue
+				.outbound_tls,
+			OutboundTls::Strict
+		);
+
+		// Explicit opportunistic parses.
+		let opportunistic = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+[queue]
+outbound_tls = "opportunistic"
+"#,
+		);
+		assert_eq!(
+			Config::load(opportunistic.path())
+				.expect("loads")
+				.queue
+				.outbound_tls,
+			OutboundTls::Opportunistic
+		);
+
+		// An unknown key inside [queue] is rejected (deny_unknown_fields).
+		let bad = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+[queue]
+surprise = true
+"#,
+		);
+		assert!(matches!(
+			Config::load(bad.path()),
 			Err(ConfigError::Parse { .. })
 		));
 	}

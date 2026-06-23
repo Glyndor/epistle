@@ -203,7 +203,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	.with_metrics(metrics.clone())
 	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
 	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
-	.with_transports(config.transport.clone());
+	.with_transports(config.transport.clone())
+	.with_outbound_tls(config.queue.outbound_tls);
 	if let Some(webhook) = &webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}

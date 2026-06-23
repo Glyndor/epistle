@@ -59,6 +59,9 @@ pub struct Worker {
 	/// DNSSEC-validating resolver for DANE TLSA lookups. `None` disables DANE
 	/// (delivery stays opportunistic).
 	dane_dns: Option<Arc<dyn crate::spf::DnsLookup>>,
+	/// STARTTLS authentication mode for unmandated, non-DANE delivery. Defaults
+	/// to strict PKIX (the secure default); see [`crate::config::OutboundTls`].
+	outbound_tls: crate::config::OutboundTls,
 }
 
 impl Worker {
@@ -77,7 +80,16 @@ impl Worker {
 			suppression: None,
 			transports: Vec::new(),
 			dane_dns: None,
+			outbound_tls: crate::config::OutboundTls::default(),
 		}
+	}
+
+	/// Set the outbound STARTTLS authentication mode for unmandated, non-DANE
+	/// delivery. The default is strict PKIX; opportunistic accepts any
+	/// certificate (encryption without authentication).
+	pub fn with_outbound_tls(mut self, mode: crate::config::OutboundTls) -> Self {
+		self.outbound_tls = mode;
+		self
 	}
 
 	/// Enforce outbound DANE (RFC 7672) using this DNSSEC-validating resolver
@@ -482,6 +494,7 @@ impl Worker {
 				tls_required,
 				auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
 				&dane,
+				self.outbound_tls,
 			)
 			.await;
 			match result {

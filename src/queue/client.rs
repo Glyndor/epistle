@@ -8,9 +8,13 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::client::danger::{
+	HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 
+use crate::config::OutboundTls;
 use crate::dane::policy::DaneOutcome;
 use crate::dane::tlsa::TlsaRecord;
 use crate::dane::verify::verify_chain;
@@ -44,6 +48,16 @@ impl DeliveryError {
 /// mail. Fail closed: a TLSA mismatch, or DANE-mandated STARTTLS the remote does
 /// not offer, returns a transient error so the message is retried, never sent in
 /// the clear.
+///
+/// How the STARTTLS certificate is authenticated depends on three inputs:
+/// * `require_tls` (MTA-STS enforce / REQUIRETLS) → strict PKIX (webpki +
+///   hostname), always.
+/// * `tlsa` present → accept-any handshake, then `verify_chain` authenticates
+///   the chain against the TLSA records (DANE-EE certificates are commonly
+///   self-signed, so PKIX must not run first).
+/// * neither: `mode` decides — [`OutboundTls::Strict`] (the default) uses strict
+///   PKIX, [`OutboundTls::Opportunistic`] completes the handshake with any
+///   certificate (encryption without authentication, the SMTP norm).
 #[allow(clippy::too_many_arguments)]
 pub async fn deliver<S>(
 	stream: S,
@@ -55,6 +69,7 @@ pub async fn deliver<S>(
 	require_tls: bool,
 	auth: Option<(&str, &str)>,
 	tlsa: &[TlsaRecord],
+	mode: OutboundTls,
 ) -> Result<(), DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -75,7 +90,12 @@ where
 	if offers_starttls {
 		conn.command("STARTTLS", 220).await?;
 		let inner = conn.into_inner();
-		let (tls, peer_chain) = tls_connect(inner, server_name).await?;
+		// Authenticate the certificate via PKIX (webpki + hostname) only when TLS
+		// is mandated, or when it is purely opportunistic AND strict mode is set.
+		// With TLSA present, DANE (below) authenticates instead, so the handshake
+		// accepts any certificate — a DANE-EE leaf is normally self-signed.
+		let authenticate_pkix = require_tls || (tlsa.is_empty() && mode == OutboundTls::Strict);
+		let (tls, peer_chain) = tls_connect(inner, server_name, authenticate_pkix).await?;
 		// DANE: authenticate the presented chain against validated TLSA records.
 		// With none, this is a no-op (opportunistic); a mismatch fails closed.
 		match verify_chain(tlsa, &peer_chain) {
@@ -118,9 +138,17 @@ where
 
 /// Complete a STARTTLS handshake, returning the encrypted stream and the DER
 /// certificate chain the peer presented (leaf first), for DANE authentication.
+///
+/// With `authenticate` set, the certificate is strictly verified against the
+/// webpki roots and must match `server_name` (PKIX). Otherwise the handshake
+/// accepts any certificate (encryption only): the caller authenticates the
+/// returned chain by another means (DANE via `verify_chain`) or accepts
+/// unauthenticated TLS (opportunistic mode). The peer chain is captured in both
+/// cases so DANE can run on it.
 async fn tls_connect(
 	stream: Box<dyn Stream>,
 	server_name: &str,
+	authenticate: bool,
 ) -> Result<
 	(
 		tokio_rustls::client::TlsStream<Box<dyn Stream>>,
@@ -128,12 +156,19 @@ async fn tls_connect(
 	),
 	DeliveryError,
 > {
-	let mut roots = RootCertStore::empty();
-	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 	crate::tls::ensure_crypto_provider();
-	let config = ClientConfig::builder()
-		.with_root_certificates(roots)
-		.with_no_client_auth();
+	let config = if authenticate {
+		let mut roots = RootCertStore::empty();
+		roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+		ClientConfig::builder()
+			.with_root_certificates(roots)
+			.with_no_client_auth()
+	} else {
+		ClientConfig::builder()
+			.dangerous()
+			.with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert::new()))
+			.with_no_client_auth()
+	};
 	let name = ServerName::try_from(server_name.to_string())
 		.map_err(|_| DeliveryError::Transient(format!("invalid TLS name {server_name}")))?;
 	let tls = TlsConnector::from(Arc::new(config))
@@ -147,6 +182,78 @@ async fn tls_connect(
 		.map(|certs| certs.iter().map(|cert| cert.as_ref().to_vec()).collect())
 		.unwrap_or_default();
 	Ok((tls, peer_chain))
+}
+
+/// A `rustls` certificate verifier that accepts ANY server certificate without
+/// PKIX validation, used only when authentication is intentionally not done via
+/// PKIX: opportunistic mode (encryption without authentication) or DANE (the
+/// chain is authenticated afterwards against TLSA records). It is NEVER used when
+/// TLS is mandated (`require_tls`).
+///
+/// The handshake signatures are still verified — against the presented
+/// certificate's own key, using the process crypto provider's algorithms — so
+/// the peer must hold the private key for the certificate it offers; only the
+/// trust-anchor/hostname checks are skipped. `supported_verify_schemes` is taken
+/// verbatim from the provider so the offered schemes match what we can verify.
+#[derive(Debug)]
+struct AcceptAnyServerCert {
+	provider: Arc<tokio_rustls::rustls::crypto::CryptoProvider>,
+}
+
+impl AcceptAnyServerCert {
+	fn new() -> Self {
+		let provider = tokio_rustls::rustls::crypto::CryptoProvider::get_default()
+			.cloned()
+			.unwrap_or_else(|| Arc::new(tokio_rustls::rustls::crypto::ring::default_provider()));
+		AcceptAnyServerCert { provider }
+	}
+}
+
+impl ServerCertVerifier for AcceptAnyServerCert {
+	fn verify_server_cert(
+		&self,
+		_end_entity: &CertificateDer<'_>,
+		_intermediates: &[CertificateDer<'_>],
+		_server_name: &ServerName<'_>,
+		_ocsp_response: &[u8],
+		_now: UnixTime,
+	) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
+		Ok(ServerCertVerified::assertion())
+	}
+
+	fn verify_tls12_signature(
+		&self,
+		message: &[u8],
+		cert: &CertificateDer<'_>,
+		dss: &DigitallySignedStruct,
+	) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+		tokio_rustls::rustls::crypto::verify_tls12_signature(
+			message,
+			cert,
+			dss,
+			&self.provider.signature_verification_algorithms,
+		)
+	}
+
+	fn verify_tls13_signature(
+		&self,
+		message: &[u8],
+		cert: &CertificateDer<'_>,
+		dss: &DigitallySignedStruct,
+	) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+		tokio_rustls::rustls::crypto::verify_tls13_signature(
+			message,
+			cert,
+			dss,
+			&self.provider.signature_verification_algorithms,
+		)
+	}
+
+	fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+		self.provider
+			.signature_verification_algorithms
+			.supported_schemes()
+	}
 }
 
 trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -303,6 +410,7 @@ mod tests {
 			false,
 			None,
 			&[],
+			OutboundTls::Strict,
 		)
 		.await
 		.expect("delivery succeeds");
@@ -343,6 +451,7 @@ mod tests {
 			false,
 			None,
 			&[],
+			OutboundTls::Strict,
 		)
 		.await;
 
@@ -363,6 +472,7 @@ mod tests {
 			false,
 			None,
 			&[],
+			OutboundTls::Strict,
 		)
 		.await
 	}
@@ -391,6 +501,7 @@ mod tests {
 			false,
 			Some(("user", "pass")),
 			&[],
+			OutboundTls::Strict,
 		)
 		.await;
 		// AUTH credentials must never cross plaintext: fail closed.
@@ -419,4 +530,49 @@ mod tests {
 			"{result:?}"
 		);
 	}
+
+	/// The exact rule that decides PKIX authentication, mirroring `deliver`.
+	fn authenticate_pkix(require_tls: bool, tlsa_empty: bool, mode: OutboundTls) -> bool {
+		require_tls || (tlsa_empty && mode == OutboundTls::Strict)
+	}
+
+	#[test]
+	fn pkix_authentication_decision() {
+		use OutboundTls::{Opportunistic, Strict};
+		// Mandated TLS is always strict PKIX, regardless of mode or TLSA.
+		assert!(authenticate_pkix(true, true, Opportunistic));
+		assert!(authenticate_pkix(true, false, Opportunistic));
+		assert!(authenticate_pkix(true, true, Strict));
+		// TLSA present (not mandated): never PKIX — DANE authenticates instead,
+		// even in strict mode (the DANE-EE self-signed fix).
+		assert!(!authenticate_pkix(false, false, Strict));
+		assert!(!authenticate_pkix(false, false, Opportunistic));
+		// Pure opportunistic (no mandate, no TLSA): mode decides.
+		assert!(authenticate_pkix(false, true, Strict));
+		assert!(!authenticate_pkix(false, true, Opportunistic));
+	}
+
+	#[test]
+	fn accept_any_verifier_asserts_and_advertises_schemes() {
+		crate::tls::ensure_crypto_provider();
+		let verifier = AcceptAnyServerCert::new();
+		// Any chain is accepted without PKIX (the leaf can be unparseable here:
+		// verify_server_cert never inspects it).
+		let leaf = CertificateDer::from(vec![0u8; 8]);
+		let verified = verifier.verify_server_cert(
+			&leaf,
+			&[],
+			&ServerName::try_from("mx.example.org").expect("name"),
+			&[],
+			UnixTime::now(),
+		);
+		assert!(verified.is_ok());
+		// The schemes come from the provider, so the offered set is non-empty and
+		// matches what the signature checks can verify.
+		assert!(!verifier.supported_verify_schemes().is_empty());
+	}
 }
+
+#[cfg(test)]
+#[path = "client_tls_tests.rs"]
+mod tls_tests;
