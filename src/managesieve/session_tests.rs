@@ -58,6 +58,29 @@ fn capability_advertises_sasl_after_tls() {
 }
 
 #[test]
+fn capability_advertises_implemented_sieve_extensions() {
+	let (mut s, _dir) = session(false);
+	let text = String::from_utf8(s.handle(Command::Capability).encode()).expect("utf8");
+	// Every extension the interpreter honors must be advertised so clients can
+	// `require` it.
+	for ext in [
+		"fileinto",
+		"vacation",
+		"imap4flags",
+		"relational",
+		"variables",
+		"reject",
+		"ereject",
+		"copy",
+		"body",
+		"date",
+		"comparator-i;ascii-numeric",
+	] {
+		assert!(text.contains(ext), "missing {ext} in: {text}");
+	}
+}
+
+#[test]
 fn auth_refused_without_tls() {
 	let (mut s, _dir) = session(false);
 	let response = s.handle(Command::Authenticate {
