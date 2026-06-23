@@ -18,6 +18,11 @@ pub struct Alias {
 	/// not disclosed through directory queries. Set false to make it visible.
 	#[serde(default = "default_hidden")]
 	pub hidden: bool,
+	/// Treat this alias as a mailing list: when set, delivered copies carry
+	/// `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers
+	/// (RFC 2369/2919). Absent means a plain alias with no list headers.
+	#[serde(default)]
+	pub list_id: Option<String>,
 }
 
 /// Aliases hide their membership by default (privacy / secure by default).

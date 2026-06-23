@@ -133,6 +133,7 @@ fn multi_target_alias_delivers_to_every_member() {
 				],
 				senders: Vec::new(),
 				hidden: true,
+				list_id: None,
 			},
 		)]),
 	);
@@ -149,4 +150,42 @@ fn multi_target_alias_delivers_to_every_member() {
 	// Both members received exactly one copy.
 	assert_eq!(inbox_count(dir.path(), "alice"), 1);
 	assert_eq!(inbox_count(dir.path(), "bob"), 1);
+}
+
+#[test]
+fn mailing_list_prepends_list_headers() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_aliases([(
+			"announce@example.org".to_string(),
+			crate::smtp::directory::AliasSpec {
+				members: vec!["alice@example.org".to_string()],
+				senders: Vec::new(),
+				hidden: true,
+				list_id: Some("announce.example.org".to_string()),
+			},
+		)]),
+	);
+	let delivery = LocalDelivery::new(dir.path(), directory).expect("delivery");
+	let message = AcceptedMessage {
+		reverse_path: "sender@elsewhere.example".into(),
+		recipients: vec!["announce@example.org".to_string()],
+		data: BODY.to_vec(),
+		require_tls: false,
+		mailbox: None,
+		no_dsn: Vec::new(),
+	};
+	delivery.deliver(message).expect("deliver to list");
+	let files = fs::read_dir(dir.path().join("accounts").join("alice").join("new"))
+		.expect("inbox")
+		.map(|e| e.expect("entry").path())
+		.collect::<Vec<_>>();
+	assert_eq!(files.len(), 1);
+	let body = std::fs::read_to_string(&files[0]).expect("read");
+	assert!(body.contains("List-Id: <announce.example.org>"), "{body}");
+	assert!(body.contains("List-Unsubscribe:"), "{body}");
 }
