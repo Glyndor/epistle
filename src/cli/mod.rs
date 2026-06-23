@@ -3,6 +3,7 @@
 mod accounts;
 mod autoconfig;
 mod autodiscover;
+mod backup;
 mod dns_records;
 mod export;
 mod import;
@@ -78,6 +79,13 @@ enum Command {
 		/// instead of an mbox stream on stdin.
 		#[arg(long, value_name = "DIR")]
 		maildir: Option<PathBuf>,
+	},
+	/// Write a consistent backup snapshot (gzip tar) to stdout: the filesystem
+	/// mail store plus a pg_dump when a database is configured.
+	Backup {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
@@ -230,6 +238,13 @@ impl Cli {
 					Some(dir) => import::run_maildir(&config.data_dir, &account, &dir),
 					None => import::run(&config.data_dir, &account, std::io::stdin().lock()),
 				},
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Backup { config } => match Config::load(&config) {
+				Ok(config) => backup::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
