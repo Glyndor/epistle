@@ -17,6 +17,7 @@ pub mod db;
 pub mod directory_store;
 pub mod dkim;
 pub mod dmarc;
+pub mod dns;
 pub mod dnsbl;
 pub mod imap;
 pub mod jwt;
