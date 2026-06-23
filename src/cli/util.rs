@@ -73,6 +73,33 @@ pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
 	ExitCode::SUCCESS
 }
 
+/// Build the at-rest [`MessageCrypto`] from a loaded config, printing the
+/// fail-closed error and returning `Err(FAILURE)` if the key cannot be loaded.
+pub(super) fn message_crypto(
+	config: &crate::config::Config,
+) -> Result<crate::storage::MessageCrypto, ExitCode> {
+	crate::storage::MessageCrypto::from_config(config.storage.as_ref()).map_err(|error| {
+		eprintln!("error: {error}");
+		ExitCode::FAILURE
+	})
+}
+
+/// `epistle storage-keygen`: print a fresh base64 32-byte at-rest encryption key
+/// to stdout for the operator to place in an env var or key file (off the data
+/// disk). Mirrors `dkim-keygen`; never writes into `data_dir`.
+pub(super) fn storage_keygen() -> ExitCode {
+	match crate::storage::generate_key_base64() {
+		Some(key) => {
+			println!("{key}");
+			ExitCode::SUCCESS
+		}
+		None => {
+			eprintln!("error: system CSPRNG unavailable");
+			ExitCode::FAILURE
+		}
+	}
+}
+
 pub(super) fn dkim_keygen(out: &std::path::Path) -> ExitCode {
 	if out.exists() {
 		eprintln!(

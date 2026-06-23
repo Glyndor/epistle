@@ -20,7 +20,8 @@ impl Session {
 			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
 		}
 		// Quota enforcement (RFC 9208): refuse before reading the literal.
-		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
+		let projected =
+			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
 		if projected > self.effective_quota() {
 			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
 		}
@@ -86,7 +87,8 @@ impl Session {
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
 		}
-		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
+		let projected =
+			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
 		if projected > self.effective_quota() {
 			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
 		}
@@ -127,7 +129,14 @@ impl Session {
 		} else {
 			"APPEND"
 		};
-		let id = match mailbox::append(&self.data_dir, &account, &mailbox, &flags, data) {
+		let id = match mailbox::append(
+			&self.data_dir,
+			&account,
+			&mailbox,
+			&flags,
+			data,
+			&self.crypto,
+		) {
 			Ok(id) => id,
 			Err(_) => return Output::text(format!("{tag} NO {verb} failed\r\n")),
 		};
@@ -152,7 +161,7 @@ impl Session {
 		seq: u32,
 		code: &str,
 	) -> Output {
-		let mut snapshot = match Snapshot::open(&self.data_dir, account, selected) {
+		let mut snapshot = match Snapshot::open(&self.data_dir, account, selected, &self.crypto) {
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO REPLACE failed\r\n")),
 		};

@@ -7,12 +7,19 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::imap::mailbox::{self, Flag, Snapshot};
+use crate::storage::MessageCrypto;
 
-/// Write every message in `account`'s mailboxes to `out` as one mbox stream.
-pub(super) fn run(data_dir: &Path, account: &str, out: &mut impl Write) -> ExitCode {
+/// Write every message in `account`'s mailboxes to `out` as one mbox stream,
+/// decoding any at-rest encryption through `crypto`.
+pub(super) fn run(
+	data_dir: &Path,
+	account: &str,
+	crypto: &MessageCrypto,
+	out: &mut impl Write,
+) -> ExitCode {
 	let mut count = 0u64;
 	for name in mailbox::list(data_dir, account) {
-		let Ok(snapshot) = Snapshot::open(data_dir, account, &name) else {
+		let Ok(snapshot) = Snapshot::open(data_dir, account, &name, crypto) else {
 			continue;
 		};
 		for message in snapshot.messages() {
@@ -37,7 +44,12 @@ pub(super) fn run(data_dir: &Path, account: &str, out: &mut impl Write) -> ExitC
 /// root `cur/`, each other mailbox to a Dovecot Maildir++ `.Name/cur/`
 /// subdirectory (the inverse of the Maildir import). IMAP flags are carried in
 /// the Maildir `:2,<info>` filename suffix.
-pub(super) fn run_maildir(data_dir: &Path, account: &str, dir: &Path) -> ExitCode {
+pub(super) fn run_maildir(
+	data_dir: &Path,
+	account: &str,
+	crypto: &MessageCrypto,
+	dir: &Path,
+) -> ExitCode {
 	let mut count = 0u64;
 	for name in mailbox::list(data_dir, account) {
 		let folder = if name.eq_ignore_ascii_case("INBOX") {
@@ -50,7 +62,7 @@ pub(super) fn run_maildir(data_dir: &Path, account: &str, dir: &Path) -> ExitCod
 			eprintln!("error: creating {}", cur.display());
 			return ExitCode::FAILURE;
 		}
-		let Ok(snapshot) = Snapshot::open(data_dir, account, &name) else {
+		let Ok(snapshot) = Snapshot::open(data_dir, account, &name, crypto) else {
 			continue;
 		};
 		for message in snapshot.messages() {
@@ -127,6 +139,43 @@ mod tests {
 	}
 
 	#[test]
+	fn export_decrypts_encrypted_store_to_plaintext_mbox() {
+		// With encryption on, the on-disk message is ciphertext but the exported
+		// mbox stream must carry the plaintext.
+		let dir = tempfile::tempdir().expect("tempdir");
+		let crypto = MessageCrypto::for_test(b"0123456789abcdef0123456789abcdef");
+		mailbox::append(
+			dir.path(),
+			"alice",
+			"INBOX",
+			&[],
+			b"Subject: hi\r\n\r\nsecret export body\r\n",
+			&crypto,
+		)
+		.expect("append");
+		// The stored file is encrypted.
+		let new_dir = dir.path().join("accounts").join("alice").join("new");
+		let stored = std::fs::read_dir(&new_dir)
+			.expect("new dir")
+			.flatten()
+			.map(|e| std::fs::read(e.path()).expect("read"))
+			.next()
+			.expect("one file");
+		assert!(
+			stored.starts_with(b"EPENC1\0"),
+			"stored message is encrypted"
+		);
+
+		let mut out = Vec::new();
+		assert_eq!(
+			run(dir.path(), "alice", &crypto, &mut out),
+			ExitCode::SUCCESS
+		);
+		let text = String::from_utf8(out).expect("utf8");
+		assert!(text.contains("secret export body"), "{text}");
+	}
+
+	#[test]
 	fn maildir_flags_are_canonical_order() {
 		let flags = [Flag::Seen, Flag::Draft, Flag::Answered];
 		// Output is always D F R S T order regardless of input order.
@@ -143,7 +192,7 @@ mod tests {
 
 		let out = tempfile::tempdir().expect("out");
 		assert_eq!(
-			run_maildir(dir.path(), "alice", out.path()),
+			run_maildir(dir.path(), "alice", &MessageCrypto::disabled(), out.path()),
 			ExitCode::SUCCESS
 		);
 		let cur = out.path().join("cur");
@@ -168,7 +217,7 @@ mod tests {
 
 		let out = tempfile::tempdir().expect("out");
 		assert_eq!(
-			run_maildir(dir.path(), "alice", out.path()),
+			run_maildir(dir.path(), "alice", &MessageCrypto::disabled(), out.path()),
 			ExitCode::SUCCESS
 		);
 
@@ -176,10 +225,16 @@ mod tests {
 		// message survives.
 		let dest = tempfile::tempdir().expect("dest");
 		assert_eq!(
-			crate::cli::import::run_maildir(dest.path(), "bob", out.path()),
+			crate::cli::import::run_maildir(
+				dest.path(),
+				"bob",
+				&MessageCrypto::disabled(),
+				out.path()
+			),
 			ExitCode::SUCCESS
 		);
-		let snapshot = Snapshot::open(dest.path(), "bob", "INBOX").expect("inbox");
+		let snapshot =
+			Snapshot::open(dest.path(), "bob", "INBOX", &MessageCrypto::disabled()).expect("inbox");
 		assert_eq!(snapshot.messages().count(), 1);
 		let message = snapshot.messages().next().expect("message");
 		let data = snapshot.read(message).expect("read");

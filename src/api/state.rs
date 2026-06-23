@@ -8,7 +8,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use crate::directory_store::AccountStore;
-use crate::storage::FsSpool;
+use crate::storage::{FsSpool, MessageCrypto};
 
 use super::error::ApiError;
 
@@ -35,6 +35,8 @@ struct Inner {
 	/// real out-of-band delivery is out of scope, so these only need to round-trip
 	/// through `PushSubscription/get`/`set`. Keyed by subscription id.
 	push_subscriptions: std::sync::Mutex<Vec<serde_json::Value>>,
+	/// At-rest crypto for stored message bodies and uploaded blobs.
+	crypto: MessageCrypto,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -110,8 +112,23 @@ impl ApiState {
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
+				crypto: MessageCrypto::disabled(),
 			}),
 		}
+	}
+
+	/// Replace the at-rest crypto used for stored messages and blobs. Must be set
+	/// before the state is shared (it rebuilds the `Arc` inner).
+	pub fn with_crypto(mut self, crypto: MessageCrypto) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.crypto = crypto;
+		}
+		self
+	}
+
+	/// The at-rest crypto for stored messages and uploaded blobs.
+	pub fn crypto(&self) -> &MessageCrypto {
+		&self.inner.crypto
 	}
 
 	/// Set the per-account storage quota in bytes (0 = unlimited).
@@ -188,7 +205,8 @@ impl ApiState {
 	/// signal "something changed" to the client that made the change. It is not a
 	/// JMAP change-log cursor (we do not track one — see `/changes`).
 	pub fn account_state(&self, account: &str) -> String {
-		let usage = crate::imap::mailbox::account_usage(&self.inner.data_dir, account);
+		let usage =
+			crate::imap::mailbox::account_usage(&self.inner.data_dir, account, &self.inner.crypto);
 		format!("{usage}")
 	}
 

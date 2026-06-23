@@ -72,6 +72,32 @@ The default is **full-disk encryption (LUKS)** on the data volume, which
 protects against stolen-disk/offline access while keeping search and Bayes
 working. Message and config files are written `0600` under the isolated user.
 
+### Optional at-rest message encryption (`[storage]`)
+
+For defence in depth against **offline disk/backup theft**, the stored message
+files (`.eml` bodies, the outbound spool, JMAP blobs) can be transparently
+encrypted with ChaCha20-Poly1305. Enable it with `encrypt_at_rest = true` in
+`[storage]` and supply a 32-byte key. This **complements, not replaces**, LUKS:
+the server holds the key in memory and decrypts on every read, so it cannot
+defend against a live-server compromise — its value is that a stolen disk or
+backup, on its own, yields only ciphertext.
+
+- **The key must live off the encrypted disk** (otherwise encrypting files on
+  the same disk is pointless against theft). Source it from `encryption_key_env`
+  (the name of an environment variable holding the base64 key) or
+  `encryption_key_file` (a path the operator manages, ideally outside
+  `data_dir`). Generate one with `epistle storage-keygen`. The server never
+  auto-generates a key inside `data_dir`.
+- **Fail closed:** with `encrypt_at_rest = true` and no usable key the server
+  refuses to start; a decryption failure on read is an error, never a fall-back
+  to serving ciphertext.
+- **Transparent migration:** encrypted files carry a magic prefix, so encrypted
+  and pre-existing plaintext files coexist — turning encryption on encrypts only
+  new writes, and old plaintext mail still reads correctly.
+- **Backups stay encrypted:** `epistle backup` archives the on-disk bytes
+  verbatim, so a backup of an encrypted store remains ciphertext — restore it on
+  a host with the same key. Use `epistle export` for a decrypted copy.
+
 ## Reporting a vulnerability
 
 Please report security issues privately via GitHub Security Advisories on this

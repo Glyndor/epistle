@@ -58,7 +58,8 @@ fn submit_email(
 		.get("emailId")
 		.and_then(Value::as_str)
 		.ok_or("invalidProperties")?;
-	let raw = objects::find_email_raw(state.data_dir(), account, email_id).ok_or("notFound")?;
+	let raw = objects::find_email_raw(state.data_dir(), account, email_id, state.crypto())
+		.ok_or("notFound")?;
 	let headers = String::from_utf8_lossy(&raw);
 	let envelope = submission.get("envelope");
 	let mail_from = envelope
@@ -107,7 +108,7 @@ pub(super) fn quota_get(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
-	let used = crate::imap::mailbox::account_usage(state.data_dir(), account);
+	let used = crate::imap::mailbox::account_usage(state.data_dir(), account, state.crypto());
 	let limit = state.quota_limit();
 	let mut quota = serde_json::Map::from_iter([
 		("id".to_string(), json!("mail")),
@@ -266,7 +267,7 @@ pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value
 	let mut not_found = Vec::new();
 	if let Some(ids) = args.get("ids").and_then(Value::as_array) {
 		for id in ids.iter().filter_map(Value::as_str) {
-			if objects::find_email(state.data_dir(), account, id).is_some() {
+			if objects::find_email(state.data_dir(), account, id, state.crypto()).is_some() {
 				list.push(json!({ "id": id, "emailIds": [id] }));
 			} else {
 				not_found.push(Value::String(id.to_string()));
@@ -319,7 +320,7 @@ pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Valu
 		.unwrap_or("INBOX");
 
 	let mut ids: Vec<String> =
-		crate::imap::mailbox::Snapshot::open(state.data_dir(), account, mailbox)
+		crate::imap::mailbox::Snapshot::open(state.data_dir(), account, mailbox, state.crypto())
 			.map(|snapshot| snapshot.messages().map(|m| m.id().to_string()).collect())
 			.unwrap_or_default();
 	ids.reverse();
@@ -361,7 +362,7 @@ pub(super) fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	let mut list = Vec::new();
 	let mut not_found = Vec::new();
 	for id in requested {
-		match objects::find_email(state.data_dir(), account, &id) {
+		match objects::find_email(state.data_dir(), account, &id, state.crypto()) {
 			Some(email) => list.push(email),
 			None => not_found.push(Value::String(id)),
 		}

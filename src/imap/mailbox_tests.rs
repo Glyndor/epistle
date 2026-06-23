@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::MessageCrypto;
 
 fn deliver(dir: &Path, account: &str, body: &[u8]) -> Uuid {
 	let new_dir = dir.join("accounts").join(account).join("new");
@@ -11,7 +12,8 @@ fn deliver(dir: &Path, account: &str, body: &[u8]) -> Uuid {
 #[test]
 fn empty_or_missing_inbox_is_empty() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert!(snapshot.is_empty());
 	// UIDVALIDITY is always a nonzero value (RFC 3501).
 	assert!(snapshot.uid_validity() > 0);
@@ -22,15 +24,18 @@ fn empty_or_missing_inbox_is_empty() {
 fn uid_validity_is_stable_across_sessions() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"first\r\n");
-	let first = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let first =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	let validity = first.uid_validity();
 	assert!(validity > 0);
 	// Re-opening yields the same value.
-	let again = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let again =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(again.uid_validity(), validity);
 	// Delivering more mail does not change it (the old derived value did).
 	deliver(dir.path(), "alice", b"second\r\n");
-	let grown = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let grown =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(grown.uid_validity(), validity);
 }
 
@@ -40,7 +45,8 @@ fn messages_are_ordered_and_readable() {
 	deliver(dir.path(), "alice", b"first\r\n");
 	deliver(dir.path(), "alice", b"second\r\n");
 
-	let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(snapshot.len(), 2);
 
 	let first = snapshot.by_sequence(1).expect("seq 1");
@@ -63,14 +69,16 @@ fn flags_roundtrip_and_expunge() {
 	deliver(dir.path(), "alice", b"two\r\n");
 	deliver(dir.path(), "alice", b"three\r\n");
 
-	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let mut snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	snapshot
 		.store_flags(1, vec![Flag::Seen, Flag::Deleted])
 		.expect("store");
 	snapshot.store_flags(3, vec![Flag::Deleted]).expect("store");
 
 	// A fresh snapshot reads the persisted flags.
-	let reloaded = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let reloaded =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(
 		reloaded.by_sequence(1).expect("seq 1").flags,
 		vec![Flag::Seen, Flag::Deleted]
@@ -90,7 +98,8 @@ fn flags_roundtrip_and_expunge() {
 	);
 
 	// Files are gone on disk too.
-	let after = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let after =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(after.len(), 1);
 }
 
@@ -99,7 +108,8 @@ fn expunge_logs_vanished_uids() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"one\r\n");
 	deliver(dir.path(), "alice", b"two\r\n");
-	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let mut snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	snapshot.store_flags(1, vec![Flag::Deleted]).expect("store");
 	let base = snapshot.highest_modseq();
 	snapshot.expunge().expect("expunge");
@@ -117,21 +127,24 @@ fn uids_are_persistent_and_survive_expunge() {
 	deliver(dir.path(), "alice", b"two\r\n");
 	deliver(dir.path(), "alice", b"three\r\n");
 
-	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let mut snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(snapshot.uid_next(), 4);
 	// Delete the first message and expunge it.
 	snapshot.store_flags(1, vec![Flag::Deleted]).expect("store");
 	snapshot.expunge().expect("expunge");
 
 	// The survivors keep their original UIDs (2, 3) — not renumbered to 1, 2.
-	let reopened = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let reopened =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	let uids: Vec<u32> = reopened.messages().map(|m| m.uid).collect();
 	assert_eq!(uids, vec![2, 3]);
 	// uid_next never goes backwards even though a UID was freed.
 	assert_eq!(reopened.uid_next(), 4);
 	// A newly delivered message takes UID 4, never reusing 1.
 	deliver(dir.path(), "alice", b"four\r\n");
-	let grown = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let grown =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(grown.messages().last().expect("last").uid, 4);
 	assert_eq!(grown.uid_next(), 5);
 }
@@ -140,7 +153,8 @@ fn uids_are_persistent_and_survive_expunge() {
 fn store_flags_rejects_bad_sequence() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"one\r\n");
-	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let mut snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert!(snapshot.store_flags(0, vec![]).is_err());
 	assert!(snapshot.store_flags(2, vec![]).is_err());
 }
@@ -177,8 +191,17 @@ fn create_list_rename_delete_roundtrip() {
 	assert!(exists(dir.path(), "alice", "Sent"));
 	assert!(create(dir.path(), "alice", "Sent").is_err());
 
-	append(dir.path(), "alice", "Sent", &[Flag::Seen], b"sent\r\n").expect("append");
-	let snapshot = Snapshot::open(dir.path(), "alice", "Sent").expect("open");
+	append(
+		dir.path(),
+		"alice",
+		"Sent",
+		&[Flag::Seen],
+		b"sent\r\n",
+		&MessageCrypto::disabled(),
+	)
+	.expect("append");
+	let snapshot =
+		Snapshot::open(dir.path(), "alice", "Sent", &MessageCrypto::disabled()).expect("open");
 	assert_eq!(snapshot.len(), 1);
 	assert_eq!(
 		snapshot.by_sequence(1).expect("seq").flags,
@@ -210,6 +233,7 @@ fn ignores_foreign_files() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), "alice", b"mail\r\n");
 	std::fs::write(dir.path().join("accounts/alice/new/notes.txt"), b"not mail").expect("write");
-	let snapshot = Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(snapshot.len(), 1);
 }

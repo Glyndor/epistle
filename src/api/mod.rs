@@ -72,3 +72,7 @@ mod jmap_tests;
 #[cfg(test)]
 #[path = "jmap_tests_b.rs"]
 mod jmap_tests_b;
+
+#[cfg(test)]
+#[path = "jmap_tests_c.rs"]
+mod jmap_tests_c;

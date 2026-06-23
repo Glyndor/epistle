@@ -259,8 +259,8 @@ pub async fn download(
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id)
-		.or_else(|| read_blob(state.data_dir(), &blob_id));
+	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto())
+		.or_else(|| read_blob(state.data_dir(), &blob_id, state.crypto()));
 	match bytes {
 		Some(bytes) => {
 			// Serve the media type recorded at upload time; stored messages and
@@ -309,7 +309,7 @@ pub async fn upload(
 	// the closest standard code for "would exceed the account's storage".
 	let limit = state.quota_limit();
 	if limit > 0 {
-		let usage = account_usage_bytes(state.data_dir(), &account);
+		let usage = account_usage_bytes(state.data_dir(), &account, state.crypto());
 		if usage.saturating_add(body.len() as u64) > limit {
 			return (
 				StatusCode::INSUFFICIENT_STORAGE,
@@ -333,8 +333,20 @@ pub async fn upload(
 		.to_string();
 	let blob_id = uuid::Uuid::now_v7().to_string();
 	let dir = state.data_dir().join("blobs");
+	// Encrypt the blob payload at rest like stored mail; the `.type` sidecar
+	// stays plaintext metadata.
+	let stored = match state.crypto().encode(&body) {
+		Ok(stored) => stored,
+		Err(_) => {
+			return jmap_error(
+				StatusCode::INTERNAL_SERVER_ERROR,
+				"serverFail",
+				"cannot store blob",
+			);
+		}
+	};
 	if std::fs::create_dir_all(&dir).is_err()
-		|| std::fs::write(dir.join(&blob_id), &body).is_err()
+		|| std::fs::write(dir.join(&blob_id), &stored).is_err()
 		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
 	{
 		return jmap_error(
@@ -369,12 +381,19 @@ fn jmap_error(status: StatusCode, kind: &str, detail: &str) -> axum::response::R
 		.into_response()
 }
 
-/// Read an uploaded blob by id (rejecting any path separators in the id).
-fn read_blob(data_dir: &std::path::Path, blob_id: &str) -> Option<Vec<u8>> {
+/// Read an uploaded blob by id (rejecting any path separators in the id),
+/// decoding the at-rest envelope. Fails closed: a blob that cannot be decrypted
+/// is not returned rather than served as ciphertext.
+fn read_blob(
+	data_dir: &std::path::Path,
+	blob_id: &str,
+	crypto: &crate::storage::MessageCrypto,
+) -> Option<Vec<u8>> {
 	if uuid::Uuid::parse_str(blob_id).is_err() {
 		return None;
 	}
-	std::fs::read(data_dir.join("blobs").join(blob_id)).ok()
+	let stored = std::fs::read(data_dir.join("blobs").join(blob_id)).ok()?;
+	crypto.decode(&stored).ok()
 }
 
 /// Read the recorded media type of an uploaded blob, if any (the `.type`
@@ -393,8 +412,12 @@ fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
 /// live in one shared `<data_dir>/blobs` pool that is not partitioned per
 /// account, so the whole pool is counted — a conservative, fail-closed choice
 /// that never under-counts usage when enforcing the quota on upload.
-pub fn account_usage_bytes(data_dir: &std::path::Path, account: &str) -> u64 {
-	crate::imap::mailbox::account_usage(data_dir, account)
+pub fn account_usage_bytes(
+	data_dir: &std::path::Path,
+	account: &str,
+	crypto: &crate::storage::MessageCrypto,
+) -> u64 {
+	crate::imap::mailbox::account_usage(data_dir, account, crypto)
 		.saturating_add(blobs_usage_bytes(data_dir))
 }
 

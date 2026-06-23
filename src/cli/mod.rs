@@ -21,7 +21,7 @@ mod util;
 mod verify;
 mod verify_dns;
 
-use util::{dkim_keygen, generate_secret, read_line, token_hash};
+use util::{dkim_keygen, generate_secret, message_crypto, read_line, storage_keygen, token_hash};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -59,6 +59,10 @@ enum Command {
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
 	},
+	/// Generate a base64 32-byte at-rest message-encryption key and print it to
+	/// stdout. Store it off the data disk (an env var or a key file), then point
+	/// `[storage]` at it; never written into data_dir.
+	StorageKeygen,
 	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
 	/// a Maildir tree with `--maildir`.
 	Export {
@@ -294,9 +298,17 @@ impl Cli {
 				account,
 				maildir,
 			} => match Config::load(&config) {
-				Ok(config) => match maildir {
-					Some(dir) => export::run_maildir(&config.data_dir, &account, &dir),
-					None => export::run(&config.data_dir, &account, &mut std::io::stdout().lock()),
+				Ok(config) => match message_crypto(&config) {
+					Ok(crypto) => match maildir {
+						Some(dir) => export::run_maildir(&config.data_dir, &account, &crypto, &dir),
+						None => export::run(
+							&config.data_dir,
+							&account,
+							&crypto,
+							&mut std::io::stdout().lock(),
+						),
+					},
+					Err(code) => code,
 				},
 				Err(error) => {
 					eprintln!("error: {error}");
@@ -308,9 +320,17 @@ impl Cli {
 				account,
 				maildir,
 			} => match Config::load(&config) {
-				Ok(config) => match maildir {
-					Some(dir) => import::run_maildir(&config.data_dir, &account, &dir),
-					None => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+				Ok(config) => match message_crypto(&config) {
+					Ok(crypto) => match maildir {
+						Some(dir) => import::run_maildir(&config.data_dir, &account, &crypto, &dir),
+						None => import::run(
+							&config.data_dir,
+							&account,
+							&crypto,
+							std::io::stdin().lock(),
+						),
+					},
+					Err(code) => code,
 				},
 				Err(error) => {
 					eprintln!("error: {error}");
@@ -325,7 +345,12 @@ impl Cli {
 				}
 			},
 			Command::Verify { config } => match Config::load(&config) {
-				Ok(config) => verify::run(&config.data_dir, &mut std::io::stdout().lock()),
+				Ok(config) => match message_crypto(&config) {
+					Ok(crypto) => {
+						verify::run(&config.data_dir, &crypto, &mut std::io::stdout().lock())
+					}
+					Err(code) => code,
+				},
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -430,6 +455,7 @@ impl Cli {
 				}
 			},
 			Command::DkimKeygen { out } => dkim_keygen(&out),
+			Command::StorageKeygen => storage_keygen(),
 			Command::TokenHash => token_hash(),
 			Command::AppPasswordCreate {
 				config,

@@ -8,9 +8,16 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::imap::mailbox::{self, Flag};
+use crate::storage::MessageCrypto;
 
-/// Import the mbox on `reader` into `account`'s INBOX, returning the count.
-pub(super) fn run(data_dir: &Path, account: &str, reader: impl BufRead) -> ExitCode {
+/// Import the mbox on `reader` into `account`'s INBOX, encrypting at rest through
+/// `crypto`, returning the count.
+pub(super) fn run(
+	data_dir: &Path,
+	account: &str,
+	crypto: &MessageCrypto,
+	reader: impl BufRead,
+) -> ExitCode {
 	let mut current: Option<Vec<u8>> = None;
 	let mut imported = 0u64;
 	let deliver = |body: Vec<u8>| {
@@ -19,7 +26,7 @@ pub(super) fn run(data_dir: &Path, account: &str, reader: impl BufRead) -> ExitC
 		if trimmed.is_empty() {
 			return true;
 		}
-		mailbox::append(data_dir, account, "INBOX", &[], trimmed).is_ok()
+		mailbox::append(data_dir, account, "INBOX", &[], trimmed, crypto).is_ok()
 	};
 	for line in reader.lines() {
 		let Ok(line) = line else {
@@ -70,7 +77,12 @@ fn unquote(line: &str) -> &str {
 /// INBOX; each nested Dovecot Maildir++ folder (a `.Name` / `.Parent.Child`
 /// subdirectory) maps to the IMAP mailbox `Name` / `Parent.Child` (epistle uses
 /// `.` as the hierarchy separator). `tmp` is ignored.
-pub(super) fn run_maildir(data_dir: &Path, account: &str, maildir: &Path) -> ExitCode {
+pub(super) fn run_maildir(
+	data_dir: &Path,
+	account: &str,
+	crypto: &MessageCrypto,
+	maildir: &Path,
+) -> ExitCode {
 	// Collect every (mailbox, folder) target: INBOX at the root plus each valid
 	// Maildir++ subfolder.
 	let mut targets: Vec<(String, std::path::PathBuf)> =
@@ -111,7 +123,7 @@ pub(super) fn run_maildir(data_dir: &Path, account: &str, maildir: &Path) -> Exi
 		let handles: Vec<_> = targets
 			.iter()
 			.map(|(name, folder)| {
-				scope.spawn(move || import_folder(data_dir, account, name, folder))
+				scope.spawn(move || import_folder(data_dir, account, name, folder, crypto))
 			})
 			.collect();
 		handles.into_iter().map(|h| h.join().unwrap()).collect()
@@ -139,6 +151,7 @@ fn import_folder(
 	account: &str,
 	mailbox: &str,
 	folder: &Path,
+	crypto: &MessageCrypto,
 ) -> std::io::Result<u64> {
 	let mut imported = 0u64;
 	for sub in ["cur", "new"] {
@@ -152,7 +165,7 @@ fn import_folder(
 			}
 			let data = normalize_crlf(&std::fs::read(&path)?);
 			let flags = maildir_flags(&entry.file_name().to_string_lossy());
-			mailbox::append(data_dir, account, mailbox, &flags, &data)?;
+			mailbox::append(data_dir, account, mailbox, &flags, &data, crypto)?;
 			imported += 1;
 		}
 	}

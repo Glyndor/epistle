@@ -6,9 +6,16 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::imap::mailbox::{self, Flag};
+use crate::storage::MessageCrypto;
 
-/// Run the integrity check over `data_dir`, writing a report to `out`.
-pub(super) fn run(data_dir: &Path, out: &mut impl std::io::Write) -> ExitCode {
+/// Run the integrity check over `data_dir`, writing a report to `out`. Message
+/// files are decoded through `crypto` so an encrypted store validates against the
+/// plaintext, not the envelope.
+pub(super) fn run(
+	data_dir: &Path,
+	crypto: &MessageCrypto,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let accounts_dir = data_dir.join("accounts");
 	let Ok(entries) = std::fs::read_dir(&accounts_dir) else {
 		let _ = writeln!(out, "no accounts directory at {}", accounts_dir.display());
@@ -33,7 +40,14 @@ pub(super) fn run(data_dir: &Path, out: &mut impl std::io::Write) -> ExitCode {
 			let Some(dir) = mailbox::mailbox_dir(data_dir, account, &mailbox_name) else {
 				continue;
 			};
-			check_mailbox(&dir, account, &mailbox_name, &mut messages, &mut problems);
+			check_mailbox(
+				&dir,
+				account,
+				&mailbox_name,
+				crypto,
+				&mut messages,
+				&mut problems,
+			);
 		}
 	}
 
@@ -57,6 +71,7 @@ fn check_mailbox(
 	dir: &Path,
 	account: &str,
 	mailbox: &str,
+	crypto: &MessageCrypto,
 	messages: &mut u64,
 	problems: &mut Vec<String>,
 ) {
@@ -76,7 +91,7 @@ fn check_mailbox(
 			}
 			ids.insert(stem.to_string());
 			*messages += 1;
-			match std::fs::read(&path) {
+			match std::fs::read(&path).and_then(|stored| crypto.decode(&stored)) {
 				Ok(data) if data.is_empty() => problems.push(format!("{here}: empty message")),
 				Ok(data) if !has_header_separator(&data) => {
 					problems.push(format!("{here}: no header/body separator"));
@@ -124,6 +139,7 @@ mod tests {
 			"INBOX",
 			&[Flag::Seen],
 			b"Subject: x\r\n\r\nbody",
+			&MessageCrypto::disabled(),
 		)
 		.expect("append");
 		mailbox::append(
@@ -132,10 +148,14 @@ mod tests {
 			"Archive",
 			&[],
 			b"Subject: y\r\n\r\nbody",
+			&MessageCrypto::disabled(),
 		)
 		.expect("append");
 		let mut out = Vec::new();
-		assert_eq!(run(dir.path(), &mut out), ExitCode::SUCCESS);
+		assert_eq!(
+			run(dir.path(), &MessageCrypto::disabled(), &mut out),
+			ExitCode::SUCCESS
+		);
 		let report = String::from_utf8(out).expect("utf8");
 		assert!(report.contains("2 messages: 0 problems"), "{report}");
 	}
@@ -155,7 +175,10 @@ mod tests {
 		std::fs::write(inbox.join(format!("{orphan}.flags")), b"[\"\\\\Seen\"]").expect("write");
 
 		let mut out = Vec::new();
-		assert_eq!(run(dir.path(), &mut out), ExitCode::FAILURE);
+		assert_eq!(
+			run(dir.path(), &MessageCrypto::disabled(), &mut out),
+			ExitCode::FAILURE
+		);
 		let report = String::from_utf8(out).expect("utf8");
 		assert!(report.contains("not a UUID"), "{report}");
 		assert!(report.contains("no header/body separator"), "{report}");
@@ -166,6 +189,9 @@ mod tests {
 	fn missing_accounts_dir_is_ok() {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let mut out = Vec::new();
-		assert_eq!(run(dir.path(), &mut out), ExitCode::SUCCESS);
+		assert_eq!(
+			run(dir.path(), &MessageCrypto::disabled(), &mut out),
+			ExitCode::SUCCESS
+		);
 	}
 }

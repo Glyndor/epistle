@@ -58,6 +58,8 @@ pub struct Server {
 	cbind_data: Option<Vec<u8>>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// At-rest crypto for stored message bodies, shared by every session.
+	crypto: crate::storage::MessageCrypto,
 }
 
 impl Server {
@@ -80,7 +82,14 @@ impl Server {
 			oauth: None,
 			cbind_data: None,
 			max_connections: MAX_CONNECTIONS,
+			crypto: crate::storage::MessageCrypto::disabled(),
 		}
+	}
+
+	/// Encrypt/decrypt stored message bodies at rest through `crypto`.
+	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
+		self.crypto = crypto;
+		self
 	}
 
 	/// Cap concurrent connections for this listener (0 keeps the default).
@@ -118,6 +127,7 @@ impl Server {
 			self.directory.current(),
 		)
 		.with_quota_limit(self.quota_bytes)
+		.with_crypto(self.crypto.clone())
 		.with_oauth(self.oauth.clone());
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
