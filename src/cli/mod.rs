@@ -52,7 +52,8 @@ enum Command {
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
 	},
-	/// Export an account's mailboxes to an mbox stream on stdout (backup).
+	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
+	/// a Maildir tree with `--maildir`.
 	Export {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
@@ -60,6 +61,9 @@ enum Command {
 		/// The account name to export.
 		#[arg(long, value_name = "NAME")]
 		account: String,
+		/// Export to a Maildir directory tree instead of an mbox stream.
+		#[arg(long, value_name = "DIR")]
+		maildir: Option<PathBuf>,
 	},
 	/// Import mail into an account (migration): an mbox stream from stdin, or a
 	/// Maildir tree with `--maildir`.
@@ -203,10 +207,15 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Export { config, account } => match Config::load(&config) {
-				Ok(config) => {
-					export::run(&config.data_dir, &account, &mut std::io::stdout().lock())
-				}
+			Command::Export {
+				config,
+				account,
+				maildir,
+			} => match Config::load(&config) {
+				Ok(config) => match maildir {
+					Some(dir) => export::run_maildir(&config.data_dir, &account, &dir),
+					None => export::run(&config.data_dir, &account, &mut std::io::stdout().lock()),
+				},
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE

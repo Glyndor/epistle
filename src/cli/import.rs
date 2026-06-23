@@ -71,14 +71,10 @@ fn unquote(line: &str) -> &str {
 /// subdirectory) maps to the IMAP mailbox `Name` / `Parent.Child` (epistle uses
 /// `.` as the hierarchy separator). `tmp` is ignored.
 pub(super) fn run_maildir(data_dir: &Path, account: &str, maildir: &Path) -> ExitCode {
-	let mut imported = 0u64;
-	match import_folder(data_dir, account, "INBOX", maildir) {
-		Ok(count) => imported += count,
-		Err(error) => {
-			eprintln!("error: {error}");
-			return ExitCode::FAILURE;
-		}
-	}
+	// Collect every (mailbox, folder) target: INBOX at the root plus each valid
+	// Maildir++ subfolder.
+	let mut targets: Vec<(String, std::path::PathBuf)> =
+		vec![("INBOX".to_string(), maildir.to_path_buf())];
 
 	let entries = match std::fs::read_dir(maildir) {
 		Ok(entries) => entries,
@@ -99,7 +95,6 @@ pub(super) fn run_maildir(data_dir: &Path, account: &str, maildir: &Path) -> Exi
 		})
 		.collect();
 	folders.sort();
-
 	for folder in folders {
 		let raw = folder.file_name().and_then(|n| n.to_str()).unwrap_or("");
 		let name = raw.trim_start_matches('.');
@@ -107,7 +102,24 @@ pub(super) fn run_maildir(data_dir: &Path, account: &str, maildir: &Path) -> Exi
 			eprintln!("warning: skipping folder \"{raw}\" (not a valid mailbox name)");
 			continue;
 		}
-		match import_folder(data_dir, account, name, &folder) {
+		targets.push((name.to_string(), folder));
+	}
+
+	// Import each mailbox in parallel: every target is a distinct mailbox, so
+	// their UID counters and files never overlap. One scoped thread per target.
+	let results: Vec<std::io::Result<u64>> = std::thread::scope(|scope| {
+		let handles: Vec<_> = targets
+			.iter()
+			.map(|(name, folder)| {
+				scope.spawn(move || import_folder(data_dir, account, name, folder))
+			})
+			.collect();
+		handles.into_iter().map(|h| h.join().unwrap()).collect()
+	});
+
+	let mut imported = 0u64;
+	for result in results {
+		match result {
 			Ok(count) => imported += count,
 			Err(error) => {
 				eprintln!("error: {error}");
