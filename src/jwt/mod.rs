@@ -7,7 +7,9 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+use ring::rand::SystemRandom;
 use ring::signature;
+use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
 use serde_json::Value;
 
 /// Supported signature algorithms.
@@ -147,6 +149,51 @@ fn audience_matches(aud: Option<&Value>, expected: &str) -> bool {
 		Some(Value::Array(values)) => values.iter().any(|v| v.as_str() == Some(expected)),
 		_ => false,
 	}
+}
+
+/// Why signing a token failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignError {
+	/// The algorithm is not supported for signing (only ES256 is).
+	UnsupportedAlgorithm,
+	/// The PKCS#8 private key could not be parsed.
+	BadKey,
+	/// The claims could not be serialized to JSON.
+	BadClaims,
+	/// The CSPRNG failed or the signature operation failed.
+	SigningFailed,
+}
+
+/// Sign `claims` into a compact JWS (`base64url(header).base64url(payload).
+/// base64url(signature)`) using `algorithm` and `private_key_pkcs8` (a PKCS#8
+/// DER ES256 private key).
+///
+/// Only ES256 is supported (the authorization server's own tokens are ES256);
+/// any other algorithm fails closed with [`SignError::UnsupportedAlgorithm`].
+/// The header is `{"alg":"ES256","typ":"JWT"}`. The resulting token verifies
+/// with [`validate`] against the matching public point.
+pub fn sign(
+	claims: &Value,
+	algorithm: Algorithm,
+	private_key_pkcs8: &[u8],
+) -> Result<String, SignError> {
+	if algorithm != Algorithm::Es256 {
+		return Err(SignError::UnsupportedAlgorithm);
+	}
+	let rng = SystemRandom::new();
+	let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, private_key_pkcs8, &rng)
+		.map_err(|_| SignError::BadKey)?;
+	let header = serde_json::json!({"alg": "ES256", "typ": "JWT"});
+	let header_b64 = B64URL.encode(serde_json::to_vec(&header).map_err(|_| SignError::BadClaims)?);
+	let payload_b64 = B64URL.encode(serde_json::to_vec(claims).map_err(|_| SignError::BadClaims)?);
+	let signing_input = format!("{header_b64}.{payload_b64}");
+	let signature = pair
+		.sign(&rng, signing_input.as_bytes())
+		.map_err(|_| SignError::SigningFailed)?;
+	Ok(format!(
+		"{signing_input}.{}",
+		B64URL.encode(signature.as_ref())
+	))
 }
 
 fn decode_json(part: &str) -> Result<Value, JwtError> {

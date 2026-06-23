@@ -162,3 +162,31 @@ fn malformed_token_rejected() {
 		Err(JwtError::Malformed)
 	);
 }
+
+#[test]
+fn prod_sign_round_trips_through_validate() {
+	// The production `sign` produces a token that `validate` accepts against the
+	// matching public point, with the claims intact.
+	let rng = SystemRandom::new();
+	let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).expect("gen");
+	let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+		.expect("parse");
+	let public = pair.public_key().as_ref().to_vec();
+	// `super::sign` is the production signer (the module-local `sign` helper above
+	// shadows the glob import).
+	let token = super::sign(&claims(2000), Algorithm::Es256, pkcs8.as_ref()).expect("sign");
+	let result = validate(&token, Algorithm::Es256, &public, &validation(1000)).expect("valid");
+	assert_eq!(result.string("sub"), Some("alice@example.org"));
+}
+
+#[test]
+fn prod_sign_rejects_non_es256_and_bad_key() {
+	assert_eq!(
+		super::sign(&claims(2000), Algorithm::Rs256, b"x"),
+		Err(SignError::UnsupportedAlgorithm)
+	);
+	assert_eq!(
+		super::sign(&claims(2000), Algorithm::Es256, b"not-a-pkcs8-key"),
+		Err(SignError::BadKey)
+	);
+}
