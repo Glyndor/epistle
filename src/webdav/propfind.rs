@@ -15,18 +15,26 @@ pub struct Entry {
 	pub href: String,
 	/// Whether this resource is a collection (directory).
 	pub is_collection: bool,
+	/// Whether this collection is a CardDAV addressbook — adds the
+	/// `<C:addressbook/>` resourcetype alongside `<D:collection/>`.
+	pub is_addressbook: bool,
 	/// Byte length for a non-collection; ignored for collections.
 	pub length: u64,
 	/// Last-modified time, if known.
 	pub modified: Option<SystemTime>,
 	/// Human-readable name (the last path segment).
 	pub display_name: String,
+	/// Content type for a non-collection (e.g. `text/vcard` for a vCard).
+	pub content_type: &'static str,
+	/// A strong-ish ETag, already quoted, for a non-collection; empty to omit.
+	pub etag: String,
 }
 
 /// Build the full `<multistatus>` document for the given entries.
 pub fn multistatus(entries: &[Entry]) -> String {
 	let mut body = String::from(
-		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:multistatus xmlns:D=\"DAV:\">\n",
+		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\n",
 	);
 	for entry in entries {
 		body.push_str(&response(entry));
@@ -37,7 +45,9 @@ pub fn multistatus(entries: &[Entry]) -> String {
 
 /// Build a single `<response>` element for one resource.
 fn response(entry: &Entry) -> String {
-	let resourcetype = if entry.is_collection {
+	let resourcetype = if entry.is_collection && entry.is_addressbook {
+		"<D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>"
+	} else if entry.is_collection {
 		"<D:resourcetype><D:collection/></D:resourcetype>"
 	} else {
 		"<D:resourcetype/>"
@@ -63,13 +73,21 @@ fn response(entry: &Entry) -> String {
 	let content_type = if entry.is_collection {
 		String::new()
 	} else {
-		"\t\t\t\t<D:getcontenttype>application/octet-stream</D:getcontenttype>\n".to_string()
+		format!(
+			"\t\t\t\t<D:getcontenttype>{}</D:getcontenttype>\n",
+			entry.content_type
+		)
+	};
+	let etag = if entry.is_collection || entry.etag.is_empty() {
+		String::new()
+	} else {
+		format!("\t\t\t\t<D:getetag>{}</D:getetag>\n", escape(&entry.etag))
 	};
 	format!(
 		"\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
 		\t\t\t\t{resourcetype}\n\
 		\t\t\t\t<D:displayname>{name}</D:displayname>\n\
-		{length}{modified}{content_type}\
+		{length}{modified}{content_type}{etag}\
 		\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n",
 		href = escape(&entry.href),
 		name = escape(&entry.display_name),
@@ -109,8 +127,38 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 	(if month <= 2 { year + 1 } else { year }, month, day)
 }
 
+/// Build the discovery `207 Multi-Status` for `href` (typically a principal or
+/// home path) answering the CardDAV bootstrap props: `current-user-principal`,
+/// `principal-URL` and `addressbook-home-set`. They all point a client at
+/// `account_home` (e.g. `/<account>/`) as the principal and addressbook home —
+/// pragmatic, and enough for autodiscovery to land in the account tree.
+pub fn discovery(href: &str, account_home: &str) -> String {
+	let href = escape(href);
+	let home = escape(account_home);
+	format!(
+		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\n\
+		\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
+		\t\t\t\t<D:current-user-principal><D:href>{home}</D:href></D:current-user-principal>\n\
+		\t\t\t\t<D:principal-URL><D:href>{home}</D:href></D:principal-URL>\n\
+		\t\t\t\t<C:addressbook-home-set><D:href>{home}</D:href></C:addressbook-home-set>\n\
+		\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n\
+		</D:multistatus>\n"
+	)
+}
+
+/// Whether a PROPFIND request body asks for any of the CardDAV discovery props
+/// (`current-user-principal`, `principal-URL`, `addressbook-home-set`). A body
+/// requesting one of these is answered with [`discovery`] rather than the
+/// filesystem walk.
+pub fn wants_discovery(body: &str) -> bool {
+	body.contains("current-user-principal")
+		|| body.contains("principal-URL")
+		|| body.contains("addressbook-home-set")
+}
+
 /// Escape the XML special characters for safe interpolation into the body.
-fn escape(value: &str) -> String {
+pub fn escape(value: &str) -> String {
 	value
 		.replace('&', "&amp;")
 		.replace('<', "&lt;")

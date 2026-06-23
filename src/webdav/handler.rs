@@ -16,11 +16,12 @@ use axum::response::{IntoResponse, Response};
 
 use super::WebDavState;
 use super::auth::{self, REALM};
+use super::carddav;
 use super::path;
 use super::propfind::{self, Entry};
 
 /// The `Allow` header listing every method this server implements.
-const ALLOW: &str = "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND";
+const ALLOW: &str = "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
 
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
 /// method into the account's confined tree. Unknown methods are `405`.
@@ -51,7 +52,8 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	}
 }
 
-/// Dispatch the WebDAV verbs axum has no `Method` constant for.
+/// Dispatch the WebDAV verbs axum has no `Method` constant for, including the
+/// CardDAV `REPORT`.
 async fn dispatch_extension(
 	method: &str,
 	root: &Path,
@@ -60,12 +62,24 @@ async fn dispatch_extension(
 	request: Request,
 ) -> Response {
 	match method {
-		"MKCOL" => mkcol(target).await,
-		"PROPFIND" => propfind(target, uri_path, request.headers()).await,
+		"MKCOL" => mkcol(target, request).await,
+		"PROPFIND" => propfind(target, uri_path, request).await,
+		"REPORT" => report(root, target, request).await,
 		"COPY" => copy_move(root, target, request.headers(), false).await,
 		"MOVE" => copy_move(root, target, request.headers(), true).await,
 		_ => method_not_allowed(),
 	}
+}
+
+/// `REPORT` (CardDAV, RFC 6352): read the body and hand it to the CardDAV
+/// report dispatcher, which branches on the body's root element and enforces the
+/// same per-account confinement on every href it returns.
+async fn report(root: &Path, target: &Path, request: Request) -> Response {
+	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+		Ok(bytes) => bytes,
+		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+	};
+	carddav::report(root, target, &body).await
 }
 
 /// `401` with the Basic challenge so clients prompt for credentials.
@@ -82,12 +96,16 @@ fn method_not_allowed() -> Response {
 	(StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, ALLOW)]).into_response()
 }
 
-/// `OPTIONS`: advertise WebDAV class 1 and the allowed methods.
+/// `OPTIONS`: advertise WebDAV class 1 and 3 plus the CardDAV `addressbook`
+/// compliance class (RFC 6352 §6.1) — the class a CardDAV client looks for to
+/// know the server speaks CardDAV — and the allowed methods. `addressbook` is
+/// advertised on every resource: it costs nothing and lets a client probe the
+/// root before it has found an addressbook collection.
 fn options() -> Response {
 	Response::builder()
 		.status(StatusCode::OK)
 		.header(header::ALLOW, ALLOW)
-		.header("DAV", "1")
+		.header("DAV", "1, 3, addressbook")
 		.body(Body::empty())
 		.expect("options response")
 }
@@ -103,7 +121,8 @@ async fn get(target: &Path, with_body: bool) -> Response {
 	let modified = metadata.modified().ok();
 	let mut builder = Response::builder()
 		.status(StatusCode::OK)
-		.header(header::CONTENT_TYPE, "application/octet-stream")
+		.header(header::CONTENT_TYPE, content_type(target))
+		.header(header::ETAG, carddav::etag(&metadata))
 		.header(header::CONTENT_LENGTH, length);
 	if let Some(modified) = modified {
 		builder = builder.header(header::LAST_MODIFIED, propfind::httpdate(modified));
@@ -117,9 +136,19 @@ async fn get(target: &Path, with_body: bool) -> Response {
 	}
 }
 
+/// The `Content-Type` for a resource by extension: `text/vcard` for a vCard
+/// (`.vcf`, what CardDAV stores), `application/octet-stream` otherwise.
+fn content_type(target: &Path) -> &'static str {
+	match target.extension().and_then(|ext| ext.to_str()) {
+		Some(ext) if ext.eq_ignore_ascii_case("vcf") => carddav::VCARD_TYPE,
+		_ => "application/octet-stream",
+	}
+}
+
 /// `PUT`: create or replace a file. The parent must already exist (RFC 4918
 /// §9.7.1 — a `PUT` to a non-existent collection is `409 Conflict`). Returns
-/// `201` when the file is new, `204` when it replaced an existing one.
+/// `201` when the file is new, `204` when it replaced an existing one, each with
+/// the new resource's `ETag` so a CardDAV client can track the card.
 async fn put(target: &Path, request: Request) -> Response {
 	if target.is_dir() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -136,12 +165,25 @@ async fn put(target: &Path, request: Request) -> Response {
 		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
 	};
 	match tokio::fs::write(target, &body).await {
-		Ok(()) if existed => StatusCode::NO_CONTENT.into_response(),
-		Ok(()) => StatusCode::CREATED.into_response(),
+		Ok(()) => put_success(target, existed).await,
 		Err(error) if error.kind() == std::io::ErrorKind::StorageFull => {
 			StatusCode::INSUFFICIENT_STORAGE.into_response()
 		}
 		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+	}
+}
+
+/// Build the success response for a completed `PUT`: `204`/`201` carrying the
+/// freshly written resource's `ETag` (best-effort — omitted if the stat fails).
+async fn put_success(target: &Path, existed: bool) -> Response {
+	let status = if existed {
+		StatusCode::NO_CONTENT
+	} else {
+		StatusCode::CREATED
+	};
+	match tokio::fs::metadata(target).await {
+		Ok(metadata) => (status, [(header::ETAG, carddav::etag(&metadata))]).into_response(),
+		Err(_) => status.into_response(),
 	}
 }
 
@@ -163,9 +205,12 @@ async fn delete(target: &Path) -> Response {
 	}
 }
 
-/// `MKCOL`: create a single collection. The parent must exist (else `409`) and
-/// the target must not (else `405`). Success is `201`.
-async fn mkcol(target: &Path) -> Response {
+/// `MKCOL` (RFC 4918) and extended-MKCOL (RFC 5689): create a single
+/// collection. The parent must exist (else `409`) and the target must not (else
+/// `405`). When the request body requests the CardDAV `addressbook`
+/// resourcetype, the new collection is also flagged as an addressbook (a
+/// [`carddav::MARKER`] file is written into it). Success is `201`.
+async fn mkcol(target: &Path, request: Request) -> Response {
 	if target.exists() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
 	}
@@ -175,25 +220,51 @@ async fn mkcol(target: &Path) -> Response {
 	if !parent.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
-	match tokio::fs::create_dir(target).await {
-		Ok(()) => StatusCode::CREATED.into_response(),
-		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+		Ok(bytes) => bytes,
+		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+	};
+	let as_addressbook = String::from_utf8_lossy(&body).contains("addressbook");
+	if tokio::fs::create_dir(target).await.is_err() {
+		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
+	if as_addressbook && !carddav::mark_addressbook(target).await {
+		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+	}
+	StatusCode::CREATED.into_response()
 }
 
 /// `PROPFIND`: a `207` multi-status of the target (and, at `Depth: 1`, its
 /// children). `Depth: infinity` is treated as `1` (we do not recurse fully).
-async fn propfind(target: &Path, uri_path: &str, headers: &HeaderMap) -> Response {
+///
+/// A body asking for the CardDAV discovery props
+/// (`current-user-principal`/`addressbook-home-set`/`principal-URL`) is answered
+/// with the discovery document instead — pointing the client at the account
+/// home as its addressbook home.
+async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
+	let depth = request
+		.headers()
+		.get("Depth")
+		.and_then(|value| value.to_str().ok())
+		.map(str::trim)
+		.unwrap_or("0")
+		.to_string();
+	let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+		.await
+		.unwrap_or_default();
+	if propfind::wants_discovery(&String::from_utf8_lossy(&body_bytes)) {
+		return xml_multistatus(propfind::discovery(uri_path, &account_home(uri_path)));
+	}
 	let metadata = match tokio::fs::metadata(target).await {
 		Ok(metadata) => metadata,
 		Err(_) => return StatusCode::NOT_FOUND.into_response(),
 	};
-	let depth = headers
-		.get("Depth")
-		.and_then(|value| value.to_str().ok())
-		.map(str::trim)
-		.unwrap_or("0");
-	let mut entries = vec![entry_for(uri_path, &metadata, display_name(uri_path))];
+	let mut entries = vec![entry_for(
+		uri_path,
+		target,
+		&metadata,
+		display_name(uri_path),
+	)];
 	if depth != "0"
 		&& metadata.is_dir()
 		&& let Ok(mut dir) = tokio::fs::read_dir(target).await
@@ -202,14 +273,27 @@ async fn propfind(target: &Path, uri_path: &str, headers: &HeaderMap) -> Respons
 		while let Ok(Some(child)) = dir.next_entry().await {
 			let name = child.file_name();
 			let name = name.to_string_lossy();
+			// Hide the addressbook marker from listings — it is an internal flag.
+			if name == carddav::MARKER {
+				continue;
+			}
 			let Ok(child_meta) = child.metadata().await else {
 				continue;
 			};
 			let href = format!("{base}/{name}");
-			entries.push(entry_for(&href, &child_meta, name.to_string()));
+			entries.push(entry_for(
+				&href,
+				&child.path(),
+				&child_meta,
+				name.to_string(),
+			));
 		}
 	}
-	let body = propfind::multistatus(&entries);
+	xml_multistatus(propfind::multistatus(&entries))
+}
+
+/// Wrap an already-built multi-status XML body in the `207` response.
+fn xml_multistatus(body: String) -> Response {
 	(
 		StatusCode::MULTI_STATUS,
 		[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
@@ -218,9 +302,27 @@ async fn propfind(target: &Path, uri_path: &str, headers: &HeaderMap) -> Respons
 		.into_response()
 }
 
+/// The addressbook home for a request: the account's root collection, `/<acct>/`
+/// — built from the first path segment of the request, or `/` at the root. This
+/// is what the discovery props hand back to a client.
+fn account_home(uri_path: &str) -> String {
+	let first = uri_path
+		.trim_start_matches('/')
+		.split('/')
+		.next()
+		.unwrap_or("");
+	if first.is_empty() {
+		"/".to_string()
+	} else {
+		format!("/{first}/")
+	}
+}
+
 /// Build a PROPFIND [`Entry`] from filesystem metadata. A collection's href is
-/// given a trailing slash, as RFC 4918 recommends.
-fn entry_for(href: &str, metadata: &std::fs::Metadata, display: String) -> Entry {
+/// given a trailing slash (RFC 4918); an addressbook collection is flagged so
+/// its resourcetype carries `<C:addressbook/>`; a vCard file carries its
+/// `text/vcard` content type and an ETag.
+fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: String) -> Entry {
 	let is_collection = metadata.is_dir();
 	let href = if is_collection && !href.ends_with('/') {
 		format!("{href}/")
@@ -230,9 +332,16 @@ fn entry_for(href: &str, metadata: &std::fs::Metadata, display: String) -> Entry
 	Entry {
 		href,
 		is_collection,
+		is_addressbook: is_collection && carddav::is_addressbook(disk),
 		length: metadata.len(),
 		modified: metadata.modified().ok(),
 		display_name: display,
+		content_type: content_type(disk),
+		etag: if is_collection {
+			String::new()
+		} else {
+			carddav::etag(metadata)
+		},
 	}
 }
 

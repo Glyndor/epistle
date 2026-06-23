@@ -80,7 +80,7 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
 | `acme` | 80 | ACME HTTP-01 challenge responder. |
 | `autoconfig` | 8091 | Serves Thunderbird autoconfig + Microsoft Autodiscover. Point `autoconfig.<domain>`/`autodiscover.<domain>` here (behind your TLS proxy). |
-| `webdav` | 8090 | WebDAV (RFC 4918) per-account file storage. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
+| `webdav` | 8090 | WebDAV (RFC 4918) file storage + CardDAV (RFC 6352) addressbooks. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
 ## Sections
 
