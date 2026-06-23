@@ -104,8 +104,16 @@ fn now_secs() -> u64 {
 		.unwrap_or(0)
 }
 
+/// A DNS provider plus the mail hostname, used to refresh the DANE TLSA record
+/// when the certificate rotates.
+type TlsaPublisher = (
+	std::sync::Arc<dyn crate::dns::provider::DnsProvider>,
+	String,
+);
+
 /// Run one issuance: register, obtain a certificate over HTTP-01, persist it,
-/// and hot-reload the acceptor.
+/// hot-reload the acceptor, and (when a DNS provider is configured) refresh the
+/// TLSA record for the new certificate.
 async fn issue(
 	directory_url: &str,
 	contacts: &[String],
@@ -113,6 +121,7 @@ async fn issue(
 	store: &ChallengeStore,
 	data_dir: &Path,
 	reloadable: &ReloadableAcceptor,
+	tlsa: Option<&TlsaPublisher>,
 ) -> Result<(), AcmeError> {
 	let transport = HttpTransport::new()?;
 	let key = load_or_create_account_key(data_dir)?;
@@ -130,11 +139,21 @@ async fn issue(
 		.map_err(|e| AcmeError::Protocol(e.to_string()))?;
 	reloadable.reload(acceptor);
 	tracing::info!(?domains, "ACME certificate issued and TLS reloaded");
+
+	// Refresh the DANE TLSA record for the new certificate (best-effort: a DNS
+	// failure must not fail an otherwise-successful issuance).
+	if let Some((provider, hostname)) = tlsa
+		&& let Err(error) =
+			crate::dns::records::publish_tlsa(provider.as_ref(), hostname, &chain).await
+	{
+		tracing::warn!(%error, "TLSA refresh after cert rotation failed");
+	}
 	Ok(())
 }
 
 /// Renewal loop: check on startup and every 12 hours, issuing when due. Errors
 /// are logged and retried at the next tick — a CA outage never crashes serving.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
 	directory_url: String,
 	contacts: Vec<String>,
@@ -143,6 +162,7 @@ pub async fn run(
 	data_dir: PathBuf,
 	reloadable: ReloadableAcceptor,
 	renew_before_days: u64,
+	tlsa: Option<TlsaPublisher>,
 ) {
 	loop {
 		if needs_renewal(&data_dir, renew_before_days, now_secs())
@@ -153,6 +173,7 @@ pub async fn run(
 				&store,
 				&data_dir,
 				&reloadable,
+				tlsa.as_ref(),
 			)
 			.await
 		{

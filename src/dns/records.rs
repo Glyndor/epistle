@@ -7,7 +7,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::provider::{DnsRecord, RecordKind};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 
 /// A record to publish, paired with the zone it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +101,27 @@ pub fn tlsa_full_cert(cert_pem: &str) -> Option<String> {
 		acc
 	});
 	Some(format!("3 0 1 {hex}"))
+}
+
+/// Publish (or refresh) the mail host's DANE TLSA record for a freshly issued
+/// certificate via `provider` — called after a cert rotation. A `3 0 1`
+/// association of the new leaf certificate is upserted at `_25._tcp.<hostname>`.
+/// Returns `Ok(())` with no work when the PEM has no certificate.
+pub async fn publish_tlsa(
+	provider: &dyn DnsProvider,
+	hostname: &str,
+	cert_pem: &str,
+) -> Result<(), ProviderError> {
+	let Some(value) = tlsa_full_cert(cert_pem) else {
+		return Ok(());
+	};
+	let record = DnsRecord {
+		name: format!("_25._tcp.{hostname}"),
+		kind: RecordKind::Tlsa,
+		value,
+		ttl: TTL,
+	};
+	provider.upsert(hostname, record).await
 }
 
 /// Decode the first PEM `CERTIFICATE` block to DER.

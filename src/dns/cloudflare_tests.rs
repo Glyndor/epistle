@@ -169,3 +169,26 @@ async fn structured_kind_is_unsupported() {
 		Err(ProviderError::Unsupported)
 	);
 }
+
+#[test]
+fn record_body_uses_data_for_tlsa_and_content_otherwise() {
+	let tlsa = DnsRecord {
+		name: "_25._tcp.mail.example.org".into(),
+		kind: RecordKind::Tlsa,
+		value: "3 0 1 abcd".into(),
+		ttl: 3600,
+	};
+	let body = CloudflareProvider::record_body("TLSA", &tlsa).expect("tlsa body");
+	assert!(body.contains("\"data\""), "{body}");
+	assert!(body.contains("\"usage\":3"), "{body}");
+	assert!(body.contains("\"certificate\":\"abcd\""), "{body}");
+
+	let txt = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Txt,
+		value: "v=spf1 -all".into(),
+		ttl: 3600,
+	};
+	let body = CloudflareProvider::record_body("TXT", &txt).expect("txt body");
+	assert!(body.contains("\"content\":\"v=spf1 -all\""), "{body}");
+}

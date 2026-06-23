@@ -99,3 +99,61 @@ fn tlsa_full_cert_rejects_non_pem() {
 		None
 	);
 }
+
+#[tokio::test]
+async fn publish_tlsa_upserts_a_3_0_1_record() {
+	use crate::dns::provider::{DnsProvider, ProviderError};
+	use std::pin::Pin;
+	use std::sync::Mutex;
+
+	#[derive(Default)]
+	struct Capture(Mutex<Vec<super::PublishRecord>>);
+	impl DnsProvider for Capture {
+		fn upsert(
+			&self,
+			zone: &str,
+			record: super::DnsRecord,
+		) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+			self.0.lock().unwrap().push(super::PublishRecord {
+				zone: zone.to_string(),
+				record,
+			});
+			Box::pin(async { Ok(()) })
+		}
+		fn delete(
+			&self,
+			_zone: &str,
+			_record: super::DnsRecord,
+		) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + '_>> {
+			Box::pin(async { Ok(()) })
+		}
+		fn list(
+			&self,
+			_zone: &str,
+		) -> Pin<Box<dyn Future<Output = Result<Vec<super::DnsRecord>, ProviderError>> + Send + '_>>
+		{
+			Box::pin(async { Ok(Vec::new()) })
+		}
+	}
+
+	let cert =
+		rcgen::generate_simple_self_signed(vec!["mail.example.org".to_string()]).expect("cert");
+	let provider = Capture::default();
+	publish_tlsa(&provider, "mail.example.org", &cert.cert.pem())
+		.await
+		.expect("publish");
+	let captured = provider.0.lock().unwrap();
+	assert_eq!(captured.len(), 1);
+	assert_eq!(captured[0].record.name, "_25._tcp.mail.example.org");
+	assert_eq!(captured[0].record.kind, RecordKind::Tlsa);
+	assert!(captured[0].record.value.starts_with("3 0 1 "));
+}
+
+#[tokio::test]
+async fn publish_tlsa_noop_without_certificate() {
+	use crate::dns::provider::ManualProvider;
+	// No cert in the PEM → nothing to publish, no error.
+	publish_tlsa(&ManualProvider, "mail.example.org", "garbage")
+		.await
+		.expect("noop");
+}
