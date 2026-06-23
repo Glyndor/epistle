@@ -3,6 +3,7 @@
 //! so it is safe to run anytime and needs no provider credentials.
 
 pub mod cloudflare;
+pub mod desec;
 pub mod provider;
 pub mod records;
 
