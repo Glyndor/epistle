@@ -24,7 +24,11 @@ impl Session {
 		// Shared mechanism set: -PLUS only with a bound certificate hash, the
 		// OAuth mechanisms only with a configured verifier.
 		let mut mechs = String::from("AUTH");
-		for mechanism in crate::sasl::available(self.cbind_data.is_some(), self.oauth.is_some()) {
+		for mechanism in crate::sasl::available(
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
 			mechs.push(' ');
 			mechs.push_str(mechanism.name());
 		}

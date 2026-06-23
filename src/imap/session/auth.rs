@@ -30,6 +30,8 @@ pub(super) enum PendingAuth {
 	LoginUser { tag: String },
 	/// AUTH=LOGIN: awaiting the base64 password for `user`.
 	LoginPass { tag: String, user: String },
+	/// AUTH=EXTERNAL: awaiting the (optional) authzid.
+	External { tag: String },
 }
 
 impl Session {
@@ -53,7 +55,11 @@ impl Session {
 		// Shared mechanism set: -PLUS only with a bound certificate hash, the
 		// OAuth mechanisms only with a configured verifier.
 		let mut caps = String::new();
-		for mechanism in crate::sasl::available(self.cbind_data.is_some(), self.oauth.is_some()) {
+		for mechanism in crate::sasl::available(
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
 			caps.push_str(" AUTH=");
 			caps.push_str(mechanism.name());
 		}
@@ -126,11 +132,25 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
 			return unsupported();
 		};
-		if !crate::sasl::is_available(parsed, self.cbind_data.is_some(), self.oauth.is_some()) {
+		if !crate::sasl::is_available(
+			parsed,
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
 			return unsupported();
 		}
 		use crate::sasl::Mechanism;
 		match parsed {
+			Mechanism::External => match initial {
+				Some(response) => self.auth_external(tag, &response),
+				None => {
+					self.pending_auth = Some(PendingAuth::External {
+						tag: tag.to_string(),
+					});
+					continuation("")
+				}
+			},
 			Mechanism::Plain => match initial {
 				Some(response) => self.auth_plain(tag, &response),
 				None => {
@@ -198,7 +218,39 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			}) => self.scram_final(&tag, line, *server, *credentials, &account),
 			Some(PendingAuth::LoginUser { tag }) => self.login_user(&tag, line),
 			Some(PendingAuth::LoginPass { tag, user }) => self.login_pass(&tag, &user, line),
+			Some(PendingAuth::External { tag }) => self.auth_external(&tag, line),
 			None => Output::text("* BAD unexpected authentication response\r\n".to_string()),
+		}
+	}
+
+	/// SASL EXTERNAL: authenticate as the identity in the verified client
+	/// certificate. The optional authzid (base64, or `=`/empty) must be empty or
+	/// equal the certificate identity — no acting as another user.
+	fn auth_external(&mut self, tag: &str, encoded: &str) -> Output {
+		let Some(identity) = self.client_identity.clone() else {
+			return self.auth_failure(tag);
+		};
+		let trimmed = encoded.trim();
+		let authzid = if trimmed.is_empty() || trimmed == "=" {
+			String::new()
+		} else {
+			match BASE64.decode(trimmed) {
+				Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+				Err(_) => return self.auth_failure(tag),
+			}
+		};
+		if !authzid.is_empty() && authzid != identity {
+			return self.auth_failure(tag);
+		}
+		match crate::smtp::address::Address::parse(&identity) {
+			Ok(address) => match self.directory.resolve(&address) {
+				crate::smtp::directory::Resolution::Account(account) => {
+					self.state = State::Authenticated { account };
+					Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
+				}
+				_ => self.auth_failure(tag),
+			},
+			Err(_) => self.auth_failure(tag),
 		}
 	}
 
@@ -309,7 +361,8 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			Some(
 				PendingAuth::Plain { tag }
 				| PendingAuth::ScramFirst { tag, .. }
-				| PendingAuth::LoginUser { tag },
+				| PendingAuth::LoginUser { tag }
+				| PendingAuth::External { tag },
 			) => tag.clone(),
 			Some(PendingAuth::ScramFinal { tag, .. } | PendingAuth::LoginPass { tag, .. }) => {
 				tag.clone()

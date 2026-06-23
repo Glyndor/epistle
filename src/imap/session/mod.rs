@@ -100,6 +100,9 @@ pub struct Session {
 	/// `tls-server-end-point` channel-binding data (server certificate hash)
 	/// when known; enables AUTH=SCRAM-SHA-256-PLUS.
 	cbind_data: Option<Vec<u8>>,
+	/// Verified TLS client-certificate identity (email SAN), enabling SASL
+	/// EXTERNAL. Set by the network layer after a client-cert handshake.
+	client_identity: Option<String>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -123,7 +126,14 @@ impl Session {
 			scram_nonce: None,
 			oauth: None,
 			cbind_data: None,
+			client_identity: None,
 		}
+	}
+
+	/// Set the verified TLS client-certificate identity (email), enabling SASL
+	/// EXTERNAL for this connection.
+	pub fn set_client_identity(&mut self, identity: Option<String>) {
+		self.client_identity = identity;
 	}
 
 	/// Set the default storage quota (bytes) used when an account has no

@@ -154,7 +154,15 @@ impl Server {
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
 				let tls = self.tls.accept(stream).await?;
-				(Box::new(tls), self.new_session())
+				let identity = tls
+					.get_ref()
+					.1
+					.peer_certificates()
+					.and_then(|certs| certs.first())
+					.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+				let mut session = self.new_session();
+				session.set_client_identity(identity);
+				(Box::new(tls), session)
 			}
 			TlsMode::StartTls => (Box::new(stream), self.new_session().with_starttls()),
 		};
@@ -281,6 +289,14 @@ impl Server {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
 					let tls = self.tls.accept(stream).await?;
+					// A verified client certificate enables SASL EXTERNAL.
+					let identity = tls
+						.get_ref()
+						.1
+						.peer_certificates()
+						.and_then(|certs| certs.first())
+						.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+					session.set_client_identity(identity);
 					stream = Box::new(tls);
 					session.tls_started();
 					decoder = LineDecoder::new();

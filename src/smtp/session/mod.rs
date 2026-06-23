@@ -57,6 +57,11 @@ pub struct Session {
 	cbind_data: Option<Vec<u8>>,
 	/// Shared per-account submission rate limiter (authenticated senders).
 	send_limiter: Option<std::sync::Arc<super::ratelimit::SendLimiter>>,
+	/// Verified TLS client-certificate identity (email SAN), enabling SASL
+	/// EXTERNAL. Set by the network layer after a client-cert handshake.
+	client_identity: Option<String>,
+	/// Awaiting the EXTERNAL response line after a `334` challenge.
+	pending_external: bool,
 }
 
 impl Session {
@@ -78,7 +83,16 @@ impl Session {
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
+			client_identity: None,
+			pending_external: false,
 		}
+	}
+
+	/// Set the verified TLS client-certificate identity (email), enabling SASL
+	/// EXTERNAL for this connection. Called by the network layer once a client
+	/// presented a certificate that rustls verified against the trust anchor.
+	pub fn set_client_identity(&mut self, identity: Option<String>) {
+		self.client_identity = identity;
 	}
 
 	/// Attach a shared per-account submission rate limiter.
@@ -214,11 +228,23 @@ impl Session {
 		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
 			return unsupported();
 		};
-		if !crate::sasl::is_available(parsed, self.cbind_data.is_some(), self.oauth.is_some()) {
+		if !crate::sasl::is_available(
+			parsed,
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
 			return unsupported();
 		}
 		use crate::sasl::Mechanism;
 		match parsed {
+			Mechanism::External => match initial {
+				Some(response) => self.verify_external(&response),
+				None => {
+					self.pending_external = true;
+					Action::CollectAuthResponse(Reply::single(334, ""))
+				}
+			},
 			Mechanism::Plain => match initial {
 				Some(response) => self.verify_plain(&response),
 				None => Action::CollectAuthResponse(Reply::single(334, "")),
@@ -253,7 +279,12 @@ impl Session {
 		if line == "*" {
 			self.pending_scram = None;
 			self.pending_login = None;
+			self.pending_external = false;
 			return Action::Continue(Reply::single(501, "5.7.0 authentication cancelled"));
+		}
+		// EXTERNAL: the challenged response is the (optional) authzid.
+		if std::mem::take(&mut self.pending_external) {
+			return self.verify_external(line);
 		}
 		// AUTH LOGIN's two-step username/password exchange.
 		if let Some(state) = self.pending_login.take() {

@@ -12,6 +12,18 @@ fn reply_code(action: &Action) -> u16 {
 	}
 }
 
+fn reply_text(action: &Action) -> String {
+	match action {
+		Action::Continue(r)
+		| Action::CollectData(r)
+		| Action::UpgradeTls(r)
+		| Action::CollectAuthResponse(r)
+		| Action::Close(r) => r.to_string(),
+		Action::Deliver(r, _) => r.to_string(),
+		Action::CollectChunk { .. } => String::new(),
+	}
+}
+
 fn auth_directory() -> Arc<Directory> {
 	Arc::new(
 		Directory::new(
@@ -490,4 +502,54 @@ fn submission_rate_limit_defers_over_the_limit() {
 	// The second within the window exceeds the per-account limit -> 4xx defer.
 	let second = session.command_line("MAIL FROM:<alice@example.org>");
 	assert_eq!(reply_code(&second), 450);
+}
+
+#[test]
+fn external_authenticates_with_verified_client_cert() {
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active();
+	// The TLS layer recorded a verified certificate identity for this account.
+	session.set_client_identity(Some("alice@example.org".to_string()));
+	let ehlo = session.command_line("EHLO client.example.org");
+	assert!(
+		reply_text(&ehlo).contains("EXTERNAL"),
+		"EXTERNAL advertised once a client cert is present: {}",
+		reply_text(&ehlo)
+	);
+	// Empty initial response (`=`) means "use the certificate identity".
+	let action = session.command_line("AUTH EXTERNAL =");
+	assert_eq!(reply_code(&action), 235);
+	assert_eq!(session.authenticated(), Some("alice"));
+}
+
+#[test]
+fn external_is_unavailable_without_a_client_cert() {
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active();
+	let ehlo = session.command_line("EHLO client.example.org");
+	assert!(
+		!reply_text(&ehlo).contains("EXTERNAL"),
+		"EXTERNAL not advertised without a client cert"
+	);
+	// And attempting it is rejected (not advertised).
+	let action = session.command_line("AUTH EXTERNAL =");
+	assert_eq!(reply_code(&action), 504);
+	assert_eq!(session.authenticated(), None);
+}
+
+#[test]
+fn external_rejects_mismatched_authzid() {
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active();
+	session.set_client_identity(Some("alice@example.org".to_string()));
+	session.command_line("EHLO client.example.org");
+	// Requesting to act as someone other than the certificate identity fails.
+	use base64::Engine;
+	let authzid = base64::engine::general_purpose::STANDARD.encode("bob@example.org");
+	let action = session.command_line(&format!("AUTH EXTERNAL {authzid}"));
+	assert_eq!(reply_code(&action), 535);
+	assert_eq!(session.authenticated(), None);
 }
