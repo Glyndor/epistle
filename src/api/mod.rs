@@ -30,6 +30,9 @@ pub fn router(state: ApiState) -> Router {
 		.route("/.well-known/jmap", get(jmap::session))
 		.route("/jmap/session", get(jmap::session))
 		.route("/jmap/api", post(jmap::api))
+		// JMAP over WebSocket (RFC 8887): the upgrade endpoint, under the same
+		// bearer auth as the rest of the authenticated router.
+		.route("/jmap/ws", get(jmap::websocket::ws_upgrade))
 		.route(
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),

@@ -28,6 +28,7 @@ const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 mod email;
 mod methods;
 mod objects;
+pub mod websocket;
 
 /// JMAP core capability URN.
 const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
@@ -37,6 +38,8 @@ const MAIL_CAPABILITY: &str = "urn:ietf:params:jmap:mail";
 const SUBMISSION_CAPABILITY: &str = "urn:ietf:params:jmap:submission";
 /// JMAP quota capability URN (RFC 9425).
 const QUOTA_CAPABILITY: &str = "urn:ietf:params:jmap:quota";
+/// JMAP over WebSocket capability URN (RFC 8887).
+const WEBSOCKET_CAPABILITY: &str = "urn:ietf:params:jmap:websocket";
 
 /// `GET /jmap/session`: the Session resource (RFC 8620 §2).
 pub async fn session(State(state): State<ApiState>) -> Json<Value> {
@@ -90,6 +93,13 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 				"submissionExtensions": {},
 			},
 			QUOTA_CAPABILITY: {},
+			// JMAP over WebSocket (RFC 8887 §2): a relative `/jmap/ws` URL, like
+			// the other URLs above. `supportsPush` advertises in-band StateChange
+			// pushes over the same socket (RFC 8887 §5).
+			WEBSOCKET_CAPABILITY: {
+				"url": "/jmap/ws",
+				"supportsPush": true,
+			},
 		},
 		"accounts": accounts,
 		"primaryAccounts": primary,
@@ -123,6 +133,14 @@ pub struct Response {
 
 /// `POST /jmap/api`: dispatch each method call, returning the responses.
 pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) -> Json<Response> {
+	Json(dispatch_request(&state, request))
+}
+
+/// Dispatch a request envelope's method calls and collect the responses
+/// (RFC 8620 §3.3–§3.7). Shared by the HTTP `POST /jmap/api` handler and the
+/// WebSocket transport (RFC 8887), so the two never diverge. Pure aside from the
+/// data-dir/state mutations the individual methods perform.
+pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 	let mut method_responses = Vec::with_capacity(request.method_calls.len());
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
@@ -141,12 +159,12 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 		method_responses.push(match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
-			"Mailbox/get" => methods::mailbox_get(&state, &args, &call_id),
-			"Mailbox/set" => methods::mailbox_set(&state, &args, &call_id),
-			"Mailbox/query" => methods::mailbox_query(&state, &args, &call_id),
-			"Email/query" => methods::email_query(&state, &args, &call_id),
-			"Email/get" => methods::email_get(&state, &args, &call_id),
-			"Thread/get" => methods::thread_get(&state, &args, &call_id),
+			"Mailbox/get" => methods::mailbox_get(state, &args, &call_id),
+			"Mailbox/set" => methods::mailbox_set(state, &args, &call_id),
+			"Mailbox/query" => methods::mailbox_query(state, &args, &call_id),
+			"Email/query" => methods::email_query(state, &args, &call_id),
+			"Email/get" => methods::email_get(state, &args, &call_id),
+			"Thread/get" => methods::thread_get(state, &args, &call_id),
 			// We do not track a change log, so /changes and /queryChanges are
 			// not calculable (RFC 8620 §5.2, §5.6); report it per spec rather
 			// than unknownMethod.
@@ -154,16 +172,20 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 			| "Email/changes"
 			| "Thread/changes"
 			| "Mailbox/queryChanges"
-			| "Email/queryChanges" => methods::cannot_calculate_changes(&state, &args, &call_id),
-			"Email/set" => email::email_set(&state, &args, &call_id),
-			"Email/copy" => email::email_copy(&state, &args, &call_id),
-			"Identity/get" => methods::identity_get(&state, &args, &call_id),
-			"Quota/get" => methods::quota_get(&state, &args, &call_id),
-			"EmailSubmission/set" => methods::email_submission_set(&state, &args, &call_id),
+			| "Email/queryChanges" => methods::cannot_calculate_changes(state, &args, &call_id),
+			"Email/set" => email::email_set(state, &args, &call_id),
+			"Email/copy" => email::email_copy(state, &args, &call_id),
+			"Identity/get" => methods::identity_get(state, &args, &call_id),
+			"Quota/get" => methods::quota_get(state, &args, &call_id),
+			"EmailSubmission/set" => methods::email_submission_set(state, &args, &call_id),
+			// PushSubscription objects are session-scoped, not per-account
+			// (RFC 8620 §7.2).
+			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),
+			"PushSubscription/set" => websocket::push_subscription_set(state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		});
 	}
-	Json(Response { method_responses })
+	Response { method_responses }
 }
 
 /// Replace each `#`-prefixed argument (a ResultReference) with the value pulled
