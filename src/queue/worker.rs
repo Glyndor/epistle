@@ -54,6 +54,8 @@ pub struct Worker {
 	max_age_secs: u64,
 	/// Suppression list: recipients that hard-bounced are not retried.
 	suppression: Option<super::SuppressionList>,
+	/// Outbound transport rules (relay/socks/direct/fail). Empty = direct MX.
+	transports: Vec<crate::config::Transport>,
 }
 
 impl Worker {
@@ -70,7 +72,15 @@ impl Worker {
 			webhook: None,
 			max_age_secs: DEFAULT_MAX_AGE_SECS,
 			suppression: None,
+			transports: Vec::new(),
 		}
+	}
+
+	/// Route outbound mail through these transport rules (relay/socks/direct/
+	/// fail). Empty (the default) delivers everything directly via MX.
+	pub fn with_transports(mut self, transports: Vec<crate::config::Transport>) -> Self {
+		self.transports = transports;
+		self
 	}
 
 	/// Override the give-up window (seconds). A message older than this is
@@ -372,11 +382,49 @@ impl Worker {
 			// MTA-STS enforce or a sender's REQUIRETLS both mandate verified TLS.
 			let require_tls = policy.is_some() || entry.envelope.require_tls;
 
-			let (stream, server_name) = match self.connector.connect(&domain, policy.as_ref()).await
-			{
-				Ok(connection) => connection,
-				Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
-				Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
+			// Route this delivery: a configured transport (relay/fail) or direct.
+			let sender_account = entry
+				.envelope
+				.reverse_path
+				.rsplit_once('@')
+				.map(|(local, _)| local)
+				.filter(|local| !local.is_empty());
+			let transport =
+				crate::config::select_transport(&self.transports, sender_account, &domain);
+			let (stream, server_name, auth, tls_required) = match transport {
+				Some(rule) if rule.kind == crate::config::TransportKind::Fail => {
+					return Outcome::Dropped(format!("transport policy rejects {domain}"));
+				}
+				Some(rule) if rule.kind == crate::config::TransportKind::Relay => {
+					// host/port validated at config load.
+					let host = rule.host.clone().unwrap_or_default();
+					let port = rule.port.unwrap_or(0);
+					let stream = match super::transport::relay_connect(
+						&host,
+						port,
+						rule.socks_proxy.as_deref(),
+					)
+					.await
+					{
+						Ok(stream) => stream,
+						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
+						Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
+					};
+					let auth = match (&rule.username, &rule.password) {
+						(Some(user), Some(pass)) => Some((user.clone(), pass.clone())),
+						_ => None,
+					};
+					// starttls (required whenever AUTH is configured) forces TLS.
+					(stream, host, auth, rule.starttls)
+				}
+				_ => {
+					// Direct (no rule, or kind = direct): MX delivery.
+					match self.connector.connect(&domain, policy.as_ref()).await {
+						Ok((stream, server_name)) => (stream, server_name, None, require_tls),
+						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
+						Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
+					}
+				}
 			};
 			let result = client::deliver(
 				stream,
@@ -385,7 +433,8 @@ impl Worker {
 				&entry.envelope.reverse_path,
 				&recipients,
 				&entry.data,
-				require_tls,
+				tls_required,
+				auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
 			)
 			.await;
 			match result {

@@ -17,6 +17,14 @@ impl Config {
 		self.validate_acme()?;
 		self.validate_webhook()?;
 		self.validate_privileges()?;
+		self.validate_transport()?;
+		Ok(())
+	}
+
+	fn validate_transport(&self) -> Result<(), ConfigError> {
+		for rule in &self.transport {
+			rule.validate().map_err(ConfigError::Invalid)?;
+		}
 		Ok(())
 	}
 
