@@ -109,6 +109,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		}
 		"GETMETADATA" => super::metadata::parse_get(&tag, args)?,
 		"SETMETADATA" => super::metadata::parse_set(&tag, args)?,
+		"NOTIFY" => super::notify::parse_notify(&tag, args)?,
 		"SUBSCRIBE" => Command::Subscribe {
 			mailbox: parse_mailbox(&tag, args)?,
 		},

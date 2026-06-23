@@ -75,6 +75,11 @@ impl Session {
 THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH MULTISEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
 LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk METADATA",
 		);
+		// NOTIFY (RFC 5465) is only usable once authenticated; advertise it in the
+		// post-authentication capability set, like other selected-state features.
+		if self.account().is_some() {
+			capabilities.push_str(" NOTIFY");
+		}
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
 		}
