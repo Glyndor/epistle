@@ -1,0 +1,69 @@
+name: Interop
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - "src/smtp/**"
+      - "src/imap/**"
+      - "src/queue/**"
+      - "src/storage/**"
+      - "src/tls/**"
+      - "tests/interop.rs"
+      - ".github/workflows/interop.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  interop-tests:
+    name: protocol interop
+    runs-on: ubuntu-latest
+    services:
+      # Postfix as the reference outbound peer. boky/postfix is a maintained
+      # image that boots an SMTP server (smtpd on 25) for the given domains with
+      # no extra config; ALLOWED_SENDER_DOMAINS opens relay/acceptance for the
+      # test sender domain. Host port 1025 maps to the container's plaintext 25.
+      postfix:
+        image: boky/postfix:latest
+        env:
+          ALLOWED_SENDER_DOMAINS: epistle.interop.test localhost
+        ports:
+          - 1025:25
+        options: >-
+          --health-cmd "nc -z 127.0.0.1 25 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      # Dovecot as the reference IMAP peer. The official image starts an IMAP
+      # listener on 143 with its default configuration.
+      dovecot:
+        image: dovecot/dovecot:latest
+        ports:
+          - 1143:143
+        options: >-
+          --health-cmd "nc -z 127.0.0.1 143 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      INTEROP_POSTFIX_HOST: localhost
+      INTEROP_POSTFIX_PORT: "1025"
+      INTEROP_DOVECOT_HOST: localhost
+      INTEROP_DOVECOT_IMAP_PORT: "1143"
+      # The interop tests bind epistle's own servers in-process and migrate
+      # nothing, but a compile can still touch sqlx; keep the macros offline.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Run protocol interop tests
+        run: cargo test --locked --test interop
