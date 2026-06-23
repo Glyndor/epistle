@@ -24,6 +24,10 @@ pub struct SplitDelivery {
 	rules: Vec<crate::rules::Rule>,
 	/// SRS rewriter and our domain, for forwarded (redirected) mail.
 	srs: Option<(crate::queue::srs::Srs, String)>,
+	/// ARC sealer for forwarded mail, so the next hop can trust our assessment
+	/// even when forwarding breaks SPF/DKIM (RFC 8617). Optional and our domain,
+	/// used to skip re-sealing a chain we already sealed at inbound accept.
+	arc: Option<(Arc<crate::arc::sealer::ArcSealer>, String)>,
 	/// Counters for Sieve delivery outcomes (reject, vacation, redirect).
 	metrics: Option<Arc<crate::metrics::Metrics>>,
 	/// Outbound webhook for delivery events (fire-and-forget, advisory).
@@ -40,6 +44,7 @@ impl SplitDelivery {
 			signer: None,
 			rules: Vec::new(),
 			srs: None,
+			arc: None,
 			metrics: None,
 			webhook: None,
 		})
@@ -78,6 +83,55 @@ impl SplitDelivery {
 	pub fn with_srs(mut self, srs: crate::queue::srs::Srs, our_domain: impl Into<String>) -> Self {
 		self.srs = Some((srs, our_domain.into()));
 		self
+	}
+
+	/// Seal forwarded mail into our ARC chain at `our_domain`, so the next hop
+	/// can trust this hop's authentication assessment (RFC 8617). Our domain is
+	/// taken from the sealer so we can skip re-sealing a chain we already sealed.
+	pub fn with_arc_sealer(mut self, sealer: Arc<crate::arc::sealer::ArcSealer>) -> Self {
+		let domain = sealer.domain().to_string();
+		self.arc = Some((sealer, domain));
+		self
+	}
+
+	/// ARC headers to prepend to a forwarded copy of `data`, or `None` when no
+	/// sealer is configured, when our domain already sealed the latest instance
+	/// (skip the duplicate set), or when the message cannot be sealed.
+	///
+	/// Forward sealing stays synchronous: the chain-validation status comes from
+	/// the pure [`crate::arc::chain::chain_status`] (the prior chain's recorded
+	/// `cv`), never the async, DNS-backed `arc::validate::validate`. A message
+	/// with no prior chain — the common case — yields `cv=none` with no lookup;
+	/// a present chain reuses its own recorded status structurally rather than
+	/// re-running cryptographic verification in this sync delivery path.
+	fn arc_seal(&self, data: &[u8]) -> Option<String> {
+		let (sealer, our_domain) = self.arc.as_ref()?;
+		let prior = crate::arc::chain::extract(data)
+			.ok()
+			.flatten()
+			.unwrap_or_default();
+		// No double seal: if our domain already authored the latest instance
+		// (e.g. inbound mail we sealed at accept), do not add a second set.
+		if let Some(top) = prior.last()
+			&& crate::arc::chain::tag(&top.seal, "d")
+				.is_some_and(|d| d.eq_ignore_ascii_case(our_domain))
+		{
+			return None;
+		}
+		// cv reflects the prior chain: none when fresh, else its recorded status
+		// (a structurally broken chain extracts to empty, so seals as a fresh
+		// chain — never an invalid set). This keeps sealing sync (no DNS).
+		let cv = if prior.is_empty() {
+			crate::arc::chain::ChainValidation::None
+		} else {
+			crate::arc::chain::chain_status(&prior)
+				.unwrap_or(crate::arc::chain::ChainValidation::Fail)
+		};
+		// Reuse this message's Authentication-Results as our hop's summary, or a
+		// minimal "none" when the message carries none.
+		let auth_results =
+			header_of(data, "authentication-results").unwrap_or_else(|| "none".to_string());
+		sealer.seal(data, &auth_results, &prior, cv)
 	}
 
 	/// The envelope sender to use for mail forwarded to `redirect`: an SRS
@@ -225,11 +279,20 @@ impl MessageSink for SplitDelivery {
 				}
 			}
 			// Queue Sieve redirects, preserving the (non-null) original sender.
+			// ARC-seal the forwarded copy once, shared across every target.
+			let forward_data = match self.arc_seal(&message.data) {
+				Some(arc_headers) => {
+					let mut sealed = arc_headers.into_bytes();
+					sealed.extend_from_slice(&message.data);
+					sealed
+				}
+				None => message.data.clone(),
+			};
 			for address in delivered.redirects {
 				let forwarded = AcceptedMessage {
 					reverse_path: self.forward_sender(&message.reverse_path),
 					recipients: vec![address],
-					data: message.data.clone(),
+					data: forward_data.clone(),
 					require_tls: false,
 					mailbox: None,
 					no_dsn: Vec::new(),

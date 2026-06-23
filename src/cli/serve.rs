@@ -97,6 +97,24 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	if let Some(webhook) = &webhook {
 		split = split.with_webhook(Arc::clone(webhook));
 	}
+	// Optional ARC sealer: seals inbound mail under the server hostname using
+	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed). The
+	// same sealer also seals forwarded mail (RFC 8617) via the delivery sink.
+	let arc_sealer = match &config.arc {
+		Some(arc) => {
+			let key =
+				crate::dkim::load_ed25519_key(&arc.key_file).map_err(std::io::Error::other)?;
+			Some(Arc::new(crate::arc::sealer::ArcSealer::new(
+				key,
+				config.hostname.clone(),
+				arc.selector.clone(),
+			)))
+		}
+		None => None,
+	};
+	if let Some(sealer) = &arc_sealer {
+		split = split.with_arc_sealer(Arc::clone(sealer));
+	}
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
@@ -117,21 +135,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		});
 		store
 	});
-
-	// Optional ARC sealer: seals inbound mail under the server hostname using
-	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed).
-	let arc_sealer = match &config.arc {
-		Some(arc) => {
-			let key =
-				crate::dkim::load_ed25519_key(&arc.key_file).map_err(std::io::Error::other)?;
-			Some(Arc::new(crate::arc::sealer::ArcSealer::new(
-				key,
-				config.hostname.clone(),
-				arc.selector.clone(),
-			)))
-		}
-		None => None,
-	};
 
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With
