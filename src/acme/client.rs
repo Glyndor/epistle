@@ -251,6 +251,43 @@ impl<T: AcmeTransport> AcmeClient<T> {
 		Ok((chain, csr.key_pem))
 	}
 
+	/// Issue a certificate for `domains` end to end via TLS-ALPN-01: order,
+	/// register each domain's challenge certificate in `alpn`, validate, finalize,
+	/// and download the chain. The challenge certificates are dropped afterward.
+	pub async fn obtain_certificate_tls_alpn01(
+		&self,
+		domains: &[String],
+		alpn: &super::tlsalpn::AlpnChallengeStore,
+		poll: u32,
+	) -> Result<(String, String), AcmeError> {
+		let (order, order_url) = self.new_order(domains).await?;
+		let mut published = Vec::new();
+
+		for authz_url in &order.authorizations {
+			let authz = self.authorization(authz_url).await?;
+			let challenge = authz
+				.challenge("tls-alpn-01")
+				.ok_or_else(|| AcmeError::Protocol("no tls-alpn-01 challenge".into()))?;
+			let domain = authz.identifier.value.clone();
+			alpn.set(&domain, &self.key.key_authorization(&challenge.token))
+				.map_err(|e| AcmeError::Protocol(e.to_string()))?;
+			published.push(domain);
+			self.respond_challenge(&challenge.url).await?;
+			self.poll_authorization(authz_url, poll).await?;
+		}
+
+		let csr = super::csr::generate(domains).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		let finalized = self.finalize(&order.finalize, &csr.der_b64url).await?;
+		let certificate_url = self.poll_order(&order_url, &finalized, poll).await?;
+		let chain = self.download_certificate(&certificate_url).await?;
+
+		for domain in published {
+			alpn.remove(&domain);
+		}
+		let chain = String::from_utf8(chain).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		Ok((chain, csr.key_pem))
+	}
+
 	/// Re-check an authorization until it is `valid` (or bail on `invalid`).
 	async fn poll_authorization(&self, url: &str, max: u32) -> Result<(), AcmeError> {
 		for _ in 0..max.max(1) {
