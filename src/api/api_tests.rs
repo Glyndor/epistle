@@ -41,6 +41,8 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 		password_hash: Some("$argon2id$secret".to_string()),
 		catch_all: Vec::new(),
 		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
 	}];
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(

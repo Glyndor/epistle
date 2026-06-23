@@ -46,7 +46,10 @@ a connection URL.
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
 | `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
 | `srs_secret` | string | unset | Secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Absent disables SRS. |
-| `quota_bytes` | int | 5 GiB | Per-account mailbox quota (RFC 9208). |
+| `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. |
+| `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). |
+| `submission_rate_limit_per_min` | int | unset | Max messages an authenticated account may submit per minute (deferred with 450 over the limit). Absent disables it. |
+| `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
 | `scanner_hook_url` | string | unset | External scanner hook (ClamAV/Rspamd behind HTTP) for unauthenticated inbound mail. Absent disables scanning. |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
@@ -166,6 +169,9 @@ A mail account. An account with no `password_hash` is receive-only.
 | `addresses` | One or more addresses (each in a configured domain). |
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
+| `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. |
+| `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
+| `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 
 ## Example
 

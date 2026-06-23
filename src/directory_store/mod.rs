@@ -350,6 +350,16 @@ impl AccountStore {
 				.quota_bytes
 				.map(|bytes| (account.name.clone(), bytes))
 		});
+		let forwards = self
+			.static_accounts
+			.iter()
+			.filter(|account| !account.forward.is_empty())
+			.map(|account| {
+				(
+					account.name.clone(),
+					(account.forward.clone(), account.forward_keep_local),
+				)
+			});
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
@@ -358,6 +368,7 @@ impl AccountStore {
 			.with_totp(totp)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
+			.with_forwards(forwards)
 	}
 }
 
@@ -389,6 +400,8 @@ mod tests {
 			password_hash: None,
 			catch_all: Vec::new(),
 			quota_bytes: None,
+			forward: Vec::new(),
+			forward_keep_local: true,
 		}
 	}
 

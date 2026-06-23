@@ -17,6 +17,26 @@ use crate::smtp::sink::{MessageSink, SinkError};
 
 use super::spool::write_sync;
 
+/// Forward only while a message has crossed at most this many hops. A loop
+/// re-injects the message each round, accruing `Received:` headers; stopping
+/// well under RFC 5321's 100-hop ceiling breaks a forwarding loop early.
+const MAX_FORWARD_HOPS: usize = 25;
+
+/// Count the `Received:` header lines in a raw message (its hop count).
+fn received_hops(data: &[u8]) -> usize {
+	let head_end = data
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.unwrap_or(data.len());
+	let head = &data[..head_end];
+	head.split(|&b| b == b'\n')
+		.filter(|line| {
+			let line = line.strip_suffix(b"\r").unwrap_or(line);
+			line.len() >= 9 && line[..9].eq_ignore_ascii_case(b"Received:")
+		})
+		.count()
+}
+
 /// What local delivery produced: redirect addresses for the caller to queue,
 /// and a Sieve reject reason to bounce (if any).
 #[derive(Debug, Default)]
@@ -144,11 +164,19 @@ impl LocalDelivery {
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			return Ok(Delivered::default());
 		}
+		// Admin-configured external forwarding, independent of the user filter.
+		let (forwards, keep_local) = self.account_forwards(account, message);
 		let Some(outcome) = self.sieve_outcome(account, message) else {
-			// No filter (or it failed to compile): normal INBOX delivery.
-			self.deliver_to_account(account, None, data, &[])
-				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			return Ok(Delivered::default());
+			// No filter (or it failed to compile): normal INBOX delivery, unless
+			// the account forwards with keep_local = false (pure forwarding).
+			if keep_local || forwards.is_empty() {
+				self.deliver_to_account(account, None, data, &[])
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			}
+			return Ok(Delivered {
+				redirects: forwards,
+				..Delivered::default()
+			});
 		};
 		// reject/ereject: refuse without delivering; the caller bounces the
 		// reason to a non-null sender.
@@ -176,16 +204,34 @@ impl LocalDelivery {
 			.into_iter()
 			.collect();
 		// Never redirect a bounce (null sender): that risks mail loops.
-		let redirects = if message.reverse_path.is_empty() {
+		let mut redirects = if message.reverse_path.is_empty() {
 			Vec::new()
 		} else {
 			outcome.redirects
 		};
+		// Account-level forwards are additive to the user's filter; local
+		// storage follows the filter (keep_local governs only the no-filter case).
+		redirects.extend(forwards);
 		Ok(Delivered {
 			redirects,
 			reject: None,
 			replies,
 		})
+	}
+
+	/// Admin-configured external forwarding targets for an account, with the
+	/// keep-local flag. Empty when the account has no forwarding, the sender is
+	/// null (a bounce — never forward, loop risk), or the message has already
+	/// traversed too many hops (loop guard).
+	fn account_forwards(&self, account: &str, message: &AcceptedMessage) -> (Vec<String>, bool) {
+		let directory = self.directory.current();
+		let Some((targets, keep_local)) = directory.forwards(account) else {
+			return (Vec::new(), true);
+		};
+		if message.reverse_path.is_empty() || received_hops(&message.data) > MAX_FORWARD_HOPS {
+			return (Vec::new(), keep_local);
+		}
+		(targets.to_vec(), keep_local)
 	}
 
 	/// Evaluate the account's Sieve filter, if present and valid. Any read,
@@ -423,3 +469,7 @@ mod tests {
 		assert_eq!(list_inbox(dir.path(), "alice").len(), 1);
 	}
 }
+
+#[cfg(test)]
+#[path = "delivery_forward_tests.rs"]
+mod forward_tests;
