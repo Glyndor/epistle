@@ -2,6 +2,8 @@
 //! what epistle expects, and report drift. Read-only — it never changes DNS,
 //! so it is safe to run anytime and needs no provider credentials.
 
+pub mod provider;
+
 use crate::spf::DnsLookup;
 
 /// The outcome of checking one expected record.
