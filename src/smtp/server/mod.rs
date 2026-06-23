@@ -60,6 +60,8 @@ pub struct Server {
 	dnsbl: crate::dnsbl::Dnsbl,
 	/// When set, accepted unauthenticated mail is recorded as ham.
 	reputation: Option<sqlx::PgPool>,
+	/// When set, the Bayesian corpus is trained on accept/reject decisions.
+	bayes: Option<crate::antispam::corpus::BayesStore>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
 	/// Shared metrics counters.
@@ -91,6 +93,7 @@ impl Server {
 			spf: None,
 			dnsbl: crate::dnsbl::Dnsbl::default(),
 			reputation: None,
+			bayes: None,
 			hook: None,
 			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
@@ -149,6 +152,12 @@ impl Server {
 		self
 	}
 
+	/// Train the (encrypted-at-rest) Bayesian corpus on accept/reject decisions.
+	pub fn with_bayes(mut self, store: crate::antispam::corpus::BayesStore) -> Self {
+		self.bayes = Some(store);
+		self
+	}
+
 	/// Delay first-time unauthenticated senders by `secs` seconds. Zero (the
 	/// default) disables the slowdown.
 	pub fn with_first_time_delay(mut self, secs: u64) -> Self {
@@ -167,14 +176,9 @@ impl Server {
 	/// rejected mail trains spam, so the classifier learns from the server's
 	/// own accept/reject decisions.
 	fn train_corpus(&self, data: &[u8], spam: bool) {
-		if let Some(pool) = &self.reputation {
+		if let Some(bayes) = &self.bayes {
 			let text = String::from_utf8_lossy(data).into_owned();
-			crate::antispam::corpus::train_in_background(
-				pool.clone(),
-				crate::antispam::corpus::SHARED.to_string(),
-				text,
-				spam,
-			);
+			bayes.train_in_background(crate::antispam::corpus::SHARED.to_string(), text, spam);
 		}
 	}
 
