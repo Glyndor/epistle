@@ -9,14 +9,15 @@ use serde::Deserialize;
 use crate::dns::cloudflare::CloudflareProvider;
 use crate::dns::desec::DesecProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
+use crate::dns::route53::Route53Provider;
 
-/// DNS provider settings. When present with a usable token, record automation
-/// is enabled; otherwise epistle stays in manual mode (operator publishes
-/// records by hand).
+/// DNS provider settings. When present with usable credentials, record
+/// automation is enabled; otherwise epistle stays in manual mode (operator
+/// publishes records by hand).
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dns {
-	/// Provider id: `cloudflare` (more to come) or `manual`.
+	/// Provider id: `cloudflare`, `desec`, `route53`, or `manual`.
 	pub provider: String,
 	/// The DNS zone the token is scoped to (least privilege).
 	pub zone: String,
@@ -29,17 +30,48 @@ pub struct Dns {
 	/// Environment variable holding the API token.
 	#[serde(default)]
 	pub token_env: Option<String>,
+	/// Route 53: AWS access key id.
+	#[serde(default)]
+	pub access_key: Option<String>,
+	/// Route 53: AWS secret access key (prefer `secret_key_env`).
+	#[serde(default)]
+	pub secret_key: Option<String>,
+	/// Route 53: environment variable holding the AWS secret access key.
+	#[serde(default)]
+	pub secret_key_env: Option<String>,
+	/// Route 53: the hosted zone id.
+	#[serde(default)]
+	pub hosted_zone_id: Option<String>,
 }
 
 impl Dns {
-	/// Build the configured provider, or `None` in manual mode / when no token
-	/// is available (fail closed: no automation rather than a broken provider).
+	/// Build the configured provider, or `None` in manual mode / when
+	/// credentials are missing (fail closed: no automation rather than a broken
+	/// provider).
 	pub fn build(&self) -> Option<Arc<dyn DnsProvider>> {
 		match self.provider.to_ascii_lowercase().as_str() {
 			"cloudflare" => Some(Arc::new(CloudflareProvider::new(self.secret()?))),
 			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
+			"route53" => {
+				let access_key = self.access_key.clone()?;
+				let secret_key = self.aws_secret()?;
+				let hosted_zone_id = self.hosted_zone_id.clone()?;
+				Some(Arc::new(Route53Provider::new(
+					access_key,
+					secret_key,
+					hosted_zone_id,
+				)))
+			}
 			_ => None,
 		}
+	}
+
+	/// The AWS secret access key from `secret_key_env` (preferred) or inline.
+	fn aws_secret(&self) -> Option<String> {
+		if let Some(var) = &self.secret_key_env {
+			return std::env::var(var).ok().filter(|s| !s.is_empty());
+		}
+		self.secret_key.clone()
 	}
 
 	/// Resolve the scoped token from inline / env / file, in that precedence.
@@ -65,6 +97,10 @@ impl std::fmt::Debug for Dns {
 			.field("token", &self.token.as_ref().map(|_| "***"))
 			.field("token_file", &self.token_file)
 			.field("token_env", &self.token_env)
+			.field("access_key", &self.access_key)
+			.field("secret_key", &self.secret_key.as_ref().map(|_| "***"))
+			.field("secret_key_env", &self.secret_key_env)
+			.field("hosted_zone_id", &self.hosted_zone_id)
 			.finish()
 	}
 }
@@ -111,6 +147,24 @@ mod tests {
 		let dns: Dns =
 			toml::from_str("provider = \"desec\"\nzone = \"example.org\"\ntoken = \"t\"").unwrap();
 		assert!(dns.build().is_some());
+	}
+
+	#[test]
+	fn route53_with_credentials_builds() {
+		let dns: Dns = toml::from_str(
+			"provider = \"route53\"\nzone = \"example.org\"\naccess_key = \"AKIA\"\nsecret_key = \"s\"\nhosted_zone_id = \"Z1\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_some());
+	}
+
+	#[test]
+	fn route53_without_zone_id_builds_nothing() {
+		let dns: Dns = toml::from_str(
+			"provider = \"route53\"\nzone = \"example.org\"\naccess_key = \"AKIA\"\nsecret_key = \"s\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_none());
 	}
 
 	#[test]
