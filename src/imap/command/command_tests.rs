@@ -430,3 +430,48 @@ fn parses_fetch_preview() {
 		other => panic!("expected Fetch, got {other:?}"),
 	}
 }
+
+#[test]
+fn parses_getmetadata_single_and_list() {
+	let parsed = parse("m1 GETMETADATA INBOX /private/comment").expect("parses");
+	match parsed.command {
+		Command::GetMetadata { mailbox, entries } => {
+			assert_eq!(mailbox, "INBOX");
+			assert_eq!(entries, vec!["/private/comment".to_string()]);
+		}
+		other => panic!("expected GetMetadata, got {other:?}"),
+	}
+	let parsed =
+		parse("m2 GETMETADATA (MAXSIZE 1024) INBOX (/private/a /shared/b)").expect("parses");
+	match parsed.command {
+		Command::GetMetadata { entries, .. } => {
+			assert_eq!(
+				entries,
+				vec!["/private/a".to_string(), "/shared/b".to_string()]
+			);
+		}
+		other => panic!("expected GetMetadata, got {other:?}"),
+	}
+}
+
+#[test]
+fn parses_setmetadata_with_value_and_nil() {
+	let parsed =
+		parse("m1 SETMETADATA INBOX (/private/comment \"hi\" /private/old NIL)").expect("parses");
+	match parsed.command {
+		Command::SetMetadata { mailbox, items } => {
+			assert_eq!(mailbox, "INBOX");
+			assert_eq!(
+				items[0],
+				("/private/comment".to_string(), Some("hi".to_string()))
+			);
+			assert_eq!(items[1], ("/private/old".to_string(), None));
+		}
+		other => panic!("expected SetMetadata, got {other:?}"),
+	}
+}
+
+#[test]
+fn setmetadata_rejects_unbalanced() {
+	assert!(parse("m1 SETMETADATA INBOX /private/x \"v\"").is_err());
+}

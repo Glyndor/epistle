@@ -15,6 +15,7 @@ mod commands;
 mod fetchstore;
 mod helpers;
 mod literal;
+mod metadata;
 mod sort;
 mod thread;
 
@@ -85,6 +86,9 @@ pub struct Session {
 	directory: Arc<Directory>,
 	state: State,
 	pending_append: Option<PendingLiteral>,
+	/// UIDONLY (RFC 9586) enabled: sequence-number commands are refused and
+	/// responses use UID forms (UIDFETCH, VANISHED).
+	uidonly: bool,
 	idle_tag: Option<String>,
 	/// Whether the connection is inside TLS (LOGIN refused outside).
 	tls_active: bool,
@@ -110,6 +114,7 @@ impl Session {
 			directory,
 			state: State::NotAuthenticated { login_failures: 0 },
 			pending_append: None,
+			uidonly: false,
 			idle_tag: None,
 			tls_active: true,
 			tls_available: false,
@@ -175,6 +180,14 @@ impl Session {
 
 	fn apply(&mut self, tagged: Tagged) -> Output {
 		let tag = tagged.tag;
+		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
+		if self.uidonly
+			&& let Some(verb) = sequence_command(&tagged.command)
+		{
+			return Output::text(format!(
+				"{tag} BAD [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
+			));
+		}
 		match tagged.command {
 			Command::Capability => Output::text(format!(
 				"* CAPABILITY {}\r\n{tag} OK CAPABILITY completed\r\n",
@@ -307,6 +320,10 @@ impl Session {
 				mailbox,
 				identifier,
 			} => self.delete_acl(&tag, &mailbox, &identifier),
+			Command::GetMetadata { mailbox, entries } => {
+				self.get_metadata(&tag, &mailbox, &entries)
+			}
+			Command::SetMetadata { mailbox, items } => self.set_metadata(&tag, &mailbox, &items),
 		}
 	}
 
@@ -441,12 +458,24 @@ impl Session {
 		if self.account().is_none() {
 			return Output::text(format!("{tag} BAD ENABLE only after authentication\r\n"));
 		}
+		// UIDONLY (RFC 9586) must be enabled before a mailbox is selected.
+		if capabilities
+			.iter()
+			.any(|c| c.eq_ignore_ascii_case("UIDONLY"))
+			&& matches!(self.state, State::Selected { .. })
+		{
+			return Output::text(format!("{tag} BAD UIDONLY not allowed when selected\r\n"));
+		}
 		let enabled: Vec<&str> = capabilities
 			.iter()
-			.filter_map(|cap| match cap.as_str() {
+			.filter_map(|cap| match cap.to_ascii_uppercase().as_str() {
 				"IMAP4REV2" => Some("IMAP4rev2"),
 				"CONDSTORE" => Some("CONDSTORE"),
 				"QRESYNC" => Some("QRESYNC"),
+				"UIDONLY" => {
+					self.uidonly = true;
+					Some("UIDONLY")
+				}
 				_ => None,
 			})
 			.collect();
@@ -494,37 +523,21 @@ impl Session {
 	}
 }
 
-/// The RFC 6154 special-use attribute for a well-known mailbox name, or an
-/// empty string. Matching is case-insensitive on the leaf name.
-pub(super) fn special_use_attribute(name: &str) -> &'static str {
-	match name.to_ascii_lowercase().as_str() {
-		"junk" | "spam" | "rejects" => "\\Junk",
-		"drafts" => "\\Drafts",
-		"sent" => "\\Sent",
-		"trash" | "deleted" => "\\Trash",
-		"archive" => "\\Archive",
-		_ => "",
-	}
-}
-
-#[cfg(test)]
-mod special_use_tests {
-	use super::special_use_attribute;
-
-	#[test]
-	fn well_known_folders_get_attributes() {
-		assert_eq!(special_use_attribute("Junk"), "\\Junk");
-		assert_eq!(special_use_attribute("rejects"), "\\Junk");
-		assert_eq!(special_use_attribute("Drafts"), "\\Drafts");
-		assert_eq!(special_use_attribute("Sent"), "\\Sent");
-		assert_eq!(special_use_attribute("Trash"), "\\Trash");
-		assert_eq!(special_use_attribute("Archive"), "\\Archive");
-	}
-
-	#[test]
-	fn ordinary_folder_has_no_attribute() {
-		assert_eq!(special_use_attribute("INBOX"), "");
-		assert_eq!(special_use_attribute("Projects"), "");
+/// The command verb when it relies on message sequence numbers (and so is
+/// refused under UIDONLY), or `None` for UID-based and non-sequence commands.
+fn sequence_command(command: &Command) -> Option<&'static str> {
+	match command {
+		Command::Fetch { uid: false, .. } => Some("FETCH"),
+		Command::Store { uid: false, .. } => Some("STORE"),
+		Command::Search { uid: false, .. } => Some("SEARCH"),
+		Command::Sort { uid: false, .. } => Some("SORT"),
+		Command::Thread { uid: false, .. } => Some("THREAD"),
+		Command::Copy {
+			uid: false,
+			remove_source,
+			..
+		} => Some(if *remove_source { "MOVE" } else { "COPY" }),
+		_ => None,
 	}
 }
 

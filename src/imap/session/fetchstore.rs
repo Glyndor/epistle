@@ -20,6 +20,7 @@ impl Session {
 		uid: bool,
 		unchanged_since: Option<u64>,
 	) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -90,14 +91,21 @@ impl Session {
 					(Some(_), Some(value)) => format!("MODSEQ ({value}) "),
 					_ => String::new(),
 				};
-				let uid_part = if uid {
-					format!("UID {message_uid} ")
+				if uidonly {
+					// UIDONLY: the UID leads the UIDFETCH response, not a data item.
+					response.push_str(&format!(
+						"* UIDFETCH {message_uid} ({modseq}FLAGS {stored})\r\n"
+					));
 				} else {
-					String::new()
-				};
-				response.push_str(&format!(
-					"* {sequence_number} FETCH ({uid_part}{modseq}FLAGS {stored})\r\n"
-				));
+					let uid_part = if uid {
+						format!("UID {message_uid} ")
+					} else {
+						String::new()
+					};
+					response.push_str(&format!(
+						"* {sequence_number} FETCH ({uid_part}{modseq}FLAGS {stored})\r\n"
+					));
+				}
 			}
 		}
 		let code = if modified.is_empty() {
@@ -118,6 +126,7 @@ impl Session {
 		changed_since: Option<u64>,
 		vanished: bool,
 	) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
@@ -148,6 +157,9 @@ impl Session {
 			let mut parts: Vec<Vec<u8>> = Vec::new();
 			for item in items {
 				match item {
+					// UIDONLY: the UID leads the UIDFETCH response, so the
+					// redundant UID data item is omitted (RFC 9586).
+					FetchItem::Uid if uidonly => {}
 					FetchItem::Flags => {
 						parts.push(format!("FLAGS {}", render_flags(&message.flags)).into_bytes());
 					}
@@ -220,7 +232,12 @@ impl Session {
 				}
 			}
 
-			bytes.extend_from_slice(format!("* {sequence_number} FETCH (").as_bytes());
+			let header = if uidonly {
+				format!("* UIDFETCH {} (", message.uid)
+			} else {
+				format!("* {sequence_number} FETCH (")
+			};
+			bytes.extend_from_slice(header.as_bytes());
 			for (index, part) in parts.iter().enumerate() {
 				if index > 0 {
 					bytes.push(b' ');
