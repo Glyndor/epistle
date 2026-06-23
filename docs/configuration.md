@@ -225,6 +225,15 @@ Outbound routing rules. Each rule matches by sender `account` (the envelope send
 | `username`, `password` | SMTP AUTH for the relay (submission). Sent only over TLS — never in plaintext (fail closed). |
 | `socks_proxy` | `host:port` of a SOCKS5 proxy to reach the smarthost through. |
 
+### `[queue]`
+Outbound queue settings. Absent keeps the secure defaults.
+
+| Key | Meaning |
+|---|---|
+| `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
+
+This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
+
 ## Example
 
 ```toml
