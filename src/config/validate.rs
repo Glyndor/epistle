@@ -18,6 +18,16 @@ impl Config {
 		self.validate_webhook()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
+		self.validate_oauth()?;
+		Ok(())
+	}
+
+	fn validate_oauth(&self) -> Result<(), ConfigError> {
+		if let Some(oauth) = &self.oauth {
+			oauth
+				.validate()
+				.map_err(|e| ConfigError::Invalid(e.to_string()))?;
+		}
 		Ok(())
 	}
 
