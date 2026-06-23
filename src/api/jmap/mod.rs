@@ -1,9 +1,12 @@
-//! JMAP (RFC 8620) foundation: the Session resource and the Core/echo method.
+//! JMAP (RFC 8620) Core: the Session resource and the request/response method
+//! framework.
 //!
-//! This is the minimal, spec-valid entry point that opens the JMAP roadmap:
-//! a client fetches the Session object to discover capabilities and the API
+//! A client fetches the Session object to discover capabilities and the API
 //! URL, then POSTs a request envelope whose method calls are dispatched here.
-//! Only the mandatory `Core/echo` method is implemented so far.
+//! Calls are answered in order, with result back-references (`#`-prefixed
+//! arguments) resolved against earlier responses (RFC 8620 §3.7). `Core/echo`
+//! plus the Mail methods (Mailbox/Email/Thread/Identity/Quota/EmailSubmission)
+//! are wired in the dispatch below.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -122,6 +125,19 @@ pub struct Response {
 pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) -> Json<Response> {
 	let mut method_responses = Vec::with_capacity(request.method_calls.len());
 	for MethodCall(name, args, call_id) in request.method_calls {
+		// Resolve result back-references (`#`-prefixed args) against earlier
+		// responses; an unresolvable reference fails just that call (RFC 8620 §3.7).
+		let args = match resolve_references(args, &method_responses) {
+			Ok(args) => args,
+			Err(()) => {
+				method_responses.push(json!([
+					"error",
+					{ "type": "invalidResultReference" },
+					call_id
+				]));
+				continue;
+			}
+		};
 		method_responses.push(match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
@@ -146,6 +162,68 @@ pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) ->
 	}
 	Json(Response { method_responses })
 }
+
+/// Replace each `#`-prefixed argument (a ResultReference) with the value pulled
+/// from an earlier method's result, per RFC 8620 §3.7. Returns `Err(())` if any
+/// reference cannot be resolved (the caller turns that into an error response).
+fn resolve_references(mut args: Value, prior: &[Value]) -> Result<Value, ()> {
+	let Some(object) = args.as_object_mut() else {
+		return Ok(args);
+	};
+	let references: Vec<String> = object
+		.keys()
+		.filter(|key| key.starts_with('#'))
+		.cloned()
+		.collect();
+	for key in references {
+		let reference = object.remove(&key).expect("key present");
+		let resolved = resolve_reference(&reference, prior).ok_or(())?;
+		object.insert(key[1..].to_string(), resolved);
+	}
+	Ok(args)
+}
+
+/// Resolve one ResultReference `{resultOf, name, path}` against the prior
+/// `[name, arguments, callId]` responses.
+fn resolve_reference(reference: &Value, prior: &[Value]) -> Option<Value> {
+	let result_of = reference.get("resultOf")?.as_str()?;
+	let name = reference.get("name")?.as_str()?;
+	let path = reference.get("path")?.as_str()?;
+	let response = prior.iter().find(|response| {
+		response.get(0).and_then(Value::as_str) == Some(name)
+			&& response.get(2).and_then(Value::as_str) == Some(result_of)
+	})?;
+	pointer_with_wildcard(response.get(1)?, path)
+}
+
+/// JSON Pointer (RFC 6901) extended with the JMAP `*` wildcard: a `/*` segment
+/// maps the rest of the path over an array, flattening one level of array
+/// results (RFC 8620 §3.7).
+fn pointer_with_wildcard(value: &Value, path: &str) -> Option<Value> {
+	let Some(star) = path.find("/*") else {
+		return value.pointer(path).cloned();
+	};
+	let (before, rest) = path.split_at(star);
+	let rest = &rest[2..]; // drop the "/*"
+	let array = value.pointer(before)?.as_array()?;
+	let mut out = Vec::new();
+	for item in array {
+		let resolved = if rest.is_empty() {
+			item.clone()
+		} else {
+			pointer_with_wildcard(item, rest)?
+		};
+		match resolved {
+			Value::Array(items) => out.extend(items),
+			other => out.push(other),
+		}
+	}
+	Some(Value::Array(out))
+}
+
+#[cfg(test)]
+#[path = "jmap_backref_tests.rs"]
+mod backref_tests;
 
 /// `GET /jmap/download/{accountId}/{blobId}/{name}` (RFC 8620 §6.2): return the
 /// raw bytes of a stored message or an uploaded blob, by id.
