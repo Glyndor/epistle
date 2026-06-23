@@ -15,6 +15,19 @@ pub(super) async fn bind(listener: &Listener) -> std::io::Result<TcpListener> {
 	Ok(bound)
 }
 
+/// Spawn an axum router on a bound listener, returning the serving task. Shared
+/// by the plain-HTTP listener arms (autoconfig, ACME, WebDAV, metrics).
+pub(super) fn serve_http(
+	listener: TcpListener,
+	router: axum::Router,
+) -> tokio::task::JoinHandle<std::io::Result<()>> {
+	tokio::spawn(async move {
+		axum::serve(listener, router)
+			.await
+			.map_err(std::io::Error::other)
+	})
+}
+
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with
 /// accumulated delivery records, build the reports and queue them on the
 /// outbound spool.

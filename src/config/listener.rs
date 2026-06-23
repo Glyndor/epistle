@@ -32,6 +32,8 @@ pub enum ListenerKind {
 	Acme,
 	/// Client autodiscovery: Thunderbird autoconfig + Microsoft Autodiscover.
 	Autoconfig,
+	/// WebDAV (RFC 4918) per-account file storage.
+	WebDav,
 }
 
 impl ListenerKind {
@@ -49,6 +51,7 @@ impl ListenerKind {
 			ListenerKind::Metrics => 9090,
 			ListenerKind::Acme => 80,
 			ListenerKind::Autoconfig => 8091,
+			ListenerKind::WebDav => 8090,
 		}
 	}
 }

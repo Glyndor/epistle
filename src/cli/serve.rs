@@ -406,6 +406,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						.map_err(std::io::Error::other)
 				}));
 			}
+			ListenerKind::WebDav => {
+				let listener = super::serve_tasks::bind(listener_config).await?;
+				let router = crate::webdav::router(directory.clone(), config.data_dir.clone());
+				tasks.push(super::serve_tasks::serve_http(listener, router));
+			}
 			ListenerKind::ManageSieve => {
 				let Some(acceptor) = &tls_acceptor else {
 					return Err(std::io::Error::other(
