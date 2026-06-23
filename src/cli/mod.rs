@@ -3,6 +3,7 @@
 mod accounts;
 mod autoconfig;
 mod autodiscover;
+mod dns_records;
 mod export;
 mod import;
 mod mobileconfig;
@@ -83,6 +84,13 @@ enum Command {
 	/// Check published DNS records against what epistle expects and report
 	/// drift (read-only; queries DNS, changes nothing).
 	VerifyDns {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Print the DNS records this deployment should publish (SPF, DKIM, DMARC,
+	/// MTA-STS, MX and a DANE TLSA record when a certificate is present).
+	DnsRecords {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
@@ -227,6 +235,13 @@ impl Cli {
 			},
 			Command::VerifyDns { config } => match Config::load(&config) {
 				Ok(config) => verify_dns::run(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::DnsRecords { config } => match Config::load(&config) {
+				Ok(config) => dns_records::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
