@@ -89,6 +89,87 @@ pub(super) fn spawn_blob_reclamation(config: &Config) {
 	});
 }
 
+/// Build the OAuth2/OIDC token verifier from `[oauth]`, fetching the JWKS once
+/// and spawning an hourly refresh when OIDC discovery is configured. A malformed
+/// configuration or an initial fetch failure is fatal (fail closed). Returns
+/// `Ok(None)` when no `[oauth]` section is present.
+pub(super) async fn build_oauth_verifier(
+	config: &Config,
+) -> std::io::Result<Option<Arc<crate::oauth::OauthVerifier>>> {
+	let Some(oauth) = &config.oauth else {
+		return Ok(None);
+	};
+	oauth
+		.validate()
+		.map_err(|e| std::io::Error::other(format!("oauth config: {e}")))?;
+	let verifier = match (&oauth.public_key, &oauth.discovery_url) {
+		(Some(public_key), _) => crate::oauth::OauthVerifier::new(
+			&oauth.issuer,
+			&oauth.audience,
+			&oauth.algorithm,
+			public_key,
+		)
+		.map_err(|e| std::io::Error::other(format!("oauth config: {e:?}")))?,
+		(None, Some(discovery_url)) => {
+			let default_alg = parse_oauth_alg(&oauth.algorithm)?;
+			let client = reqwest::Client::new();
+			let keys = crate::oauth::oidc::fetch_keys(&client, discovery_url, default_alg)
+				.await
+				.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
+			let verifier =
+				crate::oauth::OauthVerifier::from_jwks(&oauth.issuer, &oauth.audience, keys);
+			spawn_jwks_refresh(
+				verifier.jwks_cache(),
+				client,
+				discovery_url.clone(),
+				default_alg,
+			);
+			verifier
+		}
+		(None, None) => unreachable!("validate() rejects the no-source case"),
+	};
+	Ok(Some(Arc::new(verifier)))
+}
+
+/// Map the configured algorithm name to a [`crate::jwt::Algorithm`], the default
+/// applied to a JWKS key that omits its own `alg`.
+fn parse_oauth_alg(algorithm: &str) -> std::io::Result<crate::jwt::Algorithm> {
+	match algorithm.to_ascii_uppercase().as_str() {
+		"RS256" => Ok(crate::jwt::Algorithm::Rs256),
+		"ES256" => Ok(crate::jwt::Algorithm::Es256),
+		_ => Err(std::io::Error::other("oauth config: unsupported algorithm")),
+	}
+}
+
+/// Spawn the hourly JWKS refresh: re-fetch the IdP's keys and swap them into the
+/// shared cache so rotated keys are picked up without a restart. A failed fetch
+/// keeps the previous keys (it does not clear the cache).
+fn spawn_jwks_refresh(
+	cache: Option<Arc<std::sync::RwLock<Vec<crate::oauth::Jwk>>>>,
+	client: reqwest::Client,
+	discovery_url: String,
+	default_alg: crate::jwt::Algorithm,
+) {
+	let Some(cache) = cache else {
+		return;
+	};
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			match crate::oauth::oidc::fetch_keys(&client, &discovery_url, default_alg).await {
+				Ok(keys) => {
+					if let Ok(mut guard) = cache.write() {
+						*guard = keys;
+					}
+				}
+				Err(error) => tracing::warn!(%error, "oidc jwks refresh failed"),
+			}
+		}
+	});
+}
+
 /// Spawn the automatic DKIM key-rotation task when `[dkim] rotate_days` and a
 /// `[dns]` provider are both configured. Hourly ticks rotate/retire when due.
 pub(super) fn spawn_dkim_rotation(
