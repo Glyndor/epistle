@@ -99,6 +99,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"COPY" => parse_copy(&tag, args, false, false)?,
 		"MOVE" => parse_copy(&tag, args, false, true)?,
 		"SEARCH" => super::search::parse_search(&tag, args, false)?,
+		"ESEARCH" => super::search::parse_esearch(&tag, args)?,
 		"SORT" => super::search::parse_sort(&tag, args, false)?,
 		"THREAD" => super::search::parse_thread(&tag, args, false)?,
 		"STATUS" => parse_status(&tag, args)?,

@@ -115,6 +115,13 @@ pub enum Command {
 		/// `* SEARCH` reply; `Some` selects the `* ESEARCH` reply.
 		return_opts: Option<Vec<ReturnOpt>>,
 	},
+	/// `ESEARCH [IN (sources)] [RETURN (...)] criteria` (RFC 7377
+	/// MULTISEARCH). Searches one or more mailboxes, always reporting UIDs.
+	Esearch {
+		sources: Vec<SearchScope>,
+		criteria: Vec<SearchKey>,
+		return_opts: Vec<ReturnOpt>,
+	},
 	/// `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
 	Sort {
 		keys: Vec<(bool, SortKey)>,
@@ -165,6 +172,26 @@ pub enum ReturnOpt {
 	Max,
 	Count,
 	All,
+}
+
+/// A MULTISEARCH source scope (RFC 7377 §2.2 `scope-option`). Selects which
+/// mailboxes an `ESEARCH` command searches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchScope {
+	/// The currently selected mailbox (the default when no `IN` is given).
+	Selected,
+	/// Mailboxes that receive new messages — here, just INBOX.
+	Inboxes,
+	/// Every mailbox in the user's personal namespace.
+	Personal,
+	/// Every subscribed mailbox.
+	Subscribed,
+	/// The named mailboxes and all their descendants.
+	Subtree(Vec<String>),
+	/// The named mailboxes and their immediate children only.
+	SubtreeOne(Vec<String>),
+	/// Exactly the named mailboxes.
+	Mailboxes(Vec<String>),
 }
 
 /// A SORT key (RFC 5256), optionally preceded by REVERSE in the command.

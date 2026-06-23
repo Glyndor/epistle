@@ -327,3 +327,58 @@ fn parses_id_nil_and_enable() {
 		Command::Enable { .. }
 	));
 }
+
+#[test]
+fn parses_esearch_with_scope_and_return() {
+	let parsed = parse("m1 ESEARCH IN (mailboxes (\"INBOX\" \"Archive\")) RETURN (COUNT) ALL")
+		.expect("parses");
+	match parsed.command {
+		Command::Esearch {
+			sources,
+			criteria,
+			return_opts,
+		} => {
+			assert_eq!(
+				sources,
+				vec![SearchScope::Mailboxes(vec![
+					"INBOX".to_string(),
+					"Archive".to_string(),
+				])]
+			);
+			assert_eq!(return_opts, vec![ReturnOpt::Count]);
+			assert_eq!(criteria.len(), 1);
+		}
+		other => panic!("expected Esearch, got {other:?}"),
+	}
+}
+
+#[test]
+fn esearch_defaults_to_selected_and_all() {
+	let parsed = parse("m1 ESEARCH ALL").expect("parses");
+	match parsed.command {
+		Command::Esearch {
+			sources,
+			return_opts,
+			..
+		} => {
+			assert_eq!(sources, vec![SearchScope::Selected]);
+			assert_eq!(return_opts, vec![ReturnOpt::All]);
+		}
+		other => panic!("expected Esearch, got {other:?}"),
+	}
+}
+
+#[test]
+fn esearch_rejects_unknown_scope() {
+	assert!(parse("m1 ESEARCH IN (bogus) ALL").is_err());
+}
+
+#[test]
+fn esearch_rejects_missing_criteria() {
+	assert!(parse("m1 ESEARCH IN (mailboxes (\"INBOX\"))").is_err());
+}
+
+#[test]
+fn esearch_rejects_unclosed_scope() {
+	assert!(parse("m1 ESEARCH IN (mailboxes (\"INBOX\") ALL").is_err());
+}

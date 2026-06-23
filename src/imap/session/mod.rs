@@ -260,6 +260,11 @@ impl Session {
 				uid,
 				return_opts,
 			} => self.search(&tag, &criteria, uid, return_opts.as_deref()),
+			Command::Esearch {
+				sources,
+				criteria,
+				return_opts,
+			} => self.esearch(&tag, &sources, &criteria, &return_opts),
 			Command::Status { mailbox, items } => self.status(&tag, &mailbox, &items),
 			Command::Subscribe { mailbox } => self.subscription_op(&tag, |data_dir, account| {
 				mailbox::subscribe(data_dir, account, &mailbox)

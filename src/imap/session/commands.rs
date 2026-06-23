@@ -1,5 +1,5 @@
-use super::super::command::{ReturnOpt, SequenceSet};
-use super::codes::{copyuid_code, esearch_line};
+use super::super::command::{ReturnOpt, SearchScope, SequenceSet};
+use super::codes::{copyuid_code, esearch_line, esearch_multi_line};
 use super::helpers::search_matches;
 use super::mailbox::{self, Flag, Snapshot};
 use super::{Output, SearchKey, Session, State, StatusItem};
@@ -119,6 +119,73 @@ impl Session {
 			}
 		};
 		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
+	}
+
+	/// MULTISEARCH (RFC 7377): search every resolved mailbox and emit one
+	/// `* ESEARCH` line per mailbox that produced output. Results are always
+	/// UIDs, correlated by `MAILBOX`/`UIDVALIDITY`.
+	pub(super) fn esearch(
+		&mut self,
+		tag: &str,
+		sources: &[SearchScope],
+		criteria: &[SearchKey],
+		return_opts: &[ReturnOpt],
+	) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
+		};
+
+		let mut mailboxes = match self.resolve_scopes(sources, &account) {
+			Some(mailboxes) => mailboxes,
+			None => return Output::text(format!("{tag} BAD no mailbox selected\r\n")),
+		};
+		mailboxes.dedup();
+
+		let mut body = String::new();
+		for name in &mailboxes {
+			let Ok(snapshot) = Snapshot::open(&self.data_dir, &account, name) else {
+				continue;
+			};
+			let hits = matching_uids(&snapshot, criteria);
+			body.push_str(&esearch_multi_line(
+				tag,
+				name,
+				snapshot.uid_validity(),
+				&hits,
+				return_opts,
+			));
+		}
+		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
+	}
+
+	/// Resolve MULTISEARCH source scopes to a concrete, ordered mailbox list.
+	/// Returns `None` only when `selected` is requested without a selected
+	/// mailbox (a protocol error).
+	fn resolve_scopes(&self, sources: &[SearchScope], account: &str) -> Option<Vec<String>> {
+		let mut names = Vec::new();
+		for source in sources {
+			match source {
+				SearchScope::Selected => match &self.state {
+					State::Selected { mailbox, .. } => names.push(mailbox.clone()),
+					_ => return None,
+				},
+				SearchScope::Inboxes => names.push("INBOX".to_string()),
+				SearchScope::Personal => {
+					names.extend(mailbox::list(&self.data_dir, account));
+				}
+				SearchScope::Subscribed => {
+					names.extend(mailbox::list_subscribed(&self.data_dir, account));
+				}
+				SearchScope::Subtree(roots) => {
+					names.extend(subtree(&self.data_dir, account, roots, false));
+				}
+				SearchScope::SubtreeOne(roots) => {
+					names.extend(subtree(&self.data_dir, account, roots, true));
+				}
+				SearchScope::Mailboxes(list) => names.extend(list.iter().cloned()),
+			}
+		}
+		Some(names)
 	}
 
 	pub(super) fn expunge(&mut self, tag: &str) -> Output {
@@ -382,4 +449,49 @@ impl Session {
 		}
 		Some(parts)
 	}
+}
+
+/// UIDs of every message in `snapshot` matching all search keys.
+fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
+	let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+	let mut hits = Vec::new();
+	for seqno in 1..=total {
+		let Some(message) = snapshot.by_sequence(seqno) else {
+			continue;
+		};
+		let mut content: Option<String> = None;
+		if criteria
+			.iter()
+			.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content))
+		{
+			hits.push(message.uid);
+		}
+	}
+	hits
+}
+
+/// Expand SUBTREE / SUBTREE-ONE roots into matching mailbox names. With
+/// `one_level`, only the root and its immediate children are included;
+/// otherwise the whole subtree (the hierarchy separator is `/`).
+fn subtree(
+	data_dir: &std::path::Path,
+	account: &str,
+	roots: &[String],
+	one_level: bool,
+) -> Vec<String> {
+	let all = mailbox::list(data_dir, account);
+	let mut out = Vec::new();
+	for root in roots {
+		let prefix = format!("{root}/");
+		for name in &all {
+			if name == root {
+				out.push(name.clone());
+			} else if let Some(rest) = name.strip_prefix(&prefix)
+				&& (!one_level || !rest.contains('/'))
+			{
+				out.push(name.clone());
+			}
+		}
+	}
+	out
 }
