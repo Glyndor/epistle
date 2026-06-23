@@ -375,6 +375,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_report_dir(config.data_dir.clone());
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
+					// The corpus key lives under data_dir, encrypted-at-rest tokens.
+					match crate::antispam::corpus::BayesStore::open(pool.clone(), &config.data_dir)
+					{
+						Ok(store) => server = server.with_bayes(store),
+						Err(error) => {
+							eprintln!("error: cannot open bayes corpus key: {error}");
+							return Err(error);
+						}
+					}
 				}
 				if let Some(hook) = &scanner_hook {
 					server = server.with_hook(Arc::clone(hook));
