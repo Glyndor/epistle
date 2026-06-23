@@ -382,3 +382,51 @@ fn esearch_rejects_missing_criteria() {
 fn esearch_rejects_unclosed_scope() {
 	assert!(parse("m1 ESEARCH IN (mailboxes (\"INBOX\") ALL").is_err());
 }
+
+#[test]
+fn parses_replace_command() {
+	let parsed = parse(r"m1 REPLACE 3 Archive (\Seen) {10}").expect("parses");
+	match parsed.command {
+		Command::Replace {
+			sequence,
+			mailbox,
+			flags,
+			size,
+			uid,
+		} => {
+			assert_eq!(sequence, 3);
+			assert_eq!(mailbox, "Archive");
+			assert_eq!(flags, vec!["\\Seen".to_string()]);
+			assert_eq!(size, 10);
+			assert!(!uid);
+		}
+		other => panic!("expected Replace, got {other:?}"),
+	}
+}
+
+#[test]
+fn parses_uid_replace_command() {
+	let parsed = parse("m1 UID REPLACE 42 INBOX {5}").expect("parses");
+	match parsed.command {
+		Command::Replace { sequence, uid, .. } => {
+			assert_eq!(sequence, 42);
+			assert!(uid);
+		}
+		other => panic!("expected Replace, got {other:?}"),
+	}
+}
+
+#[test]
+fn replace_rejects_missing_sequence_and_zero() {
+	assert!(parse("m1 REPLACE INBOX {5}").is_err());
+	assert!(parse("m1 REPLACE 0 INBOX {5}").is_err());
+}
+
+#[test]
+fn parses_fetch_preview() {
+	let parsed = parse("m1 FETCH 1 (PREVIEW)").expect("parses");
+	match parsed.command {
+		Command::Fetch { items, .. } => assert!(items.contains(&FetchItem::Preview)),
+		other => panic!("expected Fetch, got {other:?}"),
+	}
+}

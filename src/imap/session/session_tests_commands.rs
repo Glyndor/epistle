@@ -334,3 +334,78 @@ fn copy_preserves_source_and_flags() {
 	assert!(response.contains(r"FLAGS (\Seen)"), "{response}");
 	assert!(response.contains("one"), "{response}");
 }
+
+#[test]
+fn replace_appends_new_and_expunges_source() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: one\r\n\r\nfirst\r\n");
+	deliver(dir.path(), b"Subject: two\r\n\r\nsecond\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let output = session.command_line("a3 REPLACE 1 INBOX {23}");
+	assert_eq!(output.collect_literal, Some(23));
+	let output = session.literal_done(b"Subject: new\r\n\r\nfresh\r\n");
+	let response = text(&output);
+	assert!(response.contains("* 1 EXPUNGE"), "{response}");
+	assert!(response.contains("[APPENDUID "), "{response}");
+	assert!(response.contains("REPLACE completed"), "{response}");
+
+	// Two messages remain (one expunged, one appended): old "two" and "new".
+	let output = session.command_line("a4 SELECT INBOX");
+	assert!(text(&output).contains("* 2 EXISTS"), "{}", text(&output));
+	let output = session.command_line("a5 FETCH 1:2 (BODY[])");
+	let response = text(&output);
+	assert!(response.contains("Subject: two"), "{response}");
+	assert!(response.contains("Subject: new"), "{response}");
+	assert!(!response.contains("Subject: one"), "{response}");
+}
+
+#[test]
+fn replace_rejects_unknown_source_and_no_selection() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: one\r\n\r\nx\r\n");
+	let mut session = logged_in(dir.path());
+
+	// No mailbox selected yet.
+	let output = session.command_line("a2 REPLACE 1 INBOX {5}");
+	assert!(text(&output).contains("a2 NO"), "{}", text(&output));
+	assert_eq!(output.collect_literal, None);
+
+	session.command_line("a3 SELECT INBOX");
+	let output = session.command_line("a4 REPLACE 9 INBOX {5}");
+	assert!(
+		text(&output).contains("no such message"),
+		"{}",
+		text(&output)
+	);
+	assert_eq!(output.collect_literal, None);
+}
+
+#[test]
+fn replace_refused_on_read_only() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: one\r\n\r\nx\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 EXAMINE INBOX");
+	let output = session.command_line("a3 REPLACE 1 INBOX {5}");
+	assert!(text(&output).contains("read-only"), "{}", text(&output));
+	assert_eq!(output.collect_literal, None);
+}
+
+#[test]
+fn fetch_preview_returns_collapsed_snippet() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(
+		dir.path(),
+		b"Subject: hi\r\n\r\nThis is   the\r\nbody text.\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	let output = session.command_line("a3 FETCH 1 (PREVIEW)");
+	let response = text(&output);
+	assert!(
+		response.contains("PREVIEW \"This is the body text.\""),
+		"{response}"
+	);
+}

@@ -177,6 +177,15 @@ impl Session {
 						let dt = format_internaldate(message.internal_date);
 						parts.push(format!("SAVEDATE \"{dt}\"").into_bytes());
 					}
+					FetchItem::Preview => match snapshot.read(message) {
+						Ok(data) => {
+							let preview = preview_text(&data);
+							parts.push(format!("PREVIEW \"{preview}\"").into_bytes());
+						}
+						Err(_) => {
+							return Output::text(format!("{tag} NO message unavailable\r\n"));
+						}
+					},
 					FetchItem::Body => match snapshot.read(message) {
 						Ok(data) => {
 							let mut part = format!("BODY[] {{{}}}\r\n", data.len()).into_bytes();
@@ -280,4 +289,42 @@ fn decode_quoted_printable(body: &str) -> Vec<u8> {
 		i += 1;
 	}
 	out
+}
+
+/// Maximum characters in a PREVIEW snippet (RFC 8970 recommends ~200).
+const PREVIEW_LEN: usize = 200;
+
+/// Build a short PREVIEW snippet (RFC 8970) from a raw message: take the body
+/// after the header block, collapse whitespace, and truncate. Quotes and
+/// backslashes are escaped so the result is a valid IMAP quoted string.
+fn preview_text(raw: &[u8]) -> String {
+	let text = String::from_utf8_lossy(raw);
+	// The body starts after the first blank line (CRLF or LF).
+	let body = text
+		.split_once("\r\n\r\n")
+		.or_else(|| text.split_once("\n\n"))
+		.map(|(_, body)| body)
+		.unwrap_or(&text);
+
+	let mut preview = String::with_capacity(PREVIEW_LEN);
+	let mut last_was_space = false;
+	for ch in body.chars() {
+		if preview.chars().count() >= PREVIEW_LEN {
+			break;
+		}
+		if ch.is_whitespace() {
+			if !last_was_space && !preview.is_empty() {
+				preview.push(' ');
+				last_was_space = true;
+			}
+		} else if ch == '"' || ch == '\\' {
+			preview.push('\\');
+			preview.push(ch);
+			last_was_space = false;
+		} else if !ch.is_control() {
+			preview.push(ch);
+			last_was_space = false;
+		}
+	}
+	preview.trim_end().to_string()
 }
