@@ -142,7 +142,9 @@ async fn options_advertises_dav_and_allow() {
 	let app = test_app(dir.path());
 	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(ALICE), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(resp_headers.get("DAV").unwrap(), "1");
+	let dav = resp_headers.get("DAV").unwrap().to_str().unwrap();
+	assert!(dav.contains('1'));
+	assert!(dav.contains("addressbook"));
 	let allow = resp_headers.get(header::ALLOW).unwrap().to_str().unwrap();
 	assert!(allow.contains("PROPFIND"));
 	assert!(allow.contains("MKCOL"));

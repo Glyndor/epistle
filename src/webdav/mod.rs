@@ -13,6 +13,8 @@
 //! - [`path`] — request-path-to-disk mapping with traversal protection.
 //! - [`handler`] — method dispatch and the per-method handlers.
 //! - [`propfind`] — the `207 Multi-Status` XML body.
+//! - [`carddav`] — the CardDAV (RFC 6352) layer: addressbook collections,
+//!   the `REPORT` method, and the discovery props.
 
 use std::path::PathBuf;
 
@@ -22,6 +24,7 @@ use axum::routing::any;
 use crate::directory_store::DirectoryHandle;
 
 pub mod auth;
+pub mod carddav;
 pub mod handler;
 pub mod path;
 pub mod propfind;
