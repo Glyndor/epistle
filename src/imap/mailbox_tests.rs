@@ -237,3 +237,60 @@ fn ignores_foreign_files() {
 		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
 	assert_eq!(snapshot.len(), 1);
 }
+
+#[test]
+fn flags_equal_is_order_and_duplicate_independent() {
+	assert!(flags_equal(&[], &[]));
+	assert!(flags_equal(
+		&[Flag::Seen, Flag::Flagged],
+		&[Flag::Flagged, Flag::Seen],
+	));
+	// Duplicates collapse to a set.
+	assert!(flags_equal(&[Flag::Seen], &[Flag::Seen, Flag::Seen]));
+	assert!(!flags_equal(&[Flag::Seen], &[Flag::Seen, Flag::Deleted]));
+	assert!(!flags_equal(&[Flag::Seen], &[Flag::Deleted]));
+}
+
+#[test]
+fn store_flags_noop_skips_disk_write_and_modseq() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"one\r\n");
+	let mut snapshot =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("snapshot");
+
+	// A real change writes the sidecar and advances the mod-sequence.
+	snapshot.store_flags(1, vec![Flag::Seen]).expect("store");
+	let modseq_after_change = snapshot.by_sequence(1).expect("message").modseq;
+	let account_dir = dir.path().join("accounts").join("alice").join("new");
+	let id = snapshot.by_sequence(1).expect("message").id();
+	let sidecar = account_dir.join(format!("{id}.flags"));
+	let mtime_before = std::fs::metadata(&sidecar)
+		.expect("sidecar")
+		.modified()
+		.ok();
+
+	// Re-storing the same set (different order) is a no-op: no modseq bump and
+	// the sidecar is not rewritten.
+	let result = snapshot
+		.store_flags(1, vec![Flag::Seen])
+		.expect("noop store");
+	assert_eq!(result, &[Flag::Seen]);
+	assert_eq!(
+		snapshot.by_sequence(1).expect("message").modseq,
+		modseq_after_change
+	);
+	let mtime_after = std::fs::metadata(&sidecar)
+		.expect("sidecar")
+		.modified()
+		.ok();
+	assert_eq!(
+		mtime_before, mtime_after,
+		"no-op STORE must not rewrite the sidecar"
+	);
+
+	// A genuine change still advances the mod-sequence.
+	snapshot
+		.store_flags(1, vec![Flag::Seen, Flag::Flagged])
+		.expect("store");
+	assert!(snapshot.by_sequence(1).expect("message").modseq > modseq_after_change);
+}
