@@ -15,6 +15,9 @@
 //! - [`propfind`] — the `207 Multi-Status` XML body.
 //! - [`carddav`] — the CardDAV (RFC 6352) layer: addressbook collections,
 //!   the `REPORT` method, and the discovery props.
+//! - [`caldav`] — the CalDAV (RFC 4791) layer: calendar collections, the
+//!   calendar `REPORT`s, free-busy, and the scheduling Outbox (RFC 6638).
+//! - [`rrule`] — a self-contained iCalendar recurrence expander for free-busy.
 
 use std::path::PathBuf;
 
@@ -24,10 +27,12 @@ use axum::routing::any;
 use crate::directory_store::DirectoryHandle;
 
 pub mod auth;
+pub mod caldav;
 pub mod carddav;
 pub mod handler;
 pub mod path;
 pub mod propfind;
+pub mod rrule;
 
 /// Shared handler state: the directory (for authentication) and the data root
 /// under which each account's `dav` tree lives.

@@ -16,12 +16,13 @@ use axum::response::{IntoResponse, Response};
 
 use super::WebDavState;
 use super::auth::{self, REALM};
+use super::caldav;
 use super::carddav;
 use super::path;
 use super::propfind::{self, Entry};
 
 /// The `Allow` header listing every method this server implements.
-const ALLOW: &str = "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
+const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
 
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
 /// method into the account's confined tree. Unknown methods are `405`.
@@ -46,6 +47,7 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 		Method::OPTIONS => options(),
 		Method::GET => get(&target, true).await,
 		Method::HEAD => get(&target, false).await,
+		Method::POST => post(&root, &uri_path, request).await,
 		Method::PUT => put(&target, request).await,
 		Method::DELETE => delete(&target).await,
 		method => dispatch_extension(method.as_str(), &root, &target, &uri_path, request).await,
@@ -71,15 +73,48 @@ async fn dispatch_extension(
 	}
 }
 
-/// `REPORT` (CardDAV, RFC 6352): read the body and hand it to the CardDAV
-/// report dispatcher, which branches on the body's root element and enforces the
-/// same per-account confinement on every href it returns.
+/// `REPORT` (RFC 6352 / RFC 4791): read the body and hand it to the right
+/// report dispatcher. The choice is made by peeking the body's root element: a
+/// body naming a CalDAV report (`calendar-multiget`/`calendar-query`/
+/// `free-busy-query`) goes to the CalDAV handler, everything else to CardDAV.
+/// Both enforce the same per-account confinement on every href they return.
 async fn report(root: &Path, target: &Path, request: Request) -> Response {
 	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
 		Ok(bytes) => bytes,
 		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
 	};
-	carddav::report(root, target, &body).await
+	if caldav::is_caldav_report(&String::from_utf8_lossy(&body)) {
+		caldav::report(root, target, &body).await
+	} else {
+		carddav::report(root, target, &body).await
+	}
+}
+
+/// `POST` (RFC 6638 §6.1): a scheduling Outbox free-busy request. Only a POST to
+/// the account's conventional `outbox/` path is honoured — it returns the
+/// authenticated account's own free/busy, scanning every calendar under the
+/// account root (the same `root` that confines every other request). A POST
+/// anywhere else is `405`.
+async fn post(root: &Path, uri_path: &str, request: Request) -> Response {
+	let first = uri_path
+		.trim_start_matches('/')
+		.split('/')
+		.next()
+		.unwrap_or("");
+	let second = uri_path
+		.trim_start_matches('/')
+		.split('/')
+		.nth(1)
+		.unwrap_or("");
+	// The Outbox may be at `/<account>/outbox/` or, at the account root, `/outbox/`.
+	if first != caldav::OUTBOX && second != caldav::OUTBOX {
+		return method_not_allowed();
+	}
+	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+		Ok(bytes) => bytes,
+		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+	};
+	caldav::outbox_post(root, &body).await
 }
 
 /// `401` with the Basic challenge so clients prompt for credentials.
@@ -97,15 +132,16 @@ fn method_not_allowed() -> Response {
 }
 
 /// `OPTIONS`: advertise WebDAV class 1 and 3 plus the CardDAV `addressbook`
-/// compliance class (RFC 6352 §6.1) — the class a CardDAV client looks for to
-/// know the server speaks CardDAV — and the allowed methods. `addressbook` is
-/// advertised on every resource: it costs nothing and lets a client probe the
-/// root before it has found an addressbook collection.
+/// (RFC 6352 §6.1) and CalDAV `calendar-access` (RFC 4791 §5.1) compliance
+/// classes — the classes a CardDAV/CalDAV client looks for to know the server
+/// speaks each protocol — and the allowed methods. Both are advertised on every
+/// resource: it costs nothing and lets a client probe the root before it has
+/// found an addressbook or calendar collection.
 fn options() -> Response {
 	Response::builder()
 		.status(StatusCode::OK)
 		.header(header::ALLOW, ALLOW)
-		.header("DAV", "1, 3, addressbook")
+		.header("DAV", "1, 3, addressbook, calendar-access")
 		.body(Body::empty())
 		.expect("options response")
 }
@@ -137,10 +173,12 @@ async fn get(target: &Path, with_body: bool) -> Response {
 }
 
 /// The `Content-Type` for a resource by extension: `text/vcard` for a vCard
-/// (`.vcf`, what CardDAV stores), `application/octet-stream` otherwise.
+/// (`.vcf`, CardDAV), `text/calendar` for an iCalendar object (`.ics`, CalDAV),
+/// `application/octet-stream` otherwise.
 fn content_type(target: &Path) -> &'static str {
 	match target.extension().and_then(|ext| ext.to_str()) {
 		Some(ext) if ext.eq_ignore_ascii_case("vcf") => carddav::VCARD_TYPE,
+		Some(ext) if ext.eq_ignore_ascii_case("ics") => caldav::CALENDAR_TYPE,
 		_ => "application/octet-stream",
 	}
 }
@@ -207,9 +245,11 @@ async fn delete(target: &Path) -> Response {
 
 /// `MKCOL` (RFC 4918) and extended-MKCOL (RFC 5689): create a single
 /// collection. The parent must exist (else `409`) and the target must not (else
-/// `405`). When the request body requests the CardDAV `addressbook`
-/// resourcetype, the new collection is also flagged as an addressbook (a
-/// [`carddav::MARKER`] file is written into it). Success is `201`.
+/// `405`). When the request body requests the CardDAV `addressbook` or the
+/// CalDAV `calendar` resourcetype, the new collection is also flagged
+/// accordingly (a [`carddav::MARKER`]/[`caldav::MARKER`] file is written into
+/// it). `addressbook` takes precedence if a body somehow names both. Success is
+/// `201`.
 async fn mkcol(target: &Path, request: Request) -> Response {
 	if target.exists() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -224,11 +264,16 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 		Ok(bytes) => bytes,
 		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
 	};
-	let as_addressbook = String::from_utf8_lossy(&body).contains("addressbook");
+	let text = String::from_utf8_lossy(&body);
+	let as_addressbook = text.contains("addressbook");
+	let as_calendar = !as_addressbook && caldav::requests_calendar(&text);
 	if tokio::fs::create_dir(target).await.is_err() {
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
 	if as_addressbook && !carddav::mark_addressbook(target).await {
+		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+	}
+	if as_calendar && !caldav::mark_calendar(target).await {
 		return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 	}
 	StatusCode::CREATED.into_response()
@@ -273,8 +318,8 @@ async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
 		while let Ok(Some(child)) = dir.next_entry().await {
 			let name = child.file_name();
 			let name = name.to_string_lossy();
-			// Hide the addressbook marker from listings — it is an internal flag.
-			if name == carddav::MARKER {
+			// Hide the addressbook/calendar markers from listings — internal flags.
+			if name == carddav::MARKER || name == caldav::MARKER {
 				continue;
 			}
 			let Ok(child_meta) = child.metadata().await else {
@@ -319,9 +364,9 @@ fn account_home(uri_path: &str) -> String {
 }
 
 /// Build a PROPFIND [`Entry`] from filesystem metadata. A collection's href is
-/// given a trailing slash (RFC 4918); an addressbook collection is flagged so
-/// its resourcetype carries `<C:addressbook/>`; a vCard file carries its
-/// `text/vcard` content type and an ETag.
+/// given a trailing slash (RFC 4918); an addressbook/calendar collection is
+/// flagged so its resourcetype carries `<C:addressbook/>`/`<CAL:calendar/>`; a
+/// vCard or iCalendar file carries its content type and an ETag.
 fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: String) -> Entry {
 	let is_collection = metadata.is_dir();
 	let href = if is_collection && !href.ends_with('/') {
@@ -333,6 +378,7 @@ fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: Str
 		href,
 		is_collection,
 		is_addressbook: is_collection && carddav::is_addressbook(disk),
+		is_calendar: is_collection && caldav::is_calendar(disk),
 		length: metadata.len(),
 		modified: metadata.modified().ok(),
 		display_name: display,
