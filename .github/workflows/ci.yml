@@ -15,4 +15,4 @@ jobs:
       coverage-threshold: 90
       # The reputation and db modules are exercised by the Database workflow
       # (Postgres service), not the no-DB coverage job; exclude them here.
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/(transport|renew)|pop3/(backend|server)|managesieve/server)\\.rs"
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/(transport|renew)|pop3/(backend|server)|managesieve/server|directory_store/sql)\\.rs"

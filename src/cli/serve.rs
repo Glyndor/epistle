@@ -181,6 +181,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		None => None,
 	};
 
+	// Optional SQL directory backend: load accounts into the store and refresh.
+	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
+		.await?;
+
 	// The queue worker drains the outbound spool in the background.
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
 	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(

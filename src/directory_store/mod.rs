@@ -16,6 +16,9 @@ use crate::smtp::directory::Directory;
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
+pub mod sql;
+pub use sql::{SqlAccount, load_sql_accounts};
+
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
 pub struct DirectoryHandle {
@@ -122,6 +125,10 @@ pub struct AccountStore {
 	/// `app_passwords.toml` at open time.
 	app_passwords: Vec<(String, AppPassword)>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
+	/// Accounts loaded from the SQL directory backend, refreshed periodically.
+	/// Static config and dynamic accounts take precedence over these on a name
+	/// or address conflict.
+	sql_accounts: RwLock<Vec<SqlAccount>>,
 	handle: DirectoryHandle,
 }
 
@@ -155,6 +162,7 @@ impl AccountStore {
 			aliases: Vec::new(),
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
+			sql_accounts: RwLock::new(Vec::new()),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -173,6 +181,21 @@ impl AccountStore {
 		self.aliases = aliases;
 		self.handle.replace(self.build_directory());
 		self
+	}
+
+	/// Seed the SQL-sourced accounts at construction and rebuild the directory
+	/// (builder form, for startup wiring).
+	pub fn with_sql_accounts(self, accounts: Vec<SqlAccount>) -> Self {
+		self.set_sql_accounts(accounts);
+		self
+	}
+
+	/// Replace the SQL-sourced accounts and rebuild the directory. Called by the
+	/// background refresh task on an `Arc<AccountStore>`; static and dynamic
+	/// accounts keep precedence on conflict.
+	pub fn set_sql_accounts(&self, accounts: Vec<SqlAccount>) {
+		*self.sql_accounts.write().expect("store lock") = accounts;
+		self.handle.replace(self.build_directory());
 	}
 
 	/// The hot-reloadable handle shared with servers and delivery.
@@ -314,8 +337,11 @@ impl AccountStore {
 
 	fn build_directory(&self) -> Directory {
 		let dynamic = self.dynamic.read().expect("store lock");
-		let address_accounts = self
-			.static_accounts
+		let sql = self.sql_accounts.read().expect("store lock");
+		// SQL accounts are listed first so static config and dynamic accounts,
+		// chained after, take precedence on a name or address collision (the
+		// directory's maps keep the last writer).
+		let address_accounts = sql
 			.iter()
 			.flat_map(|account| {
 				account
@@ -323,6 +349,12 @@ impl AccountStore {
 					.iter()
 					.map(|address| (address.clone(), account.name.clone()))
 			})
+			.chain(self.static_accounts.iter().flat_map(|account| {
+				account
+					.addresses
+					.iter()
+					.map(|address| (address.clone(), account.name.clone()))
+			}))
 			.chain(dynamic.iter().flat_map(|account| {
 				account
 					.addresses
@@ -330,8 +362,7 @@ impl AccountStore {
 					.map(|address| (address.clone(), account.name.clone()))
 			}))
 			.collect::<Vec<_>>();
-		let hashes = self
-			.static_accounts
+		let hashes = sql
 			.iter()
 			.filter_map(|account| {
 				account
@@ -339,6 +370,12 @@ impl AccountStore {
 					.as_ref()
 					.map(|hash| (account.name.clone(), hash.clone()))
 			})
+			.chain(self.static_accounts.iter().filter_map(|account| {
+				account
+					.password_hash
+					.as_ref()
+					.map(|hash| (account.name.clone(), hash.clone()))
+			}))
 			.chain(
 				dynamic
 					.iter()

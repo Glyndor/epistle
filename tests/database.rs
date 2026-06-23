@@ -187,6 +187,71 @@ async fn bayes_corpus_trains_and_scores() {
 }
 
 #[tokio::test]
+async fn sql_directory_loads_resolves_and_authenticates() {
+	use epistle::directory_store::{AccountStore, load_sql_accounts};
+	use epistle::smtp::address::Address;
+	use epistle::smtp::directory::Resolution;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	// A unique account so reruns against a persistent database stay isolated.
+	let name = format!("dir-{}", uuid::Uuid::now_v7());
+	let address = format!("{name}@example.org");
+	let hash = epistle::smtp::auth::hash_password("s3cret").expect("hash");
+	sqlx::query("INSERT INTO directory_account (name, password_hash) VALUES ($1, $2)")
+		.bind(&name)
+		.bind(&hash)
+		.execute(&pool)
+		.await
+		.expect("insert account");
+	sqlx::query("INSERT INTO directory_address (address, account) VALUES ($1, $2)")
+		.bind(&address)
+		.bind(&name)
+		.execute(&pool)
+		.await
+		.expect("insert address");
+
+	// Load via the async loader and feed the rows into a freshly built store.
+	let accounts = load_sql_accounts(&pool).await.expect("load sql accounts");
+	assert!(
+		accounts.iter().any(|a| a.name == name),
+		"loaded set contains the new account"
+	);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = AccountStore::open(
+		dir.path(),
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.expect("open store")
+	.with_sql_accounts(accounts);
+	let directory = store.handle().current();
+
+	assert_eq!(
+		directory.resolve(&Address::parse(&address).expect("address")),
+		Resolution::Account(name.clone())
+	);
+	assert_eq!(
+		directory.authenticate(&address, "s3cret"),
+		Some(name.clone())
+	);
+	assert_eq!(directory.authenticate(&address, "wrong"), None);
+
+	sqlx::query("DELETE FROM directory_account WHERE name = $1")
+		.bind(&name)
+		.execute(&pool)
+		.await
+		.expect("cleanup");
+}
+
+#[tokio::test]
 async fn bayes_per_account_corpora_are_isolated() {
 	use epistle::antispam::corpus;
 
