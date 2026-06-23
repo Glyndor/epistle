@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO bayes_corpus (scope, ham_messages, spam_messages) VALUES ($1, $2, $3) ON CONFLICT (scope) DO UPDATE SET ham_messages = bayes_corpus.ham_messages + $2, spam_messages = bayes_corpus.spam_messages + $3, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93978c2ef515d1ca1e22e0b5ccf59b1f2f7086d9baa18b4a3622a4bca90ffb12"
+}

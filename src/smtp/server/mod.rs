@@ -169,7 +169,12 @@ impl Server {
 	fn train_corpus(&self, data: &[u8], spam: bool) {
 		if let Some(pool) = &self.reputation {
 			let text = String::from_utf8_lossy(data).into_owned();
-			crate::antispam::corpus::train_in_background(pool.clone(), text, spam);
+			crate::antispam::corpus::train_in_background(
+				pool.clone(),
+				crate::antispam::corpus::SHARED.to_string(),
+				text,
+				spam,
+			);
 		}
 	}
 

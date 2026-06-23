@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO bayes_token (id, scope, token, ham_count, spam_count) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (scope, token) DO UPDATE SET ham_count = bayes_token.ham_count + $4, spam_count = bayes_token.spam_count + $5, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fdb6a8b800682d1d11761149eaea6c69dd2eaffe20391419a6f5b854834f81b7"
+}
