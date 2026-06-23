@@ -20,6 +20,10 @@ pub struct Snapshot {
 	highest_modseq: u64,
 	/// At-rest crypto for decoding message bodies on read.
 	crypto: MessageCrypto,
+	/// Whether this snapshot came from the metadata index (fast path). Used by
+	/// tests to prove the index path is exercised and skips the sidecar reads.
+	#[cfg(test)]
+	loaded_from_index: bool,
 }
 
 /// One message in the snapshot.
@@ -39,6 +43,26 @@ impl MessageRef {
 	/// The message's stable UUID (its on-disk `<id>.eml` name).
 	pub fn id(&self) -> Uuid {
 		self.id
+	}
+
+	/// Build a [`MessageRef`] from index-decoded fields. Used by the metadata
+	/// index loader, which holds the same per-message data the FS scan gathers.
+	pub(super) fn from_index(
+		uid: u32,
+		id: Uuid,
+		size: u64,
+		flags: Vec<Flag>,
+		internal_date: std::time::SystemTime,
+		modseq: u64,
+	) -> MessageRef {
+		MessageRef {
+			uid,
+			id,
+			size,
+			flags,
+			internal_date,
+			modseq,
+		}
 	}
 }
 
@@ -204,6 +228,26 @@ impl Snapshot {
 	) -> std::io::Result<Snapshot> {
 		let account_dir = mailbox_dir(data_dir, account, mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
+		// Fast path: a fresh metadata index whose stamp matches the current
+		// mailbox generation lets us skip the per-message sidecar reads. Any
+		// doubt (missing, stale, corrupt, wrong version) falls through to the
+		// authoritative scan below — the filesystem is always the truth.
+		let generation = super::index::current_generation(&account_dir);
+		if let Some(messages) = super::index::load(&account_dir, generation) {
+			let uid_validity = super::uidvalidity::read_or_init(&account_dir);
+			let uid_next = super::uid::read_counter(&account_dir) + 1;
+			let highest_modseq = generation.0;
+			return Ok(Snapshot {
+				account_dir,
+				messages,
+				uid_validity,
+				uid_next,
+				highest_modseq,
+				crypto: crypto.clone(),
+				#[cfg(test)]
+				loaded_from_index: true,
+			});
+		}
 		let mut ids: Vec<Uuid> = Vec::new();
 		match std::fs::read_dir(&account_dir) {
 			Ok(entries) => {
@@ -259,6 +303,14 @@ impl Snapshot {
 			.max(messages.iter().map(|m| m.modseq).max().unwrap_or(1))
 			.max(1);
 		let uid_validity = super::uidvalidity::read_or_init(&account_dir);
+		// Persist a fresh index stamped with the generation we just observed, so
+		// the next open can take the fast path. A failed index write must not
+		// fail the open — the snapshot already succeeded from the scan, which is
+		// canonical — so any error is intentionally dropped.
+		// Reuse the generation observed before the scan: the scan only reads the
+		// filesystem and assigns UIDs (it never adds/removes an `.eml` file nor
+		// bumps the mailbox mod-sequence counter), so the stamp is unchanged.
+		let _ = super::index::write(&account_dir, generation, &messages);
 		Ok(Snapshot {
 			account_dir,
 			messages,
@@ -266,7 +318,16 @@ impl Snapshot {
 			uid_next: uid_counter + 1,
 			highest_modseq,
 			crypto: crypto.clone(),
+			#[cfg(test)]
+			loaded_from_index: false,
 		})
+	}
+
+	/// Whether this snapshot was built from the metadata index (fast path)
+	/// rather than the full filesystem scan. Test-only correctness signal.
+	#[cfg(test)]
+	pub(super) fn loaded_from_index(&self) -> bool {
+		self.loaded_from_index
 	}
 
 	/// The mailbox's highest mod-sequence (CONDSTORE).
