@@ -205,6 +205,52 @@ impl<T: AcmeTransport> AcmeClient<T> {
 		Ok((chain, csr.key_pem))
 	}
 
+	/// Issue a certificate for `domains` end to end via DNS-01: order, publish
+	/// each `_acme-challenge` TXT record through `provider`, validate, finalize,
+	/// and download the chain. The challenge records are removed afterward.
+	pub async fn obtain_certificate_dns01(
+		&self,
+		domains: &[String],
+		provider: &dyn crate::dns::provider::DnsProvider,
+		poll: u32,
+	) -> Result<(String, String), AcmeError> {
+		use crate::dns::provider::{DnsRecord, RecordKind};
+		let (order, order_url) = self.new_order(domains).await?;
+		let mut published: Vec<(String, DnsRecord)> = Vec::new();
+
+		for authz_url in &order.authorizations {
+			let authz = self.authorization(authz_url).await?;
+			let challenge = authz
+				.challenge("dns-01")
+				.ok_or_else(|| AcmeError::Protocol("no dns-01 challenge".into()))?;
+			let domain = authz.identifier.value.clone();
+			let record = DnsRecord {
+				name: format!("_acme-challenge.{domain}"),
+				kind: RecordKind::Txt,
+				value: self.key.dns01_value(&challenge.token),
+				ttl: 60,
+			};
+			provider
+				.upsert(&domain, record.clone())
+				.await
+				.map_err(|e| AcmeError::Protocol(e.to_string()))?;
+			published.push((domain, record));
+			self.respond_challenge(&challenge.url).await?;
+			self.poll_authorization(authz_url, poll).await?;
+		}
+
+		let csr = super::csr::generate(domains).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		let finalized = self.finalize(&order.finalize, &csr.der_b64url).await?;
+		let certificate_url = self.poll_order(&order_url, &finalized, poll).await?;
+		let chain = self.download_certificate(&certificate_url).await?;
+
+		for (zone, record) in published {
+			let _ = provider.delete(&zone, record).await;
+		}
+		let chain = String::from_utf8(chain).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		Ok((chain, csr.key_pem))
+	}
+
 	/// Re-check an authorization until it is `valid` (or bail on `invalid`).
 	async fn poll_authorization(&self, url: &str, max: u32) -> Result<(), AcmeError> {
 		for _ in 0..max.max(1) {
