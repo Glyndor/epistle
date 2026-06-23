@@ -13,6 +13,7 @@ mod serve_tasks;
 mod srv;
 mod suppression;
 mod verify;
+mod verify_dns;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -75,6 +76,13 @@ enum Command {
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Check published DNS records against what epistle expects and report
+	/// drift (read-only; queries DNS, changes nothing).
+	VerifyDns {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
@@ -212,6 +220,13 @@ impl Cli {
 			},
 			Command::Verify { config } => match Config::load(&config) {
 				Ok(config) => verify::run(&config.data_dir, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::VerifyDns { config } => match Config::load(&config) {
+				Ok(config) => verify_dns::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
