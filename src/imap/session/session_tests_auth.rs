@@ -181,3 +181,37 @@ fn authenticate_scram_rejects_downgrade_when_bound() {
 	)));
 	assert!(response.contains("a1 NO"), "{response}");
 }
+
+#[test]
+fn authenticate_external_with_client_cert() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut session = unauth(tmp.path());
+	// The TLS layer recorded a verified certificate identity.
+	session.set_client_identity(Some("alice@example.org".to_string()));
+	let caps = text(&session.command_line("a CAPABILITY"));
+	assert!(caps.contains("AUTH=EXTERNAL"), "{caps}");
+	// Empty initial response (`=`) means "use the certificate identity".
+	let out = text(&session.command_line("b AUTHENTICATE EXTERNAL ="));
+	assert!(out.contains("b OK"), "{out}");
+}
+
+#[test]
+fn authenticate_external_unavailable_without_client_cert() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut session = unauth(tmp.path());
+	let caps = text(&session.command_line("a CAPABILITY"));
+	assert!(!caps.contains("AUTH=EXTERNAL"), "{caps}");
+	let out = text(&session.command_line("b AUTHENTICATE EXTERNAL ="));
+	assert!(out.contains("b NO"), "{out}");
+}
+
+#[test]
+fn authenticate_external_rejects_mismatched_authzid() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut session = unauth(tmp.path());
+	session.set_client_identity(Some("alice@example.org".to_string()));
+	// Requesting to act as another user fails.
+	let authzid = B64.encode("bob@example.org");
+	let out = text(&session.command_line(&format!("b AUTHENTICATE EXTERNAL {authzid}")));
+	assert!(out.contains("b NO"), "{out}");
+}

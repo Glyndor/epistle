@@ -12,6 +12,12 @@ pub struct Tls {
 	pub cert_file: PathBuf,
 	/// Private key for the leaf certificate (PEM, PKCS#8 or RSA/EC).
 	pub key_file: PathBuf,
+	/// Trust anchor (PEM) for verifying TLS client certificates. When set,
+	/// clients may authenticate with a certificate (SASL EXTERNAL); the
+	/// account is taken from the certificate's verified email (SAN). Absent
+	/// disables client-certificate authentication.
+	#[serde(default)]
+	pub client_ca: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -29,6 +35,23 @@ key_file = "/etc/mail/key.pem"
 		.expect("parse tls");
 		assert_eq!(tls.cert_file, PathBuf::from("/etc/mail/cert.pem"));
 		assert_eq!(tls.key_file, PathBuf::from("/etc/mail/key.pem"));
+		assert_eq!(tls.client_ca, None);
+	}
+
+	#[test]
+	fn parses_client_ca() {
+		let tls: Tls = toml::from_str(
+			r#"
+cert_file = "/c.pem"
+key_file = "/k.pem"
+client_ca = "/etc/mail/client-ca.pem"
+"#,
+		)
+		.expect("parse tls");
+		assert_eq!(
+			tls.client_ca,
+			Some(PathBuf::from("/etc/mail/client-ca.pem"))
+		);
 	}
 
 	#[test]

@@ -41,16 +41,69 @@ pub enum TlsError {
 	Invalid(String),
 }
 
-/// Build a TLS acceptor from the configured PEM files.
+/// Build a TLS acceptor from the configured PEM files. With `client_ca` set the
+/// acceptor requests and verifies client certificates (for SASL EXTERNAL),
+/// still allowing clients that present none (they fall back to password auth).
 pub fn acceptor(config: &Tls) -> Result<TlsAcceptor, TlsError> {
 	ensure_crypto_provider();
 	let certs = load_certs(&config.cert_file)?;
 	let key = load_key(&config.key_file)?;
-	let server_config = ServerConfig::builder()
-		.with_no_client_auth()
-		.with_single_cert(certs, key)
-		.map_err(|error| TlsError::Invalid(error.to_string()))?;
+	let server_config = server_config(certs, key, config.client_ca.as_deref())?;
 	Ok(TlsAcceptor::from(Arc::new(server_config)))
+}
+
+/// Assemble a `ServerConfig`, enabling client-certificate verification against
+/// `client_ca` when one is configured.
+fn server_config(
+	certs: Vec<CertificateDer<'static>>,
+	key: PrivateKeyDer<'static>,
+	client_ca: Option<&Path>,
+) -> Result<ServerConfig, TlsError> {
+	let builder = ServerConfig::builder();
+	let with_auth = match client_ca {
+		Some(ca) => builder.with_client_cert_verifier(client_verifier(ca)?),
+		None => builder.with_no_client_auth(),
+	};
+	with_auth
+		.with_single_cert(certs, key)
+		.map_err(|error| TlsError::Invalid(error.to_string()))
+}
+
+/// A client-certificate verifier trusting `ca_file`. Unauthenticated clients
+/// are still allowed (no certificate), so password auth keeps working; a client
+/// that *does* present a certificate must chain to the configured trust anchor.
+fn client_verifier(
+	ca_file: &Path,
+) -> Result<Arc<dyn tokio_rustls::rustls::server::danger::ClientCertVerifier>, TlsError> {
+	use tokio_rustls::rustls::RootCertStore;
+	use tokio_rustls::rustls::server::WebPkiClientVerifier;
+
+	let mut roots = RootCertStore::empty();
+	for cert in load_certs(ca_file)? {
+		roots
+			.add(cert)
+			.map_err(|error| TlsError::Invalid(error.to_string()))?;
+	}
+	WebPkiClientVerifier::builder(Arc::new(roots))
+		.allow_unauthenticated()
+		.build()
+		.map_err(|error| TlsError::Invalid(error.to_string()))
+}
+
+/// The authenticated identity in a verified client certificate: its first
+/// `rfc822Name` (email) Subject Alternative Name. Returns `None` when the
+/// certificate cannot be parsed or carries no email SAN. The certificate has
+/// already been verified against the trust anchor by rustls before this runs.
+pub fn identity_from_cert(der: &[u8]) -> Option<String> {
+	use x509_parser::extensions::GeneralName;
+	use x509_parser::prelude::FromDer;
+
+	let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der).ok()?;
+	let san = cert.subject_alternative_name().ok()??;
+	san.value.general_names.iter().find_map(|name| match name {
+		GeneralName::RFC822Name(email) => Some((*email).to_string()),
+		_ => None,
+	})
 }
 
 /// The `tls-server-end-point` channel binding (RFC 5929) for
@@ -187,6 +240,33 @@ mod tests {
 	#[test]
 	fn acceptor_from_pem_rejects_missing_material() {
 		assert!(acceptor_from_pem(b"", b"").is_err());
+	}
+
+	#[test]
+	fn identity_from_cert_reads_email_san() {
+		let mut params = rcgen::CertificateParams::new(vec![]).expect("params");
+		params.subject_alt_names.push(rcgen::SanType::Rfc822Name(
+			"alice@example.org".try_into().expect("ia5"),
+		));
+		let key = rcgen::KeyPair::generate().expect("key");
+		let cert = params.self_signed(&key).expect("self-signed");
+		assert_eq!(
+			identity_from_cert(cert.der().as_ref()),
+			Some("alice@example.org".to_string())
+		);
+	}
+
+	#[test]
+	fn identity_from_cert_none_without_email_san() {
+		// A DNS-only certificate carries no rfc822Name SAN.
+		let certified =
+			rcgen::generate_simple_self_signed(vec!["mail.example.org".to_string()]).expect("cert");
+		assert_eq!(identity_from_cert(certified.cert.der().as_ref()), None);
+	}
+
+	#[test]
+	fn identity_from_cert_rejects_garbage() {
+		assert_eq!(identity_from_cert(b"not a certificate"), None);
 	}
 
 	/// Write a self-signed certificate + key pair into `dir`.

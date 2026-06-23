@@ -272,7 +272,15 @@ impl Server {
 		match (self.tls_mode, &self.tls) {
 			(TlsMode::Implicit, Some(acceptor)) => {
 				let tls_stream = acceptor.current().accept(stream).await?;
-				let session = self.new_session().with_tls_active();
+				// A verified client certificate enables SASL EXTERNAL.
+				let identity = tls_stream
+					.get_ref()
+					.1
+					.peer_certificates()
+					.and_then(|certs| certs.first())
+					.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+				let mut session = self.new_session().with_tls_active();
+				session.set_client_identity(identity);
 				self.run(Box::new(tls_stream), session, peer).await
 			}
 			(TlsMode::Implicit, None) => Err(std::io::Error::other(

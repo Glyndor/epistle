@@ -9,6 +9,9 @@
 /// A SASL authentication mechanism supported by the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mechanism {
+	/// TLS client-certificate authentication (RFC 4422 EXTERNAL): the identity
+	/// comes from the verified certificate, not a password.
+	External,
 	/// SCRAM-SHA-256 with channel binding (RFC 5802 + RFC 9266).
 	ScramSha256Plus,
 	/// SCRAM-SHA-256 without channel binding (RFC 5802).
@@ -27,6 +30,7 @@ impl Mechanism {
 	/// The mechanism's SASL name as it appears on the wire.
 	pub fn name(self) -> &'static str {
 		match self {
+			Mechanism::External => "EXTERNAL",
 			Mechanism::ScramSha256Plus => "SCRAM-SHA-256-PLUS",
 			Mechanism::ScramSha256 => "SCRAM-SHA-256",
 			Mechanism::Plain => "PLAIN",
@@ -40,6 +44,7 @@ impl Mechanism {
 	pub fn parse(name: &str) -> Option<Mechanism> {
 		let upper = name.to_ascii_uppercase();
 		[
+			Mechanism::External,
 			Mechanism::ScramSha256Plus,
 			Mechanism::ScramSha256,
 			Mechanism::Plain,
@@ -52,12 +57,15 @@ impl Mechanism {
 	}
 }
 
-/// The mechanisms the server offers, strongest first, given whether channel
-/// binding is available (a bound certificate hash) and whether an OAuth verifier
-/// is configured. Failing closed: a mechanism whose precondition is unmet is
-/// never advertised, so `-PLUS` and the OAuth mechanisms appear only when usable.
-pub fn available(channel_binding: bool, oauth: bool) -> Vec<Mechanism> {
-	let mut mechanisms = Vec::with_capacity(6);
+/// The mechanisms the server offers, strongest first, given whether a verified
+/// client certificate is present (EXTERNAL), channel binding is available (a
+/// bound certificate hash, for `-PLUS`), and an OAuth verifier is configured.
+/// Failing closed: a mechanism whose precondition is unmet is never advertised.
+pub fn available(external: bool, channel_binding: bool, oauth: bool) -> Vec<Mechanism> {
+	let mut mechanisms = Vec::with_capacity(7);
+	if external {
+		mechanisms.push(Mechanism::External);
+	}
 	if channel_binding {
 		mechanisms.push(Mechanism::ScramSha256Plus);
 	}
@@ -71,8 +79,13 @@ pub fn available(channel_binding: bool, oauth: bool) -> Vec<Mechanism> {
 /// `true` when the mechanism is currently offered (advertised) under the given
 /// preconditions. The dispatch uses this to reject a mechanism a client tries
 /// without it having been advertised (e.g. `-PLUS` with no channel binding).
-pub fn is_available(mechanism: Mechanism, channel_binding: bool, oauth: bool) -> bool {
-	available(channel_binding, oauth).contains(&mechanism)
+pub fn is_available(
+	mechanism: Mechanism,
+	external: bool,
+	channel_binding: bool,
+	oauth: bool,
+) -> bool {
+	available(external, channel_binding, oauth).contains(&mechanism)
 }
 
 #[cfg(test)]
@@ -97,33 +110,49 @@ mod tests {
 
 	#[test]
 	fn name_round_trips_through_parse() {
-		for mechanism in available(true, true) {
+		for mechanism in available(true, true, true) {
 			assert_eq!(Mechanism::parse(mechanism.name()), Some(mechanism));
 		}
 	}
 
 	#[test]
 	fn channel_binding_gates_plus() {
-		assert!(available(false, false).contains(&Mechanism::ScramSha256));
-		assert!(!available(false, false).contains(&Mechanism::ScramSha256Plus));
-		assert!(available(true, false).contains(&Mechanism::ScramSha256Plus));
-		// -PLUS is offered strongest-first.
-		assert_eq!(available(true, false)[0], Mechanism::ScramSha256Plus);
+		assert!(available(false, false, false).contains(&Mechanism::ScramSha256));
+		assert!(!available(false, false, false).contains(&Mechanism::ScramSha256Plus));
+		assert!(available(false, true, false).contains(&Mechanism::ScramSha256Plus));
+		// -PLUS is offered strongest-first (no EXTERNAL present).
+		assert_eq!(available(false, true, false)[0], Mechanism::ScramSha256Plus);
+	}
+
+	#[test]
+	fn external_gates_on_client_certificate() {
+		assert!(!available(false, false, false).contains(&Mechanism::External));
+		assert!(available(true, false, false).contains(&Mechanism::External));
+		// EXTERNAL is the strongest, offered first.
+		assert_eq!(available(true, true, false)[0], Mechanism::External);
+		assert_eq!(Mechanism::parse("external"), Some(Mechanism::External));
 	}
 
 	#[test]
 	fn oauth_gates_bearer_mechanisms() {
-		assert!(!available(false, false).contains(&Mechanism::OauthBearer));
-		assert!(available(false, true).contains(&Mechanism::OauthBearer));
-		assert!(available(false, true).contains(&Mechanism::Xoauth2));
+		assert!(!available(false, false, false).contains(&Mechanism::OauthBearer));
+		assert!(available(false, false, true).contains(&Mechanism::OauthBearer));
+		assert!(available(false, false, true).contains(&Mechanism::Xoauth2));
 	}
 
 	#[test]
 	fn is_available_matches_advertised() {
-		assert!(is_available(Mechanism::Plain, false, false));
-		assert!(!is_available(Mechanism::ScramSha256Plus, false, false));
-		assert!(is_available(Mechanism::ScramSha256Plus, true, false));
-		assert!(!is_available(Mechanism::OauthBearer, false, false));
-		assert!(is_available(Mechanism::OauthBearer, false, true));
+		assert!(is_available(Mechanism::Plain, false, false, false));
+		assert!(!is_available(Mechanism::External, false, false, false));
+		assert!(is_available(Mechanism::External, true, false, false));
+		assert!(!is_available(
+			Mechanism::ScramSha256Plus,
+			false,
+			false,
+			false
+		));
+		assert!(is_available(Mechanism::ScramSha256Plus, false, true, false));
+		assert!(!is_available(Mechanism::OauthBearer, false, false, false));
+		assert!(is_available(Mechanism::OauthBearer, false, false, true));
 	}
 }

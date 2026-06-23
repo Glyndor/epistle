@@ -90,6 +90,7 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 |---|---|
 | `cert_file` | PEM certificate chain. |
 | `key_file` | PEM private key. |
+| `client_ca` | PEM trust anchor for verifying TLS **client** certificates. When set, a client may authenticate with a certificate via SASL `EXTERNAL` (the account comes from the certificate's verified email SAN); clients without one fall back to password auth. Absent disables client-certificate auth. Requires a static certificate (not available under ACME, like SCRAM-SHA-256-PLUS). |
 
 ### `[dkim]`
 Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for receivers that lack Ed25519 support.
