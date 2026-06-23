@@ -29,6 +29,7 @@ pub mod pop3;
 pub mod privdrop;
 pub mod queue;
 pub mod rules;
+pub mod sasl;
 pub mod sieve;
 pub mod smtp;
 pub mod spf;

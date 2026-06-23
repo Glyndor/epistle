@@ -50,14 +50,12 @@ impl Session {
 
 	/// The advertised SASL mechanisms, including OAuth when configured.
 	pub(super) fn sasl_capability(&self) -> String {
+		// Shared mechanism set: -PLUS only with a bound certificate hash, the
+		// OAuth mechanisms only with a configured verifier.
 		let mut caps = String::new();
-		// Channel binding (-PLUS) is offered only with a certificate hash to bind.
-		if self.cbind_data.is_some() {
-			caps.push_str(" AUTH=SCRAM-SHA-256-PLUS");
-		}
-		caps.push_str(" AUTH=PLAIN AUTH=LOGIN AUTH=SCRAM-SHA-256");
-		if self.oauth.is_some() {
-			caps.push_str(" AUTH=OAUTHBEARER AUTH=XOAUTH2");
+		for mechanism in crate::sasl::available(self.cbind_data.is_some(), self.oauth.is_some()) {
+			caps.push_str(" AUTH=");
+			caps.push_str(mechanism.name());
 		}
 		caps.push_str(" SASL-IR");
 		caps
@@ -122,8 +120,18 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		if !matches!(self.state, State::NotAuthenticated { .. }) {
 			return Output::text(format!("{tag} BAD already authenticated\r\n"));
 		}
-		match mechanism {
-			"PLAIN" => match initial {
+		// Only negotiate a mechanism that is currently advertised (channel
+		// binding present for -PLUS, a verifier present for the OAuth ones).
+		let unsupported = || Output::text(format!("{tag} NO unsupported SASL mechanism\r\n"));
+		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
+			return unsupported();
+		};
+		if !crate::sasl::is_available(parsed, self.cbind_data.is_some(), self.oauth.is_some()) {
+			return unsupported();
+		}
+		use crate::sasl::Mechanism;
+		match parsed {
+			Mechanism::Plain => match initial {
 				Some(response) => self.auth_plain(tag, &response),
 				None => {
 					self.pending_auth = Some(PendingAuth::Plain {
@@ -132,11 +140,9 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 					continuation("")
 				}
 			},
-			"SCRAM-SHA-256" => self.scram_begin(tag, initial, false),
-			"SCRAM-SHA-256-PLUS" if self.cbind_data.is_some() => {
-				self.scram_begin(tag, initial, true)
-			}
-			"LOGIN" => match initial {
+			Mechanism::ScramSha256 => self.scram_begin(tag, initial, false),
+			Mechanism::ScramSha256Plus => self.scram_begin(tag, initial, true),
+			Mechanism::Login => match initial {
 				// SASL-IR initial response is the username.
 				Some(user) => self.login_user(tag, &user),
 				None => {
@@ -146,8 +152,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 					continuation("VXNlcm5hbWU6")
 				}
 			},
-			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(tag, initial),
-			_ => Output::text(format!("{tag} NO unsupported SASL mechanism\r\n")),
+			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_bearer(tag, initial),
 		}
 	}
 
