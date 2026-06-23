@@ -208,15 +208,25 @@ impl Session {
 		if self.state != State::Greeted {
 			return Action::Continue(Reply::bad_sequence());
 		}
-		match mechanism {
-			"PLAIN" => match initial {
+		// Only negotiate a mechanism that is currently advertised (channel
+		// binding present for -PLUS, a verifier present for the OAuth ones).
+		let unsupported = || Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
+		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
+			return unsupported();
+		};
+		if !crate::sasl::is_available(parsed, self.cbind_data.is_some(), self.oauth.is_some()) {
+			return unsupported();
+		}
+		use crate::sasl::Mechanism;
+		match parsed {
+			Mechanism::Plain => match initial {
 				Some(response) => self.verify_plain(&response),
 				None => Action::CollectAuthResponse(Reply::single(334, "")),
 			},
-			"SCRAM-SHA-256" => self.scram_begin(initial, false),
-			"SCRAM-SHA-256-PLUS" if self.cbind_data.is_some() => self.scram_begin(initial, true),
-			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(mechanism, initial),
-			"LOGIN" => match initial {
+			Mechanism::ScramSha256 => self.scram_begin(initial, false),
+			Mechanism::ScramSha256Plus => self.scram_begin(initial, true),
+			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_bearer(mechanism, initial),
+			Mechanism::Login => match initial {
 				// Initial response is the username; prompt for the password.
 				Some(user) => self.login_username(&user),
 				None => {
@@ -224,7 +234,6 @@ impl Session {
 					Action::CollectAuthResponse(Reply::single(334, "VXNlcm5hbWU6"))
 				}
 			},
-			_ => Action::Continue(Reply::single(504, "5.5.4 mechanism not supported")),
 		}
 	}
 
