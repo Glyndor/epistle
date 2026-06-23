@@ -51,6 +51,8 @@ pub fn scram_directory() -> Arc<Directory> {
 	)
 }
 
+#[path = "session_tests_acl.rs"]
+mod acl;
 #[path = "session_tests_auth.rs"]
 mod auth;
 #[path = "session_tests_basic.rs"]

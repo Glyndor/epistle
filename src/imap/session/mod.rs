@@ -8,6 +8,7 @@ use crate::smtp::directory::Directory;
 use super::command::{Command, FetchItem, ParseError, SearchKey, StatusItem, StoreMode, Tagged};
 use super::mailbox::{self, Flag, Snapshot};
 
+mod acl;
 mod auth;
 mod codes;
 mod commands;
@@ -291,6 +292,21 @@ impl Session {
 				mailbox::unsubscribe(data_dir, account, &mailbox)
 			}),
 			Command::Lsub { pattern, .. } => self.lsub(&tag, &pattern),
+			Command::GetAcl { mailbox } => self.get_acl(&tag, &mailbox),
+			Command::MyRights { mailbox } => self.my_rights(&tag, &mailbox),
+			Command::ListRights {
+				mailbox,
+				identifier,
+			} => self.list_rights(&tag, &mailbox, &identifier),
+			Command::SetAcl {
+				mailbox,
+				identifier,
+				rights,
+			} => self.set_acl(&tag, &mailbox, &identifier, &rights),
+			Command::DeleteAcl {
+				mailbox,
+				identifier,
+			} => self.delete_acl(&tag, &mailbox, &identifier),
 		}
 	}
 

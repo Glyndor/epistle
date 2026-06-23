@@ -104,6 +104,9 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"SORT" => super::search::parse_sort(&tag, args, false)?,
 		"THREAD" => super::search::parse_thread(&tag, args, false)?,
 		"STATUS" => parse_status(&tag, args)?,
+		"GETACL" | "SETACL" | "DELETEACL" | "LISTRIGHTS" | "MYRIGHTS" => {
+			super::acl::parse(verb.to_ascii_uppercase().as_str(), &tag, args)?
+		}
 		"SUBSCRIBE" => Command::Subscribe {
 			mailbox: parse_mailbox(&tag, args)?,
 		},
