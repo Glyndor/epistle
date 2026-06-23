@@ -12,8 +12,8 @@ data_dir = "/var/lib/mail"
 domains = ["example.org"]
 
 [privileges]
-user = "glyndor-mail"
-group = "glyndor-mail"
+user = "glyndor-epistle"
+group = "glyndor-epistle"
 "#,
 	);
 	assert!(result.is_ok());
@@ -43,7 +43,7 @@ data_dir = "/var/lib/mail"
 domains = ["example.org"]
 
 [privileges]
-user = "glyndor-mail"
+user = "glyndor-epistle"
 group = ""
 "#,
 	);

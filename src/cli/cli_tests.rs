@@ -11,26 +11,26 @@ fn cli_definition_is_consistent() {
 
 #[test]
 fn parses_serve_command() {
-	let cli =
-		Cli::try_parse_from(["mail", "serve", "--config", "/etc/mail.toml"]).expect("serve parses");
+	let cli = Cli::try_parse_from(["epistle", "serve", "--config", "/etc/mail.toml"])
+		.expect("serve parses");
 	assert!(matches!(cli.command, Command::Serve { .. }));
 }
 
 #[test]
 fn parses_config_check_command() {
-	let cli = Cli::try_parse_from(["mail", "config-check", "--config", "/etc/mail.toml"])
+	let cli = Cli::try_parse_from(["epistle", "config-check", "--config", "/etc/mail.toml"])
 		.expect("config-check parses");
 	assert!(matches!(cli.command, Command::ConfigCheck { .. }));
 }
 
 #[test]
 fn rejects_missing_config_argument() {
-	assert!(Cli::try_parse_from(["mail", "serve"]).is_err());
+	assert!(Cli::try_parse_from(["epistle", "serve"]).is_err());
 }
 
 #[test]
 fn rejects_unknown_subcommand() {
-	assert!(Cli::try_parse_from(["mail", "destroy"]).is_err());
+	assert!(Cli::try_parse_from(["epistle", "destroy"]).is_err());
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn config_check_accepts_valid_file() {
 	file.write_all(b"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n")
 		.expect("write");
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"config-check",
 		"--config",
 		file.path().to_str().expect("utf-8 path"),
@@ -54,7 +54,7 @@ fn config_check_rejects_invalid_file() {
 	file.write_all(b"hostname = \"localhost\"\ndata_dir = \"/var/lib/mail\"\n")
 		.expect("write");
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"config-check",
 		"--config",
 		file.path().to_str().expect("utf-8 path"),
@@ -68,7 +68,7 @@ fn dkim_keygen_writes_key_and_refuses_overwrite() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let out = dir.path().join("dkim.pem");
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"dkim-keygen",
 		"--out",
 		out.to_str().expect("utf-8 path"),
@@ -79,7 +79,7 @@ fn dkim_keygen_writes_key_and_refuses_overwrite() {
 	assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----"));
 
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"dkim-keygen",
 		"--out",
 		out.to_str().expect("utf-8 path"),
@@ -95,7 +95,7 @@ fn dkim_keygen_sets_owner_only_permissions() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let out = dir.path().join("dkim.pem");
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"dkim-keygen",
 		"--out",
 		out.to_str().expect("utf-8 path"),
@@ -111,7 +111,7 @@ fn dkim_keygen_sets_owner_only_permissions() {
 
 #[test]
 fn serve_fails_on_missing_config() {
-	let cli = Cli::try_parse_from(["mail", "serve", "--config", "/nonexistent/mail.toml"])
+	let cli = Cli::try_parse_from(["epistle", "serve", "--config", "/nonexistent/mail.toml"])
 		.expect("parses");
 	assert_eq!(cli.run(), ExitCode::FAILURE);
 }
@@ -119,7 +119,7 @@ fn serve_fails_on_missing_config() {
 #[test]
 fn parses_export_command() {
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"export",
 		"--config",
 		"/etc/mail.toml",
@@ -184,7 +184,7 @@ fn export_run_streams_account_mailboxes() {
 
 #[test]
 fn parses_accounts_command() {
-	let cli = Cli::try_parse_from(["mail", "accounts", "--config", "/etc/mail.toml"])
+	let cli = Cli::try_parse_from(["epistle", "accounts", "--config", "/etc/mail.toml"])
 		.expect("accounts parses");
 	assert!(matches!(cli.command, Command::Accounts { .. }));
 }
@@ -223,7 +223,7 @@ fn accounts_list_prints_configured_accounts() {
 #[test]
 fn parses_account_add_command() {
 	let cli = Cli::try_parse_from([
-		"mail",
+		"epistle",
 		"account-add",
 		"--config",
 		"/etc/mail.toml",
@@ -305,8 +305,8 @@ fn account_add_creates_and_validates() {
 
 #[test]
 fn parses_queue_command() {
-	let cli =
-		Cli::try_parse_from(["mail", "queue", "--config", "/etc/mail.toml"]).expect("queue parses");
+	let cli = Cli::try_parse_from(["epistle", "queue", "--config", "/etc/mail.toml"])
+		.expect("queue parses");
 	assert!(matches!(cli.command, Command::Queue { .. }));
 }
 
@@ -381,7 +381,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 
 #[test]
 fn parses_token_hash_command() {
-	let cli = Cli::try_parse_from(["mail", "token-hash"]).expect("token-hash parses");
+	let cli = Cli::try_parse_from(["epistle", "token-hash"]).expect("token-hash parses");
 	assert!(matches!(cli.command, Command::TokenHash));
 }
 

@@ -1,11 +1,11 @@
 #!/bin/sh
-# Install the latest mail release binary.
+# Install the latest epistle release binary.
 #
 # Usage: ./install.sh [version]
 #   version: tag like v0.1.0; defaults to the latest release.
 set -eu
 
-REPO="Glyndor/mail"
+REPO="Glyndor/epistle"
 ARCH="x86_64-linux"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
@@ -20,7 +20,7 @@ if [ -z "$version" ]; then
 fi
 
 base="https://github.com/${REPO}/releases/download/${version}"
-binary="mail-${version}-${ARCH}"
+binary="epistle-${version}-${ARCH}"
 
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
@@ -32,7 +32,7 @@ curl -fsSL -o "${workdir}/SHA256SUMS" "${base}/SHA256SUMS"
 echo "Verifying checksum ..."
 (cd "$workdir" && grep " ${binary}\$" SHA256SUMS | sha256sum -c -)
 
-echo "Installing to ${INSTALL_DIR}/mail ..."
-install -m 0755 "${workdir}/${binary}" "${INSTALL_DIR}/mail"
+echo "Installing to ${INSTALL_DIR}/epistle ..."
+install -m 0755 "${workdir}/${binary}" "${INSTALL_DIR}/epistle"
 
-echo "Installed: $("${INSTALL_DIR}/mail" --version)"
+echo "Installed: $("${INSTALL_DIR}/epistle" --version)"

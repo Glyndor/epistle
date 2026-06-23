@@ -7,10 +7,10 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use mail::imap::command::parse as imap_parse;
-use mail::smtp::address::Address;
-use mail::smtp::command::parse as smtp_parse;
-use mail::smtp::line::LineDecoder;
+use epistle::imap::command::parse as imap_parse;
+use epistle::smtp::address::Address;
+use epistle::smtp::command::parse as smtp_parse;
+use epistle::smtp::line::LineDecoder;
 
 fn smtp_command(c: &mut Criterion) {
 	c.bench_function("smtp_parse_mail_from", |b| {

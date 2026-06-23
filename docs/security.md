@@ -60,7 +60,7 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
 - The outbound queue gives up by **message age** (5 days), not a low attempt
   count, so transient outages don't lose mail; a delay-warning DSN is sent once.
 - **ARF** abuse reports can be generated for offending messages
-  (`mail report-abuse`).
+  (`epistle report-abuse`).
 
 ## Data at rest
 
