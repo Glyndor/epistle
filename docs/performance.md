@@ -132,3 +132,67 @@ SQLX_OFFLINE=true cargo flamegraph --bench queue -- --bench store_flags
 The resulting SVG is interactive: wide frames are where time is spent, so a
 storage path dominated by `fsync` shows a wide syscall frame — exactly the cost
 the no-op STORE skip removes.
+
+## Profiling pass
+
+The criterion benches above time individual functions in isolation. They do not
+show where the wall-clock of a *realistic* message lifecycle goes — a message is
+received and parsed, delivered to disk, then read back over IMAP. To profile
+that end-to-end shape there is a macro workload at `examples/profile.rs`.
+
+Each iteration drives the real public hot paths against a `tempfile::tempdir()`
+store:
+
+1. **Parse** — SMTP `MAIL FROM`/`RCPT TO`, the recipient `Address`, an IMAP
+   `UID FETCH`, and the raw header block fed through the `LineDecoder` (the
+   per-byte/per-command paths every receive exercises).
+2. **Deliver** — `LocalDelivery::deliver_routed` writes one crash-safe `.eml`
+   copy (temp file → `fsync` → atomic rename) into the recipient's INBOX.
+3. **Read** — `Snapshot::open` scans the mailbox directory, then `read` pulls
+   the newest message back, the path a client `FETCH` walks.
+4. **Store** — `store_flags(\Seen)` plus `render_flags` on the response (the
+   path the no-op-skip and `render_flags` work above touches).
+
+### Running it
+
+```sh
+# N messages (default 2000). Use --release for representative timings.
+SQLX_OFFLINE=true cargo run --release --example profile -- 2000
+
+# Flamegraph the whole pipeline (writes flamegraph.svg in the cwd).
+SQLX_OFFLINE=true cargo flamegraph --example profile -- 2000
+```
+
+It prints elapsed wall-time and throughput (msgs/sec) at the end.
+
+### What the pass surfaces
+
+The methodology is qualitative — read the flame widths, do not trust absolute
+numbers across machines — but the shape is consistent:
+
+- **Delivery is fsync-bound.** The widest frames sit under
+  `LocalDelivery`/`write_sync`, in the `fsync`-class syscalls of the
+  temp+fsync+rename write. This is *inherent* durability cost: a message is not
+  accepted until it is durable on disk, so the two synchronous writes per
+  message are the floor, not waste. Nothing here is "fixable" without weakening
+  the crash-safety guarantee.
+- **Parsing is allocation-light.** The parse stage is a thin sliver: the SMTP,
+  address and IMAP parsers borrow with `split_once`/`strip_*` and the line
+  decoder reuses its buffer, so this stage barely registers next to the
+  delivery fsyncs (consistent with [What was left alone](#what-was-left-alone)).
+- **The snapshot scan grows with the mailbox.** `Snapshot::open` is O(mailbox
+  size) — it lists the `new/` directory and sorts the messages. The example
+  re-opens a mailbox that grows by one message per iteration, so at large N the
+  cumulative `open` cost overtakes delivery and total throughput falls off
+  super-linearly. This is the cost a real session pays once per `SELECT`, not
+  per message, but the workload makes it visible. The STORE stage benefits
+  directly from the no-op skip and the single-allocation `render_flags` covered
+  above (see [#237](https://github.com/Glyndor/epistle/issues/237) for the
+  `store_flags`/`render_flags` work).
+
+On the development machine the run printed roughly **540 msgs/sec at N=200** —
+where delivery fsyncs dominate — falling to about **50 msgs/sec at N=2000** as
+the growing per-iteration `Snapshot::open` scan takes over. The absolute figures
+are storage- and machine-dependent (an SSD with fast `fsync` shifts them
+sharply); reproduce locally and read the flamegraph for the relative shape
+rather than the headline number.
