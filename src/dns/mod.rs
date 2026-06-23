@@ -3,6 +3,7 @@
 //! so it is safe to run anytime and needs no provider credentials.
 
 pub mod provider;
+pub mod records;
 
 use crate::spf::DnsLookup;
 
