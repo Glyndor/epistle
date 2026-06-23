@@ -25,6 +25,9 @@ impl Config {
 		for rule in &self.transport {
 			rule.validate().map_err(ConfigError::Invalid)?;
 		}
+		for alias in &self.alias {
+			alias.validate().map_err(ConfigError::Invalid)?;
+		}
 		Ok(())
 	}
 

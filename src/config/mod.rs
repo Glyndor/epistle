@@ -6,6 +6,7 @@
 
 mod account;
 mod acme;
+mod alias;
 mod api;
 mod arc;
 mod database;
@@ -21,6 +22,7 @@ mod webhook;
 
 pub use account::Account;
 pub use acme::Acme;
+pub use alias::Alias;
 pub use api::Api;
 pub use arc::Arc;
 pub use database::Database;
@@ -157,6 +159,9 @@ pub struct Config {
 	/// account/domain/global routing. Empty means direct MX delivery for all.
 	#[serde(default)]
 	pub transport: Vec<Transport>,
+	/// Multi-target aliases: an address that delivers to several accounts.
+	#[serde(default)]
+	pub alias: Vec<Alias>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.

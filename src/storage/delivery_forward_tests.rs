@@ -112,3 +112,41 @@ fn counts_received_hops() {
 	// Received tokens in the body are not counted.
 	assert_eq!(received_hops(b"Subject: x\r\n\r\nReceived: nope"), 0);
 }
+
+#[test]
+fn multi_target_alias_delivers_to_every_member() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[
+				("alice@example.org".to_string(), "alice".to_string()),
+				("bob@example.org".to_string(), "bob".to_string()),
+			],
+		)
+		.with_aliases([(
+			"team@example.org".to_string(),
+			crate::smtp::directory::AliasSpec {
+				members: vec![
+					"alice@example.org".to_string(),
+					"bob@example.org".to_string(),
+				],
+				senders: Vec::new(),
+				hidden: true,
+			},
+		)]),
+	);
+	let delivery = LocalDelivery::new(dir.path(), directory).expect("delivery");
+	let message = AcceptedMessage {
+		reverse_path: "sender@elsewhere.example".into(),
+		recipients: vec!["team@example.org".to_string()],
+		data: BODY.to_vec(),
+		require_tls: false,
+		mailbox: None,
+		no_dsn: Vec::new(),
+	};
+	delivery.deliver(message).expect("deliver to alias");
+	// Both members received exactly one copy.
+	assert_eq!(inbox_count(dir.path(), "alice"), 1);
+	assert_eq!(inbox_count(dir.path(), "bob"), 1);
+}

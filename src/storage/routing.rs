@@ -153,7 +153,9 @@ impl MessageSink for SplitDelivery {
 				SinkError::Unavailable(format!("unparseable recipient {recipient}"))
 			})?;
 			match self.directory.current().resolve(&address) {
-				Resolution::Account(_) => local.push(recipient.clone()),
+				// An account or a multi-target alias delivers locally; the alias
+				// is expanded to its members by `LocalDelivery`.
+				Resolution::Account(_) | Resolution::Alias(_) => local.push(recipient.clone()),
 				Resolution::NotLocal => remote.push(recipient.clone()),
 				// The session rejected unknown local users; drift here is
 				// a logic error and the whole delivery fails closed.

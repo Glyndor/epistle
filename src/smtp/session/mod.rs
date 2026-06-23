@@ -426,7 +426,8 @@ impl Session {
 			Resolution::UnknownUser => {
 				return Action::Continue(Reply::single(550, "5.1.1 no such user"));
 			}
-			Resolution::Account(_) => {}
+			// A local account or a multi-target alias is an acceptable recipient.
+			Resolution::Account(_) | Resolution::Alias(_) => {}
 		}
 		let forward_path = address.to_string();
 		// Suppress failure DSNs for NOTIFY=NEVER or a NOTIFY without FAILURE (RFC 3461).
