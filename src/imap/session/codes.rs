@@ -9,28 +9,57 @@ pub(super) fn esearch_line(tag: &str, uid: bool, hits: &[u32], opts: &[ReturnOpt
 	if uid {
 		line.push_str(" UID");
 	}
+	line.push_str(&esearch_results(hits, opts));
+	line.push_str("\r\n");
+	line
+}
+
+/// Build one MULTISEARCH (RFC 7377) ESEARCH reply line. The correlator carries
+/// the mailbox name and its UIDVALIDITY so the client can attribute results
+/// across mailboxes; results are always UIDs. Returns an empty string when the
+/// requested options produce no output for this mailbox (e.g. only `ALL` was
+/// asked for and nothing matched), so empty per-mailbox lines are omitted.
+pub(super) fn esearch_multi_line(
+	tag: &str,
+	mailbox: &str,
+	uid_validity: u32,
+	hits: &[u32],
+	opts: &[ReturnOpt],
+) -> String {
+	let results = esearch_results(hits, opts);
+	if results.is_empty() {
+		return String::new();
+	}
+	format!(
+		"* ESEARCH (TAG \"{tag}\" MAILBOX \"{mailbox}\" UIDVALIDITY {uid_validity}) UID{results}\r\n"
+	)
+}
+
+/// Format the return-option portion (` COUNT n`, ` MIN n`, ` MAX n`, ` ALL set`)
+/// shared by the single-mailbox and MULTISEARCH ESEARCH replies.
+fn esearch_results(hits: &[u32], opts: &[ReturnOpt]) -> String {
+	let mut out = String::new();
 	for opt in opts {
 		match opt {
-			ReturnOpt::Count => line.push_str(&format!(" COUNT {}", hits.len())),
+			ReturnOpt::Count => out.push_str(&format!(" COUNT {}", hits.len())),
 			ReturnOpt::Min => {
 				if let Some(min) = hits.iter().min() {
-					line.push_str(&format!(" MIN {min}"));
+					out.push_str(&format!(" MIN {min}"));
 				}
 			}
 			ReturnOpt::Max => {
 				if let Some(max) = hits.iter().max() {
-					line.push_str(&format!(" MAX {max}"));
+					out.push_str(&format!(" MAX {max}"));
 				}
 			}
 			ReturnOpt::All => {
 				if !hits.is_empty() {
-					line.push_str(&format!(" ALL {}", uid_set(hits)));
+					out.push_str(&format!(" ALL {}", uid_set(hits)));
 				}
 			}
 		}
 	}
-	line.push_str("\r\n");
-	line
+	out
 }
 
 /// Build the UIDPLUS `[COPYUID validity src dst] ` response code, or an empty

@@ -1,6 +1,7 @@
 use super::parse::parse_astring;
 use super::{
-	Command, ParseError, ReturnOpt, SearchKey, SortKey, parse_imap_date, parse_sequence_set,
+	Command, ParseError, ReturnOpt, SearchKey, SearchScope, SortKey, parse_imap_date,
+	parse_sequence_set,
 };
 use crate::imap::mailbox::Flag;
 
@@ -288,4 +289,114 @@ fn find_close_paren(s: &str) -> Option<usize> {
 		}
 	}
 	None
+}
+
+/// Parse `ESEARCH [IN (sources)] [RETURN (...)] criteria` (RFC 7377).
+pub(super) fn parse_esearch(tag: &str, args: &str) -> Result<Command, ParseError> {
+	let bad = || ParseError::BadArguments(tag.to_string());
+	let mut rest = args.trim();
+
+	// Optional source scope: `IN (...)`. Absent means the selected mailbox.
+	let mut sources = Vec::new();
+	if let Some(after_in) = strip_keyword(rest, "IN") {
+		let inner = after_in.trim_start();
+		if !inner.starts_with('(') {
+			return Err(bad());
+		}
+		let close = find_close_paren(inner).ok_or_else(bad)?;
+		sources = parse_scopes(&inner[1..close]).ok_or_else(bad)?;
+		rest = inner[close + 1..].trim_start();
+	}
+	if sources.is_empty() {
+		sources.push(SearchScope::Selected);
+	}
+
+	// Optional `RETURN (...)`; defaults to ALL when omitted.
+	let mut return_opts = vec![ReturnOpt::All];
+	if let Some(after_return) = strip_keyword(rest, "RETURN") {
+		let inner = after_return.trim_start();
+		if !inner.starts_with('(') {
+			return Err(bad());
+		}
+		let close = find_close_paren(inner).ok_or_else(bad)?;
+		return_opts = parse_return_opts(&inner[1..close]).ok_or_else(bad)?;
+		rest = inner[close + 1..].trim_start();
+	}
+
+	let mut criteria = Vec::new();
+	while !rest.is_empty() {
+		let (key, after) = parse_search_key(rest).ok_or_else(bad)?;
+		criteria.push(key);
+		rest = after.trim_start();
+	}
+	if criteria.is_empty() {
+		return Err(bad());
+	}
+	Ok(Command::Esearch {
+		sources,
+		criteria,
+		return_opts,
+	})
+}
+
+/// Parse the `IN (...)` scope-option list (RFC 7377 §2.2).
+fn parse_scopes(text: &str) -> Option<Vec<SearchScope>> {
+	let mut scopes = Vec::new();
+	let mut rest = text.trim();
+	while !rest.is_empty() {
+		let (token, after) = match rest.split_once(char::is_whitespace) {
+			Some((token, after)) => (token, after.trim_start()),
+			None => (rest, ""),
+		};
+		let (scope, next) = match token.to_ascii_uppercase().as_str() {
+			"SELECTED" => (SearchScope::Selected, after),
+			"INBOXES" => (SearchScope::Inboxes, after),
+			"PERSONAL" => (SearchScope::Personal, after),
+			"SUBSCRIBED" => (SearchScope::Subscribed, after),
+			"SUBTREE" => {
+				let (list, next) = parse_scope_mailboxes(after)?;
+				(SearchScope::Subtree(list), next)
+			}
+			"SUBTREE-ONE" => {
+				let (list, next) = parse_scope_mailboxes(after)?;
+				(SearchScope::SubtreeOne(list), next)
+			}
+			"MAILBOXES" => {
+				let (list, next) = parse_scope_mailboxes(after)?;
+				(SearchScope::Mailboxes(list), next)
+			}
+			_ => return None,
+		};
+		scopes.push(scope);
+		rest = next.trim_start();
+	}
+	if scopes.is_empty() {
+		None
+	} else {
+		Some(scopes)
+	}
+}
+
+/// Parse a parenthesized mailbox list, e.g. `("Sent" "Drafts")`, returning the
+/// names and the remaining input.
+fn parse_scope_mailboxes(s: &str) -> Option<(Vec<String>, &str)> {
+	let s = s.trim_start();
+	let inner_end = find_close_paren(s)?;
+	if !s.starts_with('(') {
+		return None;
+	}
+	let mut inner = s[1..inner_end].trim();
+	let mut names = Vec::new();
+	while !inner.is_empty() {
+		let (name, after) = parse_astring(inner)?;
+		if name.is_empty() {
+			return None;
+		}
+		names.push(name);
+		inner = after.trim_start();
+	}
+	if names.is_empty() {
+		return None;
+	}
+	Some((names, s[inner_end + 1..].trim_start()))
 }
