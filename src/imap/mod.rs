@@ -3,6 +3,7 @@
 pub mod acl;
 pub mod command;
 pub mod mailbox;
+pub mod metadata;
 mod modseq;
 pub mod server;
 pub mod session;

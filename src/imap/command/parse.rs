@@ -107,6 +107,8 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"GETACL" | "SETACL" | "DELETEACL" | "LISTRIGHTS" | "MYRIGHTS" => {
 			super::acl::parse(verb.to_ascii_uppercase().as_str(), &tag, args)?
 		}
+		"GETMETADATA" => super::metadata::parse_get(&tag, args)?,
+		"SETMETADATA" => super::metadata::parse_set(&tag, args)?,
 		"SUBSCRIBE" => Command::Subscribe {
 			mailbox: parse_mailbox(&tag, args)?,
 		},

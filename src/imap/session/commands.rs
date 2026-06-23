@@ -13,6 +13,7 @@ impl Session {
 		uid: bool,
 		remove_source: bool,
 	) -> Output {
+		let uidonly = self.uidonly;
 		let data_dir = self.data_dir.clone();
 		let State::Selected {
 			account,
@@ -73,7 +74,16 @@ impl Session {
 				if snapshot.remove_at(current).is_err() {
 					return Output::text(format!("{tag} NO move failed\r\n"));
 				}
-				response.push_str(&format!("* {current} EXPUNGE\r\n"));
+				if !uidonly {
+					response.push_str(&format!("* {current} EXPUNGE\r\n"));
+				}
+			}
+			// UIDONLY: report removals as a single VANISHED with UIDs.
+			if uidonly && !source_uids.is_empty() {
+				response.push_str(&format!(
+					"* VANISHED {}\r\n",
+					super::codes::uid_set(&source_uids)
+				));
 			}
 		}
 		let verb = if remove_source { "MOVE" } else { "COPY" };
@@ -189,6 +199,7 @@ impl Session {
 	}
 
 	pub(super) fn expunge(&mut self, tag: &str) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -200,14 +211,16 @@ impl Session {
 		if *read_only {
 			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
 		}
+		// UIDONLY reports VANISHED with UIDs, captured before they are removed.
+		let deleted_uids: Vec<u32> = snapshot
+			.messages()
+			.filter(|m| m.flags.contains(&Flag::Deleted))
+			.map(|m| m.uid)
+			.collect();
 		match snapshot.expunge() {
 			Ok(expunged) => {
-				let mut response = String::new();
-				for sequence_number in expunged {
-					response.push_str(&format!("* {sequence_number} EXPUNGE\r\n"));
-				}
-				response.push_str(&format!("{tag} OK EXPUNGE completed\r\n"));
-				Output::text(response)
+				let response = expunge_response(uidonly, &expunged, &deleted_uids);
+				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
 			}
 			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
 		}
@@ -247,6 +260,7 @@ impl Session {
 	}
 
 	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -264,14 +278,16 @@ impl Session {
 			.map(|m| m.uid)
 			.filter(|uid| sequence.contains(*uid, max_uid))
 			.collect();
+		// The UIDs actually removed are the in-set ones flagged \Deleted.
+		let deleted_uids: Vec<u32> = snapshot
+			.messages()
+			.filter(|m| m.flags.contains(&Flag::Deleted) && uids.contains(&m.uid))
+			.map(|m| m.uid)
+			.collect();
 		match snapshot.expunge_uids(&uids) {
 			Ok(expunged) => {
-				let mut response = String::new();
-				for sequence_number in expunged {
-					response.push_str(&format!("* {sequence_number} EXPUNGE\r\n"));
-				}
-				response.push_str(&format!("{tag} OK EXPUNGE completed\r\n"));
-				Output::text(response)
+				let response = expunge_response(uidonly, &expunged, &deleted_uids);
+				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
 			}
 			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
 		}
@@ -325,7 +341,7 @@ impl Session {
 			if !matches || (select_subscribed && !subscribed.contains(&name)) {
 				continue;
 			}
-			let mut attributes = super::special_use_attribute(&name).to_string();
+			let mut attributes = super::helpers::special_use_attribute(&name).to_string();
 			if subscribed.contains(&name) {
 				if !attributes.is_empty() {
 					attributes.push(' ');
@@ -397,6 +413,21 @@ impl Session {
 		}
 		Some(parts)
 	}
+}
+
+/// Build the untagged expunge output: per-message `EXPUNGE` lines normally, or
+/// a single `VANISHED` with the removed UIDs under UIDONLY (RFC 9586).
+fn expunge_response(uidonly: bool, expunged: &[u32], deleted_uids: &[u32]) -> String {
+	if uidonly {
+		if deleted_uids.is_empty() {
+			return String::new();
+		}
+		return format!("* VANISHED {}\r\n", super::codes::uid_set(deleted_uids));
+	}
+	expunged
+		.iter()
+		.map(|seq| format!("* {seq} EXPUNGE\r\n"))
+		.collect()
 }
 
 /// UIDs of every message in `snapshot` matching all search keys.

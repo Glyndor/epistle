@@ -181,6 +181,18 @@ pub enum Command {
 	MyRights {
 		mailbox: String,
 	},
+	/// `GETMETADATA [(options)] <mailbox> <entries>` (RFC 5464). An empty
+	/// mailbox name addresses server-level annotations.
+	GetMetadata {
+		mailbox: String,
+		entries: Vec<String>,
+	},
+	/// `SETMETADATA <mailbox> (entry value ...)` (RFC 5464). A `None` value
+	/// deletes the entry.
+	SetMetadata {
+		mailbox: String,
+		items: Vec<(String, Option<String>)>,
+	},
 }
 
 /// Items that can be requested in a STATUS command.
@@ -398,6 +410,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 
 mod acl;
 mod literal;
+mod metadata;
 mod parse;
 mod search;
 mod select_params;
