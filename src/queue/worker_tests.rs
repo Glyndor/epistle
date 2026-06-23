@@ -37,6 +37,55 @@ impl Connector for LoopbackConnector {
 	}
 }
 
+/// A resolver that publishes one (already DNSSEC-validated) TLSA record for
+/// every `_25._tcp.<host>` query, simulating an MX with a DANE policy.
+struct DaneDns {
+	record: crate::dane::tlsa::TlsaRecord,
+}
+
+impl crate::spf::DnsLookup for DaneDns {
+	fn txt(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn addresses(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, crate::spf::DnsFailure>> + Send + '_>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn mx(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn tlsa(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<
+			dyn Future<Output = Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure>>
+				+ Send
+				+ '_,
+		>,
+	> {
+		let record = self.record.clone();
+		Box::pin(async move { Ok(vec![record]) })
+	}
+}
+
 /// Connector that always fails with a transient error.
 struct DownConnector;
 
@@ -118,6 +167,49 @@ async fn permanent_rejection_drops_and_bounces() {
 	);
 	let body = String::from_utf8(bounces[0].data.clone()).expect("ascii");
 	assert!(body.contains("carol@remote.example"), "{body}");
+}
+
+#[tokio::test]
+async fn dane_present_but_no_starttls_defers_and_keeps_message() {
+	// The loopback MX speaks plaintext (offers no STARTTLS). With a DANE policy
+	// published for it, delivery must never downgrade: the message is deferred
+	// (kept in the spool) and nothing is delivered (fail closed, RFC 7672).
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let sink = Arc::new(MemorySink::new());
+	let connector = Arc::new(LoopbackConnector {
+		sink: sink.clone(),
+		domain: "remote.example".to_string(),
+	});
+	// Any TLSA record makes STARTTLS mandatory for that MX.
+	let record = crate::dane::tlsa::TlsaRecord::from_parts(3, 1, 1, vec![0u8; 32]).expect("record");
+	let dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(DaneDns { record });
+
+	let worker = Worker::new(spool, connector, "mail.sender.example").with_dane(Arc::clone(&dns));
+	let delivered = worker.pass().await.expect("pass");
+
+	assert_eq!(delivered, 0);
+	// Deferred, not dropped: the message stays in the spool for retry.
+	assert_eq!(worker.spool.list().expect("list").len(), 1);
+	// Nothing crossed the wire to the (plaintext) remote.
+	assert!(sink.messages().is_empty());
+}
+
+#[tokio::test]
+async fn without_dane_plaintext_mx_still_delivers() {
+	// The same plaintext loopback MX, but no DANE policy: opportunistic TLS
+	// applies and delivery succeeds (the regression guard for the DANE gate).
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let sink = Arc::new(MemorySink::new());
+	let connector = Arc::new(LoopbackConnector {
+		sink: sink.clone(),
+		domain: "remote.example".to_string(),
+	});
+
+	let worker = Worker::new(spool, connector, "mail.sender.example");
+	assert_eq!(worker.pass().await.expect("pass"), 1);
+	assert_eq!(sink.messages().len(), 1);
 }
 
 /// Creation epoch of the single spooled message, from its UUIDv7 id.

@@ -66,3 +66,39 @@ pub(super) fn spawn_dmarc_flush(
 	});
 	Ok(())
 }
+
+/// Spawn the automatic DKIM key-rotation task when `[dkim] rotate_days` and a
+/// `[dns]` provider are both configured. Hourly ticks rotate/retire when due.
+pub(super) fn spawn_dkim_rotation(
+	config: &Config,
+	dkim_signer: &Option<crate::dkim::ReloadableSigner>,
+) {
+	let (Some(dkim), Some(signer), Some(dns)) = (&config.dkim, dkim_signer, &config.dns) else {
+		return;
+	};
+	let (Some(rotate_days), Some(provider)) = (dkim.rotate_days, dns.build()) else {
+		return;
+	};
+	let rotator = crate::dkim::Rotator::new(
+		config.data_dir.clone(),
+		signer.clone(),
+		provider,
+		dns.zone.clone(),
+		dns.zone.clone(),
+		u64::from(rotate_days) * 86_400,
+		u64::from(dkim.rotate_overlap_days) * 86_400,
+	);
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		loop {
+			ticker.tick().await;
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|d| d.as_secs())
+				.unwrap_or(0);
+			if let Err(error) = rotator.tick(now).await {
+				tracing::warn!(%error, "dkim rotation tick failed");
+			}
+		}
+	});
+}

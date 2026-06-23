@@ -56,6 +56,9 @@ pub struct Worker {
 	suppression: Option<super::SuppressionList>,
 	/// Outbound transport rules (relay/socks/direct/fail). Empty = direct MX.
 	transports: Vec<crate::config::Transport>,
+	/// DNSSEC-validating resolver for DANE TLSA lookups. `None` disables DANE
+	/// (delivery stays opportunistic).
+	dane_dns: Option<Arc<dyn crate::spf::DnsLookup>>,
 }
 
 impl Worker {
@@ -73,6 +76,28 @@ impl Worker {
 			max_age_secs: DEFAULT_MAX_AGE_SECS,
 			suppression: None,
 			transports: Vec::new(),
+			dane_dns: None,
+		}
+	}
+
+	/// Enforce outbound DANE (RFC 7672) using this DNSSEC-validating resolver
+	/// for TLSA lookups. Without it, delivery stays opportunistic.
+	pub fn with_dane(mut self, dns: Arc<dyn crate::spf::DnsLookup>) -> Self {
+		self.dane_dns = Some(dns);
+		self
+	}
+
+	/// DNSSEC-validated TLSA records for an MX host, queried at `_25._tcp.<host>`
+	/// (RFC 7672 §3). Empty when DANE is disabled, the host publishes none, or
+	/// the response is not authenticated — the lookup only ever returns trusted
+	/// records, so an empty result means "no DANE" (opportunistic TLS).
+	async fn tlsa_for(&self, mx_host: &str) -> Vec<crate::dane::tlsa::TlsaRecord> {
+		match &self.dane_dns {
+			Some(dns) => dns
+				.tlsa(&format!("_25._tcp.{mx_host}"))
+				.await
+				.unwrap_or_default(),
+			None => Vec::new(),
 		}
 	}
 
@@ -391,7 +416,7 @@ impl Worker {
 				.filter(|local| !local.is_empty());
 			let transport =
 				crate::config::select_transport(&self.transports, sender_account, &domain);
-			let (stream, server_name, auth, tls_required) = match transport {
+			let (stream, server_name, auth, tls_required, dane) = match transport {
 				Some(rule) if rule.kind == crate::config::TransportKind::Fail => {
 					return Outcome::Dropped(format!("transport policy rejects {domain}"));
 				}
@@ -415,12 +440,18 @@ impl Worker {
 						_ => None,
 					};
 					// starttls (required whenever AUTH is configured) forces TLS.
-					(stream, host, auth, rule.starttls)
+					// DANE does not apply to a configured smarthost (RFC 7672 is
+					// keyed on the recipient's MX), so no TLSA records here.
+					(stream, host, auth, rule.starttls, Vec::new())
 				}
 				_ => {
 					// Direct (no rule, or kind = direct): MX delivery.
 					match self.connector.connect(&domain, policy.as_ref()).await {
-						Ok((stream, server_name)) => (stream, server_name, None, require_tls),
+						Ok((stream, server_name)) => {
+							// DANE: TLSA is published under the MX hostname.
+							let tlsa = self.tlsa_for(&server_name).await;
+							(stream, server_name, None, require_tls, tlsa)
+						}
 						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
 						Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
 					}
@@ -435,6 +466,7 @@ impl Worker {
 				&entry.data,
 				tls_required,
 				auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+				&dane,
 			)
 			.await;
 			match result {

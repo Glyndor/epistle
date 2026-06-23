@@ -3,3 +3,4 @@
 
 pub mod policy;
 pub mod tlsa;
+pub mod verify;

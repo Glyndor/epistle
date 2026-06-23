@@ -13,7 +13,7 @@ axum = "0.8.9"
 flate2 = "1.1.9"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
-hickory-resolver = "0.26.1"
+hickory-resolver = { version = "0.26.1", features = ["dnssec-ring"] }
 libc = "0.2.186"
 psl = "2.1.212"
 rcgen = "0.14.8"
