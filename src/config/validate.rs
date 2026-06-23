@@ -19,6 +19,7 @@ impl Config {
 		self.validate_privileges()?;
 		self.validate_transport()?;
 		self.validate_oauth()?;
+		self.validate_ldap()?;
 		Ok(())
 	}
 
@@ -27,6 +28,13 @@ impl Config {
 			oauth
 				.validate()
 				.map_err(|e| ConfigError::Invalid(e.to_string()))?;
+		}
+		Ok(())
+	}
+
+	fn validate_ldap(&self) -> Result<(), ConfigError> {
+		if let Some(ldap) = &self.ldap {
+			ldap.validate().map_err(ConfigError::Invalid)?;
 		}
 		Ok(())
 	}
