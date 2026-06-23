@@ -78,9 +78,25 @@ impl Flag {
 }
 
 /// Render a flag list for FETCH/STORE responses.
+///
+/// Builds the parenthesized list in a single pre-sized allocation, without the
+/// intermediate `Vec<&str>` that `join` would require — this runs once per
+/// message in every FETCH FLAGS / STORE response.
 pub fn render_flags(flags: &[Flag]) -> String {
-	let tokens: Vec<&str> = flags.iter().map(|flag| flag.as_str()).collect();
-	format!("({})", tokens.join(" "))
+	// "(" + ")" + flag tokens + single-space separators between them.
+	let capacity = 2
+		+ flags.iter().map(|flag| flag.as_str().len()).sum::<usize>()
+		+ flags.len().saturating_sub(1);
+	let mut out = String::with_capacity(capacity);
+	out.push('(');
+	for (index, flag) in flags.iter().enumerate() {
+		if index > 0 {
+			out.push(' ');
+		}
+		out.push_str(flag.as_str());
+	}
+	out.push(')');
+	out
 }
 
 /// Whether a client-supplied mailbox name is safe and supported.
@@ -315,6 +331,13 @@ impl Snapshot {
 			.and_then(|s| s.checked_sub(1))
 			.filter(|index| *index < self.messages.len())
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
+		// A STORE that does not change the flag set must not touch the disk or
+		// advance the mod-sequence (RFC 7162: only an actual change bumps MODSEQ).
+		// Skipping the sidecar rewrite + two counter writes removes the
+		// write-amplification of the common "re-mark \Seen" pattern.
+		if flags_equal(&self.messages[index].flags, &flags) {
+			return Ok(&self.messages[index].flags);
+		}
 		let id = self.messages[index].id;
 		write_flags(&self.account_dir, id, &flags)?;
 		// A flag change advances the mailbox mod-sequence and stamps the message.
@@ -505,6 +528,12 @@ fn write_subscriptions(data_dir: &Path, account: &str, names: &[String]) -> std:
 			s
 		}),
 	)
+}
+
+/// Whether two flag lists denote the same flag set, independent of order or
+/// duplicates. Used to detect a no-op STORE and avoid a redundant disk write.
+fn flags_equal(current: &[Flag], next: &[Flag]) -> bool {
+	current.iter().all(|flag| next.contains(flag)) && next.iter().all(|flag| current.contains(flag))
 }
 
 fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {

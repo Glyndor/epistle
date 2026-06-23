@@ -8,6 +8,7 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use epistle::imap::command::parse as imap_parse;
+use epistle::imap::mailbox::{Flag, render_flags};
 use epistle::smtp::address::Address;
 use epistle::smtp::command::parse as smtp_parse;
 use epistle::smtp::line::LineDecoder;
@@ -62,5 +63,21 @@ fn line_decoder(c: &mut Criterion) {
 	});
 }
 
-criterion_group!(benches, smtp_command, address, imap_command, line_decoder);
+fn render(c: &mut Criterion) {
+	// Rendered once per message in every FETCH FLAGS / STORE response, so a
+	// representative multi-flag set is the case to watch.
+	let flags = [Flag::Seen, Flag::Answered, Flag::Flagged];
+	c.bench_function("render_flags", |b| {
+		b.iter(|| black_box(render_flags(black_box(&flags))))
+	});
+}
+
+criterion_group!(
+	benches,
+	smtp_command,
+	address,
+	imap_command,
+	line_decoder,
+	render
+);
 criterion_main!(benches);

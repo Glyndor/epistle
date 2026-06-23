@@ -8,11 +8,12 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
+use epistle::imap::mailbox::{Flag, Snapshot};
 use epistle::queue::SuppressionList;
 use epistle::queue::bounce;
 use epistle::queue::srs::Srs;
 use epistle::smtp::session::AcceptedMessage;
-use epistle::storage::FsSpool;
+use epistle::storage::{FsSpool, MessageCrypto};
 
 /// A representative message body for spool/bounce benchmarks.
 fn sample_message() -> AcceptedMessage {
@@ -95,5 +96,47 @@ fn suppression(c: &mut Criterion) {
 	});
 }
 
-criterion_group!(benches, srs, bounce_dsn, spool, suppression);
+/// STORE flags: a real change (writes the sidecar + advances the mod-sequence)
+/// versus a no-op re-store of the same set (skips all disk I/O). The gap is the
+/// write-amplification removed from the common "client re-marks \Seen" pattern.
+fn store_flags(c: &mut Criterion) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let new_dir = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&new_dir).expect("create dirs");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		new_dir.join(format!("{id}.eml")),
+		b"Subject: hi\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let crypto = MessageCrypto::disabled();
+	let mut snapshot = Snapshot::open(dir.path(), "alice", "INBOX", &crypto).expect("open");
+
+	// Establish a baseline flag set, then re-store it: this hits the no-op path.
+	snapshot.store_flags(1, vec![Flag::Seen]).expect("seed");
+	c.bench_function("store_flags_noop", |b| {
+		b.iter(|| {
+			let stored = snapshot
+				.store_flags(black_box(1), black_box(vec![Flag::Seen]))
+				.expect("noop");
+			black_box(stored.len())
+		})
+	});
+
+	// A genuine change every other iteration (toggle \Flagged) always writes.
+	let mut on = false;
+	c.bench_function("store_flags_change", |b| {
+		b.iter(|| {
+			on = !on;
+			let flags = if on {
+				vec![Flag::Seen, Flag::Flagged]
+			} else {
+				vec![Flag::Seen]
+			};
+			black_box(snapshot.store_flags(black_box(1), flags).expect("change"));
+		})
+	});
+}
+
+criterion_group!(benches, srs, bounce_dsn, spool, suppression, store_flags);
 criterion_main!(benches);
