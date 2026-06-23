@@ -6,6 +6,7 @@ pub mod cloudflare;
 pub mod desec;
 pub mod provider;
 pub mod records;
+pub mod route53;
 
 use crate::spf::DnsLookup;
 
