@@ -377,6 +377,7 @@ impl AccountStore {
 					members: alias.members.clone(),
 					senders: alias.senders.clone(),
 					hidden: alias.hidden,
+					list_id: alias.list_id.clone(),
 				},
 			)
 		});

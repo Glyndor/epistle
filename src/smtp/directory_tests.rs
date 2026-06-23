@@ -46,6 +46,7 @@ fn aliased() -> Directory {
 			],
 			senders: Vec::new(),
 			hidden: true,
+			list_id: None,
 		},
 	)])
 }
@@ -81,6 +82,7 @@ fn alias_sender_restriction() {
 			],
 			senders: vec!["alice@example.org".to_string()],
 			hidden: true,
+			list_id: None,
 		},
 	)]);
 	assert!(restricted.owns_address("alice", &parse("team@example.org")));
@@ -98,6 +100,7 @@ fn alias_membership_visibility() {
 			members: vec!["alice@example.org".to_string()],
 			senders: Vec::new(),
 			hidden: false,
+			list_id: None,
 		},
 	)]);
 	assert_eq!(
@@ -321,4 +324,32 @@ fn account_without_hash_cannot_authenticate() {
 	// `bob` exists in the address map but has no password hash.
 	let directory = directory_with_credentials();
 	assert!(directory.credentials("bob@example.org").is_none());
+}
+
+#[test]
+fn list_headers_only_for_list_aliases() {
+	// A plain alias is not a list.
+	assert_eq!(aliased().list_headers("team@example.org"), None);
+	// An alias with a list_id yields List-* headers.
+	let list = directory().with_aliases([(
+		"announce@example.org".to_string(),
+		AliasSpec {
+			members: vec!["alice@example.org".to_string()],
+			senders: Vec::new(),
+			hidden: true,
+			list_id: Some("announce.example.org".to_string()),
+		},
+	)]);
+	let headers = list
+		.list_headers("announce@example.org")
+		.expect("list headers");
+	assert!(
+		headers.contains("List-Id: <announce.example.org>"),
+		"{headers}"
+	);
+	assert!(
+		headers.contains("List-Post: <mailto:announce@example.org>"),
+		"{headers}"
+	);
+	assert!(headers.contains("List-Unsubscribe:"), "{headers}");
 }

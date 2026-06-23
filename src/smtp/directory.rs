@@ -27,6 +27,9 @@ pub struct AliasSpec {
 	pub senders: Vec<String>,
 	/// Keep the membership private (not disclosed via [`Directory::alias_members`]).
 	pub hidden: bool,
+	/// When set, this alias is a mailing list with the given `List-Id`; delivered
+	/// copies gain `List-Id`/`List-Post`/`List-Unsubscribe` headers.
+	pub list_id: Option<String>,
 }
 
 /// Immutable lookup table built from the configuration.
@@ -108,6 +111,18 @@ impl Directory {
 	pub fn alias_members(&self, address: &str) -> Option<Vec<String>> {
 		let spec = self.aliases.get(&address.to_ascii_lowercase())?;
 		(!spec.hidden).then(|| spec.members.clone())
+	}
+
+	/// Mailing-list headers (`List-Id`/`List-Post`/`List-Unsubscribe`, each with
+	/// a trailing CRLF) for an address, or `None` when it is not a list. Prepended
+	/// to delivered copies so clients can identify and leave the list (RFC 2369).
+	pub fn list_headers(&self, address: &str) -> Option<String> {
+		let spec = self.aliases.get(&address.to_ascii_lowercase())?;
+		let list_id = spec.list_id.as_ref()?;
+		Some(format!(
+			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n\
+			 List-Unsubscribe: <mailto:{address}?subject=unsubscribe>\r\n"
+		))
 	}
 
 	/// Attach TOTP secrets (account name → base32 secret) for two-factor auth.
