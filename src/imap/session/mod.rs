@@ -104,6 +104,9 @@ pub struct Session {
 	/// Verified TLS client-certificate identity (email SAN), enabling SASL
 	/// EXTERNAL. Set by the network layer after a client-cert handshake.
 	client_identity: Option<String>,
+	/// The client's peer IP, set by the network layer; used to enforce an app
+	/// password's CIDR allowlist during authentication.
+	peer_ip: Option<std::net::IpAddr>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -129,6 +132,7 @@ impl Session {
 			oauth: None,
 			cbind_data: None,
 			client_identity: None,
+			peer_ip: None,
 		}
 	}
 
@@ -136,6 +140,11 @@ impl Session {
 	/// EXTERNAL for this connection.
 	pub fn set_client_identity(&mut self, identity: Option<String>) {
 		self.client_identity = identity;
+	}
+
+	/// Set the client's peer IP, used to enforce app-password CIDR allowlists.
+	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
+		self.peer_ip = ip;
 	}
 
 	/// Set the default storage quota (bytes) used when an account has no
@@ -203,7 +212,7 @@ impl Session {
 		let tag = tagged.tag;
 		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
 		if self.uidonly
-			&& let Some(verb) = sequence_command(&tagged.command)
+			&& let Some(verb) = helpers::sequence_command(&tagged.command)
 		{
 			return Output::text(format!(
 				"{tag} BAD [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
@@ -542,24 +551,6 @@ impl Session {
 			Ok(()) => Output::text(format!("{tag} OK completed\r\n")),
 			Err(error) => Output::text(format!("{tag} NO {error}\r\n")),
 		}
-	}
-}
-
-/// The command verb when it relies on message sequence numbers (and so is
-/// refused under UIDONLY), or `None` for UID-based and non-sequence commands.
-fn sequence_command(command: &Command) -> Option<&'static str> {
-	match command {
-		Command::Fetch { uid: false, .. } => Some("FETCH"),
-		Command::Store { uid: false, .. } => Some("STORE"),
-		Command::Search { uid: false, .. } => Some("SEARCH"),
-		Command::Sort { uid: false, .. } => Some("SORT"),
-		Command::Thread { uid: false, .. } => Some("THREAD"),
-		Command::Copy {
-			uid: false,
-			remove_source,
-			..
-		} => Some(if *remove_source { "MOVE" } else { "COPY" }),
-		_ => None,
 	}
 }
 

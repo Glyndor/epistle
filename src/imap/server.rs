@@ -138,7 +138,7 @@ impl Server {
 			tokio::spawn(async move {
 				let _permit = permit;
 				tracing::debug!(%peer, "imap connection accepted");
-				if let Err(error) = server.handle(stream).await {
+				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "imap connection ended with error");
 				}
 			});
@@ -146,8 +146,9 @@ impl Server {
 	}
 
 	/// Drive one connection: TLS handshake (or plaintext with STARTTLS),
-	/// then the command loop.
-	pub async fn handle<S>(&self, stream: S) -> std::io::Result<()>
+	/// then the command loop. `peer` is the client IP, used to enforce
+	/// app-password CIDR allowlists; `None` for in-memory tests.
+	pub async fn handle<S>(&self, stream: S, peer: Option<std::net::IpAddr>) -> std::io::Result<()>
 	where
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 	{
@@ -166,6 +167,7 @@ impl Server {
 			}
 			TlsMode::StartTls => (Box::new(stream), self.new_session().with_starttls()),
 		};
+		session.set_peer_ip(peer);
 
 		let greeting = session.greeting();
 		stream.write_all(&greeting.bytes).await?;

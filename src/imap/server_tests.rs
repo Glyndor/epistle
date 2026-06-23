@@ -54,7 +54,7 @@ async fn starttls_upgrade_then_login() {
 	);
 
 	let (mut client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	// Plaintext greeting advertises STARTTLS.
 	let mut chunk = [0u8; 1024];
@@ -113,7 +113,7 @@ async fn full_read_session_over_tls() {
 	);
 
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");
@@ -163,7 +163,7 @@ fn plaintext_server() -> (
 		TlsMode::StartTls,
 	);
 	let (client, server_stream) = tokio::io::duplex(256 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 	(client, task)
 }
 
@@ -236,7 +236,7 @@ async fn append_with_literal_stores_a_message() {
 		TlsMode::Implicit,
 	);
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");
@@ -290,7 +290,7 @@ async fn authenticate_login_over_tls_drives_continuation() {
 		TlsMode::Implicit,
 	);
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");
@@ -338,7 +338,7 @@ async fn idle_then_done_resumes_command_mode() {
 		TlsMode::Implicit,
 	);
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");
@@ -386,7 +386,7 @@ async fn idle_poll_pushes_exists_on_new_mail() {
 		TlsMode::Implicit,
 	);
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");
@@ -456,7 +456,7 @@ async fn idle_times_out_during_idle() {
 		TlsMode::Implicit,
 	);
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream).await });
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
 
 	let mut roots = RootCertStore::empty();
 	roots.add(cert).expect("trust cert");

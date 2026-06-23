@@ -193,9 +193,13 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		continuation("UGFzc3dvcmQ6")
 	}
 
-	/// AUTH=LOGIN: verify the password (plus any TOTP) against the username.
+	/// AUTH=LOGIN: verify the password (plus any TOTP, or an app password whose
+	/// CIDR allowlist matches the peer IP) against the username.
 	fn login_pass(&mut self, tag: &str, user: &str, encoded: &str) -> Output {
-		let verified = decode(encoded).and_then(|pass| self.directory.authenticate(user, &pass));
+		let verified = decode(encoded).and_then(|pass| {
+			self.directory
+				.authenticate_with_ip(user, &pass, self.peer_ip)
+		});
 		match verified {
 			Some(account) => {
 				self.state = State::Authenticated { account };
@@ -260,13 +264,14 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 	}
 
 	fn auth_plain(&mut self, tag: &str, encoded: &str) -> Output {
+		// Route through the directory so the primary password (with any TOTP) and
+		// app passwords (CIDR-checked against the peer IP) are both accepted; no
+		// oracle (unknown user behaves like a wrong password).
 		let verified = crate::smtp::auth::parse_plain(encoded)
 			.ok()
 			.and_then(|creds| {
 				self.directory
-					.credentials(&creds.authcid)
-					.filter(|(_, hash)| crate::smtp::auth::verify_password(hash, &creds.password))
-					.map(|(account, _)| account)
+					.authenticate_with_ip(&creds.authcid, &creds.password, self.peer_ip)
 			});
 		match verified {
 			Some(account) => {

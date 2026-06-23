@@ -11,11 +11,13 @@ impl Session {
 		let Ok(credentials) = super::super::auth::parse_plain(encoded) else {
 			return self.auth_fail();
 		};
-		// Password + any TOTP second factor; no oracle (unknown user == bad pw).
-		match self
-			.directory
-			.authenticate(&credentials.authcid, &credentials.password)
-		{
+		// Password + any TOTP second factor, or an app password (CIDR-checked
+		// against the peer IP); no oracle (unknown user == bad pw).
+		match self.directory.authenticate_with_ip(
+			&credentials.authcid,
+			&credentials.password,
+			self.peer_ip,
+		) {
 			Some(account) => self.auth_success(account),
 			None => self.auth_fail(),
 		}
@@ -35,10 +37,11 @@ impl Session {
 		let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
 			return self.auth_fail();
 		};
-		match self
-			.directory
-			.authenticate(user, &String::from_utf8_lossy(&bytes))
-		{
+		match self.directory.authenticate_with_ip(
+			user,
+			&String::from_utf8_lossy(&bytes),
+			self.peer_ip,
+		) {
 			Some(account) => self.auth_success(account),
 			None => self.auth_fail(),
 		}
