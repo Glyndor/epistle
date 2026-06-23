@@ -62,6 +62,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let mut split = SplitDelivery::new(&config.data_dir, directory.clone())?
 		.with_rules(config.rules.clone())
 		.with_metrics(metrics.clone());
+	// Hot-swappable DKIM signer, so automatic key rotation applies live.
+	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	if let Some(dkim) = &config.dkim {
 		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
 			.map_err(std::io::Error::other)?;
@@ -70,7 +72,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_rsa(selector, key_file)
 				.map_err(std::io::Error::other)?;
 		}
-		split = split.with_signer(Arc::new(signer));
+		let reloadable = crate::dkim::ReloadableSigner::new(Arc::new(signer));
+		split = split.with_signer(reloadable.clone());
+		dkim_signer = Some(reloadable);
 	}
 	if let Some(secret) = &config.srs_secret {
 		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
@@ -198,6 +202,36 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// DMARC aggregate report flush runs hourly in the background.
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
+
+	// Automatic DKIM key rotation, when [dkim] rotate_days and a [dns] provider
+	// are both configured. Hourly ticks rotate/retire when due.
+	if let (Some(dkim), Some(signer), Some(dns)) = (&config.dkim, &dkim_signer, &config.dns)
+		&& let Some(rotate_days) = dkim.rotate_days
+		&& let Some(provider) = dns.build()
+	{
+		let rotator = crate::dkim::Rotator::new(
+			config.data_dir.clone(),
+			signer.clone(),
+			provider,
+			dns.zone.clone(),
+			dns.zone.clone(),
+			u64::from(rotate_days) * 86_400,
+			u64::from(dkim.rotate_overlap_days) * 86_400,
+		);
+		tokio::spawn(async move {
+			let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+			loop {
+				ticker.tick().await;
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_secs())
+					.unwrap_or(0);
+				if let Err(error) = rotator.tick(now).await {
+					tracing::warn!(%error, "dkim rotation tick failed");
+				}
+			}
+		});
+	}
 
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	let tls_acceptor = match &config.tls {

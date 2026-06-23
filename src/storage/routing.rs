@@ -20,7 +20,7 @@ pub struct SplitDelivery {
 	directory: DirectoryHandle,
 	local: LocalDelivery,
 	outbound: FsSpool,
-	signer: Option<Arc<crate::dkim::Signer>>,
+	signer: Option<crate::dkim::ReloadableSigner>,
 	rules: Vec<crate::rules::Rule>,
 	/// SRS rewriter and our domain, for forwarded (redirected) mail.
 	srs: Option<(crate::queue::srs::Srs, String)>,
@@ -67,8 +67,8 @@ impl SplitDelivery {
 		self
 	}
 
-	/// Sign outbound messages with this DKIM signer.
-	pub fn with_signer(mut self, signer: Arc<crate::dkim::Signer>) -> Self {
+	/// Sign outbound messages with this (hot-swappable) DKIM signer.
+	pub fn with_signer(mut self, signer: crate::dkim::ReloadableSigner) -> Self {
 		self.signer = Some(signer);
 		self
 	}
@@ -270,7 +270,7 @@ impl MessageSink for SplitDelivery {
 			// Sign relayed mail so receivers can verify our domain.
 			if let Some(signer) = &self.signer
 				&& let Some((_, domain)) = outbound_message.reverse_path.rsplit_once('@')
-				&& let Some(header) = signer.sign(domain, &outbound_message.data)
+				&& let Some(header) = signer.current().sign(domain, &outbound_message.data)
 			{
 				let mut signed = header.into_bytes();
 				signed.extend_from_slice(&outbound_message.data);
