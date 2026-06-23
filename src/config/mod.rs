@@ -16,6 +16,7 @@ mod listener;
 mod oauth;
 mod otel;
 mod privileges;
+mod storage;
 mod tls;
 mod transport;
 mod validate;
@@ -33,6 +34,7 @@ pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
+pub use storage::Storage;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
@@ -176,6 +178,11 @@ pub struct Config {
 	/// Unprivileged user/group to drop to after privileged ports are bound.
 	/// Absent leaves the process running as whoever started it.
 	pub privileges: Option<Privileges>,
+	/// At-rest message encryption. Absent leaves stored mail unencrypted at the
+	/// application layer (relying on full-disk encryption); present can enable
+	/// transparent ChaCha20-Poly1305 encryption of stored message files.
+	#[serde(default)]
+	pub storage: Option<Storage>,
 }
 
 impl Config {

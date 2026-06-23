@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::storage::MessageCrypto;
+
 /// A snapshot of one mailbox at SELECT time. Sequence numbers are positions
 /// in `messages` (1-based); UIDs are persistent, assigned in arrival order.
 #[derive(Debug)]
@@ -16,6 +18,8 @@ pub struct Snapshot {
 	uid_next: u32,
 	/// Highest mod-sequence in the mailbox (CONDSTORE, RFC 7162).
 	highest_modseq: u64,
+	/// At-rest crypto for decoding message bodies on read.
+	crypto: MessageCrypto,
 }
 
 /// One message in the snapshot.
@@ -173,8 +177,15 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 }
 
 impl Snapshot {
-	/// Build the snapshot of any existing mailbox.
-	pub fn open(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<Snapshot> {
+	/// Build the snapshot of any existing mailbox, decoding message bodies
+	/// through `crypto` on read. Use [`MessageCrypto::disabled`] for a plaintext
+	/// store.
+	pub fn open(
+		data_dir: &Path,
+		account: &str,
+		mailbox: &str,
+		crypto: &MessageCrypto,
+	) -> std::io::Result<Snapshot> {
 		let account_dir = mailbox_dir(data_dir, account, mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
 		let mut ids: Vec<Uuid> = Vec::new();
@@ -201,8 +212,15 @@ impl Snapshot {
 		let mut uid_counter = initial_counter;
 		let mut messages = Vec::with_capacity(ids.len());
 		for id in ids.iter() {
-			let meta = std::fs::metadata(account_dir.join(format!("{id}.eml")));
-			let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+			let path = account_dir.join(format!("{id}.eml"));
+			let meta = std::fs::metadata(&path);
+			// RFC822.SIZE must be the plaintext size a client sees, not the
+			// on-disk envelope size, so subtract the fixed crypto overhead for an
+			// encrypted file.
+			let size = meta
+				.as_ref()
+				.map(|m| crypto.stored_plaintext_len(&path, m.len()))
+				.unwrap_or(0);
 			let internal_date = meta
 				.as_ref()
 				.ok()
@@ -231,6 +249,7 @@ impl Snapshot {
 			uid_validity,
 			uid_next: uid_counter + 1,
 			highest_modseq,
+			crypto: crypto.clone(),
 		})
 	}
 
@@ -280,9 +299,12 @@ impl Snapshot {
 			.map(|index| u32::try_from(index + 1).unwrap_or(u32::MAX))
 	}
 
-	/// Raw message bytes.
+	/// Raw (plaintext) message bytes, decoding the at-rest envelope when the file
+	/// is encrypted. Fails closed on a decryption error rather than returning
+	/// ciphertext.
 	pub fn read(&self, message: &MessageRef) -> std::io::Result<Vec<u8>> {
-		std::fs::read(self.account_dir.join(format!("{}.eml", message.id)))
+		let stored = std::fs::read(self.account_dir.join(format!("{}.eml", message.id)))?;
+		self.crypto.decode(&stored)
 	}
 
 	/// Replace the flags of the message at `sequence` (1-based), persisting
@@ -359,14 +381,16 @@ impl Snapshot {
 	}
 }
 
-/// Append a message to a mailbox crash-safely, with flags.
-/// Standalone because APPEND may target a mailbox that is not selected.
+/// Append a message to a mailbox crash-safely, with flags, encoding the body
+/// through `crypto` at rest. Standalone because APPEND may target a mailbox that
+/// is not selected.
 pub fn append(
 	data_dir: &Path,
 	account: &str,
 	mailbox: &str,
 	flags: &[Flag],
 	data: &[u8],
+	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
 	let account_dir = mailbox_dir(data_dir, account, mailbox)
 		.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
@@ -376,7 +400,7 @@ pub fn append(
 
 	let id = Uuid::now_v7();
 	let tmp = tmp_dir.join(format!("{id}.eml"));
-	std::fs::write(&tmp, data)?;
+	std::fs::write(&tmp, &crypto.encode(data)?)?;
 	std::fs::rename(&tmp, account_dir.join(format!("{id}.eml")))?;
 	if !flags.is_empty() {
 		write_flags(&account_dir, id, flags)?;
@@ -388,14 +412,16 @@ pub fn append(
 /// `APPENDUID` response. `None` if the mailbox can no longer be opened or the
 /// message has already vanished.
 pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Option<(u32, u32)> {
-	let snapshot = Snapshot::open(data_dir, account, mailbox).ok()?;
+	// Only UIDs are read here, never a message body, so no key is needed.
+	let snapshot = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()).ok()?;
 	let uid = snapshot.messages().find(|message| message.id == id)?.uid;
 	Some((snapshot.uid_validity(), uid))
 }
 
-/// Total bytes stored for an account: the sum of every message's size across
-/// INBOX and all folders (RFC 9208 STORAGE usage).
-pub fn account_usage(data_dir: &Path, account: &str) -> u64 {
+/// Total bytes stored for an account: the sum of every message's plaintext size
+/// across INBOX and all folders (RFC 9208 STORAGE usage). Counts the message
+/// size a client sees, so quota is unaffected by whether the store is encrypted.
+pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> u64 {
 	let mut total = 0u64;
 	for mailbox in list(data_dir, account) {
 		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
@@ -411,7 +437,7 @@ pub fn account_usage(data_dir: &Path, account: &str) -> u64 {
 				.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
-				total += meta.len();
+				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
 			}
 		}
 	}

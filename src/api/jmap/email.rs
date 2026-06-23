@@ -20,7 +20,7 @@ pub(super) fn email_copy(state: &ApiState, args: &Value, call_id: &str) -> Value
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (cid, spec) in create {
-			match copy_email(state.data_dir(), account, spec) {
+			match copy_email(state.data_dir(), account, spec, state.crypto()) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
@@ -43,6 +43,7 @@ fn copy_email(
 	data_dir: &std::path::Path,
 	account: &str,
 	spec: &Value,
+	crypto: &crate::storage::MessageCrypto,
 ) -> Result<Value, &'static str> {
 	let id = spec
 		.get("emailId")
@@ -54,8 +55,8 @@ fn copy_email(
 		.and_then(|m| m.iter().find(|(_, v)| v.as_bool() == Some(true)))
 		.map(|(name, _)| name.clone())
 		.unwrap_or_else(|| "INBOX".to_string());
-	let raw = objects::find_email_raw(data_dir, account, id).ok_or("notFound")?;
-	let new_id = crate::imap::mailbox::append(data_dir, account, &target, &[], &raw)
+	let raw = objects::find_email_raw(data_dir, account, id, crypto).ok_or("notFound")?;
+	let new_id = crate::imap::mailbox::append(data_dir, account, &target, &[], &raw, crypto)
 		.map_err(|_| "serverFail")?;
 	Ok(json!({
 		"id": new_id.to_string(),
@@ -78,7 +79,7 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (cid, spec) in create {
-			match create_email(state.data_dir(), account, spec) {
+			match create_email(state.data_dir(), account, spec, state.crypto()) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
@@ -92,7 +93,7 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	let mut not_updated = serde_json::Map::new();
 	if let Some(update) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in update {
-			match apply_email_update(state.data_dir(), account, id, patch) {
+			match apply_email_update(state.data_dir(), account, id, patch, state.crypto()) {
 				Ok(()) => {
 					updated.insert(id.clone(), Value::Null);
 				}
@@ -130,6 +131,7 @@ fn create_email(
 	data_dir: &std::path::Path,
 	account: &str,
 	spec: &Value,
+	crypto: &crate::storage::MessageCrypto,
 ) -> Result<Value, &'static str> {
 	let mailbox = spec
 		.get("mailboxIds")
@@ -148,7 +150,7 @@ fn create_email(
 		})
 		.unwrap_or_default();
 	let raw = objects::build_rfc5322(spec);
-	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw)
+	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
 		.map_err(|_| "serverFail")?;
 	Ok(json!({
 		"id": id.to_string(),
@@ -162,8 +164,12 @@ fn create_email(
 fn destroy_email(data_dir: &std::path::Path, account: &str, id: &str) -> Result<(), &'static str> {
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
 	for mailbox in crate::imap::mailbox::list(data_dir, account) {
-		let Ok(mut snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox)
-		else {
+		let Ok(mut snapshot) = crate::imap::mailbox::Snapshot::open(
+			data_dir,
+			account,
+			&mailbox,
+			&crate::storage::MessageCrypto::disabled(),
+		) else {
 			continue;
 		};
 		let position = snapshot.messages().position(|m| m.id() == uuid);
@@ -182,6 +188,7 @@ fn apply_email_update(
 	account: &str,
 	id: &str,
 	patch: &Value,
+	crypto: &crate::storage::MessageCrypto,
 ) -> Result<(), &'static str> {
 	use crate::imap::mailbox::{self, Flag};
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
@@ -192,7 +199,7 @@ fn apply_email_update(
 		.map(|(name, _)| name.clone());
 
 	for source in mailbox::list(data_dir, account) {
-		let Ok(mut snapshot) = mailbox::Snapshot::open(data_dir, account, &source) else {
+		let Ok(mut snapshot) = mailbox::Snapshot::open(data_dir, account, &source, crypto) else {
 			continue;
 		};
 		let Some(index) = snapshot.messages().position(|m| m.id() == uuid) else {
@@ -219,7 +226,8 @@ fn apply_email_update(
 		if let Some(target) = &target
 			&& !target.eq_ignore_ascii_case(&source)
 		{
-			mailbox::append(data_dir, account, target, &flags, &raw).map_err(|_| "serverFail")?;
+			mailbox::append(data_dir, account, target, &flags, &raw, crypto)
+				.map_err(|_| "serverFail")?;
 			return snapshot.remove_at(sequence).map_err(|_| "serverFail");
 		}
 		if patch.get("keywords").is_some() {

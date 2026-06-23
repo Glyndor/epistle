@@ -35,6 +35,7 @@ pub struct Server {
 	directory: DirectoryHandle,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	crypto: crate::storage::MessageCrypto,
 }
 
 impl Server {
@@ -46,7 +47,14 @@ impl Server {
 			directory,
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			crypto: crate::storage::MessageCrypto::disabled(),
 		}
+	}
+
+	/// Decode stored message bodies through `crypto` when serving RETR/TOP.
+	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
+		self.crypto = crypto;
+		self
 	}
 
 	/// Cap concurrent connections for this listener (0 keeps the default).
@@ -78,7 +86,11 @@ impl Server {
 
 	async fn handle(&self, stream: TcpStream) -> std::io::Result<()> {
 		let stream = self.tls.accept(stream).await?;
-		let backend = MailboxBackend::new(self.directory.clone(), self.data_dir.clone());
+		let backend = MailboxBackend::new_with_crypto(
+			self.directory.clone(),
+			self.data_dir.clone(),
+			self.crypto.clone(),
+		);
 		run(stream, backend).await
 	}
 }

@@ -164,6 +164,22 @@ Drop OS privileges after binding ports (run the daemon unprivileged).
 | `user` | Unprivileged user to switch to (must exist). |
 | `group` | Optional; defaults to the user's primary group. |
 
+### `[storage]`
+Optional at-rest encryption of stored message files. Defaults to off (relying on
+full-disk encryption). When on, `.eml` bodies, the outbound spool and JMAP blobs
+are encrypted with ChaCha20-Poly1305; reads decrypt transparently. The key must
+be sourced off the data disk. With `encrypt_at_rest = true` and no usable key the
+server refuses to start (fail closed). See the security guide's "Data at rest".
+
+| Key | Meaning |
+|---|---|
+| `encrypt_at_rest` | Encrypt new message writes at rest (default `false`). |
+| `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
+| `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
+
+Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
+to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
+
 ### `[otel]`
 OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HTTP to a collector.
 

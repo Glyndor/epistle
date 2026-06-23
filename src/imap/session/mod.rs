@@ -107,6 +107,8 @@ pub struct Session {
 	/// The client's peer IP, set by the network layer; used to enforce an app
 	/// password's CIDR allowlist during authentication.
 	peer_ip: Option<std::net::IpAddr>,
+	/// At-rest crypto for stored message bodies (read decode, append encode).
+	crypto: crate::storage::MessageCrypto,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -133,7 +135,14 @@ impl Session {
 			cbind_data: None,
 			client_identity: None,
 			peer_ip: None,
+			crypto: crate::storage::MessageCrypto::disabled(),
 		}
+	}
+
+	/// Use `crypto` to decode/encode stored message bodies at rest.
+	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
+		self.crypto = crypto;
+		self
 	}
 
 	/// Set the verified TLS client-certificate identity (email), enabling SASL
@@ -418,7 +427,7 @@ impl Session {
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO no such mailbox\r\n"));
 		}
-		let snapshot = match Snapshot::open(&self.data_dir, &account, mailbox) {
+		let snapshot = match Snapshot::open(&self.data_dir, &account, mailbox, &self.crypto) {
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
 		};

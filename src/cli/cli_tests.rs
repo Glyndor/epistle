@@ -153,7 +153,12 @@ fn export_run_streams_account_mailboxes() {
 	.expect("write");
 	let mut out = Vec::new();
 	assert_eq!(
-		export::run(dir.path(), "alice", &mut out),
+		export::run(
+			dir.path(),
+			"alice",
+			&crate::storage::MessageCrypto::disabled(),
+			&mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -162,7 +167,12 @@ fn export_run_streams_account_mailboxes() {
 
 	let mut empty = Vec::new();
 	assert_eq!(
-		export::run(dir.path(), "nobody", &mut empty),
+		export::run(
+			dir.path(),
+			"nobody",
+			&crate::storage::MessageCrypto::disabled(),
+			&mut empty
+		),
 		ExitCode::SUCCESS
 	);
 	assert!(empty.is_empty());
@@ -177,7 +187,12 @@ fn export_run_streams_account_mailboxes() {
 		}
 	}
 	assert_eq!(
-		export::run(dir.path(), "alice", &mut FailWriter),
+		export::run(
+			dir.path(),
+			"alice",
+			&crate::storage::MessageCrypto::disabled(),
+			&mut FailWriter
+		),
 		ExitCode::FAILURE
 	);
 }

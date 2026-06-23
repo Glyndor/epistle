@@ -8,6 +8,7 @@ use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
+use super::crypto::MessageCrypto;
 use super::delivery::LocalDelivery;
 use super::spool::FsSpool;
 
@@ -35,11 +36,22 @@ pub struct SplitDelivery {
 }
 
 impl SplitDelivery {
-	/// Create the routing sink rooted at `data_dir`.
+	/// Create the routing sink rooted at `data_dir` with no at-rest encryption.
+	/// The encrypting variant is [`SplitDelivery::new_with_crypto`].
 	pub fn new(data_dir: &std::path::Path, directory: DirectoryHandle) -> std::io::Result<Self> {
+		Self::new_with_crypto(data_dir, directory, MessageCrypto::disabled())
+	}
+
+	/// Create the routing sink rooted at `data_dir`, encrypting stored message
+	/// files (local mailboxes and the outbound spool) through `crypto`.
+	pub fn new_with_crypto(
+		data_dir: &std::path::Path,
+		directory: DirectoryHandle,
+		crypto: MessageCrypto,
+	) -> std::io::Result<Self> {
 		Ok(SplitDelivery {
-			local: LocalDelivery::new(data_dir, directory.clone())?,
-			outbound: FsSpool::open(data_dir)?,
+			local: LocalDelivery::new_with_crypto(data_dir, directory.clone(), crypto.clone())?,
+			outbound: FsSpool::open_with_crypto(data_dir, crypto)?,
 			directory,
 			signer: None,
 			rules: Vec::new(),

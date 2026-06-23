@@ -92,11 +92,21 @@ fn import_delivers_mbox_messages_to_inbox() {
 	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
 	let mbox = "From MAILER-DAEMON@localhost\r\nX-Mailbox: INBOX\r\nSubject: one\r\n\r\nbody1\r\n\r\nFrom MAILER-DAEMON@localhost\r\nSubject: two\r\n\r\n>From the desk\r\n\r\n";
 	assert_eq!(
-		import::run(dir.path(), "alice", Cursor::new(mbox)),
+		import::run(
+			dir.path(),
+			"alice",
+			&crate::storage::MessageCrypto::disabled(),
+			Cursor::new(mbox)
+		),
 		ExitCode::SUCCESS
 	);
-	let snapshot =
-		crate::imap::mailbox::Snapshot::open(dir.path(), "alice", "INBOX").expect("snapshot");
+	let snapshot = crate::imap::mailbox::Snapshot::open(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("snapshot");
 	assert_eq!(snapshot.len(), 2);
 	let bodies: Vec<String> = snapshot
 		.messages()
@@ -127,11 +137,22 @@ fn import_maildir_delivers_to_inbox_and_nested_folders_with_flags() {
 	.expect("write");
 
 	assert_eq!(
-		import::run_maildir(dir.path(), "alice", &src),
+		import::run_maildir(
+			dir.path(),
+			"alice",
+			&crate::storage::MessageCrypto::disabled(),
+			&src
+		),
 		ExitCode::SUCCESS
 	);
 
-	let inbox = Snapshot::open(dir.path(), "alice", "INBOX").expect("inbox");
+	let inbox = Snapshot::open(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("inbox");
 	assert_eq!(inbox.len(), 2);
 	// LF was normalized to CRLF on import.
 	let inbox_bodies: Vec<String> = inbox
@@ -149,7 +170,13 @@ fn import_maildir_delivers_to_inbox_and_nested_folders_with_flags() {
 		.count();
 	assert_eq!(seen_count, 1);
 
-	let sent = Snapshot::open(dir.path(), "alice", "Sent").expect("sent");
+	let sent = Snapshot::open(
+		dir.path(),
+		"alice",
+		"Sent",
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("sent");
 	assert_eq!(sent.len(), 1);
 	let sent_msg = sent.messages().next().expect("sent msg");
 	assert!(sent_msg.flags.contains(&Flag::Seen));

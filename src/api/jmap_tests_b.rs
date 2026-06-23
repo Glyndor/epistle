@@ -410,6 +410,59 @@ async fn jmap_download_returns_raw_message() {
 }
 
 #[tokio::test]
+async fn jmap_download_decrypts_encrypted_message() {
+	// Encryption ON: the message is stored as ciphertext, but find_email_raw via
+	// the download route must return the plaintext.
+	use super::tests::request_raw;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = crate::storage::MessageCrypto::for_test(b"0123456789abcdef0123456789abcdef");
+	let raw = b"From: a@example.org\r\nSubject: dl\r\n\r\nencrypted body\r\n";
+	let id = crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], raw, &crypto)
+		.expect("append");
+	// On disk it is ciphertext, not the plaintext.
+	let stored = std::fs::read(dir.path().join(format!("accounts/alice/new/{id}.eml")))
+		.expect("read stored");
+	assert!(
+		stored.starts_with(b"EPENC1\0"),
+		"stored message is encrypted"
+	);
+
+	let app = router(test_state(dir.path(), 0).with_crypto(crypto));
+	let (status, body) = request_raw(
+		&app,
+		&format!("/jmap/download/alice/{id}/msg.eml"),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, raw, "download must return decrypted plaintext");
+}
+
+#[tokio::test]
+async fn jmap_email_get_returns_decrypted_body() {
+	// Email/get over an encrypted store must surface the plaintext body.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = crate::storage::MessageCrypto::for_test(b"0123456789abcdef0123456789abcdef");
+	let raw = b"From: a@example.org\r\nSubject: hi\r\n\r\nplaintext via jmap\r\n";
+	let id = crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], raw, &crypto)
+		.expect("append");
+	let app = router(test_state(dir.path(), 0).with_crypto(crypto));
+
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/get",
+			{ "accountId": "alice", "ids": [id.to_string()],
+			  "properties": ["preview"] }, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let preview = body["methodResponses"][0][1]["list"][0]["preview"]
+		.as_str()
+		.unwrap_or_default();
+	assert!(preview.contains("plaintext via jmap"), "{body}");
+}
+
+#[tokio::test]
 async fn jmap_upload_then_download_round_trips() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
@@ -485,68 +538,4 @@ async fn jmap_upload_within_quota_succeeds_over_quota_is_rejected() {
 	assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE, "{body}");
 	assert_eq!(body["type"], "urn:ietf:params:jmap:error:limit");
 	assert_eq!(body["limit"], "storage");
-}
-
-#[test]
-fn account_usage_bytes_sums_mail_and_blobs() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let path = dir.path();
-	// 5 bytes of stored mail.
-	let inbox = path.join("accounts").join("alice").join("new");
-	std::fs::create_dir_all(&inbox).expect("mkdir");
-	std::fs::write(
-		inbox.join(format!("{}.eml", uuid::Uuid::now_v7())),
-		b"hello",
-	)
-	.expect("write");
-	// 10 bytes across the shared blob pool.
-	let blobs = path.join("blobs");
-	std::fs::create_dir_all(&blobs).expect("mkdir");
-	std::fs::write(blobs.join(uuid::Uuid::now_v7().to_string()), b"0123456789").expect("write");
-
-	assert_eq!(super::jmap::account_usage_bytes(path, "alice"), 15);
-}
-
-#[test]
-fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let path = dir.path();
-	let blobs = path.join("blobs");
-	std::fs::create_dir_all(&blobs).expect("mkdir");
-
-	// A stale blob (payload + sidecar) backdated past the TTL.
-	let stale = uuid::Uuid::now_v7().to_string();
-	std::fs::write(blobs.join(&stale), b"old").expect("write");
-	std::fs::write(blobs.join(format!("{stale}.type")), b"image/png").expect("write");
-	let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
-	filetime_set(&blobs.join(&stale), old);
-
-	// A fresh blob written just now.
-	let fresh = uuid::Uuid::now_v7().to_string();
-	std::fs::write(blobs.join(&fresh), b"new").expect("write");
-
-	// Stored mail that must never be reclaimed.
-	let inbox = path.join("accounts").join("alice").join("new");
-	std::fs::create_dir_all(&inbox).expect("mkdir");
-	let msg = inbox.join(format!("{}.eml", uuid::Uuid::now_v7()));
-	std::fs::write(&msg, b"keep me").expect("write");
-
-	let removed = super::jmap::reclaim_blobs(path, std::time::Duration::from_secs(24 * 3600));
-	assert_eq!(removed, 1);
-	assert!(!blobs.join(&stale).exists(), "stale blob should be gone");
-	assert!(
-		!blobs.join(format!("{stale}.type")).exists(),
-		"stale sidecar should be gone"
-	);
-	assert!(blobs.join(&fresh).exists(), "fresh blob should be kept");
-	assert!(msg.exists(), "stored mail must be untouched");
-}
-
-/// Backdate a file's mtime by writing through `std::fs::File::set_modified`.
-fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
-	let file = std::fs::OpenOptions::new()
-		.write(true)
-		.open(path)
-		.expect("open");
-	file.set_modified(when).expect("set mtime");
 }

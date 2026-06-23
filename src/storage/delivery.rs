@@ -15,6 +15,7 @@ use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
+use super::crypto::MessageCrypto;
 use super::spool::write_sync;
 
 /// Forward only while a message has crossed at most this many hops. A loop
@@ -53,18 +54,30 @@ pub struct Delivered {
 pub struct LocalDelivery {
 	accounts_root: PathBuf,
 	directory: DirectoryHandle,
+	crypto: MessageCrypto,
 }
 
 impl LocalDelivery {
-	/// Create a local delivery sink rooted at `data_dir`. Creates the
-	/// accounts directory eagerly so an unwritable data_dir fails at
-	/// startup, not on first delivery.
+	/// Create a local delivery sink rooted at `data_dir` with no at-rest
+	/// encryption. The encrypting variant is [`LocalDelivery::new_with_crypto`].
 	pub fn new(data_dir: &std::path::Path, directory: DirectoryHandle) -> std::io::Result<Self> {
+		Self::new_with_crypto(data_dir, directory, MessageCrypto::disabled())
+	}
+
+	/// Create a local delivery sink rooted at `data_dir`, encrypting stored
+	/// message (`.eml`) files through `crypto`. Creates the accounts directory
+	/// eagerly so an unwritable data_dir fails at startup, not on first delivery.
+	pub fn new_with_crypto(
+		data_dir: &std::path::Path,
+		directory: DirectoryHandle,
+		crypto: MessageCrypto,
+	) -> std::io::Result<Self> {
 		let accounts_root = data_dir.join("accounts");
 		fs::create_dir_all(&accounts_root)?;
 		Ok(LocalDelivery {
 			accounts_root,
 			directory,
+			crypto,
 		})
 	}
 
@@ -115,7 +128,7 @@ impl LocalDelivery {
 		fs::create_dir_all(&new_dir)?;
 
 		let tmp_path = tmp_dir.join(format!("{id}.eml"));
-		write_sync(&tmp_path, data)?;
+		write_sync(&tmp_path, &self.crypto.encode(data)?)?;
 		fs::rename(&tmp_path, new_dir.join(format!("{id}.eml")))?;
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
 		write_flag_sidecar(&new_dir, id, flags);

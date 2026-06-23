@@ -15,6 +15,7 @@ impl Session {
 	) -> Output {
 		let uidonly = self.uidonly;
 		let data_dir = self.data_dir.clone();
+		let crypto = self.crypto.clone();
 		let State::Selected {
 			account,
 			snapshot,
@@ -56,7 +57,7 @@ impl Session {
 				Ok(data) => data,
 				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
 			};
-			match mailbox::append(&data_dir, &account, target, &message.flags, &data) {
+			match mailbox::append(&data_dir, &account, target, &message.flags, &data, &crypto) {
 				Ok(id) => dest_ids.push(id),
 				Err(_) => return Output::text(format!("{tag} NO copy failed\r\n")),
 			}
@@ -153,7 +154,7 @@ impl Session {
 
 		let mut body = String::new();
 		for name in &mailboxes {
-			let Ok(snapshot) = Snapshot::open(&self.data_dir, &account, name) else {
+			let Ok(snapshot) = Snapshot::open(&self.data_dir, &account, name, &self.crypto) else {
 				continue;
 			};
 			let hits = matching_uids(&snapshot, criteria);
@@ -254,7 +255,7 @@ impl Session {
 
 	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
 	fn quota_line(&self, account: &str) -> String {
-		let used_kib = mailbox::account_usage(&self.data_dir, account).div_ceil(1024);
+		let used_kib = mailbox::account_usage(&self.data_dir, account, &self.crypto).div_ceil(1024);
 		let limit_kib = self.effective_quota().div_ceil(1024);
 		format!("* QUOTA \"\" (STORAGE {used_kib} {limit_kib})\r\n")
 	}
@@ -307,7 +308,7 @@ impl Session {
 		else {
 			return None;
 		};
-		let fresh = match Snapshot::open(&self.data_dir, account, mailbox) {
+		let fresh = match Snapshot::open(&self.data_dir, account, mailbox, &self.crypto) {
 			Ok(s) => s,
 			Err(_) => return None,
 		};
@@ -352,7 +353,7 @@ impl Session {
 		else {
 			return None;
 		};
-		let fresh = Snapshot::open(&self.data_dir, account, mailbox).ok()?;
+		let fresh = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
 		if fresh.uid_validity() != snapshot.uid_validity() || fresh.len() != snapshot.len() {
 			let exists = fresh.len();
 			*snapshot = fresh;
@@ -435,7 +436,7 @@ impl Session {
 		mailbox: &str,
 		items: &[StatusItem],
 	) -> Option<String> {
-		let snapshot = Snapshot::open(&self.data_dir, account, mailbox).ok()?;
+		let snapshot = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
 		let count_flag = |flag: Flag| {
 			snapshot
 				.messages()

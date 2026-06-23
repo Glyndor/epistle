@@ -60,14 +60,20 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	);
 	let directory = account_store.handle();
 
+	// At-rest message encryption, loaded once and shared. Fail closed: with
+	// encryption enabled but no usable key the server refuses to start.
+	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
+		.map_err(std::io::Error::other)?;
+
 	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
 	let metrics = Arc::new(crate::metrics::Metrics::new());
 
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured.
-	let mut split = SplitDelivery::new(&config.data_dir, directory.clone())?
-		.with_rules(config.rules.clone())
-		.with_metrics(metrics.clone());
+	let mut split =
+		SplitDelivery::new_with_crypto(&config.data_dir, directory.clone(), crypto.clone())?
+			.with_rules(config.rules.clone())
+			.with_metrics(metrics.clone());
 	// Hot-swappable DKIM signer, so automatic key rotation applies live.
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	if let Some(dkim) = &config.dkim {
@@ -183,7 +189,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		})?,
 	)));
 	let mut worker = crate::queue::Worker::new(
-		crate::storage::FsSpool::open(&config.data_dir)?,
+		crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 		connector,
 		&config.hostname,
 	)
@@ -268,9 +274,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					config.data_dir.clone(),
 					config.domains.clone(),
 					Arc::clone(&account_store),
-					crate::storage::FsSpool::open(&config.data_dir)?,
+					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
-				.with_quota(config.quota_bytes.unwrap_or(0));
+				.with_quota(config.quota_bytes.unwrap_or(0))
+				.with_crypto(crypto.clone());
 				let listener = super::serve_tasks::bind(listener_config).await?;
 				let router = crate::api::router(state);
 				tasks.push(tokio::spawn(async move {
@@ -334,7 +341,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					directory.clone(),
 					acceptor.clone(),
 					mode,
-				);
+				)
+				.with_crypto(crypto.clone());
 				if let Some(bytes) = config.quota_bytes {
 					imap_server = imap_server.with_quota(bytes);
 				}
@@ -360,6 +368,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						directory.clone(),
 						acceptor.clone(),
 					)
+					.with_crypto(crypto.clone())
 					.with_max_connections(max_conn),
 				);
 				tasks.push(tokio::spawn(server.serve(listener)));

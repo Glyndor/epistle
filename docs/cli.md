@@ -17,6 +17,7 @@ flags.
 | Command | What it does |
 |---|---|
 | `epistle dkim-keygen --out F` | Generate an Ed25519 DKIM key and print the DNS record value. |
+| `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
 ## Accounts
