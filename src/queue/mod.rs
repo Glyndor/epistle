@@ -5,6 +5,7 @@ pub mod client;
 mod resolver;
 pub mod srs;
 pub mod suppression;
+mod transport;
 mod worker;
 
 pub use resolver::{Connector, MxConnector};

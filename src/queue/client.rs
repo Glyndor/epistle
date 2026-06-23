@@ -35,6 +35,7 @@ impl DeliveryError {
 /// `server_name` is the MX hostname used for TLS verification when the
 /// remote offers STARTTLS. TLS is opportunistic: a remote without STARTTLS
 /// still gets the mail (MTA-STS/DANE enforcement comes later).
+#[allow(clippy::too_many_arguments)]
 pub async fn deliver<S>(
 	stream: S,
 	server_name: &str,
@@ -43,6 +44,7 @@ pub async fn deliver<S>(
 	recipients: &[String],
 	data: &[u8],
 	require_tls: bool,
+	auth: Option<(&str, &str)>,
 ) -> Result<(), DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -59,12 +61,27 @@ where
 		));
 	}
 
+	let mut tls_active = false;
 	if offers_starttls {
 		conn.command("STARTTLS", 220).await?;
 		let inner = conn.into_inner();
 		let tls = tls_connect(inner, server_name).await?;
 		conn = Conn::new(Box::new(tls));
 		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
+		tls_active = true;
+	}
+
+	// Relay (submission) AUTH: only over TLS, never in plaintext (fail closed).
+	if let Some((username, password)) = auth {
+		if !tls_active {
+			return Err(DeliveryError::Permanent(
+				"relay AUTH requested but smarthost offered no STARTTLS".into(),
+			));
+		}
+		use base64::Engine;
+		let token =
+			base64::engine::general_purpose::STANDARD.encode(format!("\0{username}\0{password}"));
+		conn.command(&format!("AUTH PLAIN {token}"), 235).await?;
 	}
 
 	conn.command(&format!("MAIL FROM:<{reverse_path}>"), 250)
@@ -249,6 +266,7 @@ mod tests {
 			&["bob@example.org".to_string()],
 			b"Subject: hi\r\n\r\n.leading dot\r\nbody\r\n",
 			false,
+			None,
 		)
 		.await
 		.expect("delivery succeeds");
@@ -287,6 +305,7 @@ mod tests {
 			&["unknown@example.org".to_string()],
 			b"body\r\n",
 			false,
+			None,
 		)
 		.await;
 
@@ -305,6 +324,7 @@ mod tests {
 			&["bob@example.org".to_string()],
 			b"body\r\n",
 			false,
+			None,
 		)
 		.await
 	}
@@ -314,6 +334,29 @@ mod tests {
 		let result = deliver_against(b"not-a-code\r\n").await;
 		assert!(
 			matches!(result, Err(DeliveryError::Transient(_))),
+			"{result:?}"
+		);
+	}
+
+	#[tokio::test]
+	async fn relay_auth_without_tls_is_permanent() {
+		// Greeting then an EHLO reply offering no STARTTLS.
+		let canned: &[u8] = b"220 mx ready\r\n250-mx.example.org\r\n250 SIZE 0\r\n";
+		let stream = tokio::io::join(canned, tokio::io::sink());
+		let result = deliver(
+			stream,
+			"mx.example.org",
+			"mail.sender.example",
+			"alice@sender.example",
+			&["bob@example.org".to_string()],
+			b"body\r\n",
+			false,
+			Some(("user", "pass")),
+		)
+		.await;
+		// AUTH credentials must never cross plaintext: fail closed.
+		assert!(
+			matches!(result, Err(DeliveryError::Permanent(_))),
 			"{result:?}"
 		);
 	}

@@ -309,3 +309,58 @@ async fn notify_never_suppresses_the_bounce() {
 		"no bounce for NOTIFY=NEVER"
 	);
 }
+
+fn fail_rule(domain: &str) -> crate::config::Transport {
+	crate::config::Transport {
+		account: None,
+		domain: Some(domain.to_string()),
+		kind: crate::config::TransportKind::Fail,
+		host: None,
+		port: None,
+		starttls: false,
+		username: None,
+		password: None,
+		socks_proxy: None,
+	}
+}
+
+#[tokio::test]
+async fn fail_transport_drops_without_connecting() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let sink = Arc::new(MemorySink::new());
+	let connector = Arc::new(LoopbackConnector {
+		sink: sink.clone(),
+		domain: "remote.example".to_string(),
+	});
+	let bounce_sink = Arc::new(MemorySink::new());
+
+	let worker = Worker::new(spool, connector, "mail.sender.example")
+		.with_bounce_sink(bounce_sink.clone() as Arc<dyn MessageSink>)
+		.with_transports(vec![fail_rule("remote.example")]);
+	let delivered = worker.pass().await.expect("pass");
+
+	// The fail transport refuses: nothing delivered to the remote, message
+	// dropped and bounced to the sender.
+	assert_eq!(delivered, 0);
+	assert!(sink.messages().is_empty());
+	assert!(worker.spool.list().expect("list").is_empty());
+	assert_eq!(bounce_sink.messages().len(), 1);
+}
+
+#[tokio::test]
+async fn direct_kind_still_delivers_via_mx() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let sink = Arc::new(MemorySink::new());
+	let connector = Arc::new(LoopbackConnector {
+		sink: sink.clone(),
+		domain: "remote.example".to_string(),
+	});
+	let mut direct = fail_rule("remote.example");
+	direct.kind = crate::config::TransportKind::Direct;
+
+	let worker = Worker::new(spool, connector, "mail.sender.example").with_transports(vec![direct]);
+	assert_eq!(worker.pass().await.expect("pass"), 1);
+	assert_eq!(sink.messages().len(), 1);
+}

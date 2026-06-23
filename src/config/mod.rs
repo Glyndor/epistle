@@ -15,6 +15,7 @@ mod listener;
 mod oauth;
 mod privileges;
 mod tls;
+mod transport;
 mod validate;
 mod webhook;
 
@@ -29,6 +30,7 @@ pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
 pub use privileges::Privileges;
 pub use tls::Tls;
+pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -151,6 +153,10 @@ pub struct Config {
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
 	pub max_connections_per_listener: Option<usize>,
+	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
+	/// account/domain/global routing. Empty means direct MX delivery for all.
+	#[serde(default)]
+	pub transport: Vec<Transport>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.

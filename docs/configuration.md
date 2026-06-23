@@ -174,6 +174,19 @@ A mail account. An account with no `password_hash` is receive-only.
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 
+### `[[transport]]`
+Outbound routing rules. Each rule matches by sender `account` (the envelope sender's local part) **or** recipient `domain`; a rule with neither is the catch-all. The most specific match wins (account > domain > catch-all). With no rule, mail is delivered directly via MX. Empty `[[transport]]` keeps that default.
+
+| Key | Meaning |
+|---|---|
+| `account` | Match mail from this local sender account. |
+| `domain` | Match mail to this recipient domain. |
+| `kind` | `direct` (MX, the default), `relay` (smarthost), or `fail` (refuse). |
+| `host`, `port` | Smarthost address (required for `relay`). |
+| `starttls` | Upgrade to TLS before AUTH/mail on a relay. Required when AUTH is set. |
+| `username`, `password` | SMTP AUTH for the relay (submission). Sent only over TLS — never in plaintext (fail closed). |
+| `socks_proxy` | `host:port` of a SOCKS5 proxy to reach the smarthost through. |
+
 ## Example
 
 ```toml
