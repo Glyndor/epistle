@@ -196,6 +196,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)
 	.with_bounce_sink(Arc::clone(&sink))
 	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
+	.with_dane(Arc::clone(&spf_dns))
 	.with_metrics(metrics.clone())
 	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
 	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
@@ -209,35 +210,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// DMARC aggregate report flush runs hourly in the background.
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
 
-	// Automatic DKIM key rotation, when [dkim] rotate_days and a [dns] provider
-	// are both configured. Hourly ticks rotate/retire when due.
-	if let (Some(dkim), Some(signer), Some(dns)) = (&config.dkim, &dkim_signer, &config.dns)
-		&& let Some(rotate_days) = dkim.rotate_days
-		&& let Some(provider) = dns.build()
-	{
-		let rotator = crate::dkim::Rotator::new(
-			config.data_dir.clone(),
-			signer.clone(),
-			provider,
-			dns.zone.clone(),
-			dns.zone.clone(),
-			u64::from(rotate_days) * 86_400,
-			u64::from(dkim.rotate_overlap_days) * 86_400,
-		);
-		tokio::spawn(async move {
-			let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
-			loop {
-				ticker.tick().await;
-				let now = std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.map(|d| d.as_secs())
-					.unwrap_or(0);
-				if let Err(error) = rotator.tick(now).await {
-					tracing::warn!(%error, "dkim rotation tick failed");
-				}
-			}
-		});
-	}
+	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
 
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	let tls_acceptor = match &config.tls {

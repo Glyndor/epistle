@@ -11,6 +11,10 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
+use crate::dane::policy::DaneOutcome;
+use crate::dane::tlsa::TlsaRecord;
+use crate::dane::verify::verify_chain;
+
 /// Whether the attempt may be retried later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryError {
@@ -32,9 +36,14 @@ impl DeliveryError {
 
 /// One outbound delivery attempt over an established stream.
 ///
-/// `server_name` is the MX hostname used for TLS verification when the
-/// remote offers STARTTLS. TLS is opportunistic: a remote without STARTTLS
-/// still gets the mail (MTA-STS/DANE enforcement comes later).
+/// `server_name` is the MX hostname used for TLS verification when the remote
+/// offers STARTTLS. `tlsa` are the DNSSEC-validated TLSA records for this MX (an
+/// empty slice means none): when present they make STARTTLS mandatory and the
+/// presented certificate is authenticated against them (RFC 7672). TLS is
+/// otherwise opportunistic: a remote without STARTTLS and no TLSA still gets the
+/// mail. Fail closed: a TLSA mismatch, or DANE-mandated STARTTLS the remote does
+/// not offer, returns a transient error so the message is retried, never sent in
+/// the clear.
 #[allow(clippy::too_many_arguments)]
 pub async fn deliver<S>(
 	stream: S,
@@ -45,6 +54,7 @@ pub async fn deliver<S>(
 	data: &[u8],
 	require_tls: bool,
 	auth: Option<(&str, &str)>,
+	tlsa: &[TlsaRecord],
 ) -> Result<(), DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -54,10 +64,10 @@ where
 
 	conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 	let offers_starttls = conn.last_reply_contains("STARTTLS");
-	if require_tls && !offers_starttls {
-		// MTA-STS enforce: never downgrade to plaintext; retry later.
+	// DANE presence makes STARTTLS mandatory (RFC 7672 §2.2): never downgrade.
+	if (require_tls || !tlsa.is_empty()) && !offers_starttls {
 		return Err(DeliveryError::Transient(
-			"MTA-STS enforce but remote offers no STARTTLS".into(),
+			"TLS required (MTA-STS/DANE) but remote offers no STARTTLS".into(),
 		));
 	}
 
@@ -65,7 +75,17 @@ where
 	if offers_starttls {
 		conn.command("STARTTLS", 220).await?;
 		let inner = conn.into_inner();
-		let tls = tls_connect(inner, server_name).await?;
+		let (tls, peer_chain) = tls_connect(inner, server_name).await?;
+		// DANE: authenticate the presented chain against validated TLSA records.
+		// With none, this is a no-op (opportunistic); a mismatch fails closed.
+		match verify_chain(tlsa, &peer_chain) {
+			DaneOutcome::Authenticated | DaneOutcome::NoRecords => {}
+			DaneOutcome::Mismatch => {
+				return Err(DeliveryError::Transient(format!(
+					"DANE: no TLSA record matches the certificate of {server_name}"
+				)));
+			}
+		}
 		conn = Conn::new(Box::new(tls));
 		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 		tls_active = true;
@@ -96,10 +116,18 @@ where
 	Ok(())
 }
 
+/// Complete a STARTTLS handshake, returning the encrypted stream and the DER
+/// certificate chain the peer presented (leaf first), for DANE authentication.
 async fn tls_connect(
 	stream: Box<dyn Stream>,
 	server_name: &str,
-) -> Result<tokio_rustls::client::TlsStream<Box<dyn Stream>>, DeliveryError> {
+) -> Result<
+	(
+		tokio_rustls::client::TlsStream<Box<dyn Stream>>,
+		Vec<Vec<u8>>,
+	),
+	DeliveryError,
+> {
 	let mut roots = RootCertStore::empty();
 	roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 	crate::tls::ensure_crypto_provider();
@@ -108,10 +136,17 @@ async fn tls_connect(
 		.with_no_client_auth();
 	let name = ServerName::try_from(server_name.to_string())
 		.map_err(|_| DeliveryError::Transient(format!("invalid TLS name {server_name}")))?;
-	TlsConnector::from(Arc::new(config))
+	let tls = TlsConnector::from(Arc::new(config))
 		.connect(name, stream)
 		.await
-		.map_err(|error| DeliveryError::Transient(format!("TLS handshake failed: {error}")))
+		.map_err(|error| DeliveryError::Transient(format!("TLS handshake failed: {error}")))?;
+	let peer_chain = tls
+		.get_ref()
+		.1
+		.peer_certificates()
+		.map(|certs| certs.iter().map(|cert| cert.as_ref().to_vec()).collect())
+		.unwrap_or_default();
+	Ok((tls, peer_chain))
 }
 
 trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -267,6 +302,7 @@ mod tests {
 			b"Subject: hi\r\n\r\n.leading dot\r\nbody\r\n",
 			false,
 			None,
+			&[],
 		)
 		.await
 		.expect("delivery succeeds");
@@ -306,6 +342,7 @@ mod tests {
 			b"body\r\n",
 			false,
 			None,
+			&[],
 		)
 		.await;
 
@@ -325,6 +362,7 @@ mod tests {
 			b"body\r\n",
 			false,
 			None,
+			&[],
 		)
 		.await
 	}
@@ -352,6 +390,7 @@ mod tests {
 			b"body\r\n",
 			false,
 			Some(("user", "pass")),
+			&[],
 		)
 		.await;
 		// AUTH credentials must never cross plaintext: fail closed.
