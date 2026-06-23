@@ -176,6 +176,16 @@ A mail account. An account with no `password_hash` is receive-only.
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 
+### `[[alias]]`
+A multi-target alias: one address that delivers to several local accounts.
+
+| Key | Meaning |
+|---|---|
+| `address` | The alias address (e.g. `team@example.org`). |
+| `members` | Member addresses it delivers to (each a local account address). |
+| `senders` | Addresses allowed to send *as* the alias (From / MAIL FROM). Empty means any member may; a non-member is always refused. |
+| `hidden` | Keep the membership private — not disclosed through directory queries (default `true`). |
+
 ### `[[transport]]`
 Outbound routing rules. Each rule matches by sender `account` (the envelope sender's local part) **or** recipient `domain`; a rule with neither is the catch-all. The most specific match wins (account > domain > catch-all). With no rule, mail is delivered directly via MX. Empty `[[transport]]` keeps that default.
 

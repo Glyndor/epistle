@@ -50,7 +50,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			config.accounts.clone(),
 		)
 		.map_err(|error| std::io::Error::other(error.to_string()))?
-		.with_domain_quotas(config.domain_quotas.clone()),
+		.with_domain_quotas(config.domain_quotas.clone())
+		.with_aliases(config.alias.clone()),
 	);
 	let directory = account_store.handle();
 

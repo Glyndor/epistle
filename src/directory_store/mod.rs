@@ -113,6 +113,8 @@ pub struct AccountStore {
 	static_accounts: Vec<Account>,
 	/// Default storage quota (bytes) per domain.
 	domain_quotas: std::collections::HashMap<String, u64>,
+	/// Multi-target aliases from the static configuration.
+	aliases: Vec<crate::config::Alias>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
 	handle: DirectoryHandle,
 }
@@ -141,6 +143,7 @@ impl AccountStore {
 			domain_aliases,
 			static_accounts,
 			domain_quotas: std::collections::HashMap::new(),
+			aliases: Vec::new(),
 			dynamic: RwLock::new(dynamic.accounts),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
@@ -151,6 +154,13 @@ impl AccountStore {
 	/// Set the per-domain default storage quotas and rebuild the directory.
 	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
 		self.domain_quotas = quotas;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Set the multi-target aliases and rebuild the directory.
+	pub fn with_aliases(mut self, aliases: Vec<crate::config::Alias>) -> Self {
+		self.aliases = aliases;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -360,6 +370,16 @@ impl AccountStore {
 					(account.forward.clone(), account.forward_keep_local),
 				)
 			});
+		let aliases = self.aliases.iter().map(|alias| {
+			(
+				alias.address.clone(),
+				crate::smtp::directory::AliasSpec {
+					members: alias.members.clone(),
+					senders: alias.senders.clone(),
+					hidden: alias.hidden,
+				},
+			)
+		});
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
@@ -369,6 +389,7 @@ impl AccountStore {
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
 			.with_forwards(forwards)
+			.with_aliases(aliases)
 	}
 }
 

@@ -81,6 +81,10 @@ impl LocalDelivery {
 				Resolution::Account(account) => {
 					accounts.insert(account);
 				}
+				// A multi-target alias fans out to every member account.
+				Resolution::Alias(members) => {
+					accounts.extend(members);
+				}
 				_ => {
 					return Err(SinkError::Unavailable(format!(
 						"recipient {recipient} no longer resolves to an account"
