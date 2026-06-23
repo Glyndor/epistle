@@ -83,6 +83,16 @@ pub enum Command {
 		flags: Vec<String>,
 		size: usize,
 	},
+	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
+	/// message to `mailbox`, then expunge message `sequence` from the selected
+	/// mailbox. `uid` selects `UID REPLACE`.
+	Replace {
+		sequence: u32,
+		mailbox: String,
+		flags: Vec<String>,
+		size: usize,
+		uid: bool,
+	},
 	Fetch {
 		sequence: SequenceSet,
 		items: Vec<FetchItem>,
@@ -269,6 +279,8 @@ pub enum FetchItem {
 	ThreadId,
 	/// `SAVEDATE`: when the message was saved to the mailbox (RFC 8514).
 	SaveDate,
+	/// `PREVIEW`: a short text snippet of the message (RFC 8970).
+	Preview,
 }
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).
@@ -360,6 +372,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 	Some((year, month, day))
 }
 
+mod literal;
 mod parse;
 mod search;
 mod select_params;

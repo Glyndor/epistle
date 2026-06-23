@@ -13,6 +13,7 @@ mod codes;
 mod commands;
 mod fetchstore;
 mod helpers;
+mod literal;
 mod sort;
 mod thread;
 
@@ -51,6 +52,16 @@ impl Output {
 	}
 }
 
+/// A literal-bearing command (APPEND or REPLACE) awaiting its payload.
+struct PendingLiteral {
+	tag: String,
+	mailbox: String,
+	flags: Vec<Flag>,
+	/// For REPLACE only: the selected mailbox to expunge from and the source
+	/// message sequence number, resolved when the command was received.
+	replace: Option<(String, u32)>,
+}
+
 enum State {
 	NotAuthenticated {
 		login_failures: u8,
@@ -72,7 +83,7 @@ pub struct Session {
 	data_dir: PathBuf,
 	directory: Arc<Directory>,
 	state: State,
-	pending_append: Option<(String, String, Vec<Flag>)>,
+	pending_append: Option<PendingLiteral>,
 	idle_tag: Option<String>,
 	/// Whether the connection is inside TLS (LOGIN refused outside).
 	tls_active: bool,
@@ -234,6 +245,13 @@ impl Session {
 				flags,
 				size,
 			} => self.append_begin(&tag, &mailbox, &flags, size),
+			Command::Replace {
+				sequence,
+				mailbox,
+				flags,
+				size,
+				uid,
+			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid),
 			Command::Fetch {
 				sequence,
 				items,

@@ -277,58 +277,6 @@ impl Session {
 		}
 	}
 
-	pub(super) fn append_begin(
-		&mut self,
-		tag: &str,
-		mailbox: &str,
-		flag_tokens: &[String],
-		size: usize,
-	) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
-		}
-		// Quota enforcement (RFC 9208): refuse before reading the literal.
-		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
-		if projected > self.quota_limit_bytes {
-			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
-		}
-		let mut flags = Vec::with_capacity(flag_tokens.len());
-		for token in flag_tokens {
-			match Flag::parse(token) {
-				Some(flag) => flags.push(flag),
-				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
-			}
-		}
-		self.pending_append = Some((tag.to_string(), mailbox.to_string(), flags));
-		let mut output = Output::text("+ ready for literal data\r\n".to_string());
-		output.collect_literal = Some(size);
-		output
-	}
-
-	/// Called by the network layer with the complete APPEND literal.
-	pub fn literal_done(&mut self, data: &[u8]) -> Output {
-		let Some((tag, mailbox, flags)) = self.pending_append.take() else {
-			return Output::text("* BAD unexpected literal\r\n".to_string());
-		};
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		match mailbox::append(&self.data_dir, &account, &mailbox, &flags, data) {
-			Ok(id) => {
-				// UIDPLUS: report the UIDVALIDITY and UID assigned (RFC 4315).
-				let code = match mailbox::appenduid(&self.data_dir, &account, &mailbox, id) {
-					Some((validity, uid)) => format!("[APPENDUID {validity} {uid}] "),
-					None => String::new(),
-				};
-				Output::text(format!("{tag} OK {code}APPEND completed\r\n"))
-			}
-			Err(_) => Output::text(format!("{tag} NO APPEND failed\r\n")),
-		}
-	}
-
 	/// Poll for mailbox changes during IDLE. Refreshes the snapshot and emits
 	/// untagged EXISTS/FLAGS responses if the message count changed. Returns
 	/// `None` when not in IDLE or no mailbox is selected.
