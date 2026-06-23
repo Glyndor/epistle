@@ -255,7 +255,7 @@ impl Session {
 	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
 	fn quota_line(&self, account: &str) -> String {
 		let used_kib = mailbox::account_usage(&self.data_dir, account).div_ceil(1024);
-		let limit_kib = self.quota_limit_bytes.div_ceil(1024);
+		let limit_kib = self.effective_quota().div_ceil(1024);
 		format!("* QUOTA \"\" (STORAGE {used_kib} {limit_kib})\r\n")
 	}
 

@@ -21,7 +21,7 @@ impl Session {
 		}
 		// Quota enforcement (RFC 9208): refuse before reading the literal.
 		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
-		if projected > self.quota_limit_bytes {
+		if projected > self.effective_quota() {
 			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
 		}
 		let mut flags = Vec::with_capacity(flag_tokens.len());
@@ -87,7 +87,7 @@ impl Session {
 			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
 		}
 		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
-		if projected > self.quota_limit_bytes {
+		if projected > self.effective_quota() {
 			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
 		}
 		let mut flags = Vec::with_capacity(flag_tokens.len());

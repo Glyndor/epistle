@@ -40,6 +40,7 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),
 		catch_all: Vec::new(),
+		quota_bytes: None,
 	}];
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(

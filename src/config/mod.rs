@@ -139,6 +139,14 @@ pub struct Config {
 	/// DNS provider for record automation (e.g. TLSA refresh on cert rotation).
 	#[serde(default)]
 	pub dns: Option<Dns>,
+	/// Default storage quota (bytes) per domain, applied to accounts in that
+	/// domain that have no quota of their own.
+	#[serde(default)]
+	pub domain_quotas: std::collections::HashMap<String, u64>,
+	/// Max messages an authenticated account may submit per minute. Absent
+	/// disables per-account submission rate limiting.
+	#[serde(default)]
+	pub submission_rate_limit_per_min: Option<u32>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
