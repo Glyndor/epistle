@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::imap::mailbox::{self, Snapshot};
+use crate::imap::mailbox::{self, Flag, Snapshot};
 
 /// Write every message in `account`'s mailboxes to `out` as one mbox stream.
 pub(super) fn run(data_dir: &Path, account: &str, out: &mut impl Write) -> ExitCode {
@@ -31,6 +31,60 @@ pub(super) fn run(data_dir: &Path, account: &str, out: &mut impl Write) -> ExitC
 	}
 	eprintln!("exported {count} messages for {account}");
 	ExitCode::SUCCESS
+}
+
+/// Export `account`'s mailboxes to a Maildir tree under `dir`: INBOX to the
+/// root `cur/`, each other mailbox to a Dovecot Maildir++ `.Name/cur/`
+/// subdirectory (the inverse of the Maildir import). IMAP flags are carried in
+/// the Maildir `:2,<info>` filename suffix.
+pub(super) fn run_maildir(data_dir: &Path, account: &str, dir: &Path) -> ExitCode {
+	let mut count = 0u64;
+	for name in mailbox::list(data_dir, account) {
+		let folder = if name.eq_ignore_ascii_case("INBOX") {
+			dir.to_path_buf()
+		} else {
+			dir.join(format!(".{name}"))
+		};
+		let cur = folder.join("cur");
+		if std::fs::create_dir_all(&cur).is_err() {
+			eprintln!("error: creating {}", cur.display());
+			return ExitCode::FAILURE;
+		}
+		let Ok(snapshot) = Snapshot::open(data_dir, account, &name) else {
+			continue;
+		};
+		for message in snapshot.messages() {
+			let Ok(data) = snapshot.read(message) else {
+				continue;
+			};
+			let filename = format!("{}:2,{}", message.id(), maildir_flags(&message.flags));
+			if std::fs::write(cur.join(filename), &data).is_err() {
+				eprintln!("error: writing message to {}", cur.display());
+				return ExitCode::FAILURE;
+			}
+			count += 1;
+		}
+	}
+	eprintln!("exported {count} messages for {account}");
+	ExitCode::SUCCESS
+}
+
+/// The Maildir info flags (`:2,` suffix) for a message's IMAP flags, in the
+/// canonical alphabetical order (RFC-less Maildir convention).
+fn maildir_flags(flags: &[Flag]) -> String {
+	let mut info = String::new();
+	for (flag, ch) in [
+		(Flag::Draft, 'D'),
+		(Flag::Flagged, 'F'),
+		(Flag::Answered, 'R'),
+		(Flag::Seen, 'S'),
+		(Flag::Deleted, 'T'),
+	] {
+		if flags.contains(&flag) {
+			info.push(ch);
+		}
+	}
+	info
 }
 
 /// One mbox entry: a `From ` separator, an `X-Mailbox` header, then the quoted
@@ -58,4 +112,80 @@ fn split_lines(data: &[u8]) -> impl Iterator<Item = &[u8]> {
 fn needs_quote(line: &[u8]) -> bool {
 	let stripped = line.iter().position(|&b| b != b'>').unwrap_or(line.len());
 	line[stripped..].starts_with(b"From ")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Write a raw message into an account's INBOX (`new`).
+	fn deliver(data_dir: &Path, account: &str, body: &[u8]) {
+		let new_dir = data_dir.join("accounts").join(account).join("new");
+		std::fs::create_dir_all(&new_dir).expect("dirs");
+		let id = uuid::Uuid::now_v7();
+		std::fs::write(new_dir.join(format!("{id}.eml")), body).expect("write");
+	}
+
+	#[test]
+	fn maildir_flags_are_canonical_order() {
+		let flags = [Flag::Seen, Flag::Draft, Flag::Answered];
+		// Output is always D F R S T order regardless of input order.
+		assert_eq!(maildir_flags(&flags), "DRS");
+		assert_eq!(maildir_flags(&[]), "");
+		assert_eq!(maildir_flags(&[Flag::Deleted, Flag::Flagged]), "FT");
+	}
+
+	#[test]
+	fn maildir_export_writes_messages_to_cur() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), "alice", b"Subject: one\r\n\r\nbody one\r\n");
+		deliver(dir.path(), "alice", b"Subject: two\r\n\r\nbody two\r\n");
+
+		let out = tempfile::tempdir().expect("out");
+		assert_eq!(
+			run_maildir(dir.path(), "alice", out.path()),
+			ExitCode::SUCCESS
+		);
+		let cur = out.path().join("cur");
+		let files: Vec<_> = std::fs::read_dir(&cur)
+			.expect("cur exists")
+			.flatten()
+			.collect();
+		assert_eq!(files.len(), 2, "two messages exported");
+		// Maildir filenames carry the `:2,` info suffix.
+		assert!(
+			files
+				.iter()
+				.all(|f| f.file_name().to_string_lossy().contains(":2,")),
+			"maildir info suffix present"
+		);
+	}
+
+	#[test]
+	fn maildir_export_round_trips_through_import() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		deliver(dir.path(), "alice", b"Subject: hello\r\n\r\nround trip\r\n");
+
+		let out = tempfile::tempdir().expect("out");
+		assert_eq!(
+			run_maildir(dir.path(), "alice", out.path()),
+			ExitCode::SUCCESS
+		);
+
+		// Import the exported Maildir into a fresh account and confirm the
+		// message survives.
+		let dest = tempfile::tempdir().expect("dest");
+		assert_eq!(
+			crate::cli::import::run_maildir(dest.path(), "bob", out.path()),
+			ExitCode::SUCCESS
+		);
+		let snapshot = Snapshot::open(dest.path(), "bob", "INBOX").expect("inbox");
+		assert_eq!(snapshot.messages().count(), 1);
+		let message = snapshot.messages().next().expect("message");
+		let data = snapshot.read(message).expect("read");
+		assert!(
+			String::from_utf8_lossy(&data).contains("round trip"),
+			"content preserved"
+		);
+	}
 }
