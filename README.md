@@ -112,6 +112,68 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 - [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
 - [Security](docs/security.md) — the transport, authentication, anti-abuse and at-rest controls, and how to report a vulnerability.
 
+## 🧪 End-to-end test matrix
+
+Beyond the unit and in-process protocol tests, an end-to-end matrix
+([`.github/workflows/e2e.yml`](.github/workflows/e2e.yml)) exercises the real
+shipped binary as it runs in production:
+
+- **Full server, not a harness** — `epistle serve` is built `--release` and
+  launched under **systemd** (`systemd-run`), exactly as an operator would run
+  it from [`contrib/epistle.service`](contrib/epistle.service).
+- **Real ports and TLS** — it binds a `submissions` listener (implicit TLS) and
+  an `imaps` listener (implicit TLS) on real TCP ports with a self-signed
+  certificate.
+- **A real round trip** — `tests/e2e.rs` opens a TLS client to the submission
+  port, authenticates (`AUTH PLAIN`), submits a message with a unique marker,
+  then polls the IMAP port over TLS and asserts the message is delivered and
+  fetchable.
+- **A VM matrix** — every step runs on each GitHub VM runner in the matrix
+  (`ubuntu-22.04`, `ubuntu-24.04`); GitHub's hosted runners are virtual
+  machines, so this is the VM coverage.
+
+The test is gated on `E2E_*` environment variables and skips cleanly when they
+are unset, so the default `cargo test` run is unaffected. To run it locally
+against a server you have started, point it at the live ports and the server's
+certificate:
+
+```sh
+cargo build --release
+
+# Generate a TLS certificate (the client must trust it as both root and leaf,
+# so it must not be CA-flagged), a config, and an account, then serve.
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
+  -days 2 -subj "/CN=mail.epistle.test" \
+  -addext "subjectAltName=DNS:mail.epistle.test,IP:127.0.0.1" \
+  -addext "basicConstraints=critical,CA:FALSE"
+
+cat > e2e.toml <<'EOF'
+hostname = "mail.epistle.test"
+data_dir = "/var/lib/epistle-e2e"
+domains = ["epistle.test"]
+[tls]
+cert_file = "cert.pem"
+key_file = "key.pem"
+[[listeners]]
+kind = "submissions"
+addr = "127.0.0.1"
+port = 4465
+[[listeners]]
+kind = "imaps"
+addr = "127.0.0.1"
+port = 4993
+EOF
+chmod 600 e2e.toml
+
+printf 'a-strong-password' | ./target/release/epistle account-add \
+  --config e2e.toml --name tester --address tester@epistle.test
+./target/release/epistle serve --config e2e.toml &
+
+E2E_HOST=127.0.0.1 E2E_SUBMISSION_PORT=4465 E2E_IMAPS_PORT=4993 \
+  E2E_ACCOUNT=tester@epistle.test E2E_PASSWORD=a-strong-password \
+  E2E_CA_PEM=cert.pem cargo test --test e2e
+```
+
 ## 🗺️ Roadmap
 
 Remaining work — an LDAP directory backend, IMAP `COMPRESS`, and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
