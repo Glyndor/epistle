@@ -212,6 +212,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
 
+	super::serve_tasks::spawn_blob_reclamation(&config);
+
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	let tls_acceptor = match &config.tls {
 		Some(tls_config) => Some(crate::tls::acceptor(tls_config).map_err(std::io::Error::other)?),

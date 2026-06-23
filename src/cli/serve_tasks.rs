@@ -67,6 +67,28 @@ pub(super) fn spawn_dmarc_flush(
 	Ok(())
 }
 
+/// JMAP uploaded blobs are transient (RFC 8620 §6.1): time-to-live for an
+/// unreferenced upload before it is reclaimed.
+const BLOB_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// Spawn the hourly JMAP blob reclamation: delete uploaded blobs older than
+/// `BLOB_TTL` from the upload store. Only the blob store is swept; stored mail
+/// is never touched.
+pub(super) fn spawn_blob_reclamation(config: &Config) {
+	let data_dir = config.data_dir.clone();
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			let removed = crate::api::reclaim_blobs(&data_dir, BLOB_TTL);
+			if removed > 0 {
+				tracing::info!(removed, "reclaimed expired JMAP blobs");
+			}
+		}
+	});
+}
+
 /// Spawn the automatic DKIM key-rotation task when `[dkim] rotate_days` and a
 /// `[dns]` provider are both configured. Hourly ticks rotate/retire when due.
 pub(super) fn spawn_dkim_rotation(
