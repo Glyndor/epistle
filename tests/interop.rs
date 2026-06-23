@@ -1,5 +1,5 @@
-//! SMTP/IMAP interoperability tests against the reference servers (Postfix,
-//! Dovecot). They run ONLY when the `INTEROP_*` environment variables point at
+//! SMTP/IMAP interoperability tests against a reference SMTP server (Postfix).
+//! They run ONLY when the `INTEROP_*` environment variables point at
 //! running peers (the `Interop` CI workflow provides them as service
 //! containers); otherwise each test prints "skipping" and returns, so the
 //! default `cargo test` run needs no containers.
@@ -18,10 +18,11 @@
 //!   raw compliant client is used as the inbound peer here).
 //! - epistle's IMAP server serves a real IMAP client over TLS
 //!   (`imap_server_serves_fetch`): LOGIN, SELECT INBOX, FETCH 1 (BODY[]),
-//!   LOGOUT, asserting the delivered body comes back. Dovecot is the reference
-//!   IMAP server; a Dovecot cross-check is deferred (epistle's IMAP correctness
-//!   is the core deliverable) — the `INTEROP_DOVECOT_*` reachability is still
-//!   asserted so the workflow's service container is exercised.
+//!   LOGOUT, asserting the delivered body comes back. A cross-check against a
+//!   reference IMAP server (Dovecot) is deferred: a bare Dovecot service
+//!   container needs a mounted config + seeded user to serve plaintext IMAP,
+//!   which the workflow can't provide, so epistle's IMAP correctness is proven
+//!   against a raw client here.
 
 use std::sync::Arc;
 
@@ -46,22 +47,11 @@ fn postfix_addr() -> Option<String> {
 	Some(format!("{host}:{port}"))
 }
 
-/// `host:port` for the Dovecot IMAP listener, or `None` when unset.
-fn dovecot_addr() -> Option<String> {
-	let host = std::env::var("INTEROP_DOVECOT_HOST")
-		.ok()
-		.filter(|h| !h.is_empty())?;
-	let port = std::env::var("INTEROP_DOVECOT_IMAP_PORT")
-		.ok()
-		.filter(|p| !p.is_empty())?;
-	Some(format!("{host}:{port}"))
-}
-
-/// True when any interop peer is configured; the IMAP/inbound tests run against
+/// True when the interop peer is configured; the IMAP/inbound tests run against
 /// in-process epistle servers but stay gated behind the same switch so the
 /// default `cargo test` run never spins up servers it cannot reach.
 fn interop_enabled() -> bool {
-	postfix_addr().is_some() || dovecot_addr().is_some()
+	postfix_addr().is_some()
 }
 
 /// Read one CRLF-terminated SMTP reply line from `stream`, returning its text
@@ -296,36 +286,6 @@ async fn imap_server_serves_fetch() {
 	send_line(&mut tls, "a4 LOGOUT").await;
 	read_until(&mut tls, "a4 OK").await;
 	task.abort();
-}
-
-#[tokio::test]
-async fn dovecot_imap_is_reachable() {
-	let Some(addr) = dovecot_addr() else {
-		eprintln!("skipping: INTEROP_DOVECOT_HOST/IMAP_PORT not set");
-		return;
-	};
-
-	// The reference Dovecot service must be reachable so the workflow's
-	// multi-server matrix is real. A full epistle-vs-Dovecot FETCH comparison is
-	// deferred (it needs a Dovecot configured for plaintext IMAP + a seeded
-	// user, which a bare service container does not provide). When the peer is
-	// configured to greet on this port we assert the IMAP `* OK`; otherwise the
-	// successful TCP connection alone proves reachability.
-	let mut stream = TcpStream::connect(&addr).await.expect("connect to Dovecot");
-	let mut byte = [0u8; 1];
-	match tokio::time::timeout(std::time::Duration::from_secs(3), stream.read(&mut byte)).await {
-		Ok(Ok(n)) if n == 1 && byte[0] == b'*' => {
-			let rest = read_line(&mut stream).await;
-			let greeting = format!("*{rest}");
-			assert!(
-				greeting.starts_with("* OK") || greeting.starts_with("* BYE"),
-				"Dovecot IMAP greeting: {greeting:?}"
-			);
-		}
-		_ => eprintln!(
-			"Dovecot reachable on {addr} (no plaintext IMAP greeting; cross-check deferred)"
-		),
-	}
 }
 
 /// Read from `stream` until `needle` appears in the accumulated text, returning
