@@ -86,6 +86,53 @@ impl crate::spf::DnsLookup for DaneDns {
 	}
 }
 
+/// A resolver whose TLSA lookup fails transiently (e.g. resolver timeout),
+/// while every other query succeeds with no records. Models the case where a
+/// host *may* publish DANE but the lookup cannot be completed right now.
+struct TlsaTempFailDns;
+
+impl crate::spf::DnsLookup for TlsaTempFailDns {
+	fn txt(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn addresses(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, crate::spf::DnsFailure>> + Send + '_>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn mx(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn tlsa(
+		&self,
+		_name: &str,
+	) -> std::pin::Pin<
+		Box<
+			dyn Future<Output = Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure>>
+				+ Send
+				+ '_,
+		>,
+	> {
+		Box::pin(async { Err(crate::spf::DnsFailure::Temporary) })
+	}
+}
+
 /// Connector that always fails with a transient error.
 struct DownConnector;
 
@@ -192,6 +239,31 @@ async fn dane_present_but_no_starttls_defers_and_keeps_message() {
 	// Deferred, not dropped: the message stays in the spool for retry.
 	assert_eq!(worker.spool.list().expect("list").len(), 1);
 	// Nothing crossed the wire to the (plaintext) remote.
+	assert!(sink.messages().is_empty());
+}
+
+#[tokio::test]
+async fn transient_tlsa_failure_defers_rather_than_downgrading() {
+	// A host that may publish DANE, but the TLSA lookup fails transiently. The
+	// worker must NOT treat that as "no DANE" and deliver over a (plaintext or
+	// opportunistic) connection — that would be a silent downgrade. It must
+	// defer (keep the message, deliver nothing) and retry later (RFC 7672 §2.1).
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let sink = Arc::new(MemorySink::new());
+	let connector = Arc::new(LoopbackConnector {
+		sink: sink.clone(),
+		domain: "remote.example".to_string(),
+	});
+	let dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(TlsaTempFailDns);
+
+	let worker = Worker::new(spool, connector, "mail.sender.example").with_dane(Arc::clone(&dns));
+	let delivered = worker.pass().await.expect("pass");
+
+	assert_eq!(delivered, 0);
+	// Deferred for retry: the message is still in the spool.
+	assert_eq!(worker.spool.list().expect("list").len(), 1);
+	// Nothing was delivered over a connection that bypassed DANE.
 	assert!(sink.messages().is_empty());
 }
 

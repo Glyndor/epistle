@@ -88,16 +88,22 @@ impl Worker {
 	}
 
 	/// DNSSEC-validated TLSA records for an MX host, queried at `_25._tcp.<host>`
-	/// (RFC 7672 §3). Empty when DANE is disabled, the host publishes none, or
-	/// the response is not authenticated — the lookup only ever returns trusted
-	/// records, so an empty result means "no DANE" (opportunistic TLS).
-	async fn tlsa_for(&self, mx_host: &str) -> Vec<crate::dane::tlsa::TlsaRecord> {
+	/// (RFC 7672 §3). `Ok(vec![])` when DANE is disabled, the host publishes
+	/// none, or the response is not authenticated — the lookup only ever returns
+	/// trusted records, so an empty result means "no DANE" (opportunistic TLS).
+	///
+	/// A transient TLSA lookup failure is propagated as `Err`, never collapsed
+	/// into an empty result: treating a temporary resolver error as "no DANE"
+	/// would silently downgrade a host that does publish TLSA, defeating the
+	/// downgrade protection DANE exists for (RFC 7672 §2.1). The caller defers
+	/// delivery in that case instead.
+	async fn tlsa_for(
+		&self,
+		mx_host: &str,
+	) -> Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure> {
 		match &self.dane_dns {
-			Some(dns) => dns
-				.tlsa(&format!("_25._tcp.{mx_host}"))
-				.await
-				.unwrap_or_default(),
-			None => Vec::new(),
+			Some(dns) => dns.tlsa(&format!("_25._tcp.{mx_host}")).await,
+			None => Ok(Vec::new()),
 		}
 	}
 
@@ -448,8 +454,17 @@ impl Worker {
 					// Direct (no rule, or kind = direct): MX delivery.
 					match self.connector.connect(&domain, policy.as_ref()).await {
 						Ok((stream, server_name)) => {
-							// DANE: TLSA is published under the MX hostname.
-							let tlsa = self.tlsa_for(&server_name).await;
+							// DANE: TLSA is published under the MX hostname. A
+							// transient TLSA lookup failure defers delivery rather
+							// than downgrading to opportunistic TLS (RFC 7672 §2.1).
+							let tlsa = match self.tlsa_for(&server_name).await {
+								Ok(records) => records,
+								Err(crate::spf::DnsFailure::Temporary) => {
+									return Outcome::Retry(format!(
+										"transient TLSA lookup failure for {server_name}"
+									));
+								}
+							};
 							(stream, server_name, None, require_tls, tlsa)
 						}
 						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),

@@ -66,6 +66,23 @@ fn selector_is_day_unique_and_stable() {
 	assert_ne!(selector_for(5 * DAY), selector_for(6 * DAY));
 }
 
+#[cfg(unix)]
+#[test]
+fn write_key_creates_with_owner_only_perms_and_refuses_overwrite() {
+	use std::os::unix::fs::PermissionsExt;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("dkim-sel.key");
+
+	super::write_key(&path, "PEM").expect("write");
+	let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+	// Never group/world readable: the private key has no permissive window.
+	assert_eq!(mode & 0o077, 0, "mode = {:o}", mode);
+
+	// A pre-existing path is an error (fail closed), not a silent overwrite.
+	assert!(super::write_key(&path, "OTHER").is_err());
+}
+
 #[test]
 fn reloadable_signer_swaps_the_active_signer() {
 	let dir = tempfile::tempdir().expect("tempdir");

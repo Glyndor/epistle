@@ -83,11 +83,17 @@ impl Response {
 	}
 }
 
+/// How many failed `AUTHENTICATE` attempts close the connection, matching the
+/// SMTP and IMAP auth paths so this protocol is not a softer brute-force target.
+const MAX_AUTH_FAILURES: u8 = 3;
+
 /// One ManageSieve connection's protocol state.
 pub struct Session<B: Backend> {
 	backend: B,
 	tls: bool,
 	account: Option<String>,
+	/// Failed `AUTHENTICATE` attempts on this connection.
+	auth_failures: u8,
 }
 
 impl<B: Backend> Session<B> {
@@ -98,6 +104,7 @@ impl<B: Backend> Session<B> {
 			backend,
 			tls,
 			account: None,
+			auth_failures: 0,
 		}
 	}
 
@@ -192,9 +199,18 @@ impl<B: Backend> Session<B> {
 		match account {
 			Some(account) => {
 				self.account = Some(account);
+				self.auth_failures = 0;
 				Response::Ok(Some("Authenticated.".to_string()))
 			}
-			None => Response::No(Some("Authentication failed.".to_string())),
+			None => {
+				self.auth_failures = self.auth_failures.saturating_add(1);
+				if self.auth_failures >= MAX_AUTH_FAILURES {
+					// Close the connection so an attacker cannot guess unbounded
+					// credentials on a single connection (matches SMTP/IMAP).
+					return Response::Bye("Too many authentication failures.".to_string());
+				}
+				Response::No(Some("Authentication failed.".to_string()))
+			}
 		}
 	}
 

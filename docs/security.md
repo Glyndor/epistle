@@ -4,6 +4,10 @@ epistle is built secure-by-default and fail-closed: a misconfiguration or a
 failed safety check aborts rather than degrading silently. This page summarizes
 the controls in place and how to report a vulnerability.
 
+For the requirement-by-requirement mapping to OWASP ASVS Level 3 — each control
+tied to the file and mechanism that implements it — see the
+[ASVS L3 sweep](asvs.md).
+
 ## Transport
 
 - **Authentication never crosses cleartext.** SMTP `AUTH` and IMAP `LOGIN`/
