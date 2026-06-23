@@ -170,6 +170,40 @@ fn spawn_jwks_refresh(
 	});
 }
 
+/// Load the SQL directory accounts into the store once, then spawn an hourly
+/// refresh task. A no-op unless `[database] directory = true` and a reputation
+/// pool is present. The initial load fails closed (a fatal startup error) so the
+/// server never runs with a silently empty SQL directory; later refresh failures
+/// keep the previously loaded accounts. Account precedence (static and dynamic
+/// over SQL) is handled by [`crate::directory_store::AccountStore`].
+pub(super) async fn spawn_sql_directory(
+	config: &Config,
+	pool: &Option<sqlx::PgPool>,
+	store: Arc<crate::directory_store::AccountStore>,
+) -> std::io::Result<()> {
+	let (Some(true), Some(pool)) = (config.database.as_ref().map(|db| db.directory), pool) else {
+		return Ok(());
+	};
+	let accounts = crate::directory_store::load_sql_accounts(pool)
+		.await
+		.map_err(|error| std::io::Error::other(format!("sql directory load: {error}")))?;
+	tracing::info!(count = accounts.len(), "loaded SQL directory accounts");
+	store.set_sql_accounts(accounts);
+	let pool = pool.clone();
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			match crate::directory_store::load_sql_accounts(&pool).await {
+				Ok(accounts) => store.set_sql_accounts(accounts),
+				Err(error) => tracing::warn!(%error, "sql directory refresh failed"),
+			}
+		}
+	});
+	Ok(())
+}
+
 /// Spawn the automatic DKIM key-rotation task when `[dkim] rotate_days` and a
 /// `[dns]` provider are both configured. Hourly ticks rotate/retire when due.
 pub(super) fn spawn_dkim_rotation(
