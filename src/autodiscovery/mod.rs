@@ -84,6 +84,32 @@ pub fn autodiscover(hostname: &str) -> String {
 	)
 }
 
+/// Build a Microsoft Autodiscover v2 JSON response for the requested protocol,
+/// or `None` if the protocol is not supported. `Autodiscoverv1` redirects to the
+/// POX endpoint; IMAP/POP use implicit TLS, SMTP submission uses STARTTLS.
+pub fn autodiscover_v2(hostname: &str, protocol: &str) -> Option<String> {
+	let host = json_escape(hostname);
+	if protocol.eq_ignore_ascii_case("autodiscoverv1") {
+		return Some(format!(
+			r#"{{"Protocol":"Autodiscoverv1","Url":"https://{host}/autodiscover/autodiscover.xml"}}"#
+		));
+	}
+	let (proto, port, ssl) = match protocol.to_ascii_lowercase().as_str() {
+		"imap" => ("IMAP", 993, true),
+		"pop" => ("POP3", 995, true),
+		"smtp" => ("SMTP", 587, false),
+		_ => return None,
+	};
+	Some(format!(
+		r#"{{"Protocol":"{proto}","Server":"{host}","Port":{port},"SSL":{ssl},"AuthRequired":true}}"#
+	))
+}
+
+/// Escape a value for safe interpolation into a JSON string literal.
+fn json_escape(value: &str) -> String {
+	value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Escape the five XML special characters for safe interpolation.
 pub fn escape(value: &str) -> String {
 	value
@@ -129,11 +155,27 @@ pub fn router(hostname: String, domains: Vec<String>) -> Router {
 			"/autodiscover/autodiscover.xml",
 			get(autodiscover_handler).post(autodiscover_handler),
 		)
+		.route(
+			"/autodiscover/autodiscover.json",
+			get(autodiscover_v2_handler),
+		)
 		.with_state(state)
 }
 
 fn xml(body: String) -> Response {
 	([(header::CONTENT_TYPE, "application/xml")], body).into_response()
+}
+
+fn json(body: String) -> Response {
+	([(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+/// Case-insensitive query-parameter lookup (Outlook sends `Protocol`/`Email`).
+fn param_ci<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {
+	params
+		.iter()
+		.find(|(k, _)| k.eq_ignore_ascii_case(key))
+		.map(|(_, v)| v)
 }
 
 /// Serve Thunderbird autoconfig for the `emailaddress` query's domain, if hosted.
@@ -153,6 +195,27 @@ async fn autoconfig_handler(
 /// Serve the Microsoft Autodiscover v1 document (keyed on the mail hostname).
 async fn autodiscover_handler(State(state): State<Discovery>) -> Response {
 	xml(autodiscover(&state.hostname))
+}
+
+/// Serve the Microsoft Autodiscover v2 JSON document for the requested
+/// `Protocol`. A hosted `Email` domain is required when supplied; an
+/// unsupported protocol is a 404.
+async fn autodiscover_v2_handler(
+	State(state): State<Discovery>,
+	Query(params): Query<HashMap<String, String>>,
+) -> Response {
+	let Some(protocol) = param_ci(&params, "Protocol") else {
+		return StatusCode::BAD_REQUEST.into_response();
+	};
+	if let Some(domain) = param_ci(&params, "Email").and_then(|e| domain_of(e))
+		&& !state.domains.contains(&domain)
+	{
+		return StatusCode::NOT_FOUND.into_response();
+	}
+	match autodiscover_v2(&state.hostname, protocol) {
+		Some(body) => json(body),
+		None => StatusCode::NOT_FOUND.into_response(),
+	}
 }
 
 #[cfg(test)]

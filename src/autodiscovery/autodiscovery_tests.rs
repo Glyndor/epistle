@@ -75,3 +75,51 @@ async fn autodiscover_handler_serves_document() {
 		"{text}"
 	);
 }
+
+#[test]
+fn v2_builder_covers_protocols_and_redirect() {
+	let imap = autodiscover_v2("mail.example.org", "Imap").expect("imap");
+	assert!(imap.contains("\"Protocol\":\"IMAP\""), "{imap}");
+	assert!(imap.contains("\"Port\":993"), "{imap}");
+	assert!(imap.contains("\"SSL\":true"), "{imap}");
+	let smtp = autodiscover_v2("mail.example.org", "smtp").expect("smtp");
+	assert!(smtp.contains("\"Port\":587"), "{smtp}");
+	assert!(smtp.contains("\"SSL\":false"), "{smtp}");
+	let pop = autodiscover_v2("mail.example.org", "POP").expect("pop");
+	assert!(pop.contains("\"Port\":995"), "{pop}");
+	let v1 = autodiscover_v2("mail.example.org", "Autodiscoverv1").expect("v1");
+	assert!(v1.contains("/autodiscover/autodiscover.xml"), "{v1}");
+	assert!(autodiscover_v2("mail.example.org", "ActiveSync").is_none());
+}
+
+#[tokio::test]
+async fn v2_handler_serves_json_for_hosted_email() {
+	let params = HashMap::from([
+		("Email".to_string(), "alice@example.org".to_string()),
+		("Protocol".to_string(), "Imap".to_string()),
+	]);
+	let (status, text) = body(autodiscover_v2_handler(State(state()), Query(params)).await).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(text.contains("\"Protocol\":\"IMAP\""), "{text}");
+}
+
+#[tokio::test]
+async fn v2_handler_requires_protocol() {
+	let params = HashMap::from([("Email".to_string(), "alice@example.org".to_string())]);
+	let (status, _) = body(autodiscover_v2_handler(State(state()), Query(params)).await).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v2_handler_rejects_unknown_domain_and_protocol() {
+	let params = HashMap::from([
+		("Email".to_string(), "bob@other.example".to_string()),
+		("Protocol".to_string(), "Imap".to_string()),
+	]);
+	let (status, _) = body(autodiscover_v2_handler(State(state()), Query(params)).await).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	let params = HashMap::from([("Protocol".to_string(), "ActiveSync".to_string())]);
+	let (status, _) = body(autodiscover_v2_handler(State(state()), Query(params)).await).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
