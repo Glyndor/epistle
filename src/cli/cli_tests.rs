@@ -388,7 +388,7 @@ fn parses_token_hash_command() {
 #[test]
 fn token_hash_produces_sha256_format() {
 	use std::io::Cursor;
-	let result = token_hash_from(Cursor::new("hunter2\n"));
+	let result = super::util::token_hash_from(Cursor::new("hunter2\n"));
 	assert_eq!(result, ExitCode::SUCCESS);
 }
 
@@ -418,14 +418,14 @@ fn token_hash_output_matches_sha256() {
 #[test]
 fn token_hash_rejects_empty_input() {
 	use std::io::Cursor;
-	let result = token_hash_from(Cursor::new("\n"));
+	let result = super::util::token_hash_from(Cursor::new("\n"));
 	assert_eq!(result, ExitCode::FAILURE);
 }
 
 #[test]
 fn token_hash_rejects_no_input() {
 	use std::io::Cursor;
-	let result = token_hash_from(Cursor::new(""));
+	let result = super::util::token_hash_from(Cursor::new(""));
 	assert_eq!(result, ExitCode::FAILURE);
 }
 
@@ -433,7 +433,7 @@ fn token_hash_rejects_no_input() {
 fn token_hash_strips_crlf() {
 	use std::io::Cursor;
 	// Windows-style line endings must not be treated as part of the token.
-	let result = token_hash_from(Cursor::new("my-token\r\n"));
+	let result = super::util::token_hash_from(Cursor::new("my-token\r\n"));
 	assert_eq!(result, ExitCode::SUCCESS);
 }
 
@@ -457,6 +457,6 @@ fn token_hash_reports_stdin_io_error() {
 		}
 		fn consume(&mut self, _: usize) {}
 	}
-	let result = token_hash_from(AlwaysErrors);
+	let result = super::util::token_hash_from(AlwaysErrors);
 	assert_eq!(result, ExitCode::FAILURE);
 }

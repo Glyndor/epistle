@@ -4,11 +4,13 @@
 //! mail-panel. Every endpoint requires the bearer token; the listener
 //! binds to localhost unless explicitly configured otherwise.
 
+pub mod api_keys;
 mod error;
 mod jmap;
 mod state;
 pub mod v1;
 
+pub use api_keys::{ApiKey, ApiKeyStore};
 pub use state::ApiState;
 
 use axum::Router;

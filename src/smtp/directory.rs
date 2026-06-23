@@ -65,6 +65,9 @@ pub struct Directory {
 	forwards: HashMap<String, (Vec<String>, bool)>,
 	/// Multi-target aliases, keyed by lowercased alias address.
 	aliases: HashMap<String, AliasSpec>,
+	/// Secondary app passwords per account name. Each entry is tried when the
+	/// primary password check fails (see [`Directory::authenticate_with_ip`]).
+	app_passwords: HashMap<String, Vec<crate::directory_store::AppPassword>>,
 }
 
 impl Directory {
@@ -94,7 +97,23 @@ impl Directory {
 			domain_quotas: HashMap::new(),
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
+			app_passwords: HashMap::new(),
 		}
+	}
+
+	/// Attach per-account app passwords (account name → list). Account keys are
+	/// lowercased to match the authentication lookup.
+	pub fn with_app_passwords(
+		mut self,
+		entries: impl IntoIterator<Item = (String, crate::directory_store::AppPassword)>,
+	) -> Self {
+		for (account, password) in entries {
+			self.app_passwords
+				.entry(account.to_ascii_lowercase())
+				.or_default()
+				.push(password);
+		}
+		self
 	}
 
 	/// Attach multi-target aliases (alias address → spec).
@@ -190,27 +209,72 @@ impl Directory {
 	}
 
 	/// Verify a login with its password, enforcing TOTP when the account has a
-	/// secret: the last 6 digits of the password are the current TOTP code.
+	/// secret: the last 6 digits of the password are the current TOTP code. This
+	/// is a thin wrapper over [`Directory::authenticate_with_ip`] for callers
+	/// without a client IP (app-password CIDR allowlists then never match).
 	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+		self.authenticate_with_ip(login, password, None)
+	}
+
+	/// Verify a login, falling back to the account's app passwords when the
+	/// primary password fails. `ip` is the client address used to enforce an app
+	/// password's CIDR allowlist (an allowlisted app password is unusable
+	/// without it).
+	///
+	/// Fail-closed and no user-enumeration oracle: an unknown login returns
+	/// `None` from [`Directory::credentials`] before any hashing, exactly as a
+	/// known account whose primary and every app password mismatch — both end in
+	/// `None`. The app-password fallback runs only for a resolved account, so it
+	/// does not change the unknown-vs-known timing class.
+	pub fn authenticate_with_ip(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+	) -> Option<String> {
 		let (account, hash) = self.credentials(login)?;
-		let password = match self.totp.get(&account) {
-			Some(secret) => {
-				let split = password.len().checked_sub(6)?;
-				let (pass, code) = password.split_at(split);
-				let code: u32 = code.parse().ok()?;
-				let bytes = crate::totp::decode_base32_secret(secret)?;
-				let now = std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.map(|d| d.as_secs())
-					.unwrap_or(0);
-				if !crate::totp::verify(&bytes, code, now) {
-					return None;
-				}
-				pass
-			}
-			None => password,
+		// TOTP applies to the primary password only; strip and verify the code.
+		let primary = match self.totp.get(&account) {
+			Some(secret) => self.totp_strip(password, secret),
+			None => Some(password),
 		};
-		super::auth::verify_password(hash, password).then_some(account)
+		if let Some(primary) = primary
+			&& super::auth::verify_password(hash, primary)
+		{
+			return Some(account);
+		}
+		// Primary failed (or its TOTP did): try the account's app passwords. App
+		// passwords are not subject to TOTP — they are independent secrets.
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		for app in self
+			.app_passwords
+			.get(&account)
+			.map(Vec::as_slice)
+			.unwrap_or(&[])
+		{
+			if app.admits(password, ip, now) {
+				return Some(account.clone());
+			}
+		}
+		None
+	}
+
+	/// Strip and verify the trailing 6-digit TOTP code from `password`, returning
+	/// the remaining password on success, or `None` if the code is missing or
+	/// wrong.
+	fn totp_strip<'a>(&self, password: &'a str, secret: &str) -> Option<&'a str> {
+		let split = password.len().checked_sub(6)?;
+		let (pass, code) = password.split_at(split);
+		let code: u32 = code.parse().ok()?;
+		let bytes = crate::totp::decode_base32_secret(secret)?;
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		crate::totp::verify(&bytes, code, now).then_some(pass)
 	}
 
 	/// Attach SCRAM credentials (account name → stored credentials).
@@ -385,3 +449,7 @@ impl Directory {
 #[cfg(test)]
 #[path = "directory_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "directory_app_password_tests.rs"]
+mod app_password_tests;

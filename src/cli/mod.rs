@@ -1,6 +1,8 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod accounts;
+mod api_keys;
+mod app_passwords;
 mod autoconfig;
 mod autodiscover;
 mod backup;
@@ -15,8 +17,11 @@ mod serve_tasks;
 mod srv;
 mod suppression;
 mod tracing_setup;
+mod util;
 mod verify;
 mod verify_dns;
+
+use util::{dkim_keygen, generate_secret, read_line, token_hash};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -193,6 +198,74 @@ enum Command {
 	/// Reads the plaintext token from stdin (one line). Prints a
 	/// `sha256:<hex>` string to stdout, ready to paste into the config file.
 	TokenHash,
+	/// Create an app password for an account (a secondary IMAP/SMTP credential).
+	/// The generated secret is printed once and never stored.
+	AppPasswordCreate {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account the app password belongs to.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+		/// A label identifying this app password (e.g. "iphone").
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+		/// Optional expiry as Unix epoch seconds.
+		#[arg(long, value_name = "EPOCH")]
+		expires_at: Option<u64>,
+		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
+		#[arg(long, value_name = "CIDR")]
+		ip_cidr: Option<String>,
+	},
+	/// List every account's app passwords (never the secret).
+	AppPasswords {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Revoke an account's app password by label.
+	AppPasswordRevoke {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account the app password belongs to.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+		/// The label of the app password to revoke.
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+	},
+	/// Create a management API key. The generated key is printed once and never
+	/// stored.
+	ApiKeyCreate {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// A label identifying this API key (e.g. "ci").
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+		/// Optional expiry as Unix epoch seconds.
+		#[arg(long, value_name = "EPOCH")]
+		expires_at: Option<u64>,
+		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
+		#[arg(long, value_name = "CIDR")]
+		ip_cidr: Option<String>,
+	},
+	/// List the management API keys (never the key).
+	ApiKeys {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Revoke a management API key by label.
+	ApiKeyRevoke {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The label of the API key to revoke.
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+	},
 }
 
 impl Cli {
@@ -358,89 +431,80 @@ impl Cli {
 			},
 			Command::DkimKeygen { out } => dkim_keygen(&out),
 			Command::TokenHash => token_hash(),
+			Command::AppPasswordCreate {
+				config,
+				account,
+				label,
+				expires_at,
+				ip_cidr,
+			} => match Config::load(&config) {
+				Ok(config) => app_passwords::create(
+					&config,
+					&account,
+					&label,
+					expires_at,
+					ip_cidr,
+					&mut std::io::stdout().lock(),
+				),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::AppPasswords { config } => match Config::load(&config) {
+				Ok(config) => app_passwords::list(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::AppPasswordRevoke {
+				config,
+				account,
+				label,
+			} => match Config::load(&config) {
+				Ok(config) => {
+					app_passwords::revoke(&config, &account, &label, &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKeyCreate {
+				config,
+				label,
+				expires_at,
+				ip_cidr,
+			} => match Config::load(&config) {
+				Ok(config) => api_keys::create(
+					&config,
+					&label,
+					expires_at,
+					ip_cidr,
+					&mut std::io::stdout().lock(),
+				),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKeys { config } => match Config::load(&config) {
+				Ok(config) => api_keys::list(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKeyRevoke { config, label } => match Config::load(&config) {
+				Ok(config) => api_keys::revoke(&config, &label, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
 		}
 	}
-}
-
-fn token_hash() -> ExitCode {
-	token_hash_from(std::io::stdin().lock())
-}
-
-/// Read one non-empty line (CR-trimmed) from `reader`, or a FAILURE code.
-pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCode> {
-	let value = match reader.lines().next() {
-		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
-		Some(Err(error)) => {
-			eprintln!("error: reading stdin: {error}");
-			return Err(ExitCode::FAILURE);
-		}
-		None => {
-			eprintln!("error: no input — pipe or type the value on stdin");
-			return Err(ExitCode::FAILURE);
-		}
-	};
-	if value.is_empty() {
-		eprintln!("error: input must not be empty");
-		return Err(ExitCode::FAILURE);
-	}
-	Ok(value)
-}
-
-fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
-	let token = match read_line(reader) {
-		Ok(token) => token,
-		Err(code) => return code,
-	};
-	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
-	let hex = digest
-		.as_ref()
-		.iter()
-		.fold(String::with_capacity(64), |mut s, b| {
-			use std::fmt::Write;
-			write!(s, "{b:02x}").ok();
-			s
-		});
-	println!("sha256:{hex}");
-	ExitCode::SUCCESS
-}
-
-fn dkim_keygen(out: &std::path::Path) -> ExitCode {
-	if out.exists() {
-		eprintln!(
-			"error: {} already exists, refusing to overwrite",
-			out.display()
-		);
-		return ExitCode::FAILURE;
-	}
-	let (pem, record) = match crate::dkim::generate_key() {
-		Ok(generated) => generated,
-		Err(error) => {
-			eprintln!("error: {error}");
-			return ExitCode::FAILURE;
-		}
-	};
-	// The private key must never be group/world readable.
-	let result = {
-		use std::io::Write;
-		let mut options = std::fs::OpenOptions::new();
-		options.write(true).create_new(true);
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::OpenOptionsExt;
-			options.mode(0o600);
-		}
-		options
-			.open(out)
-			.and_then(|mut file| file.write_all(pem.as_bytes()))
-	};
-	if let Err(error) = result {
-		eprintln!("error: cannot write {}: {error}", out.display());
-		return ExitCode::FAILURE;
-	}
-	println!("private key written to {}", out.display());
-	println!("publish this TXT record at <selector>._domainkey.<your-domain>:");
-	println!("{record}");
-	ExitCode::SUCCESS
 }
 
 #[cfg(test)]

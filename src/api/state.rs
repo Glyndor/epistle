@@ -28,6 +28,9 @@ struct Inner {
 	auth_limiter: std::sync::Mutex<AuthLimiter>,
 	/// Per-account storage quota in bytes; 0 means unlimited.
 	quota_limit: std::sync::atomic::AtomicU64,
+	/// Labeled bearer API keys, loaded from `api_keys.toml`; any non-expired,
+	/// IP-permitted key authenticates alongside the configured token.
+	api_keys: Vec<super::api_keys::ApiKey>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -79,7 +82,9 @@ pub struct AccountView {
 }
 
 impl ApiState {
-	/// Build the state from configuration data.
+	/// Build the state from configuration data. API keys are loaded from
+	/// `api_keys.toml` under `data_dir`; a missing or unreadable file leaves the
+	/// key set empty (the configured token still authenticates).
 	pub fn new(
 		token_hash: &str,
 		data_dir: PathBuf,
@@ -87,6 +92,9 @@ impl ApiState {
 		store: Arc<AccountStore>,
 		spool: FsSpool,
 	) -> Self {
+		let api_keys = super::api_keys::ApiKeyStore::open(&data_dir)
+			.map(|store| store.keys().to_vec())
+			.unwrap_or_default();
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.to_string(),
@@ -96,6 +104,7 @@ impl ApiState {
 				spool,
 				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
+				api_keys,
 			}),
 		}
 	}
@@ -144,6 +153,24 @@ impl ApiState {
 		&self.inner.data_dir
 	}
 
+	/// Whether `token` from `client_ip` authorizes a request: the configured
+	/// token matches, or any non-expired, IP-permitted API key's hash matches.
+	/// Fail-closed: an expired or IP-restricted key that does not match is no
+	/// different from no key at all.
+	fn authorizes(&self, token: &str, client_ip: Option<std::net::IpAddr>) -> bool {
+		if self.token_matches(token) {
+			return true;
+		}
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		self.inner
+			.api_keys
+			.iter()
+			.any(|key| key.admits(token, client_ip, now))
+	}
+
 	fn token_matches(&self, token: &str) -> bool {
 		let stored = &self.inner.token_hash;
 		if let Some(expected_hex) = stored.strip_prefix("sha256:") {
@@ -185,13 +212,21 @@ pub async fn require_bearer_token(
 		}
 	}
 
+	// The client IP for API-key CIDR allowlists. `ConnectInfo` is present when
+	// the router is served with `into_make_service_with_connect_info`; absent
+	// (e.g. in tests) it is `None`, so an IP-restricted key cannot match.
+	let client_ip = request
+		.extensions()
+		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+		.map(|info| info.0.ip());
+
 	let token = request
 		.headers()
 		.get(axum::http::header::AUTHORIZATION)
 		.and_then(|value| value.to_str().ok())
 		.and_then(|value| value.strip_prefix("Bearer "));
 
-	let authorized = token.is_some_and(|t| state.token_matches(t));
+	let authorized = token.is_some_and(|t| state.authorizes(t, client_ip));
 
 	{
 		let mut limiter = state
@@ -211,3 +246,7 @@ pub async fn require_bearer_token(
 	}
 	Ok(next.run(request).await)
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;

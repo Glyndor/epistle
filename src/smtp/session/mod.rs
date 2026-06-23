@@ -62,6 +62,9 @@ pub struct Session {
 	client_identity: Option<String>,
 	/// Awaiting the EXTERNAL response line after a `334` challenge.
 	pending_external: bool,
+	/// The client's peer IP, set by the network layer; used to enforce an app
+	/// password's CIDR allowlist during authentication.
+	peer_ip: Option<std::net::IpAddr>,
 }
 
 impl Session {
@@ -85,6 +88,7 @@ impl Session {
 			send_limiter: None,
 			client_identity: None,
 			pending_external: false,
+			peer_ip: None,
 		}
 	}
 
@@ -93,6 +97,11 @@ impl Session {
 	/// presented a certificate that rustls verified against the trust anchor.
 	pub fn set_client_identity(&mut self, identity: Option<String>) {
 		self.client_identity = identity;
+	}
+
+	/// Set the client's peer IP, used to enforce app-password CIDR allowlists.
+	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
+		self.peer_ip = ip;
 	}
 
 	/// Attach a shared per-account submission rate limiter.

@@ -26,6 +26,8 @@ impl Server {
 		mut session: Session,
 		peer: Option<IpAddr>,
 	) -> std::io::Result<()> {
+		// App-password CIDR allowlists are checked against the peer IP.
+		session.set_peer_ip(peer);
 		self.metrics.connection();
 		send(&mut stream, &session.greeting()).await?;
 

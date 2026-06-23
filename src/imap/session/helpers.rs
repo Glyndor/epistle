@@ -1,5 +1,23 @@
 use super::mailbox::Snapshot;
-use super::{SearchKey, mailbox};
+use super::{Command, SearchKey, mailbox};
+
+/// The command verb when it relies on message sequence numbers (and so is
+/// refused under UIDONLY), or `None` for UID-based and non-sequence commands.
+pub(super) fn sequence_command(command: &Command) -> Option<&'static str> {
+	match command {
+		Command::Fetch { uid: false, .. } => Some("FETCH"),
+		Command::Store { uid: false, .. } => Some("STORE"),
+		Command::Search { uid: false, .. } => Some("SEARCH"),
+		Command::Sort { uid: false, .. } => Some("SORT"),
+		Command::Thread { uid: false, .. } => Some("THREAD"),
+		Command::Copy {
+			uid: false,
+			remove_source,
+			..
+		} => Some(if *remove_source { "MOVE" } else { "COPY" }),
+		_ => None,
+	}
+}
 
 /// Format a SystemTime as an IMAP INTERNALDATE string (RFC 3501).
 pub(super) fn format_internaldate(t: std::time::SystemTime) -> String {
