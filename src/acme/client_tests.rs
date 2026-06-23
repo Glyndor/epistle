@@ -331,3 +331,124 @@ async fn obtain_times_out_when_authorization_never_valid() {
 		.await;
 	assert!(result.is_err(), "perpetual pending must time out");
 }
+
+/// An in-memory DnsProvider that records upserts and deletes.
+#[derive(Default)]
+struct RecordingProvider {
+	upserts: Mutex<Vec<crate::dns::provider::DnsRecord>>,
+	deletes: Mutex<Vec<String>>,
+}
+
+impl crate::dns::provider::DnsProvider for RecordingProvider {
+	fn upsert(
+		&self,
+		_zone: &str,
+		record: crate::dns::provider::DnsRecord,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<(), crate::dns::provider::ProviderError>> + Send + '_>,
+	> {
+		self.upserts.lock().unwrap().push(record);
+		Box::pin(async { Ok(()) })
+	}
+	fn delete(
+		&self,
+		_zone: &str,
+		record: crate::dns::provider::DnsRecord,
+	) -> std::pin::Pin<
+		Box<dyn Future<Output = Result<(), crate::dns::provider::ProviderError>> + Send + '_>,
+	> {
+		self.deletes.lock().unwrap().push(record.name);
+		Box::pin(async { Ok(()) })
+	}
+	fn list(
+		&self,
+		_zone: &str,
+	) -> std::pin::Pin<
+		Box<
+			dyn Future<
+					Output = Result<
+						Vec<crate::dns::provider::DnsRecord>,
+						crate::dns::provider::ProviderError,
+					>,
+				> + Send
+				+ '_,
+		>,
+	> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
+#[tokio::test]
+async fn obtain_certificate_dns01_publishes_and_cleans_up() {
+	let (key, _) = AccountKey::generate().expect("key");
+	let mut posts: HashMap<String, std::collections::VecDeque<PostResponse>> = HashMap::new();
+	let mut q = |url: &str, items: Vec<PostResponse>| {
+		posts.insert(url.to_string(), items.into());
+	};
+	q(
+		"https://acme.example/new-acct",
+		vec![PostResponse {
+			nonce: "n".into(),
+			location: Some("https://acme.example/acct/1".into()),
+			status: 201,
+			body: b"{}".to_vec(),
+		}],
+	);
+	q(
+		"https://acme.example/new-order",
+		vec![PostResponse {
+			nonce: "n".into(),
+			location: Some("https://acme.example/order/7".into()),
+			status: 201,
+			body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
+		}],
+	);
+	q(
+		"https://acme.example/authz/1",
+		vec![
+			ok_body("n", br#"{"status":"pending","identifier":{"type":"dns","value":"mail.example.org"},"challenges":[{"type":"dns-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#),
+			ok_body("n", br#"{"status":"valid","challenges":[]}"#),
+		],
+	);
+	q("https://acme.example/chal/1", vec![ok_body("n", b"{}")]);
+	q(
+		"https://acme.example/finalize/7",
+		vec![ok_body("n", br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#)],
+	);
+	q(
+		"https://acme.example/cert/7",
+		vec![ok_body(
+			"n",
+			b"-----BEGIN CERTIFICATE-----\nMII\n-----END CERTIFICATE-----\n",
+		)],
+	);
+
+	let transport = SequencedTransport {
+		directory: directory_json(),
+		posts: Mutex::new(posts),
+	};
+	let client = AcmeClient::connect(transport, key, "https://acme.example/dir")
+		.await
+		.expect("connect");
+	client
+		.register(&["admin@example.org".to_string()])
+		.await
+		.expect("register");
+
+	let provider = RecordingProvider::default();
+	let (chain, key_pem) = client
+		.obtain_certificate_dns01(&["mail.example.org".to_string()], &provider, 3)
+		.await
+		.expect("obtain");
+	assert!(chain.starts_with("-----BEGIN CERTIFICATE-----"));
+	assert!(key_pem.contains("PRIVATE KEY"));
+
+	// The challenge record was published at _acme-challenge and then removed.
+	let upserts = provider.upserts.lock().unwrap();
+	assert_eq!(upserts.len(), 1);
+	assert_eq!(upserts[0].name, "_acme-challenge.mail.example.org");
+	assert_eq!(
+		provider.deletes.lock().unwrap().as_slice(),
+		&["_acme-challenge.mail.example.org".to_string()]
+	);
+}
