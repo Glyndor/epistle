@@ -4,7 +4,7 @@
 Usage:
   sign.py <input-file> [<output-sig-file>]
 
-The private key is read from the RELEASE_SIGN_KEY environment variable (raw
+The private key is read from the GLYNDOR_RELEASE_ED25519_KEY environment variable (raw
 32-byte Ed25519 seed in standard base64), never from the command line, so the
 secret is not exposed in the process argument list (/proc/<pid>/cmdline).
 
@@ -22,9 +22,9 @@ def main() -> None:
 		print(__doc__, file=sys.stderr)
 		sys.exit(1)
 
-	key_b64 = os.environ.get("RELEASE_SIGN_KEY")
+	key_b64 = os.environ.get("GLYNDOR_RELEASE_ED25519_KEY")
 	if not key_b64:
-		print("RELEASE_SIGN_KEY is not set in the environment", file=sys.stderr)
+		print("GLYNDOR_RELEASE_ED25519_KEY is not set in the environment", file=sys.stderr)
 		sys.exit(1)
 
 	input_file = sys.argv[1]

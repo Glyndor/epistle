@@ -107,13 +107,13 @@ jobs:
 
       - name: Sign artifacts with the org Ed25519 key
         env:
-          RELEASE_SIGN_KEY: ${{ secrets.RELEASE_SIGN_KEY }}
+          GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
         run: |
           set -euo pipefail
           # Fail closed: never publish unsigned artifacts. Verifiers and the
           # apt archive trust this org Ed25519 signature.
-          if [ -z "${RELEASE_SIGN_KEY:-}" ]; then
-            echo "::error::RELEASE_SIGN_KEY secret is not configured; refusing to release unsigned artifacts."
+          if [ -z "${GLYNDOR_RELEASE_ED25519_KEY:-}" ]; then
+            echo "::error::GLYNDOR_RELEASE_ED25519_KEY secret is not configured; refusing to release unsigned artifacts."
             exit 1
           fi
           # Install the signing dependencies into an isolated, hash-pinned
@@ -121,7 +121,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/signvenv"
           venv_py="$RUNNER_TEMP/signvenv/bin/python"
           "$venv_py" -m pip install --quiet --require-hashes -r .github/scripts/sign-requirements.txt
-          # The key is read from RELEASE_SIGN_KEY in the environment, not argv.
+          # The key is read from GLYNDOR_RELEASE_ED25519_KEY in the environment, not argv.
           "$venv_py" .github/scripts/sign.py "dist/epistle-${TAG}-x86_64-linux"
           "$venv_py" .github/scripts/sign.py dist/SHA256SUMS
 
