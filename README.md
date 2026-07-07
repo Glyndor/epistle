@@ -4,10 +4,6 @@ Self-hosted, headless mail server — SMTP, IMAP and modern email security throu
 
 [![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
 
-> Secure by default and fail-closed. SMTP/IMAP/POP3/JMAP, full email
-> authentication, Sieve filtering, automatic TLS and antispam are implemented and
-> tested; see the feature list below.
-
 ```mermaid
 flowchart LR
 	client([SMTP client]) -->|25 / 587 / 465| tls[TLS / STARTTLS]
