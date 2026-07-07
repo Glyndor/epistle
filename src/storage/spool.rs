@@ -10,6 +10,8 @@ use uuid::Uuid;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
+use super::crypto::MessageCrypto;
+
 /// Envelope metadata stored next to the raw message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -31,6 +33,10 @@ pub struct Envelope {
 	/// Recipients that suppress failure DSNs (`NOTIFY=NEVER`, RFC 3461).
 	#[serde(default)]
 	pub no_dsn: Vec<String>,
+	/// Whether the "delivery delayed" warning DSN has already been sent, so it
+	/// is sent at most once (RFC 5321 §4.5.4.1).
+	#[serde(default)]
+	pub delay_warned: bool,
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -44,15 +50,23 @@ pub struct SpoolEntry {
 #[derive(Debug)]
 pub struct FsSpool {
 	root: PathBuf,
+	crypto: MessageCrypto,
 }
 
 impl FsSpool {
-	/// Open (creating if needed) the spool under `data_dir`.
+	/// Open (creating if needed) the spool under `data_dir`, with no at-rest
+	/// encryption. The encrypting variant is [`FsSpool::open_with_crypto`].
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
+		Self::open_with_crypto(data_dir, MessageCrypto::disabled())
+	}
+
+	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
+	/// (`.eml`) files through `crypto`. Envelope JSON sidecars are unaffected.
+	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = data_dir.join("spool");
 		fs::create_dir_all(root.join("tmp"))?;
 		fs::create_dir_all(root.join("new"))?;
-		Ok(FsSpool { root })
+		Ok(FsSpool { root, crypto })
 	}
 
 	/// Persist one message crash-safely and return its spool id.
@@ -70,6 +84,7 @@ impl FsSpool {
 			next_attempt: 0,
 			require_tls: message.require_tls,
 			no_dsn: message.no_dsn.clone(),
+			delay_warned: false,
 		};
 
 		let tmp_message = self.root.join("tmp").join(format!("{id}.eml"));
@@ -77,7 +92,7 @@ impl FsSpool {
 		let final_message = self.root.join("new").join(format!("{id}.eml"));
 		let final_envelope = self.root.join("new").join(format!("{id}.json"));
 
-		write_sync(&tmp_message, &message.data)?;
+		write_sync(&tmp_message, &self.crypto.encode(&message.data)?)?;
 		let envelope_bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
 		write_sync(&tmp_envelope, &envelope_bytes)?;
 
@@ -91,7 +106,9 @@ impl FsSpool {
 		let envelope_bytes = fs::read(self.root.join("new").join(format!("{id}.json")))?;
 		let envelope: Envelope =
 			serde_json::from_slice(&envelope_bytes).map_err(std::io::Error::other)?;
-		let data = fs::read(self.root.join("new").join(format!("{id}.eml")))?;
+		let data = self
+			.crypto
+			.decode(&fs::read(self.root.join("new").join(format!("{id}.eml")))?)?;
 		Ok(SpoolEntry { envelope, data })
 	}
 
@@ -127,6 +144,17 @@ impl FsSpool {
 		write_sync(&tmp, &bytes)?;
 		fs::rename(&tmp, self.root.join("new").join(format!("{id}.json")))?;
 		Ok(entry.envelope.attempts)
+	}
+
+	/// Mark the delay-warning DSN as sent, crash-safely, so it is sent once.
+	pub fn mark_delay_warned(&self, id: Uuid) -> std::io::Result<()> {
+		let mut entry = self.load(id)?;
+		entry.envelope.delay_warned = true;
+		let tmp = self.root.join("tmp").join(format!("{id}.json"));
+		let bytes = serde_json::to_vec(&entry.envelope).map_err(std::io::Error::other)?;
+		write_sync(&tmp, &bytes)?;
+		fs::rename(&tmp, self.root.join("new").join(format!("{id}.json")))?;
+		Ok(())
 	}
 
 	/// Remove a spooled message after successful processing.

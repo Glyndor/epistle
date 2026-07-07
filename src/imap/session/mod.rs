@@ -5,14 +5,19 @@ use std::sync::Arc;
 
 use crate::smtp::directory::Directory;
 
-use super::command::{Command, FetchItem, ParseError, SearchKey, StatusItem, StoreMode, Tagged};
+use super::command::{
+	Command, FetchItem, NotifyEvent, ParseError, SearchKey, StatusItem, StoreMode, Tagged,
+};
 use super::mailbox::{self, Flag, Snapshot};
 
+mod acl;
 mod auth;
 mod codes;
 mod commands;
 mod fetchstore;
 mod helpers;
+mod literal;
+mod metadata;
 mod sort;
 mod thread;
 
@@ -41,14 +46,20 @@ impl Output {
 
 	fn closing(text: String) -> Self {
 		Output {
-			bytes: text.into_bytes(),
 			close: true,
-			collect_literal: None,
-			idle: false,
-			upgrade_tls: false,
-			collect_auth: false,
+			..Output::text(text)
 		}
 	}
+}
+
+/// A literal-bearing command (APPEND or REPLACE) awaiting its payload.
+struct PendingLiteral {
+	tag: String,
+	mailbox: String,
+	flags: Vec<Flag>,
+	/// For REPLACE only: the selected mailbox to expunge from and the source
+	/// message sequence number, resolved when the command was received.
+	replace: Option<(String, u32)>,
 }
 
 enum State {
@@ -72,8 +83,14 @@ pub struct Session {
 	data_dir: PathBuf,
 	directory: Arc<Directory>,
 	state: State,
-	pending_append: Option<(String, String, Vec<Flag>)>,
+	pending_append: Option<PendingLiteral>,
+	/// UIDONLY (RFC 9586) enabled: sequence-number commands are refused and
+	/// responses use UID forms (UIDFETCH, VANISHED).
+	uidonly: bool,
 	idle_tag: Option<String>,
+	/// NOTIFY (RFC 5465) events requested for the selected mailbox. `None` means
+	/// NOTIFY is not active; an empty set means notifications are explicitly off.
+	notify_selected: Option<Vec<NotifyEvent>>,
 	/// Whether the connection is inside TLS (LOGIN refused outside).
 	tls_active: bool,
 	tls_available: bool,
@@ -81,6 +98,17 @@ pub struct Session {
 	pending_auth: Option<auth::PendingAuth>,
 	scram_nonce: Option<String>,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` channel-binding data (server certificate hash)
+	/// when known; enables AUTH=SCRAM-SHA-256-PLUS.
+	cbind_data: Option<Vec<u8>>,
+	/// Verified TLS client-certificate identity (email SAN), enabling SASL
+	/// EXTERNAL. Set by the network layer after a client-cert handshake.
+	client_identity: Option<String>,
+	/// The client's peer IP, set by the network layer; used to enforce an app
+	/// password's CIDR allowlist during authentication.
+	peer_ip: Option<std::net::IpAddr>,
+	/// At-rest crypto for stored message bodies (read decode, append encode).
+	crypto: crate::storage::MessageCrypto,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -95,19 +123,58 @@ impl Session {
 			directory,
 			state: State::NotAuthenticated { login_failures: 0 },
 			pending_append: None,
+			uidonly: false,
 			idle_tag: None,
+			notify_selected: None,
 			tls_active: true,
 			tls_available: false,
 			quota_limit_bytes: DEFAULT_QUOTA_BYTES,
 			pending_auth: None,
 			scram_nonce: None,
 			oauth: None,
+			cbind_data: None,
+			client_identity: None,
+			peer_ip: None,
+			crypto: crate::storage::MessageCrypto::disabled(),
 		}
 	}
 
-	/// Set the per-account storage quota (bytes).
+	/// Use `crypto` to decode/encode stored message bodies at rest.
+	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
+		self.crypto = crypto;
+		self
+	}
+
+	/// Set the verified TLS client-certificate identity (email), enabling SASL
+	/// EXTERNAL for this connection.
+	pub fn set_client_identity(&mut self, identity: Option<String>) {
+		self.client_identity = identity;
+	}
+
+	/// Set the client's peer IP, used to enforce app-password CIDR allowlists.
+	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
+		self.peer_ip = ip;
+	}
+
+	/// Set the default storage quota (bytes) used when an account has no
+	/// per-account or per-domain quota of its own.
 	pub fn with_quota_limit(mut self, bytes: u64) -> Self {
 		self.quota_limit_bytes = bytes;
+		self
+	}
+
+	/// The storage quota in force for the authenticated account: its own /
+	/// domain quota from the directory, else the server default.
+	fn effective_quota(&self) -> u64 {
+		self.account()
+			.and_then(|account| self.directory.quota_for(account))
+			.unwrap_or(self.quota_limit_bytes)
+	}
+
+	/// Provide the `tls-server-end-point` channel-binding data (server
+	/// certificate hash), enabling AUTH=SCRAM-SHA-256-PLUS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
 		self
 	}
 
@@ -122,23 +189,6 @@ impl Session {
 		self.tls_active = true;
 		self.tls_available = false;
 		self.state = State::NotAuthenticated { login_failures: 0 };
-	}
-
-	fn capabilities(&self) -> String {
-		let mut capabilities = String::from(
-			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
-THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
-LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
-		);
-		if self.tls_available {
-			capabilities.push_str(" STARTTLS");
-		}
-		if self.tls_active {
-			capabilities.push_str(&self.sasl_capability());
-		} else {
-			capabilities.push_str(" LOGINDISABLED");
-		}
-		capabilities
 	}
 
 	/// The greeting sent when the connection opens.
@@ -169,6 +219,14 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 
 	fn apply(&mut self, tagged: Tagged) -> Output {
 		let tag = tagged.tag;
+		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
+		if self.uidonly
+			&& let Some(verb) = helpers::sequence_command(&tagged.command)
+		{
+			return Output::text(format!(
+				"{tag} BAD [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
+			));
+		}
 		match tagged.command {
 			Command::Capability => Output::text(format!(
 				"* CAPABILITY {}\r\n{tag} OK CAPABILITY completed\r\n",
@@ -240,6 +298,13 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 				flags,
 				size,
 			} => self.append_begin(&tag, &mailbox, &flags, size),
+			Command::Replace {
+				sequence,
+				mailbox,
+				flags,
+				size,
+				uid,
+			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid),
 			Command::Fetch {
 				sequence,
 				items,
@@ -266,6 +331,11 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 				uid,
 				return_opts,
 			} => self.search(&tag, &criteria, uid, return_opts.as_deref()),
+			Command::Esearch {
+				sources,
+				criteria,
+				return_opts,
+			} => self.esearch(&tag, &sources, &criteria, &return_opts),
 			Command::Status { mailbox, items } => self.status(&tag, &mailbox, &items),
 			Command::Subscribe { mailbox } => self.subscription_op(&tag, |data_dir, account| {
 				mailbox::subscribe(data_dir, account, &mailbox)
@@ -274,6 +344,26 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 				mailbox::unsubscribe(data_dir, account, &mailbox)
 			}),
 			Command::Lsub { pattern, .. } => self.lsub(&tag, &pattern),
+			Command::GetAcl { mailbox } => self.get_acl(&tag, &mailbox),
+			Command::MyRights { mailbox } => self.my_rights(&tag, &mailbox),
+			Command::ListRights {
+				mailbox,
+				identifier,
+			} => self.list_rights(&tag, &mailbox, &identifier),
+			Command::SetAcl {
+				mailbox,
+				identifier,
+				rights,
+			} => self.set_acl(&tag, &mailbox, &identifier, &rights),
+			Command::DeleteAcl {
+				mailbox,
+				identifier,
+			} => self.delete_acl(&tag, &mailbox, &identifier),
+			Command::GetMetadata { mailbox, entries } => {
+				self.get_metadata(&tag, &mailbox, &entries)
+			}
+			Command::SetMetadata { mailbox, items } => self.set_metadata(&tag, &mailbox, &items),
+			Command::Notify(request) => self.notify(&tag, request),
 		}
 	}
 
@@ -337,7 +427,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO no such mailbox\r\n"));
 		}
-		let snapshot = match Snapshot::open(&self.data_dir, &account, mailbox) {
+		let snapshot = match Snapshot::open(&self.data_dir, &account, mailbox, &self.crypto) {
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
 		};
@@ -408,12 +498,24 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 		if self.account().is_none() {
 			return Output::text(format!("{tag} BAD ENABLE only after authentication\r\n"));
 		}
+		// UIDONLY (RFC 9586) must be enabled before a mailbox is selected.
+		if capabilities
+			.iter()
+			.any(|c| c.eq_ignore_ascii_case("UIDONLY"))
+			&& matches!(self.state, State::Selected { .. })
+		{
+			return Output::text(format!("{tag} BAD UIDONLY not allowed when selected\r\n"));
+		}
 		let enabled: Vec<&str> = capabilities
 			.iter()
-			.filter_map(|cap| match cap.as_str() {
+			.filter_map(|cap| match cap.to_ascii_uppercase().as_str() {
 				"IMAP4REV2" => Some("IMAP4rev2"),
 				"CONDSTORE" => Some("CONDSTORE"),
 				"QRESYNC" => Some("QRESYNC"),
+				"UIDONLY" => {
+					self.uidonly = true;
+					Some("UIDONLY")
+				}
 				_ => None,
 			})
 			.collect();
@@ -458,40 +560,6 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE",
 			Ok(()) => Output::text(format!("{tag} OK completed\r\n")),
 			Err(error) => Output::text(format!("{tag} NO {error}\r\n")),
 		}
-	}
-}
-
-/// The RFC 6154 special-use attribute for a well-known mailbox name, or an
-/// empty string. Matching is case-insensitive on the leaf name.
-pub(super) fn special_use_attribute(name: &str) -> &'static str {
-	match name.to_ascii_lowercase().as_str() {
-		"junk" | "spam" | "rejects" => "\\Junk",
-		"drafts" => "\\Drafts",
-		"sent" => "\\Sent",
-		"trash" | "deleted" => "\\Trash",
-		"archive" => "\\Archive",
-		_ => "",
-	}
-}
-
-#[cfg(test)]
-mod special_use_tests {
-	use super::special_use_attribute;
-
-	#[test]
-	fn well_known_folders_get_attributes() {
-		assert_eq!(special_use_attribute("Junk"), "\\Junk");
-		assert_eq!(special_use_attribute("rejects"), "\\Junk");
-		assert_eq!(special_use_attribute("Drafts"), "\\Drafts");
-		assert_eq!(special_use_attribute("Sent"), "\\Sent");
-		assert_eq!(special_use_attribute("Trash"), "\\Trash");
-		assert_eq!(special_use_attribute("Archive"), "\\Archive");
-	}
-
-	#[test]
-	fn ordinary_folder_has_no_attribute() {
-		assert_eq!(special_use_attribute("INBOX"), "");
-		assert_eq!(special_use_attribute("Projects"), "");
 	}
 }
 

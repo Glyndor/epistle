@@ -11,13 +11,18 @@ use crate::storage::FsSpool;
 use super::client::{self, DeliveryError};
 use super::resolver::Connector;
 
-/// Maximum delivery attempts per spool entry before it is dropped.
-/// Counts persist in the envelope, so restarts do not reset them.
-const MAX_ATTEMPTS: u32 = 10;
-
 /// Base retry delay; attempt n waits `base * 2^n`, capped at one hour.
 const BACKOFF_BASE_SECS: u64 = 60;
 const BACKOFF_CAP_SECS: u64 = 3600;
+
+/// Default give-up window: a message older than this is bounced (RFC 5321
+/// §4.5.4.1 guidance of 4–5 days). The bound is by message age, not attempt
+/// count, so a recipient down for hours does not lose mail. Operator-tunable.
+const DEFAULT_MAX_AGE_SECS: u64 = 5 * 86_400;
+
+/// Send a "delivery delayed" warning DSN once the message has been queued this
+/// long without success (~4 hours), so the sender knows it is still trying.
+const DELAY_WARNING_SECS: u64 = 4 * 3600;
 
 /// When attempt number `attempts` may run, given the current time.
 fn backoff_until(now_epoch: u64, attempts: u32) -> u64 {
@@ -45,6 +50,18 @@ pub struct Worker {
 	metrics: Option<Arc<crate::metrics::Metrics>>,
 	/// Webhook for delivery-failure events (fire-and-forget, advisory).
 	webhook: Option<Arc<crate::webhook::Webhook>>,
+	/// Give-up window in seconds: a message older than this is bounced.
+	max_age_secs: u64,
+	/// Suppression list: recipients that hard-bounced are not retried.
+	suppression: Option<super::SuppressionList>,
+	/// Outbound transport rules (relay/socks/direct/fail). Empty = direct MX.
+	transports: Vec<crate::config::Transport>,
+	/// DNSSEC-validating resolver for DANE TLSA lookups. `None` disables DANE
+	/// (delivery stays opportunistic).
+	dane_dns: Option<Arc<dyn crate::spf::DnsLookup>>,
+	/// STARTTLS authentication mode for unmandated, non-DANE delivery. Defaults
+	/// to strict PKIX (the secure default); see [`crate::config::OutboundTls`].
+	outbound_tls: crate::config::OutboundTls,
 }
 
 impl Worker {
@@ -59,6 +76,86 @@ impl Worker {
 			clock: std::sync::atomic::AtomicU64::new(0),
 			metrics: None,
 			webhook: None,
+			max_age_secs: DEFAULT_MAX_AGE_SECS,
+			suppression: None,
+			transports: Vec::new(),
+			dane_dns: None,
+			outbound_tls: crate::config::OutboundTls::default(),
+		}
+	}
+
+	/// Set the outbound STARTTLS authentication mode for unmandated, non-DANE
+	/// delivery. The default is strict PKIX; opportunistic accepts any
+	/// certificate (encryption without authentication).
+	pub fn with_outbound_tls(mut self, mode: crate::config::OutboundTls) -> Self {
+		self.outbound_tls = mode;
+		self
+	}
+
+	/// Enforce outbound DANE (RFC 7672) using this DNSSEC-validating resolver
+	/// for TLSA lookups. Without it, delivery stays opportunistic.
+	pub fn with_dane(mut self, dns: Arc<dyn crate::spf::DnsLookup>) -> Self {
+		self.dane_dns = Some(dns);
+		self
+	}
+
+	/// DNSSEC-validated TLSA records for an MX host, queried at `_25._tcp.<host>`
+	/// (RFC 7672 §3). `Ok(vec![])` when DANE is disabled, the host publishes
+	/// none, or the response is not authenticated — the lookup only ever returns
+	/// trusted records, so an empty result means "no DANE" (opportunistic TLS).
+	///
+	/// A transient TLSA lookup failure is propagated as `Err`, never collapsed
+	/// into an empty result: treating a temporary resolver error as "no DANE"
+	/// would silently downgrade a host that does publish TLSA, defeating the
+	/// downgrade protection DANE exists for (RFC 7672 §2.1). The caller defers
+	/// delivery in that case instead.
+	async fn tlsa_for(
+		&self,
+		mx_host: &str,
+	) -> Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure> {
+		match &self.dane_dns {
+			Some(dns) => dns.tlsa(&format!("_25._tcp.{mx_host}")).await,
+			None => Ok(Vec::new()),
+		}
+	}
+
+	/// Route outbound mail through these transport rules (relay/socks/direct/
+	/// fail). Empty (the default) delivers everything directly via MX.
+	pub fn with_transports(mut self, transports: Vec<crate::config::Transport>) -> Self {
+		self.transports = transports;
+		self
+	}
+
+	/// Override the give-up window (seconds). A message older than this is
+	/// bounced; zero falls back to the default.
+	pub fn with_max_age(mut self, secs: u64) -> Self {
+		if secs > 0 {
+			self.max_age_secs = secs;
+		}
+		self
+	}
+
+	/// Skip (and record) recipients on this suppression list.
+	pub fn with_suppression(mut self, suppression: super::SuppressionList) -> Self {
+		self.suppression = Some(suppression);
+		self
+	}
+
+	/// Record every recipient of a permanently failed entry on the suppression
+	/// list, so future mail to them is not even attempted.
+	fn suppress_entry(&self, id: uuid::Uuid) {
+		if let Some(suppression) = &self.suppression
+			&& let Ok(entry) = self.spool.load(id)
+		{
+			let account = &entry.envelope.reverse_path;
+			for recipient in &entry.envelope.recipients {
+				suppression.suppress(recipient);
+				// Also record under the sending account so an operator can see
+				// per-account bounces.
+				if !account.is_empty() {
+					suppression.suppress_for(account, recipient);
+				}
+			}
 		}
 	}
 
@@ -112,6 +209,49 @@ impl Worker {
 	pub fn with_bounce_sink(mut self, sink: Arc<dyn MessageSink>) -> Self {
 		self.bounce_sink = Some(sink);
 		self
+	}
+
+	/// Age in seconds of a spooled message, derived from its UUIDv7 id (the id
+	/// encodes its creation time, so age survives restarts without extra state).
+	fn message_age(&self, id: uuid::Uuid, now: u64) -> u64 {
+		let created = id.get_timestamp().map(|ts| ts.to_unix().0).unwrap_or(now);
+		now.saturating_sub(created)
+	}
+
+	/// Send the one-time "delivery delayed" warning DSN for a still-queued entry.
+	fn warn_delayed(&self, id: uuid::Uuid, reason: &str) {
+		let Ok(entry) = self.spool.load(id) else {
+			return;
+		};
+		if entry.envelope.delay_warned {
+			return;
+		}
+		// NOTIFY=DELAY is not modelled separately; reuse the failure opt-out so a
+		// sender that wants no DSNs at all gets no delay warning either.
+		let recipients: Vec<String> = entry
+			.envelope
+			.recipients
+			.iter()
+			.filter(|r| !entry.envelope.no_dsn.contains(r))
+			.cloned()
+			.collect();
+		if !recipients.is_empty()
+			&& let Some(message) = super::bounce::build_delay_warning(
+				&self.ehlo_hostname,
+				&entry.envelope.reverse_path,
+				&recipients,
+				reason,
+				&entry.data,
+				std::time::SystemTime::now(),
+			) && let Some(sink) = &self.bounce_sink
+			&& let Err(error) = sink.deliver(message)
+		{
+			tracing::warn!(%id, %error, "delay-warning delivery failed");
+		}
+		// Mark warned regardless, so it is attempted at most once.
+		if let Err(error) = self.spool.mark_delay_warned(id) {
+			tracing::warn!(%id, %error, "failed to record delay warning");
+		}
 	}
 
 	/// Generate and deliver a bounce for a dropped spool entry.
@@ -193,26 +333,36 @@ impl Worker {
 				Outcome::Dropped(reason) => {
 					tracing::warn!(%id, %reason, "dropping undeliverable message");
 					self.bounce(id, &reason);
+					self.suppress_entry(id);
 					self.spool.remove(id)?;
 					self.metric(|m| m.bounced());
+				}
+				Outcome::Suppressed => {
+					// Every recipient is already suppressed (hard-bounced
+					// before): drop silently, with no second bounce.
+					tracing::debug!(%id, "dropping message to suppressed recipients");
+					self.spool.remove(id)?;
 				}
 				Outcome::Retry(reason) => {
 					let prior = self
 						.spool
 						.load(id)
 						.map(|entry| entry.envelope.attempts)
-						.unwrap_or(MAX_ATTEMPTS);
-					let attempts = self
-						.spool
-						.record_attempt(id, backoff_until(now, prior + 1))
-						.unwrap_or(MAX_ATTEMPTS);
-					if attempts >= MAX_ATTEMPTS {
-						tracing::warn!(%id, %reason, attempts, "giving up on message");
+						.unwrap_or(0);
+					let _ = self.spool.record_attempt(id, backoff_until(now, prior + 1));
+					let age = self.message_age(id, now);
+					if age >= self.max_age_secs {
+						// Give up by message age, not attempt count: a recipient
+						// down for hours must not lose mail (RFC 5321 §4.5.4.1).
+						tracing::warn!(%id, %reason, age, "giving up: message expired");
 						self.bounce(id, &reason);
 						self.spool.remove(id)?;
 						self.metric(|m| m.bounced());
 					} else {
-						tracing::debug!(%id, %reason, attempts, "delivery deferred");
+						if age >= DELAY_WARNING_SECS {
+							self.warn_delayed(id, &reason);
+						}
+						tracing::debug!(%id, %reason, age, "delivery deferred");
 						self.metric(|m| m.deferred());
 					}
 				}
@@ -227,9 +377,27 @@ impl Worker {
 			Err(error) => return Outcome::Retry(format!("spool read failed: {error}")),
 		};
 
+		// Skip recipients suppressed globally or for this sending account (they
+		// hard-bounced before); if that leaves none, drop without a second
+		// bounce.
+		let account = &entry.envelope.reverse_path;
+		let recipients: Vec<&String> = entry
+			.envelope
+			.recipients
+			.iter()
+			.filter(|r| {
+				self.suppression
+					.as_ref()
+					.is_none_or(|s| !s.is_suppressed(r) && !s.is_suppressed_for(account, r))
+			})
+			.collect();
+		if recipients.is_empty() {
+			return Outcome::Suppressed;
+		}
+
 		// Group recipients by domain: one conversation per exchanger.
 		let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-		for recipient in &entry.envelope.recipients {
+		for recipient in recipients {
 			let Ok(address) = Address::parse(recipient) else {
 				return Outcome::Dropped(format!("unparseable recipient {recipient}"));
 			};
@@ -257,11 +425,64 @@ impl Worker {
 			// MTA-STS enforce or a sender's REQUIRETLS both mandate verified TLS.
 			let require_tls = policy.is_some() || entry.envelope.require_tls;
 
-			let (stream, server_name) = match self.connector.connect(&domain, policy.as_ref()).await
-			{
-				Ok(connection) => connection,
-				Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
-				Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
+			// Route this delivery: a configured transport (relay/fail) or direct.
+			let sender_account = entry
+				.envelope
+				.reverse_path
+				.rsplit_once('@')
+				.map(|(local, _)| local)
+				.filter(|local| !local.is_empty());
+			let transport =
+				crate::config::select_transport(&self.transports, sender_account, &domain);
+			let (stream, server_name, auth, tls_required, dane) = match transport {
+				Some(rule) if rule.kind == crate::config::TransportKind::Fail => {
+					return Outcome::Dropped(format!("transport policy rejects {domain}"));
+				}
+				Some(rule) if rule.kind == crate::config::TransportKind::Relay => {
+					// host/port validated at config load.
+					let host = rule.host.clone().unwrap_or_default();
+					let port = rule.port.unwrap_or(0);
+					let stream = match super::transport::relay_connect(
+						&host,
+						port,
+						rule.socks_proxy.as_deref(),
+					)
+					.await
+					{
+						Ok(stream) => stream,
+						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
+						Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
+					};
+					let auth = match (&rule.username, &rule.password) {
+						(Some(user), Some(pass)) => Some((user.clone(), pass.clone())),
+						_ => None,
+					};
+					// starttls (required whenever AUTH is configured) forces TLS.
+					// DANE does not apply to a configured smarthost (RFC 7672 is
+					// keyed on the recipient's MX), so no TLSA records here.
+					(stream, host, auth, rule.starttls, Vec::new())
+				}
+				_ => {
+					// Direct (no rule, or kind = direct): MX delivery.
+					match self.connector.connect(&domain, policy.as_ref()).await {
+						Ok((stream, server_name)) => {
+							// DANE: TLSA is published under the MX hostname. A
+							// transient TLSA lookup failure defers delivery rather
+							// than downgrading to opportunistic TLS (RFC 7672 §2.1).
+							let tlsa = match self.tlsa_for(&server_name).await {
+								Ok(records) => records,
+								Err(crate::spf::DnsFailure::Temporary) => {
+									return Outcome::Retry(format!(
+										"transient TLSA lookup failure for {server_name}"
+									));
+								}
+							};
+							(stream, server_name, None, require_tls, tlsa)
+						}
+						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
+						Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
+					}
+				}
 			};
 			let result = client::deliver(
 				stream,
@@ -270,7 +491,10 @@ impl Worker {
 				&entry.envelope.reverse_path,
 				&recipients,
 				&entry.data,
-				require_tls,
+				tls_required,
+				auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+				&dane,
+				self.outbound_tls,
 			)
 			.await;
 			match result {
@@ -287,6 +511,8 @@ enum Outcome {
 	Delivered,
 	Retry(String),
 	Dropped(String),
+	/// Every recipient is suppressed; drop without bouncing.
+	Suppressed,
 }
 
 #[cfg(test)]

@@ -17,6 +17,12 @@ pub struct Database {
 	/// Maximum pooled connections.
 	#[serde(default = "default_max_connections")]
 	pub max_connections: u32,
+	/// Load mail accounts from the SQL directory backend (the `directory_account`
+	/// / `directory_address` tables) into the in-memory directory at startup and
+	/// refresh them hourly. Off by default. Static config and dynamic accounts
+	/// take precedence over SQL-sourced accounts on conflict.
+	#[serde(default)]
+	pub directory: bool,
 }
 
 #[cfg(test)]
@@ -28,6 +34,15 @@ mod tests {
 		let db: Database = toml::from_str(r#"url = "postgres://localhost/mail""#).expect("parse");
 		assert_eq!(db.max_connections, 10);
 		assert_eq!(db.url, "postgres://localhost/mail");
+		assert!(!db.directory);
+	}
+
+	#[test]
+	fn parses_directory_flag() {
+		let db: Database =
+			toml::from_str("url = \"postgres://localhost/mail\"\ndirectory = true\n")
+				.expect("parse");
+		assert!(db.directory);
 	}
 
 	#[test]

@@ -38,6 +38,39 @@ pub fn authenticate(records: &[TlsaRecord], leaf: &CertView, chain: &[CertView])
 	})
 }
 
+/// The result of applying a DANE policy to a presented chain (RFC 7672 §2.2).
+///
+/// `Mismatch` is the fail-closed case: TLSA records were published (and
+/// DNSSEC-validated) but none matched the certificate, so the peer is NOT
+/// authenticated and delivery must not proceed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaneOutcome {
+	/// At least one DNSSEC-validated TLSA record matched the chain.
+	Authenticated,
+	/// No (validated) TLSA records exist: DANE does not apply, proceed
+	/// opportunistically.
+	NoRecords,
+	/// TLSA records exist but none matched: authentication failed.
+	Mismatch,
+}
+
+/// Decide the DANE outcome for a presented chain against published records.
+///
+/// The records passed here MUST already be DNSSEC-validated (RFC 7672 §2.1):
+/// unvalidated TLSA is never trusted and must be presented as an empty slice so
+/// this returns [`DaneOutcome::NoRecords`]. With records present, the peer is
+/// authenticated only when one matches; otherwise the outcome is
+/// [`DaneOutcome::Mismatch`] and the caller must refuse delivery (fail closed).
+pub fn dane_outcome(records: &[TlsaRecord], leaf: &CertView, chain: &[CertView]) -> DaneOutcome {
+	if records.is_empty() {
+		DaneOutcome::NoRecords
+	} else if authenticate(records, leaf, chain) {
+		DaneOutcome::Authenticated
+	} else {
+		DaneOutcome::Mismatch
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -94,5 +127,31 @@ mod tests {
 	#[test]
 	fn no_records_means_not_authenticated() {
 		assert!(!authenticate(&[], &leaf(), &chain()));
+	}
+
+	#[test]
+	fn outcome_authenticated_on_match() {
+		let record = TlsaRecord::from_parts(3, 1, 1, sha256(LEAF_SPKI)).expect("record");
+		assert_eq!(
+			dane_outcome(&[record], &leaf(), &chain()),
+			DaneOutcome::Authenticated
+		);
+	}
+
+	#[test]
+	fn outcome_mismatch_when_no_record_matches() {
+		// Records are present (DNSSEC-validated) but none matches the chain:
+		// fail closed, the peer is not authenticated.
+		let record = TlsaRecord::from_parts(3, 1, 1, sha256(b"wrong key")).expect("record");
+		assert_eq!(
+			dane_outcome(&[record], &leaf(), &chain()),
+			DaneOutcome::Mismatch
+		);
+	}
+
+	#[test]
+	fn outcome_no_records_when_empty() {
+		// No validated TLSA: DANE does not apply (opportunistic TLS).
+		assert_eq!(dane_outcome(&[], &leaf(), &chain()), DaneOutcome::NoRecords);
 	}
 }

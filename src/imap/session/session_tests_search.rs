@@ -410,3 +410,110 @@ fn search_larger_smaller() {
 	let response = text(&session.command_line("a6 SEARCH SMALLER 5"));
 	assert!(response.contains("* SEARCH\r\n"), "{response}");
 }
+
+/// Deliver a message straight into a non-INBOX mailbox's `new` directory.
+fn deliver_to(dir: &std::path::Path, mailbox: &str, body: &[u8]) {
+	let new_dir = dir
+		.join("accounts")
+		.join("alice")
+		.join("folders")
+		.join(mailbox)
+		.join("new");
+	std::fs::create_dir_all(&new_dir).expect("create dirs");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(new_dir.join(format!("{id}.eml")), body).expect("write");
+}
+
+#[test]
+fn multisearch_across_explicit_mailboxes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
+	deliver(dir.path(), b"Subject: b\r\n\r\ntwo\r\n");
+	deliver_to(dir.path(), "Archive", b"Subject: c\r\n\r\nthree\r\n");
+	let mut session = logged_in(dir.path());
+
+	// MULTISEARCH does not require a selected mailbox; it names them.
+	let response = text(
+		&session
+			.command_line("m1 ESEARCH IN (mailboxes (\"INBOX\" \"Archive\")) RETURN (COUNT) ALL"),
+	);
+	assert!(
+		response.contains("MAILBOX \"INBOX\" UIDVALIDITY"),
+		"{response}"
+	);
+	assert!(
+		response.contains("MAILBOX \"Archive\" UIDVALIDITY"),
+		"{response}"
+	);
+	// INBOX has two, Archive has one.
+	assert!(response.contains("UID COUNT 2"), "{response}");
+	assert!(response.contains("UID COUNT 1"), "{response}");
+	assert!(response.contains("m1 OK SEARCH completed"), "{response}");
+}
+
+#[test]
+fn multisearch_defaults_to_selected_mailbox() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
+	deliver(dir.path(), b"Subject: b\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("m1 SELECT INBOX");
+
+	// No IN clause → the selected mailbox; default RETURN is ALL (UIDs).
+	let response = text(&session.command_line("m2 ESEARCH ALL"));
+	assert!(
+		response.contains("MAILBOX \"INBOX\" UIDVALIDITY"),
+		"{response}"
+	);
+	assert!(response.contains("UID ALL 1,2"), "{response}");
+}
+
+#[test]
+fn multisearch_selected_without_selection_is_bad() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
+	let mut session = logged_in(dir.path());
+	// Authenticated but no mailbox selected.
+	let response = text(&session.command_line("m1 ESEARCH ALL"));
+	assert!(response.contains("m1 BAD"), "{response}");
+}
+
+#[test]
+fn multisearch_subtree_matches_root_not_same_prefix_sibling() {
+	// The mailbox store is flat (names cannot contain the hierarchy
+	// separator), so a subtree resolves to its named root. A sibling that
+	// merely shares the name as a prefix ("Workshop") must not be included.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver_to(dir.path(), "Work", b"Subject: a\r\n\r\none\r\n");
+	deliver_to(dir.path(), "Workshop", b"Subject: b\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+
+	let response =
+		text(&session.command_line("m1 ESEARCH IN (subtree (\"Work\")) RETURN (COUNT) ALL"));
+	assert!(
+		response.contains("MAILBOX \"Work\" UIDVALIDITY"),
+		"{response}"
+	);
+	assert!(
+		!response.contains("MAILBOX \"Workshop\""),
+		"sibling leaked: {response}"
+	);
+}
+
+#[test]
+fn multisearch_personal_scope_searches_all_mailboxes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: a\r\n\r\none\r\n");
+	deliver_to(dir.path(), "Archive", b"Subject: b\r\n\r\ntwo\r\n");
+	let mut session = logged_in(dir.path());
+
+	let response = text(&session.command_line("m1 ESEARCH IN (personal) RETURN (COUNT) ALL"));
+	assert!(
+		response.contains("MAILBOX \"INBOX\" UIDVALIDITY"),
+		"{response}"
+	);
+	assert!(
+		response.contains("MAILBOX \"Archive\" UIDVALIDITY"),
+		"{response}"
+	);
+}

@@ -51,10 +51,20 @@ pub struct Order {
 	pub certificate: Option<String>,
 }
 
+/// The DNS identifier an authorization or order covers.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Identifier {
+	#[serde(default)]
+	pub value: String,
+}
+
 /// An authorization for one identifier, listing its challenges.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Authorization {
 	pub status: String,
+	/// The domain this authorization covers (needed for the DNS-01 record name).
+	#[serde(default)]
+	pub identifier: Identifier,
 	#[serde(default)]
 	pub challenges: Vec<Challenge>,
 }

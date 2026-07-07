@@ -13,6 +13,15 @@ use crate::config::Account;
 use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
 
+pub mod app_passwords;
+pub use app_passwords::{AppPassword, AppPasswordStore};
+
+pub mod sql;
+pub use sql::{SqlAccount, load_sql_accounts};
+
+pub mod ldap;
+pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
+
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
 pub struct DirectoryHandle {
@@ -111,7 +120,24 @@ pub struct AccountStore {
 	domains: Vec<String>,
 	domain_aliases: std::collections::HashMap<String, String>,
 	static_accounts: Vec<Account>,
+	/// Default storage quota (bytes) per domain.
+	domain_quotas: std::collections::HashMap<String, u64>,
+	/// Multi-target aliases from the static configuration.
+	aliases: Vec<crate::config::Alias>,
+	/// App passwords (secondary mail credentials) keyed by account, loaded from
+	/// `app_passwords.toml` at open time.
+	app_passwords: Vec<(String, AppPassword)>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
+	/// Accounts loaded from the SQL directory backend, refreshed periodically.
+	/// Static config and dynamic accounts take precedence over these on a name
+	/// or address conflict.
+	sql_accounts: RwLock<Vec<SqlAccount>>,
+	/// Accounts loaded from the LDAP directory backend, refreshed periodically.
+	/// Lowest precedence: static, dynamic and SQL accounts all win on conflict.
+	ldap_accounts: RwLock<Vec<LdapAccount>>,
+	/// Live LDAP authenticator (a worker thread), shared into every rebuilt
+	/// directory so per-request binds work after a refresh.
+	ldap_auth: Option<Arc<LdapAuthenticator>>,
 	handle: DirectoryHandle,
 }
 
@@ -133,16 +159,70 @@ impl AccountStore {
 			Err(error) => return Err(error.into()),
 		};
 
+		// App passwords are an optional sidecar; a missing file is an empty set.
+		let app_passwords = AppPasswordStore::open(data_dir)?.entries().collect();
+
 		let store = AccountStore {
 			path,
 			domains,
 			domain_aliases,
 			static_accounts,
+			domain_quotas: std::collections::HashMap::new(),
+			aliases: Vec::new(),
+			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
+			sql_accounts: RwLock::new(Vec::new()),
+			ldap_accounts: RwLock::new(Vec::new()),
+			ldap_auth: None,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
 		Ok(store)
+	}
+
+	/// Set the per-domain default storage quotas and rebuild the directory.
+	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
+		self.domain_quotas = quotas;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Set the multi-target aliases and rebuild the directory.
+	pub fn with_aliases(mut self, aliases: Vec<crate::config::Alias>) -> Self {
+		self.aliases = aliases;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Seed the SQL-sourced accounts at construction and rebuild the directory
+	/// (builder form, for startup wiring).
+	pub fn with_sql_accounts(self, accounts: Vec<SqlAccount>) -> Self {
+		self.set_sql_accounts(accounts);
+		self
+	}
+
+	/// Replace the SQL-sourced accounts and rebuild the directory. Called by the
+	/// background refresh task on an `Arc<AccountStore>`; static and dynamic
+	/// accounts keep precedence on conflict.
+	pub fn set_sql_accounts(&self, accounts: Vec<SqlAccount>) {
+		*self.sql_accounts.write().expect("store lock") = accounts;
+		self.handle.replace(self.build_directory());
+	}
+
+	/// Attach the live LDAP authenticator at construction and rebuild the
+	/// directory so per-request LDAP binds are wired in (builder form).
+	pub fn with_ldap_authenticator(mut self, ldap: Arc<LdapAuthenticator>) -> Self {
+		self.ldap_auth = Some(ldap);
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Replace the LDAP-sourced resolution accounts and rebuild the directory.
+	/// Called by the background refresh task; static, dynamic and SQL accounts all
+	/// keep precedence on conflict.
+	pub fn set_ldap_accounts(&self, accounts: Vec<LdapAccount>) {
+		*self.ldap_accounts.write().expect("store lock") = accounts;
+		self.handle.replace(self.build_directory());
 	}
 
 	/// The hot-reloadable handle shared with servers and delivery.
@@ -284,8 +364,12 @@ impl AccountStore {
 
 	fn build_directory(&self) -> Directory {
 		let dynamic = self.dynamic.read().expect("store lock");
-		let address_accounts = self
-			.static_accounts
+		let sql = self.sql_accounts.read().expect("store lock");
+		let ldap = self.ldap_accounts.read().expect("store lock");
+		// LDAP accounts are listed first, then SQL, so static config and dynamic
+		// accounts chained after take precedence on a name or address collision
+		// (the directory's maps keep the last writer): static > dynamic > SQL > LDAP.
+		let address_accounts = ldap
 			.iter()
 			.flat_map(|account| {
 				account
@@ -293,6 +377,18 @@ impl AccountStore {
 					.iter()
 					.map(|address| (address.clone(), account.name.clone()))
 			})
+			.chain(sql.iter().flat_map(|account| {
+				account
+					.addresses
+					.iter()
+					.map(|address| (address.clone(), account.name.clone()))
+			}))
+			.chain(self.static_accounts.iter().flat_map(|account| {
+				account
+					.addresses
+					.iter()
+					.map(|address| (address.clone(), account.name.clone()))
+			}))
 			.chain(dynamic.iter().flat_map(|account| {
 				account
 					.addresses
@@ -300,8 +396,7 @@ impl AccountStore {
 					.map(|address| (address.clone(), account.name.clone()))
 			}))
 			.collect::<Vec<_>>();
-		let hashes = self
-			.static_accounts
+		let hashes = sql
 			.iter()
 			.filter_map(|account| {
 				account
@@ -309,6 +404,12 @@ impl AccountStore {
 					.as_ref()
 					.map(|hash| (account.name.clone(), hash.clone()))
 			})
+			.chain(self.static_accounts.iter().filter_map(|account| {
+				account
+					.password_hash
+					.as_ref()
+					.map(|hash| (account.name.clone(), hash.clone()))
+			}))
 			.chain(
 				dynamic
 					.iter()
@@ -335,12 +436,44 @@ impl AccountStore {
 				.clone()
 				.map(|secret| (account.name.clone(), secret))
 		});
+		let account_quotas = self.static_accounts.iter().filter_map(|account| {
+			account
+				.quota_bytes
+				.map(|bytes| (account.name.clone(), bytes))
+		});
+		let forwards = self
+			.static_accounts
+			.iter()
+			.filter(|account| !account.forward.is_empty())
+			.map(|account| {
+				(
+					account.name.clone(),
+					(account.forward.clone(), account.forward_keep_local),
+				)
+			});
+		let aliases = self.aliases.iter().map(|alias| {
+			(
+				alias.address.clone(),
+				crate::smtp::directory::AliasSpec {
+					members: alias.members.clone(),
+					senders: alias.senders.clone(),
+					hidden: alias.hidden,
+					list_id: alias.list_id.clone(),
+				},
+			)
+		});
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
 			.with_scram(scram)
 			.with_totp(totp)
+			.with_account_quotas(account_quotas)
+			.with_domain_quotas(self.domain_quotas.clone())
+			.with_forwards(forwards)
+			.with_aliases(aliases)
+			.with_app_passwords(self.app_passwords.iter().cloned())
+			.with_ldap(self.ldap_auth.clone())
 	}
 }
 
@@ -361,136 +494,5 @@ fn validate_name(name: &str) -> Result<(), StoreError> {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::smtp::directory::Resolution;
-
-	fn static_account() -> Account {
-		Account {
-			name: "alice".to_string(),
-			addresses: vec!["alice@example.org".to_string()],
-			password_hash: None,
-			catch_all: Vec::new(),
-		}
-	}
-
-	fn open_store(dir: &Path) -> AccountStore {
-		AccountStore::open(
-			dir,
-			vec!["example.org".to_string()],
-			std::collections::HashMap::new(),
-			vec![static_account()],
-		)
-		.expect("open store")
-	}
-
-	fn dynamic(name: &str, address: &str) -> DynamicAccount {
-		DynamicAccount {
-			name: name.to_string(),
-			addresses: vec![address.to_string()],
-			password_hash: "$argon2id$stub".to_string(),
-			scram: None,
-			totp_secret: None,
-		}
-	}
-
-	fn resolves(handle: &DirectoryHandle, raw: &str) -> Resolution {
-		handle
-			.current()
-			.resolve(&Address::parse(raw).expect("address"))
-	}
-
-	#[test]
-	fn add_swaps_the_directory_and_persists() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let store = open_store(dir.path());
-		let handle = store.handle();
-
-		assert_eq!(
-			resolves(&handle, "bob@example.org"),
-			Resolution::UnknownUser
-		);
-		store.add(dynamic("bob", "bob@example.org")).expect("add");
-		assert_eq!(
-			resolves(&handle, "bob@example.org"),
-			Resolution::Account("bob".to_string())
-		);
-
-		// A fresh store sees the persisted account.
-		let reopened = open_store(dir.path());
-		assert_eq!(
-			resolves(&reopened.handle(), "bob@example.org"),
-			Resolution::Account("bob".to_string())
-		);
-	}
-
-	#[test]
-	fn rejects_duplicates_and_foreign_domains() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let store = open_store(dir.path());
-
-		// Static name and address are taken.
-		assert!(matches!(
-			store.add(dynamic("alice", "alice2@example.org")),
-			Err(StoreError::Duplicate(_))
-		));
-		assert!(matches!(
-			store.add(dynamic("bob", "ALICE@example.org")),
-			Err(StoreError::Duplicate(_))
-		));
-		assert!(matches!(
-			store.add(dynamic("bob", "bob@elsewhere.example")),
-			Err(StoreError::Invalid(_))
-		));
-		assert!(matches!(
-			store.add(dynamic("Bad Name", "bob@example.org")),
-			Err(StoreError::Invalid(_))
-		));
-	}
-
-	#[test]
-	fn remove_only_dynamic_accounts() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let store = open_store(dir.path());
-		store.add(dynamic("bob", "bob@example.org")).expect("add");
-
-		assert!(matches!(
-			store.remove("alice"),
-			Err(StoreError::NotFound(_))
-		));
-		store.remove("bob").expect("remove");
-		assert_eq!(
-			resolves(&store.handle(), "bob@example.org"),
-			Resolution::UnknownUser
-		);
-	}
-
-	#[test]
-	fn password_change_swaps_credentials() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let store = open_store(dir.path());
-		store.add(dynamic("bob", "bob@example.org")).expect("add");
-
-		let real_hash = crate::smtp::auth::tests::hash("secret");
-		store
-			.set_password_hash("bob", real_hash, None)
-			.expect("set password");
-		let directory = store.handle().current();
-		let (account, hash) = directory.credentials("bob").expect("credentials");
-		assert_eq!(account, "bob");
-		assert!(crate::smtp::auth::verify_password(hash, "secret"));
-	}
-
-	#[test]
-	fn account_views_mark_origin() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let store = open_store(dir.path());
-		store.add(dynamic("bob", "bob@example.org")).expect("add");
-		let views = store.account_views();
-		assert_eq!(views.len(), 2);
-		assert_eq!(views[0].0, "alice");
-		assert!(!views[0].2);
-		assert_eq!(views[1].0, "bob");
-		assert!(views[1].2);
-	}
-}
+#[path = "mod_tests.rs"]
+mod tests;

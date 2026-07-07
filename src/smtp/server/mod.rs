@@ -60,6 +60,8 @@ pub struct Server {
 	dnsbl: crate::dnsbl::Dnsbl,
 	/// When set, accepted unauthenticated mail is recorded as ham.
 	reputation: Option<sqlx::PgPool>,
+	/// When set, the Bayesian corpus is trained on accept/reject decisions.
+	bayes: Option<crate::antispam::corpus::BayesStore>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
 	/// Shared metrics counters.
@@ -74,6 +76,12 @@ pub struct Server {
 	greylist: Option<(Arc<crate::antispam::greylist::MemoryGreylist>, u64)>,
 	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
+	cbind_data: Option<Vec<u8>>,
+	/// Shared per-account submission rate limiter for authenticated senders.
+	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
+	/// Max concurrent connections for this listener (back-pressure cap).
+	max_connections: usize,
 }
 
 impl Server {
@@ -89,6 +97,7 @@ impl Server {
 			spf: None,
 			dnsbl: crate::dnsbl::Dnsbl::default(),
 			reputation: None,
+			bayes: None,
 			hook: None,
 			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
@@ -96,7 +105,31 @@ impl Server {
 			arc_sealer: None,
 			greylist: None,
 			oauth: None,
+			cbind_data: None,
+			send_limiter: None,
+			max_connections: MAX_CONNECTIONS,
 		}
+	}
+
+	/// Attach a shared per-account submission rate limiter.
+	pub fn with_send_limiter(mut self, limiter: Arc<crate::smtp::ratelimit::SendLimiter>) -> Self {
+		self.send_limiter = Some(limiter);
+		self
+	}
+
+	/// Cap concurrent connections for this listener (0 keeps the default).
+	pub fn with_max_connections(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Provide the `tls-server-end-point` certificate hash, enabling
+	/// SCRAM-SHA-256-PLUS once a session is inside TLS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
+		self
 	}
 
 	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
@@ -139,6 +172,12 @@ impl Server {
 		self
 	}
 
+	/// Train the (encrypted-at-rest) Bayesian corpus on accept/reject decisions.
+	pub fn with_bayes(mut self, store: crate::antispam::corpus::BayesStore) -> Self {
+		self.bayes = Some(store);
+		self
+	}
+
 	/// Delay first-time unauthenticated senders by `secs` seconds. Zero (the
 	/// default) disables the slowdown.
 	pub fn with_first_time_delay(mut self, secs: u64) -> Self {
@@ -157,9 +196,9 @@ impl Server {
 	/// rejected mail trains spam, so the classifier learns from the server's
 	/// own accept/reject decisions.
 	fn train_corpus(&self, data: &[u8], spam: bool) {
-		if let Some(pool) = &self.reputation {
+		if let Some(bayes) = &self.bayes {
 			let text = String::from_utf8_lossy(data).into_owned();
-			crate::antispam::corpus::train_in_background(pool.clone(), text, spam);
+			bayes.train_in_background(crate::antispam::corpus::SHARED.to_string(), text, spam);
 		}
 	}
 
@@ -191,16 +230,22 @@ impl Server {
 	}
 
 	fn new_session(&self) -> Session {
-		let session = Session::new(&self.hostname).with_directory(self.directory.current());
-		match &self.oauth {
-			Some(verifier) => session.with_oauth(Arc::clone(verifier)),
-			None => session,
+		let mut session = Session::new(&self.hostname).with_directory(self.directory.current());
+		if let Some(verifier) = &self.oauth {
+			session = session.with_oauth(Arc::clone(verifier));
 		}
+		if let Some(cbind) = &self.cbind_data {
+			session = session.with_channel_binding(cbind.clone());
+		}
+		if let Some(limiter) = &self.send_limiter {
+			session = session.with_send_limiter(Arc::clone(limiter));
+		}
+		session
 	}
 
 	/// Accept connections forever. Each connection runs in its own task.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
@@ -227,7 +272,15 @@ impl Server {
 		match (self.tls_mode, &self.tls) {
 			(TlsMode::Implicit, Some(acceptor)) => {
 				let tls_stream = acceptor.current().accept(stream).await?;
-				let session = self.new_session().with_tls_active();
+				// A verified client certificate enables SASL EXTERNAL.
+				let identity = tls_stream
+					.get_ref()
+					.1
+					.peer_certificates()
+					.and_then(|certs| certs.first())
+					.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+				let mut session = self.new_session().with_tls_active();
+				session.set_client_identity(identity);
 				self.run(Box::new(tls_stream), session, peer).await
 			}
 			(TlsMode::Implicit, None) => Err(std::io::Error::other(

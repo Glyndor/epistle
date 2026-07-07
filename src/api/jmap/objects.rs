@@ -37,15 +37,19 @@ pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
 	format!("{headers}\r\n{body}").into_bytes()
 }
 
-/// Raw bytes of a stored message by id, searching the account's mailboxes.
+/// Raw (plaintext) bytes of a stored message by id, searching the account's
+/// mailboxes and decoding the at-rest envelope through `crypto`.
 pub(super) fn find_email_raw(
 	data_dir: &std::path::Path,
 	account: &str,
 	id: &str,
+	crypto: &crate::storage::MessageCrypto,
 ) -> Option<Vec<u8>> {
 	let uuid = uuid::Uuid::parse_str(id).ok()?;
 	for mailbox in crate::imap::mailbox::list(data_dir, account) {
-		let Ok(snapshot) = crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox) else {
+		let Ok(snapshot) =
+			crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox, crypto)
+		else {
 			continue;
 		};
 		if let Some(message) = snapshot.messages().find(|m| m.id() == uuid) {
@@ -55,14 +59,21 @@ pub(super) fn find_email_raw(
 	None
 }
 
-/// Locate a message by id across the account's mailboxes and build its Email.
-pub(super) fn find_email(data_dir: &std::path::Path, account: &str, id: &str) -> Option<Value> {
+/// Locate a message by id across the account's mailboxes and build its Email,
+/// decoding the body through `crypto`.
+pub(super) fn find_email(
+	data_dir: &std::path::Path,
+	account: &str,
+	id: &str,
+	crypto: &crate::storage::MessageCrypto,
+) -> Option<Value> {
 	let uuid = uuid::Uuid::parse_str(id).ok()?;
 	for mailbox in crate::imap::mailbox::list(data_dir, account) {
-		let snapshot = match crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox) {
-			Ok(snapshot) => snapshot,
-			Err(_) => continue,
-		};
+		let snapshot =
+			match crate::imap::mailbox::Snapshot::open(data_dir, account, &mailbox, crypto) {
+				Ok(snapshot) => snapshot,
+				Err(_) => continue,
+			};
 		if let Some(message) = snapshot.messages().find(|m| m.id() == uuid) {
 			let raw = snapshot.read(message).unwrap_or_default();
 			return Some(email_object(id, &mailbox, message, &raw));
@@ -177,15 +188,20 @@ pub(super) fn unix_to_utc(time: std::time::SystemTime) -> String {
 
 /// Build one JMAP Mailbox object from a mailbox name.
 pub(super) fn mailbox_object(data_dir: &std::path::Path, account: &str, name: &str) -> Value {
-	let (total, unread) = crate::imap::mailbox::Snapshot::open(data_dir, account, name)
-		.map(|snapshot| {
-			let unread = snapshot
-				.messages()
-				.filter(|m| !m.flags.contains(&crate::imap::mailbox::Flag::Seen))
-				.count();
-			(snapshot.len(), unread)
-		})
-		.unwrap_or((0, 0));
+	let (total, unread) = crate::imap::mailbox::Snapshot::open(
+		data_dir,
+		account,
+		name,
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.map(|snapshot| {
+		let unread = snapshot
+			.messages()
+			.filter(|m| !m.flags.contains(&crate::imap::mailbox::Flag::Seen))
+			.count();
+		(snapshot.len(), unread)
+	})
+	.unwrap_or((0, 0));
 	json!({
 		"id": name,
 		"name": name,

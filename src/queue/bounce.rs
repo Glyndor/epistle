@@ -3,6 +3,15 @@
 use crate::clock;
 use crate::smtp::session::AcceptedMessage;
 
+/// Whether the report is a permanent failure or a transient-delay warning.
+#[derive(Clone, Copy)]
+enum Kind {
+	/// Permanent failure: the message is returned and will not be retried.
+	Failed,
+	/// Delay warning: the message is still queued and delivery continues.
+	Delayed,
+}
+
 /// Build a Delivery Status Notification for a permanently failed message.
 ///
 /// Produces an RFC 3464 `multipart/report; report-type=delivery-status`
@@ -19,10 +28,59 @@ pub fn build(
 	original_data: &[u8],
 	now: std::time::SystemTime,
 ) -> Option<AcceptedMessage> {
+	build_report(
+		Kind::Failed,
+		hostname,
+		original_reverse_path,
+		failed_recipients,
+		reason,
+		original_data,
+		now,
+	)
+}
+
+/// Build a "delivery delayed" warning DSN (RFC 3464 `Action: delayed`). Unlike a
+/// bounce, the message stays queued; this just informs the sender it is taking a
+/// while. Returns `None` when the original was itself a bounce.
+pub fn build_delay_warning(
+	hostname: &str,
+	original_reverse_path: &str,
+	recipients: &[String],
+	reason: &str,
+	original_data: &[u8],
+	now: std::time::SystemTime,
+) -> Option<AcceptedMessage> {
+	build_report(
+		Kind::Delayed,
+		hostname,
+		original_reverse_path,
+		recipients,
+		reason,
+		original_data,
+		now,
+	)
+}
+
+fn build_report(
+	kind: Kind,
+	hostname: &str,
+	original_reverse_path: &str,
+	recipients: &[String],
+	reason: &str,
+	original_data: &[u8],
+	now: std::time::SystemTime,
+) -> Option<AcceptedMessage> {
 	if original_reverse_path.is_empty() {
 		// Never bounce a bounce.
 		return None;
 	}
+
+	// The reason is the remote MTA's SMTP reply, attacker-influenced and read
+	// with its line breaks intact. Sanitize before it reaches any DSN header or
+	// body: a raw CR/LF would inject forged headers into the bounce we send back
+	// to the (attacker-chosen) original sender (header injection / DSN
+	// smuggling). Collapse all control characters to spaces and cap the length.
+	let reason = &sanitize_reason(reason);
 
 	let date = clock::rfc5322(now);
 	let boundary = format!(
@@ -31,20 +89,38 @@ pub fn build(
 			.map(|d| d.as_secs())
 			.unwrap_or(0)
 	);
-	let status = enhanced_status(reason);
+	let (subject, action, default_status, intro, reason_label, closing) = match kind {
+		Kind::Failed => (
+			"Undelivered Mail Returned to Sender",
+			"failed",
+			"5.0.0",
+			"Your message could not be delivered to the following recipients:",
+			"Reason:",
+			"The message will not be retried.",
+		),
+		Kind::Delayed => (
+			"Delivery Status Notification (Delay)",
+			"delayed",
+			"4.0.0",
+			"Your message is taking longer than expected to deliver to:",
+			"Reason for the delay:",
+			"No action is required: delivery will keep being retried.",
+		),
+	};
+	let status = enhanced_status(reason, default_status);
 
-	let human_recipients: String = failed_recipients
+	let human_recipients: String = recipients
 		.iter()
 		.map(|recipient| format!("   {recipient}\r\n"))
 		.collect();
 
 	// Per-recipient machine-readable status fields.
-	let per_recipient: String = failed_recipients
+	let per_recipient: String = recipients
 		.iter()
 		.map(|recipient| {
 			format!(
 				"Final-Recipient: rfc822; {recipient}\r\n\
-Action: failed\r\n\
+Action: {action}\r\n\
 Status: {status}\r\n\
 Diagnostic-Code: smtp; {reason}\r\n\
 \r\n"
@@ -57,7 +133,7 @@ Diagnostic-Code: smtp; {reason}\r\n\
 	let body = format!(
 		"From: Mail Delivery System <MAILER-DAEMON@{hostname}>\r\n\
 To: <{original_reverse_path}>\r\n\
-Subject: Undelivered Mail Returned to Sender\r\n\
+Subject: {subject}\r\n\
 Date: {date}\r\n\
 Auto-Submitted: auto-replied\r\n\
 MIME-Version: 1.0\r\n\
@@ -69,14 +145,14 @@ Content-Type: text/plain; charset=us-ascii\r\n\
 \r\n\
 This is the mail system at host {hostname}.\r\n\
 \r\n\
-Your message could not be delivered to the following recipients:\r\n\
+{intro}\r\n\
 \r\n\
 {human_recipients}\
 \r\n\
-Reason:\r\n\
+{reason_label}\r\n\
    {reason}\r\n\
 \r\n\
-The message will not be retried.\r\n\
+{closing}\r\n\
 \r\n\
 --{boundary}\r\n\
 Content-Type: message/delivery-status\r\n\
@@ -101,13 +177,26 @@ Content-Type: message/rfc822-headers\r\n\
 	})
 }
 
+/// Sanitize a remote MTA's reply for safe inclusion in a DSN. Every control
+/// character (CR, LF, TAB, NUL, …) is replaced with a single space so it cannot
+/// break out of a header line or inject new headers, and the result is capped to
+/// bound the bounce size. The reply is otherwise attacker-influenced text.
+fn sanitize_reason(reason: &str) -> String {
+	const MAX_REASON_LEN: usize = 512;
+	reason
+		.chars()
+		.map(|c| if c.is_control() { ' ' } else { c })
+		.take(MAX_REASON_LEN)
+		.collect()
+}
+
 /// The enhanced status code (RFC 3463, `class.subject.detail`) carried in the
-/// reason, or a generic permanent failure when none is present.
-fn enhanced_status(reason: &str) -> String {
+/// reason, or `default` when none is present.
+fn enhanced_status(reason: &str, default: &str) -> String {
 	reason
 		.split_whitespace()
 		.find(|token| is_enhanced_code(token))
-		.unwrap_or("5.0.0")
+		.unwrap_or(default)
 		.to_string()
 }
 
@@ -241,6 +330,82 @@ mod tests {
 			2,
 			"{body}"
 		);
+	}
+
+	#[test]
+	fn delay_warning_is_transient_and_keeps_retrying() {
+		let warning = build_delay_warning(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			"451 4.4.1 connection timed out",
+			original(),
+			UNIX_EPOCH,
+		)
+		.expect("warning built");
+		assert_eq!(warning.reverse_path, "");
+		let body = String::from_utf8(warning.data).expect("ascii");
+		assert!(body.contains("Action: delayed"), "{body}");
+		assert!(body.contains("Status: 4.4.1"), "{body}");
+		assert!(
+			body.contains("Subject: Delivery Status Notification (Delay)"),
+			"{body}"
+		);
+		assert!(body.contains("retried"), "{body}");
+		// A delayed report must never be returned for a bounce.
+		assert!(
+			build_delay_warning(
+				"h.example",
+				"",
+				&["x@y.example".to_string()],
+				"r",
+				original(),
+				UNIX_EPOCH
+			)
+			.is_none()
+		);
+	}
+
+	#[test]
+	fn sanitizes_crlf_in_reason_to_prevent_header_injection() {
+		// A hostile/compromised remote MTA returns a reply whose line contains a
+		// CRLF and a forged header. It must not appear as a real header (or any
+		// new line) in the DSN we generate.
+		let bounce = build(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			"550 rejected\r\nBcc: attacker@evil.example\r\nX-Injected: yes",
+			original(),
+			UNIX_EPOCH,
+		)
+		.expect("bounce built");
+		let body = String::from_utf8(bounce.data).expect("ascii");
+		// The injected header must never appear at the start of a line.
+		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
+		assert!(!body.contains("\r\nX-Injected: yes"), "{body}");
+		// The control characters are flattened to spaces, so the reason text is
+		// still present on a single line.
+		assert!(
+			body.contains("550 rejected  Bcc: attacker@evil.example  X-Injected: yes"),
+			"{body}"
+		);
+	}
+
+	#[test]
+	fn caps_reason_length() {
+		let bounce = build(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			&"x".repeat(5_000),
+			original(),
+			UNIX_EPOCH,
+		)
+		.expect("bounce built");
+		let body = String::from_utf8(bounce.data).expect("ascii");
+		// The reason appears twice (header + text part); each is capped to 512.
+		assert!(!body.contains(&"x".repeat(513)), "reason not capped");
 	}
 
 	#[test]

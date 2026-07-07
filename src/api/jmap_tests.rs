@@ -346,3 +346,45 @@ async fn jmap_mailbox_get_filters_by_ids() {
 		.collect();
 	assert_eq!(names, vec!["INBOX".to_string()], "{body}");
 }
+
+#[tokio::test]
+async fn jmap_query_changes_reports_cannot_calculate() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/queryChanges", {"accountId": "alice", "sinceQueryState": "0"}, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["methodResponses"][0][0], "error");
+	assert_eq!(
+		body["methodResponses"][0][1]["type"],
+		"cannotCalculateChanges"
+	);
+}
+
+#[tokio::test]
+async fn jmap_result_back_reference_chains_calls() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	// Mailbox/query then Mailbox/get the resulting ids via a back-reference.
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [
+			["Mailbox/query", {"accountId": "alice"}, "q1"],
+			["Mailbox/get", {
+				"accountId": "alice",
+				"#ids": {"resultOf": "q1", "name": "Mailbox/query", "path": "/ids"}
+			}, "g1"]
+		],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["methodResponses"][1][0], "Mailbox/get");
+	// The INBOX resolved from the query's ids is present in the get result.
+	let list = body["methodResponses"][1][1]["list"].to_string();
+	assert!(list.contains("INBOX"), "{list}");
+}

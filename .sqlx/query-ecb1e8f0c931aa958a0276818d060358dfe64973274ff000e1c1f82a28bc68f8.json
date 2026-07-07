@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT ham_messages, spam_messages FROM bayes_corpus WHERE singleton",
+  "query": "SELECT ham_messages, spam_messages FROM bayes_corpus WHERE scope = $1",
   "describe": {
     "columns": [
       {
@@ -15,12 +15,14 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       false,
       false
     ]
   },
-  "hash": "c50d19ccc7c039420b12469e3f534de6e842602a723f798b4812fbe44b5d01ec"
+  "hash": "ecb1e8f0c931aa958a0276818d060358dfe64973274ff000e1c1f82a28bc68f8"
 }

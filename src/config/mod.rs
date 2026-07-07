@@ -6,25 +6,41 @@
 
 mod account;
 mod acme;
+mod alias;
 mod api;
 mod arc;
 mod database;
 mod dkim;
+mod dns;
+mod ldap;
 mod listener;
 mod oauth;
+mod otel;
+mod privileges;
+mod queue;
+mod storage;
 mod tls;
+mod transport;
 mod validate;
 mod webhook;
 
 pub use account::Account;
 pub use acme::Acme;
+pub use alias::Alias;
 pub use api::Api;
 pub use arc::Arc;
 pub use database::Database;
 pub use dkim::Dkim;
+pub use dns::Dns;
+pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind};
 pub use oauth::Oauth;
+pub use otel::Otel;
+pub use privileges::Privileges;
+pub use queue::{OutboundTls, Queue};
+pub use storage::Storage;
 pub use tls::Tls;
+pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -101,6 +117,9 @@ pub struct Config {
 	/// Per-account IMAP storage quota in bytes (RFC 9208). Absent uses the
 	/// built-in default (5 GiB).
 	pub quota_bytes: Option<u64>,
+	/// Outbound give-up window in seconds: undelivered mail older than this is
+	/// bounced to the sender. Absent uses the built-in default (5 days).
+	pub queue_give_up_secs: Option<u64>,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
@@ -129,12 +148,53 @@ pub struct Config {
 	pub log_format: LogFormat,
 	/// Automatic TLS (ACME). Present enables certificate issuance/renewal.
 	pub acme: Option<Acme>,
+	/// DNS provider for record automation (e.g. TLSA refresh on cert rotation).
+	#[serde(default)]
+	pub dns: Option<Dns>,
+	/// Default storage quota (bytes) per domain, applied to accounts in that
+	/// domain that have no quota of their own.
+	#[serde(default)]
+	pub domain_quotas: std::collections::HashMap<String, u64>,
+	/// Max messages an authenticated account may submit per minute. Absent
+	/// disables per-account submission rate limiting.
+	#[serde(default)]
+	pub submission_rate_limit_per_min: Option<u32>,
+	/// Max concurrent connections per listener (back-pressure cap). Absent
+	/// uses each protocol's built-in default. Excess connections are dropped.
+	#[serde(default)]
+	pub max_connections_per_listener: Option<usize>,
+	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
+	/// account/domain/global routing. Empty means direct MX delivery for all.
+	#[serde(default)]
+	pub transport: Vec<Transport>,
+	/// OpenTelemetry OTLP trace export. Present enables span export.
+	#[serde(default)]
+	pub otel: Option<Otel>,
+	/// Multi-target aliases: an address that delivers to several accounts.
+	#[serde(default)]
+	pub alias: Vec<Alias>,
 	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
 	pub arc: Option<Arc>,
 	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
 	pub oauth: Option<Oauth>,
+	/// LDAP / Active Directory directory backend. Present enables authenticating
+	/// non-local logins against the LDAP server and loading its users for
+	/// recipient resolution.
+	pub ldap: Option<Ldap>,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
+	/// Unprivileged user/group to drop to after privileged ports are bound.
+	/// Absent leaves the process running as whoever started it.
+	pub privileges: Option<Privileges>,
+	/// At-rest message encryption. Absent leaves stored mail unencrypted at the
+	/// application layer (relying on full-disk encryption); present can enable
+	/// transparent ChaCha20-Poly1305 encryption of stored message files.
+	#[serde(default)]
+	pub storage: Option<Storage>,
+	/// Outbound queue settings (currently the STARTTLS authentication mode).
+	/// Absent uses the secure defaults (strict outbound TLS).
+	#[serde(default)]
+	pub queue: Queue,
 }
 
 impl Config {
@@ -322,7 +382,86 @@ surprise = true
 	}
 
 	#[test]
+	fn outbound_tls_defaults_strict_and_parses() {
+		// Absent [queue] section: strict (fail closed, back-compatible).
+		let default = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		assert_eq!(
+			Config::load(default.path())
+				.expect("loads")
+				.queue
+				.outbound_tls,
+			OutboundTls::Strict
+		);
+
+		// Explicit opportunistic parses.
+		let opportunistic = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+[queue]
+outbound_tls = "opportunistic"
+"#,
+		);
+		assert_eq!(
+			Config::load(opportunistic.path())
+				.expect("loads")
+				.queue
+				.outbound_tls,
+			OutboundTls::Opportunistic
+		);
+
+		// An unknown key inside [queue] is rejected (deny_unknown_fields).
+		let bad = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+[queue]
+surprise = true
+"#,
+		);
+		assert!(matches!(
+			Config::load(bad.path()),
+			Err(ConfigError::Parse { .. })
+		));
+	}
+
+	#[test]
 	fn default_bind_is_loopback() {
 		assert!(Config::default_bind_addr().is_loopback());
+	}
+
+	#[test]
+	fn max_connections_per_listener_parses_and_defaults_none() {
+		let default = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		);
+		assert_eq!(
+			Config::load(default.path())
+				.expect("loads")
+				.max_connections_per_listener,
+			None
+		);
+
+		let set = write_temp(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+max_connections_per_listener = 2048
+"#,
+		);
+		assert_eq!(
+			Config::load(set.path())
+				.expect("loads")
+				.max_connections_per_listener,
+			Some(2048)
+		);
 	}
 }

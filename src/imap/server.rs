@@ -54,6 +54,12 @@ pub struct Server {
 	tls_mode: TlsMode,
 	quota_bytes: u64,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` hash; enables AUTH=SCRAM-SHA-256-PLUS.
+	cbind_data: Option<Vec<u8>>,
+	/// Max concurrent connections for this listener (back-pressure cap).
+	max_connections: usize,
+	/// At-rest crypto for stored message bodies, shared by every session.
+	crypto: crate::storage::MessageCrypto,
 }
 
 impl Server {
@@ -74,7 +80,24 @@ impl Server {
 			tls_mode,
 			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
 			oauth: None,
+			cbind_data: None,
+			max_connections: MAX_CONNECTIONS,
+			crypto: crate::storage::MessageCrypto::disabled(),
 		}
+	}
+
+	/// Encrypt/decrypt stored message bodies at rest through `crypto`.
+	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
+		self.crypto = crypto;
+		self
+	}
+
+	/// Cap concurrent connections for this listener (0 keeps the default).
+	pub fn with_max_connections(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_connections = max;
+		}
+		self
 	}
 
 	/// Set the per-account storage quota applied to sessions.
@@ -89,9 +112,32 @@ impl Server {
 		self
 	}
 
+	/// Provide the `tls-server-end-point` certificate hash, enabling
+	/// AUTH=SCRAM-SHA-256-PLUS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
+		self
+	}
+
+	/// Build a session with this server's quota, OAuth and channel-binding.
+	fn new_session(&self) -> Session {
+		let mut session = Session::new(
+			&self.hostname,
+			self.data_dir.clone(),
+			self.directory.current(),
+		)
+		.with_quota_limit(self.quota_bytes)
+		.with_crypto(self.crypto.clone())
+		.with_oauth(self.oauth.clone());
+		if let Some(cbind) = &self.cbind_data {
+			session = session.with_channel_binding(cbind.clone());
+		}
+		session
+	}
+
 	/// Accept connections forever.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
-		let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
@@ -102,7 +148,7 @@ impl Server {
 			tokio::spawn(async move {
 				let _permit = permit;
 				tracing::debug!(%peer, "imap connection accepted");
-				if let Err(error) = server.handle(stream).await {
+				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "imap connection ended with error");
 				}
 			});
@@ -110,37 +156,28 @@ impl Server {
 	}
 
 	/// Drive one connection: TLS handshake (or plaintext with STARTTLS),
-	/// then the command loop.
-	pub async fn handle<S>(&self, stream: S) -> std::io::Result<()>
+	/// then the command loop. `peer` is the client IP, used to enforce
+	/// app-password CIDR allowlists; `None` for in-memory tests.
+	pub async fn handle<S>(&self, stream: S, peer: Option<std::net::IpAddr>) -> std::io::Result<()>
 	where
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 	{
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
 				let tls = self.tls.accept(stream).await?;
-				(
-					Box::new(tls),
-					Session::new(
-						&self.hostname,
-						self.data_dir.clone(),
-						self.directory.current(),
-					)
-					.with_quota_limit(self.quota_bytes)
-					.with_oauth(self.oauth.clone()),
-				)
+				let identity = tls
+					.get_ref()
+					.1
+					.peer_certificates()
+					.and_then(|certs| certs.first())
+					.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+				let mut session = self.new_session();
+				session.set_client_identity(identity);
+				(Box::new(tls), session)
 			}
-			TlsMode::StartTls => (
-				Box::new(stream),
-				Session::new(
-					&self.hostname,
-					self.data_dir.clone(),
-					self.directory.current(),
-				)
-				.with_quota_limit(self.quota_bytes)
-				.with_oauth(self.oauth.clone())
-				.with_starttls(),
-			),
+			TlsMode::StartTls => (Box::new(stream), self.new_session().with_starttls()),
 		};
+		session.set_peer_ip(peer);
 
 		let greeting = session.greeting();
 		stream.write_all(&greeting.bytes).await?;
@@ -154,16 +191,35 @@ impl Server {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
 				Ok(None) => {
-					let read =
-						match tokio::time::timeout(READ_TIMEOUT, stream.read(&mut buffer)).await {
-							Ok(Ok(n)) => n,
+					// With NOTIFY active (RFC 5465), poll the selected mailbox at
+					// IDLE_POLL intervals while waiting for the next command and
+					// push unsolicited EXISTS/EXPUNGE, bounded by READ_TIMEOUT.
+					let wait_start = tokio::time::Instant::now();
+					let read = loop {
+						let poll = if session.notify_active() {
+							IDLE_POLL.min(READ_TIMEOUT)
+						} else {
+							READ_TIMEOUT
+						};
+						match tokio::time::timeout(poll, stream.read(&mut buffer)).await {
+							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
-								tracing::debug!("IMAP idle timeout, closing connection");
-								let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
-								return Ok(());
+								if !session.notify_active() || wait_start.elapsed() >= READ_TIMEOUT
+								{
+									tracing::debug!("IMAP idle timeout, closing connection");
+									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
+									return Ok(());
+								}
+								if let Some(notification) = session.check_notify() {
+									if stream.write_all(&notification.bytes).await.is_err() {
+										return Ok(());
+									}
+									let _ = stream.flush().await;
+								}
 							}
-						};
+						}
+					};
 					if read == 0 {
 						return Ok(());
 					}
@@ -264,6 +320,14 @@ impl Server {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
 					let tls = self.tls.accept(stream).await?;
+					// A verified client certificate enables SASL EXTERNAL.
+					let identity = tls
+						.get_ref()
+						.1
+						.peer_certificates()
+						.and_then(|certs| certs.first())
+						.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+					session.set_client_identity(identity);
 					stream = Box::new(tls);
 					session.tls_started();
 					decoder = LineDecoder::new();

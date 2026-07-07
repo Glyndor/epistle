@@ -24,10 +24,16 @@ pub enum ListenerKind {
 	Imap,
 	/// POP3 over implicit TLS (port 995). Plaintext POP3 is not offered.
 	Pop3s,
+	/// ManageSieve with mandatory STARTTLS upgrade (port 4190).
+	ManageSieve,
 	/// Prometheus metrics endpoint (`GET /metrics`).
 	Metrics,
 	/// ACME HTTP-01 challenge responder (`/.well-known/acme-challenge/*`).
 	Acme,
+	/// Client autodiscovery: Thunderbird autoconfig + Microsoft Autodiscover.
+	Autoconfig,
+	/// WebDAV (RFC 4918) per-account file storage.
+	WebDav,
 }
 
 impl ListenerKind {
@@ -41,8 +47,11 @@ impl ListenerKind {
 			ListenerKind::Imaps => 993,
 			ListenerKind::Imap => 143,
 			ListenerKind::Pop3s => 995,
+			ListenerKind::ManageSieve => 4190,
 			ListenerKind::Metrics => 9090,
 			ListenerKind::Acme => 80,
+			ListenerKind::Autoconfig => 8091,
+			ListenerKind::WebDav => 8090,
 		}
 	}
 }

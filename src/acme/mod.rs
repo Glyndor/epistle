@@ -10,4 +10,5 @@ pub mod http01;
 pub mod jws;
 pub mod protocol;
 pub mod renew;
+pub mod tlsalpn;
 pub mod transport;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT token, ham_count, spam_count FROM bayes_token WHERE token = ANY($1)",
+  "query": "SELECT token, ham_count, spam_count FROM bayes_token WHERE scope = $1 AND token = ANY($2)",
   "describe": {
     "columns": [
       {
@@ -21,6 +21,7 @@
     ],
     "parameters": {
       "Left": [
+        "Text",
         "TextArray"
       ]
     },
@@ -30,5 +31,5 @@
       false
     ]
   },
-  "hash": "f47d06590563ed3d902dc50d649769956018d58930f8d3a6d11f7215e9442024"
+  "hash": "dea90f5c7bfd8f607140e7be6b87ff0c78c154f390aaa87ed1c7d795a4573efd"
 }

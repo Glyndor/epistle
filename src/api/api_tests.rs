@@ -40,6 +40,9 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),
 		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
 	}];
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(
@@ -491,4 +494,52 @@ async fn rate_limit_triggers_after_repeated_failures() {
 	let (status, body) = request(&app, "GET", "/api/v1/status", Some("wrong")).await;
 	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
 	assert_eq!(body["error"]["code"], "rate_limited");
+}
+
+#[tokio::test]
+async fn suppression_lists_global_and_per_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let suppression = crate::queue::SuppressionList::open(dir.path()).expect("open");
+	suppression.suppress("bob@example.net");
+	suppression.suppress_for("alice@example.org", "carol@example.net");
+	let app = router(test_state(dir.path(), 0));
+
+	// Global list.
+	let (status, body) = request(&app, "GET", "/api/v1/suppression", Some(TOKEN)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["addresses"][0], "bob@example.net");
+
+	// Per-account list.
+	let (status, body) = request(
+		&app,
+		"GET",
+		"/api/v1/suppression?account=alice@example.org",
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["addresses"][0], "carol@example.net");
+}
+
+#[tokio::test]
+async fn suppression_delete_removes_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let suppression = crate::queue::SuppressionList::open(dir.path()).expect("open");
+	suppression.suppress("bob@example.net");
+	let app = router(test_state(dir.path(), 0));
+
+	let (status, body) = request(
+		&app,
+		"DELETE",
+		"/api/v1/suppression/bob@example.net",
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["removed"], "bob@example.net");
+	assert!(
+		!crate::queue::SuppressionList::open(dir.path())
+			.expect("open")
+			.is_suppressed("bob@example.net")
+	);
 }

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::directory_store::DirectoryHandle;
 use crate::imap::mailbox::mailbox_dir;
+use crate::storage::MessageCrypto;
 
 use super::session::Backend;
 
@@ -16,14 +17,27 @@ use super::session::Backend;
 pub struct MailboxBackend {
 	directory: DirectoryHandle,
 	data_dir: PathBuf,
+	crypto: MessageCrypto,
 }
 
 impl MailboxBackend {
-	/// Build a backend sharing the server's directory handle and data dir.
+	/// Build a backend sharing the server's directory handle and data dir, with
+	/// no at-rest encryption. The encrypting variant is
+	/// [`MailboxBackend::new_with_crypto`].
 	pub fn new(directory: DirectoryHandle, data_dir: PathBuf) -> Self {
+		Self::new_with_crypto(directory, data_dir, MessageCrypto::disabled())
+	}
+
+	/// Build a backend that decodes stored message bodies through `crypto`.
+	pub fn new_with_crypto(
+		directory: DirectoryHandle,
+		data_dir: PathBuf,
+		crypto: MessageCrypto,
+	) -> Self {
 		Self {
 			directory,
 			data_dir,
+			crypto,
 		}
 	}
 }
@@ -62,9 +76,11 @@ impl Backend for MailboxBackend {
 		stems
 			.into_iter()
 			.filter_map(|stem| {
-				std::fs::read(dir.join(format!("{stem}.eml")))
-					.ok()
-					.map(|data| (stem, data))
+				let stored = std::fs::read(dir.join(format!("{stem}.eml"))).ok()?;
+				// Fail closed: drop a message that cannot be decrypted rather than
+				// serving ciphertext as if it were the message.
+				let data = self.crypto.decode(&stored).ok()?;
+				Some((stem, data))
 			})
 			.collect()
 	}
@@ -124,6 +140,7 @@ mod tests {
 			"INBOX",
 			&[],
 			b"Subject: one\r\n\r\na\r\n",
+			&MessageCrypto::disabled(),
 		)
 		.expect("append one");
 		crate::imap::mailbox::append(
@@ -132,6 +149,7 @@ mod tests {
 			"INBOX",
 			&[],
 			b"Subject: two\r\n\r\nb\r\n",
+			&MessageCrypto::disabled(),
 		)
 		.expect("append two");
 
@@ -146,7 +164,15 @@ mod tests {
 	fn remove_deletes_named_messages() {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let backend = backend(dir.path());
-		crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], b"x\r\n").expect("append");
+		crate::imap::mailbox::append(
+			dir.path(),
+			"alice",
+			"INBOX",
+			&[],
+			b"x\r\n",
+			&MessageCrypto::disabled(),
+		)
+		.expect("append");
 		let messages = backend.load("alice");
 		assert_eq!(messages.len(), 1);
 		let uid = messages[0].0.clone();

@@ -1,5 +1,5 @@
-use super::super::command::{ReturnOpt, SequenceSet};
-use super::codes::{copyuid_code, esearch_line};
+use super::super::command::{NotifyEvent, NotifyRequest, ReturnOpt, SearchScope, SequenceSet};
+use super::codes::{copyuid_code, esearch_line, esearch_multi_line};
 use super::helpers::search_matches;
 use super::mailbox::{self, Flag, Snapshot};
 use super::{Output, SearchKey, Session, State, StatusItem};
@@ -13,7 +13,9 @@ impl Session {
 		uid: bool,
 		remove_source: bool,
 	) -> Output {
+		let uidonly = self.uidonly;
 		let data_dir = self.data_dir.clone();
+		let crypto = self.crypto.clone();
 		let State::Selected {
 			account,
 			snapshot,
@@ -55,7 +57,7 @@ impl Session {
 				Ok(data) => data,
 				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
 			};
-			match mailbox::append(&data_dir, &account, target, &message.flags, &data) {
+			match mailbox::append(&data_dir, &account, target, &message.flags, &data, &crypto) {
 				Ok(id) => dest_ids.push(id),
 				Err(_) => return Output::text(format!("{tag} NO copy failed\r\n")),
 			}
@@ -73,7 +75,16 @@ impl Session {
 				if snapshot.remove_at(current).is_err() {
 					return Output::text(format!("{tag} NO move failed\r\n"));
 				}
-				response.push_str(&format!("* {current} EXPUNGE\r\n"));
+				if !uidonly {
+					response.push_str(&format!("* {current} EXPUNGE\r\n"));
+				}
+			}
+			// UIDONLY: report removals as a single VANISHED with UIDs.
+			if uidonly && !source_uids.is_empty() {
+				response.push_str(&format!(
+					"* VANISHED {}\r\n",
+					super::codes::uid_set(&source_uids)
+				));
 			}
 		}
 		let verb = if remove_source { "MOVE" } else { "COPY" };
@@ -121,7 +132,75 @@ impl Session {
 		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
 	}
 
+	/// MULTISEARCH (RFC 7377): search every resolved mailbox and emit one
+	/// `* ESEARCH` line per mailbox that produced output. Results are always
+	/// UIDs, correlated by `MAILBOX`/`UIDVALIDITY`.
+	pub(super) fn esearch(
+		&mut self,
+		tag: &str,
+		sources: &[SearchScope],
+		criteria: &[SearchKey],
+		return_opts: &[ReturnOpt],
+	) -> Output {
+		let Some(account) = self.account().map(str::to_string) else {
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
+		};
+
+		let mut mailboxes = match self.resolve_scopes(sources, &account) {
+			Some(mailboxes) => mailboxes,
+			None => return Output::text(format!("{tag} BAD no mailbox selected\r\n")),
+		};
+		mailboxes.dedup();
+
+		let mut body = String::new();
+		for name in &mailboxes {
+			let Ok(snapshot) = Snapshot::open(&self.data_dir, &account, name, &self.crypto) else {
+				continue;
+			};
+			let hits = matching_uids(&snapshot, criteria);
+			body.push_str(&esearch_multi_line(
+				tag,
+				name,
+				snapshot.uid_validity(),
+				&hits,
+				return_opts,
+			));
+		}
+		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
+	}
+
+	/// Resolve MULTISEARCH source scopes to a concrete, ordered mailbox list.
+	/// Returns `None` only when `selected` is requested without a selected
+	/// mailbox (a protocol error).
+	fn resolve_scopes(&self, sources: &[SearchScope], account: &str) -> Option<Vec<String>> {
+		let mut names = Vec::new();
+		for source in sources {
+			match source {
+				SearchScope::Selected => match &self.state {
+					State::Selected { mailbox, .. } => names.push(mailbox.clone()),
+					_ => return None,
+				},
+				SearchScope::Inboxes => names.push("INBOX".to_string()),
+				SearchScope::Personal => {
+					names.extend(mailbox::list(&self.data_dir, account));
+				}
+				SearchScope::Subscribed => {
+					names.extend(mailbox::list_subscribed(&self.data_dir, account));
+				}
+				SearchScope::Subtree(roots) => {
+					names.extend(subtree(&self.data_dir, account, roots, false));
+				}
+				SearchScope::SubtreeOne(roots) => {
+					names.extend(subtree(&self.data_dir, account, roots, true));
+				}
+				SearchScope::Mailboxes(list) => names.extend(list.iter().cloned()),
+			}
+		}
+		Some(names)
+	}
+
 	pub(super) fn expunge(&mut self, tag: &str) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -133,14 +212,16 @@ impl Session {
 		if *read_only {
 			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
 		}
+		// UIDONLY reports VANISHED with UIDs, captured before they are removed.
+		let deleted_uids: Vec<u32> = snapshot
+			.messages()
+			.filter(|m| m.flags.contains(&Flag::Deleted))
+			.map(|m| m.uid)
+			.collect();
 		match snapshot.expunge() {
 			Ok(expunged) => {
-				let mut response = String::new();
-				for sequence_number in expunged {
-					response.push_str(&format!("* {sequence_number} EXPUNGE\r\n"));
-				}
-				response.push_str(&format!("{tag} OK EXPUNGE completed\r\n"));
-				Output::text(response)
+				let response = expunge_response(uidonly, &expunged, &deleted_uids);
+				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
 			}
 			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
 		}
@@ -174,12 +255,13 @@ impl Session {
 
 	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
 	fn quota_line(&self, account: &str) -> String {
-		let used_kib = mailbox::account_usage(&self.data_dir, account).div_ceil(1024);
-		let limit_kib = self.quota_limit_bytes.div_ceil(1024);
+		let used_kib = mailbox::account_usage(&self.data_dir, account, &self.crypto).div_ceil(1024);
+		let limit_kib = self.effective_quota().div_ceil(1024);
 		format!("* QUOTA \"\" (STORAGE {used_kib} {limit_kib})\r\n")
 	}
 
 	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -197,68 +279,18 @@ impl Session {
 			.map(|m| m.uid)
 			.filter(|uid| sequence.contains(*uid, max_uid))
 			.collect();
+		// The UIDs actually removed are the in-set ones flagged \Deleted.
+		let deleted_uids: Vec<u32> = snapshot
+			.messages()
+			.filter(|m| m.flags.contains(&Flag::Deleted) && uids.contains(&m.uid))
+			.map(|m| m.uid)
+			.collect();
 		match snapshot.expunge_uids(&uids) {
 			Ok(expunged) => {
-				let mut response = String::new();
-				for sequence_number in expunged {
-					response.push_str(&format!("* {sequence_number} EXPUNGE\r\n"));
-				}
-				response.push_str(&format!("{tag} OK EXPUNGE completed\r\n"));
-				Output::text(response)
+				let response = expunge_response(uidonly, &expunged, &deleted_uids);
+				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
 			}
 			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
-		}
-	}
-
-	pub(super) fn append_begin(
-		&mut self,
-		tag: &str,
-		mailbox: &str,
-		flag_tokens: &[String],
-		size: usize,
-	) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
-		}
-		// Quota enforcement (RFC 9208): refuse before reading the literal.
-		let projected = mailbox::account_usage(&self.data_dir, &account) + size as u64;
-		if projected > self.quota_limit_bytes {
-			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
-		}
-		let mut flags = Vec::with_capacity(flag_tokens.len());
-		for token in flag_tokens {
-			match Flag::parse(token) {
-				Some(flag) => flags.push(flag),
-				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
-			}
-		}
-		self.pending_append = Some((tag.to_string(), mailbox.to_string(), flags));
-		let mut output = Output::text("+ ready for literal data\r\n".to_string());
-		output.collect_literal = Some(size);
-		output
-	}
-
-	/// Called by the network layer with the complete APPEND literal.
-	pub fn literal_done(&mut self, data: &[u8]) -> Output {
-		let Some((tag, mailbox, flags)) = self.pending_append.take() else {
-			return Output::text("* BAD unexpected literal\r\n".to_string());
-		};
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		match mailbox::append(&self.data_dir, &account, &mailbox, &flags, data) {
-			Ok(id) => {
-				// UIDPLUS: report the UIDVALIDITY and UID assigned (RFC 4315).
-				let code = match mailbox::appenduid(&self.data_dir, &account, &mailbox, id) {
-					Some((validity, uid)) => format!("[APPENDUID {validity} {uid}] "),
-					None => String::new(),
-				};
-				Output::text(format!("{tag} OK {code}APPEND completed\r\n"))
-			}
-			Err(_) => Output::text(format!("{tag} NO APPEND failed\r\n")),
 		}
 	}
 
@@ -276,7 +308,7 @@ impl Session {
 		else {
 			return None;
 		};
-		let fresh = match Snapshot::open(&self.data_dir, account, mailbox) {
+		let fresh = match Snapshot::open(&self.data_dir, account, mailbox, &self.crypto) {
 			Ok(s) => s,
 			Err(_) => return None,
 		};
@@ -287,6 +319,58 @@ impl Session {
 		} else {
 			None
 		}
+	}
+
+	/// NOTIFY (RFC 5465): record which selected-mailbox events the client wants
+	/// pushed unsolicited. Other mailbox specifiers were accepted-and-ignored at
+	/// parse time. Requires authentication.
+	pub(super) fn notify(&mut self, tag: &str, request: NotifyRequest) -> Output {
+		if self.account().is_none() {
+			return Output::text(format!("{tag} NO not authenticated\r\n"));
+		}
+		match request {
+			NotifyRequest::None => self.notify_selected = None,
+			NotifyRequest::Set { selected, .. } => self.notify_selected = Some(selected),
+		}
+		Output::text(format!("{tag} OK NOTIFY completed\r\n"))
+	}
+
+	/// Poll for mailbox changes for a NOTIFY-enabled session, mirroring
+	/// [`Self::check_idle`] but gated on active NOTIFY `selected` events rather
+	/// than IDLE. Returns an unsolicited `* <n> EXISTS` when the selected mailbox
+	/// gained or lost messages and the client asked for
+	/// MessageNew/MessageExpunge.
+	pub fn check_notify(&mut self) -> Option<Output> {
+		if !self.notify_active() {
+			return None;
+		}
+		let State::Selected {
+			account,
+			mailbox,
+			snapshot,
+			..
+		} = &mut self.state
+		else {
+			return None;
+		};
+		let fresh = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
+		if fresh.uid_validity() != snapshot.uid_validity() || fresh.len() != snapshot.len() {
+			let exists = fresh.len();
+			*snapshot = fresh;
+			Some(Output::text(format!("* {exists} EXISTS\r\n")))
+		} else {
+			None
+		}
+	}
+
+	/// Whether this session has NOTIFY enabled with selected-mailbox message
+	/// events, so the server loop should poll between commands.
+	pub fn notify_active(&self) -> bool {
+		self.notify_selected.as_ref().is_some_and(|events| {
+			events
+				.iter()
+				.any(|e| matches!(e, NotifyEvent::MessageNew | NotifyEvent::MessageExpunge))
+		})
 	}
 
 	pub(super) fn list(
@@ -310,7 +394,7 @@ impl Session {
 			if !matches || (select_subscribed && !subscribed.contains(&name)) {
 				continue;
 			}
-			let mut attributes = super::special_use_attribute(&name).to_string();
+			let mut attributes = super::helpers::special_use_attribute(&name).to_string();
 			if subscribed.contains(&name) {
 				if !attributes.is_empty() {
 					attributes.push(' ');
@@ -352,7 +436,7 @@ impl Session {
 		mailbox: &str,
 		items: &[StatusItem],
 	) -> Option<String> {
-		let snapshot = Snapshot::open(&self.data_dir, account, mailbox).ok()?;
+		let snapshot = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
 		let count_flag = |flag: Flag| {
 			snapshot
 				.messages()
@@ -382,4 +466,64 @@ impl Session {
 		}
 		Some(parts)
 	}
+}
+
+/// Build the untagged expunge output: per-message `EXPUNGE` lines normally, or
+/// a single `VANISHED` with the removed UIDs under UIDONLY (RFC 9586).
+fn expunge_response(uidonly: bool, expunged: &[u32], deleted_uids: &[u32]) -> String {
+	if uidonly {
+		if deleted_uids.is_empty() {
+			return String::new();
+		}
+		return format!("* VANISHED {}\r\n", super::codes::uid_set(deleted_uids));
+	}
+	expunged
+		.iter()
+		.map(|seq| format!("* {seq} EXPUNGE\r\n"))
+		.collect()
+}
+
+/// UIDs of every message in `snapshot` matching all search keys.
+fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
+	let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+	let mut hits = Vec::new();
+	for seqno in 1..=total {
+		let Some(message) = snapshot.by_sequence(seqno) else {
+			continue;
+		};
+		let mut content: Option<String> = None;
+		if criteria
+			.iter()
+			.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content))
+		{
+			hits.push(message.uid);
+		}
+	}
+	hits
+}
+
+/// Expand SUBTREE / SUBTREE-ONE roots into matching mailbox names. With
+/// `one_level`, only the root and its immediate children are included;
+/// otherwise the whole subtree (the hierarchy separator is `/`).
+fn subtree(
+	data_dir: &std::path::Path,
+	account: &str,
+	roots: &[String],
+	one_level: bool,
+) -> Vec<String> {
+	let all = mailbox::list(data_dir, account);
+	let mut out = Vec::new();
+	for root in roots {
+		let prefix = format!("{root}/");
+		for name in &all {
+			if name == root {
+				out.push(name.clone());
+			} else if let Some(rest) = name.strip_prefix(&prefix)
+				&& (!one_level || !rest.contains('/'))
+			{
+				out.push(name.clone());
+			}
+		}
+	}
+	out
 }

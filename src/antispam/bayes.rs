@@ -22,7 +22,7 @@ pub struct TokenCounts {
 }
 
 /// Message totals of the trained corpus, used to normalize token counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Corpus {
 	pub ham_messages: u64,
 	pub spam_messages: u64,

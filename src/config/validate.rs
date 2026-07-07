@@ -16,6 +16,57 @@ impl Config {
 		self.validate_listeners()?;
 		self.validate_acme()?;
 		self.validate_webhook()?;
+		self.validate_privileges()?;
+		self.validate_transport()?;
+		self.validate_oauth()?;
+		self.validate_ldap()?;
+		Ok(())
+	}
+
+	fn validate_oauth(&self) -> Result<(), ConfigError> {
+		if let Some(oauth) = &self.oauth {
+			oauth
+				.validate()
+				.map_err(|e| ConfigError::Invalid(e.to_string()))?;
+		}
+		Ok(())
+	}
+
+	fn validate_ldap(&self) -> Result<(), ConfigError> {
+		if let Some(ldap) = &self.ldap {
+			ldap.validate().map_err(ConfigError::Invalid)?;
+		}
+		Ok(())
+	}
+
+	fn validate_transport(&self) -> Result<(), ConfigError> {
+		for rule in &self.transport {
+			rule.validate().map_err(ConfigError::Invalid)?;
+		}
+		for alias in &self.alias {
+			alias.validate().map_err(ConfigError::Invalid)?;
+		}
+		Ok(())
+	}
+
+	fn validate_privileges(&self) -> Result<(), ConfigError> {
+		let Some(privileges) = &self.privileges else {
+			return Ok(());
+		};
+		if privileges.user.trim().is_empty() {
+			return Err(ConfigError::Invalid(
+				"[privileges] user must not be empty".into(),
+			));
+		}
+		if privileges
+			.group
+			.as_ref()
+			.is_some_and(|g| g.trim().is_empty())
+		{
+			return Err(ConfigError::Invalid(
+				"[privileges] group must not be empty when set".into(),
+			));
+		}
 		Ok(())
 	}
 
@@ -228,11 +279,13 @@ impl Config {
 			}
 			let needs_tls = matches!(
 				listener.kind,
-				crate::config::ListenerKind::Imaps | crate::config::ListenerKind::Imap
+				crate::config::ListenerKind::Imaps
+					| crate::config::ListenerKind::Imap
+					| crate::config::ListenerKind::ManageSieve
 			);
 			if needs_tls && self.tls.is_none() {
 				return Err(ConfigError::Invalid(format!(
-					"listener {addr} requires a [tls] section (IMAP logins never cross plaintext)"
+					"listener {addr} requires a [tls] section (logins never cross plaintext)"
 				)));
 			}
 			if listener.kind == crate::config::ListenerKind::Api && self.api.is_none() {

@@ -10,6 +10,7 @@ pub mod command;
 mod command_tests;
 pub mod directory;
 pub mod line;
+pub mod ratelimit;
 pub mod reply;
 pub mod scram;
 pub mod server;

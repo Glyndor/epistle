@@ -2,6 +2,7 @@
 //! interpreter that run a user's filter against a delivered message.
 
 pub mod ast;
+mod compare;
 mod date;
 mod eval;
 pub mod interp;

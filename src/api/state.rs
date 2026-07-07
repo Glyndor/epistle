@@ -8,7 +8,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 
 use crate::directory_store::AccountStore;
-use crate::storage::FsSpool;
+use crate::storage::{FsSpool, MessageCrypto};
 
 use super::error::ApiError;
 
@@ -28,6 +28,19 @@ struct Inner {
 	auth_limiter: std::sync::Mutex<AuthLimiter>,
 	/// Per-account storage quota in bytes; 0 means unlimited.
 	quota_limit: std::sync::atomic::AtomicU64,
+	/// Labeled bearer API keys, loaded from `api_keys.toml`; any non-expired,
+	/// IP-permitted key authenticates alongside the configured token.
+	api_keys: Vec<super::api_keys::ApiKey>,
+	/// Session-scoped PushSubscription objects (RFC 8620 §7.2). Held in memory:
+	/// real out-of-band delivery is out of scope, so these only need to round-trip
+	/// through `PushSubscription/get`/`set`. Keyed by subscription id.
+	push_subscriptions: std::sync::Mutex<Vec<serde_json::Value>>,
+	/// At-rest crypto for stored message bodies and uploaded blobs.
+	crypto: MessageCrypto,
+	/// The built-in OAuth 2.0 authorization server, present only when a signing
+	/// key is configured. When `None`, the `/oauth/*` grant routes are not mounted
+	/// and no tokens are issued (fail closed).
+	authz: Option<Arc<super::oauth::AuthzServer>>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -79,7 +92,9 @@ pub struct AccountView {
 }
 
 impl ApiState {
-	/// Build the state from configuration data.
+	/// Build the state from configuration data. API keys are loaded from
+	/// `api_keys.toml` under `data_dir`; a missing or unreadable file leaves the
+	/// key set empty (the configured token still authenticates).
 	pub fn new(
 		token_hash: &str,
 		data_dir: PathBuf,
@@ -87,6 +102,9 @@ impl ApiState {
 		store: Arc<AccountStore>,
 		spool: FsSpool,
 	) -> Self {
+		let api_keys = super::api_keys::ApiKeyStore::open(&data_dir)
+			.map(|store| store.keys().to_vec())
+			.unwrap_or_default();
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.to_string(),
@@ -96,8 +114,53 @@ impl ApiState {
 				spool,
 				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
+				api_keys,
+				push_subscriptions: std::sync::Mutex::new(Vec::new()),
+				crypto: MessageCrypto::disabled(),
+				authz: None,
 			}),
 		}
+	}
+
+	/// Attach the built-in OAuth authorization server. Must be set before the
+	/// state is shared (it rebuilds the `Arc` inner). When unset, the `/oauth/*`
+	/// grant routes are absent and no tokens are issued.
+	pub fn with_authz(mut self, authz: super::oauth::AuthzServer) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.authz = Some(Arc::new(authz));
+		}
+		self
+	}
+
+	/// The built-in OAuth authorization server, when configured.
+	pub fn authz(&self) -> Option<&super::oauth::AuthzServer> {
+		self.inner.authz.as_deref()
+	}
+
+	/// Authenticate `login`/`password` against the account directory, returning
+	/// the resolved account identity. Used by the OAuth approval/authorize
+	/// endpoints to bind a grant to a real account. Fail-closed and free of any
+	/// user-enumeration oracle (see [`crate::smtp::directory::Directory::authenticate`]).
+	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+		self.inner
+			.store
+			.handle()
+			.current()
+			.authenticate(login, password)
+	}
+
+	/// Replace the at-rest crypto used for stored messages and blobs. Must be set
+	/// before the state is shared (it rebuilds the `Arc` inner).
+	pub fn with_crypto(mut self, crypto: MessageCrypto) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.crypto = crypto;
+		}
+		self
+	}
+
+	/// The at-rest crypto for stored messages and uploaded blobs.
+	pub fn crypto(&self) -> &MessageCrypto {
+		&self.inner.crypto
 	}
 
 	/// Set the per-account storage quota in bytes (0 = unlimited).
@@ -144,6 +207,59 @@ impl ApiState {
 		&self.inner.data_dir
 	}
 
+	/// The current PushSubscription objects (RFC 8620 §7.2), cloned out for a
+	/// `PushSubscription/get`.
+	pub fn push_subscriptions(&self) -> Vec<serde_json::Value> {
+		self.inner
+			.push_subscriptions
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.clone()
+	}
+
+	/// Run `f` against the mutable PushSubscription store, returning its result.
+	/// Used by `PushSubscription/set` to create and destroy subscriptions.
+	pub fn with_push_subscriptions<R>(
+		&self,
+		f: impl FnOnce(&mut Vec<serde_json::Value>) -> R,
+	) -> R {
+		let mut guard = self
+			.inner
+			.push_subscriptions
+			.lock()
+			.unwrap_or_else(|p| p.into_inner());
+		f(&mut guard)
+	}
+
+	/// A cheap, opaque state token for an account's mail, derived from total
+	/// stored bytes. It changes whenever a message is added, removed, or resized,
+	/// which is enough for the connection-scoped WebSocket push (RFC 8887 §5) to
+	/// signal "something changed" to the client that made the change. It is not a
+	/// JMAP change-log cursor (we do not track one — see `/changes`).
+	pub fn account_state(&self, account: &str) -> String {
+		let usage =
+			crate::imap::mailbox::account_usage(&self.inner.data_dir, account, &self.inner.crypto);
+		format!("{usage}")
+	}
+
+	/// Whether `token` from `client_ip` authorizes a request: the configured
+	/// token matches, or any non-expired, IP-permitted API key's hash matches.
+	/// Fail-closed: an expired or IP-restricted key that does not match is no
+	/// different from no key at all.
+	fn authorizes(&self, token: &str, client_ip: Option<std::net::IpAddr>) -> bool {
+		if self.token_matches(token) {
+			return true;
+		}
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		self.inner
+			.api_keys
+			.iter()
+			.any(|key| key.admits(token, client_ip, now))
+	}
+
 	fn token_matches(&self, token: &str) -> bool {
 		let stored = &self.inner.token_hash;
 		if let Some(expected_hex) = stored.strip_prefix("sha256:") {
@@ -185,13 +301,21 @@ pub async fn require_bearer_token(
 		}
 	}
 
+	// The client IP for API-key CIDR allowlists. `ConnectInfo` is present when
+	// the router is served with `into_make_service_with_connect_info`; absent
+	// (e.g. in tests) it is `None`, so an IP-restricted key cannot match.
+	let client_ip = request
+		.extensions()
+		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+		.map(|info| info.0.ip());
+
 	let token = request
 		.headers()
 		.get(axum::http::header::AUTHORIZATION)
 		.and_then(|value| value.to_str().ok())
 		.and_then(|value| value.strip_prefix("Bearer "));
 
-	let authorized = token.is_some_and(|t| state.token_matches(t));
+	let authorized = token.is_some_and(|t| state.authorizes(t, client_ip));
 
 	{
 		let mut limiter = state
@@ -211,3 +335,7 @@ pub async fn require_bearer_token(
 	}
 	Ok(next.run(request).await)
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;

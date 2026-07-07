@@ -3,7 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use crate::smtp::scram::{ScramCredentials, ScramServer, username_of};
+use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
@@ -14,8 +14,11 @@ use super::{Output, Session, State};
 pub(super) enum PendingAuth {
 	/// Tag stashed while awaiting the PLAIN response (`+ `).
 	Plain { tag: String },
-	/// Awaiting the SCRAM client-first message.
-	ScramFirst { tag: String },
+	/// Awaiting the SCRAM client-first message (with its channel-binding policy).
+	ScramFirst {
+		tag: String,
+		binding: ChannelBinding,
+	},
 	/// Awaiting the SCRAM client-final message.
 	ScramFinal {
 		tag: String,
@@ -27,6 +30,8 @@ pub(super) enum PendingAuth {
 	LoginUser { tag: String },
 	/// AUTH=LOGIN: awaiting the base64 password for `user`.
 	LoginPass { tag: String, user: String },
+	/// AUTH=EXTERNAL: awaiting the (optional) authzid.
+	External { tag: String },
 }
 
 impl Session {
@@ -47,12 +52,54 @@ impl Session {
 
 	/// The advertised SASL mechanisms, including OAuth when configured.
 	pub(super) fn sasl_capability(&self) -> String {
-		let mut caps = String::from(" AUTH=PLAIN AUTH=LOGIN AUTH=SCRAM-SHA-256");
-		if self.oauth.is_some() {
-			caps.push_str(" AUTH=OAUTHBEARER AUTH=XOAUTH2");
+		// Shared mechanism set: -PLUS only with a bound certificate hash, the
+		// OAuth mechanisms only with a configured verifier.
+		let mut caps = String::new();
+		for mechanism in crate::sasl::available(
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
+			caps.push_str(" AUTH=");
+			caps.push_str(mechanism.name());
 		}
 		caps.push_str(" SASL-IR");
 		caps
+	}
+
+	/// The advertised IMAP capabilities, including SASL mechanisms and the
+	/// STARTTLS/LOGINDISABLED state.
+	pub(super) fn capabilities(&self) -> String {
+		let mut capabilities = String::from(
+			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
+THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH MULTISEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
+LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk METADATA",
+		);
+		// NOTIFY (RFC 5465) is only usable once authenticated; advertise it in the
+		// post-authentication capability set, like other selected-state features.
+		if self.account().is_some() {
+			capabilities.push_str(" NOTIFY");
+		}
+		if self.tls_available {
+			capabilities.push_str(" STARTTLS");
+		}
+		if self.tls_active {
+			capabilities.push_str(&self.sasl_capability());
+		} else {
+			capabilities.push_str(" LOGINDISABLED");
+		}
+		capabilities
+	}
+
+	/// The channel-binding policy for a SCRAM exchange (mirrors the SMTP side):
+	/// `-PLUS` binds to the certificate hash; plain SCRAM over a bound link
+	/// rejects downgrades; without a binding it is unsupported.
+	fn scram_binding(&self, plus: bool) -> ChannelBinding {
+		match (&self.cbind_data, plus) {
+			(Some(hash), true) => ChannelBinding::Required(hash.clone()),
+			(Some(_), false) => ChannelBinding::Supported,
+			(None, _) => ChannelBinding::Unsupported,
+		}
 	}
 
 	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token (SASL-IR required).
@@ -84,8 +131,32 @@ impl Session {
 		if !matches!(self.state, State::NotAuthenticated { .. }) {
 			return Output::text(format!("{tag} BAD already authenticated\r\n"));
 		}
-		match mechanism {
-			"PLAIN" => match initial {
+		// Only negotiate a mechanism that is currently advertised (channel
+		// binding present for -PLUS, a verifier present for the OAuth ones).
+		let unsupported = || Output::text(format!("{tag} NO unsupported SASL mechanism\r\n"));
+		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
+			return unsupported();
+		};
+		if !crate::sasl::is_available(
+			parsed,
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
+			return unsupported();
+		}
+		use crate::sasl::Mechanism;
+		match parsed {
+			Mechanism::External => match initial {
+				Some(response) => self.auth_external(tag, &response),
+				None => {
+					self.pending_auth = Some(PendingAuth::External {
+						tag: tag.to_string(),
+					});
+					continuation("")
+				}
+			},
+			Mechanism::Plain => match initial {
 				Some(response) => self.auth_plain(tag, &response),
 				None => {
 					self.pending_auth = Some(PendingAuth::Plain {
@@ -94,16 +165,9 @@ impl Session {
 					continuation("")
 				}
 			},
-			"SCRAM-SHA-256" => match initial {
-				Some(client_first) => self.scram_first(tag, &client_first),
-				None => {
-					self.pending_auth = Some(PendingAuth::ScramFirst {
-						tag: tag.to_string(),
-					});
-					continuation("")
-				}
-			},
-			"LOGIN" => match initial {
+			Mechanism::ScramSha256 => self.scram_begin(tag, initial, false),
+			Mechanism::ScramSha256Plus => self.scram_begin(tag, initial, true),
+			Mechanism::Login => match initial {
 				// SASL-IR initial response is the username.
 				Some(user) => self.login_user(tag, &user),
 				None => {
@@ -113,8 +177,7 @@ impl Session {
 					continuation("VXNlcm5hbWU6")
 				}
 			},
-			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(tag, initial),
-			_ => Output::text(format!("{tag} NO unsupported SASL mechanism\r\n")),
+			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_bearer(tag, initial),
 		}
 	}
 
@@ -130,9 +193,13 @@ impl Session {
 		continuation("UGFzc3dvcmQ6")
 	}
 
-	/// AUTH=LOGIN: verify the password (plus any TOTP) against the username.
+	/// AUTH=LOGIN: verify the password (plus any TOTP, or an app password whose
+	/// CIDR allowlist matches the peer IP) against the username.
 	fn login_pass(&mut self, tag: &str, user: &str, encoded: &str) -> Output {
-		let verified = decode(encoded).and_then(|pass| self.directory.authenticate(user, &pass));
+		let verified = decode(encoded).and_then(|pass| {
+			self.directory
+				.authenticate_with_ip(user, &pass, self.peer_ip)
+		});
 		match verified {
 			Some(account) => {
 				self.state = State::Authenticated { account };
@@ -151,7 +218,7 @@ impl Session {
 		}
 		match self.pending_auth.take() {
 			Some(PendingAuth::Plain { tag }) => self.auth_plain(&tag, line),
-			Some(PendingAuth::ScramFirst { tag }) => self.scram_first(&tag, line),
+			Some(PendingAuth::ScramFirst { tag, binding }) => self.scram_first(&tag, line, binding),
 			Some(PendingAuth::ScramFinal {
 				tag,
 				server,
@@ -160,18 +227,51 @@ impl Session {
 			}) => self.scram_final(&tag, line, *server, *credentials, &account),
 			Some(PendingAuth::LoginUser { tag }) => self.login_user(&tag, line),
 			Some(PendingAuth::LoginPass { tag, user }) => self.login_pass(&tag, &user, line),
+			Some(PendingAuth::External { tag }) => self.auth_external(&tag, line),
 			None => Output::text("* BAD unexpected authentication response\r\n".to_string()),
 		}
 	}
 
+	/// SASL EXTERNAL: authenticate as the identity in the verified client
+	/// certificate. The optional authzid (base64, or `=`/empty) must be empty or
+	/// equal the certificate identity — no acting as another user.
+	fn auth_external(&mut self, tag: &str, encoded: &str) -> Output {
+		let Some(identity) = self.client_identity.clone() else {
+			return self.auth_failure(tag);
+		};
+		let trimmed = encoded.trim();
+		let authzid = if trimmed.is_empty() || trimmed == "=" {
+			String::new()
+		} else {
+			match BASE64.decode(trimmed) {
+				Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+				Err(_) => return self.auth_failure(tag),
+			}
+		};
+		if !authzid.is_empty() && authzid != identity {
+			return self.auth_failure(tag);
+		}
+		match crate::smtp::address::Address::parse(&identity) {
+			Ok(address) => match self.directory.resolve(&address) {
+				crate::smtp::directory::Resolution::Account(account) => {
+					self.state = State::Authenticated { account };
+					Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
+				}
+				_ => self.auth_failure(tag),
+			},
+			Err(_) => self.auth_failure(tag),
+		}
+	}
+
 	fn auth_plain(&mut self, tag: &str, encoded: &str) -> Output {
+		// Route through the directory so the primary password (with any TOTP) and
+		// app passwords (CIDR-checked against the peer IP) are both accepted; no
+		// oracle (unknown user behaves like a wrong password).
 		let verified = crate::smtp::auth::parse_plain(encoded)
 			.ok()
 			.and_then(|creds| {
 				self.directory
-					.credentials(&creds.authcid)
-					.filter(|(_, hash)| crate::smtp::auth::verify_password(hash, &creds.password))
-					.map(|(account, _)| account)
+					.authenticate_with_ip(&creds.authcid, &creds.password, self.peer_ip)
 			});
 		match verified {
 			Some(account) => {
@@ -182,7 +282,23 @@ impl Session {
 		}
 	}
 
-	fn scram_first(&mut self, tag: &str, encoded: &str) -> Output {
+	/// Begin SCRAM-SHA-256(-PLUS): process the optional SASL-IR client-first, or
+	/// prompt for it with an empty continuation.
+	fn scram_begin(&mut self, tag: &str, initial: Option<String>, plus: bool) -> Output {
+		let binding = self.scram_binding(plus);
+		match initial {
+			Some(client_first) => self.scram_first(tag, &client_first, binding),
+			None => {
+				self.pending_auth = Some(PendingAuth::ScramFirst {
+					tag: tag.to_string(),
+					binding,
+				});
+				continuation("")
+			}
+		}
+	}
+
+	fn scram_first(&mut self, tag: &str, encoded: &str, binding: ChannelBinding) -> Output {
 		let Some(client_first) = decode(encoded) else {
 			return self.auth_failure(tag);
 		};
@@ -195,7 +311,11 @@ impl Session {
 		let Some((account, _)) = self.directory.credentials(&username) else {
 			return self.auth_failure(tag);
 		};
-		let mut server = ScramServer::new(self.fresh_nonce());
+		let Some(nonce) = self.fresh_nonce() else {
+			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			return self.auth_failure(tag);
+		};
+		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
 			return self.auth_failure(tag);
 		};
@@ -250,8 +370,9 @@ impl Session {
 		match &self.pending_auth {
 			Some(
 				PendingAuth::Plain { tag }
-				| PendingAuth::ScramFirst { tag }
-				| PendingAuth::LoginUser { tag },
+				| PendingAuth::ScramFirst { tag, .. }
+				| PendingAuth::LoginUser { tag }
+				| PendingAuth::External { tag },
 			) => tag.clone(),
 			Some(PendingAuth::ScramFinal { tag, .. } | PendingAuth::LoginPass { tag, .. }) => {
 				tag.clone()
@@ -260,14 +381,15 @@ impl Session {
 		}
 	}
 
-	fn fresh_nonce(&self) -> String {
+	fn fresh_nonce(&self) -> Option<String> {
 		if let Some(nonce) = &self.scram_nonce {
-			return nonce.clone();
+			return Some(nonce.clone());
 		}
 		use ring::rand::SecureRandom;
 		let mut bytes = [0u8; 18];
-		let _ = ring::rand::SystemRandom::new().fill(&mut bytes);
-		BASE64.encode(bytes)
+		// Fail closed if the CSPRNG cannot produce a nonce.
+		ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
+		Some(BASE64.encode(bytes))
 	}
 }
 

@@ -72,6 +72,15 @@ impl AccountKey {
 		format!("{token}.{}", self.thumbprint())
 	}
 
+	/// The DNS-01 TXT value for a challenge `token` (RFC 8555 §8.4):
+	/// `base64url(sha256(key_authorization))`, published at
+	/// `_acme-challenge.<domain>`.
+	pub fn dns01_value(&self, token: &str) -> String {
+		let key_authorization = self.key_authorization(token);
+		let digest = ring::digest::digest(&ring::digest::SHA256, key_authorization.as_bytes());
+		B64.encode(digest.as_ref())
+	}
+
 	/// Build a flattened JWS for an ACME request to `url` with anti-replay
 	/// `nonce`. A `key_id` (account URL) selects the `kid` header; without one
 	/// the embedded `jwk` is used (for `newAccount`).
@@ -173,6 +182,12 @@ mod tests {
 		// Key authorization is token "." thumbprint.
 		let auth = key.key_authorization("tok123");
 		assert_eq!(auth, format!("tok123.{}", key.thumbprint()));
+
+		// DNS-01 value is base64url(sha256(key authorization)): 43 chars, no pad.
+		let dns = key.dns01_value("tok123");
+		assert_eq!(dns.len(), 43, "{dns}");
+		assert!(!dns.contains('='), "{dns}");
+		assert_eq!(dns, restored.dns01_value("tok123"));
 	}
 
 	#[test]

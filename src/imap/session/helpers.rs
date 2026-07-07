@@ -1,5 +1,23 @@
 use super::mailbox::Snapshot;
-use super::{SearchKey, mailbox};
+use super::{Command, SearchKey, mailbox};
+
+/// The command verb when it relies on message sequence numbers (and so is
+/// refused under UIDONLY), or `None` for UID-based and non-sequence commands.
+pub(super) fn sequence_command(command: &Command) -> Option<&'static str> {
+	match command {
+		Command::Fetch { uid: false, .. } => Some("FETCH"),
+		Command::Store { uid: false, .. } => Some("STORE"),
+		Command::Search { uid: false, .. } => Some("SEARCH"),
+		Command::Sort { uid: false, .. } => Some("SORT"),
+		Command::Thread { uid: false, .. } => Some("THREAD"),
+		Command::Copy {
+			uid: false,
+			remove_source,
+			..
+		} => Some(if *remove_source { "MOVE" } else { "COPY" }),
+		_ => None,
+	}
+}
 
 /// Format a SystemTime as an IMAP INTERNALDATE string (RFC 3501).
 pub(super) fn format_internaldate(t: std::time::SystemTime) -> String {
@@ -132,4 +150,38 @@ pub(super) fn header_value(lower_message: &str, name: &str) -> Option<String> {
 		}
 	}
 	value
+}
+
+/// The RFC 6154 special-use attribute for a well-known mailbox name, or an
+/// empty string. Matching is case-insensitive on the leaf name.
+pub(super) fn special_use_attribute(name: &str) -> &'static str {
+	match name.to_ascii_lowercase().as_str() {
+		"junk" | "spam" | "rejects" => "\\Junk",
+		"drafts" => "\\Drafts",
+		"sent" => "\\Sent",
+		"trash" | "deleted" => "\\Trash",
+		"archive" => "\\Archive",
+		_ => "",
+	}
+}
+
+#[cfg(test)]
+mod special_use_tests {
+	use super::special_use_attribute;
+
+	#[test]
+	fn well_known_folders_get_attributes() {
+		assert_eq!(special_use_attribute("Junk"), "\\Junk");
+		assert_eq!(special_use_attribute("rejects"), "\\Junk");
+		assert_eq!(special_use_attribute("Drafts"), "\\Drafts");
+		assert_eq!(special_use_attribute("Sent"), "\\Sent");
+		assert_eq!(special_use_attribute("Trash"), "\\Trash");
+		assert_eq!(special_use_attribute("Archive"), "\\Archive");
+	}
+
+	#[test]
+	fn ordinary_folder_has_no_attribute() {
+		assert_eq!(special_use_attribute("INBOX"), "");
+		assert_eq!(special_use_attribute("Projects"), "");
+	}
 }

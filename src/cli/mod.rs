@@ -1,13 +1,30 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod accounts;
+mod api_keys;
+mod app_passwords;
+mod autoconfig;
+mod autodiscover;
+mod backup;
+mod dns_records;
 mod export;
 mod import;
 mod mobileconfig;
 mod queue;
+mod report_abuse;
 mod serve;
+mod serve_tasks;
 mod srv;
+mod suppression;
+mod tracing_setup;
+mod util;
 mod verify;
+mod verify_dns;
+
+use util::{
+	dkim_keygen, generate_secret, message_crypto, oauth_keygen, read_line, storage_keygen,
+	token_hash,
+};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -19,7 +36,7 @@ use crate::config::Config;
 /// Headless mail server: SMTP, IMAP and modern email security through an
 /// API and CLI.
 #[derive(Debug, Parser)]
-#[command(name = "mail", version, disable_help_subcommand = true)]
+#[command(name = "epistle", version, disable_help_subcommand = true)]
 pub struct Cli {
 	#[command(subcommand)]
 	command: Command,
@@ -45,7 +62,16 @@ enum Command {
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
 	},
-	/// Export an account's mailboxes to an mbox stream on stdout (backup).
+	/// Generate a base64 32-byte at-rest message-encryption key and print it to
+	/// stdout. Store it off the data disk (an env var or a key file), then point
+	/// `[storage]` at it; never written into data_dir.
+	StorageKeygen,
+	/// Generate an ES256 key pair for the built-in OAuth authorization server and
+	/// print it to stdout: the base64 PKCS#8 private key for `[oauth] signing_key`
+	/// and the matching base64 public point for `[oauth] public_key`.
+	OauthKeygen,
+	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
+	/// a Maildir tree with `--maildir`.
 	Export {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
@@ -53,6 +79,9 @@ enum Command {
 		/// The account name to export.
 		#[arg(long, value_name = "NAME")]
 		account: String,
+		/// Export to a Maildir directory tree instead of an mbox stream.
+		#[arg(long, value_name = "DIR")]
+		maildir: Option<PathBuf>,
 	},
 	/// Import mail into an account (migration): an mbox stream from stdin, or a
 	/// Maildir tree with `--maildir`.
@@ -68,8 +97,29 @@ enum Command {
 		#[arg(long, value_name = "DIR")]
 		maildir: Option<PathBuf>,
 	},
+	/// Write a consistent backup snapshot (gzip tar) to stdout: the filesystem
+	/// mail store plus a pg_dump when a database is configured.
+	Backup {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Check published DNS records against what epistle expects and report
+	/// drift (read-only; queries DNS, changes nothing).
+	VerifyDns {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Print the DNS records this deployment should publish (SPF, DKIM, DMARC,
+	/// MTA-STS, MX and a DANE TLSA record when a certificate is present).
+	DnsRecords {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
@@ -86,6 +136,46 @@ enum Command {
 	},
 	/// Print the RFC 6186 service-discovery SRV records to publish in DNS.
 	SrvRecords {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Print the Thunderbird autoconfig XML for a domain (host it at
+	/// `autoconfig.<domain>/mail/config-v1.1.xml`).
+	Autoconfig {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The domain (defaults to the first configured domain).
+		#[arg(long, value_name = "DOMAIN")]
+		domain: Option<String>,
+	},
+	/// Print the Microsoft Autodiscover v1 XML for a domain (host it at
+	/// `autodiscover.<domain>/autodiscover/autodiscover.xml`).
+	Autodiscover {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The domain (defaults to the first configured domain).
+		#[arg(long, value_name = "DOMAIN")]
+		domain: Option<String>,
+	},
+	/// List the outbound suppression list (addresses that hard-bounced), or
+	/// remove one with `--remove`.
+	Suppression {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// Remove this address from the suppression list instead of listing.
+		#[arg(long, value_name = "ADDRESS")]
+		remove: Option<String>,
+		/// Operate on this sending account's per-account list, not the global one.
+		#[arg(long, value_name = "ACCOUNT")]
+		account: Option<String>,
+	},
+	/// Read an offending message on stdin and print an RFC 5965 ARF abuse
+	/// report (send it to the offending sender's abuse address).
+	ReportAbuse {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
@@ -119,6 +209,74 @@ enum Command {
 	/// Reads the plaintext token from stdin (one line). Prints a
 	/// `sha256:<hex>` string to stdout, ready to paste into the config file.
 	TokenHash,
+	/// Create an app password for an account (a secondary IMAP/SMTP credential).
+	/// The generated secret is printed once and never stored.
+	AppPasswordCreate {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account the app password belongs to.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+		/// A label identifying this app password (e.g. "iphone").
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+		/// Optional expiry as Unix epoch seconds.
+		#[arg(long, value_name = "EPOCH")]
+		expires_at: Option<u64>,
+		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
+		#[arg(long, value_name = "CIDR")]
+		ip_cidr: Option<String>,
+	},
+	/// List every account's app passwords (never the secret).
+	AppPasswords {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Revoke an account's app password by label.
+	AppPasswordRevoke {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account the app password belongs to.
+		#[arg(long, value_name = "NAME")]
+		account: String,
+		/// The label of the app password to revoke.
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+	},
+	/// Create a management API key. The generated key is printed once and never
+	/// stored.
+	ApiKeyCreate {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// A label identifying this API key (e.g. "ci").
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+		/// Optional expiry as Unix epoch seconds.
+		#[arg(long, value_name = "EPOCH")]
+		expires_at: Option<u64>,
+		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
+		#[arg(long, value_name = "CIDR")]
+		ip_cidr: Option<String>,
+	},
+	/// List the management API keys (never the key).
+	ApiKeys {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
+	/// Revoke a management API key by label.
+	ApiKeyRevoke {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The label of the API key to revoke.
+		#[arg(long, value_name = "LABEL")]
+		label: String,
+	},
 }
 
 impl Cli {
@@ -142,10 +300,23 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Export { config, account } => match Config::load(&config) {
-				Ok(config) => {
-					export::run(&config.data_dir, &account, &mut std::io::stdout().lock())
-				}
+			Command::Export {
+				config,
+				account,
+				maildir,
+			} => match Config::load(&config) {
+				Ok(config) => match message_crypto(&config) {
+					Ok(crypto) => match maildir {
+						Some(dir) => export::run_maildir(&config.data_dir, &account, &crypto, &dir),
+						None => export::run(
+							&config.data_dir,
+							&account,
+							&crypto,
+							&mut std::io::stdout().lock(),
+						),
+					},
+					Err(code) => code,
+				},
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -156,17 +327,51 @@ impl Cli {
 				account,
 				maildir,
 			} => match Config::load(&config) {
-				Ok(config) => match maildir {
-					Some(dir) => import::run_maildir(&config.data_dir, &account, &dir),
-					None => import::run(&config.data_dir, &account, std::io::stdin().lock()),
+				Ok(config) => match message_crypto(&config) {
+					Ok(crypto) => match maildir {
+						Some(dir) => import::run_maildir(&config.data_dir, &account, &crypto, &dir),
+						None => import::run(
+							&config.data_dir,
+							&account,
+							&crypto,
+							std::io::stdin().lock(),
+						),
+					},
+					Err(code) => code,
 				},
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
 				}
 			},
+			Command::Backup { config } => match Config::load(&config) {
+				Ok(config) => backup::run(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
 			Command::Verify { config } => match Config::load(&config) {
-				Ok(config) => verify::run(&config.data_dir, &mut std::io::stdout().lock()),
+				Ok(config) => match message_crypto(&config) {
+					Ok(crypto) => {
+						verify::run(&config.data_dir, &crypto, &mut std::io::stdout().lock())
+					}
+					Err(code) => code,
+				},
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::VerifyDns { config } => match Config::load(&config) {
+				Ok(config) => verify_dns::run(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::DnsRecords { config } => match Config::load(&config) {
+				Ok(config) => dns_records::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -181,6 +386,51 @@ impl Cli {
 			},
 			Command::SrvRecords { config } => match Config::load(&config) {
 				Ok(config) => srv::run(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Autoconfig { config, domain } => match Config::load(&config) {
+				Ok(config) => {
+					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Suppression {
+				config,
+				remove,
+				account,
+			} => match Config::load(&config) {
+				Ok(config) => suppression::run(
+					&config,
+					remove.as_deref(),
+					account.as_deref(),
+					&mut std::io::stdout().lock(),
+				),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::Autodiscover { config, domain } => match Config::load(&config) {
+				Ok(config) => {
+					autodiscover::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ReportAbuse { config } => match Config::load(&config) {
+				Ok(config) => report_abuse::run(
+					&config,
+					std::io::stdin().lock(),
+					&mut std::io::stdout().lock(),
+				),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
@@ -212,90 +462,83 @@ impl Cli {
 				}
 			},
 			Command::DkimKeygen { out } => dkim_keygen(&out),
+			Command::StorageKeygen => storage_keygen(),
+			Command::OauthKeygen => oauth_keygen(),
 			Command::TokenHash => token_hash(),
+			Command::AppPasswordCreate {
+				config,
+				account,
+				label,
+				expires_at,
+				ip_cidr,
+			} => match Config::load(&config) {
+				Ok(config) => app_passwords::create(
+					&config,
+					&account,
+					&label,
+					expires_at,
+					ip_cidr,
+					&mut std::io::stdout().lock(),
+				),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::AppPasswords { config } => match Config::load(&config) {
+				Ok(config) => app_passwords::list(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::AppPasswordRevoke {
+				config,
+				account,
+				label,
+			} => match Config::load(&config) {
+				Ok(config) => {
+					app_passwords::revoke(&config, &account, &label, &mut std::io::stdout().lock())
+				}
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKeyCreate {
+				config,
+				label,
+				expires_at,
+				ip_cidr,
+			} => match Config::load(&config) {
+				Ok(config) => api_keys::create(
+					&config,
+					&label,
+					expires_at,
+					ip_cidr,
+					&mut std::io::stdout().lock(),
+				),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKeys { config } => match Config::load(&config) {
+				Ok(config) => api_keys::list(&config, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKeyRevoke { config, label } => match Config::load(&config) {
+				Ok(config) => api_keys::revoke(&config, &label, &mut std::io::stdout().lock()),
+				Err(error) => {
+					eprintln!("error: {error}");
+					ExitCode::FAILURE
+				}
+			},
 		}
 	}
-}
-
-fn token_hash() -> ExitCode {
-	token_hash_from(std::io::stdin().lock())
-}
-
-/// Read one non-empty line (CR-trimmed) from `reader`, or a FAILURE code.
-pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCode> {
-	let value = match reader.lines().next() {
-		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
-		Some(Err(error)) => {
-			eprintln!("error: reading stdin: {error}");
-			return Err(ExitCode::FAILURE);
-		}
-		None => {
-			eprintln!("error: no input — pipe or type the value on stdin");
-			return Err(ExitCode::FAILURE);
-		}
-	};
-	if value.is_empty() {
-		eprintln!("error: input must not be empty");
-		return Err(ExitCode::FAILURE);
-	}
-	Ok(value)
-}
-
-fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
-	let token = match read_line(reader) {
-		Ok(token) => token,
-		Err(code) => return code,
-	};
-	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
-	let hex = digest
-		.as_ref()
-		.iter()
-		.fold(String::with_capacity(64), |mut s, b| {
-			use std::fmt::Write;
-			write!(s, "{b:02x}").ok();
-			s
-		});
-	println!("sha256:{hex}");
-	ExitCode::SUCCESS
-}
-
-fn dkim_keygen(out: &std::path::Path) -> ExitCode {
-	if out.exists() {
-		eprintln!(
-			"error: {} already exists, refusing to overwrite",
-			out.display()
-		);
-		return ExitCode::FAILURE;
-	}
-	let (pem, record) = match crate::dkim::generate_key() {
-		Ok(generated) => generated,
-		Err(error) => {
-			eprintln!("error: {error}");
-			return ExitCode::FAILURE;
-		}
-	};
-	// The private key must never be group/world readable.
-	let result = {
-		use std::io::Write;
-		let mut options = std::fs::OpenOptions::new();
-		options.write(true).create_new(true);
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::OpenOptionsExt;
-			options.mode(0o600);
-		}
-		options
-			.open(out)
-			.and_then(|mut file| file.write_all(pem.as_bytes()))
-	};
-	if let Err(error) = result {
-		eprintln!("error: cannot write {}: {error}", out.display());
-		return ExitCode::FAILURE;
-	}
-	println!("private key written to {}", out.display());
-	println!("publish this TXT record at <selector>._domainkey.<your-domain>:");
-	println!("{record}");
-	ExitCode::SUCCESS
 }
 
 #[cfg(test)]

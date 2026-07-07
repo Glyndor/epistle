@@ -14,7 +14,7 @@ async fn migrations_apply_and_reputation_roundtrips() {
 		return;
 	};
 
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -48,13 +48,13 @@ async fn migrations_apply_and_reputation_roundtrips() {
 
 #[tokio::test]
 async fn reputation_record_accumulates_and_judges() {
-	use mail::antispam::reputation::{self, Scope, Verdict};
+	use epistle::antispam::reputation::{self, Scope, Verdict};
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -95,13 +95,13 @@ async fn reputation_record_accumulates_and_judges() {
 
 #[tokio::test]
 async fn reputation_screen_maps_verdicts() {
-	use mail::antispam::reputation::{self, Scope, Screen};
+	use epistle::antispam::reputation::{self, Scope, Screen};
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -133,30 +133,40 @@ async fn reputation_screen_maps_verdicts() {
 
 #[tokio::test]
 async fn bayes_corpus_trains_and_scores() {
-	use mail::antispam::corpus;
+	use epistle::antispam::corpus;
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = mail::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, 5)
 		.await
 		.expect("connect and migrate");
 
+	let store = corpus::BayesStore::with_key(pool.clone(), [7u8; 32]);
+
 	// Train: several spam messages with a marker token, several ham without.
 	for _ in 0..6 {
-		corpus::train(&pool, "buy cheap viagra now discount", true)
+		store
+			.train(corpus::SHARED, "buy cheap viagra now discount", true)
 			.await
 			.expect("train spam");
-		corpus::train(&pool, "project meeting notes attached agenda", false)
+		store
+			.train(
+				corpus::SHARED,
+				"project meeting notes attached agenda",
+				false,
+			)
 			.await
 			.expect("train ham");
 	}
 
-	let spammy = corpus::score(&pool, "viagra discount cheap")
+	let spammy = store
+		.score(corpus::SHARED, "viagra discount cheap")
 		.await
 		.expect("score");
-	let hammy = corpus::score(&pool, "meeting agenda notes")
+	let hammy = store
+		.score(corpus::SHARED, "meeting agenda notes")
 		.await
 		.expect("score");
 	assert!(
@@ -165,13 +175,141 @@ async fn bayes_corpus_trains_and_scores() {
 	);
 	assert!(spammy > 0.5, "spammy {spammy}");
 
-	// Reset shared corpus so reruns stay deterministic.
-	sqlx::query("DELETE FROM bayes_token")
+	// Reset the shared corpus so reruns stay deterministic.
+	sqlx::query("DELETE FROM bayes_token WHERE scope = ''")
 		.execute(&pool)
 		.await
 		.expect("clear tokens");
-	sqlx::query("UPDATE bayes_corpus SET ham_messages = 0, spam_messages = 0")
+	sqlx::query("UPDATE bayes_corpus SET ham_messages = 0, spam_messages = 0 WHERE scope = ''")
 		.execute(&pool)
 		.await
 		.expect("reset corpus");
+}
+
+#[tokio::test]
+async fn sql_directory_loads_resolves_and_authenticates() {
+	use epistle::directory_store::{AccountStore, load_sql_accounts};
+	use epistle::smtp::address::Address;
+	use epistle::smtp::directory::Resolution;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	// A unique account so reruns against a persistent database stay isolated.
+	let name = format!("dir-{}", uuid::Uuid::now_v7());
+	let address = format!("{name}@example.org");
+	let hash = epistle::smtp::auth::hash_password("s3cret").expect("hash");
+	sqlx::query("INSERT INTO directory_account (name, password_hash) VALUES ($1, $2)")
+		.bind(&name)
+		.bind(&hash)
+		.execute(&pool)
+		.await
+		.expect("insert account");
+	sqlx::query("INSERT INTO directory_address (address, account) VALUES ($1, $2)")
+		.bind(&address)
+		.bind(&name)
+		.execute(&pool)
+		.await
+		.expect("insert address");
+
+	// Load via the async loader and feed the rows into a freshly built store.
+	let accounts = load_sql_accounts(&pool).await.expect("load sql accounts");
+	assert!(
+		accounts.iter().any(|a| a.name == name),
+		"loaded set contains the new account"
+	);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = AccountStore::open(
+		dir.path(),
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.expect("open store")
+	.with_sql_accounts(accounts);
+	let directory = store.handle().current();
+
+	assert_eq!(
+		directory.resolve(&Address::parse(&address).expect("address")),
+		Resolution::Account(name.clone())
+	);
+	assert_eq!(
+		directory.authenticate(&address, "s3cret"),
+		Some(name.clone())
+	);
+	assert_eq!(directory.authenticate(&address, "wrong"), None);
+
+	sqlx::query("DELETE FROM directory_account WHERE name = $1")
+		.bind(&name)
+		.execute(&pool)
+		.await
+		.expect("cleanup");
+}
+
+#[tokio::test]
+async fn bayes_per_account_corpora_are_isolated() {
+	use epistle::antispam::corpus;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, 5)
+		.await
+		.expect("connect and migrate");
+
+	let store = corpus::BayesStore::with_key(pool.clone(), [9u8; 32]);
+
+	// Alice trains a distinctive marker token as spam.
+	for _ in 0..6 {
+		store
+			.train("alice@example.org", "zzzmarker special offer", true)
+			.await
+			.expect("train alice spam");
+		store
+			.train("alice@example.org", "ordinary message body text", false)
+			.await
+			.expect("train alice ham");
+	}
+
+	// Alice scores the marker as spammy; an untrained account and the shared
+	// corpus are unaffected (per-account isolation).
+	let alice = store
+		.score("alice@example.org", "zzzmarker offer")
+		.await
+		.expect("score alice");
+	let bob = store
+		.score("bob@example.org", "zzzmarker offer")
+		.await
+		.expect("score bob");
+	let shared = store
+		.score(corpus::SHARED, "zzzmarker offer")
+		.await
+		.expect("score shared");
+	assert!(alice > 0.5, "alice {alice}");
+	// Alice's training raised the marker's score only for Alice; untrained
+	// scopes are unaffected and an untrained account matches the untrained
+	// shared corpus exactly (full isolation).
+	assert!(
+		alice > bob,
+		"alice {alice} should exceed untrained bob {bob}"
+	);
+	assert!(
+		(bob - shared).abs() < f64::EPSILON,
+		"bob {bob} vs shared {shared}"
+	);
+
+	sqlx::query("DELETE FROM bayes_token WHERE scope = 'alice@example.org'")
+		.execute(&pool)
+		.await
+		.expect("clear alice tokens");
+	sqlx::query("DELETE FROM bayes_corpus WHERE scope = 'alice@example.org'")
+		.execute(&pool)
+		.await
+		.expect("clear alice corpus");
 }

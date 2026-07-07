@@ -45,6 +45,83 @@ fn b64(s: &str) -> String {
 	base64::engine::general_purpose::STANDARD.encode(s)
 }
 
+fn b64_bytes(bytes: &[u8]) -> String {
+	use base64::Engine;
+	base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// A 32-byte stand-in for the tls-server-end-point certificate hash.
+const CERT_HASH: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+/// A SCRAM session on a TLS link that also offers channel binding (-PLUS).
+fn scram_plus_session() -> Session {
+	Session::new("mail.example.org")
+		.with_directory(scram_directory())
+		.with_tls_active()
+		.with_channel_binding(CERT_HASH.to_vec())
+		.with_scram_nonce("SN")
+		.tap_ehlo()
+}
+
+trait TapEhlo {
+	fn tap_ehlo(self) -> Self;
+}
+impl TapEhlo for Session {
+	fn tap_ehlo(mut self) -> Self {
+		self.command_line("EHLO client.example.org");
+		self
+	}
+}
+
+#[test]
+fn scram_plus_negotiates_when_bound() {
+	let mut session = scram_plus_session();
+	let action = session.command_line(&format!(
+		"AUTH SCRAM-SHA-256-PLUS {}",
+		b64("p=tls-server-end-point,,n=alice,r=CN")
+	));
+	assert_eq!(
+		reply_code(&action),
+		334,
+		"bound -PLUS client-first is challenged"
+	);
+}
+
+#[test]
+fn scram_plus_unavailable_without_binding() {
+	// No channel binding configured → the -PLUS mechanism is not offered.
+	let mut session = scram_session(true);
+	let action = session.command_line(&format!(
+		"AUTH SCRAM-SHA-256-PLUS {}",
+		b64("p=tls-server-end-point,,n=alice,r=CN")
+	));
+	assert_eq!(reply_code(&action), 504);
+}
+
+#[test]
+fn scram_plus_wrong_binding_is_rejected() {
+	let mut session = scram_plus_session();
+	assert_eq!(
+		reply_code(&session.command_line(&format!(
+			"AUTH SCRAM-SHA-256-PLUS {}",
+			b64("p=tls-server-end-point,,n=alice,r=CN")
+		))),
+		334
+	);
+	// client-final whose c= carries the wrong binding data.
+	let wrong = b64_bytes(b"WRONGWRONGWRONGWRONGWRONGWRONG!!");
+	let client_final = format!("c={wrong},r=CNSN,p={}", b64_bytes(&[0u8; 32]));
+	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
+}
+
+#[test]
+fn scram_plain_rejects_downgrade_when_bound() {
+	// On a link that offers -PLUS, plain SCRAM with `y,,` is a downgrade.
+	let mut session = scram_plus_session();
+	let action = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("y,,n=alice,r=CN")));
+	assert_eq!(reply_code(&action), 535);
+}
+
 #[test]
 fn scram_without_initial_prompts_for_client_first() {
 	let mut session = scram_session(true);

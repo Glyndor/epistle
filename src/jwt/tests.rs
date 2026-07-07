@@ -116,6 +116,34 @@ fn audience_array_matches() {
 }
 
 #[test]
+fn token_without_exp_is_rejected() {
+	let k = key();
+	// A well-signed token with the right issuer/audience but no `exp` must NOT
+	// be accepted as a non-expiring bearer token (ASVS V3.5).
+	let token = sign(
+		&k,
+		&serde_json::json!({"iss": "https://issuer.example", "aud": "mail"}),
+	);
+	assert_eq!(
+		validate(&token, Algorithm::Es256, &k.public, &validation(1000)),
+		Err(JwtError::MissingExpiry)
+	);
+}
+
+#[test]
+fn token_with_non_numeric_exp_is_rejected() {
+	let k = key();
+	let token = sign(
+		&k,
+		&serde_json::json!({"iss": "https://issuer.example", "aud": "mail", "exp": "soon"}),
+	);
+	assert_eq!(
+		validate(&token, Algorithm::Es256, &k.public, &validation(1000)),
+		Err(JwtError::MissingExpiry)
+	);
+}
+
+#[test]
 fn algorithm_mismatch_rejected() {
 	let k = key();
 	let token = sign(&k, &claims(2000));
@@ -132,5 +160,33 @@ fn malformed_token_rejected() {
 	assert_eq!(
 		validate("not-a-jwt", Algorithm::Es256, &k.public, &validation(1000)),
 		Err(JwtError::Malformed)
+	);
+}
+
+#[test]
+fn prod_sign_round_trips_through_validate() {
+	// The production `sign` produces a token that `validate` accepts against the
+	// matching public point, with the claims intact.
+	let rng = SystemRandom::new();
+	let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).expect("gen");
+	let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+		.expect("parse");
+	let public = pair.public_key().as_ref().to_vec();
+	// `super::sign` is the production signer (the module-local `sign` helper above
+	// shadows the glob import).
+	let token = super::sign(&claims(2000), Algorithm::Es256, pkcs8.as_ref()).expect("sign");
+	let result = validate(&token, Algorithm::Es256, &public, &validation(1000)).expect("valid");
+	assert_eq!(result.string("sub"), Some("alice@example.org"));
+}
+
+#[test]
+fn prod_sign_rejects_non_es256_and_bad_key() {
+	assert_eq!(
+		super::sign(&claims(2000), Algorithm::Rs256, b"x"),
+		Err(SignError::UnsupportedAlgorithm)
+	);
+	assert_eq!(
+		super::sign(&claims(2000), Algorithm::Es256, b"not-a-pkcs8-key"),
+		Err(SignError::BadKey)
 	);
 }

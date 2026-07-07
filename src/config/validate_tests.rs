@@ -466,3 +466,6 @@ domains = ["example.org"]
 	);
 	assert!(matches!(result, Err(ConfigError::Invalid(_))));
 }
+
+#[path = "validate_privileges_tests.rs"]
+mod privileges;

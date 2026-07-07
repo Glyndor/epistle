@@ -99,9 +99,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp target/release/mail "dist/mail-${TAG}-x86_64-linux"
+          cp target/release/epistle "dist/epistle-${TAG}-x86_64-linux"
           cp scripts/install.sh dist/install.sh
-          cp mail.cdx.json "dist/mail-${TAG}.cdx.json"
+          cp epistle.cdx.json "dist/epistle-${TAG}.cdx.json"
           cd dist
           sha256sum * > SHA256SUMS
 
@@ -122,13 +122,13 @@ jobs:
           venv_py="$RUNNER_TEMP/signvenv/bin/python"
           "$venv_py" -m pip install --quiet --require-hashes -r .github/scripts/sign-requirements.txt
           # The key is read from RELEASE_SIGN_KEY in the environment, not argv.
-          "$venv_py" .github/scripts/sign.py "dist/mail-${TAG}-x86_64-linux"
+          "$venv_py" .github/scripts/sign.py "dist/epistle-${TAG}-x86_64-linux"
           "$venv_py" .github/scripts/sign.py dist/SHA256SUMS
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: dist/mail-*-x86_64-linux
+          subject-path: dist/epistle-*-x86_64-linux
 
       - name: Create release
         env:

@@ -26,6 +26,8 @@ impl Server {
 		mut session: Session,
 		peer: Option<IpAddr>,
 	) -> std::io::Result<()> {
+		// App-password CIDR allowlists are checked against the peer IP.
+		session.set_peer_ip(peer);
 		self.metrics.connection();
 		send(&mut stream, &session.greeting()).await?;
 
@@ -467,6 +469,14 @@ impl Server {
 					// a pipelining client cannot smuggle plaintext commands
 					// into the TLS session.
 					let tls_stream = acceptor.current().accept(stream).await?;
+					// A verified client certificate enables SASL EXTERNAL.
+					let identity = tls_stream
+						.get_ref()
+						.1
+						.peer_certificates()
+						.and_then(|certs| certs.first())
+						.and_then(|cert| crate::tls::identity_from_cert(cert.as_ref()));
+					session.set_client_identity(identity);
 					stream = Box::new(tls_stream);
 					session.tls_started();
 					decoder = LineDecoder::new();

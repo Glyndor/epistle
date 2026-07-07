@@ -83,6 +83,16 @@ pub enum Command {
 		flags: Vec<String>,
 		size: usize,
 	},
+	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
+	/// message to `mailbox`, then expunge message `sequence` from the selected
+	/// mailbox. `uid` selects `UID REPLACE`.
+	Replace {
+		sequence: u32,
+		mailbox: String,
+		flags: Vec<String>,
+		size: usize,
+		uid: bool,
+	},
 	Fetch {
 		sequence: SequenceSet,
 		items: Vec<FetchItem>,
@@ -115,6 +125,13 @@ pub enum Command {
 		/// `* SEARCH` reply; `Some` selects the `* ESEARCH` reply.
 		return_opts: Option<Vec<ReturnOpt>>,
 	},
+	/// `ESEARCH [IN (sources)] [RETURN (...)] criteria` (RFC 7377
+	/// MULTISEARCH). Searches one or more mailboxes, always reporting UIDs.
+	Esearch {
+		sources: Vec<SearchScope>,
+		criteria: Vec<SearchKey>,
+		return_opts: Vec<ReturnOpt>,
+	},
 	/// `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
 	Sort {
 		keys: Vec<(bool, SortKey)>,
@@ -140,6 +157,73 @@ pub enum Command {
 		reference: String,
 		pattern: String,
 	},
+	/// `SETACL <mailbox> <identifier> <rights>` (RFC 4314).
+	SetAcl {
+		mailbox: String,
+		identifier: String,
+		rights: String,
+	},
+	/// `DELETEACL <mailbox> <identifier>` (RFC 4314).
+	DeleteAcl {
+		mailbox: String,
+		identifier: String,
+	},
+	/// `GETACL <mailbox>` (RFC 4314).
+	GetAcl {
+		mailbox: String,
+	},
+	/// `LISTRIGHTS <mailbox> <identifier>` (RFC 4314).
+	ListRights {
+		mailbox: String,
+		identifier: String,
+	},
+	/// `MYRIGHTS <mailbox>` (RFC 4314).
+	MyRights {
+		mailbox: String,
+	},
+	/// `GETMETADATA [(options)] <mailbox> <entries>` (RFC 5464). An empty
+	/// mailbox name addresses server-level annotations.
+	GetMetadata {
+		mailbox: String,
+		entries: Vec<String>,
+	},
+	/// `SETMETADATA <mailbox> (entry value ...)` (RFC 5464). A `None` value
+	/// deletes the entry.
+	SetMetadata {
+		mailbox: String,
+		items: Vec<(String, Option<String>)>,
+	},
+	/// `NOTIFY SET [STATUS] (<event-group> ...)` / `NOTIFY NONE` (RFC 5465).
+	Notify(NotifyRequest),
+}
+
+/// A parsed `NOTIFY` request (RFC 5465 §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyRequest {
+	/// `NOTIFY NONE`: disable all unsolicited event notifications.
+	None,
+	/// `NOTIFY SET [STATUS] (...)`: enable notifications. `status` records the
+	/// `STATUS` return modifier. `selected` holds the events requested for the
+	/// `selected` mailbox specifier (the only specifier fully supported); other
+	/// specifiers are accepted and ignored.
+	Set {
+		status: bool,
+		selected: Vec<NotifyEvent>,
+	},
+}
+
+/// A NOTIFY message event (RFC 5465 §6). Only the events the server can deliver
+/// for the selected mailbox are modelled; unknown events are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyEvent {
+	/// `MessageNew`: a message was added to the mailbox.
+	MessageNew,
+	/// `MessageExpunge`: a message was removed from the mailbox.
+	MessageExpunge,
+	/// `FlagChange`: a message's flags changed.
+	FlagChange,
+	/// `AnnotationChange`: a message annotation changed.
+	AnnotationChange,
 }
 
 /// Items that can be requested in a STATUS command.
@@ -165,6 +249,26 @@ pub enum ReturnOpt {
 	Max,
 	Count,
 	All,
+}
+
+/// A MULTISEARCH source scope (RFC 7377 §2.2 `scope-option`). Selects which
+/// mailboxes an `ESEARCH` command searches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchScope {
+	/// The currently selected mailbox (the default when no `IN` is given).
+	Selected,
+	/// Mailboxes that receive new messages — here, just INBOX.
+	Inboxes,
+	/// Every mailbox in the user's personal namespace.
+	Personal,
+	/// Every subscribed mailbox.
+	Subscribed,
+	/// The named mailboxes and all their descendants.
+	Subtree(Vec<String>),
+	/// The named mailboxes and their immediate children only.
+	SubtreeOne(Vec<String>),
+	/// Exactly the named mailboxes.
+	Mailboxes(Vec<String>),
 }
 
 /// A SORT key (RFC 5256), optionally preceded by REVERSE in the command.
@@ -242,6 +346,8 @@ pub enum FetchItem {
 	ThreadId,
 	/// `SAVEDATE`: when the message was saved to the mailbox (RFC 8514).
 	SaveDate,
+	/// `PREVIEW`: a short text snippet of the message (RFC 8970).
+	Preview,
 }
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).
@@ -333,6 +439,10 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 	Some((year, month, day))
 }
 
+mod acl;
+mod literal;
+mod metadata;
+mod notify;
 mod parse;
 mod search;
 mod select_params;

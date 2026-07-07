@@ -52,6 +52,19 @@ pub struct Session {
 	/// Test-injected SCRAM server nonce; `None` generates a fresh random one.
 	scram_nonce: Option<String>,
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
+	/// `tls-server-end-point` channel-binding data (the server certificate
+	/// hash) when the connection is TLS; enables SCRAM-SHA-256-PLUS.
+	cbind_data: Option<Vec<u8>>,
+	/// Shared per-account submission rate limiter (authenticated senders).
+	send_limiter: Option<std::sync::Arc<super::ratelimit::SendLimiter>>,
+	/// Verified TLS client-certificate identity (email SAN), enabling SASL
+	/// EXTERNAL. Set by the network layer after a client-cert handshake.
+	client_identity: Option<String>,
+	/// Awaiting the EXTERNAL response line after a `334` challenge.
+	pending_external: bool,
+	/// The client's peer IP, set by the network layer; used to enforce an app
+	/// password's CIDR allowlist during authentication.
+	peer_ip: Option<std::net::IpAddr>,
 }
 
 impl Session {
@@ -71,7 +84,41 @@ impl Session {
 			pending_login: None,
 			scram_nonce: None,
 			oauth: None,
+			cbind_data: None,
+			send_limiter: None,
+			client_identity: None,
+			pending_external: false,
+			peer_ip: None,
 		}
+	}
+
+	/// Set the verified TLS client-certificate identity (email), enabling SASL
+	/// EXTERNAL for this connection. Called by the network layer once a client
+	/// presented a certificate that rustls verified against the trust anchor.
+	pub fn set_client_identity(&mut self, identity: Option<String>) {
+		self.client_identity = identity;
+	}
+
+	/// Set the client's peer IP, used to enforce app-password CIDR allowlists.
+	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
+		self.peer_ip = ip;
+	}
+
+	/// Attach a shared per-account submission rate limiter.
+	pub fn with_send_limiter(
+		mut self,
+		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
+	) -> Self {
+		self.send_limiter = Some(limiter);
+		self
+	}
+
+	/// Provide the `tls-server-end-point` channel-binding data (the server
+	/// certificate hash), enabling SCRAM-SHA-256-PLUS. Set by the network layer
+	/// once the connection is TLS.
+	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+		self.cbind_data = Some(cert_hash);
+		self
 	}
 
 	/// The authenticated account, if AUTH succeeded.
@@ -184,14 +231,37 @@ impl Session {
 		if self.state != State::Greeted {
 			return Action::Continue(Reply::bad_sequence());
 		}
-		match mechanism {
-			"PLAIN" => match initial {
+		// Only negotiate a mechanism that is currently advertised (channel
+		// binding present for -PLUS, a verifier present for the OAuth ones).
+		let unsupported = || Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
+		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
+			return unsupported();
+		};
+		if !crate::sasl::is_available(
+			parsed,
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
+			return unsupported();
+		}
+		use crate::sasl::Mechanism;
+		match parsed {
+			Mechanism::External => match initial {
+				Some(response) => self.verify_external(&response),
+				None => {
+					self.pending_external = true;
+					Action::CollectAuthResponse(Reply::single(334, ""))
+				}
+			},
+			Mechanism::Plain => match initial {
 				Some(response) => self.verify_plain(&response),
 				None => Action::CollectAuthResponse(Reply::single(334, "")),
 			},
-			"SCRAM-SHA-256" => self.scram_begin(initial),
-			"OAUTHBEARER" | "XOAUTH2" => self.oauth_bearer(mechanism, initial),
-			"LOGIN" => match initial {
+			Mechanism::ScramSha256 => self.scram_begin(initial, false),
+			Mechanism::ScramSha256Plus => self.scram_begin(initial, true),
+			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_bearer(mechanism, initial),
+			Mechanism::Login => match initial {
 				// Initial response is the username; prompt for the password.
 				Some(user) => self.login_username(&user),
 				None => {
@@ -199,7 +269,6 @@ impl Session {
 					Action::CollectAuthResponse(Reply::single(334, "VXNlcm5hbWU6"))
 				}
 			},
-			_ => Action::Continue(Reply::single(504, "5.5.4 mechanism not supported")),
 		}
 	}
 
@@ -219,7 +288,12 @@ impl Session {
 		if line == "*" {
 			self.pending_scram = None;
 			self.pending_login = None;
+			self.pending_external = false;
 			return Action::Continue(Reply::single(501, "5.7.0 authentication cancelled"));
+		}
+		// EXTERNAL: the challenged response is the (optional) authzid.
+		if std::mem::take(&mut self.pending_external) {
+			return self.verify_external(line);
 		}
 		// AUTH LOGIN's two-step username/password exchange.
 		if let Some(state) = self.pending_login.take() {
@@ -229,7 +303,9 @@ impl Session {
 			};
 		}
 		match self.pending_scram.take() {
-			Some(scram::PendingScram::ClientFirst) => self.scram_client_first(line),
+			Some(scram::PendingScram::ClientFirst(binding)) => {
+				self.scram_client_first(line, binding)
+			}
 			Some(scram::PendingScram::ClientFinal {
 				server,
 				credentials,
@@ -318,6 +394,16 @@ impl Session {
 					}
 					_ => {}
 				}
+				// Per-account submission rate limit for authenticated senders.
+				if let Some(account) = self.authenticated.clone()
+					&& let Some(limiter) = &self.send_limiter
+					&& !limiter.check(&account, unix_now())
+				{
+					return Action::Continue(Reply::single(
+						450,
+						"4.7.1 sending rate limit exceeded; retry later",
+					));
+				}
 				// SIZE is declared up front: reject oversize without DATA.
 				if size.is_some_and(|s| s > MAX_MESSAGE_SIZE as u64) {
 					return Action::Continue(Reply::single(
@@ -349,7 +435,8 @@ impl Session {
 			Resolution::UnknownUser => {
 				return Action::Continue(Reply::single(550, "5.1.1 no such user"));
 			}
-			Resolution::Account(_) => {}
+			// A local account or a multi-target alias is an acceptable recipient.
+			Resolution::Account(_) | Resolution::Alias(_) => {}
 		}
 		let forward_path = address.to_string();
 		// Suppress failure DSNs for NOTIFY=NEVER or a NOTIFY without FAILURE (RFC 3461).
@@ -468,6 +555,14 @@ impl Session {
 			self.state = State::Greeted;
 		}
 	}
+}
+
+/// Current time in epoch seconds (for rate-limit windows).
+fn unix_now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
 }
 
 #[cfg(test)]

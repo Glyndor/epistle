@@ -93,15 +93,23 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		}
 		"EXPUNGE" => no_args(&tag, args, Command::Expunge)?,
 		"IDLE" => no_args(&tag, args, Command::Idle)?,
-		"APPEND" => parse_append(&tag, args)?,
+		"APPEND" => super::literal::parse_append(&tag, args)?,
+		"REPLACE" => super::literal::parse_replace(&tag, args, false)?,
 		"FETCH" => parse_fetch(&tag, args, false)?,
 		"STORE" => parse_store(&tag, args, false)?,
 		"COPY" => parse_copy(&tag, args, false, false)?,
 		"MOVE" => parse_copy(&tag, args, false, true)?,
 		"SEARCH" => super::search::parse_search(&tag, args, false)?,
+		"ESEARCH" => super::search::parse_esearch(&tag, args)?,
 		"SORT" => super::search::parse_sort(&tag, args, false)?,
 		"THREAD" => super::search::parse_thread(&tag, args, false)?,
 		"STATUS" => parse_status(&tag, args)?,
+		"GETACL" | "SETACL" | "DELETEACL" | "LISTRIGHTS" | "MYRIGHTS" => {
+			super::acl::parse(verb.to_ascii_uppercase().as_str(), &tag, args)?
+		}
+		"GETMETADATA" => super::metadata::parse_get(&tag, args)?,
+		"SETMETADATA" => super::metadata::parse_set(&tag, args)?,
+		"NOTIFY" => super::notify::parse_notify(&tag, args)?,
 		"SUBSCRIBE" => Command::Subscribe {
 			mailbox: parse_mailbox(&tag, args)?,
 		},
@@ -136,6 +144,8 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 				super::search::parse_sort(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("THREAD") {
 				super::search::parse_thread(&tag, sub_args, true)?
+			} else if sub.eq_ignore_ascii_case("REPLACE") {
+				super::literal::parse_replace(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("EXPUNGE") {
 				let sequence = super::parse_sequence_set(sub_args)
 					.ok_or_else(|| ParseError::BadArguments(tag.clone()))?;
@@ -285,6 +295,7 @@ fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> 
 			"EMAILID" => items.push(FetchItem::EmailId),
 			"THREADID" => items.push(FetchItem::ThreadId),
 			"SAVEDATE" => items.push(FetchItem::SaveDate),
+			"PREVIEW" => items.push(FetchItem::Preview),
 			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
 			"BINARY[]" | "BINARY.PEEK[]" => items.push(FetchItem::Binary),
 			"BINARY.SIZE[]" => items.push(FetchItem::BinarySize),
@@ -352,44 +363,6 @@ fn parse_fetch_modifier(modifier: &str, tag: &str) -> Result<(Option<u64>, bool)
 		return Err(bad());
 	}
 	Ok((changed_since, vanished))
-}
-
-fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	let (mailbox, rest) = parse_astring(args).ok_or_else(bad)?;
-	if mailbox.is_empty() {
-		return Err(bad());
-	}
-	let rest = rest.trim();
-
-	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
-		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
-		(
-			inside
-				.split_whitespace()
-				.map(|token| token.to_string())
-				.collect(),
-			after.trim(),
-		)
-	} else {
-		(Vec::new(), rest)
-	};
-
-	// `{n}` synchronizing or `{n+}` non-synchronizing literal.
-	let size_text = literal_text
-		.strip_prefix('{')
-		.and_then(|t| t.strip_suffix('}'))
-		.ok_or_else(bad)?;
-	let size_text = size_text.strip_suffix('+').unwrap_or(size_text);
-	let size: usize = size_text.parse().map_err(|_| bad())?;
-	if size == 0 || size > MAX_APPEND_SIZE {
-		return Err(bad());
-	}
-	Ok(Command::Append {
-		mailbox,
-		flags,
-		size,
-	})
 }
 
 fn parse_copy(

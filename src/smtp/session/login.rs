@@ -11,11 +11,13 @@ impl Session {
 		let Ok(credentials) = super::super::auth::parse_plain(encoded) else {
 			return self.auth_fail();
 		};
-		// Password + any TOTP second factor; no oracle (unknown user == bad pw).
-		match self
-			.directory
-			.authenticate(&credentials.authcid, &credentials.password)
-		{
+		// Password + any TOTP second factor, or an app password (CIDR-checked
+		// against the peer IP); no oracle (unknown user == bad pw).
+		match self.directory.authenticate_with_ip(
+			&credentials.authcid,
+			&credentials.password,
+			self.peer_ip,
+		) {
 			Some(account) => self.auth_success(account),
 			None => self.auth_fail(),
 		}
@@ -35,12 +37,43 @@ impl Session {
 		let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
 			return self.auth_fail();
 		};
-		match self
-			.directory
-			.authenticate(user, &String::from_utf8_lossy(&bytes))
-		{
+		match self.directory.authenticate_with_ip(
+			user,
+			&String::from_utf8_lossy(&bytes),
+			self.peer_ip,
+		) {
 			Some(account) => self.auth_success(account),
 			None => self.auth_fail(),
+		}
+	}
+
+	/// SASL EXTERNAL: authenticate as the identity in the verified client
+	/// certificate. The optional authzid (base64, or `=`/empty) must be empty or
+	/// equal the certificate identity — no acting as another user.
+	pub(super) fn verify_external(&mut self, encoded: &str) -> Action {
+		let Some(identity) = self.client_identity.clone() else {
+			// EXTERNAL without a verified client certificate: never succeeds.
+			return self.auth_fail();
+		};
+		let trimmed = encoded.trim();
+		let authzid = if trimmed.is_empty() || trimmed == "=" {
+			String::new()
+		} else {
+			match base64::engine::general_purpose::STANDARD.decode(trimmed) {
+				Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+				Err(_) => return self.auth_fail(),
+			}
+		};
+		if !authzid.is_empty() && authzid != identity {
+			return self.auth_fail();
+		}
+		// Resolve the certificate's email identity to a local account.
+		match crate::smtp::address::Address::parse(&identity) {
+			Ok(address) => match self.directory.resolve(&address) {
+				crate::smtp::directory::Resolution::Account(account) => self.auth_success(account),
+				_ => self.auth_fail(),
+			},
+			Err(_) => self.auth_fail(),
 		}
 	}
 

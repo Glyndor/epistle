@@ -21,9 +21,16 @@ impl Session {
 	/// The advertised `AUTH` capability line, including the OAuth mechanisms
 	/// when a verifier is configured.
 	pub(super) fn auth_capability(&self) -> String {
-		let mut mechs = String::from("AUTH SCRAM-SHA-256 PLAIN LOGIN");
-		if self.oauth.is_some() {
-			mechs.push_str(" OAUTHBEARER XOAUTH2");
+		// Shared mechanism set: -PLUS only with a bound certificate hash, the
+		// OAuth mechanisms only with a configured verifier.
+		let mut mechs = String::from("AUTH");
+		for mechanism in crate::sasl::available(
+			self.client_identity.is_some(),
+			self.cbind_data.is_some(),
+			self.oauth.is_some(),
+		) {
+			mechs.push(' ');
+			mechs.push_str(mechanism.name());
 		}
 		mechs
 	}

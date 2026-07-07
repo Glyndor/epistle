@@ -15,7 +15,28 @@ use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
+use super::crypto::MessageCrypto;
 use super::spool::write_sync;
+
+/// Forward only while a message has crossed at most this many hops. A loop
+/// re-injects the message each round, accruing `Received:` headers; stopping
+/// well under RFC 5321's 100-hop ceiling breaks a forwarding loop early.
+const MAX_FORWARD_HOPS: usize = 25;
+
+/// Count the `Received:` header lines in a raw message (its hop count).
+fn received_hops(data: &[u8]) -> usize {
+	let head_end = data
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.unwrap_or(data.len());
+	let head = &data[..head_end];
+	head.split(|&b| b == b'\n')
+		.filter(|line| {
+			let line = line.strip_suffix(b"\r").unwrap_or(line);
+			line.len() >= 9 && line[..9].eq_ignore_ascii_case(b"Received:")
+		})
+		.count()
+}
 
 /// What local delivery produced: redirect addresses for the caller to queue,
 /// and a Sieve reject reason to bounce (if any).
@@ -33,18 +54,30 @@ pub struct Delivered {
 pub struct LocalDelivery {
 	accounts_root: PathBuf,
 	directory: DirectoryHandle,
+	crypto: MessageCrypto,
 }
 
 impl LocalDelivery {
-	/// Create a local delivery sink rooted at `data_dir`. Creates the
-	/// accounts directory eagerly so an unwritable data_dir fails at
-	/// startup, not on first delivery.
+	/// Create a local delivery sink rooted at `data_dir` with no at-rest
+	/// encryption. The encrypting variant is [`LocalDelivery::new_with_crypto`].
 	pub fn new(data_dir: &std::path::Path, directory: DirectoryHandle) -> std::io::Result<Self> {
+		Self::new_with_crypto(data_dir, directory, MessageCrypto::disabled())
+	}
+
+	/// Create a local delivery sink rooted at `data_dir`, encrypting stored
+	/// message (`.eml`) files through `crypto`. Creates the accounts directory
+	/// eagerly so an unwritable data_dir fails at startup, not on first delivery.
+	pub fn new_with_crypto(
+		data_dir: &std::path::Path,
+		directory: DirectoryHandle,
+		crypto: MessageCrypto,
+	) -> std::io::Result<Self> {
 		let accounts_root = data_dir.join("accounts");
 		fs::create_dir_all(&accounts_root)?;
 		Ok(LocalDelivery {
 			accounts_root,
 			directory,
+			crypto,
 		})
 	}
 
@@ -60,6 +93,10 @@ impl LocalDelivery {
 			match self.directory.current().resolve(&address) {
 				Resolution::Account(account) => {
 					accounts.insert(account);
+				}
+				// A multi-target alias fans out to every member account.
+				Resolution::Alias(members) => {
+					accounts.extend(members);
 				}
 				_ => {
 					return Err(SinkError::Unavailable(format!(
@@ -91,7 +128,7 @@ impl LocalDelivery {
 		fs::create_dir_all(&new_dir)?;
 
 		let tmp_path = tmp_dir.join(format!("{id}.eml"));
-		write_sync(&tmp_path, data)?;
+		write_sync(&tmp_path, &self.crypto.encode(data)?)?;
 		fs::rename(&tmp_path, new_dir.join(format!("{id}.eml")))?;
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
 		write_flag_sidecar(&new_dir, id, flags);
@@ -118,6 +155,9 @@ impl LocalDelivery {
 		if accounts.is_empty() {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
+		// Mailing list: prepend List-* headers to the copies members receive.
+		let listed = self.list_message(message);
+		let message = listed.as_ref().unwrap_or(message);
 		let mut delivered = Delivered::default();
 		for account in &accounts {
 			let one = self.deliver_for_account(account, message, mailbox)?;
@@ -126,6 +166,23 @@ impl LocalDelivery {
 			delivered.replies.extend(one.replies);
 		}
 		Ok(delivered)
+	}
+
+	/// If any recipient is a mailing list, a copy of the message with the list's
+	/// `List-*` headers prepended; otherwise `None` (deliver the original).
+	fn list_message(&self, message: &AcceptedMessage) -> Option<AcceptedMessage> {
+		let directory = self.directory.current();
+		let headers = message
+			.recipients
+			.iter()
+			.filter_map(|recipient| Address::parse(recipient).ok())
+			.find_map(|address| directory.list_headers(&address.to_string()))?;
+		let mut data = headers.into_bytes();
+		data.extend_from_slice(&message.data);
+		Some(AcceptedMessage {
+			data,
+			..message.clone()
+		})
 	}
 
 	/// Deliver one message to one account. An explicit `hint` mailbox (an
@@ -144,11 +201,19 @@ impl LocalDelivery {
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			return Ok(Delivered::default());
 		}
+		// Admin-configured external forwarding, independent of the user filter.
+		let (forwards, keep_local) = self.account_forwards(account, message);
 		let Some(outcome) = self.sieve_outcome(account, message) else {
-			// No filter (or it failed to compile): normal INBOX delivery.
-			self.deliver_to_account(account, None, data, &[])
-				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			return Ok(Delivered::default());
+			// No filter (or it failed to compile): normal INBOX delivery, unless
+			// the account forwards with keep_local = false (pure forwarding).
+			if keep_local || forwards.is_empty() {
+				self.deliver_to_account(account, None, data, &[])
+					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			}
+			return Ok(Delivered {
+				redirects: forwards,
+				..Delivered::default()
+			});
 		};
 		// reject/ereject: refuse without delivering; the caller bounces the
 		// reason to a non-null sender.
@@ -176,16 +241,34 @@ impl LocalDelivery {
 			.into_iter()
 			.collect();
 		// Never redirect a bounce (null sender): that risks mail loops.
-		let redirects = if message.reverse_path.is_empty() {
+		let mut redirects = if message.reverse_path.is_empty() {
 			Vec::new()
 		} else {
 			outcome.redirects
 		};
+		// Account-level forwards are additive to the user's filter; local
+		// storage follows the filter (keep_local governs only the no-filter case).
+		redirects.extend(forwards);
 		Ok(Delivered {
 			redirects,
 			reject: None,
 			replies,
 		})
+	}
+
+	/// Admin-configured external forwarding targets for an account, with the
+	/// keep-local flag. Empty when the account has no forwarding, the sender is
+	/// null (a bounce — never forward, loop risk), or the message has already
+	/// traversed too many hops (loop guard).
+	fn account_forwards(&self, account: &str, message: &AcceptedMessage) -> (Vec<String>, bool) {
+		let directory = self.directory.current();
+		let Some((targets, keep_local)) = directory.forwards(account) else {
+			return (Vec::new(), true);
+		};
+		if message.reverse_path.is_empty() || received_hops(&message.data) > MAX_FORWARD_HOPS {
+			return (Vec::new(), keep_local);
+		}
+		(targets.to_vec(), keep_local)
 	}
 
 	/// Evaluate the account's Sieve filter, if present and valid. Any read,
@@ -423,3 +506,7 @@ mod tests {
 		assert_eq!(list_inbox(dir.path(), "alice").len(), 1);
 	}
 }
+
+#[cfg(test)]
+#[path = "delivery_forward_tests.rs"]
+mod forward_tests;

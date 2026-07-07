@@ -20,6 +20,7 @@ impl Session {
 		uid: bool,
 		unchanged_since: Option<u64>,
 	) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -90,14 +91,21 @@ impl Session {
 					(Some(_), Some(value)) => format!("MODSEQ ({value}) "),
 					_ => String::new(),
 				};
-				let uid_part = if uid {
-					format!("UID {message_uid} ")
+				if uidonly {
+					// UIDONLY: the UID leads the UIDFETCH response, not a data item.
+					response.push_str(&format!(
+						"* UIDFETCH {message_uid} ({modseq}FLAGS {stored})\r\n"
+					));
 				} else {
-					String::new()
-				};
-				response.push_str(&format!(
-					"* {sequence_number} FETCH ({uid_part}{modseq}FLAGS {stored})\r\n"
-				));
+					let uid_part = if uid {
+						format!("UID {message_uid} ")
+					} else {
+						String::new()
+					};
+					response.push_str(&format!(
+						"* {sequence_number} FETCH ({uid_part}{modseq}FLAGS {stored})\r\n"
+					));
+				}
 			}
 		}
 		let code = if modified.is_empty() {
@@ -118,6 +126,7 @@ impl Session {
 		changed_since: Option<u64>,
 		vanished: bool,
 	) -> Output {
+		let uidonly = self.uidonly;
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
@@ -148,6 +157,9 @@ impl Session {
 			let mut parts: Vec<Vec<u8>> = Vec::new();
 			for item in items {
 				match item {
+					// UIDONLY: the UID leads the UIDFETCH response, so the
+					// redundant UID data item is omitted (RFC 9586).
+					FetchItem::Uid if uidonly => {}
 					FetchItem::Flags => {
 						parts.push(format!("FLAGS {}", render_flags(&message.flags)).into_bytes());
 					}
@@ -177,6 +189,15 @@ impl Session {
 						let dt = format_internaldate(message.internal_date);
 						parts.push(format!("SAVEDATE \"{dt}\"").into_bytes());
 					}
+					FetchItem::Preview => match snapshot.read(message) {
+						Ok(data) => {
+							let preview = preview_text(&data);
+							parts.push(format!("PREVIEW \"{preview}\"").into_bytes());
+						}
+						Err(_) => {
+							return Output::text(format!("{tag} NO message unavailable\r\n"));
+						}
+					},
 					FetchItem::Body => match snapshot.read(message) {
 						Ok(data) => {
 							let mut part = format!("BODY[] {{{}}}\r\n", data.len()).into_bytes();
@@ -211,7 +232,12 @@ impl Session {
 				}
 			}
 
-			bytes.extend_from_slice(format!("* {sequence_number} FETCH (").as_bytes());
+			let header = if uidonly {
+				format!("* UIDFETCH {} (", message.uid)
+			} else {
+				format!("* {sequence_number} FETCH (")
+			};
+			bytes.extend_from_slice(header.as_bytes());
 			for (index, part) in parts.iter().enumerate() {
 				if index > 0 {
 					bytes.push(b' ');
@@ -280,4 +306,42 @@ fn decode_quoted_printable(body: &str) -> Vec<u8> {
 		i += 1;
 	}
 	out
+}
+
+/// Maximum characters in a PREVIEW snippet (RFC 8970 recommends ~200).
+const PREVIEW_LEN: usize = 200;
+
+/// Build a short PREVIEW snippet (RFC 8970) from a raw message: take the body
+/// after the header block, collapse whitespace, and truncate. Quotes and
+/// backslashes are escaped so the result is a valid IMAP quoted string.
+fn preview_text(raw: &[u8]) -> String {
+	let text = String::from_utf8_lossy(raw);
+	// The body starts after the first blank line (CRLF or LF).
+	let body = text
+		.split_once("\r\n\r\n")
+		.or_else(|| text.split_once("\n\n"))
+		.map(|(_, body)| body)
+		.unwrap_or(&text);
+
+	let mut preview = String::with_capacity(PREVIEW_LEN);
+	let mut last_was_space = false;
+	for ch in body.chars() {
+		if preview.chars().count() >= PREVIEW_LEN {
+			break;
+		}
+		if ch.is_whitespace() {
+			if !last_was_space && !preview.is_empty() {
+				preview.push(' ');
+				last_was_space = true;
+			}
+		} else if ch == '"' || ch == '\\' {
+			preview.push('\\');
+			preview.push(ch);
+			last_was_space = false;
+		} else if !ch.is_control() {
+			preview.push(ch);
+			last_was_space = false;
+		}
+	}
+	preview.trim_end().to_string()
 }

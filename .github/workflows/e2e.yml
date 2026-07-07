@@ -1,0 +1,143 @@
+name: E2E
+
+# Full-server end-to-end matrix: build the real binary, run it under systemd on
+# GitHub's VM runners (the "VM matrix") with real ports and TLS, then submit a
+# message over SMTP and retrieve it over IMAP via `tests/e2e.rs`.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/e2e.rs"
+      - "contrib/epistle.service"
+      - ".github/workflows/e2e.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: full-server e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    env:
+      SQLX_OFFLINE: "true"
+      # Real ports the local-delivery round trip uses; both implicit TLS.
+      E2E_HOST: "127.0.0.1"
+      # TLS server name must match the certificate's SAN (not the loopback IP).
+      E2E_SERVER_NAME: "mail.epistle.test"
+      E2E_SUBMISSION_PORT: "4465"
+      E2E_IMAPS_PORT: "4993"
+      E2E_ACCOUNT: "tester@epistle.test"
+      DATA_DIR: "${{ github.workspace }}/e2e-data"
+      CONF_DIR: "${{ github.workspace }}/e2e-conf"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Generate password
+        run: echo "E2E_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - name: Generate TLS certificate and key
+        run: |
+          mkdir -p "$CONF_DIR" "$DATA_DIR"
+          # CA:FALSE is required: the test's rustls client trusts this self-signed
+          # certificate as its sole root AND the server presents it as the leaf,
+          # and rustls rejects a CA-flagged certificate used as an end entity.
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$CONF_DIR/key.pem" -out "$CONF_DIR/cert.pem" \
+            -days 2 -subj "/CN=mail.epistle.test" \
+            -addext "subjectAltName=DNS:mail.epistle.test,IP:127.0.0.1" \
+            -addext "basicConstraints=critical,CA:FALSE"
+          echo "E2E_CA_PEM=$CONF_DIR/cert.pem" >> "$GITHUB_ENV"
+
+      - name: Generate DKIM key
+        run: ./target/release/epistle dkim-keygen --out "$CONF_DIR/dkim.pem"
+
+      - name: Write config
+        run: |
+          cat > "$CONF_DIR/epistle.toml" <<EOF
+          hostname = "mail.epistle.test"
+          data_dir = "$DATA_DIR"
+          domains = ["epistle.test"]
+
+          [tls]
+          cert_file = "$CONF_DIR/cert.pem"
+          key_file = "$CONF_DIR/key.pem"
+
+          [[listeners]]
+          kind = "submissions"
+          addr = "127.0.0.1"
+          port = $E2E_SUBMISSION_PORT
+
+          [[listeners]]
+          kind = "imaps"
+          addr = "127.0.0.1"
+          port = $E2E_IMAPS_PORT
+          EOF
+          chmod 600 "$CONF_DIR/epistle.toml"
+          ./target/release/epistle config-check --config "$CONF_DIR/epistle.toml"
+
+      - name: Add account
+        run: |
+          printf '%s' "$E2E_PASSWORD" | ./target/release/epistle account-add \
+            --config "$CONF_DIR/epistle.toml" \
+            --name tester --address "$E2E_ACCOUNT"
+
+      - name: Start server under systemd
+        run: |
+          sudo systemd-run --unit=epistle-e2e --property=Type=simple \
+            --setenv=SQLX_OFFLINE=true \
+            "$PWD/target/release/epistle" serve --config "$CONF_DIR/epistle.toml"
+
+      - name: Wait for ports
+        run: |
+          for port in "$E2E_SUBMISSION_PORT" "$E2E_IMAPS_PORT"; do
+            for _ in $(seq 1 60); do
+              if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+                exec 3>&- 3<&-
+                echo "port $port is up"
+                break
+              fi
+              sleep 1
+            done
+            if ! (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+              echo "port $port never came up"
+              sudo journalctl -u epistle-e2e --no-pager || true
+              exit 1
+            fi
+            exec 3>&- 3<&-
+          done
+
+      - name: Run e2e test
+        run: cargo test --locked --test e2e
+
+      - name: Capture server log
+        if: always()
+        run: sudo journalctl -u epistle-e2e --no-pager > "$CONF_DIR/server.log" 2>&1 || true
+
+      - name: Stop server
+        if: always()
+        run: sudo systemctl stop epistle-e2e || true
+
+      - name: Upload server log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: epistle-e2e-log-${{ matrix.os }}
+          path: ${{ env.CONF_DIR }}/server.log
+          if-no-files-found: ignore

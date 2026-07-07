@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::storage::MessageCrypto;
+
 /// A snapshot of one mailbox at SELECT time. Sequence numbers are positions
 /// in `messages` (1-based); UIDs are persistent, assigned in arrival order.
 #[derive(Debug)]
@@ -16,6 +18,12 @@ pub struct Snapshot {
 	uid_next: u32,
 	/// Highest mod-sequence in the mailbox (CONDSTORE, RFC 7162).
 	highest_modseq: u64,
+	/// At-rest crypto for decoding message bodies on read.
+	crypto: MessageCrypto,
+	/// Whether this snapshot came from the metadata index (fast path). Used by
+	/// tests to prove the index path is exercised and skips the sidecar reads.
+	#[cfg(test)]
+	loaded_from_index: bool,
 }
 
 /// One message in the snapshot.
@@ -35,6 +43,26 @@ impl MessageRef {
 	/// The message's stable UUID (its on-disk `<id>.eml` name).
 	pub fn id(&self) -> Uuid {
 		self.id
+	}
+
+	/// Build a [`MessageRef`] from index-decoded fields. Used by the metadata
+	/// index loader, which holds the same per-message data the FS scan gathers.
+	pub(super) fn from_index(
+		uid: u32,
+		id: Uuid,
+		size: u64,
+		flags: Vec<Flag>,
+		internal_date: std::time::SystemTime,
+		modseq: u64,
+	) -> MessageRef {
+		MessageRef {
+			uid,
+			id,
+			size,
+			flags,
+			internal_date,
+			modseq,
+		}
 	}
 }
 
@@ -74,9 +102,25 @@ impl Flag {
 }
 
 /// Render a flag list for FETCH/STORE responses.
+///
+/// Builds the parenthesized list in a single pre-sized allocation, without the
+/// intermediate `Vec<&str>` that `join` would require — this runs once per
+/// message in every FETCH FLAGS / STORE response.
 pub fn render_flags(flags: &[Flag]) -> String {
-	let tokens: Vec<&str> = flags.iter().map(|flag| flag.as_str()).collect();
-	format!("({})", tokens.join(" "))
+	// "(" + ")" + flag tokens + single-space separators between them.
+	let capacity = 2
+		+ flags.iter().map(|flag| flag.as_str().len()).sum::<usize>()
+		+ flags.len().saturating_sub(1);
+	let mut out = String::with_capacity(capacity);
+	out.push('(');
+	for (index, flag) in flags.iter().enumerate() {
+		if index > 0 {
+			out.push(' ');
+		}
+		out.push_str(flag.as_str());
+	}
+	out.push(')');
+	out
 }
 
 /// Whether a client-supplied mailbox name is safe and supported.
@@ -173,10 +217,37 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 }
 
 impl Snapshot {
-	/// Build the snapshot of any existing mailbox.
-	pub fn open(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<Snapshot> {
+	/// Build the snapshot of any existing mailbox, decoding message bodies
+	/// through `crypto` on read. Use [`MessageCrypto::disabled`] for a plaintext
+	/// store.
+	pub fn open(
+		data_dir: &Path,
+		account: &str,
+		mailbox: &str,
+		crypto: &MessageCrypto,
+	) -> std::io::Result<Snapshot> {
 		let account_dir = mailbox_dir(data_dir, account, mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
+		// Fast path: a fresh metadata index whose stamp matches the current
+		// mailbox generation lets us skip the per-message sidecar reads. Any
+		// doubt (missing, stale, corrupt, wrong version) falls through to the
+		// authoritative scan below — the filesystem is always the truth.
+		let generation = super::index::current_generation(&account_dir);
+		if let Some(messages) = super::index::load(&account_dir, generation) {
+			let uid_validity = super::uidvalidity::read_or_init(&account_dir);
+			let uid_next = super::uid::read_counter(&account_dir) + 1;
+			let highest_modseq = generation.0;
+			return Ok(Snapshot {
+				account_dir,
+				messages,
+				uid_validity,
+				uid_next,
+				highest_modseq,
+				crypto: crypto.clone(),
+				#[cfg(test)]
+				loaded_from_index: true,
+			});
+		}
 		let mut ids: Vec<Uuid> = Vec::new();
 		match std::fs::read_dir(&account_dir) {
 			Ok(entries) => {
@@ -201,8 +272,15 @@ impl Snapshot {
 		let mut uid_counter = initial_counter;
 		let mut messages = Vec::with_capacity(ids.len());
 		for id in ids.iter() {
-			let meta = std::fs::metadata(account_dir.join(format!("{id}.eml")));
-			let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+			let path = account_dir.join(format!("{id}.eml"));
+			let meta = std::fs::metadata(&path);
+			// RFC822.SIZE must be the plaintext size a client sees, not the
+			// on-disk envelope size, so subtract the fixed crypto overhead for an
+			// encrypted file.
+			let size = meta
+				.as_ref()
+				.map(|m| crypto.stored_plaintext_len(&path, m.len()))
+				.unwrap_or(0);
 			let internal_date = meta
 				.as_ref()
 				.ok()
@@ -225,13 +303,31 @@ impl Snapshot {
 			.max(messages.iter().map(|m| m.modseq).max().unwrap_or(1))
 			.max(1);
 		let uid_validity = super::uidvalidity::read_or_init(&account_dir);
+		// Persist a fresh index stamped with the generation we just observed, so
+		// the next open can take the fast path. A failed index write must not
+		// fail the open — the snapshot already succeeded from the scan, which is
+		// canonical — so any error is intentionally dropped.
+		// Reuse the generation observed before the scan: the scan only reads the
+		// filesystem and assigns UIDs (it never adds/removes an `.eml` file nor
+		// bumps the mailbox mod-sequence counter), so the stamp is unchanged.
+		let _ = super::index::write(&account_dir, generation, &messages);
 		Ok(Snapshot {
 			account_dir,
 			messages,
 			uid_validity,
 			uid_next: uid_counter + 1,
 			highest_modseq,
+			crypto: crypto.clone(),
+			#[cfg(test)]
+			loaded_from_index: false,
 		})
+	}
+
+	/// Whether this snapshot was built from the metadata index (fast path)
+	/// rather than the full filesystem scan. Test-only correctness signal.
+	#[cfg(test)]
+	pub(super) fn loaded_from_index(&self) -> bool {
+		self.loaded_from_index
 	}
 
 	/// The mailbox's highest mod-sequence (CONDSTORE).
@@ -280,9 +376,12 @@ impl Snapshot {
 			.map(|index| u32::try_from(index + 1).unwrap_or(u32::MAX))
 	}
 
-	/// Raw message bytes.
+	/// Raw (plaintext) message bytes, decoding the at-rest envelope when the file
+	/// is encrypted. Fails closed on a decryption error rather than returning
+	/// ciphertext.
 	pub fn read(&self, message: &MessageRef) -> std::io::Result<Vec<u8>> {
-		std::fs::read(self.account_dir.join(format!("{}.eml", message.id)))
+		let stored = std::fs::read(self.account_dir.join(format!("{}.eml", message.id)))?;
+		self.crypto.decode(&stored)
 	}
 
 	/// Replace the flags of the message at `sequence` (1-based), persisting
@@ -293,6 +392,13 @@ impl Snapshot {
 			.and_then(|s| s.checked_sub(1))
 			.filter(|index| *index < self.messages.len())
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
+		// A STORE that does not change the flag set must not touch the disk or
+		// advance the mod-sequence (RFC 7162: only an actual change bumps MODSEQ).
+		// Skipping the sidecar rewrite + two counter writes removes the
+		// write-amplification of the common "re-mark \Seen" pattern.
+		if flags_equal(&self.messages[index].flags, &flags) {
+			return Ok(&self.messages[index].flags);
+		}
 		let id = self.messages[index].id;
 		write_flags(&self.account_dir, id, &flags)?;
 		// A flag change advances the mailbox mod-sequence and stamps the message.
@@ -359,14 +465,16 @@ impl Snapshot {
 	}
 }
 
-/// Append a message to a mailbox crash-safely, with flags.
-/// Standalone because APPEND may target a mailbox that is not selected.
+/// Append a message to a mailbox crash-safely, with flags, encoding the body
+/// through `crypto` at rest. Standalone because APPEND may target a mailbox that
+/// is not selected.
 pub fn append(
 	data_dir: &Path,
 	account: &str,
 	mailbox: &str,
 	flags: &[Flag],
 	data: &[u8],
+	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
 	let account_dir = mailbox_dir(data_dir, account, mailbox)
 		.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
@@ -376,7 +484,7 @@ pub fn append(
 
 	let id = Uuid::now_v7();
 	let tmp = tmp_dir.join(format!("{id}.eml"));
-	std::fs::write(&tmp, data)?;
+	std::fs::write(&tmp, &crypto.encode(data)?)?;
 	std::fs::rename(&tmp, account_dir.join(format!("{id}.eml")))?;
 	if !flags.is_empty() {
 		write_flags(&account_dir, id, flags)?;
@@ -388,14 +496,16 @@ pub fn append(
 /// `APPENDUID` response. `None` if the mailbox can no longer be opened or the
 /// message has already vanished.
 pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Option<(u32, u32)> {
-	let snapshot = Snapshot::open(data_dir, account, mailbox).ok()?;
+	// Only UIDs are read here, never a message body, so no key is needed.
+	let snapshot = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()).ok()?;
 	let uid = snapshot.messages().find(|message| message.id == id)?.uid;
 	Some((snapshot.uid_validity(), uid))
 }
 
-/// Total bytes stored for an account: the sum of every message's size across
-/// INBOX and all folders (RFC 9208 STORAGE usage).
-pub fn account_usage(data_dir: &Path, account: &str) -> u64 {
+/// Total bytes stored for an account: the sum of every message's plaintext size
+/// across INBOX and all folders (RFC 9208 STORAGE usage). Counts the message
+/// size a client sees, so quota is unaffected by whether the store is encrypted.
+pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> u64 {
 	let mut total = 0u64;
 	for mailbox in list(data_dir, account) {
 		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
@@ -411,7 +521,7 @@ pub fn account_usage(data_dir: &Path, account: &str) -> u64 {
 				.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
-				total += meta.len();
+				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
 			}
 		}
 	}
@@ -479,6 +589,12 @@ fn write_subscriptions(data_dir: &Path, account: &str, names: &[String]) -> std:
 			s
 		}),
 	)
+}
+
+/// Whether two flag lists denote the same flag set, independent of order or
+/// duplicates. Used to detect a no-op STORE and avoid a redundant disk write.
+fn flags_equal(current: &[Flag], next: &[Flag]) -> bool {
+	current.iter().all(|flag| next.contains(flag)) && next.iter().all(|flag| current.contains(flag))
 }
 
 fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {

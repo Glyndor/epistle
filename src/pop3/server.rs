@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use crate::directory_store::DirectoryHandle;
@@ -25,12 +26,16 @@ const READ_BUFFER: usize = 4096;
 const TIMEOUT: Duration = Duration::from_secs(600);
 /// Consecutive `-ERR` responses before the connection is dropped (abuse guard).
 const MAX_ERROR_STREAK: u32 = 20;
+/// Default max concurrent connections for a POP3 listener.
+const MAX_CONNECTIONS: usize = 500;
 
 /// A TLS-only POP3 server bound to one listener.
 pub struct Server {
 	data_dir: PathBuf,
 	directory: DirectoryHandle,
 	tls: TlsAcceptor,
+	max_connections: usize,
+	crypto: crate::storage::MessageCrypto,
 }
 
 impl Server {
@@ -41,15 +46,37 @@ impl Server {
 			data_dir,
 			directory,
 			tls,
+			max_connections: MAX_CONNECTIONS,
+			crypto: crate::storage::MessageCrypto::disabled(),
 		}
 	}
 
-	/// Accept connections forever, one task per connection.
+	/// Decode stored message bodies through `crypto` when serving RETR/TOP.
+	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
+		self.crypto = crypto;
+		self
+	}
+
+	/// Cap concurrent connections for this listener (0 keeps the default).
+	pub fn with_max_connections(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Accept connections forever, one bounded task per connection.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
-			let (stream, _) = listener.accept().await?;
+			let (stream, peer) = listener.accept().await?;
+			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
+				tracing::warn!(%peer, "POP3 connection limit reached, dropping");
+				continue;
+			};
 			let server = Arc::clone(&self);
 			tokio::spawn(async move {
+				let _permit = permit;
 				if let Err(error) = server.handle(stream).await {
 					tracing::debug!(%error, "POP3 connection closed");
 				}
@@ -59,7 +86,11 @@ impl Server {
 
 	async fn handle(&self, stream: TcpStream) -> std::io::Result<()> {
 		let stream = self.tls.accept(stream).await?;
-		let backend = MailboxBackend::new(self.directory.clone(), self.data_dir.clone());
+		let backend = MailboxBackend::new_with_crypto(
+			self.directory.clone(),
+			self.data_dir.clone(),
+			self.crypto.clone(),
+		);
 		run(stream, backend).await
 	}
 }

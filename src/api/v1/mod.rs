@@ -6,6 +6,7 @@ mod mailboxes;
 mod queue;
 mod send;
 mod status;
+mod suppression;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -31,6 +32,11 @@ pub fn router() -> Router<ApiState> {
 		.route("/accounts/{name}/mailboxes", get(mailboxes::list))
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))
+		.route("/suppression", get(suppression::list))
+		.route(
+			"/suppression/{address}",
+			axum::routing::delete(suppression::remove),
+		)
 		// Explicit body ceiling consistent with the SMTP message-size limit,
 		// rather than relying on the framework default.
 		.route(

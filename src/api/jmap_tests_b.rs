@@ -410,6 +410,59 @@ async fn jmap_download_returns_raw_message() {
 }
 
 #[tokio::test]
+async fn jmap_download_decrypts_encrypted_message() {
+	// Encryption ON: the message is stored as ciphertext, but find_email_raw via
+	// the download route must return the plaintext.
+	use super::tests::request_raw;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = crate::storage::MessageCrypto::for_test(b"0123456789abcdef0123456789abcdef");
+	let raw = b"From: a@example.org\r\nSubject: dl\r\n\r\nencrypted body\r\n";
+	let id = crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], raw, &crypto)
+		.expect("append");
+	// On disk it is ciphertext, not the plaintext.
+	let stored = std::fs::read(dir.path().join(format!("accounts/alice/new/{id}.eml")))
+		.expect("read stored");
+	assert!(
+		stored.starts_with(b"EPENC1\0"),
+		"stored message is encrypted"
+	);
+
+	let app = router(test_state(dir.path(), 0).with_crypto(crypto));
+	let (status, body) = request_raw(
+		&app,
+		&format!("/jmap/download/alice/{id}/msg.eml"),
+		Some(TOKEN),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, raw, "download must return decrypted plaintext");
+}
+
+#[tokio::test]
+async fn jmap_email_get_returns_decrypted_body() {
+	// Email/get over an encrypted store must surface the plaintext body.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let crypto = crate::storage::MessageCrypto::for_test(b"0123456789abcdef0123456789abcdef");
+	let raw = b"From: a@example.org\r\nSubject: hi\r\n\r\nplaintext via jmap\r\n";
+	let id = crate::imap::mailbox::append(dir.path(), "alice", "INBOX", &[], raw, &crypto)
+		.expect("append");
+	let app = router(test_state(dir.path(), 0).with_crypto(crypto));
+
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/get",
+			{ "accountId": "alice", "ids": [id.to_string()],
+			  "properties": ["preview"] }, "c1"]],
+	});
+	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let preview = body["methodResponses"][0][1]["list"][0]["preview"]
+		.as_str()
+		.unwrap_or_default();
+	assert!(preview.contains("plaintext via jmap"), "{body}");
+}
+
+#[tokio::test]
 async fn jmap_upload_then_download_round_trips() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
@@ -465,4 +518,24 @@ async fn jmap_upload_over_max_size_is_rejected() {
 	assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 	assert_eq!(body["type"], "urn:ietf:params:jmap:error:limit");
 	assert_eq!(body["limit"], "maxSizeUpload");
+}
+
+#[tokio::test]
+async fn jmap_upload_within_quota_succeeds_over_quota_is_rejected() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// A tiny per-account quota makes the over-quota path testable.
+	let app = router(test_state(dir.path(), 0).with_quota(64));
+
+	// A blob within the quota is stored and returns 200.
+	let (status, body) =
+		post_raw_ct(&app, "/jmap/upload/alice", Some(TOKEN), None, &[0u8; 32]).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	// A second blob would push usage (32 already stored) past the 64-byte quota
+	// and is refused with the JMAP storage limit error, fail-closed.
+	let (status, body) =
+		post_raw_ct(&app, "/jmap/upload/alice", Some(TOKEN), None, &[0u8; 64]).await;
+	assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE, "{body}");
+	assert_eq!(body["type"], "urn:ietf:params:jmap:error:limit");
+	assert_eq!(body["limit"], "storage");
 }
