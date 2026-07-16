@@ -10,8 +10,13 @@ permissions:
 
 jobs:
   rust:
-    uses: Glyndor/.github/.github/workflows/rust-ci.yml@80523422631014f591b07bc24c507145faabb271 # v1.2.0
+    uses: Glyndor/.github/.github/workflows/rust-ci.yml@505d78df893bfc2f73261ff285529e6afd46f5ac # v1.9.1
     with:
+      # Pin the toolchain so CI no longer floats to whatever `stable` is that
+      # day — an unpinned toolchain turned every open PR red when Rust 1.97
+      # widened a clippy lint. Held at 1.96 for now; adopting 1.97 (the org
+      # default) is a deliberate follow-up that fixes its new lints at once.
+      toolchain: "1.96"
       coverage-threshold: 90
       # The reputation and db modules are exercised by the Database workflow
       # (Postgres service), not the no-DB coverage job; exclude them here.
