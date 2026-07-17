@@ -165,7 +165,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 10.2.x No malicious/unexpected code paths | Met | Apache-2.0 source, reviewed; no obfuscation, no phone-home/telemetry (org policy). |
+| 10.2.x No malicious/unexpected code paths | Met | MIT source, reviewed; no obfuscation, no phone-home/telemetry (org policy). |
 | 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the org apt archive (org `GLYNDOR_RELEASE_ED25519_KEY`); the server does not self-update, so it carries no in-process artifact-verification path. |
 | 10.3.2 No remote/dynamic code loading | Met | No `eval`, no plugin download-and-exec; dependencies are pinned and audited. |
 | (mail-specific) Inbound malware scanning | Met | Antivirus (ClamAV) + Bayesian / DNSBL / reputation filtering at delivery (`src/antispam/`, `src/dnsbl/`). |
