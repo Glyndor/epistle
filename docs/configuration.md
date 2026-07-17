@@ -111,6 +111,7 @@ Management API (consumed by `epistle-panel`). Closed by default.
 | Key | Meaning |
 |---|---|
 | `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
+| `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
 
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes).

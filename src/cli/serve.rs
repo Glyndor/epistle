@@ -289,6 +289,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
 				.with_quota(config.quota_bytes.unwrap_or(0))
+				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone());
 				// Built-in OAuth authorization server, when a signing key is set.
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
