@@ -26,6 +26,7 @@ pub mod managesieve;
 pub mod metrics;
 pub mod mtasts;
 pub mod oauth;
+pub mod password;
 pub mod pop3;
 pub mod privdrop;
 pub mod queue;

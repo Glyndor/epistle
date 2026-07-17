@@ -43,9 +43,8 @@ pub(super) fn add(
 		Ok(password) => password,
 		Err(code) => return code,
 	};
-	let password_chars = password.chars().count();
-	if !(12..=64).contains(&password_chars) {
-		eprintln!("error: password must be between 12 and 64 characters");
+	if let Err(rejection) = crate::password::validate(&password) {
+		eprintln!("error: {}", rejection.message());
 		return ExitCode::FAILURE;
 	}
 	let store = match AccountStore::open(
