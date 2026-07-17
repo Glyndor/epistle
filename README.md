@@ -176,4 +176,4 @@ Remaining work — an LDAP directory backend, IMAP `COMPRESS`, and CalDAV/CardDA
 
 ## 📄 License
 
-[Apache-2.0](LICENSE)
+[MIT](LICENSE)

@@ -2,7 +2,7 @@
 name = "epistle"
 version = "0.3.4"
 edition = "2024"
-license = "Apache-2.0"
+license = "MIT"
 description = "Self-hosted, headless mail server: SMTP, IMAP and modern email security through an API and CLI."
 repository = "https://github.com/Glyndor/epistle"
 publish = false
