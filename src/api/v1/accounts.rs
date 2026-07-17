@@ -31,22 +31,12 @@ pub struct Created {
 	created: String,
 }
 
-/// Minimum password length accepted by the API.
-const MIN_PASSWORD: usize = 12;
-/// Maximum password length: a DoS ceiling on the Argon2 input, generous enough
-/// that no real passphrase or password-manager output is rejected.
-const MAX_PASSWORD: usize = 64;
-
-/// Enforce the global password length policy (12–64 characters, counted as
-/// Unicode scalar values so multibyte input is never silently truncated).
+/// Enforce the global password policy (length, printable-ASCII character set,
+/// and rejection of known-breached passwords) via the shared `password` module,
+/// mapping any rejection to a `400` with a non-revealing message.
 fn check_password(password: &str) -> Result<(), ApiError> {
-	let chars = password.chars().count();
-	if !(MIN_PASSWORD..=MAX_PASSWORD).contains(&chars) {
-		return Err(ApiError::invalid_input(
-			"Password must be between 12 and 64 characters.",
-		));
-	}
-	Ok(())
+	crate::password::validate(password)
+		.map_err(|rejection| ApiError::invalid_input(rejection.message()))
 }
 
 pub async fn create(
