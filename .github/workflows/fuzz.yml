@@ -39,7 +39,7 @@ jobs:
           key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.toml') }}
 
       - name: Install cargo-fuzz
-        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked --version "^0.13"
 
       - name: Fuzz ${{ matrix.target }}
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60 -timeout=10

@@ -14,9 +14,9 @@ jobs:
     with:
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
-      # widened a clippy lint. Held at 1.96 for now; adopting 1.97 (the org
-      # default) is a deliberate follow-up that fixes its new lints at once.
-      toolchain: "1.96"
+      # widened a clippy lint. Now on 1.97 (the org default), with that lint
+      # fixed; bump deliberately through this input, never by tracking stable.
+      toolchain: "1.97"
       coverage-threshold: 90
       # The reputation and db modules are exercised by the Database workflow
       # (Postgres service), not the no-DB coverage job; exclude them here.
