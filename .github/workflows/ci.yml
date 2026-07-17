@@ -18,6 +18,16 @@ jobs:
       # default) is a deliberate follow-up that fixes its new lints at once.
       toolchain: "1.96"
       coverage-threshold: 90
-      # The reputation and db modules are exercised by the Database workflow
-      # (Postgres service), not the no-DB coverage job; exclude them here.
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/(transport|renew)|pop3/(backend|server)|managesieve/server|directory_store/(sql|ldap))\\.rs"
+      # Files the no-DB coverage job cannot fairly measure — each needs a live
+      # service or is thin connection-accept glue, so they are excluded here
+      # rather than padded with hollow tests:
+      #   db/mod, antispam/{reputation,corpus,hook}, directory_store/sql — need
+      #     PostgreSQL; the Database workflow exercises them (without measuring).
+      #   directory_store/ldap — needs an LDAP server (tests/ldap.rs, gated on
+      #     INTEROP_LDAP_URL).
+      #   acme/renew — the certificate-renewal path needs a live ACME directory.
+      #   pop3/server, managesieve/server — connection-accept glue, exercised
+      #     end-to-end rather than by unit tests.
+      # acme/transport and pop3/backend are well covered and deliberately NOT
+      # excluded (they count toward the gate).
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap))\\.rs"
