@@ -26,6 +26,8 @@ struct Inner {
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<AuthLimiter>,
+	/// Account names allowed to authenticate to the admin panel.
+	admins: Vec<String>,
 	/// Per-account storage quota in bytes; 0 means unlimited.
 	quota_limit: std::sync::atomic::AtomicU64,
 	/// Labeled bearer API keys, loaded from `api_keys.toml`; any non-expired,
@@ -113,6 +115,7 @@ impl ApiState {
 				store,
 				spool,
 				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
+				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
@@ -147,6 +150,20 @@ impl ApiState {
 			.handle()
 			.current()
 			.authenticate(login, password)
+	}
+
+	/// Set the account names allowed to authenticate to the admin panel. Must be
+	/// set before the state is shared (it rebuilds the `Arc` inner).
+	pub fn with_admins(mut self, admins: Vec<String>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.admins = admins;
+		}
+		self
+	}
+
+	/// Whether a resolved account name carries the admin-panel privilege.
+	pub fn is_admin(&self, name: &str) -> bool {
+		self.inner.admins.iter().any(|admin| admin == name)
 	}
 
 	/// Replace the at-rest crypto used for stored messages and blobs. Must be set
