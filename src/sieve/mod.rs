@@ -7,7 +7,7 @@ mod date;
 mod eval;
 pub mod interp;
 pub mod lexer;
-mod message;
+pub mod message;
 pub mod parser;
 pub mod vacation;
 mod vars;
