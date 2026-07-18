@@ -137,7 +137,7 @@ impl PolicyFetcher for SystemFetcher {
 	fn fetch(&self, domain: &str) -> FetchFuture<'_> {
 		let url = format!("https://mta-sts.{domain}/.well-known/mta-sts.txt");
 		Box::pin(async move {
-			let response = self
+			let mut response = self
 				.client
 				.get(&url)
 				.send()
@@ -149,15 +149,22 @@ impl PolicyFetcher for SystemFetcher {
 					response.status()
 				)));
 			}
-			// Policies are tiny; cap the body defensively.
-			let body = response
-				.text()
+			// Policies are tiny; read incrementally with a hard cap so a hostile
+			// recipient domain cannot make us buffer a huge body before the
+			// size check (the old `.text()` materialised it all first).
+			const MAX_BODY: usize = 64 * 1024;
+			let mut body = Vec::new();
+			while let Some(chunk) = response
+				.chunk()
 				.await
-				.map_err(|error| PolicyError::Temporary(error.to_string()))?;
-			if body.len() > 64 * 1024 {
-				return Err(PolicyError::Malformed("oversized policy".into()));
+				.map_err(|error| PolicyError::Temporary(error.to_string()))?
+			{
+				if body.len() + chunk.len() > MAX_BODY {
+					return Err(PolicyError::Malformed("oversized policy".into()));
+				}
+				body.extend_from_slice(&chunk);
 			}
-			Ok(body)
+			String::from_utf8(body).map_err(|error| PolicyError::Malformed(error.to_string()))
 		})
 	}
 }

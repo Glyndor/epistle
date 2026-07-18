@@ -116,14 +116,28 @@ fn require_https(url: &str) -> Result<(), OidcError> {
 }
 
 async fn get_text(client: &reqwest::Client, url: &str) -> Result<String, OidcError> {
-	client
+	// Discovery and JWKS documents are small; read the body in chunks with a
+	// hard cap so a hostile or compromised IdP cannot exhaust memory with a
+	// huge (or endless) response. Paired with the client's no-redirect policy,
+	// this closes the discovery-fetch SSRF/DoS surface.
+	const MAX_BODY: usize = 256 * 1024;
+	let mut response = client
 		.get(url)
 		.send()
 		.await
-		.map_err(|e| OidcError::Network(e.to_string()))?
-		.text()
+		.map_err(|e| OidcError::Network(e.to_string()))?;
+	let mut body = Vec::new();
+	while let Some(chunk) = response
+		.chunk()
 		.await
-		.map_err(|e| OidcError::Network(e.to_string()))
+		.map_err(|e| OidcError::Network(e.to_string()))?
+	{
+		if body.len() + chunk.len() > MAX_BODY {
+			return Err(OidcError::Network("discovery response too large".into()));
+		}
+		body.extend_from_slice(&chunk);
+	}
+	String::from_utf8(body).map_err(|e| OidcError::Network(e.to_string()))
 }
 
 /// Parse a JWKS JSON document into the supported signing keys. RSA (`kty:RSA`,

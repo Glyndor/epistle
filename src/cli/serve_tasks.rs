@@ -112,7 +112,14 @@ pub(super) async fn build_oauth_verifier(
 		.map_err(|e| std::io::Error::other(format!("oauth config: {e:?}")))?,
 		(None, Some(discovery_url)) => {
 			let default_alg = parse_oauth_alg(&oauth.algorithm)?;
-			let client = reqwest::Client::new();
+			// No redirects (a compromised IdP must not 302 the fetch to an
+			// internal address) and a hard timeout (never hang startup on a
+			// stalled IdP). The body itself is size-bounded in `get_text`.
+			let client = reqwest::Client::builder()
+				.timeout(std::time::Duration::from_secs(30))
+				.redirect(reqwest::redirect::Policy::none())
+				.build()
+				.map_err(|e| std::io::Error::other(format!("oauth http client: {e}")))?;
 			let keys = crate::oauth::oidc::fetch_keys(&client, discovery_url, default_alg)
 				.await
 				.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
