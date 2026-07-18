@@ -96,3 +96,24 @@ fn rejects_zero_refresh() {
 	ldap.refresh_secs = 0;
 	assert!(ldap.validate().is_err());
 }
+
+#[test]
+fn debug_redacts_the_bind_password() {
+	let ldap: Ldap = toml::from_str(
+		r#"url = "ldaps://ldap.example.org"
+bind_dn = "cn=svc,dc=example,dc=org"
+bind_password = "super-secret-pw"
+base_dn = "ou=people,dc=example,dc=org"
+user_filter = "(uid=%s)""#,
+	)
+	.expect("parse");
+	let rendered = format!("{ldap:?}");
+	assert!(
+		!rendered.contains("super-secret-pw"),
+		"bind_password leaked in Debug: {rendered}"
+	);
+	assert!(
+		rendered.contains("***"),
+		"expected a redaction marker: {rendered}"
+	);
+}
