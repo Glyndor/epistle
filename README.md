@@ -116,7 +116,7 @@ shipped binary as it runs in production:
 
 - **Full server, not a harness** — `epistle serve` is built `--release` and
   launched under **systemd** (`systemd-run`), exactly as an operator would run
-  it from [`contrib/epistle.service`](contrib/epistle.service).
+  it from [`docs/epistle.service`](docs/epistle.service).
 - **Real ports and TLS** — it binds a `submissions` listener (implicit TLS) and
   an `imaps` listener (implicit TLS) on real TCP ports with a self-signed
   certificate.
