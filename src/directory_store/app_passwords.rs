@@ -191,9 +191,7 @@ impl AppPasswordStore {
 		};
 		let text = toml::to_string_pretty(&file)
 			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		let tmp = self.path.with_extension("toml.tmp");
-		std::fs::write(&tmp, text)?;
-		std::fs::rename(&tmp, &self.path)?;
+		crate::storage::write_secret(&self.path, text.as_bytes())?;
 		Ok(())
 	}
 }

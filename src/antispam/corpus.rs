@@ -205,12 +205,7 @@ fn load_or_create_key(data_dir: &Path) -> std::io::Result<[u8; 32]> {
 		.fill(&mut key)
 		.map_err(|_| std::io::Error::other("rng failure"))?;
 	std::fs::create_dir_all(data_dir)?;
-	std::fs::write(&path, key)?;
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt;
-		std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-	}
+	crate::storage::write_secret(&path, &key)?;
 	Ok(key)
 }
 

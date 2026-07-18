@@ -32,8 +32,13 @@ Restart=on-failure
 RestartSec=5s
 
 # Run as a transient, unprivileged, system-managed user with its own state dir.
+# UMask + StateDirectoryMode keep the mailbox and the credential/TOTP stores
+# owner-only (0700) — the server writes secrets 0600, and nothing above it
+# should be group- or world-readable.
 DynamicUser=yes
+UMask=0077
 StateDirectory=glyndor/epistle
+StateDirectoryMode=0700
 ReadWritePaths=/var/lib/glyndor/epistle
 
 # Only the two capabilities needed to bind privileged ports; nothing else.
