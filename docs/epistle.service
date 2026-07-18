@@ -1,15 +1,23 @@
 # Sample systemd unit for the epistle mail server.
 #
 # Install:
-#   install -Dm644 contrib/epistle.service /etc/systemd/system/epistle.service
+#   install -Dm644 docs/epistle.service /etc/systemd/system/epistle.service
 #   install -Dm755 target/release/epistle /usr/local/bin/epistle
-#   install -Dm600 epistle.toml            /etc/epistle/epistle.toml   # owner-only
+#   install -Dm600 epistle.toml            /etc/glyndor/epistle/epistle.toml   # owner-only
 #   systemctl daemon-reload && systemctl enable --now epistle
 #
 # The unit runs epistle as a transient unprivileged user (DynamicUser) with the
 # filesystem locked down. CAP_NET_BIND_SERVICE lets it bind the low mail ports
 # (25/465/587/993/995) without root; drop the capability lines if you only use
 # high ports. ReadWritePaths must match the config's data_dir.
+#
+# DynamicUser runs the server as a transient, system-managed account (named
+# after the unit) that exists only while the service runs — there is no
+# persistent account to create, trace or clean up. The Glyndor prefix therefore
+# lives on the durable footprint instead: /etc/glyndor/epistle and the
+# StateDirectory under /var/lib/glyndor/epistle. To run under a persistent,
+# prefixed `glyndor-epistle` account instead, drop DynamicUser here and use the
+# config's [privileges] section (see the README).
 
 [Unit]
 Description=epistle mail server (SMTP, IMAP, email security)
@@ -19,14 +27,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/epistle serve --config /etc/epistle/epistle.toml
+ExecStart=/usr/local/bin/epistle serve --config /etc/glyndor/epistle/epistle.toml
 Restart=on-failure
 RestartSec=5s
 
 # Run as a transient, unprivileged, system-managed user with its own state dir.
 DynamicUser=yes
-StateDirectory=epistle
-ReadWritePaths=/var/lib/epistle
+StateDirectory=glyndor/epistle
+ReadWritePaths=/var/lib/glyndor/epistle
 
 # Only the two capabilities needed to bind privileged ports; nothing else.
 AmbientCapabilities=CAP_NET_BIND_SERVICE

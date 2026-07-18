@@ -11,7 +11,7 @@ on:
     paths:
       - "src/**"
       - "tests/e2e.rs"
-      - "contrib/epistle.service"
+      - "docs/epistle.service"
       - ".github/workflows/e2e.yml"
       - "Cargo.toml"
       - "Cargo.lock"

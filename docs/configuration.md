@@ -4,15 +4,15 @@
 every command with `--config`:
 
 ```sh
-epistle serve --config /etc/epistle/mail.toml
-epistle config-check --config /etc/epistle/mail.toml   # validate without starting
+epistle serve --config /etc/glyndor/epistle/mail.toml
+epistle config-check --config /etc/glyndor/epistle/mail.toml   # validate without starting
 ```
 
 The file must be owner-only — the server refuses to load a file that is group-
 or world-readable:
 
 ```sh
-chmod 600 /etc/epistle/mail.toml
+chmod 600 /etc/glyndor/epistle/mail.toml
 ```
 
 Validation is **fail-closed**: an unknown key, an invalid value, insecure
@@ -239,19 +239,19 @@ This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIR
 
 ```toml
 hostname = "mail.example.org"
-data_dir = "/var/lib/epistle"
+data_dir = "/var/lib/glyndor/epistle"
 domains  = ["example.org"]
 
 queue_give_up_secs = 432000   # 5 days (the default)
 greylist_delay_secs = 60
 
 [tls]
-cert_file = "/etc/epistle/tls/fullchain.pem"
-key_file  = "/etc/epistle/tls/privkey.pem"
+cert_file = "/etc/glyndor/epistle/tls/fullchain.pem"
+key_file  = "/etc/glyndor/epistle/tls/privkey.pem"
 
 [dkim]
 selector = "ed1"
-key_file = "/etc/epistle/dkim/ed1.pem"
+key_file = "/etc/glyndor/epistle/dkim/ed1.pem"
 
 [privileges]
 user  = "glyndor-epistle"

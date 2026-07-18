@@ -51,7 +51,7 @@ fail) is recommended once you are sure every sender is listed.
 Sign outbound mail. Generate the key and record:
 
 ```sh
-epistle dkim-keygen --out /etc/epistle/dkim/ed1.pem
+epistle dkim-keygen --out /etc/glyndor/epistle/dkim/ed1.pem
 ```
 
 Publish the printed TXT at `ed1._domainkey.example.org`, and configure
