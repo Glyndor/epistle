@@ -71,9 +71,27 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, Vec<u8>)>> {
 	Ok(out)
 }
 
-/// Run `pg_dump <url>` and return its SQL output.
+/// Run `pg_dump` against `url` and return its SQL output.
+///
+/// The connection password must never reach argv — `/proc/<pid>/cmdline` is
+/// world-readable while pg_dump runs. Strip it from the URL and pass it through
+/// `PGPASSWORD` in the child's environment instead.
 fn pg_dump(url: &str) -> std::io::Result<Vec<u8>> {
-	let output = std::process::Command::new("pg_dump").arg(url).output()?;
+	let mut command = std::process::Command::new("pg_dump");
+	if let Ok(mut parsed) = url::Url::parse(url) {
+		if let Some(password) = parsed.password().map(|encoded| {
+			percent_encoding::percent_decode_str(encoded)
+				.decode_utf8_lossy()
+				.into_owned()
+		}) {
+			let _ = parsed.set_password(None);
+			command.env("PGPASSWORD", password);
+		}
+		command.arg(parsed.as_str());
+	} else {
+		command.arg(url);
+	}
+	let output = command.output()?;
 	if !output.status.success() {
 		return Err(std::io::Error::other(
 			String::from_utf8_lossy(&output.stderr).trim().to_string(),

@@ -169,9 +169,7 @@ impl ApiKeyStore {
 		};
 		let text = toml::to_string_pretty(&file)
 			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-		let tmp = self.path.with_extension("toml.tmp");
-		std::fs::write(&tmp, text)?;
-		std::fs::rename(&tmp, &self.path)
+		crate::storage::write_secret(&self.path, text.as_bytes())
 	}
 }
 
