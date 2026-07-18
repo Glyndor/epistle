@@ -24,7 +24,7 @@ const fn default_refresh_secs() -> u64 {
 }
 
 /// LDAP/AD directory backend settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ldap {
 	/// Server URL, `ldap://host:port` (plaintext or StartTLS) or `ldaps://...`
@@ -86,6 +86,22 @@ impl Ldap {
 			return Err("ldap.refresh_secs must be greater than zero".to_string());
 		}
 		Ok(())
+	}
+}
+
+impl std::fmt::Debug for Ldap {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Ldap")
+			.field("url", &self.url)
+			.field("bind_dn", &self.bind_dn)
+			.field("bind_password", &"***")
+			.field("base_dn", &self.base_dn)
+			.field("user_filter", &self.user_filter)
+			.field("account_attribute", &self.account_attribute)
+			.field("mail_attribute", &self.mail_attribute)
+			.field("refresh_secs", &self.refresh_secs)
+			.field("tls", &self.tls)
+			.finish()
 	}
 }
 

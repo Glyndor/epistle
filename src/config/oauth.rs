@@ -6,7 +6,7 @@ use serde::Deserialize;
 /// `issuer` using `algorithm`, with the signing key taken from exactly one
 /// source: a static base64 `public_key`, or keys fetched at startup from the
 /// OIDC `discovery_url` (`/.well-known/openid-configuration`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Oauth {
 	/// Expected `iss` claim.
@@ -91,6 +91,19 @@ impl Oauth {
 			return Err(OauthConfigError::SigningKeyWithoutPublicKey);
 		}
 		Ok(())
+	}
+}
+
+impl std::fmt::Debug for Oauth {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Oauth")
+			.field("issuer", &self.issuer)
+			.field("audience", &self.audience)
+			.field("algorithm", &self.algorithm)
+			.field("public_key", &self.public_key)
+			.field("discovery_url", &self.discovery_url)
+			.field("signing_key", &self.signing_key.as_ref().map(|_| "***"))
+			.finish()
 	}
 }
 

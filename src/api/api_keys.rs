@@ -65,7 +65,10 @@ pub fn sha256_token_matches(stored: &str, token: &str) -> bool {
 			write!(s, "{b:02x}").ok();
 			s
 		});
-	expected_hex.eq_ignore_ascii_case(&actual_hex)
+	crate::api::oauth::constant_time_eq(
+		expected_hex.to_ascii_lowercase().as_bytes(),
+		actual_hex.as_bytes(),
+	)
 }
 
 /// The `sha256:<hex>` digest of `token`, for storing a new key.

@@ -292,7 +292,7 @@ impl ApiState {
 					write!(s, "{b:02x}").ok();
 					s
 				});
-			expected_hex == actual_hex
+			crate::api::oauth::constant_time_eq(expected_hex.as_bytes(), actual_hex.as_bytes())
 		} else {
 			// Backward compat: argon2id PHC (legacy; generate new hash with `mail token-hash`).
 			crate::smtp::auth::verify_password(stored, token)

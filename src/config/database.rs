@@ -9,7 +9,7 @@ const fn default_max_connections() -> u32 {
 
 /// PostgreSQL connection settings. Present only when antispam features that
 /// need persistence are in use.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
 	/// libpq-style connection URL, e.g. `postgres://user:pass@host/db`.
@@ -23,6 +23,17 @@ pub struct Database {
 	/// take precedence over SQL-sourced accounts on conflict.
 	#[serde(default)]
 	pub directory: bool,
+}
+
+impl std::fmt::Debug for Database {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		// The URL embeds the connection password; redact it whole.
+		f.debug_struct("Database")
+			.field("url", &"***")
+			.field("max_connections", &self.max_connections)
+			.field("directory", &self.directory)
+			.finish()
+	}
 }
 
 #[cfg(test)]
