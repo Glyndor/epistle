@@ -5,6 +5,27 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    labels: ["dependencies", "type:ci"]
+    labels: ["type:deps", "type:ci"]
     open-pull-requests-limit: 10
+    target-branch: "develop"
+
+  # The crate itself. Without this entry nothing watches the dependencies a
+  # mail server is actually built out of — TLS, DNS, hashing, the HTTP stack —
+  # which is exactly where an advisory hurts most.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    labels: ["type:deps"]
+    open-pull-requests-limit: 10
+    target-branch: "develop"
+
+  # The fuzz targets are their own crate, outside the root manifest, so the
+  # entry above does not reach them.
+  - package-ecosystem: "cargo"
+    directory: "/fuzz"
+    schedule:
+      interval: "daily"
+    labels: ["type:deps"]
+    open-pull-requests-limit: 5
     target-branch: "develop"
