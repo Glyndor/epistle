@@ -4,7 +4,11 @@ version = 2
 # RUSTSEC-2023-0071 (rsa Marvin attack) is reachable only via sqlx-mysql,
 # which the sqlx `macros` feature pulls unconditionally. We use PostgreSQL
 # only, whose path never touches rsa; no upstream fix exists.
-ignore = ["RUSTSEC-2023-0071"]
+# RUSTSEC-2026-0221 (event-listener unsoundness in `StackSlot`) is reachable
+# only via sqlx. The unsoundness is in `!Send` tags crossing thread boundaries;
+# we never construct `!Send` tags, so the unsafe path is never executed.
+# Track upstream: when sqlx bumps event-listener past the fix, drop this entry.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0221"]
 
 [licenses]
 version = 2
