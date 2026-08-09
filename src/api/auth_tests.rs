@@ -1,4 +1,7 @@
 //! Tests for `/api/v1/auth/verify` — panel credential verification.
+// codeql[rust/cleartext-storage-of-passwords] False positive: every literal password in this
+// module is a test fixture (intentionally trivial strings, never real credentials);
+// `create_account` and the request bodies only forward them as input to the system-under-test.
 
 use axum::http::StatusCode;
 use serde_json::json;

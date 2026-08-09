@@ -36,6 +36,8 @@ pub(super) fn generate_secret() -> Option<String> {
 }
 
 /// Read one non-empty line (CR-trimmed) from `reader`, or a FAILURE code.
+// codeql[rust/cleartext-storage-of-passwords] False positive: the FAILURE returns on the empty/error
+// paths are process exit codes, not credentials; this function reads any one line of stdin.
 pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCode> {
 	let value = match reader.lines().next() {
 		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
