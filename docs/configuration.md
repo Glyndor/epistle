@@ -189,6 +189,62 @@ OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HT
 | `endpoint` | OTLP/HTTP endpoint of the collector (e.g. `http://localhost:4318`). |
 | `service_name` | `service.name` resource attribute (default `epistle`). |
 
+### `[dns]`
+DNS provider for record automation (DKIM rotation, MTA-STS, TLS-RPT,
+TLSA-on-cert-rotate, …). Records published through a provider are
+**re-published on every change** — when this section is configured, epistle
+stops asking the operator to add records by hand. Absent or unmatched
+`provider` → manual mode (records printed for the operator to add).
+
+| `provider` value | Notes |
+|---|---|
+| `cloudflare` | API token; bearer auth; supports TLSA via structured data. |
+| `desec` | deSEC API token; rrset-style bulk PUT; supports TLSA. |
+| `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
+| `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
+| `manual` | Always available; no credentials. |
+
+Common keys (every provider):
+
+| Key | Meaning |
+|---|---|
+| `provider` | One of `cloudflare`, `desec`, `namecheap`, `route53`, `manual`. |
+| `zone` | The DNS zone the token is scoped to (least privilege). |
+| `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
+| `token_env` | Name of an env var holding the API token. |
+| `token_file` | Path to a `0600` file holding the API token. |
+
+#### `[dns]` — Namecheap specifics
+
+```toml
+[dns]
+provider = "namecheap"
+zone = "example.org"
+token = "your_username:your_api_key"      # or token_file / token_env
+```
+
+- The `token` carries **two** values separated by `:` — Namecheap's API
+  requires `ApiUser`, `ApiKey`, and `UserName` on every call (the username
+  doubles as both `ApiUser` and `UserName`). A missing colon, empty
+  username, or empty key disables automation (fail closed).
+- **API URL:** production is `https://api.namecheap.com/xml.response`. The
+  provider's `with_api_url` constructor swaps to
+  `https://api.sandbox.namecheap.com/xml.response` for sandbox credentials;
+  no config knob for it yet.
+- **IPv4 whitelist is mandatory.** Namecheap rejects API calls from any IP
+  not on the account's whitelist at
+  <https://www.namecheap.com/support/api/methods/>. The server's egress IP
+  must be added there or every call returns an auth-flavoured error.
+- **TLSA is not supported** by Namecheap's UI or API. DANE records must be
+  published at a different DNS host (or the zone must be split between
+  providers) — epistle will return `provider does not support writes` for
+  TLSA and skip publishing it.
+- **`setHosts` is destructive.** It replaces the entire record set at the
+  zone. epistle's upsert/delete is a read-modify-write (`getHosts` → mutate
+  → `setHosts`), so if an operator also edits the zone by hand between
+  those calls their changes are silently dropped. Pair with periodic drift
+  checks (`epistle dns-check`) for zones that are not fully epistle-owned.
+
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 
