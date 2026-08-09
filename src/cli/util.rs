@@ -57,10 +57,8 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCod
 
 /// The standard FAILURE exit code. Centralised so the CodeQL analyzer sees
 /// the literal in exactly one place, with the suppression colocated.
-// codeql[rust/cleartext-storage-of-passwords] False positive: this is a
-// process exit code (1), not a credential. The single source lives here on
-// purpose so the suppression is colocated with the literal.
 fn fail() -> ExitCode {
+	// codeql[rust/cleartext-storage-of-passwords] false positive: process exit code (1), not a credential
 	ExitCode::FAILURE
 }
 
