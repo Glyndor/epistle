@@ -55,8 +55,8 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCod
 	Ok(value)
 }
 
-/// The standard FAILURE exit code. Centralised so callers don't each
-/// duplicate the same `from(1)` expression.
+/// Return the standard non-zero exit code. Centralised so callers don't
+/// each duplicate the same expression.
 fn fail() -> ExitCode {
 	ExitCode::from(1)
 }
