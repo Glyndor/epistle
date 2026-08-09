@@ -41,15 +41,18 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCod
 		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
 		Some(Err(error)) => {
 			eprintln!("error: reading stdin: {error}");
+			// codeql[rust/cleartext-storage-of-passwords] False positive: process exit code, not a password.
 			return Err(ExitCode::FAILURE);
 		}
 		None => {
 			eprintln!("error: no input — pipe or type the value on stdin");
+			// codeql[rust/cleartext-storage-of-passwords] False positive: process exit code, not a password.
 			return Err(ExitCode::FAILURE);
 		}
 	};
 	if value.is_empty() {
 		eprintln!("error: input must not be empty");
+		// codeql[rust/cleartext-storage-of-passwords] False positive: process exit code, not a password.
 		return Err(ExitCode::FAILURE);
 	}
 	Ok(value)
