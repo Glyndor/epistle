@@ -1,7 +1,4 @@
 //! Tests for `/api/v1/auth/verify` — panel credential verification.
-// codeql[rust/cleartext-storage-of-passwords] False positive: every literal password in this
-// module is a test fixture (intentionally trivial strings, never real credentials);
-// `create_account` and the request bodies only forward them as input to the system-under-test.
 
 use axum::http::StatusCode;
 use serde_json::json;
@@ -29,6 +26,7 @@ async fn create_account(app: &axum::Router, name: &str, password: &str) {
 async fn verify_flags_a_valid_admin() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0).with_admins(vec!["ops".to_string()]));
+	// codeql[rust/cleartext-storage-of-passwords] False positive: literal test fixture password.
 	create_account(&app, "ops", "a-long-password").await;
 
 	let (status, body) = request_with_body(
@@ -49,6 +47,7 @@ async fn verify_accepts_a_valid_non_admin_without_admin() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	// No admins configured: a valid account is a user, never an admin.
 	let app = router(test_state(dir.path(), 0));
+	// codeql[rust/cleartext-storage-of-passwords] False positive: literal test fixture password.
 	create_account(&app, "user", "a-long-password").await;
 
 	let (_, body) = request_with_body(
@@ -67,6 +66,7 @@ async fn verify_accepts_a_valid_non_admin_without_admin() {
 async fn verify_rejects_wrong_password_and_unknown_account_identically() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0).with_admins(vec!["ops".to_string()]));
+	// codeql[rust/cleartext-storage-of-passwords] False positive: literal test fixture password.
 	create_account(&app, "ops", "a-long-password").await;
 
 	// Wrong password for a real (admin) account.
