@@ -41,21 +41,27 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCod
 		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
 		Some(Err(error)) => {
 			eprintln!("error: reading stdin: {error}");
-			// codeql[rust/cleartext-storage-of-passwords] False positive: process exit code, not a password.
-			return Err(ExitCode::FAILURE);
+			return Err(fail());
 		}
 		None => {
 			eprintln!("error: no input — pipe or type the value on stdin");
-			// codeql[rust/cleartext-storage-of-passwords] False positive: process exit code, not a password.
-			return Err(ExitCode::FAILURE);
+			return Err(fail());
 		}
 	};
 	if value.is_empty() {
 		eprintln!("error: input must not be empty");
-		// codeql[rust/cleartext-storage-of-passwords] False positive: process exit code, not a password.
-		return Err(ExitCode::FAILURE);
+		return Err(fail());
 	}
 	Ok(value)
+}
+
+/// The standard FAILURE exit code. Centralised so the CodeQL analyzer sees
+/// the literal in exactly one place, with the suppression colocated.
+// codeql[rust/cleartext-storage-of-passwords] False positive: this is a
+// process exit code (1), not a credential. The single source lives here on
+// purpose so the suppression is colocated with the literal.
+fn fail() -> ExitCode {
+	ExitCode::FAILURE
 }
 
 pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
