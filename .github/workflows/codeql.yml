@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   analyze:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
