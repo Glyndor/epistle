@@ -1,4 +1,3 @@
 name: epistle
 queries:
-  - exclude:
-      id: rust/cleartext-storage-of-passwords
+  - exclude: rust/cleartext-storage-of-passwords
