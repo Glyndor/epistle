@@ -13,6 +13,64 @@ use crate::config::Account;
 use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
 
+/// Atomic write of a secrets-bearing file with owner-only mode (0o600).
+///
+/// Creates a sibling temp file with `O_CREAT|O_EXCL|0600`, writes, then renames
+/// onto the target. On non-Unix targets the mode bits are best-effort omitted
+/// so cross-platform builds still compile. A corrective chmod runs after the
+/// rename so legacy files persisted before this fix are tightened too;
+/// failures are logged and tolerated (we never block startup on a chmod).
+fn write_secret_file(path: &Path, contents: &str) -> std::io::Result<()> {
+	#[cfg(unix)]
+	{
+		use std::io::Write;
+		use std::os::unix::fs::OpenOptionsExt;
+		let tmp = path.with_extension("toml.tmp");
+		// Drop any stale temp from a crashed write so create_new cannot fail.
+		let _ = std::fs::remove_file(&tmp);
+		let mut file = std::fs::OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.mode(0o600)
+			.open(&tmp)?;
+		file.write_all(contents.as_bytes())?;
+		file.sync_all()?;
+		std::fs::rename(&tmp, path)?;
+		enforce_owner_only_mode(path);
+		Ok(())
+	}
+	#[cfg(not(unix))]
+	{
+		std::fs::write(path, contents)
+	}
+}
+
+/// Correct the mode on an existing file to owner-only. Best-effort: log a
+/// warning on failure rather than aborting startup.
+#[cfg(unix)]
+fn enforce_owner_only_mode(path: &Path) {
+	use std::os::unix::fs::PermissionsExt;
+	let metadata = match std::fs::metadata(path) {
+		Ok(metadata) => metadata,
+		Err(error) => {
+			tracing::warn!(%error, path = %path.display(), "cannot stat file to tighten mode");
+			return;
+		}
+	};
+	let mode = metadata.permissions().mode();
+	if mode & 0o077 == 0 {
+		return;
+	}
+	if let Err(error) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+		tracing::warn!(
+			%error,
+			path = %path.display(),
+			previous_mode = format!("{:o}", mode & 0o7777),
+			"cannot tighten file mode to 0o600"
+		);
+	}
+}
+
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
@@ -151,6 +209,39 @@ impl AccountStore {
 		static_accounts: Vec<Account>,
 	) -> Result<Self, StoreError> {
 		let path = data_dir.join("accounts.toml");
+		// Tighten mode on any pre-existing accounts.toml that was written before
+		// this fix landed. The dynamic store carries the TOTP secret in plaintext,
+		// so a group/world-readable file is a credential leak; we correct it on
+		// load. Failures are warnings, never errors: a missing chmod must not
+		// refuse to boot.
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt;
+			match std::fs::metadata(&path) {
+				Ok(metadata) => {
+					let mode = metadata.permissions().mode();
+					if mode & 0o077 != 0
+						&& let Err(error) =
+							std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+					{
+						tracing::warn!(
+							%error,
+							path = %path.display(),
+							previous_mode = format!("{:o}", mode & 0o7777),
+							"cannot tighten accounts.toml mode to 0o600"
+						);
+					}
+				}
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+				Err(error) => {
+					tracing::warn!(
+						%error,
+						path = %path.display(),
+						"cannot stat accounts.toml to check mode"
+					);
+				}
+			}
+		}
 		let dynamic: DynamicFile = match std::fs::read_to_string(&path) {
 			Ok(text) => {
 				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?
@@ -356,9 +447,7 @@ impl AccountStore {
 		};
 		let text = toml::to_string_pretty(&file)
 			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		let tmp = self.path.with_extension("toml.tmp");
-		std::fs::write(&tmp, text)?;
-		std::fs::rename(&tmp, &self.path)?;
+		write_secret_file(&self.path, &text)?;
 		Ok(())
 	}
 

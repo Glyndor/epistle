@@ -80,9 +80,40 @@ pub struct AppPasswordStore {
 
 impl AppPasswordStore {
 	/// Open (loading if present) the store under `data_dir`. A missing file is
-	/// an empty store.
+	/// an empty store. Any pre-existing file written before the owner-only
+	/// fix lands here gets its mode tightened to 0o600 — the file carries
+	/// argon2id PHC hashes, and a group/world-readable copy would let any
+	/// local user mount an offline brute force.
 	pub fn open(data_dir: &Path) -> Result<Self, StoreError> {
 		let path = data_dir.join("app_passwords.toml");
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt;
+			match std::fs::metadata(&path) {
+				Ok(metadata) => {
+					let mode = metadata.permissions().mode();
+					if mode & 0o077 != 0
+						&& let Err(error) =
+							std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+					{
+						tracing::warn!(
+							%error,
+							path = %path.display(),
+							previous_mode = format!("{:o}", mode & 0o7777),
+							"cannot tighten app_passwords.toml mode to 0o600"
+						);
+					}
+				}
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+				Err(error) => {
+					tracing::warn!(
+						%error,
+						path = %path.display(),
+						"cannot stat app_passwords.toml to check mode"
+					);
+				}
+			}
+		}
 		let file: AppPasswordFile = match std::fs::read_to_string(&path) {
 			Ok(text) => {
 				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?
@@ -173,7 +204,8 @@ impl AppPasswordStore {
 		rows
 	}
 
-	/// Atomically rewrite the backing file (write-temp-then-rename).
+	/// Atomically rewrite the backing file (write-temp-then-rename), keeping the
+	/// file owner-only because it carries argon2id PHC hashes.
 	fn persist(&self) -> Result<(), StoreError> {
 		let file = AppPasswordFile {
 			accounts: self
@@ -191,9 +223,7 @@ impl AppPasswordStore {
 		};
 		let text = toml::to_string_pretty(&file)
 			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		let tmp = self.path.with_extension("toml.tmp");
-		std::fs::write(&tmp, text)?;
-		std::fs::rename(&tmp, &self.path)?;
+		super::write_secret_file(&self.path, &text)?;
 		Ok(())
 	}
 }

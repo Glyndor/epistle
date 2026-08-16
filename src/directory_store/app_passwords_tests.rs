@@ -115,3 +115,40 @@ fn account_lookup_is_case_insensitive() {
 	assert_eq!(store.for_account("alice").len(), 1);
 	assert_eq!(store.for_account("ALICE").len(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn app_passwords_toml_written_with_owner_only_mode() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	store
+		.add("alice", app_password("phone", "secret"))
+		.expect("add");
+
+	let path = dir.path().join("app_passwords.toml");
+	let mode = std::fs::metadata(&path)
+		.expect("metadata")
+		.permissions()
+		.mode()
+		& 0o7777;
+	assert_eq!(mode, 0o600, "expected 0o600, got {:o}", mode);
+}
+
+#[cfg(unix)]
+#[test]
+fn app_passwords_toml_corrects_legacy_world_readable_mode() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("app_passwords.toml");
+	std::fs::write(&path, "").expect("seed");
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("seed mode");
+
+	let _ = AppPasswordStore::open(dir.path()).expect("open");
+	let mode = std::fs::metadata(&path)
+		.expect("metadata")
+		.permissions()
+		.mode()
+		& 0o7777;
+	assert_eq!(mode, 0o600, "open() should have tightened, got {:o}", mode);
+}

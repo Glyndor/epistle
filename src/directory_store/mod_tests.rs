@@ -167,3 +167,83 @@ fn account_views_mark_origin() {
 	assert_eq!(views[1].0, "bob");
 	assert!(views[1].2);
 }
+
+#[cfg(unix)]
+#[test]
+fn accounts_toml_written_with_owner_only_mode() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	store.add(dynamic("bob", "bob@example.org")).expect("add");
+
+	let path = dir.path().join("accounts.toml");
+	let metadata = std::fs::metadata(&path).expect("metadata");
+	let mode = metadata.permissions().mode() & 0o7777;
+	assert_eq!(
+		mode, 0o600,
+		"expected 0o600 regardless of umask, got {:o}",
+		mode
+	);
+}
+
+#[cfg(unix)]
+#[test]
+fn accounts_toml_corrects_legacy_world_readable_mode() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+
+	// Pre-create the file with mode 0o644 as if a legacy deployment had run
+	// before the fix. AccountStore::open() must tighten it on load.
+	let path = dir.path().join("accounts.toml");
+	std::fs::write(&path, "").expect("seed file");
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("seed mode");
+
+	let store = open_store(dir.path());
+	let metadata = std::fs::metadata(&path).expect("metadata after open");
+	let mode_after_open = metadata.permissions().mode() & 0o7777;
+	assert_eq!(
+		mode_after_open, 0o600,
+		"open() should have tightened to 0o600, got {:o}",
+		mode_after_open
+	);
+
+	// And a subsequent persist (via mutation) keeps it 0o600 even if the
+	// rename path tries anything funny.
+	store.add(dynamic("bob", "bob@example.org")).expect("add");
+	let mode_after_persist = std::fs::metadata(&path)
+		.expect("metadata after persist")
+		.permissions()
+		.mode()
+		& 0o7777;
+	assert_eq!(mode_after_persist, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn accounts_toml_load_survives_failed_chmod() {
+	// Even when the chmod sweep at open() cannot run, the store must load
+	// the existing file. We make the parent directory read-only so the chmod
+	// on the file fails with EPERM; the store should still open without
+	// panicking, and the test should not error out.
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("accounts.toml");
+	std::fs::write(
+		&path,
+		"[[accounts]]\nname = \"bob\"\naddresses = [\"bob@example.org\"]\n\
+		 password_hash = \"$argon2id$stub\"\ntotp_secret = \"JBSWY3DPEHPK3PXP\"\n",
+	)
+	.expect("seed");
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("seed mode");
+	// Strip write on the parent dir so the chmod inside open() fails.
+	std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).expect("lock dir");
+
+	let store = open_store(dir.path());
+	// Restore dir perms so the tempdir can clean up the test file.
+	let _ = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755));
+	let bob = store
+		.handle()
+		.current()
+		.resolve(&Address::parse("bob@example.org").expect("address"));
+	assert_eq!(bob, Resolution::Account("bob".to_string()));
+}
