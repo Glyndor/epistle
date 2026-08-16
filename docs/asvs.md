@@ -215,7 +215,7 @@ function name is the stable reference.
 | 14.2.1 Dependencies current and audited | Met | Pinned, Dependabot-tracked, `cargo audit` in CI (org standard). |
 | 14.3.2 No debug/verbose errors in production | Met | Generic client errors (V7); no stack traces. |
 | 14.4.1 Safe HTTP response headers | Partial / N/A | The server emits no `Server` header and no HTML; browser security headers (CSP/HSTS/X-Frame-Options) are the operator-proxy/panel's responsibility, not this headless API's. |
-| 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]`; the config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
+| 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]` ONLY when bound externally. `submissions`, `imaps`, `imap`, `manage-sieve` are rejected without `[tls]`; `pop3s` (implicit TLS by protocol) is rejected without `[tls]`; `submission`, `web-dav`, `api`, `autoconfig`, `metrics` are accepted without `[tls]` when loopback-bound and emit a warning otherwise. The config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
 
 ---
 
