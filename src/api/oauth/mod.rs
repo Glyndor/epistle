@@ -131,20 +131,49 @@ impl AuthzServer {
 	}
 
 	/// A short human `user_code` (`XXXX-XXXX`) from the unambiguous alphabet,
-	/// using rejection-free CSPRNG bytes. `None` if the CSPRNG fails.
+	/// drawn via rejection sampling to avoid modulo bias. With 28 chars in
+	/// the alphabet, `256 % 28 = 4` would otherwise make the first 4 chars
+	/// appear 10/256 of the time vs 9/256 for the rest (a 1.111× bias).
+	/// Rejecting any byte ≥ `256 - (256 % 28)` (= 252) and remapping the
+	/// remainder with `byte % 28` makes every char exactly 9/252 of the
+	/// valid bytes. `None` if the CSPRNG fails (fail closed).
 	fn random_user_code(&self) -> Option<String> {
-		let mut bytes = [0u8; 8];
-		self.rng.fill(&mut bytes).ok()?;
+		let chars =
+			random_user_code_chars_with(USER_CODE_ALPHABET, 8, |buf| self.rng.fill(buf).ok())?;
 		let mut out = String::with_capacity(9);
-		for (i, byte) in bytes.iter().enumerate() {
+		for (i, b) in chars.into_iter().enumerate() {
 			if i == 4 {
 				out.push('-');
 			}
-			let index = (*byte as usize) % USER_CODE_ALPHABET.len();
-			out.push(USER_CODE_ALPHABET[index] as char);
+			out.push(b as char);
 		}
 		Some(out)
 	}
+}
+
+/// Draw `count` characters from `alphabet` uniformly at random via rejection
+/// sampling over a CSPRNG byte source. Bytes `≥ 256 - (256 % alphabet.len())`
+/// are discarded so that `byte % alphabet.len()` is uniform — the naive
+/// `byte % len` over a CSPRNG byte has a bias of `(256 % len) / 256` toward
+/// the first `256 % len` alphabet slots (with the 28-char user_code alphabet
+/// that's 4/256 = a 1.111× bias toward `B`, `C`, `D`, `F`). `None` if the
+/// byte source fails (fail closed).
+fn random_user_code_chars_with(
+	alphabet: &[u8],
+	count: usize,
+	mut fill: impl FnMut(&mut [u8; 1]) -> Option<()>,
+) -> Option<Vec<u8>> {
+	let len = alphabet.len();
+	let threshold = 256 - (256 % len);
+	let mut out = Vec::with_capacity(count);
+	let mut byte = [0u8; 1];
+	while out.len() < count {
+		fill(&mut byte)?;
+		if byte[0] < threshold as u8 {
+			out.push(alphabet[(byte[0] as usize) % len]);
+		}
+	}
+	Some(out)
 }
 
 /// Constant-time-ish byte comparison: always scans both inputs fully, so a
