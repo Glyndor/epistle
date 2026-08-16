@@ -6,6 +6,7 @@
 
 use crate::clock;
 use crate::smtp::session::AcceptedMessage;
+use crate::util::header::sanitize_header_value;
 
 /// Parameters of a `vacation` action.
 pub struct Vacation<'a> {
@@ -32,10 +33,12 @@ pub fn build_response(
 	now: std::time::SystemTime,
 ) -> AcceptedMessage {
 	let from = vacation.from.unwrap_or(vacation.user_address);
+	// Reflected back from the original message (Subject, Message-ID): a raw
+	// CRLF in any of these values would inject forged headers into the reply.
 	let subject = match vacation.subject {
-		Some(subject) => subject.to_string(),
+		Some(subject) => sanitize_header_value(subject),
 		None => match original_subject {
-			Some(original) => format!("Auto: {original}"),
+			Some(original) => format!("Auto: {}", sanitize_header_value(original)),
 			None => "Auto: Re: your message".to_string(),
 		},
 	};
@@ -49,6 +52,7 @@ Auto-Submitted: auto-replied (vacation)\r\n",
 		date = clock::rfc5322(now),
 	);
 	if let Some(message_id) = original_message_id {
+		let message_id = sanitize_header_value(message_id);
 		headers.push_str(&format!("In-Reply-To: {message_id}\r\n"));
 	}
 
@@ -123,5 +127,75 @@ mod tests {
 		let reply = build_response(&vacation(), "bob@example.net", None, None, UNIX_EPOCH);
 		let body = String::from_utf8(reply.data).expect("ascii");
 		assert!(body.contains("Subject: Auto: Re: your message"), "{body}");
+	}
+
+	#[test]
+	fn subject_with_crlf_does_not_inject_headers() {
+		// The original message's Subject carries CRLF and a forged Bcc. The
+		// built reply must not contain a header that starts a line.
+		let reply = build_response(
+			&vacation(),
+			"bob@example.net",
+			Some("foo\r\nBcc: attacker@evil.example"),
+			Some("<abc@example.net>"),
+			UNIX_EPOCH,
+		);
+		let body = String::from_utf8(reply.data).expect("ascii");
+		// No injected header at the start of any line.
+		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
+		assert!(!body.contains("\r\nX-Injected:"), "{body}");
+		// The Subject line itself must not contain raw CR or LF: the injected
+		// CRLF was flattened to spaces, so the value sits on one line.
+		let subject_line = body
+			.lines()
+			.find(|line| line.starts_with("Subject:"))
+			.expect("Subject line present");
+		assert!(!subject_line.contains('\r'), "{subject_line}");
+		assert!(!subject_line.contains('\n'), "{subject_line}");
+		assert!(
+			subject_line.contains("Bcc: attacker@evil.example"),
+			"{subject_line}"
+		);
+	}
+
+	#[test]
+	fn message_id_with_crlf_does_not_inject_headers() {
+		// The original message's Message-ID carries CRLF and a forged Bcc.
+		let reply = build_response(
+			&vacation(),
+			"bob@example.net",
+			Some("Lunch?"),
+			Some("<abc@example.net>\r\nBcc: attacker@evil.example"),
+			UNIX_EPOCH,
+		);
+		let body = String::from_utf8(reply.data).expect("ascii");
+		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
+		let in_reply_to_line = body
+			.lines()
+			.find(|line| line.starts_with("In-Reply-To:"))
+			.expect("In-Reply-To line present");
+		assert!(!in_reply_to_line.contains('\r'), "{in_reply_to_line}");
+		assert!(!in_reply_to_line.contains('\n'), "{in_reply_to_line}");
+	}
+
+	#[test]
+	fn explicit_subject_with_crlf_is_flattened() {
+		// A Sieve script's `:subject` parameter is also user-influenced: the
+		// same flattening must apply regardless of where the value comes from.
+		let vacation = Vacation {
+			reason: "Away.",
+			subject: Some("Out of office\r\nBcc: attacker@evil.example"),
+			from: None,
+			user_address: "alice@example.org",
+		};
+		let reply = build_response(&vacation, "bob@example.net", None, None, UNIX_EPOCH);
+		let body = String::from_utf8(reply.data).expect("ascii");
+		assert!(!body.contains("\r\nBcc: attacker@evil.example"), "{body}");
+		let subject_line = body
+			.lines()
+			.find(|line| line.starts_with("Subject:"))
+			.expect("Subject line present");
+		assert!(!subject_line.contains('\r'), "{subject_line}");
+		assert!(!subject_line.contains('\n'), "{subject_line}");
 	}
 }

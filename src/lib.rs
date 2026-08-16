@@ -39,5 +39,6 @@ pub mod storage;
 pub mod tls;
 pub mod tlsrpt;
 pub mod totp;
+pub mod util;
 pub mod webdav;
 pub mod webhook;
