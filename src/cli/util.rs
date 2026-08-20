@@ -35,34 +35,43 @@ pub(super) fn generate_secret() -> Option<String> {
 	Some(out)
 }
 
-/// Read one non-empty line (CR-trimmed) from `reader`, or a FAILURE code.
-pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, ExitCode> {
+/// The stdin read failed. The reason has already been written to stderr, so a
+/// caller only has to choose its exit code.
+///
+/// Carries no data on purpose. `read_line` feeds values that callers bind to
+/// names like `token` and `password`, which makes every constant returned from
+/// it look, to a taint analyser, like a credential travelling to a credential
+/// sink - `rust/hard-coded-cryptographic-value` flagged the exit code on the
+/// error path for exactly that reason. Keeping the exit code at the call site
+/// leaves nothing constant flowing out of this function.
+pub(super) struct InputError;
+
+/// Read one non-empty line (CR-trimmed) from `reader`.
+///
+/// Diagnostics go to stderr; the caller turns [`InputError`] into an exit code.
+pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputError> {
 	let value = match reader.lines().next() {
 		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
 		Some(Err(error)) => {
 			eprintln!("error: reading stdin: {error}");
-			return Err(fail());
+			return Err(InputError);
 		}
 		None => {
 			eprintln!("error: no input — pipe or type the value on stdin");
-			return Err(fail());
+			return Err(InputError);
 		}
 	};
 	if value.is_empty() {
 		eprintln!("error: input must not be empty");
-		return Err(fail());
+		return Err(InputError);
 	}
 	Ok(value)
-}
-
-fn fail() -> ExitCode {
-	ExitCode::from(1)
 }
 
 pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
 	let token = match read_line(reader) {
 		Ok(token) => token,
-		Err(code) => return code,
+		Err(InputError) => return ExitCode::FAILURE,
 	};
 	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
 	let hex = digest

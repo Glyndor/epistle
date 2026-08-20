@@ -41,7 +41,7 @@ pub(super) fn add(
 ) -> ExitCode {
 	let password = match super::read_line(reader) {
 		Ok(password) => password,
-		Err(code) => return code,
+		Err(super::InputError) => return ExitCode::FAILURE,
 	};
 	if let Err(rejection) = crate::password::validate(&password) {
 		eprintln!("error: {}", rejection.message());
