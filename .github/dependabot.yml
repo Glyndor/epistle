@@ -29,3 +29,20 @@ updates:
     labels: ["type:deps"]
     open-pull-requests-limit: 5
     target-branch: "develop"
+
+  # The release-signing script (`.github/scripts/sign.py`) pulls `cryptography`
+  # from `sign-requirements.txt`, and nothing was watching that file. Every
+  # release artifact is signed with it, so a stale version there is not a
+  # cosmetic lag.
+  #
+  # This entry covers version updates only. Security updates do not use a
+  # configuration entry that sets `target-branch`, so they open against `main`,
+  # where `main-guard` refuses any pull request whose source is not `develop`.
+  # That is #676 and it is not fixed here.
+  - package-ecosystem: "pip"
+    directory: "/.github/scripts"
+    schedule:
+      interval: "daily"
+    labels: ["type:deps", "type:security"]
+    open-pull-requests-limit: 5
+    target-branch: "develop"

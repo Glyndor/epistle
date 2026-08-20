@@ -28,8 +28,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Same pin as the build job below and as ci.yml. This job only reads
+          # metadata and runs the audit, so the version matters less here - but a
+          # release workflow where two jobs disagree about the compiler is a
+          # question nobody wants to answer later.
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
 
       - name: Tag matches the crate version
         run: |
@@ -50,6 +54,25 @@ jobs:
             exit 1
           fi
 
+      - name: Debian changelog carries the same version
+        run: |
+          set -euo pipefail
+          # dpkg-buildpackage takes the .deb version from debian/changelog and
+          # nowhere else, so a changelog left behind produces a package labelled
+          # with the version the user already has - apt then reports nothing to
+          # upgrade and the release never reaches them. The tag check above
+          # cannot catch it, because the tag and Cargo.toml can agree perfectly
+          # while the changelog lags. Parsed here rather than with
+          # dpkg-parsechangelog, which lives in dpkg-dev and this job does not
+          # install.
+          crate="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          deb="$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' debian/changelog)"
+          if [ "$deb" != "$crate" ]; then
+            echo "::error::debian/changelog is at ${deb} but Cargo.toml is at ${crate}; add a changelog entry so the .deb carries the released version."
+            exit 1
+          fi
+
       - name: Audit dependencies at release time
         run: |
           command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version "^0.22"
@@ -67,9 +90,86 @@ jobs:
             exit 1
           fi
 
+  build-deb:
+    name: Build Debian package (${{ matrix.arch }})
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    # The image, not dpkg, provides the toolchain: this is upstream 1.97.1, the
+    # same version ci.yml pins, so the .deb users install is built by the
+    # compiler that validated the code. Debian's own rustc is too old anyway -
+    # trixie ships 1.85 and the dependency floor is 1.88 (rcgen, time,
+    # time-macros), which edition 2024 alone does not tell you. Digest-pinned so
+    # a retag cannot change the build environment.
+    container: docker.io/library/rust@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c # 1.97.1-slim-trixie
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Install packaging tooling
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends dpkg-dev debhelper
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Build the package
+        env:
+          # The queries are checked against the committed .sqlx cache, so no
+          # database is needed and none is reachable from here.
+          SQLX_OFFLINE: "true"
+        run: |
+          # dpkg-buildpackage builds for the host architecture, so each runner
+          # produces its own arch's .deb natively - no emulation.
+          #
+          # -d skips the build-dependency check on purpose. Build-Depends
+          # declares what a source rebuild with Debian's own tools needs, and
+          # that is a true and useful statement, but this image satisfies the
+          # toolchain from /usr/local/cargo rather than from dpkg, so the check
+          # would fail on a requirement that is already met.
+          dpkg-buildpackage -us -uc -b -d
+
+      - name: Stage the .deb into the workspace
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          deb=$(find .. -maxdepth 1 -name "epistle_*_${ARCH}.deb" | sort | head -n1)
+          if [ -z "$deb" ]; then
+            echo "::error::no ${ARCH} .deb artifact was produced"
+            exit 1
+          fi
+          cp "$deb" "$(basename "$deb")"
+          echo "Staged $(basename "$deb")"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: epistle_*_${{ matrix.arch }}.deb
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: epistle-deb-${{ matrix.arch }}
+          path: epistle_*_${{ matrix.arch }}.deb
+          retention-days: 1
+          if-no-files-found: error
+
   build:
     name: Build and publish
-    needs: verify
+    needs: [verify, build-deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -84,8 +184,14 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned, not `stable`. ci.yml pins 1.97 and the .deb job builds in a
+          # digest-pinned 1.97.1 image, so tracking `stable` here would mean the
+          # binary install.sh delivers is the one artifact built by a compiler
+          # nothing agreed on - and unlike CI, a release bakes that in
+          # permanently, because releases are immutable. Bump this with ci.yml's
+          # toolchain input, deliberately, in the same change.
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
 
       - name: Build release binary
         run: cargo build --release --locked
@@ -95,6 +201,13 @@ jobs:
           command -v cargo-cyclonedx >/dev/null || cargo install --locked cargo-cyclonedx --version "^0.5"
           cargo cyclonedx --format json --all-features
 
+      - name: Collect the Debian packages
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: epistle-deb-*
+          merge-multiple: true
+          path: dist
+
       - name: Prepare artifacts
         run: |
           set -euo pipefail
@@ -102,7 +215,17 @@ jobs:
           cp target/release/epistle "dist/epistle-${TAG}-x86_64-linux"
           cp scripts/install.sh dist/install.sh
           cp epistle.cdx.json "dist/epistle-${TAG}.cdx.json"
+          # Both architectures must have arrived. The apt archive is rebuilt
+          # from scratch and synced with --delete, so a product whose declared
+          # architecture is missing is evicted from the served archive rather
+          # than left at its previous version.
+          for arch in amd64 arm64; do
+            ls dist/epistle_*_"$arch".deb >/dev/null 2>&1 \
+              || { echo "::error::no ${arch} .deb reached the release job"; exit 1; }
+          done
           cd dist
+          # SHA256SUMS is computed last so it covers the .debs too. The .sig
+          # files do not exist yet, which is why they are not in it.
           sha256sum * > SHA256SUMS
 
       - name: Sign artifacts with the org Ed25519 key
@@ -123,6 +246,12 @@ jobs:
           "$venv_py" -m pip install --quiet --require-hashes -r .github/scripts/sign-requirements.txt
           # The key is read from GLYNDOR_RELEASE_ED25519_KEY in the environment, not argv.
           "$venv_py" .github/scripts/sign.py "dist/epistle-${TAG}-x86_64-linux"
+          # Each .deb gets its own detached signature: the apt archive verifies
+          # every package against <deb>.sig before admitting it, and refuses to
+          # re-sign with its own GPG key anything it did not verify first.
+          for deb in dist/epistle_*.deb; do
+            "$venv_py" .github/scripts/sign.py "$deb"
+          done
           "$venv_py" .github/scripts/sign.py dist/SHA256SUMS
 
       - name: Attest build provenance
