@@ -386,11 +386,20 @@ fn queue_list_reports_and_handles_edge_cases() {
 		FsSpool::open(dir.path()).expect("spool");
 		let new = dir.path().join("spool").join("new");
 		std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+		// A process holding CAP_DAC_OVERRIDE - root, which is what
+		// dpkg-buildpackage runs the suite as - reads the directory anyway, so
+		// there is no denial to observe and the assertion below would be
+		// asserting the opposite of what it says. Probe the precondition
+		// directly rather than checking the uid: the capability, not the uid,
+		// is what decides, and a non-root process can hold it too.
+		let denied = std::fs::read_dir(&new).is_err();
 		let mut out = Vec::new();
 		let result = queue::list(dir.path(), &mut out);
 		// Restore permissions so the tempdir can be cleaned up.
 		let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755));
-		assert_eq!(result, ExitCode::FAILURE);
+		if denied {
+			assert_eq!(result, ExitCode::FAILURE);
+		}
 	}
 }
 
