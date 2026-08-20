@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   rust:
-    uses: Glyndor/.github/.github/workflows/rust-ci.yml@505d78df893bfc2f73261ff285529e6afd46f5ac # v1.9.1
+    uses: Glyndor/.github/.github/workflows/rust-ci.yml@118244b8d758bdec6d2c5115d815dbc2e5c4f4e9 # v1.16.0
     with:
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
