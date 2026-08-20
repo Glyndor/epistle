@@ -69,9 +69,10 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputEr
 }
 
 pub(super) fn token_hash_from(reader: impl std::io::BufRead) -> ExitCode {
-	let token = match read_line(reader) {
-		Ok(token) => token,
-		Err(InputError) => return ExitCode::FAILURE,
+	// let-else for the same reason as the caller in `accounts.rs`: a returning
+	// match arm still counts as an arm of the expression that binds `token`.
+	let Ok(token) = read_line(reader) else {
+		return ExitCode::FAILURE;
 	};
 	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
 	let hex = digest

@@ -22,8 +22,8 @@ mod verify;
 mod verify_dns;
 
 use util::{
-	InputError, dkim_keygen, generate_secret, message_crypto, oauth_keygen, read_line,
-	storage_keygen, token_hash,
+	dkim_keygen, generate_secret, message_crypto, oauth_keygen, read_line, storage_keygen,
+	token_hash,
 };
 
 use std::path::PathBuf;
