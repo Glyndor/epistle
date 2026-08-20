@@ -1,0 +1,12 @@
+epistle (0.3.4) unstable; urgency=medium
+
+  * Initial Debian packaging. Installs the epistle binary to /usr/bin, with
+    the README and the sample systemd unit under /usr/share/doc/epistle.
+  * Podman and podup are Recommends rather than Depends: a production
+    deployment runs the stack under rootless Podman, but the management
+    commands, config-check, key generation and import/export all run without a
+    container runtime.
+  * PostgreSQL is a Suggests. The antispam engine and the directory backend
+    use it, and both are optional in the configuration today.
+
+ -- Glyndor <packages@glyndor.net>  Thu, 20 Aug 2026 13:43:32 +0000

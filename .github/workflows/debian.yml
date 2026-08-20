@@ -1,0 +1,36 @@
+name: Debian package
+
+# Two different questions, answered by two different builds.
+#
+# This one asks "is epistle still a legitimate Debian package?" - it builds with
+# Debian's own rustc through the shared reusable, and `dpkg-checkbuilddeps`
+# proves Build-Depends is satisfiable rather than aspirational.
+#
+# release.yml asks a different question and answers it with a pinned upstream
+# toolchain (1.97.1, the version ci.yml validates), so the .deb a user installs
+# is built by the compiler that vouched for the code. Neither build subsumes the
+# other.
+#
+# No path filter. One would fire on nearly every pull request anyway, since this
+# repository keeps its code in src/, and a filter that silently stops matching is
+# how a gate stops being a gate.
+
+on:
+  push:
+    branches: ["develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+permissions:
+  contents: read
+
+jobs:
+  debian:
+    uses: Glyndor/.github/.github/workflows/rust-debian.yml@118244b8d758bdec6d2c5115d815dbc2e5c4f4e9 # v1.16.0
+    with:
+      package-name: epistle
+      # Not the reusable's trixie default: trixie ships rustc 1.85 and the
+      # dependency floor is 1.88 (rcgen, time, time-macros), which edition 2024
+      # alone does not reveal. sid carries 1.95. Digest-pinned so the check runs
+      # against a fixed environment instead of a moving tag.
+      debian-image: "debian:sid@sha256:24c766c06ebdbda66a026e92361ede7d9212819701b2fca82e347ef0c240cb2c"

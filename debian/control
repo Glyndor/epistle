@@ -1,0 +1,28 @@
+Source: epistle
+Section: mail
+Priority: optional
+Maintainer: Glyndor <packages@glyndor.net>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.88)
+Standards-Version: 4.7.0
+Homepage: https://github.com/Glyndor/epistle
+Vcs-Git: https://github.com/Glyndor/epistle.git
+Vcs-Browser: https://github.com/Glyndor/epistle
+Rules-Requires-Root: no
+
+Package: epistle
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: podman (>= 5.0), podup
+Suggests: postgresql
+Description: self-hosted mail server with a management API and CLI
+ epistle is a headless mail server: SMTP, IMAP4rev2, JMAP and POP3 with the
+ modern email-security stack (SPF, DKIM, DMARC, MTA-STS, TLS-RPT, ARC, DANE,
+ SRS) and ACME certificates for the mail protocols. It has no web UI of its
+ own — administration goes through the `epistle` command or the management
+ HTTP API, which is closed to the network by default.
+ .
+ A production deployment runs as a rootless Podman stack alongside
+ PostgreSQL, which is why podman and podup are recommended. The binary also
+ runs standalone for the management commands, for `epistle config-check`,
+ and for key generation, import and export, none of which need a container
+ runtime.
