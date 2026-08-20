@@ -396,3 +396,50 @@ async fn device_approve_accepts_basic_auth() {
 	let response = app.oneshot(request).await.expect("response");
 	assert_eq!(response.status(), StatusCode::OK);
 }
+
+/// The 28-char `USER_CODE_ALPHABET` has `256 % 28 = 4`, so the naive
+/// `byte % 28` over random bytes produces a 10/9 frequency split (the first
+/// 4 chars — `B`, `C`, `D`, `F` — get 10/256 vs 9/256 for the rest, a
+/// 1.111× bias). Rejection sampling under the threshold
+/// `256 - (256 % 28) = 252` makes every alphabet char exactly 9/252 of the
+/// valid bytes — uniform.
+///
+/// Pins the rejection-sampling logic directly with a deterministic byte
+/// source that cycles `0..=255` in order — the worst case for the naive
+/// modulo. With that source and threshold 252, every complete 256-byte cycle
+/// yields exactly 9 valid hits per alphabet slot, so cumulative counts are
+/// EXACTLY equal after a whole number of cycles — no statistical slack, no
+/// flake risk.
+#[test]
+fn random_user_code_rejection_sampling_is_uniform() {
+	let alphabet = super::USER_CODE_ALPHABET;
+	let n = alphabet.len();
+	assert_eq!(n, 28, "this test pins the alphabet size");
+	assert_eq!(256 % n, 4, "this test pins the bias shape");
+
+	struct CyclingRng(u8);
+	let mut rng = CyclingRng(0);
+	// 396 full cycles = 99_792 valid bytes; each char gets 9 hits per cycle.
+	let samples = 99_792usize;
+	let chars = super::random_user_code_chars_with(alphabet, samples, |buf| {
+		buf[0] = rng.0;
+		rng.0 = rng.0.wrapping_add(1);
+		Some(())
+	})
+	.expect("fill never fails");
+
+	let mut counts = vec![0usize; n];
+	for &c in &chars {
+		let idx = alphabet.iter().position(|&a| a == c).unwrap();
+		counts[idx] += 1;
+	}
+
+	// Strict equality: a deterministic source plus a uniform map means every
+	// alphabet char was used the same number of times. The biased `byte % n`
+	// version would surface 3_960 hits for the first 4 chars and 3_564 for
+	// the rest — a 396-hit gap that strict equality (this assertion) catches.
+	let max = *counts.iter().max().unwrap();
+	let min = *counts.iter().min().unwrap();
+	assert_eq!(max, min, "non-uniform distribution: {counts:?}");
+	assert_eq!(counts.iter().sum::<usize>(), samples);
+}

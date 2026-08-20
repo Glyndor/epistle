@@ -8,6 +8,10 @@ on:
   pull_request:
     paths:
       - "src/smtp/**"
+      - "src/imap/**"
+      - "src/sieve/**"
+      - "src/pop3/**"
+      - "src/managesieve/**"
       - "fuzz/**"
 
 permissions:
@@ -20,7 +24,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [smtp_command, smtp_line, smtp_address]
+        target:
+          [
+            smtp_command,
+            smtp_line,
+            smtp_address,
+            imap_command,
+            sieve_message,
+            sieve_script,
+            pop3_command,
+            managesieve_command,
+          ]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -29,7 +43,7 @@ jobs:
           rustup toolchain install nightly --profile minimal
           rustup default nightly
 
-      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -39,7 +53,7 @@ jobs:
           key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.toml') }}
 
       - name: Install cargo-fuzz
-        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked --version "^0.13"
 
       - name: Fuzz ${{ matrix.target }}
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60 -timeout=10

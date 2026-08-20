@@ -1,6 +1,7 @@
 //! `/api/v1` routes. Each route module mirrors its path.
 
 mod accounts;
+mod auth;
 mod domains;
 mod mailboxes;
 mod queue;
@@ -18,6 +19,7 @@ use super::state::ApiState;
 pub fn router() -> Router<ApiState> {
 	Router::new()
 		.route("/status", get(status::get))
+		.route("/auth/verify", post(auth::verify))
 		.route("/domains", get(domains::list))
 		.route("/accounts", get(accounts::list).post(accounts::create))
 		.route("/accounts/{name}", axum::routing::delete(accounts::remove))

@@ -73,13 +73,9 @@ fn parse_event_group(input: &str) -> Option<(&str, Vec<NotifyEvent>, &str)> {
 	let after = if specifier.eq_ignore_ascii_case("subtree")
 		|| specifier.eq_ignore_ascii_case("mailboxes")
 	{
-		match after.strip_prefix('(') {
-			Some(rest) => {
-				let mbox_close = matching_paren(rest)?;
-				rest[mbox_close + 1..].trim_start()
-			}
-			None => return None,
-		}
+		let rest = after.strip_prefix('(')?;
+		let mbox_close = matching_paren(rest)?;
+		rest[mbox_close + 1..].trim_start()
 	} else {
 		after
 	};

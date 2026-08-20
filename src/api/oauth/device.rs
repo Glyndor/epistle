@@ -106,9 +106,9 @@ pub async fn device_approve(
 
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
-	let grant = devices
-		.values_mut()
-		.find(|g| g.user_code == user_code && g.expires_at > now);
+	let grant = devices.values_mut().find(|g| {
+		super::constant_time_eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
+	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {
 			grant.approved_account = Some(account);

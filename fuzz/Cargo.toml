@@ -32,5 +32,40 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "imap_command"
+path = "fuzz_targets/imap_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sieve_message"
+path = "fuzz_targets/sieve_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sieve_script"
+path = "fuzz_targets/sieve_script.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pop3_command"
+path = "fuzz_targets/pop3_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "managesieve_command"
+path = "fuzz_targets/managesieve_command.rs"
+test = false
+doc = false
+bench = false
+
 # Detach from the parent crate's workspace.
 [workspace]

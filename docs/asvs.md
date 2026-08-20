@@ -45,9 +45,10 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 2.1.1 / 2.1.x Password length & all-chars allowed | Met | Length 12–64 enforced before hashing (`src/api/v1/accounts.rs::check_password`, `src/cli/accounts.rs`); the 64 cap is the documented Argon2 DoS ceiling; counted as Unicode scalars (no truncation). |
-| 2.1.7 Reject known-breached passwords | **Gap** | No HaveIBeenPwned range query and no bundled breached-list check exists. Documented below (deferred — needs network integration or a bundled list; out of scope for a minimal surgical fix). |
-| 2.1.9 No composition rules that reduce strength / no silent truncation | Met | No silent truncation; all characters accepted within the length window (`check_password`). |
+| 2.1.1 Password length | Met | Length 12–64 enforced before hashing on every set/change path (`src/password::validate`, called by `src/api/v1/accounts.rs` and `src/cli/accounts.rs`); the 64 cap is the documented Argon2 DoS ceiling; no silent truncation. |
+| 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
+| 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
+| 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
 | 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate.rs`). |
@@ -164,8 +165,8 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 10.2.x No malicious/unexpected code paths | Met | Apache-2.0 source, reviewed; no obfuscation, no phone-home/telemetry (org policy). |
-| 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the org apt archive (org `RELEASE_SIGN_KEY`); the server does not self-update, so it carries no in-process artifact-verification path. |
+| 10.2.x No malicious/unexpected code paths | Met | MIT source, reviewed; no obfuscation, no phone-home/telemetry (org policy). |
+| 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the org apt archive (org `GLYNDOR_RELEASE_ED25519_KEY`); the server does not self-update, so it carries no in-process artifact-verification path. |
 | 10.3.2 No remote/dynamic code loading | Met | No `eval`, no plugin download-and-exec; dependencies are pinned and audited. |
 | (mail-specific) Inbound malware scanning | Met | Antivirus (ClamAV) + Bayesian / DNSBL / reputation filtering at delivery (`src/antispam/`, `src/dnsbl/`). |
 
@@ -214,7 +215,7 @@ function name is the stable reference.
 | 14.2.1 Dependencies current and audited | Met | Pinned, Dependabot-tracked, `cargo audit` in CI (org standard). |
 | 14.3.2 No debug/verbose errors in production | Met | Generic client errors (V7); no stack traces. |
 | 14.4.1 Safe HTTP response headers | Partial / N/A | The server emits no `Server` header and no HTML; browser security headers (CSP/HSTS/X-Frame-Options) are the operator-proxy/panel's responsibility, not this headless API's. |
-| 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]`; the config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
+| 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]` ONLY when bound externally. `submissions`, `imaps`, `imap`, `manage-sieve` are rejected without `[tls]`; `pop3s` (implicit TLS by protocol) is rejected without `[tls]`; `submission`, `web-dav`, `api`, `autoconfig`, `metrics` are accepted without `[tls]` when loopback-bound and emit a warning otherwise. The config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
 
 ---
 
@@ -270,11 +271,6 @@ Two further low-severity hardening fixes were applied:
 These are real ASVS L3 deficiencies, recorded honestly. Each needs more than a
 surgical change and should be tracked as its own issue.
 
-- **Breached-password rejection (V2.1.7).** Length 12–64 is enforced, but there
-  is no HaveIBeenPwned k-anonymity range query and no bundled breached-list
-  check. The standard calls breach-rejection "the part that actually protects."
-  A fix needs either a network integration or a shipped list — out of scope for a
-  no-new-dependency surgical change.
 - **Cross-connection brute-force ban (V2.2.1).** Throttling is per-connection
   (3-strikes) plus the API's in-memory budget; there is no persistent per-IP /
   per-account failure tracker shared across connections, so an attacker can
@@ -296,7 +292,7 @@ surgical change and should be tracked as its own issue.
 | Chapter | Met | N/A | Gap |
 |---|---|---|---|
 | V1 Architecture | 9 | 0 | 0 |
-| V2 Authentication | 7 | 1 | 4 (3 partial)\* |
+| V2 Authentication | 9 | 1 | 2 (both partial)\* |
 | V3 Session | 3 | 3 | 0 |
 | V4 Access Control | 7 | 0 | 1 (partial) |
 | V5 Validation | 6 | 0 | 0 |
@@ -310,8 +306,8 @@ surgical change and should be tracked as its own issue.
 | V13 API | 5 | 1 | 0 |
 | V14 Configuration | 4 | 1 | 0 |
 
-\* The V2 gaps overlap the deferred items above (breached passwords,
-cross-connection brute force, TOTP replay/recovery/at-rest); the scoped-API-key
-item is the V4 partial. All five concrete, fixable gaps found during the audit
-were fixed in this sweep with tests; the remainder are deferred features tracked
-above.
+\* The remaining V2 gaps are the deferred items above (cross-connection brute
+force, TOTP replay/recovery/at-rest); the scoped-API-key item is the V4 partial.
+Breached-password rejection (V2.1.7) and a printable-ASCII character-set policy
+were since added with tests (`src/password`); the rest are deferred features
+tracked above.

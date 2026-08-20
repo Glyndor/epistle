@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::dns::cloudflare::CloudflareProvider;
 use crate::dns::desec::DesecProvider;
+use crate::dns::namecheap::NamecheapProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
 use crate::dns::route53::Route53Provider;
 
@@ -17,7 +18,7 @@ use crate::dns::route53::Route53Provider;
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dns {
-	/// Provider id: `cloudflare`, `desec`, `route53`, or `manual`.
+	/// Provider id: `cloudflare`, `desec`, `namecheap`, `route53`, or `manual`.
 	pub provider: String,
 	/// The DNS zone the token is scoped to (least privilege).
 	pub zone: String,
@@ -52,6 +53,7 @@ impl Dns {
 		match self.provider.to_ascii_lowercase().as_str() {
 			"cloudflare" => Some(Arc::new(CloudflareProvider::new(self.secret()?))),
 			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
+			"namecheap" => Some(Arc::new(NamecheapProvider::new(self.secret()?).ok()?)),
 			"route53" => {
 				let access_key = self.access_key.clone()?;
 				let secret_key = self.aws_secret()?;
@@ -172,5 +174,28 @@ mod tests {
 		unsafe { std::env::set_var("EPISTLE_TEST_DNS_PROVIDER_TOKEN", "tok") };
 		let dns = cfg("token_env = \"EPISTLE_TEST_DNS_PROVIDER_TOKEN\"");
 		assert!(dns.build().is_some());
+	}
+
+	#[test]
+	fn namecheap_with_inline_token_builds() {
+		let dns: Dns = toml::from_str(
+			"provider = \"namecheap\"\nzone = \"example.org\"\ntoken = \"user:key\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_some());
+	}
+
+	#[test]
+	fn namecheap_without_token_builds_nothing() {
+		let dns: Dns = toml::from_str("provider = \"namecheap\"\nzone = \"example.org\"").unwrap();
+		assert!(dns.build().is_none());
+	}
+
+	#[test]
+	fn namecheap_malformed_token_builds_nothing() {
+		let dns: Dns =
+			toml::from_str("provider = \"namecheap\"\nzone = \"example.org\"\ntoken = \"nocolon\"")
+				.unwrap();
+		assert!(dns.build().is_none());
 	}
 }

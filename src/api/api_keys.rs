@@ -65,7 +65,10 @@ pub fn sha256_token_matches(stored: &str, token: &str) -> bool {
 			write!(s, "{b:02x}").ok();
 			s
 		});
-	expected_hex.eq_ignore_ascii_case(&actual_hex)
+	crate::api::oauth::constant_time_eq(
+		expected_hex.to_ascii_lowercase().as_bytes(),
+		actual_hex.as_bytes(),
+	)
 }
 
 /// The `sha256:<hex>` digest of `token`, for storing a new key.
@@ -169,9 +172,7 @@ impl ApiKeyStore {
 		};
 		let text = toml::to_string_pretty(&file)
 			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-		let tmp = self.path.with_extension("toml.tmp");
-		std::fs::write(&tmp, text)?;
-		std::fs::rename(&tmp, &self.path)
+		crate::storage::write_secret(&self.path, text.as_bytes())
 	}
 }
 

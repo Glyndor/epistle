@@ -4,7 +4,7 @@
 use serde::Deserialize;
 
 /// Where and how to POST event notifications. Present enables webhooks.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Webhook {
 	/// The HTTPS endpoint that receives event payloads.
@@ -13,6 +13,15 @@ pub struct Webhook {
 	/// `X-Webhook-Signature: sha256=<hex>` HMAC of the body.
 	#[serde(default)]
 	pub secret: Option<String>,
+}
+
+impl std::fmt::Debug for Webhook {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Webhook")
+			.field("url", &self.url)
+			.field("secret", &self.secret.as_ref().map(|_| "***"))
+			.finish()
+	}
 }
 
 #[cfg(test)]
