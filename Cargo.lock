@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "epistle"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "argon2",
  "axum",

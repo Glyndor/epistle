@@ -1,3 +1,20 @@
+epistle (0.3.5) unstable; urgency=medium
+
+  * install.sh verifies the signed SHA256SUMS against the embedded release key
+    before downloading anything, and fails closed on a missing key, a missing
+    signature, an unverifiable one, or no way to check it. Releases before this
+    one were signed with the key retired in July 2026, so this installer will
+    not accept them - that is the correct answer, not a regression.
+  * Debian packaging, for amd64 and arm64. Each package is signed with the org
+    release key so the apt archive can verify it before admitting it.
+  * The exit code no longer travels out of read_line into the value a caller
+    binds as a credential, which is what CodeQL's hard-coded-cryptographic-value
+    query had been reporting since 0.3.4.
+  * CI: the release-signing requirements are watched for updates, and the
+    PostgreSQL and Postfix service images are pinned by digest.
+
+ -- Glyndor <packages@glyndor.net>  Thu, 20 Aug 2026 15:51:05 +0000
+
 epistle (0.3.4) unstable; urgency=medium
 
   * Initial Debian packaging. Installs the epistle binary to /usr/bin, with
