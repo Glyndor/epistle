@@ -28,8 +28,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Same pin as the build job below and as ci.yml. This job only reads
+          # metadata and runs the audit, so the version matters less here - but a
+          # release workflow where two jobs disagree about the compiler is a
+          # question nobody wants to answer later.
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
 
       - name: Tag matches the crate version
         run: |
@@ -180,8 +184,14 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned, not `stable`. ci.yml pins 1.97 and the .deb job builds in a
+          # digest-pinned 1.97.1 image, so tracking `stable` here would mean the
+          # binary install.sh delivers is the one artifact built by a compiler
+          # nothing agreed on - and unlike CI, a release bakes that in
+          # permanently, because releases are immutable. Bump this with ci.yml's
+          # toolchain input, deliberately, in the same change.
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
 
       - name: Build release binary
         run: cargo build --release --locked
