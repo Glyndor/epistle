@@ -28,7 +28,10 @@ jobs:
       # no extra config; ALLOWED_SENDER_DOMAINS opens relay/acceptance for the
       # test sender domain. Host port 1025 maps to the container's plaintext 25.
       postfix:
-        image: boky/postfix:latest
+        # Digest-pinned: `latest` is the worst case of a moving tag - the
+        # reference MTA the interop tests measure against could change between
+        # two runs of the same commit.
+        image: boky/postfix:latest@sha256:aafc772384232497bed875e1eb66b4d3e54ba1ebc86e2e185a6dc1dbc48182ef
         env:
           ALLOWED_SENDER_DOMAINS: epistle.interop.test localhost
         ports:

@@ -20,7 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18
+        # Digest-pinned: `postgres:18` is a moving major tag, so a retag would
+        # silently change what the integration tests run against. Bump this
+        # deliberately, the way rust-debian.yml pins its build image.
+        image: postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: epistle_test
