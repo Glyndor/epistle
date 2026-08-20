@@ -35,10 +35,26 @@ flowchart LR
 ## Install
 
 ```sh
-curl -fsSL https://glyndor.net/install/epistle | sh
+curl -fsSL https://glyndor.net/install/epistle | sudo sh
 ```
 
-Installs the latest release binary to `/usr/local/bin`. Override with `INSTALL_DIR=/path/to/bin`.
+That is the whole install. It adds the signed Glyndor apt repository, installs
+`epistle` from it, and sets the machine up to receive security fixes on its own.
+Podman and podup come along with it — they are what run the mail stack.
+
+Root is needed because it installs packages. It leaves nothing of its own behind:
+the download is removed, and so is anything it had to install just to check the
+archive key.
+
+**Upgrades are apt's job from then on.** `apt upgrade` pulls new versions, and
+the archive's signing key renews through the same channel, because it ships as a
+package apt owns. If the machine had no automatic-upgrade setup, the installer
+adds a conservative one: security updates apply on their own, and the server
+never reboots itself. If it already had one, that configuration is left exactly
+as it was.
+
+epistle runs on Linux and ships as a `.deb`, so apt is the supported install. On
+a system without apt, build from source below.
 
 ## 🚀 Quick start (from source)
 
