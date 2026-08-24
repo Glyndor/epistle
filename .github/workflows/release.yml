@@ -186,10 +186,10 @@ jobs:
         run: |
           # Pinned, not `stable`. ci.yml pins 1.97 and the .deb job builds in a
           # digest-pinned 1.97.1 image, so tracking `stable` here would mean the
-          # binary install.sh delivers is the one artifact built by a compiler
-          # nothing agreed on - and unlike CI, a release bakes that in
-          # permanently, because releases are immutable. Bump this with ci.yml's
-          # toolchain input, deliberately, in the same change.
+          # binary the .deb carries is built by a compiler nothing agreed on -
+          # and unlike CI, a release bakes that in permanently, because releases
+          # are immutable. Bump this with ci.yml's toolchain input, deliberately,
+          # in the same change.
           rustup toolchain install 1.97.1 --profile minimal
           rustup default 1.97.1
 
@@ -213,7 +213,6 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp target/release/epistle "dist/epistle-${TAG}-x86_64-linux"
-          cp scripts/install.sh dist/install.sh
           cp epistle.cdx.json "dist/epistle-${TAG}.cdx.json"
           # Both architectures must have arrived. The apt archive is rebuilt
           # from scratch and synced with --delete, so a product whose declared
