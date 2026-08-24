@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   debian:
-    uses: Glyndor/.github/.github/workflows/rust-debian.yml@118244b8d758bdec6d2c5115d815dbc2e5c4f4e9 # v1.16.0
+    uses: Glyndor/.github/.github/workflows/rust-debian.yml@d4bbc5b6ec0c351ca4cb17d948ceaad818da4078 # v1.18.1
     with:
       package-name: epistle
       # Not the reusable's trixie default: trixie ships rustc 1.85 and the
