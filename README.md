@@ -35,7 +35,7 @@ flowchart LR
 ## Install
 
 ```sh
-curl -fsSL https://glyndor.net/install/epistle | sudo sh
+curl -fsSL https://apt.glyndor.net/install/epistle | sudo sh
 ```
 
 That is the whole install. It adds the signed Glyndor apt repository, installs
