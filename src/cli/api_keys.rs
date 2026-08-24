@@ -2,19 +2,28 @@
 
 use std::process::ExitCode;
 
+use crate::api::api_keys::Scope;
 use crate::api::{ApiKey, ApiKeyStore};
 use crate::config::Config;
 
 /// Generate a strong random key, hash it (SHA-256) and store it under `label`.
 /// The plaintext key is printed once and never stored. `expires_at` is epoch
-/// seconds; `ip_cidr` a single CIDR allowlist.
+/// seconds; `ip_cidr` a single CIDR allowlist; `scopes` lists the permissions
+/// granted (`read`, `write`, `send`). The CLI requires at least one scope —
+/// unscoped keys would be admin-equivalent on first leak, which is the
+/// problem the scope field exists to fix.
 pub(super) fn create(
 	config: &Config,
 	label: &str,
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
+	scopes: Vec<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	if scopes.is_empty() {
+		eprintln!("error: --scope is required (repeat to grant more than one: read, write, send)");
+		return ExitCode::FAILURE;
+	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
 		None => {
@@ -34,6 +43,7 @@ pub(super) fn create(
 		hash: crate::api::api_keys::sha256_hash(&secret),
 		expires_at,
 		ip_cidr,
+		scopes,
 	};
 	match store.add(key) {
 		Ok(()) => {
@@ -57,14 +67,38 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	for (label, expires_at, ip_cidr) in store.list() {
+	for (label, expires_at, ip_cidr, scopes) in store.list() {
 		let expiry = expires_at.map_or_else(|| "never".to_string(), |e| e.to_string());
 		let cidr = ip_cidr.unwrap_or_else(|| "any".to_string());
-		if writeln!(out, "{label}\texpires={expiry}\tip={cidr}").is_err() {
+		// An empty scope list is a legacy key; show the warning verbatim so
+		// operators can spot it on `api-key list` without grepping the logs.
+		let scopes_repr = if scopes.is_empty() {
+			"legacy(all)".to_string()
+		} else {
+			scopes.join(",")
+		};
+		if writeln!(
+			out,
+			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}"
+		)
+		.is_err()
+		{
 			return ExitCode::FAILURE;
 		}
 	}
 	ExitCode::SUCCESS
+}
+
+/// Validate a `--scope` argument. Called by the CLI dispatch before the value
+/// reaches `ApiKeyStore::add` (the store repeats the check; this gives the
+/// user a clean error before any I/O happens).
+pub(super) fn parse_scope(value: &str) -> Result<String, String> {
+	match Scope::from_str(value) {
+		Some(_) => Ok(value.to_string()),
+		None => Err(format!(
+			"unknown scope \"{value}\" (expected read, write or send)"
+		)),
+	}
 }
 
 /// Revoke a management API key by label.

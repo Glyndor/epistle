@@ -9,13 +9,14 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::state::ApiState;
+use super::state::{ApiState, MatchedAuth};
+use crate::api::api_keys::Scope;
 
 /// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
 /// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
@@ -132,15 +133,19 @@ pub struct Response {
 }
 
 /// `POST /jmap/api`: dispatch each method call, returning the responses.
-pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) -> Json<Response> {
-	Json(dispatch_request(&state, request))
+pub async fn api(
+	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
+	Json(request): Json<Request>,
+) -> Json<Response> {
+	Json(dispatch_request(&state, &auth, request))
 }
 
 /// Dispatch a request envelope's method calls and collect the responses
 /// (RFC 8620 §3.3–§3.7). Shared by the HTTP `POST /jmap/api` handler and the
 /// WebSocket transport (RFC 8887), so the two never diverge. Pure aside from the
 /// data-dir/state mutations the individual methods perform.
-pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
+pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) -> Response {
 	let mut method_responses = Vec::with_capacity(request.method_calls.len());
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
@@ -156,11 +161,34 @@ pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 				continue;
 			}
 		};
-		method_responses.push(match name.as_str() {
+		// Scope tightening: the middleware infers `Read` for any `POST
+		// /jmap/api`, but mutating methods need `Write` (or `Send` for
+		// outbound submission). A read-only key hitting the dispatcher would
+		// otherwise reach `Mailbox/set`, `EmailSubmission/set`, etc.
+		let response = match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
+			"Mailbox/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => methods::mailbox_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"Email/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => email::email_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"Email/copy" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => email::email_copy(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"EmailSubmission/set" => match state.require_scope(auth, Scope::Send) {
+				Ok(()) => methods::email_submission_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"PushSubscription/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => websocket::push_subscription_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
 			"Mailbox/get" => methods::mailbox_get(state, &args, &call_id),
-			"Mailbox/set" => methods::mailbox_set(state, &args, &call_id),
 			"Mailbox/query" => methods::mailbox_query(state, &args, &call_id),
 			"Email/query" => methods::email_query(state, &args, &call_id),
 			"Email/get" => methods::email_get(state, &args, &call_id),
@@ -173,19 +201,21 @@ pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 			| "Thread/changes"
 			| "Mailbox/queryChanges"
 			| "Email/queryChanges" => methods::cannot_calculate_changes(state, &args, &call_id),
-			"Email/set" => email::email_set(state, &args, &call_id),
-			"Email/copy" => email::email_copy(state, &args, &call_id),
 			"Identity/get" => methods::identity_get(state, &args, &call_id),
 			"Quota/get" => methods::quota_get(state, &args, &call_id),
-			"EmailSubmission/set" => methods::email_submission_set(state, &args, &call_id),
-			// PushSubscription objects are session-scoped, not per-account
-			// (RFC 8620 §7.2).
 			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),
-			"PushSubscription/set" => websocket::push_subscription_set(state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
-		});
+		};
+		method_responses.push(response);
 	}
 	Response { method_responses }
+}
+
+/// The JMAP spec does not define a "forbidden" method error; `forbidden` is
+/// the closest general-purpose failure (RFC 8620 §3.6.2) and is what other
+/// servers emit for an authorised-but-not-allowed-permission call.
+fn jmap_scope_error(call_id: &str) -> Value {
+	json!(["error", { "type": "forbidden" }, call_id])
 }
 
 /// Replace each `#`-prefixed argument (a ResultReference) with the value pulled
@@ -277,10 +307,16 @@ pub async fn download(
 /// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
 pub async fn upload(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(account): Path<String>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> impl IntoResponse {
+	// `Write` scope: a read-only key must not be able to fill the quota or
+	// the blob store with arbitrary bytes.
+	if state.require_scope(&auth, Scope::Write).is_err() {
+		return jmap_error(StatusCode::UNAUTHORIZED, "forbidden", "missing write scope");
+	}
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}

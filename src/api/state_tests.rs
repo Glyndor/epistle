@@ -1,7 +1,7 @@
 //! Tests for bearer-token plus API-key authorization on the management API.
 
 use super::*;
-use crate::api::api_keys::{ApiKey, ApiKeyStore};
+use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
 
 fn ip(text: &str) -> std::net::IpAddr {
 	text.parse().expect("ip")
@@ -37,6 +37,8 @@ fn key(label: &str, secret: &str) -> ApiKey {
 		hash: crate::api::api_keys::sha256_hash(secret),
 		expires_at: None,
 		ip_cidr: None,
+		// `add()` rejects empty scopes; every test-built key carries one.
+		scopes: vec![Scope::Read.as_str().to_string()],
 	}
 }
 
@@ -44,24 +46,24 @@ fn key(label: &str, secret: &str) -> ApiKey {
 fn configured_token_still_authorizes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_keys(dir.path(), "the-token", Vec::new());
-	assert!(state.authorizes("the-token", None));
-	assert!(!state.authorizes("wrong-token", None));
+	assert!(state.authorizes("the-token", None, &[Scope::Read]));
+	assert!(!state.authorizes("wrong-token", None, &[Scope::Read]));
 }
 
 #[test]
 fn valid_api_key_authorizes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_keys(dir.path(), "the-token", vec![key("ci", "key-secret")]);
-	assert!(state.authorizes("key-secret", None));
+	assert!(state.authorizes("key-secret", None, &[Scope::Read]));
 	// The configured token also still works.
-	assert!(state.authorizes("the-token", None));
+	assert!(state.authorizes("the-token", None, &[Scope::Read]));
 }
 
 #[test]
 fn wrong_api_key_rejected() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_keys(dir.path(), "the-token", vec![key("ci", "key-secret")]);
-	assert!(!state.authorizes("not-the-key", None));
+	assert!(!state.authorizes("not-the-key", None, &[Scope::Read]));
 }
 
 #[test]
@@ -70,7 +72,7 @@ fn expired_api_key_rejected() {
 	let mut expired = key("ci", "key-secret");
 	expired.expires_at = Some(1); // long past
 	let state = state_with_keys(dir.path(), "the-token", vec![expired]);
-	assert!(!state.authorizes("key-secret", None));
+	assert!(!state.authorizes("key-secret", None, &[Scope::Read]));
 }
 
 #[test]
@@ -79,10 +81,10 @@ fn ip_restricted_api_key_enforced() {
 	let mut restricted = key("ci", "key-secret");
 	restricted.ip_cidr = Some("10.0.0.0/8".to_string());
 	let state = state_with_keys(dir.path(), "the-token", vec![restricted]);
-	assert!(state.authorizes("key-secret", Some(ip("10.1.2.3"))));
-	assert!(!state.authorizes("key-secret", Some(ip("192.0.2.1"))));
+	assert!(state.authorizes("key-secret", Some(ip("10.1.2.3")), &[Scope::Read]));
+	assert!(!state.authorizes("key-secret", Some(ip("192.0.2.1")), &[Scope::Read]));
 	// A restricted key with no known client IP cannot be satisfied.
-	assert!(!state.authorizes("key-secret", None));
+	assert!(!state.authorizes("key-secret", None, &[Scope::Read]));
 }
 
 /// `owns_address` must return `false` when no directory has been attached

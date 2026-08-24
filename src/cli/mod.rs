@@ -261,6 +261,16 @@ enum Command {
 		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
+		/// Permissions granted to this key (repeat to grant more than one:
+		/// `read`, `write`, `send`). Required at least once — an unscoped key
+		/// is admin-equivalent, which is exactly what the scopes field exists
+		/// to prevent.
+		#[arg(
+			long = "scope",
+			value_name = "SCOPE",
+			value_parser = api_keys::parse_scope,
+		)]
+		scopes: Vec<String>,
 	},
 	/// List the management API keys (never the key).
 	ApiKeys {
@@ -510,12 +520,14 @@ impl Cli {
 				label,
 				expires_at,
 				ip_cidr,
+				scopes,
 			} => match Config::load(&config) {
 				Ok(config) => api_keys::create(
 					&config,
 					&label,
 					expires_at,
 					ip_cidr,
+					scopes,
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
