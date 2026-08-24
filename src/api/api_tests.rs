@@ -57,9 +57,10 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 		&crate::smtp::auth::tests::hash(TOKEN),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
-		store,
+		store.clone(),
 		spool,
 	)
+	.with_directory(store.handle())
 }
 
 pub(super) async fn request(
@@ -407,9 +408,10 @@ async fn sha256_token_format_is_accepted() {
 		&sha256_hash(TOKEN),
 		dir.path().to_path_buf(),
 		vec![],
-		store,
+		store.clone(),
 		spool,
-	);
+	)
+	.with_directory(store.handle());
 	let app = router(state);
 	let (status, _) = request(&app, "GET", "/api/v1/status", Some(TOKEN)).await;
 	assert_eq!(status, StatusCode::OK);
