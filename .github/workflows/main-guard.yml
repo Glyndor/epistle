@@ -6,17 +6,11 @@ on:
 
 permissions: {}
 
+# This used to be an inline job named `develop-only`, which emitted the
+# required-check context `develop-only`. Calling the shared reusable from a
+# job with id `develop-only` emits `develop-only / develop-only` instead —
+# the context name has to be updated in the `main` ruleset at the same
+# time this PR merges, or `main` is blocked.
 jobs:
   develop-only:
-    name: develop-only
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require develop as source branch
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-        run: |
-          if [ "$HEAD_REF" != "develop" ]; then
-            echo "::error::Pull requests into main must come from develop (got $HEAD_REF)."
-            exit 1
-          fi
-          echo "Source branch is develop."
+    uses: Glyndor/.github/.github/workflows/main-guard.yml@d4bbc5b6ec0c351ca4cb17d948ceaad818da4078 # v1.18.1
