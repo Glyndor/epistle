@@ -97,6 +97,13 @@ impl ApiState {
 	/// Build the state from configuration data. API keys are loaded from
 	/// `api_keys.toml` under `data_dir`; a missing or unreadable file leaves the
 	/// key set empty (the configured token still authenticates).
+	///
+	/// As a one-shot migration, this also runs the JMAP blob-ownership
+	/// backfill: writes an `.owner` sidecar for every uploaded blob whose
+	/// corresponding message already lives under the account's mailboxes, so
+	/// pre-existing data stays servable after the per-account download gate
+	/// is introduced. Idempotent: sidecars that already name the right account
+	/// are not touched.
 	pub fn new(
 		token_hash: &str,
 		data_dir: PathBuf,
@@ -107,6 +114,27 @@ impl ApiState {
 		let api_keys = super::api_keys::ApiKeyStore::open(&data_dir)
 			.map(|store| store.keys().to_vec())
 			.unwrap_or_default();
+		// One-shot backfill before any handler can serve a download. Runs
+		// against every known account; the function itself is bounded by the
+		// number of stored messages and per-message work is constant, so a
+		// large corpus never blocks startup for more than a few seconds of
+		// straight `read_dir` + `fs::write` traffic.
+		let account_names: Vec<String> = store
+			.account_views()
+			.into_iter()
+			.map(|(name, _, _)| name)
+			.collect();
+		let stats = super::jmap::backfill_blob_ownership(&data_dir, &account_names);
+		if stats.written > 0 || stats.conflicts > 0 || stats.errors > 0 {
+			tracing::info!(
+				scanned = stats.scanned,
+				written = stats.written,
+				skipped = stats.skipped,
+				conflicts = stats.conflicts,
+				errors = stats.errors,
+				"jmap blob-ownership backfill complete"
+			);
+		}
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.to_string(),
