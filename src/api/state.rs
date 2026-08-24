@@ -7,7 +7,8 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::directory_store::AccountStore;
+use crate::directory_store::{AccountStore, DirectoryHandle};
+use crate::smtp::address::Address;
 use crate::storage::{FsSpool, MessageCrypto};
 
 use super::error::ApiError;
@@ -43,6 +44,10 @@ struct Inner {
 	/// key is configured. When `None`, the `/oauth/*` grant routes are not mounted
 	/// and no tokens are issued (fail closed).
 	authz: Option<Arc<super::oauth::AuthzServer>>,
+	/// Hot-reloadable directory shared with SMTP/IMAP/ManageSieve. Required for
+	/// send-as ownership checks on the API path; when absent, every
+	/// `owns_address` call returns `false` (fail closed).
+	directory: Option<DirectoryHandle>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -149,6 +154,7 @@ impl ApiState {
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
 				crypto: MessageCrypto::disabled(),
 				authz: None,
+				directory: None,
 			}),
 		}
 	}
@@ -206,6 +212,30 @@ impl ApiState {
 	/// The at-rest crypto for stored messages and uploaded blobs.
 	pub fn crypto(&self) -> &MessageCrypto {
 		&self.inner.crypto
+	}
+
+	/// Attach the hot-reloadable directory used for send-as ownership checks
+	/// on the API path. Must be set before the state is shared (it rebuilds
+	/// the `Arc` inner). When never attached, every `owns_address` call returns
+	/// `false` (fail closed).
+	pub fn with_directory(mut self, directory: DirectoryHandle) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.directory = Some(directory);
+		}
+		self
+	}
+
+	/// Whether `account` owns `address` — used to enforce send-as on the API
+	/// path the same way SMTP does (`src/smtp/session/mod.rs`). Fail-closed:
+	/// returns `false` when no directory has been attached (e.g. in tests or
+	/// if a future deployment forgets to wire it in), never `true`. The SMTP
+	/// path also delegates to `Directory::owns_address`, so the API and the
+	/// SMTP submission path can never disagree on ownership.
+	pub fn owns_address(&self, account: &str, address: &Address) -> bool {
+		match &self.inner.directory {
+			None => false,
+			Some(handle) => handle.current().owns_address(account, address),
+		}
 	}
 
 	/// Set the per-account storage quota in bytes (0 = unlimited).

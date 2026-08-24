@@ -84,3 +84,59 @@ fn ip_restricted_api_key_enforced() {
 	// A restricted key with no known client IP cannot be satisfied.
 	assert!(!state.authorizes("key-secret", None));
 }
+
+/// `owns_address` must return `false` when no directory has been attached
+/// (fail-closed). Without this guarantee, a future deployment that forgets
+/// to wire the directory would silently allow every send-as.
+#[test]
+fn owns_address_is_fail_closed_without_directory() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_keys(dir.path(), "the-token", Vec::new());
+	let address = crate::smtp::address::Address::parse("alice@example.org")
+		.expect("address parses");
+	// No directory attached: every owns_address call is `false`, even for an
+	// address that *would* be owned if the directory were wired up.
+	assert!(
+		!state.owns_address("alice", &address),
+		"owns_address must fail closed when no directory is attached"
+	);
+}
+
+/// `owns_address` delegates to the wired-in directory: a foreign address is
+/// rejected, an owned one is accepted, and a case-different variant of an
+/// owned address is still accepted (Directory::owns_address is
+/// case-insensitive on the address — see src/smtp/directory.rs:412).
+#[test]
+fn owns_address_consults_attached_directory() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let accounts = crate::config::Account {
+		name: "alice".to_string(),
+		addresses: vec!["alice@example.org".to_string()],
+		password_hash: Some("$argon2id$secret".to_string()),
+		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
+	};
+	let store = std::sync::Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir.path(),
+			vec!["example.org".to_string()],
+			std::collections::HashMap::new(),
+			vec![accounts],
+		)
+		.expect("open store"),
+	);
+	let state = state_with_keys(dir.path(), "the-token", Vec::new())
+		.with_directory(store.handle());
+	let owned = crate::smtp::address::Address::parse("alice@example.org")
+		.expect("address parses");
+	let foreign = crate::smtp::address::Address::parse("bob@example.org")
+		.expect("address parses");
+	let case_variant =
+		crate::smtp::address::Address::parse("ALICE@example.ORG")
+			.expect("address parses");
+	assert!(state.owns_address("alice", &owned));
+	assert!(!state.owns_address("alice", &foreign));
+	assert!(state.owns_address("alice", &case_variant));
+}
