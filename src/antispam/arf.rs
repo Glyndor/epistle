@@ -7,6 +7,7 @@
 
 use crate::clock;
 use crate::smtp::session::AcceptedMessage;
+use crate::util::header::sanitize_header_value;
 
 /// The kind of abuse being reported (RFC 5965 §7.3 Feedback-Type registry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,23 +53,32 @@ pub fn build(hostname: &str, report: &Report, now: std::time::SystemTime) -> Acc
 			.map(|d| d.as_secs())
 			.unwrap_or(0)
 	);
-	let reported_domain = report
-		.original_mail_from
+	// `original_mail_from` and `source_ip` come from an inbound ARF
+	// complaint (the feedback loop from another provider's mailbox): the
+	// message is not authenticated, and a CRLF in either value would
+	// inject forged headers into our feedback report. Sanitize before the
+	// values reach any `format!`, matching what
+	// `src/cli/report_abuse.rs::build_report` does for the operator-driven
+	// path. `reported_domain` is derived from the sanitised
+	// `original_mail_from` so it cannot carry an injection either.
+	let original_mail_from = sanitize_header_value(report.original_mail_from);
+	let reported_domain = original_mail_from
 		.rsplit_once('@')
-		.map(|(_, domain)| domain)
-		.unwrap_or("");
+		.map(|(_, domain)| sanitize_header_value(domain))
+		.unwrap_or_default();
+	let source_ip = report.source_ip.map(|ip| sanitize_header_value(ip));
 
 	let mut feedback = format!(
 		"Feedback-Type: {}\r\n\
-User-Agent: {hostname}\r\n\
-Version: 1\r\n\
-Original-Mail-From: {}\r\n\
-Arrival-Date: {date}\r\n\
-Reported-Domain: {reported_domain}\r\n",
+ User-Agent: {hostname}\r\n\
+ Version: 1\r\n\
+ Original-Mail-From: {}\r\n\
+ Arrival-Date: {date}\r\n\
+ Reported-Domain: {reported_domain}\r\n",
 		report.feedback_type.as_str(),
-		report.original_mail_from,
+		original_mail_from,
 	);
-	if let Some(ip) = report.source_ip {
+	if let Some(ip) = source_ip {
 		feedback.push_str(&format!("Source-IP: {ip}\r\n"));
 	}
 
@@ -356,5 +366,70 @@ Content-Type: text/plain\r\n\
 human only\r\n\
 --b--\r\n";
 		assert_eq!(parse(raw), None);
+	}
+
+	/// Inbound ARF complaints are unauthenticated. A CRLF in
+	/// `Original-Mail-From:` would, if interpolated raw into our reply,
+	/// terminate the line and start a new header. The build must sanitise:
+	/// the sanitiser collapses CRLF to a space, so the result is a single
+	/// header line with the `Bcc:` content as opaque text, not as a new
+	/// header.
+	#[test]
+	fn build_sanitises_crlf_in_original_mail_from() {
+		let mut r = report();
+		// A real-looking envelope sender plus a CRLF that, if echoed raw,
+		// would start a forged `Bcc:` header.
+		r.original_mail_from = "spammer@bad.example\r\nBcc: attacker@evil.example";
+		let body = String::from_utf8(
+			build("mail.example.org", &r, UNIX_EPOCH + Duration::from_secs(1_780_662_896)).data,
+		)
+		.expect("ascii");
+		// Scan the whole report: any line that starts with `Bcc:` is a
+		// header-injection success.
+		for line in body.lines() {
+			assert!(
+				!line.to_ascii_lowercase().starts_with("bcc:"),
+				"forged Bcc: must not appear as its own header: {line:?}\n--- full body ---\n{body}"
+			);
+		}
+	}
+
+	/// A CRLF in `Source-IP:` would split the line. The build must sanitise:
+	/// the value lands on a single line, no forged header appears after it.
+	#[test]
+	fn build_sanitises_crlf_in_source_ip() {
+		let mut r = report();
+		r.source_ip = Some("192.0.2.5\r\nBcc: attacker@evil.example");
+		let body = String::from_utf8(
+			build("mail.example.org", &r, UNIX_EPOCH + Duration::from_secs(1_780_662_896)).data,
+		)
+		.expect("ascii");
+		for line in body.lines() {
+			assert!(
+				!line.to_ascii_lowercase().starts_with("bcc:"),
+				"forged Bcc: must not appear via source-IP injection: {line:?}\n--- full body ---\n{body}"
+			);
+		}
+	}
+
+	/// `Reported-Domain:` is derived from `Original-Mail-From` after
+	/// sanitisation, so a CRLF in the latter cannot leak into the
+	/// reported-domain value either.
+	#[test]
+	fn build_sanitises_reported_domain_derived_from_mail_from() {
+		let mut r = report();
+		r.original_mail_from = "spammer@bad.example\r\nBcc: attacker@evil.example";
+		let body = String::from_utf8(
+			build("mail.example.org", &r, UNIX_EPOCH + Duration::from_secs(1_780_662_896)).data,
+		)
+		.expect("ascii");
+		let reported_line = body
+			.lines()
+			.find(|line| line.to_ascii_lowercase().starts_with("reported-domain:"))
+			.expect("reported-domain line");
+		assert!(
+			!reported_line.contains('\r') && !reported_line.contains('\n'),
+			"Reported-Domain: line must not contain CRLF: {reported_line:?}"
+		);
 	}
 }

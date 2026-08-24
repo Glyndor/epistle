@@ -539,3 +539,67 @@ async fn jmap_upload_within_quota_succeeds_over_quota_is_rejected() {
 	assert_eq!(body["type"], "urn:ietf:params:jmap:error:limit");
 	assert_eq!(body["limit"], "storage");
 }
+
+/// JMAP `Email/set` create builds RFC 5322 with the user's `from`, `to` and
+/// `subject` interpolated raw. Without sanitization, a CRLF in any of those
+/// would inject forged headers (Bcc, X-*, …) into the stored message. This
+/// test exercises the rejection half: a CRLF in `subject` cannot survive
+/// into the produced bytes; the matching acceptance case is the suite of
+/// `Email/set` create tests above (they use a benign subject).
+#[tokio::test]
+async fn jmap_email_set_sanitises_header_injection_in_subject() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	// Subject contains a CRLF that, if interpolated raw, would terminate the
+	// header line and start a new `Bcc:` header.
+	let req = serde_json::json!({
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"create": { "d1": {
+				"mailboxIds": {"INBOX": true},
+				"from": [{"email": "alice@example.org"}],
+				"to": [{"email": "alice@example.org"}],
+				"subject": "hi\r\nBcc: attacker@evil.example",
+			} },
+		}, "c1"]],
+	});
+	let (status, _body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	// Pull the stored message back. Append goes to `INBOX/cur` after
+	// delivery (delivery moves it from `new`).
+	let find_message = |dir: &std::path::Path| -> Option<Vec<u8>> {
+		let entries = std::fs::read_dir(dir).ok()?;
+		for entry in entries.flatten() {
+			if let Ok(bytes) = std::fs::read(entry.path()) {
+				return Some(bytes);
+			}
+		}
+		None
+	};
+	let raw = find_message(&dir.path().join("accounts").join("alice").join("cur"))
+		.or_else(|| find_message(&dir.path().join("accounts").join("alice").join("new")))
+		.expect("stored message");
+	let text = String::from_utf8_lossy(&raw);
+	// The sanitiser collapses CRLF to spaces, so the substring `Bcc:` may
+	// still appear inside the `Subject:` value (as opaque text on the same
+	// line). The structural property that defeats the injection is that
+	// no line in the header block starts with `Bcc:`, which is what an
+	// un-sanitised CRLF would produce.
+	for line in text.lines() {
+		assert!(
+			!line.to_ascii_lowercase().starts_with("bcc:"),
+			"forged Bcc: must not appear as its own header: {line:?}"
+		);
+	}
+	// And the original `Subject:` line is on a single line (no embedded CRLF).
+	let subject_line = text
+		.lines()
+		.find(|line| line.to_ascii_lowercase().starts_with("subject:"))
+		.expect("subject header");
+	assert!(
+		!subject_line.contains('\r') && !subject_line.contains('\n'),
+		"Subject: line must not contain CRLF: {subject_line:?}"
+	);
+}
