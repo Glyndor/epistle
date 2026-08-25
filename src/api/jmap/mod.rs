@@ -9,13 +9,14 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::state::ApiState;
+use super::state::{ApiState, MatchedAuth};
+use crate::api::api_keys::Scope;
 
 /// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
 /// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
@@ -25,10 +26,16 @@ pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 
+mod blobs;
 mod email;
 mod methods;
 mod objects;
 pub mod websocket;
+
+pub use blobs::{backfill_blob_ownership, reclaim_blobs};
+
+#[cfg(test)]
+pub(crate) use blobs::{account_usage_bytes, read_blob_owner};
 
 /// JMAP core capability URN.
 const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
@@ -132,15 +139,19 @@ pub struct Response {
 }
 
 /// `POST /jmap/api`: dispatch each method call, returning the responses.
-pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) -> Json<Response> {
-	Json(dispatch_request(&state, request))
+pub async fn api(
+	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
+	Json(request): Json<Request>,
+) -> Json<Response> {
+	Json(dispatch_request(&state, &auth, request))
 }
 
 /// Dispatch a request envelope's method calls and collect the responses
 /// (RFC 8620 §3.3–§3.7). Shared by the HTTP `POST /jmap/api` handler and the
 /// WebSocket transport (RFC 8887), so the two never diverge. Pure aside from the
 /// data-dir/state mutations the individual methods perform.
-pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
+pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) -> Response {
 	let mut method_responses = Vec::with_capacity(request.method_calls.len());
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
@@ -156,11 +167,34 @@ pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 				continue;
 			}
 		};
-		method_responses.push(match name.as_str() {
+		// Scope tightening: the middleware infers `Read` for any `POST
+		// /jmap/api`, but mutating methods need `Write` (or `Send` for
+		// outbound submission). A read-only key hitting the dispatcher would
+		// otherwise reach `Mailbox/set`, `EmailSubmission/set`, etc.
+		let response = match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
+			"Mailbox/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => methods::mailbox_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"Email/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => email::email_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"Email/copy" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => email::email_copy(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"EmailSubmission/set" => match state.require_scope(auth, Scope::Send) {
+				Ok(()) => methods::email_submission_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"PushSubscription/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => websocket::push_subscription_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
 			"Mailbox/get" => methods::mailbox_get(state, &args, &call_id),
-			"Mailbox/set" => methods::mailbox_set(state, &args, &call_id),
 			"Mailbox/query" => methods::mailbox_query(state, &args, &call_id),
 			"Email/query" => methods::email_query(state, &args, &call_id),
 			"Email/get" => methods::email_get(state, &args, &call_id),
@@ -173,19 +207,21 @@ pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 			| "Thread/changes"
 			| "Mailbox/queryChanges"
 			| "Email/queryChanges" => methods::cannot_calculate_changes(state, &args, &call_id),
-			"Email/set" => email::email_set(state, &args, &call_id),
-			"Email/copy" => email::email_copy(state, &args, &call_id),
 			"Identity/get" => methods::identity_get(state, &args, &call_id),
 			"Quota/get" => methods::quota_get(state, &args, &call_id),
-			"EmailSubmission/set" => methods::email_submission_set(state, &args, &call_id),
-			// PushSubscription objects are session-scoped, not per-account
-			// (RFC 8620 §7.2).
 			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),
-			"PushSubscription/set" => websocket::push_subscription_set(state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
-		});
+		};
+		method_responses.push(response);
 	}
 	Response { method_responses }
+}
+
+/// The JMAP spec does not define a "forbidden" method error; `forbidden` is
+/// the closest general-purpose failure (RFC 8620 §3.6.2) and is what other
+/// servers emit for an authorised-but-not-allowed-permission call.
+fn jmap_scope_error(call_id: &str) -> Value {
+	json!(["error", { "type": "forbidden" }, call_id])
 }
 
 /// Replace each `#`-prefixed argument (a ResultReference) with the value pulled
@@ -260,12 +296,12 @@ pub async fn download(
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
 	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto())
-		.or_else(|| read_blob(state.data_dir(), &account, &blob_id, state.crypto()));
+		.or_else(|| blobs::read_blob(state.data_dir(), &account, &blob_id, state.crypto()));
 	match bytes {
 		Some(bytes) => {
 			// Serve the media type recorded at upload time; stored messages and
 			// legacy blobs without a sidecar fall back to octet-stream.
-			let content_type = read_blob_type(state.data_dir(), &blob_id)
+			let content_type = blobs::read_blob_type(state.data_dir(), &blob_id)
 				.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_string());
 			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
 		}
@@ -277,10 +313,16 @@ pub async fn download(
 /// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
 pub async fn upload(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(account): Path<String>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> impl IntoResponse {
+	// `Write` scope: a read-only key must not be able to fill the quota or
+	// the blob store with arbitrary bytes.
+	if state.require_scope(&auth, Scope::Write).is_err() {
+		return jmap_error(StatusCode::UNAUTHORIZED, "forbidden", "missing write scope");
+	}
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
@@ -309,7 +351,7 @@ pub async fn upload(
 	// the closest standard code for "would exceed the account's storage".
 	let limit = state.quota_limit();
 	if limit > 0 {
-		let usage = account_usage_bytes(state.data_dir(), &account, state.crypto());
+		let usage = blobs::account_usage_bytes(state.data_dir(), &account, state.crypto());
 		if usage.saturating_add(body.len() as u64) > limit {
 			return (
 				StatusCode::INSUFFICIENT_STORAGE,
@@ -348,7 +390,7 @@ pub async fn upload(
 	if std::fs::create_dir_all(&dir).is_err()
 		|| std::fs::write(dir.join(&blob_id), &stored).is_err()
 		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
-		|| write_blob_owner(state.data_dir(), &blob_id, &account).is_err()
+		|| blobs::write_blob_owner(state.data_dir(), &blob_id, &account).is_err()
 	{
 		return jmap_error(
 			StatusCode::INTERNAL_SERVER_ERROR,
@@ -380,309 +422,4 @@ fn jmap_error(status: StatusCode, kind: &str, detail: &str) -> axum::response::R
 		})),
 	)
 		.into_response()
-}
-
-/// Read an uploaded blob by id (rejecting any path separators in the id),
-/// decoding the at-rest envelope. Fails closed: a blob that cannot be decrypted
-/// is not returned rather than served as ciphertext, and a blob whose `.owner`
-/// sidecar does not name the requesting account is not returned either — the
-/// sidecar gates cross-account reads of the shared blob pool.
-fn read_blob(
-	data_dir: &std::path::Path,
-	account: &str,
-	blob_id: &str,
-	crypto: &crate::storage::MessageCrypto,
-) -> Option<Vec<u8>> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	// Owner sidecar is mandatory for every uploaded blob: missing, empty, or
-	// mismatching means the blob is not (or no longer) owned by `account`, so
-	// it must not be served. Pre-existing blobs from before this gate was
-	// introduced get an `.owner` written by the startup backfill; transient
-	// uploads that never get referenced stay sidecar-less and become
-	// unservable (the reclaim task sweeps them after their TTL anyway).
-	let blob_dir = data_dir.join("blobs");
-	let owner = std::fs::read_to_string(blob_dir.join(format!("{blob_id}.owner")))
-		.ok()
-		.filter(|value| !value.is_empty())?;
-	if owner != account {
-		return None;
-	}
-	let stored = std::fs::read(blob_dir.join(blob_id)).ok()?;
-	crypto.decode(&stored).ok()
-}
-
-/// Read the recorded media type of an uploaded blob, if any (the `.type`
-/// sidecar written at upload time). Returns `None` for stored messages.
-fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	std::fs::read_to_string(data_dir.join("blobs").join(format!("{blob_id}.type")))
-		.ok()
-		.filter(|value| !value.is_empty())
-}
-
-/// Suffix written alongside every uploaded blob to record the account that
-/// owns it. Mirrors the `.type` sidecar (the media-type sidecar already used
-/// for uploaded blobs).
-const OWNER_SIDECAR_SUFFIX: &str = ".owner";
-
-/// Write the `.owner` sidecar for an uploaded blob, recording the account that
-/// owns it. Used by the upload handler and by the startup backfill.
-fn write_blob_owner(
-	data_dir: &std::path::Path,
-	blob_id: &str,
-	account: &str,
-) -> std::io::Result<()> {
-	let dir = data_dir.join("blobs");
-	std::fs::create_dir_all(&dir)?;
-	std::fs::write(
-		dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")),
-		account.as_bytes(),
-	)
-}
-
-/// Read the recorded owner of an uploaded blob, if any. Visible to sibling
-/// test modules so they can assert on the sidecar without scraping the
-/// filesystem in two places.
-#[cfg(test)]
-pub(crate) fn read_blob_owner(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	std::fs::read_to_string(
-		data_dir
-			.join("blobs")
-			.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")),
-	)
-	.ok()
-	.filter(|value| !value.is_empty())
-}
-
-/// Bytes counted against an account's storage quota: its stored mail (every
-/// message across INBOX and folders) plus the uploaded blob store. JMAP blobs
-/// live in one shared `<data_dir>/blobs` pool that is not partitioned per
-/// account, so the whole pool is counted — a conservative, fail-closed choice
-/// that never under-counts usage when enforcing the quota on upload.
-pub fn account_usage_bytes(
-	data_dir: &std::path::Path,
-	account: &str,
-	crypto: &crate::storage::MessageCrypto,
-) -> u64 {
-	crate::imap::mailbox::account_usage(data_dir, account, crypto)
-		.saturating_add(blobs_usage_bytes(data_dir))
-}
-
-/// Total size in bytes of the uploaded blob store, counting blob payloads and
-/// their `.type` and `.owner` sidecars under `<data_dir>/blobs`.
-fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
-	let mut total = 0u64;
-	let Ok(entries) = std::fs::read_dir(data_dir.join("blobs")) else {
-		return 0;
-	};
-	for entry in entries.flatten() {
-		if let Ok(meta) = entry.metadata()
-			&& meta.is_file()
-		{
-			total = total.saturating_add(meta.len());
-		}
-	}
-	total
-}
-
-/// Reclaim transient uploaded blobs (RFC 8620 §6.1: an uploaded blob that is
-/// not referenced may be deleted). Delete every blob — payload and its `.type`
-/// and `.owner` sidecars — whose payload was last modified more than `ttl` ago,
-/// returning the number of blobs removed. Only the upload store under
-/// `<data_dir>/blobs` is touched; stored mail under `<data_dir>/accounts` is
-/// never affected.
-pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> usize {
-	let dir = data_dir.join("blobs");
-	let Ok(entries) = std::fs::read_dir(&dir) else {
-		return 0;
-	};
-	let now = std::time::SystemTime::now();
-	let mut removed = 0;
-	for entry in entries.flatten() {
-		let name = entry.file_name();
-		// Sidecars are reclaimed alongside their payload, not on their own.
-		if name
-			.to_str()
-			.is_some_and(|name| name.ends_with(".type") || name.ends_with(OWNER_SIDECAR_SUFFIX))
-		{
-			continue;
-		}
-		// Only act on well-formed blob ids; ignore anything else in the dir.
-		let Some(blob_id) = name.to_str().filter(|id| uuid::Uuid::parse_str(id).is_ok()) else {
-			continue;
-		};
-		let expired = entry
-			.metadata()
-			.and_then(|meta| meta.modified())
-			.ok()
-			.and_then(|modified| now.duration_since(modified).ok())
-			.is_some_and(|age| age > ttl);
-		if expired {
-			let _ = std::fs::remove_file(dir.join(blob_id));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}.type")));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")));
-			removed += 1;
-		}
-	}
-	removed
-}
-
-/// Counts from [`backfill_blob_ownership`]: lets the caller log progress at
-/// startup and lets tests verify what the pass actually did without scraping
-/// the filesystem.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct BackfillStats {
-	/// Stored messages inspected across every account's mailboxes.
-	pub scanned: u64,
-	/// Sidecars written because they were missing or did not match the
-	/// account that owns the message.
-	pub written: u64,
-	/// Sidecars left untouched because they already named the correct owner.
-	pub skipped: u64,
-	/// Sidecars that already named a *different* owner — recorded so the
-	/// operator can investigate, never overwritten (two distinct accounts
-	/// claiming the same UUID is a real anomaly, not something to silently
-	/// fix).
-	pub conflicts: u64,
-	/// Per-message filesystem errors swallowed so a corrupt mailbox does not
-	/// abort the pass (the spec: "que no muera si un mensaje esta corrupto").
-	pub errors: u64,
-}
-
-/// One-shot startup migration: write `.owner` sidecars for every uploaded blob
-/// whose corresponding message already lives under the account's mailboxes.
-///
-/// A stored message's filename UUID is itself a valid `blobId` (RFC 8621 §4.1.1
-/// and [`objects::email_object`], which returns `blobId: id`). So every `.eml`
-/// already implies ownership of its UUID by the account that owns the
-/// mailbox, and writing the sidecar here makes those pre-existing uploads
-/// servable again after the per-account gate is introduced.
-///
-/// What this pass deliberately does NOT do:
-///
-/// - **Scan message bodies for embedded blob references.** RFC 5322 messages
-///   can carry any number of UUID-shaped tokens in headers (Message-Id,
-///   References, Content-Id...) and inside bodies. Treating every such token
-///   as a blob reference would claim ownership of arbitrary UUIDs that may
-///   not even exist as blobs in the pool, and in the worst case — when the
-///   UUID happens to match another account's blob — would transfer that
-///   blob's ownership. The conservative choice is to only register UUIDs the
-///   server actually minted as mailbox filenames; future attachment support
-///   can extend this pass without touching the security model.
-/// - **Rewrite sidecars that already name the correct owner.** Idempotent:
-///   re-running on a server whose sidecars are already up-to-date is a no-op
-///   (verified by the `mtime_unchanged_on_second_run` test).
-/// - **Touch a `.owner` that names a different account.** Logged as a
-///   conflict and left alone — two distinct accounts claiming the same UUID
-///   is a real anomaly worth investigating, never something to silently
-///   resolve by overwriting.
-///
-/// Errors reading individual mailbox directories or entries are swallowed
-/// and counted in [`BackfillStats::errors`] so a single bad message does not
-/// abort the whole pass.
-pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) -> BackfillStats {
-	let mut stats = BackfillStats::default();
-	for account in accounts {
-		for mailbox in crate::imap::mailbox::list(data_dir, account) {
-			let Some(dir) = crate::imap::mailbox::mailbox_dir(data_dir, account, &mailbox) else {
-				stats.errors = stats.errors.saturating_add(1);
-				continue;
-			};
-			let entries = match std::fs::read_dir(&dir) {
-				Ok(entries) => entries,
-				Err(_) => {
-					stats.errors = stats.errors.saturating_add(1);
-					continue;
-				}
-			};
-			for entry in entries {
-				let entry = match entry {
-					Ok(entry) => entry,
-					Err(_) => {
-						stats.errors = stats.errors.saturating_add(1);
-						continue;
-					}
-				};
-				let name = match entry.file_name().to_str() {
-					Some(name) => name.to_string(),
-					None => continue,
-				};
-				let Some(stem) = name.strip_suffix(".eml") else {
-					continue;
-				};
-				// A non-UUID filename means the message would not have been
-				// accepted by the snapshot; nothing to register.
-				if uuid::Uuid::parse_str(stem).is_err() {
-					continue;
-				}
-				stats.scanned = stats.scanned.saturating_add(1);
-				match ensure_blob_owner(data_dir, stem, account) {
-					Ok(EnsureOutcome::Written) => {
-						stats.written = stats.written.saturating_add(1);
-					}
-					Ok(EnsureOutcome::AlreadyCorrect) => {
-						stats.skipped = stats.skipped.saturating_add(1);
-					}
-					Ok(EnsureOutcome::Conflict) => {
-						stats.conflicts = stats.conflicts.saturating_add(1);
-					}
-					Err(()) => {
-						stats.errors = stats.errors.saturating_add(1);
-					}
-				}
-			}
-		}
-	}
-	stats
-}
-
-/// What [`ensure_blob_owner`] did to a blob's `.owner` sidecar.
-enum EnsureOutcome {
-	/// The sidecar was missing or did not match the expected account; it has
-	/// now been written.
-	Written,
-	/// The sidecar already names the expected account; nothing was touched.
-	AlreadyCorrect,
-	/// The sidecar names a different account; left alone and reported.
-	Conflict,
-}
-
-/// Write the `.owner` sidecar only if it is missing or does not match the
-/// expected account. Returns the [`EnsureOutcome`] describing what happened,
-/// or `Err(())` on a filesystem error so the caller can count it without
-/// aborting the whole pass.
-fn ensure_blob_owner(
-	data_dir: &std::path::Path,
-	blob_id: &str,
-	account: &str,
-) -> Result<EnsureOutcome, ()> {
-	let blob_dir = data_dir.join("blobs");
-	let owner_path = blob_dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}"));
-	match std::fs::read_to_string(&owner_path) {
-		Ok(existing) if existing == account => Ok(EnsureOutcome::AlreadyCorrect),
-		Ok(_) => Ok(EnsureOutcome::Conflict),
-		Err(_) if owner_path.exists() => Err(()),
-		Err(_) => {
-			// The payload file determines whether this sidecar is needed at
-			// all: if the blob was uploaded but never persisted under
-			// `blobs/`, there is nothing to gate. Skipping the sidecar write
-			// in that case avoids creating an `.owner` for a non-existent
-			// blob (which would not affect the download check but would
-			// inflate the scan count).
-			if !blob_dir.join(blob_id).exists() {
-				Ok(EnsureOutcome::AlreadyCorrect)
-			} else {
-				std::fs::create_dir_all(&blob_dir).map_err(|_| ())?;
-				std::fs::write(&owner_path, account.as_bytes()).map_err(|_| ())?;
-				Ok(EnsureOutcome::Written)
-			}
-		}
-	}
 }

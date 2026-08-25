@@ -4,6 +4,7 @@
 
 use super::{PushState, handle_ws_message};
 use crate::api::router;
+use crate::api::state::MatchedAuth;
 use crate::api::tests::{TOKEN, request, test_state};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -12,6 +13,16 @@ use serde_json::{Value, json};
 fn one(frames: Vec<String>) -> Value {
 	assert_eq!(frames.len(), 1, "expected one frame, got {frames:?}");
 	serde_json::from_str(&frames[0]).expect("frame is JSON")
+}
+
+/// The configured bearer token grants every scope, so `handle_ws_message`
+/// dispatches unimpeded. (Scope-failure cases are exercised through the HTTP
+/// router in api_tests.rs, which goes through the real middleware.)
+fn auth_for_test() -> MatchedAuth {
+	MatchedAuth {
+		token: Some(TOKEN.to_string()),
+		client_ip: None,
+	}
 }
 
 #[test]
@@ -26,7 +37,12 @@ fn request_frame_returns_response_with_echoed_request_id() {
 		"methodCalls": [["Core/echo", {"hello": "ws"}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &frame, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&frame,
+		&mut push,
+	));
 	assert_eq!(reply["@type"], "Response");
 	assert_eq!(reply["requestId"], "R1");
 	assert_eq!(reply["methodResponses"][0][0], "Core/echo");
@@ -44,7 +60,12 @@ fn request_without_id_omits_request_id() {
 		"methodCalls": [["Core/echo", {}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &frame, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&frame,
+		&mut push,
+	));
 	assert_eq!(reply["@type"], "Response");
 	assert!(reply.get("requestId").is_none(), "{reply}");
 }
@@ -56,6 +77,7 @@ fn unknown_type_returns_request_error() {
 	let mut push = PushState::default();
 	let reply = one(handle_ws_message(
 		&state,
+		&auth_for_test(),
 		&json!({"@type": "Frobnicate"}).to_string(),
 		&mut push,
 	));
@@ -69,7 +91,12 @@ fn unparseable_frame_returns_request_error() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = test_state(dir.path(), 0);
 	let mut push = PushState::default();
-	let reply = one(handle_ws_message(&state, "{not json", &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		"{not json",
+		&mut push,
+	));
 	assert_eq!(reply["@type"], "RequestError");
 	assert_eq!(reply["type"], "urn:ietf:params:jmap:error:notJSON");
 }
@@ -85,6 +112,7 @@ fn push_enable_then_mailbox_set_yields_state_change() {
 	// Opt the connection in (no dataTypes => all types).
 	let enable = handle_ws_message(
 		&state,
+		&auth_for_test(),
 		&json!({"@type": "WebSocketPushEnable"}).to_string(),
 		&mut push,
 	);
@@ -104,7 +132,7 @@ fn push_enable_then_mailbox_set_yields_state_change() {
 		}, "c1"]],
 	})
 	.to_string();
-	let frames = handle_ws_message(&state, &frame, &mut push);
+	let frames = handle_ws_message(&state, &auth_for_test(), &frame, &mut push);
 	assert_eq!(frames.len(), 2, "Response + StateChange: {frames:?}");
 	let response: Value = serde_json::from_str(&frames[0]).expect("json");
 	assert_eq!(response["@type"], "Response");
@@ -137,7 +165,7 @@ fn push_disabled_suppresses_state_change() {
 	})
 	.to_string();
 	// Push not enabled: only the Response, never a StateChange.
-	let frames = handle_ws_message(&state, &frame, &mut push);
+	let frames = handle_ws_message(&state, &auth_for_test(), &frame, &mut push);
 	assert_eq!(frames.len(), 1, "{frames:?}");
 }
 
@@ -158,7 +186,7 @@ fn push_subscription_set_then_get_round_trips() {
 		}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &set, &mut push));
+	let reply = one(handle_ws_message(&state, &auth_for_test(), &set, &mut push));
 	let id = reply["methodResponses"][0][1]["created"]["s1"]["id"]
 		.as_str()
 		.expect("created id")
@@ -169,7 +197,7 @@ fn push_subscription_set_then_get_round_trips() {
 		"methodCalls": [["PushSubscription/get", {"ids": null}, "c2"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &get, &mut push));
+	let reply = one(handle_ws_message(&state, &auth_for_test(), &get, &mut push));
 	let list = reply["methodResponses"][0][1]["list"]
 		.as_array()
 		.expect("list");
@@ -190,7 +218,7 @@ fn push_subscription_set_rejects_missing_url() {
 		}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &set, &mut push));
+	let reply = one(handle_ws_message(&state, &auth_for_test(), &set, &mut push));
 	assert_eq!(
 		reply["methodResponses"][0][1]["notCreated"]["bad"]["type"],
 		"invalidProperties"
@@ -209,7 +237,7 @@ fn push_subscription_destroy_removes() {
 		}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &set, &mut push));
+	let reply = one(handle_ws_message(&state, &auth_for_test(), &set, &mut push));
 	let id = reply["methodResponses"][0][1]["created"]["s1"]["id"]
 		.as_str()
 		.expect("id")
@@ -219,7 +247,12 @@ fn push_subscription_destroy_removes() {
 		"methodCalls": [["PushSubscription/set", {"destroy": [id]}, "c2"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &destroy, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&destroy,
+		&mut push,
+	));
 	assert_eq!(reply["methodResponses"][0][1]["destroyed"][0], id);
 	assert!(state.push_subscriptions().is_empty());
 }

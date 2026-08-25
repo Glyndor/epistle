@@ -290,7 +290,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				)
 				.with_quota(config.quota_bytes.unwrap_or(0))
 				.with_admins(api.admins.clone())
-				.with_crypto(crypto.clone());
+				.with_crypto(crypto.clone())
+				.with_directory(directory.clone());
 				// Built-in OAuth authorization server, when a signing key is set.
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
 					state = state.with_authz(authz);

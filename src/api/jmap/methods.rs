@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 use super::super::state::ApiState;
 use super::objects;
 
+use crate::smtp::address::Address;
+
 /// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
 /// this server does not maintain a change log (`canCalculateChanges` is false),
 /// so the spec-correct response is the `cannotCalculateChanges` error.
@@ -84,6 +86,18 @@ fn submit_email(
 	};
 	if recipients.is_empty() {
 		return Err("noRecipients");
+	}
+	// Send-as guard: the envelope mailFrom must belong to the account on whose
+	// behalf the bearer authenticated, matching what SMTP enforces at
+	// `src/smtp/session/mod.rs:380`. Empty mailFrom is the null reverse path
+	// (JMAP `Envelope.mailFrom.email: null`), legal for bounces; a non-empty
+	// mailFrom that does not parse, or that the account does not own, is
+	// rejected with the RFC 8621 §7.5.2 `forbiddenFrom` error.
+	if !mail_from.is_empty() {
+		let parsed = Address::parse(&mail_from).map_err(|_| "invalidEmail")?;
+		if !state.owns_address(account, &parsed) {
+			return Err("forbiddenFrom");
+		}
 	}
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,

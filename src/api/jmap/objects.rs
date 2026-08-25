@@ -3,8 +3,19 @@
 
 use serde_json::{Value, json};
 
+use crate::util::header::sanitize_header_value;
+
 /// Serialize a JMAP Email submission object into an RFC 5322 message (Email/set
 /// create). Only the common header set and a single text body are emitted.
+///
+/// `From:`, `To:` and `Subject:` are sanitized through
+/// [`sanitize_header_value`]: the JMAP spec lets clients submit arbitrary
+/// strings for these fields, and a CRLF in any one of them would inject
+/// forged headers (Bcc, X-*, …) into the resulting message — the same
+/// vector `send.rs` already blocks for the v1 send endpoint. The sanitizer
+/// collapses every control character to a single space and caps each value
+/// to the RFC 5322 998-octet line limit, so a single client submission
+/// cannot inflate a single header line past the standard.
 pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
 	let addresses = |field: &str| -> Option<String> {
 		let list = spec.get(field)?.as_array()?;
@@ -16,13 +27,13 @@ pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
 	};
 	let mut headers = String::new();
 	if let Some(from) = addresses("from") {
-		headers.push_str(&format!("From: {from}\r\n"));
+		headers.push_str(&format!("From: {}\r\n", sanitize_header_value(&from)));
 	}
 	if let Some(to) = addresses("to") {
-		headers.push_str(&format!("To: {to}\r\n"));
+		headers.push_str(&format!("To: {}\r\n", sanitize_header_value(&to)));
 	}
 	if let Some(subject) = spec.get("subject").and_then(Value::as_str) {
-		headers.push_str(&format!("Subject: {subject}\r\n"));
+		headers.push_str(&format!("Subject: {}\r\n", sanitize_header_value(subject)));
 	}
 	// The body is the first bodyValues entry, else empty.
 	let body = spec
