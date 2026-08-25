@@ -5,8 +5,11 @@ use tower::ServiceExt;
 
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
+use std::sync::LazyLock;
 
-pub(super) const TOKEN: &str = "test-token";
+// The bearer token used by every API test is generated fresh at startup. A literal
+// bound to a constant named TOKEN triggered CodeQL `rust/hard-coded-cryptographic-value`.
+pub(super) static TOKEN: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().to_string());
 
 fn sha256_hash(token: &str) -> String {
 	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
@@ -54,7 +57,7 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 		.expect("open store"),
 	);
 	ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN),
+		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
 		store.clone(),
@@ -157,7 +160,7 @@ async fn healthz_is_unauthenticated() {
 async fn status_reports_counts() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 2));
-	let (status, body) = request(&app, "GET", "/api/v1/status", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/api/v1/status", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["domains"], 1);
 	assert_eq!(body["accounts"], 1);
@@ -168,7 +171,7 @@ async fn status_reports_counts() {
 async fn accounts_never_expose_credentials() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, body) = request(&app, "GET", "/api/v1/accounts", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/api/v1/accounts", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["accounts"][0]["name"], "alice");
 	assert!(!body.to_string().contains("argon2"), "{body}");
@@ -178,7 +181,7 @@ async fn accounts_never_expose_credentials() {
 async fn domains_are_listed() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, body) = request(&app, "GET", "/api/v1/domains", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/api/v1/domains", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["domains"][0], "example.org");
 }
@@ -188,7 +191,7 @@ async fn queue_pagination_walks_all_entries() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 5));
 
-	let (status, page) = request(&app, "GET", "/api/v1/queue?limit=2", Some(TOKEN)).await;
+	let (status, page) = request(&app, "GET", "/api/v1/queue?limit=2", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(page["entries"].as_array().expect("entries").len(), 2);
 	let cursor = page["next_cursor"].as_str().expect("cursor").to_string();
@@ -197,7 +200,7 @@ async fn queue_pagination_walks_all_entries() {
 		&app,
 		"GET",
 		&format!("/api/v1/queue?limit=2&cursor={cursor}"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(page2["entries"].as_array().expect("entries").len(), 2);
@@ -209,7 +212,7 @@ async fn queue_pagination_walks_all_entries() {
 		&app,
 		"GET",
 		&format!("/api/v1/queue?limit=2&cursor={cursor2}"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(page3["entries"].as_array().expect("entries").len(), 1);
@@ -220,7 +223,7 @@ async fn queue_pagination_walks_all_entries() {
 async fn queue_rejects_zero_limit() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, body) = request(&app, "GET", "/api/v1/queue?limit=0", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/api/v1/queue?limit=0", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"]["code"], "invalid_input");
 }
@@ -229,14 +232,26 @@ async fn queue_rejects_zero_limit() {
 async fn queue_entry_can_be_removed_once() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 1));
-	let (_, page) = request(&app, "GET", "/api/v1/queue", Some(TOKEN)).await;
+	let (_, page) = request(&app, "GET", "/api/v1/queue", Some(TOKEN.as_str())).await;
 	let id = page["entries"][0]["id"].as_str().expect("id").to_string();
 
-	let (status, body) = request(&app, "DELETE", &format!("/api/v1/queue/{id}"), Some(TOKEN)).await;
+	let (status, body) = request(
+		&app,
+		"DELETE",
+		&format!("/api/v1/queue/{id}"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["removed"], id.as_str());
 
-	let (status, body) = request(&app, "DELETE", &format!("/api/v1/queue/{id}"), Some(TOKEN)).await;
+	let (status, body) = request(
+		&app,
+		"DELETE",
+		&format!("/api/v1/queue/{id}"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
 }
@@ -250,7 +265,7 @@ async fn account_create_delete_and_password_flow() {
 		&app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": "bob",
 			"addresses": ["bob@example.org"],
@@ -261,7 +276,7 @@ async fn account_create_delete_and_password_flow() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["created"], "bob");
 
-	let (_, body) = request(&app, "GET", "/api/v1/accounts", Some(TOKEN)).await;
+	let (_, body) = request(&app, "GET", "/api/v1/accounts", Some(TOKEN.as_str())).await;
 	let names: Vec<&str> = body["accounts"]
 		.as_array()
 		.expect("accounts")
@@ -274,17 +289,24 @@ async fn account_create_delete_and_password_flow() {
 		&app,
 		"PUT",
 		"/api/v1/accounts/bob/password",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({"password": "another-long-password"})),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	let (status, body) = request(&app, "DELETE", "/api/v1/accounts/bob", Some(TOKEN)).await;
+	let (status, body) =
+		request(&app, "DELETE", "/api/v1/accounts/bob", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
 	// Static accounts cannot be deleted.
-	let (status, _) = request(&app, "DELETE", "/api/v1/accounts/alice", Some(TOKEN)).await;
+	let (status, _) = request(
+		&app,
+		"DELETE",
+		"/api/v1/accounts/alice",
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -296,14 +318,20 @@ async fn totp_enrollment_stores_a_valid_secret() {
 		&app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": "bob", "addresses": ["bob@example.org"], "password": "a-long-password"
 		})),
 	)
 	.await;
 
-	let (status, body) = request(&app, "POST", "/api/v1/accounts/bob/totp", Some(TOKEN)).await;
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/accounts/bob/totp",
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let secret = body["secret"].as_str().expect("secret");
 	// A valid base32 TOTP secret that decodes.
@@ -320,7 +348,13 @@ async fn totp_enrollment_stores_a_valid_secret() {
 	);
 
 	// Disabling clears it.
-	let (status, _) = request(&app, "DELETE", "/api/v1/accounts/bob/totp", Some(TOKEN)).await;
+	let (status, _) = request(
+		&app,
+		"DELETE",
+		"/api/v1/accounts/bob/totp",
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
 }
 
@@ -334,7 +368,7 @@ async fn account_creation_validates_input() {
 		&app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": "bob", "addresses": ["bob@example.org"], "password": "short"
 		})),
@@ -347,7 +381,7 @@ async fn account_creation_validates_input() {
 		&app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": "bob", "addresses": ["bob@example.org"], "password": "x".repeat(65)
 		})),
@@ -361,7 +395,7 @@ async fn account_creation_validates_input() {
 		&app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": "bob", "addresses": ["bob@elsewhere.example"], "password": "a-long-password"
 		})),
@@ -374,7 +408,7 @@ async fn account_creation_validates_input() {
 		&app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": "alice", "addresses": ["alice2@example.org"], "password": "a-long-password"
 		})),
@@ -387,7 +421,7 @@ async fn account_creation_validates_input() {
 async fn unknown_route_is_404() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, _) = request(&app, "GET", "/api/v1/nope", Some(TOKEN)).await;
+	let (status, _) = request(&app, "GET", "/api/v1/nope", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -405,7 +439,7 @@ async fn sha256_token_format_is_accepted() {
 		.expect("store"),
 	);
 	let state = ApiState::new(
-		&sha256_hash(TOKEN),
+		&sha256_hash(TOKEN.as_str()),
 		dir.path().to_path_buf(),
 		vec![],
 		store.clone(),
@@ -413,7 +447,7 @@ async fn sha256_token_format_is_accepted() {
 	)
 	.with_directory(store.handle());
 	let app = router(state);
-	let (status, _) = request(&app, "GET", "/api/v1/status", Some(TOKEN)).await;
+	let (status, _) = request(&app, "GET", "/api/v1/status", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(&app, "GET", "/api/v1/status", Some("wrong")).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -423,8 +457,13 @@ async fn sha256_token_format_is_accepted() {
 async fn mailboxes_lists_inbox_for_known_account() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, body) =
-		request(&app, "GET", "/api/v1/accounts/alice/mailboxes", Some(TOKEN)).await;
+	let (status, body) = request(
+		&app,
+		"GET",
+		"/api/v1/accounts/alice/mailboxes",
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
 	let mailboxes = body["mailboxes"].as_array().expect("mailboxes");
 	assert!(mailboxes.iter().any(|m| m == "INBOX"), "{body}");
@@ -438,7 +477,7 @@ async fn mailboxes_returns_404_for_unknown_account() {
 		&app,
 		"GET",
 		"/api/v1/accounts/nobody/mailboxes",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
@@ -455,7 +494,7 @@ async fn send_enqueues_and_validates() {
 		&app,
 		"POST",
 		"/api/v1/send",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"from": "alice@example.org",
 			"to": ["bob@elsewhere.example"],
@@ -466,7 +505,7 @@ async fn send_enqueues_and_validates() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body["queued"].as_str().is_some(), "{body}");
-	let (_, status_body) = request(&app, "GET", "/api/v1/status", Some(TOKEN)).await;
+	let (_, status_body) = request(&app, "GET", "/api/v1/status", Some(TOKEN.as_str())).await;
 	assert_eq!(status_body["queue_size"], 1);
 
 	// Empty recipients, CR/LF header injection, a bad address, and an over-long
@@ -478,8 +517,14 @@ async fn send_enqueues_and_validates() {
 		serde_json::json!({"from": "not-an-address", "to": ["b@x.example"]}),
 		serde_json::json!({"from": "alice@example.org", "to": many}),
 	] {
-		let (status, body) =
-			request_with_body(&app, "POST", "/api/v1/send", Some(TOKEN), Some(bad)).await;
+		let (status, body) = request_with_body(
+			&app,
+			"POST",
+			"/api/v1/send",
+			Some(TOKEN.as_str()),
+			Some(bad),
+		)
+		.await;
 		assert_eq!(status, StatusCode::BAD_REQUEST);
 		assert_eq!(body["error"]["code"], "invalid_input");
 	}
@@ -507,7 +552,7 @@ async fn suppression_lists_global_and_per_account() {
 	let app = router(test_state(dir.path(), 0));
 
 	// Global list.
-	let (status, body) = request(&app, "GET", "/api/v1/suppression", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/api/v1/suppression", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["addresses"][0], "bob@example.net");
 
@@ -516,7 +561,7 @@ async fn suppression_lists_global_and_per_account() {
 		&app,
 		"GET",
 		"/api/v1/suppression?account=alice@example.org",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
@@ -534,7 +579,7 @@ async fn suppression_delete_removes_address() {
 		&app,
 		"DELETE",
 		"/api/v1/suppression/bob@example.net",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);

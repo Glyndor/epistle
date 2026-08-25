@@ -79,7 +79,7 @@ async fn jmap_download_returns_raw_message() {
 	let (status, body) = request_raw(
 		&app,
 		&format!("/jmap/download/alice/{id}/msg.eml"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
@@ -89,11 +89,16 @@ async fn jmap_download_returns_raw_message() {
 	let (status, _) = request_raw(
 		&app,
 		&format!("/jmap/download/alice/{}/x", uuid::Uuid::now_v7()),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
-	let (status, _) = request_raw(&app, &format!("/jmap/download/ghost/{id}/x"), Some(TOKEN)).await;
+	let (status, _) = request_raw(
+		&app,
+		&format!("/jmap/download/ghost/{id}/x"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	// Without a token the route is unauthorized.
 	let (status, _) = request_raw(&app, &format!("/jmap/download/alice/{id}/x"), None).await;
@@ -122,7 +127,7 @@ async fn jmap_download_decrypts_encrypted_message() {
 	let (status, body) = request_raw(
 		&app,
 		&format!("/jmap/download/alice/{id}/msg.eml"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
@@ -145,7 +150,8 @@ async fn jmap_email_get_returns_decrypted_body() {
 			{ "accountId": "alice", "ids": [id.to_string()],
 			  "properties": ["preview"] }, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let preview = body["methodResponses"][0][1]["list"][0]["preview"]
 		.as_str()
@@ -163,7 +169,7 @@ async fn jmap_upload_then_download_round_trips() {
 	let (status, body) = post_raw_ct(
 		&app,
 		"/jmap/upload/alice",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some("image/png"),
 		payload,
 	)
@@ -178,7 +184,7 @@ async fn jmap_upload_then_download_round_trips() {
 	let (status, content_type, got) = request_raw_ct(
 		&app,
 		&format!("/jmap/download/alice/{blob_id}/x"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
@@ -186,12 +192,26 @@ async fn jmap_upload_then_download_round_trips() {
 	assert_eq!(got, payload);
 
 	// Missing Content-Type falls back to octet-stream.
-	let (_, body) = post_raw_ct(&app, "/jmap/upload/alice", Some(TOKEN), None, payload).await;
+	let (_, body) = post_raw_ct(
+		&app,
+		"/jmap/upload/alice",
+		Some(TOKEN.as_str()),
+		None,
+		payload,
+	)
+	.await;
 	assert_eq!(body["type"], "application/octet-stream");
 
 	// Unknown account and missing token are rejected; the former with a JMAP
 	// problem-details body.
-	let (status, body) = post_raw_ct(&app, "/jmap/upload/ghost", Some(TOKEN), None, payload).await;
+	let (status, body) = post_raw_ct(
+		&app,
+		"/jmap/upload/ghost",
+		Some(TOKEN.as_str()),
+		None,
+		payload,
+	)
+	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["type"], "urn:ietf:params:jmap:error:notFound");
 	let (status, _) = post_raw_ct(&app, "/jmap/upload/alice", None, None, payload).await;
@@ -205,7 +225,14 @@ async fn jmap_upload_over_max_size_is_rejected() {
 	let app = router(test_state(dir.path(), 0));
 	let payload = vec![0u8; MAX_UPLOAD_SIZE + 1];
 
-	let (status, body) = post_raw_ct(&app, "/jmap/upload/alice", Some(TOKEN), None, &payload).await;
+	let (status, body) = post_raw_ct(
+		&app,
+		"/jmap/upload/alice",
+		Some(TOKEN.as_str()),
+		None,
+		&payload,
+	)
+	.await;
 	assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 	assert_eq!(body["type"], "urn:ietf:params:jmap:error:limit");
 	assert_eq!(body["limit"], "maxSizeUpload");
@@ -218,14 +245,26 @@ async fn jmap_upload_within_quota_succeeds_over_quota_is_rejected() {
 	let app = router(test_state(dir.path(), 0).with_quota(64));
 
 	// A blob within the quota is stored and returns 200.
-	let (status, body) =
-		post_raw_ct(&app, "/jmap/upload/alice", Some(TOKEN), None, &[0u8; 32]).await;
+	let (status, body) = post_raw_ct(
+		&app,
+		"/jmap/upload/alice",
+		Some(TOKEN.as_str()),
+		None,
+		&[0u8; 32],
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
 	// A second blob would push usage (32 already stored) past the 64-byte quota
 	// and is refused with the JMAP storage limit error, fail-closed.
-	let (status, body) =
-		post_raw_ct(&app, "/jmap/upload/alice", Some(TOKEN), None, &[0u8; 64]).await;
+	let (status, body) = post_raw_ct(
+		&app,
+		"/jmap/upload/alice",
+		Some(TOKEN.as_str()),
+		None,
+		&[0u8; 64],
+	)
+	.await;
 	assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE, "{body}");
 	assert_eq!(body["type"], "urn:ietf:params:jmap:error:limit");
 	assert_eq!(body["limit"], "storage");

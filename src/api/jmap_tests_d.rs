@@ -47,7 +47,7 @@ fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiState {
 		.expect("open store"),
 	);
 	crate::api::ApiState::new(
-		&crate::smtp::auth::tests::hash(TOKEN),
+		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
 		store,
@@ -123,7 +123,7 @@ async fn alice_uploads_then_downloads_her_own_blob() {
 	let (status, body) = post_raw(
 		&app,
 		"/jmap/upload/alice",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some("text/plain"),
 		payload,
 	)
@@ -134,7 +134,7 @@ async fn alice_uploads_then_downloads_her_own_blob() {
 	let (status, content_type, got) = get_raw(
 		&app,
 		&format!("/jmap/download/alice/{blob_id}/x"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(
@@ -169,7 +169,7 @@ async fn bob_cannot_download_alice_blob() {
 	let (_, body) = post_raw(
 		&app,
 		"/jmap/upload/alice",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some("text/plain"),
 		payload,
 	)
@@ -180,7 +180,7 @@ async fn bob_cannot_download_alice_blob() {
 	let (status, _, body_bytes) = get_raw(
 		&app,
 		&format!("/jmap/download/bob/{blob_id}/x"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(
@@ -204,7 +204,7 @@ async fn bob_cannot_download_alice_blob() {
 	let (status, _, _) = get_raw(
 		&app,
 		&format!("/jmap/download/alice/{blob_id}/x"),
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 	)
 	.await;
 	assert_eq!(
@@ -237,8 +237,12 @@ async fn blob_without_owner_sidecar_is_not_served() {
 	);
 
 	let app = router(state_with_two_accounts(path));
-	let (status, _, body_bytes) =
-		get_raw(&app, &format!("/jmap/download/alice/{id}/x"), Some(TOKEN)).await;
+	let (status, _, body_bytes) = get_raw(
+		&app,
+		&format!("/jmap/download/alice/{id}/x"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(
 		status,
 		StatusCode::NOT_FOUND,
@@ -467,7 +471,7 @@ fn reclaim_blobs_drops_owner_sidecar_with_payload() {
 async fn upload_writes_owner_sidecar() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(state_with_two_accounts(dir.path()));
-	let (_, body) = post_raw(&app, "/jmap/upload/alice", Some(TOKEN), None, b"x").await;
+	let (_, body) = post_raw(&app, "/jmap/upload/alice", Some(TOKEN.as_str()), None, b"x").await;
 	let blob_id = body["blobId"].as_str().expect("blobId").to_string();
 	let owner_path = dir.path().join("blobs").join(format!("{blob_id}.owner"));
 	assert!(owner_path.exists(), "upload must write the owner sidecar");
@@ -522,8 +526,12 @@ async fn empty_owner_sidecar_is_treated_as_missing() {
 	std::fs::write(blobs.join(format!("{id}.owner")), b"").expect("write empty owner");
 
 	let app = router(state_with_two_accounts(path));
-	let (status, _, body_bytes) =
-		get_raw(&app, &format!("/jmap/download/alice/{id}/x"), Some(TOKEN)).await;
+	let (status, _, body_bytes) = get_raw(
+		&app,
+		&format!("/jmap/download/alice/{id}/x"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(
 		status,
 		StatusCode::NOT_FOUND,
