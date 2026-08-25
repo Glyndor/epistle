@@ -10,4 +10,4 @@ permissions:
 
 jobs:
   sbom-and-licenses:
-    uses: Glyndor/.github/.github/workflows/rust-supply-chain.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: Glyndor/.github/.github/workflows/rust-supply-chain.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
