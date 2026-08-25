@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 async fn jmap_session_advertises_core_capability() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, body) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(
 		body["capabilities"]["urn:ietf:params:jmap:core"].is_object(),
@@ -26,7 +26,7 @@ async fn jmap_well_known_serves_session() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
 	// RFC 8620 §2.2 autodiscovery path returns the Session resource.
-	let (status, body) = request(&app, "GET", "/.well-known/jmap", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/.well-known/jmap", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["apiUrl"], "/jmap/api");
 	assert!(
@@ -43,7 +43,8 @@ async fn jmap_core_echo_round_trips() {
 		"using": ["urn:ietf:params:jmap:core"],
 		"methodCalls": [["Core/echo", {"hello": "world"}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["methodResponses"][0][0], "Core/echo");
 	assert_eq!(body["methodResponses"][0][1]["hello"], "world");
@@ -53,7 +54,8 @@ async fn jmap_core_echo_round_trips() {
 		"using": [],
 		"methodCalls": [["Widget/get", {}, "c2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][0], "error");
 	assert_eq!(body["methodResponses"][0][1]["type"], "unknownMethod");
 }
@@ -71,14 +73,16 @@ async fn jmap_mailbox_set_creates_and_destroys() {
 			"create": { "c1": {"name": "Work", "parentId": null} },
 		}, "m1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["methodResponses"][0][1]["created"]["c1"]["id"], "Work");
 
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/get", {"accountId": "alice"}, "m2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	let names: Vec<_> = body["methodResponses"][0][1]["list"]
 		.as_array()
 		.expect("list")
@@ -90,7 +94,8 @@ async fn jmap_mailbox_set_creates_and_destroys() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "destroy": ["Work"]}, "m3"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][1]["destroyed"][0], "Work");
 }
 
@@ -102,12 +107,13 @@ async fn jmap_mailbox_query_lists_ids() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Work"}}}, "m1"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	let req = serde_json::json!({
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Mailbox/query", {"accountId": "alice"}, "q1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let ids = body["methodResponses"][0][1]["ids"].to_string();
 	assert!(ids.contains("INBOX") && ids.contains("Work"), "{ids}");
@@ -117,7 +123,8 @@ async fn jmap_mailbox_query_lists_ids() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/query", {"accountId": "nobody"}, "q2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][1]["type"], "accountNotFound");
 }
 
@@ -129,7 +136,7 @@ async fn jmap_mailbox_get_lists_inbox() {
 	std::fs::write(inbox.join(format!("{}.eml", uuid::Uuid::now_v7())), b"x").expect("write");
 
 	let app = router(test_state(dir.path(), 0));
-	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert!(
 		session["capabilities"]["urn:ietf:params:jmap:mail"].is_object(),
 		"{session}"
@@ -139,7 +146,8 @@ async fn jmap_mailbox_get_lists_inbox() {
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Mailbox/get", {"accountId": "alice", "ids": null}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let response = &body["methodResponses"][0];
 	assert_eq!(response[0], "Mailbox/get");
@@ -152,7 +160,8 @@ async fn jmap_mailbox_get_lists_inbox() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/get", {"accountId": "nobody"}, "c2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][0], "error");
 	assert_eq!(body["methodResponses"][0][1]["type"], "accountNotFound");
 }
@@ -182,7 +191,8 @@ async fn jmap_email_submission_queues_message() {
 			} },
 		}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(
 		body["methodResponses"][0][1]["created"]["s1"]["id"].is_string(),
@@ -193,6 +203,123 @@ async fn jmap_email_submission_queues_message() {
 		.map(|d| d.count())
 		.unwrap_or(0);
 	assert!(count >= 1, "expected a spooled message");
+}
+
+/// `EmailSubmission/set` must reject a non-empty `envelope.mailFrom.email`
+/// that the named `accountId` does not own. Without this guard a bearer
+/// token holder can submit outbound mail as any address (RFC 8621 §7.5.2:
+/// `forbiddenFrom`).
+#[tokio::test]
+async fn jmap_email_submission_rejects_unowned_mail_from() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"From: alice@example.org\r\nTo: bob@elsewhere.example\r\nSubject: hi\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+
+	// alice tries to send as bob@elsewhere.example — an address no one owns
+	// in this test's directory (only alice@example.org is configured).
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:submission"],
+		"methodCalls": [["EmailSubmission/set", {
+			"accountId": "alice",
+			"create": { "s1": {
+				"emailId": id.to_string(),
+				"identityId": "alice@example.org",
+				"envelope": {"mailFrom": {"email": "bob@elsewhere.example"},
+					"rcptTo": [{"email": "carol@elsewhere.example"}]},
+			} },
+		}, "c1"]],
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let response = &body["methodResponses"][0];
+	assert_eq!(
+		response[1]["notCreated"]["s1"]["type"], "forbiddenFrom",
+		"send-as must be rejected with forbiddenFrom: {body}"
+	);
+}
+
+/// `EmailSubmission/set` must reject a `mailFrom` that does not parse as an
+/// address: a malformed envelope value is not a free pass to spoofing.
+#[tokio::test]
+async fn jmap_email_submission_rejects_malformed_mail_from() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"From: alice@example.org\r\nTo: bob@elsewhere.example\r\nSubject: hi\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:submission"],
+		"methodCalls": [["EmailSubmission/set", {
+			"accountId": "alice",
+			"create": { "s1": {
+				"emailId": id.to_string(),
+				"identityId": "alice@example.org",
+				"envelope": {"mailFrom": {"email": "not-an-address"},
+					"rcptTo": [{"email": "bob@elsewhere.example"}]},
+			} },
+		}, "c1"]],
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let response = &body["methodResponses"][0];
+	assert_eq!(
+		response[1]["notCreated"]["s1"]["type"], "invalidEmail",
+		"malformed mailFrom must be rejected with invalidEmail: {body}"
+	);
+}
+
+/// `EmailSubmission/set` must accept a `mailFrom` that is one of the
+/// account's configured addresses — the acceptance case that proves the
+/// control does not over-reject (paired with the two rejection tests above).
+#[tokio::test]
+async fn jmap_email_submission_accepts_owned_mail_from() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"From: alice@example.org\r\nTo: bob@elsewhere.example\r\nSubject: hi\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+
+	// The case-insensitive variant `ALICE@EXAMPLE.ORG` still matches:
+	// `Directory::owns_address` lower-cases the key (smtp/directory.rs:412).
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:submission"],
+		"methodCalls": [["EmailSubmission/set", {
+			"accountId": "alice",
+			"create": { "s1": {
+				"emailId": id.to_string(),
+				"identityId": "alice@example.org",
+				"envelope": {"mailFrom": {"email": "ALICE@EXAMPLE.ORG"},
+					"rcptTo": [{"email": "bob@elsewhere.example"}]},
+			} },
+		}, "c1"]],
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert!(
+		body["methodResponses"][0][1]["created"]["s1"]["id"].is_string(),
+		"owned mailFrom (case-insensitive) must be accepted: {body}"
+	);
 }
 
 #[tokio::test]
@@ -206,7 +333,7 @@ async fn jmap_quota_get_reports_usage() {
 	)
 	.expect("write");
 	let app = router(test_state(dir.path(), 0).with_quota(1_000_000));
-	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert!(
 		session["capabilities"]["urn:ietf:params:jmap:quota"].is_object(),
 		"{session}"
@@ -215,7 +342,8 @@ async fn jmap_quota_get_reports_usage() {
 		"using": ["urn:ietf:params:jmap:quota"],
 		"methodCalls": [["Quota/get", {"accountId": "alice"}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let quota = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(quota["limit"], 1_000_000);
@@ -226,7 +354,7 @@ async fn jmap_quota_get_reports_usage() {
 async fn jmap_identity_get_lists_addresses() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	let (_, session) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert!(
 		session["capabilities"]["urn:ietf:params:jmap:submission"].is_object(),
 		"{session}"
@@ -235,7 +363,8 @@ async fn jmap_identity_get_lists_addresses() {
 		"using": ["urn:ietf:params:jmap:submission"],
 		"methodCalls": [["Identity/get", {"accountId": "alice"}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let identity = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(identity["email"], "alice@example.org");
@@ -257,7 +386,7 @@ async fn jmap_email_copy_duplicates_to_mailbox() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Saved"}}}, "m1"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 
 	let req = serde_json::json!({
 		"methodCalls": [["Email/copy", {
@@ -265,7 +394,8 @@ async fn jmap_email_copy_duplicates_to_mailbox() {
 			"create": { "k": {"emailId": id.to_string(), "mailboxIds": {"Saved": true}} },
 		}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(
 		body["methodResponses"][0][1]["created"]["k"]["id"].is_string(),
@@ -277,7 +407,8 @@ async fn jmap_email_copy_duplicates_to_mailbox() {
 			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "Saved"}}, "q2"],
 		],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][1]["total"], 1);
 	assert_eq!(body["methodResponses"][1][1]["total"], 1);
 }
@@ -292,7 +423,7 @@ async fn jmap_mailbox_set_update_create_invalid_and_destroy_unknown() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Work"}}}, "m1"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {
@@ -302,7 +433,8 @@ async fn jmap_mailbox_set_update_create_invalid_and_destroy_unknown() {
 			"destroy": ["Nonexistent"],
 		}, "m2"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let r = &body["methodResponses"][0][1];
 	// A create without a name is rejected.
@@ -331,13 +463,14 @@ async fn jmap_mailbox_get_filters_by_ids() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c": {"name": "Work"}}}, "m1"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 
 	// Request only INBOX by id: Work is filtered out.
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/get", {"accountId": "alice", "ids": ["INBOX"]}, "m2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	let names: Vec<String> = body["methodResponses"][0][1]["list"]
 		.as_array()
 		.expect("list")
@@ -356,7 +489,8 @@ async fn jmap_query_changes_reports_cannot_calculate() {
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Email/queryChanges", {"accountId": "alice", "sinceQueryState": "0"}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["methodResponses"][0][0], "error");
 	assert_eq!(
@@ -381,7 +515,8 @@ async fn jmap_result_back_reference_chains_calls() {
 			}, "g1"]
 		],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["methodResponses"][1][0], "Mailbox/get");
 	// The INBOX resolved from the query's ids is present in the get result.

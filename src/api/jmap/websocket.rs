@@ -21,27 +21,30 @@
 //! `url` of a `PushSubscription` — is OUT OF SCOPE here; the PushSubscription
 //! objects round-trip through get/set but nothing is delivered to them.
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Extension, State};
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 
 use super::Request;
-use crate::api::state::ApiState;
+use crate::api::state::{ApiState, MatchedAuth};
 
 /// `GET /jmap/ws` (RFC 8887 §3): upgrade to a WebSocket. Auth is already enforced
-/// by the bearer-token middleware on the authenticated router.
+/// by the bearer-token middleware on the authenticated router; the captured
+/// `MatchedAuth` is propagated into the per-connection loop so each frame is
+/// dispatched against the same credential that opened it.
 pub async fn ws_upgrade(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-	upgrade.on_upgrade(move |socket| serve(socket, state))
+	upgrade.on_upgrade(move |socket| serve(socket, state, auth))
 }
 
 /// Per-connection loop: read text frames, answer each, and emit any in-band push
 /// frames. Binary frames are rejected with a `RequestError`; close/ping/pong are
 /// left to the transport.
-async fn serve(mut socket: WebSocket, state: ApiState) {
+async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 	let mut push = PushState::default();
 	while let Some(Ok(message)) = socket.recv().await {
 		let text = match message {
@@ -56,7 +59,7 @@ async fn serve(mut socket: WebSocket, state: ApiState) {
 			Message::Close(_) => return,
 			Message::Ping(_) | Message::Pong(_) => continue,
 		};
-		for reply in handle_ws_message(&state, &text, &mut push) {
+		for reply in handle_ws_message(&state, &auth, &text, &mut push) {
 			if socket.send(Message::Text(reply.into())).await.is_err() {
 				return;
 			}
@@ -81,12 +84,17 @@ const STATEFUL_TYPES: [&str; 2] = ["Email", "Mailbox"];
 /// one, or — for a state-changing `Request` with push enabled — a `Response`
 /// followed by a `StateChange`). Pure with respect to the socket so it can be
 /// unit-tested with JSON strings.
-pub fn handle_ws_message(state: &ApiState, text: &str, push: &mut PushState) -> Vec<String> {
+pub fn handle_ws_message(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	text: &str,
+	push: &mut PushState,
+) -> Vec<String> {
 	let Ok(value) = serde_json::from_str::<Value>(text) else {
 		return vec![request_error("notJSON", "frame is not valid JSON").to_string()];
 	};
 	match value.get("@type").and_then(Value::as_str) {
-		Some("Request") => handle_request(state, &value, push),
+		Some("Request") => handle_request(state, auth, &value, push),
 		Some("WebSocketPushEnable") => {
 			push.enabled = true;
 			push.data_types = value
@@ -114,7 +122,12 @@ pub fn handle_ws_message(state: &ApiState, text: &str, push: &mut PushState) -> 
 
 /// Dispatch a WebSocket `Request` frame and build its `Response`, plus a
 /// `StateChange` when push is enabled and a `/set` changed an account's state.
-fn handle_request(state: &ApiState, value: &Value, push: &PushState) -> Vec<String> {
+fn handle_request(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	value: &Value,
+	push: &PushState,
+) -> Vec<String> {
 	// The envelope is the HTTP request shape plus an optional client `id`.
 	let request: Request = match serde_json::from_value(value.clone()) {
 		Ok(request) => request,
@@ -128,7 +141,7 @@ fn handle_request(state: &ApiState, value: &Value, push: &PushState) -> Vec<Stri
 	// actually changed stored mail can be reported (RFC 8887 §5.2).
 	let accounts: Vec<String> = state.accounts().into_iter().map(|a| a.name).collect();
 	let before: Vec<String> = accounts.iter().map(|a| state.account_state(a)).collect();
-	let response = super::dispatch_request(state, request);
+	let response = super::dispatch_request(state, auth, request);
 
 	let mut response_frame = serde_json::Map::new();
 	response_frame.insert("@type".to_string(), json!("Response"));

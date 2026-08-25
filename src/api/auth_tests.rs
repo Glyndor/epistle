@@ -20,7 +20,7 @@ async fn create_account(app: &axum::Router, name: &str, password: &str) {
 		app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(json!({
 			"name": name,
 			"addresses": [format!("{name}@example.org")],
@@ -41,7 +41,7 @@ async fn verify_flags_a_valid_admin() {
 		&app,
 		"POST",
 		"/api/v1/auth/verify",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(json!({"name": "ops@example.org", "password": test_password()})),
 	)
 	.await;
@@ -61,7 +61,7 @@ async fn verify_accepts_a_valid_non_admin_without_admin() {
 		&app,
 		"POST",
 		"/api/v1/auth/verify",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(json!({"name": "user@example.org", "password": test_password()})),
 	)
 	.await;
@@ -80,7 +80,7 @@ async fn verify_rejects_wrong_password_and_unknown_account_identically() {
 		&app,
 		"POST",
 		"/api/v1/auth/verify",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(json!({"name": "ops@example.org", "password": "not-the-password"})),
 	)
 	.await;
@@ -95,7 +95,7 @@ async fn verify_rejects_wrong_password_and_unknown_account_identically() {
 		&app,
 		"POST",
 		"/api/v1/auth/verify",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(json!({"name": "ghost@example.org", "password": test_password()})),
 	)
 	.await;

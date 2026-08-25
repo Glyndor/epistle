@@ -7,10 +7,26 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::directory_store::AccountStore;
+use crate::directory_store::{AccountStore, DirectoryHandle};
+use crate::smtp::address::Address;
 use crate::storage::{FsSpool, MessageCrypto};
 
+use super::api_keys::Scope;
 use super::error::ApiError;
+
+/// The bearer credentials the middleware extracted from the request, stashed
+/// in request extensions so handlers can apply a fine-grained scope check on
+/// top of the coarse path/method inference the middleware already did.
+#[derive(Clone)]
+pub struct MatchedAuth {
+	/// The raw bearer token as presented by the client, or `None` for
+	/// unauthenticated routes (which never reach the API surface).
+	pub token: Option<String>,
+	/// The peer IP, when the listener was started with `ConnectInfo`. `None`
+	/// means the IP is unknown; an IP-restricted key cannot match in that
+	/// case (fail-closed).
+	pub client_ip: Option<std::net::IpAddr>,
+}
 
 /// State shared by every handler.
 #[derive(Clone)]
@@ -43,6 +59,15 @@ struct Inner {
 	/// key is configured. When `None`, the `/oauth/*` grant routes are not mounted
 	/// and no tokens are issued (fail closed).
 	authz: Option<Arc<super::oauth::AuthzServer>>,
+	/// Hot-reloadable directory shared with SMTP/IMAP/ManageSieve. Required for
+	/// send-as ownership checks on the API path; when absent, every
+	/// `owns_address` call returns `false` (fail closed).
+	directory: Option<DirectoryHandle>,
+	/// Labels of API keys whose `scopes` field is empty (legacy) and that
+	/// have already triggered the one-time deprecation warning. Keyed by
+	/// label so re-warning across the lifetime of a single process is
+	/// prevented.
+	legacy_warned: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -97,6 +122,13 @@ impl ApiState {
 	/// Build the state from configuration data. API keys are loaded from
 	/// `api_keys.toml` under `data_dir`; a missing or unreadable file leaves the
 	/// key set empty (the configured token still authenticates).
+	///
+	/// As a one-shot migration, this also runs the JMAP blob-ownership
+	/// backfill: writes an `.owner` sidecar for every uploaded blob whose
+	/// corresponding message already lives under the account's mailboxes, so
+	/// pre-existing data stays servable after the per-account download gate
+	/// is introduced. Idempotent: sidecars that already name the right account
+	/// are not touched.
 	pub fn new(
 		token_hash: &str,
 		data_dir: PathBuf,
@@ -107,6 +139,27 @@ impl ApiState {
 		let api_keys = super::api_keys::ApiKeyStore::open(&data_dir)
 			.map(|store| store.keys().to_vec())
 			.unwrap_or_default();
+		// One-shot backfill before any handler can serve a download. Runs
+		// against every known account; the function itself is bounded by the
+		// number of stored messages and per-message work is constant, so a
+		// large corpus never blocks startup for more than a few seconds of
+		// straight `read_dir` + `fs::write` traffic.
+		let account_names: Vec<String> = store
+			.account_views()
+			.into_iter()
+			.map(|(name, _, _)| name)
+			.collect();
+		let stats = super::jmap::backfill_blob_ownership(&data_dir, &account_names);
+		if stats.written > 0 || stats.conflicts > 0 || stats.errors > 0 {
+			tracing::info!(
+				scanned = stats.scanned,
+				written = stats.written,
+				skipped = stats.skipped,
+				conflicts = stats.conflicts,
+				errors = stats.errors,
+				"jmap blob-ownership backfill complete"
+			);
+		}
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.to_string(),
@@ -121,6 +174,8 @@ impl ApiState {
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
 				crypto: MessageCrypto::disabled(),
 				authz: None,
+				directory: None,
+				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 			}),
 		}
 	}
@@ -178,6 +233,30 @@ impl ApiState {
 	/// The at-rest crypto for stored messages and uploaded blobs.
 	pub fn crypto(&self) -> &MessageCrypto {
 		&self.inner.crypto
+	}
+
+	/// Attach the hot-reloadable directory used for send-as ownership checks
+	/// on the API path. Must be set before the state is shared (it rebuilds
+	/// the `Arc` inner). When never attached, every `owns_address` call returns
+	/// `false` (fail closed).
+	pub fn with_directory(mut self, directory: DirectoryHandle) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.directory = Some(directory);
+		}
+		self
+	}
+
+	/// Whether `account` owns `address` — used to enforce send-as on the API
+	/// path the same way SMTP does (`src/smtp/session/mod.rs`). Fail-closed:
+	/// returns `false` when no directory has been attached (e.g. in tests or
+	/// if a future deployment forgets to wire it in), never `true`. The SMTP
+	/// path also delegates to `Directory::owns_address`, so the API and the
+	/// SMTP submission path can never disagree on ownership.
+	pub fn owns_address(&self, account: &str, address: &Address) -> bool {
+		match &self.inner.directory {
+			None => false,
+			Some(handle) => handle.current().owns_address(account, address),
+		}
 	}
 
 	/// Set the per-account storage quota in bytes (0 = unlimited).
@@ -259,11 +338,28 @@ impl ApiState {
 		format!("{usage}")
 	}
 
-	/// Whether `token` from `client_ip` authorizes a request: the configured
-	/// token matches, or any non-expired, IP-permitted API key's hash matches.
-	/// Fail-closed: an expired or IP-restricted key that does not match is no
-	/// different from no key at all.
-	fn authorizes(&self, token: &str, client_ip: Option<std::net::IpAddr>) -> bool {
+	/// Whether `token` from `client_ip` authorizes a request that needs one
+	/// of `acceptable_scopes`: the configured token matches, or any
+	/// non-expired, IP-permitted API key's hash matches and the key carries
+	/// at least one of the acceptable scopes. Fail-closed: an expired,
+	/// IP-restricted or under-scoped key that does not match is no different
+	/// from no key at all.
+	///
+	/// The configured token has every scope — a leaked configured token is
+	/// admin-equivalent regardless. Per-key scopes only matter for the
+	/// optional, labeled keys in `api_keys.toml`.
+	///
+	/// Pass a single-element slice when the route is unambiguous (e.g.
+	/// `POST /api/v1/send` is always `Send`); pass a multi-element slice
+	/// when the coarse path/method inference is ambiguous and the handler
+	/// will tighten (e.g. `POST /jmap/api`, where the actual scope depends on
+	/// the JMAP method in the request body).
+	fn authorizes(
+		&self,
+		token: &str,
+		client_ip: Option<std::net::IpAddr>,
+		acceptable_scopes: &[Scope],
+	) -> bool {
 		if self.token_matches(token) {
 			return true;
 		}
@@ -271,10 +367,49 @@ impl ApiState {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0);
-		self.inner
+		let matched = self
+			.inner
 			.api_keys
 			.iter()
-			.any(|key| key.admits(token, client_ip, now))
+			.find(|key| key.admits_any(token, client_ip, now, acceptable_scopes));
+		if let Some(key) = matched
+			&& key.scopes.is_empty()
+		{
+			self.warn_legacy_key_once(&key.label);
+		}
+		matched.is_some()
+	}
+
+	/// Emit the one-time-per-key warning for legacy (un-scoped) keys. The
+	/// state is shared across requests (it lives behind an `Arc`), so the
+	/// `Mutex<HashSet>` deduplicates: an operator who restarts will see one
+	/// warning per legacy key per process lifetime, not one per request.
+	fn warn_legacy_key_once(&self, label: &str) {
+		let mut warned = self
+			.inner
+			.legacy_warned
+			.lock()
+			.unwrap_or_else(|p| p.into_inner());
+		if warned.insert(label.to_string()) {
+			tracing::warn!(
+				key_label = label,
+				"API key has no scopes; granting full legacy access. \
+				 Scopes will be required in a future release; rotate this key \
+				 with `--scope read|write|send` to keep its blast radius small."
+			);
+		}
+	}
+
+	/// Re-check `auth` against `required_scope`. Used by handlers whose scope
+	/// cannot be inferred from path+method (most JMAP method calls — the same
+	/// `POST /jmap/api` route serves reads, writes and outbound submissions
+	/// depending on the request body, so the middleware's coarse inference
+	/// defaults to passing any scoped key and lets each handler tighten it).
+	pub fn require_scope(&self, auth: &MatchedAuth, scope: Scope) -> Result<(), ApiError> {
+		match &auth.token {
+			Some(token) if self.authorizes(token, auth.client_ip, &[scope]) => Ok(()),
+			_ => Err(ApiError::unauthenticated()),
+		}
 	}
 
 	fn token_matches(&self, token: &str) -> bool {
@@ -300,10 +435,48 @@ impl ApiState {
 	}
 }
 
+/// The client IP extracted from the `ConnectInfo<SocketAddr>` extension of
+/// the inbound request. `None` when the listener was not built with
+/// `into_make_service_with_connect_info` (e.g. in unit tests, where the IP
+/// is irrelevant to the test and `unknown` will be logged). The audit
+/// channel renders `None` as the literal `unknown` so the field is always
+/// present and filterable.
+#[derive(Clone, Copy, Debug)]
+pub struct ClientIp(pub Option<std::net::IpAddr>);
+
+/// Infer the coarse-grained scope the request needs from its method and path.
+/// The middleware uses this as a first pass; per-method JMAP handlers
+/// (`src/api/jmap/mod.rs::dispatch_request`) tighten it on top.
+///
+/// Unambiguous routes (`POST /api/v1/send`, `POST /jmap/upload`) get a
+/// single-scope slice. `POST /jmap/api` is ambiguous (every method call
+/// shares the same path), so the slice accepts any of `Read`/`Write`/`Send`
+/// — the dispatcher then enforces the actual scope per method call.
+fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
+	const ALL: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
+	if method == axum::http::Method::POST && path == "/api/v1/send" {
+		return vec![Scope::Send];
+	}
+	match *method {
+		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],
+		axum::http::Method::POST
+		| axum::http::Method::PUT
+		| axum::http::Method::DELETE
+		| axum::http::Method::PATCH => {
+			if path.starts_with("/api/v1/") || path.starts_with("/jmap/upload") {
+				vec![Scope::Write]
+			} else {
+				ALL.to_vec()
+			}
+		}
+		_ => vec![Scope::Write],
+	}
+}
+
 /// Middleware: every request must carry the bearer token.
 pub async fn require_bearer_token(
 	State(state): State<ApiState>,
-	request: Request,
+	mut request: Request,
 	next: Next,
 ) -> Result<Response, ApiError> {
 	// Reject before any token work when failure budget is exhausted.
@@ -330,9 +503,17 @@ pub async fn require_bearer_token(
 		.headers()
 		.get(axum::http::header::AUTHORIZATION)
 		.and_then(|value| value.to_str().ok())
-		.and_then(|value| value.strip_prefix("Bearer "));
+		.and_then(|value| value.strip_prefix("Bearer "))
+		.map(str::to_owned);
 
-	let authorized = token.is_some_and(|t| state.authorizes(t, client_ip));
+	// Coarse-grained scope from the request line: the per-route JMAP handlers
+	// apply their own fine-grained check on top of this. Unambiguous
+	// mutators (e.g. POST /api/v1/send, POST /jmap/upload) are caught here;
+	// ambiguous routes (POST /jmap/api) accept any scoped key and let the
+	// dispatcher decide per method call.
+	let acceptable_scopes = acceptable_scopes_for(request.method(), request.uri().path());
+	let token_ref = token.as_deref();
+	let authorized = token_ref.is_some_and(|t| state.authorizes(t, client_ip, &acceptable_scopes));
 
 	{
 		let mut limiter = state
@@ -350,6 +531,16 @@ pub async fn require_bearer_token(
 	if !authorized {
 		return Err(ApiError::unauthenticated());
 	}
+	// Inject the resolved client IP so privileged handlers can attribute
+	// their state-changing actions in the audit log.
+	request.extensions_mut().insert(ClientIp(client_ip));
+	// Stash the matched credentials so per-route handlers can apply a
+	// fine-grained scope check on top of the coarse path/method inference
+	// the middleware just performed.
+	request.extensions_mut().insert(MatchedAuth {
+		token: token.clone(),
+		client_ip,
+	});
 	Ok(next.run(request).await)
 }
 

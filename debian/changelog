@@ -1,3 +1,29 @@
+epistle (0.4.0) unstable; urgency=medium
+
+  * JMAP EmailSubmission/set now checks address ownership. A request that
+    submits from an address the named account does not own is rejected.
+    This is a behaviour change, not a regression - integrations that
+    submitted from a sender the account did not own stop working, and
+    that is the correct answer.
+  * API keys carry scopes. A key without the field keeps the full access
+    it had before, so an existing api_keys.toml survives the upgrade
+    without edits - a warning is logged once per key the first time it
+    is loaded. New keys require scopes.
+  * JMAP blob downloads are now gated to the owning account. On startup
+    the owner of every existing blob that some message references is
+    backfilled, so the change applies to data already on disk. A blob
+    uploaded but never referenced by a message stops being served.
+  * Privilege changes are now logged. Adding or removing TOTP, changing
+    the password, and deleting an account each record an event with the
+    account and the client IP. The TOTP secret, the password and its
+    hash are never written to the log.
+  * Header values controlled by third parties are sanitised at JMAP
+    message construction time and in the abuse reports.
+  * The README and the installer now point to the apt archive at
+    apt.glyndor.net/install/epistle (#712).
+
+ -- Glyndor <packages@glyndor.net>  Tue, 25 Aug 2026 02:12:46 +0000
+
 epistle (0.3.5) unstable; urgency=medium
 
   * install.sh verifies the signed SHA256SUMS against the embedded release key

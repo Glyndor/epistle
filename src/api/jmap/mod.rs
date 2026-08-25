@@ -9,13 +9,14 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::state::ApiState;
+use super::state::{ApiState, MatchedAuth};
+use crate::api::api_keys::Scope;
 
 /// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
 /// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
@@ -25,10 +26,16 @@ pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 
+mod blobs;
 mod email;
 mod methods;
 mod objects;
 pub mod websocket;
+
+pub use blobs::{backfill_blob_ownership, reclaim_blobs};
+
+#[cfg(test)]
+pub(crate) use blobs::{account_usage_bytes, read_blob_owner};
 
 /// JMAP core capability URN.
 const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
@@ -132,15 +139,19 @@ pub struct Response {
 }
 
 /// `POST /jmap/api`: dispatch each method call, returning the responses.
-pub async fn api(State(state): State<ApiState>, Json(request): Json<Request>) -> Json<Response> {
-	Json(dispatch_request(&state, request))
+pub async fn api(
+	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
+	Json(request): Json<Request>,
+) -> Json<Response> {
+	Json(dispatch_request(&state, &auth, request))
 }
 
 /// Dispatch a request envelope's method calls and collect the responses
 /// (RFC 8620 §3.3–§3.7). Shared by the HTTP `POST /jmap/api` handler and the
 /// WebSocket transport (RFC 8887), so the two never diverge. Pure aside from the
 /// data-dir/state mutations the individual methods perform.
-pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
+pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) -> Response {
 	let mut method_responses = Vec::with_capacity(request.method_calls.len());
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
@@ -156,11 +167,34 @@ pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 				continue;
 			}
 		};
-		method_responses.push(match name.as_str() {
+		// Scope tightening: the middleware infers `Read` for any `POST
+		// /jmap/api`, but mutating methods need `Write` (or `Send` for
+		// outbound submission). A read-only key hitting the dispatcher would
+		// otherwise reach `Mailbox/set`, `EmailSubmission/set`, etc.
+		let response = match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
+			"Mailbox/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => methods::mailbox_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"Email/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => email::email_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"Email/copy" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => email::email_copy(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"EmailSubmission/set" => match state.require_scope(auth, Scope::Send) {
+				Ok(()) => methods::email_submission_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
+			"PushSubscription/set" => match state.require_scope(auth, Scope::Write) {
+				Ok(()) => websocket::push_subscription_set(state, &args, &call_id),
+				Err(_) => jmap_scope_error(&call_id),
+			},
 			"Mailbox/get" => methods::mailbox_get(state, &args, &call_id),
-			"Mailbox/set" => methods::mailbox_set(state, &args, &call_id),
 			"Mailbox/query" => methods::mailbox_query(state, &args, &call_id),
 			"Email/query" => methods::email_query(state, &args, &call_id),
 			"Email/get" => methods::email_get(state, &args, &call_id),
@@ -173,19 +207,21 @@ pub fn dispatch_request(state: &ApiState, request: Request) -> Response {
 			| "Thread/changes"
 			| "Mailbox/queryChanges"
 			| "Email/queryChanges" => methods::cannot_calculate_changes(state, &args, &call_id),
-			"Email/set" => email::email_set(state, &args, &call_id),
-			"Email/copy" => email::email_copy(state, &args, &call_id),
 			"Identity/get" => methods::identity_get(state, &args, &call_id),
 			"Quota/get" => methods::quota_get(state, &args, &call_id),
-			"EmailSubmission/set" => methods::email_submission_set(state, &args, &call_id),
-			// PushSubscription objects are session-scoped, not per-account
-			// (RFC 8620 §7.2).
 			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),
-			"PushSubscription/set" => websocket::push_subscription_set(state, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
-		});
+		};
+		method_responses.push(response);
 	}
 	Response { method_responses }
+}
+
+/// The JMAP spec does not define a "forbidden" method error; `forbidden` is
+/// the closest general-purpose failure (RFC 8620 §3.6.2) and is what other
+/// servers emit for an authorised-but-not-allowed-permission call.
+fn jmap_scope_error(call_id: &str) -> Value {
+	json!(["error", { "type": "forbidden" }, call_id])
 }
 
 /// Replace each `#`-prefixed argument (a ResultReference) with the value pulled
@@ -260,12 +296,12 @@ pub async fn download(
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
 	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto())
-		.or_else(|| read_blob(state.data_dir(), &blob_id, state.crypto()));
+		.or_else(|| blobs::read_blob(state.data_dir(), &account, &blob_id, state.crypto()));
 	match bytes {
 		Some(bytes) => {
 			// Serve the media type recorded at upload time; stored messages and
 			// legacy blobs without a sidecar fall back to octet-stream.
-			let content_type = read_blob_type(state.data_dir(), &blob_id)
+			let content_type = blobs::read_blob_type(state.data_dir(), &blob_id)
 				.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_string());
 			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
 		}
@@ -277,10 +313,16 @@ pub async fn download(
 /// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
 pub async fn upload(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(account): Path<String>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> impl IntoResponse {
+	// `Write` scope: a read-only key must not be able to fill the quota or
+	// the blob store with arbitrary bytes.
+	if state.require_scope(&auth, Scope::Write).is_err() {
+		return jmap_error(StatusCode::UNAUTHORIZED, "forbidden", "missing write scope");
+	}
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
@@ -309,7 +351,7 @@ pub async fn upload(
 	// the closest standard code for "would exceed the account's storage".
 	let limit = state.quota_limit();
 	if limit > 0 {
-		let usage = account_usage_bytes(state.data_dir(), &account, state.crypto());
+		let usage = blobs::account_usage_bytes(state.data_dir(), &account, state.crypto());
 		if usage.saturating_add(body.len() as u64) > limit {
 			return (
 				StatusCode::INSUFFICIENT_STORAGE,
@@ -333,8 +375,8 @@ pub async fn upload(
 		.to_string();
 	let blob_id = uuid::Uuid::now_v7().to_string();
 	let dir = state.data_dir().join("blobs");
-	// Encrypt the blob payload at rest like stored mail; the `.type` sidecar
-	// stays plaintext metadata.
+	// Encrypt the blob payload at rest like stored mail; the `.type` and
+	// `.owner` sidecars stay plaintext metadata.
 	let stored = match state.crypto().encode(&body) {
 		Ok(stored) => stored,
 		Err(_) => {
@@ -348,6 +390,7 @@ pub async fn upload(
 	if std::fs::create_dir_all(&dir).is_err()
 		|| std::fs::write(dir.join(&blob_id), &stored).is_err()
 		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
+		|| blobs::write_blob_owner(state.data_dir(), &blob_id, &account).is_err()
 	{
 		return jmap_error(
 			StatusCode::INTERNAL_SERVER_ERROR,
@@ -379,98 +422,4 @@ fn jmap_error(status: StatusCode, kind: &str, detail: &str) -> axum::response::R
 		})),
 	)
 		.into_response()
-}
-
-/// Read an uploaded blob by id (rejecting any path separators in the id),
-/// decoding the at-rest envelope. Fails closed: a blob that cannot be decrypted
-/// is not returned rather than served as ciphertext.
-fn read_blob(
-	data_dir: &std::path::Path,
-	blob_id: &str,
-	crypto: &crate::storage::MessageCrypto,
-) -> Option<Vec<u8>> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	let stored = std::fs::read(data_dir.join("blobs").join(blob_id)).ok()?;
-	crypto.decode(&stored).ok()
-}
-
-/// Read the recorded media type of an uploaded blob, if any (the `.type`
-/// sidecar written at upload time). Returns `None` for stored messages.
-fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	std::fs::read_to_string(data_dir.join("blobs").join(format!("{blob_id}.type")))
-		.ok()
-		.filter(|value| !value.is_empty())
-}
-
-/// Bytes counted against an account's storage quota: its stored mail (every
-/// message across INBOX and folders) plus the uploaded blob store. JMAP blobs
-/// live in one shared `<data_dir>/blobs` pool that is not partitioned per
-/// account, so the whole pool is counted — a conservative, fail-closed choice
-/// that never under-counts usage when enforcing the quota on upload.
-pub fn account_usage_bytes(
-	data_dir: &std::path::Path,
-	account: &str,
-	crypto: &crate::storage::MessageCrypto,
-) -> u64 {
-	crate::imap::mailbox::account_usage(data_dir, account, crypto)
-		.saturating_add(blobs_usage_bytes(data_dir))
-}
-
-/// Total size in bytes of the uploaded blob store, counting blob payloads and
-/// their `.type` sidecars under `<data_dir>/blobs`.
-fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
-	let mut total = 0u64;
-	let Ok(entries) = std::fs::read_dir(data_dir.join("blobs")) else {
-		return 0;
-	};
-	for entry in entries.flatten() {
-		if let Ok(meta) = entry.metadata()
-			&& meta.is_file()
-		{
-			total = total.saturating_add(meta.len());
-		}
-	}
-	total
-}
-
-/// Reclaim transient uploaded blobs (RFC 8620 §6.1: an uploaded blob that is
-/// not referenced may be deleted). Delete every blob — payload and its `.type`
-/// sidecar — whose payload was last modified more than `ttl` ago, returning the
-/// number of blobs removed. Only the upload store under `<data_dir>/blobs` is
-/// touched; stored mail under `<data_dir>/accounts` is never affected.
-pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> usize {
-	let dir = data_dir.join("blobs");
-	let Ok(entries) = std::fs::read_dir(&dir) else {
-		return 0;
-	};
-	let now = std::time::SystemTime::now();
-	let mut removed = 0;
-	for entry in entries.flatten() {
-		let name = entry.file_name();
-		// Sidecars are reclaimed alongside their payload, not on their own.
-		if name.to_str().is_some_and(|name| name.ends_with(".type")) {
-			continue;
-		}
-		// Only act on well-formed blob ids; ignore anything else in the dir.
-		let Some(blob_id) = name.to_str().filter(|id| uuid::Uuid::parse_str(id).is_ok()) else {
-			continue;
-		};
-		let expired = entry
-			.metadata()
-			.and_then(|meta| meta.modified())
-			.ok()
-			.and_then(|modified| now.duration_since(modified).ok())
-			.is_some_and(|age| age > ttl);
-		if expired {
-			let _ = std::fs::remove_file(dir.join(blob_id));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}.type")));
-			removed += 1;
-		}
-	}
-	removed
 }

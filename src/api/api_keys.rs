@@ -16,6 +16,65 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// Permissions a key may carry. The set is intentionally small — one per
+/// damage class — so an operator can read at a glance what a leaked key would
+/// let through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+	/// Read-only views (status, domains, accounts list, mailboxes, queue list,
+	/// suppression list, auth/verify, JMAP reads, JMAP `/download`).
+	Read,
+	/// State mutation that does not originate outbound mail: account
+	/// create/delete/password/TOTP, queue and suppression delete, JMAP
+	/// `/set` on mailbox/email/push-subscription, JMAP `/upload`.
+	Write,
+	/// Outbound mail submission: `POST /api/v1/send`, JMAP `EmailSubmission/set`.
+	Send,
+}
+
+/// Error returned when [`Scope::from_str`] (the [`std::str::FromStr`] impl) is
+/// handed a value that is not one of the canonical `read`/`write`/`send`
+/// strings. Carries the offending value so a caller can format a context-aware
+/// message; nobody needs to construct one outside of this module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownScopeError(String);
+
+impl std::fmt::Display for UnknownScopeError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(formatter, "unknown scope \"{}\"", self.0)
+	}
+}
+
+impl std::error::Error for UnknownScopeError {}
+
+impl std::str::FromStr for Scope {
+	type Err = UnknownScopeError;
+
+	/// Parse the canonical form (`read`, `write`, `send`). Unknown values are
+	/// rejected — the store refuses to load an `api_keys.toml` containing a
+	/// typo, and the CLI rejects `--scope` values it does not recognise.
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		match value {
+			"read" => Ok(Scope::Read),
+			"write" => Ok(Scope::Write),
+			"send" => Ok(Scope::Send),
+			_ => Err(UnknownScopeError(value.to_string())),
+		}
+	}
+}
+
+impl Scope {
+	/// Canonical serialised form (`read`, `write`, `send`) used in
+	/// `api_keys.toml` and in the `ApiKey.scopes` vector.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Scope::Read => "read",
+			Scope::Write => "write",
+			Scope::Send => "send",
+		}
+	}
+}
+
 /// One API key as persisted in `api_keys.toml`. The plaintext key is shown once
 /// at creation and never stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,12 +89,35 @@ pub struct ApiKey {
 	/// Single-CIDR allowlist; `None` allows any client IP.
 	#[serde(default)]
 	pub ip_cidr: Option<String>,
+	/// Permissions granted to this key. Absent (legacy) = all scopes, with a
+	/// one-time startup warning per key. New keys added through the store are
+	/// required to declare at least one scope.
+	#[serde(default)]
+	pub scopes: Vec<String>,
 }
 
 impl ApiKey {
 	/// Whether this key admits `presented` from `client_ip` at `now` (epoch
-	/// seconds). Fail-closed on every branch.
-	pub fn admits(&self, presented: &str, client_ip: Option<IpAddr>, now: u64) -> bool {
+	/// seconds), and whether it carries at least one of `acceptable_scopes`.
+	/// Fail-closed on every branch.
+	///
+	/// A key with no `scopes` field (legacy) admits every scope — that is the
+	/// pre-existing behaviour and the migration contract: keys installed
+	/// before the field existed must keep authenticating on upgrade. The
+	/// caller (the API state) is responsible for emitting a one-time warning
+	/// per legacy key.
+	///
+	/// Scopes are independent — a `write`-only key is not also `read`, and a
+	/// `send`-only key cannot `write`. When the caller wants "any of these",
+	/// pass the full set; when it wants "this specific scope", pass a
+	/// single-element slice.
+	pub fn admits_any(
+		&self,
+		presented: &str,
+		client_ip: Option<IpAddr>,
+		now: u64,
+		acceptable_scopes: &[Scope],
+	) -> bool {
 		let hash_ok = sha256_token_matches(&self.hash, presented);
 		let time_ok = self.expires_at.is_none_or(|expiry| now < expiry);
 		let ip_ok = match &self.ip_cidr {
@@ -45,7 +127,13 @@ impl ApiKey {
 				_ => false,
 			},
 		};
-		hash_ok && time_ok && ip_ok
+		// Empty `scopes` = legacy key = admit any scope (preserve behaviour).
+		// A scoped key must list at least one of the acceptable scopes.
+		let scope_ok = self.scopes.is_empty()
+			|| acceptable_scopes
+				.iter()
+				.any(|scope| self.scopes.iter().any(|s| s == scope.as_str()));
+		hash_ok && time_ok && ip_ok && scope_ok
 	}
 }
 
@@ -92,10 +180,63 @@ struct ApiKeyFile {
 	keys: Vec<ApiKey>,
 }
 
+/// One row of [`ApiKeyStore::list`]. Carries everything an operator can see
+/// about a key without ever seeing the secret or its hash.
+#[derive(Debug, Clone)]
+pub struct ApiKeySummary {
+	/// Human-readable label identifying the key.
+	pub label: String,
+	/// Expiry as epoch seconds; `None` never expires.
+	pub expires_at: Option<u64>,
+	/// Single-CIDR allowlist; `None` allows any client IP.
+	pub ip_cidr: Option<String>,
+	/// Permissions granted to the key (canonical strings, e.g. `read`); empty
+	/// means the legacy "any scope" form.
+	pub scopes: Vec<String>,
+}
+
 /// Filesystem-backed store of management API keys.
 pub struct ApiKeyStore {
 	path: PathBuf,
 	keys: Vec<ApiKey>,
+}
+
+/// Validate `scopes` for a brand-new key (the CLI path): at least one scope
+/// must be listed, and every entry must be a known `Scope`.
+fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
+	if scopes.is_empty() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			"API key must declare at least one scope (read/write/send)",
+		));
+	}
+	for scope in scopes {
+		if scope.parse::<Scope>().is_err() {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidInput,
+				format!("unknown API key scope \"{scope}\" (expected read, write or send)"),
+			));
+		}
+	}
+	Ok(())
+}
+
+/// Validate the scope entries loaded from disk: empty is allowed (legacy),
+/// every non-empty entry must be a known `Scope`. A typo in the file is the
+/// kind of thing that should keep the server from starting — the file is
+/// small and operator-edited, so any mistake is best surfaced immediately.
+fn validate_loaded_scopes(scopes: &[String]) -> std::io::Result<()> {
+	for scope in scopes {
+		if scope.parse::<Scope>().is_err() {
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidData,
+				format!(
+					"unknown API key scope \"{scope}\" in api_keys.toml (expected read, write or send)"
+				),
+			));
+		}
+	}
+	Ok(())
 }
 
 impl ApiKeyStore {
@@ -109,6 +250,9 @@ impl ApiKeyStore {
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => ApiKeyFile::default(),
 			Err(error) => return Err(error),
 		};
+		for key in &file.keys {
+			validate_loaded_scopes(&key.scopes)?;
+		}
 		Ok(ApiKeyStore {
 			path,
 			keys: file.keys,
@@ -121,7 +265,7 @@ impl ApiKeyStore {
 	}
 
 	/// Add a key. The hash must already be `sha256:<hex>`; a duplicate label is
-	/// rejected, as is a malformed CIDR.
+	/// rejected, as is a malformed CIDR or an empty/unknown `scopes` vector.
 	pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
 		if let Some(spec) = &key.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
@@ -131,6 +275,7 @@ impl ApiKeyStore {
 				format!("invalid CIDR \"{spec}\""),
 			));
 		}
+		validate_new_scopes(&key.scopes)?;
 		if self.keys.iter().any(|existing| existing.label == key.label) {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::AlreadyExists,
@@ -154,14 +299,20 @@ impl ApiKeyStore {
 		self.persist()
 	}
 
-	/// Every `(label, expires_at, ip_cidr)`, sorted. Hashes are never exposed.
-	pub fn list(&self) -> Vec<(String, Option<u64>, Option<String>)> {
-		let mut rows: Vec<_> = self
+	/// Every key as an [`ApiKeySummary`], sorted by label. Hashes are never
+	/// exposed.
+	pub fn list(&self) -> Vec<ApiKeySummary> {
+		let mut rows: Vec<ApiKeySummary> = self
 			.keys
 			.iter()
-			.map(|key| (key.label.clone(), key.expires_at, key.ip_cidr.clone()))
+			.map(|key| ApiKeySummary {
+				label: key.label.clone(),
+				expires_at: key.expires_at,
+				ip_cidr: key.ip_cidr.clone(),
+				scopes: key.scopes.clone(),
+			})
 			.collect();
-		rows.sort();
+		rows.sort_by(|a, b| a.label.cmp(&b.label));
 		rows
 	}
 

@@ -1,11 +1,13 @@
 //! `/api/v1/accounts`: list, create, delete, change password.
 
+use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
+use crate::api::audit::{self, AuditEvent};
 use crate::api::error::ApiError;
-use crate::api::state::{AccountView, ApiState};
+use crate::api::state::{AccountView, ApiState, ClientIp};
 use crate::directory_store::{DynamicAccount, StoreError};
 
 #[derive(Serialize)]
@@ -68,9 +70,11 @@ pub struct Removed {
 
 pub async fn remove(
 	State(state): State<ApiState>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(name): Path<String>,
 ) -> Result<Json<Removed>, ApiError> {
 	state.store().remove(&name).map_err(store_error)?;
+	audit::log_privilege_change(AuditEvent::AccountRemoved, &name, client_ip.0);
 	Ok(Json(Removed { removed: name }))
 }
 
@@ -86,6 +90,7 @@ pub struct PasswordChanged {
 
 pub async fn set_password(
 	State(state): State<ApiState>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(name): Path<String>,
 	Json(request): Json<SetPassword>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
@@ -97,6 +102,7 @@ pub async fn set_password(
 		.store()
 		.set_password_hash(&name, hash, Some(scram))
 		.map_err(store_error)?;
+	audit::log_privilege_change(AuditEvent::PasswordReset, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
 }
 
@@ -125,6 +131,7 @@ pub struct TotpEnrolled {
 /// POST `/accounts/{name}/totp`: generate and store a fresh TOTP secret (2FA).
 pub async fn enroll_totp(
 	State(state): State<ApiState>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(name): Path<String>,
 ) -> Result<Json<TotpEnrolled>, ApiError> {
 	use ring::rand::SecureRandom;
@@ -143,6 +150,7 @@ pub async fn enroll_totp(
 		.map(String::as_str)
 		.unwrap_or("mail");
 	let otpauth_uri = format!("otpauth://totp/{issuer}:{name}?secret={secret}&issuer={issuer}");
+	audit::log_privilege_change(AuditEvent::TotpEnrolled, &name, client_ip.0);
 	Ok(Json(TotpEnrolled {
 		secret,
 		otpauth_uri,
@@ -152,9 +160,11 @@ pub async fn enroll_totp(
 /// DELETE `/accounts/{name}/totp`: disable two-factor auth for the account.
 pub async fn disable_totp(
 	State(state): State<ApiState>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(name): Path<String>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
 	state.store().set_totp(&name, None).map_err(store_error)?;
+	audit::log_privilege_change(AuditEvent::TotpDisabled, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
 }
 

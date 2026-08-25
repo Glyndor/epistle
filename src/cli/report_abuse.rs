@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use std::time::SystemTime;
 
 use crate::config::Config;
+use crate::util::header::sanitize_header_value;
 
 /// Build an ARF report for the message read from `input` and write it to `out`.
 pub(super) fn run(
@@ -56,11 +57,18 @@ fn build_report(config: &Config, message: &[u8]) -> String {
 	let boundary = boundary(message);
 	let date = crate::clock::rfc5322(SystemTime::now());
 	let host = &config.hostname;
-	let mail_from = header(&headers, "return-path")
-		.or_else(|| header(&headers, "from"))
-		.unwrap_or_else(|| "unknown".to_string());
+	// The reported message is hostile by definition — it is the spam the
+	// operator is reporting. A CRLF in `Return-Path:` / `From:` would inject
+	// forged headers into the ARF report (Bcc, X-*, …), and a CRLF in the
+	// extracted `Received:` IP would terminate the `Source-IP:` line and
+	// start a new one. Sanitize before the value reaches any `format!`.
+	let mail_from = sanitize_header_value(
+		&header(&headers, "return-path")
+			.or_else(|| header(&headers, "from"))
+			.unwrap_or_else(|| "unknown".to_string()),
+	);
 	let arrival = header(&headers, "date").unwrap_or_else(|| date.clone());
-	let source_ip = received_ip(&headers);
+	let source_ip = received_ip(&headers).map(|ip| sanitize_header_value(&ip));
 	let version = env!("CARGO_PKG_VERSION");
 
 	let mut feedback = format!(

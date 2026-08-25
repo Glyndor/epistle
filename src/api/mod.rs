@@ -5,6 +5,7 @@
 //! binds to localhost unless explicitly configured otherwise.
 
 pub mod api_keys;
+mod audit;
 mod error;
 mod jmap;
 pub mod oauth;
@@ -13,7 +14,7 @@ pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeyStore};
 pub use jmap::reclaim_blobs;
-pub use state::ApiState;
+pub use state::{ApiState, ClientIp};
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -77,6 +78,10 @@ pub fn router(state: ApiState) -> Router {
 mod tests;
 
 #[cfg(test)]
+#[path = "api_tests_b.rs"]
+mod tests_b;
+
+#[cfg(test)]
 #[path = "auth_tests.rs"]
 mod auth_tests;
 
@@ -91,3 +96,15 @@ mod jmap_tests_b;
 #[cfg(test)]
 #[path = "jmap_tests_c.rs"]
 mod jmap_tests_c;
+
+#[cfg(test)]
+#[path = "jmap_tests_d.rs"]
+mod jmap_tests_d;
+
+#[cfg(test)]
+#[path = "jmap_tests_e.rs"]
+mod jmap_tests_e;
+
+#[cfg(test)]
+#[path = "jmap_tests_f.rs"]
+mod jmap_tests_f;
