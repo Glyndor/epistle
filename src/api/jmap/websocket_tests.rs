@@ -261,7 +261,7 @@ fn push_subscription_destroy_removes() {
 async fn session_advertises_websocket_capability() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	let (status, body) = request(&app, "GET", "/jmap/session", Some(TOKEN)).await;
+	let (status, body) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
 	let ws = &body["capabilities"]["urn:ietf:params:jmap:websocket"];
 	assert_eq!(ws["url"], "/jmap/ws", "{body}");

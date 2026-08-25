@@ -153,7 +153,7 @@ async fn bootstrap_account(app: &axum::Router, name: &str) {
 		app,
 		"POST",
 		"/api/v1/accounts",
-		Some(TOKEN),
+		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
 			"name": name,
 			"addresses": [format!("{name}@example.org")],
@@ -178,15 +178,25 @@ async fn totp_enrollment_records_event_and_does_not_leak_secret() {
 	// Capture the secret the handler returns so we can also assert the
 	// handler actually generated one — and assert the audit log never sees it.
 	let secret = {
-		let (status, body) =
-			request(&app, "POST", "/api/v1/accounts/carol/totp", Some(TOKEN)).await;
+		let (status, body) = request(
+			&app,
+			"POST",
+			"/api/v1/accounts/carol/totp",
+			Some(TOKEN.as_str()),
+		)
+		.await;
 		assert_eq!(status, axum::http::StatusCode::OK, "{body}");
 		body["secret"].as_str().expect("secret").to_string()
 	};
 
 	let events = run_with_capture(async {
-		let (status, body) =
-			request(&app, "POST", "/api/v1/accounts/carol/totp", Some(TOKEN)).await;
+		let (status, body) = request(
+			&app,
+			"POST",
+			"/api/v1/accounts/carol/totp",
+			Some(TOKEN.as_str()),
+		)
+		.await;
 		assert_eq!(status, axum::http::StatusCode::OK, "{body}");
 		// Discard the second secret — we only need the event capture here.
 		let _ = body["secret"].as_str();
@@ -217,13 +227,13 @@ async fn totp_enrollment_records_event_and_does_not_leak_secret() {
 		!blob.contains(&secret),
 		"audit leaked the generated TOTP secret: {blob}"
 	);
-	let bearer = format!("Bearer {TOKEN}");
+	let bearer = format!("Bearer {}", TOKEN.as_str());
 	assert!(
 		!blob.contains(&bearer),
 		"audit leaked the bearer token: {blob}"
 	);
 	assert!(
-		!blob.contains(TOKEN),
+		!blob.contains(TOKEN.as_str()),
 		"audit leaked the raw token string: {blob}"
 	);
 }
@@ -236,8 +246,13 @@ async fn totp_disable_records_event() {
 	bootstrap_account(&app, "dave").await;
 
 	let events = run_with_capture(async {
-		let (status, body) =
-			request(&app, "DELETE", "/api/v1/accounts/dave/totp", Some(TOKEN)).await;
+		let (status, body) = request(
+			&app,
+			"DELETE",
+			"/api/v1/accounts/dave/totp",
+			Some(TOKEN.as_str()),
+		)
+		.await;
 		assert_eq!(status, axum::http::StatusCode::OK, "{body}");
 	});
 
@@ -257,7 +272,7 @@ async fn totp_disable_records_event() {
 	);
 	let blob = audit_blob(&events);
 	assert!(
-		!blob.contains(TOKEN),
+		!blob.contains(TOKEN.as_str()),
 		"audit leaked the bearer token: {blob}"
 	);
 }
@@ -278,7 +293,7 @@ async fn password_reset_records_event_and_does_not_leak_credentials() {
 			&app,
 			"PUT",
 			"/api/v1/accounts/erin/password",
-			Some(TOKEN),
+			Some(TOKEN.as_str()),
 			Some(serde_json::json!({"password": new_password})),
 		)
 		.await;
@@ -314,7 +329,7 @@ async fn password_reset_records_event_and_does_not_leak_credentials() {
 		"audit leaked the argon2id hash: {blob}"
 	);
 	assert!(
-		!blob.contains(TOKEN),
+		!blob.contains(TOKEN.as_str()),
 		"audit leaked the bearer token: {blob}"
 	);
 }
@@ -327,7 +342,13 @@ async fn account_removal_records_event() {
 	bootstrap_account(&app, "frank").await;
 
 	let events = run_with_capture(async {
-		let (status, body) = request(&app, "DELETE", "/api/v1/accounts/frank", Some(TOKEN)).await;
+		let (status, body) = request(
+			&app,
+			"DELETE",
+			"/api/v1/accounts/frank",
+			Some(TOKEN.as_str()),
+		)
+		.await;
 		assert_eq!(status, axum::http::StatusCode::OK, "{body}");
 	});
 
@@ -347,7 +368,7 @@ async fn account_removal_records_event() {
 	);
 	let blob = audit_blob(&events);
 	assert!(
-		!blob.contains(TOKEN),
+		!blob.contains(TOKEN.as_str()),
 		"audit leaked the bearer token: {blob}"
 	);
 }
@@ -374,7 +395,7 @@ async fn audit_log_records_client_ip_when_connect_info_is_present() {
 		let mut request = Request::builder()
 			.method("DELETE")
 			.uri("/api/v1/accounts/gwen")
-			.header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+			.header(header::AUTHORIZATION, format!("Bearer {}", TOKEN.as_str()))
 			.body(Body::empty())
 			.expect("request");
 		request.extensions_mut().insert(ConnectInfo(peer));
@@ -399,7 +420,7 @@ async fn audit_log_records_client_ip_when_connect_info_is_present() {
 	);
 	let blob = audit_blob(&events);
 	assert!(
-		!blob.contains(TOKEN),
+		!blob.contains(TOKEN.as_str()),
 		"bearer leaked through the audit channel: {blob}"
 	);
 }

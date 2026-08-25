@@ -23,7 +23,8 @@ async fn jmap_email_set_creates_message() {
 			} },
 		}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let id = body["methodResponses"][0][1]["created"]["draft"]["id"]
 		.as_str()
@@ -32,7 +33,8 @@ async fn jmap_email_set_creates_message() {
 	let req = serde_json::json!({
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id]}, "c2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	let email = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(email["subject"], "Hello");
 	assert_eq!(email["bodyValues"]["0"]["value"], "the body");
@@ -55,7 +57,8 @@ async fn jmap_email_set_destroys_message() {
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Email/set", {"accountId": "alice", "destroy": [id.to_string()]}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(
 		body["methodResponses"][0][1]["destroyed"][0],
@@ -64,7 +67,8 @@ async fn jmap_email_set_destroys_message() {
 	let req = serde_json::json!({
 		"methodCalls": [["Email/query", {"accountId": "alice"}, "c2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][1]["total"], 0);
 }
 
@@ -84,7 +88,7 @@ async fn jmap_email_set_moves_between_mailboxes() {
 	let req = serde_json::json!({
 		"methodCalls": [["Mailbox/set", {"accountId": "alice", "create": {"c1": {"name": "Work"}}}, "m1"]],
 	});
-	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 
 	// Move the email to Work.
 	let req = serde_json::json!({
@@ -93,7 +97,8 @@ async fn jmap_email_set_moves_between_mailboxes() {
 			"update": { id.to_string(): {"mailboxIds": {"Work": true}} },
 		}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body["methodResponses"][0][1]["updated"][id.to_string()].is_null());
 	// INBOX is now empty; Work has the message.
@@ -103,7 +108,8 @@ async fn jmap_email_set_moves_between_mailboxes() {
 			["Email/query", {"accountId": "alice", "filter": {"inMailbox": "Work"}}, "q2"],
 		],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][1]["total"], 0);
 	assert_eq!(body["methodResponses"][1][1]["total"], 1);
 }
@@ -128,7 +134,8 @@ async fn jmap_email_set_updates_keywords() {
 			"update": { id.to_string(): {"keywords": {"$seen": true}} },
 		}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body["methodResponses"][0][1]["updated"][id.to_string()].is_null());
 
@@ -136,7 +143,8 @@ async fn jmap_email_set_updates_keywords() {
 	let req = serde_json::json!({
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id.to_string()]}, "c2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(
 		body["methodResponses"][0][1]["list"][0]["keywords"]["$seen"],
 		true
@@ -160,7 +168,8 @@ async fn jmap_email_get_parses_message() {
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id.to_string()]}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let email = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(email["subject"], "Hi there");
@@ -172,7 +181,8 @@ async fn jmap_email_get_parses_message() {
 	let req = serde_json::json!({
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": ["not-a-uuid"]}, "c2"]],
 	});
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(body["methodResponses"][0][1]["notFound"][0], "not-a-uuid");
 }
 
@@ -192,7 +202,8 @@ async fn jmap_thread_get_returns_singleton_thread() {
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Thread/get", {"accountId": "alice", "ids": [id.to_string(), "missing"]}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let thread = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(thread["id"], id.to_string());
@@ -214,7 +225,8 @@ async fn jmap_email_query_returns_ids() {
 		"using": ["urn:ietf:params:jmap:mail"],
 		"methodCalls": [["Email/query", {"accountId": "alice", "filter": {"inMailbox": "INBOX"}}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let response = &body["methodResponses"][0][1];
 	assert_eq!(response["total"], 3);
@@ -241,7 +253,7 @@ async fn jmap_methods_reject_missing_account_id() {
 	] {
 		let req = serde_json::json!({ "methodCalls": [[method, {}, "c1"]] });
 		let (status, body) =
-			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(body["methodResponses"][0][0], "error", "{method}: {body}");
 		assert_eq!(
@@ -267,7 +279,8 @@ async fn jmap_email_set_reports_unknown_ids() {
 			"update": { "missing-id": {"keywords": {"$seen": true}} },
 		}, "c1"]],
 	});
-	let (status, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	let result = &body["methodResponses"][0][1];
 	assert_eq!(result["notDestroyed"][&ghost]["type"], "notFound", "{body}");
@@ -281,7 +294,8 @@ async fn jmap_email_set_reports_unknown_ids() {
 		let req = serde_json::json!({
 			"methodCalls": [[method, {"accountId": "ghost-account"}, "c2"]],
 		});
-		let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		let (_, body) =
+			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 		assert_eq!(
 			body["methodResponses"][0][1]["type"], "accountNotFound",
 			"{method}: {body}"
@@ -297,7 +311,7 @@ async fn jmap_changes_methods_report_cannot_calculate() {
 	for method in ["Mailbox/changes", "Email/changes", "Thread/changes"] {
 		let req = serde_json::json!({ "methodCalls": [[method, {"accountId": "alice"}, "c1"]] });
 		let (status, body) =
-			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+			request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(
 			body["methodResponses"][0][1]["type"], "cannotCalculateChanges",
@@ -306,7 +320,8 @@ async fn jmap_changes_methods_report_cannot_calculate() {
 	}
 	// Without an account it is invalidArguments.
 	let req = serde_json::json!({ "methodCalls": [["Email/changes", {}, "c2"]] });
-	let (_, body) = request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(
 		body["methodResponses"][0][1]["type"], "invalidArguments",
 		"{body}"
@@ -338,7 +353,7 @@ async fn jmap_email_set_sanitises_header_injection_in_subject() {
 		}, "c1"]],
 	});
 	let (status, _body) =
-		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN), Some(req)).await;
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	assert_eq!(status, StatusCode::OK);
 	// Pull the stored message back. Append goes to `INBOX/cur` after
 	// delivery (delivery moves it from `new`).
