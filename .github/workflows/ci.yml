@@ -10,13 +10,15 @@ permissions:
 
 jobs:
   rust:
-    uses: Glyndor/.github/.github/workflows/rust-ci.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: Glyndor/.github/.github/workflows/rust-ci.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
     with:
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
-      # widened a clippy lint. Now on 1.97 (the org default), with that lint
+      # widened a clippy lint. Now on 1.98 (the org default), with that lint
       # fixed; bump deliberately through this input, never by tracking stable.
-      toolchain: "1.97"
+      # Kept equal to the rust-supply-chain.yml default — a repo whose SBOM is
+      # produced by a compiler its test suite never ran is podup#1487.
+      toolchain: "1.98"
       coverage-threshold: 90
       # Files the no-DB coverage job cannot fairly measure — each needs a live
       # service or is thin connection-accept glue, so they are excluded here
@@ -32,8 +34,8 @@ jobs:
       # excluded (they count toward the gate).
       coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap))\\.rs"
   pin-policy:
-    uses: Glyndor/.github/.github/workflows/pin-policy-reusable.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: Glyndor/.github/.github/workflows/pin-policy-reusable.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
   dependabot-freshness:
-    uses: Glyndor/.github/.github/workflows/dependabot-freshness.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: Glyndor/.github/.github/workflows/dependabot-freshness.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
     with:
       max-age-days: 15
