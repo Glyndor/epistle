@@ -37,7 +37,12 @@ fn request_frame_returns_response_with_echoed_request_id() {
 		"methodCalls": [["Core/echo", {"hello": "ws"}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &frame, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&frame,
+		&mut push,
+	));
 	assert_eq!(reply["@type"], "Response");
 	assert_eq!(reply["requestId"], "R1");
 	assert_eq!(reply["methodResponses"][0][0], "Core/echo");
@@ -55,7 +60,12 @@ fn request_without_id_omits_request_id() {
 		"methodCalls": [["Core/echo", {}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &frame, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&frame,
+		&mut push,
+	));
 	assert_eq!(reply["@type"], "Response");
 	assert!(reply.get("requestId").is_none(), "{reply}");
 }
@@ -81,7 +91,12 @@ fn unparseable_frame_returns_request_error() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = test_state(dir.path(), 0);
 	let mut push = PushState::default();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), "{not json", &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		"{not json",
+		&mut push,
+	));
 	assert_eq!(reply["@type"], "RequestError");
 	assert_eq!(reply["type"], "urn:ietf:params:jmap:error:notJSON");
 }
@@ -232,7 +247,12 @@ fn push_subscription_destroy_removes() {
 		"methodCalls": [["PushSubscription/set", {"destroy": [id]}, "c2"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &destroy, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&destroy,
+		&mut push,
+	));
 	assert_eq!(reply["methodResponses"][0][1]["destroyed"][0], id);
 	assert!(state.push_subscriptions().is_empty());
 }

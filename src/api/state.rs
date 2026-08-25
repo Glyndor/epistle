@@ -367,9 +367,11 @@ impl ApiState {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0);
-		let matched = self.inner.api_keys.iter().find(|key| {
-			key.admits_any(token, client_ip, now, acceptable_scopes)
-		});
+		let matched = self
+			.inner
+			.api_keys
+			.iter()
+			.find(|key| key.admits_any(token, client_ip, now, acceptable_scopes));
 		if let Some(key) = matched
 			&& key.scopes.is_empty()
 		{

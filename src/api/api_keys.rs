@@ -179,9 +179,7 @@ fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
 		if Scope::from_str(scope).is_none() {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidInput,
-				format!(
-					"unknown API key scope \"{scope}\" (expected read, write or send)"
-				),
+				format!("unknown API key scope \"{scope}\" (expected read, write or send)"),
 			));
 		}
 	}

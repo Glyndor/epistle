@@ -94,8 +94,8 @@ fn ip_restricted_api_key_enforced() {
 fn owns_address_is_fail_closed_without_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_keys(dir.path(), "the-token", Vec::new());
-	let address = crate::smtp::address::Address::parse("alice@example.org")
-		.expect("address parses");
+	let address =
+		crate::smtp::address::Address::parse("alice@example.org").expect("address parses");
 	// No directory attached: every owns_address call is `false`, even for an
 	// address that *would* be owned if the directory were wired up.
 	assert!(
@@ -129,15 +129,11 @@ fn owns_address_consults_attached_directory() {
 		)
 		.expect("open store"),
 	);
-	let state = state_with_keys(dir.path(), "the-token", Vec::new())
-		.with_directory(store.handle());
-	let owned = crate::smtp::address::Address::parse("alice@example.org")
-		.expect("address parses");
-	let foreign = crate::smtp::address::Address::parse("bob@example.org")
-		.expect("address parses");
+	let state = state_with_keys(dir.path(), "the-token", Vec::new()).with_directory(store.handle());
+	let owned = crate::smtp::address::Address::parse("alice@example.org").expect("address parses");
+	let foreign = crate::smtp::address::Address::parse("bob@example.org").expect("address parses");
 	let case_variant =
-		crate::smtp::address::Address::parse("ALICE@example.ORG")
-			.expect("address parses");
+		crate::smtp::address::Address::parse("ALICE@example.ORG").expect("address parses");
 	assert!(state.owns_address("alice", &owned));
 	assert!(!state.owns_address("alice", &foreign));
 	assert!(state.owns_address("alice", &case_variant));

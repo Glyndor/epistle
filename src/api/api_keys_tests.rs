@@ -150,7 +150,9 @@ fn add_rejects_empty_scopes() {
 	let mut store = ApiKeyStore::open(dir.path()).expect("open");
 	let mut unscoped = key("ci", "secret");
 	unscoped.scopes.clear();
-	let error = store.add(unscoped).expect_err("empty scopes must be rejected");
+	let error = store
+		.add(unscoped)
+		.expect_err("empty scopes must be rejected");
 	assert!(
 		error.to_string().contains("scope"),
 		"unexpected error message: {error}"
@@ -201,5 +203,8 @@ fn open_accepts_legacy_file_without_scopes() {
 	.expect("write fixture");
 	let store = ApiKeyStore::open(dir.path()).expect("legacy file must load");
 	assert_eq!(store.keys().len(), 1);
-	assert!(store.keys()[0].scopes.is_empty(), "legacy key has empty scopes");
+	assert!(
+		store.keys()[0].scopes.is_empty(),
+		"legacy key has empty scopes"
+	);
 }

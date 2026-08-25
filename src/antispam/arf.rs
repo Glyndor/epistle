@@ -381,7 +381,12 @@ human only\r\n\
 		// would start a forged `Bcc:` header.
 		r.original_mail_from = "spammer@bad.example\r\nBcc: attacker@evil.example";
 		let body = String::from_utf8(
-			build("mail.example.org", &r, UNIX_EPOCH + Duration::from_secs(1_780_662_896)).data,
+			build(
+				"mail.example.org",
+				&r,
+				UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			)
+			.data,
 		)
 		.expect("ascii");
 		// Scan the whole report: any line that starts with `Bcc:` is a
@@ -401,7 +406,12 @@ human only\r\n\
 		let mut r = report();
 		r.source_ip = Some("192.0.2.5\r\nBcc: attacker@evil.example");
 		let body = String::from_utf8(
-			build("mail.example.org", &r, UNIX_EPOCH + Duration::from_secs(1_780_662_896)).data,
+			build(
+				"mail.example.org",
+				&r,
+				UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			)
+			.data,
 		)
 		.expect("ascii");
 		for line in body.lines() {
@@ -420,7 +430,12 @@ human only\r\n\
 		let mut r = report();
 		r.original_mail_from = "spammer@bad.example\r\nBcc: attacker@evil.example";
 		let body = String::from_utf8(
-			build("mail.example.org", &r, UNIX_EPOCH + Duration::from_secs(1_780_662_896)).data,
+			build(
+				"mail.example.org",
+				&r,
+				UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			)
+			.data,
 		)
 		.expect("ascii");
 		let reported_line = body
