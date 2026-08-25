@@ -66,7 +66,7 @@ pub fn build(hostname: &str, report: &Report, now: std::time::SystemTime) -> Acc
 		.rsplit_once('@')
 		.map(|(_, domain)| sanitize_header_value(domain))
 		.unwrap_or_default();
-	let source_ip = report.source_ip.map(|ip| sanitize_header_value(ip));
+	let source_ip = report.source_ip.map(sanitize_header_value);
 
 	let mut feedback = format!(
 		"Feedback-Type: {}\r\n\

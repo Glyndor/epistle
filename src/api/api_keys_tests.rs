@@ -120,7 +120,7 @@ fn store_add_list_remove_roundtrip() {
 
 	let rows = store.list();
 	assert_eq!(rows.len(), 2);
-	assert!(rows.iter().any(|(l, _, _, _)| l == "ci"));
+	assert!(rows.iter().any(|row| row.label == "ci"));
 
 	let reopened = ApiKeyStore::open(dir.path()).expect("reopen");
 	assert_eq!(reopened.keys().len(), 2);

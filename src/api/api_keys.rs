@@ -32,6 +32,37 @@ pub enum Scope {
 	Send,
 }
 
+/// Error returned when [`Scope::from_str`] (the [`std::str::FromStr`] impl) is
+/// handed a value that is not one of the canonical `read`/`write`/`send`
+/// strings. Carries the offending value so a caller can format a context-aware
+/// message; nobody needs to construct one outside of this module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownScopeError(String);
+
+impl std::fmt::Display for UnknownScopeError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(formatter, "unknown scope \"{}\"", self.0)
+	}
+}
+
+impl std::error::Error for UnknownScopeError {}
+
+impl std::str::FromStr for Scope {
+	type Err = UnknownScopeError;
+
+	/// Parse the canonical form (`read`, `write`, `send`). Unknown values are
+	/// rejected — the store refuses to load an `api_keys.toml` containing a
+	/// typo, and the CLI rejects `--scope` values it does not recognise.
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		match value {
+			"read" => Ok(Scope::Read),
+			"write" => Ok(Scope::Write),
+			"send" => Ok(Scope::Send),
+			_ => Err(UnknownScopeError(value.to_string())),
+		}
+	}
+}
+
 impl Scope {
 	/// Canonical serialised form (`read`, `write`, `send`) used in
 	/// `api_keys.toml` and in the `ApiKey.scopes` vector.
@@ -40,17 +71,6 @@ impl Scope {
 			Scope::Read => "read",
 			Scope::Write => "write",
 			Scope::Send => "send",
-		}
-	}
-
-	/// Parse the canonical form. Unknown values are rejected — the store will
-	/// refuse to load an `api_keys.toml` containing a typo.
-	pub fn from_str(value: &str) -> Option<Self> {
-		match value {
-			"read" => Some(Scope::Read),
-			"write" => Some(Scope::Write),
-			"send" => Some(Scope::Send),
-			_ => None,
 		}
 	}
 }
@@ -160,6 +180,21 @@ struct ApiKeyFile {
 	keys: Vec<ApiKey>,
 }
 
+/// One row of [`ApiKeyStore::list`]. Carries everything an operator can see
+/// about a key without ever seeing the secret or its hash.
+#[derive(Debug, Clone)]
+pub struct ApiKeySummary {
+	/// Human-readable label identifying the key.
+	pub label: String,
+	/// Expiry as epoch seconds; `None` never expires.
+	pub expires_at: Option<u64>,
+	/// Single-CIDR allowlist; `None` allows any client IP.
+	pub ip_cidr: Option<String>,
+	/// Permissions granted to the key (canonical strings, e.g. `read`); empty
+	/// means the legacy "any scope" form.
+	pub scopes: Vec<String>,
+}
+
 /// Filesystem-backed store of management API keys.
 pub struct ApiKeyStore {
 	path: PathBuf,
@@ -176,7 +211,7 @@ fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
 		));
 	}
 	for scope in scopes {
-		if Scope::from_str(scope).is_none() {
+		if scope.parse::<Scope>().is_err() {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidInput,
 				format!("unknown API key scope \"{scope}\" (expected read, write or send)"),
@@ -192,7 +227,7 @@ fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
 /// small and operator-edited, so any mistake is best surfaced immediately.
 fn validate_loaded_scopes(scopes: &[String]) -> std::io::Result<()> {
 	for scope in scopes {
-		if Scope::from_str(scope).is_none() {
+		if scope.parse::<Scope>().is_err() {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidData,
 				format!(
@@ -264,22 +299,20 @@ impl ApiKeyStore {
 		self.persist()
 	}
 
-	/// Every `(label, expires_at, ip_cidr, scopes)`, sorted by label. Hashes
-	/// are never exposed.
-	pub fn list(&self) -> Vec<(String, Option<u64>, Option<String>, Vec<String>)> {
-		let mut rows: Vec<_> = self
+	/// Every key as an [`ApiKeySummary`], sorted by label. Hashes are never
+	/// exposed.
+	pub fn list(&self) -> Vec<ApiKeySummary> {
+		let mut rows: Vec<ApiKeySummary> = self
 			.keys
 			.iter()
-			.map(|key| {
-				(
-					key.label.clone(),
-					key.expires_at,
-					key.ip_cidr.clone(),
-					key.scopes.clone(),
-				)
+			.map(|key| ApiKeySummary {
+				label: key.label.clone(),
+				expires_at: key.expires_at,
+				ip_cidr: key.ip_cidr.clone(),
+				scopes: key.scopes.clone(),
 			})
 			.collect();
-		rows.sort();
+		rows.sort_by(|a, b| a.label.cmp(&b.label));
 		rows
 	}
 

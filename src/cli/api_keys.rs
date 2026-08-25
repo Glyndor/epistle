@@ -67,19 +67,22 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	for (label, expires_at, ip_cidr, scopes) in store.list() {
-		let expiry = expires_at.map_or_else(|| "never".to_string(), |e| e.to_string());
-		let cidr = ip_cidr.unwrap_or_else(|| "any".to_string());
+	for row in store.list() {
+		let expiry = row
+			.expires_at
+			.map_or_else(|| "never".to_string(), |e| e.to_string());
+		let cidr = row.ip_cidr.unwrap_or_else(|| "any".to_string());
 		// An empty scope list is a legacy key; show the warning verbatim so
 		// operators can spot it on `api-key list` without grepping the logs.
-		let scopes_repr = if scopes.is_empty() {
+		let scopes_repr = if row.scopes.is_empty() {
 			"legacy(all)".to_string()
 		} else {
-			scopes.join(",")
+			row.scopes.join(",")
 		};
 		if writeln!(
 			out,
-			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}"
+			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}",
+			label = row.label,
 		)
 		.is_err()
 		{
@@ -93,9 +96,9 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 /// reaches `ApiKeyStore::add` (the store repeats the check; this gives the
 /// user a clean error before any I/O happens).
 pub(super) fn parse_scope(value: &str) -> Result<String, String> {
-	match Scope::from_str(value) {
-		Some(_) => Ok(value.to_string()),
-		None => Err(format!(
+	match value.parse::<Scope>() {
+		Ok(_) => Ok(value.to_string()),
+		Err(_) => Err(format!(
 			"unknown scope \"{value}\" (expected read, write or send)"
 		)),
 	}
