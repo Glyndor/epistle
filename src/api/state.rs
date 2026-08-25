@@ -328,10 +328,19 @@ impl ApiState {
 	}
 }
 
+/// The client IP extracted from the `ConnectInfo<SocketAddr>` extension of
+/// the inbound request. `None` when the listener was not built with
+/// `into_make_service_with_connect_info` (e.g. in unit tests, where the IP
+/// is irrelevant to the test and `unknown` will be logged). The audit
+/// channel renders `None` as the literal `unknown` so the field is always
+/// present and filterable.
+#[derive(Clone, Copy, Debug)]
+pub struct ClientIp(pub Option<std::net::IpAddr>);
+
 /// Middleware: every request must carry the bearer token.
 pub async fn require_bearer_token(
 	State(state): State<ApiState>,
-	request: Request,
+	mut request: Request,
 	next: Next,
 ) -> Result<Response, ApiError> {
 	// Reject before any token work when failure budget is exhausted.
@@ -378,6 +387,9 @@ pub async fn require_bearer_token(
 	if !authorized {
 		return Err(ApiError::unauthenticated());
 	}
+	// Inject the resolved client IP so privileged handlers can attribute
+	// their state-changing actions in the audit log.
+	request.extensions_mut().insert(ClientIp(client_ip));
 	Ok(next.run(request).await)
 }
 

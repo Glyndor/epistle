@@ -5,6 +5,7 @@
 //! binds to localhost unless explicitly configured otherwise.
 
 pub mod api_keys;
+mod audit;
 mod error;
 mod jmap;
 pub mod oauth;
@@ -13,7 +14,7 @@ pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeyStore};
 pub use jmap::reclaim_blobs;
-pub use state::ApiState;
+pub use state::{ApiState, ClientIp};
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
