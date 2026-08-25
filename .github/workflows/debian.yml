@@ -7,7 +7,7 @@ name: Debian package
 # proves Build-Depends is satisfiable rather than aspirational.
 #
 # release.yml asks a different question and answers it with a pinned upstream
-# toolchain (1.97.1, the version ci.yml validates), so the .deb a user installs
+# toolchain (1.98.0, the version ci.yml validates), so the .deb a user installs
 # is built by the compiler that vouched for the code. Neither build subsumes the
 # other.
 #

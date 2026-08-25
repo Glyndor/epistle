@@ -32,8 +32,8 @@ jobs:
           # metadata and runs the audit, so the version matters less here - but a
           # release workflow where two jobs disagree about the compiler is a
           # question nobody wants to answer later.
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup default 1.97.1
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
 
       - name: Tag matches the crate version
         run: |
@@ -94,13 +94,13 @@ jobs:
     name: Build Debian package (${{ matrix.arch }})
     needs: verify
     runs-on: ${{ matrix.runner }}
-    # The image, not dpkg, provides the toolchain: this is upstream 1.97.1, the
+    # The image, not dpkg, provides the toolchain: this is upstream 1.98, the
     # same version ci.yml pins, so the .deb users install is built by the
     # compiler that validated the code. Debian's own rustc is too old anyway -
     # trixie ships 1.85 and the dependency floor is 1.88 (rcgen, time,
     # time-macros), which edition 2024 alone does not tell you. Digest-pinned so
     # a retag cannot change the build environment.
-    container: docker.io/library/rust@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c # 1.97.1-slim-trixie
+    container: docker.io/library/rust@sha256:fb4b2f1dc68c06f46618948b09d0ade147e6d2b11a6581e599b0c808d5b8a167 # 1.98-slim-trixie
     permissions:
       contents: read
       id-token: write
@@ -184,14 +184,14 @@ jobs:
 
       - name: Install toolchain
         run: |
-          # Pinned, not `stable`. ci.yml pins 1.97 and the .deb job builds in a
-          # digest-pinned 1.97.1 image, so tracking `stable` here would mean the
+          # Pinned, not `stable`. ci.yml pins 1.98 and the .deb job builds in a
+          # digest-pinned 1.98.0 image, so tracking `stable` here would mean the
           # binary the .deb carries is built by a compiler nothing agreed on -
           # and unlike CI, a release bakes that in permanently, because releases
           # are immutable. Bump this with ci.yml's toolchain input, deliberately,
           # in the same change.
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup default 1.97.1
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
 
       - name: Build release binary
         run: cargo build --release --locked
