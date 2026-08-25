@@ -429,7 +429,7 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 		return StatusCode::CONFLICT.into_response();
 	}
 	if let Err(response) = perform_copy(source, &dest_path, existed).await {
-		return response;
+		return *response;
 	}
 	if remove {
 		let removal = if source.is_dir() {
@@ -451,7 +451,7 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 /// Copy `source` onto `dest`, replacing an existing destination first. A
 /// directory source is copied recursively. On error returns the response to
 /// send.
-async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), Response> {
+async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), Box<Response>> {
 	if existed {
 		let removal = if dest.is_dir() {
 			tokio::fs::remove_dir_all(dest).await
@@ -459,7 +459,7 @@ async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), R
 			tokio::fs::remove_file(dest).await
 		};
 		if removal.is_err() {
-			return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+			return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
 		}
 	}
 	let result = if source.is_dir() {
@@ -467,7 +467,7 @@ async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), R
 	} else {
 		tokio::fs::copy(source, dest).await.map(|_| ())
 	};
-	result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+	result.map_err(|_| Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()))
 }
 
 /// Recursively copy a directory tree (an iterative walk; no async recursion).
