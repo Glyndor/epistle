@@ -8,4 +8,8 @@ permissions:
 
 jobs:
   dco:
-    uses: Glyndor/.github/.github/workflows/dco.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
+    # Local copy of Glyndor/.github's dco.yml at v1.21.0, byte-identical and
+    # verified by sha256. The job id stays `dco` so the emitted check name stays
+    # `dco / Signed-off-by present on every commit`, which the develop ruleset
+    # requires character for character.
+    uses: ./.github/workflows/reusable-dco.yml
