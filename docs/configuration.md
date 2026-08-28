@@ -204,6 +204,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `desec` | deSEC API token; rrset-style bulk PUT; supports TLSA. |
 | `digitalocean` | Personal access token; bearer auth; v2 REST API; see specifics below. |
 | `gcloud` | Google Cloud DNS service-account JSON; RS256 JWT bearer; supports TLSA. |
+| `dnsimple` | DNSimple API token + account id; bearer auth; record-id granularity. |
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
 | `rfc2136` | TSIG-authenticated DNS UPDATE to a local nameserver (`host:port`); A/AAAA/TXT/CNAME/TLSA. |
@@ -215,6 +216,7 @@ Common keys (every provider):
 |---|---|
 | `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `manual`. |
 | `provider` | One of `cloudflare`, `desec`, `gcloud`, `namecheap`, `route53`, `manual`. |
+| `provider` | One of `cloudflare`, `desec`, `dnsimple`, `namecheap`, `route53`, `manual`. |
 | `zone` | The DNS zone the token is scoped to (least privilege). |
 | `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
 | `token_env` | Name of an env var holding the API token. |
@@ -246,6 +248,37 @@ token = "your_personal_access_token"     # or token_file / token_env
   possible because of the lookup.
 - **Pagination is followed.** `list` walks `links.pages.next` until exhausted,
   so a zone with hundreds of records is not silently truncated.
+#### `[dns]` — DNSimple specifics
+
+```toml
+[dns]
+provider = "dnsimple"
+zone = "example.org"
+account_id = "1010"             # not a secret; visible in the path /v2/{id}/...
+token = "your_api_token"        # or token_file / token_env
+```
+
+- `account_id` is **required**: every URL is `/v2/{account_id}/zones/{zone}/records`,
+  so a missing `account_id` fails the build rather than guessing. The id is
+  not a secret; it sits in the config file in clear alongside the zone.
+- `token` is a user token (DNSimple's "Account API token" or an OAuth token
+  for the same user); the provider sends it as `Authorization: Bearer …`.
+- **Upsert is list-then-write.** DNSimple's `POST` returns 400 if a record
+  with the same name and type already exists, so every upsert first lists
+  the zone (filtered to that `(name, type)`) and either `PATCH`es the
+  existing record or `POST`s a new one. Two TXT records for the same name
+  therefore cannot be created by mistake.
+- **Delete is idempotent.** Deleting a record that does not exist is a no-op
+  (no `DELETE` request is sent) — the list comes back empty.
+- **List walks pagination.** The records endpoint is paginated; the
+  provider requests `per_page=100` (the API maximum) and follows
+  `pagination.total_pages`. Records are returned as FQDNs — the relative
+  `name` from the API is joined to the configured zone.
+- **Unsupported kinds:** MX (priority is not modelled by epistle yet), SRV
+  (priority/weight/port), and TLSA (no structured-data field). The provider
+  returns `provider does not support writes` for these.
+- **API base:** `https://api.dnsimple.com/v2` — overridable through the
+  provider's `with_base` for tests.
 
 #### `[dns]` — Namecheap specifics
 

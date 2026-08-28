@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::dns::cloudflare::CloudflareProvider;
 use crate::dns::desec::DesecProvider;
+use crate::dns::dnsimple::DnsimpleProvider;
 use crate::dns::gcloud::{GcloudProvider, ServiceAccount};
 use crate::dns::namecheap::NamecheapProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
@@ -81,6 +82,10 @@ impl Dns {
 	pub fn build(&self) -> Option<Arc<dyn DnsProvider>> {
 		match self.provider.to_ascii_lowercase().as_str() {
 			"cloudflare" => Some(Arc::new(CloudflareProvider::new(self.secret()?))),
+			"dnsimple" => {
+				let account_id = self.account_id.clone()?;
+				Some(Arc::new(DnsimpleProvider::new(self.secret()?, account_id)))
+			}
 			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
 			"gcloud" => Some(Arc::new(GcloudProvider::new(
 				self.secret()?,
@@ -260,6 +265,30 @@ mod tests {
 	fn gcloud_without_credentials_file_builds_nothing() {
 		let dns: Dns =
 			toml::from_str("provider = \"gcloud\"\nzone = \"example.org\"\ntoken = \"x\"").unwrap();
+		assert!(dns.build().is_none());
+	}
+
+	#[test]
+	fn dnsimple_with_token_and_account_id_builds() {
+		let dns: Dns = toml::from_str(
+			"provider = \"dnsimple\"\nzone = \"example.org\"\ntoken = \"t\"\naccount_id = \"1010\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_some());
+	}
+	#[test]
+	fn dnsimple_without_account_id_builds_nothing() {
+		let dns: Dns =
+			toml::from_str("provider = \"dnsimple\"\nzone = \"example.org\"\ntoken = \"t\"")
+				.unwrap();
+		assert!(dns.build().is_none());
+	}
+	#[test]
+	fn dnsimple_without_token_builds_nothing() {
+		let dns: Dns = toml::from_str(
+			"provider = \"dnsimple\"\nzone = \"example.org\"\naccount_id = \"1010\"",
+		)
+		.unwrap();
 		assert!(dns.build().is_none());
 	}
 }
