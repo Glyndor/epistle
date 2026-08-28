@@ -70,20 +70,25 @@ pub fn archive_message(
 ) -> std::io::Result<()> {
 	let archive = archive_dir(account_root);
 	std::fs::create_dir_all(&archive)?;
-	for ext in [".eml", ".flags", ".uid"] {
+	// The sidecar is written first and the body moved last, because the body
+	// is what `list` keys on: an `.eml` that reached the archive without its
+	// sidecar is invisible to list, restore and purge alike, so it would sit
+	// there against the account quota forever. In this order a failure at any
+	// step leaves the message in its mailbox, which the caller can retry.
+	let sidecar = archive.join(format!("{id}.deleted"));
+	std::fs::write(sidecar, format!("{now}\n{mailbox}\n"))?;
+	for ext in [".flags", ".uid", ".eml"] {
 		let from = mailbox_dir.join(format!("{id}{ext}"));
 		let to = archive.join(format!("{id}{ext}"));
 		// A missing source file is a no-op (idempotent with concurrent
-		// deletes); anything else is reported so the caller can fall back.
+		// deletes); anything else is reported so the caller can retry.
 		match std::fs::rename(&from, &to) {
 			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error),
 		}
 	}
-	let sidecar = archive.join(format!("{id}.deleted"));
-	let body = format!("{now}\n{mailbox}\n");
-	std::fs::write(sidecar, body)
+	Ok(())
 }
 
 /// List every archived message for `account_root`, regardless of which
@@ -91,7 +96,21 @@ pub fn archive_message(
 /// sidecar; a sidecar without the matching `.eml` is silently skipped (the
 /// sweeper will have removed both).
 pub fn list(account_root: &Path) -> std::io::Result<Vec<ArchivedMessage>> {
-	let archive = account_root.join(".archive");
+	let mut out: Vec<ArchivedMessage> = sidecars(account_root)?
+		.into_iter()
+		.filter(|(_, has_body)| *has_body)
+		.map(|(entry, _)| entry)
+		.collect();
+	out.sort_by_key(|entry| entry.deleted_at);
+	Ok(out)
+}
+
+/// Every readable `.deleted` sidecar under `account_root`, paired with whether
+/// its message body is still present. [`list`] hides the bodiless ones because
+/// they cannot be restored, but [`purge`] has to see them: a sidecar left
+/// behind by a half-finished archive is reclaimed by nothing else.
+fn sidecars(account_root: &Path) -> std::io::Result<Vec<(ArchivedMessage, bool)>> {
+	let archive = archive_dir(account_root);
 	let entries = match std::fs::read_dir(&archive) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -109,12 +128,6 @@ pub fn list(account_root: &Path) -> std::io::Result<Vec<ArchivedMessage>> {
 		let Ok(id) = Uuid::parse_str(stem) else {
 			continue;
 		};
-		// Skip archived entries whose message body is already gone.
-		if !entry.path().with_extension("eml").exists()
-			&& !archive.join(format!("{id}.eml")).exists()
-		{
-			continue;
-		}
 		let Ok(raw) = std::fs::read_to_string(entry.path()) else {
 			continue;
 		};
@@ -128,13 +141,16 @@ pub fn list(account_root: &Path) -> std::io::Result<Vec<ArchivedMessage>> {
 		let Ok(deleted_at) = ts_line.trim().parse::<u64>() else {
 			continue;
 		};
-		out.push(ArchivedMessage {
-			id,
-			mailbox: mb_line.to_string(),
-			deleted_at,
-		});
+		let has_body = archive.join(format!("{id}.eml")).exists();
+		out.push((
+			ArchivedMessage {
+				id,
+				mailbox: mb_line.to_string(),
+				deleted_at,
+			},
+			has_body,
+		));
 	}
-	out.sort_by_key(|entry| entry.deleted_at);
 	Ok(out)
 }
 
@@ -197,17 +213,20 @@ pub fn restore(
 /// purged. Entries whose sidecar cannot be parsed are kept (defensive: the
 /// sweeper must not destroy data it cannot reason about).
 pub fn purge(account_root: &Path, older_than_secs: u64, now: u64) -> std::io::Result<usize> {
-	let entries = list(account_root)?;
+	let archive = archive_dir(account_root);
 	let mut removed = 0usize;
-	for entry in entries {
+	// Walks the sidecars rather than `list` so an entry whose body never made
+	// it into the archive is still reclaimed rather than left forever.
+	for (entry, has_body) in sidecars(account_root)? {
 		if now.saturating_sub(entry.deleted_at) <= older_than_secs {
 			continue;
 		}
-		let archive = archive_dir(account_root);
 		for ext in [".eml", ".flags", ".uid", ".deleted"] {
 			let _ = std::fs::remove_file(archive.join(format!("{}{ext}", entry.id)));
 		}
-		removed += 1;
+		if has_body {
+			removed += 1;
+		}
 	}
 	Ok(removed)
 }

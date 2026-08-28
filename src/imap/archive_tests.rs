@@ -346,3 +346,86 @@ fn a_session_without_retention_still_deletes_in_the_act() {
 		"retention 0 must not start archiving on its own",
 	);
 }
+
+#[test]
+fn a_failed_archive_leaves_the_message_on_disk() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = delivered(dir.path(), "alice", "INBOX", b"Subject: hi\r\n\r\nbody\r\n");
+
+	// Occupy `.archive` with a plain file so `create_dir_all` cannot succeed.
+	// This is the durable-storage failure the retention promise has to survive:
+	// a full disk or a bad permission must not turn into deleted mail.
+	let account = dir.path().join("accounts/alice");
+	std::fs::create_dir_all(&account).expect("account dir");
+	std::fs::write(account.join(".archive"), b"not a directory").expect("block archive");
+
+	let mut snapshot = Snapshot::open_at(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&MessageCrypto::disabled(),
+		30,
+		1_000,
+	)
+	.expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("flag");
+	snapshot.expunge().expect("expunge");
+
+	assert!(
+		account.join("new").join(format!("{id}.eml")).exists(),
+		"an unarchivable message must stay on disk, not be deleted",
+	);
+}
+
+#[test]
+fn purge_reclaims_a_sidecar_whose_body_never_arrived() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let account = dir.path().join("accounts/alice");
+	let archive = account.join(".archive");
+	std::fs::create_dir_all(&archive).expect("archive dir");
+
+	// The shape a half-finished archive leaves behind: sidecar, no body.
+	let id = Uuid::new_v4();
+	let sidecar = archive.join(format!("{id}.deleted"));
+	std::fs::write(&sidecar, b"1000\nINBOX\n").expect("sidecar");
+
+	assert!(
+		archive::list(&account).expect("list").is_empty(),
+		"a bodiless entry cannot be restored, so it must not be listed",
+	);
+
+	let removed = archive::purge(&account, 86_400, 1_000_000).expect("purge");
+	assert_eq!(removed, 0, "a bodiless entry is not a purged message");
+	assert!(
+		!sidecar.exists(),
+		"purge must reclaim the orphaned sidecar; nothing else ever will",
+	);
+}
+
+#[test]
+fn the_body_is_the_last_thing_moved_into_the_archive() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = delivered(dir.path(), "alice", "INBOX", b"Subject: hi\r\n\r\nbody\r\n");
+	let account = dir.path().join("accounts/alice");
+	let inbox = account.join("new");
+
+	// Block only the body's destination, so the sidecar and the small
+	// sidecars move but the `.eml` rename fails. What survives tells us the
+	// order: a sidecar on disk here means it was written before the body was
+	// moved, which is the invariant that keeps a half-finished archive
+	// visible to `list` and `purge` instead of orphaning the message.
+	let archive = account.join(".archive");
+	std::fs::create_dir_all(archive.join(format!("{id}.eml"))).expect("block body");
+
+	archive::archive_message(&account, &inbox, "INBOX", id, 1_000)
+		.expect_err("moving the body onto a directory must fail");
+
+	assert!(
+		archive.join(format!("{id}.deleted")).exists(),
+		"the sidecar must already be written when the body move fails",
+	);
+	assert!(
+		inbox.join(format!("{id}.eml")).exists(),
+		"a failed move leaves the body in its mailbox",
+	);
+}

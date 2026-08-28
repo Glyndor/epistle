@@ -264,9 +264,10 @@ impl Snapshot {
 	/// sidecar records when and from which mailbox they came. The original
 	/// `flags` and `uid` sidecars move with the message so a restore can
 	/// rebuild the same on-disk state without round-tripping through the
-	/// mailstore. A rename failure (other than `NotFound`) falls through to
-	/// the legacy immediate-delete path so a stuck archive never prevents a
-	/// user from clearing their mailbox.
+	/// mailstore. When archiving fails the files are **left where they are**
+	/// and the error is logged: retention is a promise that the mail can be
+	/// recovered for that long, and deleting it because the archive was
+	/// briefly unwritable breaks exactly the promise the setting makes.
 	fn remove_files(&self, id: uuid::Uuid) {
 		if self.retention_days > 0 {
 			match super::archive::archive_message(
@@ -278,12 +279,13 @@ impl Snapshot {
 			) {
 				Ok(()) => return,
 				Err(error) => {
-					tracing::warn!(
+					tracing::error!(
 						%error,
 						account_root = %self.account_root.display(),
 						mailbox = %self.mailbox,
-						"archive rename failed, falling back to immediate delete",
+						"could not archive an expunged message; leaving it on disk",
 					);
+					return;
 				}
 			}
 		}
