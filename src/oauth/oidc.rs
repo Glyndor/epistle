@@ -226,7 +226,10 @@ fn jwks_ips_allowed(jwks_ips: &[IpAddr], discovery_ips: &[IpAddr]) -> bool {
 	if internal.is_empty() {
 		return true;
 	}
-	internal.iter().any(|ip| discovery_ips.contains(ip))
+	// `all`, not `any`. A jwks set that resolves to both the discovery host and
+	// something else internal is the pivot this exists to stop: one matching
+	// address must not vouch for the rest of the set.
+	internal.iter().all(|ip| discovery_ips.contains(ip))
 }
 
 /// Reject any endpoint that is not HTTPS (fail closed: keys must arrive over a

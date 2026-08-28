@@ -271,3 +271,14 @@ fn jwks_uri_off_scope_error_mentions_the_resolved_address() {
 		"error must explain the rule it tripped, got: {rendered}"
 	);
 }
+
+#[test]
+fn jwks_ips_allowed_rejects_a_set_mixing_the_discovery_host_with_another_internal_address() {
+	use std::net::{IpAddr, Ipv4Addr};
+	let lan: IpAddr = Ipv4Addr::new(192, 168, 1, 5).into();
+	let metadata: IpAddr = Ipv4Addr::new(169, 254, 169, 254).into();
+	assert!(
+		!super::jwks_ips_allowed(&[lan, metadata], &[lan]),
+		"a jwks set containing an internal address the discovery host does not have must be rejected"
+	);
+}
