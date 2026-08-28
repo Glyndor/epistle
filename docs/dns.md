@@ -109,10 +109,10 @@ If `[dns]` is configured (see [`configuration.md`](configuration.md) §`[dns]`),
 epistle writes records itself — the operator does not have to add them by
 hand. The supported providers are `cloudflare`, `desec`, `namecheap`,
 `route53`, `rfc2136` (TSIG-authenticated dynamic update against a local
-nameserver), and `manual` (records printed for the operator). RFC 2136
-talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating with TSIG
-— useful when the zone is hosted on the same host as epistle and a full
-DNS-as-a-service API is overkill.
+nameserver), `spaceship`, and `manual` (records printed for the operator).
+RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
+with TSIG — useful when the zone is hosted on the same host as epistle
+and a full DNS-as-a-service API is overkill.
 
 ## BIMI (optional)
 

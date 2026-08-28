@@ -14,6 +14,7 @@ use crate::dns::gcloud::{GcloudProvider, ServiceAccount};
 use crate::dns::namecheap::NamecheapProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
 use crate::dns::route53::Route53Provider;
+use crate::dns::spaceship::SpaceshipProvider;
 
 /// DNS provider settings. When present with usable credentials, record
 /// automation is enabled; otherwise epistle stays in manual mode (operator
@@ -88,6 +89,15 @@ impl Dns {
 				Some(Arc::new(DnsimpleProvider::new(self.secret()?, account_id)))
 			}
 			"bunny" => Some(Arc::new(BunnyProvider::new(self.secret()?))),
+			"spaceship" => {
+				let api_key = self.access_key.clone()?;
+				let api_secret = self.aws_secret()?;
+				Some(Arc::new(SpaceshipProvider::new(
+					api_key,
+					api_secret,
+					self.zone.clone(),
+				)))
+			}
 			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
 			"gcloud" => Some(Arc::new(GcloudProvider::new(
 				self.secret()?,
@@ -291,6 +301,29 @@ mod tests {
 			"provider = \"dnsimple\"\nzone = \"example.org\"\naccount_id = \"1010\"",
 		)
 		.unwrap();
+		assert!(dns.build().is_none());
+	}
+
+	#[test]
+	fn spaceship_with_keys_builds() {
+		let dns: Dns = toml::from_str(
+			"provider = \"spaceship\"\nzone = \"example.org\"\naccess_key = \"AK\"\nsecret_key = \"SK\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_some());
+	}
+	#[test]
+	fn spaceship_without_access_key_builds_nothing() {
+		let dns: Dns =
+			toml::from_str("provider = \"spaceship\"\nzone = \"example.org\"\nsecret_key = \"SK\"")
+				.unwrap();
+		assert!(dns.build().is_none());
+	}
+	#[test]
+	fn spaceship_without_secret_key_builds_nothing() {
+		let dns: Dns =
+			toml::from_str("provider = \"spaceship\"\nzone = \"example.org\"\naccess_key = \"AK\"")
+				.unwrap();
 		assert!(dns.build().is_none());
 	}
 }
