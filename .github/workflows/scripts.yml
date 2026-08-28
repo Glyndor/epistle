@@ -1,0 +1,54 @@
+name: Scripts
+
+# Push and pull request, like line-limit and editorconfig. This asks a
+# question about the state of the tree (do the Python helper scripts
+# still work?), not about a diff. It reads no base ref, so it answers
+# identically on both, and the push half catches what arrives on a
+# branch by a merge no pull request passed through.
+#
+# This file is in its own path filter on purpose. A workflow whose
+# path list omits itself does not run on the pull request that changes
+# it, so a broken edit merges without ever having been executed. The
+# `tests/test_discovery_premise.rs` exemption for `.github/scripts`
+# names THIS workflow in its comment; renaming or deleting the
+# workflow leaves that comment lying, and the exemption has to go
+# with the workflow in the same change.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - ".github/workflows/scripts.yml"
+      - ".github/scripts/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scripts-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-scripts:
+    name: python scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install signing dependencies
+        # sign-requirements.txt is hash-pinned; --require-hashes makes
+        # pip refuse anything that does not match a declared digest.
+        # The release workflow installs from the same file, so what
+        # passes here is what signs a real release.
+        run: |
+          python3 -m pip install --require-hashes -r .github/scripts/sign-requirements.txt
+
+      - name: Run script unit tests
+        # Discovers every test_sign.py under .github/scripts. New
+        # helpers in that directory only need to ship a test_*.py
+        # next to them; this job picks it up automatically.
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v

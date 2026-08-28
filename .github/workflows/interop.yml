@@ -1,5 +1,11 @@
 name: Interop
 
+# Path filter on pull_request only. The protocol interop tests run
+# against a reference MTA, so a PR that does not touch the protocol-
+# facing modules or the test itself does not pay for the run. Push
+# to develop or main is a checkpoint, so the full run fires there
+# unconditionally.
+
 on:
   push:
     branches: [develop, main]
@@ -48,12 +54,16 @@ jobs:
       # nothing, but a compile can still touch sqlx; keep the macros offline.
       SQLX_OFFLINE: "true"
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned to match ci.yml. This job exercises epistle against a
+          # reference MTA (Postfix) and writes no SBOM of its own, but
+          # `stable` here would still let protocol interop drift away from
+          # what the gate tests on a 1.98 compiler.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
 
       - name: Run protocol interop tests
         run: cargo test --locked --test interop

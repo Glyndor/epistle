@@ -1,5 +1,10 @@
 name: DCO
 
+# PR only. This check walks `git rev-list --no-merges BASE_SHA..HEAD_SHA`
+# off the pull_request event, and a push has no such range. The question
+# is "does every commit in this PR carry a Signed-off-by trailer?", and
+# that question only exists for pull requests.
+
 on:
   pull_request:
 
@@ -8,4 +13,8 @@ permissions:
 
 jobs:
   dco:
-    uses: Glyndor/.github/.github/workflows/dco.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    # Local copy of Glyndor/.github's dco.yml at v1.21.0, byte-identical and
+    # verified by sha256. The job id stays `dco` so the emitted check name stays
+    # `dco / Signed-off-by present on every commit`, which the develop ruleset
+    # requires character for character.
+    uses: ./.github/workflows/reusable-dco.yml

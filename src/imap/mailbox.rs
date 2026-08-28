@@ -29,9 +29,13 @@ pub struct Snapshot {
 /// One message in the snapshot.
 #[derive(Debug, Clone)]
 pub struct MessageRef {
+	/// Persistent UID assigned at delivery; position in the mailbox's UID
+	/// space (independent of sequence numbers).
 	pub uid: u32,
 	id: Uuid,
+	/// RFC 5322 size of the message in octets.
 	pub size: u64,
+	/// Permanent flags currently set on the message.
 	pub flags: Vec<Flag>,
 	/// File mtime; used for INTERNALDATE.
 	pub internal_date: std::time::SystemTime,
@@ -69,10 +73,15 @@ impl MessageRef {
 /// Supported permanent flags (RFC 9051 section 2.3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Flag {
+	/// `\Seen`: the message has been read.
 	Seen,
+	/// `\Answered`: a reply has been sent.
 	Answered,
+	/// `\Flagged`: marked for attention (the "star" in most clients).
 	Flagged,
+	/// `\Deleted`: marked for removal; expunged at CLOSE or explicit EXPUNGE.
 	Deleted,
+	/// `\Draft`: not yet sent.
 	Draft,
 }
 
@@ -340,14 +349,20 @@ impl Snapshot {
 		super::vanished::since(&self.account_dir, modseq)
 	}
 
+	/// Number of messages in the snapshot (the highest sequence number plus
+	/// expunged messages still in the snapshot's view).
 	pub fn len(&self) -> usize {
 		self.messages.len()
 	}
 
+	/// Whether the snapshot has no messages.
 	pub fn is_empty(&self) -> bool {
 		self.messages.is_empty()
 	}
 
+	/// The mailbox's UIDVALIDITY (RFC 9051 §2.3.1.1): a 32-bit value that
+	/// MUST NOT change while UIDs remain valid. Re-assignment makes every
+	/// UID previously issued for this mailbox obsolete.
 	pub fn uid_validity(&self) -> u32 {
 		self.uid_validity
 	}

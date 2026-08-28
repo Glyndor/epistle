@@ -34,7 +34,11 @@ impl Scope {
 /// Accumulated ham/spam counts for one identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationScore {
+	/// Number of accepted observations recorded for this identity. Each
+	/// `record` call with `spam = false` increments this by one.
 	pub ham: i64,
+	/// Number of rejected observations recorded for this identity. Each
+	/// `record` call with `spam = true` increments this by one.
 	pub spam: i64,
 }
 

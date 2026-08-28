@@ -32,8 +32,12 @@ pub(super) enum State {
 /// A message accepted by the session, ready for delivery.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AcceptedMessage {
+	/// Envelope sender (`MAIL FROM`). Empty string denotes a bounce
+	/// (null reverse-path).
 	pub reverse_path: String,
+	/// Envelope recipients accepted during the transaction (`RCPT TO`).
 	pub recipients: Vec<String>,
+	/// Raw RFC 5322 message bytes collected via DATA or BDAT.
 	pub data: Vec<u8>,
 	/// The sender requested REQUIRETLS (RFC 8689): onward delivery must use
 	/// verified TLS.
@@ -56,7 +60,12 @@ pub enum Action {
 	CollectData(Reply),
 	/// Read exactly `size` raw bytes (a BDAT chunk, RFC 3030) with no reply
 	/// first, then feed them to `Session::bdat_chunk`.
-	CollectChunk { size: usize, last: bool },
+	CollectChunk {
+		/// Octet count of the BDAT chunk the network layer should read.
+		size: usize,
+		/// Whether this is the final chunk of the message.
+		last: bool,
+	},
 	/// Send the reply, hand the message to delivery, keep reading commands.
 	Deliver(Reply, AcceptedMessage),
 	/// Send the reply, then upgrade the connection to TLS (RFC 3207).

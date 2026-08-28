@@ -14,8 +14,15 @@ use std::sync::Mutex;
 /// The identity greylisting keys on (RFC-less convention): client IP, envelope
 /// sender, and one recipient.
 pub struct Triplet<'a> {
+	/// The connecting MTA's IP address. This is the SMTP `peer` for the
+	/// session, not the envelope sender's domain.
 	pub client_ip: IpAddr,
+	/// Envelope sender (`MAIL FROM`), without the surrounding angle brackets.
+	/// Compared case-insensitively so case variants collapse to one entry.
 	pub sender: &'a str,
+	/// One envelope recipient (`RCPT TO`), without angle brackets. Compared
+	/// case-insensitively. Greylisting keys on each recipient separately,
+	/// not on the message as a whole.
 	pub recipient: &'a str,
 }
 

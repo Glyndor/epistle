@@ -19,9 +19,18 @@ pub struct Address {
 /// Why an address was rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddressError {
+	/// The address exceeded the RFC 5321 §4.5.3.1.3 total length cap (254
+	/// octets).
 	TooLong,
+	/// The address had no `@` to separate the local part from the domain.
 	MissingAtSign,
+	/// The local part was empty, overlong, contained a disallowed character,
+	/// had consecutive dots, or was a quoted-string form (deliberately
+	/// refused by this strict parser).
 	InvalidLocalPart,
+	/// The domain was empty, had no dot, contained an overlong label, a
+	/// leading/trailing hyphen, an underscore, or an address-literal form
+	/// (deliberately refused).
 	InvalidDomain,
 }
 

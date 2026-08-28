@@ -13,12 +13,20 @@ use std::pin::Pin;
 /// A DNS record kind epistle publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordKind {
+	/// IPv4 address record.
 	A,
+	/// IPv6 address record.
 	Aaaa,
+	/// Text record. Used for SPF, DMARC, DKIM keys, MTA-STS, TLSRPT, and
+	/// ACME DNS-01 challenges.
 	Txt,
+	/// Mail exchange record.
 	Mx,
+	/// Canonical name (alias) record.
 	Cname,
+	/// TLSA association record (RFC 6698) for DANE.
 	Tlsa,
+	/// Service locator record (RFC 2782).
 	Srv,
 }
 
@@ -42,8 +50,13 @@ impl RecordKind {
 pub struct DnsRecord {
 	/// Fully-qualified record name (e.g. `_dmarc.example.org`).
 	pub name: String,
+	/// Record type.
 	pub kind: RecordKind,
+	/// Record value, formatted the way the provider's API expects for that
+	/// kind (raw IPv4/IPv6 for A/AAAA, quoted text for TXT, target host for
+	/// MX, etc.).
 	pub value: String,
+	/// Time-to-live in seconds. Providers translate to their own semantics.
 	pub ttl: u32,
 }
 

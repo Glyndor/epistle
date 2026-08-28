@@ -1,10 +1,19 @@
 name: Database
 
+# Path filter on pull_request only. The database integration suite is
+# expensive, so a PR that does not touch migrations, src/db, or the
+# test itself does not pay for it. Push to develop or main is a
+# checkpoint, so the full run fires there unconditionally.
+
 on:
   push:
     branches: [develop, main]
   pull_request:
     paths:
+      # This file is in its own filter on purpose. A workflow whose path
+      # list omits itself does not run on the pull request that changes
+      # it, so a broken edit merges without ever having been executed.
+      - ".github/workflows/db.yml"
       - "migrations/**"
       - "src/db/**"
       - "tests/database.rs"
@@ -16,7 +25,13 @@ permissions:
 
 jobs:
   db-tests:
-    name: integration tests
+    # Not `integration tests`: that name said nothing about which integration,
+    # and a required status check is matched by its name string, so any workflow
+    # reaching for the same generic label would be indistinguishable from this
+    # one in the checks list and ambiguous to a ruleset requiring it. ldap.yml
+    # hit exactly that and now calls itself `LDAP directory`; interop.yml uses
+    # `protocol interop`.
+    name: database integration
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -41,12 +56,110 @@ jobs:
       # live compile-time check would race the (not-yet-applied) schema.
       SQLX_OFFLINE: "true"
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned to match ci.yml. The integration tests exercise the sqlx
+          # macros against a live Postgres, and `stable` here would mean the
+          # queries compiled for the SBOM are not the ones the database
+          # tests ran against the same schema.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
 
-      - name: Run database integration tests
-        run: cargo test --locked --test database
+      - name: Install cargo-llvm-cov
+        env:
+          # Kept equal to the `llvm-cov-version` default in
+          # reusable-rust-ci.yml. Two coverage jobs on two different
+          # instrumentation versions produce two numbers that are not
+          # comparable, so bump both together or neither.
+          LLVM_COV_VERSION: "0.8.7"
+        run: command -v cargo-llvm-cov >/dev/null || cargo install cargo-llvm-cov --locked --version "$LLVM_COV_VERSION"
+
+      - name: Coverage gate
+        # This job used to run `cargo test --locked --test database` and measure
+        # nothing, which left the modules it exists for gated by no one: they are
+        # excluded from ci.yml's 90% gate (the no-DB job cannot fairly measure a
+        # module that needs PostgreSQL) and this job, the one that does exercise
+        # them, never looked at a number.
+        #
+        # The assertion is per file, not a global percentage. `--test database`
+        # instruments the whole tree from a single test target, so the global
+        # figure lands near 2.5% and says nothing about anything; the four files
+        # below are what this job exists to cover, so they are what it asserts.
+        #
+        # src/antispam/hook.rs is deliberately NOT in this list even though
+        # ci.yml excludes it. Measured here it is 0.00%: the scanner hook talks
+        # HTTP to ClamAV/Rspamd, needs no database, and tests/database.rs never
+        # imports it. Gating it here would be a floor over a file this job does
+        # not touch. Its own unit tests cover it at 95.40%, so it comes out of
+        # ci.yml's ignore regex instead and counts toward the real gate.
+        env:
+          # Measured on 1.98 against the service Postgres above, 2026-08-28:
+          #   src/db/mod.rs                 100.00%
+          #   src/directory_store/sql.rs     96.88%
+          #   src/antispam/corpus.rs         74.79%
+          #   src/antispam/reputation.rs     73.85%
+          # The floor is today's worst file rounded down to the ten, not 90. A
+          # threshold above what the tree actually has would make this gate red
+          # on its first run, and a gate that is born red is a gate somebody
+          # silences. Raise it deliberately as the numbers improve — it is meant
+          # to move, but only upward and only on purpose.
+          COVERAGE_THRESHOLD: "70"
+          COVERAGE_FILES: |
+            src/db/mod.rs
+            src/antispam/reputation.rs
+            src/antispam/corpus.rs
+            src/directory_store/sql.rs
+        run: |
+          cargo llvm-cov --locked --test database --summary-only --json --output-path coverage.json
+          python3 - <<'EOF'
+          import json
+          import os
+          import sys
+
+          threshold = float(os.environ["COVERAGE_THRESHOLD"])
+          wanted = os.environ["COVERAGE_FILES"].split()
+          files = json.load(open("coverage.json"))["data"][0]["files"]
+
+          rows, missing, below = [], [], []
+          for name in wanted:
+              # llvm-cov reports absolute paths; match on the repo-relative tail.
+              hit = next(
+                  (f for f in files if f["filename"].endswith("/" + name)),
+                  None,
+              )
+              if hit is None:
+                  missing.append(name)
+                  continue
+              pct = hit["summary"]["lines"]["percent"]
+              rows.append((name, pct))
+              if pct < threshold:
+                  below.append((name, pct))
+
+          report = [f"### Database coverage (floor: {threshold:g}% per file)", ""]
+          report += [f"- `{name}`: {pct:.2f}%" for name, pct in rows]
+          report += [f"- `{name}`: **absent from the report**" for name in missing]
+          text = "\n".join(report) + "\n"
+          print(text)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write(text)
+
+          # An absent file is not a file at 100%. It means the suite never
+          # loaded it or the path moved, and treating absence as a pass is
+          # exactly how a gate ends up asserting over an empty set.
+          for name in missing:
+              print(
+                  f"FAIL: {name} does not appear in coverage.json. The test "
+                  "never exercised it, or the file moved and this list is stale.",
+                  file=sys.stderr,
+              )
+          for name, pct in below:
+              print(
+                  f"FAIL: {name} is at {pct:.2f}%, below the {threshold:g}% floor.",
+                  file=sys.stderr,
+              )
+          sys.exit(1 if missing or below else 0)
+          EOF

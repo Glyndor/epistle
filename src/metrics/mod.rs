@@ -9,11 +9,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Why an inbound message was rejected, for the per-reason counter label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
+	/// Rejected because the client IP appeared in a configured DNSBL.
 	Dnsbl,
+	/// Rejected because SPF did not pass and the receiver's policy enforces.
 	Spf,
+	/// Rejected because DMARC alignment failed and the record's policy is
+	/// `reject` (or `quarantine`, which the metrics treat as a rejection).
 	Dmarc,
+	/// Rejected because the sender's reputation crossed the suspect
+	/// threshold.
 	Reputation,
+	/// Rejected by an external content scanner (ClamAV/Rspamd).
 	Scanner,
+	/// Rejected because the message was a loop (our own envelope sender on
+	/// a received message, e.g. via SRS / an alias chain).
 	Loop,
 }
 
@@ -63,6 +72,7 @@ pub struct Metrics {
 }
 
 impl Metrics {
+	/// An empty metrics struct, with every counter at zero.
 	pub fn new() -> Self {
 		Self::default()
 	}

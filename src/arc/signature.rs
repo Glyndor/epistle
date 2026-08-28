@@ -14,27 +14,57 @@ use super::chain::ChainValidation;
 /// A parsed `ARC-Message-Signature` header value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageSignature {
+	/// Instance number of this AMS, parsed from the `i=` tag. The chain
+	/// accepts instances in `[1, MAX_INSTANCE]` (the parser rejects the rest).
 	pub instance: u32,
+	/// Signature algorithm parsed from `a=` (only `rsa-sha256` and
+	/// `ed25519-sha256` are accepted).
 	pub algorithm: Algorithm,
+	/// `d=` tag, lowercased: the signing domain. The verifier fetches the
+	/// public key from `<selector>._domainkey.<domain>`.
 	pub domain: String,
+	/// `s=` tag, lowercased: the DKIM selector. Combined with `domain` to form
+	/// the TXT query name for the public key.
 	pub selector: String,
+	/// `h=` tag: the lowercased header names covered by the signature. The
+	/// parser requires `from` to be present and forbids any `arc-` prefix.
 	pub signed_headers: Vec<String>,
+	/// `bh=` tag: SHA-256 body hash, base64-decoded.
 	pub body_hash: Vec<u8>,
+	/// `b=` tag: signature value over the DKIM signing input, base64-decoded.
 	pub signature: Vec<u8>,
+	/// Header canonicalization (`c=`) — defaults to `simple/simple` when `c=`
+	/// is absent.
 	pub header_canon: Canon,
+	/// Body canonicalization (`c=`) — defaults to `simple` when `c=`
+	/// is absent.
 	pub body_canon: Canon,
+	/// Optional `t=` signature creation timestamp (UNIX seconds). Absent
+	/// means the signer did not include a timestamp tag.
 	pub timestamp: Option<u64>,
 }
 
 /// A parsed `ARC-Seal` header value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Seal {
+	/// Instance number of this seal, parsed from the `i=` tag.
 	pub instance: u32,
+	/// Signature algorithm parsed from `a=` (`rsa-sha256` or
+	/// `ed25519-sha256`).
 	pub algorithm: Algorithm,
+	/// `d=` tag, lowercased: the signing domain. The verifier fetches the
+	/// public key from `<selector>._domainkey.<domain>`.
 	pub domain: String,
+	/// `s=` tag, lowercased: the DKIM selector. Combined with `domain` to form
+	/// the TXT query name for the public key.
 	pub selector: String,
+	/// `cv=` tag: the chain validation status carried by this seal
+	/// (`none`, `pass`, `fail`, or `soft-fail`).
 	pub chain_validation: ChainValidation,
+	/// `b=` tag: signature value over the ARC signing input, base64-decoded.
 	pub signature: Vec<u8>,
+	/// Optional `t=` signature creation timestamp (UNIX seconds). Absent
+	/// means the signer did not include a timestamp tag.
 	pub timestamp: Option<u64>,
 }
 

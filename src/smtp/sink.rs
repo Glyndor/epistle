@@ -13,6 +13,9 @@ pub trait MessageSink: Send + Sync {
 /// Why a delivery could not be accepted.
 #[derive(Debug, thiserror::Error)]
 pub enum SinkError {
+	/// Storage is unavailable right now (transient): disk full, network
+	/// error talking to the spool, mutex poisoned. The caller should answer
+	/// with a 4xx so the client retries later.
 	#[error("storage unavailable: {0}")]
 	Unavailable(String),
 }

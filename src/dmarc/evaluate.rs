@@ -8,14 +8,23 @@ use super::record::{Alignment, Policy, Record};
 /// DMARC outcome for `Authentication-Results` and policy enforcement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DmarcOutcome {
+	/// Either SPF or DKIM passed and was aligned with the RFC5322.From
+	/// domain under the record's alignment mode.
 	Pass,
 	/// Failed with the record requesting rejection (quarantine is treated
 	/// as reject until a quarantine mailbox exists).
 	Reject,
 	/// Failed but the record requests no action.
 	Fail,
+	/// No DMARC record was found (or one was found but the strict
+	/// single-record rule of RFC 7489 §6.6.3 forbade it): DMARC does not
+	/// apply.
 	None,
+	/// A transient error prevented evaluation, typically a DNS lookup
+	/// failure. The verifier should be retried later.
 	TempError,
+	/// A permanent error prevented evaluation: the published record is
+	/// malformed or otherwise unusable.
 	PermError,
 }
 

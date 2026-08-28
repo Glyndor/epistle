@@ -15,9 +15,16 @@ use ring::{digest, hmac, pbkdf2};
 /// The per-account SCRAM credentials, derived from the password at set time.
 #[derive(Debug, Clone)]
 pub struct ScramCredentials {
+	/// Salt fed to PBKDF2 when deriving `SaltedPassword`. Should be freshly
+	/// generated random per account; never reused across accounts.
 	pub salt: Vec<u8>,
+	/// PBKDF2 iteration count (RFC 7677 mandates ≥ 4096 for SHA-256).
 	pub iterations: u32,
+	/// `H(ClientKey)` stored as `StoredKey`; the verifier compares the
+	/// client's proof against this.
 	pub stored_key: [u8; 32],
+	/// `HMAC(SaltedPassword, "Server Key")` used to authenticate the
+	/// server's final message.
 	pub server_key: [u8; 32],
 }
 
@@ -49,6 +56,7 @@ impl ScramCredentials {
 pub struct ScramStored {
 	/// Base64 salt.
 	pub salt: String,
+	/// PBKDF2 iteration count (RFC 7677 mandates ≥ 4096 for SHA-256).
 	pub iterations: u32,
 	/// Base64 StoredKey (SHA-256 of ClientKey).
 	pub stored_key: String,

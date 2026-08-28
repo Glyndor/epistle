@@ -17,14 +17,22 @@ const SIGNIFICANT_TOKENS: usize = 15;
 /// Ham/spam occurrence counts for one token across the trained corpus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TokenCounts {
+	/// Number of distinct ham messages in which the token appeared at least
+	/// once during training.
 	pub ham: u64,
+	/// Number of distinct spam messages in which the token appeared at least
+	/// once during training.
 	pub spam: u64,
 }
 
 /// Message totals of the trained corpus, used to normalize token counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Corpus {
+	/// Total ham messages the corpus was trained on. Floored at 1 inside
+	/// `token_probability` so a fresh corpus cannot divide by zero.
 	pub ham_messages: u64,
+	/// Total spam messages the corpus was trained on. Floored at 1 inside
+	/// `token_probability` so a fresh corpus cannot divide by zero.
 	pub spam_messages: u64,
 }
 

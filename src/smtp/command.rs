@@ -11,11 +11,21 @@ pub const MAX_COMMAND_LINE: usize = 512;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
 	/// `HELO <domain>`
-	Helo { domain: String },
+	Helo {
+		/// EHLO/HELO domain argument. RFC 5321 says it identifies the
+		/// client; this implementation does not enforce a particular format.
+		domain: String,
+	},
 	/// `EHLO <domain>`
-	Ehlo { domain: String },
+	Ehlo {
+		/// EHLO/HELO domain argument. RFC 5321 says it identifies the
+		/// client; this implementation does not enforce a particular format.
+		domain: String,
+	},
 	/// `MAIL FROM:<reverse-path> [parameters]`
 	MailFrom {
+		/// Envelope sender (`MAIL FROM`). The empty string denotes a bounce
+		/// (null reverse-path, RFC 5321 §4.5.5).
 		reverse_path: String,
 		/// `SIZE=` parameter (RFC 1870), declared message size in bytes.
 		size: Option<u64>,
@@ -30,6 +40,7 @@ pub enum Command {
 	},
 	/// `RCPT TO:<forward-path> [parameters]`
 	RcptTo {
+		/// Envelope recipient (`RCPT TO`).
 		forward_path: String,
 		/// `NOTIFY=` parameter (RFC 3461): when to send a DSN for this recipient.
 		notify: Option<Notify>,
@@ -40,7 +51,12 @@ pub enum Command {
 	Data,
 	/// `BDAT <size> [LAST]` (RFC 3030 CHUNKING): a length-prefixed chunk of the
 	/// message; `LAST` marks the final chunk.
-	Bdat { size: usize, last: bool },
+	Bdat {
+		/// Octet count of the chunk the client will send next.
+		size: usize,
+		/// `LAST` marker: `true` for the final chunk of the message.
+		last: bool,
+	},
 	/// `RSET`
 	Rset,
 	/// `NOOP`
@@ -53,7 +69,11 @@ pub enum Command {
 	StartTls,
 	/// `AUTH <mechanism> [initial-response]` (RFC 4954)
 	Auth {
+		/// SASL mechanism name (uppercased).
 		mechanism: String,
+		/// Optional initial response, base64-encoded per RFC 4959. `None`
+		/// means the client will send an empty initial response (or wait
+		/// for the server's challenge).
 		initial: Option<String>,
 	},
 }
@@ -61,7 +81,9 @@ pub enum Command {
 /// `BODY=` parameter values (RFC 6152).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Body {
+	/// `BODY=7BIT`: the message body is 7-bit ASCII (the default).
 	SevenBit,
+	/// `BODY=8BITMIME`: the message body may include 8-bit octets.
 	EightBitMime,
 }
 
@@ -69,7 +91,9 @@ pub enum Body {
 /// or only its headers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ret {
+	/// `RET=FULL`: the DSN returns the full message.
 	Full,
+	/// `RET=HDRS`: the DSN returns only the message headers.
 	Headers,
 }
 
@@ -81,8 +105,11 @@ pub enum Notify {
 	Never,
 	/// A selection of `SUCCESS`/`FAILURE`/`DELAY`.
 	On {
+		/// Send a DSN on successful delivery.
 		success: bool,
+		/// Send a DSN on permanent delivery failure.
 		failure: bool,
+		/// Send a DSN on a transient delivery delay.
 		delay: bool,
 	},
 }

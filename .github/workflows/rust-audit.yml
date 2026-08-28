@@ -1,5 +1,11 @@
 name: Rust audit
 
+# No push trigger. The audit answers "are dependencies clean of new
+# advisories or license issues on a fixed tree?", which the weekly
+# schedule on main handles. workflow_dispatch is for ad hoc reruns.
+# pull_request is path-filtered to changes that touch Cargo.toml,
+# Cargo.lock, or deny.toml.
+
 on:
   schedule:
     # Weekly, Monday 06:00 UTC: catch new RUSTSEC advisories on a fixed tree.
@@ -7,13 +13,30 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      # This file is in its own filter on purpose. A workflow whose path
+      # list omits itself does not run on the pull request that changes
+      # it, so a broken edit merges without ever having been executed.
+      - ".github/workflows/rust-audit.yml"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "deny.toml"
+      # The reusable this calls, and the ignore policy the audit reads. A
+      # change to either alters what the job accepts, so neither should land
+      # without the job having run.
+      - ".github/workflows/reusable-rust-audit.yml"
+      - ".cargo/audit.toml"
 
 permissions:
   contents: read
 
 jobs:
   audit:
-    uses: Glyndor/.github/.github/workflows/rust-audit.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: ./.github/workflows/reusable-rust-audit.yml
+    with:
+      # fuzz/ is a second workspace with its own lockfile and its own graph,
+      # and nothing looked at it until now. It is audited from the repository
+      # root rather than from inside fuzz/, because `cargo audit` reads
+      # `.cargo/audit.toml` relative to the process directory: running it in
+      # fuzz/ drops the ignore policy and reports advisories already assessed
+      # here, which is why that lockfile appeared to carry four findings.
+      extra-lockfiles: fuzz/Cargo.lock

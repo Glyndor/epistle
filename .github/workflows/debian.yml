@@ -7,13 +7,19 @@ name: Debian package
 # proves Build-Depends is satisfiable rather than aspirational.
 #
 # release.yml asks a different question and answers it with a pinned upstream
-# toolchain (1.97.1, the version ci.yml validates), so the .deb a user installs
+# toolchain (1.98.0, the version ci.yml validates), so the .deb a user installs
 # is built by the compiler that vouched for the code. Neither build subsumes the
 # other.
 #
 # No path filter. One would fire on nearly every pull request anyway, since this
 # repository keeps its code in src/, and a filter that silently stops matching is
 # how a gate stops being a gate.
+
+# Push is scoped to develop only, not main. The repo's flow keeps main
+# reachable only via pull request (topic -> develop -> main, the path
+# main-guard enforces), so a direct push to main never arrives here.
+# Push to develop is the integration checkpoint where the Debian
+# build needs to keep passing.
 
 on:
   push:
@@ -26,7 +32,7 @@ permissions:
 
 jobs:
   debian:
-    uses: Glyndor/.github/.github/workflows/rust-debian.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: ./.github/workflows/reusable-rust-debian.yml
     with:
       package-name: epistle
       # Not the reusable's trixie default: trixie ships rustc 1.85 and the

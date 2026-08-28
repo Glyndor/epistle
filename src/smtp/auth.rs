@@ -8,7 +8,12 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 /// Parsed PLAIN credentials.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PlainCredentials {
+	/// Authentication identity (the user being authenticated). RFC 4616
+	/// permits an authorization identity too, but the parser rejects any
+	/// mismatch as impersonation.
 	pub authcid: String,
+	/// The password in plaintext (the SASL PLAIN message is base64, not
+	/// hashed). Stored only as long as the caller needs it.
 	pub password: String,
 }
 

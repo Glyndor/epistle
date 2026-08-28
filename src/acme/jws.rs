@@ -13,10 +13,15 @@ use serde_json::{Value, json};
 /// Errors from key handling or signing.
 #[derive(Debug, thiserror::Error)]
 pub enum JwsError {
+	/// The OS CSPRNG refused to produce an ECDSA P-256 key pair. Should not
+	/// happen on a healthy host; surfaces `ring::error::Unspecified`.
 	#[error("key generation failed")]
 	KeyGen,
+	/// The supplied PKCS#8 bytes could not be parsed as an ECDSA P-256 key.
 	#[error("invalid account key material")]
 	InvalidKey,
+	/// The signing input could not be produced (protected-header or flattened
+	/// JWS serialization failed, or `ring` refused to sign).
 	#[error("signing failed")]
 	Signing,
 }

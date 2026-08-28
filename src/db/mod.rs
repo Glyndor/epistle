@@ -10,8 +10,15 @@ use sqlx::postgres::PgPoolOptions;
 /// Errors from database setup.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
+	/// `sqlx::PgPool` could not establish its initial connection to the URL
+	/// (DNS, auth, network, or the server refused). The wrapped
+	/// `sqlx::Error` carries the underlying cause.
 	#[error("database connection failed: {0}")]
 	Connect(#[source] sqlx::Error),
+	/// The embedded migration runner could not apply one or more migrations:
+	/// the schema is in an inconsistent state, a migration checksum failed,
+	/// or the database rejected a statement. The wrapped
+	/// `sqlx::migrate::MigrateError` carries the underlying cause.
 	#[error("database migration failed: {0}")]
 	Migrate(#[source] sqlx::migrate::MigrateError),
 }

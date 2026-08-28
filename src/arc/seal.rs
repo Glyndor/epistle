@@ -16,17 +16,31 @@ use super::ams::strip_b;
 use super::chain::{ChainValidation, Instance};
 use super::signature::Seal;
 
-/// Build the `ARC-Seal` header line for a new instance, signing the chain so
-/// far (`prior`, instances `1..i-1`) plus this instance's freshly built
-/// ARC-Authentication-Results and ARC-Message-Signature values.
 /// Identity and chain status for a new seal.
 pub struct SealParams<'a> {
+	/// Instance number of the new seal. Must be one greater than every entry
+	/// in `prior`; the signer does not enforce this, the caller does.
 	pub instance: u32,
+	/// Signing domain (`d=` tag) of the new seal. The verifier fetches the
+	/// public key from `<selector>._domainkey.<domain>`.
 	pub domain: &'a str,
+	/// DKIM selector (`s=` tag) of the new seal. Combined with `domain`
+	/// to form the TXT query name for the public key.
 	pub selector: &'a str,
+	/// `cv=` tag of the new seal: the chain validation result so far
+	/// (`none`, `pass`, `fail`, or `soft-fail`).
 	pub chain_validation: ChainValidation,
 }
 
+/// Build the `ARC-Seal` header line for a new instance, signing the chain so
+/// far (`prior`, instances `1..i-1`) plus this instance's freshly built
+/// ARC-Authentication-Results and ARC-Message-Signature values.
+///
+/// Returns the full `ARC-Seal:` header line, including the trailing CRLF,
+/// ready to be inserted into the message. Signing follows RFC 8617 §5.1.2:
+/// every prior instance contributes its AAR, AMS, and Seal headers
+/// (relaxed-canonicalized), and the new seal itself terminates the input
+/// with its `b=` emptied and no trailing CRLF.
 pub fn build(
 	key: &Ed25519KeyPair,
 	params: &SealParams,

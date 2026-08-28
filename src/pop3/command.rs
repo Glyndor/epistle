@@ -36,7 +36,10 @@ pub enum Command {
 	Capa,
 	/// `AUTH [mechanism [initial-response]]` (SASL, RFC 5034).
 	Auth {
+		/// SASL mechanism name (uppercased). `None` requests the server's
+		/// capability list.
 		mechanism: Option<String>,
+		/// Optional initial response, base64-encoded per RFC 4959.
 		initial: Option<String>,
 	},
 }

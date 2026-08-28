@@ -1,0 +1,57 @@
+name: Editorconfig
+
+# Push and pull request, like line-limit and for the same reason: this asks a
+# question about the state of the tree, not about a diff. It reads no base ref,
+# so it answers identically on both, and the push half catches what arrives on
+# a branch by a merge no pull request passed through.
+#
+# This file is in its own path filter on purpose. A workflow whose path list
+# omits itself does not run on the pull request that changes it, so a broken
+# edit merges without ever having been executed.
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editorconfig-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  editorconfig:
+    name: editorconfig
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tree against .editorconfig
+        env:
+          # Pinned like every other tool this repository installs in CI. A
+          # floating version turns an unrelated upstream release into a red
+          # build on a pull request that changed nothing.
+          ECLINT_VERSION: "3.4.0"
+        # editorconfig-checker reads .editorconfig itself rather than carrying
+        # its own copy of the rules. That is the point: a second list of rules
+        # in this file would drift from the real one silently, which is the
+        # class of defect this workflow exists to catch.
+        run: |
+          set -euo pipefail
+          url="https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${ECLINT_VERSION}/ec-linux-amd64.tar.gz"
+          curl -fsSL "$url" | tar -xz
+          ./bin/ec-linux-amd64 --version
+          # Mechanical rules only: charset, line endings, final newline,
+          # trailing whitespace. Indentation is deliberately not enforced here.
+          #
+          # Two reasons, both measured rather than assumed. `cargo fmt` already
+          # governs Rust and disagrees with this tool about continuation lines
+          # inside string literals, so enforcing both makes one of them
+          # unsatisfiable. And this tool does not understand fenced code blocks:
+          # it reports the tab-indented mermaid diagram in README.md as a
+          # violation, when tabs inside a fence are literal content and exactly
+          # what belongs there.
+          ./bin/ec-linux-amd64 --disable-indentation --disable-indent-size

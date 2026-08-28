@@ -1,16 +1,27 @@
 name: guard
 
+# PR into main only. main's ruleset requires this check; develop's
+# does not. The `if:` on the inner job stops it running where it
+# cannot answer, and the ruleset not demanding it on develop stops
+# anyone expecting an answer there.
+
 on:
   pull_request:
     branches: ["main"]
 
 permissions: {}
 
-# This used to be an inline job named `develop-only`, which emitted the
-# required-check context `develop-only`. Calling the shared reusable from a
-# job with id `develop-only` emits `develop-only / develop-only` instead —
-# the context name has to be updated in the `main` ruleset at the same
-# time this PR merges, or `main` is blocked.
+# The check this emits is `develop-only / develop-only`, composed as
+# `<job id> / <inner job name>`, and `main`'s ruleset requires that exact string.
+#
+# This was an inline job named `develop-only` until #714 moved it to a reusable,
+# which changed the emitted name from `develop-only` to `develop-only /
+# develop-only`. The ruleset was not updated at the same time, so `main` required
+# a context nothing emitted and the 0.4.0 release sat blocked for four days while
+# two advisory checks took the blame. The ruleset was corrected on 2026-08-26.
+#
+# Moving from the shared reusable to a local copy does not change the name again:
+# the file is not part of it. Do not rename this job.
 jobs:
   develop-only:
-    uses: Glyndor/.github/.github/workflows/main-guard.yml@8ae47ccd49ffdbf59d1acf7e6f9c18165bfba959 # v1.19.0
+    uses: ./.github/workflows/reusable-main-guard.yml

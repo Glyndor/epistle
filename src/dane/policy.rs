@@ -11,7 +11,12 @@ use super::tlsa::{CertUsage, TlsaRecord};
 
 /// A presented certificate: its full DER and its SubjectPublicKeyInfo DER.
 pub struct CertView<'a> {
+	/// Full DER encoding of the certificate (the same bytes the TLS stack
+	/// received on the wire). Used by `selector = 0` TLSA associations
+	/// (full-certificate match).
 	pub der: &'a [u8],
+	/// DER encoding of the certificate's `SubjectPublicKeyInfo` (SPKI).
+	/// Used by `selector = 1` TLSA associations (subject-public-key match).
 	pub spki: &'a [u8],
 }
 

@@ -29,6 +29,7 @@ pub struct Check {
 	pub kind: String,
 	/// The DNS name queried.
 	pub name: String,
+	/// Outcome of the check for this record.
 	pub status: Status,
 	/// What was found, for the report.
 	pub detail: String,
