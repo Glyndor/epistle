@@ -1,8 +1,37 @@
 #!/usr/bin/make -f
 
 export CARGO_HOME = $(CURDIR)/debian/cargo-home
-# Pin the target dir so a CARGO_TARGET_DIR from the environment cannot move the
-# binary away from the path the install step expects.
+
+# Build for musl, so the packaged binary is statically linked and the package
+# carries no libc floor.
+#
+# Until this, the .deb was the one Linux artifact built against glibc: the
+# release binaries have always been musl, while dpkg-buildpackage rebuilt from
+# source with whatever glibc the build container happened to carry. That put
+# `Depends: libc6 (>= 2.39)` on every published package, which Debian 12 (2.36)
+# and Ubuntu 22.04 (2.35) do not satisfy - so `apt install` failed on an
+# oldstable supported into 2028 and an LTS into 2027.
+#
+# `Depends` is generated from `${shlibs:Depends}`, so nothing in debian/control
+# needs to change: dpkg-shlibdeps finds no shared libraries in a static binary
+# and the substitution comes out empty.
+DEB_HOST_ARCH ?= $(shell dpkg-architecture -qDEB_HOST_ARCH)
+RUST_TARGET_amd64 = x86_64-unknown-linux-musl
+RUST_TARGET_arm64 = aarch64-unknown-linux-musl
+RUST_TARGET = $(RUST_TARGET_$(DEB_HOST_ARCH))
+
+# Fail here rather than silently building for the host. A package that quietly
+# went back to glibc would reintroduce the floor with nothing to notice it, and
+# the release that shipped it is immutable.
+ifeq ($(RUST_TARGET),)
+$(error no musl Rust target is mapped for DEB_HOST_ARCH=$(DEB_HOST_ARCH); add one above)
+endif
+
+# Where cargo puts a cross-target build. Every path below reads this rather
+# than target/release, which is the host build that no longer happens.
+BUILT = target/$(RUST_TARGET)/release/epistle
+# Pin the target dir so a CARGO_TARGET_DIR from the environment cannot move
+# the binary away from the path the install step expects.
 export CARGO_TARGET_DIR = $(CURDIR)/target
 # The queries are checked against the committed .sqlx cache, so the build needs
 # no database and no network to reach one.
@@ -24,16 +53,16 @@ override_dh_auto_build:
 ifneq ($(wildcard vendor/),)
 	$(if $(wildcard .cargo/config.toml),,$(MAKE) -f debian/rules debian/cargo-config)
 endif
-	cargo build --release --locked $(CARGO_FLAGS)
+	cargo build --release --locked --target $(RUST_TARGET) $(CARGO_FLAGS)
 
 # The unit tests that touch a live PostgreSQL are gated on DATABASE_URL and skip
 # without it, so this runs the rest. The database-backed suite runs in CI
 # (db.yml) against a real server, which is the only place it means anything.
 override_dh_auto_test:
-	cargo test --release --locked $(CARGO_FLAGS)
+	cargo test --release --locked --target $(RUST_TARGET) $(CARGO_FLAGS)
 
 override_dh_auto_install:
-	install -D -m 0755 target/release/epistle debian/epistle/usr/bin/epistle
+	install -D -m 0755 $(BUILT) debian/epistle/usr/bin/epistle
 
 override_dh_auto_clean:
 	cargo clean
