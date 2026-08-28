@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   rust:
-    uses: Glyndor/.github/.github/workflows/rust-ci.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
+    uses: ./.github/workflows/reusable-rust-ci.yml
     with:
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
@@ -33,9 +33,7 @@ jobs:
       # acme/transport and pop3/backend are well covered and deliberately NOT
       # excluded (they count toward the gate).
       coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap))\\.rs"
-  pin-policy:
-    uses: Glyndor/.github/.github/workflows/pin-policy-reusable.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
   dependabot-freshness:
-    uses: Glyndor/.github/.github/workflows/dependabot-freshness.yml@d5041b038b7d4935e75400dff612962e6fa14893 # v1.21.0
+    uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:
       max-age-days: 15
