@@ -229,6 +229,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
 
+	super::serve_tasks::spawn_alert_engine(
+		&config,
+		Arc::clone(&metrics),
+		webhook.as_ref().map(Arc::clone),
+		Arc::new(crate::storage::FsSpool::open_with_crypto(
+			&config.data_dir,
+			crypto.clone(),
+		)?),
+	);
+
 	super::serve_tasks::spawn_blob_reclamation(&config);
 
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).

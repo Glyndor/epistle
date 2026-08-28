@@ -55,6 +55,7 @@ a connection URL.
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
+| `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 
 ## Listeners
 
@@ -213,6 +214,54 @@ endpoint = "https://api.openai.com/v1/chat/completions"
 api_key_env = "EPISTLE_LLM_API_KEY"
 model = "gpt-4o-mini"
 ```
+
+### `[[alerts]]`
+Metric alerts. Each block is one rule; an empty list (the default) disables
+the engine entirely. Every `window_secs` the engine reads the chosen counter,
+compares the per-window delta against `op threshold`, and on a fire either
+posts a webhook event (when `webhook = true` and `[webhook]` is configured)
+or queues an email through the outbound spool (one copy per address in
+`email`). The reverse-path of an alert email is
+`epistle-alerts@<hostname>`, so a DSN from a stuck MX comes back to the
+server.
+
+A rule that has fired will not fire again until `cooldown_secs` have
+elapsed **and** the condition has stopped holding for at least one tick.
+Without the second half, a sustained "queue high" alert would page every
+window.
+
+| Key | Meaning |
+|---|---|
+| `name` | Stable rule identifier; appears in the webhook payload, the email subject and the logs. Must be unique. |
+| `metric` | Counter name (the short identifiers exposed by `Metrics::snapshot`). The validator rejects unknown names with the full valid list in the error message. |
+| `op` | One of `>=`, `>`, `<=`, `<`, `==`. |
+| `threshold` | Right-hand side of `op`. Compared against the per-window delta of `metric`. |
+| `window_secs` | Sample interval in seconds. Must be `> 0`. |
+| `webhook` | When `true`, fire a `metric_alert` webhook event. Requires `[webhook]`. |
+| `email` | One email per entry. The alert is queued as an outbound message for each address (delivered through the queue worker like any other mail). |
+| `cooldown_secs` | Minimum seconds between consecutive fires. Must be `> 0`. |
+
+Example: a 50-bounce-storm alarm, paging on webhook and email, with a 15-min
+cooldown to keep the noise down once it has fired.
+
+```toml
+[[alerts]]
+name = "bounce-storm"
+metric = "bounced"
+op = ">="
+threshold = 50
+window_secs = 300
+webhook = true
+email = ["ops@example.org"]
+cooldown_secs = 900
+```
+
+The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes)
+are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
+`forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
+`rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
+`relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
+`webhook_sent`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).

@@ -26,6 +26,24 @@ fn signature_is_stable_hmac_sha256() {
 	assert_ne!(a, sign("other", b"body"));
 }
 
+#[test]
+fn metric_alert_serializes_with_event_tag() {
+	let event = WebhookEvent::MetricAlert {
+		name: "bounce-storm".into(),
+		metric: "bounced".into(),
+		value: 73,
+		threshold: 50,
+		window_secs: 300,
+	};
+	let json = serde_json::to_string(&event).expect("serialize");
+	assert!(json.contains("\"event\":\"metric_alert\""), "{json}");
+	assert!(json.contains("\"name\":\"bounce-storm\""), "{json}");
+	assert!(json.contains("\"metric\":\"bounced\""), "{json}");
+	assert!(json.contains("\"value\":73"), "{json}");
+	assert!(json.contains("\"threshold\":50"), "{json}");
+	assert!(json.contains("\"window_secs\":300"), "{json}");
+}
+
 /// Captured request: (body, signature header).
 type Captured = Arc<Mutex<Option<(String, Option<String>)>>>;
 

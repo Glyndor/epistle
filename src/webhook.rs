@@ -6,10 +6,10 @@
 
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A delivery event worth notifying about. Serializes to the POST body.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum WebhookEvent {
 	/// A message was accepted for a local recipient.
@@ -29,6 +29,20 @@ pub enum WebhookEvent {
 		recipient: String,
 		/// The failure reason (remote response or local error).
 		reason: String,
+	},
+	/// A `[[alerts]]` rule crossed its threshold over its sample window.
+	MetricAlert {
+		/// The rule's configured `name` (the stable identifier operators see
+		/// in logs and on the wire).
+		name: String,
+		/// Counter name the rule watches (e.g. `bounced`).
+		metric: String,
+		/// Observed delta over the window at fire time.
+		value: u64,
+		/// The threshold the delta crossed.
+		threshold: u64,
+		/// The window length in seconds (the rule's `window_secs`).
+		window_secs: u64,
 	},
 }
 
