@@ -31,6 +31,15 @@ jobs:
       # implied). It came from a build that failed, and it stays tied to
       # debian/control by tests/workflow_toolchain_pins.rs.
       msrv: "1.88"
+      # The `Doc warnings` job is gated on this input and this repository never
+      # passed it, so the job has been skipping since it existed. It had ten
+      # findings waiting when I turned it on: three unresolved intra-doc links,
+      # one redundant link target, and six public items documenting their
+      # contract in terms of constants that lived in a private module, so a
+      # reader could see the promise and not the value it named. All fixed in
+      # the same change, because a gate that lands red is a gate somebody
+      # silences.
+      doc-warnings: true
       coverage-threshold: 90
       # Files the no-DB coverage job cannot fairly measure — each needs a live
       # service or is thin connection-accept glue, so they are excluded here

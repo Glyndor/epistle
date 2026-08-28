@@ -1,6 +1,7 @@
 //! Labeled bearer API keys for the management API.
 //!
-//! Alongside the single configured bearer token (see [`super::state`]), an
+//! Alongside the single configured bearer token (held by the API state, a
+//! private module), an
 //! operator may issue any number of labeled API keys. Each carries a `label`,
 //! the SHA-256 hash of the key (the same `sha256:<hex>` form the configured
 //! token uses), an optional `expires_at` (epoch seconds) and an optional
@@ -32,7 +33,7 @@ pub enum Scope {
 	Send,
 }
 
-/// Error returned when [`Scope::from_str`] (the [`std::str::FromStr`] impl) is
+/// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
 /// handed a value that is not one of the canonical `read`/`write`/`send`
 /// strings. Carries the offending value so a caller can format a context-aware
 /// message; nobody needs to construct one outside of this module.

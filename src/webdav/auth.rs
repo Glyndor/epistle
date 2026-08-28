@@ -1,7 +1,7 @@
 //! HTTP Basic authentication and the owner-only ACL.
 //!
 //! Every WebDAV request must carry HTTP Basic credentials that the directory
-//! accepts ([`crate::directory_store::Directory::authenticate`]). The resolved
+//! accepts ([`crate::smtp::directory::Directory::authenticate`]). The resolved
 //! account name returned by the directory — not the login the client typed — is
 //! what selects the on-disk tree, so an account can only ever reach its own
 //! files: this is the ACL. A missing or bad credential is a `401` carrying a

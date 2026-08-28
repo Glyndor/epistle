@@ -2,7 +2,7 @@
 //! directory.
 //!
 //! The SQL backend is a third account source alongside the static config and
-//! the dynamic `accounts.toml`. It is loaded into the [`AccountStore`] at
+//! the dynamic `accounts.toml`. It is loaded into the [`super::AccountStore`] at
 //! startup and refreshed periodically, never queried per authentication: SQL
 //! stores argon2id hashes just like the local accounts, so once loaded, resolve
 //! and authenticate stay synchronous against the in-memory directory. Only the
