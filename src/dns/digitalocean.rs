@@ -445,3 +445,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 #[path = "digitalocean_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "digitalocean_tests_b.rs"]
+mod tests_b;

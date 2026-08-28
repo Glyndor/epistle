@@ -398,3 +398,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 #[path = "ovh_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ovh_tests_b.rs"]
+mod tests_b;

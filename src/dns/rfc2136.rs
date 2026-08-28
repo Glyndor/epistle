@@ -3,11 +3,10 @@
 //! configured in `[dns].endpoint`, authenticated with TSIG (RFC 8945). This is
 //! the wire format the protocol prescribes; there is no HTTP API to wrap.
 //!
-//! Records epistle publishes — A, AAAA, TXT, CNAME, TLSA — all encode the
-//! same way on the wire (the value field carries RDATA verbatim, with the
-//! type-specific encoding). MX/SRV would carry additional fields
-//! (preference, weight) that epistle does not build, so they return
-//! [`ProviderError::Unsupported`]. TXT values are emitted as a single
+//! Records epistle publishes — A, AAAA, TXT, CNAME, TLSA, MX, SRV and CAA —
+//! are each encoded into their own RDATA type. MX and SRV carry the extra
+//! fields the wire format demands (preference; priority, weight and port),
+//! parsed out of the record value. TXT values are emitted as a single
 //! character-string without the surrounding quotes a zone file would use.
 //!
 //! The UPDATE semantics follow RFC 2136 §2.5: an **upsert** is the pair
@@ -438,3 +437,7 @@ fn rand_id() -> u16 {
 #[cfg(test)]
 #[path = "rfc2136_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rfc2136_tests_b.rs"]
+mod tests_b;

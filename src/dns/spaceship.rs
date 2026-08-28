@@ -371,3 +371,7 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "spaceship_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "spaceship_tests_b.rs"]
+mod tests_b;

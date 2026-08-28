@@ -10,21 +10,21 @@ use axum::routing::get;
 use serde::Deserialize;
 
 #[derive(Default)]
-struct MockState {
+pub(super) struct MockState {
 	/// Records the GET endpoint returns. Keyed by `kind|name` so PUT/DELETE
 	/// lookups can match an "existing" record without filtering the list.
-	records: std::collections::HashMap<String, serde_json::Value>,
+	pub(super) records: std::collections::HashMap<String, serde_json::Value>,
 	/// Captured PUT/DELETE bodies.
-	bodies: Vec<String>,
+	pub(super) bodies: Vec<String>,
 	/// "METHOD /path?query" of every request, for assertions.
-	calls: Vec<String>,
+	pub(super) calls: Vec<String>,
 	/// X-API-Key header seen on the last request.
-	api_key: Option<String>,
+	pub(super) api_key: Option<String>,
 	/// X-API-Secret header seen on the last request.
-	api_secret: Option<String>,
+	pub(super) api_secret: Option<String>,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
 /// Query parameters the mock accepts — Spaceship requires `take` and `skip`,
 /// and may carry `orderBy`.
@@ -129,7 +129,7 @@ async fn delete_records(
 	axum::http::StatusCode::NO_CONTENT
 }
 
-async fn mock(records: Vec<serde_json::Value>) -> (SpaceshipProvider, Shared) {
+pub(super) async fn mock(records: Vec<serde_json::Value>) -> (SpaceshipProvider, Shared) {
 	let mut map = std::collections::HashMap::new();
 	for r in records {
 		let key = format!(

@@ -9,24 +9,24 @@ use axum::extract::{Path, State};
 use axum::routing::get;
 
 #[derive(Default)]
-struct MockState {
+pub(super) struct MockState {
 	/// Existing records keyed by `kind|name`.
-	records: Vec<serde_json::Value>,
+	pub(super) records: Vec<serde_json::Value>,
 	/// Bodies captured from POST/PUT requests.
-	bodies: Vec<String>,
+	pub(super) bodies: Vec<String>,
 	/// Captured "METHOD /path" of every request, for assertions.
-	calls: Vec<String>,
+	pub(super) calls: Vec<String>,
 	/// Last Authorization header seen.
-	auth: Option<String>,
+	pub(super) auth: Option<String>,
 	/// Optional pagination: when set, the GET endpoint appends `links.pages.next`
 	/// pointing to a pre-computed absolute URL, and `/next` returns no further
 	/// page.
-	next_page: bool,
+	pub(super) next_page: bool,
 	/// Pre-computed absolute URL used as `links.pages.next` when paginating.
-	next_url: Option<String>,
+	pub(super) next_url: Option<String>,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
 /// GET /v2/domains/{zone}/records — list with optional pagination.
 async fn list_records(
@@ -121,7 +121,10 @@ async fn record_item(
 /// Start the mock and return (provider, shared state). `records` are the
 /// existing records the GET endpoint returns; `next_page` enables pagination
 /// (which adds an absolute `links.pages.next` URL pointing to `/next`).
-async fn mock(records: Vec<serde_json::Value>, next_page: bool) -> (DigitaloceanProvider, Shared) {
+pub(super) async fn mock(
+	records: Vec<serde_json::Value>,
+	next_page: bool,
+) -> (DigitaloceanProvider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState {
 		records,
 		next_page,
