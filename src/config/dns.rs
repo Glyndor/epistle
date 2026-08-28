@@ -43,6 +43,34 @@ pub struct Dns {
 	/// Route 53: the hosted zone id.
 	#[serde(default)]
 	pub hosted_zone_id: Option<String>,
+	/// Provider-specific account identifier. DNSimple needs one alongside the
+	/// token; it is not a secret and may sit in the config file.
+	#[serde(default)]
+	pub account_id: Option<String>,
+	/// Provider endpoint or region selector. OVH has `ovh-eu`, `ovh-ca` and
+	/// `ovh-us` APIs with separate credentials; RFC 2136 uses this for the
+	/// nameserver `host:port` that accepts UPDATE messages.
+	#[serde(default)]
+	pub endpoint: Option<String>,
+	/// Third credential part for providers whose API needs one beyond
+	/// `access_key` and `secret_key`. OVH calls it the consumer key.
+	#[serde(default)]
+	pub consumer_key: Option<String>,
+	/// Environment variable holding `consumer_key`, so it stays out of the
+	/// config file.
+	#[serde(default)]
+	pub consumer_key_env: Option<String>,
+	/// TSIG key name for RFC 2136. The key material itself travels through
+	/// `token` / `token_env` / `token_file` as base64.
+	#[serde(default)]
+	pub key_name: Option<String>,
+	/// TSIG algorithm for RFC 2136 (`hmac-sha256` by default when absent).
+	#[serde(default)]
+	pub algorithm: Option<String>,
+	/// Path to a credentials file for providers that authenticate with one,
+	/// such as a Google Cloud service-account JSON.
+	#[serde(default)]
+	pub credentials_file: Option<PathBuf>,
 }
 
 impl Dns {
