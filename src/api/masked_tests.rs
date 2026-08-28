@@ -152,7 +152,7 @@ async fn patch_unknown_address_is_404() {
 }
 
 #[tokio::test]
-async fn limit_returns_429() {
+async fn limit_returns_409_not_429() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(
@@ -203,8 +203,10 @@ async fn limit_returns_429() {
 		Some(serde_json::json!({ "label": "second" })),
 	)
 	.await;
-	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-	assert_eq!(body["error"]["code"], "rate_limited");
+	// 409, not 429: the cap does not lift with time, so telling the client to
+	// retry would send it into a loop that can never succeed.
+	assert_eq!(status, StatusCode::CONFLICT);
+	assert_eq!(body["error"]["code"], "conflict");
 }
 
 #[tokio::test]
@@ -313,4 +315,59 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Two domains configured, with the account living on the second one.
+fn two_domain_state(dir: &std::path::Path) -> ApiState {
+	let domains = vec!["first.example".to_string(), "second.example".to_string()];
+	let accounts = vec![crate::config::Account {
+		name: "bob".to_string(),
+		addresses: vec!["bob@second.example".to_string()],
+		password_hash: Some("$argon2id$secret".to_string()),
+		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
+	}];
+	let store = std::sync::Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir,
+			domains.clone(),
+			std::collections::HashMap::new(),
+			accounts,
+		)
+		.expect("open store"),
+	);
+	ApiState::new(
+		&crate::smtp::auth::tests::hash(TOKEN.as_str()),
+		dir.to_path_buf(),
+		domains,
+		store.clone(),
+		crate::storage::FsSpool::open(dir).expect("open spool"),
+	)
+	.with_directory(store.handle())
+}
+
+#[tokio::test]
+async fn a_mask_lands_on_the_account_own_domain_not_the_first_configured() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(two_domain_state(dir.path()));
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/accounts/bob/masked",
+		Some(TOKEN.as_str()),
+		Some(serde_json::json!({ "label": "shopping" })),
+	)
+	.await;
+	assert_eq!(status, StatusCode::CREATED);
+	let address = body["address"].as_str().expect("address");
+	// `domains` is a list and accounts are keyed by full address. Handing bob
+	// a mask at first.example would put it on a domain he has nothing to do
+	// with, and every mask in the install would break the day that domain is
+	// dropped from the config.
+	assert!(
+		address.ends_with("@second.example"),
+		"mask landed off the account's own domain: {address}"
+	);
 }

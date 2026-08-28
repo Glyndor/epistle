@@ -54,11 +54,11 @@ pub async fn create(
 	Path(name): Path<String>,
 	Json(request): Json<CreateRequest>,
 ) -> Result<(axum::http::StatusCode, Json<CreatedResponse>), ApiError> {
-	let domain = pick_domain(&state)?;
+	let domain = pick_domain(&state, &name)?;
 	let now = unix_now();
 	let entry = state
 		.store()
-		.add_masked(&name, &request.label, domain, now)
+		.add_masked(&name, &request.label, &domain, now)
 		.map_err(map_store_error)?;
 	audit::log_privilege_change(AuditEvent::MaskedCreated, &name, client_ip.0);
 	Ok((
@@ -121,16 +121,25 @@ pub async fn remove(
 	Ok(Json(RemovedResponse { removed: address }))
 }
 
-/// Pick the first configured domain as the masked address's home. A more
-/// sophisticated policy could key the domain off the account's primary
-/// address, but the API surfaces one domain at a time and most installs run
-/// a single domain; one mask per domain keeps the listing simple and the
-/// slug suffix unique.
-fn pick_domain(state: &ApiState) -> Result<&str, ApiError> {
+/// The domain a mask for `account` lives under: the domain of the account's
+/// own first address. `domains` is a list, and accounts are keyed by full
+/// address, so taking `domains[0]` would hand every account on every domain a
+/// mask under whichever domain happens to be configured first — and drop all
+/// of them the day that domain is removed. The first configured domain is
+/// only a fallback for an account that has no address of its own.
+fn pick_domain(state: &ApiState, account: &str) -> Result<String, ApiError> {
 	state
-		.domains()
-		.first()
-		.map(String::as_str)
+		.store()
+		.account_views()
+		.into_iter()
+		.find(|(name, _, _)| name == account)
+		.and_then(|(_, addresses, _)| addresses.first().cloned())
+		.and_then(|address| {
+			address
+				.rsplit_once('@')
+				.map(|(_, domain)| domain.to_string())
+		})
+		.or_else(|| state.domains().first().cloned())
 		.ok_or_else(|| ApiError::invalid_input("No domain configured for masked addresses."))
 }
 
@@ -144,7 +153,7 @@ fn map_store_error(error: StoreError) -> ApiError {
 		// reveals cross-account addresses.
 		StoreError::NotFound(_) => ApiError::not_found("no such masked address"),
 		StoreError::LimitReached { max } => {
-			ApiError::rate_limited_with(format!("masked-address limit ({max}) reached for account"))
+			ApiError::conflict(format!("masked-address limit ({max}) reached for account"))
 		}
 		StoreError::Io(_) => ApiError::internal(),
 	}
