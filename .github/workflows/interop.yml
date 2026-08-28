@@ -52,8 +52,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned to match ci.yml. This job exercises epistle against a
+          # reference MTA (Postfix) and writes no SBOM of its own, but
+          # `stable` here would still let protocol interop drift away from
+          # what the gate tests on a 1.98 compiler.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
 
       - name: Run protocol interop tests
         run: cargo test --locked --test interop

@@ -43,8 +43,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned to 1.98. This job builds the real binary, starts it under
+          # systemd, and submits and retrieves a message over SMTP and IMAP,
+          # so the SBOM it produces must name the same compiler that built
+          # the artifact the .deb ships.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
 
       - name: Build release binary
         run: cargo build --locked --release
