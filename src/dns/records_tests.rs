@@ -324,3 +324,24 @@ async fn publish_tlsa_noop_without_certificate() {
 		.await
 		.expect("noop");
 }
+
+#[test]
+fn caa_emitted_for_the_google_trust_services_directory() {
+	// The hostname here was wrong on the first pass (`gcp-host.com`, which
+	// does not resolve), so an operator on Google Trust Services silently got
+	// no CAA at all. Checked against the live directory: it answers 200.
+	assert_eq!(
+		caa_ca_for_directory("https://dv.acme-v02.api.pki.goog/directory"),
+		Some("pki.goog"),
+	);
+}
+
+#[test]
+fn caa_is_withheld_for_a_directory_we_do_not_recognise() {
+	// Withholding is the safe direction: a CAA naming the wrong CA blocks
+	// renewal outright, while a missing CAA just leaves issuance unrestricted.
+	assert_eq!(
+		caa_ca_for_directory("https://acme.example.test/directory"),
+		None
+	);
+}

@@ -52,10 +52,10 @@ const SRV_SERVICES: &[SrvService] = &[
 	},
 ];
 
-/// Which extra services the deployment exposes. Drives the optional SRV
-/// records (CalDAV/CardDAV) and the optional CNAME discovery records (CAA
-/// only when the ACME directory is a known one — see
-/// [`crate::config::acme::Acme`]).
+/// Which extra services the deployment exposes. Drives the optional
+/// CalDAV/CardDAV SRV records and the CNAME discovery records. The CAA
+/// record is separate: it comes from the `directory_url` of the `acme`
+/// config section, and only when that directory names a CA we recognise.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Services {
 	/// CalDAV (RFC 4791) is served by the in-tree `webdav` module.
@@ -86,7 +86,7 @@ pub fn caa_ca_for_directory(directory_url: &str) -> Option<&'static str> {
 		"https://acme-staging-v02.api.letsencrypt.org/directory" => Some("letsencrypt.org"),
 		"https://acme.zerossl.com/v2/DV90" => Some("zerossl.com"),
 		"https://api.buypass.com/acme/directory" => Some("buypass.com"),
-		"https://dv.acme-v02.api.gcp-host.com/directory" => Some("pki.goog"),
+		"https://dv.acme-v02.api.pki.goog/directory" => Some("pki.goog"),
 		_ => None,
 	}
 }
