@@ -45,8 +45,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # Pinned to match ci.yml. The integration tests exercise the sqlx
+          # macros against a live Postgres, and `stable` here would mean the
+          # queries compiled for the SBOM are not the ones the database
+          # tests ran against the same schema.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
 
       - name: Run database integration tests
         run: cargo test --locked --test database
