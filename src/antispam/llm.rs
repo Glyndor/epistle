@@ -239,6 +239,31 @@ pub struct LlmHook {
 }
 
 impl LlmHook {
+	/// Build the hook from the `[antispam.llm]` section, or `None` when the
+	/// section is absent. Lives here rather than in `serve` so the wiring is next
+	/// to the type it wires and `serve.rs` stays under the line limit.
+	pub fn from_config(cfg: Option<&crate::config::Llm>) -> std::io::Result<Option<Self>> {
+		let Some(cfg) = cfg else {
+			return Ok(None);
+		};
+		let api_key = cfg.read_api_key().map_err(std::io::Error::other)?;
+		let classifier = LlmClassifier::new(
+			&cfg.endpoint,
+			&api_key,
+			&cfg.model,
+			cfg.timeout_secs,
+			cfg.max_body_bytes,
+		)
+		.map_err(|e| std::io::Error::other(format!("llm hook: {e}")))?;
+		Ok(Some(Self {
+			classifier: std::sync::Arc::new(classifier),
+			low: cfg.uncertain_low,
+			high: cfg.uncertain_high,
+		}))
+	}
+}
+
+impl LlmHook {
 	/// Whether `score` lands inside the configured band and therefore needs
 	/// the LLM to decide.
 	pub fn is_uncertain(&self, score: f64) -> bool {

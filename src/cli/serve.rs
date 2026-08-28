@@ -179,25 +179,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// key is read from the environment via the configured variable name so it
 	// never lands in the config file. Built eagerly so a missing key fails
 	// the start, not the first mail that hits the band.
-	let llm_hook: Option<crate::antispam::llm::LlmHook> = match &config.antispam_llm {
-		Some(llm_cfg) => {
-			let api_key = llm_cfg.read_api_key().map_err(std::io::Error::other)?;
-			let classifier = crate::antispam::llm::LlmClassifier::new(
-				&llm_cfg.endpoint,
-				&api_key,
-				&llm_cfg.model,
-				llm_cfg.timeout_secs,
-				llm_cfg.max_body_bytes,
-			)
-			.map_err(|e| std::io::Error::other(format!("llm hook: {e}")))?;
-			Some(crate::antispam::llm::LlmHook {
-				classifier: std::sync::Arc::new(classifier),
-				low: llm_cfg.uncertain_low,
-				high: llm_cfg.uncertain_high,
-			})
-		}
-		None => None,
-	};
+	let llm_hook = crate::antispam::llm::LlmHook::from_config(config.antispam_llm.as_ref())?;
 
 	// Optional reputation database, migrated at startup.
 	let reputation_pool = match &config.database {
