@@ -7,6 +7,7 @@
 mod account;
 mod acme;
 mod alias;
+mod antispam;
 mod api;
 mod arc;
 mod database;
@@ -27,6 +28,7 @@ mod webhook;
 pub use account::Account;
 pub use acme::Acme;
 pub use alias::Alias;
+pub use antispam::Llm;
 pub use api::Api;
 pub use arc::Arc;
 pub use database::Database;
@@ -148,6 +150,9 @@ pub struct Config {
 	/// URL of an external scanner hook (ClamAV/Rspamd behind HTTP) consulted
 	/// for unauthenticated inbound mail. Absent disables scanning.
 	pub scanner_hook_url: Option<String>,
+	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
+	/// lands in an uncertain band. Absent disables the hook.
+	pub antispam_llm: Option<Llm>,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
@@ -237,6 +242,7 @@ impl std::fmt::Debug for Config {
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
+			.field("antispam_llm", &self.antispam_llm)
 			.field("listeners", &self.listeners)
 			.field("accounts", &self.accounts)
 			.field("tls", &self.tls)

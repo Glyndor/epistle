@@ -64,6 +64,10 @@ pub struct Server {
 	bayes: Option<crate::antispam::corpus::BayesStore>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
+	/// Optional LLM hook consulted for unauthenticated mail whose Bayesian
+	/// score sits inside the configured uncertain band. Outside the band the
+	/// classifier is not consulted at all, so a non-`None` value is cheap.
+	llm: Option<crate::antispam::llm::LlmHook>,
 	/// Shared metrics counters.
 	metrics: Arc<crate::metrics::Metrics>,
 	/// Delay applied to first-time unauthenticated senders. Zero disables it.
@@ -99,6 +103,7 @@ impl Server {
 			reputation: None,
 			bayes: None,
 			hook: None,
+			llm: None,
 			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
@@ -163,6 +168,14 @@ impl Server {
 	/// Consult an external scanner hook for unauthenticated inbound mail.
 	pub fn with_hook(mut self, hook: Arc<dyn crate::antispam::hook::MailHook>) -> Self {
 		self.hook = Some(hook);
+		self
+	}
+
+	/// Consult the LLM hook for unauthenticated mail whose Bayesian score
+	/// lands in the configured uncertain band. Outside the band the hook is
+	/// not called at all.
+	pub fn with_llm(mut self, llm: crate::antispam::llm::LlmHook) -> Self {
+		self.llm = Some(llm);
 		self
 	}
 

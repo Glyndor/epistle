@@ -430,6 +430,41 @@ impl Server {
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}
+					// LLM-assisted screening (unauthenticated mail only, and only
+					// when the local Bayesian score lands in the configured
+					// uncertain band — outside it the local classifier is
+					// trusted and the LLM is not paid for).
+					if let (Some(llm), Some(bayes), None) =
+						(&self.llm, &self.bayes, session.authenticated())
+					{
+						let text = String::from_utf8_lossy(&message.data);
+						match bayes.score(crate::antispam::corpus::SHARED, &text).await {
+							Ok(score) if llm.is_uncertain(score) => {
+								self.metrics.llm_consulted();
+								match llm.classifier.consult(&message.data).await {
+									crate::antispam::llm::ConsultOutcome::Verdict(
+										crate::antispam::hook::HookVerdict::Quarantine,
+									) => {
+										self.metrics.llm_quarantined();
+										self.train_corpus(&message.data, true);
+										message.mailbox = Some("Rejects".to_string());
+									}
+									crate::antispam::llm::ConsultOutcome::Verdict(_) => {}
+									crate::antispam::llm::ConsultOutcome::Failed => {
+										self.metrics.llm_failed();
+									}
+								}
+							}
+							Ok(_) => {}
+							Err(error) => {
+								// The Bayesian score fetch failed; treat the
+								// message as outside the band (Accept) rather
+								// than blocking mail on a DB hiccup.
+								self.metrics.llm_failed();
+								tracing::warn!(%error, "llm band score failed; accepting");
+							}
+						}
+					}
 					// Accepted unauthenticated mail trains the ham corpus —
 					// unless it was quarantined (already trained as spam).
 					if session.authenticated().is_none() && message.mailbox.is_none() {
