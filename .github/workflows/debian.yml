@@ -15,6 +15,12 @@ name: Debian package
 # repository keeps its code in src/, and a filter that silently stops matching is
 # how a gate stops being a gate.
 
+# Push is scoped to develop only, not main. The repo's flow keeps main
+# reachable only via pull request (topic -> develop -> main, the path
+# main-guard enforces), so a direct push to main never arrives here.
+# Push to develop is the integration checkpoint where the Debian
+# build needs to keep passing.
+
 on:
   push:
     branches: ["develop"]

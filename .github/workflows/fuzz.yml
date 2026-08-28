@@ -1,5 +1,11 @@
 name: Fuzz
 
+# No push trigger. Fuzzing asks "does cargo fuzz surface parser panics
+# on a fixed tree?", which is a property of HEAD, not a commit range.
+# The nightly schedule lives on main, the branch GitHub reads schedule:
+# triggers from. pull_request is path-filtered to keep per-PR cost down
+# to parser-facing changes.
+
 on:
   schedule:
     # Nightly short fuzz run to surface parser panics on a fixed tree.

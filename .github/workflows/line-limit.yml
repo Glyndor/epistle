@@ -1,5 +1,19 @@
 name: Line limit
 
+# Push and PR, unlike `dco`, and the difference is deliberate. The org CI
+# standard groups the two together and says both examine a pull request's
+# diff, which is true of `dco` and not of this one: the reusable ends in
+# `git ls-files -z` and counts the lines of every tracked file by extension.
+# It reads no base ref and computes no diff, so it answers the same question
+# on a push as on a pull request.
+#
+# That makes it a statement about the state of the tree rather than about a
+# pull request, and the standard's own taxonomy puts those on
+# `pull_request` plus `push`. The push half is what catches content that
+# arrives on `develop` or `main` by a merge no pull request passed through.
+#
+# podup runs it on `pull_request` only. That is the narrower scope and the
+# one worth revisiting, not this.
 on:
   push:
     branches: [develop, main]

@@ -1,5 +1,10 @@
 name: Release
 
+# Tag push and manual dispatch only. This workflow answers "is this
+# tag ready to release?", which is a question about a specific tag,
+# not branch state. workflow_dispatch lets a maintainer re-run a
+# release for an existing tag whose previous attempt failed.
+
 on:
   push:
     tags: ["v*"]

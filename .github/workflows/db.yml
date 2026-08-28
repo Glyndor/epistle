@@ -1,5 +1,10 @@
 name: Database
 
+# Path filter on pull_request only. The database integration suite is
+# expensive, so a PR that does not touch migrations, src/db, or the
+# test itself does not pay for it. Push to develop or main is a
+# checkpoint, so the full run fires there unconditionally.
+
 on:
   push:
     branches: [develop, main]

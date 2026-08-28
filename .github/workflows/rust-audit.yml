@@ -1,5 +1,11 @@
 name: Rust audit
 
+# No push trigger. The audit answers "are dependencies clean of new
+# advisories or license issues on a fixed tree?", which the weekly
+# schedule on main handles. workflow_dispatch is for ad hoc reruns.
+# pull_request is path-filtered to changes that touch Cargo.toml,
+# Cargo.lock, or deny.toml.
+
 on:
   schedule:
     # Weekly, Monday 06:00 UTC: catch new RUSTSEC advisories on a fixed tree.
