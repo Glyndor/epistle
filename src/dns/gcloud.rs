@@ -492,5 +492,9 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+#[path = "gcloud_test_support.rs"]
+mod test_support;
+#[cfg(test)]
 #[path = "gcloud_tests.rs"]
 mod tests;
