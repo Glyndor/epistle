@@ -32,6 +32,21 @@ use std::path::{Path, PathBuf};
 /// this test fail the Debian build on its first run.
 const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules", "cargo-home"];
 
+/// Directories that contain test files invoked by a workflow committed to
+/// this repository. The absence of a runner does not mean the absence of
+/// coverage here: a workflow names each entry's tests by path. Every entry
+/// MUST carry the name of the workflow that runs it in the comment, so that
+/// deleting the workflow without deleting the exemption surfaces the lie
+/// rather than hiding it.
+const WORKFLOW_INVOKED_DIRS: &[&str] = &[
+	// `.github/workflows/scripts.yml` runs
+	// `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v`
+	// on every PR that touches this directory or that workflow. If the
+	// workflow is renamed or deleted, delete this line in the same change:
+	// the exemption no longer corresponds to anything.
+	".github/scripts",
+];
+
 /// Extensions whose test files are not discovered by any runner — something has
 /// to invoke them by name, which is the condition this test watches for.
 const UNDISCOVERED_EXTS: &[&str] = &["sh", "bash", "bats", "py", "ps1", "rb", "pl"];
@@ -70,7 +85,10 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 		let path = entry.path();
 		let name = entry.file_name().to_string_lossy().into_owned();
 		if path.is_dir() {
-			if SKIP_DIRS.contains(&name.as_str()) || is_dependency_checkout(&path) {
+			if SKIP_DIRS.contains(&name.as_str())
+				|| is_dependency_checkout(&path)
+				|| is_workflow_invoked(root, &path)
+			{
 				continue;
 			}
 			collect(root, &path, out);
@@ -94,6 +112,17 @@ fn is_dependency_checkout(path: &Path) -> bool {
 		}
 	}
 	false
+}
+
+/// True when `path` is one of `WORKFLOW_INVOKED_DIRS`, matched against the
+/// repo-relative path. The list is short on purpose; each entry is a
+/// promise that a workflow exists, and the matching is exact so the
+/// promise cannot quietly extend to a sibling directory.
+fn is_workflow_invoked(root: &Path, path: &Path) -> bool {
+	let rel = path.strip_prefix(root).unwrap_or(path);
+	WORKFLOW_INVOKED_DIRS
+		.iter()
+		.any(|exempt| Path::new(exempt) == rel)
 }
 
 /// A file counts when its extension has no runner *and* either its name marks it
