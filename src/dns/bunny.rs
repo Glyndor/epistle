@@ -109,7 +109,7 @@ impl BunnyProvider {
 			RecordKind::Cname => Ok(2),
 			RecordKind::Txt => Ok(3),
 			RecordKind::Srv => Ok(8),
-			RecordKind::Mx | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Mx | RecordKind::Tlsa | RecordKind::Caa => Err(ProviderError::Unsupported),
 		}
 	}
 

@@ -60,7 +60,8 @@ impl DesecProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Tlsa
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
@@ -190,6 +191,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

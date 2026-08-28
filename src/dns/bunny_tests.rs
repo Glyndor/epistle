@@ -418,5 +418,8 @@ async fn srv_upsert_puts_weight_port_target_in_value() {
 	// Bunny's Type 8 (SRV) carries `weight port target` in Value (priority
 	// is fixed at 0 by the Bunny API).
 	assert!(body.contains("\"Type\":8"), "{body}");
-	assert!(body.contains("\"Value\":\"1 465 mail.example.org\""), "{body}");
+	assert!(
+		body.contains("\"Value\":\"1 465 mail.example.org\""),
+		"{body}"
+	);
 }

@@ -65,7 +65,8 @@ impl SpaceshipProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Tlsa
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
@@ -106,6 +107,7 @@ impl SpaceshipProvider {
 			RecordKind::Cname => "cname",
 			RecordKind::Tlsa => "associationData",
 			RecordKind::Srv => "target",
+			RecordKind::Caa => "value",
 			RecordKind::Mx => unreachable!("filtered by api_kind"),
 		}
 	}
@@ -138,9 +140,31 @@ impl SpaceshipProvider {
 			map.insert("weight".to_string(), weight.into());
 			map.insert("port".to_string(), port.into());
 			map.insert("target".to_string(), target.into());
+		} else if record.kind == RecordKind::Caa {
+			let mut parts = record.value.splitn(3, ' ');
+			let flags: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			let map = item.as_object_mut().expect("object");
+			map.insert("flag".to_string(), flags.into());
+			map.insert("tag".to_string(), tag.into());
+			map.insert("value".to_string(), value.into());
 		} else {
 			let map = item.as_object_mut().expect("object");
-			map.insert(Self::value_field(record.kind).to_string(), record.value.clone().into());
+			map.insert(
+				Self::value_field(record.kind).to_string(),
+				record.value.clone().into(),
+			);
 		}
 		let body = serde_json::json!({
 			"force": true,
@@ -272,11 +296,15 @@ impl SpaceshipProvider {
 					format!("{name}.{zone}")
 				};
 				let value = if matches!(Self::parse_kind(kind), RecordKind::Srv) {
-					let priority = item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+					let priority =
+						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
 					let weight = item.get("weight").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
 					let port = item.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
 					let target = item.get("target").and_then(|v| v.as_str())?;
-					format!("{priority} {weight} {port} {}", target.trim_end_matches('.'))
+					format!(
+						"{priority} {weight} {port} {}",
+						target.trim_end_matches('.')
+					)
 				} else {
 					Self::extract_value(&item)?
 				};

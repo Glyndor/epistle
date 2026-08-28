@@ -227,7 +227,10 @@ async fn srv_upsert_passes_value_through_in_rrdatas() {
 	// (presentation form, no quotes), per
 	// https://cloud.google.com/dns/docs/records-overview.
 	assert!(body.contains("\"type\":\"SRV\""), "{body}");
-	assert!(body.contains("\"rrdatas\":[\"0 1 465 mail.example.org.\"]"), "{body}");
+	assert!(
+		body.contains("\"rrdatas\":[\"0 1 465 mail.example.org.\"]"),
+		"{body}"
+	);
 }
 
 /// PEM round-trip: a valid PKCS#8 PEM decodes to a non-empty DER blob.

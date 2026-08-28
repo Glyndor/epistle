@@ -47,6 +47,7 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		// we don't have a flag for "operator disabled CalDAV only", so emit
 		// both SRVs and let the operator prune them by hand if needed.
 		Services::all(),
+		config.acme.as_ref().map(|a| a.directory_url.as_str()),
 	);
 	report(&recs, out)
 }

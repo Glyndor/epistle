@@ -145,7 +145,8 @@ fn record_type(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		| RecordKind::Txt
 		| RecordKind::Cname
 		| RecordKind::Tlsa
-		| RecordKind::Srv => Ok(kind.as_str()),
+		| RecordKind::Srv
+		| RecordKind::Caa => Ok(kind.as_str()),
 		RecordKind::Mx => Err(ProviderError::Unsupported),
 	}
 }

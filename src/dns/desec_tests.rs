@@ -163,3 +163,19 @@ async fn srv_upsert_puts_unquoted_value_with_correct_subname() {
 	// deSEC stores SRV values unquoted, as `<prio> <weight> <port> <target>`.
 	assert!(body.contains("\"records\":[\"0 1 465 mail.example.org.\"]"), "{body}");
 }
+
+#[tokio::test]
+async fn caa_upsert_passes_value_through_verbatim() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let caa = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Caa,
+		value: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", caa).await.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(body.contains("\"subname\":\"\""), "{body}");
+	assert!(body.contains("\"type\":\"CAA\""), "{body}");
+	assert!(body.contains("\"records\":[\"0 issue \\\"letsencrypt.org\\\"\"]"), "{body}");
+}

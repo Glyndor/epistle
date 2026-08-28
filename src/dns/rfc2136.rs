@@ -46,7 +46,7 @@ use hickory_resolver::proto::rr::{
 	DNSClass, Name, RData, Record, RecordType, TSigner,
 	rdata::tlsa::{CertUsage, Matching, Selector},
 	rdata::tsig::TsigAlgorithm,
-	rdata::{CNAME, SRV, TLSA, TXT},
+	rdata::{CAA, CNAME, SRV, TLSA, TXT},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -131,7 +131,8 @@ impl Rfc2136Provider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Tlsa
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
@@ -357,6 +358,44 @@ fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
 			let target_name = Name::from_ascii(&target)
 				.map_err(|e| ProviderError::Remote(format!("bad SRV target: {e}")))?;
 			Ok(RData::SRV(SRV::new(priority, weight, port, target_name)))
+		}
+		RecordKind::Caa => {
+			// CAA in presentation form: `<flags> <tag> <value>`. hickory's
+			// CAA struct is `#[non_exhaustive]` and only constructs for
+			// `issue` / `issuewild` / `iodef` tags, so for an `issue` record
+			// we pass the CA name through `new_issue`. The wire bytes match
+			// RFC 8659 because hickory emits `<flags> <taglen> <tag> <value>`
+			// on its own. We do not support `issuewild` / `iodef` here
+			// because the build_records path only emits `issue`.
+			let mut parts = value.splitn(3, ' ');
+			let flags: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let ca_value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"');
+			let issuer_critical = flags & 0x80 != 0;
+			if tag != "issue" {
+				return Err(ProviderError::Remote(format!(
+					"rfc2136 only emits CAA issue tags, got {tag}"
+				)));
+			}
+			let name = Name::from_ascii(ca_value)
+				.map_err(|e| ProviderError::Remote(format!("bad CAA issuer: {e}")))?;
+			// `CAA::new_issue` encodes the value bytes itself; we have to
+			// zero out the issuer-critical bit from `reserved_flags` because
+			// hickory derives it from the dedicated `issuer_critical` field.
+			Ok(RData::CAA(CAA::new_issue(
+				issuer_critical,
+				Some(name),
+				Vec::new(),
+			)))
 		}
 		RecordKind::Mx => Err(ProviderError::Unsupported),
 	}

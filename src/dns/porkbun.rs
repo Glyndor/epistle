@@ -117,7 +117,8 @@ impl PorkbunProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Tlsa
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
@@ -126,10 +127,8 @@ impl PorkbunProvider {
 	/// so the upsert path can populate the `prio` field (Porkbun treats it
 	/// as the plain preference for SRV). Returns `Remote` on malformed input.
 	fn sr_prio(record: &DnsRecord) -> Result<u16, ProviderError> {
-		let (priority, _weight, _port, _target) =
-			parse_srv(&record.value).ok_or_else(|| {
-				ProviderError::Remote(format!("bad SRV value: {}", record.value))
-			})?;
+		let (priority, _weight, _port, _target) = parse_srv(&record.value)
+			.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
 		Ok(priority)
 	}
 
@@ -234,6 +233,27 @@ impl PorkbunProvider {
 				);
 			}
 		}
+		if record.kind == RecordKind::Caa {
+			// Porkbun's CAA payload: `content` carries the CA value verbatim,
+			// and the `caa_tag` field holds the tag ("issue", "issuewild",
+			// "iodef"). We split the presentation form to surface malformed
+			// input as a `Remote` error rather than letting Porkbun reject it.
+			let mut parts = record.value.splitn(3, ' ');
+			let _flags = parts.next();
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			if let Some(map) = fields.as_object_mut() {
+				map.insert("caa_tag".to_string(), tag.into());
+				map.insert("content".to_string(), value.into());
+			}
+		}
 		let existing = self.matching_ids(&record.name, kind).await?;
 		match existing.split_first() {
 			// Replace in place, then drop any duplicate left at the same
@@ -280,10 +300,7 @@ impl PorkbunProvider {
 					let packed: u32 = r.prio.parse().ok()?;
 					let priority = (packed >> 16) as u16;
 					let weight = (packed & 0xFFFF) as u16;
-					format!(
-						"{priority} {weight} 0 {}",
-						r.content.trim_end_matches('.')
-					)
+					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
 				} else {
 					r.content.trim_matches('"').to_string()
 				};
@@ -315,6 +332,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

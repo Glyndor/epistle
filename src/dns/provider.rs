@@ -28,6 +28,8 @@ pub enum RecordKind {
 	Tlsa,
 	/// Service locator record (RFC 2782).
 	Srv,
+	/// Certification Authority Authorization (RFC 8659).
+	Caa,
 }
 
 impl RecordKind {
@@ -41,6 +43,7 @@ impl RecordKind {
 			RecordKind::Cname => "CNAME",
 			RecordKind::Tlsa => "TLSA",
 			RecordKind::Srv => "SRV",
+			RecordKind::Caa => "CAA",
 		}
 	}
 }

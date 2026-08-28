@@ -246,3 +246,26 @@ async fn srv_upsert_posts_with_data_fields() {
 	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
 	assert!(!body.contains("\"content\""), "{body}");
 }
+
+#[tokio::test]
+async fn caa_upsert_posts_with_flags_tag_value_data() {
+	let (provider, state) = mock(Vec::new()).await;
+	let caa = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Caa,
+		value: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", caa).await.expect("caa upsert");
+	let body = state
+		.lock()
+		.unwrap()
+		.last_body
+		.clone()
+		.expect("post body captured");
+	assert!(body.contains("\"type\":\"CAA\""), "{body}");
+	assert!(body.contains("\"data\""), "{body}");
+	assert!(body.contains("\"flags\":0"), "{body}");
+	assert!(body.contains("\"tag\":\"issue\""), "{body}");
+	assert!(body.contains("\"value\":\"letsencrypt.org\""), "{body}");
+}

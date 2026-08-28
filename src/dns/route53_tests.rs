@@ -166,3 +166,21 @@ async fn srv_upsert_uses_verbatim_value_in_value_element() {
 		"{body}"
 	);
 }
+
+#[tokio::test]
+async fn caa_upsert_uses_verbatim_value_in_value_element() {
+	let (provider, state) = mock().await;
+	let caa = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Caa,
+		value: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", caa).await.expect("caa upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("<Type>CAA</Type>"), "{body}");
+	assert!(
+		body.contains("<Value>0 issue \"letsencrypt.org\"</Value>"),
+		"{body}"
+	);
+}

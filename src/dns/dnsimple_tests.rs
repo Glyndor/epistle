@@ -350,3 +350,20 @@ async fn srv_upsert_splits_priority_weight_port_target_into_fields() {
 	assert!(body.contains("\"weight\":1"), "{body}");
 	assert!(body.contains("\"port\":465"), "{body}");
 }
+
+#[tokio::test]
+async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
+	let (provider, state) = mock(Vec::new()).await;
+	let caa = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Caa,
+		value: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	};
+	provider.upsert(ZONE, caa).await.expect("caa upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("\"type\":\"CAA\""), "{body}");
+	assert!(body.contains("\"content\":\"letsencrypt.org\""), "{body}");
+	assert!(body.contains("\"flags\":0"), "{body}");
+	assert!(body.contains("\"caa_tag\":\"issue\""), "{body}");
+}

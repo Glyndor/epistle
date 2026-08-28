@@ -386,8 +386,10 @@ async fn unsupported_kind_is_rejected() {
 
 #[tokio::test]
 async fn srv_upsert_encodes_priority_weight_port_target_in_wire_message() {
-	let (endpoint, captured) =
-		spawn_server(|_| ServerReply::NoError { verify_signer: make_signing_pair() }).await;
+	let (endpoint, captured) = spawn_server(|_| ServerReply::NoError {
+		verify_signer: make_signing_pair(),
+	})
+	.await;
 	let provider = provider_with_endpoint(endpoint);
 	let srv = DnsRecord {
 		name: format!("_submissions._tcp.{ZONE}"),

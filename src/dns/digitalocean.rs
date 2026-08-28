@@ -91,7 +91,8 @@ impl DigitaloceanProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Tlsa
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
@@ -274,6 +275,31 @@ impl DigitaloceanProvider {
 			})
 			.to_string());
 		}
+		if record.kind == RecordKind::Caa {
+			let mut parts = record.value.splitn(3, ' ');
+			let flags: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			return Ok(serde_json::json!({
+				"type": kind,
+				"name": rel,
+				"data": value,
+				"priority": flags,
+				"tag": tag,
+				"ttl": record.ttl,
+			})
+			.to_string());
+		}
 		Ok(serde_json::json!({
 			"type": kind,
 			"name": rel,
@@ -367,6 +393,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

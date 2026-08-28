@@ -110,7 +110,8 @@ impl DnsimpleProvider {
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Mx | RecordKind::Tlsa => Err(ProviderError::Unsupported),
 		}
 	}
@@ -182,10 +183,8 @@ impl DnsimpleProvider {
 		let kind = Self::api_kind(record.kind)?;
 		let relative = self.relative_name(&record.name);
 		let body = if record.kind == RecordKind::Srv {
-			let (priority, weight, port, target) =
-				parse_srv(&record.value).ok_or_else(|| {
-					ProviderError::Remote(format!("bad SRV value: {}", record.value))
-				})?;
+			let (priority, weight, port, target) = parse_srv(&record.value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
 			serde_json::json!({
 				"name": relative,
 				"type": kind,
@@ -194,6 +193,30 @@ impl DnsimpleProvider {
 				"priority": priority,
 				"weight": weight,
 				"port": port,
+			})
+			.to_string()
+		} else if record.kind == RecordKind::Caa {
+			let mut parts = record.value.splitn(3, ' ');
+			let flags: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			serde_json::json!({
+				"name": relative,
+				"type": kind,
+				"content": value,
+				"ttl": record.ttl,
+				"flags": flags,
+				"caa_tag": tag,
 			})
 			.to_string()
 		} else {
@@ -304,6 +327,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

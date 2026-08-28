@@ -18,6 +18,7 @@ fn builds_core_records_per_domain() {
 		None,
 		"v1",
 		Services::all(),
+		None,
 	);
 
 	assert_eq!(
@@ -63,6 +64,7 @@ fn omits_dkim_when_absent_and_tlsa_when_no_cert() {
 		None,
 		"v1",
 		Services::all(),
+		None,
 	);
 	assert!(!records.iter().any(|r| r.record.name.contains("_domainkey")));
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Tlsa));
@@ -77,6 +79,7 @@ fn tlsa_record_added_once_for_host() {
 		Some("3 0 1 abcd"),
 		"v1",
 		Services::all(),
+		None,
 	);
 	let tlsa: Vec<_> = records
 		.iter()
@@ -96,6 +99,7 @@ fn builds_srv_records_for_mail_jmap_and_sieve() {
 		None,
 		"v1",
 		Services::all(),
+		None,
 	);
 	let submissions = find(&records, "_submissions._tcp.example.org", RecordKind::Srv);
 	assert_eq!(submissions.record.value, "0 1 465 mail.example.org.");
@@ -114,6 +118,7 @@ fn builds_discovery_cnames_for_autoconfig_autodiscover_and_mta_sts() {
 		None,
 		"v1",
 		Services::all(),
+		None,
 	);
 	let autoconfig = find(&records, "autoconfig.example.org", RecordKind::Cname);
 	assert_eq!(autoconfig.record.value, "mail.example.org");
@@ -132,13 +137,18 @@ fn caldav_and_carddav_srv_are_optional() {
 		None,
 		"v1",
 		Services::default(),
+		None,
 	);
-	assert!(!without
-		.iter()
-		.any(|r| r.record.name == "_caldavs._tcp.example.org"));
-	assert!(!without
-		.iter()
-		.any(|r| r.record.name == "_carddavs._tcp.example.org"));
+	assert!(
+		!without
+			.iter()
+			.any(|r| r.record.name == "_caldavs._tcp.example.org")
+	);
+	assert!(
+		!without
+			.iter()
+			.any(|r| r.record.name == "_carddavs._tcp.example.org")
+	);
 	let with = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
@@ -146,15 +156,93 @@ fn caldav_and_carddav_srv_are_optional() {
 		None,
 		"v1",
 		Services::all(),
+		None,
 	);
-	assert!(with
-		.iter()
-		.any(|r| r.record.name == "_caldavs._tcp.example.org"
-			&& r.record.value == "0 1 443 mail.example.org."));
-	assert!(with
-		.iter()
-		.any(|r| r.record.name == "_carddavs._tcp.example.org"
-			&& r.record.value == "0 1 443 mail.example.org."));
+	assert!(
+		with.iter()
+			.any(|r| r.record.name == "_caldavs._tcp.example.org"
+				&& r.record.value == "0 1 443 mail.example.org.")
+	);
+	assert!(
+		with.iter()
+			.any(|r| r.record.name == "_carddavs._tcp.example.org"
+				&& r.record.value == "0 1 443 mail.example.org.")
+	);
+}
+
+#[test]
+fn caa_emitted_for_known_lets_encrypt_directory() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme-v02.api.letsencrypt.org/directory"),
+	);
+	let caa = find(&records, "example.org", RecordKind::Caa);
+	assert_eq!(caa.record.value, "0 issue \"letsencrypt.org\"");
+}
+
+#[test]
+fn caa_emitted_for_known_zerossl_directory() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme.zerossl.com/v2/DV90"),
+	);
+	let caa = find(&records, "example.org", RecordKind::Caa);
+	assert_eq!(caa.record.value, "0 issue \"zerossl.com\"");
+}
+
+#[test]
+fn caa_omitted_for_unknown_acme_directory() {
+	// An unrecognised directory must not emit a CAA — a wrong value would
+	// block legitimate renewal, so the safe default is silence.
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme.example.com/directory"),
+	);
+	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
+}
+
+#[test]
+fn caa_directory_with_trailing_slash_is_accepted() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme-v02.api.letsencrypt.org/directory/"),
+	);
+	let caa = find(&records, "example.org", RecordKind::Caa);
+	assert_eq!(caa.record.value, "0 issue \"letsencrypt.org\"");
+}
+
+#[test]
+fn caa_is_none_when_acme_is_not_configured() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		None,
+	);
+	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
 }
 
 #[test]
