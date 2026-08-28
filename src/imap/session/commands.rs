@@ -401,6 +401,14 @@ impl Session {
 				}
 				attributes.push_str("\\Subscribed");
 			}
+			// CHILDREN (RFC 3348): every LIST line carries a child attribute.
+			// epistle stores mailboxes flat (the hierarchy separator is `/`,
+			// and mailbox names cannot contain it), so every mailbox is a leaf
+			// — \HasNoChildren is the truthful answer for each.
+			if !attributes.is_empty() {
+				attributes.push(' ');
+			}
+			attributes.push_str("\\HasNoChildren");
 			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n"));
 			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
 			if !return_status.is_empty()
