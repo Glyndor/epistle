@@ -60,9 +60,13 @@ fn thread_groups_by_base_subject() {
 
 	let response = text(&session.command_line("a3 THREAD ORDEREDSUBJECT UTF-8 ALL"));
 	// "Re: Project plan" (3) groups with "Project plan" (1) by base subject.
-	// With equal arrival times the threads fall back to base-subject order, so
-	// "lunch" precedes "project plan".
-	assert!(response.contains("* THREAD (2)(1 3)"), "{response}");
+	// Only the grouping is asserted. Which thread comes first depends on the
+	// arrival times, and these three messages land in the same second only
+	// when delivery is fast enough: under coverage instrumentation they
+	// straddled a second and the order flipped, so asserting it was testing
+	// the speed of the machine rather than the threading.
+	assert!(response.contains("(1 3)"), "{response}");
+	assert!(response.contains("(2)"), "{response}");
 	assert!(response.contains("a3 OK THREAD completed"), "{response}");
 }
 
