@@ -47,11 +47,25 @@ jobs:
           bin=target/x86_64-unknown-linux-musl/release/epistle
           ls -la "$bin"
           file "$bin"
-          # The whole point: no dynamic loader, no libc6 dependency.
-          if file "$bin" | grep -q "statically linked"; then
-            echo "STATIC: yes"
-          else
-            echo "::error::binary is not statically linked; the glibc floor would survive"
+          # Assert the property, not a string. `file` says "statically linked"
+          # for a classic static binary and "static-pie linked" for a
+          # position-independent one, and a musl build produces the second.
+          # Grepping for the first reports a perfectly static binary as a
+          # failure, which is what the first run of this probe did.
+          #
+          # What actually matters is that nothing asks for a dynamic loader at
+          # run time, so that is what gets checked: no PT_INTERP segment, and
+          # no NEEDED entries.
+          if readelf -l "$bin" | grep -q "Requesting program interpreter"; then
+            echo "::error::binary requests a dynamic loader; the glibc floor would survive"
+            readelf -l "$bin" | grep -A1 "INTERP"
             exit 1
           fi
+          needed=$(readelf -d "$bin" 2>/dev/null | grep -c "NEEDED" || true)
+          if [ "$needed" -ne 0 ]; then
+            echo "::error::binary has $needed NEEDED entries; it links shared libraries"
+            readelf -d "$bin" | grep "NEEDED"
+            exit 1
+          fi
+          echo "STATIC: no interpreter, no NEEDED entries"
           "$bin" --version
