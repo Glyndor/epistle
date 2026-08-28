@@ -1,0 +1,17 @@
+# Default owner for everything in this repository.
+*                        @Jaro-c
+
+# Listed again, after the catch-all, because GitHub applies the last matching
+# rule and because this path is the one that matters. standards/ci records that
+# a required status check is matched by its name, so a pull request with write
+# access can replace a caller with a stub emitting that name and exiting zero.
+# The reusable cannot prevent it: the caller lives in the repository the pull
+# request edits, and GitHub runs the pull request's version.
+#
+# The org accepts that risk while this is a single-maintainer repository, and
+# the mitigation to apply the moment a human collaborator is added is
+# ruleset-side: require review from Code Owners on this path, so a pull request
+# neutralizing a caller cannot merge without the owner seeing the diff. That
+# mitigation needs this file to already exist, which is why it is here now
+# rather than on the day it is needed.
+.github/workflows/      @Jaro-c

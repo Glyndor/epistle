@@ -48,6 +48,14 @@ impl ReloadableSigner {
 pub struct Previous {
 	/// The retired selector whose TXT is still published.
 	pub selector: String,
+	/// The retired selector's key file (PKCS#8 PEM), absolute path. Recorded
+	/// at rotation time so [`Rotator`] can remove it once the TXT is taken
+	/// down, instead of leaving every retired signing key on disk forever.
+	/// `[serde(default)]` lets state written before this field existed still
+	/// load; an empty path is treated as "no file to remove" rather than as
+	/// a path to delete.
+	#[serde(default)]
+	pub key_file: PathBuf,
 	/// Epoch second at/after which the old TXT may be deleted.
 	pub retire_at: u64,
 }
@@ -180,6 +188,7 @@ impl Rotator {
 				// Retire the just-replaced selector after the overlap window.
 				let previous = (!state.selector.is_empty()).then(|| Previous {
 					selector: state.selector.clone(),
+					key_file: state.key_file.clone(),
 					retire_at: now.saturating_add(self.overlap),
 				});
 				state = RotationState {
@@ -191,12 +200,30 @@ impl Rotator {
 				self.save_state(&state)?;
 			}
 			Decision::Retire(selector) => {
+				let retired_key_file = state.previous.as_ref().and_then(|p| {
+					(p.selector == *selector && !p.key_file.as_os_str().is_empty())
+						.then(|| p.key_file.clone())
+				});
 				self.provider
 					.delete(&self.zone, txt_record(&self.record_name(selector), ""))
 					.await
 					.map_err(|e| RotateError(e.to_string()))?;
 				state.previous = None;
 				self.save_state(&state)?;
+				// Best-effort: the state and the DNS are already consistent,
+				// the file is the leftover. A failure (typically permissions)
+				// is logged but does not abort the rotation, and `NotFound`
+				// is the idempotent case the operator caused by hand.
+				if let Some(path) = retired_key_file
+					&& let Err(error) = std::fs::remove_file(&path)
+					&& error.kind() != std::io::ErrorKind::NotFound
+				{
+					tracing::warn!(
+						%error,
+						path = %path.display(),
+						"failed to remove retired DKIM key file; DNS and state already cleared",
+					);
+				}
 			}
 		}
 		Ok(decision)

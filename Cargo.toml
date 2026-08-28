@@ -2,6 +2,16 @@
 name = "epistle"
 version = "0.4.0"
 edition = "2024"
+# The floor CI builds on, and the one `epistle` claims to support. It came from
+# a build that failed rather than from this file: `rcgen`, `time` and
+# `icu_properties` each wanted more than `edition = "2024"` implies, which is
+# why standards/testing forbids deriving a packaging floor from the manifest.
+#
+# It lives here now because debian/control no longer carries one: the .deb is
+# built for musl with a rustup toolchain, so `Build-Depends` has no rustc to
+# declare. tests/msrv_agrees_with_ci.rs ties this to ci.yml's `msrv` input, and
+# cargo itself refuses to build on anything older.
+rust-version = "1.88"
 license = "MIT"
 description = "Self-hosted, headless mail server: SMTP, IMAP and modern email security through an API and CLI."
 repository = "https://github.com/Glyndor/epistle"

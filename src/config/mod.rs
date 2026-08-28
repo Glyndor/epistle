@@ -103,7 +103,7 @@ pub enum LogFormat {
 }
 
 /// Top-level server configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
 	/// Fully qualified hostname the server identifies as (EHLO, TLS).
@@ -219,6 +219,56 @@ pub struct Config {
 	pub queue: Queue,
 }
 
+impl std::fmt::Debug for Config {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Config")
+			.field("hostname", &self.hostname)
+			.field("data_dir", &self.data_dir)
+			.field("domains", &self.domains)
+			.field("domain_aliases", &self.domain_aliases)
+			.field("dnsbl_zones", &self.dnsbl_zones)
+			.field(
+				"first_time_sender_delay_secs",
+				&self.first_time_sender_delay_secs,
+			)
+			.field("greylist_delay_secs", &self.greylist_delay_secs)
+			.field("srs_secret", &self.srs_secret.as_ref().map(|_| "***"))
+			.field("quota_bytes", &self.quota_bytes)
+			.field("queue_give_up_secs", &self.queue_give_up_secs)
+			.field("rules", &self.rules)
+			.field("scanner_hook_url", &self.scanner_hook_url)
+			.field("listeners", &self.listeners)
+			.field("accounts", &self.accounts)
+			.field("tls", &self.tls)
+			.field("dkim", &self.dkim)
+			.field("api", &self.api)
+			.field("database", &self.database)
+			.field("log_format", &self.log_format)
+			.field("acme", &self.acme)
+			.field("dns", &self.dns)
+			.field("domain_quotas", &self.domain_quotas)
+			.field(
+				"submission_rate_limit_per_min",
+				&self.submission_rate_limit_per_min,
+			)
+			.field(
+				"max_connections_per_listener",
+				&self.max_connections_per_listener,
+			)
+			.field("transport", &self.transport)
+			.field("otel", &self.otel)
+			.field("alias", &self.alias)
+			.field("arc", &self.arc)
+			.field("oauth", &self.oauth)
+			.field("ldap", &self.ldap)
+			.field("webhook", &self.webhook)
+			.field("privileges", &self.privileges)
+			.field("storage", &self.storage)
+			.field("queue", &self.queue)
+			.finish()
+	}
+}
+
 impl Config {
 	/// Load and validate a configuration file. Fails closed: insecure
 	/// permissions, a read, parse or validation error, or an undefined
@@ -296,6 +346,10 @@ fn check_permissions(path: &Path) -> Result<(), ConfigError> {
 fn check_permissions(_path: &Path) -> Result<(), ConfigError> {
 	Ok(())
 }
+
+#[cfg(test)]
+#[path = "redaction_tests.rs"]
+mod redaction_tests;
 
 #[cfg(test)]
 mod tests {

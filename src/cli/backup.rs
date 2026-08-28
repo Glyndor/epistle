@@ -5,6 +5,7 @@
 //! The index rebuilds from the `.eml` files, so it is not archived.
 
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -27,7 +28,7 @@ pub(super) fn run(config: &Config, out: &mut impl Write) -> ExitCode {
 	// pg_dump is available (best-effort: a filesystem backup is still useful).
 	if let Some(db) = &config.database {
 		match pg_dump(&db.url) {
-			Ok(dump) => entries.push(("database.sql".to_string(), dump)),
+			Ok(dump) => entries.push(("database.sql".to_string(), 0o644, dump)),
 			Err(error) => eprintln!("warning: skipping pg_dump: {error}"),
 		}
 	}
@@ -46,8 +47,12 @@ pub(super) fn run(config: &Config, out: &mut impl Write) -> ExitCode {
 	ExitCode::SUCCESS
 }
 
-/// Every regular file under `root`, as (archive-relative path, bytes).
-fn collect_files(root: &Path) -> std::io::Result<Vec<(String, Vec<u8>)>> {
+/// Every regular file under `root`, as (archive-relative path, source mode, bytes).
+///
+/// The mode is read from the file's metadata so the archive round-trips the
+/// permission bits the operator set — including the 0o600 they relied on for
+/// DKIM/ACME/TLS private keys.
+fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 	let mut out = Vec::new();
 	let mut stack = vec![root.to_path_buf()];
 	while let Some(dir) = stack.pop() {
@@ -63,7 +68,9 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, Vec<u8>)>> {
 				stack.push(path);
 			} else if let Ok(relative) = path.strip_prefix(root) {
 				let name = format!("data/{}", relative.to_string_lossy());
-				out.push((name, std::fs::read(&path)?));
+				let metadata = std::fs::metadata(&path)?;
+				let mode = metadata.permissions().mode();
+				out.push((name, mode, std::fs::read(&path)?));
 			}
 		}
 	}
@@ -101,10 +108,10 @@ fn pg_dump(url: &str) -> std::io::Result<Vec<u8>> {
 }
 
 /// Build a gzip-compressed USTAR archive from named byte entries.
-fn tar_gz(entries: &[(String, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
+fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
 	let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-	for (name, data) in entries {
-		encoder.write_all(&ustar_header(name, data.len())?)?;
+	for (name, mode, data) in entries {
+		encoder.write_all(&ustar_header(name, *mode, data.len())?)?;
 		encoder.write_all(data)?;
 		// Pad the file content to a 512-byte boundary.
 		let pad = (512 - data.len() % 512) % 512;
@@ -116,13 +123,17 @@ fn tar_gz(entries: &[(String, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
 }
 
 /// One 512-byte USTAR header for a regular file.
-fn ustar_header(name: &str, size: usize) -> std::io::Result<[u8; 512]> {
+///
+/// `mode` is the permission bits to write into the header, masked to the lower
+/// 12 bits (perm + setuid/setgid/sticky) so the file-type bits from
+/// `Permissions::mode()` don't leak into the tar mode field.
+fn ustar_header(name: &str, mode: u32, size: usize) -> std::io::Result<[u8; 512]> {
 	if name.len() > 100 {
 		return Err(std::io::Error::other(format!("path too long: {name}")));
 	}
 	let mut header = [0u8; 512];
 	header[..name.len()].copy_from_slice(name.as_bytes());
-	write_field(&mut header, 100, 8, "0000644"); // mode
+	write_field(&mut header, 100, 8, &format!("{:07o}", mode & 0o7777)); // mode
 	write_field(&mut header, 108, 8, "0000000"); // uid
 	write_field(&mut header, 116, 8, "0000000"); // gid
 	write_field(&mut header, 124, 12, &format!("{size:011o}")); // size (octal)
@@ -132,6 +143,8 @@ fn ustar_header(name: &str, size: usize) -> std::io::Result<[u8; 512]> {
 	header[263..265].copy_from_slice(b"00");
 
 	// Checksum: sum of all bytes with the checksum field treated as spaces.
+	// Computed after the mode is written — a checksum over the wrong mode
+	// produces a tar `tar` itself rejects.
 	header[148..156].copy_from_slice(b"        ");
 	let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
 	let chksum = format!("{sum:06o}\0 ");
