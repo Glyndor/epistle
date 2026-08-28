@@ -294,3 +294,15 @@ fn store_flags_noop_skips_disk_write_and_modseq() {
 		.expect("store");
 	assert!(snapshot.by_sequence(1).expect("message").modseq > modseq_after_change);
 }
+
+#[test]
+fn a_mailbox_name_cannot_contain_the_hierarchy_delimiter() {
+	// LIST answers `\HasNoChildren` for every mailbox, which is only truthful
+	// while the hierarchy is flat. That holds because `/` — the delimiter
+	// LIST reports — is not an accepted character, so no mailbox can ever be
+	// another's parent. Allowing it here would turn the CHILDREN capability
+	// epistle advertises into a lie, silently, with nothing else failing.
+	assert!(!valid_name("parent/child"));
+	assert!(!valid_name("/leading"));
+	assert!(valid_name("Archive 2026"));
+}
