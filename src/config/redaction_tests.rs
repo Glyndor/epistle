@@ -28,14 +28,35 @@ fn sentinel() -> String {
 	format!("SENTINEL-DO-NOT-LEAK-{}", uuid::Uuid::new_v4().simple())
 }
 
+/// Assert the rendering without ever putting it in the failure message.
+///
+/// The first version printed `{rendered}` on failure, and I defended it: the
+/// dump is what would have reached the logs, so showing it made the point. That
+/// was wrong, and CodeQL said so — `Cleartext logging of sensitive information`,
+/// twice, on exactly those two lines.
+///
+/// It is right. A panic message goes to the CI log, and CI logs are retained and
+/// widely readable. A test that fails by writing the secret-bearing struct into
+/// them leaks on the one run where it matters. That the secret here is a
+/// generated sentinel does not change the shape, and the shape is what the next
+/// person copies.
+///
+/// #679 says to remove the node the path starts from rather than disguise it.
+/// The rendering never enters a message, so there is no path. The failure still
+/// names the struct, the field, and which of the two properties broke, which is
+/// everything needed to reproduce it locally with the dump in front of you.
 fn assert_redacted(struct_name: &str, field_name: &str, sentinel: &str, rendered: &str) {
 	assert!(
 		!rendered.contains(sentinel),
-		"{struct_name}.{field_name} leaked through Debug: {rendered}"
+		"{struct_name}.{field_name} leaked its value through Debug. \
+		 The rendering is deliberately not shown here: printing it is the leak. \
+		 Reproduce locally to inspect it."
 	);
 	assert!(
 		rendered.contains("***"),
-		"{struct_name}.{field_name} missing redaction marker in Debug: {rendered}"
+		"{struct_name}.{field_name} has no `***` redaction marker in Debug, so \
+		 the field was dropped rather than redacted. The rendering is \
+		 deliberately not shown here."
 	);
 }
 
