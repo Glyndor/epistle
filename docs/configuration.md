@@ -202,6 +202,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 |---|---|
 | `cloudflare` | API token; bearer auth; supports TLSA via structured data. |
 | `desec` | deSEC API token; rrset-style bulk PUT; supports TLSA. |
+| `digitalocean` | Personal access token; bearer auth; v2 REST API; see specifics below. |
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
 | `manual` | Always available; no credentials. |
@@ -210,11 +211,38 @@ Common keys (every provider):
 
 | Key | Meaning |
 |---|---|
-| `provider` | One of `cloudflare`, `desec`, `namecheap`, `route53`, `manual`. |
+| `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `manual`. |
 | `zone` | The DNS zone the token is scoped to (least privilege). |
 | `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
 | `token_env` | Name of an env var holding the API token. |
 | `token_file` | Path to a `0600` file holding the API token. |
+
+#### `[dns]` — DigitalOcean specifics
+
+```toml
+[dns]
+provider = "digitalocean"
+zone = "example.org"
+token = "your_personal_access_token"     # or token_file / token_env
+```
+
+- Generate the token at <https://cloud.digitalocean.com/account/api/tokens>
+  with **Write** scope and a single domain. DigitalOcean tokens are not
+  zone-scoped at the API level, so the zone restriction is enforced by
+  epistle (records outside `zone` are rejected before any call).
+- **API URL:** production is `https://api.digitalocean.com`. The provider's
+  `with_base` constructor swaps to an alternate base for tests; no config
+  knob for it yet.
+- **TXT values are unquoted.** DigitalOcean adds the DNS wire-format quotes
+  at the zone layer, so epistle sends `data: "v=DMARC1; p=none"` rather than
+  `data: "\"v=DMARC1; p=none\""`. Quoting them would produce a double-quoted
+  TXT record.
+- **`upsert` is read-then-write.** epistle `GET`s records matching the name
+  and type, then either `PUT`s the existing record's id (replacing) or
+  `POST`s a new one. Two TXT records with the same name and type are not
+  possible because of the lookup.
+- **Pagination is followed.** `list` walks `links.pages.next` until exhausted,
+  so a zone with hundreds of records is not silently truncated.
 
 #### `[dns]` — Namecheap specifics
 
