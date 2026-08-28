@@ -11,7 +11,12 @@ mod delivery;
 mod routing;
 mod spool;
 
-pub use crypto::{CryptoError, MessageCrypto, generate_key_base64};
+// KEY_LEN, MAGIC and OVERHEAD are re-exported because the public docs of the
+// items above already describe the contract in terms of them: a key is
+// "exactly KEY_LEN bytes", a file "carries MAGIC", a plaintext length is
+// "file_len - OVERHEAD". They were pub inside a private module, so a reader
+// could see the promise and not the value it refers to.
+pub use crypto::{CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64};
 pub use delivery::LocalDelivery;
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! Bridges the raw DER certificates a rustls connection exposes to the
 //! association-matching policy in [`super::policy`]: it extracts each
 //! certificate's SubjectPublicKeyInfo (needed for selector `1` records) and runs
-//! [`dane_outcome`](super::policy::dane_outcome). Fail-closed: a chain that
+//! [`dane_outcome`]. Fail-closed: a chain that
 //! cannot be parsed against present records is a mismatch, never a pass.
 
 use super::policy::{CertView, DaneOutcome, dane_outcome};
