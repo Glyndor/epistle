@@ -21,6 +21,14 @@ on:
         description: Exact version of cargo-audit to install; bumped via .github releases
         type: string
         default: "0.22.2"
+      extra-lockfiles:
+        description: >
+          Newline-separated lockfiles to audit in addition to the one in
+          working-directory, given relative to it. A second workspace has its
+          own Cargo.lock and its own dependency graph, and auditing only the
+          root leaves it unexamined.
+        type: string
+        default: ""
       cargo-deny-version:
         description: Exact version of cargo-deny to install; bumped via .github releases
         type: string
@@ -76,6 +84,29 @@ jobs:
         # --deny warnings so unmaintained/unsound/yanked advisories also fail,
         # not just vulnerabilities.
         run: cargo audit --deny warnings
+
+      - name: Run cargo audit on the extra lockfiles
+        if: inputs.extra-lockfiles != ''
+        env:
+          EXTRA_LOCKFILES: ${{ inputs.extra-lockfiles }}
+        # Deliberately run from working-directory with --file rather than
+        # cd-ing into the other workspace. `cargo audit` resolves
+        # `.cargo/audit.toml` relative to the process directory, so auditing
+        # from inside the second workspace silently drops the ignore policy and
+        # reports advisories this repository has already assessed. That is how
+        # fuzz/Cargo.lock looked like it carried four findings when the same
+        # graph audits clean from here.
+        run: |
+          set -euo pipefail
+          echo "$EXTRA_LOCKFILES" | while read -r lockfile; do
+            [ -n "$lockfile" ] || continue
+            if [ ! -f "$lockfile" ]; then
+              echo "::error::$lockfile does not exist; the input is stale."
+              exit 1
+            fi
+            echo "Auditing $lockfile"
+            cargo audit --deny warnings --file "$lockfile"
+          done
 
   deny:
     name: cargo deny

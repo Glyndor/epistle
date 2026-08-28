@@ -20,6 +20,11 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "deny.toml"
+      # The reusable this calls, and the ignore policy the audit reads. A
+      # change to either alters what the job accepts, so neither should land
+      # without the job having run.
+      - ".github/workflows/reusable-rust-audit.yml"
+      - ".cargo/audit.toml"
 
 permissions:
   contents: read
@@ -27,3 +32,11 @@ permissions:
 jobs:
   audit:
     uses: ./.github/workflows/reusable-rust-audit.yml
+    with:
+      # fuzz/ is a second workspace with its own lockfile and its own graph,
+      # and nothing looked at it until now. It is audited from the repository
+      # root rather than from inside fuzz/, because `cargo audit` reads
+      # `.cargo/audit.toml` relative to the process directory: running it in
+      # fuzz/ drops the ignore policy and reports advisories already assessed
+      # here, which is why that lockfile appeared to carry four findings.
+      extra-lockfiles: fuzz/Cargo.lock
