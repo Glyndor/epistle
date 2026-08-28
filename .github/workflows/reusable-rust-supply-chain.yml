@@ -19,8 +19,10 @@ on:
       # was already on 1.98, because the bump raised one and not the other and
       # nothing compared them. A repository whose SBOM is produced by a compiler
       # its test suite never ran is the defect podup#1487 recorded, and podup
-      # now has a test asserting its own two pins agree — nothing asserts it
-      # across these two reusables, so it is written here instead.
+      # now has a test asserting its own two pins agree.
+      # tests/workflow_toolchain_pins.rs extends the same invariant across every
+      # toolchain pin in this repository's workflows and fails when any of them
+      # drift.
       toolchain:
         description: Rust toolchain to pin the SBOM and license job to
         type: string
