@@ -8,7 +8,8 @@ use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
 
-use super::{Output, Session, State};
+use super::state::State;
+use super::{Output, Session};
 
 /// In-flight SASL state between AUTHENTICATE continuation lines.
 pub(super) enum PendingAuth {
@@ -73,7 +74,7 @@ impl Session {
 		let mut capabilities = String::from(
 			"IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE ID UIDPLUS SORT \
 THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH MULTISEARCH QUOTA QUOTA=RES-STORAGE STATUS=SIZE CONDSTORE LIST-EXTENDED \
-LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk METADATA CHILDREN WITHIN",
+LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk METADATA CHILDREN WITHIN SEARCHRES",
 		);
 		// NOTIFY (RFC 5465) is only usable once authenticated; advertise it in the
 		// post-authentication capability set, like other selected-state features.

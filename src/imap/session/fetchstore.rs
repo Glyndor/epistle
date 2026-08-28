@@ -4,7 +4,8 @@
 use super::super::command::SequenceSet;
 use super::helpers::format_internaldate;
 use super::mailbox::{Flag, render_flags};
-use super::{FetchItem, Output, Session, State, StoreMode};
+use super::state::State;
+use super::{FetchItem, Output, Session, StoreMode};
 
 impl Session {
 	// CONDSTORE adds the seventh data argument; a params struct would not read
@@ -21,6 +22,8 @@ impl Session {
 		unchanged_since: Option<u64>,
 	) -> Output {
 		let uidonly = self.uidonly;
+		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`.
+		let saved = self.saved_seqnos_for(uid);
 		let State::Selected {
 			snapshot,
 			read_only,
@@ -49,7 +52,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total) {
+			if !sequence.contains(selector, total, &saved) {
 				continue;
 			}
 			// CONDSTORE UNCHANGEDSINCE: a concurrently-changed message is not
@@ -127,6 +130,8 @@ impl Session {
 		vanished: bool,
 	) -> Output {
 		let uidonly = self.uidonly;
+		// Capture the SEARCHRES `$` set before the immutable borrow of `self.state`.
+		let saved = self.saved_seqnos_for(uid);
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
@@ -146,7 +151,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total) {
+			if !sequence.contains(selector, total, &saved) {
 				continue;
 			}
 			// CONDSTORE CHANGEDSINCE: skip messages not changed since `n`.

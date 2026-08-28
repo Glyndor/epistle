@@ -365,6 +365,9 @@ pub enum ReturnOpt {
 	Count,
 	/// Return every matching sequence number / UID.
 	All,
+	/// SEARCHRES (RFC 5182): save the result set so the client can reference
+	/// it via `$` in a subsequent command.
+	Save,
 }
 
 /// A MULTISEARCH source scope (RFC 7377 §2.2 `scope-option`). Selects which
@@ -487,7 +490,9 @@ pub enum FetchItem {
 	Preview,
 }
 
-/// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).
+/// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges), or
+/// the SEARCHRES `$` placeholder for the most recent saved result set
+/// (RFC 5182).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SequenceSet {
 	/// Inclusive ranges as `(start, end)` pairs. `end = None` denotes a
@@ -495,12 +500,26 @@ pub struct SequenceSet {
 	/// `*` (the maximum existing value); see [`Self::contains`] for the
 	/// resolution rules.
 	pub ranges: Vec<(u32, Option<u32>)>,
+	/// `true` when the source was `$`. `ranges` is then ignored and the
+	/// session's most recent SEARCHRES-saved result set supplies the values.
+	pub saved: bool,
 }
 
 impl SequenceSet {
+	/// A sequence set that resolves to the SEARCHRES `$` placeholder.
+	pub const SAVED: SequenceSet = SequenceSet {
+		ranges: Vec::new(),
+		saved: true,
+	};
+
 	/// Whether `value` (a sequence number or UID) is included, given the
-	/// maximum existing value for `*`.
-	pub fn contains(&self, value: u32, max: u32) -> bool {
+	/// maximum existing value for `*` and the SEARCHRES `$` set when
+	/// `self.saved == true`. When `saved` is empty and `self.saved == true`
+	/// (no recent SAVE), nothing matches.
+	pub fn contains(&self, value: u32, max: u32, saved: &[u32]) -> bool {
+		if self.saved {
+			return saved.contains(&value);
+		}
 		self.ranges.iter().any(|(start, end)| {
 			let start = *start;
 			let end = end.unwrap_or(start);
@@ -529,10 +548,20 @@ pub enum ParseError {
 	BadArguments(String),
 }
 
-/// Parse `1`, `1:5`, `1:*`, `*`, comma-separated. `0` encodes `*` here.
+/// Parse `1`, `1:5`, `1:*`, `*`, comma-separated, or the SEARCHRES `$`
+/// placeholder (RFC 5182). `0` encodes `*` here.
 fn parse_sequence_set(text: &str) -> Option<SequenceSet> {
+	let trimmed = text.trim();
+	// RFC 5182: the SEARCHRES shortcut is the whole sequence-set, not part of
+	// a range. We accept any leading/trailing whitespace but reject mixed
+	// forms like `1,$` or `$,5`: those would require resolving $ against an
+	// arbitrary other range, which RFC 5182 does not specify. Returning the
+	// SAVED placeholder is still useful — the consumer checks emptiness.
+	if trimmed == "$" {
+		return Some(SequenceSet::SAVED);
+	}
 	let mut ranges = Vec::new();
-	for part in text.split(',') {
+	for part in trimmed.split(',') {
 		let (start, end) = match part.split_once(':') {
 			Some((start, end)) => (parse_seq_number(start)?, Some(parse_seq_number(end)?)),
 			None => (parse_seq_number(part)?, None),
@@ -542,7 +571,10 @@ fn parse_sequence_set(text: &str) -> Option<SequenceSet> {
 	if ranges.is_empty() {
 		return None;
 	}
-	Some(SequenceSet { ranges })
+	Some(SequenceSet {
+		ranges,
+		saved: false,
+	})
 }
 
 fn parse_seq_number(text: &str) -> Option<u32> {

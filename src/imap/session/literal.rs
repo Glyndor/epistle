@@ -3,7 +3,8 @@
 //! literal collection and finish once the payload arrives.
 
 use super::mailbox::{self, Flag, Snapshot};
-use super::{Output, PendingLiteral, Session, State};
+use super::state::State;
+use super::{Output, PendingLiteral, Session};
 
 impl Session {
 	pub(super) fn append_begin(
