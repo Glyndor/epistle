@@ -203,6 +203,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `cloudflare` | API token; bearer auth; supports TLSA via structured data. |
 | `desec` | deSEC API token; rrset-style bulk PUT; supports TLSA. |
 | `digitalocean` | Personal access token; bearer auth; v2 REST API; see specifics below. |
+| `gcloud` | Google Cloud DNS service-account JSON; RS256 JWT bearer; supports TLSA. |
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
 | `rfc2136` | TSIG-authenticated DNS UPDATE to a local nameserver (`host:port`); A/AAAA/TXT/CNAME/TLSA. |
@@ -213,6 +214,7 @@ Common keys (every provider):
 | Key | Meaning |
 |---|---|
 | `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `manual`. |
+| `provider` | One of `cloudflare`, `desec`, `gcloud`, `namecheap`, `route53`, `manual`. |
 | `zone` | The DNS zone the token is scoped to (least privilege). |
 | `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
 | `token_env` | Name of an env var holding the API token. |
@@ -277,7 +279,6 @@ token = "your_username:your_api_key"      # or token_file / token_env
   checks (`epistle dns-check`) for zones that are not fully epistle-owned.
 
 #### `[dns]` — RFC 2136 specifics
-
 ```toml
 [dns]
 provider = "rfc2136"
@@ -288,7 +289,6 @@ token = "base64-of-shared-secret"
 # token_file / token_env also accepted, like every provider
 algorithm = "hmac-sha256"     # default; "hmac-sha384" and "hmac-sha512" supported
 ```
-
 - **No HTTP API.** epistle sends DNS UPDATE messages (opcode 5) over TCP,
   framed with a 2-byte length prefix (RFC 1035 §4.2.4). The endpoint is
   `host:port` of a nameserver that has the zone configured and the TSIG
@@ -318,6 +318,31 @@ algorithm = "hmac-sha256"     # default; "hmac-sha384" and "hmac-sha512" support
 - **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
   rejected (`Unsupported`) because they carry extra fields
   (preference, weight, port) that epistle does not currently build.
+#### `[dns]` — Google Cloud DNS specifics
+provider = "gcloud"
+token = "unused"                       # placeholder; auth is signature-based
+credentials_file = "/etc/glyndor/epistle/dns/gcloud.json"
+- **Auth is signature-based, not bearer-based.** `token` (and friends) is a
+  placeholder; Google authenticates the service account with a JWT RS256
+  signed with the private key from the credentials file. The bearer
+  exchanged at `https://oauth2.googleapis.com/token` is cached in-process
+  until one minute before `expires_in`, so the JWT is signed once per cache
+  lifetime, not on every DNS API call.
+- **`credentials_file`** is a Google service-account JSON (`client_email`,
+  `private_key` in PKCS#8 PEM, `project_id`). The service account needs the
+  **DNS Administrator** role on the project (scope
+  `https://www.googleapis.com/auth/ndev.clouddns.readwrite`) and the
+  `private_key` must be reachable by the process; a `0600` file outside
+  `data_dir` is the recommended location.
+- **Two-phase write.** Every change lists the zone's rrsets and submits one
+  `POST .../changes` carrying `additions` (and, when replacing, `deletions`
+  of the old rrset). A second upsert with identical value + TTL is a no-op
+  (no second change request is submitted), so two TXT records for the same
+  name cannot appear.
+- **Delete is idempotent.** Deleting an absent rrset is a no-op; the
+  provider only submits a change when the rrset exists in the zone.
+- **TLSA is supported** via the structured `rrdatas` path. MX/SRV are not
+  emitted yet and return `provider does not support writes`.
 
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
