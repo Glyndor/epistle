@@ -165,18 +165,25 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn structured_kind_is_unsupported() {
-	let (provider, _state) = mock(Vec::new()).await;
+async fn mx_upsert_posts_data_object_with_priority_and_host() {
+	let (provider, state) = mock(Vec::new()).await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state
+		.lock()
+		.unwrap()
+		.last_body
+		.clone()
+		.expect("post body captured");
+	assert!(body.contains("\"type\":\"MX\""), "{body}");
+	assert!(body.contains("\"data\""), "{body}");
+	assert!(body.contains("\"priority\":10"), "{body}");
+	assert!(body.contains("\"host\":\"mail.example.org\""), "{body}");
 }
 
 #[test]

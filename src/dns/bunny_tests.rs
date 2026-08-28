@@ -392,16 +392,34 @@ async fn record_outside_zone_is_rejected_without_network() {
 #[tokio::test]
 async fn unsupported_kind_is_rejected() {
 	let (provider, _state) = mock().await;
+	// Bunny's API has no field for TLSA's usage/selector/matching tuple or
+	// for CAA's flags/tag/value; both stay Unsupported (MX now works).
+	let tlsa = DnsRecord {
+		name: "_25._tcp.example.org".into(),
+		kind: RecordKind::Tlsa,
+		value: "3 0 1 abcd".into(),
+		ttl: 3600,
+	};
+	assert_eq!(
+		provider.upsert("example.org", tlsa).await,
+		Err(ProviderError::Unsupported)
+	);
+}
+
+#[tokio::test]
+async fn mx_upsert_puts_priority_target_in_value() {
+	let (provider, state) = mock().await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	// Bunny's Type 4 (MX) keeps the `<priority> <target>` shape in `Value`.
+	assert!(body.contains("\"Type\":4"), "{body}");
+	assert!(body.contains("\"Value\":\"10 mail.example.org\""), "{body}");
 }
 
 #[tokio::test]

@@ -369,19 +369,31 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let endpoint = "127.0.0.1:1".to_string();
+async fn mx_upsert_encodes_preference_and_exchange_in_wire_message() {
+	let (endpoint, captured) =
+		spawn_server(|_| ServerReply::NoError { verify_signer: make_signing_pair() }).await;
 	let provider = provider_with_endpoint(endpoint);
 	let mx = DnsRecord {
 		name: ZONE.to_string(),
 		kind: RecordKind::Mx,
-		value: "10 mail.example.org".to_string(),
+		value: "10 mail.example.org.".to_string(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert(ZONE, mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert(ZONE, mx).await.expect("mx upsert");
+	let caps = captured.lock().unwrap();
+	let wire = caps.first().expect("captured a request").wire.clone();
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	let updates = msg.updates();
+	let add = updates
+		.iter()
+		.find(|r| matches!(r.data, hickory_resolver::proto::rr::RData::MX(_)))
+		.expect("add MX RR");
+	if let hickory_resolver::proto::rr::RData::MX(mx) = &add.data {
+		assert_eq!(mx.preference, 10);
+		assert_eq!(mx.exchange.to_ascii(), "mail.example.org.");
+	} else {
+		panic!("expected MX rdata");
+	}
 }
 
 #[tokio::test]

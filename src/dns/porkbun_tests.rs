@@ -289,7 +289,7 @@ async fn record_outside_the_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
+async fn mx_upsert_splits_priority_and_target() {
 	let (provider, state) = mock(serde_json::json!([])).await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
@@ -297,11 +297,11 @@ async fn unsupported_kind_is_rejected() {
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
-	);
-	assert!(state.lock().unwrap().calls.is_empty());
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().body("/dns/create/example.org");
+	assert_eq!(body["type"], "MX");
+	assert_eq!(body["content"], "mail.example.org");
+	assert_eq!(body["prio"], serde_json::json!(10));
 }
 
 #[tokio::test]

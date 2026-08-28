@@ -66,11 +66,10 @@ impl CloudflareProvider {
 	}
 
 	/// The Cloudflare record type for a kind we can publish. TXT/A/AAAA/CNAME
-	/// go through a plain `content` field; TLSA and SRV use a structured `data`
-	/// object. MX (priority in `data.priority`) is not yet supported because
-	/// the priority lives outside `content` and we have no caller emitting it
-	/// — the only consumer (the SRV helper here) uses the same shape and
-	/// already maps through `data`.
+	/// go through a plain `content` field; TLSA, SRV, MX, and CAA use a
+	/// structured `data` object — each carries its kind-specific shape
+	/// (`usage selector matching cert` / `priority weight port target` /
+	/// `priority host` / `flags tag value`).
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
@@ -79,8 +78,8 @@ impl CloudflareProvider {
 			| RecordKind::Cname
 			| RecordKind::Tlsa
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -146,6 +145,28 @@ impl CloudflareProvider {
 				"name": record.name,
 				"ttl": record.ttl,
 				"data": Self::caa_data(&record.value)?,
+			})
+		} else if record.kind == RecordKind::Mx {
+			// MX value: `<priority> <target>` — split into `priority` and
+			// `host` fields per Cloudflare's MX data shape.
+			let mut parts = record.value.split_whitespace();
+			let priority: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			serde_json::json!({
+				"type": kind,
+				"name": record.name,
+				"ttl": record.ttl,
+				"data": {
+					"priority": priority,
+					"host": target,
+				},
 			})
 		} else {
 			serde_json::json!({

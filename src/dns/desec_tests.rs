@@ -133,18 +133,19 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, _state) = mock(serde_json::json!([])).await;
+async fn mx_upsert_passes_value_through_verbatim() {
+	let (provider, state) = mock(serde_json::json!([])).await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(body.contains("\"type\":\"MX\""), "{body}");
+	// deSEC stores MX records as `<priority> <target>` in `records`.
+	assert!(body.contains("\"records\":[\"10 mail.example.org\"]"), "{body}");
 }
 
 #[tokio::test]

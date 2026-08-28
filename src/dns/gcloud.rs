@@ -146,8 +146,8 @@ impl GcloudProvider {
 			| RecordKind::Cname
 			| RecordKind::Tlsa
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 

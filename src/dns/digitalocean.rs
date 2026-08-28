@@ -92,8 +92,8 @@ impl DigitaloceanProvider {
 			| RecordKind::Cname
 			| RecordKind::Tlsa
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -300,6 +300,26 @@ impl DigitaloceanProvider {
 			})
 			.to_string());
 		}
+		if record.kind == RecordKind::Mx {
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			return Ok(serde_json::json!({
+				"type": kind,
+				"name": rel,
+				"data": target,
+				"priority": priority,
+				"ttl": record.ttl,
+			})
+			.to_string());
+		}
 		Ok(serde_json::json!({
 			"type": kind,
 			"name": rel,
@@ -357,6 +377,11 @@ impl DigitaloceanProvider {
 						(Some(p), Some(w), Some(port)) => {
 							format!("{p} {w} {port} {}", r.data.trim_end_matches('.'))
 						}
+						_ => return None,
+					}
+				} else if kind == RecordKind::Mx {
+					match r.priority {
+						Some(p) => format!("{p} {}", r.data.trim_end_matches('.')),
 						_ => return None,
 					}
 				} else {

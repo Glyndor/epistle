@@ -196,19 +196,22 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (base, _state) = start_mock(Vec::new()).await;
+async fn mx_upsert_passes_value_through_in_rrdatas() {
+	let (base, state) = start_mock(Vec::new()).await;
 	let provider = provider_for(&base);
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
-		value: "10 mail.example.org".into(),
+		value: "10 mail.example.org.".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().changes.last().cloned().unwrap();
+	// Cloud DNS carries MX as `<priority> <target>` in rrdatas (presentation
+	// form, no quotes), per
+	// https://cloud.google.com/dns/docs/records-overview.
+	assert!(body.contains("\"type\":\"MX\""), "{body}");
+	assert!(body.contains("\"rrdatas\":[\"10 mail.example.org.\"]"), "{body}");
 }
 
 #[tokio::test]

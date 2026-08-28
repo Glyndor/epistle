@@ -118,8 +118,8 @@ impl PorkbunProvider {
 			| RecordKind::Cname
 			| RecordKind::Tlsa
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -252,6 +252,24 @@ impl PorkbunProvider {
 			if let Some(map) = fields.as_object_mut() {
 				map.insert("caa_tag".to_string(), tag.into());
 				map.insert("content".to_string(), value.into());
+			}
+		}
+		if record.kind == RecordKind::Mx {
+			// Porkbun's MX payload: `content` carries the target, `prio`
+			// carries the preference as an integer.
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			if let Some(map) = fields.as_object_mut() {
+				map.insert("prio".to_string(), priority.into());
+				map.insert("content".to_string(), target.into());
 			}
 		}
 		let existing = self.matching_ids(&record.name, kind).await?;

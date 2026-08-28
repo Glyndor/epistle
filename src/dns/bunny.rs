@@ -108,8 +108,9 @@ impl BunnyProvider {
 			RecordKind::Aaaa => Ok(1),
 			RecordKind::Cname => Ok(2),
 			RecordKind::Txt => Ok(3),
+			RecordKind::Mx => Ok(4),
 			RecordKind::Srv => Ok(8),
-			RecordKind::Mx | RecordKind::Tlsa | RecordKind::Caa => Err(ProviderError::Unsupported),
+			RecordKind::Tlsa | RecordKind::Caa => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -183,12 +184,17 @@ impl BunnyProvider {
 
 	/// Build the create/update body for one record. SRV carries the
 	/// `weight port target` triple in `Value` (priority is fixed at 0 by the
-	/// Bunny API), every other supported kind carries the value verbatim.
+	/// Bunny API), MX carries `<priority> <target>` (Bunny's API does not
+	/// split them), every other supported kind carries the value verbatim.
 	fn record_body(&self, record: &DnsRecord, rtype: i64) -> Result<String, ProviderError> {
 		let value = if record.kind == RecordKind::Srv {
 			let (_prio, weight, port, target) = parse_srv(&record.value)
 				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
 			format!("{weight} {port} {target}")
+		} else if record.kind == RecordKind::Mx {
+			// Bunny expects MX as `<priority> <target>` in `Value` — Bunny's
+			// own UI shows it that way too.
+			record.value.clone()
 		} else {
 			record.value.clone()
 		};

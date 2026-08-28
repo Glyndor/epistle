@@ -46,7 +46,7 @@ use hickory_resolver::proto::rr::{
 	DNSClass, Name, RData, Record, RecordType, TSigner,
 	rdata::tlsa::{CertUsage, Matching, Selector},
 	rdata::tsig::TsigAlgorithm,
-	rdata::{CAA, CNAME, SRV, TLSA, TXT},
+	rdata::{CAA, CNAME, MX, SRV, TLSA, TXT},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -132,8 +132,8 @@ impl Rfc2136Provider {
 			| RecordKind::Cname
 			| RecordKind::Tlsa
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -397,7 +397,23 @@ fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
 				Vec::new(),
 			)))
 		}
-		RecordKind::Mx => Err(ProviderError::Unsupported),
+		RecordKind::Mx => {
+			// MX in presentation form: `<priority> <target>`. RFC 1035 wire
+			// form: `<preference:16> <exchange:Name>`.
+			let mut parts = value.split_whitespace();
+			let preference: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let exchange = Name::from_ascii(
+				parts
+					.next()
+					.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+					.trim_end_matches('.'),
+			)
+			.map_err(|e| ProviderError::Remote(format!("bad MX exchange: {e}")))?;
+			Ok(RData::MX(MX::new(preference, exchange)))
+		}
 	}
 }
 

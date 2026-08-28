@@ -320,17 +320,33 @@ async fn record_outside_zone_is_rejected_without_network() {
 #[tokio::test]
 async fn unsupported_kind_is_rejected() {
 	let (provider, state) = mock(Vec::new()).await;
+	let tlsa = DnsRecord {
+		name: "_25._tcp.example.org".into(),
+		kind: RecordKind::Tlsa,
+		value: "3 0 1 abcd".into(),
+		ttl: 3600,
+	};
+	assert_eq!(
+		provider.upsert(ZONE, tlsa).await,
+		Err(ProviderError::Unsupported)
+	);
+	assert!(state.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn mx_upsert_splits_priority_target_into_fields() {
+	let (provider, state) = mock(Vec::new()).await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert(ZONE, mx).await,
-		Err(ProviderError::Unsupported)
-	);
-	assert!(state.lock().unwrap().calls.is_empty());
+	provider.upsert(ZONE, mx).await.expect("mx upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("\"type\":\"MX\""), "{body}");
+	assert!(body.contains("\"content\":\"mail.example.org\""), "{body}");
+	assert!(body.contains("\"priority\":10"), "{body}");
 }
 
 #[tokio::test]

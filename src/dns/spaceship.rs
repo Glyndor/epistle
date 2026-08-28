@@ -66,8 +66,8 @@ impl SpaceshipProvider {
 			| RecordKind::Cname
 			| RecordKind::Tlsa
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -108,7 +108,7 @@ impl SpaceshipProvider {
 			RecordKind::Tlsa => "associationData",
 			RecordKind::Srv => "target",
 			RecordKind::Caa => "value",
-			RecordKind::Mx => unreachable!("filtered by api_kind"),
+			RecordKind::Mx => "exchange",
 		}
 	}
 
@@ -159,6 +159,22 @@ impl SpaceshipProvider {
 			map.insert("flag".to_string(), flags.into());
 			map.insert("tag".to_string(), tag.into());
 			map.insert("value".to_string(), value.into());
+		} else if record.kind == RecordKind::Mx {
+			// Spaceship stores MX as `priority` (number) + `exchange`
+			// (target) fields.
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			let map = item.as_object_mut().expect("object");
+			map.insert("priority".to_string(), priority.into());
+			map.insert("exchange".to_string(), target.into());
 		} else {
 			let map = item.as_object_mut().expect("object");
 			map.insert(
@@ -305,6 +321,14 @@ impl SpaceshipProvider {
 						"{priority} {weight} {port} {}",
 						target.trim_end_matches('.')
 					)
+				} else if matches!(Self::parse_kind(kind), RecordKind::Mx) {
+					let priority =
+						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+					let target = item
+						.get("exchange")
+						.and_then(|v| v.as_str())
+						.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
+					format!("{priority} {}", target.trim_end_matches('.'))
 				} else {
 					Self::extract_value(&item)?
 				};

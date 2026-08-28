@@ -123,17 +123,20 @@ async fn delete_uses_delete_action() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, _state) = mock().await;
+async fn mx_upsert_uses_verbatim_value_in_value_element() {
+	let (provider, state) = mock().await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("<Type>MX</Type>"), "{body}");
+	assert!(
+		body.contains("<Value>10 mail.example.org</Value>"),
+		"{body}"
 	);
 }
 

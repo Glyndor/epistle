@@ -111,8 +111,9 @@ impl DnsimpleProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Srv
+			| RecordKind::Mx
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Tlsa => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -217,6 +218,25 @@ impl DnsimpleProvider {
 				"ttl": record.ttl,
 				"flags": flags,
 				"caa_tag": tag,
+			})
+			.to_string()
+		} else if record.kind == RecordKind::Mx {
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			serde_json::json!({
+				"name": relative,
+				"type": kind,
+				"content": target,
+				"ttl": record.ttl,
+				"priority": priority,
 			})
 			.to_string()
 		} else {
