@@ -9,9 +9,9 @@ use crate::config::Config;
 /// Generate a strong random key, hash it (SHA-256) and store it under `label`.
 /// The plaintext key is printed once and never stored. `expires_at` is epoch
 /// seconds; `ip_cidr` a single CIDR allowlist; `scopes` lists the permissions
-/// granted (`read`, `write`, `send`). The CLI requires at least one scope —
-/// unscoped keys would be admin-equivalent on first leak, which is the
-/// problem the scope field exists to fix.
+/// granted (`read`, `write`, `send`, `scim`). The CLI requires at least one
+/// scope — unscoped keys would be admin-equivalent on first leak, which is
+/// the problem the scope field exists to fix.
 pub(super) fn create(
 	config: &Config,
 	label: &str,
@@ -21,7 +21,9 @@ pub(super) fn create(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if scopes.is_empty() {
-		eprintln!("error: --scope is required (repeat to grant more than one: read, write, send)");
+		eprintln!(
+			"error: --scope is required (repeat to grant more than one: read, write, send, scim)"
+		);
 		return ExitCode::FAILURE;
 	}
 	let secret = match super::generate_secret() {
@@ -99,7 +101,7 @@ pub(super) fn parse_scope(value: &str) -> Result<String, String> {
 	match value.parse::<Scope>() {
 		Ok(_) => Ok(value.to_string()),
 		Err(_) => Err(format!(
-			"unknown scope \"{value}\" (expected read, write or send)"
+			"unknown scope \"{value}\" (expected read, write, send or scim)"
 		)),
 	}
 }

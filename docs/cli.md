@@ -29,7 +29,7 @@ flags.
 | `epistle app-password-create --config F --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
 | `epistle app-passwords --config F [--account N]` | List app passwords (label, expiry, IP restriction). |
 | `epistle app-password-revoke --config F --account N --label L` | Revoke an app password. |
-| `epistle api-key-create --config F --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create a management-API key; prints the generated key once. |
+| `epistle api-key-create --config F --label L [--expires-at EPOCH] [--ip-cidr CIDR] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). |
 | `epistle api-keys --config F` | List API keys (label, expiry, IP restriction). |
 | `epistle api-key-revoke --config F --label L` | Revoke an API key. |
 

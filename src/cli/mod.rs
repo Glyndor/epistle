@@ -262,9 +262,9 @@ enum Command {
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
 		/// Permissions granted to this key (repeat to grant more than one:
-		/// `read`, `write`, `send`). Required at least once — an unscoped key
-		/// is admin-equivalent, which is exactly what the scopes field exists
-		/// to prevent.
+		/// `read`, `write`, `send`, `scim`). Required at least once — an
+		/// unscoped key is admin-equivalent, which is exactly what the scopes
+		/// field exists to prevent.
 		#[arg(
 			long = "scope",
 			value_name = "SCOPE",

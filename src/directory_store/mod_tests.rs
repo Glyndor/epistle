@@ -32,6 +32,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		password_hash: "$argon2id$stub".to_string(),
 		scram: None,
 		totp_secret: None,
+		disabled: false,
 	}
 }
 
