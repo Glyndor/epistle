@@ -1,5 +1,10 @@
 name: Mutation testing
 
+# No push or pull_request trigger. Mutation testing asks "do existing
+# tests miss real regressions?", which is too expensive to gate on a
+# single change. The weekly schedule lives on main, where GitHub reads
+# schedule: triggers from. workflow_dispatch is for ad hoc reruns.
+
 on:
   schedule:
     # Weekly, Sunday 04:00 UTC: surface gaps where tests miss real regressions.

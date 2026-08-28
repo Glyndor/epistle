@@ -1,5 +1,10 @@
 name: DCO
 
+# PR only. This check walks `git rev-list --no-merges BASE_SHA..HEAD_SHA`
+# off the pull_request event, and a push has no such range. The question
+# is "does every commit in this PR carry a Signed-off-by trailer?", and
+# that question only exists for pull requests.
+
 on:
   pull_request:
 

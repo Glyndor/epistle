@@ -1,5 +1,10 @@
 name: guard
 
+# PR into main only. main's ruleset requires this check; develop's
+# does not. The `if:` on the inner job stops it running where it
+# cannot answer, and the ruleset not demanding it on develop stops
+# anyone expecting an answer there.
+
 on:
   pull_request:
     branches: ["main"]
