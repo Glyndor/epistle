@@ -5,6 +5,7 @@
 pub mod cloudflare;
 pub mod desec;
 pub mod digitalocean;
+pub mod dnsimple;
 pub mod gcloud;
 pub mod namecheap;
 pub mod provider;
