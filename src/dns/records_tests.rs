@@ -36,6 +36,12 @@ fn builds_core_records_per_domain() {
 		"v=STSv1; id=v1"
 	);
 	assert_eq!(
+		find(&records, "_smtp._tls.example.org", RecordKind::Txt)
+			.record
+			.value,
+		"v=TLSRPTv1; rua=mailto:tlsrpt@example.org"
+	);
+	assert_eq!(
 		find(&records, "example.org", RecordKind::Mx).record.value,
 		"10 mail.example.org"
 	);

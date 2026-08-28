@@ -58,6 +58,12 @@ pub fn build_records(
 			format!("_mta-sts.{domain}"),
 			format!("v=STSv1; id={mta_sts_id}"),
 		));
+		// TLSRPT (RFC 8460): reports on TLS negotiation success/failure so the
+		// operator can see when senders cannot reach us over STARTTLS.
+		records.push(txt(
+			format!("_smtp._tls.{domain}"),
+			format!("v=TLSRPTv1; rua=mailto:tlsrpt@{domain}"),
+		));
 		// MX → the mail hostname at the standard priority.
 		records.push(PublishRecord {
 			zone: domain.clone(),
