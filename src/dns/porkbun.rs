@@ -19,7 +19,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// Porkbun's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.porkbun.com/api/json/v3";
@@ -81,6 +81,8 @@ struct Record {
 	content: String,
 	#[serde(default)]
 	ttl: String,
+	#[serde(default)]
+	prio: String,
 }
 
 impl PorkbunProvider {
@@ -102,18 +104,32 @@ impl PorkbunProvider {
 	}
 
 	/// The Porkbun record type for a kind we can publish. A/AAAA/TXT/CNAME and
-	/// TLSA go through the plain `content` field; MX and SRV need the separate
-	/// `prio` field (and a target split out of the value), which epistle does
-	/// not emit yet.
+	/// TLSA go through the plain `content` field; SRV uses the same field plus
+	/// a separate `prio` (priority in the upper bits, weight in the lower —
+	/// Porkbun packs them into a single integer, see below); MX uses the same
+	/// `prio` field as a plain preference and is not yet supported because
+	/// the rest of epistle still builds MX with the priority embedded in the
+	/// value string.
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv
+			| RecordKind::Mx
+			| RecordKind::Caa => Ok(kind.as_str()),
 		}
+	}
+
+	/// Validate that `record.value` is a well-formed SRV. Returns the priority
+	/// so the upsert path can populate the `prio` field (Porkbun treats it
+	/// as the plain preference for SRV). Returns `Remote` on malformed input.
+	fn sr_prio(record: &DnsRecord) -> Result<u16, ProviderError> {
+		let (priority, _weight, _port, _target) = parse_srv(&record.value)
+			.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
+		Ok(priority)
 	}
 
 	/// The `name` Porkbun expects: the label relative to the zone, with the
@@ -194,12 +210,68 @@ impl PorkbunProvider {
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
-		let fields = serde_json::json!({
+		let mut fields = serde_json::json!({
 			"name": self.label(&record.name),
 			"type": kind,
 			"content": record.value,
 			"ttl": record.ttl.max(MIN_TTL),
 		});
+		if record.kind == RecordKind::Srv {
+			// Porkbun's SRV payload: the value carries the full presentation
+			// form (`prio weight port target`) verbatim in `content`, and the
+			// `prio` field is the plain preference (here, the priority, since
+			// weight and port are part of the value already). We still validate
+			// the value with parse_srv so a malformed SRV never reaches the API.
+			let _ = Self::sr_prio(&record)?;
+			if let Some(map) = fields.as_object_mut() {
+				map.insert(
+					"prio".to_string(),
+					parse_srv(&record.value)
+						.map(|(p, _w, _port, _target)| p)
+						.unwrap_or(0)
+						.into(),
+				);
+			}
+		}
+		if record.kind == RecordKind::Caa {
+			// Porkbun's CAA payload: `content` carries the CA value verbatim,
+			// and the `caa_tag` field holds the tag ("issue", "issuewild",
+			// "iodef"). We split the presentation form to surface malformed
+			// input as a `Remote` error rather than letting Porkbun reject it.
+			let mut parts = record.value.splitn(3, ' ');
+			let _flags = parts.next();
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			if let Some(map) = fields.as_object_mut() {
+				map.insert("caa_tag".to_string(), tag.into());
+				map.insert("content".to_string(), value.into());
+			}
+		}
+		if record.kind == RecordKind::Mx {
+			// Porkbun's MX payload: `content` carries the target, `prio`
+			// carries the preference as an integer.
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			if let Some(map) = fields.as_object_mut() {
+				map.insert("prio".to_string(), priority.into());
+				map.insert("content".to_string(), target.into());
+			}
+		}
 		let existing = self.matching_ids(&record.name, kind).await?;
 		match existing.split_first() {
 			// Replace in place, then drop any duplicate left at the same
@@ -234,11 +306,28 @@ impl PorkbunProvider {
 			.retrieve()
 			.await?
 			.into_iter()
-			.map(|r| DnsRecord {
-				name: r.name.trim_end_matches('.').to_string(),
-				kind: parse_kind(&r.kind),
-				value: r.content.trim_matches('"').to_string(),
-				ttl: r.ttl.parse().unwrap_or(MIN_TTL),
+			.filter_map(|r| {
+				let kind = parse_kind(&r.kind);
+				// SRV records Porkbun returns without a usable `prio` are
+				// malformed: drop them so the rest of the list does not
+				// carry a misleading empty value.
+				if kind == RecordKind::Srv && r.prio.is_empty() {
+					return None;
+				}
+				let value = if kind == RecordKind::Srv {
+					let packed: u32 = r.prio.parse().ok()?;
+					let priority = (packed >> 16) as u16;
+					let weight = (packed & 0xFFFF) as u16;
+					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
+				} else {
+					r.content.trim_matches('"').to_string()
+				};
+				Some(DnsRecord {
+					name: r.name.trim_end_matches('.').to_string(),
+					kind,
+					value,
+					ttl: r.ttl.parse().unwrap_or(MIN_TTL),
+				})
 			})
 			.collect())
 	}
@@ -261,6 +350,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

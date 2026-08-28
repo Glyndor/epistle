@@ -10,21 +10,21 @@ use axum::routing::get;
 use serde::Deserialize;
 
 #[derive(Default)]
-struct MockState {
+pub(super) struct MockState {
 	/// Records the GET endpoint returns. Keyed by `kind|name` so PUT/DELETE
 	/// lookups can match an "existing" record without filtering the list.
-	records: std::collections::HashMap<String, serde_json::Value>,
+	pub(super) records: std::collections::HashMap<String, serde_json::Value>,
 	/// Captured PUT/DELETE bodies.
-	bodies: Vec<String>,
+	pub(super) bodies: Vec<String>,
 	/// "METHOD /path?query" of every request, for assertions.
-	calls: Vec<String>,
+	pub(super) calls: Vec<String>,
 	/// X-API-Key header seen on the last request.
-	api_key: Option<String>,
+	pub(super) api_key: Option<String>,
 	/// X-API-Secret header seen on the last request.
-	api_secret: Option<String>,
+	pub(super) api_secret: Option<String>,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
 /// Query parameters the mock accepts — Spaceship requires `take` and `skip`,
 /// and may carry `orderBy`.
@@ -129,7 +129,7 @@ async fn delete_records(
 	axum::http::StatusCode::NO_CONTENT
 }
 
-async fn mock(records: Vec<serde_json::Value>) -> (SpaceshipProvider, Shared) {
+pub(super) async fn mock(records: Vec<serde_json::Value>) -> (SpaceshipProvider, Shared) {
 	let mut map = std::collections::HashMap::new();
 	for r in records {
 		let key = format!(
@@ -333,16 +333,37 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, _state) = mock(Vec::new()).await;
+async fn mx_upsert_splits_priority_and_exchange() {
+	let (provider, state) = mock(Vec::new()).await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert("example.org", mx).await.expect("upsert");
+	// Spaceship upserts as `remove then add`; the PUT body is the last one.
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"type\":\"MX\""), "{body}");
+	assert!(body.contains("\"priority\":10"), "{body}");
+	assert!(body.contains("\"exchange\":\"mail.example.org\""), "{body}");
+}
+
+#[tokio::test]
+async fn srv_upsert_splits_into_priority_weight_port_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	// Spaceship upserts as `remove then add`; the PUT body is the last one.
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"weight\":1"), "{body}");
+	assert!(body.contains("\"port\":465"), "{body}");
+	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
 }

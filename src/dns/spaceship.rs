@@ -10,7 +10,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv};
 
 /// Spaceship's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://spaceship.dev/api/v1";
@@ -55,16 +55,19 @@ impl SpaceshipProvider {
 		self
 	}
 
-	/// The Spaceship type token for a kind we can publish; MX/SRV need
-	/// priority/weight/port fields epistle does not currently build.
+	/// The Spaceship type token for a kind we can publish; SRV splits the
+	/// presentation form into `priority`/`weight`/`port`/`target` fields, MX
+	/// needs the priority split out (epistle still packs it into the value).
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv
+			| RecordKind::Mx
+			| RecordKind::Caa => Ok(kind.as_str()),
 		}
 	}
 
@@ -95,14 +98,17 @@ impl SpaceshipProvider {
 	/// The JSON key that holds the record's value for `kind`. Spaceship
 	/// discriminates by `type` and uses a different value field per kind:
 	/// `value` for TXT, `address` for A/AAAA, `cname` for CNAME,
-	/// `associationData` for TLSA.
+	/// `associationData` for TLSA, `target` for SRV (priority/weight/port
+	/// travel in their own dedicated fields).
 	fn value_field(kind: RecordKind) -> &'static str {
 		match kind {
 			RecordKind::Txt => "value",
 			RecordKind::A | RecordKind::Aaaa => "address",
 			RecordKind::Cname => "cname",
 			RecordKind::Tlsa => "associationData",
-			RecordKind::Mx | RecordKind::Srv => unreachable!("filtered by api_kind"),
+			RecordKind::Srv => "target",
+			RecordKind::Caa => "value",
+			RecordKind::Mx => "exchange",
 		}
 	}
 
@@ -117,17 +123,68 @@ impl SpaceshipProvider {
 
 	/// `PUT /dns/records/{zone}` — append items with `force: true`. Spaceship
 	/// documents the body as `{ force: true, items: [ ... ] }` and replies 204
-	/// on success.
+	/// on success. SRV uses dedicated `priority`/`weight`/`port`/`target`
+	/// fields; everything else uses the kind-specific value field.
 	async fn add(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
 		let path = format!("/dns/records/{}", self.zone);
+		let mut item = serde_json::json!({
+			"type": kind,
+			"name": rel,
+			"ttl": record.ttl,
+		});
+		if record.kind == RecordKind::Srv {
+			let (priority, weight, port, target) = parse_srv(&record.value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
+			let map = item.as_object_mut().expect("object");
+			map.insert("priority".to_string(), priority.into());
+			map.insert("weight".to_string(), weight.into());
+			map.insert("port".to_string(), port.into());
+			map.insert("target".to_string(), target.into());
+		} else if record.kind == RecordKind::Caa {
+			let mut parts = record.value.splitn(3, ' ');
+			let flags: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			let map = item.as_object_mut().expect("object");
+			map.insert("flag".to_string(), flags.into());
+			map.insert("tag".to_string(), tag.into());
+			map.insert("value".to_string(), value.into());
+		} else if record.kind == RecordKind::Mx {
+			// Spaceship stores MX as `priority` (number) + `exchange`
+			// (target) fields.
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			let map = item.as_object_mut().expect("object");
+			map.insert("priority".to_string(), priority.into());
+			map.insert("exchange".to_string(), target.into());
+		} else {
+			let map = item.as_object_mut().expect("object");
+			map.insert(
+				Self::value_field(record.kind).to_string(),
+				record.value.clone().into(),
+			);
+		}
 		let body = serde_json::json!({
 			"force": true,
-			"items": [{
-				"type": kind,
-				"name": rel,
-				"ttl": record.ttl,
-				Self::value_field(record.kind): record.value,
-			}]
+			"items": [item],
 		})
 		.to_string();
 		let response = self
@@ -254,7 +311,27 @@ impl SpaceshipProvider {
 				} else {
 					format!("{name}.{zone}")
 				};
-				let value = Self::extract_value(&item)?;
+				let value = if matches!(Self::parse_kind(kind), RecordKind::Srv) {
+					let priority =
+						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+					let weight = item.get("weight").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+					let port = item.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+					let target = item.get("target").and_then(|v| v.as_str())?;
+					format!(
+						"{priority} {weight} {port} {}",
+						target.trim_end_matches('.')
+					)
+				} else if matches!(Self::parse_kind(kind), RecordKind::Mx) {
+					let priority =
+						item.get("priority").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+					let target = item
+						.get("exchange")
+						.and_then(|v| v.as_str())
+						.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
+					format!("{priority} {}", target.trim_end_matches('.'))
+				} else {
+					Self::extract_value(&item)?
+				};
 				Some(DnsRecord {
 					name: fqdn,
 					kind: Self::parse_kind(kind),
@@ -294,3 +371,7 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "spaceship_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "spaceship_tests_b.rs"]
+mod tests_b;

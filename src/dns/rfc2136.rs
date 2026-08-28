@@ -3,11 +3,10 @@
 //! configured in `[dns].endpoint`, authenticated with TSIG (RFC 8945). This is
 //! the wire format the protocol prescribes; there is no HTTP API to wrap.
 //!
-//! Records epistle publishes — A, AAAA, TXT, CNAME, TLSA — all encode the
-//! same way on the wire (the value field carries RDATA verbatim, with the
-//! type-specific encoding). MX/SRV would carry additional fields
-//! (preference, weight) that epistle does not build, so they return
-//! [`ProviderError::Unsupported`]. TXT values are emitted as a single
+//! Records epistle publishes — A, AAAA, TXT, CNAME, TLSA, MX, SRV and CAA —
+//! are each encoded into their own RDATA type. MX and SRV carry the extra
+//! fields the wire format demands (preference; priority, weight and port),
+//! parsed out of the record value. TXT values are emitted as a single
 //! character-string without the surrounding quotes a zone file would use.
 //!
 //! The UPDATE semantics follow RFC 2136 §2.5: an **upsert** is the pair
@@ -46,12 +45,12 @@ use hickory_resolver::proto::rr::{
 	DNSClass, Name, RData, Record, RecordType, TSigner,
 	rdata::tlsa::{CertUsage, Matching, Selector},
 	rdata::tsig::TsigAlgorithm,
-	rdata::{CNAME, TLSA, TXT},
+	rdata::{CAA, CNAME, MX, SRV, TLSA, TXT},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// Default TSIG fudge (RFC 8945 §5.2 — maximum tolerance between client
 /// and server clocks). Five minutes mirrors what most resolvers accept.
@@ -121,17 +120,19 @@ impl Rfc2136Provider {
 		}
 	}
 
-	/// The record kinds this provider can publish. MX/SRV would need
-	/// extra fields (preference, weight) we do not build; return
-	/// Unsupported rather than emit a malformed record.
+	/// The record kinds this provider can publish. SRV maps directly from the
+	/// presentation form to the wire format; MX needs the priority split out
+	/// (epistle still packs it into the value).
 	fn supported_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv
+			| RecordKind::Mx
+			| RecordKind::Caa => Ok(kind.as_str()),
 		}
 	}
 
@@ -350,7 +351,68 @@ fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
 				cert,
 			)))
 		}
-		RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+		RecordKind::Srv => {
+			let (priority, weight, port, target) = parse_srv(value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {value}")))?;
+			let target_name = Name::from_ascii(&target)
+				.map_err(|e| ProviderError::Remote(format!("bad SRV target: {e}")))?;
+			Ok(RData::SRV(SRV::new(priority, weight, port, target_name)))
+		}
+		RecordKind::Caa => {
+			// CAA in presentation form: `<flags> <tag> <value>`. hickory's
+			// CAA struct is `#[non_exhaustive]` and only constructs for
+			// `issue` / `issuewild` / `iodef` tags, so for an `issue` record
+			// we pass the CA name through `new_issue`. The wire bytes match
+			// RFC 8659 because hickory emits `<flags> <taglen> <tag> <value>`
+			// on its own. We do not support `issuewild` / `iodef` here
+			// because the build_records path only emits `issue`.
+			let mut parts = value.splitn(3, ' ');
+			let flags: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let ca_value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"');
+			let issuer_critical = flags & 0x80 != 0;
+			if tag != "issue" {
+				return Err(ProviderError::Remote(format!(
+					"rfc2136 only emits CAA issue tags, got {tag}"
+				)));
+			}
+			let name = Name::from_ascii(ca_value)
+				.map_err(|e| ProviderError::Remote(format!("bad CAA issuer: {e}")))?;
+			// `CAA::new_issue` encodes the value bytes itself; we have to
+			// zero out the issuer-critical bit from `reserved_flags` because
+			// hickory derives it from the dedicated `issuer_critical` field.
+			Ok(RData::CAA(CAA::new_issue(
+				issuer_critical,
+				Some(name),
+				Vec::new(),
+			)))
+		}
+		RecordKind::Mx => {
+			// MX in presentation form: `<priority> <target>`. RFC 1035 wire
+			// form: `<preference:16> <exchange:Name>`.
+			let mut parts = value.split_whitespace();
+			let preference: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let exchange = Name::from_ascii(
+				parts
+					.next()
+					.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+					.trim_end_matches('.'),
+			)
+			.map_err(|e| ProviderError::Remote(format!("bad MX exchange: {e}")))?;
+			Ok(RData::MX(MX::new(preference, exchange)))
+		}
 	}
 }
 
@@ -375,3 +437,7 @@ fn rand_id() -> u16 {
 #[cfg(test)]
 #[path = "rfc2136_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rfc2136_tests_b.rs"]
+mod tests_b;

@@ -19,11 +19,11 @@ use tokio::net::TcpListener;
 
 use super::*;
 
-const ZONE: &str = "example.org";
-const KEY_NAME: &str = "epistle-key.";
-const KEY_BASE64: &str = "c3VwZXJzZWNyZXQta2V5LW1hdGVyaWFsLWZvci10ZXN0cw==";
+pub(super) const ZONE: &str = "example.org";
+pub(super) const KEY_NAME: &str = "epistle-key.";
+pub(super) const KEY_BASE64: &str = "c3VwZXJzZWNyZXQta2V5LW1hdGVyaWFsLWZvci10ZXN0cw==";
 
-fn txt(name: &str, value: &str) -> DnsRecord {
+pub(super) fn txt(name: &str, value: &str) -> DnsRecord {
 	DnsRecord {
 		name: name.to_string(),
 		kind: RecordKind::Txt,
@@ -32,7 +32,7 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 	}
 }
 
-fn make_signing_pair() -> TSigner {
+pub(super) fn make_signing_pair() -> TSigner {
 	let key = base64::engine::general_purpose::STANDARD
 		.decode(KEY_BASE64)
 		.unwrap();
@@ -42,20 +42,20 @@ fn make_signing_pair() -> TSigner {
 
 /// Captured view of one client request, for assertions.
 #[derive(Default, Debug, Clone)]
-struct Captured {
+pub(super) struct Captured {
 	/// The bytes received on the wire (length-prefix stripped).
 	wire: Vec<u8>,
 	/// Whether the client connected at all.
 	connected: bool,
 }
 
-type CapturedVec = Arc<Mutex<Vec<Captured>>>;
+pub(super) type CapturedVec = Arc<Mutex<Vec<Captured>>>;
 
 /// Spawn a fake nameserver on a random port. The handler reads one
 /// UPDATE message per connection and replies; the closure decides what
 /// (and whether) to send back, and may verify the client's TSIG. The
 /// loop accepts as many connections as needed.
-async fn spawn_server<F>(respond: F) -> (String, CapturedVec)
+pub(super) async fn spawn_server<F>(respond: F) -> (String, CapturedVec)
 where
 	F: Fn(&[u8]) -> ServerReply + Send + Sync + 'static,
 {
@@ -127,17 +127,19 @@ async fn wait_for_n_wires(captured: &CapturedVec, n: usize) -> Vec<Vec<u8>> {
 }
 
 /// What the fake server returns to the client.
-enum ServerReply {
+pub(super) enum ServerReply {
 	/// A NOERROR response. The server signs it with `verify_signer` so
 	/// the client's TSIG verification succeeds.
 	NoError { verify_signer: TSigner },
 	/// A NOTAUTH response (RCODE 9), unsigned — RFC 8945 §5.2 says error
 	/// responses are not signed unless the request itself was verified.
 	NotAuth,
+	/// Arbitrary bytes, for the case where the answer does not parse at all.
+	Raw(Vec<u8>),
 }
 
 impl ServerReply {
-	fn bytes(&self) -> Vec<u8> {
+	pub(super) fn bytes(&self) -> Vec<u8> {
 		match self {
 			ServerReply::NoError { verify_signer } => {
 				let id = 0xBEEF;
@@ -154,6 +156,7 @@ impl ServerReply {
 				let _ = resp.finalize(verify_signer, now);
 				resp.to_vec().unwrap()
 			}
+			ServerReply::Raw(bytes) => bytes.clone(),
 			ServerReply::NotAuth => {
 				let id = 0xBEEF;
 				let mut resp = Message::new(
@@ -169,7 +172,7 @@ impl ServerReply {
 }
 
 /// Build a wired-up provider pointing at the test server's endpoint.
-fn provider_with_endpoint(endpoint: String) -> Rfc2136Provider {
+pub(super) fn provider_with_endpoint(endpoint: String) -> Rfc2136Provider {
 	Rfc2136Provider::new(
 		ScopedSecret::new(ZONE, KEY_BASE64),
 		KEY_NAME,
@@ -369,19 +372,65 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let endpoint = "127.0.0.1:1".to_string();
+async fn mx_upsert_encodes_preference_and_exchange_in_wire_message() {
+	let (endpoint, captured) = spawn_server(|_| ServerReply::NoError {
+		verify_signer: make_signing_pair(),
+	})
+	.await;
 	let provider = provider_with_endpoint(endpoint);
 	let mx = DnsRecord {
 		name: ZONE.to_string(),
 		kind: RecordKind::Mx,
-		value: "10 mail.example.org".to_string(),
+		value: "10 mail.example.org.".to_string(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert(ZONE, mx).await,
-		Err(ProviderError::Unsupported)
-	);
+	provider.upsert(ZONE, mx).await.expect("mx upsert");
+	let caps = captured.lock().unwrap();
+	let wire = caps.first().expect("captured a request").wire.clone();
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	let updates = msg.updates();
+	let add = updates
+		.iter()
+		.find(|r| matches!(r.data, hickory_resolver::proto::rr::RData::MX(_)))
+		.expect("add MX RR");
+	if let hickory_resolver::proto::rr::RData::MX(mx) = &add.data {
+		assert_eq!(mx.preference, 10);
+		assert_eq!(mx.exchange.to_ascii(), "mail.example.org.");
+	} else {
+		panic!("expected MX rdata");
+	}
+}
+
+#[tokio::test]
+async fn srv_upsert_encodes_priority_weight_port_target_in_wire_message() {
+	let (endpoint, captured) = spawn_server(|_| ServerReply::NoError {
+		verify_signer: make_signing_pair(),
+	})
+	.await;
+	let provider = provider_with_endpoint(endpoint);
+	let srv = DnsRecord {
+		name: format!("_submissions._tcp.{ZONE}"),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".to_string(),
+		ttl: 3600,
+	};
+	provider.upsert(ZONE, srv).await.expect("srv upsert");
+	let caps = captured.lock().unwrap();
+	let wire = caps.first().expect("captured a request").wire.clone();
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	let updates = msg.updates();
+	let add = updates
+		.iter()
+		.find(|r| matches!(r.data, hickory_resolver::proto::rr::RData::SRV(_)))
+		.expect("add SRV RR");
+	if let hickory_resolver::proto::rr::RData::SRV(srv) = &add.data {
+		assert_eq!(srv.priority, 0);
+		assert_eq!(srv.weight, 1);
+		assert_eq!(srv.port, 465);
+		assert_eq!(srv.target.to_ascii(), "mail.example.org.");
+	} else {
+		panic!("expected SRV rdata");
+	}
 }
 
 #[tokio::test]

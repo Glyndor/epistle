@@ -17,6 +17,8 @@ fn builds_core_records_per_domain() {
 		Some(("mail", "v=DKIM1; k=ed25519; p=AAAA")),
 		None,
 		"v1",
+		Services::all(),
+		None,
 	);
 
 	assert_eq!(
@@ -34,6 +36,12 @@ fn builds_core_records_per_domain() {
 			.record
 			.value,
 		"v=STSv1; id=v1"
+	);
+	assert_eq!(
+		find(&records, "_smtp._tls.example.org", RecordKind::Txt)
+			.record
+			.value,
+		"v=TLSRPTv1; rua=mailto:tlsrpt@example.org"
 	);
 	assert_eq!(
 		find(&records, "example.org", RecordKind::Mx).record.value,
@@ -55,6 +63,8 @@ fn omits_dkim_when_absent_and_tlsa_when_no_cert() {
 		None,
 		None,
 		"v1",
+		Services::all(),
+		None,
 	);
 	assert!(!records.iter().any(|r| r.record.name.contains("_domainkey")));
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Tlsa));
@@ -68,6 +78,8 @@ fn tlsa_record_added_once_for_host() {
 		None,
 		Some("3 0 1 abcd"),
 		"v1",
+		Services::all(),
+		None,
 	);
 	let tlsa: Vec<_> = records
 		.iter()
@@ -76,6 +88,161 @@ fn tlsa_record_added_once_for_host() {
 	assert_eq!(tlsa.len(), 1);
 	assert_eq!(tlsa[0].record.name, "_25._tcp.mail.host.example");
 	assert_eq!(tlsa[0].record.value, "3 0 1 abcd");
+}
+
+#[test]
+fn builds_srv_records_for_mail_jmap_and_sieve() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		None,
+	);
+	let submissions = find(&records, "_submissions._tcp.example.org", RecordKind::Srv);
+	assert_eq!(submissions.record.value, "0 1 465 mail.example.org.");
+	let jmap = find(&records, "_jmap._tcp.example.org", RecordKind::Srv);
+	assert_eq!(jmap.record.value, "0 1 443 mail.example.org.");
+	let sieve = find(&records, "_sieve._tcp.example.org", RecordKind::Srv);
+	assert_eq!(sieve.record.value, "0 1 4190 mail.example.org.");
+}
+
+#[test]
+fn builds_discovery_cnames_for_autoconfig_autodiscover_and_mta_sts() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		None,
+	);
+	let autoconfig = find(&records, "autoconfig.example.org", RecordKind::Cname);
+	assert_eq!(autoconfig.record.value, "mail.example.org");
+	let autodiscover = find(&records, "autodiscover.example.org", RecordKind::Cname);
+	assert_eq!(autodiscover.record.value, "mail.example.org");
+	let mta_sts = find(&records, "mta-sts.example.org", RecordKind::Cname);
+	assert_eq!(mta_sts.record.value, "mail.example.org");
+}
+
+#[test]
+fn caldav_and_carddav_srv_are_optional() {
+	let without = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::default(),
+		None,
+	);
+	assert!(
+		!without
+			.iter()
+			.any(|r| r.record.name == "_caldavs._tcp.example.org")
+	);
+	assert!(
+		!without
+			.iter()
+			.any(|r| r.record.name == "_carddavs._tcp.example.org")
+	);
+	let with = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		None,
+	);
+	assert!(
+		with.iter()
+			.any(|r| r.record.name == "_caldavs._tcp.example.org"
+				&& r.record.value == "0 1 443 mail.example.org.")
+	);
+	assert!(
+		with.iter()
+			.any(|r| r.record.name == "_carddavs._tcp.example.org"
+				&& r.record.value == "0 1 443 mail.example.org.")
+	);
+}
+
+#[test]
+fn caa_emitted_for_known_lets_encrypt_directory() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme-v02.api.letsencrypt.org/directory"),
+	);
+	let caa = find(&records, "example.org", RecordKind::Caa);
+	assert_eq!(caa.record.value, "0 issue \"letsencrypt.org\"");
+}
+
+#[test]
+fn caa_emitted_for_known_zerossl_directory() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme.zerossl.com/v2/DV90"),
+	);
+	let caa = find(&records, "example.org", RecordKind::Caa);
+	assert_eq!(caa.record.value, "0 issue \"zerossl.com\"");
+}
+
+#[test]
+fn caa_omitted_for_unknown_acme_directory() {
+	// An unrecognised directory must not emit a CAA — a wrong value would
+	// block legitimate renewal, so the safe default is silence.
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme.example.com/directory"),
+	);
+	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
+}
+
+#[test]
+fn caa_directory_with_trailing_slash_is_accepted() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		Some("https://acme-v02.api.letsencrypt.org/directory/"),
+	);
+	let caa = find(&records, "example.org", RecordKind::Caa);
+	assert_eq!(caa.record.value, "0 issue \"letsencrypt.org\"");
+}
+
+#[test]
+fn caa_is_none_when_acme_is_not_configured() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+		None,
+	);
+	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
 }
 
 #[test]
@@ -156,4 +323,25 @@ async fn publish_tlsa_noop_without_certificate() {
 	publish_tlsa(&ManualProvider, "mail.example.org", "garbage")
 		.await
 		.expect("noop");
+}
+
+#[test]
+fn caa_emitted_for_the_google_trust_services_directory() {
+	// The hostname here was wrong on the first pass (`gcp-host.com`, which
+	// does not resolve), so an operator on Google Trust Services silently got
+	// no CAA at all. Checked against the live directory: it answers 200.
+	assert_eq!(
+		caa_ca_for_directory("https://dv.acme-v02.api.pki.goog/directory"),
+		Some("pki.goog"),
+	);
+}
+
+#[test]
+fn caa_is_withheld_for_a_directory_we_do_not_recognise() {
+	// Withholding is the safe direction: a CAA naming the wrong CA blocks
+	// renewal outright, while a missing CAA just leaves issuance unrestricted.
+	assert_eq!(
+		caa_ca_for_directory("https://acme.example.test/directory"),
+		None
+	);
 }

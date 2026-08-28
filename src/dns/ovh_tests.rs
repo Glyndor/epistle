@@ -18,12 +18,12 @@ use serde::Deserialize;
 /// A record the mock keeps in memory and hands back as JSON in the same
 /// shape OVH's `/record/{id}` returns.
 #[derive(Clone)]
-struct StoredRecord {
-	id: u64,
-	field_type: String,
-	sub_domain: String,
-	target: String,
-	ttl: u32,
+pub(super) struct StoredRecord {
+	pub(super) id: u64,
+	pub(super) field_type: String,
+	pub(super) sub_domain: String,
+	pub(super) target: String,
+	pub(super) ttl: u32,
 }
 
 impl StoredRecord {
@@ -40,19 +40,19 @@ impl StoredRecord {
 }
 
 #[derive(Default)]
-struct MockState {
-	records: Vec<StoredRecord>,
-	next_id: u64,
-	last_headers: HeaderMap,
-	write_headers: HeaderMap,
-	write_body: String,
-	write_method: String,
-	write_path: String,
-	refresh_called: bool,
-	addr: String,
+pub(super) struct MockState {
+	pub(super) records: Vec<StoredRecord>,
+	pub(super) next_id: u64,
+	pub(super) last_headers: HeaderMap,
+	pub(super) write_headers: HeaderMap,
+	pub(super) write_body: String,
+	pub(super) write_method: String,
+	pub(super) write_path: String,
+	pub(super) refresh_called: bool,
+	pub(super) addr: String,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
 #[derive(Deserialize, Default)]
 struct RecordListQuery {
@@ -169,11 +169,11 @@ async fn refresh_zone(
 	axum::http::StatusCode::NO_CONTENT
 }
 
-async fn mock() -> (OvhProvider, Shared) {
+pub(super) async fn mock() -> (OvhProvider, Shared) {
 	mock_with(Vec::new()).await
 }
 
-async fn mock_with(existing: Vec<StoredRecord>) -> (OvhProvider, Shared) {
+pub(super) async fn mock_with(existing: Vec<StoredRecord>) -> (OvhProvider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState {
 		next_id: 0,
 		records: existing,
@@ -205,7 +205,7 @@ async fn mock_with(existing: Vec<StoredRecord>) -> (OvhProvider, Shared) {
 	(provider, state)
 }
 
-fn txt(name: &str, value: &str) -> DnsRecord {
+pub(super) fn txt(name: &str, value: &str) -> DnsRecord {
 	DnsRecord {
 		name: name.to_string(),
 		kind: RecordKind::Txt,
@@ -460,57 +460,4 @@ async fn list_parses_records_and_strips_txt_quotes() {
 			.iter()
 			.any(|r| r.name == "_dmarc.example.org" && r.value == "v=DMARC1; p=none")
 	);
-}
-
-#[tokio::test]
-async fn record_outside_zone_is_rejected_without_network() {
-	let (provider, state) = mock().await;
-	let result = provider
-		.upsert("example.org", txt("_dmarc.other.example", "x"))
-		.await;
-	assert_eq!(result, Err(ProviderError::Auth));
-	// No request ever left the process.
-	let s = state.lock().unwrap();
-	assert_eq!(s.records.len(), 0);
-	assert!(
-		s.write_path.is_empty(),
-		"unexpected request: {}",
-		s.write_path
-	);
-	assert!(!s.refresh_called);
-}
-
-#[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, _state) = mock().await;
-	let tlsa = DnsRecord {
-		name: "_25._tcp.mail.example.org".into(),
-		kind: RecordKind::Tlsa,
-		value: "3 0 1 abcd".into(),
-		ttl: 3600,
-	};
-	assert_eq!(
-		provider.upsert("example.org", tlsa).await,
-		Err(ProviderError::Unsupported)
-	);
-}
-
-#[tokio::test]
-async fn sign_recomputes_to_the_same_value() {
-	let (provider, _state) = mock().await;
-	let sig = provider.sign(
-		"POST",
-		"http://127.0.0.1:1/domain/zone/example.org/record",
-		"{\"fieldType\":\"TXT\"}",
-		1700000000,
-	);
-	assert!(sig.starts_with("$1$"), "{sig}");
-	assert_eq!(sig.len(), "$1$".len() + 40);
-	let again = provider.sign(
-		"POST",
-		"http://127.0.0.1:1/domain/zone/example.org/record",
-		"{\"fieldType\":\"TXT\"}",
-		1700000000,
-	);
-	assert_eq!(sig, again);
 }
