@@ -19,6 +19,18 @@ jobs:
       # Kept equal to the rust-supply-chain.yml default — a repo whose SBOM is
       # produced by a compiler its test suite never ran is podup#1487.
       toolchain: "1.98"
+      # The floor debian/control promises. `Build-Depends` says `rustc (>= 1.88)`,
+      # and until this input existed nothing ever built on 1.88: CI built on 1.98
+      # only, so the `MSRV` job skipped and its gate reported a pass having looked
+      # at nothing. A floor nobody exercises is a promise to whoever installs the
+      # .deb on trixie, kept by accident.
+      #
+      # 1.88 is not derived from `rust-version` or `edition` — standards/testing
+      # forbids that, because the real floor comes from transitive dependencies
+      # (`rcgen`, `time` and `icu_properties` each wanted more than the edition
+      # implied). It came from a build that failed, and it stays tied to
+      # debian/control by tests/workflow_toolchain_pins.rs.
+      msrv: "1.88"
       coverage-threshold: 90
       # Files the no-DB coverage job cannot fairly measure — each needs a live
       # service or is thin connection-accept glue, so they are excluded here
