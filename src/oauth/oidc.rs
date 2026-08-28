@@ -6,8 +6,21 @@
 //! the SASL auth path); a background task refreshes the cache so rotated keys
 //! are picked up. JWK parameters are converted to the byte form `crate::jwt`
 //! consumes: PKCS#1 DER for RSA, the raw uncompressed point for EC.
+//!
+//! The `jwks_uri` named by the discovery document is fetched as a second
+//! request. That URL is chosen by the IdP, not the operator, so a hostile or
+//! compromised IdP could point it at an internal address (cloud metadata at
+//! `169.254.169.254`, a service on the LAN, ...). `ensure_jwks_uri_in_scope`
+//! closes that pivot: a `jwks_uri` that resolves to a private, loopback,
+//! link-local or unspecified address is accepted only when the same address is
+//! also reachable from the discovery URL's host. That keeps a legitimate
+//! internal IdP (Keycloak on the LAN, whose own JWKS points at itself) working
+//! while blocking the cross-host pivot.
+
+use std::net::{IpAddr, ToSocketAddrs};
 
 use serde::Deserialize;
+use url::Url;
 
 use crate::jwt::Algorithm;
 
@@ -28,6 +41,12 @@ pub struct Jwk {
 pub enum OidcError {
 	/// A discovery or JWKS URL was not `https://`.
 	InsecureUrl,
+	/// The `jwks_uri` named by the discovery document resolves to a private,
+	/// loopback, link-local or unspecified address that does not coincide with
+	/// any address the discovery URL itself resolves to. The string is the
+	/// resolved internal address (or addresses) that triggered the rejection,
+	/// so an operator can see exactly what the IdP tried to pivot to.
+	JwksUriOffScope(String),
 	/// A network request failed.
 	Network(String),
 	/// A response body was not the expected JSON.
@@ -42,6 +61,10 @@ impl std::fmt::Display for OidcError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			OidcError::InsecureUrl => f.write_str("OIDC endpoint must be https://"),
+			OidcError::JwksUriOffScope(address) => write!(
+				f,
+				"OIDC jwks_uri resolves to {address}, which is not the discovery host"
+			),
 			OidcError::Network(e) => write!(f, "OIDC network error: {e}"),
 			OidcError::BadJson(e) => write!(f, "OIDC malformed JSON: {e}"),
 			OidcError::NoJwksUri => f.write_str("discovery document has no jwks_uri"),
@@ -101,8 +124,112 @@ pub async fn fetch_keys(
 	let discovery: Discovery =
 		serde_json::from_str(&body).map_err(|e| OidcError::BadJson(e.to_string()))?;
 	require_https(&discovery.jwks_uri)?;
+	ensure_jwks_uri_in_scope(discovery_url, &discovery.jwks_uri).await?;
 	let jwks_body = get_text(client, &discovery.jwks_uri).await?;
 	parse_jwks(&jwks_body, default_alg)
+}
+
+/// Confirm the `jwks_uri` published by the IdP does not pivot to a host the
+/// operator did not choose. Returns `Ok(())` when every resolved address is
+/// public, or when any internal address is also reachable from the discovery
+/// URL (so a JWKS that points at itself — common practice — keeps working).
+///
+/// This is a screen, not a guarantee: between the resolve here and the actual
+/// connect in `get_text`, DNS may rotate and a second query can return a
+/// different address (TOCTOU). Closing that window means binding the socket to
+/// the already-resolved IP before connecting, which is a separate piece of work
+/// not done here.
+async fn ensure_jwks_uri_in_scope(discovery_url: &str, jwks_uri: &str) -> Result<(), OidcError> {
+	let jwks_ips = collect_ips(jwks_uri).await?;
+	if !jwks_ips.iter().any(|ip| is_internal(*ip)) {
+		return Ok(());
+	}
+	let discovery_ips = collect_ips(discovery_url).await?;
+	if jwks_ips_allowed(&jwks_ips, &discovery_ips) {
+		Ok(())
+	} else {
+		let offending = jwks_ips
+			.iter()
+			.copied()
+			.filter(|ip| is_internal(*ip))
+			.map(|ip| ip.to_string())
+			.collect::<Vec<_>>()
+			.join(", ");
+		Err(OidcError::JwksUriOffScope(offending))
+	}
+}
+
+/// Every address `url` currently points at: the literal IPv4 / IPv6 in the
+/// host, or every address a DNS lookup of the host name returns. An empty
+/// result (host did not resolve) is reported as a network error so a typo in
+/// the discovery doc does not silently fall through.
+async fn collect_ips(url: &str) -> Result<Vec<IpAddr>, OidcError> {
+	let parsed =
+		Url::parse(url).map_err(|e| OidcError::Network(format!("invalid OIDC URL {url}: {e}")))?;
+	match parsed.host() {
+		Some(url::Host::Ipv4(ip)) => Ok(vec![IpAddr::V4(ip)]),
+		Some(url::Host::Ipv6(ip)) => Ok(vec![IpAddr::V6(ip)]),
+		Some(url::Host::Domain(name)) => resolve_host(name).await,
+		None => Err(OidcError::Network(format!("OIDC URL {url} has no host"))),
+	}
+}
+
+async fn resolve_host(name: &str) -> Result<Vec<IpAddr>, OidcError> {
+	tokio::task::spawn_blocking({
+		let name = name.to_string();
+		move || -> Result<Vec<IpAddr>, OidcError> {
+			let addrs = (name.as_str(), 443u16)
+				.to_socket_addrs()
+				.map_err(|e| OidcError::Network(format!("DNS resolution for {name}: {e}")))?;
+			Ok(addrs.map(|a| a.ip()).collect())
+		}
+	})
+	.await
+	.map_err(|e| OidcError::Network(format!("DNS resolution task for {name}: {e}")))?
+}
+
+/// True when `ip` is private (RFC 1918 / RFC 4193), loopback, link-local or
+/// unspecified — i.e. an address an attacker could use to pivot to a service
+/// the operator did not choose to expose. IPv4-mapped IPv6 (`::ffff:a.b.c.d`)
+/// is unwrapped to its IPv4 payload so a v6 URL cannot hide a v4 internal
+/// address from the check.
+fn is_internal(ip: IpAddr) -> bool {
+	match ip {
+		IpAddr::V4(v4) => {
+			v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
+		}
+		IpAddr::V6(v6) => {
+			if let Some(v4) = v6.to_ipv4_mapped() {
+				return v4.is_private()
+					|| v4.is_loopback()
+					|| v4.is_link_local()
+					|| v4.is_unspecified();
+			}
+			v6.is_loopback()
+				|| v6.is_unspecified()
+				|| v6.is_unique_local()
+				|| v6.is_unicast_link_local()
+		}
+	}
+}
+
+/// Pure decision extracted from [`ensure_jwks_uri_in_scope`] so the policy can
+/// be tested without DNS. Returns true when the jwks set is allowed: either it
+/// contains no internal addresses, or every internal address in the jwks set is
+/// also reachable from the discovery URL.
+fn jwks_ips_allowed(jwks_ips: &[IpAddr], discovery_ips: &[IpAddr]) -> bool {
+	let internal = jwks_ips
+		.iter()
+		.copied()
+		.filter(|ip| is_internal(*ip))
+		.collect::<Vec<_>>();
+	if internal.is_empty() {
+		return true;
+	}
+	// `all`, not `any`. A jwks set that resolves to both the discovery host and
+	// something else internal is the pivot this exists to stop: one matching
+	// address must not vouch for the rest of the set.
+	internal.iter().all(|ip| discovery_ips.contains(ip))
 }
 
 /// Reject any endpoint that is not HTTPS (fail closed: keys must arrive over a
