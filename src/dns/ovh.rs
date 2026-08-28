@@ -98,7 +98,8 @@ impl OvhProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Mx
-			| RecordKind::Srv => Ok(kind.as_str()),
+			| RecordKind::Srv
+			| RecordKind::Caa => Ok(kind.as_str()),
 			RecordKind::Tlsa => Err(ProviderError::Unsupported),
 		}
 	}
@@ -332,6 +333,7 @@ fn parse_kind(field_type: &str) -> RecordKind {
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,
+		"CAA" => RecordKind::Caa,
 		_ => RecordKind::Txt,
 	}
 }

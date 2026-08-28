@@ -514,3 +514,54 @@ async fn sign_recomputes_to_the_same_value() {
 	);
 	assert_eq!(sig, again);
 }
+
+#[tokio::test]
+async fn upsert_creates_caa_with_its_own_field_type() {
+	// OVH was written before the CAA record existed, so `api_kind` did not
+	// cover it and the compiler caught the gap. A CAA that never reaches the
+	// zone is worse than silent: certificate issuance stays unrestricted
+	// while the operator believes it is pinned to their CA.
+	let (provider, state) = mock().await;
+	provider
+		.upsert(
+			"example.org",
+			DnsRecord {
+				name: "example.org".into(),
+				kind: RecordKind::Caa,
+				value: "0 issue \"letsencrypt.org\"".into(),
+				ttl: 3600,
+			},
+		)
+		.await
+		.expect("caa upsert");
+	let (write_body, write_path) = {
+		let s = state.lock().unwrap();
+		(s.write_body.clone(), s.write_path.clone())
+	};
+	assert_eq!(write_path, "/domain/zone/example.org/record");
+	let body: serde_json::Value = serde_json::from_str(&write_body).expect("body json");
+	assert_eq!(body["fieldType"], "CAA");
+	assert_eq!(body["subDomain"], "");
+	assert_eq!(body["target"], "0 issue \"letsencrypt.org\"");
+}
+
+#[tokio::test]
+async fn list_parses_a_caa_record_as_caa_and_not_as_txt() {
+	// `parse_kind` falls back to TXT for anything it does not know, and the
+	// compiler cannot catch a missing arm there. A CAA read back as TXT makes
+	// `delete` look past the record it was asked to remove.
+	let (provider, _state) = mock_with(vec![StoredRecord {
+		id: 91,
+		field_type: "CAA".into(),
+		sub_domain: String::new(),
+		target: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	}])
+	.await;
+	let records = provider.list("example.org").await.expect("list");
+	let caa = records
+		.iter()
+		.find(|r| r.value.contains("letsencrypt.org"))
+		.expect("the CAA record is listed");
+	assert_eq!(caa.kind, RecordKind::Caa);
+}
