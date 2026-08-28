@@ -10,6 +10,7 @@ use crate::dns::cloudflare::CloudflareProvider;
 use crate::dns::desec::DesecProvider;
 use crate::dns::namecheap::NamecheapProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
+use crate::dns::rfc2136::Rfc2136Provider;
 use crate::dns::route53::Route53Provider;
 
 /// DNS provider settings. When present with usable credentials, record
@@ -91,6 +92,18 @@ impl Dns {
 					secret_key,
 					hosted_zone_id,
 				)))
+			}
+			"rfc2136" => {
+				let endpoint = self.endpoint.clone()?;
+				let key_name = self.key_name.clone()?;
+				Rfc2136Provider::new(
+					self.secret()?,
+					&key_name,
+					self.algorithm.as_deref(),
+					&endpoint,
+				)
+				.ok()
+				.map(|p| Arc::new(p) as Arc<dyn DnsProvider>)
 			}
 			_ => None,
 		}
@@ -224,6 +237,33 @@ mod tests {
 		let dns: Dns =
 			toml::from_str("provider = \"namecheap\"\nzone = \"example.org\"\ntoken = \"nocolon\"")
 				.unwrap();
+		assert!(dns.build().is_none());
+	}
+
+	#[test]
+	fn rfc2136_with_endpoint_and_key_builds() {
+		let dns: Dns = toml::from_str(
+			"provider = \"rfc2136\"\nzone = \"example.org\"\nendpoint = \"127.0.0.1:5359\"\nkey_name = \"k.\"\ntoken = \"c2VjcmV0\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_some());
+	}
+
+	#[test]
+	fn rfc2136_without_endpoint_builds_nothing() {
+		let dns: Dns = toml::from_str(
+			"provider = \"rfc2136\"\nzone = \"example.org\"\nkey_name = \"k.\"\ntoken = \"c2VjcmV0\"",
+		)
+		.unwrap();
+		assert!(dns.build().is_none());
+	}
+
+	#[test]
+	fn rfc2136_without_key_name_builds_nothing() {
+		let dns: Dns = toml::from_str(
+			"provider = \"rfc2136\"\nzone = \"example.org\"\nendpoint = \"127.0.0.1:5359\"\ntoken = \"c2VjcmV0\"",
+		)
+		.unwrap();
 		assert!(dns.build().is_none());
 	}
 }
