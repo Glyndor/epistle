@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::dns::cloudflare::CloudflareProvider;
 use crate::dns::desec::DesecProvider;
 use crate::dns::digitalocean::DigitaloceanProvider;
+use crate::dns::gcloud::{GcloudProvider, ServiceAccount};
 use crate::dns::namecheap::NamecheapProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
 use crate::dns::rfc2136::Rfc2136Provider;
@@ -22,6 +23,7 @@ use crate::dns::route53::Route53Provider;
 pub struct Dns {
 	/// Provider id: `cloudflare`, `desec`, `digitalocean`, `namecheap`,
 	/// `route53`, or `manual`.
+	/// Provider id: `cloudflare`, `desec`, `gcloud`, `namecheap`, `route53`, or `manual`.
 	pub provider: String,
 	/// The DNS zone the token is scoped to (least privilege).
 	pub zone: String,
@@ -85,6 +87,10 @@ impl Dns {
 			"cloudflare" => Some(Arc::new(CloudflareProvider::new(self.secret()?))),
 			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
 			"digitalocean" => Some(Arc::new(DigitaloceanProvider::new(self.secret()?))),
+			"gcloud" => Some(Arc::new(GcloudProvider::new(
+				self.secret()?,
+				load_gcloud_account(self.credentials_file.as_deref()?)?,
+			))),
 			"namecheap" => Some(Arc::new(NamecheapProvider::new(self.secret()?).ok()?)),
 			"route53" => {
 				let access_key = self.access_key.clone()?;
@@ -133,6 +139,12 @@ impl Dns {
 		}
 		None
 	}
+}
+
+/// Load and parse a Google service-account JSON file.
+fn load_gcloud_account(path: &std::path::Path) -> Option<ServiceAccount> {
+	let bytes = std::fs::read(path).ok()?;
+	serde_json::from_slice(&bytes).ok()
 }
 
 impl std::fmt::Debug for Dns {
@@ -266,22 +278,27 @@ mod tests {
 		.unwrap();
 		assert!(dns.build().is_some());
 	}
-
 	#[test]
 	fn rfc2136_without_endpoint_builds_nothing() {
-		let dns: Dns = toml::from_str(
 			"provider = \"rfc2136\"\nzone = \"example.org\"\nkey_name = \"k.\"\ntoken = \"c2VjcmV0\"",
-		)
-		.unwrap();
 		assert!(dns.build().is_none());
-	}
-
-	#[test]
 	fn rfc2136_without_key_name_builds_nothing() {
-		let dns: Dns = toml::from_str(
 			"provider = \"rfc2136\"\nzone = \"example.org\"\nendpoint = \"127.0.0.1:5359\"\ntoken = \"c2VjcmV0\"",
-		)
-		.unwrap();
+	fn gcloud_with_credentials_file_builds() {
+		let path =
+			std::env::temp_dir().join(format!("epistle-gcloud-test-{}.json", std::process::id()));
+		std::fs::write(
+			&path,
+			br#"{"client_email":"sa@p.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nMIIE...fake...\n-----END PRIVATE KEY-----","project_id":"p"}"#,
+		let toml = format!(
+			"provider = \"gcloud\"\nzone = \"example.org\"\ntoken = \"x\"\ncredentials_file = \"{}\"",
+			path.display()
+		);
+		let dns: Dns = toml::from_str(&toml).unwrap();
+		let _ = std::fs::remove_file(&path);
+	fn gcloud_without_credentials_file_builds_nothing() {
+		let dns: Dns =
+			toml::from_str("provider = \"gcloud\"\nzone = \"example.org\"\ntoken = \"x\"").unwrap();
 		assert!(dns.build().is_none());
 	}
 }
