@@ -10,6 +10,10 @@ on:
     branches: [develop, main]
   pull_request:
     paths:
+      # This file is in its own filter on purpose. A workflow whose path
+      # list omits itself does not run on the pull request that changes
+      # it, so a broken edit merges without ever having been executed.
+      - ".github/workflows/db.yml"
       - "migrations/**"
       - "src/db/**"
       - "tests/database.rs"
