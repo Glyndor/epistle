@@ -262,6 +262,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `gcloud` | Google Cloud DNS service-account JSON; RS256 JWT bearer; supports TLSA. |
 | `dnsimple` | DNSimple API token + account id; bearer auth; record-id granularity. |
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
+| `ovh` | Application key + secret + consumer key; signed with `$1$`+SHA1; see specifics below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
 | `rfc2136` | TSIG-authenticated DNS UPDATE to a local nameserver (`host:port`); A/AAAA/TXT/CNAME/TLSA. |
 | `spaceship` | API key + secret; `X-API-Key`/`X-API-Secret` headers; see specifics below. |
@@ -338,6 +339,44 @@ token = "your_api_token"        # or token_file / token_env
   returns `provider does not support writes` for these.
 - **API base:** `https://api.dnsimple.com/v2` — overridable through the
   provider's `with_base` for tests.
+#### `[dns]` — OVH specifics
+
+```toml
+[dns]
+provider = "ovh"
+zone = "example.org"
+access_key = "your_application_key"          # AK from the OVH API portal
+secret_key = "your_application_secret"       # AS; prefer secret_key_env
+secret_key_env = "OVH_APP_SECRET"
+consumer_key = "your_consumer_key"           # CK; prefer consumer_key_env
+consumer_key_env = "OVH_CONSUMER_KEY"
+endpoint = "ovh-eu"                          # ovh-eu (default) | ovh-ca | ovh-us
+```
+
+- **Three credentials.** OVH's REST API authenticates each call with
+  `X-Ovh-Application` (AK), `X-Ovh-Consumer` (CK) and an `X-Ovh-Signature`
+  header — a SHA-1 over `AS + "+" + CK + "+" + METHOD + "+" + full URL + "+"
+  + body + "+" + timestamp`, prefixed with `$1$`. AK and AS come from
+  <https://eu.api.ovh.com/createApp/>; CK is generated once the operator
+  validates the rights at the URL the `/auth/credential` call returns.
+- **Endpoints.** `ovh-eu` resolves to `https://eu.api.ovh.com/1.0`,
+  `ovh-ca` to `https://ca.api.ovh.com/1.0`, `ovh-us` to
+  `https://api.us.ovhcloud.com/1.0`. A full URL is also accepted as the
+  `endpoint` value (e.g. for a private gateway). Each region has separate
+  credentials; do not reuse an EU `consumer_key` against the US API.
+- **Records are id-addressed.** `upsert` lists records of `(fieldType,
+  subDomain)` first, then PUTs the existing id (or POSTs a new one). After
+  every write OVH requires `POST /domain/zone/{z}/refresh` to publish;
+  epistle calls it for you. Records are not actually live until the refresh
+  propagates, but epistle's call returns success as soon as OVH accepts the
+  write.
+- **TXT values.** OVH silently wraps TXT targets in double quotes on read;
+  epistle strips them so `list` returns what you put in `upsert`. On write,
+  the value is sent verbatim — do not pre-quote.
+- **TLSA is not supported.** OVH's `/record` endpoint does not accept the
+  TLSA tuple, so `RecordKind::Tlsa` returns `provider does not support
+  writes` and epistle skips publishing it. Publish TLSA at a different
+  provider (or split the zone) if you need DANE.
 
 #### `[dns]` — Namecheap specifics
 
