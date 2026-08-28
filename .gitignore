@@ -29,3 +29,6 @@ NOTICES.html
 .continue/
 .playwright-mcp/
 **/*-mcp/
+
+# Python bytecode from .github/scripts tests
+__pycache__/

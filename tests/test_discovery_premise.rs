@@ -32,6 +32,18 @@ use std::path::{Path, PathBuf};
 /// this test fail the Debian build on its first run.
 const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules", "cargo-home"];
 
+/// Directories that contain test files invoked by a workflow committed to
+/// this repository. The absence of a runner does not mean the absence of
+/// coverage here: a workflow names each entry's tests by path. Every entry
+/// MUST carry the name of the workflow that runs it in the comment, so that
+/// deleting the workflow without deleting the exemption surfaces the lie
+/// rather than hiding it.
+const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[(
+	".github/scripts",
+	".github/workflows/scripts.yml",
+	"unittest discover -s .github/scripts",
+)];
+
 /// Extensions whose test files are not discovered by any runner — something has
 /// to invoke them by name, which is the condition this test watches for.
 const UNDISCOVERED_EXTS: &[&str] = &["sh", "bash", "bats", "py", "ps1", "rb", "pl"];
@@ -70,7 +82,10 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 		let path = entry.path();
 		let name = entry.file_name().to_string_lossy().into_owned();
 		if path.is_dir() {
-			if SKIP_DIRS.contains(&name.as_str()) || is_dependency_checkout(&path) {
+			if SKIP_DIRS.contains(&name.as_str())
+				|| is_dependency_checkout(&path)
+				|| is_workflow_invoked(root, &path)
+			{
 				continue;
 			}
 			collect(root, &path, out);
@@ -94,6 +109,43 @@ fn is_dependency_checkout(path: &Path) -> bool {
 		}
 	}
 	false
+}
+
+/// True when `path` is an exempt directory, and the exemption still holds.
+///
+/// The exemption is asserted rather than promised. Naming the workflow in a
+/// comment is what the first version did, and a comment saying "delete this
+/// line if you delete the workflow" is a conclusion nobody re-reads: the day
+/// the workflow goes, the exemption stays and silences the check it was
+/// carved out of. So the workflow file must exist and must still contain the
+/// invocation, or this panics naming both.
+fn is_workflow_invoked(root: &Path, path: &Path) -> bool {
+	let rel = path
+		.strip_prefix(root)
+		.unwrap_or(path)
+		.display()
+		.to_string();
+	let Some((dir, workflow, invocation)) =
+		WORKFLOW_INVOKED_DIRS.iter().find(|(dir, _, _)| rel == *dir)
+	else {
+		return false;
+	};
+
+	let workflow_path = root.join(workflow);
+	let text = fs::read_to_string(&workflow_path).unwrap_or_else(|_| {
+		panic!(
+			"{dir} is exempt because {workflow} runs its tests, and {workflow} \
+			 does not exist.\nEither restore it or drop the exemption: as it \
+			 stands, {dir} is skipped and nothing runs what is in it."
+		)
+	});
+	assert!(
+		text.contains(invocation),
+		"{dir} is exempt because {workflow} runs {invocation:?}, and that \
+		 invocation is no longer in the file.\nThe exemption is now silencing \
+		 a directory nothing tests."
+	);
+	true
 }
 
 /// A file counts when its extension has no runner *and* either its name marks it
