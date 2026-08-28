@@ -9,6 +9,7 @@ pub mod digitalocean;
 pub mod dnsimple;
 pub mod gcloud;
 pub mod namecheap;
+pub mod ovh;
 pub mod porkbun;
 pub mod provider;
 pub mod records;

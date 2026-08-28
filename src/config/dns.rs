@@ -12,6 +12,7 @@ use crate::dns::desec::DesecProvider;
 use crate::dns::dnsimple::DnsimpleProvider;
 use crate::dns::gcloud::{GcloudProvider, ServiceAccount};
 use crate::dns::namecheap::NamecheapProvider;
+use crate::dns::ovh::OvhProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
 use crate::dns::route53::Route53Provider;
 use crate::dns::spaceship::SpaceshipProvider;
@@ -104,6 +105,16 @@ impl Dns {
 				load_gcloud_account(self.credentials_file.as_deref()?)?,
 			))),
 			"namecheap" => Some(Arc::new(NamecheapProvider::new(self.secret()?).ok()?)),
+			"ovh" => {
+				let application_key = self.access_key.clone()?;
+				let application_secret = self.aws_secret()?;
+				let consumer_key = self.consumer_key()?;
+				let secret = ScopedSecret::new(&self.zone, consumer_key);
+				let base = crate::dns::ovh::resolve_base(self.endpoint.as_deref());
+				Some(Arc::new(
+					OvhProvider::new(application_key, application_secret, secret).with_base(base),
+				))
+			}
 			"route53" => {
 				let access_key = self.access_key.clone()?;
 				let secret_key = self.aws_secret()?;
@@ -124,6 +135,14 @@ impl Dns {
 			return std::env::var(var).ok().filter(|s| !s.is_empty());
 		}
 		self.secret_key.clone()
+	}
+
+	/// The OVH consumer key from `consumer_key_env` (preferred) or inline.
+	fn consumer_key(&self) -> Option<String> {
+		if let Some(var) = &self.consumer_key_env {
+			return std::env::var(var).ok().filter(|s| !s.is_empty());
+		}
+		self.consumer_key.clone()
 	}
 
 	/// Resolve the scoped token from inline / env / file, in that precedence.
