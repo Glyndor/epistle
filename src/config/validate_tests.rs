@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn config_from(toml: &str) -> Result<Config, ConfigError> {
+pub(super) fn config_from(toml: &str) -> Result<Config, ConfigError> {
 	let config: Config = toml::from_str(toml).map_err(|e| ConfigError::Invalid(e.to_string()))?;
 	config.validate()?;
 	Ok(config)

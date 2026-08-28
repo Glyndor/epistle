@@ -6,6 +6,7 @@
 
 mod account;
 mod acme;
+mod alerts;
 mod alias;
 mod antispam;
 mod api;
@@ -27,6 +28,7 @@ mod webhook;
 
 pub use account::Account;
 pub use acme::Acme;
+pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
 pub use antispam::Llm;
 pub use api::Api;
@@ -222,6 +224,11 @@ pub struct Config {
 	/// Absent uses the secure defaults (strict outbound TLS).
 	#[serde(default)]
 	pub queue: Queue,
+	/// Alert rules: periodic metric comparisons that fire webhooks or email
+	/// when the configured condition holds. Absent or empty disables the
+	/// alert engine entirely (the default).
+	#[serde(default)]
+	pub alerts: Vec<Alert>,
 }
 
 impl std::fmt::Debug for Config {
@@ -271,6 +278,7 @@ impl std::fmt::Debug for Config {
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)
+			.field("alerts", &self.alerts)
 			.finish()
 	}
 }

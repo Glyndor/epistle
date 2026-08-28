@@ -312,3 +312,23 @@ pub(super) fn spawn_dkim_rotation(
 		}
 	});
 }
+
+/// Spawn the metric alert engine when `[[alerts]]` is non-empty. A no-op when
+/// the config has no rules: no task, no overhead.
+///
+/// One task per rule owns the snapshot/window/cooldown bookkeeping and posts
+/// the configured webhook/email when the rule crosses its threshold. The
+/// runner fails open: any dispatch error is logged and the task keeps
+/// evaluating on the next tick.
+pub(super) fn spawn_alert_engine(
+	config: &Config,
+	metrics: std::sync::Arc<crate::metrics::Metrics>,
+	webhook: Option<std::sync::Arc<crate::webhook::Webhook>>,
+	spool: std::sync::Arc<crate::storage::FsSpool>,
+) {
+	if config.alerts.is_empty() {
+		return;
+	}
+	let ctx = crate::alerts::context(webhook, spool, config.hostname.clone());
+	let _handle = crate::alerts::run(config.alerts.clone(), metrics, ctx);
+}
