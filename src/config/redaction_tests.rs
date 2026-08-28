@@ -12,11 +12,25 @@ use crate::config::{Database, Ldap, Oauth, Webhook};
 
 /// The recognition token for every test in this file. It must never appear
 /// inside any `format!("{:?}", …)` output of these structs.
-const SENTINEL: &str = "SENTINEL-DO-NOT-LEAK-8f3a";
+///
+/// Built at run time rather than written as a literal. A constant string
+/// flowing into `bind_password`, `signing_key`, `secret` or `srs_secret` is a
+/// constant reaching a credential-named sink, which is what
+/// `rust/hard-coded-cryptographic-value` reports — and it is right to: that is
+/// the shape of a real hard-coded secret, and the query cannot tell this one
+/// apart by looking at it.
+///
+/// #679 records the lesson from the six pull requests that tried to make the
+/// literal progressively harder to pattern-match: the alert moved six times and
+/// the code got worse. The fix is to remove the node the path starts from, not
+/// to disguise it. There is no constant here to start from.
+fn sentinel() -> String {
+	format!("SENTINEL-DO-NOT-LEAK-{}", uuid::Uuid::new_v4().simple())
+}
 
-fn assert_redacted(struct_name: &str, field_name: &str, rendered: &str) {
+fn assert_redacted(struct_name: &str, field_name: &str, sentinel: &str, rendered: &str) {
 	assert!(
-		!rendered.contains(SENTINEL),
+		!rendered.contains(sentinel),
 		"{struct_name}.{field_name} leaked through Debug: {rendered}"
 	);
 	assert!(
@@ -27,66 +41,71 @@ fn assert_redacted(struct_name: &str, field_name: &str, rendered: &str) {
 
 #[test]
 fn ldap_bind_password_is_redacted() {
+	let sentinel = sentinel();
 	let ldap: Ldap = toml::from_str(&format!(
 		r#"
 url = "ldaps://ldap.example.org"
 bind_dn = "cn=svc,dc=example,dc=org"
-bind_password = "{SENTINEL}"
+bind_password = "{sentinel}"
 base_dn = "ou=people,dc=example,dc=org"
 user_filter = "(uid=%s)"
 "#
 	))
 	.expect("ldap parses");
-	assert_redacted("Ldap", "bind_password", &format!("{ldap:?}"));
+	assert_redacted("Ldap", "bind_password", &sentinel, &format!("{ldap:?}"));
 }
 
 #[test]
 fn oauth_signing_key_is_redacted() {
+	let sentinel = sentinel();
 	let oauth: Oauth = toml::from_str(&format!(
 		r#"
 issuer = "https://idp.example"
 audience = "mail"
 algorithm = "ES256"
 public_key = "BASE64PUB"
-signing_key = "{SENTINEL}"
+signing_key = "{sentinel}"
 "#
 	))
 	.expect("oauth parses");
-	assert_redacted("Oauth", "signing_key", &format!("{oauth:?}"));
+	assert_redacted("Oauth", "signing_key", &sentinel, &format!("{oauth:?}"));
 }
 
 #[test]
 fn database_url_is_redacted() {
+	let sentinel = sentinel();
 	let db: Database = toml::from_str(&format!(
-		r#"url = "postgres://user:{SENTINEL}@host.example/mail"
+		r#"url = "postgres://user:{sentinel}@host.example/mail"
 max_connections = 5
 directory = true"#
 	))
 	.expect("database parses");
-	assert_redacted("Database", "url", &format!("{db:?}"));
+	assert_redacted("Database", "url", &sentinel, &format!("{db:?}"));
 }
 
 #[test]
 fn webhook_secret_is_redacted() {
+	let sentinel = sentinel();
 	let webhook: Webhook = toml::from_str(&format!(
 		r#"
 url = "https://hooks.example/mail"
-secret = "{SENTINEL}"
+secret = "{sentinel}"
 "#
 	))
 	.expect("webhook parses");
-	assert_redacted("Webhook", "secret", &format!("{webhook:?}"));
+	assert_redacted("Webhook", "secret", &sentinel, &format!("{webhook:?}"));
 }
 
 #[test]
 fn config_srs_secret_is_redacted() {
+	let sentinel = sentinel();
 	let config: Config = toml::from_str(&format!(
 		r#"
 hostname = "mail.example.org"
 data_dir = "/var/lib/mail"
-srs_secret = "{SENTINEL}"
+srs_secret = "{sentinel}"
 "#
 	))
 	.expect("config parses");
-	assert_redacted("Config", "srs_secret", &format!("{config:?}"));
+	assert_redacted("Config", "srs_secret", &sentinel, &format!("{config:?}"));
 }
