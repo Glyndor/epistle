@@ -16,6 +16,9 @@ use crate::smtp::directory::Directory;
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
+pub mod masked;
+pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
+
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
@@ -130,8 +133,16 @@ pub enum StoreError {
 	/// No dynamic account with the requested name. Carries the missing name.
 	#[error("no such dynamic account: {0}")]
 	NotFound(String),
-	/// Reading or writing the `accounts.toml` / `app_passwords.toml` sidecar
-	/// files failed. The wrapped `std::io::Error` carries the cause.
+	/// The per-account cap on masked addresses would be exceeded. Carries
+	/// the configured `max` so the API can render the limit to the operator.
+	#[error("masked-address limit reached: {max}")]
+	LimitReached {
+		/// The configured cap.
+		max: usize,
+	},
+	/// Reading or writing the `accounts.toml` / `app_passwords.toml` /
+	/// `masked.json` sidecar files failed. The wrapped `std::io::Error`
+	/// carries the cause.
 	#[error("storage failure: {0}")]
 	Io(#[from] std::io::Error),
 }
@@ -160,6 +171,10 @@ pub struct AccountStore {
 	/// Live LDAP authenticator (a worker thread), shared into every rebuilt
 	/// directory so per-request binds work after a refresh.
 	ldap_auth: Option<Arc<LdapAuthenticator>>,
+	/// Per-account masked email addresses, persisted to `masked.json`.
+	/// Wrapped in `Arc<RwLock<_>>` so the API can share the same handle and
+	/// mutate without going through `AccountStore`'s mutators.
+	masked: Arc<RwLock<MaskedAddressStore>>,
 	handle: DirectoryHandle,
 }
 
@@ -184,6 +199,8 @@ impl AccountStore {
 		// App passwords are an optional sidecar; a missing file is an empty set.
 		let app_passwords = AppPasswordStore::open(data_dir)?.entries().collect();
 
+		let masked = MaskedAddressStore::open(data_dir)?;
+
 		let store = AccountStore {
 			path,
 			domains,
@@ -196,6 +213,7 @@ impl AccountStore {
 			sql_accounts: RwLock::new(Vec::new()),
 			ldap_accounts: RwLock::new(Vec::new()),
 			ldap_auth: None,
+			masked: Arc::new(RwLock::new(masked)),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -245,6 +263,88 @@ impl AccountStore {
 	pub fn set_ldap_accounts(&self, accounts: Vec<LdapAccount>) {
 		*self.ldap_accounts.write().expect("store lock") = accounts;
 		self.handle.replace(self.build_directory());
+	}
+
+	/// Set the per-account cap on masked email addresses. 0 disables the cap.
+	/// Called once at startup with the configured value; the directory is
+	/// rebuilt so the next resolution cycle reflects the new limit on reads.
+	pub fn with_masked_max(self, max: usize) -> Self {
+		self.masked
+			.write()
+			.expect("masked lock")
+			.set_max_per_account(max);
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Shared handle to the masked-address store, for the API surface (and
+	/// tests). Mutations through the handle persist and rebuild the directory
+	/// on the way back, exactly as the methods below do.
+	pub fn masked_handle(&self) -> Arc<RwLock<MaskedAddressStore>> {
+		Arc::clone(&self.masked)
+	}
+
+	/// Snapshot of an account's masked addresses for the API list view.
+	pub fn list_masked(&self, account: &str) -> Vec<MaskedAddressView> {
+		self.masked
+			.read()
+			.expect("masked lock")
+			.list_for_account(account)
+	}
+
+	/// Create a new masked address for `account` in `domain`. The per-account
+	/// limit is enforced; the random suffix comes from the CSPRNG.
+	pub fn add_masked(
+		&self,
+		account: &str,
+		label: &str,
+		domain: &str,
+		now: u64,
+	) -> Result<MaskedAddress, StoreError> {
+		let entry = self
+			.masked
+			.write()
+			.expect("masked lock")
+			.add(account, label, domain, now)?;
+		self.handle.replace(self.build_directory());
+		Ok(entry)
+	}
+
+	/// Toggle the `enabled` flag on `address` owned by `account`.
+	pub fn set_masked_enabled(
+		&self,
+		account: &str,
+		address: &str,
+		enabled: bool,
+	) -> Result<bool, StoreError> {
+		let previous = self
+			.masked
+			.write()
+			.expect("masked lock")
+			.set_enabled(account, address, enabled)?;
+		self.handle.replace(self.build_directory());
+		Ok(previous)
+	}
+
+	/// Remove `address` owned by `account`. `NotFound` if absent or owned by
+	/// someone else.
+	pub fn remove_masked(&self, account: &str, address: &str) -> Result<(), StoreError> {
+		self.masked
+			.write()
+			.expect("masked lock")
+			.remove(account, address)?;
+		self.handle.replace(self.build_directory());
+		Ok(())
+	}
+
+	/// Best-effort touch of `last_used_at` on a successful delivery. Errors
+	/// are logged and swallowed; the SMTP path must not stall on the
+	/// metadata update.
+	pub fn touch_masked_last_used(&self, account: &str, address: &str, now: u64) {
+		self.masked
+			.write()
+			.expect("masked lock")
+			.touch_last_used(account, address, now);
 	}
 
 	/// The hot-reloadable handle shared with servers and delivery.
@@ -586,6 +686,15 @@ impl AccountStore {
 				},
 			)
 		});
+		// Masked email addresses: only enabled ones feed the directory so a
+		// disabled mask rejects like an unknown user and the SMTP `owns_address`
+		// check stays fail-closed.
+		let masked = self
+			.masked
+			.read()
+			.expect("masked lock")
+			.entries()
+			.collect::<Vec<_>>();
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
@@ -599,6 +708,7 @@ impl AccountStore {
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
 			.with_ldap(self.ldap_auth.clone())
+			.with_masked(masked)
 	}
 }
 

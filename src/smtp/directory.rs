@@ -75,6 +75,10 @@ pub struct Directory {
 	/// credential path yields no match, so local and SQL accounts never incur an
 	/// LDAP round trip (see [`Directory::authenticate_with_ip`]).
 	ldap: Option<std::sync::Arc<crate::directory_store::LdapAuthenticator>>,
+	/// Enabled masked email addresses (lowercased address → owning account).
+	/// Disabled masks are not present here, so they reject exactly like an
+	/// unknown user (the directory never reveals that one once existed).
+	masked_by_address: HashMap<String, String>,
 }
 
 impl Directory {
@@ -107,6 +111,7 @@ impl Directory {
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
 			ldap: None,
+			masked_by_address: HashMap::new(),
 		}
 	}
 
@@ -133,6 +138,18 @@ impl Directory {
 				.or_default()
 				.push(password);
 		}
+		self
+	}
+
+	/// Attach enabled masked email addresses (lowercased address → owning
+	/// account). Disabled masks are never inserted here — `resolve` and
+	/// `owns_address` must treat them identically to an unknown user so a
+	/// disabled mask never reveals that one once existed.
+	pub fn with_masked(mut self, entries: impl IntoIterator<Item = (String, String)>) -> Self {
+		self.masked_by_address = entries
+			.into_iter()
+			.map(|(address, account)| (address.to_ascii_lowercase(), account))
+			.collect();
 		self
 	}
 
@@ -454,6 +471,12 @@ impl Directory {
 					.is_some_and(|owner| owner == account)
 			});
 		}
+		// Sending as an enabled masked email address: the owner only. Disabled
+		// masks are absent from the map, so they fail closed the same way an
+		// unknown address does.
+		if let Some(owner) = self.masked_by_address.get(&key) {
+			return owner == account;
+		}
 		false
 	}
 
@@ -482,6 +505,11 @@ impl Directory {
 				.cloned()
 				.collect();
 			return Resolution::Alias(accounts);
+		}
+		// Enabled masked email address: deliver to its owner. Disabled masks
+		// are absent here, so they reject identically to unknown users.
+		if let Some(account) = self.masked_by_address.get(&key) {
+			return Resolution::Account(account.clone());
 		}
 		// Sub-addressing: strip the tag and retry the base address.
 		if let Some(base) = self.strip_subaddress(local, domain)
@@ -520,3 +548,7 @@ mod tests;
 #[cfg(test)]
 #[path = "directory_app_password_tests.rs"]
 mod app_password_tests;
+
+#[cfg(test)]
+#[path = "directory_masked_tests.rs"]
+mod masked_tests;

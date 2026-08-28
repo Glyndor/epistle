@@ -31,6 +31,12 @@ pub enum AuditEvent {
 	TotpEnrolled,
 	/// A dynamic account's TOTP secret was cleared (2FA disabled).
 	TotpDisabled,
+	/// A masked email address was minted for an account.
+	MaskedCreated,
+	/// A masked email address was disabled or re-enabled.
+	MaskedUpdated,
+	/// A masked email address was removed from an account.
+	MaskedRemoved,
 }
 
 impl AuditEvent {
@@ -41,6 +47,9 @@ impl AuditEvent {
 			AuditEvent::PasswordReset => "account.password_reset",
 			AuditEvent::TotpEnrolled => "account.totp_enrolled",
 			AuditEvent::TotpDisabled => "account.totp_disabled",
+			AuditEvent::MaskedCreated => "masked.created",
+			AuditEvent::MaskedUpdated => "masked.updated",
+			AuditEvent::MaskedRemoved => "masked.removed",
 		}
 	}
 }

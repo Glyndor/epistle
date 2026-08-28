@@ -57,7 +57,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)
 	.map_err(|error| std::io::Error::other(error.to_string()))?
 	.with_domain_quotas(config.domain_quotas.clone())
-	.with_aliases(config.alias.clone());
+	.with_aliases(config.alias.clone())
+	.with_masked_max(config.masked_addresses_max);
 	if let Some(auth) = ldap_auth {
 		store = store.with_ldap_authenticator(auth);
 	}

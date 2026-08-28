@@ -53,6 +53,16 @@ impl ApiError {
 			message: "Too many failed authentication attempts. Try again later.".to_string(),
 		}
 	}
+
+	/// `429` with a caller-supplied message. Used by quota/limit errors that
+	/// are not about the auth failure budget (e.g. masked-address caps).
+	pub fn rate_limited_with(message: impl Into<String>) -> Self {
+		ApiError {
+			status: StatusCode::TOO_MANY_REQUESTS,
+			code: "rate_limited",
+			message: message.into(),
+		}
+	}
 }
 
 #[derive(Serialize)]
