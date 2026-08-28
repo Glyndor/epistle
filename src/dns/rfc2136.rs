@@ -46,12 +46,12 @@ use hickory_resolver::proto::rr::{
 	DNSClass, Name, RData, Record, RecordType, TSigner,
 	rdata::tlsa::{CertUsage, Matching, Selector},
 	rdata::tsig::TsigAlgorithm,
-	rdata::{CNAME, TLSA, TXT},
+	rdata::{CNAME, SRV, TLSA, TXT},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// Default TSIG fudge (RFC 8945 §5.2 — maximum tolerance between client
 /// and server clocks). Five minutes mirrors what most resolvers accept.
@@ -121,17 +121,18 @@ impl Rfc2136Provider {
 		}
 	}
 
-	/// The record kinds this provider can publish. MX/SRV would need
-	/// extra fields (preference, weight) we do not build; return
-	/// Unsupported rather than emit a malformed record.
+	/// The record kinds this provider can publish. SRV maps directly from the
+	/// presentation form to the wire format; MX needs the priority split out
+	/// (epistle still packs it into the value).
 	fn supported_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv => Ok(kind.as_str()),
+			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -350,7 +351,14 @@ fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
 				cert,
 			)))
 		}
-		RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+		RecordKind::Srv => {
+			let (priority, weight, port, target) = parse_srv(value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {value}")))?;
+			let target_name = Name::from_ascii(&target)
+				.map_err(|e| ProviderError::Remote(format!("bad SRV target: {e}")))?;
+			Ok(RData::SRV(SRV::new(priority, weight, port, target_name)))
+		}
+		RecordKind::Mx => Err(ProviderError::Unsupported),
 	}
 }
 

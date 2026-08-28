@@ -145,3 +145,24 @@ async fn list_is_unsupported() {
 		Err(ProviderError::Unsupported)
 	);
 }
+
+#[tokio::test]
+async fn srv_upsert_uses_verbatim_value_in_value_element() {
+	let (provider, state) = mock().await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".into(),
+		ttl: 3600,
+	};
+	provider
+		.upsert("example.org", srv)
+		.await
+		.expect("srv upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("<Type>SRV</Type>"), "{body}");
+	assert!(
+		body.contains("<Value>0 1 465 mail.example.org.</Value>"),
+		"{body}"
+	);
+}

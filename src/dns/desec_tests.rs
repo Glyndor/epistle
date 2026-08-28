@@ -146,3 +146,20 @@ async fn unsupported_kind_is_rejected() {
 		Err(ProviderError::Unsupported)
 	);
 }
+
+#[tokio::test]
+async fn srv_upsert_puts_unquoted_value_with_correct_subname() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(body.contains("\"subname\":\"_submissions._tcp\""), "{body}");
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	// deSEC stores SRV values unquoted, as `<prio> <weight> <port> <target>`.
+	assert!(body.contains("\"records\":[\"0 1 465 mail.example.org.\"]"), "{body}");
+}

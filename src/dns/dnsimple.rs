@@ -22,7 +22,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// DNSimple's API root. The account id goes in the path (`/v2/{id}/...`), so
 /// the base stops at `/v2` and we append `<account_id>` per request.
@@ -66,6 +66,12 @@ struct Record {
 	content: String,
 	#[serde(default)]
 	ttl: u32,
+	#[serde(default)]
+	priority: Option<u16>,
+	#[serde(default)]
+	weight: Option<u16>,
+	#[serde(default)]
+	port: Option<u16>,
 }
 
 impl DnsimpleProvider {
@@ -95,14 +101,17 @@ impl DnsimpleProvider {
 	}
 
 	/// The DNSimple record type token for a kind we can publish. TXT/A/AAAA/CNAME
-	/// go through the plain `content` field; MX/SRV (which need priority/weight)
-	/// and TLSA (no structured field) are not yet supported.
+	/// and SRV (after splitting priority/weight/port/target) go through `content`
+	/// plus dedicated fields; TLSA has no structured field on DNSimple, and MX
+	/// needs the priority split out, so both stay Unsupported.
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
-			RecordKind::A | RecordKind::Aaaa | RecordKind::Txt | RecordKind::Cname => {
-				Ok(kind.as_str())
-			}
-			RecordKind::Mx | RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::A
+			| RecordKind::Aaaa
+			| RecordKind::Txt
+			| RecordKind::Cname
+			| RecordKind::Srv => Ok(kind.as_str()),
+			RecordKind::Mx | RecordKind::Tlsa => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -172,13 +181,30 @@ impl DnsimpleProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let relative = self.relative_name(&record.name);
-		let body = serde_json::json!({
-			"name": relative,
-			"type": kind,
-			"content": record.value,
-			"ttl": record.ttl,
-		})
-		.to_string();
+		let body = if record.kind == RecordKind::Srv {
+			let (priority, weight, port, target) =
+				parse_srv(&record.value).ok_or_else(|| {
+					ProviderError::Remote(format!("bad SRV value: {}", record.value))
+				})?;
+			serde_json::json!({
+				"name": relative,
+				"type": kind,
+				"content": target,
+				"ttl": record.ttl,
+				"priority": priority,
+				"weight": weight,
+				"port": port,
+			})
+			.to_string()
+		} else {
+			serde_json::json!({
+				"name": relative,
+				"type": kind,
+				"content": record.value,
+				"ttl": record.ttl,
+			})
+			.to_string()
+		};
 		let url = self.url(&format!("/zones/{}/records", zone));
 		let existing = self.find_id(zone, &relative, kind).await?;
 		let request = if let Some(id) = existing {
@@ -230,18 +256,29 @@ impl DnsimpleProvider {
 		let zone_label = self.secret.zone().to_string();
 		Ok(records
 			.into_iter()
-			.map(|r| {
+			.filter_map(|r| {
 				let name = if r.name.is_empty() {
 					zone_label.clone()
 				} else {
 					format!("{}.{}", r.name, zone_label)
 				};
-				DnsRecord {
+				let kind = parse_kind(&r.kind);
+				let value = if kind == RecordKind::Srv {
+					match (r.priority, r.weight, r.port) {
+						(Some(p), Some(w), Some(port)) => {
+							format!("{p} {w} {port} {}", r.content.trim_end_matches('.'))
+						}
+						_ => return None,
+					}
+				} else {
+					r.content
+				};
+				Some(DnsRecord {
 					name,
-					kind: parse_kind(&r.kind),
-					value: r.content,
+					kind,
+					value,
 					ttl: r.ttl,
-				}
+				})
 			})
 			.collect())
 	}

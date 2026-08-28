@@ -9,7 +9,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// DigitalOcean's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.digitalocean.com";
@@ -52,6 +52,12 @@ struct DomainRecord {
 	data: String,
 	#[serde(default)]
 	ttl: u32,
+	#[serde(default)]
+	priority: Option<u16>,
+	#[serde(default)]
+	weight: Option<u16>,
+	#[serde(default)]
+	port: Option<u16>,
 }
 
 #[derive(Deserialize)]
@@ -75,16 +81,18 @@ impl DigitaloceanProvider {
 		self
 	}
 
-	/// The DigitalOcean type token for a kind we can publish; MX/SRV need
-	/// priority/weight/port fields the rest of epistle does not emit yet.
+	/// The DigitalOcean type token for a kind we can publish; SRV uses
+	/// dedicated `priority`/`weight`/`port`/`data` fields, MX needs the
+	/// priority split out (epistle still packs it into the value).
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv => Ok(kind.as_str()),
+			RecordKind::Mx => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -249,15 +257,30 @@ impl DigitaloceanProvider {
 
 	/// Build the create/update JSON body. DigitalOcean stores TXT content
 	/// unquoted (the API adds the DNS wire-format quotes server-side), so we
-	/// pass `record.value` straight through for TXT and never re-quote.
-	fn record_body(kind: &str, rel: &str, record: &DnsRecord) -> String {
-		serde_json::json!({
+	/// pass `record.value` straight through for TXT and never re-quote. SRV
+	/// splits the presentation form into the dedicated fields.
+	fn record_body(kind: &str, rel: &str, record: &DnsRecord) -> Result<String, ProviderError> {
+		if record.kind == RecordKind::Srv {
+			let (priority, weight, port, target) = parse_srv(&record.value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
+			return Ok(serde_json::json!({
+				"type": kind,
+				"name": rel,
+				"data": target,
+				"priority": priority,
+				"weight": weight,
+				"port": port,
+				"ttl": record.ttl,
+			})
+			.to_string());
+		}
+		Ok(serde_json::json!({
 			"type": kind,
 			"name": rel,
 			"data": record.value,
 			"ttl": record.ttl,
 		})
-		.to_string()
+		.to_string())
 	}
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
@@ -265,7 +288,7 @@ impl DigitaloceanProvider {
 		let kind = Self::api_kind(record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
-		let body = Self::record_body(kind, &rel, &record);
+		let body = Self::record_body(kind, &rel, &record)?;
 		match existing
 			.into_iter()
 			.find(|r| r.kind == kind && r.name == rel)
@@ -296,18 +319,29 @@ impl DigitaloceanProvider {
 		let records = self.list_all(zone).await?;
 		Ok(records
 			.into_iter()
-			.map(|r| {
+			.filter_map(|r| {
 				let name = if r.name == "@" {
 					zone.to_string()
 				} else {
 					format!("{}.{}", r.name, zone)
 				};
-				DnsRecord {
+				let kind = parse_kind(&r.kind);
+				let value = if kind == RecordKind::Srv {
+					match (r.priority, r.weight, r.port) {
+						(Some(p), Some(w), Some(port)) => {
+							format!("{p} {w} {port} {}", r.data.trim_end_matches('.'))
+						}
+						_ => return None,
+					}
+				} else {
+					r.data
+				};
+				Some(DnsRecord {
 					name,
-					kind: parse_kind(&r.kind),
-					value: r.data,
+					kind,
+					value,
 					ttl: r.ttl,
-				}
+				})
 			})
 			.collect())
 	}

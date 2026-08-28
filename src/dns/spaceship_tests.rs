@@ -346,3 +346,22 @@ async fn unsupported_kind_is_rejected() {
 		Err(ProviderError::Unsupported)
 	);
 }
+
+#[tokio::test]
+async fn srv_upsert_splits_into_priority_weight_port_target() {
+	let (provider, state) = mock(Vec::new()).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	// Spaceship upserts as `remove then add`; the PUT body is the last one.
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"weight\":1"), "{body}");
+	assert!(body.contains("\"port\":465"), "{body}");
+	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
+}

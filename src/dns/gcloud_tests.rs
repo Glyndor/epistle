@@ -211,6 +211,25 @@ async fn unsupported_kind_is_rejected() {
 	);
 }
 
+#[tokio::test]
+async fn srv_upsert_passes_value_through_in_rrdatas() {
+	let (base, state) = start_mock(Vec::new()).await;
+	let provider = provider_for(&base);
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	let body = state.lock().unwrap().changes.last().cloned().unwrap();
+	// Cloud DNS carries SRV in rrdatas as `prio weight port target.`
+	// (presentation form, no quotes), per
+	// https://cloud.google.com/dns/docs/records-overview.
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	assert!(body.contains("\"rrdatas\":[\"0 1 465 mail.example.org.\"]"), "{body}");
+}
+
 /// PEM round-trip: a valid PKCS#8 PEM decodes to a non-empty DER blob.
 #[test]
 fn pem_decoder_round_trips_a_pkcs8_block() {

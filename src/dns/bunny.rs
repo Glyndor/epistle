@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// Bunny's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.bunny.net";
@@ -98,15 +98,18 @@ impl BunnyProvider {
 	}
 
 	/// Bunny's numeric record type for a kind we publish. Anything else
-	/// (MX/SRV need priority/weight; TLSA needs tag/value we do not emit)
-	/// returns [`ProviderError::Unsupported`].
+	/// (MX needs priority/weight; TLSA needs tag/value we do not emit)
+	/// returns [`ProviderError::Unsupported`]. SRV (type 8) carries the
+	/// four-tuple in the `Value` field as `weight port target` (priority is
+	/// not editable through Bunny's API for SRV — it is always 0).
 	fn api_type(kind: RecordKind) -> Result<i64, ProviderError> {
 		match kind {
 			RecordKind::A => Ok(0),
 			RecordKind::Aaaa => Ok(1),
 			RecordKind::Cname => Ok(2),
 			RecordKind::Txt => Ok(3),
-			RecordKind::Mx | RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			RecordKind::Srv => Ok(8),
+			RecordKind::Mx | RecordKind::Tlsa => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -178,12 +181,21 @@ impl BunnyProvider {
 			.map_err(|e| ProviderError::Remote(e.to_string()))
 	}
 
-	/// Build the create/update body for one record.
+	/// Build the create/update body for one record. SRV carries the
+	/// `weight port target` triple in `Value` (priority is fixed at 0 by the
+	/// Bunny API), every other supported kind carries the value verbatim.
 	fn record_body(&self, record: &DnsRecord, rtype: i64) -> Result<String, ProviderError> {
+		let value = if record.kind == RecordKind::Srv {
+			let (_prio, weight, port, target) = parse_srv(&record.value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
+			format!("{weight} {port} {target}")
+		} else {
+			record.value.clone()
+		};
 		Ok(serde_json::json!({
 			"Type": rtype,
 			"Name": self.subname(&record.name),
-			"Value": record.value,
+			"Value": value,
 			"Ttl": record.ttl,
 		})
 		.to_string())
@@ -252,19 +264,34 @@ impl BunnyProvider {
 		Ok(detail
 			.records
 			.into_iter()
-			.map(|r| {
+			.filter_map(|r| {
 				let name_rel = r.name.unwrap_or_default();
 				let name = if name_rel.is_empty() {
 					zone.clone()
 				} else {
 					format!("{name_rel}.{zone}")
 				};
-				DnsRecord {
+				let kind = parse_kind(r.rtype);
+				let value_raw = r.value.unwrap_or_default();
+				let value = if kind == RecordKind::Srv {
+					// Bunny returns SRV values as `weight port target`; lift
+					// them into the canonical `priority weight port target.`
+					// form (Bunny's API pins priority to 0, so the wire value
+					// is exactly the one we will need to upsert later).
+					let mut parts = value_raw.split_whitespace();
+					let weight = parts.next()?;
+					let port = parts.next()?;
+					let target = parts.collect::<Vec<_>>().join(" ");
+					format!("0 {weight} {port} {target}")
+				} else {
+					value_raw
+				};
+				Some(DnsRecord {
 					name,
-					kind: parse_kind(r.rtype),
-					value: r.value.unwrap_or_default(),
+					kind,
+					value,
 					ttl: r.ttl.max(0) as u32,
-				}
+				})
 			})
 			.collect())
 	}

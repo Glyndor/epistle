@@ -9,6 +9,51 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 
+/// An SRV service descriptor: a `(name, port)` pair the operator wants to
+/// advertise. The record's FQDN is `<name>._tcp.<zone>`; priority and weight
+/// are the Stalwart-parity defaults (priority 0, weight 1).
+struct SrvService {
+	name: &'static str,
+	port: u16,
+}
+
+/// All the SRV records epistle publishes. Per RFC 6186 (IMAP/POP3/SUBMISSION)
+/// and RFC 8314 (Implicit TLS), RFC 8621 (JMAP), and ManageSieve (RFC 5804).
+/// CalDAV/CardDAV SRVs are added in [`build_records`] when the `webdav`
+/// module exposes them.
+const SRV_SERVICES: &[SrvService] = &[
+	SrvService { name: "_submissions", port: 465 },
+	SrvService { name: "_submission", port: 587 },
+	SrvService { name: "_imaps", port: 993 },
+	SrvService { name: "_imap", port: 143 },
+	SrvService { name: "_pop3s", port: 995 },
+	SrvService { name: "_jmap", port: 443 },
+	SrvService { name: "_sieve", port: 4190 },
+];
+
+/// Which extra services the deployment exposes. Drives the optional SRV
+/// records (CalDAV/CardDAV) and the optional CNAME discovery records (CAA
+/// only when the ACME directory is a known one — see
+/// [`crate::config::acme::Acme`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Services {
+	/// CalDAV (RFC 4791) is served by the in-tree `webdav` module.
+	pub caldav: bool,
+	/// CardDAV (RFC 6352) is served by the in-tree `webdav` module.
+	pub carddav: bool,
+}
+
+impl Services {
+	/// Every service on: the default for a full epistle deployment where
+	/// the `webdav` listener is configured.
+	pub fn all() -> Self {
+		Services {
+			caldav: true,
+			carddav: true,
+		}
+	}
+}
+
 /// A record to publish, paired with the zone it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishRecord {
@@ -26,13 +71,16 @@ const TTL: u32 = 3600;
 ///
 /// `dkim` is the `<selector>._domainkey` value (from the loaded signer) when
 /// DKIM is configured; `tlsa` is the `3 0 1` association for the mail host's
-/// certificate when one is available; `mta_sts_id` versions the MTA-STS record.
+/// certificate when one is available; `mta_sts_id` versions the MTA-STS record;
+/// `services` toggles the optional SRV records (CalDAV/CardDAV are tied to the
+/// `webdav` listener).
 pub fn build_records(
 	domains: &[String],
 	hostname: &str,
 	dkim: Option<(&str, &str)>,
 	tlsa: Option<&str>,
 	mta_sts_id: &str,
+	services: Services,
 ) -> Vec<PublishRecord> {
 	let mut records = Vec::new();
 	for domain in domains {
@@ -42,6 +90,15 @@ pub fn build_records(
 				name,
 				kind: RecordKind::Txt,
 				value,
+				ttl: TTL,
+			},
+		};
+		let srv = |name: String, port: u16| PublishRecord {
+			zone: domain.clone(),
+			record: DnsRecord {
+				name,
+				kind: RecordKind::Srv,
+				value: format!("0 1 {port} {hostname}."),
 				ttl: TTL,
 			},
 		};
@@ -80,6 +137,18 @@ pub fn build_records(
 				format!("{selector}._domainkey.{domain}"),
 				value.to_string(),
 			));
+		}
+		// Service locators (RFC 6186, 8314, 8621, 5804) — mail, JMAP, and
+		// ManageSieve always; CalDAV/CardDAV only when the webdav listener
+		// exposes them.
+		for svc in SRV_SERVICES {
+			records.push(srv(format!("{}._{}.{domain}", svc.name, "tcp"), svc.port));
+		}
+		if services.caldav {
+			records.push(srv(format!("_caldavs._tcp.{domain}"), 443));
+		}
+		if services.carddav {
+			records.push(srv(format!("_carddavs._tcp.{domain}"), 443));
 		}
 	}
 

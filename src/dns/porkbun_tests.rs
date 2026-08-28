@@ -305,6 +305,26 @@ async fn unsupported_kind_is_rejected() {
 }
 
 #[tokio::test]
+async fn srv_upsert_passes_value_through_and_sets_prio_to_priority() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	let body = state.lock().unwrap().body("/dns/create/example.org");
+	assert_eq!(body["type"], "SRV");
+	assert_eq!(body["name"], "_submissions._tcp");
+	// Porkbun's SRV `content` field carries the full value verbatim; the
+	// `prio` field is the plain preference (here, the priority — weight and
+	// port are part of the value).
+	assert_eq!(body["content"], "0 1 465 mail.example.org");
+	assert_eq!(body["prio"], serde_json::json!(0));
+}
+
+#[tokio::test]
 async fn error_status_with_http_200_is_a_failure() {
 	let (provider, state) = mock(serde_json::json!([])).await;
 	state.lock().unwrap().fail = Some(serde_json::json!({

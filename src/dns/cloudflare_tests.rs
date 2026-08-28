@@ -14,6 +14,10 @@ struct MockState {
 	records: Vec<serde_json::Value>,
 	/// Captured "METHOD /path" of every request, for assertions.
 	calls: Vec<String>,
+	/// Body of the most recent POST to `/dns_records` (assertions check the
+	/// kind-specific shape: SRV splits priority/weight/port/target into
+	/// `data`, TLSA splits usage/selector/matching/cert, etc.).
+	last_body: Option<String>,
 }
 
 type Shared = Arc<Mutex<MockState>>;
@@ -26,9 +30,13 @@ async fn list_zones(State(state): State<Shared>) -> axum::Json<serde_json::Value
 async fn records_collection(
 	State(state): State<Shared>,
 	method: axum::http::Method,
+	body: String,
 ) -> axum::Json<serde_json::Value> {
 	let mut s = state.lock().unwrap();
 	s.calls.push(format!("{method} /dns_records"));
+	if method == axum::http::Method::POST {
+		s.last_body = Some(body);
+	}
 	if method == axum::http::Method::GET {
 		let result = s.records.clone();
 		axum::Json(serde_json::json!({ "result": result, "success": true }))
@@ -54,6 +62,7 @@ async fn mock(records: Vec<serde_json::Value>) -> (CloudflareProvider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState {
 		records,
 		calls: Vec::new(),
+		last_body: None,
 	}));
 	let app = Router::new()
 		.route("/zones", get(list_zones))
@@ -191,4 +200,49 @@ fn record_body_uses_data_for_tlsa_and_content_otherwise() {
 	};
 	let body = CloudflareProvider::record_body("TXT", &txt).expect("txt body");
 	assert!(body.contains("\"content\":\"v=spf1 -all\""), "{body}");
+}
+
+#[test]
+fn record_body_splits_srv_into_priority_weight_port_target() {
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	let body = CloudflareProvider::record_body("SRV", &srv).expect("srv body");
+	assert!(body.contains("\"data\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"weight\":1"), "{body}");
+	assert!(body.contains("\"port\":465"), "{body}");
+	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
+	assert!(!body.contains("\"content\""), "{body}");
+}
+
+#[tokio::test]
+async fn srv_upsert_posts_with_data_fields() {
+	let (provider, state) = mock(Vec::new()).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	provider
+		.upsert("example.org", srv)
+		.await
+		.expect("srv upsert");
+	let body = state
+		.lock()
+		.unwrap()
+		.last_body
+		.clone()
+		.expect("post body captured");
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	assert!(body.contains("\"data\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"weight\":1"), "{body}");
+	assert!(body.contains("\"port\":465"), "{body}");
+	assert!(body.contains("\"target\":\"mail.example.org\""), "{body}");
+	assert!(!body.contains("\"content\""), "{body}");
 }

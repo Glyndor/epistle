@@ -134,15 +134,19 @@ impl DnsProvider for Route53Provider {
 	}
 }
 
-/// The Route 53 record type for a kind we can publish.
+/// The Route 53 record type for a kind we can publish. SRV uses the same
+/// presentation form we emit elsewhere (`<prio> <weight> <port> <target>.`),
+/// which Route 53 accepts verbatim; MX needs the priority split out, which
+/// epistle does not build yet.
 fn record_type(kind: RecordKind) -> Result<&'static str, ProviderError> {
 	match kind {
 		RecordKind::A
 		| RecordKind::Aaaa
 		| RecordKind::Txt
 		| RecordKind::Cname
-		| RecordKind::Tlsa => Ok(kind.as_str()),
-		RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+		| RecordKind::Tlsa
+		| RecordKind::Srv => Ok(kind.as_str()),
+		RecordKind::Mx => Err(ProviderError::Unsupported),
 	}
 }
 

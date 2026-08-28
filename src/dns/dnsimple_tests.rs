@@ -332,3 +332,21 @@ async fn unsupported_kind_is_rejected() {
 	);
 	assert!(state.lock().unwrap().calls.is_empty());
 }
+
+#[tokio::test]
+async fn srv_upsert_splits_priority_weight_port_target_into_fields() {
+	let (provider, state) = mock(Vec::new()).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	provider.upsert(ZONE, srv).await.expect("srv upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	assert!(body.contains("\"content\":\"mail.example.org\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"weight\":1"), "{body}");
+	assert!(body.contains("\"port\":465"), "{body}");
+}

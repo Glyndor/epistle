@@ -385,6 +385,36 @@ async fn unsupported_kind_is_rejected() {
 }
 
 #[tokio::test]
+async fn srv_upsert_encodes_priority_weight_port_target_in_wire_message() {
+	let (endpoint, captured) =
+		spawn_server(|_| ServerReply::NoError { verify_signer: make_signing_pair() }).await;
+	let provider = provider_with_endpoint(endpoint);
+	let srv = DnsRecord {
+		name: format!("_submissions._tcp.{ZONE}"),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".to_string(),
+		ttl: 3600,
+	};
+	provider.upsert(ZONE, srv).await.expect("srv upsert");
+	let caps = captured.lock().unwrap();
+	let wire = caps.first().expect("captured a request").wire.clone();
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	let updates = msg.updates();
+	let add = updates
+		.iter()
+		.find(|r| matches!(r.data, hickory_resolver::proto::rr::RData::SRV(_)))
+		.expect("add SRV RR");
+	if let hickory_resolver::proto::rr::RData::SRV(srv) = &add.data {
+		assert_eq!(srv.priority, 0);
+		assert_eq!(srv.weight, 1);
+		assert_eq!(srv.port, 465);
+		assert_eq!(srv.target.to_ascii(), "mail.example.org.");
+	} else {
+		panic!("expected SRV rdata");
+	}
+}
+
+#[tokio::test]
 async fn server_returning_notauth_is_mapped_to_auth_error() {
 	// The server rejects the request without verifying TSIG (e.g. the
 	// key is unknown). RFC 2136 says it answers NOTAUTH.

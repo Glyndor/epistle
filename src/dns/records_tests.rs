@@ -17,6 +17,7 @@ fn builds_core_records_per_domain() {
 		Some(("mail", "v=DKIM1; k=ed25519; p=AAAA")),
 		None,
 		"v1",
+		Services::all(),
 	);
 
 	assert_eq!(
@@ -61,6 +62,7 @@ fn omits_dkim_when_absent_and_tlsa_when_no_cert() {
 		None,
 		None,
 		"v1",
+		Services::all(),
 	);
 	assert!(!records.iter().any(|r| r.record.name.contains("_domainkey")));
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Tlsa));
@@ -74,6 +76,7 @@ fn tlsa_record_added_once_for_host() {
 		None,
 		Some("3 0 1 abcd"),
 		"v1",
+		Services::all(),
 	);
 	let tlsa: Vec<_> = records
 		.iter()
@@ -82,6 +85,58 @@ fn tlsa_record_added_once_for_host() {
 	assert_eq!(tlsa.len(), 1);
 	assert_eq!(tlsa[0].record.name, "_25._tcp.mail.host.example");
 	assert_eq!(tlsa[0].record.value, "3 0 1 abcd");
+}
+
+#[test]
+fn builds_srv_records_for_mail_jmap_and_sieve() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+	);
+	let submissions = find(&records, "_submissions._tcp.example.org", RecordKind::Srv);
+	assert_eq!(submissions.record.value, "0 1 465 mail.example.org.");
+	let jmap = find(&records, "_jmap._tcp.example.org", RecordKind::Srv);
+	assert_eq!(jmap.record.value, "0 1 443 mail.example.org.");
+	let sieve = find(&records, "_sieve._tcp.example.org", RecordKind::Srv);
+	assert_eq!(sieve.record.value, "0 1 4190 mail.example.org.");
+}
+
+#[test]
+fn caldav_and_carddav_srv_are_optional() {
+	let without = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::default(),
+	);
+	assert!(!without
+		.iter()
+		.any(|r| r.record.name == "_caldavs._tcp.example.org"));
+	assert!(!without
+		.iter()
+		.any(|r| r.record.name == "_carddavs._tcp.example.org"));
+	let with = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+	);
+	assert!(with
+		.iter()
+		.any(|r| r.record.name == "_caldavs._tcp.example.org"
+			&& r.record.value == "0 1 443 mail.example.org."));
+	assert!(with
+		.iter()
+		.any(|r| r.record.name == "_carddavs._tcp.example.org"
+			&& r.record.value == "0 1 443 mail.example.org."));
 }
 
 #[test]

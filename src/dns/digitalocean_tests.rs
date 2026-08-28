@@ -312,6 +312,24 @@ async fn unsupported_kind_is_rejected() {
 }
 
 #[tokio::test]
+async fn srv_upsert_splits_into_priority_weight_port_data() {
+	let (provider, state) = mock(Vec::new(), false).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	let body = state.lock().unwrap().bodies.last().cloned().unwrap();
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	assert!(body.contains("\"data\":\"mail.example.org\""), "{body}");
+	assert!(body.contains("\"priority\":0"), "{body}");
+	assert!(body.contains("\"weight\":1"), "{body}");
+	assert!(body.contains("\"port\":465"), "{body}");
+}
+
+#[tokio::test]
 async fn list_follows_pagination_next_link() {
 	let records = vec![serde_json::json!({
 		"id": 1, "type": "TXT", "name": "@",
