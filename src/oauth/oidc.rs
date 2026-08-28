@@ -10,7 +10,7 @@
 //! The `jwks_uri` named by the discovery document is fetched as a second
 //! request. That URL is chosen by the IdP, not the operator, so a hostile or
 //! compromised IdP could point it at an internal address (cloud metadata at
-//! `169.254.169.254`, a service on the LAN, ...). [`ensure_jwks_uri_in_scope`]
+//! `169.254.169.254`, a service on the LAN, ...). `ensure_jwks_uri_in_scope`
 //! closes that pivot: a `jwks_uri` that resolves to a private, loopback,
 //! link-local or unspecified address is accepted only when the same address is
 //! also reachable from the discovery URL's host. That keeps a legitimate
