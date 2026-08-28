@@ -35,6 +35,7 @@ use std::sync::Arc;
 use base64::Engine;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
+use zeroize::Zeroizing;
 
 /// Magic prefix marking an encrypted message file. The trailing version digit
 /// and NUL let the format evolve without ambiguity against plaintext mail.
@@ -250,30 +251,48 @@ fn file_has_magic(path: &Path) -> bool {
 
 /// Resolve the raw key bytes from the configured source, if any. The file source
 /// takes precedence over the environment variable when both are set.
-fn load_key_bytes(storage: &crate::config::Storage) -> Result<Option<Vec<u8>>, CryptoError> {
+///
+/// The returned bytes and the intermediate base64 string (read from file or env)
+/// are wrapped in [`Zeroizing`] so the buffers are overwritten when dropped,
+/// shrinking the window in which the master key sits in freed memory, in a
+/// core dump, or on the swap device. This is a best-effort mitigation, not a
+/// guarantee: the allocator may have copied the buffer while it was live, the
+/// kernel may have paged it out before the drop ran, and the live `LessSafeKey`
+/// inside [`MessageCrypto`] keeps its own copy for the life of the process.
+/// Closing those gaps takes locked memory and is a separate piece of work.
+fn load_key_bytes(
+	storage: &crate::config::Storage,
+) -> Result<Option<Zeroizing<Vec<u8>>>, CryptoError> {
 	if let Some(path) = &storage.encryption_key_file {
-		let raw = std::fs::read_to_string(path).map_err(|source| CryptoError::KeyFile {
-			path: path.clone(),
-			source,
-		})?;
+		let raw: Zeroizing<String> =
+			Zeroizing::new(std::fs::read_to_string(path).map_err(|source| {
+				CryptoError::KeyFile {
+					path: path.clone(),
+					source,
+				}
+			})?);
 		return Ok(Some(decode_key_text(raw.trim())?));
 	}
 	if let Some(var) = &storage.encryption_key_env {
-		let raw = std::env::var(var).map_err(|_| CryptoError::KeyEnvMissing(var.clone()))?;
+		let raw: Zeroizing<String> = Zeroizing::new(
+			std::env::var(var).map_err(|_| CryptoError::KeyEnvMissing(var.clone()))?,
+		);
 		return Ok(Some(decode_key_text(raw.trim())?));
 	}
 	Ok(None)
 }
 
-/// Base64-decode a key string to exactly [`KEY_LEN`] bytes.
-fn decode_key_text(text: &str) -> Result<Vec<u8>, CryptoError> {
+/// Base64-decode a key string to exactly [`KEY_LEN`] bytes. The decoded buffer
+/// is wrapped in [`Zeroizing`] for the same reason as in [`load_key_bytes`]:
+/// callers will hand it to [`build_key`] and let it drop.
+fn decode_key_text(text: &str) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
 	let bytes = base64::engine::general_purpose::STANDARD
 		.decode(text)
 		.map_err(|_| CryptoError::KeyMalformed)?;
 	if bytes.len() != KEY_LEN {
 		return Err(CryptoError::KeyMalformed);
 	}
-	Ok(bytes)
+	Ok(Zeroizing::new(bytes))
 }
 
 /// Build a sealing/opening key from exactly [`KEY_LEN`] raw bytes.
