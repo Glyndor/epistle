@@ -40,3 +40,15 @@ jobs:
       # alone does not reveal. sid carries 1.95. Digest-pinned so the check runs
       # against a fixed environment instead of a moving tag.
       debian-image: "debian:sid@sha256:24c766c06ebdbda66a026e92361ede7d9212819701b2fca82e347ef0c240cb2c"
+      # Debian's toolchain ships no musl standard library, so debian/rules
+      # builds for a target it has to bring itself. Keep this in step with
+      # ci.yml's toolchain: the whole point is that the packaged binary comes
+      # from the compiler CI validates with.
+      rust-toolchain: "1.98"
+      rust-target: x86_64-unknown-linux-musl
+      # aws-lc-sys is the only -sys crate in the tree and it compiles C, so
+      # cross-compiling to musl needs a C cross-compiler. ring and rcgen
+      # compile C without being -sys crates; the same package covers all three.
+      # Measured by .github/workflows/probe-musl.yml (epistle#757, closed):
+      # without it the build fails at aws-lc-sys and the floor survives.
+      apt-packages: "musl-tools"
