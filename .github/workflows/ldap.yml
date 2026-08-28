@@ -34,11 +34,12 @@ permissions:
 
 jobs:
   ldap-tests:
-    # Not `integration tests`: db.yml already emits a check by that exact name,
-    # and a required status check is matched by its name string, so two
-    # workflows sharing one would be indistinguishable in the checks list and
-    # ambiguous to any ruleset requiring it. interop.yml avoids the same
-    # collision by calling itself `protocol interop`.
+    # Not `integration tests`: db.yml used to emit a check by that exact name
+    # (it is `database integration` now), and a required status check is matched
+    # by its name string, so two workflows sharing one would be
+    # indistinguishable in the checks list and ambiguous to any ruleset
+    # requiring it. interop.yml avoids the same collision by calling itself
+    # `protocol interop`.
     name: LDAP directory
     runs-on: ubuntu-latest
     env:
