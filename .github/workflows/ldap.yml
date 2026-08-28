@@ -1,0 +1,116 @@
+name: LDAP
+
+# LDAP authentication is a security path that tests/ldap.rs exercises
+# against a real OpenLDAP. CI has shipped that file with four
+# tests that silently pass when INTEROP_LDAP_URL is unset, and no
+# workflow defined those variables, so the LDAP code path had zero
+# coverage exercised while reporting green. This workflow is the
+# fix: an OpenLDAP service with a seeded user, the six env vars
+# the test reads from, and a single cargo invocation.
+#
+# Path filter on pull_request only. The LDAP suite needs a live
+# directory server, so a PR that does not touch the LDAP code, the
+# test, or the fixtures does not pay for it. Push to develop or
+# main is a checkpoint, so the full run fires there
+# unconditionally. Per standards/ci, a workflow with a path
+# filter is not promoted to a required check: required checks
+# come from the pathless workflows, where a service container
+# would slow down every PR.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - "src/directory_store/**"
+      - "tests/ldap.rs"
+      - "tests/fixtures/ldap/**"
+      - ".github/workflows/ldap.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  ldap-tests:
+    name: integration tests
+    runs-on: ubuntu-latest
+    env:
+      INTEROP_LDAP_URL: ldap://localhost:3890
+      INTEROP_LDAP_BIND_DN: cn=admin,dc=epistle,dc=interop,dc=test
+      INTEROP_LDAP_BIND_PW: admin
+      INTEROP_LDAP_BASE_DN: dc=epistle,dc=interop,dc=test
+      INTEROP_LDAP_USER: alice
+      INTEROP_LDAP_USER_PW: alice-password
+      # Same as db.yml and interop.yml: keep the sqlx macros offline
+      # so a compile cannot race a schema that only the live service
+      # would know about.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the test OpenLDAP image
+        # osixia/openldap is the only OpenLDAP image on Docker Hub
+        # with a published manifest digest; bind-mounting the seed
+        # LDIF does not work because the image's startup script
+        # `rm -rf`s its config dir after each boot. The LDIF lives
+        # at tests/fixtures/ldap/seed.ldif and is COPYed in by the
+        # Dockerfile alongside this workflow.
+        run: |
+          docker build \
+            --tag epistle-test-openldap:local \
+            --label org.opencontainers.image.title=epistle-test-openldap \
+            tests/fixtures/ldap
+
+      - name: Start OpenLDAP
+        run: |
+          docker run --rm -d --name epistle-ldap \
+            -e LDAP_ORGANISATION=Epistle \
+            -e LDAP_DOMAIN=epistle.interop.test \
+            -e LDAP_ADMIN_PASSWORD=admin \
+            -e LDAP_BASE_DN=dc=epistle,dc=interop,dc=test \
+            -p 3890:389 \
+            epistle-test-openldap:local
+          # The image boots in two phases (seed then start slapd);
+          # the bind-search probes the running server, not the
+          # build step.
+          for _ in $(seq 1 60); do
+            if docker exec epistle-ldap \
+              ldapsearch -x -H ldap://localhost \
+                -b dc=epistle,dc=interop,dc=test \
+                -D cn=admin,dc=epistle,dc=interop,dc=test \
+                -w admin "(uid=alice)" dn >/dev/null 2>&1; then
+              echo "OpenLDAP is up and alice is seeded"
+              break
+            fi
+            sleep 1
+          done
+          if ! docker exec epistle-ldap \
+            ldapsearch -x -H ldap://localhost \
+              -b dc=epistle,dc=interop,dc=test \
+              -D cn=admin,dc=epistle,dc=interop,dc=test \
+              -w admin "(uid=alice)" dn >/dev/null 2>&1; then
+            echo "OpenLDAP never became ready"
+            docker logs epistle-ldap || true
+            exit 1
+          fi
+
+      - name: Install toolchain
+        run: |
+          # Pinned to match ci.yml. Same compiler that the gate tests
+          # run on, so a clippy lint widening on 1.99 does not break
+          # LDAP auth coverage here while the gate stays green.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
+
+      - name: Run LDAP integration tests
+        # If this command prints "skipping", the env block above is
+        # broken: tests/ldap.rs skips the entire suite when
+        # INTEROP_LDAP_URL is unset, which is the failure mode this
+        # workflow exists to prevent.
+        run: cargo test --locked --test ldap
+
+      - name: Stop OpenLDAP
+        if: always()
+        run: docker rm -f epistle-ldap || true
