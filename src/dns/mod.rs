@@ -4,6 +4,7 @@
 
 pub mod cloudflare;
 pub mod desec;
+pub mod digitalocean;
 pub mod namecheap;
 pub mod provider;
 pub mod records;
