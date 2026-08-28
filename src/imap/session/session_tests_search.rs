@@ -415,6 +415,58 @@ fn search_larger_smaller() {
 	assert!(response.contains("* SEARCH\r\n"), "{response}");
 }
 
+/// Backdate every `.eml` in alice's inbox to `secs_ago` seconds before now, so
+/// WITHIN search tests are deterministic without sleeps.
+fn backdate_inbox(dir: &std::path::Path, secs_ago: u64) {
+	let new_dir = dir.join("accounts").join("alice").join("new");
+	let target = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+	for entry in std::fs::read_dir(&new_dir).expect("read new").flatten() {
+		let Ok(file) = std::fs::OpenOptions::new().write(true).open(entry.path()) else {
+			continue;
+		};
+		let _ = file.set_modified(target);
+	}
+}
+
+#[test]
+fn search_younger_older_filters_by_internal_age() {
+	// WITHIN (RFC 5032): YOUNGER n matches messages whose internal date is
+	// within the last n seconds; OLDER n matches older than n seconds.
+	// Backdate both messages to 10 seconds ago so the bounds are deterministic.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@example.org\r\n\r\nolder\r\n");
+	deliver(dir.path(), b"From: b@example.org\r\n\r\nalso-older\r\n");
+	backdate_inbox(dir.path(), 10);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// YOUNGER 5 → no match (both messages are 10s old).
+	let response = text(&session.command_line("a3 SEARCH YOUNGER 5"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+
+	// YOUNGER 60 → both match (10s < 60s).
+	let response = text(&session.command_line("a4 SEARCH YOUNGER 60"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+
+	// OLDER 5 → both match (10s > 5s).
+	let response = text(&session.command_line("a5 SEARCH OLDER 5"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+
+	// OLDER 60 → no match (10s < 60s).
+	let response = text(&session.command_line("a6 SEARCH OLDER 60"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+
+	// Malformed argument is rejected (negative or non-numeric).
+	let response = text(&session.command_line("a7 SEARCH YOUNGER"));
+	assert!(response.contains("a7 BAD"), "{response}");
+
+	// Capability advertises WITHIN.
+	assert!(
+		text(&session.command_line("a8 CAPABILITY")).contains("WITHIN"),
+		"capability should advertise WITHIN"
+	);
+}
+
 /// Deliver a message straight into a non-INBOX mailbox's `new` directory.
 fn deliver_to(dir: &std::path::Path, mailbox: &str, body: &[u8]) {
 	let new_dir = dir

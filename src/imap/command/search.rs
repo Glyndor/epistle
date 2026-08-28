@@ -265,6 +265,19 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 			let n: u64 = n_str.parse().ok()?;
 			(SearchKey::ModSeq(n), rest)
 		}
+		"YOUNGER" | "OLDER" => {
+			let (n_str, rest) = match after.split_once(|c: char| c.is_ascii_whitespace()) {
+				Some((n, r)) => (n, r.trim_start()),
+				None => (after, ""),
+			};
+			let n: u32 = n_str.parse().ok()?;
+			let key = if word.eq_ignore_ascii_case("YOUNGER") {
+				SearchKey::Younger(n)
+			} else {
+				SearchKey::Older(n)
+			};
+			(key, rest)
+		}
 		_ => {
 			let set = parse_sequence_set(word)?;
 			(SearchKey::Sequence(set), after)

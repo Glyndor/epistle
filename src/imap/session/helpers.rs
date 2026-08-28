@@ -97,6 +97,16 @@ pub(super) fn search_matches(
 		SearchKey::Larger(n) => message.size > u64::from(*n),
 		SearchKey::Smaller(n) => message.size < u64::from(*n),
 		SearchKey::ModSeq(n) => message.modseq >= *n,
+		SearchKey::Younger(n) => age_seconds(message.internal_date) <= i64::from(*n),
+		SearchKey::Older(n) => age_seconds(message.internal_date) > i64::from(*n),
+	}
+}
+
+/// Seconds elapsed from `t` to now. Negative when `t` is in the future.
+fn age_seconds(t: std::time::SystemTime) -> i64 {
+	match std::time::SystemTime::now().duration_since(t) {
+		Ok(d) => d.as_secs() as i64,
+		Err(e) => -((e.duration().as_secs().saturating_add(1)) as i64),
 	}
 }
 

@@ -439,6 +439,12 @@ pub enum SearchKey {
 	Smaller(u32),
 	/// CONDSTORE `MODSEQ n`: mod-sequence at or above n (RFC 7162).
 	ModSeq(u64),
+	/// WITHIN `YOUNGER n` (RFC 5032): internal date within the last `n`
+	/// seconds.
+	Younger(u32),
+	/// WITHIN `OLDER n` (RFC 5032): internal date strictly more than `n`
+	/// seconds ago.
+	Older(u32),
 }
 
 /// How STORE changes the flag set.
