@@ -14,6 +14,7 @@ pub mod provider;
 pub mod records;
 pub mod rfc2136;
 pub mod route53;
+pub mod spaceship;
 
 use crate::spf::DnsLookup;
 

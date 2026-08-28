@@ -209,6 +209,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
 | `rfc2136` | TSIG-authenticated DNS UPDATE to a local nameserver (`host:port`); A/AAAA/TXT/CNAME/TLSA. |
+| `spaceship` | API key + secret; `X-API-Key`/`X-API-Secret` headers; see specifics below. |
 | `manual` | Always available; no credentials. |
 
 Common keys (every provider):
@@ -219,6 +220,7 @@ Common keys (every provider):
 | `provider` | One of `cloudflare`, `desec`, `gcloud`, `namecheap`, `route53`, `manual`. |
 | `provider` | One of `cloudflare`, `desec`, `dnsimple`, `namecheap`, `route53`, `manual`. |
 | `provider` | One of `bunny`, `cloudflare`, `desec`, `namecheap`, `route53`, `manual`. |
+| `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `rfc2136`, `spaceship`, `manual`. |
 | `zone` | The DNS zone the token is scoped to (least privilege). |
 | `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
 | `token_env` | Name of an env var holding the API token. |
@@ -411,6 +413,43 @@ token = "your-bunny-account-key"      # or token_file / token_env
   and the MX/SRV/TLSA wire formats need fields (`Priority`, `Port`,
   `Flags`, `Tag`) epistle does not yet emit. epistle returns
   `provider does not support writes` for those kinds and skips them.
+
+#### `[dns]` — Spaceship specifics
+
+```toml
+[dns]
+provider = "spaceship"
+zone = "example.org"
+access_key = "your_api_key"     # or secret_key for inline; secret_key_env is preferred
+secret_key_env = "EPISTLE_SPACESHIP_SECRET"
+```
+
+- Generate the key pair at
+  <https://www.spaceship.com/application/api-manager/> with the
+  `dnsrecords:read` and `dnsrecords:write` scopes. The two halves travel as
+  `X-API-Key` and `X-API-Secret` headers on every call; they are not
+  zone-scoped at the API level, so the zone restriction is enforced by
+  epistle (records outside `zone` are rejected before any call).
+- **API URL:** production is `https://spaceship.dev/api/v1`. The provider's
+  `with_base` constructor swaps to an alternate base for tests; no config
+  knob for it yet.
+- **No in-place update.** Spaceship's `PUT /dns/records/{zone}` *adds*
+  items (with `force: true` to overwrite). epistle implements upsert as
+  read-then-delete-then-add: it `DELETE`s the existing `(type, name)`
+  first and only then `PUT`s the new value, so two TXT records at the
+  same owner name are not possible.
+- **TXT delete body includes the value.** Spaceship's `TxtResourceRecordDeleteItem`
+  requires `{type, name, value}` (other kinds only need `{type, name}`).
+  epistle always includes `value` for TXT deletes so the right record is
+  removed when multiple TXT records at the same name exist.
+- **Pagination is followed.** `list` walks `?take=500&skip=N` until the
+  number of fetched items reaches `total`, so a zone with hundreds of
+  records is not silently truncated.
+- **TXT values are unquoted.** Spaceship stores TXT content verbatim on
+  the wire — epistle sends `value: "v=DMARC1; p=none"` rather than
+  `"value: "\"v=DMARC1; p=none\""`.
+- **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
+  rejected (`Unsupported`) for the same reason as the other providers.
 
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
