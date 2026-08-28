@@ -11,12 +11,25 @@ const MAX_DNS_MECHANISMS: u32 = 10;
 /// SPF evaluation result (RFC 7208 section 2.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpfOutcome {
+	/// No SPF record was found for the domain (or multiple were found and
+	/// per §4.5 none applies).
 	None,
+	/// `?all` or an explicit `neutral` mechanism matched: the domain makes
+	/// no assertion.
 	Neutral,
+	/// `+all` or a mechanism matching `ip` matched: the sender is authorized
+	/// for the domain.
 	Pass,
+	/// `-all` matched or a mechanism denied `ip`: the sender is NOT
+	/// authorized.
 	Fail,
+	/// `~all` matched: the sender is probably not authorized. Receiving
+	/// servers typically accept but flag the message.
 	SoftFail,
+	/// A transient error (DNS timeout, recursion limit) prevented evaluation.
 	TempError,
+	/// A permanent error (malformed record, unsupported mechanism) prevented
+	/// evaluation.
 	PermError,
 }
 

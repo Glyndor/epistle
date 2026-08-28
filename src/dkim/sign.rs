@@ -27,11 +27,19 @@ struct RsaSigner {
 /// Why signing material could not be loaded.
 #[derive(Debug, thiserror::Error)]
 pub enum SignerError {
+	/// The PEM key file could not be read from disk: missing file, permission
+	/// denied, or another I/O failure. Carries the path string and the
+	/// underlying `std::io::Error`.
 	#[error("cannot read key file {path}: {source}")]
 	Read {
+		/// Path that was attempted, formatted with `Display`.
 		path: String,
+		/// Underlying I/O error returned by `std::fs`.
 		source: std::io::Error,
 	},
+	/// The PEM file was read but its body is not a valid ed25519 PKCS#8 key
+	/// (or the file is not PEM at all). Carries the path string for the
+	/// error message.
 	#[error("invalid ed25519 key in {0}: expected PKCS#8 PEM")]
 	InvalidKey(String),
 }

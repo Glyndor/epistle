@@ -25,6 +25,9 @@ type ScanFuture<'a> = Pin<Box<dyn Future<Output = HookVerdict> + Send + 'a>>;
 
 /// A scanner that judges a raw message. Implementations must fail open.
 pub trait MailHook: Send + Sync {
+	/// Inspect the raw RFC 5322 message bytes and return the verdict to apply.
+	/// Implementations that hit any transport or parse failure must return
+	/// [`HookVerdict::Accept`] so an outage never blocks mail.
 	fn scan(&self, raw: &[u8]) -> ScanFuture<'_>;
 }
 

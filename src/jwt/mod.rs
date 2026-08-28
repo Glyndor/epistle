@@ -76,8 +76,11 @@ impl Claims {
 
 /// What to require of a token's registered claims.
 pub struct Validation<'a> {
+	/// Current UNIX timestamp (seconds); compared against `exp` and `nbf`.
 	pub now: u64,
+	/// Expected `iss` claim; `None` skips the issuer check.
 	pub issuer: Option<&'a str>,
+	/// Expected `aud` claim; `None` skips the audience check.
 	pub audience: Option<&'a str>,
 }
 

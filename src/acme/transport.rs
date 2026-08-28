@@ -20,6 +20,9 @@ pub struct HttpTransport {
 }
 
 impl HttpTransport {
+	/// Build a transport with a 30-second total request timeout applied to every
+	/// call. Returns `AcmeError::Transport` if the underlying reqwest client
+	/// cannot be constructed (for example, an invalid TLS backend).
 	pub fn new() -> Result<Self, AcmeError> {
 		let client = reqwest::Client::builder()
 			.timeout(Duration::from_secs(30))

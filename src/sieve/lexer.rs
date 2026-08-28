@@ -18,13 +18,21 @@ pub enum Token {
 	QuotedString(String),
 	/// A multi-line string (`text:` … `.`), dot-unstuffed.
 	MultiLine(String),
+	/// `[` — opens a string list.
 	BracketOpen,
+	/// `]` — closes a string list.
 	BracketClose,
+	/// `(` — opens a test argument list.
 	ParenOpen,
+	/// `)` — closes a test argument list.
 	ParenClose,
+	/// `{` — opens a block of commands.
 	BraceOpen,
+	/// `}` — closes a block of commands.
 	BraceClose,
+	/// `,` — separates items inside a list or argument list.
 	Comma,
+	/// `;` — terminates a command.
 	Semicolon,
 }
 

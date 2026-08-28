@@ -18,7 +18,9 @@ pub enum Command {
 	Noop(Option<String>),
 	/// `AUTHENTICATE "mech" ["initial"]`
 	Authenticate {
+		/// SASL mechanism name (e.g. `SCRAM-SHA-256`, `PLAIN`).
 		mechanism: String,
+		/// Optional initial response, base64-encoded per RFC 4959.
 		initial: Option<String>,
 	},
 	/// `UNAUTHENTICATE`
@@ -32,13 +34,32 @@ pub enum Command {
 	/// `DELETESCRIPT "name"`
 	DeleteScript(String),
 	/// `RENAMESCRIPT "old" "new"`
-	RenameScript { from: String, to: String },
+	RenameScript {
+		/// Existing script name.
+		from: String,
+		/// New script name.
+		to: String,
+	},
 	/// `HAVESPACE "name" size`
-	HaveSpace { name: String, size: u64 },
+	HaveSpace {
+		/// Script name the client is checking for.
+		name: String,
+		/// Required size in octets.
+		size: u64,
+	},
 	/// `PUTSCRIPT "name" {n+}` plus the literal content.
-	PutScript { name: String, content: String },
+	PutScript {
+		/// Name to store the script under (must be unique among the user's
+		/// scripts; an existing name overwrites).
+		name: String,
+		/// Script source as UTF-8 text.
+		content: String,
+	},
 	/// `CHECKSCRIPT {n+}` plus the literal content.
-	CheckScript { content: String },
+	CheckScript {
+		/// Script source to validate without storing it.
+		content: String,
+	},
 }
 
 /// A trailing literal an input line announces.

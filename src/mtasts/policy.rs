@@ -10,17 +10,23 @@ use crate::spf::{DnsFailure, DnsLookup};
 /// Policy mode (RFC 8461 section 3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
+	/// `enforce`: refuse delivery that does not match the policy.
 	Enforce,
+	/// `testing`: report violations but deliver as if no policy applied.
 	Testing,
+	/// `none`: explicitly disable MTA-STS for this domain.
 	None,
 }
 
 /// A parsed MTA-STS policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
+	/// Enforcement mode (`enforce`, `testing`, or `none`).
 	pub mode: Mode,
 	/// Allowed MX patterns: exact hostnames or `*.domain` wildcards.
 	pub mx: Vec<String>,
+	/// How long (seconds) a receiver may cache and apply this policy
+	/// before re-fetching it (RFC 8461 §3.2 `max_age`).
 	pub max_age: u64,
 }
 

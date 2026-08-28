@@ -11,6 +11,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 /// Errors from CSR generation.
 #[derive(Debug, thiserror::Error)]
 pub enum CsrError {
+	/// The CSR or its private key could not be produced. Carries the underlying
+	/// message: an empty domain list, an ECDSA key-pair generation failure, or
+	/// a `rcgen` X.509 build error.
 	#[error("CSR generation failed: {0}")]
 	Generate(String),
 }

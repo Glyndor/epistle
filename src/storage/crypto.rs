@@ -59,7 +59,9 @@ pub enum CryptoError {
 	/// The configured key file could not be read.
 	#[error("cannot read encryption key file {path}: {source}")]
 	KeyFile {
+		/// Path that was attempted.
 		path: std::path::PathBuf,
+		/// Underlying I/O error returned by `std::fs`.
 		source: std::io::Error,
 	},
 	/// The configured environment variable is not set.

@@ -38,7 +38,13 @@ pub enum Response {
 	/// `BYE "message"` then close.
 	Bye(String),
 	/// Raw lines (already encoded) followed by a final `OK`.
-	Lines { lines: Vec<String>, ok: String },
+	Lines {
+		/// Pre-encoded lines to write first (each must include its own
+		/// CRLF).
+		lines: Vec<String>,
+		/// Final `OK` response (without CRLF); appended after the lines.
+		ok: String,
+	},
 	/// A script body returned as a literal, followed by `OK` (GETSCRIPT).
 	Script(String),
 	/// Send `OK` then upgrade the connection to TLS (STARTTLS).

@@ -10,10 +10,21 @@ use super::signature::Algorithm;
 /// Outcome of one signature (RFC 8601 keywords).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DkimOutcome {
+	/// The signature parsed, the body hash matched, and the public key
+	/// verified the signature input.
 	Pass,
+	/// Verification failed: a signature mismatch, body hash mismatch, an
+	/// expired `x=` timestamp, or any other cryptographic rejection.
 	Fail,
+	/// A permanent error prevented verification: malformed signature
+	/// syntax, missing required tag, no usable key in the DNS TXT record,
+	/// or unsupported algorithm.
 	PermError,
+	/// A temporary error prevented verification, typically a DNS lookup
+	/// failure. The verifier should be retried later.
 	TempError,
+	/// The message carried no DKIM-Signature header (synthesized by
+	/// `verify_message` so the caller always sees one result per message).
 	None,
 }
 
@@ -33,6 +44,7 @@ impl DkimOutcome {
 /// Result for one DKIM-Signature header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DkimResult {
+	/// Verification outcome for this signature.
 	pub outcome: DkimOutcome,
 	/// `d=` domain, when the header parsed far enough to know it.
 	pub domain: Option<String>,

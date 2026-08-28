@@ -24,11 +24,21 @@ mod thread;
 /// Server output produced by one step: complete response lines/literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Output {
+	/// Raw bytes to write to the client. Includes any CRLF terminators.
 	pub bytes: Vec<u8>,
+	/// Whether the connection should be closed after sending `bytes`.
 	pub close: bool,
+	/// Size of a follow-on literal the client is expected to send (set by
+	/// `APPEND`/`REPLACE`; `None` otherwise). When set, the network layer
+	/// reads exactly that many bytes before invoking the session again.
 	pub collect_literal: Option<usize>,
+	/// Whether the session is now in the IDLE state; the network layer
+	/// expects `DONE` or a 29-minute timeout before resuming the pump.
 	pub idle: bool,
+	/// Whether the connection should be upgraded to TLS (STARTTLS success).
 	pub upgrade_tls: bool,
+	/// Whether the session is in the middle of a SASL exchange and expects
+	/// additional base64 challenge/response bytes from the client.
 	pub collect_auth: bool,
 }
 
@@ -185,6 +195,9 @@ impl Session {
 		self
 	}
 
+	/// Notify the session that the STARTTLS handshake completed: TLS is now
+	/// active, STARTTLS is no longer available, and any pre-TLS login
+	/// failures have been forgotten (a successful STARTTLS is a clean slate).
 	pub fn tls_started(&mut self) {
 		self.tls_active = true;
 		self.tls_available = false;

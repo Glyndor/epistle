@@ -56,8 +56,15 @@ impl DirectoryHandle {
 /// A dynamic account as persisted in `accounts.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicAccount {
+	/// Account login name (the local part used by IMAP/SMTP AUTH, without
+	/// the `@domain`). Lowercase ASCII, no leading hyphen; validated by
+	/// `AccountStore::add`.
 	pub name: String,
+	/// Delivery addresses (full `user@domain`) this account owns. At least
+	/// one, all in configured domains.
 	pub addresses: Vec<String>,
+	/// Argon2id hash of the account's password (the encoding used by
+	/// `smtp::auth::hash_password`). Stored, never the plaintext.
 	pub password_hash: String,
 	/// SCRAM credentials, derived from the password at set time (RFC 5802).
 	#[serde(default)]
@@ -104,12 +111,21 @@ struct DynamicFile {
 /// Errors from the account store.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+	/// The supplied account data is invalid: malformed address, missing
+	/// addresses, an address outside the configured domains, a bad account
+	/// name, or a malformed `accounts.toml`. The string carries the
+	/// underlying reason.
 	#[error("invalid account: {0}")]
 	Invalid(String),
+	/// An account or address with this name already exists in the store.
+	/// Carries the conflicting name or address.
 	#[error("account {0} already exists")]
 	Duplicate(String),
+	/// No dynamic account with the requested name. Carries the missing name.
 	#[error("no such dynamic account: {0}")]
 	NotFound(String),
+	/// Reading or writing the `accounts.toml` / `app_passwords.toml` sidecar
+	/// files failed. The wrapped `std::io::Error` carries the cause.
 	#[error("storage failure: {0}")]
 	Io(#[from] std::io::Error),
 }

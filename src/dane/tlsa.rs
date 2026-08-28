@@ -44,8 +44,13 @@ pub enum MatchingType {
 /// A parsed TLSA resource record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsaRecord {
+	/// Certificate usage (the first field of the TLSA RDATA).
 	pub usage: CertUsage,
+	/// Which part of the certificate the association covers (the second
+	/// field of the TLSA RDATA).
 	pub selector: Selector,
+	/// How the association data is derived (the third field of the TLSA
+	/// RDATA).
 	pub matching_type: MatchingType,
 	/// The certificate association data (raw or hashed per `matching_type`).
 	pub association: Vec<u8>,
