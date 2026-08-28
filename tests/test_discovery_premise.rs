@@ -25,8 +25,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Directories that never hold source we care about.
-const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules"];
+/// Directories that never hold source this repository owns. `cargo-home` is
+/// where `dpkg-buildpackage` drops the vendored crate registry: `sqlx`, `bytes`
+/// and `vcpkg` all ship their own `tests/*.sh`, and a dependency's test scripts
+/// say nothing about whether *our* tests are wired into CI. Scanning them made
+/// this test fail the Debian build on its first run.
+const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules", "cargo-home"];
 
 /// Extensions whose test files are not discovered by any runner — something has
 /// to invoke them by name, which is the condition this test watches for.
@@ -66,7 +70,7 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 		let path = entry.path();
 		let name = entry.file_name().to_string_lossy().into_owned();
 		if path.is_dir() {
-			if SKIP_DIRS.contains(&name.as_str()) {
+			if SKIP_DIRS.contains(&name.as_str()) || is_dependency_checkout(&path) {
 				continue;
 			}
 			collect(root, &path, out);
@@ -75,6 +79,21 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 			out.push(rel.display().to_string());
 		}
 	}
+}
+
+/// True for a cargo registry checkout wherever it lands. `CARGO_HOME` is not
+/// always named `cargo-home`, so the name list alone is not enough; every
+/// registry checkout sits under a `registry/src` pair.
+fn is_dependency_checkout(path: &Path) -> bool {
+	let mut components = path.components().peekable();
+	while let Some(component) = components.next() {
+		if component.as_os_str() == "registry"
+			&& components.peek().is_some_and(|n| n.as_os_str() == "src")
+		{
+			return true;
+		}
+	}
+	false
 }
 
 /// A file counts when its extension has no runner *and* either its name marks it
