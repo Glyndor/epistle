@@ -6,6 +6,7 @@
 
 pub mod api_keys;
 mod audit;
+pub mod domain_scope;
 mod error;
 mod jmap;
 pub mod oauth;
@@ -118,3 +119,7 @@ mod jmap_tests_e;
 #[cfg(test)]
 #[path = "jmap_tests_f.rs"]
 mod jmap_tests_f;
+
+#[cfg(test)]
+#[path = "tenancy_tests.rs"]
+mod tenancy_tests;

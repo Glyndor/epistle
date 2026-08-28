@@ -17,6 +17,7 @@ fn state_with_scoped_key(dir: &tempfile::TempDir, scopes: &[&str]) -> (Router, S
 			expires_at: None,
 			ip_cidr: None,
 			scopes: scopes.iter().map(|s| s.to_string()).collect(),
+			domains: Vec::new(),
 		})
 		.expect("add key");
 	drop(key_store);

@@ -11,13 +11,15 @@ use crate::config::Config;
 /// seconds; `ip_cidr` a single CIDR allowlist; `scopes` lists the permissions
 /// granted (`read`, `write`, `send`, `scim`). The CLI requires at least one
 /// scope — unscoped keys would be admin-equivalent on first leak, which is
-/// the problem the scope field exists to fix.
+/// the problem the scope field exists to fix. `domains` confines the key to
+/// those domains; empty reaches every configured domain.
 pub(super) fn create(
 	config: &Config,
 	label: &str,
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
 	scopes: Vec<String>,
+	domains: Vec<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if scopes.is_empty() {
@@ -46,6 +48,7 @@ pub(super) fn create(
 		expires_at,
 		ip_cidr,
 		scopes,
+		domains,
 	};
 	match store.add(key) {
 		Ok(()) => {

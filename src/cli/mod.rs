@@ -271,6 +271,11 @@ enum Command {
 			value_parser = api_keys::parse_scope,
 		)]
 		scopes: Vec<String>,
+		/// Confine this key to a domain (repeat for more). Omitted, the key
+		/// reaches every configured domain, which is what every key did
+		/// before this option existed.
+		#[arg(long = "domain", value_name = "DOMAIN")]
+		domains: Vec<String>,
 	},
 	/// List the management API keys (never the key).
 	ApiKeys {
@@ -521,6 +526,7 @@ impl Cli {
 				expires_at,
 				ip_cidr,
 				scopes,
+				domains,
 			} => match Config::load(&config) {
 				Ok(config) => api_keys::create(
 					&config,
@@ -528,6 +534,7 @@ impl Cli {
 					expires_at,
 					ip_cidr,
 					scopes,
+					domains,
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
