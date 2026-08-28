@@ -9,6 +9,7 @@ mod audit;
 mod error;
 mod jmap;
 pub mod oauth;
+pub mod scim;
 mod state;
 pub mod v1;
 
@@ -27,6 +28,11 @@ pub fn router(state: ApiState) -> Router {
 	// Authenticated surface: every route requires the bearer token.
 	let authenticated = Router::new()
 		.nest("/api/v1", v1::router())
+		// SCIM 2.0 provisioning (RFC 7644). The dedicated `Scope::Scim`
+		// gates every route, set in `acceptable_scopes_for` for any path
+		// starting with `/scim/v2`. A `read`/`write`-only key cannot
+		// enumerate or mutate users here.
+		.nest("/scim/v2", scim::router())
 		// JMAP (RFC 8620): Session discovery and the request-envelope endpoint.
 		// `.well-known/jmap` is the standard autodiscovery path (§2.2).
 		.route("/.well-known/jmap", get(jmap::session))

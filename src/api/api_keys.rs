@@ -31,6 +31,11 @@ pub enum Scope {
 	Write,
 	/// Outbound mail submission: `POST /api/v1/send`, JMAP `EmailSubmission/set`.
 	Send,
+	/// SCIM 2.0 provisioning endpoints under `/scim/v2`. The SCIM surface
+	/// manages mail accounts (create / read / patch / delete) on behalf of an
+	/// external identity provider (Entra ID, Okta, Keycloak…), so it is its
+	/// own damage class and not folded into `Write`.
+	Scim,
 }
 
 /// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
@@ -51,27 +56,30 @@ impl std::error::Error for UnknownScopeError {}
 impl std::str::FromStr for Scope {
 	type Err = UnknownScopeError;
 
-	/// Parse the canonical form (`read`, `write`, `send`). Unknown values are
-	/// rejected — the store refuses to load an `api_keys.toml` containing a
-	/// typo, and the CLI rejects `--scope` values it does not recognise.
+	/// Parse the canonical form (`read`, `write`, `send`, `scim`). Unknown
+	/// values are rejected — the store refuses to load an `api_keys.toml`
+	/// containing a typo, and the CLI rejects `--scope` values it does not
+	/// recognise.
 	fn from_str(value: &str) -> Result<Self, Self::Err> {
 		match value {
 			"read" => Ok(Scope::Read),
 			"write" => Ok(Scope::Write),
 			"send" => Ok(Scope::Send),
+			"scim" => Ok(Scope::Scim),
 			_ => Err(UnknownScopeError(value.to_string())),
 		}
 	}
 }
 
 impl Scope {
-	/// Canonical serialised form (`read`, `write`, `send`) used in
+	/// Canonical serialised form (`read`, `write`, `send`, `scim`) used in
 	/// `api_keys.toml` and in the `ApiKey.scopes` vector.
 	pub fn as_str(self) -> &'static str {
 		match self {
 			Scope::Read => "read",
 			Scope::Write => "write",
 			Scope::Send => "send",
+			Scope::Scim => "scim",
 		}
 	}
 }
@@ -208,14 +216,14 @@ fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
 	if scopes.is_empty() {
 		return Err(std::io::Error::new(
 			std::io::ErrorKind::InvalidInput,
-			"API key must declare at least one scope (read/write/send)",
+			"API key must declare at least one scope (read/write/send/scim)",
 		));
 	}
 	for scope in scopes {
 		if scope.parse::<Scope>().is_err() {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidInput,
-				format!("unknown API key scope \"{scope}\" (expected read, write or send)"),
+				format!("unknown API key scope \"{scope}\" (expected read, write, send or scim)"),
 			));
 		}
 	}
@@ -232,7 +240,7 @@ fn validate_loaded_scopes(scopes: &[String]) -> std::io::Result<()> {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidData,
 				format!(
-					"unknown API key scope \"{scope}\" in api_keys.toml (expected read, write or send)"
+					"unknown API key scope \"{scope}\" in api_keys.toml (expected read, write, send or scim)"
 				),
 			));
 		}

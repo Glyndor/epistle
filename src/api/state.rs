@@ -462,11 +462,16 @@ pub struct ClientIp(pub Option<std::net::IpAddr>);
 /// Unambiguous routes (`POST /api/v1/send`, `POST /jmap/upload`) get a
 /// single-scope slice. `POST /jmap/api` is ambiguous (every method call
 /// shares the same path), so the slice accepts any of `Read`/`Write`/`Send`
-/// — the dispatcher then enforces the actual scope per method call.
+/// — the dispatcher then enforces the actual scope per method call. The
+/// SCIM 2.0 surface under `/scim/v2` is its own damage class; both reads
+/// and writes on it require the dedicated `Scim` scope.
 fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
 	const ALL: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
 	if method == axum::http::Method::POST && path == "/api/v1/send" {
 		return vec![Scope::Send];
+	}
+	if path.starts_with("/scim/v2") {
+		return vec![Scope::Scim];
 	}
 	match *method {
 		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],

@@ -72,6 +72,11 @@ pub struct DynamicAccount {
 	/// Base32 TOTP secret for two-factor auth (RFC 6238). Absent disables 2FA.
 	#[serde(default)]
 	pub totp_secret: Option<String>,
+	/// Account is administratively disabled (kept on disk; never
+	/// authenticates). Set by SCIM `active: false` and other paths that need
+	/// to suspend an account without removing its mailbox.
+	#[serde(default)]
+	pub disabled: bool,
 }
 
 impl DynamicAccount {
@@ -98,6 +103,7 @@ impl DynamicAccount {
 			password_hash,
 			scram: Some(scram),
 			totp_secret: None,
+			disabled: false,
 		})
 	}
 }
@@ -366,6 +372,102 @@ impl AccountStore {
 		Ok(())
 	}
 
+	/// Enable or disable a dynamic account (the SCIM `active` flag). The
+	/// account stays on disk and continues to own its mailboxes, but
+	/// authentication rejects it while disabled. Returns the previous state
+	/// so callers can detect a no-op.
+	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
+		let mut dynamic = self.dynamic.write().expect("store lock");
+		let account = dynamic
+			.iter_mut()
+			.find(|account| account.name == name)
+			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+		let previous = account.disabled;
+		account.disabled = disabled;
+		self.persist(&dynamic)?;
+		drop(dynamic);
+		self.handle.replace(self.build_directory());
+		Ok(previous)
+	}
+
+	/// Whether a dynamic account is administratively disabled.
+	pub fn is_disabled(&self, name: &str) -> bool {
+		self.dynamic
+			.read()
+			.expect("store lock")
+			.iter()
+			.find(|account| account.name == name)
+			.is_some_and(|account| account.disabled)
+	}
+
+	/// Look up a dynamic account by name (case-sensitive). `None` for static
+	/// accounts and unknown names.
+	pub fn dynamic(&self, name: &str) -> Option<DynamicAccount> {
+		self.dynamic
+			.read()
+			.expect("store lock")
+			.iter()
+			.find(|account| account.name == name)
+			.cloned()
+	}
+
+	/// Snapshot every dynamic account (cloned). Used by SCIM's `List` and
+	/// other read-only surfaces that need the full set without the lock.
+	pub fn dynamic_accounts(&self) -> Vec<DynamicAccount> {
+		self.dynamic.read().expect("store lock").clone()
+	}
+
+	/// Replace a dynamic account in place, preserving its position in the
+	/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
+	/// in SCIM terms) without churning the file. `NotFound` if no
+	/// dynamic account carries `name`; `Duplicate` if the replacement's
+	/// addresses collide with another account (including itself if the
+	/// new list is unchanged — `add` short-circuits the collision check
+	/// on self, but a fresh `add` after `remove` doesn't, so we do the
+	/// same dance here).
+	pub fn replace_account(
+		&self,
+		name: &str,
+		replacement: DynamicAccount,
+	) -> Result<(), StoreError> {
+		let mut dynamic = self.dynamic.write().expect("store lock");
+		let slot = dynamic
+			.iter()
+			.position(|existing| existing.name == name)
+			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+		let mut fresh = replacement;
+		fresh.name = name.to_string();
+		// The collision check on add ignores "self" — we want the same
+		// behaviour here, so seed the address map with the existing row.
+		let mut known_addresses: Vec<String> = self
+			.static_accounts
+			.iter()
+			.flat_map(|existing| existing.addresses.iter())
+			.chain(
+				dynamic
+					.iter()
+					.enumerate()
+					.filter(|(index, _)| *index != slot)
+					.flat_map(|(_, existing)| existing.addresses.iter()),
+			)
+			.map(|address| address.to_ascii_lowercase())
+			.collect();
+		known_addresses.sort();
+		for raw in &fresh.addresses {
+			if known_addresses
+				.binary_search(&raw.to_ascii_lowercase())
+				.is_ok()
+			{
+				return Err(StoreError::Duplicate(raw.clone()));
+			}
+		}
+		dynamic[slot] = fresh;
+		self.persist(&dynamic)?;
+		drop(dynamic);
+		self.handle.replace(self.build_directory());
+		Ok(())
+	}
+
 	fn persist(&self, dynamic: &[DynamicAccount]) -> Result<(), StoreError> {
 		let file = DynamicFile {
 			accounts: dynamic.to_vec(),
@@ -450,6 +552,14 @@ impl AccountStore {
 				.clone()
 				.map(|secret| (account.name.clone(), secret))
 		});
+		// Disabled accounts are passed through to the directory as a name set so
+		// `authenticate_local` can reject them before any password work runs.
+		// The set rebuilds on every directory swap, mirroring how totp, scram
+		// and quotas are wired.
+		let disabled = dynamic
+			.iter()
+			.filter(|account| account.disabled)
+			.map(|account| account.name.clone());
 		let account_quotas = self.static_accounts.iter().filter_map(|account| {
 			account
 				.quota_bytes
@@ -482,6 +592,7 @@ impl AccountStore {
 			.with_domain_aliases(self.domain_aliases.clone())
 			.with_scram(scram)
 			.with_totp(totp)
+			.with_disabled(disabled)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
 			.with_forwards(forwards)

@@ -116,6 +116,28 @@ Management API (consumed by `epistle-panel`). Closed by default.
 | `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
 
+### `/scim/v2` (SCIM 2.0 provisioning)
+Mounted under `/scim/v2` when the management API listener is enabled.
+Authenticates against the same bearer token plus the labeled keys in
+`api_keys.toml`, but requires the dedicated `Scim` scope: a `read`- or
+`write`-only key cannot enumerate or mutate users here, so an IdP
+integration can be scoped tighter than the operator's own panel access.
+
+The implementation is the minimum that Entra ID, Okta and Keycloak
+actually use: `ServiceProviderConfig`, `Schemas`, `ResourceTypes` for
+discovery; full `Users` lifecycle (list with `userName eq "x"` filter,
+create, read, replace, patch, delete). `Groups` returns `501` — the
+directory has no group membership yet, so provisioning groups would be
+a no-op pretending to be a feature.
+
+`active: false` is honoured: the account stays on disk and keeps its
+mailboxes, but `authenticate` rejects every password before any
+hashing. `PUT` and `PATCH` refuse to change `userName` (renames are
+not supported — the account name is the directory primary key).
+`PATCH` accepts only `replace` of `active` and `password`. Every
+response carries `Content-Type: application/scim+json`; errors follow
+RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
+
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes).
 

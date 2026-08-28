@@ -54,6 +54,9 @@ pub struct Directory {
 	scram: HashMap<String, super::scram::ScramStored>,
 	/// Base32 TOTP secret per account name, for two-factor auth (RFC 6238).
 	totp: HashMap<String, String>,
+	/// Account names administratively disabled (kept on disk, cannot
+	/// authenticate). SCIM `active: false` lands here.
+	disabled: HashSet<String>,
 	/// Storage quota (bytes) per account name; absent falls back to the domain
 	/// quota, then the server default.
 	account_quotas: HashMap<String, u64>,
@@ -97,6 +100,7 @@ impl Directory {
 			domain_aliases: HashMap::new(),
 			scram: HashMap::new(),
 			totp: HashMap::new(),
+			disabled: HashSet::new(),
 			account_quotas: HashMap::new(),
 			domain_quotas: HashMap::new(),
 			forwards: HashMap::new(),
@@ -167,6 +171,21 @@ impl Directory {
 			.map(|(name, secret)| (name.to_ascii_lowercase(), secret))
 			.collect();
 		self
+	}
+
+	/// Mark a set of accounts as administratively disabled. While disabled,
+	/// the account still owns its mailboxes and is visible to management
+	/// tooling, but authentication rejects every password attempt before any
+	/// hashing. Names are lowercased so the check matches `credentials()`
+	/// (which also lowercases the bare-login path).
+	pub fn with_disabled(mut self, names: impl IntoIterator<Item = String>) -> Self {
+		self.disabled = names.into_iter().map(|n| n.to_ascii_lowercase()).collect();
+		self
+	}
+
+	/// Whether `account` is administratively disabled.
+	pub fn is_disabled(&self, account: &str) -> bool {
+		self.disabled.contains(&account.to_ascii_lowercase())
 	}
 
 	/// Attach per-account storage quotas (account name → bytes).
@@ -274,6 +293,13 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 	) -> Option<String> {
 		let (account, hash) = self.credentials(login)?;
+		// Disabled check runs after the credential lookup (which lowercases the
+		// bare-login path) but before any hashing — argon2id and SCRAM are both
+		// skipped, which is the whole point. Lookup is O(1); the disabled set
+		// is small in practice.
+		if self.disabled.contains(&account) {
+			return None;
+		}
 		// TOTP applies to the primary password only; strip and verify the code.
 		let primary = match self.totp.get(&account) {
 			Some(secret) => self.totp_strip(password, secret),
