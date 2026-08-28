@@ -6,6 +6,7 @@ pub mod cloudflare;
 pub mod desec;
 pub mod digitalocean;
 pub mod namecheap;
+pub mod porkbun;
 pub mod provider;
 pub mod records;
 pub mod rfc2136;
