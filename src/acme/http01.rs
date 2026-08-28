@@ -20,6 +20,7 @@ pub struct ChallengeStore {
 }
 
 impl ChallengeStore {
+	/// Build an empty store. Equivalent to `ChallengeStore::default()`.
 	pub fn new() -> Self {
 		Self::default()
 	}

@@ -6,120 +6,193 @@ pub const MAX_COMMAND_LINE: usize = 8192;
 /// A parsed client command with its tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tagged {
+	/// Client-supplied tag (alphanumeric, non-empty) used to correlate the
+	/// server's response with the request.
 	pub tag: String,
+	/// The parsed command body.
 	pub command: Command,
 }
 
+/// An IMAP command, parsed from a single client line. Variants correspond
+/// one-to-one with the commands RFC 9051 and its extensions (CONDSTORE,
+/// QRESYNC, LIST-EXTENDED, ACL, METADATA, NOTIFY, etc.) accept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+	/// `CAPABILITY`: list the server's capabilities.
 	Capability,
+	/// `NOOP`: a no-op the server answers with any pending updates.
 	Noop,
+	/// `LOGOUT`: graceful shutdown of the connection.
 	Logout,
 	/// `NAMESPACE` (RFC 2342).
 	Namespace,
 	/// `ID` (RFC 2971); the client's parameter list is accepted and ignored.
 	Id,
+	/// `STARTTLS`: upgrade the plaintext connection to TLS.
 	StartTls,
+	/// `LOGIN <user> <pass>`: cleartext authentication. Only accepted before
+	/// TLS is negotiated.
 	Login {
+		/// The user (authcid), without the surrounding domain.
 		username: String,
+		/// The password.
 		password: String,
 	},
 	/// `AUTHENTICATE <mechanism> [initial-response]` (RFC 9051).
 	Authenticate {
+		/// SASL mechanism name (e.g. `SCRAM-SHA-256`, `PLAIN`).
 		mechanism: String,
+		/// Optional initial response, base64-encoded per RFC 4959.
 		initial: Option<String>,
 	},
+	/// `LIST <reference> <pattern>`: list mailboxes. `RETURN (STATUS (...))`
+	/// items are returned inline (LIST-STATUS, RFC 5819); `(SUBSCRIBED)`
+	/// narrows the result to subscribed mailboxes (RFC 5258).
 	List {
+		/// Reference name (often `""` or `"INBOX"`); defines the hierarchy
+		/// context for `pattern`.
 		reference: String,
+		/// Pattern with optional wildcards (`%` for one level, `*` for any).
 		pattern: String,
 		/// `RETURN (STATUS (...))` items to report inline (LIST-STATUS, RFC 5819).
 		return_status: Vec<StatusItem>,
 		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
 		select_subscribed: bool,
 	},
+	/// `SELECT <mailbox>`: open the mailbox read-write. `(QRESYNC (...))`
+	/// resyncs from a previous session (RFC 7162).
 	Select {
+		/// Mailbox name to open.
 		mailbox: String,
 		/// `(QRESYNC (uidvalidity modseq ...))`: resync from this point (RFC 7162).
 		qresync: Option<(u32, u64)>,
 	},
+	/// `EXAMINE <mailbox>`: like `SELECT` but read-only.
 	Examine {
+		/// Mailbox name to open read-only.
 		mailbox: String,
+		/// `(QRESYNC (uidvalidity modseq ...))` (RFC 7162).
 		qresync: Option<(u32, u64)>,
 	},
+	/// `CLOSE`: leave the selected mailbox, expunging `\Deleted` messages.
 	Close,
 	/// `UNSELECT` (RFC 3691): leave the selected mailbox without expunging.
 	Unselect,
 	/// `ENABLE <capability>...` (RFC 5161).
 	Enable {
+		/// Capability names the client wants to enable for this session.
 		capabilities: Vec<String>,
 	},
 	/// `GETQUOTAROOT <mailbox>` (RFC 9208).
 	GetQuotaRoot {
+		/// Mailbox whose quota roots are queried.
 		mailbox: String,
 	},
 	/// `GETQUOTA <quota-root>` (RFC 9208).
 	GetQuota {
+		/// Quota root identifier (typically the mailbox name).
 		root: String,
 	},
+	/// `CREATE <mailbox>`.
 	Create {
+		/// Mailbox name to create (UTF-8, INBOX-safe escaping).
 		mailbox: String,
 	},
+	/// `DELETE <mailbox>`.
 	Delete {
+		/// Mailbox name to remove (fails for INBOX and mailboxes with
+		/// children unless the special `\\` sentinel is used).
 		mailbox: String,
 	},
+	/// `RENAME <from> <to>`.
 	Rename {
+		/// Source mailbox name.
 		from: String,
+		/// Destination mailbox name.
 		to: String,
 	},
+	/// `EXPUNGE`: remove all `\Deleted` messages from the selected mailbox.
 	Expunge,
 	/// `UID EXPUNGE <set>` (RFC 4315): expunge only \Deleted messages in the set.
 	UidExpunge {
+		/// Sequence set (interpreted as UIDs because the command is `UID EXPUNGE`).
 		sequence: SequenceSet,
 	},
+	/// `IDLE`: enter the IDLE state, receiving unsolicited updates until DONE.
 	Idle,
 	/// `APPEND <mailbox> [(flags)] {size}` — the literal body follows.
 	Append {
+		/// Destination mailbox.
 		mailbox: String,
+		/// Initial flags for the appended message (may be empty).
 		flags: Vec<String>,
+		/// Size of the literal body in octets.
 		size: usize,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected
 	/// mailbox. `uid` selects `UID REPLACE`.
 	Replace {
+		/// Sequence number (or UID, with `uid`) of the message to remove
+		/// after the append succeeds.
 		sequence: u32,
+		/// Destination mailbox for the new message.
 		mailbox: String,
+		/// Initial flags for the appended message.
 		flags: Vec<String>,
+		/// Size of the literal body in octets.
 		size: usize,
+		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a
+		/// sequence number.
 		uid: bool,
 	},
+	/// `FETCH <sequence> (<items>...)`: return data for messages in the set.
 	Fetch {
+		/// Messages to fetch.
 		sequence: SequenceSet,
+		/// Items to return per message (FLAGS, BODY[], UID, …).
 		items: Vec<FetchItem>,
+		/// Whether the sequence set is UIDs (`UID FETCH`) rather than
+		/// sequence numbers.
 		uid: bool,
 		/// CONDSTORE `CHANGEDSINCE n`: only messages with a greater mod-seq.
 		changed_since: Option<u64>,
 		/// QRESYNC `VANISHED`: also report UIDs expunged since `changed_since`.
 		vanished: bool,
 	},
+	/// `STORE <sequence> (<mode> <flags>)`: modify the flag set.
 	Store {
+		/// Messages to update.
 		sequence: SequenceSet,
+		/// How to apply the new flags (set, add, or remove).
 		mode: StoreMode,
+		/// Flags to apply.
 		flags: Vec<String>,
+		/// `(.SILENT)`: do not return the new flag values.
 		silent: bool,
+		/// Whether the sequence set is UIDs (`UID STORE`) rather than
+		/// sequence numbers.
 		uid: bool,
 		/// CONDSTORE `UNCHANGEDSINCE n`: skip messages whose mod-seq exceeds it.
 		unchanged_since: Option<u64>,
 	},
+	/// `COPY <sequence> <mailbox>` (or `MOVE` when `remove_source` is set).
 	Copy {
+		/// Messages to copy.
 		sequence: SequenceSet,
+		/// Destination mailbox.
 		mailbox: String,
+		/// Whether the sequence set is UIDs (`UID COPY`) rather than
+		/// sequence numbers.
 		uid: bool,
 		/// MOVE removes the source messages after copying.
 		remove_source: bool,
 	},
+	/// `SEARCH <criteria>`: return matching sequence numbers (or UIDs).
 	Search {
+		/// Criteria to AND together.
 		criteria: Vec<SearchKey>,
+		/// Whether to return UIDs (`UID SEARCH`) rather than sequence numbers.
 		uid: bool,
 		/// `RETURN (...)` options (RFC 4731 ESEARCH). `None` is the legacy
 		/// `* SEARCH` reply; `Some` selects the `* ESEARCH` reply.
@@ -128,69 +201,100 @@ pub enum Command {
 	/// `ESEARCH [IN (sources)] [RETURN (...)] criteria` (RFC 7377
 	/// MULTISEARCH). Searches one or more mailboxes, always reporting UIDs.
 	Esearch {
+		/// Mailboxes or scopes to search.
 		sources: Vec<SearchScope>,
+		/// Criteria to AND together.
 		criteria: Vec<SearchKey>,
+		/// RETURN options (RFC 4731). ESEARCH always emits them.
 		return_opts: Vec<ReturnOpt>,
 	},
 	/// `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
 	Sort {
+		/// `(reverse, key)` pairs, in priority order.
 		keys: Vec<(bool, SortKey)>,
+		/// Criteria to AND together.
 		criteria: Vec<SearchKey>,
+		/// Whether to return UIDs (`UID SORT`) rather than sequence numbers.
 		uid: bool,
 	},
 	/// `THREAD ORDEREDSUBJECT <charset> <search-criteria>` (RFC 5256).
 	Thread {
+		/// Criteria to AND together.
 		criteria: Vec<SearchKey>,
+		/// Whether to return UIDs (`UID THREAD`) rather than sequence numbers.
 		uid: bool,
 	},
+	/// `STATUS <mailbox> (<items>...)`: mailbox-level counters.
 	Status {
+		/// Mailbox name to query.
 		mailbox: String,
+		/// Items to include in the STATUS response.
 		items: Vec<StatusItem>,
 	},
+	/// `SUBSCRIBE <mailbox>`: mark the mailbox as active.
 	Subscribe {
+		/// Mailbox name to subscribe to.
 		mailbox: String,
 	},
+	/// `UNSUBSCRIBE <mailbox>`: drop the active subscription.
 	Unsubscribe {
+		/// Mailbox name to unsubscribe from.
 		mailbox: String,
 	},
+	/// `LSUB <reference> <pattern>`: list subscribed mailboxes.
 	Lsub {
+		/// Reference name defining the hierarchy context.
 		reference: String,
+		/// Pattern with wildcards (`%`, `*`).
 		pattern: String,
 	},
 	/// `SETACL <mailbox> <identifier> <rights>` (RFC 4314).
 	SetAcl {
+		/// Mailbox whose ACL is being set.
 		mailbox: String,
+		/// Identifier (authcid, anyone, …) being granted rights.
 		identifier: String,
+		/// Right string (e.g. `"lrswipkxtea"`).
 		rights: String,
 	},
 	/// `DELETEACL <mailbox> <identifier>` (RFC 4314).
 	DeleteAcl {
+		/// Mailbox whose ACL is being modified.
 		mailbox: String,
+		/// Identifier whose rights are being revoked (rights omitted).
 		identifier: String,
 	},
 	/// `GETACL <mailbox>` (RFC 4314).
 	GetAcl {
+		/// Mailbox whose ACL is being queried.
 		mailbox: String,
 	},
 	/// `LISTRIGHTS <mailbox> <identifier>` (RFC 4314).
 	ListRights {
+		/// Mailbox whose rights are being listed.
 		mailbox: String,
+		/// Identifier whose available rights are being listed.
 		identifier: String,
 	},
 	/// `MYRIGHTS <mailbox>` (RFC 4314).
 	MyRights {
+		/// Mailbox whose rights for the current user are being queried.
 		mailbox: String,
 	},
 	/// `GETMETADATA [(options)] <mailbox> <entries>` (RFC 5464). An empty
 	/// mailbox name addresses server-level annotations.
 	GetMetadata {
+		/// Mailbox name (empty string addresses server-level entries).
 		mailbox: String,
+		/// Annotation entry names to look up.
 		entries: Vec<String>,
 	},
 	/// `SETMETADATA <mailbox> (entry value ...)` (RFC 5464). A `None` value
 	/// deletes the entry.
 	SetMetadata {
+		/// Mailbox name (empty string addresses server-level entries).
 		mailbox: String,
+		/// `(entry, value)` pairs; a `None` value deletes the entry.
 		items: Vec<(String, Option<String>)>,
 	},
 	/// `NOTIFY SET [STATUS] (<event-group> ...)` / `NOTIFY NONE` (RFC 5465).
@@ -207,7 +311,10 @@ pub enum NotifyRequest {
 	/// `selected` mailbox specifier (the only specifier fully supported); other
 	/// specifiers are accepted and ignored.
 	Set {
+		/// Whether the request carried the `STATUS` return modifier: when
+		/// set, status responses for newly selected mailboxes are emitted.
 		status: bool,
+		/// Events requested for the `selected` mailbox specifier.
 		selected: Vec<NotifyEvent>,
 	},
 }
@@ -229,10 +336,15 @@ pub enum NotifyEvent {
 /// Items that can be requested in a STATUS command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusItem {
+	/// Total number of messages in the mailbox.
 	Messages,
+	/// Number of messages with the `\Recent` flag.
 	Recent,
+	/// The next UID to be assigned.
 	Uidnext,
+	/// The mailbox's UID validity value (RFC 9051 §2.3.1.1).
 	Uidvalidity,
+	/// Number of messages without the `\Seen` flag.
 	Unseen,
 	/// `SIZE` (RFC 8438): total octets of all messages in the mailbox.
 	Size,
@@ -245,9 +357,13 @@ pub enum StatusItem {
 /// An ESEARCH `RETURN` option (RFC 4731).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnOpt {
+	/// Return the lowest matching sequence number / UID.
 	Min,
+	/// Return the highest matching sequence number / UID.
 	Max,
+	/// Return the count of matches.
 	Count,
+	/// Return every matching sequence number / UID.
 	All,
 }
 
@@ -274,18 +390,26 @@ pub enum SearchScope {
 /// A SORT key (RFC 5256), optionally preceded by REVERSE in the command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
+	/// Internal date (delivery time).
 	Arrival,
+	/// Cc header.
 	Cc,
+	/// Date header.
 	Date,
+	/// From header.
 	From,
+	/// RFC 5322 size in octets.
 	Size,
+	/// Subject header.
 	Subject,
+	/// To header.
 	To,
 }
 
 /// A single SEARCH criterion; multiple keys AND together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchKey {
+	/// `ALL`: match every message in the mailbox.
 	All,
 	/// Flag present (true) or absent (false).
 	FlagIs(super::mailbox::Flag, bool),
@@ -320,16 +444,22 @@ pub enum SearchKey {
 /// How STORE changes the flag set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreMode {
+	/// `FLAGS`: replace the flag set.
 	Set,
+	/// `+FLAGS`: add the listed flags.
 	Add,
+	/// `-FLAGS`: remove the listed flags.
 	Remove,
 }
 
 /// What FETCH must return per message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchItem {
+	/// `FLAGS`: the message's flag list.
 	Flags,
+	/// `RFC822.SIZE`: the RFC 5322 size in octets.
 	Rfc822Size,
+	/// `UID`: the message's UID.
 	Uid,
 	/// `BODY[]` / `RFC822`: the full raw message.
 	Body,
@@ -337,6 +467,7 @@ pub enum FetchItem {
 	Binary,
 	/// `BINARY.SIZE[]`: the decoded body's size in octets (RFC 3516).
 	BinarySize,
+	/// `INTERNALDATE`: the message's internal date.
 	InternalDate,
 	/// `MODSEQ`: the message's mod-sequence (CONDSTORE, RFC 7162).
 	ModSeq,
@@ -353,6 +484,10 @@ pub enum FetchItem {
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SequenceSet {
+	/// Inclusive ranges as `(start, end)` pairs. `end = None` denotes a
+	/// single value rather than a range. `0` is the internal encoding for
+	/// `*` (the maximum existing value); see [`Self::contains`] for the
+	/// resolution rules.
 	pub ranges: Vec<(u32, Option<u32>)>,
 }
 

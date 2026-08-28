@@ -27,7 +27,13 @@ pub enum Response {
 	/// `-ERR <text>`
 	Err(String),
 	/// `+OK <text>` followed by a dot-terminated body.
-	Multiline { status: String, body: Vec<u8> },
+	Multiline {
+		/// Status line text (after `+OK ` and before CRLF).
+		status: String,
+		/// Raw body bytes. The encoder dot-stuffs any line starting with `.`
+		/// and terminates with the `.\r\n` terminator.
+		body: Vec<u8>,
+	},
 	/// `+OK <text>` then close the connection.
 	Bye(String),
 }

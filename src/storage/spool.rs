@@ -42,7 +42,9 @@ pub struct Envelope {
 /// One spooled message: envelope plus raw message bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpoolEntry {
+	/// Envelope metadata (sender, recipients, retry state).
 	pub envelope: Envelope,
+	/// Raw RFC 5322 message bytes, exactly as accepted.
 	pub data: Vec<u8>,
 }
 

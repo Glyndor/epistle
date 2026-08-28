@@ -28,15 +28,27 @@ pub fn ensure_crypto_provider() {
 /// start with broken TLS rather than degrade to plaintext.
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
+	/// The PEM file could not be read from disk: missing file, permission
+	/// denied, or another I/O failure. Carries the path string and the
+	/// underlying `std::io::Error`.
 	#[error("cannot read {path}: {source}")]
 	Read {
+		/// Path that was attempted, formatted with `Display`.
 		path: String,
+		/// Underlying I/O error returned by `std::fs`.
 		source: std::io::Error,
 	},
+	/// The PEM file was readable but contained no `CERTIFICATE` blocks.
+	/// Carries the path string.
 	#[error("no certificates found in {0}")]
 	NoCertificates(String),
+	/// The PEM file was readable but contained no private key block.
+	/// Carries the path string.
 	#[error("no private key found in {0}")]
 	NoPrivateKey(String),
+	/// rustls rejected the certificate/key pair: the key does not match
+	/// the certificate, or the material is otherwise unusable. Carries the
+	/// underlying message.
 	#[error("invalid TLS material: {0}")]
 	Invalid(String),
 }

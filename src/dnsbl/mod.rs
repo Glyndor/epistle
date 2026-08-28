@@ -15,7 +15,12 @@ pub enum DnsblOutcome {
 	/// The IP is not listed on any configured zone.
 	NotListed,
 	/// The IP is listed on `zone` (a spam signal, not an automatic reject).
-	Listed { zone: String },
+	/// Carries the zone that listed the IP, so callers can log which blocklist
+	/// matched.
+	Listed {
+		/// The DNSBL zone that returned a listing A record for the IP.
+		zone: String,
+	},
 	/// Every queried zone failed to resolve; the screen is inconclusive.
 	/// DNSBL is advisory, so callers must not reject solely on this.
 	Unavailable,

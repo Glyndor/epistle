@@ -51,20 +51,42 @@ use serde::Deserialize;
 /// Errors produced while loading or validating a configuration file.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+	/// The configuration file could not be read from disk: missing file,
+	/// permission denied, or another I/O failure. The variant carries the
+	/// path that was attempted and the underlying `std::io::Error`.
 	#[error("cannot read config file {path}: {source}")]
 	Read {
+		/// Path passed to `Config::load`.
 		path: PathBuf,
+		/// Underlying I/O error returned by `std::fs`.
 		source: std::io::Error,
 	},
+	/// The file was read but its contents are not valid TOML, or they contain
+	/// an unknown key (the schema is `deny_unknown_fields`). Carries the path
+	/// and the parser error.
 	#[error("invalid TOML in {path}: {source}")]
 	Parse {
+		/// Path of the file that failed to parse.
 		path: PathBuf,
+		/// Underlying TOML deserialization error.
 		source: Box<toml::de::Error>,
 	},
+	/// The configuration file is group- or world-readable (or writable): on
+	/// Unix the loader requires mode `0600`. Carries the path and the
+	/// observed permission bits (masked to the low 9).
 	#[error("config file {path} is group/world-accessible (mode {mode:#o}); restrict it to 0600")]
-	InsecurePermissions { path: PathBuf, mode: u32 },
+	InsecurePermissions {
+		/// Path whose permissions were rejected.
+		path: PathBuf,
+		/// Observed permission mode, masked to `0o777`.
+		mode: u32,
+	},
+	/// The configuration referenced `${VAR}` for a variable that is not set
+	/// in the process environment. Carries the variable name.
 	#[error("config references undefined environment variable ${{{0}}}")]
 	MissingEnv(String),
+	/// A semantic validation check failed after parsing: cross-field
+	/// consistency, an out-of-range number, or a malformed `${...}` token.
 	#[error("invalid configuration: {0}")]
 	Invalid(String),
 }

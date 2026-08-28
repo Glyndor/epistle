@@ -12,7 +12,11 @@ use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 /// A record to publish, paired with the zone it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishRecord {
+	/// DNS zone (the registrable domain) the record belongs to. The
+	/// provider uses this to scope the upsert and authorize its API
+	/// token against the right zone.
 	pub zone: String,
+	/// The record itself, ready to hand to a provider's `upsert`.
 	pub record: DnsRecord,
 }
 

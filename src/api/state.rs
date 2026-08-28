@@ -274,10 +274,15 @@ impl ApiState {
 			.load(std::sync::atomic::Ordering::Relaxed)
 	}
 
+	/// The mail domains this server hosts, as configured at startup. Used by
+	/// the API to accept or reject account and domain operations.
 	pub fn domains(&self) -> &[String] {
 		&self.inner.domains
 	}
 
+	/// A snapshot of every account in the directory, with its delivery
+	/// addresses and whether its mailbox is dynamic (provisioned on first
+	/// delivery rather than declared up front).
 	pub fn accounts(&self) -> Vec<AccountView> {
 		self.inner
 			.store
@@ -291,14 +296,20 @@ impl ApiState {
 			.collect()
 	}
 
+	/// The account directory this state was built over. Exposed for handlers
+	/// that need operations not exposed on `State` itself (for example
+	/// password changes or alias rewrites).
 	pub fn store(&self) -> &AccountStore {
 		&self.inner.store
 	}
 
+	/// The on-disk spool where accepted messages land before queueing.
 	pub fn spool(&self) -> &FsSpool {
 		&self.inner.spool
 	}
 
+	/// The server's data directory: root for the spool, key material, and
+	/// other persistent state.
 	pub fn data_dir(&self) -> &std::path::Path {
 		&self.inner.data_dir
 	}

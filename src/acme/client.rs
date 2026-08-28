@@ -15,8 +15,14 @@ use super::protocol::{self, Authorization, Order};
 /// Errors from the ACME flow.
 #[derive(Debug, thiserror::Error)]
 pub enum AcmeError {
+	/// HTTP-layer failure talking to the CA: network error, timeout, non-2xx
+	/// status that the protocol layer cannot interpret, or a malformed
+	/// `Replay-Nonce`/`Location` header.
 	#[error("transport error: {0}")]
 	Transport(String),
+	/// ACME-protocol failure: unparseable JSON, unexpected order/authorization
+	/// status, missing `Location`, missing expected challenge, or a state the
+	/// flow cannot recover from.
 	#[error("protocol error: {0}")]
 	Protocol(String),
 }
@@ -25,9 +31,17 @@ pub enum AcmeError {
 /// HTTP status, and the body.
 #[derive(Debug, Clone)]
 pub struct PostResponse {
+	/// The CA's next anti-replay nonce, taken from the `Replay-Nonce` header
+	/// (empty string if the server omitted it).
 	pub nonce: String,
+	/// `Location` header value from the response, if the server set one. For
+	/// `newAccount` and `newOrder` this carries the account or order URL.
 	pub location: Option<String>,
+	/// Numeric HTTP status returned by the CA (for example 201 on a freshly
+	/// created account or order).
 	pub status: u16,
+	/// Raw response body bytes; the caller deserializes as the relevant
+	/// resource type (order, authorization, etc.).
 	pub body: Vec<u8>,
 }
 
