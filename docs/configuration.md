@@ -200,6 +200,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 
 | `provider` value | Notes |
 |---|---|
+| `bunny` | Bunny.net account access key; `AccessKey` header; `?search=` resolves the zone id; see limitations below. |
 | `cloudflare` | API token; bearer auth; supports TLSA via structured data. |
 | `desec` | deSEC API token; rrset-style bulk PUT; supports TLSA. |
 | `digitalocean` | Personal access token; bearer auth; v2 REST API; see specifics below. |
@@ -217,6 +218,7 @@ Common keys (every provider):
 | `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `manual`. |
 | `provider` | One of `cloudflare`, `desec`, `gcloud`, `namecheap`, `route53`, `manual`. |
 | `provider` | One of `cloudflare`, `desec`, `dnsimple`, `namecheap`, `route53`, `manual`. |
+| `provider` | One of `bunny`, `cloudflare`, `desec`, `namecheap`, `route53`, `manual`. |
 | `zone` | The DNS zone the token is scoped to (least privilege). |
 | `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
 | `token_env` | Name of an env var holding the API token. |
@@ -376,6 +378,39 @@ credentials_file = "/etc/glyndor/epistle/dns/gcloud.json"
   provider only submits a change when the rrset exists in the zone.
 - **TLSA is supported** via the structured `rrdatas` path. MX/SRV are not
   emitted yet and return `provider does not support writes`.
+#### `[dns]` — Bunny specifics
+
+```toml
+[dns]
+provider = "bunny"
+zone = "example.org"
+token = "your-bunny-account-key"      # or token_file / token_env
+```
+
+- The token is the Bunny.net account **Access Key** (Account → API → API Key
+  in the panel). epistle sends it in the `AccessKey` HTTP header — *not*
+  `Authorization: Bearer …`. Keep it in `token_file` (`0600`) or `token_env`
+  in production.
+- **Zone id, not name.** Bunny references a zone by numeric id; on first
+  use epistle issues `GET /dnszone?search=<zone>` and picks the entry whose
+  `Domain` matches the token's zone exactly (Bunny's search is a prefix
+  match, so `example.org` also returns `evilexample.org` and
+  `example.org.evil.test` — those are ignored). The id is cached for the
+  life of the provider.
+- **Create vs update.** Bunny's record fields are numeric types
+  (`A=0`, `AAAA=1`, `CNAME=2`, `TXT=3`, `MX=4`, `SRV=8`, `TLSA=15`). epistle
+  upserts by first reading the zone's record list, then choosing between
+  `PUT /dnszone/{id}/records` (create) and `POST /dnszone/{id}/records/{rid}`
+  (update); without that read-modify-write, Bunny rejects a second `TXT`
+  at the same name as `400`. Two TXT records at the same name is the
+  classic mistake and is covered by a test.
+- **Delete is idempotent.** `DELETE` returns `404` for a record that is
+  already gone (e.g. removed between our find and delete by another
+  caller); epistle swallows the `404` and returns `Ok`.
+- **TLSA and SRV are not supported** — Bunny's API takes a `Type` integer
+  and the MX/SRV/TLSA wire formats need fields (`Priority`, `Port`,
+  `Flags`, `Tag`) epistle does not yet emit. epistle returns
+  `provider does not support writes` for those kinds and skips them.
 
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.

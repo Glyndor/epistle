@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::dns::bunny::BunnyProvider;
 use crate::dns::cloudflare::CloudflareProvider;
 use crate::dns::desec::DesecProvider;
 use crate::dns::dnsimple::DnsimpleProvider;
@@ -86,6 +87,7 @@ impl Dns {
 				let account_id = self.account_id.clone()?;
 				Some(Arc::new(DnsimpleProvider::new(self.secret()?, account_id)))
 			}
+			"bunny" => Some(Arc::new(BunnyProvider::new(self.secret()?))),
 			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
 			"gcloud" => Some(Arc::new(GcloudProvider::new(
 				self.secret()?,
