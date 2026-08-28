@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a bug or unexpected behavior
+title: "[bug]: "
+labels: ["type:bug", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, please search existing issues to avoid duplicates.
+        **Security issue? Do NOT file it here.** Use the Security tab and choose "Report a vulnerability" instead.
+  - type: input
+    id: component
+    attributes:
+      label: Component
+      description: Which part of epistle is affected.
+      placeholder: "smtp listener, imap, pop3, submission, antispam, sieve, autoconfig, db, api, cli, debian package, install, migrations"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Epistle version and how it was installed
+      description: Paste `cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version'` for source builds, or `dpkg-query -W -f='${Version}\n' epistle` for the .deb. Note how it was installed (apt archive, install.sh, cargo install, source build).
+      placeholder: "0.4.0 (installed from apt.glyndor.net)"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: "Debian 13 trixie, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: deployment
+    attributes:
+      label: Deployment
+      description: Is epistle running under the podman stack managed by podup, or standalone (bare-metal, a VM, a systemd unit you wrote)?
+      placeholder: "standalone under systemd"
+    validations:
+      required: true
+  - type: checkboxes
+    id: protocol
+    attributes:
+      label: Protocol surface involved
+      description: Check every surface the symptom touches.
+      options:
+        - label: SMTP (port 25)
+        - label: Submission / submissions (587 / 465)
+        - label: IMAP / IMAPS (143 / 993)
+        - label: POP3 / POP3S (110 / 995)
+        - label: Autoconfig / Autodiscover (well-known, SRV)
+        - label: JMAP
+        - label: ManageSieve
+        - label: Management API
+        - label: CLI
+        - label: Webhooks / metrics (OTLP)
+        - label: "None of the above (purely internal: queue, storage, antispam, db, ...)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant journald excerpt
+      description: Run `sudo journalctl -u epistle --since '-1h' --no-pager` and paste the relevant lines. **Redact secrets, IPs, hostnames, addresses and message bodies.**
+      render: shell
+    validations:
+      required: true
