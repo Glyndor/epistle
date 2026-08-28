@@ -52,6 +52,7 @@ a connection URL.
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
 | `scanner_hook_url` | string | unset | External scanner hook (ClamAV/Rspamd behind HTTP) for unauthenticated inbound mail. Absent disables scanning. |
+| `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 
@@ -158,6 +159,38 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 |---|---|
 | `url` | Endpoint to POST events to. |
 | `secret` | Optional HMAC-SHA256 signing secret. |
+
+### `[antispam.llm]`
+LLM-assisted screening for the **uncertain band** — the slice of mail where the
+local Bayesian classifier is not confident in either direction. Outside the band
+the local classifier is trusted and the LLM is not paid for; inside it, the
+server POSTs a minimal excerpt of the message (only `From`, `Subject`,
+`Reply-To`, plus a truncated body) to a chat-completions endpoint and parses
+the reply. Requires `[database]` so the Bayesian score can be computed.
+
+Fails open on any failure (transport, timeout, parse, shape): the message is
+accepted, a warning is logged, and `mail_llm_failed_total` increments. The LLM
+is never trusted to reject mail outright — its strongest action is quarantine
+to the `Rejects` mailbox.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `endpoint` | string | — (required) | Chat-completions URL (any OpenAI-compatible API). |
+| `api_key_env` | string | — (required) | Name of the env var that carries the API key; the server reads it at start and refuses to start if unset. |
+| `model` | string | — (required) | Model identifier sent in every request body. |
+| `uncertain_low` | float | `0.35` | Inclusive lower bound of the uncertain band. Scores below this skip the LLM. |
+| `uncertain_high` | float | `0.65` | Inclusive upper bound. Scores above this skip the LLM. |
+| `timeout_secs` | int | `10` | Per-request HTTP timeout. |
+| `max_body_bytes` | int | `16384` | Cap on the user-side bytes of the request body. The outbound prompt is always `≤` this plus the system prompt and JSON envelope. |
+
+Example:
+
+```toml
+[antispam.llm]
+endpoint = "https://api.openai.com/v1/chat/completions"
+api_key_env = "EPISTLE_LLM_API_KEY"
+model = "gpt-4o-mini"
+```
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).

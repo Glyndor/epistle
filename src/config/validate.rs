@@ -20,6 +20,14 @@ impl Config {
 		self.validate_transport()?;
 		self.validate_oauth()?;
 		self.validate_ldap()?;
+		self.validate_antispam_llm()?;
+		Ok(())
+	}
+
+	fn validate_antispam_llm(&self) -> Result<(), ConfigError> {
+		if let Some(llm) = &self.antispam_llm {
+			llm.validate()?;
+		}
 		Ok(())
 	}
 

@@ -69,6 +69,9 @@ pub struct Metrics {
 	bounced: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
+	llm_consulted: AtomicU64,
+	llm_quarantined: AtomicU64,
+	llm_failed: AtomicU64,
 }
 
 impl Metrics {
@@ -135,6 +138,24 @@ impl Metrics {
 	/// Count a webhook event that failed to deliver (advisory; mail unaffected).
 	pub fn webhook_failed(&self) {
 		self.webhook_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message sent to the LLM antispam hook for a second opinion.
+	/// Only incremented when the local Bayesian score sits inside the
+	/// configured uncertain band, so it measures the real cost of the feature.
+	pub fn llm_consulted(&self) {
+		self.llm_consulted.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message the LLM hook quarantined (spam with high confidence).
+	pub fn llm_quarantined(&self) {
+		self.llm_quarantined.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message the LLM hook could not classify (transport, timeout,
+	/// parse or shape failure). Fail-open: the message is still accepted.
+	pub fn llm_failed(&self) {
+		self.llm_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a rejected message by reason.
@@ -237,6 +258,21 @@ impl Metrics {
 				"Webhook events that failed to deliver.",
 				&self.webhook_failed,
 			),
+			(
+				"mail_llm_consulted_total",
+				"Messages sent to the LLM antispam hook (uncertain band only).",
+				&self.llm_consulted,
+			),
+			(
+				"mail_llm_quarantined_total",
+				"Messages quarantined after the LLM antispam hook answered spam.",
+				&self.llm_quarantined,
+			),
+			(
+				"mail_llm_failed_total",
+				"LLM antispam hook calls that failed (the message was accepted).",
+				&self.llm_failed,
+			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
 			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
@@ -280,6 +316,10 @@ mod tests {
 		m.relayed();
 		m.deferred();
 		m.bounced();
+		m.llm_consulted();
+		m.llm_consulted();
+		m.llm_quarantined();
+		m.llm_failed();
 		let r = m.render();
 		assert!(r.contains("mail_sieve_rejected_total 1\n"), "{r}");
 		assert!(r.contains("mail_vacation_sent_total 2\n"), "{r}");
@@ -294,6 +334,9 @@ mod tests {
 		);
 		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
 		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
+		assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
+		assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
+		assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
 		assert!(
 			r.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 2\n"),
 			"{r}"
