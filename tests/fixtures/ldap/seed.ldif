@@ -1,0 +1,11 @@
+dn: ou=people,dc=epistle,dc=interop,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=alice,ou=people,dc=epistle,dc=interop,dc=test
+objectClass: inetOrgPerson
+cn: Alice Tester
+sn: Tester
+uid: alice
+mail: alice@epistle.interop.test
+userPassword: alice-password
