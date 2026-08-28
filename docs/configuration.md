@@ -205,6 +205,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `digitalocean` | Personal access token; bearer auth; v2 REST API; see specifics below. |
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
+| `rfc2136` | TSIG-authenticated DNS UPDATE to a local nameserver (`host:port`); A/AAAA/TXT/CNAME/TLSA. |
 | `manual` | Always available; no credentials. |
 
 Common keys (every provider):
@@ -274,6 +275,49 @@ token = "your_username:your_api_key"      # or token_file / token_env
   → `setHosts`), so if an operator also edits the zone by hand between
   those calls their changes are silently dropped. Pair with periodic drift
   checks (`epistle dns-check`) for zones that are not fully epistle-owned.
+
+#### `[dns]` — RFC 2136 specifics
+
+```toml
+[dns]
+provider = "rfc2136"
+zone = "example.org"
+endpoint = "127.0.0.1:5359"   # the nameserver that accepts UPDATE messages
+key_name = "epistle-key."
+token = "base64-of-shared-secret"
+# token_file / token_env also accepted, like every provider
+algorithm = "hmac-sha256"     # default; "hmac-sha384" and "hmac-sha512" supported
+```
+
+- **No HTTP API.** epistle sends DNS UPDATE messages (opcode 5) over TCP,
+  framed with a 2-byte length prefix (RFC 1035 §4.2.4). The endpoint is
+  `host:port` of a nameserver that has the zone configured and the TSIG
+  key loaded — typically BIND, Knot, NSD, or dnsdist in front of any of
+  those.
+- **Authentication is TSIG** (RFC 8945). `key_name` is the key's name in
+  the nameserver's config; `token` is the shared secret as base64 (the
+  format `rndc-confgen` and similar tools print). The MAC is computed
+  over the full UPDATE wire format, including the message id, so replays
+  are non-viable on top of the time tolerance (`fudge`, 5 minutes by
+  default — adjust the nameserver if you need more).
+- **Supported algorithms:** `hmac-sha256` (default), `hmac-sha384`,
+  `hmac-sha512`. `hmac-sha1`, `hmac-sha224`, and `hmac-md5` are rejected
+  at build time — hickory's TSIG implementation does not implement the
+  MAC primitives for them, so an attempt to sign would fail in
+  non-obvious ways.
+- **Upsert is `delete RRset (name,type)` + `add RR` in one message.**
+  RFC 2136 §2.5 — the canonical replacement. Guarantees we never end up
+  with two TXT records at the same owner name.
+- **Delete is the same `delete RRset` with no `add` after it** —
+  class NONE, TTL 0, empty RDATA. Idempotent by definition; the server
+  answers NOERROR whether the RRset existed or not.
+- **`list` is not implemented.** RFC 2136 defines UPDATE only; reading
+  the zone back would need AXFR or per-name queries that the provider
+  has no way to enumerate. Drift detection (`epistle dns-check`) will
+  return `provider does not support writes` against an rfc2136 zone.
+- **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
+  rejected (`Unsupported`) because they carry extra fields
+  (preference, weight, port) that epistle does not currently build.
 
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.

@@ -8,6 +8,7 @@ pub mod digitalocean;
 pub mod namecheap;
 pub mod provider;
 pub mod records;
+pub mod rfc2136;
 pub mod route53;
 
 use crate::spf::DnsLookup;
