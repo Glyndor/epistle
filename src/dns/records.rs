@@ -102,6 +102,15 @@ pub fn build_records(
 				ttl: TTL,
 			},
 		};
+		let cname = |name: String| PublishRecord {
+			zone: domain.clone(),
+			record: DnsRecord {
+				name,
+				kind: RecordKind::Cname,
+				value: hostname.to_string(),
+				ttl: TTL,
+			},
+		};
 
 		// SPF: authorize the domain's MX hosts; soft-fail the rest.
 		records.push(txt(domain.clone(), "v=spf1 mx ~all".to_string()));
@@ -138,6 +147,16 @@ pub fn build_records(
 				value.to_string(),
 			));
 		}
+		// Autoconfig / autodiscover (Thunderbird / Outlook auto-account
+		// setup). Both point at the mail hostname so the discovery URL the
+		// client gets back resolves to us.
+		records.push(cname(format!("autoconfig.{domain}")));
+		records.push(cname(format!("autodiscover.{domain}")));
+		// MTA-STS policy fetch (RFC 8461 §3.2): clients look up
+		// `mta-sts.<domain>` and fetch `https://mta-sts.<domain>/.well-known/mta-sts.txt`.
+		// epistle already serves the policy over HTTPS, so the CNAME makes
+		// that URL resolvable.
+		records.push(cname(format!("mta-sts.{domain}")));
 		// Service locators (RFC 6186, 8314, 8621, 5804) — mail, JMAP, and
 		// ManageSieve always; CalDAV/CardDAV only when the webdav listener
 		// exposes them.

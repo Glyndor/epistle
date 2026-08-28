@@ -106,6 +106,24 @@ fn builds_srv_records_for_mail_jmap_and_sieve() {
 }
 
 #[test]
+fn builds_discovery_cnames_for_autoconfig_autodiscover_and_mta_sts() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		None,
+		None,
+		"v1",
+		Services::all(),
+	);
+	let autoconfig = find(&records, "autoconfig.example.org", RecordKind::Cname);
+	assert_eq!(autoconfig.record.value, "mail.example.org");
+	let autodiscover = find(&records, "autodiscover.example.org", RecordKind::Cname);
+	assert_eq!(autodiscover.record.value, "mail.example.org");
+	let mta_sts = find(&records, "mta-sts.example.org", RecordKind::Cname);
+	assert_eq!(mta_sts.record.value, "mail.example.org");
+}
+
+#[test]
 fn caldav_and_carddav_srv_are_optional() {
 	let without = build_records(
 		&["example.org".to_string()],
