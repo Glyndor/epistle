@@ -211,7 +211,10 @@ async fn mx_upsert_passes_value_through_in_rrdatas() {
 	// form, no quotes), per
 	// https://cloud.google.com/dns/docs/records-overview.
 	assert!(body.contains("\"type\":\"MX\""), "{body}");
-	assert!(body.contains("\"rrdatas\":[\"10 mail.example.org.\"]"), "{body}");
+	assert!(
+		body.contains("\"rrdatas\":[\"10 mail.example.org.\"]"),
+		"{body}"
+	);
 }
 
 #[tokio::test]

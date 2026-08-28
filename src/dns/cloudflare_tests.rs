@@ -263,7 +263,10 @@ async fn caa_upsert_posts_with_flags_tag_value_data() {
 		value: "0 issue \"letsencrypt.org\"".into(),
 		ttl: 3600,
 	};
-	provider.upsert("example.org", caa).await.expect("caa upsert");
+	provider
+		.upsert("example.org", caa)
+		.await
+		.expect("caa upsert");
 	let body = state
 		.lock()
 		.unwrap()

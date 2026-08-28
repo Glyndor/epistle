@@ -145,7 +145,10 @@ async fn mx_upsert_passes_value_through_verbatim() {
 	let body = state.lock().unwrap().puts[0].clone();
 	assert!(body.contains("\"type\":\"MX\""), "{body}");
 	// deSEC stores MX records as `<priority> <target>` in `records`.
-	assert!(body.contains("\"records\":[\"10 mail.example.org\"]"), "{body}");
+	assert!(
+		body.contains("\"records\":[\"10 mail.example.org\"]"),
+		"{body}"
+	);
 }
 
 #[tokio::test]
@@ -162,7 +165,10 @@ async fn srv_upsert_puts_unquoted_value_with_correct_subname() {
 	assert!(body.contains("\"subname\":\"_submissions._tcp\""), "{body}");
 	assert!(body.contains("\"type\":\"SRV\""), "{body}");
 	// deSEC stores SRV values unquoted, as `<prio> <weight> <port> <target>`.
-	assert!(body.contains("\"records\":[\"0 1 465 mail.example.org.\"]"), "{body}");
+	assert!(
+		body.contains("\"records\":[\"0 1 465 mail.example.org.\"]"),
+		"{body}"
+	);
 }
 
 #[tokio::test]
@@ -178,5 +184,8 @@ async fn caa_upsert_passes_value_through_verbatim() {
 	let body = state.lock().unwrap().puts[0].clone();
 	assert!(body.contains("\"subname\":\"\""), "{body}");
 	assert!(body.contains("\"type\":\"CAA\""), "{body}");
-	assert!(body.contains("\"records\":[\"0 issue \\\"letsencrypt.org\\\"\"]"), "{body}");
+	assert!(
+		body.contains("\"records\":[\"0 issue \\\"letsencrypt.org\\\"\"]"),
+		"{body}"
+	);
 }

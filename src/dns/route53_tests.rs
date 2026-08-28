@@ -179,7 +179,10 @@ async fn caa_upsert_uses_verbatim_value_in_value_element() {
 		value: "0 issue \"letsencrypt.org\"".into(),
 		ttl: 3600,
 	};
-	provider.upsert("example.org", caa).await.expect("caa upsert");
+	provider
+		.upsert("example.org", caa)
+		.await
+		.expect("caa upsert");
 	let body = state.lock().unwrap().bodies[0].clone();
 	assert!(body.contains("<Type>CAA</Type>"), "{body}");
 	assert!(

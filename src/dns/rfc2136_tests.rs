@@ -370,8 +370,10 @@ async fn record_outside_zone_is_rejected_without_network() {
 
 #[tokio::test]
 async fn mx_upsert_encodes_preference_and_exchange_in_wire_message() {
-	let (endpoint, captured) =
-		spawn_server(|_| ServerReply::NoError { verify_signer: make_signing_pair() }).await;
+	let (endpoint, captured) = spawn_server(|_| ServerReply::NoError {
+		verify_signer: make_signing_pair(),
+	})
+	.await;
 	let provider = provider_with_endpoint(endpoint);
 	let mx = DnsRecord {
 		name: ZONE.to_string(),
