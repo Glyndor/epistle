@@ -151,3 +151,123 @@ async fn fetch_keys_rejects_non_https() {
 		Err(OidcError::InsecureUrl)
 	);
 }
+
+/// The `is_internal` predicate is the gatekeeper for the jwks-scope rule. Each
+/// of these cases pins one of the four ranges the rule cares about, plus the
+/// IPv4-mapped IPv6 trick that hides a v4 internal address behind a v6 prefix.
+#[test]
+fn is_internal_classifies_address_ranges() {
+	use std::net::{Ipv4Addr, Ipv6Addr};
+
+	let v4 = |a, b, c, d| IpAddr::V4(Ipv4Addr::new(a, b, c, d));
+	let v6 = |s: &str| IpAddr::V6(s.parse::<Ipv6Addr>().unwrap());
+	let v4_mapped = |a, b, c, d| {
+		IpAddr::V6(
+			format!("::ffff:{a}.{b}.{c}.{d}")
+				.parse::<Ipv6Addr>()
+				.unwrap(),
+		)
+	};
+
+	// Public IPv4: 8.8.8.8 (Google DNS), 1.1.1.1.
+	assert!(!is_internal(v4(8, 8, 8, 8)));
+	assert!(!is_internal(v4(1, 1, 1, 1)));
+
+	// Private IPv4 (RFC 1918): 10/8, 172.16/12, 192.168/16.
+	assert!(is_internal(v4(10, 0, 0, 1)));
+	assert!(is_internal(v4(172, 16, 0, 1)));
+	assert!(is_internal(v4(192, 168, 1, 1)));
+
+	// Loopback, link-local, unspecified.
+	assert!(is_internal(v4(127, 0, 0, 1)));
+	assert!(is_internal(v4(169, 254, 169, 254)));
+	assert!(is_internal(v4(0, 0, 0, 0)));
+
+	// Public IPv6.
+	assert!(!is_internal(v6("2001:4860:4860::8888")));
+	// IPv6 internal: loopback, unspecified, unique-local (RFC 4193),
+	// link-local.
+	assert!(is_internal(v6("::1")));
+	assert!(is_internal(v6("::")));
+	assert!(is_internal(v6("fc00::1")));
+	assert!(is_internal(v6("fe80::1")));
+
+	// IPv4-mapped IPv6 carrying a v4 internal address is still internal: a v6
+	// URL must not be able to sneak past the v4 check by using the mapped
+	// prefix.
+	assert!(is_internal(v4_mapped(10, 0, 0, 1)));
+	assert!(is_internal(v4_mapped(127, 0, 0, 1)));
+	assert!(is_internal(v4_mapped(169, 254, 169, 254)));
+	// ...but not when it carries a public address.
+	assert!(!is_internal(v4_mapped(8, 8, 8, 8)));
+}
+
+/// The four scenarios the rule was written for, expressed against the pure
+/// decision so the tests do not depend on DNS resolving.
+#[test]
+fn jwks_ips_allowed_matches_the_rule() {
+	use std::net::Ipv4Addr;
+
+	let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+	let private = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+	let cloud_meta = IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254));
+
+	// jwks_uri publico: pasa. Discovery content is irrelevant when no jwks IP
+	// is internal, so pass an empty discovery set to prove it.
+	assert!(jwks_ips_allowed(&[public], &[]));
+	assert!(jwks_ips_allowed(&[public, public], &[private]));
+
+	// jwks_uri en rango privado y discovery_url publico: rechazado.
+	assert!(!jwks_ips_allowed(&[private], &[public]));
+	assert!(!jwks_ips_allowed(&[cloud_meta], &[public]));
+
+	// jwks_uri y discovery_url en el mismo host privado: pasa. This is the
+	// legitimate internal-IdP case the rule preserves.
+	assert!(jwks_ips_allowed(&[private], &[private]));
+	assert!(jwks_ips_allowed(&[private, public], &[private, public]));
+
+	// Mix: at least one internal jwks IP must overlap with a discovery IP, but
+	// the public ones can be ignored.
+	assert!(!jwks_ips_allowed(&[private, public], &[public]));
+	assert!(jwks_ips_allowed(&[private, public], &[private]));
+}
+
+/// IPv4-mapped IPv6 to a private range is rejected even when the discovery
+/// host is purely public — the mapped form is unwrapped before the check.
+#[test]
+fn jwks_ips_allowed_rejects_ipv4_mapped_ipv6_to_private() {
+	use std::net::{Ipv4Addr, Ipv6Addr};
+
+	let mapped_private = IpAddr::V6("::ffff:10.0.0.1".parse::<Ipv6Addr>().unwrap());
+	let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+	let discovery_with_mapped_public = IpAddr::V6("::ffff:8.8.8.8".parse::<Ipv6Addr>().unwrap());
+
+	// The mapped form is detected as internal and does not overlap with the
+	// pure-v4 public discovery address.
+	assert!(!jwks_ips_allowed(&[mapped_private], &[public]));
+	// A mapped-private jwks is allowed only when the discovery set also
+	// contains that exact mapped address — not just any v4 from the same
+	// range.
+	assert!(jwks_ips_allowed(&[mapped_private], &[mapped_private]));
+	assert!(!jwks_ips_allowed(
+		&[mapped_private],
+		&[discovery_with_mapped_public]
+	));
+}
+
+/// The error variant carries the resolved internal address(es) in its
+/// Display, so an operator reading a startup log sees what the IdP tried to
+/// pivot to.
+#[test]
+fn jwks_uri_off_scope_error_mentions_the_resolved_address() {
+	let err = OidcError::JwksUriOffScope("169.254.169.254".to_string());
+	let rendered = format!("{err}");
+	assert!(
+		rendered.contains("169.254.169.254"),
+		"error must name the offending address, got: {rendered}"
+	);
+	assert!(
+		rendered.contains("discovery host"),
+		"error must explain the rule it tripped, got: {rendered}"
+	);
+}
