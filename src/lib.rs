@@ -4,6 +4,12 @@
 //! through an API and a CLI. This crate hosts all server logic; the binary
 //! in `main.rs` is a thin entry point.
 
+// Every public item carries a doc comment as of #753, and this keeps it that
+// way. Declared here rather than as a CI flag so it fails at the desk, in the
+// same compile that introduced the gap, instead of ten minutes later in a job
+// the author has stopped watching.
+#![deny(missing_docs)]
+
 pub mod acme;
 pub mod antispam;
 pub mod api;
