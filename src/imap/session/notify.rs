@@ -1,7 +1,6 @@
 //! IMAP NOTIFY (RFC 5465).
 
 use super::super::command::{NotifyEvent, NotifyRequest};
-use super::mailbox::Snapshot;
 use super::state::State;
 use super::{Output, Session};
 
@@ -29,16 +28,18 @@ impl Session {
 		if !self.notify_active() {
 			return None;
 		}
-		let State::Selected {
-			account,
-			mailbox,
-			snapshot,
-			..
-		} = &mut self.state
-		else {
+		// Names are cloned so the mutable borrow of `self.state` ends before
+		// `open_snapshot` takes `&self`.
+		let (account, mailbox) = match &self.state {
+			State::Selected {
+				account, mailbox, ..
+			} => (account.clone(), mailbox.clone()),
+			_ => return None,
+		};
+		let fresh = self.open_snapshot(&account, &mailbox).ok()?;
+		let State::Selected { snapshot, .. } = &mut self.state else {
 			return None;
 		};
-		let fresh = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
 		if fresh.uid_validity() != snapshot.uid_validity() || fresh.len() != snapshot.len() {
 			let exists = fresh.len();
 			*snapshot = fresh;

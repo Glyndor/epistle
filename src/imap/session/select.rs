@@ -17,11 +17,10 @@ impl Session {
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return Output::text(format!("{tag} NO no such mailbox\r\n"));
 		}
-		let snapshot =
-			match mailbox::Snapshot::open(&self.data_dir, &account, mailbox, &self.crypto) {
-				Ok(snapshot) => snapshot,
-				Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
-			};
+		let snapshot = match self.open_snapshot(&account, mailbox) {
+			Ok(snapshot) => snapshot,
+			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
+		};
 		// QRESYNC: report vanished UIDs, but only if UIDVALIDITY still matches.
 		let vanished = match qresync {
 			Some((uid_validity, modseq)) if uid_validity == snapshot.uid_validity() => {

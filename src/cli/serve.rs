@@ -240,7 +240,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		)?),
 	);
 
-	super::serve_tasks::spawn_blob_reclamation(&config);
+	super::serve_tasks::spawn_storage_maintenance(&config);
 
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	let tls_acceptor = match &config.tls {
@@ -377,7 +377,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					acceptor.clone(),
 					mode,
 				)
-				.with_crypto(crypto.clone());
+				.with_crypto(crypto.clone())
+				.with_retention_days(super::serve_tasks::retention_days(&config));
 				if let Some(bytes) = config.quota_bytes {
 					imap_server = imap_server.with_quota(bytes);
 				}

@@ -304,17 +304,21 @@ Drop OS privileges after binding ports (run the daemon unprivileged).
 | `group` | Optional; defaults to the user's primary group. |
 
 ### `[storage]`
-Optional at-rest encryption of stored message files. Defaults to off (relying on
-full-disk encryption). When on, `.eml` bodies, the outbound spool and JMAP blobs
-are encrypted with ChaCha20-Poly1305; reads decrypt transparently. The key must
-be sourced off the data disk. With `encrypt_at_rest = true` and no usable key the
-server refuses to start (fail closed). See the security guide's "Data at rest".
+Optional at-rest encryption of stored message files and retention of expunged
+messages. Defaults to off for encryption (relying on full-disk encryption) and
+off for retention (current behaviour: an expunge deletes the on-disk files
+immediately). When encryption is on, `.eml` bodies, the outbound spool and
+JMAP blobs are encrypted with ChaCha20-Poly1305; reads decrypt transparently.
+The key must be sourced off the data disk. With `encrypt_at_rest = true` and
+no usable key the server refuses to start (fail closed). See the security
+guide's "Data at rest".
 
 | Key | Meaning |
 |---|---|
 | `encrypt_at_rest` | Encrypt new message writes at rest (default `false`). |
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
+| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.

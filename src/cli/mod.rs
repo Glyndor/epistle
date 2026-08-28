@@ -3,6 +3,7 @@
 mod accounts;
 mod api_keys;
 mod app_passwords;
+mod archive;
 mod autoconfig;
 mod autodiscover;
 mod backup;
@@ -292,6 +293,13 @@ enum Command {
 		#[arg(long, value_name = "LABEL")]
 		label: String,
 	},
+	/// Inspect and operate on the per-account expunged-message archive
+	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
+	/// Each subcommand targets one account.
+	Archive {
+		#[command(subcommand)]
+		action: archive::Subcommand,
+	},
 }
 
 impl Cli {
@@ -556,6 +564,7 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Archive { action } => archive::dispatch(action, &mut std::io::stdout().lock()),
 		}
 	}
 }

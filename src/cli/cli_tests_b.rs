@@ -182,3 +182,189 @@ fn import_maildir_delivers_to_inbox_and_nested_folders_with_flags() {
 	assert!(sent_msg.flags.contains(&Flag::Seen));
 	assert!(sent_msg.flags.contains(&Flag::Answered));
 }
+
+#[test]
+fn parses_archive_subcommands() {
+	let cli = Cli::try_parse_from([
+		"epistle",
+		"archive",
+		"list",
+		"--config",
+		"/etc/mail.toml",
+		"alice",
+	])
+	.expect("archive list parses");
+	assert!(matches!(cli.command, Command::Archive { .. }));
+
+	let cli = Cli::try_parse_from([
+		"epistle",
+		"archive",
+		"restore",
+		"--config",
+		"/etc/mail.toml",
+		"alice",
+		"00000000-0000-0000-0000-000000000001",
+	])
+	.expect("archive restore parses");
+	assert!(matches!(cli.command, Command::Archive { .. }));
+
+	let cli = Cli::try_parse_from([
+		"epistle",
+		"archive",
+		"purge",
+		"--config",
+		"/etc/mail.toml",
+		"alice",
+		"--older-than-days",
+		"30",
+	])
+	.expect("archive purge parses");
+	assert!(matches!(cli.command, Command::Archive { .. }));
+}
+
+#[test]
+fn archive_list_dispatch_runs_against_real_layout() {
+	use crate::imap::mailbox::Flag;
+	// Seed an archived entry: append one message, expunge with retention so
+	// the file lands in `.archive/`, then list through the CLI dispatcher.
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let id = crate::imap::mailbox::append(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&[],
+		b"Subject: cli\r\n\r\nbody\r\n",
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("append");
+	let mut snapshot = crate::imap::mailbox::Snapshot::open_at(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crate::storage::MessageCrypto::disabled(),
+		30,
+		1_000,
+	)
+	.expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("flag");
+	snapshot.expunge().expect("expunge");
+
+	let cfg = config_at(dir.path());
+	let path = cfg.path().to_str().expect("utf8");
+	let mut out = Vec::new();
+	assert_eq!(
+		archive::dispatch(
+			archive::Subcommand::List {
+				config: std::path::PathBuf::from(path),
+				account: "alice".to_string(),
+			},
+			&mut out,
+		),
+		ExitCode::SUCCESS,
+	);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		text.contains(&id.to_string()),
+		"listing must include the archived id; got: {text}"
+	);
+	assert!(
+		text.contains("INBOX"),
+		"listing must include the mailbox; got: {text}"
+	);
+}
+
+#[test]
+fn archive_restore_dispatch_runs_against_real_layout() {
+	use crate::imap::mailbox::Flag;
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let id = crate::imap::mailbox::append(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&[],
+		b"Subject: cli\r\n\r\nbody\r\n",
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("append");
+	let mut snapshot = crate::imap::mailbox::Snapshot::open_at(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crate::storage::MessageCrypto::disabled(),
+		30,
+		1_000,
+	)
+	.expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("flag");
+	snapshot.expunge().expect("expunge");
+
+	let cfg = config_at(dir.path());
+	let path = cfg.path().to_str().expect("utf8");
+	let mut out = Vec::new();
+	assert_eq!(
+		archive::dispatch(
+			archive::Subcommand::Restore {
+				config: std::path::PathBuf::from(path),
+				account: "alice".to_string(),
+				id,
+			},
+			&mut out,
+		),
+		ExitCode::SUCCESS,
+	);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		text.contains("restored"),
+		"restore output must confirm success; got: {text}"
+	);
+}
+
+#[test]
+fn archive_purge_dispatch_runs_against_real_layout() {
+	use crate::imap::mailbox::Flag;
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let id = crate::imap::mailbox::append(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&[],
+		b"Subject: cli\r\n\r\nbody\r\n",
+		&crate::storage::MessageCrypto::disabled(),
+	)
+	.expect("append");
+	let mut snapshot = crate::imap::mailbox::Snapshot::open_at(
+		dir.path(),
+		"alice",
+		"INBOX",
+		&crate::storage::MessageCrypto::disabled(),
+		30,
+		1_000,
+	)
+	.expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("flag");
+	snapshot.expunge().expect("expunge");
+
+	let cfg = config_at(dir.path());
+	let path = cfg.path().to_str().expect("utf8");
+	let mut out = Vec::new();
+	assert_eq!(
+		archive::dispatch(
+			archive::Subcommand::Purge {
+				config: std::path::PathBuf::from(path),
+				account: "alice".to_string(),
+				older_than_days: None,
+			},
+			&mut out,
+		),
+		ExitCode::SUCCESS,
+	);
+	// Purge without an --older-than-days threshold wipes every entry.
+	let archive = dir.path().join("accounts/alice/.archive");
+	assert!(
+		!archive.join(format!("{id}.eml")).exists(),
+		"purge without threshold must remove every entry"
+	);
+}
