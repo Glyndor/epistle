@@ -258,6 +258,7 @@ impl Session {
 			collect_literal: None,
 			idle: false,
 			upgrade_tls: false,
+			compress: false,
 			collect_auth: false,
 		}
 	}

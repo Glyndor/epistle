@@ -30,6 +30,13 @@ pub enum Command {
 	Id,
 	/// `STARTTLS`: upgrade the plaintext connection to TLS.
 	StartTls,
+	/// `COMPRESS <algorithm>` (RFC 4978). The algorithm is carried verbatim so
+	/// the session can answer `BAD` for one it does not implement rather than
+	/// the parser rejecting the command outright.
+	Compress {
+		/// The requested algorithm, uppercased. Only `DEFLATE` is implemented.
+		algorithm: String,
+	},
 	/// `LOGIN <user> <pass>`: cleartext authentication. Only accepted before
 	/// TLS is negotiated.
 	Login {

@@ -149,6 +149,20 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+### IMAP COMPRESS=DEFLATE
+
+Advertised in `CAPABILITY` and enabled per connection by `COMPRESS DEFLATE`
+(RFC 4978). There is nothing to configure: a client that asks gets a deflate
+stream in both directions for the rest of the connection, and one that does
+not is unaffected.
+
+The compression context is kept for the whole connection rather than reset
+per message, which is where the saving comes from — IMAP repeats the same
+command names, flag names and header keys endlessly. The tagged `OK` for the
+command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
+on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
+context underneath a client that is already decoding would desynchronise it.
+
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in

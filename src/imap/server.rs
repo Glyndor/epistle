@@ -330,6 +330,20 @@ impl Server {
 					output = session.auth_response(&response);
 					continue;
 				}
+				if output.compress {
+					// RFC 4978 §3: the tagged OK travels uncompressed, and
+					// everything after it is deflated. The write and flush
+					// above have already put it on the wire in the clear, so
+					// wrapping here is the first byte of the compressed
+					// stream. The line decoder keeps its state: compression
+					// is a transport layer, and unlike STARTTLS it discards
+					// nothing that was already parsed.
+					stream = Box::new(super::compress::Deflate::new(stream));
+					// break, not continue: this inner loop re-reads the same
+					// `output`, whose `compress` flag is still set, so
+					// continuing here would wrap the stream forever.
+					break;
+				}
 				if output.upgrade_tls {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
@@ -405,3 +419,7 @@ impl Server {
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "server_tests_compress.rs"]
+mod tests_compress;
