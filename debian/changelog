@@ -1,3 +1,51 @@
+epistle (0.5.0) unstable; urgency=medium
+
+  * Eight new DNS providers: DigitalOcean, RFC 2136 dynamic update over
+    TSIG, Google Cloud DNS, Porkbun, Bunny.net, DNSimple, Spaceship and
+    OVH. With Cloudflare, deSEC, Route 53 and Namecheap that is twelve.
+  * The records to go with them. Epistle already published SPF, DKIM,
+    DMARC and MTA-STS; it now also publishes TLSRPT, the SRV discovery
+    set (_submissions, _imaps, _pop3s, _jmap, _sieve, and _caldavs and
+    _carddavs when WebDAV is on), the autoconfig, autodiscover and
+    mta-sts CNAMEs, and CAA. MX had always been emitted and every
+    provider rejected it as unsupported; all twelve accept it now.
+  * CAA is derived from the directory_url in the acme section, never
+    hardcoded. An unrecognised directory publishes no CAA rather than a
+    guess, because a CAA naming the wrong CA does not degrade issuance,
+    it blocks it, renewals included.
+  * Metric alerts, delivered by webhook or email.
+  * SCIM 2.0 provisioning under /scim/v2, on its own scope so an
+    identity-provider integration can be held tighter than the
+    operator's own access.
+  * LLM-assisted screening for the uncertain band of the spam filter.
+    This is the first decision in epistle that reads the Bayesian score
+    rather than only training it.
+  * Deleted mail can be kept and restored. Set
+    [storage] deleted_retention_days above zero and an expunge moves the
+    message into the account archive instead of deleting it, with an
+    hourly sweep, a CLI and an API. Zero is the default and keeps the
+    previous behaviour exactly, down to not creating the directory.
+  * Masked email addresses: throwaway addresses that deliver to an
+    account without revealing it. Disabling one makes it reject exactly
+    the way an address that never existed does.
+  * An API key may list domains and is then held to those domains, and
+    to the accounts that live entirely inside them. A key without the
+    field reaches everything, which is what every key did before, so an
+    existing api_keys.toml survives the upgrade without edits.
+  * IMAP CHILDREN, WITHIN and SEARCHRES.
+  * Account names coming from a SQL or LDAP directory are checked before
+    they are used. The name doubles as a directory name under the data
+    directory, and only config, API and SCIM accounts were being
+    validated, so a directory row holding a path traversal reached the
+    filesystem through the authenticated session. Rows that cannot be
+    named safely are dropped and logged rather than failing the whole
+    refresh.
+  * SCRAM salts are drawn already filled instead of overwriting a zeroed
+    buffer, so there is no window where a deterministic salt sits in the
+    buffer about to be used.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 29 Aug 2026 02:00:00 +0000
+
 epistle (0.4.0) unstable; urgency=medium
 
   * JMAP EmailSubmission/set now checks address ownership. A request that
