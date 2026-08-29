@@ -57,6 +57,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)
 	.map_err(|error| std::io::Error::other(error.to_string()))?
 	.with_domain_quotas(config.domain_quotas.clone())
+	.with_domain_submission_limits(config.domain_submission_limits.clone())
 	.with_aliases(config.alias.clone())
 	.with_masked_max(config.masked_addresses_max);
 	if let Some(auth) = ldap_auth {
@@ -159,10 +160,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
-	// Optional per-account submission rate limiter, shared across SMTP listeners.
-	let send_limiter = config
-		.submission_rate_limit_per_min
-		.map(|per_min| Arc::new(crate::smtp::ratelimit::SendLimiter::new(per_min, 60)));
+	// Optional per-account submission rate limiter, shared across SMTP
+	// listeners. The per-account `limit` is resolved at MAIL FROM time
+	// (per-domain override, then the server-wide default, then no limit at
+	// all); the limiter itself only owns the shared sliding-window state.
+	// It is created whenever any limit is configured, so a per-domain
+	// override without a global still gets a working limiter.
+	let has_any_submission_limit = config.submission_rate_limit_per_min.is_some()
+		|| !config.domain_submission_limits.is_empty();
+	let send_limiter =
+		has_any_submission_limit.then(|| Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)));
 
 	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
 	let max_conn = config.max_connections_per_listener.unwrap_or(0);
@@ -488,6 +495,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(limiter) = &send_limiter {
 					server = server.with_send_limiter(Arc::clone(limiter));
 				}
+				server =
+					server.with_global_submission_rate_limit(config.submission_rate_limit_per_min);
 				if let Some(verifier) = &oauth_verifier {
 					server = server.with_oauth(Arc::clone(verifier));
 				}

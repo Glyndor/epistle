@@ -485,11 +485,12 @@ fn auth_rejects_malformed_base64() {
 
 #[test]
 fn submission_rate_limit_defers_over_the_limit() {
-	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(1, 60));
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
 	let mut session = Session::new("mail.example.org")
 		.with_directory(auth_directory())
 		.with_tls_active()
-		.with_send_limiter(limiter);
+		.with_send_limiter(limiter)
+		.with_global_submission_rate_limit(Some(1));
 	session.command_line("EHLO client.example.org");
 	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
 	assert_eq!(session.authenticated(), Some("alice"));
@@ -502,6 +503,164 @@ fn submission_rate_limit_defers_over_the_limit() {
 	// The second within the window exceeds the per-account limit -> 4xx defer.
 	let second = session.command_line("MAIL FROM:<alice@example.org>");
 	assert_eq!(reply_code(&second), 450);
+}
+
+#[test]
+fn submission_rate_limit_uses_per_domain_override() {
+	// Per-domain limit is tighter than the server-wide default: the per-domain
+	// value must win, so a second send within the per-domain budget is
+	// allowed even though the global default would already reject it.
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let directory = Arc::new(
+		Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_domain_submission_limits([("example.org".to_string(), 3)]),
+	);
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory)
+		.with_tls_active()
+		.with_send_limiter(limiter)
+		.with_global_submission_rate_limit(Some(1));
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+
+	// Three submissions fit under the per-domain limit of 3.
+	for _ in 0..3 {
+		assert_eq!(
+			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
+			250
+		);
+		session.command_line("RSET");
+	}
+	// The fourth is deferred: the per-domain limit (3) wins over the global
+	// (1), which would have deferred the second send.
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
+		450
+	);
+}
+
+#[test]
+fn submission_rate_limit_falls_back_to_global_when_domain_has_no_entry() {
+	// Directory has no entry for example.org, but the global default is set:
+	// the global wins (the conservative fallback).
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active()
+		.with_send_limiter(limiter)
+		.with_global_submission_rate_limit(Some(1));
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
+		250
+	);
+	session.command_line("RSET");
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
+		450
+	);
+}
+
+#[test]
+fn submission_rate_limit_is_off_when_neither_domain_nor_global_is_set() {
+	// No per-domain entry, no global default, but a limiter is still wired in
+	// (e.g. the operator later adds a per-domain override). The session must
+	// skip the call entirely: every send is accepted.
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active()
+		.with_send_limiter(limiter)
+		.with_global_submission_rate_limit(None);
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+
+	for _ in 0..5 {
+		assert_eq!(
+			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
+			250
+		);
+		session.command_line("RSET");
+	}
+}
+
+#[test]
+fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain() {
+	// Two accounts, one on each of two hosted domains. The directory lists
+	// example.com first; if the resolver naively read domains[0] it would
+	// hand bob (in example.org) the example.com limit. The walk over the
+	// account's own addresses must return the matching per-domain entry.
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let directory = Arc::new(
+		Directory::new(
+			["example.com".to_string(), "example.org".to_string()],
+			[
+				("alice@example.com".to_string(), "alice".to_string()),
+				("bob@example.org".to_string(), "bob".to_string()),
+			],
+		)
+		.with_password_hashes([
+			(
+				"alice".to_string(),
+				crate::smtp::auth::tests::hash("secret"),
+			),
+			("bob".to_string(), crate::smtp::auth::tests::hash("secret")),
+		])
+		.with_domain_submission_limits([
+			("example.com".to_string(), 1),
+			("example.org".to_string(), 2),
+		]),
+	);
+
+	// alice: per-domain 1. The second send within the window defers.
+	let mut session = Session::new("mail.example.org")
+		.with_directory(Arc::clone(&directory))
+		.with_tls_active()
+		.with_send_limiter(Arc::clone(&limiter));
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
+		250
+	);
+	session.command_line("RSET");
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
+		450
+	);
+
+	// bob: per-domain 2. The first two sends fit, the third defers. This
+	// would be wrong if bob were charged the example.com limit of 1 (only
+	// one send would pass).
+	let mut session = Session::new("mail.example.org")
+		.with_directory(Arc::clone(&directory))
+		.with_tls_active()
+		.with_send_limiter(Arc::clone(&limiter));
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!("AUTH PLAIN {}", plain("bob", "secret")));
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
+		250
+	);
+	session.command_line("RSET");
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
+		250
+	);
+	session.command_line("RSET");
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
+		450
+	);
 }
 
 #[test]

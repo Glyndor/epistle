@@ -63,6 +63,11 @@ pub struct Directory {
 	/// Default storage quota (bytes) per domain, applied to accounts in that
 	/// domain without their own quota.
 	domain_quotas: HashMap<String, u64>,
+	/// Per-domain submission rate limit (messages per minute) for authenticated
+	/// senders in that domain. An account picks up its domain's limit when one
+	/// is set; otherwise the server-wide default applies (or no limit, if
+	/// neither is configured).
+	domain_submission_limits: HashMap<String, u32>,
 	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
 	/// account is also queued to each target; `keep_local` keeps the local copy.
 	forwards: HashMap<String, (Vec<String>, bool)>,
@@ -107,6 +112,7 @@ impl Directory {
 			disabled: HashSet::new(),
 			account_quotas: HashMap::new(),
 			domain_quotas: HashMap::new(),
+			domain_submission_limits: HashMap::new(),
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
@@ -223,6 +229,21 @@ impl Directory {
 		self
 	}
 
+	/// Attach per-domain submission rate limits (domain → messages/min). The
+	/// lookup walks the account's own addresses — the same approach
+	/// [`Directory::quota_for`] takes — so the resolved domain is the one the
+	/// address actually lives under, not the first one configured.
+	pub fn with_domain_submission_limits(
+		mut self,
+		limits: impl IntoIterator<Item = (String, u32)>,
+	) -> Self {
+		self.domain_submission_limits = limits
+			.into_iter()
+			.map(|(domain, per_min)| (domain.to_ascii_lowercase(), per_min))
+			.collect();
+		self
+	}
+
 	/// Attach per-account forwarding: account name → (target addresses,
 	/// keep_local).
 	pub fn with_forwards(
@@ -258,6 +279,28 @@ impl Directory {
 			.filter(|(_, name)| name.eq_ignore_ascii_case(&account))
 			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
 			.find_map(|domain| self.domain_quotas.get(domain).copied())
+	}
+
+	/// The per-domain submission rate limit (messages/minute) for an
+	/// account, derived from the domain of one of the account's own
+	/// addresses. `None` when no per-domain limit covers the account; the
+	/// caller (the SMTP session) is responsible for falling back to the
+	/// server-wide limit, or to no limit at all.
+	///
+	/// Iterates the account's addresses rather than reading `domains[0]`:
+	/// taking the first configured domain would assign every account to
+	/// whichever domain happened to be configured first, and drop all of
+	/// them the day that domain is removed. The address walk matches the
+	/// approach [`Directory::quota_for`] takes for the same reason.
+	pub fn submission_limit_for(&self, account: &str) -> Option<u32> {
+		if self.domain_submission_limits.is_empty() {
+			return None;
+		}
+		self.accounts_by_address
+			.iter()
+			.filter(|(_, name)| name.eq_ignore_ascii_case(account))
+			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
+			.find_map(|domain| self.domain_submission_limits.get(domain).copied())
 	}
 
 	/// Verify a login with its password, enforcing TOTP when the account has a

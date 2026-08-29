@@ -152,6 +152,9 @@ pub struct AccountStore {
 	static_accounts: Vec<Account>,
 	/// Default storage quota (bytes) per domain.
 	domain_quotas: std::collections::HashMap<String, u64>,
+	/// Per-domain submission rate limit (messages/min) applied to authenticated
+	/// senders in that domain. Mirrors `domain_quotas` in shape and lifecycle.
+	domain_submission_limits: std::collections::HashMap<String, u32>,
 	/// Multi-target aliases from the static configuration.
 	aliases: Vec<crate::config::Alias>,
 	/// App passwords (secondary mail credentials) keyed by account, loaded from
@@ -204,6 +207,7 @@ impl AccountStore {
 			domain_aliases,
 			static_accounts,
 			domain_quotas: std::collections::HashMap::new(),
+			domain_submission_limits: std::collections::HashMap::new(),
 			aliases: Vec::new(),
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
@@ -220,6 +224,17 @@ impl AccountStore {
 	/// Set the per-domain default storage quotas and rebuild the directory.
 	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
 		self.domain_quotas = quotas;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Set the per-domain submission rate limits (messages/min) and rebuild
+	/// the directory.
+	pub fn with_domain_submission_limits(
+		mut self,
+		limits: std::collections::HashMap<String, u32>,
+	) -> Self {
+		self.domain_submission_limits = limits;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -605,6 +620,7 @@ impl AccountStore {
 			.with_disabled(disabled)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
+			.with_domain_submission_limits(self.domain_submission_limits.clone())
 			.with_forwards(forwards)
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
