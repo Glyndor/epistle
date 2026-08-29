@@ -5,7 +5,7 @@
 use std::process::ExitCode;
 
 use crate::config::Config;
-use crate::dns::records::{self, PublishRecord};
+use crate::dns::records::{self, PublishRecord, Services};
 
 /// Default MTA-STS policy id; the operator bumps it whenever the policy served
 /// over HTTPS changes so resolvers refetch.
@@ -43,6 +43,11 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		dkim,
 		tlsa.as_deref(),
 		MTA_STS_ID,
+		// The `webdav` listener always exposes CalDAV/CardDAV when present;
+		// we don't have a flag for "operator disabled CalDAV only", so emit
+		// both SRVs and let the operator prune them by hand if needed.
+		Services::all(),
+		config.acme.as_ref().map(|a| a.directory_url.as_str()),
 	);
 	report(&recs, out)
 }

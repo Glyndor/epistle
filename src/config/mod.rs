@@ -6,7 +6,9 @@
 
 mod account;
 mod acme;
+mod alerts;
 mod alias;
+mod antispam;
 mod api;
 mod arc;
 mod database;
@@ -26,7 +28,9 @@ mod webhook;
 
 pub use account::Account;
 pub use acme::Acme;
+pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
+pub use antispam::Llm;
 pub use api::Api;
 pub use arc::Arc;
 pub use database::Database;
@@ -102,6 +106,13 @@ pub enum LogFormat {
 	Json,
 }
 
+/// Default for [`Config::masked_addresses_max`]. Generous enough for the
+/// usual disposable-alias use cases (one address per signup service);
+/// caps abuse before it can mint the whole 8-character suffix space.
+fn default_masked_addresses_max() -> usize {
+	100
+}
+
 /// Top-level server configuration.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,6 +159,9 @@ pub struct Config {
 	/// URL of an external scanner hook (ClamAV/Rspamd behind HTTP) consulted
 	/// for unauthenticated inbound mail. Absent disables scanning.
 	pub scanner_hook_url: Option<String>,
+	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
+	/// lands in an uncertain band. Absent disables the hook.
+	pub antispam_llm: Option<Llm>,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
@@ -203,6 +217,13 @@ pub struct Config {
 	/// non-local logins against the LDAP server and loading its users for
 	/// recipient resolution.
 	pub ldap: Option<Ldap>,
+	/// Maximum masked email addresses one account may own. 0 disables
+	/// masked addresses entirely; the default of 100 is generous for the
+	/// usual disposable-alias use cases (a signup per service) and stops a
+	/// runaway loop from minting the whole address space. `429 Too Many
+	/// Requests` answers requests above the limit.
+	#[serde(default = "default_masked_addresses_max")]
+	pub masked_addresses_max: usize,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
 	/// Unprivileged user/group to drop to after privileged ports are bound.
@@ -217,6 +238,11 @@ pub struct Config {
 	/// Absent uses the secure defaults (strict outbound TLS).
 	#[serde(default)]
 	pub queue: Queue,
+	/// Alert rules: periodic metric comparisons that fire webhooks or email
+	/// when the configured condition holds. Absent or empty disables the
+	/// alert engine entirely (the default).
+	#[serde(default)]
+	pub alerts: Vec<Alert>,
 }
 
 impl std::fmt::Debug for Config {
@@ -237,6 +263,7 @@ impl std::fmt::Debug for Config {
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
+			.field("antispam_llm", &self.antispam_llm)
 			.field("listeners", &self.listeners)
 			.field("accounts", &self.accounts)
 			.field("tls", &self.tls)
@@ -265,6 +292,7 @@ impl std::fmt::Debug for Config {
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)
+			.field("alerts", &self.alerts)
 			.finish()
 	}
 }

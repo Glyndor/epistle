@@ -7,11 +7,12 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::directory_store::{AccountStore, DirectoryHandle};
+use crate::directory_store::{AccountStore, DirectoryHandle, MaskedAddressStore};
 use crate::smtp::address::Address;
 use crate::storage::{FsSpool, MessageCrypto};
 
 use super::api_keys::Scope;
+use super::domain_scope::DomainScope;
 use super::error::ApiError;
 
 /// The bearer credentials the middleware extracted from the request, stashed
@@ -216,6 +217,33 @@ impl ApiState {
 		self
 	}
 
+	/// The domains the credentials in `auth` are allowed to act on.
+	///
+	/// The static token is unrestricted. A key carries whatever it declared,
+	/// and a key that declared nothing keeps the reach every key had before
+	/// the field existed. Credentials that match no key at all admit no
+	/// domain: the middleware has already authorized the request by the time
+	/// a handler asks, so failing to identify the key here means the state
+	/// changed underneath us, and that is not a reason to widen anyone.
+	pub fn domain_scope(&self, auth: &MatchedAuth) -> DomainScope {
+		let Some(token) = auth.token.as_deref() else {
+			return DomainScope::Only(Vec::new());
+		};
+		if self.token_matches(token) {
+			return DomainScope::All;
+		}
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send, Scope::Scim];
+		self.inner
+			.api_keys
+			.iter()
+			.find(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE))
+			.map_or_else(|| DomainScope::Only(Vec::new()), DomainScope::of_key)
+	}
+
 	/// Whether a resolved account name carries the admin-panel privilege.
 	pub fn is_admin(&self, name: &str) -> bool {
 		self.inner.admins.iter().any(|admin| admin == name)
@@ -301,6 +329,15 @@ impl ApiState {
 	/// password changes or alias rewrites).
 	pub fn store(&self) -> &AccountStore {
 		&self.inner.store
+	}
+
+	/// Shared handle to the masked-address store. Handlers call
+	/// [`crate::directory_store::MaskedAddressStore::add`] / `remove` /
+	/// `set_enabled` directly; the store persists on each call and rebuilds
+	/// the directory on the way back so the next resolution cycle sees the
+	/// change.
+	pub fn masked_handle(&self) -> std::sync::Arc<std::sync::RwLock<MaskedAddressStore>> {
+		self.inner.store.masked_handle()
 	}
 
 	/// The on-disk spool where accepted messages land before queueing.
@@ -462,11 +499,16 @@ pub struct ClientIp(pub Option<std::net::IpAddr>);
 /// Unambiguous routes (`POST /api/v1/send`, `POST /jmap/upload`) get a
 /// single-scope slice. `POST /jmap/api` is ambiguous (every method call
 /// shares the same path), so the slice accepts any of `Read`/`Write`/`Send`
-/// — the dispatcher then enforces the actual scope per method call.
+/// — the dispatcher then enforces the actual scope per method call. The
+/// SCIM 2.0 surface under `/scim/v2` is its own damage class; both reads
+/// and writes on it require the dedicated `Scim` scope.
 fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
 	const ALL: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
 	if method == axum::http::Method::POST && path == "/api/v1/send" {
 		return vec![Scope::Send];
+	}
+	if path.starts_with("/scim/v2") {
+		return vec![Scope::Scim];
 	}
 	match *method {
 		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],

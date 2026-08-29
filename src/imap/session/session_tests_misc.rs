@@ -450,6 +450,67 @@ fn list_extended_subscribed_selection_and_attribute() {
 }
 
 #[test]
+fn list_advertises_has_no_children() {
+	// CHILDREN (RFC 3348): every LIST line carries \HasNoChildren or
+	// \HasChildren. epistle's mailbox store is flat (names cannot contain
+	// the hierarchy separator), so the answer is uniformly \HasNoChildren
+	// for every mailbox.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 CREATE Sent");
+	session.command_line("a3 CREATE Work");
+
+	let response = text(&session.command_line(r#"a4 LIST "" "*""#));
+	let list_lines: Vec<&str> = response
+		.lines()
+		.filter(|l| l.starts_with("* LIST "))
+		.collect();
+	assert!(
+		list_lines.len() >= 3,
+		"expected at least INBOX + Sent + Work, got {list_lines:?}"
+	);
+	for line in &list_lines {
+		assert!(
+			line.contains("\\HasNoChildren"),
+			"missing \\HasNoChildren in: {line}"
+		);
+		assert!(
+			!line.contains("\\HasChildren"),
+			"unexpected \\HasChildren in flat store: {line}"
+		);
+	}
+
+	// CHILDREN advertised only when the rest of the test passes.
+	assert!(
+		text(&session.command_line("a5 CAPABILITY")).contains("CHILDREN"),
+		"capability should advertise CHILDREN"
+	);
+}
+
+#[test]
+fn list_children_selection_option_is_accepted() {
+	// RFC 3348 §3.3 lets the client request child expansion with the
+	// `(CHILDREN)` selection option. With no hierarchy the answer is the
+	// same set of mailboxes, all still marked \HasNoChildren.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 CREATE Sent");
+
+	let response = text(&session.command_line(r#"a3 LIST (CHILDREN) "" "*""#));
+	assert!(response.contains("\"INBOX\""), "{response}");
+	assert!(response.contains("\"Sent\""), "{response}");
+	assert!(
+		response.contains("\\HasNoChildren"),
+		"expected child attribute in {response}"
+	);
+	assert!(response.contains("a3 OK LIST completed"), "{response}");
+
+	// Unknown selection options are rejected with BAD.
+	let response = text(&session.command_line(r#"a4 LIST (BOGUS) "" "*""#));
+	assert!(response.contains("a4 BAD"), "{response}");
+}
+
+#[test]
 fn internaldate_is_not_epoch() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"From: a@x.example\r\n\r\nhi\r\n");

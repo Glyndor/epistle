@@ -3,7 +3,8 @@
 use super::super::command::SortKey;
 use super::helpers::{header_value, load_content, search_matches};
 use super::mailbox::MessageRef;
-use super::{Output, SearchKey, Session, State};
+use super::state::State;
+use super::{Output, SearchKey, Session};
 
 /// A comparable SORT key value. Within one sort position every message yields
 /// the same variant, so cross-variant comparison never happens in practice.
@@ -84,7 +85,7 @@ impl Session {
 			let mut content: Option<String> = None;
 			let matches = criteria
 				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content));
+				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
 			if !matches {
 				continue;
 			}

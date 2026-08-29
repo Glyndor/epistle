@@ -1,7 +1,8 @@
 //! IMAP THREAD command, ORDEREDSUBJECT algorithm (RFC 5256).
 
 use super::helpers::{header_value, load_content, search_matches};
-use super::{Output, SearchKey, Session, State};
+use super::state::State;
+use super::{Output, SearchKey, Session};
 
 impl Session {
 	pub(super) fn thread(&mut self, tag: &str, criteria: &[SearchKey], uid: bool) -> Output {
@@ -19,7 +20,7 @@ impl Session {
 			let mut content: Option<String> = None;
 			let is_match = criteria
 				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content));
+				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
 			if !is_match {
 				continue;
 			}

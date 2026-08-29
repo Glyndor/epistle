@@ -4,6 +4,7 @@
 //! admin panel. Counters are process-global atomics, cheap to bump on the hot
 //! path, and rendered on demand for the `/metrics` endpoint.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Why an inbound message was rejected, for the per-reason counter label.
@@ -48,6 +49,40 @@ const REASONS: [RejectReason; 6] = [
 	RejectReason::Loop,
 ];
 
+/// Canonical short names of every counter, paired with the matching field.
+///
+/// Used by [`Metrics::snapshot`] to enumerate the counters and by the config
+/// validator to reject unknown `[[alerts]] metric = "..."` values with the
+/// full list of valid names in the error message.
+const COUNTERS: &[(&str, &str)] = &[
+	("connections", "connections"),
+	("accepted", "accepted"),
+	("quarantined", "quarantined"),
+	("rejected_dnsbl", "rejected_dnsbl"),
+	("rejected_spf", "rejected_spf"),
+	("rejected_dmarc", "rejected_dmarc"),
+	("rejected_reputation", "rejected_reputation"),
+	("rejected_scanner", "rejected_scanner"),
+	("rejected_loop", "rejected_loop"),
+	("abuse_dropped", "abuse_dropped"),
+	("sieve_rejected", "sieve_rejected"),
+	("vacation_sent", "vacation_sent"),
+	("forwarded", "forwarded"),
+	("relayed", "relayed"),
+	("deferred", "deferred"),
+	("bounced", "bounced"),
+	("webhook_sent", "webhook_sent"),
+	("webhook_failed", "webhook_failed"),
+];
+
+/// Canonical short names of every counter, sorted.
+///
+/// The alert engine validates `[[alerts]] metric` against this list; the
+/// validator reports the names from here when rejecting an unknown metric.
+pub fn metric_names() -> Vec<&'static str> {
+	COUNTERS.iter().map(|(name, _)| *name).collect()
+}
+
 /// Process-global mail metrics.
 #[derive(Debug, Default)]
 pub struct Metrics {
@@ -69,6 +104,9 @@ pub struct Metrics {
 	bounced: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
+	llm_consulted: AtomicU64,
+	llm_quarantined: AtomicU64,
+	llm_failed: AtomicU64,
 }
 
 impl Metrics {
@@ -137,6 +175,24 @@ impl Metrics {
 		self.webhook_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a message sent to the LLM antispam hook for a second opinion.
+	/// Only incremented when the local Bayesian score sits inside the
+	/// configured uncertain band, so it measures the real cost of the feature.
+	pub fn llm_consulted(&self) {
+		self.llm_consulted.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message the LLM hook quarantined (spam with high confidence).
+	pub fn llm_quarantined(&self) {
+		self.llm_quarantined.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message the LLM hook could not classify (transport, timeout,
+	/// parse or shape failure). Fail-open: the message is still accepted.
+	pub fn llm_failed(&self) {
+		self.llm_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a rejected message by reason.
 	pub fn rejected(&self, reason: RejectReason) {
 		self.counter(reason).fetch_add(1, Ordering::Relaxed);
@@ -150,6 +206,44 @@ impl Metrics {
 			RejectReason::Reputation => &self.rejected_reputation,
 			RejectReason::Scanner => &self.rejected_scanner,
 			RejectReason::Loop => &self.rejected_loop,
+		}
+	}
+
+	/// Snapshot every counter by its short name.
+	///
+	/// The keys are the names the alert engine accepts in `[[alerts]] metric`
+	/// and are stable across releases: they are the canonical short identifiers
+	/// of each counter, distinct from the Prometheus exposition names (which
+	/// carry a `mail_` prefix and `_total` suffix).
+	pub fn snapshot(&self) -> BTreeMap<&'static str, u64> {
+		let mut map = BTreeMap::new();
+		for (name, field) in COUNTERS {
+			map.insert(*name, self.counter_by_field(field).load(Ordering::Relaxed));
+		}
+		map
+	}
+
+	fn counter_by_field(&self, field: &str) -> &AtomicU64 {
+		match field {
+			"connections" => &self.connections,
+			"accepted" => &self.accepted,
+			"quarantined" => &self.quarantined,
+			"rejected_dnsbl" => &self.rejected_dnsbl,
+			"rejected_spf" => &self.rejected_spf,
+			"rejected_dmarc" => &self.rejected_dmarc,
+			"rejected_reputation" => &self.rejected_reputation,
+			"rejected_scanner" => &self.rejected_scanner,
+			"rejected_loop" => &self.rejected_loop,
+			"abuse_dropped" => &self.abuse_dropped,
+			"sieve_rejected" => &self.sieve_rejected,
+			"vacation_sent" => &self.vacation_sent,
+			"forwarded" => &self.forwarded,
+			"relayed" => &self.relayed,
+			"deferred" => &self.deferred,
+			"bounced" => &self.bounced,
+			"webhook_sent" => &self.webhook_sent,
+			"webhook_failed" => &self.webhook_failed,
+			other => unreachable!("unknown counter field {other}"),
 		}
 	}
 
@@ -237,6 +331,21 @@ impl Metrics {
 				"Webhook events that failed to deliver.",
 				&self.webhook_failed,
 			),
+			(
+				"mail_llm_consulted_total",
+				"Messages sent to the LLM antispam hook (uncertain band only).",
+				&self.llm_consulted,
+			),
+			(
+				"mail_llm_quarantined_total",
+				"Messages quarantined after the LLM antispam hook answered spam.",
+				&self.llm_quarantined,
+			),
+			(
+				"mail_llm_failed_total",
+				"LLM antispam hook calls that failed (the message was accepted).",
+				&self.llm_failed,
+			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
 			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
@@ -280,6 +389,10 @@ mod tests {
 		m.relayed();
 		m.deferred();
 		m.bounced();
+		m.llm_consulted();
+		m.llm_consulted();
+		m.llm_quarantined();
+		m.llm_failed();
 		let r = m.render();
 		assert!(r.contains("mail_sieve_rejected_total 1\n"), "{r}");
 		assert!(r.contains("mail_vacation_sent_total 2\n"), "{r}");
@@ -294,6 +407,9 @@ mod tests {
 		);
 		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
 		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
+		assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
+		assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
+		assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
 		assert!(
 			r.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 2\n"),
 			"{r}"
@@ -309,5 +425,48 @@ mod tests {
 		let r = Metrics::new().render();
 		assert!(r.contains("# TYPE mail_connections_total counter"));
 		assert!(r.contains("# HELP mail_messages_accepted_total"));
+	}
+
+	#[test]
+	fn snapshot_lists_every_counter_and_keeps_it_sorted() {
+		let m = Metrics::new();
+		m.connection();
+		m.connection();
+		m.accepted();
+		m.bounced();
+		m.bounced();
+		m.bounced();
+		let snap = m.snapshot();
+		assert_eq!(snap.get("connections"), Some(&2));
+		assert_eq!(snap.get("accepted"), Some(&1));
+		assert_eq!(snap.get("bounced"), Some(&3));
+		// Sorted alphabetically.
+		let keys: Vec<&str> = snap.keys().copied().collect();
+		let mut sorted = keys.clone();
+		sorted.sort_unstable();
+		assert_eq!(keys, sorted);
+		// Every counter the alert engine accepts is present at zero.
+		for name in [
+			"connections",
+			"accepted",
+			"quarantined",
+			"rejected_dnsbl",
+			"rejected_spf",
+			"rejected_dmarc",
+			"rejected_reputation",
+			"rejected_scanner",
+			"rejected_loop",
+			"abuse_dropped",
+			"sieve_rejected",
+			"vacation_sent",
+			"forwarded",
+			"relayed",
+			"deferred",
+			"bounced",
+			"webhook_sent",
+			"webhook_failed",
+		] {
+			assert!(snap.contains_key(name), "missing {name}");
+		}
 	}
 }

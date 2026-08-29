@@ -205,13 +205,18 @@ fn parse_login(tag: &str, args: &str) -> Result<Command, ParseError> {
 
 fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
-	// Optional leading `(SUBSCRIBED)` selection group (LIST-EXTENDED, RFC 5258).
+	// Optional leading `(SUBSCRIBED)` / `(CHILDREN)` selection group
+	// (LIST-EXTENDED, RFC 5258; CHILDREN, RFC 3348). The latter is accepted
+	// but treated as a no-op since epistle stores mailboxes flat: every
+	// mailbox is a leaf, so child expansion produces no extra rows.
 	let args = args.trim_start();
 	let (select_subscribed, args) = if let Some(after) = args.strip_prefix('(') {
 		let close = after.find(')').ok_or_else(bad)?;
 		let selection = after[..close].to_ascii_uppercase();
 		for option in after[..close].split_whitespace() {
-			if !option.eq_ignore_ascii_case("SUBSCRIBED") {
+			if !option.eq_ignore_ascii_case("SUBSCRIBED")
+				&& !option.eq_ignore_ascii_case("CHILDREN")
+			{
 				return Err(bad());
 			}
 		}

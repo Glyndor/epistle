@@ -8,7 +8,7 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// Cloudflare's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.cloudflare.com/client/v4";
@@ -66,38 +66,54 @@ impl CloudflareProvider {
 	}
 
 	/// The Cloudflare record type for a kind we can publish. TXT/A/AAAA/CNAME
-	/// go through a plain `content` field; TLSA uses a structured `data` object;
-	/// MX/SRV (which need priorities/weights) are not yet supported.
+	/// go through a plain `content` field; TLSA, SRV, MX, and CAA use a
+	/// structured `data` object — each carries its kind-specific shape
+	/// (`usage selector matching cert` / `priority weight port target` /
+	/// `priority host` / `flags tag value`).
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv
+			| RecordKind::Mx
+			| RecordKind::Caa => Ok(kind.as_str()),
 		}
 	}
 
-	/// The Cloudflare record body for a record: TLSA carries a structured
-	/// `data` object (`usage selector matching_type certificate`), everything
-	/// else a plain `content` string.
+	/// The Cloudflare record body for a record: TLSA and SRV carry a
+	/// structured `data` object (`usage selector matching_type certificate` /
+	/// `priority weight port target`), everything else a plain `content`
+	/// string. SRV splits the presentation form on whitespace.
 	fn record_body(kind: &str, record: &DnsRecord) -> Result<String, ProviderError> {
 		let value = if record.kind == RecordKind::Tlsa {
 			let mut parts = record.value.split_whitespace();
-			let usage: u8 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or(ProviderError::Unsupported)?;
-			let selector: u8 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or(ProviderError::Unsupported)?;
-			let matching: u8 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or(ProviderError::Unsupported)?;
-			let cert = parts.next().ok_or(ProviderError::Unsupported)?;
+			let usage: u8 =
+				parts
+					.next()
+					.and_then(|p| p.parse().ok())
+					.ok_or(ProviderError::Remote(
+						"TLSA needs usage selector matching cert".into(),
+					))?;
+			let selector: u8 =
+				parts
+					.next()
+					.and_then(|p| p.parse().ok())
+					.ok_or(ProviderError::Remote(
+						"TLSA needs usage selector matching cert".into(),
+					))?;
+			let matching: u8 =
+				parts
+					.next()
+					.and_then(|p| p.parse().ok())
+					.ok_or(ProviderError::Remote(
+						"TLSA needs usage selector matching cert".into(),
+					))?;
+			let cert = parts.next().ok_or(ProviderError::Remote(
+				"TLSA needs usage selector matching cert".into(),
+			))?;
 			serde_json::json!({
 				"type": kind,
 				"name": record.name,
@@ -109,6 +125,49 @@ impl CloudflareProvider {
 					"certificate": cert,
 				},
 			})
+		} else if record.kind == RecordKind::Srv {
+			let (priority, weight, port, target) = parse_srv(&record.value)
+				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
+			serde_json::json!({
+				"type": kind,
+				"name": record.name,
+				"ttl": record.ttl,
+				"data": {
+					"priority": priority,
+					"weight": weight,
+					"port": port,
+					"target": target,
+				},
+			})
+		} else if record.kind == RecordKind::Caa {
+			serde_json::json!({
+				"type": kind,
+				"name": record.name,
+				"ttl": record.ttl,
+				"data": Self::caa_data(&record.value)?,
+			})
+		} else if record.kind == RecordKind::Mx {
+			// MX value: `<priority> <target>` — split into `priority` and
+			// `host` fields per Cloudflare's MX data shape.
+			let mut parts = record.value.split_whitespace();
+			let priority: u8 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			serde_json::json!({
+				"type": kind,
+				"name": record.name,
+				"ttl": record.ttl,
+				"data": {
+					"priority": priority,
+					"host": target,
+				},
+			})
 		} else {
 			serde_json::json!({
 				"type": kind,
@@ -118,6 +177,32 @@ impl CloudflareProvider {
 			})
 		};
 		Ok(value.to_string())
+	}
+
+	/// The Cloudflare wire shape for a CAA record body: per
+	/// <https://developers.cloudflare.com/api/operations/dns-records-create-dns-record>
+	/// CAA uses a `data` object with `flags`, `tag` and `value`. We parse the
+	/// presentation form `"<flags> <tag> <value>"` we emit.
+	fn caa_data(value: &str) -> Result<serde_json::Value, ProviderError> {
+		let mut parts = value.splitn(3, ' ');
+		let flags: u8 = parts
+			.next()
+			.and_then(|p| p.parse().ok())
+			.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
+		let tag = parts
+			.next()
+			.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+			.to_string();
+		let v = parts
+			.next()
+			.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+			.trim_matches('"')
+			.to_string();
+		Ok(serde_json::json!({
+			"flags": flags,
+			"tag": tag,
+			"value": v,
+		}))
 	}
 
 	/// Reject a record the token is not scoped for, before any network call.
@@ -246,6 +331,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

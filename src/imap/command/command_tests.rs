@@ -70,8 +70,8 @@ fn parses_fetch_variants() {
 	assert!(!uid);
 	assert_eq!(changed_since, None);
 	assert_eq!(items, vec![FetchItem::Flags, FetchItem::Rfc822Size]);
-	assert!(sequence.contains(3, 10));
-	assert!(!sequence.contains(6, 10));
+	assert!(sequence.contains(3, 10, &[]));
+	assert!(!sequence.contains(6, 10, &[]));
 
 	let parsed = parse("a2 UID FETCH 1:* (BODY[])").expect("parses");
 	let Command::Fetch { items, uid, .. } = parsed.command else {
@@ -85,12 +85,12 @@ fn parses_fetch_variants() {
 #[test]
 fn sequence_star_means_max() {
 	let set = parse_sequence_set("*").expect("parses");
-	assert!(set.contains(7, 7));
-	assert!(!set.contains(6, 7));
+	assert!(set.contains(7, 7, &[]));
+	assert!(!set.contains(6, 7, &[]));
 	let set = parse_sequence_set("3:*").expect("parses");
-	assert!(set.contains(3, 7));
-	assert!(set.contains(7, 7));
-	assert!(!set.contains(2, 7));
+	assert!(set.contains(3, 7, &[]));
+	assert!(set.contains(7, 7, &[]));
+	assert!(!set.contains(2, 7, &[]));
 }
 
 #[test]
@@ -258,10 +258,10 @@ fn parses_search_on_date_criterion() {
 fn sequence_set_reversed_range_is_normalized() {
 	let set = super::parse_sequence_set("5:2").expect("parse");
 	// start > end → still matches values within [2, 5]
-	assert!(set.contains(2, 10));
-	assert!(set.contains(5, 10));
-	assert!(set.contains(3, 10));
-	assert!(!set.contains(6, 10));
+	assert!(set.contains(2, 10, &[]));
+	assert!(set.contains(5, 10, &[]));
+	assert!(set.contains(3, 10, &[]));
+	assert!(!set.contains(6, 10, &[]));
 }
 
 #[test]

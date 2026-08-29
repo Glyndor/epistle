@@ -110,3 +110,50 @@ fn refresh_replaces_sql_accounts() {
 		Resolution::Account("new".to_string())
 	);
 }
+
+#[test]
+fn a_sql_account_whose_name_escapes_the_data_dir_is_dropped() {
+	// The account name doubles as a directory name under `<data_dir>/accounts/`
+	// and `mailbox_dir` joins it without checking — it validates the mailbox
+	// name and trusts the account. Config accounts and API/SCIM accounts are
+	// validated on the way in; SQL rows were not, so a directory returning
+	// `../..` reached the filesystem through the authenticated session.
+	let store = store_with(Vec::new());
+	store.set_sql_accounts(vec![
+		sql("../../etc", "escape@example.org", Some("secret")),
+		sql("ok", "ok@example.org", Some("secret")),
+	]);
+	let resolve = |address: &str| {
+		store
+			.handle()
+			.current()
+			.resolve(&crate::smtp::address::Address::parse(address).expect("address"))
+	};
+	assert!(
+		matches!(resolve("ok@example.org"), Resolution::Account(ref n) if n == "ok"),
+		"the well-named row must still resolve",
+	);
+	assert!(
+		!matches!(resolve("escape@example.org"), Resolution::Account(_)),
+		"a name that would escape the data dir must not become an account",
+	);
+}
+
+#[test]
+fn one_bad_sql_row_does_not_take_the_whole_directory_offline() {
+	// These sources are reloaded on a timer, so failing the refresh outright
+	// would turn one malformed row into an outage for everyone else.
+	let store = store_with(Vec::new());
+	store.set_sql_accounts(vec![
+		sql("Uppercase", "a@example.org", Some("secret")),
+		sql("has/slash", "b@example.org", Some("secret")),
+		sql("good", "good@example.org", Some("secret")),
+	]);
+	assert!(matches!(
+		store
+			.handle()
+			.current()
+			.resolve(&crate::smtp::address::Address::parse("good@example.org").expect("address")),
+		Resolution::Account(ref name) if name == "good"
+	));
+}

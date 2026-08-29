@@ -2,8 +2,9 @@
 //! (RFC 8508). The command line is parsed elsewhere; these begin the
 //! literal collection and finish once the payload arrives.
 
-use super::mailbox::{self, Flag, Snapshot};
-use super::{Output, PendingLiteral, Session, State};
+use super::mailbox::{self, Flag};
+use super::state::State;
+use super::{Output, PendingLiteral, Session};
 
 impl Session {
 	pub(super) fn append_begin(
@@ -161,7 +162,7 @@ impl Session {
 		seq: u32,
 		code: &str,
 	) -> Output {
-		let mut snapshot = match Snapshot::open(&self.data_dir, account, selected, &self.crypto) {
+		let mut snapshot = match self.open_snapshot(account, selected) {
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO REPLACE failed\r\n")),
 		};

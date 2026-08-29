@@ -6,8 +6,9 @@ use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
 use crate::api::audit::{self, AuditEvent};
+use crate::api::domain_scope::DomainScope;
 use crate::api::error::ApiError;
-use crate::api::state::{AccountView, ApiState, ClientIp};
+use crate::api::state::{AccountView, ApiState, ClientIp, MatchedAuth};
 use crate::directory_store::{DynamicAccount, StoreError};
 
 #[derive(Serialize)]
@@ -15,10 +16,40 @@ pub struct Accounts {
 	accounts: Vec<AccountView>,
 }
 
-pub async fn list(State(state): State<ApiState>) -> Json<Accounts> {
+pub async fn list(
+	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
+) -> Json<Accounts> {
+	let scope = state.domain_scope(&auth);
 	Json(Accounts {
-		accounts: state.accounts(),
+		accounts: state
+			.accounts()
+			.into_iter()
+			.filter(|account| scope.admits_account(account.addresses.iter().map(String::as_str)))
+			.collect(),
 	})
+}
+
+/// Reject a mutation aimed at an account outside the caller's domains.
+///
+/// The answer is `404`, not `403`: a key confined to one tenant must not be
+/// able to enumerate another tenant's account names by reading the status
+/// code, so an account it may not touch is indistinguishable from one that
+/// does not exist.
+fn require_in_scope(state: &ApiState, scope: &DomainScope, name: &str) -> Result<(), ApiError> {
+	let known = state
+		.accounts()
+		.into_iter()
+		.find(|account| account.name == name);
+	match known {
+		Some(account) if scope.admits_account(account.addresses.iter().map(String::as_str)) => {
+			Ok(())
+		}
+		Some(_) => Err(ApiError::not_found("no such account")),
+		// Unknown to us: let the store produce its own error, which is what
+		// happened before scopes existed.
+		None => Ok(()),
+	}
 }
 
 #[derive(Deserialize)]
@@ -43,8 +74,17 @@ fn check_password(password: &str) -> Result<(), ApiError> {
 
 pub async fn create(
 	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<CreateAccount>,
 ) -> Result<Json<Created>, ApiError> {
+	// Checked before the password, so a caller cannot use the password
+	// rejection to probe which addresses another tenant already has.
+	let scope = state.domain_scope(&auth);
+	if !scope.admits_account(request.addresses.iter().map(String::as_str)) {
+		return Err(ApiError::invalid_input(
+			"address outside the domains this key may act on",
+		));
+	}
 	check_password(&request.password)?;
 	let password_hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
@@ -56,6 +96,7 @@ pub async fn create(
 			password_hash,
 			scram: Some(derive_scram(&request.password)?),
 			totp_secret: None,
+			disabled: false,
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created {
@@ -71,8 +112,10 @@ pub struct Removed {
 pub async fn remove(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<Removed>, ApiError> {
+	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	state.store().remove(&name).map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::AccountRemoved, &name, client_ip.0);
 	Ok(Json(Removed { removed: name }))
@@ -91,9 +134,11 @@ pub struct PasswordChanged {
 pub async fn set_password(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 	Json(request): Json<SetPassword>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
+	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	check_password(&request.password)?;
 	let hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
@@ -110,15 +155,7 @@ pub async fn set_password(
 /// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the CSPRNG
 /// cannot produce a salt rather than storing a predictable one.
 fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ApiError> {
-	use ring::rand::SecureRandom;
-	let mut salt = [0u8; 16];
-	ring::rand::SystemRandom::new()
-		.fill(&mut salt)
-		.map_err(|_| ApiError::internal())?;
-	let credentials = crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096);
-	Ok(crate::smtp::scram::ScramStored::from_credentials(
-		&credentials,
-	))
+	crate::smtp::scram::ScramStored::with_fresh_salt(password).ok_or_else(ApiError::internal)
 }
 
 /// The enrolled TOTP secret and its `otpauth://` provisioning URI.
@@ -132,8 +169,10 @@ pub struct TotpEnrolled {
 pub async fn enroll_totp(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<TotpEnrolled>, ApiError> {
+	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	use ring::rand::SecureRandom;
 	let mut bytes = [0u8; 20];
 	ring::rand::SystemRandom::new()
@@ -161,8 +200,10 @@ pub async fn enroll_totp(
 pub async fn disable_totp(
 	State(state): State<ApiState>,
 	Extension(client_ip): Extension<ClientIp>,
+	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
 ) -> Result<Json<PasswordChanged>, ApiError> {
+	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	state.store().set_totp(&name, None).map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::TotpDisabled, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
@@ -173,6 +214,7 @@ fn store_error(error: StoreError) -> ApiError {
 		StoreError::Invalid(message) => ApiError::invalid_input(&message),
 		StoreError::Duplicate(what) => ApiError::invalid_input(&format!("{what} already exists.")),
 		StoreError::NotFound(_) => ApiError::not_found("no such dynamic account"),
+		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
 	}
 }

@@ -3,6 +3,7 @@
 mod accounts;
 mod api_keys;
 mod app_passwords;
+mod archive;
 mod autoconfig;
 mod autodiscover;
 mod backup;
@@ -262,15 +263,20 @@ enum Command {
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
 		/// Permissions granted to this key (repeat to grant more than one:
-		/// `read`, `write`, `send`). Required at least once — an unscoped key
-		/// is admin-equivalent, which is exactly what the scopes field exists
-		/// to prevent.
+		/// `read`, `write`, `send`, `scim`). Required at least once — an
+		/// unscoped key is admin-equivalent, which is exactly what the scopes
+		/// field exists to prevent.
 		#[arg(
 			long = "scope",
 			value_name = "SCOPE",
 			value_parser = api_keys::parse_scope,
 		)]
 		scopes: Vec<String>,
+		/// Confine this key to a domain (repeat for more). Omitted, the key
+		/// reaches every configured domain, which is what every key did
+		/// before this option existed.
+		#[arg(long = "domain", value_name = "DOMAIN")]
+		domains: Vec<String>,
 	},
 	/// List the management API keys (never the key).
 	ApiKeys {
@@ -286,6 +292,13 @@ enum Command {
 		/// The label of the API key to revoke.
 		#[arg(long, value_name = "LABEL")]
 		label: String,
+	},
+	/// Inspect and operate on the per-account expunged-message archive
+	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
+	/// Each subcommand targets one account.
+	Archive {
+		#[command(subcommand)]
+		action: archive::Subcommand,
 	},
 }
 
@@ -521,6 +534,7 @@ impl Cli {
 				expires_at,
 				ip_cidr,
 				scopes,
+				domains,
 			} => match Config::load(&config) {
 				Ok(config) => api_keys::create(
 					&config,
@@ -528,6 +542,7 @@ impl Cli {
 					expires_at,
 					ip_cidr,
 					scopes,
+					domains,
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
@@ -549,6 +564,7 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Archive { action } => archive::dispatch(action, &mut std::io::stdout().lock()),
 		}
 	}
 }

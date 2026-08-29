@@ -16,6 +16,12 @@ use crate::smtp::directory::Directory;
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
+pub mod masked;
+mod names;
+use names::{validate_name, with_safe_names};
+mod masked_api;
+pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
+
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
@@ -72,6 +78,11 @@ pub struct DynamicAccount {
 	/// Base32 TOTP secret for two-factor auth (RFC 6238). Absent disables 2FA.
 	#[serde(default)]
 	pub totp_secret: Option<String>,
+	/// Account is administratively disabled (kept on disk; never
+	/// authenticates). Set by SCIM `active: false` and other paths that need
+	/// to suspend an account without removing its mailbox.
+	#[serde(default)]
+	pub disabled: bool,
 }
 
 impl DynamicAccount {
@@ -82,22 +93,17 @@ impl DynamicAccount {
 		addresses: Vec<String>,
 		password: &str,
 	) -> Result<Self, StoreError> {
-		use ring::rand::SecureRandom;
 		let password_hash = crate::smtp::auth::hash_password(password)
 			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
-		let mut salt = [0u8; 16];
-		ring::rand::SystemRandom::new()
-			.fill(&mut salt)
-			.map_err(|_| StoreError::Invalid("cannot generate salt".to_string()))?;
-		let scram = crate::smtp::scram::ScramStored::from_credentials(
-			&crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096),
-		);
+		let scram = crate::smtp::scram::ScramStored::with_fresh_salt(password)
+			.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
 		Ok(DynamicAccount {
 			name,
 			addresses,
 			password_hash,
 			scram: Some(scram),
 			totp_secret: None,
+			disabled: false,
 		})
 	}
 }
@@ -124,8 +130,16 @@ pub enum StoreError {
 	/// No dynamic account with the requested name. Carries the missing name.
 	#[error("no such dynamic account: {0}")]
 	NotFound(String),
-	/// Reading or writing the `accounts.toml` / `app_passwords.toml` sidecar
-	/// files failed. The wrapped `std::io::Error` carries the cause.
+	/// The per-account cap on masked addresses would be exceeded. Carries
+	/// the configured `max` so the API can render the limit to the operator.
+	#[error("masked-address limit reached: {max}")]
+	LimitReached {
+		/// The configured cap.
+		max: usize,
+	},
+	/// Reading or writing the `accounts.toml` / `app_passwords.toml` /
+	/// `masked.json` sidecar files failed. The wrapped `std::io::Error`
+	/// carries the cause.
 	#[error("storage failure: {0}")]
 	Io(#[from] std::io::Error),
 }
@@ -154,6 +168,10 @@ pub struct AccountStore {
 	/// Live LDAP authenticator (a worker thread), shared into every rebuilt
 	/// directory so per-request binds work after a refresh.
 	ldap_auth: Option<Arc<LdapAuthenticator>>,
+	/// Per-account masked email addresses, persisted to `masked.json`.
+	/// Wrapped in `Arc<RwLock<_>>` so the API can share the same handle and
+	/// mutate without going through `AccountStore`'s mutators.
+	masked: Arc<RwLock<MaskedAddressStore>>,
 	handle: DirectoryHandle,
 }
 
@@ -178,6 +196,8 @@ impl AccountStore {
 		// App passwords are an optional sidecar; a missing file is an empty set.
 		let app_passwords = AppPasswordStore::open(data_dir)?.entries().collect();
 
+		let masked = MaskedAddressStore::open(data_dir)?;
+
 		let store = AccountStore {
 			path,
 			domains,
@@ -190,6 +210,7 @@ impl AccountStore {
 			sql_accounts: RwLock::new(Vec::new()),
 			ldap_accounts: RwLock::new(Vec::new()),
 			ldap_auth: None,
+			masked: Arc::new(RwLock::new(masked)),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -221,6 +242,7 @@ impl AccountStore {
 	/// background refresh task on an `Arc<AccountStore>`; static and dynamic
 	/// accounts keep precedence on conflict.
 	pub fn set_sql_accounts(&self, accounts: Vec<SqlAccount>) {
+		let accounts = with_safe_names(accounts, "sql", |account| &account.name);
 		*self.sql_accounts.write().expect("store lock") = accounts;
 		self.handle.replace(self.build_directory());
 	}
@@ -237,6 +259,7 @@ impl AccountStore {
 	/// Called by the background refresh task; static, dynamic and SQL accounts all
 	/// keep precedence on conflict.
 	pub fn set_ldap_accounts(&self, accounts: Vec<LdapAccount>) {
+		let accounts = with_safe_names(accounts, "ldap", |account| &account.name);
 		*self.ldap_accounts.write().expect("store lock") = accounts;
 		self.handle.replace(self.build_directory());
 	}
@@ -244,22 +267,6 @@ impl AccountStore {
 	/// The hot-reloadable handle shared with servers and delivery.
 	pub fn handle(&self) -> DirectoryHandle {
 		self.handle.clone()
-	}
-
-	/// Account views (name + addresses) across static and dynamic accounts.
-	pub fn account_views(&self) -> Vec<(String, Vec<String>, bool)> {
-		let dynamic = self.dynamic.read().expect("store lock");
-		let mut views: Vec<(String, Vec<String>, bool)> = self
-			.static_accounts
-			.iter()
-			.map(|account| (account.name.clone(), account.addresses.clone(), false))
-			.collect();
-		views.extend(
-			dynamic
-				.iter()
-				.map(|account| (account.name.clone(), account.addresses.clone(), true)),
-		);
-		views
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
@@ -366,6 +373,102 @@ impl AccountStore {
 		Ok(())
 	}
 
+	/// Enable or disable a dynamic account (the SCIM `active` flag). The
+	/// account stays on disk and continues to own its mailboxes, but
+	/// authentication rejects it while disabled. Returns the previous state
+	/// so callers can detect a no-op.
+	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
+		let mut dynamic = self.dynamic.write().expect("store lock");
+		let account = dynamic
+			.iter_mut()
+			.find(|account| account.name == name)
+			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+		let previous = account.disabled;
+		account.disabled = disabled;
+		self.persist(&dynamic)?;
+		drop(dynamic);
+		self.handle.replace(self.build_directory());
+		Ok(previous)
+	}
+
+	/// Whether a dynamic account is administratively disabled.
+	pub fn is_disabled(&self, name: &str) -> bool {
+		self.dynamic
+			.read()
+			.expect("store lock")
+			.iter()
+			.find(|account| account.name == name)
+			.is_some_and(|account| account.disabled)
+	}
+
+	/// Look up a dynamic account by name (case-sensitive). `None` for static
+	/// accounts and unknown names.
+	pub fn dynamic(&self, name: &str) -> Option<DynamicAccount> {
+		self.dynamic
+			.read()
+			.expect("store lock")
+			.iter()
+			.find(|account| account.name == name)
+			.cloned()
+	}
+
+	/// Snapshot every dynamic account (cloned). Used by SCIM's `List` and
+	/// other read-only surfaces that need the full set without the lock.
+	pub fn dynamic_accounts(&self) -> Vec<DynamicAccount> {
+		self.dynamic.read().expect("store lock").clone()
+	}
+
+	/// Replace a dynamic account in place, preserving its position in the
+	/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
+	/// in SCIM terms) without churning the file. `NotFound` if no
+	/// dynamic account carries `name`; `Duplicate` if the replacement's
+	/// addresses collide with another account (including itself if the
+	/// new list is unchanged — `add` short-circuits the collision check
+	/// on self, but a fresh `add` after `remove` doesn't, so we do the
+	/// same dance here).
+	pub fn replace_account(
+		&self,
+		name: &str,
+		replacement: DynamicAccount,
+	) -> Result<(), StoreError> {
+		let mut dynamic = self.dynamic.write().expect("store lock");
+		let slot = dynamic
+			.iter()
+			.position(|existing| existing.name == name)
+			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+		let mut fresh = replacement;
+		fresh.name = name.to_string();
+		// The collision check on add ignores "self" — we want the same
+		// behaviour here, so seed the address map with the existing row.
+		let mut known_addresses: Vec<String> = self
+			.static_accounts
+			.iter()
+			.flat_map(|existing| existing.addresses.iter())
+			.chain(
+				dynamic
+					.iter()
+					.enumerate()
+					.filter(|(index, _)| *index != slot)
+					.flat_map(|(_, existing)| existing.addresses.iter()),
+			)
+			.map(|address| address.to_ascii_lowercase())
+			.collect();
+		known_addresses.sort();
+		for raw in &fresh.addresses {
+			if known_addresses
+				.binary_search(&raw.to_ascii_lowercase())
+				.is_ok()
+			{
+				return Err(StoreError::Duplicate(raw.clone()));
+			}
+		}
+		dynamic[slot] = fresh;
+		self.persist(&dynamic)?;
+		drop(dynamic);
+		self.handle.replace(self.build_directory());
+		Ok(())
+	}
+
 	fn persist(&self, dynamic: &[DynamicAccount]) -> Result<(), StoreError> {
 		let file = DynamicFile {
 			accounts: dynamic.to_vec(),
@@ -450,6 +553,14 @@ impl AccountStore {
 				.clone()
 				.map(|secret| (account.name.clone(), secret))
 		});
+		// Disabled accounts are passed through to the directory as a name set so
+		// `authenticate_local` can reject them before any password work runs.
+		// The set rebuilds on every directory swap, mirroring how totp, scram
+		// and quotas are wired.
+		let disabled = dynamic
+			.iter()
+			.filter(|account| account.disabled)
+			.map(|account| account.name.clone());
 		let account_quotas = self.static_accounts.iter().filter_map(|account| {
 			account
 				.quota_bytes
@@ -476,34 +587,29 @@ impl AccountStore {
 				},
 			)
 		});
+		// Masked email addresses: only enabled ones feed the directory so a
+		// disabled mask rejects like an unknown user and the SMTP `owns_address`
+		// check stays fail-closed.
+		let masked = self
+			.masked
+			.read()
+			.expect("masked lock")
+			.entries()
+			.collect::<Vec<_>>();
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
 			.with_scram(scram)
 			.with_totp(totp)
+			.with_disabled(disabled)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
 			.with_forwards(forwards)
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
 			.with_ldap(self.ldap_auth.clone())
-	}
-}
-
-fn validate_name(name: &str) -> Result<(), StoreError> {
-	let safe = !name.is_empty()
-		&& name.len() <= 64
-		&& name
-			.chars()
-			.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-		&& !name.starts_with('-');
-	if safe {
-		Ok(())
-	} else {
-		Err(StoreError::Invalid(format!(
-			"account name \"{name}\" must be lowercase alphanumeric/hyphen"
-		)))
+			.with_masked(masked)
 	}
 }
 

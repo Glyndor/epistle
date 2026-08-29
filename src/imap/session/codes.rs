@@ -57,6 +57,9 @@ fn esearch_results(hits: &[u32], opts: &[ReturnOpt]) -> String {
 					out.push_str(&format!(" ALL {}", uid_set(hits)));
 				}
 			}
+			// SEARCHRES (RFC 5182): SAVE writes to the session's reservation
+			// but produces no reply text.
+			ReturnOpt::Save => {}
 		}
 	}
 	out

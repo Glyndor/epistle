@@ -29,7 +29,7 @@ flags.
 | `epistle app-password-create --config F --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
 | `epistle app-passwords --config F [--account N]` | List app passwords (label, expiry, IP restriction). |
 | `epistle app-password-revoke --config F --account N --label L` | Revoke an app password. |
-| `epistle api-key-create --config F --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create a management-API key; prints the generated key once. |
+| `epistle api-key-create --config F --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
 | `epistle api-keys --config F` | List API keys (label, expiry, IP restriction). |
 | `epistle api-key-revoke --config F --label L` | Revoke an API key. |
 
@@ -42,6 +42,20 @@ flags.
 | `epistle queue --config F` | List the outbound delivery queue. |
 | `epistle suppression --config F [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
 | `epistle report-abuse --config F` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
+
+## Expunged-message archive
+
+Active only when `[storage] deleted_retention_days` is set to a positive value.
+With retention off, an expunge deletes the on-disk files immediately and no
+archive directory is created. With retention on, an expunge moves the message
+into `<account>/.archive/`, and an hourly sweeper drops entries older than the
+configured window.
+
+| Command | What it does |
+|---|---|
+| `epistle archive list --config F <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
+| `epistle archive restore --config F <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
+| `epistle archive purge --config F <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
 
 ## Client autodiscovery
 

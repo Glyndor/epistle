@@ -12,6 +12,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::{digest, hmac, pbkdf2};
 
+/// Salt length in bytes for a freshly derived SCRAM secret.
+const SALT_LEN: usize = 16;
+
+/// SCRAM-SHA-256 iteration count. RFC 7677 sets 4096 as the minimum.
+const SCRAM_ITERATIONS: u32 = 4096;
+
 /// The per-account SCRAM credentials, derived from the password at set time.
 #[derive(Debug, Clone)]
 pub struct ScramCredentials {
@@ -73,6 +79,26 @@ impl ScramStored {
 			stored_key: BASE64.encode(credentials.stored_key),
 			server_key: BASE64.encode(credentials.server_key),
 		}
+	}
+
+	/// Derive stored SCRAM-SHA-256 credentials for `password` under a fresh
+	/// random salt (RFC 7677 minimum 4096 iterations). `None` when the CSPRNG
+	/// cannot produce one, so the caller fails closed rather than storing
+	/// credentials under a predictable salt.
+	///
+	/// The salt comes back from `ring::rand::generate` already filled. The
+	/// three call sites this replaces each declared `[0u8; 16]` and then
+	/// overwrote it, which left a window — brief, but real — where a
+	/// deterministic salt sat in the buffer that was about to be used.
+	pub fn with_fresh_salt(password: &str) -> Option<Self> {
+		let salt: [u8; SALT_LEN] = ring::rand::generate(&ring::rand::SystemRandom::new())
+			.ok()?
+			.expose();
+		Some(Self::from_credentials(&ScramCredentials::derive(
+			password,
+			&salt,
+			SCRAM_ITERATIONS,
+		)))
 	}
 
 	/// Reconstruct credentials, or `None` if any field is malformed.
@@ -469,5 +495,44 @@ mod tests {
 		// The header says `n,,` but the c= carries extra bytes.
 		let result = run_cb_exchange(ChannelBinding::Supported, "n,,", b"extra");
 		assert_eq!(result, Err(ScramError::Malformed));
+	}
+
+	#[test]
+	fn a_fresh_salt_is_never_the_declared_buffer_and_never_repeats() {
+		// The three call sites this replaced each wrote `[0u8; 16]` and then
+		// overwrote it. If a future edit drops the randomness and leaves the
+		// buffer as declared, every account would share one known salt — so
+		// the all-zero salt is asserted against explicitly, not just
+		// inequality between two draws.
+		let zero = ScramStored::from_credentials(&ScramCredentials::derive(
+			"correct horse battery staple",
+			&[0u8; SALT_LEN],
+			SCRAM_ITERATIONS,
+		));
+		let a = ScramStored::with_fresh_salt("correct horse battery staple").expect("csprng");
+		let b = ScramStored::with_fresh_salt("correct horse battery staple").expect("csprng");
+		assert_ne!(
+			a.salt, zero.salt,
+			"the salt must not be the declared buffer"
+		);
+		assert_ne!(a.salt, b.salt, "two derivations must not share a salt");
+		assert_eq!(a.iterations, SCRAM_ITERATIONS);
+	}
+
+	#[test]
+	fn a_fresh_salt_still_authenticates_the_password_it_derived_from() {
+		// A salt that is random but not the one actually used would pass the
+		// test above and break every login, so the round trip is checked too.
+		let stored = ScramStored::with_fresh_salt("correct horse battery staple").expect("csprng");
+		let salt = base64::engine::general_purpose::STANDARD
+			.decode(&stored.salt)
+			.expect("salt is base64");
+		let again = ScramStored::from_credentials(&ScramCredentials::derive(
+			"correct horse battery staple",
+			&salt,
+			stored.iterations,
+		));
+		assert_eq!(again.stored_key, stored.stored_key);
+		assert_eq!(again.server_key, stored.server_key);
 	}
 }

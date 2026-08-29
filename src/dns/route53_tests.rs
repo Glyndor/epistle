@@ -123,17 +123,20 @@ async fn delete_uses_delete_action() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, _state) = mock().await;
+async fn mx_upsert_uses_verbatim_value_in_value_element() {
+	let (provider, state) = mock().await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("<Type>MX</Type>"), "{body}");
+	assert!(
+		body.contains("<Value>10 mail.example.org</Value>"),
+		"{body}"
 	);
 }
 
@@ -143,5 +146,47 @@ async fn list_is_unsupported() {
 	assert_eq!(
 		provider.list("example.org").await,
 		Err(ProviderError::Unsupported)
+	);
+}
+
+#[tokio::test]
+async fn srv_upsert_uses_verbatim_value_in_value_element() {
+	let (provider, state) = mock().await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".into(),
+		ttl: 3600,
+	};
+	provider
+		.upsert("example.org", srv)
+		.await
+		.expect("srv upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("<Type>SRV</Type>"), "{body}");
+	assert!(
+		body.contains("<Value>0 1 465 mail.example.org.</Value>"),
+		"{body}"
+	);
+}
+
+#[tokio::test]
+async fn caa_upsert_uses_verbatim_value_in_value_element() {
+	let (provider, state) = mock().await;
+	let caa = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Caa,
+		value: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	};
+	provider
+		.upsert("example.org", caa)
+		.await
+		.expect("caa upsert");
+	let body = state.lock().unwrap().bodies[0].clone();
+	assert!(body.contains("<Type>CAA</Type>"), "{body}");
+	assert!(
+		body.contains("<Value>0 issue \"letsencrypt.org\"</Value>"),
+		"{body}"
 	);
 }

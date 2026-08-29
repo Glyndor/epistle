@@ -84,7 +84,8 @@ pub(super) fn parse_search(tag: &str, args: &str, uid: bool) -> Result<Command, 
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let mut rest = args.trim();
 
-	// Optional ESEARCH `RETURN (...)` block (RFC 4731), before the criteria.
+	// Optional leading `RETURN (...)` (RFC 4731 §3.2): RETURN first, then
+	// the criteria.
 	let mut return_opts = None;
 	if let Some(after_return) = strip_keyword(rest, "RETURN") {
 		let inner = after_return.trim_start();
@@ -96,8 +97,27 @@ pub(super) fn parse_search(tag: &str, args: &str, uid: bool) -> Result<Command, 
 		rest = inner[close + 1..].trim_start();
 	}
 
+	// Parse criteria until either the input is consumed or we hit a trailing
+	// `RETURN (...)` block (RFC 5182 §2.1 lets RETURN appear after the
+	// criteria, and says servers MUST accept either form).
 	let mut criteria = Vec::new();
 	while !rest.is_empty() {
+		if let Some(after_return) = strip_keyword(rest, "RETURN") {
+			let inner = after_return.trim_start();
+			let close = find_close_paren(inner).ok_or_else(bad)?;
+			if !inner.starts_with('(') {
+				return Err(bad());
+			}
+			// A trailing RETURN replaces any leading one to keep the most
+			// recently-parsed intent; for SEARCHRES the SAVE option is the
+			// important one and either form is acceptable.
+			return_opts = Some(parse_return_opts(&inner[1..close]).ok_or_else(bad)?);
+			rest = inner[close + 1..].trim_start();
+			if !rest.is_empty() {
+				return Err(bad());
+			}
+			break;
+		}
 		let (key, after) = parse_search_key(rest).ok_or_else(bad)?;
 		criteria.push(key);
 		rest = after.trim_start();
@@ -121,6 +141,7 @@ fn parse_return_opts(text: &str) -> Option<Vec<ReturnOpt>> {
 			"MAX" => ReturnOpt::Max,
 			"COUNT" => ReturnOpt::Count,
 			"ALL" => ReturnOpt::All,
+			"SAVE" => ReturnOpt::Save,
 			_ => return None,
 		});
 	}
@@ -264,6 +285,19 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 			};
 			let n: u64 = n_str.parse().ok()?;
 			(SearchKey::ModSeq(n), rest)
+		}
+		"YOUNGER" | "OLDER" => {
+			let (n_str, rest) = match after.split_once(|c: char| c.is_ascii_whitespace()) {
+				Some((n, r)) => (n, r.trim_start()),
+				None => (after, ""),
+			};
+			let n: u32 = n_str.parse().ok()?;
+			let key = if word.eq_ignore_ascii_case("YOUNGER") {
+				SearchKey::Younger(n)
+			} else {
+				SearchKey::Older(n)
+			};
+			(key, rest)
 		}
 		_ => {
 			let set = parse_sequence_set(word)?;

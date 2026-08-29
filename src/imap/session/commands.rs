@@ -1,8 +1,11 @@
-use super::super::command::{NotifyEvent, NotifyRequest, ReturnOpt, SearchScope, SequenceSet};
+//! IMAP COPY/MOVE/SEARCH/ESEARCH command handlers.
+
+use super::super::command::{ReturnOpt, SearchScope, SequenceSet};
 use super::codes::{copyuid_code, esearch_line, esearch_multi_line};
 use super::helpers::search_matches;
-use super::mailbox::{self, Flag, Snapshot};
-use super::{Output, SearchKey, Session, State, StatusItem};
+use super::mailbox::{self, Snapshot};
+use super::state::State;
+use super::{Output, SearchKey, Session};
 
 impl Session {
 	pub(super) fn copy(
@@ -16,6 +19,9 @@ impl Session {
 		let uidonly = self.uidonly;
 		let data_dir = self.data_dir.clone();
 		let crypto = self.crypto.clone();
+		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`,
+		// since `saved_seqnos_for` reads `self` immutably.
+		let saved = self.saved_seqnos_for(uid);
 		let State::Selected {
 			account,
 			snapshot,
@@ -41,7 +47,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if sequence.contains(selector, total) {
+			if sequence.contains(selector, total, &saved) {
 				matched.push(sequence_number);
 				source_uids.push(message.uid);
 			}
@@ -104,6 +110,9 @@ impl Session {
 		};
 
 		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		// SEARCH criteria never carry SEARCHRES `$` placeholders — only the
+		// consuming commands (FETCH/STORE/COPY/UID EXPUNGE) do — so the saved
+		// set is irrelevant here.
 		let mut hits = Vec::new();
 		for seqno in 1..=total {
 			let Some(message) = snapshot.by_sequence(seqno) else {
@@ -112,7 +121,7 @@ impl Session {
 			let mut content: Option<String> = None;
 			let matches = criteria
 				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content));
+				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
 			if matches {
 				hits.push(if uid { message.uid } else { seqno });
 			}
@@ -129,6 +138,18 @@ impl Session {
 				line
 			}
 		};
+		// SEARCHRES (RFC 5182): the `SAVE` return option stores the result
+		// set so subsequent commands can reference it via `$`. We replace the
+		// reservation on every successful SEARCH with SAVE, never merge. A
+		// failing SEARCH MUST NOT touch the saved set.
+		if let Some(opts) = return_opts
+			&& opts.contains(&ReturnOpt::Save)
+		{
+			self.saved_search = Some(super::SavedSearch {
+				are_uids: uid,
+				values: hits.clone(),
+			});
+		}
 		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
 	}
 
@@ -154,7 +175,7 @@ impl Session {
 
 		let mut body = String::new();
 		for name in &mailboxes {
-			let Ok(snapshot) = Snapshot::open(&self.data_dir, &account, name, &self.crypto) else {
+			let Ok(snapshot) = self.open_snapshot(&account, name) else {
 				continue;
 			};
 			let hits = matching_uids(&snapshot, criteria);
@@ -198,289 +219,6 @@ impl Session {
 		}
 		Some(names)
 	}
-
-	pub(super) fn expunge(&mut self, tag: &str) -> Output {
-		let uidonly = self.uidonly;
-		let State::Selected {
-			snapshot,
-			read_only,
-			..
-		} = &mut self.state
-		else {
-			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
-		};
-		if *read_only {
-			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
-		}
-		// UIDONLY reports VANISHED with UIDs, captured before they are removed.
-		let deleted_uids: Vec<u32> = snapshot
-			.messages()
-			.filter(|m| m.flags.contains(&Flag::Deleted))
-			.map(|m| m.uid)
-			.collect();
-		match snapshot.expunge() {
-			Ok(expunged) => {
-				let response = expunge_response(uidonly, &expunged, &deleted_uids);
-				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
-			}
-			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
-		}
-	}
-
-	/// GETQUOTAROOT: report the quota root of a mailbox and its quota.
-	pub(super) fn get_quota_root(&self, tag: &str, mailbox: &str) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
-		}
-		let quota = self.quota_line(&account);
-		Output::text(format!(
-			"* QUOTAROOT {mailbox} \"\"\r\n{quota}{tag} OK GETQUOTAROOT completed\r\n"
-		))
-	}
-
-	/// GETQUOTA: report the quota for a root (only the empty root exists).
-	pub(super) fn get_quota(&self, tag: &str, root: &str) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		if !root.is_empty() {
-			return Output::text(format!("{tag} NO unknown quota root\r\n"));
-		}
-		let quota = self.quota_line(&account);
-		Output::text(format!("{quota}{tag} OK GETQUOTA completed\r\n"))
-	}
-
-	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
-	fn quota_line(&self, account: &str) -> String {
-		let used_kib = mailbox::account_usage(&self.data_dir, account, &self.crypto).div_ceil(1024);
-		let limit_kib = self.effective_quota().div_ceil(1024);
-		format!("* QUOTA \"\" (STORAGE {used_kib} {limit_kib})\r\n")
-	}
-
-	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
-		let uidonly = self.uidonly;
-		let State::Selected {
-			snapshot,
-			read_only,
-			..
-		} = &mut self.state
-		else {
-			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
-		};
-		if *read_only {
-			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
-		}
-		let max_uid = snapshot.messages().map(|m| m.uid).max().unwrap_or(0);
-		let uids: Vec<u32> = snapshot
-			.messages()
-			.map(|m| m.uid)
-			.filter(|uid| sequence.contains(*uid, max_uid))
-			.collect();
-		// The UIDs actually removed are the in-set ones flagged \Deleted.
-		let deleted_uids: Vec<u32> = snapshot
-			.messages()
-			.filter(|m| m.flags.contains(&Flag::Deleted) && uids.contains(&m.uid))
-			.map(|m| m.uid)
-			.collect();
-		match snapshot.expunge_uids(&uids) {
-			Ok(expunged) => {
-				let response = expunge_response(uidonly, &expunged, &deleted_uids);
-				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
-			}
-			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
-		}
-	}
-
-	/// Poll for mailbox changes during IDLE. Refreshes the snapshot and emits
-	/// untagged EXISTS/FLAGS responses if the message count changed. Returns
-	/// `None` when not in IDLE or no mailbox is selected.
-	pub fn check_idle(&mut self) -> Option<Output> {
-		self.idle_tag.as_ref()?;
-		let State::Selected {
-			account,
-			mailbox,
-			snapshot,
-			..
-		} = &mut self.state
-		else {
-			return None;
-		};
-		let fresh = match Snapshot::open(&self.data_dir, account, mailbox, &self.crypto) {
-			Ok(s) => s,
-			Err(_) => return None,
-		};
-		if fresh.uid_validity() != snapshot.uid_validity() || fresh.len() != snapshot.len() {
-			let exists = fresh.len();
-			*snapshot = fresh;
-			Some(Output::text(format!("* {exists} EXISTS\r\n")))
-		} else {
-			None
-		}
-	}
-
-	/// NOTIFY (RFC 5465): record which selected-mailbox events the client wants
-	/// pushed unsolicited. Other mailbox specifiers were accepted-and-ignored at
-	/// parse time. Requires authentication.
-	pub(super) fn notify(&mut self, tag: &str, request: NotifyRequest) -> Output {
-		if self.account().is_none() {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		}
-		match request {
-			NotifyRequest::None => self.notify_selected = None,
-			NotifyRequest::Set { selected, .. } => self.notify_selected = Some(selected),
-		}
-		Output::text(format!("{tag} OK NOTIFY completed\r\n"))
-	}
-
-	/// Poll for mailbox changes for a NOTIFY-enabled session, mirroring
-	/// [`Self::check_idle`] but gated on active NOTIFY `selected` events rather
-	/// than IDLE. Returns an unsolicited `* <n> EXISTS` when the selected mailbox
-	/// gained or lost messages and the client asked for
-	/// MessageNew/MessageExpunge.
-	pub fn check_notify(&mut self) -> Option<Output> {
-		if !self.notify_active() {
-			return None;
-		}
-		let State::Selected {
-			account,
-			mailbox,
-			snapshot,
-			..
-		} = &mut self.state
-		else {
-			return None;
-		};
-		let fresh = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
-		if fresh.uid_validity() != snapshot.uid_validity() || fresh.len() != snapshot.len() {
-			let exists = fresh.len();
-			*snapshot = fresh;
-			Some(Output::text(format!("* {exists} EXISTS\r\n")))
-		} else {
-			None
-		}
-	}
-
-	/// Whether this session has NOTIFY enabled with selected-mailbox message
-	/// events, so the server loop should poll between commands.
-	pub fn notify_active(&self) -> bool {
-		self.notify_selected.as_ref().is_some_and(|events| {
-			events
-				.iter()
-				.any(|e| matches!(e, NotifyEvent::MessageNew | NotifyEvent::MessageExpunge))
-		})
-	}
-
-	pub(super) fn list(
-		&mut self,
-		tag: &str,
-		pattern: &str,
-		return_status: &[StatusItem],
-		select_subscribed: bool,
-	) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		let subscribed: std::collections::HashSet<String> =
-			mailbox::list_subscribed(&self.data_dir, &account)
-				.into_iter()
-				.collect();
-		let mut response = String::new();
-		for name in mailbox::list(&self.data_dir, &account) {
-			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
-			// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists only subscribed boxes.
-			if !matches || (select_subscribed && !subscribed.contains(&name)) {
-				continue;
-			}
-			let mut attributes = super::helpers::special_use_attribute(&name).to_string();
-			if subscribed.contains(&name) {
-				if !attributes.is_empty() {
-					attributes.push(' ');
-				}
-				attributes.push_str("\\Subscribed");
-			}
-			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n"));
-			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
-			if !return_status.is_empty()
-				&& let Some(parts) = self.status_parts(&account, &name, return_status)
-			{
-				response.push_str(&format!("* STATUS \"{name}\" ({parts})\r\n"));
-			}
-		}
-		response.push_str(&format!("{tag} OK LIST completed\r\n"));
-		Output::text(response)
-	}
-
-	pub(super) fn status(&mut self, tag: &str, mailbox: &str, items: &[StatusItem]) -> Output {
-		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
-		};
-		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
-		}
-		let Some(parts) = self.status_parts(&account, mailbox, items) else {
-			return Output::text(format!("{tag} NO cannot open mailbox\r\n"));
-		};
-		Output::text(format!(
-			"* STATUS \"{mailbox}\" ({parts})\r\n{tag} OK STATUS completed\r\n"
-		))
-	}
-
-	/// The `ITEM value ...` body of a STATUS response, or `None` if the mailbox
-	/// cannot be opened. Shared by STATUS and LIST ... RETURN (STATUS ...).
-	pub(super) fn status_parts(
-		&self,
-		account: &str,
-		mailbox: &str,
-		items: &[StatusItem],
-	) -> Option<String> {
-		let snapshot = Snapshot::open(&self.data_dir, account, mailbox, &self.crypto).ok()?;
-		let count_flag = |flag: Flag| {
-			snapshot
-				.messages()
-				.filter(|m| m.flags.contains(&flag))
-				.count()
-		};
-		let mut parts = String::new();
-		for (i, item) in items.iter().enumerate() {
-			if i > 0 {
-				parts.push(' ');
-			}
-			let rendered = match item {
-				StatusItem::Messages => format!("MESSAGES {}", snapshot.len()),
-				StatusItem::Recent => "RECENT 0".to_string(),
-				StatusItem::Uidnext => format!("UIDNEXT {}", snapshot.uid_next()),
-				StatusItem::Uidvalidity => format!("UIDVALIDITY {}", snapshot.uid_validity()),
-				StatusItem::Unseen => {
-					format!("UNSEEN {}", snapshot.len() - count_flag(Flag::Seen))
-				}
-				StatusItem::Size => {
-					format!("SIZE {}", snapshot.messages().map(|m| m.size).sum::<u64>())
-				}
-				StatusItem::Deleted => format!("DELETED {}", count_flag(Flag::Deleted)),
-				StatusItem::MailboxId => format!("MAILBOXID (M{})", snapshot.uid_validity()),
-			};
-			parts.push_str(&rendered);
-		}
-		Some(parts)
-	}
-}
-
-/// Build the untagged expunge output: per-message `EXPUNGE` lines normally, or
-/// a single `VANISHED` with the removed UIDs under UIDONLY (RFC 9586).
-fn expunge_response(uidonly: bool, expunged: &[u32], deleted_uids: &[u32]) -> String {
-	if uidonly {
-		if deleted_uids.is_empty() {
-			return String::new();
-		}
-		return format!("* VANISHED {}\r\n", super::codes::uid_set(deleted_uids));
-	}
-	expunged
-		.iter()
-		.map(|seq| format!("* {seq} EXPUNGE\r\n"))
-		.collect()
 }
 
 /// UIDs of every message in `snapshot` matching all search keys.
@@ -494,7 +232,7 @@ fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
 		let mut content: Option<String> = None;
 		if criteria
 			.iter()
-			.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content))
+			.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]))
 		{
 			hits.push(message.uid);
 		}

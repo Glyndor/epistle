@@ -28,6 +28,8 @@ pub enum RecordKind {
 	Tlsa,
 	/// Service locator record (RFC 2782).
 	Srv,
+	/// Certification Authority Authorization (RFC 8659).
+	Caa,
 }
 
 impl RecordKind {
@@ -41,8 +43,26 @@ impl RecordKind {
 			RecordKind::Cname => "CNAME",
 			RecordKind::Tlsa => "TLSA",
 			RecordKind::Srv => "SRV",
+			RecordKind::Caa => "CAA",
 		}
 	}
+}
+
+/// The four parts of an SRV record, split out from the presentation form
+/// `"<prio> <weight> <port> <target>."`. The trailing dot on the target is
+/// tolerated (and stripped) so callers can build the value either way. Returns
+/// `None` if the value is malformed — providers should treat that as an
+/// internal error rather than passing it to the API.
+pub fn parse_srv(value: &str) -> Option<(u16, u16, u16, String)> {
+	let mut parts = value.split_whitespace();
+	let prio: u16 = parts.next()?.parse().ok()?;
+	let weight: u16 = parts.next()?.parse().ok()?;
+	let port: u16 = parts.next()?.parse().ok()?;
+	let target = parts.next()?.trim_end_matches('.').to_string();
+	if parts.next().is_some() {
+		return None;
+	}
+	Some((prio, weight, port, target))
 }
 
 /// A DNS record to publish or remove.

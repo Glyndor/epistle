@@ -20,6 +20,15 @@ impl Config {
 		self.validate_transport()?;
 		self.validate_oauth()?;
 		self.validate_ldap()?;
+		self.validate_antispam_llm()?;
+		self.validate_alerts()?;
+		Ok(())
+	}
+
+	fn validate_antispam_llm(&self) -> Result<(), ConfigError> {
+		if let Some(llm) = &self.antispam_llm {
+			llm.validate()?;
+		}
 		Ok(())
 	}
 
@@ -337,6 +346,27 @@ impl Config {
 				| crate::config::ListenerKind::Metrics
 		)
 	}
+
+	fn validate_alerts(&self) -> Result<(), ConfigError> {
+		let mut seen = HashSet::new();
+		for alert in &self.alerts {
+			if !seen.insert(alert.name.as_str()) {
+				return Err(ConfigError::Invalid(format!(
+					"[[alerts]] name \"{}\" is declared more than once",
+					alert.name
+				)));
+			}
+			alert.validate().map_err(ConfigError::Invalid)?;
+			// A rule that posts to the webhook needs a configured poster.
+			if alert.webhook && self.webhook.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"[[alerts]] \"{}\" sets webhook = true but no [webhook] section is configured",
+					alert.name
+				)));
+			}
+		}
+		Ok(())
+	}
 }
 
 /// Validate a fully qualified DNS name; `field` names it in errors.
@@ -377,3 +407,6 @@ mod tests;
 #[cfg(test)]
 #[path = "validate_tests_b.rs"]
 mod tests_b;
+#[cfg(test)]
+#[path = "validate_tests_c.rs"]
+mod tests_c;

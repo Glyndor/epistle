@@ -240,15 +240,24 @@ fn ignores_foreign_files() {
 
 #[test]
 fn flags_equal_is_order_and_duplicate_independent() {
-	assert!(flags_equal(&[], &[]));
-	assert!(flags_equal(
+	assert!(super::super::flags::flags_equal(&[], &[]));
+	assert!(super::super::flags::flags_equal(
 		&[Flag::Seen, Flag::Flagged],
 		&[Flag::Flagged, Flag::Seen],
 	));
 	// Duplicates collapse to a set.
-	assert!(flags_equal(&[Flag::Seen], &[Flag::Seen, Flag::Seen]));
-	assert!(!flags_equal(&[Flag::Seen], &[Flag::Seen, Flag::Deleted]));
-	assert!(!flags_equal(&[Flag::Seen], &[Flag::Deleted]));
+	assert!(super::super::flags::flags_equal(
+		&[Flag::Seen],
+		&[Flag::Seen, Flag::Seen]
+	));
+	assert!(!super::super::flags::flags_equal(
+		&[Flag::Seen],
+		&[Flag::Seen, Flag::Deleted]
+	));
+	assert!(!super::super::flags::flags_equal(
+		&[Flag::Seen],
+		&[Flag::Deleted]
+	));
 }
 
 #[test]
@@ -293,4 +302,16 @@ fn store_flags_noop_skips_disk_write_and_modseq() {
 		.store_flags(1, vec![Flag::Seen, Flag::Flagged])
 		.expect("store");
 	assert!(snapshot.by_sequence(1).expect("message").modseq > modseq_after_change);
+}
+
+#[test]
+fn a_mailbox_name_cannot_contain_the_hierarchy_delimiter() {
+	// LIST answers `\HasNoChildren` for every mailbox, which is only truthful
+	// while the hierarchy is flat. That holds because `/` — the delimiter
+	// LIST reports — is not an accepted character, so no mailbox can ever be
+	// another's parent. Allowing it here would turn the CHILDREN capability
+	// epistle advertises into a lie, silently, with nothing else failing.
+	assert!(!valid_name("parent/child"));
+	assert!(!valid_name("/leading"));
+	assert!(valid_name("Archive 2026"));
 }

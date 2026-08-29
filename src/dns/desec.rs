@@ -50,16 +50,19 @@ impl DesecProvider {
 		self
 	}
 
-	/// The record type token for a kind we can publish (deSEC handles each as an
-	/// rrset; MX/SRV need priority/weight handling we do not emit yet).
+	/// The record type token for a kind we can publish (deSEC handles each as
+	/// an rrset; MX needs the priority split out into a separate field which
+	/// epistle does not build yet).
 	fn rrset_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
 			| RecordKind::Aaaa
 			| RecordKind::Txt
 			| RecordKind::Cname
-			| RecordKind::Tlsa => Ok(kind.as_str()),
-			RecordKind::Mx | RecordKind::Srv => Err(ProviderError::Unsupported),
+			| RecordKind::Tlsa
+			| RecordKind::Srv
+			| RecordKind::Mx
+			| RecordKind::Caa => Ok(kind.as_str()),
 		}
 	}
 
@@ -188,6 +191,7 @@ fn parse_kind(kind: &str) -> RecordKind {
 	match kind {
 		"A" => RecordKind::A,
 		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
 		"CNAME" => RecordKind::Cname,
 		"MX" => RecordKind::Mx,
 		"SRV" => RecordKind::Srv,

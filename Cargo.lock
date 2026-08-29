@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "epistle"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "axum",
@@ -734,6 +734,7 @@ dependencies = [
  "percent-encoding",
  "psl",
  "quick-xml",
+ "rand 0.8.8",
  "rcgen",
  "reqwest",
  "ring",

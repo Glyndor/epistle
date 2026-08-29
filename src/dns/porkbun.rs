@@ -1,0 +1,394 @@
+//! A Porkbun DNS provider implementing [`DnsProvider`]. Porkbun's v3 API is
+//! JSON over POST only, and it carries the credentials in the request **body**
+//! (`apikey` / `secretapikey`) rather than in a header, so there is no
+//! `Authorization` header on any call. Records are addressed by numeric id, so
+//! writes are a retrieve-then-create-or-edit: `POST /dns/retrieve/{zone}`
+//! locates the matching name/type, then `POST /dns/create/{zone}` or
+//! `POST /dns/edit/{zone}/{id}` publishes it.
+//!
+//! Porkbun answers `200 OK` with `{"status":"ERROR", …}` for application-level
+//! failures as readily as it answers `400`, so every reply is decoded and the
+//! `status` field checked; a non-`SUCCESS` status is an error regardless of the
+//! HTTP code, and the authentication-flavoured `code` values map to
+//! [`ProviderError::Auth`].
+//!
+//! Endpoints and payloads follow <https://porkbun.com/llms/dns> and the
+//! OpenAPI spec at <https://porkbun.com/api/json/v3/spec>.
+
+use std::pin::Pin;
+
+use serde::Deserialize;
+
+use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
+
+/// Porkbun's API base; overridable for tests.
+const DEFAULT_BASE: &str = "https://api.porkbun.com/api/json/v3";
+
+/// Porkbun's floor for a record TTL, in seconds. Shorter values are rejected;
+/// the API also treats `0` as "use the account minimum".
+const MIN_TTL: u32 = 600;
+
+/// Error `code` values Porkbun returns when the credentials, the account, or
+/// the key's allowlists reject the call. Everything else is a remote error.
+const AUTH_CODES: &[&str] = &[
+	"API_KEY_REQUIRED",
+	"INVALID_API_KEYS_001",
+	"INVALID_TOKEN",
+	"INVALID_USER",
+	"IP_NOT_ALLOWED",
+	"DOMAIN_NOT_ALLOWED",
+];
+
+type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
+type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
+
+/// A Porkbun-backed DNS provider for one zone.
+pub struct PorkbunProvider {
+	client: reqwest::Client,
+	/// The secret API key, scoped to the zone it may write to.
+	secret: ScopedSecret,
+	/// The (non-secret) API key that pairs with it.
+	api_key: String,
+	base: String,
+}
+
+/// A Porkbun reply. Every endpoint returns `status`; the rest of the fields are
+/// endpoint-specific and absent elsewhere. Porkbun serialises the record `id`,
+/// `ttl` and `prio` as strings.
+#[derive(Deserialize)]
+struct Reply {
+	#[serde(default)]
+	status: String,
+	#[serde(default)]
+	message: Option<String>,
+	#[serde(default)]
+	code: Option<String>,
+	#[serde(default)]
+	records: Vec<Record>,
+}
+
+/// One record as `POST /dns/retrieve/{zone}` returns it. `name` is the
+/// fully-qualified name, not the label.
+#[derive(Deserialize)]
+struct Record {
+	#[serde(default)]
+	id: String,
+	#[serde(default)]
+	name: String,
+	#[serde(rename = "type", default)]
+	kind: String,
+	#[serde(default)]
+	content: String,
+	#[serde(default)]
+	ttl: String,
+	#[serde(default)]
+	prio: String,
+}
+
+impl PorkbunProvider {
+	/// Build a provider for the secret's zone. `secret` holds the secret API
+	/// key (`secretapikey`); `api_key` is the API key (`apikey`) it pairs with.
+	pub fn new(secret: ScopedSecret, api_key: impl Into<String>) -> Self {
+		PorkbunProvider {
+			client: reqwest::Client::new(),
+			secret,
+			api_key: api_key.into(),
+			base: DEFAULT_BASE.to_string(),
+		}
+	}
+
+	/// Point the provider at an alternate API base (tests).
+	pub fn with_base(mut self, base: impl Into<String>) -> Self {
+		self.base = base.into();
+		self
+	}
+
+	/// The Porkbun record type for a kind we can publish. A/AAAA/TXT/CNAME and
+	/// TLSA go through the plain `content` field; SRV uses the same field plus
+	/// a separate `prio` (priority in the upper bits, weight in the lower —
+	/// Porkbun packs them into a single integer, see below); MX uses the same
+	/// `prio` field as a plain preference and is not yet supported because
+	/// the rest of epistle still builds MX with the priority embedded in the
+	/// value string.
+	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
+		match kind {
+			RecordKind::A
+			| RecordKind::Aaaa
+			| RecordKind::Txt
+			| RecordKind::Cname
+			| RecordKind::Tlsa
+			| RecordKind::Srv
+			| RecordKind::Mx
+			| RecordKind::Caa => Ok(kind.as_str()),
+		}
+	}
+
+	/// Validate that `record.value` is a well-formed SRV. Returns the priority
+	/// so the upsert path can populate the `prio` field (Porkbun treats it
+	/// as the plain preference for SRV). Returns `Remote` on malformed input.
+	fn sr_prio(record: &DnsRecord) -> Result<u16, ProviderError> {
+		let (priority, _weight, _port, _target) = parse_srv(&record.value)
+			.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
+		Ok(priority)
+	}
+
+	/// The `name` Porkbun expects: the label relative to the zone, with the
+	/// apex as the empty string (Porkbun's "blank for root").
+	fn label(&self, name: &str) -> String {
+		let name = name.trim_end_matches('.');
+		let zone = self.secret.zone().trim_end_matches('.');
+		if name.eq_ignore_ascii_case(zone) {
+			return String::new();
+		}
+		name.strip_suffix(&format!(".{zone}"))
+			.unwrap_or(name)
+			.to_string()
+	}
+
+	/// Reject a record the secret is not scoped for, before any network call.
+	fn authorize(&self, record: &DnsRecord) -> Result<(), ProviderError> {
+		if self.secret.authorizes(&record.name) {
+			Ok(())
+		} else {
+			Err(ProviderError::Auth)
+		}
+	}
+
+	/// POST `path` with the credentials merged into `fields`, and decode the
+	/// reply. Porkbun takes `apikey`/`secretapikey` in the body on every call.
+	async fn call(&self, path: &str, fields: serde_json::Value) -> Result<Reply, ProviderError> {
+		let mut body = serde_json::Map::new();
+		body.insert("apikey".to_string(), self.api_key.clone().into());
+		body.insert(
+			"secretapikey".to_string(),
+			self.secret.token().to_string().into(),
+		);
+		if let serde_json::Value::Object(fields) = fields {
+			body.extend(fields);
+		}
+		let response = self
+			.client
+			.post(format!("{}{path}", self.base))
+			.header(reqwest::header::CONTENT_TYPE, "application/json")
+			.body(serde_json::Value::Object(body).to_string())
+			.send()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		decode(response).await
+	}
+
+	/// Every record in the zone, as Porkbun reports it.
+	async fn retrieve(&self) -> Result<Vec<Record>, ProviderError> {
+		let path = format!("/dns/retrieve/{}", self.secret.zone());
+		Ok(self.call(&path, serde_json::Value::Null).await?.records)
+	}
+
+	/// The ids of every record with this fully-qualified name and type. More
+	/// than one means the zone already holds duplicates (two TXT at the same
+	/// name is the classic case), which an upsert has to collapse rather than
+	/// add to.
+	async fn matching_ids(&self, name: &str, kind: &str) -> Result<Vec<String>, ProviderError> {
+		let name = name.trim_end_matches('.');
+		Ok(self
+			.retrieve()
+			.await?
+			.into_iter()
+			.filter(|r| {
+				r.kind.eq_ignore_ascii_case(kind)
+					&& r.name.trim_end_matches('.').eq_ignore_ascii_case(name)
+			})
+			.map(|r| r.id)
+			.collect())
+	}
+
+	/// Remove the record with `id`.
+	async fn delete_id(&self, id: &str) -> Result<(), ProviderError> {
+		let path = format!("/dns/delete/{}/{id}", self.secret.zone());
+		self.call(&path, serde_json::Value::Null).await.map(drop)
+	}
+
+	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
+		self.authorize(&record)?;
+		let kind = Self::api_kind(record.kind)?;
+		let mut fields = serde_json::json!({
+			"name": self.label(&record.name),
+			"type": kind,
+			"content": record.value,
+			"ttl": record.ttl.max(MIN_TTL),
+		});
+		if record.kind == RecordKind::Srv {
+			// Porkbun's SRV payload: the value carries the full presentation
+			// form (`prio weight port target`) verbatim in `content`, and the
+			// `prio` field is the plain preference (here, the priority, since
+			// weight and port are part of the value already). We still validate
+			// the value with parse_srv so a malformed SRV never reaches the API.
+			let _ = Self::sr_prio(&record)?;
+			if let Some(map) = fields.as_object_mut() {
+				map.insert(
+					"prio".to_string(),
+					parse_srv(&record.value)
+						.map(|(p, _w, _port, _target)| p)
+						.unwrap_or(0)
+						.into(),
+				);
+			}
+		}
+		if record.kind == RecordKind::Caa {
+			// Porkbun's CAA payload: `content` carries the CA value verbatim,
+			// and the `caa_tag` field holds the tag ("issue", "issuewild",
+			// "iodef"). We split the presentation form to surface malformed
+			// input as a `Remote` error rather than letting Porkbun reject it.
+			let mut parts = record.value.splitn(3, ' ');
+			let _flags = parts.next();
+			let tag = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.to_string();
+			let value = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
+				.trim_matches('"')
+				.to_string();
+			if let Some(map) = fields.as_object_mut() {
+				map.insert("caa_tag".to_string(), tag.into());
+				map.insert("content".to_string(), value.into());
+			}
+		}
+		if record.kind == RecordKind::Mx {
+			// Porkbun's MX payload: `content` carries the target, `prio`
+			// carries the preference as an integer.
+			let mut parts = record.value.split_whitespace();
+			let priority: u16 = parts
+				.next()
+				.and_then(|p| p.parse().ok())
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
+			let target = parts
+				.next()
+				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?
+				.trim_end_matches('.')
+				.to_string();
+			if let Some(map) = fields.as_object_mut() {
+				map.insert("prio".to_string(), priority.into());
+				map.insert("content".to_string(), target.into());
+			}
+		}
+		let existing = self.matching_ids(&record.name, kind).await?;
+		match existing.split_first() {
+			// Replace in place, then drop any duplicate left at the same
+			// name/type so an upsert never widens the record set.
+			Some((id, duplicates)) => {
+				let path = format!("/dns/edit/{}/{id}", self.secret.zone());
+				self.call(&path, fields).await?;
+				for extra in duplicates {
+					self.delete_id(extra).await?;
+				}
+				Ok(())
+			}
+			None => {
+				let path = format!("/dns/create/{}", self.secret.zone());
+				self.call(&path, fields).await.map(drop)
+			}
+		}
+	}
+
+	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
+		self.authorize(&record)?;
+		let kind = Self::api_kind(record.kind)?;
+		// No match: already absent, so nothing to do (idempotent).
+		for id in self.matching_ids(&record.name, kind).await? {
+			self.delete_id(&id).await?;
+		}
+		Ok(())
+	}
+
+	async fn list_inner(&self) -> Result<Vec<DnsRecord>, ProviderError> {
+		Ok(self
+			.retrieve()
+			.await?
+			.into_iter()
+			.filter_map(|r| {
+				let kind = parse_kind(&r.kind);
+				// SRV records Porkbun returns without a usable `prio` are
+				// malformed: drop them so the rest of the list does not
+				// carry a misleading empty value.
+				if kind == RecordKind::Srv && r.prio.is_empty() {
+					return None;
+				}
+				let value = if kind == RecordKind::Srv {
+					let packed: u32 = r.prio.parse().ok()?;
+					let priority = (packed >> 16) as u16;
+					let weight = (packed & 0xFFFF) as u16;
+					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
+				} else {
+					r.content.trim_matches('"').to_string()
+				};
+				Some(DnsRecord {
+					name: r.name.trim_end_matches('.').to_string(),
+					kind,
+					value,
+					ttl: r.ttl.parse().unwrap_or(MIN_TTL),
+				})
+			})
+			.collect())
+	}
+}
+
+impl DnsProvider for PorkbunProvider {
+	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		Box::pin(async move { self.upsert_inner(record).await })
+	}
+	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		Box::pin(async move { self.delete_inner(record).await })
+	}
+	fn list(&self, _zone: &str) -> ListOp<'_> {
+		Box::pin(async move { self.list_inner().await })
+	}
+}
+
+/// Map a Porkbun type token back to a [`RecordKind`], defaulting to TXT.
+fn parse_kind(kind: &str) -> RecordKind {
+	match kind {
+		"A" => RecordKind::A,
+		"AAAA" => RecordKind::Aaaa,
+		"CAA" => RecordKind::Caa,
+		"CNAME" => RecordKind::Cname,
+		"MX" => RecordKind::Mx,
+		"SRV" => RecordKind::Srv,
+		"TLSA" => RecordKind::Tlsa,
+		_ => RecordKind::Txt,
+	}
+}
+
+/// Decode a reply, treating anything but `status: "SUCCESS"` as a failure even
+/// when it arrives with `200 OK`, and mapping credential/allowlist rejections
+/// to [`ProviderError::Auth`]. The error message carries Porkbun's `message`,
+/// never the credentials.
+async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
+	let http = response.status();
+	if http == reqwest::StatusCode::UNAUTHORIZED || http == reqwest::StatusCode::FORBIDDEN {
+		return Err(ProviderError::Auth);
+	}
+	let text = response
+		.text()
+		.await
+		.map_err(|e| ProviderError::Remote(e.to_string()))?;
+	let reply: Reply =
+		serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
+	if reply.status.eq_ignore_ascii_case("SUCCESS") {
+		return Ok(reply);
+	}
+	if reply
+		.code
+		.as_deref()
+		.is_some_and(|code| AUTH_CODES.contains(&code))
+	{
+		return Err(ProviderError::Auth);
+	}
+	Err(ProviderError::Remote(
+		reply.message.unwrap_or_else(|| format!("HTTP {http}")),
+	))
+}
+
+#[cfg(test)]
+#[path = "porkbun_tests.rs"]
+mod tests;

@@ -32,6 +32,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		password_hash: "$argon2id$stub".to_string(),
 		scram: None,
 		totp_secret: None,
+		disabled: false,
 	}
 }
 
@@ -166,4 +167,46 @@ fn account_views_mark_origin() {
 	assert!(!views[0].2);
 	assert_eq!(views[1].0, "bob");
 	assert!(views[1].2);
+}
+
+#[test]
+fn an_ldap_account_whose_name_escapes_the_data_dir_is_dropped() {
+	// LDAP rows take the same route as SQL ones: straight into the store, with
+	// the name later used as a directory under `<data_dir>/accounts/`.
+	// `mailbox_dir` checks the mailbox name and trusts the account, so a
+	// directory attribute holding `../..` escaped the data dir.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = AccountStore::open(
+		dir.path(),
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.expect("open store");
+	store.set_ldap_accounts(vec![
+		crate::directory_store::LdapAccount {
+			name: "../../etc".to_string(),
+			addresses: vec!["escape@example.org".to_string()],
+		},
+		crate::directory_store::LdapAccount {
+			name: "ok".to_string(),
+			addresses: vec!["ok@example.org".to_string()],
+		},
+	]);
+	let resolve = |address: &str| {
+		store
+			.handle()
+			.current()
+			.resolve(&crate::smtp::address::Address::parse(address).expect("address"))
+	};
+	assert!(
+		matches!(resolve("ok@example.org"), crate::smtp::directory::Resolution::Account(ref n) if n == "ok"),
+	);
+	assert!(
+		!matches!(
+			resolve("escape@example.org"),
+			crate::smtp::directory::Resolution::Account(_)
+		),
+		"a name that would escape the data dir must not become an account",
+	);
 }

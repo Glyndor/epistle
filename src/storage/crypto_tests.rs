@@ -91,6 +91,7 @@ fn from_config_enabled_without_key_fails_closed() {
 		encrypt_at_rest: true,
 		encryption_key_env: None,
 		encryption_key_file: None,
+		deleted_retention_days: 0,
 	};
 	let result = MessageCrypto::from_config(Some(&storage));
 	assert!(matches!(result, Err(CryptoError::NoKeySource)));
@@ -106,6 +107,7 @@ fn from_config_loads_key_from_file() {
 		encrypt_at_rest: true,
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path),
+		deleted_retention_days: 0,
 	};
 	let crypto = MessageCrypto::from_config(Some(&storage)).expect("build");
 	assert!(crypto.enabled());
@@ -125,6 +127,7 @@ fn from_config_keeps_key_loaded_when_disabled() {
 		encrypt_at_rest: true,
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path.clone()),
+		deleted_retention_days: 0,
 	};
 	let ciphertext = MessageCrypto::from_config(Some(&enabled))
 		.expect("build enabled")
@@ -135,6 +138,7 @@ fn from_config_keeps_key_loaded_when_disabled() {
 		encrypt_at_rest: false,
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path),
+		deleted_retention_days: 0,
 	};
 	let crypto = MessageCrypto::from_config(Some(&disabled)).expect("build disabled");
 	assert!(!crypto.enabled());
@@ -153,6 +157,7 @@ fn from_config_rejects_malformed_key() {
 		encrypt_at_rest: true,
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path),
+		deleted_retention_days: 0,
 	};
 	assert!(matches!(
 		MessageCrypto::from_config(Some(&storage)),

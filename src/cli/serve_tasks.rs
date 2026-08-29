@@ -312,3 +312,79 @@ pub(super) fn spawn_dkim_rotation(
 		}
 	});
 }
+
+/// Spawn the metric alert engine when `[[alerts]]` is non-empty. A no-op when
+/// the config has no rules: no task, no overhead.
+///
+/// One task per rule owns the snapshot/window/cooldown bookkeeping and posts
+/// the configured webhook/email when the rule crosses its threshold. The
+/// runner fails open: any dispatch error is logged and the task keeps
+/// evaluating on the next tick.
+pub(super) fn spawn_alert_engine(
+	config: &Config,
+	metrics: std::sync::Arc<crate::metrics::Metrics>,
+	webhook: Option<std::sync::Arc<crate::webhook::Webhook>>,
+	spool: std::sync::Arc<crate::storage::FsSpool>,
+) {
+	if config.alerts.is_empty() {
+		return;
+	}
+	let ctx = crate::alerts::context(webhook, spool, config.hostname.clone());
+	let _handle = crate::alerts::run(config.alerts.clone(), metrics, ctx);
+}
+
+/// Spawn the hourly archive sweep when `[storage] deleted_retention_days` is
+/// positive. The task iterates every account and drops archive entries whose
+/// sidecar timestamp is older than the retention window, so the per-account
+/// `.archive/` directory cannot grow without bound. No-op when the operator
+/// has not opted in (retention = 0).
+pub(super) fn spawn_archive_sweep(config: &Config) {
+	let Some(retention_days) = config
+		.storage
+		.as_ref()
+		.filter(|storage| storage.deleted_retention_days > 0)
+		.map(|storage| storage.deleted_retention_days)
+	else {
+		return;
+	};
+	let data_dir = config.data_dir.clone();
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|d| d.as_secs())
+				.unwrap_or(0);
+			match crate::imap::archive::sweep(&data_dir, retention_days, now) {
+				Ok(0) => {}
+				Ok(removed) => {
+					tracing::info!(retention_days, removed, "archive sweep purged entries");
+				}
+				Err(error) => {
+					tracing::warn!(%error, "archive sweep failed");
+				}
+			}
+		}
+	});
+}
+
+/// The configured archive retention in days, or `0` when `[storage]` is absent
+/// or the operator has not opted in. Read here rather than at the call site so
+/// the IMAP server and the sweep below cannot drift apart on what "retention"
+/// means.
+pub(super) fn retention_days(config: &Config) -> u64 {
+	config
+		.storage
+		.as_ref()
+		.map_or(0, |storage| storage.deleted_retention_days)
+}
+
+/// Spawn the periodic tasks that keep on-disk storage bounded: blob
+/// reclamation, and the archive sweep when retention is configured. Grouped
+/// so `serve` starts them together and neither can be forgotten on its own.
+pub(super) fn spawn_storage_maintenance(config: &Config) {
+	spawn_blob_reclamation(config);
+	spawn_archive_sweep(config);
+}

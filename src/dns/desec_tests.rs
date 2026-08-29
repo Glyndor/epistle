@@ -133,16 +133,59 @@ async fn record_outside_zone_is_rejected_without_network() {
 }
 
 #[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, _state) = mock(serde_json::json!([])).await;
+async fn mx_upsert_passes_value_through_verbatim() {
+	let (provider, state) = mock(serde_json::json!([])).await;
 	let mx = DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
-	assert_eq!(
-		provider.upsert("example.org", mx).await,
-		Err(ProviderError::Unsupported)
+	provider.upsert("example.org", mx).await.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(body.contains("\"type\":\"MX\""), "{body}");
+	// deSEC stores MX records as `<priority> <target>` in `records`.
+	assert!(
+		body.contains("\"records\":[\"10 mail.example.org\"]"),
+		"{body}"
+	);
+}
+
+#[tokio::test]
+async fn srv_upsert_puts_unquoted_value_with_correct_subname() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let srv = DnsRecord {
+		name: "_submissions._tcp.example.org".into(),
+		kind: RecordKind::Srv,
+		value: "0 1 465 mail.example.org.".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", srv).await.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(body.contains("\"subname\":\"_submissions._tcp\""), "{body}");
+	assert!(body.contains("\"type\":\"SRV\""), "{body}");
+	// deSEC stores SRV values unquoted, as `<prio> <weight> <port> <target>`.
+	assert!(
+		body.contains("\"records\":[\"0 1 465 mail.example.org.\"]"),
+		"{body}"
+	);
+}
+
+#[tokio::test]
+async fn caa_upsert_passes_value_through_verbatim() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let caa = DnsRecord {
+		name: "example.org".into(),
+		kind: RecordKind::Caa,
+		value: "0 issue \"letsencrypt.org\"".into(),
+		ttl: 3600,
+	};
+	provider.upsert("example.org", caa).await.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(body.contains("\"subname\":\"\""), "{body}");
+	assert!(body.contains("\"type\":\"CAA\""), "{body}");
+	assert!(
+		body.contains("\"records\":[\"0 issue \\\"letsencrypt.org\\\"\"]"),
+		"{body}"
 	);
 }
