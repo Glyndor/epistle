@@ -17,6 +17,8 @@ pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
 pub mod masked;
+mod names;
+use names::{validate_name, with_safe_names};
 mod masked_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
 
@@ -246,6 +248,7 @@ impl AccountStore {
 	/// background refresh task on an `Arc<AccountStore>`; static and dynamic
 	/// accounts keep precedence on conflict.
 	pub fn set_sql_accounts(&self, accounts: Vec<SqlAccount>) {
+		let accounts = with_safe_names(accounts, "sql", |account| &account.name);
 		*self.sql_accounts.write().expect("store lock") = accounts;
 		self.handle.replace(self.build_directory());
 	}
@@ -262,6 +265,7 @@ impl AccountStore {
 	/// Called by the background refresh task; static, dynamic and SQL accounts all
 	/// keep precedence on conflict.
 	pub fn set_ldap_accounts(&self, accounts: Vec<LdapAccount>) {
+		let accounts = with_safe_names(accounts, "ldap", |account| &account.name);
 		*self.ldap_accounts.write().expect("store lock") = accounts;
 		self.handle.replace(self.build_directory());
 	}
@@ -612,22 +616,6 @@ impl AccountStore {
 			.with_app_passwords(self.app_passwords.iter().cloned())
 			.with_ldap(self.ldap_auth.clone())
 			.with_masked(masked)
-	}
-}
-
-fn validate_name(name: &str) -> Result<(), StoreError> {
-	let safe = !name.is_empty()
-		&& name.len() <= 64
-		&& name
-			.chars()
-			.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-		&& !name.starts_with('-');
-	if safe {
-		Ok(())
-	} else {
-		Err(StoreError::Invalid(format!(
-			"account name \"{name}\" must be lowercase alphanumeric/hyphen"
-		)))
 	}
 }
 
