@@ -83,6 +83,22 @@ impl Session {
 				output.upgrade_tls = true;
 				output
 			}
+			Command::Compress { algorithm } => {
+				if algorithm != "DEFLATE" {
+					return Output::text(format!("{tag} BAD unsupported COMPRESS algorithm\r\n"));
+				}
+				if self.compressing {
+					// RFC 4978 §3: a second COMPRESS is NO, not BAD. The
+					// command is well formed; the state is wrong.
+					return Output::text(format!(
+						"{tag} NO [COMPRESSIONACTIVE] compression is already active\r\n"
+					));
+				}
+				self.compressing = true;
+				let mut output = Output::text(format!("{tag} OK begin compression now\r\n"));
+				output.compress = true;
+				output
+			}
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
 			Command::Namespace => Output::text(format!(

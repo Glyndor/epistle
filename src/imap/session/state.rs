@@ -25,6 +25,10 @@ pub struct Output {
 	pub idle: bool,
 	/// Whether the connection should be upgraded to TLS (STARTTLS success).
 	pub upgrade_tls: bool,
+	/// Whether the connection should start deflating in both directions
+	/// (COMPRESS=DEFLATE success). Set only after the tagged OK, which RFC
+	/// 4978 §3 requires to travel uncompressed.
+	pub compress: bool,
 	/// Whether the session is in the middle of a SASL exchange and expects
 	/// additional base64 challenge/response bytes from the client.
 	pub collect_auth: bool,
@@ -38,6 +42,7 @@ impl Output {
 			collect_literal: None,
 			idle: false,
 			upgrade_tls: false,
+			compress: false,
 			collect_auth: false,
 		}
 	}
@@ -129,6 +134,9 @@ pub struct Session {
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately.
 	retention_days: u64,
+	/// Whether COMPRESS=DEFLATE is already active, so a second
+	/// `COMPRESS` is refused rather than restarting the deflate context.
+	pub(super) compressing: bool,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -201,6 +209,7 @@ impl Session {
 			peer_ip: None,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			retention_days: 0,
+			compressing: false,
 			saved_search: None,
 		}
 	}
