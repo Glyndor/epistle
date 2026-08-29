@@ -17,6 +17,7 @@ pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
 pub mod masked;
+mod masked_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
 
 pub mod sql;
@@ -265,107 +266,9 @@ impl AccountStore {
 		self.handle.replace(self.build_directory());
 	}
 
-	/// Set the per-account cap on masked email addresses. 0 disables the cap.
-	/// Called once at startup with the configured value; the directory is
-	/// rebuilt so the next resolution cycle reflects the new limit on reads.
-	pub fn with_masked_max(self, max: usize) -> Self {
-		self.masked
-			.write()
-			.expect("masked lock")
-			.set_max_per_account(max);
-		self.handle.replace(self.build_directory());
-		self
-	}
-
-	/// Shared handle to the masked-address store, for the API surface (and
-	/// tests). Mutations through the handle persist and rebuild the directory
-	/// on the way back, exactly as the methods below do.
-	pub fn masked_handle(&self) -> Arc<RwLock<MaskedAddressStore>> {
-		Arc::clone(&self.masked)
-	}
-
-	/// Snapshot of an account's masked addresses for the API list view.
-	pub fn list_masked(&self, account: &str) -> Vec<MaskedAddressView> {
-		self.masked
-			.read()
-			.expect("masked lock")
-			.list_for_account(account)
-	}
-
-	/// Create a new masked address for `account` in `domain`. The per-account
-	/// limit is enforced; the random suffix comes from the CSPRNG.
-	pub fn add_masked(
-		&self,
-		account: &str,
-		label: &str,
-		domain: &str,
-		now: u64,
-	) -> Result<MaskedAddress, StoreError> {
-		let entry = self
-			.masked
-			.write()
-			.expect("masked lock")
-			.add(account, label, domain, now)?;
-		self.handle.replace(self.build_directory());
-		Ok(entry)
-	}
-
-	/// Toggle the `enabled` flag on `address` owned by `account`.
-	pub fn set_masked_enabled(
-		&self,
-		account: &str,
-		address: &str,
-		enabled: bool,
-	) -> Result<bool, StoreError> {
-		let previous = self
-			.masked
-			.write()
-			.expect("masked lock")
-			.set_enabled(account, address, enabled)?;
-		self.handle.replace(self.build_directory());
-		Ok(previous)
-	}
-
-	/// Remove `address` owned by `account`. `NotFound` if absent or owned by
-	/// someone else.
-	pub fn remove_masked(&self, account: &str, address: &str) -> Result<(), StoreError> {
-		self.masked
-			.write()
-			.expect("masked lock")
-			.remove(account, address)?;
-		self.handle.replace(self.build_directory());
-		Ok(())
-	}
-
-	/// Best-effort touch of `last_used_at` on a successful delivery. Errors
-	/// are logged and swallowed; the SMTP path must not stall on the
-	/// metadata update.
-	pub fn touch_masked_last_used(&self, account: &str, address: &str, now: u64) {
-		self.masked
-			.write()
-			.expect("masked lock")
-			.touch_last_used(account, address, now);
-	}
-
 	/// The hot-reloadable handle shared with servers and delivery.
 	pub fn handle(&self) -> DirectoryHandle {
 		self.handle.clone()
-	}
-
-	/// Account views (name + addresses) across static and dynamic accounts.
-	pub fn account_views(&self) -> Vec<(String, Vec<String>, bool)> {
-		let dynamic = self.dynamic.read().expect("store lock");
-		let mut views: Vec<(String, Vec<String>, bool)> = self
-			.static_accounts
-			.iter()
-			.map(|account| (account.name.clone(), account.addresses.clone(), false))
-			.collect();
-		views.extend(
-			dynamic
-				.iter()
-				.map(|account| (account.name.clone(), account.addresses.clone(), true)),
-		);
-		views
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
