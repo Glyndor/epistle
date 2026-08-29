@@ -33,10 +33,10 @@ mod methods;
 mod objects;
 pub mod websocket;
 
-pub use blobs::{backfill_blob_ownership, reclaim_blobs};
+pub use blobs::{account_usage_bytes, backfill_blob_ownership, reclaim_blobs};
 
 #[cfg(test)]
-pub(crate) use blobs::{account_usage_bytes, read_blob_owner};
+pub(crate) use blobs::read_blob_owner;
 
 /// JMAP core capability URN.
 const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
@@ -372,6 +372,34 @@ pub async fn upload(
 			)
 				.into_response();
 		}
+	}
+	// Per-tenant aggregate storage cap (RFC 8620 §6.1; the same JMAP limit
+	// type as the per-account quota above). Sits on top of the per-account
+	// limit; either can fail and the rejection looks the same to the client.
+	// Empty `tenant_limits` is the identity, no extra work.
+	let account_addresses: Vec<String> = state
+		.accounts()
+		.into_iter()
+		.find(|view| view.name == account)
+		.map(|view| view.addresses)
+		.unwrap_or_default();
+	if let Err(message) = state.tenant_limits().check_aggregate_quota(
+		state.store(),
+		state.data_dir(),
+		state.crypto(),
+		&account_addresses,
+		body.len() as u64,
+	) {
+		return (
+			StatusCode::INSUFFICIENT_STORAGE,
+			Json(json!({
+				"type": "urn:ietf:params:jmap:error:limit",
+				"limit": "tenant_storage",
+				"status": 507,
+				"detail": message,
+			})),
+		)
+			.into_response();
 	}
 	// The blob's media type is the request Content-Type, echoed back and
 	// persisted so downloads serve it (RFC 8620 §6.1).

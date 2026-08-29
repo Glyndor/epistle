@@ -311,6 +311,17 @@ impl Directory {
 		self.authenticate_with_ip(login, password, None)
 	}
 
+	/// Every delivery address the directory resolves for `account`,
+	/// case-preserved. Empty when the account is unknown — callers treat that
+	/// as "no tenant membership" and skip per-tenant aggregates.
+	pub fn addresses_for(&self, account: &str) -> Vec<String> {
+		self.accounts_by_address
+			.iter()
+			.filter(|(_, owner)| owner.eq_ignore_ascii_case(account))
+			.map(|(address, _)| address.clone())
+			.collect()
+	}
+
 	/// Verify a login, falling back to the account's app passwords when the
 	/// primary password fails. `ip` is the client address used to enforce an app
 	/// password's CIDR allowlist (an allowlisted app password is unusable

@@ -4,6 +4,9 @@ use std::collections::HashSet;
 
 use super::{Config, ConfigError};
 
+#[path = "validate_tenants.rs"]
+mod validate_tenants;
+
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
@@ -22,6 +25,7 @@ impl Config {
 		self.validate_ldap()?;
 		self.validate_antispam_llm()?;
 		self.validate_alerts()?;
+		self.validate_tenants()?;
 		Ok(())
 	}
 
@@ -370,7 +374,7 @@ impl Config {
 }
 
 /// Validate a fully qualified DNS name; `field` names it in errors.
-fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
+pub(crate) fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
 	let name = name.trim();
 	if name.is_empty() {
 		return Err(ConfigError::Invalid(format!("{field} must not be empty")));
@@ -407,6 +411,11 @@ mod tests;
 #[cfg(test)]
 #[path = "validate_tests_b.rs"]
 mod tests_b;
+
 #[cfg(test)]
 #[path = "validate_tests_c.rs"]
 mod tests_c;
+
+#[cfg(test)]
+#[path = "validate_tests_d.rs"]
+mod tests_d;

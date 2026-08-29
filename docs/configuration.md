@@ -58,6 +58,7 @@ a connection URL.
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
+| `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
 
 ## Listeners
 
@@ -728,6 +729,36 @@ A multi-target alias: one address that delivers to several local accounts.
 
 ### Masked email addresses
 Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `429`.
+
+### `[[tenant]]`
+A tenant is a named group of domains with optional aggregate caps. Tenancy is what makes a resellable deployment work: each tenant gets its own per-account cap (already covered by `quota_bytes` / `domain_quotas`) plus aggregate caps the operator can promise to the tenant without having to revisit per-account limits. With no `[[tenant]]` block the server behaves exactly as it always has; the empty list is the identity.
+
+```toml
+[[tenant]]
+name = "acme"
+domains = ["acme.example", "acme-mail.example"]
+quota_bytes = 1073741824        # 1 GiB aggregate across every account in the tenant
+max_accounts = 50                # hard cap on accounts in the tenant's domains
+max_domains = 5                  # operator guard; never smaller than domains.len()
+submission_rate_limit_per_min = 200   # aggregate SMTP submission rate, on top of submission_rate_limit_per_min
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | Stable identifier shown in error messages. Operators see it; the network never does. |
+| `domains` | Domains that belong to the tenant. Every entry must also appear under the top-level `domains` list. |
+| `quota_bytes` | Aggregate storage cap (bytes) across every account in every domain of the tenant. Absent means no aggregate cap; the per-account and per-domain quotas still apply. |
+| `max_accounts` | Maximum number of accounts (static + dynamic) this tenant may hold. Absent means no cap. |
+| `max_domains` | Maximum number of domains this tenant may declare. Absent means no cap. The cap cannot be lower than `domains.len()` because that would make the tenant unloadable. |
+| `submission_rate_limit_per_min` | Aggregate submission rate ceiling for the tenant (messages per minute, summed across every authenticated sender in every domain of the tenant). Sits on top of — not in place of — the global `submission_rate_limit_per_min` per-account limiter. |
+
+Rules:
+
+- A domain can only belong to one tenant. A config that lists the same domain under two `[[tenant]]` blocks fails to load, with both tenant names in the message.
+- `quota_bytes` smaller than the sum of `domain_quotas` entries that fall inside the tenant is rejected at load time: a cap that cannot be reached would be a lie on the reseller agreement.
+- `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it.
+- `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
+- `submission_rate_limit_per_min` is enforced on authenticated `MAIL FROM` (over SMTP) and on `POST /api/v1/send`, on top of the global per-account limiter. A rejection is `429` from the API or `450 4.7.1` from SMTP.
 
 ### `[[transport]]`
 Outbound routing rules. Each rule matches by sender `account` (the envelope sender's local part) **or** recipient `domain`; a rule with neither is the catch-all. The most specific match wins (account > domain > catch-all). With no rule, mail is delivered directly via MX. Empty `[[transport]]` keeps that default.

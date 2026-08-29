@@ -54,6 +54,18 @@ impl ApiError {
 		}
 	}
 
+	/// `429` for an outbound submission rate limit, with the caller-supplied
+	/// detail (which tenant rejected, which cap was hit). Distinct from
+	/// `rate_limited`, which is reserved for the auth-failure sliding window
+	/// on the bearer-token middleware.
+	pub fn rate_limited_with_message(message: impl Into<String>) -> Self {
+		ApiError {
+			status: StatusCode::TOO_MANY_REQUESTS,
+			code: "rate_limited",
+			message: message.into(),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

@@ -63,6 +63,10 @@ pub struct Session {
 	/// entry. `None` together with no per-domain entry means no limit at
 	/// all (the limiter is skipped).
 	global_submission_rate_limit_per_min: Option<u32>,
+	/// Per-tenant aggregate submission limits (accounts, storage, rate).
+	/// On top of `send_limiter`; an empty value is the identity and every
+	/// check short-circuits.
+	tenant_limits: Option<std::sync::Arc<crate::api::TenantLimits>>,
 	/// Verified TLS client-certificate identity (email SAN), enabling SASL
 	/// EXTERNAL. Set by the network layer after a client-cert handshake.
 	client_identity: Option<String>,
@@ -93,6 +97,7 @@ impl Session {
 			cbind_data: None,
 			send_limiter: None,
 			global_submission_rate_limit_per_min: None,
+			tenant_limits: None,
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
@@ -128,6 +133,15 @@ impl Session {
 	/// entry means no limit at all.
 	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
 		self.global_submission_rate_limit_per_min = limit;
+		self
+	}
+
+	/// Attach per-tenant aggregate limits. On top of the per-account
+	/// limiter in [`Self::with_send_limiter`]; the SMTP path checks both
+	/// before accepting MAIL FROM. `None` (the default) is the identity and
+	/// short-circuits every check.
+	pub fn with_tenant_limits(mut self, limits: std::sync::Arc<crate::api::TenantLimits>) -> Self {
+		self.tenant_limits = Some(limits);
 		self
 	}
 

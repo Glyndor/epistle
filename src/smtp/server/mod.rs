@@ -89,6 +89,9 @@ pub struct Server {
 	/// is the fallback when the account's domain has no entry. `None`
 	/// together with no per-domain entry disables submission rate limiting.
 	global_submission_rate_limit_per_min: Option<u32>,
+	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
+	/// per-account limiter; empty is the identity.
+	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 }
@@ -118,6 +121,7 @@ impl Server {
 			cbind_data: None,
 			send_limiter: None,
 			global_submission_rate_limit_per_min: None,
+			tenant_limits: None,
 			max_connections: MAX_CONNECTIONS,
 		}
 	}
@@ -135,6 +139,13 @@ impl Server {
 	/// together with no per-domain entry disables submission rate limiting.
 	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
 		self.global_submission_rate_limit_per_min = limit;
+		self
+	}
+
+	/// Attach per-tenant aggregate limits. On top of the per-account
+	/// limiter; the SMTP path checks both before accepting MAIL FROM.
+	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
+		self.tenant_limits = Some(limits);
 		self
 	}
 
