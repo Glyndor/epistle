@@ -69,6 +69,11 @@ struct Inner {
 	/// label so re-warning across the lifetime of a single process is
 	/// prevented.
 	legacy_warned: std::sync::Mutex<std::collections::HashSet<String>>,
+	/// Pluggable blob store. Defaults to the filesystem root at `data_dir`;
+	/// the S3 backend replaces it when `[storage.blobs] backend = "s3"` is
+	/// configured. The handler-side helpers do not know which is in play —
+	/// they speak to the trait the same way either way.
+	blob_backend: Arc<dyn crate::storage::BlobBackend>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -164,7 +169,7 @@ impl ApiState {
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.to_string(),
-				data_dir,
+				data_dir: data_dir.clone(),
 				domains,
 				store,
 				spool,
@@ -177,6 +182,7 @@ impl ApiState {
 				authz: None,
 				directory: None,
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
+				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 			}),
 		}
 	}
@@ -194,6 +200,25 @@ impl ApiState {
 	/// The built-in OAuth authorization server, when configured.
 	pub fn authz(&self) -> Option<&super::oauth::AuthzServer> {
 		self.inner.authz.as_deref()
+	}
+
+	/// Attach a different blob backend. Must be set before the state is
+	/// shared (it rebuilds the `Arc` inner). The default at construction
+	/// time is the on-disk pool at the configured `data_dir`; calling this
+	/// before the listener starts swaps in the operator-configured S3
+	/// backend.
+	pub fn with_blob_backend(mut self, backend: Arc<dyn crate::storage::BlobBackend>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.blob_backend = backend;
+		}
+		self
+	}
+
+	/// The blob backend serving this server. The upload and download
+	/// handlers go through this for every read and write; they do not know
+	/// whether the bytes end up on disk or in an S3 bucket.
+	pub fn blob_backend(&self) -> &Arc<dyn crate::storage::BlobBackend> {
+		&self.inner.blob_backend
 	}
 
 	/// Authenticate `login`/`password` against the account directory, returning

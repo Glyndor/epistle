@@ -42,7 +42,7 @@ pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
-pub use storage::Storage;
+pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;

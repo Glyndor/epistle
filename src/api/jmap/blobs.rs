@@ -3,28 +3,30 @@
 //!
 //! The JMAP upload/download handlers in the parent module delegate the actual
 //! filesystem work here. None of the items below know about axum or HTTP
-//! routing — they take a `data_dir` path and return plain `Option<Vec<u8>>`
-//! / `io::Result<()>` values that the handlers wrap. The split keeps the
-//! HTTP layer small and lets the storage code be tested directly off the
-//! filesystem.
+//! routing — they take a [`crate::storage::BlobBackend`] and return plain
+//! `Option<Vec<u8>>` / `io::Result<()>` values that the handlers wrap. The
+//! split keeps the HTTP layer small and lets the storage code be tested
+//! directly against either backend.
+
+use std::sync::Arc;
 
 use super::blob_path;
 use crate::imap::mailbox;
-use crate::storage::MessageCrypto;
+use crate::storage::{BlobBackend, MessageCrypto};
 
 /// Read an uploaded blob by id (rejecting any path separators in the id),
 /// decoding the at-rest envelope. Fails closed: a blob that cannot be decrypted
 /// is not returned rather than served as ciphertext, and a blob whose `.owner`
 /// sidecar does not name the requesting account is not returned either — the
 /// sidecar gates cross-account reads of the shared blob pool.
-pub(super) fn read_blob(
-	data_dir: &std::path::Path,
+pub(super) async fn read_blob(
+	backend: &Arc<dyn BlobBackend>,
 	account: &str,
 	blob_id: &str,
 	crypto: &MessageCrypto,
 ) -> Option<Vec<u8>> {
-	// Parse at the boundary: below this line the id is a `Uuid`, so no path
-	// built from it can be anything but a file name.
+	// Parse at the boundary: below this line the id is a `Uuid`, so a path
+	// built from it is bound to the configured backend's namespace.
 	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
 	// Owner sidecar is mandatory for every uploaded blob: missing, empty, or
 	// mismatching means the blob is not (or no longer) owned by `account`, so
@@ -32,23 +34,25 @@ pub(super) fn read_blob(
 	// introduced get an `.owner` written by the startup backfill; transient
 	// uploads that never get referenced stay sidecar-less and become
 	// unservable (the reclaim task sweeps them after their TTL anyway).
-	let owner = std::fs::read_to_string(blob_path::read_path(data_dir, blob_id, ".owner"))
-		.ok()
-		.filter(|value| !value.is_empty())?;
-	if owner != account {
+	let owner_bytes = backend.get(blob_id, ".owner").await.ok()??;
+	let owner = String::from_utf8(owner_bytes).ok()?;
+	if owner.as_str() != account {
 		return None;
 	}
-	let stored = std::fs::read(blob_path::read_path(data_dir, blob_id, "")).ok()?;
+	let stored = backend.get(blob_id, "").await.ok()??;
 	crypto.decode(&stored).ok()
 }
 
 /// Read the recorded media type of an uploaded blob, if any (the `.type`
 /// sidecar written at upload time). Returns `None` for stored messages.
-pub(super) fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
+pub(super) async fn read_blob_type(
+	backend: &Arc<dyn BlobBackend>,
+	blob_id: &str,
+) -> Option<String> {
 	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
-	std::fs::read_to_string(blob_path::read_path(data_dir, blob_id, ".type"))
-		.ok()
-		.filter(|value| !value.is_empty())
+	let bytes = backend.get(blob_id, ".type").await.ok()??;
+	let value = String::from_utf8(bytes).ok()?;
+	(!value.is_empty()).then_some(value)
 }
 
 /// Suffix written alongside every uploaded blob to record the account that
@@ -58,31 +62,28 @@ const OWNER_SIDECAR_SUFFIX: &str = ".owner";
 
 /// Write the `.owner` sidecar for an uploaded blob, recording the account that
 /// owns it. Used by the upload handler and by the startup backfill.
-pub(super) fn write_blob_owner(
-	data_dir: &std::path::Path,
+pub(super) async fn write_blob_owner(
+	backend: &Arc<dyn BlobBackend>,
 	blob_id: uuid::Uuid,
 	account: &str,
-) -> std::io::Result<()> {
-	let path = blob_path::write_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
-	if let Some(parent) = path.parent() {
-		std::fs::create_dir_all(parent)?;
-	}
-	std::fs::write(path, account.as_bytes())
+) -> Result<(), crate::storage::BlobError> {
+	backend
+		.put(blob_id, OWNER_SIDECAR_SUFFIX, account.as_bytes())
+		.await
 }
 
 /// Read the recorded owner of an uploaded blob, if any. Visible to sibling
 /// test modules so they can assert on the sidecar without scraping the
 /// filesystem in two places.
 #[cfg(test)]
-pub(crate) fn read_blob_owner(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
+pub(crate) async fn read_blob_owner(
+	backend: &Arc<dyn BlobBackend>,
+	blob_id: &str,
+) -> Option<String> {
 	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
-	std::fs::read_to_string(blob_path::read_path(
-		data_dir,
-		blob_id,
-		OWNER_SIDECAR_SUFFIX,
-	))
-	.ok()
-	.filter(|value| !value.is_empty())
+	let bytes = backend.get(blob_id, OWNER_SIDECAR_SUFFIX).await.ok()??;
+	let value = String::from_utf8(bytes).ok()?;
+	(!value.is_empty()).then_some(value)
 }
 
 /// Bytes counted against an account's storage quota: its stored mail (every
@@ -90,6 +91,11 @@ pub(crate) fn read_blob_owner(data_dir: &std::path::Path, blob_id: &str) -> Opti
 /// live in one shared `<data_dir>/blobs` pool that is not partitioned per
 /// account, so the whole pool is counted — a conservative, fail-closed choice
 /// that never under-counts usage when enforcing the quota on upload.
+///
+/// Sizes on the blob side are read directly off the filesystem rather than
+/// through the backend: the FS backend's `list()` only returns ids, and the
+/// S3 backend operator is expected to manage quota via bucket metrics (S3
+/// does not let us efficiently size the whole bucket through the LIST API).
 pub fn account_usage_bytes(
 	data_dir: &std::path::Path,
 	account: &str,

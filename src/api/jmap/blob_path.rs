@@ -69,7 +69,7 @@ pub(crate) fn read_path(data_dir: &Path, blob_id: Uuid, suffix: &str) -> PathBuf
 /// Sidecars are skipped: a caller that wants one asks for it by id. Walking
 /// both layouts is what lets the reclaim sweep and the usage count keep
 /// working across the upgrade instead of quietly ignoring older blobs.
-pub(super) fn walk(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
+pub(crate) fn walk(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 	let root = blob_root(data_dir);
 	let mut out = Vec::new();
 	collect(&root, &mut out);
