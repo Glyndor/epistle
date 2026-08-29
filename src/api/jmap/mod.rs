@@ -296,13 +296,20 @@ pub async fn download(
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto())
-		.or_else(|| blobs::read_blob(state.data_dir(), &account, &blob_id, state.crypto()));
+	let stored_message =
+		objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto());
+	let uploaded = if stored_message.is_some() {
+		None
+	} else {
+		blobs::read_blob(state.blob_backend(), &account, &blob_id, state.crypto()).await
+	};
+	let bytes = stored_message.or(uploaded);
 	match bytes {
 		Some(bytes) => {
 			// Serve the media type recorded at upload time; stored messages and
 			// legacy blobs without a sidecar fall back to octet-stream.
-			let content_type = blobs::read_blob_type(state.data_dir(), &blob_id)
+			let content_type = blobs::read_blob_type(state.blob_backend(), &blob_id)
+				.await
 				.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_string());
 			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
 		}
@@ -377,13 +384,6 @@ pub async fn upload(
 	// Minted as a `Uuid` and kept as one: the string form is only for the
 	// response body, so nothing downstream can be handed a path fragment.
 	let blob_id = uuid::Uuid::now_v7();
-	let payload_path = blob_path::write_path(state.data_dir(), blob_id, "");
-	//  always yields a parent; the fallback keeps the function
-	// total rather than unwrapping on a path we built ourselves.
-	let dir = payload_path.parent().map_or_else(
-		|| blob_path::blob_root(state.data_dir()),
-		std::path::Path::to_path_buf,
-	);
 	// Encrypt the blob payload at rest like stored mail; the `.type` and
 	// `.owner` sidecars stay plaintext metadata.
 	let stored = match state.crypto().encode(&body) {
@@ -396,10 +396,15 @@ pub async fn upload(
 			);
 		}
 	};
-	if std::fs::create_dir_all(&dir).is_err()
-		|| std::fs::write(&payload_path, &stored).is_err()
-		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
-		|| blobs::write_blob_owner(state.data_dir(), blob_id, &account).is_err()
+	let backend = state.blob_backend();
+	if backend.put(blob_id, "", &stored).await.is_err()
+		|| backend
+			.put(blob_id, ".type", content_type.as_bytes())
+			.await
+			.is_err()
+		|| blobs::write_blob_owner(backend, blob_id, &account)
+			.await
+			.is_err()
 	{
 		return jmap_error(
 			StatusCode::INTERNAL_SERVER_ERROR,

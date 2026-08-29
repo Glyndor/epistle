@@ -8,7 +8,7 @@ pub mod api_keys;
 mod audit;
 pub mod domain_scope;
 mod error;
-mod jmap;
+pub(crate) mod jmap;
 pub mod oauth;
 pub mod scim;
 mod state;

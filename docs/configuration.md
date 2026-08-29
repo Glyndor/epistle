@@ -353,6 +353,47 @@ guide's "Data at rest".
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
 
+### `[storage.blobs]`
+Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
+`backend = "fs"`) keeps the historical default of `<data_dir>/blobs/`,
+sharded two levels by the **last** four characters of the blob id, with a
+fallback to the flat layout for blobs written by older versions. Setting
+`backend = "s3"` redirects uploads to an S3-compatible bucket; the
+download handler and the `.owner` / `.type` sidecars follow the same path.
+
+| Key | Meaning |
+|---|---|
+| `backend` | Either `"fs"` (default; same as omitting the section) or `"s3"`. |
+| `endpoint` | S3 endpoint URL (`https://s3.us-east-1.amazonaws.com`, or a compatible service like MinIO at `http://minio.local:9000`). Required when `backend = "s3"`. |
+| `bucket` | Bucket name. Object keys are the raw blob id (`<uuid>` for the payload and `<uuid>.type` / `<uuid>.owner` for the sidecars). |
+| `region` | AWS region used for SigV4 signing (e.g. `us-east-1`). Setting it wrong returns `SignatureDoesNotMatch` from the server. |
+| `access_key_id` | Public access key id. Not a secret, so it lives in the config file. |
+| `secret_access_key_env` | Name of an env var holding the secret access key. The secret never appears in the config file. |
+| `secret_access_key_file` | Path to a `0600` file holding the secret access key. Takes precedence over `secret_access_key_env` when both are set. |
+
+Example S3 block:
+
+```toml
+[storage.blobs]
+backend = "s3"
+endpoint = "https://s3.us-east-1.amazonaws.com"
+bucket = "mail-blobs"
+region = "us-east-1"
+access_key_id = "AKIA-EXAMPLE"
+secret_access_key_env = "EPISTLE_S3_SECRET"
+```
+
+The S3 backend speaks the four verbs S3 exposes — `PutObject`, `GetObject`,
+`DeleteObject`, `ListObjectsV2` — over HTTPS with SigV4 signed by hand (no
+SDK dependency; the AWS SDK tree would be heavier than the four HTTP
+calls). A bucket that returns 401 or 403 surfaces as
+`BlobError::Auth`, never as "object not found", so an operator chasing
+wrong credentials is not led to chase a phantom missing blob. When
+`backend = "s3"` is set, blob-store reclaim (`reclaim_blobs`) and the
+`/api/v1/accounts/{name}/quota` path no longer walk the local filesystem
+— quota is enforced by the configured per-account limit and the operator
+manages bucket lifecycle on the S3 side.
+
 ### `[otel]`
 OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HTTP to a collector.
 

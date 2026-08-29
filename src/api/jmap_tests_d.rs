@@ -117,7 +117,8 @@ pub(super) async fn get_raw(
 #[tokio::test]
 async fn alice_uploads_then_downloads_her_own_blob() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let app = router(state_with_two_accounts(dir.path()));
+	let state = state_with_two_accounts(dir.path());
+	let app = router(state.clone());
 	let payload = b"alice-only attachment \x00\x01\x02";
 
 	let (status, body) = post_raw(
@@ -148,7 +149,8 @@ async fn alice_uploads_then_downloads_her_own_blob() {
 	// The `.owner` sidecar carries the uploader's account name — this is what
 	// the per-account gate reads, so verifying it here makes the control
 	// explicit instead of relying on the test "just happening to work".
-	let owner = super::jmap::read_blob_owner(dir.path(), &blob_id)
+	let owner = super::jmap::read_blob_owner(state.blob_backend(), &blob_id)
+		.await
 		.expect("upload must write the owner sidecar");
 	assert_eq!(
 		owner, "alice",
