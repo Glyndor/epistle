@@ -20,7 +20,8 @@ async fn upload_writes_owner_sidecar() {
 	let app = router(state_with_two_accounts(dir.path()));
 	let (_, body) = post_raw(&app, "/jmap/upload/alice", Some(TOKEN.as_str()), None, b"x").await;
 	let blob_id = body["blobId"].as_str().expect("blobId").to_string();
-	let owner_path = crate::api::jmap::blob_path::read_path(dir.path(), &blob_id, ".owner");
+	let owner_path = crate::api::jmap::blob_path::read_path(dir.path(), &blob_id, ".owner")
+		.expect("valid blob id");
 	assert!(owner_path.exists(), "upload must write the owner sidecar");
 	assert_eq!(
 		std::fs::read_to_string(&owner_path).expect("read"),
@@ -48,11 +49,10 @@ fn api_state_new_runs_backfill_on_construction() {
 
 	// Building the state must have run the backfill; verify the sidecar is
 	// now on disk without calling the backfill function explicitly.
-	let owner = std::fs::read_to_string(crate::api::jmap::blob_path::read_path(
-		path,
-		&id.to_string(),
-		".owner",
-	))
+	let owner = std::fs::read_to_string(
+		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id"),
+	)
 	.expect("owner");
 	assert_eq!(owner, "alice", "ApiState::new must trigger the backfill");
 	// Sanity: nothing else got invented.
@@ -76,7 +76,8 @@ async fn empty_owner_sidecar_is_treated_as_missing() {
 	std::fs::write(blobs.join(id.to_string()), b"orphan").expect("write payload");
 	// Empty sidecar: present but no usable account name.
 	std::fs::write(
-		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner"),
+		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id"),
 		b"",
 	)
 	.expect("write empty owner");

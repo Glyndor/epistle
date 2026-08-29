@@ -375,7 +375,15 @@ pub async fn upload(
 		.unwrap_or(DEFAULT_BLOB_TYPE)
 		.to_string();
 	let blob_id = uuid::Uuid::now_v7().to_string();
-	let payload_path = blob_path::write_path(state.data_dir(), &blob_id, "");
+	// The id is one we just minted, so this cannot fail; the fallback keeps
+	// the handler total rather than unwrapping.
+	let Some(payload_path) = blob_path::write_path(state.data_dir(), &blob_id, "") else {
+		return jmap_error(
+			StatusCode::INTERNAL_SERVER_ERROR,
+			"serverFail",
+			"cannot store blob",
+		);
+	};
 	//  always yields a parent; the fallback keeps the function
 	// total rather than unwrapping on a path we built ourselves.
 	let dir = payload_path.parent().map_or_else(
