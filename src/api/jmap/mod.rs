@@ -374,16 +374,10 @@ pub async fn upload(
 		.filter(|value| !value.is_empty())
 		.unwrap_or(DEFAULT_BLOB_TYPE)
 		.to_string();
-	let blob_id = uuid::Uuid::now_v7().to_string();
-	// The id is one we just minted, so this cannot fail; the fallback keeps
-	// the handler total rather than unwrapping.
-	let Some(payload_path) = blob_path::write_path(state.data_dir(), &blob_id, "") else {
-		return jmap_error(
-			StatusCode::INTERNAL_SERVER_ERROR,
-			"serverFail",
-			"cannot store blob",
-		);
-	};
+	// Minted as a `Uuid` and kept as one: the string form is only for the
+	// response body, so nothing downstream can be handed a path fragment.
+	let blob_id = uuid::Uuid::now_v7();
+	let payload_path = blob_path::write_path(state.data_dir(), blob_id, "");
 	//  always yields a parent; the fallback keeps the function
 	// total rather than unwrapping on a path we built ourselves.
 	let dir = payload_path.parent().map_or_else(
@@ -405,7 +399,7 @@ pub async fn upload(
 	if std::fs::create_dir_all(&dir).is_err()
 		|| std::fs::write(&payload_path, &stored).is_err()
 		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
-		|| blobs::write_blob_owner(state.data_dir(), &blob_id, &account).is_err()
+		|| blobs::write_blob_owner(state.data_dir(), blob_id, &account).is_err()
 	{
 		return jmap_error(
 			StatusCode::INTERNAL_SERVER_ERROR,
