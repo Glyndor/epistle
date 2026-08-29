@@ -1,6 +1,11 @@
 //! Per-account submission rate limiting: caps how many messages an
 //! authenticated account may send within a sliding window, shared across all
 //! connections. A compromised or runaway account cannot flood outbound mail.
+//!
+//! The limit per account is supplied at each [`SendLimiter::check`] call from
+//! the active policy: a per-domain override, falling back to a server-wide
+//! default, falling back to no limit at all. The limiter itself only owns the
+//! shared window state — where the number comes from is a caller decision.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -8,8 +13,6 @@ use std::sync::Mutex;
 /// A shared per-account send-rate limiter.
 #[derive(Debug)]
 pub struct SendLimiter {
-	/// Maximum messages allowed per account within the window.
-	per_window: u32,
 	/// Window length in seconds.
 	window_secs: u64,
 	/// Per-account `(window_start_epoch, count_in_window)`.
@@ -17,18 +20,28 @@ pub struct SendLimiter {
 }
 
 impl SendLimiter {
-	/// A limiter allowing `per_window` messages per `window_secs` per account.
-	pub fn new(per_window: u32, window_secs: u64) -> Self {
+	/// A limiter that evaluates a per-call `limit` against a shared sliding
+	/// window of `window_secs` seconds. `window_secs` is clamped to one so the
+	/// window still advances on every check.
+	pub fn new(window_secs: u64) -> Self {
 		SendLimiter {
-			per_window: per_window.max(1),
 			window_secs: window_secs.max(1),
 			state: Mutex::new(HashMap::new()),
 		}
 	}
 
-	/// Record one send by `account` at `now` (epoch seconds) and report whether
-	/// it is within the limit. The window resets once it elapses.
-	pub fn check(&self, account: &str, now: u64) -> bool {
+	/// Record one send by `account` at `now` (epoch seconds) against the
+	/// per-account `limit` (messages per window) and report whether it is
+	/// within the limit. The window resets once it elapses.
+	///
+	/// `limit == 0` is treated as "no limit" (always allowed): the policy
+	/// layer is expected to skip the call entirely when the resolved limit is
+	/// `None`, so a literal zero here only appears when an operator
+	/// deliberately configured it.
+	pub fn check(&self, account: &str, limit: u32, now: u64) -> bool {
+		if limit == 0 {
+			return true;
+		}
 		let mut state = self.state.lock().expect("send limiter");
 		let entry = state
 			.entry(account.to_ascii_lowercase())
@@ -36,7 +49,7 @@ impl SendLimiter {
 		if now.saturating_sub(entry.0) >= self.window_secs {
 			*entry = (now, 0);
 		}
-		if entry.1 >= self.per_window {
+		if entry.1 >= limit {
 			return false;
 		}
 		entry.1 += 1;
@@ -45,42 +58,5 @@ impl SendLimiter {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn allows_up_to_the_limit_then_blocks() {
-		let limiter = SendLimiter::new(3, 60);
-		assert!(limiter.check("alice", 100));
-		assert!(limiter.check("alice", 101));
-		assert!(limiter.check("alice", 102));
-		// Fourth in the window is blocked.
-		assert!(!limiter.check("alice", 103));
-	}
-
-	#[test]
-	fn window_resets_after_elapsing() {
-		let limiter = SendLimiter::new(2, 60);
-		assert!(limiter.check("alice", 100));
-		assert!(limiter.check("alice", 110));
-		assert!(!limiter.check("alice", 120));
-		// A new window (>= 60s after the start) resets the count.
-		assert!(limiter.check("alice", 160));
-	}
-
-	#[test]
-	fn accounts_are_independent_and_case_insensitive() {
-		let limiter = SendLimiter::new(1, 60);
-		assert!(limiter.check("alice@example.org", 100));
-		assert!(!limiter.check("ALICE@example.org", 100));
-		// A different account has its own budget.
-		assert!(limiter.check("bob@example.org", 100));
-	}
-
-	#[test]
-	fn zero_limit_is_clamped_to_one() {
-		let limiter = SendLimiter::new(0, 60);
-		assert!(limiter.check("alice", 100));
-		assert!(!limiter.check("alice", 101));
-	}
-}
+#[path = "ratelimit_tests.rs"]
+mod tests;

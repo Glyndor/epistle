@@ -195,6 +195,17 @@ pub struct Config {
 	/// disables per-account submission rate limiting.
 	#[serde(default)]
 	pub submission_rate_limit_per_min: Option<u32>,
+	/// Per-domain submission rate limit (messages/min) for authenticated
+	/// senders in that domain. Resolved by walking the account's own
+	/// addresses — the same lookup [`crate::smtp::directory::Directory::quota_for`]
+	/// performs — so the limit is the one for the domain the account is
+	/// actually in, not the first domain configured. An account without a
+	/// matching entry falls back to `submission_rate_limit_per_min` (and
+	/// then to no limit, if that is also unset). Absent entries in
+	/// `domain_quotas` and the existing `with_domain_quotas` builder mirror
+	/// the same shape and lifecycle.
+	#[serde(default)]
+	pub domain_submission_limits: std::collections::HashMap<String, u32>,
 	/// Max concurrent connections per listener (back-pressure cap). Absent
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
@@ -278,6 +289,7 @@ impl std::fmt::Debug for Config {
 				"submission_rate_limit_per_min",
 				&self.submission_rate_limit_per_min,
 			)
+			.field("domain_submission_limits", &self.domain_submission_limits)
 			.field(
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,

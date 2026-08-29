@@ -84,6 +84,11 @@ pub struct Server {
 	cbind_data: Option<Vec<u8>>,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
+	/// Server-wide default submission rate limit (messages/min) for
+	/// authenticated senders. Per-domain limits on the directory win; this
+	/// is the fallback when the account's domain has no entry. `None`
+	/// together with no per-domain entry disables submission rate limiting.
+	global_submission_rate_limit_per_min: Option<u32>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 }
@@ -112,6 +117,7 @@ impl Server {
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
+			global_submission_rate_limit_per_min: None,
 			max_connections: MAX_CONNECTIONS,
 		}
 	}
@@ -119,6 +125,16 @@ impl Server {
 	/// Attach a shared per-account submission rate limiter.
 	pub fn with_send_limiter(mut self, limiter: Arc<crate::smtp::ratelimit::SendLimiter>) -> Self {
 		self.send_limiter = Some(limiter);
+		self
+	}
+
+	/// Set the server-wide default submission rate limit (messages/min).
+	/// The per-domain limit on the active directory (configured via
+	/// [`crate::smtp::directory::Directory::with_domain_submission_limits`])
+	/// takes precedence at check time; this is the fallback. `None`
+	/// together with no per-domain entry disables submission rate limiting.
+	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
+		self.global_submission_rate_limit_per_min = limit;
 		self
 	}
 
@@ -253,6 +269,8 @@ impl Server {
 		if let Some(limiter) = &self.send_limiter {
 			session = session.with_send_limiter(Arc::clone(limiter));
 		}
+		session =
+			session.with_global_submission_rate_limit(self.global_submission_rate_limit_per_min);
 		session
 	}
 

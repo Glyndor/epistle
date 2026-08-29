@@ -57,6 +57,12 @@ pub struct Session {
 	cbind_data: Option<Vec<u8>>,
 	/// Shared per-account submission rate limiter (authenticated senders).
 	send_limiter: Option<std::sync::Arc<super::ratelimit::SendLimiter>>,
+	/// Server-wide default submission rate limit (messages/min) for
+	/// authenticated senders. Per-domain limits on the active directory take
+	/// precedence; this is the fallback when the account's domain has no
+	/// entry. `None` together with no per-domain entry means no limit at
+	/// all (the limiter is skipped).
+	global_submission_rate_limit_per_min: Option<u32>,
 	/// Verified TLS client-certificate identity (email SAN), enabling SASL
 	/// EXTERNAL. Set by the network layer after a client-cert handshake.
 	client_identity: Option<String>,
@@ -86,6 +92,7 @@ impl Session {
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
+			global_submission_rate_limit_per_min: None,
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
@@ -110,6 +117,17 @@ impl Session {
 		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
 	) -> Self {
 		self.send_limiter = Some(limiter);
+		self
+	}
+
+	/// Set the server-wide default submission rate limit (messages/min).
+	/// The per-domain limit on the active directory (set via
+	/// [`crate::smtp::directory::Directory::with_domain_submission_limits`])
+	/// takes precedence at check time; this is the fallback when the
+	/// account's domain has no entry. `None` together with no per-domain
+	/// entry means no limit at all.
+	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
+		self.global_submission_rate_limit_per_min = limit;
 		self
 	}
 
@@ -395,9 +413,17 @@ impl Session {
 					_ => {}
 				}
 				// Per-account submission rate limit for authenticated senders.
+				// Resolution: per-domain override for the account's own
+				// domain (looked up by walking the account's addresses, the
+				// same way `Directory::quota_for` does), falling back to the
+				// server-wide default, falling back to no limit at all.
 				if let Some(account) = self.authenticated.clone()
 					&& let Some(limiter) = &self.send_limiter
-					&& !limiter.check(&account, unix_now())
+					&& let Some(limit) = self
+						.directory
+						.submission_limit_for(&account)
+						.or(self.global_submission_rate_limit_per_min)
+					&& !limiter.check(&account, limit, unix_now())
 				{
 					return Action::Continue(Reply::single(
 						450,
@@ -572,9 +598,13 @@ mod tests_basic;
 #[cfg(test)]
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
+
 #[cfg(test)]
 #[path = "../session_tests_oauth.rs"]
 mod tests_oauth;
+#[cfg(test)]
+#[path = "../session_tests_ratelimit.rs"]
+mod tests_ratelimit;
 #[cfg(test)]
 #[path = "../session_tests_scram.rs"]
 mod tests_scram;
