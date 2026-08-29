@@ -39,6 +39,7 @@ fn key(label: &str, secret: &str) -> ApiKey {
 		ip_cidr: None,
 		// `add()` rejects empty scopes; every test-built key carries one.
 		scopes: vec![Scope::Read.as_str().to_string()],
+		domains: Vec::new(),
 	}
 }
 

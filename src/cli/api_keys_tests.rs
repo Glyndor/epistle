@@ -22,7 +22,15 @@ fn create_list_revoke_roundtrip() {
 
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&config, "ci", None, None, read_scope(), &mut out),
+		create(
+			&config,
+			"ci",
+			None,
+			None,
+			read_scope(),
+			Vec::new(),
+			&mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let created = String::from_utf8(out).expect("utf8");
@@ -54,6 +62,7 @@ fn create_with_expiry_and_cidr_is_stored() {
 			Some(9999),
 			Some("10.0.0.0/8".to_string()),
 			read_scope(),
+			Vec::new(),
 			&mut out,
 		),
 		ExitCode::SUCCESS
@@ -72,7 +81,7 @@ fn create_without_scope_is_rejected() {
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&config, "ci", None, None, Vec::new(), &mut out),
+		create(&config, "ci", None, None, Vec::new(), Vec::new(), &mut out),
 		ExitCode::FAILURE,
 		"--scope must be required"
 	);
@@ -90,6 +99,7 @@ fn create_rejects_bad_cidr() {
 			None,
 			Some("bogus".to_string()),
 			read_scope(),
+			Vec::new(),
 			&mut out,
 		),
 		ExitCode::FAILURE

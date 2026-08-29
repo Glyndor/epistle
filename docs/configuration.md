@@ -118,6 +118,37 @@ Management API (consumed by `epistle-panel`). Closed by default.
 | `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
 
+### Domain-confined API keys (multi-tenancy)
+
+A key in `api_keys.toml` may carry a `domains` list, on top of its scopes:
+
+```toml
+[[keys]]
+label = "tenant-a"
+hash = "sha256:..."
+scopes = ["read", "write"]
+domains = ["a.example"]
+```
+
+Create one with `epistle api-key-create --domain a.example` (repeat the
+flag for more). The key then sees only those domains in `GET /domains`,
+only the accounts that live entirely inside them in `GET /accounts`, and
+is refused on any account or address outside them.
+
+Absent or empty, `domains` means every configured domain — which is what
+every key did before the field existed, so an upgrade never narrows a key
+that is already deployed. The configured `token` is never confined.
+
+Two rules are worth knowing before you rely on this:
+
+- An account holding an address in two domains belongs to both tenants and
+  is therefore out of scope for a key confined to either one. Deleting it,
+  or resetting its password, would reach a domain the key was not given.
+- A refusal answers `404`, not `403`. A key confined to one tenant must not
+  be able to enumerate another tenant's account names by reading the status
+  code, so an account it may not touch looks exactly like one that does not
+  exist.
+
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in

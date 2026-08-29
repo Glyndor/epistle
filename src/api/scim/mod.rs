@@ -64,3 +64,7 @@ pub fn router() -> Router<ApiState> {
 #[cfg(test)]
 #[path = "scim_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "scim_tests_b.rs"]
+mod tests_b;

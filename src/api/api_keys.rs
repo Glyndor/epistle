@@ -103,6 +103,11 @@ pub struct ApiKey {
 	/// required to declare at least one scope.
 	#[serde(default)]
 	pub scopes: Vec<String>,
+	/// Domains this key may act on. Absent or empty means every configured
+	/// domain, which is what every key did before this field existed — a
+	/// tenancy field must not silently narrow the keys already installed.
+	#[serde(default)]
+	pub domains: Vec<String>,
 }
 
 impl ApiKey {

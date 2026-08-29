@@ -18,17 +18,19 @@ use crate::storage::FsSpool;
 
 /// Configured bearer token. Generated fresh at process start so a literal
 /// does not trip CodeQL.
-static CONFIGURED_TOKEN: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().to_string());
+pub(super) static CONFIGURED_TOKEN: LazyLock<String> =
+	LazyLock::new(|| uuid::Uuid::now_v7().to_string());
 
 /// A SCIM-scoped key. Its plaintext is shown once and never stored.
-static SCIM_KEY_SECRET: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().to_string());
+pub(super) static SCIM_KEY_SECRET: LazyLock<String> =
+	LazyLock::new(|| uuid::Uuid::now_v7().to_string());
 
 /// A read-only key (used to verify the 403 gate).
 static READ_KEY_SECRET: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().to_string());
 
 /// Build an `ApiState` rooted at a fresh temp directory, with a configured
 /// token plus the two labeled API keys above.
-fn build_state() -> (tempfile::TempDir, ApiState) {
+pub(super) fn build_state() -> (tempfile::TempDir, ApiState) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let store = Arc::new(
@@ -50,6 +52,7 @@ fn build_state() -> (tempfile::TempDir, ApiState) {
 		expires_at: None,
 		ip_cidr: None,
 		scopes: vec![Scope::Scim.as_str().to_string()],
+		domains: Vec::new(),
 	})
 	.expect("add scim key");
 	keys.add(ApiKey {
@@ -58,6 +61,7 @@ fn build_state() -> (tempfile::TempDir, ApiState) {
 		expires_at: None,
 		ip_cidr: None,
 		scopes: vec![Scope::Read.as_str().to_string()],
+		domains: Vec::new(),
 	})
 	.expect("add read key");
 	drop(keys);
@@ -72,13 +76,13 @@ fn build_state() -> (tempfile::TempDir, ApiState) {
 	(dir, state)
 }
 
-fn app(state: ApiState) -> Router {
+pub(super) fn app(state: ApiState) -> Router {
 	router(state)
 }
 
 /// Send a SCIM request. `accept` is hardcoded to `application/scim+json`
 /// so the test asserts the server's responses always negotiate SCIM.
-async fn send(
+pub(super) async fn send(
 	app: &Router,
 	method: &str,
 	path: &str,
@@ -127,7 +131,7 @@ async fn send(
 /// Same as `send` but also returns the response headers — the few tests
 /// that pin a header (e.g. `Content-Type: application/scim+json`) reach
 /// for this.
-async fn send_with_headers(
+pub(super) async fn send_with_headers(
 	app: &Router,
 	method: &str,
 	path: &str,
@@ -456,113 +460,4 @@ async fn patch_password_updates_credentials() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-}
-
-#[tokio::test]
-async fn groups_endpoint_returns_not_implemented() {
-	let (_dir, state) = build_state();
-	let (status, body) = send(
-		&app(state.clone()),
-		"GET",
-		"/scim/v2/Groups",
-		Some(SCIM_KEY_SECRET.as_str()),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-	assert_eq!(
-		body["schemas"][0],
-		"urn:ietf:params:scim:api:messages:2.0:Error"
-	);
-	assert_eq!(body["status"], "501");
-}
-
-#[tokio::test]
-async fn disabled_account_cannot_authenticate() {
-	let (_dir, state) = build_state();
-	let create = serde_json::json!({
-		"userName": "alice",
-		"active": true,
-		"emails": [{"value": "alice@example.org"}],
-		"password": "Correct-Horse-Battery-9"
-	});
-	let (status, _) = send(
-		&app(state.clone()),
-		"POST",
-		"/scim/v2/Users",
-		Some(SCIM_KEY_SECRET.as_str()),
-		Some(&create),
-	)
-	.await;
-	assert_eq!(status, StatusCode::CREATED);
-
-	// Disable via PATCH.
-	let patch = serde_json::json!({
-		"Operations": [{"op": "replace", "path": "active", "value": false}]
-	});
-	let (status, _) = send(
-		&app(state.clone()),
-		"PATCH",
-		"/scim/v2/Users/alice",
-		Some(SCIM_KEY_SECRET.as_str()),
-		Some(&patch),
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-
-	// The directory must reject the password even though the account is
-	// present. We check via `state.store().is_disabled` to keep this
-	// independent of the directory's exact authentication timing path.
-	assert!(
-		state.store().is_disabled("alice"),
-		"disabled flag should be persisted on the store"
-	);
-}
-
-#[tokio::test]
-async fn list_users_with_no_filter_returns_all() {
-	let (_dir, state) = build_state();
-	for name in ["alice", "bob"] {
-		let create = serde_json::json!({
-			"userName": name,
-			"active": true,
-			"emails": [{"value": format!("{name}@example.org")}],
-			"password": "Correct-Horse-Battery-9"
-		});
-		let (status, _) = send(
-			&app(state.clone()),
-			"POST",
-			"/scim/v2/Users",
-			Some(SCIM_KEY_SECRET.as_str()),
-			Some(&create),
-		)
-		.await;
-		assert_eq!(status, StatusCode::CREATED);
-	}
-
-	let (status, body) = send(
-		&app(state.clone()),
-		"GET",
-		"/scim/v2/Users",
-		Some(SCIM_KEY_SECRET.as_str()),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["totalResults"], 2);
-}
-
-#[tokio::test]
-async fn filter_rejects_unsupported_expressions() {
-	let (_dir, state) = build_state();
-	let (status, body) = send(
-		&app(state),
-		"GET",
-		"/scim/v2/Users?filter=displayName%20eq%20%22Alice%22",
-		Some(SCIM_KEY_SECRET.as_str()),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-	assert_eq!(body["status"], "400");
 }
