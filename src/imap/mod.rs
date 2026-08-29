@@ -3,6 +3,7 @@
 pub mod acl;
 pub mod archive;
 pub mod command;
+mod compress;
 mod flags;
 mod index;
 pub mod mailbox;

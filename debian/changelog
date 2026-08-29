@@ -1,3 +1,18 @@
+epistle (0.6.0) unstable; urgency=medium
+
+  * IMAP COMPRESS=DEFLATE (RFC 4978). A client that asks gets a deflate
+    stream in both directions for the rest of the connection; one that
+    does not is unaffected, and there is nothing to configure. The
+    compression context is kept for the whole connection rather than
+    reset per message, which is where the saving comes from: IMAP
+    repeats the same command names, flag names and header keys
+    endlessly. The tagged OK for the command itself travels
+    uncompressed, as the RFC requires, and a second COMPRESS answers
+    NO [COMPRESSIONACTIVE] rather than restarting the context underneath
+    a client that is already decoding.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 29 Aug 2026 06:00:00 +0000
+
 epistle (0.5.0) unstable; urgency=medium
 
   * Eight new DNS providers: DigitalOcean, RFC 2136 dynamic update over

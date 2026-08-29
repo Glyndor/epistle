@@ -149,7 +149,7 @@ async fn full_read_session_over_tls() {
 }
 
 /// A StartTLS-mode server (greets in plaintext) plus a connected client.
-fn plaintext_server() -> (
+pub(super) fn plaintext_server() -> (
 	tokio::io::DuplexStream,
 	tokio::task::JoinHandle<std::io::Result<()>>,
 ) {

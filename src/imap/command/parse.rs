@@ -31,6 +31,18 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 		"ID" => Command::Id,
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
 		"STARTTLS" => no_args(&tag, args, Command::StartTls)?,
+		"COMPRESS" => {
+			let mut parts = args.split_whitespace();
+			let Some(algorithm) = parts.next() else {
+				return Err(ParseError::BadArguments(tag));
+			};
+			if parts.next().is_some() {
+				return Err(ParseError::BadArguments(tag));
+			}
+			Command::Compress {
+				algorithm: algorithm.to_ascii_uppercase(),
+			}
+		}
 		"LOGIN" => parse_login(&tag, args)?,
 		"AUTHENTICATE" => {
 			let mut parts = args.split_whitespace();
