@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It came from
 # a build that failed rather than from this file: `rcgen`, `time` and
