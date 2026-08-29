@@ -1,3 +1,30 @@
+epistle (0.8.0) unstable; urgency=medium
+
+  * Uploaded blobs can live somewhere other than the local disk. A
+    BlobBackend trait with two implementations: the filesystem one is
+    what was there before, moved behind the trait and unchanged, and an
+    S3 one that speaks to any S3-compatible endpoint. The secret comes
+    from an environment variable or a file, never from the TOML. SigV4
+    is signed directly rather than pulling in the AWS SDK for four HTTP
+    verbs, and the signature is checked against the vector AWS
+    publishes, not against this implementation. Absent or backend = "fs"
+    is the default and keeps the previous behaviour: an existing config
+    parses unchanged and never opens a socket.
+  * Tenants have limits, not just domains. A [[tenant]] block accepts
+    quota_bytes, max_accounts, max_domains and
+    submission_rate_limit_per_min, all aggregated across the tenant's
+    domains. A cap that is reached answers 409 rather than 429: waiting
+    does not lift it. A quota below the sum of the domains' own quotas
+    is rejected on load, because it could never be reached.
+  * Submission rate limits can differ per domain.
+    domain_submission_limits maps a domain to messages per minute, and
+    an account picks up the entry for its own domain; without one the
+    server-wide default applies, and without that there is no limit. The
+    domain comes from the account's own address rather than from the
+    first one configured.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 29 Aug 2026 12:00:00 +0000
+
 epistle (0.7.0) unstable; urgency=medium
 
   * Uploaded JMAP blobs are stored two levels deep under
