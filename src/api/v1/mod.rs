@@ -4,6 +4,7 @@ mod accounts;
 mod auth;
 mod domains;
 mod mailboxes;
+mod masked;
 mod queue;
 mod send;
 mod status;
@@ -32,6 +33,14 @@ pub fn router() -> Router<ApiState> {
 			axum::routing::post(accounts::enroll_totp).delete(accounts::disable_totp),
 		)
 		.route("/accounts/{name}/mailboxes", get(mailboxes::list))
+		.route(
+			"/accounts/{name}/masked",
+			get(masked::list).post(masked::create),
+		)
+		.route(
+			"/accounts/{name}/masked/{address}",
+			axum::routing::patch(masked::update).delete(masked::remove),
+		)
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))
 		.route("/suppression", get(suppression::list))

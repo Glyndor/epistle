@@ -7,7 +7,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::directory_store::{AccountStore, DirectoryHandle};
+use crate::directory_store::{AccountStore, DirectoryHandle, MaskedAddressStore};
 use crate::smtp::address::Address;
 use crate::storage::{FsSpool, MessageCrypto};
 
@@ -301,6 +301,15 @@ impl ApiState {
 	/// password changes or alias rewrites).
 	pub fn store(&self) -> &AccountStore {
 		&self.inner.store
+	}
+
+	/// Shared handle to the masked-address store. Handlers call
+	/// [`crate::directory_store::MaskedAddressStore::add`] / `remove` /
+	/// `set_enabled` directly; the store persists on each call and rebuilds
+	/// the directory on the way back so the next resolution cycle sees the
+	/// change.
+	pub fn masked_handle(&self) -> std::sync::Arc<std::sync::RwLock<MaskedAddressStore>> {
+		self.inner.store.masked_handle()
 	}
 
 	/// The on-disk spool where accepted messages land before queueing.

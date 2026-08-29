@@ -16,6 +16,10 @@ use crate::smtp::directory::Directory;
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
+pub mod masked;
+mod masked_api;
+pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
+
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
@@ -130,8 +134,16 @@ pub enum StoreError {
 	/// No dynamic account with the requested name. Carries the missing name.
 	#[error("no such dynamic account: {0}")]
 	NotFound(String),
-	/// Reading or writing the `accounts.toml` / `app_passwords.toml` sidecar
-	/// files failed. The wrapped `std::io::Error` carries the cause.
+	/// The per-account cap on masked addresses would be exceeded. Carries
+	/// the configured `max` so the API can render the limit to the operator.
+	#[error("masked-address limit reached: {max}")]
+	LimitReached {
+		/// The configured cap.
+		max: usize,
+	},
+	/// Reading or writing the `accounts.toml` / `app_passwords.toml` /
+	/// `masked.json` sidecar files failed. The wrapped `std::io::Error`
+	/// carries the cause.
 	#[error("storage failure: {0}")]
 	Io(#[from] std::io::Error),
 }
@@ -160,6 +172,10 @@ pub struct AccountStore {
 	/// Live LDAP authenticator (a worker thread), shared into every rebuilt
 	/// directory so per-request binds work after a refresh.
 	ldap_auth: Option<Arc<LdapAuthenticator>>,
+	/// Per-account masked email addresses, persisted to `masked.json`.
+	/// Wrapped in `Arc<RwLock<_>>` so the API can share the same handle and
+	/// mutate without going through `AccountStore`'s mutators.
+	masked: Arc<RwLock<MaskedAddressStore>>,
 	handle: DirectoryHandle,
 }
 
@@ -184,6 +200,8 @@ impl AccountStore {
 		// App passwords are an optional sidecar; a missing file is an empty set.
 		let app_passwords = AppPasswordStore::open(data_dir)?.entries().collect();
 
+		let masked = MaskedAddressStore::open(data_dir)?;
+
 		let store = AccountStore {
 			path,
 			domains,
@@ -196,6 +214,7 @@ impl AccountStore {
 			sql_accounts: RwLock::new(Vec::new()),
 			ldap_accounts: RwLock::new(Vec::new()),
 			ldap_auth: None,
+			masked: Arc::new(RwLock::new(masked)),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -250,22 +269,6 @@ impl AccountStore {
 	/// The hot-reloadable handle shared with servers and delivery.
 	pub fn handle(&self) -> DirectoryHandle {
 		self.handle.clone()
-	}
-
-	/// Account views (name + addresses) across static and dynamic accounts.
-	pub fn account_views(&self) -> Vec<(String, Vec<String>, bool)> {
-		let dynamic = self.dynamic.read().expect("store lock");
-		let mut views: Vec<(String, Vec<String>, bool)> = self
-			.static_accounts
-			.iter()
-			.map(|account| (account.name.clone(), account.addresses.clone(), false))
-			.collect();
-		views.extend(
-			dynamic
-				.iter()
-				.map(|account| (account.name.clone(), account.addresses.clone(), true)),
-		);
-		views
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
@@ -586,6 +589,15 @@ impl AccountStore {
 				},
 			)
 		});
+		// Masked email addresses: only enabled ones feed the directory so a
+		// disabled mask rejects like an unknown user and the SMTP `owns_address`
+		// check stays fail-closed.
+		let masked = self
+			.masked
+			.read()
+			.expect("masked lock")
+			.entries()
+			.collect::<Vec<_>>();
 		Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
@@ -599,6 +611,7 @@ impl AccountStore {
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
 			.with_ldap(self.ldap_auth.clone())
+			.with_masked(masked)
 	}
 }
 

@@ -106,6 +106,13 @@ pub enum LogFormat {
 	Json,
 }
 
+/// Default for [`Config::masked_addresses_max`]. Generous enough for the
+/// usual disposable-alias use cases (one address per signup service);
+/// caps abuse before it can mint the whole 8-character suffix space.
+fn default_masked_addresses_max() -> usize {
+	100
+}
+
 /// Top-level server configuration.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,6 +217,13 @@ pub struct Config {
 	/// non-local logins against the LDAP server and loading its users for
 	/// recipient resolution.
 	pub ldap: Option<Ldap>,
+	/// Maximum masked email addresses one account may own. 0 disables
+	/// masked addresses entirely; the default of 100 is generous for the
+	/// usual disposable-alias use cases (a signup per service) and stops a
+	/// runaway loop from minting the whole address space. `429 Too Many
+	/// Requests` answers requests above the limit.
+	#[serde(default = "default_masked_addresses_max")]
+	pub masked_addresses_max: usize,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
 	/// Unprivileged user/group to drop to after privileged ports are bound.

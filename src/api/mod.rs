@@ -92,6 +92,10 @@ mod tests_b;
 mod auth_tests;
 
 #[cfg(test)]
+#[path = "masked_tests.rs"]
+mod masked_tests;
+
+#[cfg(test)]
 #[path = "jmap_tests.rs"]
 mod jmap_tests;
 
