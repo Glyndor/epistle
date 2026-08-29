@@ -26,6 +26,7 @@ pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 
+pub(crate) mod blob_path;
 mod blobs;
 mod email;
 mod methods;
@@ -374,7 +375,13 @@ pub async fn upload(
 		.unwrap_or(DEFAULT_BLOB_TYPE)
 		.to_string();
 	let blob_id = uuid::Uuid::now_v7().to_string();
-	let dir = state.data_dir().join("blobs");
+	let payload_path = blob_path::write_path(state.data_dir(), &blob_id, "");
+	//  always yields a parent; the fallback keeps the function
+	// total rather than unwrapping on a path we built ourselves.
+	let dir = payload_path.parent().map_or_else(
+		|| blob_path::blob_root(state.data_dir()),
+		std::path::Path::to_path_buf,
+	);
 	// Encrypt the blob payload at rest like stored mail; the `.type` and
 	// `.owner` sidecars stay plaintext metadata.
 	let stored = match state.crypto().encode(&body) {
@@ -388,7 +395,7 @@ pub async fn upload(
 		}
 	};
 	if std::fs::create_dir_all(&dir).is_err()
-		|| std::fs::write(dir.join(&blob_id), &stored).is_err()
+		|| std::fs::write(&payload_path, &stored).is_err()
 		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
 		|| blobs::write_blob_owner(state.data_dir(), &blob_id, &account).is_err()
 	{

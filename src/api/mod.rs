@@ -113,6 +113,10 @@ mod jmap_tests_c;
 mod jmap_tests_d;
 
 #[cfg(test)]
+#[path = "jmap_tests_e2.rs"]
+mod jmap_tests_e2;
+
+#[cfg(test)]
 #[path = "jmap_tests_e.rs"]
 mod jmap_tests_e;
 
