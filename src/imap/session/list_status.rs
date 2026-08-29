@@ -76,8 +76,7 @@ impl Session {
 		mailbox_name: &str,
 		items: &[StatusItem],
 	) -> Option<String> {
-		let snapshot =
-			mailbox::Snapshot::open(&self.data_dir, account, mailbox_name, &self.crypto).ok()?;
+		let snapshot = self.open_snapshot(account, mailbox_name).ok()?;
 		let count_flag = |flag: mailbox::Flag| {
 			snapshot
 				.messages()

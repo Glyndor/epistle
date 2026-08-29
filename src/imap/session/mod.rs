@@ -320,4 +320,4 @@ impl Session {
 
 #[cfg(test)]
 #[path = "session_tests.rs"]
-mod tests;
+pub(crate) mod tests;

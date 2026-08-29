@@ -1,6 +1,7 @@
 //! `/api/v1` routes. Each route module mirrors its path.
 
 mod accounts;
+mod archive;
 mod auth;
 mod domains;
 mod mailboxes;
@@ -40,6 +41,11 @@ pub fn router() -> Router<ApiState> {
 		.route(
 			"/accounts/{name}/masked/{address}",
 			axum::routing::patch(masked::update).delete(masked::remove),
+		)
+		.route("/accounts/{name}/archive", get(archive::list))
+		.route(
+			"/accounts/{name}/archive/{id}/restore",
+			axum::routing::post(archive::restore),
 		)
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))

@@ -43,6 +43,20 @@ flags.
 | `epistle suppression --config F [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
 | `epistle report-abuse --config F` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 
+## Expunged-message archive
+
+Active only when `[storage] deleted_retention_days` is set to a positive value.
+With retention off, an expunge deletes the on-disk files immediately and no
+archive directory is created. With retention on, an expunge moves the message
+into `<account>/.archive/`, and an hourly sweeper drops entries older than the
+configured window.
+
+| Command | What it does |
+|---|---|
+| `epistle archive list --config F <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
+| `epistle archive restore --config F <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
+| `epistle archive purge --config F <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
+
 ## Client autodiscovery
 
 These print documents the operator publishes so clients configure themselves

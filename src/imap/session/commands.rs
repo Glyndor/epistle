@@ -175,7 +175,7 @@ impl Session {
 
 		let mut body = String::new();
 		for name in &mailboxes {
-			let Ok(snapshot) = Snapshot::open(&self.data_dir, &account, name, &self.crypto) else {
+			let Ok(snapshot) = self.open_snapshot(&account, name) else {
 				continue;
 			};
 			let hits = matching_uids(&snapshot, criteria);

@@ -60,6 +60,11 @@ pub struct Server {
 	max_connections: usize,
 	/// At-rest crypto for stored message bodies, shared by every session.
 	crypto: crate::storage::MessageCrypto,
+	/// Days to keep expunged messages in `<account>/.archive/` before the
+	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
+	/// expunge deletes the on-disk files immediately. The sweep itself runs
+	/// in [`crate::cli::serve_tasks::spawn_archive_sweep`].
+	retention_days: u64,
 }
 
 impl Server {
@@ -83,12 +88,20 @@ impl Server {
 			cbind_data: None,
 			max_connections: MAX_CONNECTIONS,
 			crypto: crate::storage::MessageCrypto::disabled(),
+			retention_days: 0,
 		}
 	}
 
 	/// Encrypt/decrypt stored message bodies at rest through `crypto`.
 	pub fn with_crypto(mut self, crypto: crate::storage::MessageCrypto) -> Self {
 		self.crypto = crypto;
+		self
+	}
+
+	/// Days to keep expunged messages in `<account>/.archive/` before the
+	/// hourly sweeper removes them. `0` keeps the legacy behaviour.
+	pub fn with_retention_days(mut self, days: u64) -> Self {
+		self.retention_days = days;
 		self
 	}
 
@@ -128,7 +141,8 @@ impl Server {
 		)
 		.with_quota_limit(self.quota_bytes)
 		.with_crypto(self.crypto.clone())
-		.with_oauth(self.oauth.clone());
+		.with_oauth(self.oauth.clone())
+		.with_retention_days(self.retention_days);
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
 		}

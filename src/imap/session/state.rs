@@ -125,6 +125,10 @@ pub struct Session {
 	/// successful `SEARCH ... RETURN (SAVE)`. Using `$` in a command whose
 	/// UID-kind does not match the saved kind is rejected.
 	pub(super) saved_search: Option<SavedSearch>,
+	/// Days to keep expunged messages in `<account>/.archive/` before the
+	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
+	/// expunge deletes the on-disk files immediately.
+	retention_days: u64,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -141,6 +145,40 @@ pub struct SavedSearch {
 pub const DEFAULT_QUOTA_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 impl Session {
+	/// Days to keep expunged messages in `<account>/.archive/` before the
+	/// hourly sweeper removes them. `0` keeps the legacy behaviour.
+	pub fn with_retention_days(mut self, days: u64) -> Self {
+		self.retention_days = days;
+		self
+	}
+
+	/// Open a mailbox snapshot with this session's retention and at-rest
+	/// crypto, sampling the clock once so every expunge in a single command
+	/// shares the same archive timestamp.
+	///
+	/// Every session path that can end in an expunge must open through here.
+	/// `Snapshot::open` leaves `retention_days` at zero, so a call site that
+	/// slips back to it deletes the mail the operator asked to keep, and
+	/// nothing else would say so.
+	pub(super) fn open_snapshot(
+		&self,
+		account: &str,
+		mailbox: &str,
+	) -> std::io::Result<super::mailbox::Snapshot> {
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or(0);
+		super::mailbox::Snapshot::open_at(
+			&self.data_dir,
+			account,
+			mailbox,
+			&self.crypto,
+			self.retention_days,
+			now,
+		)
+	}
+
 	/// New session over an established TLS connection.
 	pub fn new(hostname: &str, data_dir: PathBuf, directory: Arc<Directory>) -> Self {
 		Session {
@@ -162,6 +200,7 @@ impl Session {
 			client_identity: None,
 			peer_ip: None,
 			crypto: crate::storage::MessageCrypto::disabled(),
+			retention_days: 0,
 			saved_search: None,
 		}
 	}
