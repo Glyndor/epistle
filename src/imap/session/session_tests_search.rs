@@ -415,6 +415,58 @@ fn search_larger_smaller() {
 	assert!(response.contains("* SEARCH\r\n"), "{response}");
 }
 
+/// Backdate every `.eml` in alice's inbox to `secs_ago` seconds before now, so
+/// WITHIN search tests are deterministic without sleeps.
+fn backdate_inbox(dir: &std::path::Path, secs_ago: u64) {
+	let new_dir = dir.join("accounts").join("alice").join("new");
+	let target = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+	for entry in std::fs::read_dir(&new_dir).expect("read new").flatten() {
+		let Ok(file) = std::fs::OpenOptions::new().write(true).open(entry.path()) else {
+			continue;
+		};
+		let _ = file.set_modified(target);
+	}
+}
+
+#[test]
+fn search_younger_older_filters_by_internal_age() {
+	// WITHIN (RFC 5032): YOUNGER n matches messages whose internal date is
+	// within the last n seconds; OLDER n matches older than n seconds.
+	// Backdate both messages to 10 seconds ago so the bounds are deterministic.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@example.org\r\n\r\nolder\r\n");
+	deliver(dir.path(), b"From: b@example.org\r\n\r\nalso-older\r\n");
+	backdate_inbox(dir.path(), 10);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// YOUNGER 5 → no match (both messages are 10s old).
+	let response = text(&session.command_line("a3 SEARCH YOUNGER 5"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+
+	// YOUNGER 60 → both match (10s < 60s).
+	let response = text(&session.command_line("a4 SEARCH YOUNGER 60"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+
+	// OLDER 5 → both match (10s > 5s).
+	let response = text(&session.command_line("a5 SEARCH OLDER 5"));
+	assert!(response.contains("* SEARCH 1 2\r\n"), "{response}");
+
+	// OLDER 60 → no match (10s < 60s).
+	let response = text(&session.command_line("a6 SEARCH OLDER 60"));
+	assert!(response.contains("* SEARCH\r\n"), "{response}");
+
+	// Malformed argument is rejected (negative or non-numeric).
+	let response = text(&session.command_line("a7 SEARCH YOUNGER"));
+	assert!(response.contains("a7 BAD"), "{response}");
+
+	// Capability advertises WITHIN.
+	assert!(
+		text(&session.command_line("a8 CAPABILITY")).contains("WITHIN"),
+		"capability should advertise WITHIN"
+	);
+}
+
 /// Deliver a message straight into a non-INBOX mailbox's `new` directory.
 fn deliver_to(dir: &std::path::Path, mailbox: &str, body: &[u8]) {
 	let new_dir = dir
@@ -520,4 +572,93 @@ fn multisearch_personal_scope_searches_all_mailboxes() {
 		response.contains("MAILBOX \"Archive\" UIDVALIDITY"),
 		"{response}"
 	);
+}
+
+#[test]
+fn searchres_save_and_dollar_shortcut() {
+	// SEARCHRES (RFC 5182): `SEARCH RETURN (SAVE)` stores the result set so
+	// the client can reference it via `$` in subsequent FETCH/STORE/COPY.
+	// Plain SEARCH saves sequence numbers; UID SEARCH saves UIDs.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@x.example\r\n\r\none\r\n");
+	deliver(
+		dir.path(),
+		b"From: b@x.example\r\nSubject: hi\r\n\r\ntwo\r\n",
+	);
+	deliver(
+		dir.path(),
+		b"From: c@x.example\r\nSubject: hi\r\n\r\nthree\r\n",
+	);
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// Save every message that has a "hi" subject (sequences 2 and 3).
+	let response = text(&session.command_line("a3 SEARCH SUBJECT hi RETURN (SAVE)"));
+	assert!(response.contains("a3 OK SEARCH completed"), "{response}");
+
+	// FETCH $ uses the saved set: messages 2 and 3, never 1.
+	let response = text(&session.command_line("a4 FETCH $ FLAGS"));
+	assert!(response.contains("* 2 FETCH"), "{response}");
+	assert!(response.contains("* 3 FETCH"), "{response}");
+	assert!(!response.contains("* 1 FETCH"), "{response}");
+
+	// STORE $ applies to the saved set (mark them \Seen).
+	let response = text(&session.command_line(r"a5 STORE $ +FLAGS (\Seen)"));
+	assert!(
+		response.contains(r"* 2 FETCH (FLAGS (\Seen))"),
+		"{response}"
+	);
+	assert!(
+		response.contains(r"* 3 FETCH (FLAGS (\Seen))"),
+		"{response}"
+	);
+	assert!(response.contains("a5 OK STORE completed"), "{response}");
+
+	// UID SEARCH saves UIDs; UID FETCH $ uses them.
+	let response = text(&session.command_line("a6 UID SEARCH SUBJECT hi RETURN (SAVE)"));
+	assert!(response.contains("a6 OK"), "{response}");
+	let response = text(&session.command_line("a7 UID FETCH $ UID"));
+	assert!(response.contains("* 2 FETCH"), "{response}");
+	assert!(response.contains("* 3 FETCH"), "{response}");
+	assert!(response.contains("UID 2"), "{response}");
+	assert!(response.contains("UID 3"), "{response}");
+
+	// Type mismatch: $ from a UID SEARCH is not valid in a non-UID command.
+	let response = text(&session.command_line("a8 FETCH $ FLAGS"));
+	assert!(
+		response.contains("a8 NO"),
+		"$ from UID SEARCH must be rejected for non-UID FETCH: {response}"
+	);
+
+	// Re-SAVE replaces the reservation.
+	let response = text(&session.command_line("a9 SEARCH ALL RETURN (SAVE)"));
+	assert!(response.contains("a9 OK"), "{response}");
+	let response = text(&session.command_line("a10 FETCH $ FLAGS"));
+	assert!(response.contains("* 1 FETCH"), "{response}");
+	assert!(response.contains("* 2 FETCH"), "{response}");
+	assert!(response.contains("* 3 FETCH"), "{response}");
+
+	// Capability advertises SEARCHRES.
+	assert!(
+		text(&session.command_line("a11 CAPABILITY")).contains("SEARCHRES"),
+		"capability should advertise SEARCHRES"
+	);
+
+	// SAVE combined with other return options: still stores the set and
+	// emits the requested fields alongside.
+	let response = text(&session.command_line("a12 SEARCH RETURN (SAVE COUNT) ALL"));
+	assert!(response.contains("COUNT 3"), "{response}");
+}
+
+#[test]
+fn searchres_dollar_without_save_is_rejected() {
+	// Per RFC 5182 §5.1, using $ when no SAVE has been issued is a protocol
+	// error. The server answers NO so the client knows to re-issue SEARCH.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"From: a@x.example\r\n\r\none\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	let response = text(&session.command_line("a3 FETCH $ FLAGS"));
+	assert!(response.contains("a3 NO"), "{response}");
 }

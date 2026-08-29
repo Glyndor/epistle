@@ -37,7 +37,10 @@ fn list_shows_inbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	let output = session.command_line(r#"a2 LIST "" "*""#);
-	assert!(text(&output).contains("* LIST (\\Subscribed) \"/\" \"INBOX\""));
+	// CHILDREN (RFC 3348): every leaf mailbox gets \HasNoChildren. epistle
+	// stores mailboxes flat (no hierarchy separator in names), so the answer
+	// is uniform for every returned mailbox.
+	assert!(text(&output).contains("* LIST (\\Subscribed \\HasNoChildren) \"/\" \"INBOX\""));
 	assert!(text(&output).contains("a2 OK"));
 }
 

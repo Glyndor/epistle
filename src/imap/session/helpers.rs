@@ -1,3 +1,4 @@
+use super::super::command::SequenceSet;
 use super::mailbox::Snapshot;
 use super::{Command, SearchKey, mailbox};
 
@@ -15,6 +16,21 @@ pub(super) fn sequence_command(command: &Command) -> Option<&'static str> {
 			remove_source,
 			..
 		} => Some(if *remove_source { "MOVE" } else { "COPY" }),
+		_ => None,
+	}
+}
+
+/// Whether `command` accepts the SEARCHRES `$` placeholder, and if so the
+/// verb to surface in an error and the UID-kind (`true` for UID variants).
+/// Returns `None` for commands that never reference a sequence set.
+pub(super) fn dollar_command(command: &Command) -> Option<(&'static str, bool, &SequenceSet)> {
+	match command {
+		Command::Fetch { sequence, uid, .. } => Some(("FETCH", *uid, sequence)),
+		Command::Store { sequence, uid, .. } => Some(("STORE", *uid, sequence)),
+		Command::Copy { sequence, uid, .. } => {
+			Some((if *uid { "UID COPY" } else { "COPY" }, *uid, sequence))
+		}
+		Command::UidExpunge { sequence } => Some(("UID EXPUNGE", true, sequence)),
 		_ => None,
 	}
 }
@@ -63,12 +79,13 @@ pub(super) fn search_matches(
 	total: u32,
 	snapshot: &Snapshot,
 	content: &mut Option<String>,
+	saved: &[u32],
 ) -> bool {
 	match key {
 		SearchKey::All => true,
 		SearchKey::FlagIs(flag, wanted) => message.flags.contains(flag) == *wanted,
-		SearchKey::Sequence(set) => set.contains(seqno, total),
-		SearchKey::UidSet(set) => set.contains(message.uid, total),
+		SearchKey::Sequence(set) => set.contains(seqno, total, saved),
+		SearchKey::UidSet(set) => set.contains(message.uid, total, saved),
 		SearchKey::Header(name, needle) => {
 			let text = content.get_or_insert_with(|| load_content(snapshot, message));
 			header_value(text, name).is_some_and(|v| v.contains(needle.as_str()))
@@ -78,13 +95,13 @@ pub(super) fn search_matches(
 			text.contains(needle.as_str())
 		}
 		SearchKey::Or(a, b) => {
-			search_matches(a, message, seqno, total, snapshot, content)
-				|| search_matches(b, message, seqno, total, snapshot, content)
+			search_matches(a, message, seqno, total, snapshot, content, saved)
+				|| search_matches(b, message, seqno, total, snapshot, content, saved)
 		}
-		SearchKey::Not(k) => !search_matches(k, message, seqno, total, snapshot, content),
+		SearchKey::Not(k) => !search_matches(k, message, seqno, total, snapshot, content, saved),
 		SearchKey::And(keys) => keys
 			.iter()
-			.all(|k| search_matches(k, message, seqno, total, snapshot, content)),
+			.all(|k| search_matches(k, message, seqno, total, snapshot, content, saved)),
 		SearchKey::Before(y, m, d) => {
 			systemtime_to_epoch_day(message.internal_date) < date_to_epoch_day(*y, *m, *d)
 		}
@@ -97,6 +114,16 @@ pub(super) fn search_matches(
 		SearchKey::Larger(n) => message.size > u64::from(*n),
 		SearchKey::Smaller(n) => message.size < u64::from(*n),
 		SearchKey::ModSeq(n) => message.modseq >= *n,
+		SearchKey::Younger(n) => age_seconds(message.internal_date) <= i64::from(*n),
+		SearchKey::Older(n) => age_seconds(message.internal_date) > i64::from(*n),
+	}
+}
+
+/// Seconds elapsed from `t` to now. Negative when `t` is in the future.
+fn age_seconds(t: std::time::SystemTime) -> i64 {
+	match std::time::SystemTime::now().duration_since(t) {
+		Ok(d) => d.as_secs() as i64,
+		Err(e) => -((e.duration().as_secs().saturating_add(1)) as i64),
 	}
 }
 

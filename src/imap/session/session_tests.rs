@@ -1,6 +1,9 @@
 use super::helpers::format_internaldate;
 use super::*;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::smtp::directory::Directory;
 
 pub fn directory() -> Arc<Directory> {
 	Arc::new(
