@@ -21,6 +21,11 @@ on:
     paths:
       - ".github/workflows/scripts.yml"
       - ".github/scripts/**"
+      # test_release_targets.py asserts these two agree, so a pull request
+      # that changes either has to run it. Without them the check would only
+      # fire on the push after the merge, which is after the damage.
+      - "debian/rules"
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: read

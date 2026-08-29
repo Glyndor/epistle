@@ -124,7 +124,31 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends dpkg-dev debhelper
+          # musl-tools provides musl-gcc, which `ring` needs to compile its C
+          # against a musl target. It is not a Rust dependency, so it cannot be
+          # declared in Cargo.toml and has to be installed here.
+          apt-get install -y --no-install-recommends dpkg-dev debhelper musl-tools
+
+      - name: Install the musl target debian/rules builds for
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          # debian/rules has built for musl since #758, to stop the .deb
+          # carrying a glibc floor. The image ships only its own target's
+          # standard library, so `--target` cannot resolve without this and the
+          # build dies on "can't find crate for `core`". The PR-time job
+          # installs it through the reusable workflow's `rust-target` input;
+          # this one had no equivalent, so releasing has been impossible since
+          # that change landed and nothing said so until a release was cut.
+          case "$ARCH" in
+            amd64) target=x86_64-unknown-linux-musl ;;
+            arm64) target=aarch64-unknown-linux-musl ;;
+            *) echo "::error::no musl target mapped for $ARCH"; exit 1 ;;
+          esac
+          rustup target add "$target"
+          # Fail here rather than 200 crates into the build.
+          rustc --print target-libdir --target "$target" >/dev/null
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
