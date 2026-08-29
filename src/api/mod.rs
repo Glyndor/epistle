@@ -12,11 +12,13 @@ pub(crate) mod jmap;
 pub mod oauth;
 pub mod scim;
 mod state;
+pub mod tenant_limits;
 pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeyStore};
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
+pub use tenant_limits::TenantLimits;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -127,3 +129,7 @@ mod jmap_tests_f;
 #[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
+
+#[cfg(test)]
+#[path = "tenant_limits_tests_e2e.rs"]
+mod tenant_limits_tests_e2e;

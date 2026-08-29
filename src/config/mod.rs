@@ -21,9 +21,11 @@ mod otel;
 mod privileges;
 mod queue;
 mod storage;
+mod tenant;
 mod tls;
 mod transport;
 mod validate;
+pub(crate) use validate::validate_dns_name;
 mod webhook;
 
 pub use account::Account;
@@ -43,6 +45,7 @@ pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
+pub use tenant::Tenant;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
@@ -237,6 +240,12 @@ pub struct Config {
 	pub masked_addresses_max: usize,
 	/// Outbound event webhooks. Present enables notifications.
 	pub webhook: Option<Webhook>,
+	/// Tenant definitions: named groups of domains with optional aggregate
+	/// caps on accounts, domains, storage and submission rate. Absent or
+	/// empty means no tenancy is in effect and the server behaves exactly as
+	/// it did before this field existed.
+	#[serde(default, rename = "tenant")]
+	pub tenants: Vec<Tenant>,
 	/// Unprivileged user/group to drop to after privileged ports are bound.
 	/// Absent leaves the process running as whoever started it.
 	pub privileges: Option<Privileges>,
@@ -301,6 +310,7 @@ impl std::fmt::Debug for Config {
 			.field("oauth", &self.oauth)
 			.field("ldap", &self.ldap)
 			.field("webhook", &self.webhook)
+			.field("tenants", &self.tenants)
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)

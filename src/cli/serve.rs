@@ -57,7 +57,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)
 	.map_err(|error| std::io::Error::other(error.to_string()))?
 	.with_domain_quotas(config.domain_quotas.clone())
-	.with_domain_submission_limits(config.domain_submission_limits.clone())
 	.with_aliases(config.alias.clone())
 	.with_masked_max(config.masked_addresses_max);
 	if let Some(auth) = ldap_auth {
@@ -170,6 +169,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		|| !config.domain_submission_limits.is_empty();
 	let send_limiter =
 		has_any_submission_limit.then(|| Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)));
+
+	// Per-tenant aggregate limits. Built once from the static config; with
+	// no `[[tenant]]` blocks the result is the identity, every check is a
+	// no-op, and the wire below carries an empty `Arc`.
+	let tenant_limits = Arc::new(crate::api::TenantLimits::from_config(&config.tenants));
 
 	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
 	let max_conn = config.max_connections_per_listener.unwrap_or(0);
@@ -325,7 +329,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())
-				.with_blob_backend(blob_backend);
+				.with_blob_backend(blob_backend)
+				.with_tenant_limits(Arc::clone(&tenant_limits));
 				// Built-in OAuth authorization server, when a signing key is set.
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
 					state = state.with_authz(authz);
@@ -505,8 +510,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(limiter) = &send_limiter {
 					server = server.with_send_limiter(Arc::clone(limiter));
 				}
-				server =
-					server.with_global_submission_rate_limit(config.submission_rate_limit_per_min);
+				if !tenant_limits.is_empty() {
+					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
+				}
 				if let Some(verifier) = &oauth_verifier {
 					server = server.with_oauth(Arc::clone(verifier));
 				}

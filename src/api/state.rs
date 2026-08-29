@@ -14,6 +14,7 @@ use crate::storage::{FsSpool, MessageCrypto};
 use super::api_keys::Scope;
 use super::domain_scope::DomainScope;
 use super::error::ApiError;
+use super::tenant_limits::TenantLimits;
 
 /// The bearer credentials the middleware extracted from the request, stashed
 /// in request extensions so handlers can apply a fine-grained scope check on
@@ -74,6 +75,10 @@ struct Inner {
 	/// configured. The handler-side helpers do not know which is in play —
 	/// they speak to the trait the same way either way.
 	blob_backend: Arc<dyn crate::storage::BlobBackend>,
+	/// Per-tenant aggregate limits (accounts, storage, submission rate).
+	/// Empty when no `[[tenant]]` is configured; the empty state is the
+	/// identity, every check short-circuits to "no cap".
+	tenant_limits: TenantLimits,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -183,6 +188,7 @@ impl ApiState {
 				directory: None,
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
+				tenant_limits: TenantLimits::default(),
 			}),
 		}
 	}
@@ -318,6 +324,31 @@ impl ApiState {
 			.quota_limit
 			.store(bytes, std::sync::atomic::Ordering::Relaxed);
 		self
+	}
+
+	/// Attach the per-tenant aggregate limits. Must be set before the state
+	/// is shared (it rebuilds the `Arc` inner). With no configured tenants
+	/// the runtime is the identity, every check returns "no cap". The
+	/// `Arc` lets the SMTP server share the same instance without a clone.
+	pub fn with_tenant_limits(mut self, limits: Arc<TenantLimits>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.tenant_limits = (*limits).clone();
+		}
+		self
+	}
+
+	/// The per-tenant aggregate limits. Empty when no `[[tenant]]` is
+	/// configured; the empty state short-circuits every check to "no cap",
+	/// which is the pre-tenancy behaviour bit-for-bit.
+	pub fn tenant_limits(&self) -> &TenantLimits {
+		&self.inner.tenant_limits
+	}
+
+	/// Shared handle for wiring the same limits into the SMTP server. Kept
+	/// separate from `tenant_limits()` so callers do not need to construct
+	/// an `Arc` themselves just to mirror the state.
+	pub fn tenant_limits_handle(&self) -> Arc<TenantLimits> {
+		Arc::new(self.inner.tenant_limits.clone())
 	}
 
 	/// The configured per-account storage quota in bytes (0 = unlimited).

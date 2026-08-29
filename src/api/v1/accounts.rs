@@ -85,6 +85,15 @@ pub async fn create(
 			"address outside the domains this key may act on",
 		));
 	}
+	// Per-tenant `max_accounts`: a cap waiting will not lift is a `409`, not
+	// a `429` (`ApiError::conflict` exists exactly for this). Checked before
+	// the password for the same reason as the scope check above.
+	if let Err(message) = state
+		.tenant_limits()
+		.check_account_creation(state.store(), &request.addresses)
+	{
+		return Err(ApiError::conflict(message));
+	}
 	check_password(&request.password)?;
 	let password_hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
