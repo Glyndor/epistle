@@ -149,6 +149,22 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+### Uploaded blob storage
+
+JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the
+**last** four characters of the blob id: `blobs/ab/cd/<id>`, with the `.type`
+and `.owner` sidecars beside the payload.
+
+The shard comes from the end of the id rather than the start because blob ids
+are UUIDv7, whose first 48 bits are a timestamp — every blob written in the
+same era shares its leading characters, so sharding on them would file almost
+everything into one bucket while looking sharded.
+
+There is no migration. A blob written by an older version stays where it is
+and is still read, still counted against quota, and still reclaimed; only new
+blobs are written into the shards. Nothing needs to be moved and nothing needs
+configuring.
+
 ### IMAP COMPRESS=DEFLATE
 
 Advertised in `CAPABILITY` and enabled per connection by `COMPRESS DEFLATE`

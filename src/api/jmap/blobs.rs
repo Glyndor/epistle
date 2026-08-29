@@ -8,6 +8,7 @@
 //! HTTP layer small and lets the storage code be tested directly off the
 //! filesystem.
 
+use super::blob_path;
 use crate::imap::mailbox;
 use crate::storage::MessageCrypto;
 
@@ -31,14 +32,13 @@ pub(super) fn read_blob(
 	// introduced get an `.owner` written by the startup backfill; transient
 	// uploads that never get referenced stay sidecar-less and become
 	// unservable (the reclaim task sweeps them after their TTL anyway).
-	let blob_dir = data_dir.join("blobs");
-	let owner = std::fs::read_to_string(blob_dir.join(format!("{blob_id}.owner")))
+	let owner = std::fs::read_to_string(blob_path::read_path(data_dir, blob_id, ".owner"))
 		.ok()
 		.filter(|value| !value.is_empty())?;
 	if owner != account {
 		return None;
 	}
-	let stored = std::fs::read(blob_dir.join(blob_id)).ok()?;
+	let stored = std::fs::read(blob_path::read_path(data_dir, blob_id, "")).ok()?;
 	crypto.decode(&stored).ok()
 }
 
@@ -48,7 +48,7 @@ pub(super) fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Optio
 	if uuid::Uuid::parse_str(blob_id).is_err() {
 		return None;
 	}
-	std::fs::read_to_string(data_dir.join("blobs").join(format!("{blob_id}.type")))
+	std::fs::read_to_string(blob_path::read_path(data_dir, blob_id, ".type"))
 		.ok()
 		.filter(|value| !value.is_empty())
 }
@@ -65,12 +65,11 @@ pub(super) fn write_blob_owner(
 	blob_id: &str,
 	account: &str,
 ) -> std::io::Result<()> {
-	let dir = data_dir.join("blobs");
-	std::fs::create_dir_all(&dir)?;
-	std::fs::write(
-		dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")),
-		account.as_bytes(),
-	)
+	let path = blob_path::write_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
+	if let Some(parent) = path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+	std::fs::write(path, account.as_bytes())
 }
 
 /// Read the recorded owner of an uploaded blob, if any. Visible to sibling
@@ -81,11 +80,11 @@ pub(crate) fn read_blob_owner(data_dir: &std::path::Path, blob_id: &str) -> Opti
 	if uuid::Uuid::parse_str(blob_id).is_err() {
 		return None;
 	}
-	std::fs::read_to_string(
-		data_dir
-			.join("blobs")
-			.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")),
-	)
+	std::fs::read_to_string(data_dir.join(blob_path::read_path(
+		data_dir,
+		blob_id,
+		OWNER_SIDECAR_SUFFIX,
+	)))
 	.ok()
 	.filter(|value| !value.is_empty())
 }
@@ -107,14 +106,17 @@ pub fn account_usage_bytes(
 /// their `.type` and `.owner` sidecars under `<data_dir>/blobs`.
 fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
 	let mut total = 0u64;
-	let Ok(entries) = std::fs::read_dir(data_dir.join("blobs")) else {
-		return 0;
-	};
-	for entry in entries.flatten() {
-		if let Ok(meta) = entry.metadata()
-			&& meta.is_file()
-		{
-			total = total.saturating_add(meta.len());
+	for (blob_id, path) in blob_path::walk(data_dir) {
+		for candidate in [
+			path,
+			blob_path::read_path(data_dir, &blob_id, ".type"),
+			blob_path::read_path(data_dir, &blob_id, OWNER_SIDECAR_SUFFIX),
+		] {
+			if let Ok(meta) = std::fs::metadata(&candidate)
+				&& meta.is_file()
+			{
+				total = total.saturating_add(meta.len());
+			}
 		}
 	}
 	total
@@ -127,35 +129,28 @@ fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
 /// `<data_dir>/blobs` is touched; stored mail under `<data_dir>/accounts` is
 /// never affected.
 pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> usize {
-	let dir = data_dir.join("blobs");
-	let Ok(entries) = std::fs::read_dir(&dir) else {
-		return 0;
-	};
 	let now = std::time::SystemTime::now();
 	let mut removed = 0;
-	for entry in entries.flatten() {
-		let name = entry.file_name();
-		// Sidecars are reclaimed alongside their payload, not on their own.
-		if name
-			.to_str()
-			.is_some_and(|name| name.ends_with(".type") || name.ends_with(OWNER_SIDECAR_SUFFIX))
-		{
+	// `walk` yields payloads only, from both the sharded and the flat layout,
+	// so a blob written before this change is still reclaimed.
+	for (blob_id, path) in blob_path::walk(data_dir) {
+		// Only act on well-formed blob ids; ignore anything else in there.
+		if uuid::Uuid::parse_str(&blob_id).is_err() {
 			continue;
 		}
-		// Only act on well-formed blob ids; ignore anything else in the dir.
-		let Some(blob_id) = name.to_str().filter(|id| uuid::Uuid::parse_str(id).is_ok()) else {
-			continue;
-		};
-		let expired = entry
-			.metadata()
+		let expired = std::fs::metadata(&path)
 			.and_then(|meta| meta.modified())
 			.ok()
 			.and_then(|modified| now.duration_since(modified).ok())
 			.is_some_and(|age| age > ttl);
 		if expired {
-			let _ = std::fs::remove_file(dir.join(blob_id));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}.type")));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")));
+			let _ = std::fs::remove_file(&path);
+			let _ = std::fs::remove_file(blob_path::read_path(data_dir, &blob_id, ".type"));
+			let _ = std::fs::remove_file(blob_path::read_path(
+				data_dir,
+				&blob_id,
+				OWNER_SIDECAR_SUFFIX,
+			));
 			removed += 1;
 		}
 	}
@@ -291,8 +286,9 @@ fn ensure_blob_owner(
 	blob_id: &str,
 	account: &str,
 ) -> Result<EnsureOutcome, ()> {
-	let blob_dir = data_dir.join("blobs");
-	let owner_path = blob_dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}"));
+	// Read through the fallback so a blob still in the flat layout is seen,
+	// and write to the shard so the backfill does not recreate the old shape.
+	let owner_path = blob_path::read_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
 	match std::fs::read_to_string(&owner_path) {
 		Ok(existing) if existing == account => Ok(EnsureOutcome::AlreadyCorrect),
 		Ok(_) => Ok(EnsureOutcome::Conflict),
@@ -304,11 +300,14 @@ fn ensure_blob_owner(
 			// in that case avoids creating an `.owner` for a non-existent
 			// blob (which would not affect the download check but would
 			// inflate the scan count).
-			if !blob_dir.join(blob_id).exists() {
+			if !blob_path::read_path(data_dir, blob_id, "").exists() {
 				Ok(EnsureOutcome::AlreadyCorrect)
 			} else {
-				std::fs::create_dir_all(&blob_dir).map_err(|_| ())?;
-				std::fs::write(&owner_path, account.as_bytes()).map_err(|_| ())?;
+				let write_to = blob_path::write_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
+				if let Some(parent) = write_to.parent() {
+					std::fs::create_dir_all(parent).map_err(|_| ())?;
+				}
+				std::fs::write(&write_to, account.as_bytes()).map_err(|_| ())?;
 				Ok(EnsureOutcome::Written)
 			}
 		}

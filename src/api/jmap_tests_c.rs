@@ -33,7 +33,11 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 	// A stale blob (payload + sidecar) backdated past the TTL.
 	let stale = uuid::Uuid::now_v7().to_string();
 	std::fs::write(blobs.join(&stale), b"old").expect("write");
-	std::fs::write(blobs.join(format!("{stale}.type")), b"image/png").expect("write");
+	std::fs::write(
+		crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type"),
+		b"image/png",
+	)
+	.expect("write");
 	let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
 	filetime_set(&blobs.join(&stale), old);
 
@@ -51,7 +55,7 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 	assert_eq!(removed, 1);
 	assert!(!blobs.join(&stale).exists(), "stale blob should be gone");
 	assert!(
-		!blobs.join(format!("{stale}.type")).exists(),
+		!crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type").exists(),
 		"stale sidecar should be gone"
 	);
 	assert!(blobs.join(&fresh).exists(), "fresh blob should be kept");
