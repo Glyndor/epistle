@@ -93,16 +93,10 @@ impl DynamicAccount {
 		addresses: Vec<String>,
 		password: &str,
 	) -> Result<Self, StoreError> {
-		use ring::rand::SecureRandom;
 		let password_hash = crate::smtp::auth::hash_password(password)
 			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
-		let mut salt = [0u8; 16];
-		ring::rand::SystemRandom::new()
-			.fill(&mut salt)
-			.map_err(|_| StoreError::Invalid("cannot generate salt".to_string()))?;
-		let scram = crate::smtp::scram::ScramStored::from_credentials(
-			&crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096),
-		);
+		let scram = crate::smtp::scram::ScramStored::with_fresh_salt(password)
+			.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
 		Ok(DynamicAccount {
 			name,
 			addresses,

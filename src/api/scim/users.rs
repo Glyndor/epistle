@@ -96,15 +96,7 @@ fn check_password(password: &str) -> Result<(), ScimError> {
 /// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the
 /// CSPRNG cannot produce a salt rather than storing a predictable one.
 fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ScimError> {
-	use ring::rand::SecureRandom;
-	let mut salt = [0u8; 16];
-	ring::rand::SystemRandom::new()
-		.fill(&mut salt)
-		.map_err(|_| ScimError::internal())?;
-	let credentials = crate::smtp::scram::ScramCredentials::derive(password, &salt, 4096);
-	Ok(crate::smtp::scram::ScramStored::from_credentials(
-		&credentials,
-	))
+	crate::smtp::scram::ScramStored::with_fresh_salt(password).ok_or_else(ScimError::internal)
 }
 
 /// Hash a plaintext password with the global argon2id KDF. The `password`
