@@ -232,7 +232,9 @@ async fn blob_without_owner_sidecar_is_not_served() {
 	let id = uuid::Uuid::now_v7();
 	std::fs::write(blobs.join(id.to_string()), b"orphan payload").expect("write");
 	assert!(
-		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner").exists(),
+		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id")
+			.exists(),
 		"precondition: no owner sidecar before download"
 	);
 
@@ -275,7 +277,11 @@ async fn backfill_writes_owner_sidecar_for_referenced_blob() {
 	let blobs = path.join("blobs");
 	std::fs::create_dir_all(&blobs).expect("mkdir");
 	std::fs::write(blobs.join(id.to_string()), b"pre-existing uploaded payload").expect("write");
-	assert!(!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner").exists());
+	assert!(
+		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id")
+			.exists()
+	);
 
 	// Run the backfill the way `ApiState::new` does.
 	let stats = super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
@@ -288,7 +294,8 @@ async fn backfill_writes_owner_sidecar_for_referenced_blob() {
 	assert_eq!(stats.conflicts, 0);
 	assert_eq!(stats.errors, 0);
 
-	let owner_path = crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner");
+	let owner_path = crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+		.expect("valid blob id");
 	assert!(owner_path.exists(), "backfill must materialise the sidecar");
 	assert_eq!(
 		std::fs::read_to_string(&owner_path).expect("read sidecar"),
@@ -314,7 +321,8 @@ async fn backfill_is_idempotent_on_unchanged_ownership() {
 
 	let stats1 = super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
 	assert_eq!(stats1.written, 1);
-	let owner_path = crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner");
+	let owner_path = crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+		.expect("valid blob id");
 	let mtime1 = std::fs::metadata(&owner_path)
 		.expect("sidecar after first run")
 		.modified()
@@ -374,7 +382,8 @@ async fn backfill_does_not_overwrite_conflicting_sidecar() {
 	std::fs::write(blobs.join(id.to_string()), b"shared").expect("write payload");
 	// Pre-existing sidecar names bob. Alice's pass must not overwrite it.
 	std::fs::write(
-		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner"),
+		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id"),
 		b"bob",
 	)
 	.expect("write sidecar");
@@ -398,11 +407,10 @@ async fn backfill_does_not_overwrite_conflicting_sidecar() {
 	assert_eq!(stats.skipped, 1, "bob's pass must report AlreadyCorrect");
 	assert_eq!(stats.errors, 0);
 	// The pre-existing sidecar survives unchanged.
-	let sidecar = std::fs::read_to_string(crate::api::jmap::blob_path::read_path(
-		path,
-		&id.to_string(),
-		".owner",
-	))
+	let sidecar = std::fs::read_to_string(
+		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id"),
+	)
 	.expect("read");
 	assert_eq!(
 		sidecar, "bob",
@@ -448,12 +456,14 @@ fn reclaim_blobs_drops_owner_sidecar_with_payload() {
 	let id = uuid::Uuid::now_v7().to_string();
 	std::fs::write(blobs.join(&id), b"old").expect("write payload");
 	std::fs::write(
-		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".type"),
+		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".type")
+			.expect("valid blob id"),
 		b"text/plain",
 	)
 	.expect("write type");
 	std::fs::write(
-		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner"),
+		crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id"),
 		b"alice",
 	)
 	.expect("write owner");
@@ -468,11 +478,15 @@ fn reclaim_blobs_drops_owner_sidecar_with_payload() {
 	assert_eq!(removed, 1);
 	assert!(!blobs.join(&id).exists(), "payload reclaimed");
 	assert!(
-		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".type").exists(),
+		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".type")
+			.expect("valid blob id")
+			.exists(),
 		".type sidecar reclaimed"
 	);
 	assert!(
-		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner").exists(),
+		!crate::api::jmap::blob_path::read_path(path, &id.to_string(), ".owner")
+			.expect("valid blob id")
+			.exists(),
 		".owner sidecar must be reclaimed alongside its payload"
 	);
 }

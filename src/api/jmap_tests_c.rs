@@ -34,7 +34,8 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 	let stale = uuid::Uuid::now_v7().to_string();
 	std::fs::write(blobs.join(&stale), b"old").expect("write");
 	std::fs::write(
-		crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type"),
+		crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type")
+			.expect("valid blob id"),
 		b"image/png",
 	)
 	.expect("write");
@@ -55,7 +56,9 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 	assert_eq!(removed, 1);
 	assert!(!blobs.join(&stale).exists(), "stale blob should be gone");
 	assert!(
-		!crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type").exists(),
+		!crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type")
+			.expect("valid blob id")
+			.exists(),
 		"stale sidecar should be gone"
 	);
 	assert!(blobs.join(&fresh).exists(), "fresh blob should be kept");

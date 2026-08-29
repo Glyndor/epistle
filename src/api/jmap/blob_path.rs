@@ -28,9 +28,25 @@ pub(crate) fn blob_root(data_dir: &Path) -> PathBuf {
 	data_dir.join("blobs")
 }
 
+/// Whether `blob_id` is safe to put in a path.
+///
+/// Every caller parses the id before it gets here — the download handler, the
+/// type and owner readers, and the backfill each do. The check lives in this
+/// module as well because that is the shape of a bug this codebase has already
+/// shipped: `validate_name` had a single caller, three of the four places an
+/// account name could arrive were checking it, and the fourth walked a path
+/// traversal into the data directory. A path-building helper that trusts its
+/// input is one new caller away from the same thing.
+fn is_safe_id(blob_id: &str) -> bool {
+	uuid::Uuid::parse_str(blob_id).is_ok()
+}
+
 /// The directory `blob_id` shards into. `None` for an id too short to shard,
 /// which cannot happen for a UUID but keeps the function total.
 pub(super) fn shard_dir(data_dir: &Path, blob_id: &str) -> Option<PathBuf> {
+	if !is_safe_id(blob_id) {
+		return None;
+	}
 	let id = blob_id.as_bytes();
 	if id.len() < SHARD_CHARS * 2 {
 		return None;
@@ -42,12 +58,8 @@ pub(super) fn shard_dir(data_dir: &Path, blob_id: &str) -> Option<PathBuf> {
 
 /// Where a new file for `blob_id` is written. `suffix` is `""` for the
 /// payload, or `.type` / `.owner` for a sidecar.
-pub(crate) fn write_path(data_dir: &Path, blob_id: &str, suffix: &str) -> PathBuf {
-	let name = format!("{blob_id}{suffix}");
-	match shard_dir(data_dir, blob_id) {
-		Some(dir) => dir.join(name),
-		None => blob_root(data_dir).join(name),
-	}
+pub(crate) fn write_path(data_dir: &Path, blob_id: &str, suffix: &str) -> Option<PathBuf> {
+	Some(shard_dir(data_dir, blob_id)?.join(format!("{blob_id}{suffix}")))
 }
 
 /// Where an existing file for `blob_id` is, preferring the sharded location
@@ -55,12 +67,12 @@ pub(crate) fn write_path(data_dir: &Path, blob_id: &str, suffix: &str) -> PathBu
 ///
 /// The fallback is what makes this upgrade free: nothing has to be moved, and
 /// a blob written before this change is still found.
-pub(crate) fn read_path(data_dir: &Path, blob_id: &str, suffix: &str) -> PathBuf {
-	let sharded = write_path(data_dir, blob_id, suffix);
+pub(crate) fn read_path(data_dir: &Path, blob_id: &str, suffix: &str) -> Option<PathBuf> {
+	let sharded = write_path(data_dir, blob_id, suffix)?;
 	if sharded.exists() {
-		return sharded;
+		return Some(sharded);
 	}
-	blob_root(data_dir).join(format!("{blob_id}{suffix}"))
+	Some(blob_root(data_dir).join(format!("{blob_id}{suffix}")))
 }
 
 /// Every blob payload under the store, sharded or flat, as `(id, path)`.
