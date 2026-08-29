@@ -19,6 +19,8 @@
 
 use std::path::{Path, PathBuf};
 
+use uuid::Uuid;
+
 /// Hex characters per shard level. Two levels of two characters is 65,536
 /// buckets, which keeps a directory small well past any single-node install.
 const SHARD_CHARS: usize = 2;
@@ -28,38 +30,25 @@ pub(crate) fn blob_root(data_dir: &Path) -> PathBuf {
 	data_dir.join("blobs")
 }
 
-/// Whether `blob_id` is safe to put in a path.
+/// The directory `blob_id` shards into.
 ///
-/// Every caller parses the id before it gets here — the download handler, the
-/// type and owner readers, and the backfill each do. The check lives in this
-/// module as well because that is the shape of a bug this codebase has already
-/// shipped: `validate_name` had a single caller, three of the four places an
-/// account name could arrive were checking it, and the fourth walked a path
-/// traversal into the data directory. A path-building helper that trusts its
-/// input is one new caller away from the same thing.
-fn is_safe_id(blob_id: &str) -> bool {
-	uuid::Uuid::parse_str(blob_id).is_ok()
-}
-
-/// The directory `blob_id` shards into. `None` for an id too short to shard,
-/// which cannot happen for a UUID but keeps the function total.
-pub(super) fn shard_dir(data_dir: &Path, blob_id: &str) -> Option<PathBuf> {
-	if !is_safe_id(blob_id) {
-		return None;
-	}
-	let id = blob_id.as_bytes();
-	if id.len() < SHARD_CHARS * 2 {
-		return None;
-	}
-	let tail = &blob_id[blob_id.len() - SHARD_CHARS * 2..];
+/// Taking a [`Uuid`] rather than a string is the whole safety argument. A
+/// caller cannot hand this a path fragment, because the only way to get one
+/// is to parse it and parsing rejects anything that is not a UUID. The
+/// previous version checked at run time, which a new caller could reach with
+/// a bad value and only find out when it ran; this one they cannot write.
+pub(super) fn shard_dir(data_dir: &Path, blob_id: Uuid) -> PathBuf {
+	// A hyphenated UUID is 36 characters, so the tail always exists.
+	let id = blob_id.to_string();
+	let tail = &id[id.len() - SHARD_CHARS * 2..];
 	let (outer, inner) = tail.split_at(SHARD_CHARS);
-	Some(blob_root(data_dir).join(outer).join(inner))
+	blob_root(data_dir).join(outer).join(inner)
 }
 
 /// Where a new file for `blob_id` is written. `suffix` is `""` for the
 /// payload, or `.type` / `.owner` for a sidecar.
-pub(crate) fn write_path(data_dir: &Path, blob_id: &str, suffix: &str) -> Option<PathBuf> {
-	Some(shard_dir(data_dir, blob_id)?.join(format!("{blob_id}{suffix}")))
+pub(crate) fn write_path(data_dir: &Path, blob_id: Uuid, suffix: &str) -> PathBuf {
+	shard_dir(data_dir, blob_id).join(format!("{blob_id}{suffix}"))
 }
 
 /// Where an existing file for `blob_id` is, preferring the sharded location
@@ -67,12 +56,12 @@ pub(crate) fn write_path(data_dir: &Path, blob_id: &str, suffix: &str) -> Option
 ///
 /// The fallback is what makes this upgrade free: nothing has to be moved, and
 /// a blob written before this change is still found.
-pub(crate) fn read_path(data_dir: &Path, blob_id: &str, suffix: &str) -> Option<PathBuf> {
-	let sharded = write_path(data_dir, blob_id, suffix)?;
+pub(crate) fn read_path(data_dir: &Path, blob_id: Uuid, suffix: &str) -> PathBuf {
+	let sharded = write_path(data_dir, blob_id, suffix);
 	if sharded.exists() {
-		return Some(sharded);
+		return sharded;
 	}
-	Some(blob_root(data_dir).join(format!("{blob_id}{suffix}")))
+	blob_root(data_dir).join(format!("{blob_id}{suffix}"))
 }
 
 /// Every blob payload under the store, sharded or flat, as `(id, path)`.
@@ -80,7 +69,7 @@ pub(crate) fn read_path(data_dir: &Path, blob_id: &str, suffix: &str) -> Option<
 /// Sidecars are skipped: a caller that wants one asks for it by id. Walking
 /// both layouts is what lets the reclaim sweep and the usage count keep
 /// working across the upgrade instead of quietly ignoring older blobs.
-pub(super) fn walk(data_dir: &Path) -> Vec<(String, PathBuf)> {
+pub(super) fn walk(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 	let root = blob_root(data_dir);
 	let mut out = Vec::new();
 	collect(&root, &mut out);
@@ -107,7 +96,7 @@ fn read_dir_names(dir: &Path) -> Vec<String> {
 }
 
 /// Append the payload files directly inside `dir` to `out`.
-fn collect(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+fn collect(dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
 	let Ok(entries) = std::fs::read_dir(dir) else {
 		return;
 	};
@@ -119,11 +108,12 @@ fn collect(dir: &Path, out: &mut Vec<(String, PathBuf)>) {
 		let Ok(name) = entry.file_name().into_string() else {
 			continue;
 		};
-		// A payload is named by the bare id; `.type` and `.owner` are not.
-		if name.contains('.') {
+		// A payload is named by the bare id; `.type` and `.owner` are not,
+		// and anything that is not a UUID was not written by us.
+		let Ok(id) = Uuid::parse_str(&name) else {
 			continue;
-		}
-		out.push((name, path));
+		};
+		out.push((id, path));
 	}
 }
 

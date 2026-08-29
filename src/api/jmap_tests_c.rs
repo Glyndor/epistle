@@ -31,20 +31,19 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 	std::fs::create_dir_all(&blobs).expect("mkdir");
 
 	// A stale blob (payload + sidecar) backdated past the TTL.
-	let stale = uuid::Uuid::now_v7().to_string();
-	std::fs::write(blobs.join(&stale), b"old").expect("write");
+	let stale = uuid::Uuid::now_v7();
+	std::fs::write(blobs.join(stale.to_string()), b"old").expect("write");
 	std::fs::write(
-		crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type")
-			.expect("valid blob id"),
+		crate::api::jmap::blob_path::read_path(path, stale, ".type"),
 		b"image/png",
 	)
 	.expect("write");
 	let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
-	filetime_set(&blobs.join(&stale), old);
+	filetime_set(&blobs.join(stale.to_string()), old);
 
 	// A fresh blob written just now.
-	let fresh = uuid::Uuid::now_v7().to_string();
-	std::fs::write(blobs.join(&fresh), b"new").expect("write");
+	let fresh = uuid::Uuid::now_v7();
+	std::fs::write(blobs.join(fresh.to_string()), b"new").expect("write");
 
 	// Stored mail that must never be reclaimed.
 	let inbox = path.join("accounts").join("alice").join("new");
@@ -54,14 +53,18 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 
 	let removed = super::jmap::reclaim_blobs(path, std::time::Duration::from_secs(24 * 3600));
 	assert_eq!(removed, 1);
-	assert!(!blobs.join(&stale).exists(), "stale blob should be gone");
 	assert!(
-		!crate::api::jmap::blob_path::read_path(path, &stale.to_string(), ".type")
-			.expect("valid blob id")
-			.exists(),
+		!blobs.join(stale.to_string()).exists(),
+		"stale blob should be gone"
+	);
+	assert!(
+		!crate::api::jmap::blob_path::read_path(path, stale, ".type").exists(),
 		"stale sidecar should be gone"
 	);
-	assert!(blobs.join(&fresh).exists(), "fresh blob should be kept");
+	assert!(
+		blobs.join(fresh.to_string()).exists(),
+		"fresh blob should be kept"
+	);
 	assert!(msg.exists(), "stored mail must be untouched");
 }
 
