@@ -1,6 +1,6 @@
 use super::*;
 
-fn reply_code(action: &Action) -> u16 {
+pub(super) fn reply_code(action: &Action) -> u16 {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -12,7 +12,7 @@ fn reply_code(action: &Action) -> u16 {
 	}
 }
 
-fn reply_text(action: &Action) -> String {
+pub(super) fn reply_text(action: &Action) -> String {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -24,7 +24,7 @@ fn reply_text(action: &Action) -> String {
 	}
 }
 
-fn auth_directory() -> Arc<Directory> {
+pub(super) fn auth_directory() -> Arc<Directory> {
 	Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -37,12 +37,12 @@ fn auth_directory() -> Arc<Directory> {
 	)
 }
 
-fn plain(authcid: &str, password: &str) -> String {
+pub(super) fn plain(authcid: &str, password: &str) -> String {
 	use base64::Engine;
 	base64::engine::general_purpose::STANDARD.encode(format!("\0{authcid}\0{password}"))
 }
 
-fn tls_session() -> Session {
+pub(super) fn tls_session() -> Session {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(auth_directory())
 		.with_tls_active();
@@ -50,7 +50,7 @@ fn tls_session() -> Session {
 	session
 }
 
-fn authenticated_session() -> Session {
+pub(super) fn authenticated_session() -> Session {
 	let mut session = tls_session();
 	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
 	assert_eq!(session.authenticated(), Some("alice"));
@@ -58,14 +58,14 @@ fn authenticated_session() -> Session {
 }
 
 // Unauthenticated session with no TLS — used for relay/sender tests.
-fn greeted_plain() -> Session {
+pub(super) fn greeted_plain() -> Session {
 	let mut session = Session::new("mail.example.org").with_directory(auth_directory());
 	session.command_line("EHLO client.example.org");
 	session
 }
 
 #[test]
-fn auth_login_authenticates() {
+pub(super) fn auth_login_authenticates() {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 	let mut session = tls_session();
@@ -190,7 +190,7 @@ fn scram_sha256_wrong_password_fails() {
 }
 
 #[test]
-fn auth_rejected_outside_tls() {
+pub(super) fn auth_rejected_outside_tls() {
 	let mut session = greeted_plain();
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
 	assert_eq!(reply_code(&action), 538);
@@ -198,7 +198,7 @@ fn auth_rejected_outside_tls() {
 }
 
 #[test]
-fn ehlo_advertises_auth_only_inside_tls() {
+pub(super) fn ehlo_advertises_auth_only_inside_tls() {
 	let mut plain_session = greeted_plain();
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
@@ -216,7 +216,7 @@ fn ehlo_advertises_auth_only_inside_tls() {
 }
 
 #[test]
-fn ehlo_advertises_requiretls_only_inside_tls() {
+pub(super) fn ehlo_advertises_requiretls_only_inside_tls() {
 	let mut plain_session = greeted_plain();
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
@@ -231,21 +231,21 @@ fn ehlo_advertises_requiretls_only_inside_tls() {
 }
 
 #[test]
-fn requiretls_rejected_without_tls() {
+pub(super) fn requiretls_rejected_without_tls() {
 	let mut session = greeted_plain();
 	let action = session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
 	assert_eq!(reply_code(&action), 530);
 }
 
 #[test]
-fn requiretls_accepted_inside_tls() {
+pub(super) fn requiretls_accepted_inside_tls() {
 	let mut session = tls_session();
 	let action = session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
 	assert_eq!(reply_code(&action), 250);
 }
 
 #[test]
-fn requiretls_flows_to_accepted_message() {
+pub(super) fn requiretls_flows_to_accepted_message() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
 	session.command_line("RCPT TO:<alice@example.org>");
@@ -263,7 +263,7 @@ fn requiretls_flows_to_accepted_message() {
 }
 
 #[test]
-fn auth_with_initial_response_succeeds() {
+pub(super) fn auth_with_initial_response_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
 	assert_eq!(reply_code(&action), 235);
@@ -271,7 +271,7 @@ fn auth_with_initial_response_succeeds() {
 }
 
 #[test]
-fn auth_by_address_succeeds() {
+pub(super) fn auth_by_address_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -281,7 +281,7 @@ fn auth_by_address_succeeds() {
 }
 
 #[test]
-fn auth_challenge_flow_succeeds() {
+pub(super) fn auth_challenge_flow_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line("AUTH PLAIN");
 	assert!(matches!(action, Action::CollectAuthResponse(_)));
@@ -291,7 +291,7 @@ fn auth_challenge_flow_succeeds() {
 }
 
 #[test]
-fn auth_challenge_can_be_cancelled() {
+pub(super) fn auth_challenge_can_be_cancelled() {
 	let mut session = tls_session();
 	session.command_line("AUTH PLAIN");
 	let action = session.auth_line("*");
@@ -308,14 +308,14 @@ fn wrong_password_gets_535_without_detail() {
 }
 
 #[test]
-fn unknown_user_gets_same_reply_as_wrong_password() {
+pub(super) fn unknown_user_gets_same_reply_as_wrong_password() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("mallory", "secret")));
 	assert_eq!(reply_code(&action), 535);
 }
 
 #[test]
-fn third_failure_closes_connection() {
+pub(super) fn third_failure_closes_connection() {
 	let mut session = tls_session();
 	for _ in 0..2 {
 		let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "wrong")));
@@ -326,7 +326,7 @@ fn third_failure_closes_connection() {
 }
 
 #[test]
-fn auth_after_success_is_bad_sequence() {
+pub(super) fn auth_after_success_is_bad_sequence() {
 	let mut session = tls_session();
 	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
@@ -340,7 +340,7 @@ fn unsupported_mechanism_gets_504() {
 }
 
 #[test]
-fn auth_inside_transaction_is_bad_sequence() {
+pub(super) fn auth_inside_transaction_is_bad_sequence() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
 	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
@@ -348,7 +348,7 @@ fn auth_inside_transaction_is_bad_sequence() {
 }
 
 #[test]
-fn authenticated_user_may_relay_to_foreign_domains() {
+pub(super) fn authenticated_user_may_relay_to_foreign_domains() {
 	let mut session = authenticated_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
 	let action = session.command_line("RCPT TO:<bob@elsewhere.example>");
@@ -356,7 +356,7 @@ fn authenticated_user_may_relay_to_foreign_domains() {
 }
 
 #[test]
-fn unauthenticated_relay_stays_denied() {
+pub(super) fn unauthenticated_relay_stays_denied() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<someone@elsewhere.example>");
 	let action = session.command_line("RCPT TO:<bob@elsewhere.example>");
@@ -364,21 +364,21 @@ fn unauthenticated_relay_stays_denied() {
 }
 
 #[test]
-fn authenticated_sender_must_own_the_address() {
+pub(super) fn authenticated_sender_must_own_the_address() {
 	let mut session = authenticated_session();
 	let action = session.command_line("MAIL FROM:<other@elsewhere.example>");
 	assert_eq!(reply_code(&action), 553);
 }
 
 #[test]
-fn authenticated_sender_cannot_use_null_path() {
+pub(super) fn authenticated_sender_cannot_use_null_path() {
 	let mut session = authenticated_session();
 	let action = session.command_line("MAIL FROM:<>");
 	assert_eq!(reply_code(&action), 553);
 }
 
 #[test]
-fn authenticated_relay_still_rejects_unknown_local_users() {
+pub(super) fn authenticated_relay_still_rejects_unknown_local_users() {
 	let mut session = authenticated_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
 	let action = session.command_line("RCPT TO:<stranger@example.org>");
@@ -388,13 +388,13 @@ fn authenticated_relay_still_rejects_unknown_local_users() {
 // TLS / STARTTLS tests
 
 #[test]
-fn starttls_without_tls_configured_is_unavailable() {
+pub(super) fn starttls_without_tls_configured_is_unavailable() {
 	let mut session = greeted_plain();
 	assert_eq!(reply_code(&session.command_line("STARTTLS")), 454);
 }
 
 #[test]
-fn ehlo_advertises_starttls_when_available() {
+pub(super) fn ehlo_advertises_starttls_when_available() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("expected continue");
@@ -403,7 +403,7 @@ fn ehlo_advertises_starttls_when_available() {
 }
 
 #[test]
-fn ehlo_advertises_dsn() {
+pub(super) fn ehlo_advertises_dsn() {
 	let mut session = Session::new("mail.example.org");
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("expected continue");
@@ -412,7 +412,7 @@ fn ehlo_advertises_dsn() {
 }
 
 #[test]
-fn ehlo_does_not_advertise_starttls_when_unavailable() {
+pub(super) fn ehlo_does_not_advertise_starttls_when_unavailable() {
 	let mut session = greeted_plain();
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("expected continue");
@@ -421,7 +421,7 @@ fn ehlo_does_not_advertise_starttls_when_unavailable() {
 }
 
 #[test]
-fn starttls_upgrades_after_greeting() {
+pub(super) fn starttls_upgrades_after_greeting() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	session.command_line("EHLO client.example.org");
 	let action = session.command_line("STARTTLS");
@@ -430,13 +430,13 @@ fn starttls_upgrades_after_greeting() {
 }
 
 #[test]
-fn starttls_before_greeting_is_bad_sequence() {
+pub(super) fn starttls_before_greeting_is_bad_sequence() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	assert_eq!(reply_code(&session.command_line("STARTTLS")), 503);
 }
 
 #[test]
-fn starttls_inside_transaction_is_bad_sequence() {
+pub(super) fn starttls_inside_transaction_is_bad_sequence() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	session.command_line("EHLO client.example.org");
 	session.command_line("MAIL FROM:<a@example.org>");
@@ -444,7 +444,7 @@ fn starttls_inside_transaction_is_bad_sequence() {
 }
 
 #[test]
-fn tls_started_resets_session() {
+pub(super) fn tls_started_resets_session() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	session.command_line("EHLO client.example.org");
 	session.tls_started();
@@ -484,7 +484,7 @@ fn auth_rejects_malformed_base64() {
 }
 
 #[test]
-fn submission_rate_limit_defers_over_the_limit() {
+pub(super) fn submission_rate_limit_defers_over_the_limit() {
 	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
 	let mut session = Session::new("mail.example.org")
 		.with_directory(auth_directory())
@@ -503,212 +503,4 @@ fn submission_rate_limit_defers_over_the_limit() {
 	// The second within the window exceeds the per-account limit -> 4xx defer.
 	let second = session.command_line("MAIL FROM:<alice@example.org>");
 	assert_eq!(reply_code(&second), 450);
-}
-
-#[test]
-fn submission_rate_limit_uses_per_domain_override() {
-	// Per-domain limit is tighter than the server-wide default: the per-domain
-	// value must win, so a second send within the per-domain budget is
-	// allowed even though the global default would already reject it.
-	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
-	let directory = Arc::new(
-		Directory::new(
-			["example.org".to_string()],
-			[("alice@example.org".to_string(), "alice".to_string())],
-		)
-		.with_password_hashes([(
-			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
-		)])
-		.with_domain_submission_limits([("example.org".to_string(), 3)]),
-	);
-	let mut session = Session::new("mail.example.org")
-		.with_directory(directory)
-		.with_tls_active()
-		.with_send_limiter(limiter)
-		.with_global_submission_rate_limit(Some(1));
-	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
-
-	// Three submissions fit under the per-domain limit of 3.
-	for _ in 0..3 {
-		assert_eq!(
-			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-			250
-		);
-		session.command_line("RSET");
-	}
-	// The fourth is deferred: the per-domain limit (3) wins over the global
-	// (1), which would have deferred the second send.
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-		450
-	);
-}
-
-#[test]
-fn submission_rate_limit_falls_back_to_global_when_domain_has_no_entry() {
-	// Directory has no entry for example.org, but the global default is set:
-	// the global wins (the conservative fallback).
-	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
-	let mut session = Session::new("mail.example.org")
-		.with_directory(auth_directory())
-		.with_tls_active()
-		.with_send_limiter(limiter)
-		.with_global_submission_rate_limit(Some(1));
-	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
-
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-		450
-	);
-}
-
-#[test]
-fn submission_rate_limit_is_off_when_neither_domain_nor_global_is_set() {
-	// No per-domain entry, no global default, but a limiter is still wired in
-	// (e.g. the operator later adds a per-domain override). The session must
-	// skip the call entirely: every send is accepted.
-	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
-	let mut session = Session::new("mail.example.org")
-		.with_directory(auth_directory())
-		.with_tls_active()
-		.with_send_limiter(limiter)
-		.with_global_submission_rate_limit(None);
-	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
-
-	for _ in 0..5 {
-		assert_eq!(
-			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
-			250
-		);
-		session.command_line("RSET");
-	}
-}
-
-#[test]
-fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain() {
-	// Two accounts, one on each of two hosted domains. The directory lists
-	// example.com first; if the resolver naively read domains[0] it would
-	// hand bob (in example.org) the example.com limit. The walk over the
-	// account's own addresses must return the matching per-domain entry.
-	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
-	let directory = Arc::new(
-		Directory::new(
-			["example.com".to_string(), "example.org".to_string()],
-			[
-				("alice@example.com".to_string(), "alice".to_string()),
-				("bob@example.org".to_string(), "bob".to_string()),
-			],
-		)
-		.with_password_hashes([
-			(
-				"alice".to_string(),
-				crate::smtp::auth::tests::hash("secret"),
-			),
-			("bob".to_string(), crate::smtp::auth::tests::hash("secret")),
-		])
-		.with_domain_submission_limits([
-			("example.com".to_string(), 1),
-			("example.org".to_string(), 2),
-		]),
-	);
-
-	// alice: per-domain 1. The second send within the window defers.
-	let mut session = Session::new("mail.example.org")
-		.with_directory(Arc::clone(&directory))
-		.with_tls_active()
-		.with_send_limiter(Arc::clone(&limiter));
-	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
-		450
-	);
-
-	// bob: per-domain 2. The first two sends fit, the third defers. This
-	// would be wrong if bob were charged the example.com limit of 1 (only
-	// one send would pass).
-	let mut session = Session::new("mail.example.org")
-		.with_directory(Arc::clone(&directory))
-		.with_tls_active()
-		.with_send_limiter(Arc::clone(&limiter));
-	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("bob", "secret")));
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
-		250
-	);
-	session.command_line("RSET");
-	assert_eq!(
-		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
-		450
-	);
-}
-
-#[test]
-fn external_authenticates_with_verified_client_cert() {
-	let mut session = Session::new("mail.example.org")
-		.with_directory(auth_directory())
-		.with_tls_active();
-	// The TLS layer recorded a verified certificate identity for this account.
-	session.set_client_identity(Some("alice@example.org".to_string()));
-	let ehlo = session.command_line("EHLO client.example.org");
-	assert!(
-		reply_text(&ehlo).contains("EXTERNAL"),
-		"EXTERNAL advertised once a client cert is present: {}",
-		reply_text(&ehlo)
-	);
-	// Empty initial response (`=`) means "use the certificate identity".
-	let action = session.command_line("AUTH EXTERNAL =");
-	assert_eq!(reply_code(&action), 235);
-	assert_eq!(session.authenticated(), Some("alice"));
-}
-
-#[test]
-fn external_is_unavailable_without_a_client_cert() {
-	let mut session = Session::new("mail.example.org")
-		.with_directory(auth_directory())
-		.with_tls_active();
-	let ehlo = session.command_line("EHLO client.example.org");
-	assert!(
-		!reply_text(&ehlo).contains("EXTERNAL"),
-		"EXTERNAL not advertised without a client cert"
-	);
-	// And attempting it is rejected (not advertised).
-	let action = session.command_line("AUTH EXTERNAL =");
-	assert_eq!(reply_code(&action), 504);
-	assert_eq!(session.authenticated(), None);
-}
-
-#[test]
-fn external_rejects_mismatched_authzid() {
-	let mut session = Session::new("mail.example.org")
-		.with_directory(auth_directory())
-		.with_tls_active();
-	session.set_client_identity(Some("alice@example.org".to_string()));
-	session.command_line("EHLO client.example.org");
-	// Requesting to act as someone other than the certificate identity fails.
-	use base64::Engine;
-	let authzid = base64::engine::general_purpose::STANDARD.encode("bob@example.org");
-	let action = session.command_line(&format!("AUTH EXTERNAL {authzid}"));
-	assert_eq!(reply_code(&action), 535);
-	assert_eq!(session.authenticated(), None);
 }

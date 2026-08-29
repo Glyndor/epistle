@@ -598,9 +598,13 @@ mod tests_basic;
 #[cfg(test)]
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
+
 #[cfg(test)]
 #[path = "../session_tests_oauth.rs"]
 mod tests_oauth;
+#[cfg(test)]
+#[path = "../session_tests_ratelimit.rs"]
+mod tests_ratelimit;
 #[cfg(test)]
 #[path = "../session_tests_scram.rs"]
 mod tests_scram;
