@@ -1,3 +1,24 @@
+epistle (0.7.0) unstable; urgency=medium
+
+  * Uploaded JMAP blobs are stored two levels deep under
+    blobs/<ab>/<cd>/<id> instead of in one flat directory. The reclaim
+    sweep and the quota usage count both walk that directory on a timer,
+    so flat they cost the whole history of the install rather than what
+    is there now, and most filesystems slow down badly past a few tens
+    of thousands of entries in one place. The shard comes from the END
+    of the blob id: ids are UUIDv7, whose leading characters are a
+    timestamp, so sharding on them would file everything written in the
+    same era into one bucket. There is no migration and nothing to
+    configure: a blob written by an older version stays where it is and
+    is still served, still counted against quota, and still reclaimed.
+  * The master at-rest key and the base64 text it was read from are
+    zeroized after loading, so the buffers are overwritten on drop
+    rather than left in freed memory, a core dump, or swap. Best effort,
+    not a guarantee, and the doc comment says which gaps remain: the
+    live key keeps its own copy for the life of the process.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 29 Aug 2026 08:00:00 +0000
+
 epistle (0.6.0) unstable; urgency=medium
 
   * IMAP COMPRESS=DEFLATE (RFC 4978). A client that asks gets a deflate
