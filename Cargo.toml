@@ -52,6 +52,7 @@ tracing-opentelemetry = "0.33"
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
+zeroize = "=1.9.0"
 
 [profile.release]
 lto = "thin"
