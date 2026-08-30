@@ -73,6 +73,23 @@ pub struct RotationState {
 	pub previous: Option<Previous>,
 }
 
+/// The interval between automatic DKIM key rotations, in days.
+///
+/// Rotation is a security property of the server, not a per-deployment
+/// preference; this is why the value is fixed in code rather than read from
+/// the config file. Aligned with the TLS certificate cycle, which is also
+/// 90 days.
+pub const ROTATE_INTERVAL_DAYS: u64 = 90;
+
+/// Days the retired selector's TXT stays published after a rotation so
+/// in-flight mail still verifies.
+///
+/// Sized to cover the remote-server retry queue: a message signed just
+/// before rotation can sit in a remote retry queue for four or five days,
+/// so the previous 7-day window left no margin. 14 covers that and still
+/// keeps the DNS footprint bounded.
+pub const ROTATE_OVERLAP_DAYS: u64 = 14;
+
 /// What a rotation tick should do at a given time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {

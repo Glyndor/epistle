@@ -103,14 +103,16 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 ### `[dkim]`
 Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for receivers that lack Ed25519 support.
 
+Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
+
 | Key | Meaning |
 |---|---|
 | `selector` | Ed25519 selector (the `s=` tag). |
 | `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
 | `rsa_selector` | Optional RSA selector. |
 | `rsa_key_file` | Optional RSA private key. |
-| `rotate_days` | Automatic key rotation interval in days. Requires a `[dns]` provider to publish the new selector's TXT. Absent disables rotation. |
-| `rotate_overlap_days` | Days the previous selector's TXT stays published after a rotation so in-flight mail still verifies (default `7`). |
+| `rotate_days` | **Deprecated.** Ignored. Kept so existing configs keep parsing; a one-shot warning is logged at startup when present. Will be removed in a future release. |
+| `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
 ### `[api]`
 Management API (consumed by `epistle-panel`). Closed by default.
