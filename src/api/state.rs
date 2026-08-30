@@ -231,12 +231,31 @@ impl ApiState {
 	/// the resolved account identity. Used by the OAuth approval/authorize
 	/// endpoints to bind a grant to a real account. Fail-closed and free of any
 	/// user-enumeration oracle (see [`crate::smtp::directory::Directory::authenticate`]).
+	///
+	/// Use [`ApiState::authenticate_with_ip`] when the request carries the
+	/// peer IP — the audit log attributes every authentication attempt to its
+	/// source IP, which is what the future IP-banning and credential-stuffing
+	/// detectors consume.
 	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+		self.authenticate_with_ip(login, password, None)
+	}
+
+	/// Authenticate `login`/`password` and attribute the attempt to `ip` in
+	/// the audit log. `None` for `ip` is the same as
+	/// [`ApiState::authenticate`]: the peer address was not available to the
+	/// caller, so it is logged as `unknown`. The audit counters are bumped
+	/// from the same path either way.
+	pub fn authenticate_with_ip(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+	) -> Option<String> {
 		self.inner
 			.store
 			.handle()
 			.current()
-			.authenticate(login, password)
+			.authenticate_with_ip(login, password, ip)
 	}
 
 	/// Set the account names allowed to authenticate to the admin panel. Must be

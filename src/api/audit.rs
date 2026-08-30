@@ -37,6 +37,14 @@ pub enum AuditEvent {
 	MaskedUpdated,
 	/// A masked email address was removed from an account.
 	MaskedRemoved,
+	/// A password-based authentication attempt (PLAIN, LOGIN, IMAP LOGIN,
+	/// WebDAV Basic, ManageSieve PLAIN, the API's credential-verification
+	/// endpoints) accepted the presented credentials and resolved an account.
+	LoginSucceeded,
+	/// The same attempt was rejected: the login was unknown, the account was
+	/// disabled, the password did not match, an app-password CIDR did not
+	/// admit the peer, or an LDAP bind failed.
+	LoginFailed,
 }
 
 impl AuditEvent {
@@ -50,6 +58,8 @@ impl AuditEvent {
 			AuditEvent::MaskedCreated => "masked.created",
 			AuditEvent::MaskedUpdated => "masked.updated",
 			AuditEvent::MaskedRemoved => "masked.removed",
+			AuditEvent::LoginSucceeded => "auth.login_succeeded",
+			AuditEvent::LoginFailed => "auth.login_failed",
 		}
 	}
 }
@@ -72,6 +82,35 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 		account = %account,
 		client_ip = %client_ip,
 		"privilege change"
+	);
+}
+
+/// Emit a structured audit event for a password-based authentication attempt
+/// (PLAIN / LOGIN / IMAP LOGIN / WebDAV Basic / ManageSieve PLAIN / API
+/// credential-verification). `login` is whatever the client presented as
+/// the authcid — for a failed attempt that name may not resolve to any
+/// account, in which case `account` is `None` and is rendered as `unknown`.
+/// The plaintext password and the TOTP code (when the account has 2FA) are
+/// never written to the log: only the result and the identifiers needed to
+/// correlate one attempt with the next do. `client_ip` follows the same
+/// `unknown` convention as [`log_privilege_change`].
+pub fn log_auth_attempt(
+	event: AuditEvent,
+	login: &str,
+	account: Option<&str>,
+	client_ip: Option<IpAddr>,
+) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	let account = account.unwrap_or("unknown");
+	tracing::info!(
+		target: "epistle::auth",
+		event = event.as_str(),
+		login = %login,
+		account = %account,
+		client_ip = %client_ip,
+		"authentication attempt"
 	);
 }
 

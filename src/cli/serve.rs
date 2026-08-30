@@ -62,6 +62,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	if let Some(auth) = ldap_auth {
 		store = store.with_ldap_authenticator(auth);
 	}
+	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	// The directory's audit counters are bumped from the SMTP, IMAP,
+	// ManageSieve, WebDAV, API and OAuth paths — every directory rebuilt
+	// here shares the same `Arc<Metrics>` so the counters are coherent.
+	store = store.with_metrics(metrics.clone());
 	let account_store = Arc::new(store);
 	let directory = account_store.handle();
 
@@ -69,9 +75,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// encryption enabled but no usable key the server refuses to start.
 	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
 		.map_err(std::io::Error::other)?;
-
-	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
-	let metrics = Arc::new(crate::metrics::Metrics::new());
 
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured.
