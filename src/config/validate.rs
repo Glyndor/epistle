@@ -7,6 +7,9 @@ use super::{Config, ConfigError};
 #[path = "validate_tenants.rs"]
 mod validate_tenants;
 
+#[path = "validate_database.rs"]
+mod validate_database;
+
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
@@ -27,6 +30,7 @@ impl Config {
 		self.validate_antispam_llm()?;
 		self.validate_alerts()?;
 		self.validate_tenants()?;
+		self.validate_database()?;
 		Ok(())
 	}
 
@@ -459,3 +463,7 @@ mod tests_d;
 #[cfg(test)]
 #[path = "validate_tests_e.rs"]
 mod tests_e;
+
+#[cfg(test)]
+#[path = "validate_tests_f.rs"]
+mod tests_f;

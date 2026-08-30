@@ -210,8 +210,9 @@ PostgreSQL backing for the antispam engine (reputation, Bayes).
 
 | Key | Meaning |
 |---|---|
-| `url` | Connection URL (keep the password in `${VAR}`). |
+| `url` | Connection URL (keep the password in `${VAR}`). Must be `sslmode=require` (or `verify-ca` / `verify-full`); an absent or weaker `sslmode` is rejected. A Unix-domain socket URL (`postgres://%2Fpath/...` or `postgres:///db?host=/path`) is accepted as is because there is no network on the path to intercept. |
 | `max_connections` | Pool size. |
+| `tls` | How the connection authenticates the PostgreSQL server. Defaults to `require`, which rejects any `sslmode` weaker than `require`. Set to `insecure` to assert that the connection stays on a network you trust (typically an internal container network with no gateway to the outside); an `insecure` connection is the operator's responsibility. |
 | `directory` | Resolve mail accounts from the SQL directory tables (off by default). |
 
 An unreachable database does not stop the server: the antispam engine is

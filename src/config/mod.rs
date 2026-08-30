@@ -35,7 +35,7 @@ pub use alias::Alias;
 pub use antispam::Llm;
 pub use api::Api;
 pub use arc::Arc;
-pub use database::Database;
+pub use database::{Database, DatabaseTls};
 pub use dkim::Dkim;
 pub use dns::Dns;
 pub use ldap::Ldap;

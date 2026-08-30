@@ -209,7 +209,7 @@ pub(super) async fn connect_database(
 	let Some(db) = &config.database else {
 		return Ok(None);
 	};
-	match crate::db::connect(&db.url, db.max_connections).await {
+	match crate::db::connect(&db.url, db.tls, db.max_connections).await {
 		Ok(pool) => Ok(Some(pool)),
 		// Fatal: the directory backend resolves recipients from this database.
 		Err(error) if db.directory => Err(std::io::Error::other(format!(
