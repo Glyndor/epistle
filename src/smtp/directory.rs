@@ -657,3 +657,7 @@ mod auth_audit_tests;
 #[cfg(test)]
 #[path = "directory_masked_tests.rs"]
 mod masked_tests;
+
+#[cfg(test)]
+#[path = "directory_alias_tests.rs"]
+mod alias_tests;

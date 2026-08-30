@@ -10,12 +10,14 @@ use std::sync::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Account;
+use crate::directory_store::aliases::AliasStore;
 use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
 
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
+pub mod aliases;
 pub mod masked;
 mod names;
 use names::{validate_name, with_safe_names};
@@ -175,6 +177,7 @@ pub struct AccountStore {
 	/// Wrapped in `Arc<RwLock<_>>` so the API can share the same handle and
 	/// mutate without going through `AccountStore`'s mutators.
 	masked: Arc<RwLock<MaskedAddressStore>>,
+	aliases_disabled: Arc<RwLock<AliasStore>>,
 	/// Shared metrics handle for the audit counters
 	/// (`auth_login_succeeded` / `auth_login_failed`). Threaded into every
 	/// rebuilt directory via [`AccountStore::with_metrics`] so the SMTP,
@@ -222,6 +225,7 @@ impl AccountStore {
 			ldap_accounts: RwLock::new(Vec::new()),
 			ldap_auth: None,
 			masked: Arc::new(RwLock::new(masked)),
+			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
 			metrics: None,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
@@ -610,6 +614,7 @@ impl AccountStore {
 					(account.forward.clone(), account.forward_keep_local),
 				)
 			});
+		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
 		let aliases = self.aliases.iter().map(|alias| {
 			(
 				alias.address.clone(),
@@ -621,6 +626,7 @@ impl AccountStore {
 				},
 			)
 		});
+		let aliases = aliases.filter(|(address, _)| !disabled_lock.is_disabled(address));
 		// Masked email addresses: only enabled ones feed the directory so a
 		// disabled mask rejects like an unknown user and the SMTP `owns_address`
 		// check stays fail-closed.
