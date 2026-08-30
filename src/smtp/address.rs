@@ -88,6 +88,13 @@ fn validate_local_part(local_part: &str) -> Result<(), AddressError> {
 }
 
 fn validate_domain(domain: &str) -> Result<(), AddressError> {
+	// RFC 5321 §4.5.3.1.2 caps a domain at 255 octets and the section
+	// header requires implementations to accept names of at least that
+	// size. 255 is the wire form: each label carries a length byte and
+	// the root label adds one more, so any presentation name is exactly
+	// two octets shorter than its wire encoding. 253 is the longest dot-
+	// separated string the wire cap can carry; raising this check would
+	// accept names that no DNS query can resolve.
 	if domain.is_empty() || domain.len() > 253 || !domain.contains('.') {
 		return Err(AddressError::InvalidDomain);
 	}
