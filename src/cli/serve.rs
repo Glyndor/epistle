@@ -64,6 +64,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	}
 	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
 	let metrics = Arc::new(crate::metrics::Metrics::new());
+	// Probe the system clock before anything else binds a socket: a drift
+	// past the TOTP window breaks two-factor for every account at once,
+	// and the counter is what the alert engine reads. The probe sleeps
+	// for ~100 ms; doing it before listener setup means the metric is
+	// already in place if a slow startup happens to coincide with one.
+	crate::clock::check_drift(&metrics);
 	// The directory's audit counters are bumped from the SMTP, IMAP,
 	// ManageSieve, WebDAV, API and OAuth paths — every directory rebuilt
 	// here shares the same `Arc<Metrics>` so the counters are coherent.
