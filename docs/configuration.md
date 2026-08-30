@@ -212,6 +212,13 @@ PostgreSQL backing for the antispam engine (reputation, Bayes).
 |---|---|
 | `url` | Connection URL (keep the password in `${VAR}`). |
 | `max_connections` | Pool size. |
+| `directory` | Resolve mail accounts from the SQL directory tables (off by default). |
+
+An unreachable database does not stop the server: the antispam engine is
+disabled, mail keeps flowing unfiltered, a warning is logged and the
+`database_unavailable` counter is incremented (alert on it). The exception is
+`directory = true`: the accounts themselves come from SQL, so there would be
+nobody to deliver to and the start fails.
 
 ### `[acme]`
 Automatic TLS certificates for the mail protocols (not the panel's web TLS).
@@ -327,7 +334,7 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
-`webhook_sent`.
+`webhook_sent`, `database_unavailable`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).

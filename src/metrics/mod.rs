@@ -73,6 +73,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("bounced", "bounced"),
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
+	("database_unavailable", "database_unavailable"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -104,6 +105,7 @@ pub struct Metrics {
 	bounced: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
+	database_unavailable: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
@@ -175,6 +177,12 @@ impl Metrics {
 		self.webhook_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a startup that could not reach the configured database and carried
+	/// on without the antispam engine (advisory; mail keeps flowing, unfiltered).
+	pub fn database_unavailable(&self) {
+		self.database_unavailable.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -243,6 +251,7 @@ impl Metrics {
 			"bounced" => &self.bounced,
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
+			"database_unavailable" => &self.database_unavailable,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -330,6 +339,11 @@ impl Metrics {
 				"mail_webhook_failed_total",
 				"Webhook events that failed to deliver.",
 				&self.webhook_failed,
+			),
+			(
+				"mail_database_unavailable_total",
+				"Startups that could not reach the database and ran without the antispam engine.",
+				&self.database_unavailable,
 			),
 			(
 				"mail_llm_consulted_total",
@@ -465,6 +479,7 @@ mod tests {
 			"bounced",
 			"webhook_sent",
 			"webhook_failed",
+			"database_unavailable",
 		] {
 			assert!(snap.contains_key(name), "missing {name}");
 		}
