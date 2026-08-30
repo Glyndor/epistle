@@ -153,8 +153,11 @@ pub fn build_records(
 			},
 		};
 
-		// SPF: authorize the domain's MX hosts; soft-fail the rest.
-		records.push(txt(domain.clone(), "v=spf1 mx ~all".to_string()));
+		// SPF: authorize the domain's MX hosts and hard-fail anything else
+		// (`-all`). The hard-fail depends on every forwarded message being
+		// SRS-rewritten; see `config::validate` for the matching check that
+		// rejects `forward` without `srs_secret`.
+		records.push(txt(domain.clone(), "v=spf1 mx -all".to_string()));
 		// DMARC: a protective default that reports to postmaster.
 		records.push(txt(
 			format!("_dmarc.{domain}"),

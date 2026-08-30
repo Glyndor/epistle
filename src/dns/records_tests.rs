@@ -23,7 +23,7 @@ fn builds_core_records_per_domain() {
 
 	assert_eq!(
 		find(&records, "example.org", RecordKind::Txt).record.value,
-		"v=spf1 mx ~all"
+		"v=spf1 mx -all"
 	);
 	assert!(
 		find(&records, "_dmarc.example.org", RecordKind::Txt)
