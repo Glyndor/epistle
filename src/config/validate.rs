@@ -15,6 +15,7 @@ impl Config {
 		self.validate_data_dir()?;
 		self.validate_domains()?;
 		self.validate_accounts()?;
+		self.validate_srs()?;
 		self.validate_api()?;
 		self.validate_listeners()?;
 		self.validate_acme()?;
@@ -351,6 +352,41 @@ impl Config {
 		)
 	}
 
+	/// Reject a config that forwards mail from any account without a configured
+	/// SRS secret. The recommended SPF policy for our domains is `-all`
+	/// (hardfail) — see `dns::records::build_records` — and `-all` only stays
+	/// safe to publish because forwarding rewrites the envelope sender onto
+	/// our own domain (SRS), so the next hop evaluates SPF against our record
+	/// and passes. Without SRS, forwarded mail keeps the original sender; the
+	/// recipient MTA's SPF check on the original domain fails, and any domain
+	/// that publishes `-all` rejects the message. Refusing here surfaces the
+	/// mismatch at load time rather than at the first forwarded bounce.
+	fn validate_srs(&self) -> Result<(), ConfigError> {
+		let forwarding: Vec<&str> = self
+			.accounts
+			.iter()
+			.filter(|account| !account.forward.is_empty())
+			.map(|account| account.name.as_str())
+			.collect();
+		if forwarding.is_empty() {
+			return Ok(());
+		}
+		if self.srs_secret.is_none() {
+			let names = forwarding
+				.iter()
+				.map(|name| format!("\"{name}\""))
+				.collect::<Vec<_>>()
+				.join(", ");
+			return Err(ConfigError::Invalid(format!(
+				"[[accounts]] {names} set `forward = [...]` but no `srs_secret` is configured; \
+				 without SRS, forwarded mail keeps the original envelope sender and any \
+				 destination whose SPF policy is `-all` will reject the message. \
+				 Set `srs_secret` or remove the `forward` entries."
+			)));
+		}
+		Ok(())
+	}
+
 	fn validate_alerts(&self) -> Result<(), ConfigError> {
 		let mut seen = HashSet::new();
 		for alert in &self.alerts {
@@ -419,3 +455,7 @@ mod tests_c;
 #[cfg(test)]
 #[path = "validate_tests_d.rs"]
 mod tests_d;
+
+#[cfg(test)]
+#[path = "validate_tests_e.rs"]
+mod tests_e;
