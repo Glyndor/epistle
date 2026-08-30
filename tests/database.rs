@@ -2,6 +2,13 @@
 //! `DATABASE_URL` is set (the `Database` CI workflow provides one); otherwise
 //! they skip so the default test run needs no database.
 
+// The CI database is a container on the runner's loopback with no TLS, which
+// is exactly the case `DatabaseTls::Insecure` exists for: a private network the
+// operator vouches for. These tests exercise migrations, reputation and the
+// Bayes corpora, not the transport, so forcing `Require` here would only make
+// them fail on the absence of a certificate nobody issued.
+use epistle::config::DatabaseTls;
+
 /// The connection URL, or `None` when no database is configured for this run.
 fn database_url() -> Option<String> {
 	std::env::var("DATABASE_URL").ok().filter(|u| !u.is_empty())
@@ -14,7 +21,7 @@ async fn migrations_apply_and_reputation_roundtrips() {
 		return;
 	};
 
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -54,7 +61,7 @@ async fn reputation_record_accumulates_and_judges() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -101,7 +108,7 @@ async fn reputation_screen_maps_verdicts() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -139,7 +146,7 @@ async fn bayes_corpus_trains_and_scores() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -196,7 +203,7 @@ async fn sql_directory_loads_resolves_and_authenticates() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -259,7 +266,7 @@ async fn bayes_per_account_corpora_are_isolated() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
