@@ -17,6 +17,8 @@ mod serve;
 mod serve_tasks;
 mod srv;
 mod suppression;
+#[cfg(test)]
+pub(crate) mod tracing_capture;
 mod tracing_setup;
 mod util;
 mod verify;
