@@ -271,6 +271,79 @@ fn unknown_user_in_local_domain_is_denied() {
 }
 
 #[test]
+fn postmaster_address_is_accepted() {
+	// RFC 5321 §4.5.1 MUST: mail to `postmaster@<domain>` is accepted. With
+	// the address owned by `bob`, RCPT TO returns 250 and the recipient is
+	// recorded as `postmaster@example.org` for delivery.
+	let directory = Arc::new(Directory::new(
+		["example.org".to_string()],
+		[
+			("bob@example.org".to_string(), "bob".to_string()),
+			("postmaster@example.org".to_string(), "bob".to_string()),
+		],
+	));
+	let mut session = Session::new("mail.example.org").with_directory(directory);
+	session.command_line("EHLO client.example.org");
+	session.command_line("MAIL FROM:<alice@example.org>");
+	assert_eq!(
+		reply_code(&session.command_line("RCPT TO:<postmaster@example.org>")),
+		250
+	);
+}
+
+#[test]
+fn postmaster_address_is_accepted_case_insensitively() {
+	// The address parser lowercases the domain (and the directory lookup is
+	// case-insensitive), so `POSTMASTER@EXAMPLE.ORG` resolves exactly like
+	// the canonical form.
+	let directory = Arc::new(Directory::new(
+		["example.org".to_string()],
+		[("postmaster@example.org".to_string(), "bob".to_string())],
+	));
+	let mut session = Session::new("mail.example.org").with_directory(directory);
+	session.command_line("EHLO client.example.org");
+	session.command_line("MAIL FROM:<alice@example.org>");
+	assert_eq!(
+		reply_code(&session.command_line("RCPT TO:<POSTMASTER@EXAMPLE.ORG>")),
+		250
+	);
+}
+
+#[test]
+fn postmaster_unconfigured_in_local_domain_is_denied() {
+	// Mirror of `unknown_user_in_local_domain_is_denied` for the postmaster
+	// local part specifically: without an explicit address or a catch-all
+	// for the domain, postmaster falls through to `UnknownUser` and is
+	// rejected. The validator at config time is what prevents this from
+	// reaching a real server.
+	let mut session = greeted();
+	session.command_line("MAIL FROM:<a@example.org>");
+	let action = session.command_line("RCPT TO:<postmaster@example.org>");
+	assert_eq!(reply_code(&action), 550);
+}
+
+#[test]
+fn abuse_address_is_accepted_when_configured() {
+	// RFC 2142 lists `abuse@<domain>` as a SHOULD; when the operator
+	// configures it as an explicit address, RCPT TO returns 250 just like
+	// any other local account.
+	let directory = Arc::new(Directory::new(
+		["example.org".to_string()],
+		[
+			("bob@example.org".to_string(), "bob".to_string()),
+			("abuse@example.org".to_string(), "bob".to_string()),
+		],
+	));
+	let mut session = Session::new("mail.example.org").with_directory(directory);
+	session.command_line("EHLO client.example.org");
+	session.command_line("MAIL FROM:<alice@example.org>");
+	assert_eq!(
+		reply_code(&session.command_line("RCPT TO:<abuse@example.org>")),
+		250
+	);
+}
+
+#[test]
 fn without_local_domains_every_recipient_is_denied() {
 	let mut session = Session::new("mail.example.org");
 	session.command_line("EHLO client.example.org");

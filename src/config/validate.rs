@@ -226,6 +226,42 @@ impl Config {
 				}
 			}
 		}
+		// RFC 5321 §4.5.1: the server MUST accept mail addressed to
+		// `postmaster` at every domain it serves. Without an explicit
+		// `postmaster@<domain>` address or a per-domain catch-all, RCPT TO
+		// for that address would resolve to `UnknownUser` and the server
+		// would 5.1.1 the message — the MUST violation. We warn at validate
+		// time so `config-check` and `serve` both surface the missing
+		// address instead of leaving it for the first inbound bounce
+		// report, but we do NOT reject the config: an upgrade that refuses
+		// to start a previously-running server is a worse failure mode than
+		// the RFC violation it was meant to fix, and operators have been
+		// running without a configured `postmaster@` for a while now. The
+		// runtime still rejects `postmaster@<domain>` at delivery time when
+		// no address or catch-all exists; closing the MUST for real is a
+		// follow-up that converts this warning into a hard error behind an
+		// opt-in flag once we know how many deployments rely on the
+		// permissive behaviour. Skipped when no accounts are configured: an
+		// account-less server has nothing to deliver mail to regardless.
+		// RFC 2142 lists `abuse@` as a SHOULD, not a MUST, so it is not
+		// enforced here — when an operator adds it (explicit address or
+		// catch-all), the existing resolution order accepts it.
+		if !self.accounts.is_empty() {
+			for domain in &self.domains {
+				let domain_lc = domain.to_ascii_lowercase();
+				let key = format!("postmaster@{domain_lc}");
+				if addresses.contains(&key) || catch_all_domains.contains(&domain_lc) {
+					continue;
+				}
+				tracing::warn!(
+					domain = %domain,
+					"domain \"{domain}\" has no `postmaster@<domain>` address and no catch-all; \
+					 RFC 5321 §4.5.1 requires the server to accept mail to postmaster. \
+					 Fix by adding a `postmaster@<domain>` address to an account, or by \
+					 adding the domain to some account's `catch_all`."
+				);
+			}
+		}
 		Ok(())
 	}
 
@@ -467,3 +503,7 @@ mod tests_e;
 #[cfg(test)]
 #[path = "validate_tests_f.rs"]
 mod tests_f;
+
+#[cfg(test)]
+#[path = "validate_tests_g.rs"]
+mod tests_g;

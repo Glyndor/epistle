@@ -215,7 +215,7 @@ fn accounts_list_prints_configured_accounts() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let cfg = write_config(&format!(
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n\n\
-[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\n",
+[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\", \"postmaster@example.org\"]\n",
 		dir.path()
 	));
 	let config = crate::config::Config::load(cfg.path()).expect("config");
