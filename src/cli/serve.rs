@@ -175,6 +175,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// no-op, and the wire below carries an empty `Arc`.
 	let tenant_limits = Arc::new(crate::api::TenantLimits::from_config(&config.tenants));
 
+	// Shared disk-space guard for `data_dir`. `MAIL FROM` rejects with
+	// `452` when the filesystem holding the spool cannot hold another
+	// message, so the remote retries instead of receiving `250` for a
+	// payload the server cannot write. One guard per listener would
+	// re-sample on every concurrent connection; one shared guard amortises
+	// the cache and keeps the measurement consistent across listeners.
+	let disk_guard = Arc::new(crate::smtp::diskspace::DiskGuard::new(
+		config.data_dir.clone(),
+	));
+
 	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
 	let max_conn = config.max_connections_per_listener.unwrap_or(0);
 
@@ -513,6 +523,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if !tenant_limits.is_empty() {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
 				}
+				server = server.with_disk_guard(Arc::clone(&disk_guard));
 				if let Some(verifier) = &oauth_verifier {
 					server = server.with_oauth(Arc::clone(verifier));
 				}

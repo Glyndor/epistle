@@ -9,6 +9,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use super::directory::Directory;
+use super::diskspace::DiskGuard;
 use super::reply::Reply;
 use super::session::Session;
 use super::sink::MessageSink;
@@ -92,6 +93,10 @@ pub struct Server {
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
+	/// Shared disk-space guard for `data_dir`. `None` disables the check,
+	/// which is the right behaviour for tests but not for production: the
+	/// production wiring in `cli/serve.rs` always sets it.
+	disk_guard: Option<Arc<DiskGuard>>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 }
@@ -122,6 +127,7 @@ impl Server {
 			send_limiter: None,
 			global_submission_rate_limit_per_min: None,
 			tenant_limits: None,
+			disk_guard: None,
 			max_connections: MAX_CONNECTIONS,
 		}
 	}
@@ -146,6 +152,15 @@ impl Server {
 	/// limiter; the SMTP path checks both before accepting MAIL FROM.
 	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
 		self.tenant_limits = Some(limits);
+		self
+	}
+
+	/// Attach a shared disk-space guard for `data_dir`. The SMTP path
+	/// consults it at `MAIL FROM` and rejects with `452` when the
+	/// filesystem cannot hold another message, so the remote retries
+	/// instead of receiving `250` for a payload the spool cannot write.
+	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
+		self.disk_guard = Some(guard);
 		self
 	}
 
@@ -282,6 +297,9 @@ impl Server {
 		}
 		session =
 			session.with_global_submission_rate_limit(self.global_submission_rate_limit_per_min);
+		if let Some(guard) = &self.disk_guard {
+			session = session.with_disk_guard(Arc::clone(guard));
+		}
 		session
 	}
 
