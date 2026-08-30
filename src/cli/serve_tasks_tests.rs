@@ -12,7 +12,7 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-use super::{DkimRotationPlan, decide_dkim_rotation};
+use super::{DkimRotationPlan, connect_database, decide_dkim_rotation};
 use crate::config::Config;
 
 /// Minimal valid base config — `hostname` + `data_dir` are the only
@@ -281,4 +281,67 @@ fn rotation_is_off_when_dkim_section_is_absent() {
 		events.is_empty(),
 		"absent [dkim] must not log anything (the operator chose it): {events:?}"
 	);
+}
+
+// --- database startup -----------------------------------------------------
+
+/// A minimal config with a `[database]` section pointing at a host that cannot
+/// resolve, so `connect_database` always takes a failure branch.
+fn config_with_unreachable_database(directory: bool) -> Config {
+	let toml = format!(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/tmp\"\n\n\
+		 [database]\nurl = \"postgres://mail@db.invalid/mail\"\ndirectory = {directory}\n"
+	);
+	toml::from_str(&toml).expect("config")
+}
+
+#[tokio::test]
+async fn no_database_section_yields_no_pool() {
+	let config: Config =
+		toml::from_str("hostname = \"mail.example.org\"\ndata_dir = \"/tmp\"\n").expect("config");
+	let metrics = crate::metrics::Metrics::new();
+	let pool = connect_database(&config, &metrics)
+		.await
+		.expect("no database is not an error");
+	assert!(pool.is_none());
+	assert_eq!(metrics.snapshot().get("database_unavailable"), Some(&0));
+}
+
+#[tokio::test]
+async fn unreachable_database_without_directory_starts_and_counts() {
+	let config = config_with_unreachable_database(false);
+	let metrics = crate::metrics::Metrics::new();
+	let pool = connect_database(&config, &metrics)
+		.await
+		.expect("an antispam-only database must not stop the start");
+	// Degraded: no pool, so every consumer sees the same shape as no database.
+	assert!(pool.is_none());
+	// The warning alone is not an alert; the counter is what the alert engine reads.
+	assert_eq!(metrics.snapshot().get("database_unavailable"), Some(&1));
+	assert!(
+		metrics
+			.render()
+			.contains("mail_database_unavailable_total 1\n"),
+		"{}",
+		metrics.render()
+	);
+}
+
+#[tokio::test]
+async fn unreachable_database_with_directory_is_fatal_and_says_why() {
+	let config = config_with_unreachable_database(true);
+	let metrics = crate::metrics::Metrics::new();
+	let error = connect_database(&config, &metrics)
+		.await
+		.expect_err("the SQL directory cannot degrade");
+	let message = error.to_string();
+	// The operator has to be able to tell this fatal case from the degraded one.
+	assert!(message.contains("directory = true"), "{message}");
+	assert!(
+		message.contains("accounts are resolved from it"),
+		"{message}"
+	);
+	assert!(message.contains("fatal for that reason only"), "{message}");
+	// A fatal start is not a degradation, so it must not fire the advisory counter.
+	assert_eq!(metrics.snapshot().get("database_unavailable"), Some(&0));
 }

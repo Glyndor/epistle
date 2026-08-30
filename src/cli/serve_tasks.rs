@@ -187,6 +187,52 @@ fn spawn_jwks_refresh(
 	});
 }
 
+/// Connect to the configured database and apply its migrations, degrading when
+/// the database only backs the antispam engine.
+///
+/// The database plays two roles behind one connection, and only one of them can
+/// degrade. Reputation screening and the Bayesian corpus are advisory: without
+/// them mail arrives unfiltered, which is worse than filtered but far better
+/// than not arriving at all, so an unreachable database leaves the server
+/// running with those features off. The SQL directory is not advisory: with
+/// `[database] directory = true` the accounts themselves come from SQL, so
+/// without the database there is nobody to deliver to and starting would be a
+/// silent black hole. That case keeps failing closed.
+///
+/// The degraded path is announced twice on purpose: a `warn!` for whoever reads
+/// the log, and the `database_unavailable` counter so the alert engine in
+/// [`crate::alerts`] can act on it without anybody reading anything.
+pub(super) async fn connect_database(
+	config: &Config,
+	metrics: &crate::metrics::Metrics,
+) -> std::io::Result<Option<sqlx::PgPool>> {
+	let Some(db) = &config.database else {
+		return Ok(None);
+	};
+	match crate::db::connect(&db.url, db.max_connections).await {
+		Ok(pool) => Ok(Some(pool)),
+		// Fatal: the directory backend resolves recipients from this database.
+		Err(error) if db.directory => Err(std::io::Error::other(format!(
+			"cannot reach the database, and `[database] directory = true` means the \
+			 mail accounts are resolved from it: starting would leave nobody to \
+			 deliver to. This failure is fatal for that reason only; with \
+			 `directory = false` the same failure merely disables the antispam \
+			 engine. Cause: {error}"
+		))),
+		Err(error) => {
+			metrics.database_unavailable();
+			tracing::warn!(
+				%error,
+				"cannot reach the database: starting without the antispam engine. \
+				 Reputation screening and the Bayesian corpus are disabled and mail \
+				 is accepted unfiltered. Account resolution is unaffected because \
+				 `[database] directory` is off."
+			);
+			Ok(None)
+		}
+	}
+}
+
 /// Load the SQL directory accounts into the store once, then spawn an hourly
 /// refresh task. A no-op unless `[database] directory = true` and a reputation
 /// pool is present. The initial load fails closed (a fatal startup error) so the

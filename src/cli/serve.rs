@@ -193,15 +193,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// the start, not the first mail that hits the band.
 	let llm_hook = crate::antispam::llm::LlmHook::from_config(config.antispam_llm.as_ref())?;
 
-	// Optional reputation database, migrated at startup.
-	let reputation_pool = match &config.database {
-		Some(db) => Some(
-			crate::db::connect(&db.url, db.max_connections)
-				.await
-				.map_err(std::io::Error::other)?,
-		),
-		None => None,
-	};
+	// Optional reputation database, migrated at startup. An unreachable
+	// database degrades the antispam engine instead of stopping the mail, unless
+	// `[database] directory = true` makes it the source of the accounts.
+	let reputation_pool = super::serve_tasks::connect_database(&config, &metrics).await?;
 
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
