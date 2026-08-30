@@ -74,6 +74,8 @@ const COUNTERS: &[(&str, &str)] = &[
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
 	("database_unavailable", "database_unavailable"),
+	("auth_login_succeeded", "auth_login_succeeded"),
+	("auth_login_failed", "auth_login_failed"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -106,6 +108,8 @@ pub struct Metrics {
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
 	database_unavailable: AtomicU64,
+	auth_login_succeeded: AtomicU64,
+	auth_login_failed: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
@@ -183,6 +187,19 @@ impl Metrics {
 		self.database_unavailable.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a password-based authentication attempt that resolved an
+	/// account (PLAIN/LOGIN/IMAP LOGIN/WebDAV Basic/ManageSieve/API verify).
+	pub fn auth_login_succeeded(&self) {
+		self.auth_login_succeeded.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count the same surface that was rejected: unknown account, disabled
+	/// account, wrong password, app-password CIDR rejection, or an LDAP
+	/// bind failure.
+	pub fn auth_login_failed(&self) {
+		self.auth_login_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -252,6 +269,8 @@ impl Metrics {
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
 			"database_unavailable" => &self.database_unavailable,
+			"auth_login_succeeded" => &self.auth_login_succeeded,
+			"auth_login_failed" => &self.auth_login_failed,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -346,6 +365,16 @@ impl Metrics {
 				&self.database_unavailable,
 			),
 			(
+				"mail_auth_login_succeeded_total",
+				"Password-based authentication attempts that resolved an account.",
+				&self.auth_login_succeeded,
+			),
+			(
+				"mail_auth_login_failed_total",
+				"Password-based authentication attempts that were rejected.",
+				&self.auth_login_failed,
+			),
+			(
 				"mail_llm_consulted_total",
 				"Messages sent to the LLM antispam hook (uncertain band only).",
 				&self.llm_consulted,
@@ -403,6 +432,9 @@ mod tests {
 		m.relayed();
 		m.deferred();
 		m.bounced();
+		m.auth_login_succeeded();
+		m.auth_login_succeeded();
+		m.auth_login_failed();
 		m.llm_consulted();
 		m.llm_consulted();
 		m.llm_quarantined();
@@ -421,6 +453,8 @@ mod tests {
 		);
 		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
 		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
+		assert!(r.contains("mail_auth_login_succeeded_total 2\n"), "{r}");
+		assert!(r.contains("mail_auth_login_failed_total 1\n"), "{r}");
 		assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
 		assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
 		assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
@@ -480,6 +514,8 @@ mod tests {
 			"webhook_sent",
 			"webhook_failed",
 			"database_unavailable",
+			"auth_login_succeeded",
+			"auth_login_failed",
 		] {
 			assert!(snap.contains_key(name), "missing {name}");
 		}

@@ -175,6 +175,13 @@ pub struct AccountStore {
 	/// Wrapped in `Arc<RwLock<_>>` so the API can share the same handle and
 	/// mutate without going through `AccountStore`'s mutators.
 	masked: Arc<RwLock<MaskedAddressStore>>,
+	/// Shared metrics handle for the audit counters
+	/// (`auth_login_succeeded` / `auth_login_failed`). Threaded into every
+	/// rebuilt directory via [`AccountStore::with_metrics`] so the SMTP,
+	/// IMAP, ManageSieve, WebDAV, API and OAuth paths bump the same counters.
+	/// `None` in unit tests that do not exercise the counters — the
+	/// directory still emits the structured tracing event regardless.
+	metrics: Option<Arc<crate::metrics::Metrics>>,
 	handle: DirectoryHandle,
 }
 
@@ -215,6 +222,7 @@ impl AccountStore {
 			ldap_accounts: RwLock::new(Vec::new()),
 			ldap_auth: None,
 			masked: Arc::new(RwLock::new(masked)),
+			metrics: None,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -266,6 +274,17 @@ impl AccountStore {
 	/// directory so per-request LDAP binds are wired in (builder form).
 	pub fn with_ldap_authenticator(mut self, ldap: Arc<LdapAuthenticator>) -> Self {
 		self.ldap_auth = Some(ldap);
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Attach the shared metrics handle so every directory rebuilt from
+	/// this point on bumps the audit counters (`auth_login_succeeded` /
+	/// `auth_login_failed`) on every password-based authentication
+	/// attempt. The structured tracing event is always emitted regardless
+	/// — the counter is a derived view.
+	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -611,7 +630,7 @@ impl AccountStore {
 			.expect("masked lock")
 			.entries()
 			.collect::<Vec<_>>();
-		Directory::new(self.domains.iter().cloned(), address_accounts)
+		let mut dir = Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
@@ -625,7 +644,11 @@ impl AccountStore {
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
 			.with_ldap(self.ldap_auth.clone())
-			.with_masked(masked)
+			.with_masked(masked);
+		if let Some(metrics) = self.metrics.clone() {
+			dir = dir.with_metrics(metrics);
+		}
+		dir
 	}
 }
 

@@ -84,6 +84,12 @@ pub struct Directory {
 	/// Disabled masks are not present here, so they reject exactly like an
 	/// unknown user (the directory never reveals that one once existed).
 	masked_by_address: HashMap<String, String>,
+	/// Shared metrics handle for the audit counters (`auth_login_succeeded`
+	/// / `auth_login_failed`). `None` in tests that do not need the
+	/// counters — a `Directory::new(...)` without `with_metrics(...)` still
+	/// emits the structured tracing event, the operator log is the primary
+	/// record, and the counters are a derived view.
+	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 }
 
 impl Directory {
@@ -118,6 +124,7 @@ impl Directory {
 			app_passwords: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
+			metrics: None,
 		}
 	}
 
@@ -129,6 +136,16 @@ impl Directory {
 		ldap: Option<std::sync::Arc<crate::directory_store::LdapAuthenticator>>,
 	) -> Self {
 		self.ldap = ldap;
+		self
+	}
+
+	/// Attach the shared metrics handle so every password-based
+	/// authentication attempt bumps `auth_login_succeeded` /
+	/// `auth_login_failed`. The structured tracing event is always emitted
+	/// regardless — the counter is a derived view, the audit log is the
+	/// primary record. Unset in unit tests that do not exercise counters.
+	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
 		self
 	}
 
@@ -337,20 +354,50 @@ impl Directory {
 	/// match: local and SQL accounts authenticate without an LDAP round trip, and
 	/// an LDAP-only login (no local entry) still gets a live bind. The LDAP path
 	/// fails closed to `None` (unknown user and bad password are indistinguishable).
+	///
+	/// The structured audit event is emitted on the way out, with the
+	/// resolved account (or `unknown` for a failure) and the login the client
+	/// presented — never the plaintext password nor the TOTP code.
 	pub fn authenticate_with_ip(
 		&self,
 		login: &str,
 		password: &str,
 		ip: Option<std::net::IpAddr>,
 	) -> Option<String> {
-		if let Some(account) = self.authenticate_local(login, password, ip) {
-			return Some(account);
+		let outcome = self.authenticate_local(login, password, ip).or_else(|| {
+			// Local/SQL credentials did not match: try the live LDAP bind, if any.
+			self.ldap
+				.as_ref()
+				.and_then(|ldap| ldap.authenticate(login, password))
+		});
+		self.record_auth_outcome(login, outcome.as_deref(), ip);
+		outcome
+	}
+
+	/// Emit the audit event and bump the counter for one authentication
+	/// attempt, with `outcome = None` for every failure path (unknown
+	/// account, disabled account, wrong password, app-password CIDR miss,
+	/// LDAP bind error) and `outcome = Some(account)` for a success. The
+	/// counter is the derived view; the tracing event on the `epistle::auth`
+	/// target is the primary record and is always emitted, including from
+	/// tests that did not attach a metrics handle.
+	fn record_auth_outcome(
+		&self,
+		login: &str,
+		outcome: Option<&str>,
+		ip: Option<std::net::IpAddr>,
+	) {
+		let event = match outcome {
+			Some(_) => crate::api::AuditEvent::LoginSucceeded,
+			None => crate::api::AuditEvent::LoginFailed,
+		};
+		crate::api::log_auth_attempt(event, login, outcome, ip);
+		if let Some(metrics) = &self.metrics {
+			match outcome {
+				Some(_) => metrics.auth_login_succeeded(),
+				None => metrics.auth_login_failed(),
+			}
 		}
-		// Local/SQL credentials did not match: try the live LDAP bind, if any.
-		if let Some(ldap) = &self.ldap {
-			return ldap.authenticate(login, password);
-		}
-		None
 	}
 
 	/// The local credential path: primary password (with TOTP when set), then the
@@ -602,6 +649,10 @@ mod tests;
 #[cfg(test)]
 #[path = "directory_app_password_tests.rs"]
 mod app_password_tests;
+
+#[cfg(test)]
+#[path = "directory_auth_audit_tests.rs"]
+mod auth_audit_tests;
 
 #[cfg(test)]
 #[path = "directory_masked_tests.rs"]
