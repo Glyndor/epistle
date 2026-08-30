@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::address::Address;
 use super::command::{Command, ParseError};
 use super::directory::{Directory, Resolution};
+use super::diskspace::DiskGuard;
 use super::reply::Reply;
 
 mod bdat;
@@ -75,6 +76,11 @@ pub struct Session {
 	/// The client's peer IP, set by the network layer; used to enforce an app
 	/// password's CIDR allowlist during authentication.
 	peer_ip: Option<std::net::IpAddr>,
+	/// Shared disk-space guard for `data_dir`. When set, `MAIL FROM` is
+	/// rejected with `452` if the filesystem cannot hold another message,
+	/// so the remote retries instead of accepting a message that will
+	/// fail to land in the spool.
+	disk_guard: Option<Arc<DiskGuard>>,
 }
 
 impl Session {
@@ -101,6 +107,7 @@ impl Session {
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
+			disk_guard: None,
 		}
 	}
 
@@ -150,6 +157,15 @@ impl Session {
 	/// once the connection is TLS.
 	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
 		self.cbind_data = Some(cert_hash);
+		self
+	}
+
+	/// Attach a shared disk-space guard for `data_dir`. When set, `MAIL FROM`
+	/// is rejected with `452` if the filesystem cannot hold another message,
+	/// so the remote retries instead of receiving a `250` for a message the
+	/// server cannot write to the spool.
+	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
+		self.disk_guard = Some(guard);
 		self
 	}
 
@@ -451,6 +467,17 @@ impl Session {
 						"5.3.4 message exceeds maximum size",
 					));
 				}
+				// Filesystem holding `data_dir` is too full to accept another
+				// message. Reject before `DATA` so the remote retries instead
+				// of receiving `250 OK` for a payload the spool cannot hold.
+				if let Some(guard) = &self.disk_guard
+					&& !guard.has_room(MAX_MESSAGE_SIZE as u64)
+				{
+					return Action::Continue(Reply::single(
+						452,
+						"4.3.1 insufficient system storage; retry later",
+					));
+				}
 				self.state = State::ReceivingRecipients {
 					reverse_path,
 					require_tls,
@@ -613,6 +640,9 @@ mod tests_basic;
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
 
+#[cfg(test)]
+#[path = "../session_tests_diskspace.rs"]
+mod tests_diskspace;
 #[cfg(test)]
 #[path = "../session_tests_oauth.rs"]
 mod tests_oauth;

@@ -9,6 +9,7 @@ pub mod command;
 #[cfg(test)]
 mod command_tests;
 pub mod directory;
+pub mod diskspace;
 pub mod line;
 pub mod ratelimit;
 pub mod reply;
