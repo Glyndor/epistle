@@ -734,7 +734,7 @@ dependencies = [
  "percent-encoding",
  "psl",
  "quick-xml",
- "rand 0.8.8",
+ "rand 0.10.2",
  "rcgen",
  "reqwest",
  "ring",
