@@ -39,7 +39,7 @@ pub use database::{Database, DatabaseTls};
 pub use dkim::Dkim;
 pub use dns::Dns;
 pub use ldap::Ldap;
-pub use listener::{Listener, ListenerKind};
+pub use listener::{Listener, ListenerKind, Protocol};
 pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;

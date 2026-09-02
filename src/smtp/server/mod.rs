@@ -99,6 +99,13 @@ pub struct Server {
 	disk_guard: Option<Arc<DiskGuard>>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// The authentication protocol this listener serves. Sessions tag every
+	/// password attempt through this server with it, so a per-account
+	/// `allowed_protocols` set that does not include the listener's kind
+	/// rejects the attempt identically to an unknown login. Default
+	/// `Protocol::Submission` matches the historical behaviour (SMTP AUTH
+	/// is client submission regardless of the listener's port).
+	auth_protocol: crate::config::Protocol,
 }
 
 impl Server {
@@ -129,7 +136,20 @@ impl Server {
 			tenant_limits: None,
 			disk_guard: None,
 			max_connections: MAX_CONNECTIONS,
+			auth_protocol: crate::config::Protocol::Submission,
 		}
+	}
+
+	/// Tag every password authentication attempt through this server with
+	/// `protocol` so the directory's per-account `allowed_protocols` set
+	/// can admit or reject it. Use the [`Protocol`] value matching the
+	/// listener kind (`Protocol::Submissions` for the implicit-TLS port,
+	/// `Protocol::Submission` for STARTTLS submission, `Protocol::Smtp`
+	/// for the receiving port — though the latter does not advertise AUTH
+	/// so the choice has no practical effect).
+	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
+		self.auth_protocol = protocol;
+		self
 	}
 
 	/// Attach a shared per-account submission rate limiter.
@@ -285,7 +305,9 @@ impl Server {
 	}
 
 	fn new_session(&self) -> Session {
-		let mut session = Session::new(&self.hostname).with_directory(self.directory.current());
+		let mut session = Session::new(&self.hostname)
+			.with_directory(self.directory.current())
+			.with_auth_protocol(self.auth_protocol);
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}

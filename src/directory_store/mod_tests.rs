@@ -12,6 +12,7 @@ fn static_account() -> Account {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	}
 }
 
@@ -33,6 +34,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		scram: None,
 		totp_secret: None,
 		disabled: false,
+		allowed_protocols: None,
 	}
 }
 
@@ -288,6 +290,7 @@ fn disabled_alias_falls_through_to_catch_all_in_account_store() {
 			quota_bytes: None,
 			forward: Vec::new(),
 			forward_keep_local: true,
+			allowed_protocols: None,
 		}],
 	)
 	.expect("open store");
@@ -332,4 +335,79 @@ fn disabled_alias_persists_across_restart_in_account_store() {
 	}
 	let reopened = open_store(dir.path());
 	assert!(reopened.alias_is_disabled("team@example.org"));
+}
+
+/// A static account with `allowed_protocols` set propagates into the
+/// directory the store rebuilds, so the gate in
+/// `Directory::authenticate_with_ip` sees the restriction. The store
+/// pulls the option from the static config; the directory unit tests
+/// in `smtp::directory::protocol_tests` exercise the gate directly.
+#[test]
+fn static_allowed_protocols_propagates_to_directory() {
+	use crate::config::Protocol;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let static_account = Account {
+		name: "service".to_string(),
+		addresses: vec!["service@example.org".to_string()],
+		password_hash: Some(crate::smtp::auth::tests::hash("s3cret")),
+		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
+		allowed_protocols: Some(vec![Protocol::Api]),
+	};
+	let store = AccountStore::open(
+		dir.path(),
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		vec![static_account],
+	)
+	.expect("open store");
+	let directory = store.handle().current();
+	// The static config's allowlist flows into the rebuilt directory:
+	// the allowed protocol admits, the unlisted one rejects.
+	assert_eq!(
+		directory
+			.authenticate("service", "s3cret", Protocol::Api)
+			.as_deref(),
+		Some("service"),
+	);
+	assert!(
+		directory
+			.authenticate("service", "s3cret", Protocol::Imaps)
+			.is_none(),
+		"static allowed_protocols must restrict authentication"
+	);
+}
+
+/// A dynamic account with `allowed_protocols` set propagates into the
+/// directory after `add` swaps the rebuilt handle. The store rebuilds
+/// the directory on every mutation (see `AccountStore::add`); this
+/// test pins that the rebuild also picks up the dynamic account's
+/// allowlist, not just the static one.
+#[test]
+fn dynamic_allowed_protocols_propagates_to_directory() {
+	use crate::config::Protocol;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	let mut dynamic_account = dynamic("service", "service@example.org");
+	// The `dynamic` helper seeds a stub hash so other tests can poke
+	// `set_password_hash`; replace it with a real argon2id hash so the
+	// directory's password check matches the test password.
+	dynamic_account.password_hash = crate::smtp::auth::tests::hash("secret");
+	dynamic_account.allowed_protocols = Some(vec![Protocol::Api]);
+	store.add(dynamic_account).expect("add");
+	let directory = store.handle().current();
+	assert_eq!(
+		directory
+			.authenticate("service", "secret", Protocol::Api)
+			.as_deref(),
+		Some("service"),
+	);
+	assert!(
+		directory
+			.authenticate("service", "secret", Protocol::Imaps)
+			.is_none(),
+		"dynamic allowed_protocols must restrict authentication"
+	);
 }

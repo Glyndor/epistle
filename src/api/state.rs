@@ -232,30 +232,42 @@ impl ApiState {
 	/// endpoints to bind a grant to a real account. Fail-closed and free of any
 	/// user-enumeration oracle (see [`crate::smtp::directory::Directory::authenticate`]).
 	///
+	/// `protocol` tags the call site so an account with a per-account
+	/// `allowed_protocols` set is rejected when this caller is not in the
+	/// set; the wire response is then identical to an unknown login.
+	///
 	/// Use [`ApiState::authenticate_with_ip`] when the request carries the
 	/// peer IP — the audit log attributes every authentication attempt to its
 	/// source IP, which is what the future IP-banning and credential-stuffing
 	/// detectors consume.
-	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
-		self.authenticate_with_ip(login, password, None)
+	pub fn authenticate(
+		&self,
+		login: &str,
+		password: &str,
+		protocol: crate::config::Protocol,
+	) -> Option<String> {
+		self.authenticate_with_ip(login, password, None, protocol)
 	}
 
 	/// Authenticate `login`/`password` and attribute the attempt to `ip` in
 	/// the audit log. `None` for `ip` is the same as
 	/// [`ApiState::authenticate`]: the peer address was not available to the
 	/// caller, so it is logged as `unknown`. The audit counters are bumped
-	/// from the same path either way.
+	/// from the same path either way. `protocol` is forwarded to the
+	/// directory so a restricted account cannot authenticate through this
+	/// path.
 	pub fn authenticate_with_ip(
 		&self,
 		login: &str,
 		password: &str,
 		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
 	) -> Option<String> {
 		self.inner
 			.store
 			.handle()
 			.current()
-			.authenticate_with_ip(login, password, ip)
+			.authenticate_with_ip(login, password, ip, protocol)
 	}
 
 	/// Set the account names allowed to authenticate to the admin panel. Must be

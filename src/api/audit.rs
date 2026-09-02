@@ -17,6 +17,8 @@
 
 use std::net::IpAddr;
 
+use crate::config::Protocol;
+
 /// A privileged action taken against an account through the management API.
 ///
 /// Each variant maps to a stable string in the `event` field of the emitted
@@ -93,12 +95,18 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 /// The plaintext password and the TOTP code (when the account has 2FA) are
 /// never written to the log: only the result and the identifiers needed to
 /// correlate one attempt with the next do. `client_ip` follows the same
-/// `unknown` convention as [`log_privilege_change`].
+/// `unknown` convention as [`log_privilege_change`]. `protocol` is the
+/// authentication path the request reached the server through (SMTP
+/// submission, IMAP, POP3, ManageSieve, the API, OAuth approval, WebDAV);
+/// operators correlate per-protocol blocks, and a rejection on a path the
+/// account never opted into is recorded as `auth.login_failed` like any
+/// other failure.
 pub fn log_auth_attempt(
 	event: AuditEvent,
 	login: &str,
 	account: Option<&str>,
 	client_ip: Option<IpAddr>,
+	protocol: Protocol,
 ) {
 	let client_ip = client_ip
 		.map(|ip| ip.to_string())
@@ -110,6 +118,7 @@ pub fn log_auth_attempt(
 		login = %login,
 		account = %account,
 		client_ip = %client_ip,
+		protocol = protocol.as_str(),
 		"authentication attempt"
 	);
 }

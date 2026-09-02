@@ -128,7 +128,7 @@ fn success_emits_login_succeeded_event_and_bumps_counter() {
 	let events = run_with_capture(|| {
 		assert_eq!(
 			directory
-				.authenticate_with_ip("alice", "hunter2", Some(peer))
+				.authenticate_with_ip("alice", "hunter2", Some(peer), crate::config::Protocol::Api)
 				.as_deref(),
 			Some("alice"),
 		);
@@ -181,7 +181,7 @@ fn wrong_password_emits_login_failed_event_and_bumps_counter() {
 	let events = run_with_capture(|| {
 		assert!(
 			directory
-				.authenticate_with_ip("alice", "not-it", None)
+				.authenticate_with_ip("alice", "not-it", None, crate::config::Protocol::Api)
 				.is_none(),
 		);
 	});
@@ -229,7 +229,7 @@ fn unknown_login_emits_login_failed_event() {
 	let events = run_with_capture(|| {
 		assert!(
 			directory
-				.authenticate_with_ip("mallory", "anything", None)
+				.authenticate_with_ip("mallory", "anything", None, crate::config::Protocol::Api)
 				.is_none()
 		);
 	});
@@ -295,13 +295,18 @@ fn captured_log_never_carries_password_or_totp_code() {
 		let combined = format!("a-very-secret-password{code:06}");
 		assert_eq!(
 			directory
-				.authenticate_with_ip("alice", &combined, None)
+				.authenticate_with_ip("alice", &combined, None, crate::config::Protocol::Api)
 				.as_deref(),
 			Some("alice"),
 		);
 		assert!(
 			directory
-				.authenticate_with_ip("alice", "a-very-secret-password", None)
+				.authenticate_with_ip(
+					"alice",
+					"a-very-secret-password",
+					None,
+					crate::config::Protocol::Api
+				)
 				.is_none(),
 		);
 	});

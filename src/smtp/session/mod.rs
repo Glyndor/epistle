@@ -16,6 +16,8 @@ mod bdat;
 mod login;
 mod oauth;
 mod scram;
+mod time;
+use time::unix_now;
 
 /// Maximum accepted message size in bytes until quotas exist.
 pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
@@ -81,6 +83,10 @@ pub struct Session {
 	/// so the remote retries instead of accepting a message that will
 	/// fail to land in the spool.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// The authentication protocol this session's listener serves;
+	/// tagged on every password attempt through this session so a
+	/// per-account `allowed_protocols` can admit or reject it.
+	auth_protocol: crate::config::Protocol,
 }
 
 impl Session {
@@ -108,7 +114,17 @@ impl Session {
 			pending_external: false,
 			peer_ip: None,
 			disk_guard: None,
+			auth_protocol: crate::config::Protocol::Submission,
 		}
+	}
+
+	/// Tag every password authentication attempt through this session with
+	/// `protocol` so the directory's per-account `allowed_protocols` set
+	/// can admit or reject it. `Protocol::Submission` is the default and
+	/// matches the historical behaviour for SMTP AUTH.
+	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
+		self.auth_protocol = protocol;
+		self
 	}
 
 	/// Set the verified TLS client-certificate identity (email), enabling SASL
@@ -622,14 +638,6 @@ impl Session {
 			self.state = State::Greeted;
 		}
 	}
-}
-
-/// Current time in epoch seconds (for rate-limit windows).
-fn unix_now() -> u64 {
-	std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	};
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(
@@ -57,6 +58,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			allowed_protocols: None,
 		})
 		.expect("add bob");
 	ApiState::new(

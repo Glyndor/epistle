@@ -18,6 +18,7 @@ fn store_with(domains: &[&str], accounts: &[(&str, &[&str])]) -> AccountStore {
 			quota_bytes: None,
 			forward: Vec::new(),
 			forward_keep_local: true,
+			allowed_protocols: None,
 		})
 		.collect();
 	let dir = tempfile::tempdir().expect("tempdir");

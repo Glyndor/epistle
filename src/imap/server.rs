@@ -65,6 +65,11 @@ pub struct Server {
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
 	/// in [`crate::cli::serve_tasks::spawn_archive_sweep`].
 	retention_days: u64,
+	/// The authentication protocol this listener serves (`Imap` or
+	/// `Imaps`); tagged on every password attempt through this server so a
+	/// per-account `allowed_protocols` can admit or reject it. Default
+	/// `Protocol::Imaps` matches the historical behaviour.
+	auth_protocol: crate::config::Protocol,
 }
 
 impl Server {
@@ -89,6 +94,7 @@ impl Server {
 			max_connections: MAX_CONNECTIONS,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			retention_days: 0,
+			auth_protocol: crate::config::Protocol::Imaps,
 		}
 	}
 
@@ -132,6 +138,16 @@ impl Server {
 		self
 	}
 
+	/// Tag every password authentication attempt through this server with
+	/// `protocol` so the directory's per-account `allowed_protocols` set
+	/// can admit or reject it. Use the [`Protocol`] value matching the
+	/// listener kind (`Protocol::Imaps` for implicit-TLS port 993,
+	/// `Protocol::Imap` for the STARTTLS port 143).
+	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
+		self.auth_protocol = protocol;
+		self
+	}
+
 	/// Build a session with this server's quota, OAuth and channel-binding.
 	fn new_session(&self) -> Session {
 		let mut session = Session::new(
@@ -142,7 +158,8 @@ impl Server {
 		.with_quota_limit(self.quota_bytes)
 		.with_crypto(self.crypto.clone())
 		.with_oauth(self.oauth.clone())
-		.with_retention_days(self.retention_days);
+		.with_retention_days(self.retention_days)
+		.with_auth_protocol(self.auth_protocol);
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
 		}

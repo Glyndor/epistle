@@ -26,6 +26,7 @@ pub(super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiS
 			quota_bytes: None,
 			forward: Vec::new(),
 			forward_keep_local: true,
+			allowed_protocols: None,
 		},
 		crate::config::Account {
 			name: "bob".to_string(),
@@ -35,6 +36,7 @@ pub(super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiS
 			quota_bytes: None,
 			forward: Vec::new(),
 			forward_keep_local: true,
+			allowed_protocols: None,
 		},
 	];
 	let store = Arc::new(

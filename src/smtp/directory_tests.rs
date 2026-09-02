@@ -303,12 +303,22 @@ fn authenticate_enforces_totp_second_factor() {
 	// Password followed by the current 6-digit TOTP code.
 	let password = format!("secret{code:06}");
 	assert_eq!(
-		directory.authenticate("alice", &password).as_deref(),
+		directory
+			.authenticate("alice", &password, crate::config::Protocol::Api)
+			.as_deref(),
 		Some("alice")
 	);
 	// A wrong code, or the bare password without a code, both fail.
-	assert!(directory.authenticate("alice", "secret000000").is_none());
-	assert!(directory.authenticate("alice", "secret").is_none());
+	assert!(
+		directory
+			.authenticate("alice", "secret000000", crate::config::Protocol::Api)
+			.is_none()
+	);
+	assert!(
+		directory
+			.authenticate("alice", "secret", crate::config::Protocol::Api)
+			.is_none()
+	);
 
 	// An account without a TOTP secret authenticates with just the password.
 	let plain = Directory::new(
@@ -316,7 +326,12 @@ fn authenticate_enforces_totp_second_factor() {
 		[("bob@example.org".to_string(), "bob".to_string())],
 	)
 	.with_password_hashes([("bob".to_string(), crate::smtp::auth::tests::hash("pw"))]);
-	assert_eq!(plain.authenticate("bob", "pw").as_deref(), Some("bob"));
+	assert_eq!(
+		plain
+			.authenticate("bob", "pw", crate::config::Protocol::Api)
+			.as_deref(),
+		Some("bob")
+	);
 }
 
 #[test]

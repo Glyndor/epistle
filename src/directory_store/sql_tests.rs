@@ -18,6 +18,7 @@ fn static_account(name: &str, address: &str, password: Option<&str>) -> Account 
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	}
 }
 
@@ -54,10 +55,13 @@ fn sql_accounts_resolve_and_authenticate() {
 		Resolution::Account("carol".to_string())
 	);
 	assert_eq!(
-		directory.authenticate("carol@example.org", "hunter2"),
+		directory.authenticate("carol@example.org", "hunter2", crate::config::Protocol::Api),
 		Some("carol".to_string())
 	);
-	assert_eq!(directory.authenticate("carol@example.org", "wrong"), None);
+	assert_eq!(
+		directory.authenticate("carol@example.org", "wrong", crate::config::Protocol::Api),
+		None
+	);
 }
 
 #[test]
@@ -68,7 +72,10 @@ fn receive_only_sql_account_cannot_authenticate() {
 		directory.resolve(&crate::smtp::address::Address::parse("dan@example.org").unwrap()),
 		Resolution::Account("dan".to_string())
 	);
-	assert_eq!(directory.authenticate("dan@example.org", "anything"), None);
+	assert_eq!(
+		directory.authenticate("dan@example.org", "anything", crate::config::Protocol::Api),
+		None
+	);
 }
 
 #[test]
@@ -84,11 +91,19 @@ fn static_account_takes_precedence_over_sql() {
 	let directory = store.handle().current();
 
 	assert_eq!(
-		directory.authenticate("shared@example.org", "static-pass"),
+		directory.authenticate(
+			"shared@example.org",
+			"static-pass",
+			crate::config::Protocol::Api
+		),
 		Some("shared".to_string())
 	);
 	assert_eq!(
-		directory.authenticate("shared@example.org", "sql-pass"),
+		directory.authenticate(
+			"shared@example.org",
+			"sql-pass",
+			crate::config::Protocol::Api
+		),
 		None
 	);
 }

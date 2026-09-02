@@ -106,6 +106,7 @@ pub async fn create(
 			scram: Some(derive_scram(&request.password)?),
 			totp_secret: None,
 			disabled: false,
+			allowed_protocols: None,
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created {
