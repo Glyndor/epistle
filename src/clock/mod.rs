@@ -118,7 +118,7 @@ pub struct DriftReport {
 /// short window, and a verifier of the timestamps we emit would see
 /// the same disagreement.
 ///
-/// The probe samples `SystemTime` twice with a [`PROBE_SLEEP`] gap and
+/// The probe samples `SystemTime` twice with a `PROBE_SLEEP` gap and
 /// compares the wall-clock elapsed time against the monotonic elapsed
 /// time from [`Instant`]. The two come from the same source on a
 /// healthy host, so any disagreement of more than `DRIFT_THRESHOLD_SECONDS`
