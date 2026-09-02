@@ -74,6 +74,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
 	("database_unavailable", "database_unavailable"),
+	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
 ];
@@ -108,6 +109,7 @@ pub struct Metrics {
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
 	database_unavailable: AtomicU64,
+	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
 	llm_consulted: AtomicU64,
@@ -185,6 +187,14 @@ impl Metrics {
 	/// on without the antispam engine (advisory; mail keeps flowing, unfiltered).
 	pub fn database_unavailable(&self) {
 		self.database_unavailable.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a startup whose clock-drift probe observed a wall-clock jump
+	/// larger than the threshold tied to the TOTP acceptance window. The
+	/// counter is what the alert engine reads; a one-shot `warn!` at the
+	/// probe site is the human-readable companion.
+	pub fn clock_drift_exceeded(&self) {
+		self.clock_drift_exceeded.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a password-based authentication attempt that resolved an
@@ -269,6 +279,7 @@ impl Metrics {
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
 			"database_unavailable" => &self.database_unavailable,
+			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
 			other => unreachable!("unknown counter field {other}"),
@@ -363,6 +374,11 @@ impl Metrics {
 				"mail_database_unavailable_total",
 				"Startups that could not reach the database and ran without the antispam engine.",
 				&self.database_unavailable,
+			),
+			(
+				"mail_clock_drift_exceeded_total",
+				"Startups whose clock-drift probe observed a wall-clock jump past the TOTP acceptance window.",
+				&self.clock_drift_exceeded,
 			),
 			(
 				"mail_auth_login_succeeded_total",
@@ -514,6 +530,7 @@ mod tests {
 			"webhook_sent",
 			"webhook_failed",
 			"database_unavailable",
+			"clock_drift_exceeded",
 			"auth_login_succeeded",
 			"auth_login_failed",
 		] {
