@@ -187,10 +187,12 @@ fn external_authenticates_with_verified_client_cert() {
 	// The TLS layer recorded a verified certificate identity for this account.
 	session.set_client_identity(Some("alice@example.org".to_string()));
 	let ehlo = session.command_line("EHLO client.example.org");
+	// The reply is deliberately not in the failure message: it comes out of
+	// a session holding the fixture credentials, and a panic message is a
+	// CI log.
 	assert!(
 		reply_text(&ehlo).contains("EXTERNAL"),
-		"EXTERNAL advertised once a client cert is present: {}",
-		reply_text(&ehlo)
+		"EXTERNAL must be advertised once a client cert is present"
 	);
 	// Empty initial response (`=`) means "use the certificate identity".
 	let action = session.command_line("AUTH EXTERNAL =");

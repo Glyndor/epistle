@@ -27,6 +27,21 @@ url = "{url}"
 	)
 }
 
+/// The error a URL must be rejected with, or a panic naming the case.
+///
+/// The failure message deliberately does not carry `result`: on the run
+/// where the URL was accepted, that value is the parsed `Config`, and the
+/// URL inside it carries the database password. A panic message is a CI
+/// log, and CodeQL reads printing it as cleartext logging of sensitive
+/// information (`src/config/redaction_tests.rs` records the same lesson).
+/// The case name and the error text are enough to reproduce locally.
+fn rejection(result: Result<super::Config, super::ConfigError>, case: &str) -> String {
+	match result {
+		Err(error) => error.to_string(),
+		Ok(_) => panic!("{case} must be rejected, but the config was accepted"),
+	}
+}
+
 fn db_with_tls(url: &str, tls: &str) -> String {
 	format!(
 		r#"
@@ -56,10 +71,8 @@ fn rejects_url_with_sslmode_disable() {
 	let result = config_from(&db(
 		"postgres://mail:secret@db.internal/mail?sslmode=disable",
 	));
-	assert!(
-		result.is_err(),
-		"sslmode=disable must be rejected: {result:?}"
-	);
+	let message = rejection(result, "sslmode=disable");
+	assert!(message.contains("sslmode"), "{message}");
 }
 
 #[test]
@@ -68,10 +81,8 @@ fn rejects_url_with_sslmode_allow() {
 	// server never does for a vanilla Postgres, so this is effectively
 	// plaintext. Rejected under the same umbrella as `disable`.
 	let result = config_from(&db("postgres://mail:secret@db.internal/mail?sslmode=allow"));
-	assert!(
-		result.is_err(),
-		"sslmode=allow must be rejected: {result:?}"
-	);
+	let message = rejection(result, "sslmode=allow");
+	assert!(message.contains("sslmode"), "{message}");
 }
 
 #[test]
@@ -81,10 +92,8 @@ fn rejects_explicit_sslmode_prefer() {
 	let result = config_from(&db(
 		"postgres://mail:secret@db.internal/mail?sslmode=prefer",
 	));
-	assert!(
-		result.is_err(),
-		"sslmode=prefer must be rejected: {result:?}"
-	);
+	let message = rejection(result, "sslmode=prefer");
+	assert!(message.contains("sslmode"), "{message}");
 }
 
 #[test]
