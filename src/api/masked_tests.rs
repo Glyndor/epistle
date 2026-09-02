@@ -167,6 +167,7 @@ async fn limit_returns_409_not_429() {
 				quota_bytes: None,
 				forward: Vec::new(),
 				forward_keep_local: true,
+				allowed_protocols: None,
 			}],
 		)
 		.expect("store")
@@ -329,6 +330,7 @@ fn two_domain_state(dir: &std::path::Path) -> ApiState {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	}];
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(

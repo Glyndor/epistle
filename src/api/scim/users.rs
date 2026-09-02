@@ -246,6 +246,7 @@ pub async fn create_user(
 		scram,
 		totp_secret: None,
 		disabled: !active,
+		allowed_protocols: None,
 	};
 	state.store().add(account).map_err(store_to_scim)?;
 	let stored = lookup(&state, &body.user_name)?;
@@ -308,6 +309,7 @@ pub async fn put_user(
 				scram: existing.scram.clone(),
 				totp_secret: existing.totp_secret.clone(),
 				disabled: !body.active,
+				allowed_protocols: existing.allowed_protocols.clone(),
 			},
 		)
 		.map_err(store_to_scim)?;

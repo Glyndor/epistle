@@ -18,9 +18,13 @@ pub const REALM: &str = "WebDAV";
 /// Authenticate the request against the directory, returning the resolved
 /// account name on success. Returns `None` for a missing, malformed, or
 /// rejected credential — the caller turns that into a `401` challenge.
+/// An account whose `allowed_protocols` does not include WebDAV rejects
+/// here too, with the same `401` shape as an unknown login.
 pub fn authenticate(headers: &HeaderMap, directory: &DirectoryHandle) -> Option<String> {
 	let (login, password) = basic_credentials(headers)?;
-	directory.current().authenticate(&login, &password)
+	directory
+		.current()
+		.authenticate(&login, &password, crate::config::Protocol::WebDav)
 }
 
 /// Parse a `Authorization: Basic <base64(user:pass)>` header into its login and

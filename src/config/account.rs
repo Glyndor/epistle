@@ -2,6 +2,8 @@
 
 use serde::Deserialize;
 
+use super::Protocol;
+
 /// One mail account.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +31,16 @@ pub struct Account {
 	/// is never lost. Set false for pure forwarding (no local mailbox copy).
 	#[serde(default = "default_true")]
 	pub forward_keep_local: bool,
+	/// Restrict which authentication protocols this account may sign in
+	/// through. `None` (the default) means every protocol the directory
+	/// knows about, mirroring the pre-restriction behaviour. When set, only
+	/// the listed protocols authenticate this account; every other
+	/// password-based path (SMTP submission, IMAP, POP3, ManageSieve, the
+	/// API credential-verification endpoint, OAuth approval, WebDAV) rejects
+	/// the same way an unknown login does, so the wire response never
+	/// reveals that the account exists.
+	#[serde(default)]
+	pub allowed_protocols: Option<Vec<Protocol>>,
 }
 
 /// Serde default for boolean fields that default to true.

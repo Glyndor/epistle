@@ -137,6 +137,12 @@ pub struct Session {
 	/// Whether COMPRESS=DEFLATE is already active, so a second
 	/// `COMPRESS` is refused rather than restarting the deflate context.
 	pub(super) compressing: bool,
+	/// The authentication protocol this session's listener serves
+	/// (`Imap` or `Imaps`); tagged on every password attempt so a
+	/// per-account `allowed_protocols` can admit or reject it. Defaults to
+	/// `Imaps` to match the historical behaviour (`imaps` is the default
+	/// listener and what tests assume).
+	pub(super) auth_protocol: crate::config::Protocol,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -211,7 +217,18 @@ impl Session {
 			retention_days: 0,
 			compressing: false,
 			saved_search: None,
+			auth_protocol: crate::config::Protocol::Imaps,
 		}
+	}
+
+	/// Tag every password authentication attempt through this session with
+	/// `protocol` so the directory's per-account `allowed_protocols` set
+	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
+	/// listener kind (`Protocol::Imaps` for implicit-TLS port 993,
+	/// `Protocol::Imap` for the STARTTLS port 143).
+	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
+		self.auth_protocol = protocol;
+		self
 	}
 
 	/// Use `crypto` to decode/encode stored message bodies at rest.

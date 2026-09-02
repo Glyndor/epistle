@@ -106,8 +106,12 @@ pub async fn device_approve(
 	// not propagated as an extension here; the audit log records `unknown`
 	// for the IP and a follow-up wires `ConnectInfo` in when the listener is
 	// built with `into_make_service_with_connect_info`.
-	let account = credentials
-		.and_then(|(login, password)| state.authenticate_with_ip(&login, &password, None));
+	let account = credentials.and_then(|(login, password)| {
+		// The OAuth approval flow is a user-facing API authentication: the
+		// account must opt into `api` in its `allowed_protocols` to bind a
+		// grant, matching how `/api/v1/auth/verify` tags its callers.
+		state.authenticate_with_ip(&login, &password, None, crate::config::Protocol::Api)
+	});
 
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());

@@ -105,15 +105,27 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 
 	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token (SASL-IR required).
 	fn oauth_bearer(&mut self, tag: &str, initial: Option<String>) -> Output {
-		let outcome = self.oauth.clone().zip(initial).and_then(|(verifier, enc)| {
-			let token = parse_bearer(&enc)?;
-			let email = verifier.verify(&token, unix_now())?;
-			let address = Address::parse(&email).ok()?;
-			match self.directory.resolve(&address) {
-				Resolution::Account(account) => Some(account),
-				_ => None,
-			}
-		});
+		let outcome = self
+			.oauth
+			.clone()
+			.zip(initial)
+			.and_then(|(verifier, enc)| {
+				let token = parse_bearer(&enc)?;
+				let email = verifier.verify(&token, unix_now())?;
+				let address = Address::parse(&email).ok()?;
+				match self.directory.resolve(&address) {
+					Resolution::Account(account) => Some(account),
+					_ => None,
+				}
+			})
+			.and_then(|account| {
+				// The bearer path bypasses `authenticate_with_ip`; the
+				// per-account `allowed_protocols` check has to be issued here too,
+				// with the same wire outcome as an unverifiable token.
+				self.directory
+					.is_protocol_allowed(&account, self.auth_protocol)
+					.then_some(account)
+			});
 		match outcome {
 			Some(account) => {
 				self.state = State::Authenticated { account };
@@ -199,7 +211,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 	fn login_pass(&mut self, tag: &str, user: &str, encoded: &str) -> Output {
 		let verified = decode(encoded).and_then(|pass| {
 			self.directory
-				.authenticate_with_ip(user, &pass, self.peer_ip)
+				.authenticate_with_ip(user, &pass, self.peer_ip, self.auth_protocol)
 		});
 		match verified {
 			Some(account) => {
@@ -252,27 +264,44 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		if !authzid.is_empty() && authzid != identity {
 			return self.auth_failure(tag);
 		}
-		match crate::smtp::address::Address::parse(&identity) {
+		// EXTERNAL reaches the directory through resolve() — not
+		// authenticate_with_ip — so the per-account `allowed_protocols`
+		// check has to be issued here too. The certificate identity still
+		// has to be a real local account; a mismatched protocol rejects
+		// with the same wire outcome as an unknown address.
+		let account = match crate::smtp::address::Address::parse(&identity) {
 			Ok(address) => match self.directory.resolve(&address) {
-				crate::smtp::directory::Resolution::Account(account) => {
-					self.state = State::Authenticated { account };
-					Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
-				}
-				_ => self.auth_failure(tag),
+				crate::smtp::directory::Resolution::Account(account) => account,
+				_ => return self.auth_failure(tag),
 			},
-			Err(_) => self.auth_failure(tag),
+			Err(_) => return self.auth_failure(tag),
+		};
+		if !self
+			.directory
+			.is_protocol_allowed(&account, self.auth_protocol)
+		{
+			return self.auth_failure(tag);
 		}
+		self.state = State::Authenticated { account };
+		Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
 	}
 
 	fn auth_plain(&mut self, tag: &str, encoded: &str) -> Output {
 		// Route through the directory so the primary password (with any TOTP) and
 		// app passwords (CIDR-checked against the peer IP) are both accepted; no
-		// oracle (unknown user behaves like a wrong password).
+		// oracle (unknown user behaves like a wrong password). The protocol tag
+		// is the listener kind this session serves (Imap or Imaps) so a
+		// per-account `allowed_protocols` that does not include it rejects
+		// exactly like an unknown login.
 		let verified = crate::smtp::auth::parse_plain(encoded)
 			.ok()
 			.and_then(|creds| {
-				self.directory
-					.authenticate_with_ip(&creds.authcid, &creds.password, self.peer_ip)
+				self.directory.authenticate_with_ip(
+					&creds.authcid,
+					&creds.password,
+					self.peer_ip,
+					self.auth_protocol,
+				)
 			});
 		match verified {
 			Some(account) => {
@@ -312,6 +341,15 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		let Some((account, _)) = self.directory.credentials(&username) else {
 			return self.auth_failure(tag);
 		};
+		// SCRAM bypasses authenticate_with_ip, so the per-account
+		// `allowed_protocols` check has to be issued here. A restricted
+		// account fails with the same wire outcome as a wrong SCRAM proof.
+		if !self
+			.directory
+			.is_protocol_allowed(&account, self.auth_protocol)
+		{
+			return self.auth_failure(tag);
+		}
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
 			return self.auth_failure(tag);

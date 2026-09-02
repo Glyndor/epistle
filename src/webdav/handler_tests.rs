@@ -42,6 +42,7 @@ fn test_app(dir: &std::path::Path) -> Router {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	};
 	let store = crate::directory_store::AccountStore::open(
 		dir,

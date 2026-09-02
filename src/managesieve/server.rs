@@ -38,7 +38,16 @@ struct DirectoryBackend {
 
 impl Backend for DirectoryBackend {
 	fn verify(&self, authcid: &str, password: &str) -> Option<String> {
-		self.directory.current().authenticate(authcid, password)
+		// ManageSieve only authenticates one protocol; the per-account
+		// `allowed_protocols` set must opt in here for an account to
+		// reach its scripts. The check rides on the wire as part of the
+		// generic "authentication failed" outcome — the same as an unknown
+		// login — so the response carries no oracle.
+		self.directory.current().authenticate(
+			authcid,
+			password,
+			crate::config::Protocol::ManageSieve,
+		)
 	}
 	fn store(&self, account: &str) -> ScriptStore {
 		ScriptStore::new(&self.accounts_root, account)

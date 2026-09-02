@@ -37,6 +37,7 @@ fn unscoped_state(dir: &std::path::Path) -> ApiState {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	};
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(
@@ -93,6 +94,7 @@ fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	};
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(
@@ -241,6 +243,7 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	};
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(
@@ -312,6 +315,7 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	};
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(

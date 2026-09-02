@@ -42,7 +42,12 @@ pub async fn verify(
 	Extension(client_ip): Extension<ClientIp>,
 	Json(request): Json<VerifyRequest>,
 ) -> Json<VerifyResponse> {
-	match state.authenticate_with_ip(&request.name, &request.password, client_ip.0) {
+	match state.authenticate_with_ip(
+		&request.name,
+		&request.password,
+		client_ip.0,
+		crate::config::Protocol::Api,
+	) {
 		Some(resolved) => Json(VerifyResponse {
 			valid: true,
 			admin: state.is_admin(&resolved),

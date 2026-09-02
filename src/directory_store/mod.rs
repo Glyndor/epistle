@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::Account;
+use crate::config::{Account, Protocol};
 use crate::directory_store::aliases::AliasStore;
 use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
@@ -29,6 +29,8 @@ pub use sql::{SqlAccount, load_sql_accounts};
 
 pub mod ldap;
 pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
+
+mod build;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -85,6 +87,14 @@ pub struct DynamicAccount {
 	/// to suspend an account without removing its mailbox.
 	#[serde(default)]
 	pub disabled: bool,
+	/// Restrict which authentication protocols this account may sign in
+	/// through. `None` (the default) means every protocol the directory
+	/// knows about — the pre-restriction behaviour. When set, only the
+	/// listed protocols authenticate this account; every other path rejects
+	/// identically to an unknown login, so the wire response never reveals
+	/// that the account exists.
+	#[serde(default)]
+	pub allowed_protocols: Option<Vec<Protocol>>,
 }
 
 impl DynamicAccount {
@@ -106,6 +116,7 @@ impl DynamicAccount {
 			scram: Some(scram),
 			totp_secret: None,
 			disabled: false,
+			allowed_protocols: None,
 		})
 	}
 }
@@ -521,84 +532,24 @@ impl AccountStore {
 		let dynamic = self.dynamic.read().expect("store lock");
 		let sql = self.sql_accounts.read().expect("store lock");
 		let ldap = self.ldap_accounts.read().expect("store lock");
-		// LDAP accounts are listed first, then SQL, so static config and dynamic
-		// accounts chained after take precedence on a name or address collision
-		// (the directory's maps keep the last writer): static > dynamic > SQL > LDAP.
-		let address_accounts = ldap
-			.iter()
-			.flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			})
-			.chain(sql.iter().flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			}))
-			.chain(self.static_accounts.iter().flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			}))
-			.chain(dynamic.iter().flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			}))
-			.collect::<Vec<_>>();
-		let hashes = sql
-			.iter()
-			.filter_map(|account| {
-				account
-					.password_hash
-					.as_ref()
-					.map(|hash| (account.name.clone(), hash.clone()))
-			})
-			.chain(self.static_accounts.iter().filter_map(|account| {
-				account
-					.password_hash
-					.as_ref()
-					.map(|hash| (account.name.clone(), hash.clone()))
-			}))
-			.chain(
-				dynamic
-					.iter()
-					.map(|account| (account.name.clone(), account.password_hash.clone())),
-			)
-			.collect::<Vec<_>>();
+		let address_accounts =
+			build::address_accounts(&ldap, &sql, &self.static_accounts, &dynamic);
+		let allowed_protocols =
+			build::allowed_protocols(&self.static_accounts, &dynamic).collect::<Vec<_>>();
+		let hashes = build::password_hashes(&sql, &self.static_accounts, &dynamic);
 		let catch_all = self.static_accounts.iter().flat_map(|account| {
 			account
 				.catch_all
 				.iter()
 				.map(|domain| (domain.clone(), account.name.clone()))
 		});
-		// SCRAM credentials only exist for dynamic accounts (derived from the
-		// plaintext password at set time).
-		let scram = dynamic.iter().filter_map(|account| {
-			account
-				.scram
-				.clone()
-				.map(|stored| (account.name.clone(), stored))
-		});
-		let totp = dynamic.iter().filter_map(|account| {
-			account
-				.totp_secret
-				.clone()
-				.map(|secret| (account.name.clone(), secret))
-		});
-		// Disabled accounts are passed through to the directory as a name set so
-		// `authenticate_local` can reject them before any password work runs.
-		// The set rebuilds on every directory swap, mirroring how totp, scram
-		// and quotas are wired.
-		let disabled = dynamic
-			.iter()
-			.filter(|account| account.disabled)
-			.map(|account| account.name.clone());
+		let scram = build::scram(&dynamic);
+		let totp = build::totp(&dynamic);
+		// Disabled accounts are passed through to the directory as a name
+		// set so `authenticate_local` can reject them before any password
+		// work runs. The set rebuilds on every directory swap, mirroring
+		// how totp, scram and quotas are wired.
+		let disabled = build::disabled(&dynamic);
 		let account_quotas = self.static_accounts.iter().filter_map(|account| {
 			account
 				.quota_bytes
@@ -650,7 +601,8 @@ impl AccountStore {
 			.with_aliases(aliases)
 			.with_app_passwords(self.app_passwords.iter().cloned())
 			.with_ldap(self.ldap_auth.clone())
-			.with_masked(masked);
+			.with_masked(masked)
+			.with_allowed_protocols(allowed_protocols);
 		if let Some(metrics) = self.metrics.clone() {
 			dir = dir.with_metrics(metrics);
 		}

@@ -246,10 +246,13 @@ async fn sql_directory_loads_resolves_and_authenticates() {
 		Resolution::Account(name.clone())
 	);
 	assert_eq!(
-		directory.authenticate(&address, "s3cret"),
+		directory.authenticate(&address, "s3cret", epistle::config::Protocol::Api),
 		Some(name.clone())
 	);
-	assert_eq!(directory.authenticate(&address, "wrong"), None);
+	assert_eq!(
+		directory.authenticate(&address, "wrong", epistle::config::Protocol::Api),
+		None
+	);
 
 	sqlx::query("DELETE FROM directory_account WHERE name = $1")
 		.bind(&name)
