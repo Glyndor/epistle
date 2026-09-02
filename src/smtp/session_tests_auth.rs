@@ -1,4 +1,5 @@
 use super::*;
+use crate::smtp::auth::tests::{fixture_password, wrong_password};
 
 pub(super) fn reply_code(action: &Action) -> u16 {
 	match action {
@@ -32,7 +33,7 @@ pub(super) fn auth_directory() -> Arc<Directory> {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixture_password()),
 		)]),
 	)
 }
@@ -52,7 +53,10 @@ pub(super) fn tls_session() -> Session {
 
 pub(super) fn authenticated_session() -> Session {
 	let mut session = tls_session();
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(session.authenticated(), Some("alice"));
 	session
 }
@@ -74,7 +78,7 @@ pub(super) fn auth_login_authenticates() {
 	assert_eq!(reply_code(&action), 334);
 	let action = session.auth_line(&B64.encode("alice"));
 	assert_eq!(reply_code(&action), 334);
-	let action = session.auth_line(&B64.encode("secret"));
+	let action = session.auth_line(&B64.encode(fixture_password()));
 	assert_eq!(reply_code(&action), 235);
 	assert_eq!(session.authenticated(), Some("alice"));
 
@@ -82,7 +86,7 @@ pub(super) fn auth_login_authenticates() {
 	let mut session = tls_session();
 	session.command_line("AUTH LOGIN");
 	session.auth_line(&B64.encode("alice"));
-	let action = session.auth_line(&B64.encode("wrong"));
+	let action = session.auth_line(&B64.encode(wrong_password()));
 	assert_eq!(reply_code(&action), 535);
 	assert_eq!(session.authenticated(), None);
 }
@@ -96,7 +100,8 @@ fn scram_sha256_authenticates() {
 	use std::num::NonZeroU32;
 
 	let salt = b"saltsalt";
-	let stored = ScramStored::from_credentials(&ScramCredentials::derive("secret", salt, 4096));
+	let stored =
+		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), salt, 4096));
 	let directory = Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -104,7 +109,7 @@ fn scram_sha256_authenticates() {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixture_password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	);
@@ -132,7 +137,7 @@ fn scram_sha256_authenticates() {
 		pbkdf2::PBKDF2_HMAC_SHA256,
 		NonZeroU32::new(4096).unwrap(),
 		salt,
-		b"secret",
+		fixture_password().as_bytes(),
 		&mut salted,
 	);
 	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");
@@ -160,8 +165,11 @@ fn scram_sha256_wrong_password_fails() {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 
-	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
+		fixture_password(),
+		b"saltsalt",
+		4096,
+	));
 	let directory = Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -169,7 +177,7 @@ fn scram_sha256_wrong_password_fails() {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixture_password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	);
@@ -192,7 +200,10 @@ fn scram_sha256_wrong_password_fails() {
 #[test]
 pub(super) fn auth_rejected_outside_tls() {
 	let mut session = greeted_plain();
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	let action = session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(reply_code(&action), 538);
 	assert_eq!(session.authenticated(), None);
 }
@@ -265,7 +276,10 @@ pub(super) fn requiretls_flows_to_accepted_message() {
 #[test]
 pub(super) fn auth_with_initial_response_succeeds() {
 	let mut session = tls_session();
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	let action = session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(reply_code(&action), 235);
 	assert_eq!(session.authenticated(), Some("alice"));
 }
@@ -275,7 +289,7 @@ pub(super) fn auth_by_address_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!(
 		"AUTH PLAIN {}",
-		plain("alice@example.org", "secret")
+		plain("alice@example.org", fixture_password())
 	));
 	assert_eq!(reply_code(&action), 235);
 }
@@ -286,7 +300,7 @@ pub(super) fn auth_challenge_flow_succeeds() {
 	let action = session.command_line("AUTH PLAIN");
 	assert!(matches!(action, Action::CollectAuthResponse(_)));
 	assert_eq!(reply_code(&action), 334);
-	let action = session.auth_line(&plain("alice", "secret"));
+	let action = session.auth_line(&plain("alice", fixture_password()));
 	assert_eq!(reply_code(&action), 235);
 }
 
@@ -302,7 +316,7 @@ pub(super) fn auth_challenge_can_be_cancelled() {
 #[test]
 fn wrong_password_gets_535_without_detail() {
 	let mut session = tls_session();
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "wrong")));
+	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", wrong_password())));
 	assert_eq!(reply_code(&action), 535);
 	assert_eq!(session.authenticated(), None);
 }
@@ -310,7 +324,10 @@ fn wrong_password_gets_535_without_detail() {
 #[test]
 pub(super) fn unknown_user_gets_same_reply_as_wrong_password() {
 	let mut session = tls_session();
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("mallory", "secret")));
+	let action = session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("mallory", fixture_password())
+	));
 	assert_eq!(reply_code(&action), 535);
 }
 
@@ -318,18 +335,25 @@ pub(super) fn unknown_user_gets_same_reply_as_wrong_password() {
 pub(super) fn third_failure_closes_connection() {
 	let mut session = tls_session();
 	for _ in 0..2 {
-		let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "wrong")));
+		let action =
+			session.command_line(&format!("AUTH PLAIN {}", plain("alice", wrong_password())));
 		assert!(matches!(action, Action::Continue(_)));
 	}
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "wrong")));
+	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", wrong_password())));
 	assert!(matches!(action, Action::Close(_)));
 }
 
 #[test]
 pub(super) fn auth_after_success_is_bad_sequence() {
 	let mut session = tls_session();
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
+	let action = session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(reply_code(&action), 503);
 }
 
@@ -343,7 +367,10 @@ fn unsupported_mechanism_gets_504() {
 pub(super) fn auth_inside_transaction_is_bad_sequence() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
-	let action = session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	let action = session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(reply_code(&action), 503);
 }
 
@@ -492,7 +519,10 @@ pub(super) fn submission_rate_limit_defers_over_the_limit() {
 		.with_send_limiter(limiter)
 		.with_global_submission_rate_limit(Some(1));
 	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(session.authenticated(), Some("alice"));
 
 	// First authenticated submission is within the limit.

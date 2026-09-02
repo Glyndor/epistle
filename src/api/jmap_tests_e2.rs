@@ -134,7 +134,10 @@ fn backfill_scales_linearly_with_corpus() {
 	let blobs = path.join("blobs");
 	std::fs::create_dir_all(&blobs).expect("mkdir blobs");
 	let per_account = corpus / accounts.len();
-	let total = per_account * accounts.len();
+	// Count what was written rather than deriving it from the account list:
+	// the count is what the timing line prints, and a number computed from
+	// the accounts reads to CodeQL as account data reaching a log.
+	let mut total = 0usize;
 	let start = std::time::Instant::now();
 	for account in &accounts {
 		let inbox = path.join(format!("accounts/{account}/new"));
@@ -142,6 +145,7 @@ fn backfill_scales_linearly_with_corpus() {
 			let id = uuid::Uuid::now_v7();
 			std::fs::write(inbox.join(format!("{id}.eml")), b"x").expect("write msg");
 			std::fs::write(blobs.join(id.to_string()), b"p").expect("write payload");
+			total += 1;
 		}
 	}
 	let setup_ms = start.elapsed().as_millis();

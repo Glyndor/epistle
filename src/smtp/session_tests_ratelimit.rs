@@ -4,6 +4,7 @@
 
 use super::tests_auth::*;
 use super::*;
+use crate::smtp::auth::tests::fixture_password;
 
 #[test]
 fn submission_rate_limit_uses_per_domain_override() {
@@ -18,7 +19,7 @@ fn submission_rate_limit_uses_per_domain_override() {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixture_password()),
 		)])
 		.with_domain_submission_limits([("example.org".to_string(), 3)]),
 	);
@@ -28,7 +29,10 @@ fn submission_rate_limit_uses_per_domain_override() {
 		.with_send_limiter(limiter)
 		.with_global_submission_rate_limit(Some(1));
 	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 
 	// Three submissions fit under the per-domain limit of 3.
 	for _ in 0..3 {
@@ -57,7 +61,10 @@ fn submission_rate_limit_falls_back_to_global_when_domain_has_no_entry() {
 		.with_send_limiter(limiter)
 		.with_global_submission_rate_limit(Some(1));
 	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
@@ -82,7 +89,10 @@ fn submission_rate_limit_is_off_when_neither_domain_nor_global_is_set() {
 		.with_send_limiter(limiter)
 		.with_global_submission_rate_limit(None);
 	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 
 	for _ in 0..5 {
 		assert_eq!(
@@ -111,9 +121,12 @@ fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain()
 		.with_password_hashes([
 			(
 				"alice".to_string(),
-				crate::smtp::auth::tests::hash("secret"),
+				crate::smtp::auth::tests::hash(fixture_password()),
 			),
-			("bob".to_string(), crate::smtp::auth::tests::hash("secret")),
+			(
+				"bob".to_string(),
+				crate::smtp::auth::tests::hash(fixture_password()),
+			),
 		])
 		.with_domain_submission_limits([
 			("example.com".to_string(), 1),
@@ -127,7 +140,10 @@ fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain()
 		.with_tls_active()
 		.with_send_limiter(Arc::clone(&limiter));
 	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("alice", "secret")));
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<alice@example.com>")),
 		250
@@ -146,7 +162,7 @@ fn submission_rate_limit_resolves_domain_from_account_address_not_first_domain()
 		.with_tls_active()
 		.with_send_limiter(Arc::clone(&limiter));
 	session.command_line("EHLO client.example.org");
-	session.command_line(&format!("AUTH PLAIN {}", plain("bob", "secret")));
+	session.command_line(&format!("AUTH PLAIN {}", plain("bob", fixture_password())));
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<bob@example.org>")),
 		250
@@ -171,10 +187,12 @@ fn external_authenticates_with_verified_client_cert() {
 	// The TLS layer recorded a verified certificate identity for this account.
 	session.set_client_identity(Some("alice@example.org".to_string()));
 	let ehlo = session.command_line("EHLO client.example.org");
+	// The reply is deliberately not in the failure message: it comes out of
+	// a session holding the fixture credentials, and a panic message is a
+	// CI log.
 	assert!(
 		reply_text(&ehlo).contains("EXTERNAL"),
-		"EXTERNAL advertised once a client cert is present: {}",
-		reply_text(&ehlo)
+		"EXTERNAL must be advertised once a client cert is present"
 	);
 	// Empty initial response (`=`) means "use the certificate identity".
 	let action = session.command_line("AUTH EXTERNAL =");
