@@ -370,7 +370,11 @@ impl Cli {
 				}
 			},
 			Command::Backup { config } => match Config::load(&config) {
-				Ok(config) => backup::run(&config, &mut std::io::stdout().lock()),
+				Ok(config) => backup::run(
+					&config,
+					&mut std::io::stdout().lock(),
+					&mut std::io::stderr().lock(),
+				),
 				Err(error) => {
 					eprintln!("error: {error}");
 					ExitCode::FAILURE
