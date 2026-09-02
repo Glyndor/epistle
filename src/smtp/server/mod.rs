@@ -142,7 +142,7 @@ impl Server {
 
 	/// Tag every password authentication attempt through this server with
 	/// `protocol` so the directory's per-account `allowed_protocols` set
-	/// can admit or reject it. Use the [`Protocol`] value matching the
+	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
 	/// listener kind (`Protocol::Submissions` for the implicit-TLS port,
 	/// `Protocol::Submission` for STARTTLS submission, `Protocol::Smtp`
 	/// for the receiving port — though the latter does not advertise AUTH

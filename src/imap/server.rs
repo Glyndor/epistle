@@ -140,7 +140,7 @@ impl Server {
 
 	/// Tag every password authentication attempt through this server with
 	/// `protocol` so the directory's per-account `allowed_protocols` set
-	/// can admit or reject it. Use the [`Protocol`] value matching the
+	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
 	/// listener kind (`Protocol::Imaps` for implicit-TLS port 993,
 	/// `Protocol::Imap` for the STARTTLS port 143).
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
