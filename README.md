@@ -123,6 +123,7 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 - [CLI reference](docs/cli.md) — every `epistle` command, plus the outbound retry/suppression policy.
 - [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
 - [Security](docs/security.md) — the transport, authentication, anti-abuse and at-rest controls, and how to report a vulnerability.
+- [Threat model](docs/threat-model.md) — assets, trust boundaries, each threat with its control and the test behind it, and the residual risks.
 
 ## 🧪 End-to-end test matrix
 

@@ -6,7 +6,8 @@ the controls in place and how to report a vulnerability.
 
 For the requirement-by-requirement mapping to OWASP ASVS Level 3 — each control
 tied to the file and mechanism that implements it — see the
-[ASVS L3 sweep](asvs.md).
+[ASVS L3 sweep](asvs.md). For the assessor's view, one row per threat with the
+control, its test and the residual risks, see the [threat model](threat-model.md).
 
 ## Transport
 
