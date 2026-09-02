@@ -39,6 +39,12 @@ updates:
   # configuration entry that sets `target-branch`, so they open against `main`,
   # where `main-guard` refuses any pull request whose source is not `develop`.
   # That is #676 and it is not fixed here.
+  #
+  # It is reported instead. `dependabot-security-watch.yml` lists the open
+  # pull requests into `main` and fails when Dependabot authored one whose
+  # head is not `develop`; re-land such a bump by hand off `develop` and close
+  # the stuck one. Keep this entry's `target-branch` as it is: the watcher
+  # exists so that the guard can stay strict.
   - package-ecosystem: "pip"
     directory: "/.github/scripts"
     schedule:
