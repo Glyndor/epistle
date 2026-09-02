@@ -22,6 +22,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::*;
+use crate::smtp::auth::tests::{fixture_password, wrong_password};
 
 #[derive(Clone, Debug)]
 struct CapturedEvent {
@@ -122,13 +123,18 @@ fn directory_with_alice(secret: &str) -> Directory {
 #[test]
 fn success_emits_login_succeeded_event_and_bumps_counter() {
 	let metrics = Arc::new(crate::metrics::Metrics::new());
-	let directory = directory_with_alice("hunter2").with_metrics(metrics.clone());
+	let directory = directory_with_alice(fixture_password()).with_metrics(metrics.clone());
 
 	let peer: std::net::IpAddr = "203.0.113.7".parse().expect("peer");
 	let events = run_with_capture(|| {
 		assert_eq!(
 			directory
-				.authenticate_with_ip("alice", "hunter2", Some(peer), crate::config::Protocol::Api)
+				.authenticate_with_ip(
+					"alice",
+					fixture_password(),
+					Some(peer),
+					crate::config::Protocol::Api
+				)
 				.as_deref(),
 			Some("alice"),
 		);
@@ -176,12 +182,17 @@ fn success_emits_login_succeeded_event_and_bumps_counter() {
 #[test]
 fn wrong_password_emits_login_failed_event_and_bumps_counter() {
 	let metrics = Arc::new(crate::metrics::Metrics::new());
-	let directory = directory_with_alice("hunter2").with_metrics(metrics.clone());
+	let directory = directory_with_alice(fixture_password()).with_metrics(metrics.clone());
 
 	let events = run_with_capture(|| {
 		assert!(
 			directory
-				.authenticate_with_ip("alice", "not-it", None, crate::config::Protocol::Api)
+				.authenticate_with_ip(
+					"alice",
+					wrong_password(),
+					None,
+					crate::config::Protocol::Api
+				)
 				.is_none(),
 		);
 	});
@@ -224,12 +235,17 @@ fn wrong_password_emits_login_failed_event_and_bumps_counter() {
 #[test]
 fn unknown_login_emits_login_failed_event() {
 	let metrics = Arc::new(crate::metrics::Metrics::new());
-	let directory = directory_with_alice("hunter2").with_metrics(metrics.clone());
+	let directory = directory_with_alice(fixture_password()).with_metrics(metrics.clone());
 
 	let events = run_with_capture(|| {
 		assert!(
 			directory
-				.authenticate_with_ip("mallory", "anything", None, crate::config::Protocol::Api)
+				.authenticate_with_ip(
+					"mallory",
+					wrong_password(),
+					None,
+					crate::config::Protocol::Api
+				)
 				.is_none()
 		);
 	});
@@ -278,7 +294,7 @@ fn captured_log_never_carries_password_or_totp_code() {
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash("a-very-secret-password"),
+		crate::smtp::auth::tests::hash(fixture_password()),
 	)])
 	.with_totp([("alice".to_string(), totp_b32.clone())]);
 
@@ -292,7 +308,7 @@ fn captured_log_never_carries_password_or_totp_code() {
 		// Two attempts: one success that exercised TOTP, one failure with
 		// a wrong password. Both must land on the audit channel without
 		// carrying the secret in any field.
-		let combined = format!("a-very-secret-password{code:06}");
+		let combined = format!("{}{code:06}", fixture_password());
 		assert_eq!(
 			directory
 				.authenticate_with_ip("alice", &combined, None, crate::config::Protocol::Api)
@@ -303,7 +319,7 @@ fn captured_log_never_carries_password_or_totp_code() {
 			directory
 				.authenticate_with_ip(
 					"alice",
-					"a-very-secret-password",
+					fixture_password(),
 					None,
 					crate::config::Protocol::Api
 				)
@@ -321,7 +337,7 @@ fn captured_log_never_carries_password_or_totp_code() {
 
 	let blob = auth_blob(&events);
 	assert!(
-		!blob.contains("a-very-secret-password"),
+		!blob.contains(fixture_password()),
 		"audit channel leaked the plaintext password in some field",
 	);
 	assert!(

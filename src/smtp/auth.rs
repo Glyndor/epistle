@@ -82,8 +82,12 @@ pub fn verify_password(phc_hash: &str, password: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
-	use super::*;
+	use std::sync::LazyLock;
+
 	use argon2::password_hash::PasswordHasher;
+	use uuid::Uuid;
+
+	use super::*;
 
 	pub(crate) fn hash(password: &str) -> String {
 		// Test-time hashing; runtime only ever verifies.
@@ -91,6 +95,25 @@ pub(crate) mod tests {
 			.hash_password_with_salt(password.as_bytes(), b"0123456789abcdef")
 			.expect("hash")
 			.to_string()
+	}
+
+	/// The password every SMTP fixture hashes and later presents, minted
+	/// once per test binary. A literal in its place reaches [`hash`] and the
+	/// session harness's `plain` through a parameter named `password`, which
+	/// is the dataflow `rust/hard-coded-cryptographic-value` reports; the API
+	/// tests moved their bearer token to this shape in #725. No test depends
+	/// on the value: each hashes it, presents it, and reads the outcome.
+	pub(crate) fn fixture_password() -> &'static str {
+		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
+		PASSWORD.as_str()
+	}
+
+	/// A password that is not [`fixture_password`], for the tests that
+	/// present the wrong one. Minted the same way, so it is never a literal
+	/// and cannot collide with the right one by accident.
+	pub(crate) fn wrong_password() -> &'static str {
+		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
+		PASSWORD.as_str()
 	}
 
 	fn encode(authzid: &str, authcid: &str, password: &str) -> String {
