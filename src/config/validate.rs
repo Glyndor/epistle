@@ -145,7 +145,7 @@ impl Config {
 				.strip_prefix("sha256:")
 				.is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
 			let argon2id = api.token_hash.starts_with("$argon2id$")
-				&& argon2::password_hash::PasswordHash::new(&api.token_hash).is_ok();
+				&& argon2::password_hash::phc::PasswordHash::new(&api.token_hash).is_ok();
 			if !sha256 && !argon2id {
 				return Err(ConfigError::Invalid(
 					"[api] token_hash must be a `sha256:<hex>` (from `mail token-hash`) or argon2id PHC string".into(),
@@ -190,7 +190,7 @@ impl Config {
 			}
 			if let Some(hash) = &account.password_hash {
 				let argon2id = hash.starts_with("$argon2id$")
-					&& argon2::password_hash::PasswordHash::new(hash).is_ok();
+					&& argon2::password_hash::phc::PasswordHash::new(hash).is_ok();
 				if !argon2id {
 					return Err(ConfigError::Invalid(format!(
 						"account \"{name}\": password_hash must be an argon2id PHC string"
