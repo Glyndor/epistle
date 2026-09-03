@@ -3,6 +3,7 @@
 //! so it is safe to run anytime and needs no provider credentials.
 
 pub mod bunny;
+pub mod check_host;
 pub mod cloudflare;
 pub mod desec;
 pub mod digitalocean;
@@ -148,3 +149,5 @@ async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) ->
 #[cfg(test)]
 #[path = "drift_tests.rs"]
 mod tests;
+
+pub use check_host::check_host;
