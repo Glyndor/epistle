@@ -14,7 +14,7 @@ fn builds_core_records_per_domain() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		Some(("mail", "v=DKIM1; k=ed25519; p=AAAA")),
+		&[("mail".to_string(), "v=DKIM1; k=ed25519; p=AAAA".to_string())],
 		None,
 		"v1",
 		Services::all(),
@@ -60,7 +60,7 @@ fn omits_dkim_when_absent_and_tlsa_when_no_cert() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -75,7 +75,7 @@ fn tlsa_record_added_once_for_host() {
 	let records = build_records(
 		&["a.example".to_string(), "b.example".to_string()],
 		"mail.host.example",
-		None,
+		&[],
 		Some("3 0 1 abcd"),
 		"v1",
 		Services::all(),
@@ -95,7 +95,7 @@ fn builds_srv_records_for_mail_jmap_and_sieve() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -114,7 +114,7 @@ fn builds_discovery_cnames_for_autoconfig_autodiscover_and_mta_sts() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -133,7 +133,7 @@ fn caldav_and_carddav_srv_are_optional() {
 	let without = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::default(),
@@ -152,7 +152,7 @@ fn caldav_and_carddav_srv_are_optional() {
 	let with = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -175,7 +175,7 @@ fn caa_emitted_for_known_lets_encrypt_directory() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -190,7 +190,7 @@ fn caa_emitted_for_known_zerossl_directory() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -207,7 +207,7 @@ fn caa_omitted_for_unknown_acme_directory() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -221,7 +221,7 @@ fn caa_directory_with_trailing_slash_is_accepted() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
@@ -236,13 +236,95 @@ fn caa_is_none_when_acme_is_not_configured() {
 	let records = build_records(
 		&["example.org".to_string()],
 		"mail.example.org",
-		None,
+		&[],
 		None,
 		"v1",
 		Services::all(),
 		None,
 	);
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
+}
+
+#[test]
+fn both_dkim_selectors_are_emitted() {
+	let records = build_records(
+		&["example.org".to_string()],
+		"mail.example.org",
+		&[
+			("mail".to_string(), "v=DKIM1; k=ed25519; p=AAAA".to_string()),
+			("rsasel".to_string(), "v=DKIM1; k=rsa; p=BBBB".to_string()),
+		],
+		None,
+		"v1",
+		Services::all(),
+		None,
+	);
+	assert_eq!(
+		find(&records, "mail._domainkey.example.org", RecordKind::Txt)
+			.record
+			.value,
+		"v=DKIM1; k=ed25519; p=AAAA"
+	);
+	assert_eq!(
+		find(&records, "rsasel._domainkey.example.org", RecordKind::Txt)
+			.record
+			.value,
+		"v=DKIM1; k=rsa; p=BBBB"
+	);
+}
+
+#[test]
+fn a_short_value_is_one_string() {
+	assert_eq!(
+		txt_strings("v=DKIM1; k=ed25519; p=AAAA"),
+		vec!["v=DKIM1; k=ed25519; p=AAAA".to_string()]
+	);
+}
+
+#[test]
+fn a_410_byte_value_splits_into_two_strings_on_a_char_boundary() {
+	// Build a value with a multi-byte UTF-8 codepoint straddling the 255-byte
+	// cut. `ñ` (U+00F1) encodes as 0xC3 0xB1, two bytes. Position it so
+	// the codepoint starts at byte 254 (occupying 254..256) and the cut
+	// would land mid-codepoint without the boundary guard.
+	let mut fragile_value = String::new();
+	fragile_value.push_str(&"A".repeat(254));
+	fragile_value.push('\u{00F1}'); // bytes 254..256: straddles byte 255
+	fragile_value.push_str(&"A".repeat(200));
+
+	let parts = txt_strings(&fragile_value);
+	assert!(parts.len() >= 2, "got {} parts", parts.len());
+	for part in &parts {
+		assert!(
+			part.len() <= 255,
+			"string of {} bytes is too long",
+			part.len()
+		);
+		assert!(
+			std::str::from_utf8(part.as_bytes()).is_ok(),
+			"split mid-character"
+		);
+	}
+	// Joining the parts must reproduce the original, resolvers see one
+	// logical TXT record again.
+	let joined: String = parts.concat();
+	assert_eq!(joined, fragile_value);
+}
+
+#[test]
+fn zone_form_escapes_quotes_and_backslashes() {
+	assert_eq!(txt_zone_form(r#"a"b\c"#), r#""a\"b\\c""#.to_string());
+}
+
+#[test]
+fn zone_form_wraps_long_values_in_multiple_quoted_strings() {
+	let value: String = "a".repeat(600);
+	let rendered = txt_zone_form(&value);
+	assert!(rendered.starts_with('"'));
+	assert!(rendered.ends_with('"'));
+	// One quote pair per split string, no character split mid-string.
+	let quote_count = rendered.chars().filter(|c| *c == '"').count();
+	assert_eq!(quote_count, txt_strings(&value).len() * 2);
 }
 
 #[test]

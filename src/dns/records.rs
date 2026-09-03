@@ -104,20 +104,72 @@ pub struct PublishRecord {
 
 const TTL: u32 = 3600;
 
+/// Split a TXT record value into the strings the wire format requires.
+///
+/// RFC 1035 §3.3.14 caps each character-string at 255 octets, and most
+/// resolvers concatenate the strings back into one logical record. An RSA
+/// DKIM `p=` is too long for a single string (~410 bytes for RSA-2048, ~755
+/// for RSA-4096); ed25519 fits in one. The split happens on character
+/// boundaries, never inside a multi-byte UTF-8 codepoint, because the
+/// wire form is length-prefixed bytes, not Unicode code points.
+pub fn txt_strings(value: &str) -> Vec<String> {
+	const MAX: usize = 255;
+	if value.len() <= MAX {
+		return vec![value.to_string()];
+	}
+	let mut out = Vec::new();
+	let mut start = 0;
+	while start < value.len() {
+		let mut end = (start + MAX).min(value.len());
+		// Walk back to the previous char boundary if a multibyte character
+		// straddles the would-be split point.
+		while end < value.len() && !value.is_char_boundary(end) {
+			end -= 1;
+		}
+		out.push(value[start..end].to_string());
+		start = end;
+	}
+	out
+}
+
+/// Render a TXT value for a zone file, with long values split into
+/// double-quoted strings (RFC 1035 §5). Embedded `"` and `\` are backslash
+/// escaped so the zone-file parser keeps them literal. A short value is
+/// returned as a single quoted string.
+pub fn txt_zone_form(value: &str) -> String {
+	let mut out = String::with_capacity(value.len() + 2);
+	for part in txt_strings(value) {
+		out.push('"');
+		for byte in part.bytes() {
+			match byte {
+				b'"' | b'\\' => {
+					out.push('\\');
+					out.push(byte as char);
+				}
+				_ => out.push(byte as char),
+			}
+		}
+		out.push('"');
+	}
+	out
+}
+
 /// The records to publish for the given domains and mail hostname.
 ///
-/// `dkim` is the `<selector>._domainkey` value (from the loaded signer) when
-/// DKIM is configured; `tlsa` is the `3 0 1` association for the mail host's
-/// certificate when one is available; `mta_sts_id` versions the MTA-STS record;
-/// `services` toggles the optional SRV records (CalDAV/CardDAV are tied to the
-/// `webdav` listener); `caa_directory` is the configured ACME directory URL —
-/// when it maps to a known CA via [`caa_ca_for_directory`], a single CAA
-/// `0 issue "<ca>"` is emitted for every domain, locking renewal to that CA.
-/// Unknown directories emit no CAA (a wrong value would block renewal).
+/// `dkim` lists every `<selector>._domainkey` value to emit (one per
+/// configured signing key, in selector order, the ed25519 selector first,
+/// then the optional RSA selector); `tlsa` is the `3 0 1` association for
+/// the mail host's certificate when one is available; `mta_sts_id`
+/// versions the MTA-STS record; `services` toggles the optional SRV records
+/// (CalDAV/CardDAV are tied to the `webdav` listener); `caa_directory` is
+/// the configured ACME directory URL; when it maps to a known CA via
+/// [`caa_ca_for_directory`], a single CAA `0 issue "<ca>"` is emitted for
+/// every domain, locking renewal to that CA. Unknown directories emit no
+/// CAA (a wrong value would block renewal).
 pub fn build_records(
 	domains: &[String],
 	hostname: &str,
-	dkim: Option<(&str, &str)>,
+	dkim: &[(String, String)],
 	tlsa: Option<&str>,
 	mta_sts_id: &str,
 	services: Services,
@@ -184,11 +236,13 @@ pub fn build_records(
 				ttl: TTL,
 			},
 		});
-		// DKIM public key, if configured.
-		if let Some((selector, value)) = dkim {
+		// DKIM public keys, one per configured selector. Two are typical
+		// (the ed25519 key plus the optional RSA dual-signing selector);
+		// nothing about the format limits that to two.
+		for (selector, value) in dkim {
 			records.push(txt(
 				format!("{selector}._domainkey.{domain}"),
-				value.to_string(),
+				value.clone(),
 			));
 		}
 		// Autoconfig / autodiscover (Thunderbird / Outlook auto-account
