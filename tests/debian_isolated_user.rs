@@ -214,3 +214,21 @@ fn maintainer_scripts_parse_as_posix_sh() {
 		);
 	}
 }
+
+#[test]
+fn control_depends_on_adduser_for_the_maintainer_scripts() {
+	let control = read("debian/control");
+
+	let depends = control
+		.lines()
+		.find_map(|line| line.strip_prefix("Depends:"))
+		.expect("debian/control declares a Depends line for the binary package");
+
+	let names: Vec<&str> = depends.split(',').map(|dep| dep.trim()).collect();
+	assert!(
+		names.contains(&"adduser"),
+		"Depends must name adduser: the postinst and postrm call adduser/deluser, and the adduser \
+		 package is Priority important rather than essential, so a minimal Debian image or a \
+		 minbase container does not carry it; got: {depends}"
+	);
+}
