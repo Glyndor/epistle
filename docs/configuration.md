@@ -39,6 +39,8 @@ a connection URL.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `hostname` | string | — (required) | FQDN the server identifies as (EHLO, TLS, HELO/PTR). One consistent name for all outbound. |
+| `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, multicast, broadcast and the documentation ranges are refused at validate time: only a global unicast address is accepted. |
+| `public_ipv6` | IPv6 | unset | Same for IPv6. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
 | `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |

@@ -10,11 +10,15 @@ mod validate_tenants;
 #[path = "validate_database.rs"]
 mod validate_database;
 
+#[path = "validate_addresses.rs"]
+pub(super) mod validate_addresses;
+
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
 	pub(crate) fn validate(&self) -> Result<(), ConfigError> {
 		validate_dns_name("hostname", &self.hostname)?;
+		self.validate_addresses()?;
 		self.validate_data_dir()?;
 		self.validate_domains()?;
 		self.validate_accounts()?;
