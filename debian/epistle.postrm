@@ -1,0 +1,38 @@
+#!/bin/sh
+# Post-removal script for the epistle package.
+#
+# Removal leaves the account and the mail alone. An operator who removes the
+# package to put a different version back, or who removes it by accident, must
+# still find the mailboxes afterwards. Purge is the explicit request for the
+# whole footprint to go, which is what `apt purge` promises across Glyndor
+# packages, so it is the only case that deletes the linger flag, the
+# subordinate id ranges, the account and its state directory.
+#
+# Every step here is tolerated: a purge that aborts halfway leaves dpkg with a
+# package it cannot finish removing.
+
+set -e
+
+case "$1" in
+purge)
+	if [ -d /run/systemd/system ]; then
+		if ! loginctl disable-linger glyndor-epistle; then
+			echo "epistle: loginctl disable-linger glyndor-epistle failed" >&2
+		fi
+	fi
+
+	if ! usermod --del-subuids 100000-165535 --del-subgids 100000-165535 glyndor-epistle; then
+		echo "epistle: could not remove the subuid/subgid ranges for glyndor-epistle" >&2
+	fi
+
+	if ! deluser --system --quiet glyndor-epistle; then
+		echo "epistle: could not remove the glyndor-epistle account" >&2
+	fi
+
+	rm -rf /var/lib/glyndor/epistle
+	;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,73 @@
+#!/bin/sh
+# Post-installation script for the epistle package.
+#
+# This prepares the isolated glyndor-epistle account that the documentation and
+# the sample unit expect: the account itself, its state directory, the
+# subuid/subgid ranges rootless Podman needs, the systemd linger flag, and the
+# sysctl that lets the account bind port 25.
+#
+# The division of labour is deliberate. This script attempts each step and
+# warns on stderr when one does not take, and it never aborts the
+# installation: a package that refuses to install on a read-only /etc, or in an
+# image where systemd is not running, is worse than one that reports what is
+# missing. `epistle init` is the other half. It verifies the resulting state
+# and refuses to continue when something this script could not do is still
+# missing.
+
+set -e
+
+case "$1" in
+configure)
+	# 1. The account. --no-create-home because the state directory is created
+	# below with the mode the server needs rather than the skeleton's.
+	if ! getent passwd glyndor-epistle >/dev/null 2>&1; then
+		adduser --system --group --quiet \
+			--home /var/lib/glyndor/epistle --no-create-home \
+			--shell /usr/sbin/nologin --disabled-password glyndor-epistle
+	fi
+
+	if [ ! -d /var/lib/glyndor/epistle ]; then
+		install -d -m 0700 -o glyndor-epistle -g glyndor-epistle \
+			/var/lib/glyndor/epistle
+	fi
+
+	# 2. The subordinate id ranges rootless Podman maps into its containers.
+	# Without them `podman` refuses to start a container as this user.
+	if ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null; then
+		if ! usermod --add-subuids 100000-165535 --add-subgids 100000-165535 glyndor-epistle; then
+			echo "epistle: could not add the subuid/subgid ranges for glyndor-epistle; rootless Podman will not start until they exist" >&2
+		fi
+	fi
+
+	# 3. Linger, so the account's user manager (and with it the rootless stack)
+	# runs without an open session. Only meaningful when systemd is running.
+	if [ -d /run/systemd/system ]; then
+		if ! loginctl enable-linger glyndor-epistle; then
+			echo "epistle: loginctl enable-linger glyndor-epistle failed; the rootless services will not start at boot" >&2
+		fi
+	else
+		echo "epistle: systemd is not running, so linger was not enabled for glyndor-epistle; epistle init will check it" >&2
+	fi
+
+	# 4. Prepare the rootless Podman runtime for the new ranges. Podman is a
+	# Recommends, so its absence is not worth a word.
+	if command -v podman >/dev/null 2>&1; then
+		if ! runuser -u glyndor-epistle -- podman system migrate; then
+			echo "epistle: podman system migrate failed for glyndor-epistle; epistle init will check the rootless runtime" >&2
+		fi
+	fi
+
+	# 5. The port floor shipped in /usr/lib/sysctl.d/30-glyndor-epistle.conf.
+	if [ -w /proc/sys ] && command -v sysctl >/dev/null 2>&1; then
+		if ! sysctl --system >/dev/null; then
+			echo "epistle: sysctl --system failed, so the unprivileged port floor may still be above 25; epistle init will check it" >&2
+		fi
+	else
+		echo "epistle: could not apply /usr/lib/sysctl.d/30-glyndor-epistle.conf; epistle init will check the unprivileged port floor" >&2
+	fi
+	;;
+esac
+
+#DEBHELPER#
+
+exit 0

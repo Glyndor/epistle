@@ -2,22 +2,27 @@
 #
 # Install:
 #   install -Dm644 docs/epistle.service /etc/systemd/system/epistle.service
-#   install -Dm755 target/release/epistle /usr/local/bin/epistle
-#   install -Dm600 epistle.toml            /etc/glyndor/epistle/epistle.toml   # owner-only
+#   install -Dm600 epistle.toml         /etc/glyndor/epistle/epistle.toml   # owner-only
 #   systemctl daemon-reload && systemctl enable --now epistle
 #
-# The unit runs epistle as a transient unprivileged user (DynamicUser) with the
-# filesystem locked down. CAP_NET_BIND_SERVICE lets it bind the low mail ports
-# (25/465/587/993/995) without root; drop the capability lines if you only use
-# high ports. ReadWritePaths must match the config's data_dir.
+# The unit runs epistle as the persistent, unprivileged `glyndor-epistle`
+# account that the .deb creates from its postinst, with the filesystem locked
+# down. Because the service is already that user, the config's [privileges]
+# section is unnecessary here: the drop is a no-op when the process is already
+# exactly the requested user (src/privdrop.rs, drop_to). Install the package
+# first, or create the account by hand, or systemd will refuse to start the
+# service with a user it cannot resolve.
 #
-# DynamicUser runs the server as a transient, system-managed account (named
-# after the unit) that exists only while the service runs — there is no
-# persistent account to create, trace or clean up. The Glyndor prefix therefore
-# lives on the durable footprint instead: /etc/glyndor/epistle and the
-# StateDirectory under /var/lib/glyndor/epistle. To run under a persistent,
-# prefixed `glyndor-epistle` account instead, drop DynamicUser here and use the
-# config's [privileges] section (see the README).
+# CAP_NET_BIND_SERVICE lets it bind the low mail ports (25/465/587/993/995)
+# without root; drop the capability lines if you only use high ports.
+# ReadWritePaths must match the config's data_dir.
+#
+# The Glyndor prefix is on the whole footprint: the account, /etc/glyndor/epistle
+# and the StateDirectory under /var/lib/glyndor/epistle.
+#
+# Running `epistle serve` straight from the package like this is for a
+# single-host, non-container deployment; the supported production shape is the
+# rootless Podman stack under this same account.
 
 [Unit]
 Description=epistle mail server (SMTP, IMAP, email security)
@@ -27,15 +32,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/epistle serve --config /etc/glyndor/epistle/epistle.toml
+ExecStart=/usr/bin/epistle serve --config /etc/glyndor/epistle/epistle.toml
 Restart=on-failure
 RestartSec=5s
 
-# Run as a transient, unprivileged, system-managed user with its own state dir.
-# UMask + StateDirectoryMode keep the mailbox and the credential/TOTP stores
-# owner-only (0700) — the server writes secrets 0600, and nothing above it
-# should be group- or world-readable.
-DynamicUser=yes
+# Run as the persistent, unprivileged account the package creates, with its own
+# state dir. UMask + StateDirectoryMode keep the mailbox and the credential/TOTP
+# stores owner-only (0700): the server writes secrets 0600, and nothing above
+# them should be group- or world-readable.
+User=glyndor-epistle
+Group=glyndor-epistle
 UMask=0077
 StateDirectory=glyndor/epistle
 StateDirectoryMode=0700
