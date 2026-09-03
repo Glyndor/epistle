@@ -32,7 +32,7 @@ use super::AccountStore;
 use super::StoreError;
 use super::names::validate_name;
 use crate::queue::SuppressionList;
-use crate::storage::FsSpool;
+use crate::storage::{CorrespondentStore, FsSpool};
 
 /// What to do with the account's queued outbound mail when it is removed.
 ///
@@ -68,6 +68,11 @@ pub struct Removed {
 	pub app_passwords: u32,
 	/// Number of per-account suppression entries removed.
 	pub suppressed_addresses: u32,
+	/// Number of correspondent markers removed. Tracks who the account
+	/// has previously written to; clearing the markers is part of the
+	/// account-removal footprint so a re-created account does not
+	/// inherit yesterday's recipient list and slip the daily new-cap.
+	pub correspondent_addresses: u32,
 	/// Queued messages dropped because the queue policy was
 	/// [`QueuePolicy::Discard`].
 	pub queued_messages_discarded: u32,
@@ -225,6 +230,11 @@ pub fn remove_account(
 	let suppression = SuppressionList::open(data_dir).map_err(StoreError::Io)?;
 	let suppressed_addresses = suppression.remove_all_for(name).map_err(StoreError::Io)?;
 
+	let correspondents = CorrespondentStore::open(data_dir).map_err(StoreError::Io)?;
+	let correspondent_addresses = correspondents
+		.remove_all_for(name)
+		.map_err(StoreError::Io)?;
+
 	let mailbox_root = account_root(data_dir, name);
 	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
 
@@ -235,6 +245,7 @@ pub fn remove_account(
 		masked_addresses,
 		app_passwords,
 		suppressed_addresses,
+		correspondent_addresses,
 		queued_messages_discarded,
 		queued_messages_left,
 	})

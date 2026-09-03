@@ -91,8 +91,8 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 /// tally is a separate structured field on the same `epistle::api::audit`
 /// event with `event = account.removed`, so an operator can filter on the
 /// `mailbox_files`, `masked_addresses`, `app_passwords`,
-/// `suppressed_addresses`, `queued_discarded` and `queued_left` fields
-/// directly: no second log line to correlate.
+/// `suppressed_addresses`, `correspondent_addresses`, `queued_discarded`
+/// and `queued_left` fields directly: no second log line to correlate.
 pub fn log_account_removal(
 	account: &str,
 	client_ip: Option<IpAddr>,
@@ -110,6 +110,7 @@ pub fn log_account_removal(
 		masked_addresses = counts.masked_addresses,
 		app_passwords = counts.app_passwords,
 		suppressed_addresses = counts.suppressed_addresses,
+		correspondent_addresses = counts.correspondent_addresses,
 		queued_discarded = counts.queued_messages_discarded,
 		queued_left = counts.queued_messages_left,
 		"account removed with footprint cleared"
