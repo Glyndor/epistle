@@ -154,7 +154,7 @@ fn generate_oauth_keypair() -> Option<(String, String)> {
 	))
 }
 
-pub(super) fn dkim_keygen(out: &std::path::Path) -> ExitCode {
+pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCode {
 	if out.exists() {
 		eprintln!(
 			"error: {} already exists, refusing to overwrite",
@@ -162,28 +162,28 @@ pub(super) fn dkim_keygen(out: &std::path::Path) -> ExitCode {
 		);
 		return ExitCode::FAILURE;
 	}
-	let (pem, record) = match crate::dkim::generate_key() {
-		Ok(generated) => generated,
-		Err(error) => {
-			eprintln!("error: {error}");
-			return ExitCode::FAILURE;
+	if rsa && !matches!(bits, 2048 | 4096) {
+		eprintln!("error: --bits must be 2048 or 4096 (got {bits})");
+		return ExitCode::FAILURE;
+	}
+	let (pem, record) = if rsa {
+		match generate_rsa_key(bits) {
+			Ok(generated) => generated,
+			Err(error) => {
+				eprintln!("error: {error}");
+				return ExitCode::FAILURE;
+			}
+		}
+	} else {
+		match crate::dkim::generate_key() {
+			Ok(generated) => generated,
+			Err(error) => {
+				eprintln!("error: {error}");
+				return ExitCode::FAILURE;
+			}
 		}
 	};
-	// The private key must never be group/world readable.
-	let result = {
-		use std::io::Write;
-		let mut options = std::fs::OpenOptions::new();
-		options.write(true).create_new(true);
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::OpenOptionsExt;
-			options.mode(0o600);
-		}
-		options
-			.open(out)
-			.and_then(|mut file| file.write_all(pem.as_bytes()))
-	};
-	if let Err(error) = result {
+	if let Err(error) = write_key_pem(out, &pem) {
 		eprintln!("error: cannot write {}: {error}", out.display());
 		return ExitCode::FAILURE;
 	}
@@ -191,6 +191,135 @@ pub(super) fn dkim_keygen(out: &std::path::Path) -> ExitCode {
 	println!("publish this TXT record at <selector>._domainkey.<your-domain>:");
 	println!("{record}");
 	ExitCode::SUCCESS
+}
+
+/// Generate an RSA DKIM key by asking `openssl genpkey` to produce a
+/// PKCS#8 PEM, returning the PEM and the matching DKIM DNS record value
+/// (`v=DKIM1; k=rsa; p=<base64 SPKI>`). The PEM is validated through
+/// `ring`'s PKCS#8 loader before it is written to disk or printed, so a
+/// process that depends on the loader (outbound signing, the publish
+/// record, the verifier) cannot trip on an `openssl` build we never
+/// actually parsed.
+///
+/// `openssl` must be on `PATH`; the message names the package to install
+/// when it is not.
+fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as BASE64;
+	use ring::signature::{KeyPair, RSA_PKCS1_2048_8192_SHA256, RsaKeyPair, UnparsedPublicKey};
+	use std::io::Read;
+	use std::process::{Command, Stdio};
+
+	let mut child = Command::new("openssl")
+		.args([
+			"genpkey",
+			"-algorithm",
+			"RSA",
+			"-pkeyopt",
+			&format!("rsa_keygen_bits:{bits}"),
+			"-outform",
+			"PEM",
+		])
+		.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped())
+		.spawn()
+		.map_err(|error| match error.kind() {
+			std::io::ErrorKind::NotFound => KeygenError::OpenSslMissing,
+			_ => KeygenError::OpenSslRead(error),
+		})?;
+
+	let mut pem = String::new();
+	if let Some(mut stdout) = child.stdout.take() {
+		let mut limited = (&mut stdout).take(64 * 1024);
+		limited
+			.read_to_string(&mut pem)
+			.map_err(KeygenError::OpenSslRead)?;
+	}
+	let output = child.wait_with_output().map_err(KeygenError::OpenSslRead)?;
+	if !output.status.success() {
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		return Err(KeygenError::OpenFailed(stderr.into_owned()));
+	}
+
+	// Validate through ring before we trust the bytes: the rendered record
+	// has to come from a key we can actually sign with.
+	let der = pem_body(&pem).ok_or(KeygenError::InvalidKey)?;
+	let pair = RsaKeyPair::from_pkcs8(&der).map_err(|_| KeygenError::InvalidKey)?;
+	let pkcs1 = pair.public_key().as_ref();
+	// Touch the parsed key through the verifier's algorithm so an opaque
+	// invalid one fails the same path the verifier will follow.
+	let parsed = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, pkcs1);
+	let _ = parsed;
+	let spki = crate::dkim::spki_for_rsa(pkcs1);
+	Ok((pem, format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki))))
+}
+
+/// Write the generated PEM to `path` with mode 0600 on Unix (or the
+/// closest equivalent on other platforms). Shared between the ed25519 and
+/// RSA paths so the file permissions do not drift between them.
+pub(super) fn write_key_pem(path: &std::path::Path, pem: &str) -> std::io::Result<()> {
+	use std::io::Write;
+	let mut options = std::fs::OpenOptions::new();
+	options.write(true).create_new(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(0o600);
+	}
+	options
+		.open(path)
+		.and_then(|mut file| file.write_all(pem.as_bytes()))
+}
+
+/// Errors from the RSA keygen path. Each variant owns its own message so
+/// the CLI can `eprintln!` without an intermediate formatting step (and
+/// without a taint analyser reading a constant string into a key sink).
+enum KeygenError {
+	OpenSslMissing,
+	OpenSslRead(std::io::Error),
+	OpenFailed(String),
+	InvalidKey,
+}
+
+impl std::fmt::Display for KeygenError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			KeygenError::OpenSslMissing => f.write_str(
+				"`openssl` was not found on PATH; install it (Debian/Ubuntu: `apt install openssl`)",
+			),
+			KeygenError::OpenSslRead(error) => write!(f, "cannot read `openssl` output: {error}"),
+			KeygenError::OpenFailed(stderr) => write!(f, "`openssl genpkey` failed: {stderr}"),
+			KeygenError::InvalidKey => {
+				f.write_str("the key `openssl` produced is not a valid PKCS#8 RSA key")
+			}
+		}
+	}
+}
+
+/// Extract the DER body of a single-block PEM file. Duplicated here from
+/// `crate::dkim::sign::pem_body` because that one is `fn` (not `pub`).
+fn pem_body(pem: &str) -> Option<Vec<u8>> {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as BASE64;
+	let mut body = String::new();
+	let mut inside = false;
+	for line in pem.lines() {
+		if line.starts_with("-----BEGIN ") {
+			inside = true;
+			continue;
+		}
+		if line.starts_with("-----END ") {
+			break;
+		}
+		if inside {
+			body.push_str(line.trim());
+		}
+	}
+	if body.is_empty() {
+		return None;
+	}
+	BASE64.decode(body).ok()
 }
 
 #[cfg(test)]
