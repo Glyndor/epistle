@@ -99,18 +99,10 @@ fn scram_sha256_authenticates() {
 	use ring::{digest, hmac, pbkdf2};
 	use std::num::NonZeroU32;
 
-	// Fresh CSPRNG salt; the literal `b"saltsalt"` is what the previous
-	// test carried and is what `rust/hard-coded-cryptographic-value`
-	// flagged: it is a fixed string reaching PBKDF2's `salt` parameter
-	// inside `ScramCredentials::derive`. Mintage happens once per call so
-	// the server-side derivation and the client-side derivation in this
-	// test agree on the same bytes.
-	let salt: [u8; 16] = {
-		use ring::rand::{SecureRandom, SystemRandom};
-		let mut bytes = [0u8; 16];
-		SystemRandom::new().fill(&mut bytes).expect("csprng");
-		bytes
-	};
+	// Salt minted per call so no literal reaches `ScramCredentials::derive`'s
+	// `salt` parameter; a v7 UUID is sixteen bytes with random low bits, which
+	// is all a test salt needs.
+	let salt: [u8; 16] = uuid::Uuid::now_v7().into_bytes();
 	let stored =
 		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), &salt, 4096));
 	let directory = Arc::new(
@@ -176,17 +168,10 @@ fn scram_sha256_wrong_password_fails() {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 
-	// Fresh CSPRNG salt; the previous test carried the literal `b"saltsalt"`
-	// and `rust/hard-coded-cryptographic-value` flagged it on its way to
-	// PBKDF2's `salt` parameter. Same shape as the passing test above:
-	// minted once per call so this test stands alone, not shared with the
-	// successful SCRAM exchange in `scram_sha256_authenticates`.
-	let salt: [u8; 16] = {
-		use ring::rand::{SecureRandom, SystemRandom};
-		let mut bytes = [0u8; 16];
-		SystemRandom::new().fill(&mut bytes).expect("csprng");
-		bytes
-	};
+	// Salt minted per call so no literal reaches `ScramCredentials::derive`'s
+	// `salt` parameter; a v7 UUID is sixteen bytes with random low bits, which
+	// is all a test salt needs.
+	let salt: [u8; 16] = uuid::Uuid::now_v7().into_bytes();
 	let stored =
 		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), &salt, 4096));
 	let directory = Arc::new(
