@@ -31,7 +31,7 @@ const EVICTION_THRESHOLD: usize = 10_000;
 /// A shared, fixed-window rate limiter keyed by an arbitrary string.
 ///
 /// `key` is lowercased (ASCII case-insensitive) before lookup. The window
-/// is fixed — not sliding — and resets each `window_secs` after the last
+/// is fixed rather than sliding and resets each `window_secs` after the last
 /// increment for that key.
 #[derive(Debug)]
 pub struct WindowLimiter {
@@ -45,6 +45,18 @@ pub struct WindowLimiter {
 /// submission limit, per-tenant aggregate limit) keep compiling; new callers
 /// should prefer [`WindowLimiter`] and its `key` parameter name.
 pub type SendLimiter = WindowLimiter;
+
+/// A `(limiter, cap)` pair for an unauthenticated inbound limit. Built once
+/// in `cli/serve::serve` from the matching top-level config field, then
+/// handed to every SMTP listener so each listener shares the same window
+/// state with the others.
+#[derive(Debug)]
+pub struct InboundLimit {
+	/// Shared window state across all listeners.
+	pub limiter: std::sync::Arc<SendLimiter>,
+	/// Per-minute ceiling the limiter compares against.
+	pub per_min: u32,
+}
 
 impl WindowLimiter {
 	/// A limiter that evaluates a per-call `limit` against a shared fixed

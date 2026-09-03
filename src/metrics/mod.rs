@@ -25,6 +25,10 @@ pub enum RejectReason {
 	/// Rejected because the message was a loop (our own envelope sender on
 	/// a received message, e.g. via SRS / an alias chain).
 	Loop,
+	/// Rejected at `MAIL FROM` because the unauthenticated client tripped
+	/// the configured per-IP or per-sender rate limit. The reply is `450`,
+	/// so the rejection is temporary and the peer is expected to retry.
+	RateLimit,
 }
 
 impl RejectReason {
@@ -36,17 +40,19 @@ impl RejectReason {
 			RejectReason::Reputation => "reputation",
 			RejectReason::Scanner => "scanner",
 			RejectReason::Loop => "loop",
+			RejectReason::RateLimit => "rate_limit",
 		}
 	}
 }
 
-const REASONS: [RejectReason; 6] = [
+const REASONS: [RejectReason; 7] = [
 	RejectReason::Dnsbl,
 	RejectReason::Spf,
 	RejectReason::Dmarc,
 	RejectReason::Reputation,
 	RejectReason::Scanner,
 	RejectReason::Loop,
+	RejectReason::RateLimit,
 ];
 
 /// Canonical short names of every counter, paired with the matching field.
@@ -64,6 +70,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("rejected_reputation", "rejected_reputation"),
 	("rejected_scanner", "rejected_scanner"),
 	("rejected_loop", "rejected_loop"),
+	("rejected_rate_limit", "rejected_rate_limit"),
 	("abuse_dropped", "abuse_dropped"),
 	("sieve_rejected", "sieve_rejected"),
 	("vacation_sent", "vacation_sent"),
@@ -99,6 +106,7 @@ pub struct Metrics {
 	rejected_reputation: AtomicU64,
 	rejected_scanner: AtomicU64,
 	rejected_loop: AtomicU64,
+	rejected_rate_limit: AtomicU64,
 	abuse_dropped: AtomicU64,
 	sieve_rejected: AtomicU64,
 	vacation_sent: AtomicU64,
@@ -241,6 +249,7 @@ impl Metrics {
 			RejectReason::Reputation => &self.rejected_reputation,
 			RejectReason::Scanner => &self.rejected_scanner,
 			RejectReason::Loop => &self.rejected_loop,
+			RejectReason::RateLimit => &self.rejected_rate_limit,
 		}
 	}
 
@@ -269,6 +278,7 @@ impl Metrics {
 			"rejected_reputation" => &self.rejected_reputation,
 			"rejected_scanner" => &self.rejected_scanner,
 			"rejected_loop" => &self.rejected_loop,
+			"rejected_rate_limit" => &self.rejected_rate_limit,
 			"abuse_dropped" => &self.abuse_dropped,
 			"sieve_rejected" => &self.sieve_rejected,
 			"vacation_sent" => &self.vacation_sent,
@@ -423,7 +433,15 @@ mod tests {
 		assert!(rendered.contains("mail_connections_total 0\n"));
 		assert!(rendered.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 0\n"));
 		// Every reason label is present.
-		for label in ["dnsbl", "spf", "dmarc", "reputation", "scanner"] {
+		for label in [
+			"dnsbl",
+			"spf",
+			"dmarc",
+			"reputation",
+			"scanner",
+			"loop",
+			"rate_limit",
+		] {
 			assert!(rendered.contains(&format!("reason=\"{label}\"")), "{label}");
 		}
 	}
@@ -520,6 +538,7 @@ mod tests {
 			"rejected_reputation",
 			"rejected_scanner",
 			"rejected_loop",
+			"rejected_rate_limit",
 			"abuse_dropped",
 			"sieve_rejected",
 			"vacation_sent",
