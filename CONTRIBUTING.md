@@ -91,7 +91,12 @@ order by `sqlx::migrate!` at startup. An applied migration is never
 edited; if a change is needed, add a new migration that follows it. The
 current files (`0001_reputation.sql`, `0002_bayes.sql`,
 `0003_bayes_scope.sql`, `0004_directory.sql`) are immutable in `develop`
-and `main`. A pull request that rewrites one is rejected at review.
+and `main`. A pull request that rewrites one is rejected at review. A
+migration numbered above 0003 must not drop, rename or retype because
+`podman auto-update` cannot roll a migration back, so the discipline is
+add and dual-write in one release, read the new shape in the next, and
+drop the old shape in the one after that; the test in
+`tests/migrations_expand_contract.rs` enforces it.
 
 ## Tests
 
