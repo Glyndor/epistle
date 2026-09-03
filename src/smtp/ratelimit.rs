@@ -10,9 +10,9 @@
 //! ## Bounded memory
 //!
 //! The `state` map grows monotonically with every distinct key an attacker
-//! is willing to feed. To keep memory finite under attack, every [`check`]
+//! is willing to feed. To keep memory finite under attack, every [`SendLimiter::check`]
 //! sweeps entries whose window started more than **two window lengths ago**
-//! whenever the map holds more than [`EVICTION_THRESHOLD`] entries. With a
+//! whenever the map holds more than `EVICTION_THRESHOLD` entries. With a
 //! 60-second window the steady-state map holds at most `EVICTION_THRESHOLD`
 //! plus the handful of fresh keys that just landed; an active churning peer
 //! cannot push it past that bound because the next `check` re-sweeps.
