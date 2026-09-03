@@ -27,6 +27,7 @@ pub mod dkim;
 pub mod dmarc;
 pub mod dns;
 pub mod dnsbl;
+pub mod domain;
 pub mod imap;
 pub mod jwt;
 pub mod managesieve;

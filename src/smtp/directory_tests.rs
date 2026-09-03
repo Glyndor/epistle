@@ -377,3 +377,22 @@ fn list_headers_only_for_list_aliases() {
 	);
 	assert!(headers.contains("List-Unsubscribe:"), "{headers}");
 }
+
+#[test]
+fn resolves_an_address_given_as_a_u_label_against_an_ascii_configured_domain() {
+	// The directory is configured with the ASCII A-label. A recipient
+	// arriving as the U-label still resolves, because the address parser
+	// stores the A-label and the lookup is on the A-label.
+	let dir = Directory::new(
+		["xn--bcher-kva.example".to_string()],
+		[(
+			"alice@xn--bcher-kva.example".to_string(),
+			"alice".to_string(),
+		)],
+	);
+	let address = Address::parse("alice@bücher.example").expect("valid u-label");
+	assert_eq!(
+		dir.resolve(&address),
+		Resolution::Account("alice".to_string())
+	);
+}

@@ -24,6 +24,7 @@ flate2 = "1.1.9"
 base64 = "0.23.1"
 clap = { version = "4.6.1", features = ["derive"] }
 hickory-resolver = { version = "0.26.1", features = ["dnssec-ring"] }
+idna = "1.1"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
 libc = "0.2.186"
 psl = "2.1.212"
@@ -41,6 +42,7 @@ tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "io-util", "
 tower-http = { version = "0.7.0", features = ["cors"] }
 tokio-rustls = "0.26.4"
 toml = "1.1.2"
+unicode-security = "0.1.2"
 url = "2.5.8"
 percent-encoding = "2.3.2"
 tracing = "0.1.44"
