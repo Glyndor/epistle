@@ -77,7 +77,12 @@ pub async fn authorize(
 	let Some((login, password)) = super::device::account_credentials_pub(&headers, &fields) else {
 		return oauth_error("invalid_grant");
 	};
-	let Some(account) = state.authenticate(&login, &password) else {
+	// The OAuth grant endpoints sit outside `require_bearer_token`, so the
+	// peer IP is not propagated as an extension here; the audit log records
+	// `unknown` for the IP — see `device::device_approve` for the same note.
+	let Some(account) =
+		state.authenticate_with_ip(&login, &password, None, crate::config::Protocol::Api)
+	else {
 		return oauth_error("invalid_grant");
 	};
 

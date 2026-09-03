@@ -2,9 +2,86 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::Config;
+
+/// The authentication protocol a request reached the server through. Used to
+/// enforce a per-account allowlist: an account whose `allowed_protocols`
+/// does not include the value the caller arrived on is rejected at
+/// authentication with the same outcome as an unknown login, so the wire
+/// response carries no oracle ("the account exists but cannot sign in
+/// here" is indistinguishable from "the account does not exist").
+///
+/// Variants are a subset of [`ListenerKind`]: the only listeners that
+/// actually take a password are `smtp` / `submission` / `submissions` /
+/// `imap` / `imaps` / `pop3s` / `managesieve` / `api` / `webdav`. The
+/// static `metrics`, `acme`, and `autoconfig` listeners never authenticate,
+/// so they are not in this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Protocol {
+	/// Inbound mail from other servers (port 25). Listed for completeness;
+	/// the server does not advertise `AUTH` on this listener, so the check
+	/// has no effect in practice.
+	Smtp,
+	/// Authenticated client submission with STARTTLS (port 587).
+	Submission,
+	/// Authenticated client submission over implicit TLS (port 465).
+	Submissions,
+	/// Management HTTP API (credential verification, OAuth approval).
+	Api,
+	/// IMAP over implicit TLS (port 993).
+	Imaps,
+	/// IMAP with mandatory STARTTLS upgrade (port 143).
+	Imap,
+	/// POP3 over implicit TLS (port 995). Plaintext POP3 is not offered.
+	Pop3s,
+	/// ManageSieve with mandatory STARTTLS upgrade (port 4190).
+	ManageSieve,
+	/// WebDAV (RFC 4918) per-account file storage.
+	WebDav,
+}
+
+impl TryFrom<ListenerKind> for Protocol {
+	type Error = &'static str;
+	fn try_from(kind: ListenerKind) -> Result<Self, Self::Error> {
+		match kind {
+			ListenerKind::Smtp => Ok(Protocol::Smtp),
+			ListenerKind::Submission => Ok(Protocol::Submission),
+			ListenerKind::Submissions => Ok(Protocol::Submissions),
+			ListenerKind::Api => Ok(Protocol::Api),
+			ListenerKind::Imaps => Ok(Protocol::Imaps),
+			ListenerKind::Imap => Ok(Protocol::Imap),
+			ListenerKind::Pop3s => Ok(Protocol::Pop3s),
+			ListenerKind::ManageSieve => Ok(Protocol::ManageSieve),
+			ListenerKind::WebDav => Ok(Protocol::WebDav),
+			ListenerKind::Metrics => Err("metrics listener does not authenticate"),
+			ListenerKind::Acme => Err("acme listener does not authenticate"),
+			ListenerKind::Autoconfig => Err("autoconfig listener does not authenticate"),
+		}
+	}
+}
+
+impl Protocol {
+	/// The stable, dotted identifier written to the audit channel's
+	/// `protocol` field. The kebab-case spelling matches the TOML
+	/// serialisation so operators correlating logs and config see the same
+	/// string in both places.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Protocol::Smtp => "smtp",
+			Protocol::Submission => "submission",
+			Protocol::Submissions => "submissions",
+			Protocol::Api => "api",
+			Protocol::Imaps => "imaps",
+			Protocol::Imap => "imap",
+			Protocol::Pop3s => "pop3s",
+			Protocol::ManageSieve => "managesieve",
+			Protocol::WebDav => "webdav",
+		}
+	}
+}
 
 /// The service a listener exposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

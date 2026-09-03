@@ -9,6 +9,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use super::directory::Directory;
+use super::diskspace::DiskGuard;
 use super::reply::Reply;
 use super::session::Session;
 use super::sink::MessageSink;
@@ -84,8 +85,27 @@ pub struct Server {
 	cbind_data: Option<Vec<u8>>,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
+	/// Server-wide default submission rate limit (messages/min) for
+	/// authenticated senders. Per-domain limits on the directory win; this
+	/// is the fallback when the account's domain has no entry. `None`
+	/// together with no per-domain entry disables submission rate limiting.
+	global_submission_rate_limit_per_min: Option<u32>,
+	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
+	/// per-account limiter; empty is the identity.
+	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
+	/// Shared disk-space guard for `data_dir`. `None` disables the check,
+	/// which is the right behaviour for tests but not for production: the
+	/// production wiring in `cli/serve.rs` always sets it.
+	disk_guard: Option<Arc<DiskGuard>>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
+	/// The authentication protocol this listener serves. Sessions tag every
+	/// password attempt through this server with it, so a per-account
+	/// `allowed_protocols` set that does not include the listener's kind
+	/// rejects the attempt identically to an unknown login. Default
+	/// `Protocol::Submission` matches the historical behaviour (SMTP AUTH
+	/// is client submission regardless of the listener's port).
+	auth_protocol: crate::config::Protocol,
 }
 
 impl Server {
@@ -112,13 +132,55 @@ impl Server {
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
+			global_submission_rate_limit_per_min: None,
+			tenant_limits: None,
+			disk_guard: None,
 			max_connections: MAX_CONNECTIONS,
+			auth_protocol: crate::config::Protocol::Submission,
 		}
+	}
+
+	/// Tag every password authentication attempt through this server with
+	/// `protocol` so the directory's per-account `allowed_protocols` set
+	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
+	/// listener kind (`Protocol::Submissions` for the implicit-TLS port,
+	/// `Protocol::Submission` for STARTTLS submission, `Protocol::Smtp`
+	/// for the receiving port — though the latter does not advertise AUTH
+	/// so the choice has no practical effect).
+	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
+		self.auth_protocol = protocol;
+		self
 	}
 
 	/// Attach a shared per-account submission rate limiter.
 	pub fn with_send_limiter(mut self, limiter: Arc<crate::smtp::ratelimit::SendLimiter>) -> Self {
 		self.send_limiter = Some(limiter);
+		self
+	}
+
+	/// Set the server-wide default submission rate limit (messages/min).
+	/// The per-domain limit on the active directory (configured via
+	/// [`crate::smtp::directory::Directory::with_domain_submission_limits`])
+	/// takes precedence at check time; this is the fallback. `None`
+	/// together with no per-domain entry disables submission rate limiting.
+	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
+		self.global_submission_rate_limit_per_min = limit;
+		self
+	}
+
+	/// Attach per-tenant aggregate limits. On top of the per-account
+	/// limiter; the SMTP path checks both before accepting MAIL FROM.
+	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
+		self.tenant_limits = Some(limits);
+		self
+	}
+
+	/// Attach a shared disk-space guard for `data_dir`. The SMTP path
+	/// consults it at `MAIL FROM` and rejects with `452` when the
+	/// filesystem cannot hold another message, so the remote retries
+	/// instead of receiving `250` for a payload the spool cannot write.
+	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
+		self.disk_guard = Some(guard);
 		self
 	}
 
@@ -243,7 +305,9 @@ impl Server {
 	}
 
 	fn new_session(&self) -> Session {
-		let mut session = Session::new(&self.hostname).with_directory(self.directory.current());
+		let mut session = Session::new(&self.hostname)
+			.with_directory(self.directory.current())
+			.with_auth_protocol(self.auth_protocol);
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
@@ -252,6 +316,11 @@ impl Server {
 		}
 		if let Some(limiter) = &self.send_limiter {
 			session = session.with_send_limiter(Arc::clone(limiter));
+		}
+		session =
+			session.with_global_submission_rate_limit(self.global_submission_rate_limit_per_min);
+		if let Some(guard) = &self.disk_guard {
+			session = session.with_disk_guard(Arc::clone(guard));
 		}
 		session
 	}

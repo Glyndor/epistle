@@ -1,51 +1,8 @@
 //! Tests for the backup archive builder.
 
+use super::helpers::*;
 use super::*;
-use flate2::read::GzDecoder;
-use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
-
-/// Gunzip an archive and return its raw tar bytes.
-fn gunzip(data: &[u8]) -> Vec<u8> {
-	let mut decoder = GzDecoder::new(data);
-	let mut out = Vec::new();
-	decoder.read_to_end(&mut out).expect("gunzip");
-	out
-}
-
-/// Walk a tar's 512-byte blocks, returning (name, content) for each file.
-fn read_tar(tar: &[u8]) -> Vec<(String, Vec<u8>)> {
-	read_tar_entries(tar)
-		.into_iter()
-		.map(|(name, _mode, content)| (name, content))
-		.collect()
-}
-
-/// Walk a tar's 512-byte blocks, returning (name, mode, content) for each file.
-///
-/// The mode is read from the 8-byte octal mode field at offset 100.
-fn read_tar_entries(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
-	let mut out = Vec::new();
-	let mut offset = 0;
-	while offset + 512 <= tar.len() {
-		let header = &tar[offset..offset + 512];
-		if header.iter().all(|&b| b == 0) {
-			break; // end-of-archive zero block
-		}
-		// USTAR magic must be present.
-		assert_eq!(&header[257..262], b"ustar", "missing ustar magic");
-		let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
-		let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
-		let mode_str = String::from_utf8_lossy(&header[100..108]);
-		let mode = u32::from_str_radix(mode_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		let size_str = String::from_utf8_lossy(&header[124..135]);
-		let size = usize::from_str_radix(size_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		offset += 512;
-		out.push((name, mode, tar[offset..offset + size].to_vec()));
-		offset += size.div_ceil(512) * 512;
-	}
-	out
-}
 
 #[test]
 fn tar_gz_round_trips_entries() {
@@ -98,7 +55,8 @@ fn run_archives_the_data_dir() {
 	let config: Config = toml::from_str(&toml).expect("config");
 
 	let mut out = Vec::new();
-	assert_eq!(run(&config, &mut out), ExitCode::SUCCESS);
+	let mut warnings = Vec::new();
+	assert_eq!(run(&config, &mut out, &mut warnings), ExitCode::SUCCESS);
 	let files = read_tar(&gunzip(&out));
 	assert!(
 		files.iter().any(|(n, _)| n.ends_with("alice/new/m1.eml")),
@@ -130,7 +88,8 @@ fn run_preserves_per_file_modes() {
 	let config: Config = toml::from_str(&toml).expect("config");
 
 	let mut out = Vec::new();
-	assert_eq!(run(&config, &mut out), ExitCode::SUCCESS);
+	let mut warnings = Vec::new();
+	assert_eq!(run(&config, &mut out, &mut warnings), ExitCode::SUCCESS);
 	let entries = read_tar_entries(&gunzip(&out));
 
 	let find = |suffix: &str| -> u32 {
@@ -186,8 +145,9 @@ fn archive_is_a_valid_tar_for_system_tar() {
 
 	let archive_path = dir.path().join("backup.tar.gz");
 	let mut file = std::fs::File::create(&archive_path).expect("create archive");
+	let mut warnings = Vec::new();
 	assert_eq!(
-		run(&config, &mut file),
+		run(&config, &mut file, &mut warnings),
 		ExitCode::SUCCESS,
 		"backup run failed"
 	);

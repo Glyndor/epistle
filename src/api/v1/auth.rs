@@ -7,10 +7,10 @@
 //! the panel having to hold or hash operator passwords itself.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use serde::{Deserialize, Serialize};
 
-use crate::api::state::ApiState;
+use crate::api::state::{ApiState, ClientIp};
 
 /// A credential-verification request.
 #[derive(Deserialize)]
@@ -39,9 +39,15 @@ pub struct VerifyResponse {
 /// `[api] admins`.
 pub async fn verify(
 	State(state): State<ApiState>,
+	Extension(client_ip): Extension<ClientIp>,
 	Json(request): Json<VerifyRequest>,
 ) -> Json<VerifyResponse> {
-	match state.authenticate(&request.name, &request.password) {
+	match state.authenticate_with_ip(
+		&request.name,
+		&request.password,
+		client_ip.0,
+		crate::config::Protocol::Api,
+	) {
 		Some(resolved) => Json(VerifyResponse {
 			valid: true,
 			admin: state.is_admin(&resolved),

@@ -45,7 +45,18 @@ impl Session {
 			.as_deref()
 			.and_then(parse_bearer)
 			.and_then(|token| verifier.verify(&token, unix_now()))
-			.and_then(|email| self.resolve_account(&email));
+			.and_then(|email| self.resolve_account(&email))
+			.and_then(|account| {
+				// The per-account `allowed_protocols` check still applies
+				// for SASL mechanisms that bypass `authenticate_with_ip`
+				// (the password is the OAuth token, not a TOTP-armored
+				// directory secret). The check rejects here exactly like a
+				// wrong token, so the wire response does not reveal that
+				// the account exists.
+				self.directory
+					.is_protocol_allowed(&account, self.auth_protocol)
+					.then_some(account)
+			});
 		match outcome {
 			Some(account) => {
 				self.authenticated = Some(account);

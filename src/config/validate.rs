@@ -4,6 +4,12 @@ use std::collections::HashSet;
 
 use super::{Config, ConfigError};
 
+#[path = "validate_tenants.rs"]
+mod validate_tenants;
+
+#[path = "validate_database.rs"]
+mod validate_database;
+
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
@@ -12,6 +18,7 @@ impl Config {
 		self.validate_data_dir()?;
 		self.validate_domains()?;
 		self.validate_accounts()?;
+		self.validate_srs()?;
 		self.validate_api()?;
 		self.validate_listeners()?;
 		self.validate_acme()?;
@@ -22,6 +29,8 @@ impl Config {
 		self.validate_ldap()?;
 		self.validate_antispam_llm()?;
 		self.validate_alerts()?;
+		self.validate_tenants()?;
+		self.validate_database()?;
 		Ok(())
 	}
 
@@ -136,7 +145,7 @@ impl Config {
 				.strip_prefix("sha256:")
 				.is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
 			let argon2id = api.token_hash.starts_with("$argon2id$")
-				&& argon2::password_hash::PasswordHash::new(&api.token_hash).is_ok();
+				&& argon2::password_hash::phc::PasswordHash::new(&api.token_hash).is_ok();
 			if !sha256 && !argon2id {
 				return Err(ConfigError::Invalid(
 					"[api] token_hash must be a `sha256:<hex>` (from `mail token-hash`) or argon2id PHC string".into(),
@@ -181,7 +190,7 @@ impl Config {
 			}
 			if let Some(hash) = &account.password_hash {
 				let argon2id = hash.starts_with("$argon2id$")
-					&& argon2::password_hash::PasswordHash::new(hash).is_ok();
+					&& argon2::password_hash::phc::PasswordHash::new(hash).is_ok();
 				if !argon2id {
 					return Err(ConfigError::Invalid(format!(
 						"account \"{name}\": password_hash must be an argon2id PHC string"
@@ -215,6 +224,42 @@ impl Config {
 						"domain \"{raw}\" has more than one catch-all account"
 					)));
 				}
+			}
+		}
+		// RFC 5321 §4.5.1: the server MUST accept mail addressed to
+		// `postmaster` at every domain it serves. Without an explicit
+		// `postmaster@<domain>` address or a per-domain catch-all, RCPT TO
+		// for that address would resolve to `UnknownUser` and the server
+		// would 5.1.1 the message — the MUST violation. We warn at validate
+		// time so `config-check` and `serve` both surface the missing
+		// address instead of leaving it for the first inbound bounce
+		// report, but we do NOT reject the config: an upgrade that refuses
+		// to start a previously-running server is a worse failure mode than
+		// the RFC violation it was meant to fix, and operators have been
+		// running without a configured `postmaster@` for a while now. The
+		// runtime still rejects `postmaster@<domain>` at delivery time when
+		// no address or catch-all exists; closing the MUST for real is a
+		// follow-up that converts this warning into a hard error behind an
+		// opt-in flag once we know how many deployments rely on the
+		// permissive behaviour. Skipped when no accounts are configured: an
+		// account-less server has nothing to deliver mail to regardless.
+		// RFC 2142 lists `abuse@` as a SHOULD, not a MUST, so it is not
+		// enforced here — when an operator adds it (explicit address or
+		// catch-all), the existing resolution order accepts it.
+		if !self.accounts.is_empty() {
+			for domain in &self.domains {
+				let domain_lc = domain.to_ascii_lowercase();
+				let key = format!("postmaster@{domain_lc}");
+				if addresses.contains(&key) || catch_all_domains.contains(&domain_lc) {
+					continue;
+				}
+				tracing::warn!(
+					domain = %domain,
+					"domain \"{domain}\" has no `postmaster@<domain>` address and no catch-all; \
+					 RFC 5321 §4.5.1 requires the server to accept mail to postmaster. \
+					 Fix by adding a `postmaster@<domain>` address to an account, or by \
+					 adding the domain to some account's `catch_all`."
+				);
 			}
 		}
 		Ok(())
@@ -347,6 +392,41 @@ impl Config {
 		)
 	}
 
+	/// Reject a config that forwards mail from any account without a configured
+	/// SRS secret. The recommended SPF policy for our domains is `-all`
+	/// (hardfail) — see `dns::records::build_records` — and `-all` only stays
+	/// safe to publish because forwarding rewrites the envelope sender onto
+	/// our own domain (SRS), so the next hop evaluates SPF against our record
+	/// and passes. Without SRS, forwarded mail keeps the original sender; the
+	/// recipient MTA's SPF check on the original domain fails, and any domain
+	/// that publishes `-all` rejects the message. Refusing here surfaces the
+	/// mismatch at load time rather than at the first forwarded bounce.
+	fn validate_srs(&self) -> Result<(), ConfigError> {
+		let forwarding: Vec<&str> = self
+			.accounts
+			.iter()
+			.filter(|account| !account.forward.is_empty())
+			.map(|account| account.name.as_str())
+			.collect();
+		if forwarding.is_empty() {
+			return Ok(());
+		}
+		if self.srs_secret.is_none() {
+			let names = forwarding
+				.iter()
+				.map(|name| format!("\"{name}\""))
+				.collect::<Vec<_>>()
+				.join(", ");
+			return Err(ConfigError::Invalid(format!(
+				"[[accounts]] {names} set `forward = [...]` but no `srs_secret` is configured; \
+				 without SRS, forwarded mail keeps the original envelope sender and any \
+				 destination whose SPF policy is `-all` will reject the message. \
+				 Set `srs_secret` or remove the `forward` entries."
+			)));
+		}
+		Ok(())
+	}
+
 	fn validate_alerts(&self) -> Result<(), ConfigError> {
 		let mut seen = HashSet::new();
 		for alert in &self.alerts {
@@ -370,34 +450,36 @@ impl Config {
 }
 
 /// Validate a fully qualified DNS name; `field` names it in errors.
-fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
+///
+/// Every value on disk is stored verbatim after this call returns `Ok`,
+/// but the caller (`Config::validate_domains` and friends) lowercases it
+/// before insertion into a domain-keyed set, so an operator who writes
+/// `Example.org` and `example.org` ends up with one entry. A U-label
+/// (any non-ASCII domain) is refused here with the A-label the operator
+/// should write instead, so configuration stays ASCII on disk and the
+/// boundary is enforced in exactly one place.
+pub(crate) fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigError> {
 	let name = name.trim();
 	if name.is_empty() {
 		return Err(ConfigError::Invalid(format!("{field} must not be empty")));
 	}
-	if !name.contains('.') {
-		return Err(ConfigError::Invalid(format!(
-			"{field} \"{name}\" must be fully qualified (contain a dot)"
-		)));
-	}
-	if name.len() > 253
-		|| name
-			.split('.')
-			.any(|label| label.is_empty() || label.len() > 63)
-	{
-		return Err(ConfigError::Invalid(format!(
+	// ASCII input still flows through normalize so the wire-shape rules
+	// apply uniformly; a clean ASCII form comes back unchanged and is
+	// accepted as today. A non-ASCII form that successfully normalises is
+	// refused with the ASCII form the operator should write instead, so
+	// configuration stays ASCII on disk.
+	match crate::domain::normalize(name) {
+		Ok(_) if name.is_ascii() => Ok(()),
+		Ok(ascii) => Err(ConfigError::Invalid(format!(
+			"{field} \"{name}\" must be written as its ASCII form \"{ascii}\""
+		))),
+		Err(crate::domain::DomainError::Confusable) => Err(ConfigError::Invalid(format!(
+			"{field} \"{name}\" is confusable with an ASCII name and is refused"
+		))),
+		Err(crate::domain::DomainError::Invalid) => Err(ConfigError::Invalid(format!(
 			"{field} \"{name}\" is not a valid DNS name"
-		)));
+		))),
 	}
-	let valid_chars = name
-		.chars()
-		.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
-	if !valid_chars {
-		return Err(ConfigError::Invalid(format!(
-			"{field} \"{name}\" contains invalid characters"
-		)));
-	}
-	Ok(())
 }
 
 #[cfg(test)]
@@ -407,6 +489,27 @@ mod tests;
 #[cfg(test)]
 #[path = "validate_tests_b.rs"]
 mod tests_b;
+
 #[cfg(test)]
 #[path = "validate_tests_c.rs"]
 mod tests_c;
+
+#[cfg(test)]
+#[path = "validate_tests_d.rs"]
+mod tests_d;
+
+#[cfg(test)]
+#[path = "validate_tests_e.rs"]
+mod tests_e;
+
+#[cfg(test)]
+#[path = "validate_tests_f.rs"]
+mod tests_f;
+
+#[cfg(test)]
+#[path = "validate_tests_g.rs"]
+mod tests_g;
+
+#[cfg(test)]
+#[path = "validate_tests_h.rs"]
+mod tests_h;

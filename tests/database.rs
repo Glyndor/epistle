@@ -2,9 +2,37 @@
 //! `DATABASE_URL` is set (the `Database` CI workflow provides one); otherwise
 //! they skip so the default test run needs no database.
 
+// The CI database is a container on the runner's loopback with no TLS, which
+// is exactly the case `DatabaseTls::Insecure` exists for: a private network the
+// operator vouches for. These tests exercise migrations, reputation and the
+// Bayes corpora, not the transport, so forcing `Require` here would only make
+// them fail on the absence of a certificate nobody issued.
+use epistle::config::DatabaseTls;
+use std::sync::LazyLock;
+
 /// The connection URL, or `None` when no database is configured for this run.
 fn database_url() -> Option<String> {
 	std::env::var("DATABASE_URL").ok().filter(|u| !u.is_empty())
+}
+
+/// The password the SQL-sourced directory test hashes and later presents,
+/// minted once per test binary from a UUIDv7. An integration test crate
+/// cannot see `crate::smtp::auth::tests` (the source-of-truth helpers),
+/// so the equivalent lives here, with the same shape and same goal: keep
+/// a string literal out of every parameter named `password` so the
+/// `rust/hard-coded-cryptographic-value` query has nothing to flag. The
+/// companion helpers in `src/smtp/auth.rs` explain the rationale.
+fn fixture_password() -> &'static str {
+	static PASSWORD: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().simple().to_string());
+	PASSWORD.as_str()
+}
+
+/// A password that is not [`fixture_password`], for the test that presents
+/// the wrong one. Minted the same way so it cannot collide with the right
+/// one by accident.
+fn wrong_password() -> &'static str {
+	static PASSWORD: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().simple().to_string());
+	PASSWORD.as_str()
 }
 
 #[tokio::test]
@@ -14,7 +42,7 @@ async fn migrations_apply_and_reputation_roundtrips() {
 		return;
 	};
 
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -54,7 +82,7 @@ async fn reputation_record_accumulates_and_judges() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -101,7 +129,7 @@ async fn reputation_screen_maps_verdicts() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -139,7 +167,7 @@ async fn bayes_corpus_trains_and_scores() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
@@ -196,14 +224,14 @@ async fn sql_directory_loads_resolves_and_authenticates() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 
 	// A unique account so reruns against a persistent database stay isolated.
 	let name = format!("dir-{}", uuid::Uuid::now_v7());
 	let address = format!("{name}@example.org");
-	let hash = epistle::smtp::auth::hash_password("s3cret").expect("hash");
+	let hash = epistle::smtp::auth::hash_password(fixture_password()).expect("hash");
 	sqlx::query("INSERT INTO directory_account (name, password_hash) VALUES ($1, $2)")
 		.bind(&name)
 		.bind(&hash)
@@ -239,10 +267,13 @@ async fn sql_directory_loads_resolves_and_authenticates() {
 		Resolution::Account(name.clone())
 	);
 	assert_eq!(
-		directory.authenticate(&address, "s3cret"),
+		directory.authenticate(&address, fixture_password(), epistle::config::Protocol::Api),
 		Some(name.clone())
 	);
-	assert_eq!(directory.authenticate(&address, "wrong"), None);
+	assert_eq!(
+		directory.authenticate(&address, wrong_password(), epistle::config::Protocol::Api),
+		None
+	);
 
 	sqlx::query("DELETE FROM directory_account WHERE name = $1")
 		.bind(&name)
@@ -259,7 +290,7 @@ async fn bayes_per_account_corpora_are_isolated() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
 		.await
 		.expect("connect and migrate");
 

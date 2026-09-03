@@ -63,6 +63,11 @@ pub struct Directory {
 	/// Default storage quota (bytes) per domain, applied to accounts in that
 	/// domain without their own quota.
 	domain_quotas: HashMap<String, u64>,
+	/// Per-domain submission rate limit (messages per minute) for authenticated
+	/// senders in that domain. An account picks up its domain's limit when one
+	/// is set; otherwise the server-wide default applies (or no limit, if
+	/// neither is configured).
+	domain_submission_limits: HashMap<String, u32>,
 	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
 	/// account is also queued to each target; `keep_local` keeps the local copy.
 	forwards: HashMap<String, (Vec<String>, bool)>,
@@ -79,6 +84,17 @@ pub struct Directory {
 	/// Disabled masks are not present here, so they reject exactly like an
 	/// unknown user (the directory never reveals that one once existed).
 	masked_by_address: HashMap<String, String>,
+	/// Shared metrics handle for the audit counters (`auth_login_succeeded`
+	/// / `auth_login_failed`). `None` in tests that do not need the
+	/// counters — a `Directory::new(...)` without `with_metrics(...)` still
+	/// emits the structured tracing event, the operator log is the primary
+	/// record, and the counters are a derived view.
+	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
+	/// Per-account protocol allowlist. Absent (the entry is missing) means
+	/// every protocol authenticates the account — the pre-restriction
+	/// behaviour. Present (even empty) means only the listed protocols do;
+	/// the rest reject identically to an unknown login.
+	allowed_protocols: HashMap<String, HashSet<crate::config::Protocol>>,
 }
 
 impl Directory {
@@ -107,11 +123,14 @@ impl Directory {
 			disabled: HashSet::new(),
 			account_quotas: HashMap::new(),
 			domain_quotas: HashMap::new(),
+			domain_submission_limits: HashMap::new(),
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
+			metrics: None,
+			allowed_protocols: HashMap::new(),
 		}
 	}
 
@@ -123,6 +142,16 @@ impl Directory {
 		ldap: Option<std::sync::Arc<crate::directory_store::LdapAuthenticator>>,
 	) -> Self {
 		self.ldap = ldap;
+		self
+	}
+
+	/// Attach the shared metrics handle so every password-based
+	/// authentication attempt bumps `auth_login_succeeded` /
+	/// `auth_login_failed`. The structured tracing event is always emitted
+	/// regardless — the counter is a derived view, the audit log is the
+	/// primary record. Unset in unit tests that do not exercise counters.
+	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
 		self
 	}
 
@@ -205,6 +234,38 @@ impl Directory {
 		self.disabled.contains(&account.to_ascii_lowercase())
 	}
 
+	/// Attach the per-account protocol allowlist (account name → set of
+	/// protocols the account may authenticate through). Account names are
+	/// lowercased to match `credentials()`. An absent entry is
+	/// "every protocol authenticates" (the default for accounts that never
+	/// opted into the restriction); an empty set is "no protocol
+	/// authenticates" — the account owns its mailboxes but cannot sign in
+	/// anywhere.
+	pub fn with_allowed_protocols(
+		mut self,
+		entries: impl IntoIterator<Item = (String, Vec<crate::config::Protocol>)>,
+	) -> Self {
+		self.allowed_protocols = entries
+			.into_iter()
+			.map(|(name, protocols)| {
+				(
+					name.to_ascii_lowercase(),
+					protocols.into_iter().collect::<HashSet<_>>(),
+				)
+			})
+			.collect();
+		self
+	}
+
+	/// Whether `account` may authenticate through `protocol`. `None` when
+	/// the account carries no allowlist (every protocol is admitted); a
+	/// stored set decides otherwise.
+	pub fn is_protocol_allowed(&self, account: &str, protocol: crate::config::Protocol) -> bool {
+		self.allowed_protocols
+			.get(&account.to_ascii_lowercase())
+			.is_none_or(|set| set.contains(&protocol))
+	}
+
 	/// Attach per-account storage quotas (account name → bytes).
 	pub fn with_account_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
 		self.account_quotas = quotas
@@ -219,6 +280,21 @@ impl Directory {
 		self.domain_quotas = quotas
 			.into_iter()
 			.map(|(domain, bytes)| (domain.to_ascii_lowercase(), bytes))
+			.collect();
+		self
+	}
+
+	/// Attach per-domain submission rate limits (domain → messages/min). The
+	/// lookup walks the account's own addresses — the same approach
+	/// [`Directory::quota_for`] takes — so the resolved domain is the one the
+	/// address actually lives under, not the first one configured.
+	pub fn with_domain_submission_limits(
+		mut self,
+		limits: impl IntoIterator<Item = (String, u32)>,
+	) -> Self {
+		self.domain_submission_limits = limits
+			.into_iter()
+			.map(|(domain, per_min)| (domain.to_ascii_lowercase(), per_min))
 			.collect();
 		self
 	}
@@ -260,43 +336,133 @@ impl Directory {
 			.find_map(|domain| self.domain_quotas.get(domain).copied())
 	}
 
+	/// The per-domain submission rate limit (messages/minute) for an
+	/// account, derived from the domain of one of the account's own
+	/// addresses. `None` when no per-domain limit covers the account; the
+	/// caller (the SMTP session) is responsible for falling back to the
+	/// server-wide limit, or to no limit at all.
+	///
+	/// Iterates the account's addresses rather than reading `domains[0]`:
+	/// taking the first configured domain would assign every account to
+	/// whichever domain happened to be configured first, and drop all of
+	/// them the day that domain is removed. The address walk matches the
+	/// approach [`Directory::quota_for`] takes for the same reason.
+	pub fn submission_limit_for(&self, account: &str) -> Option<u32> {
+		if self.domain_submission_limits.is_empty() {
+			return None;
+		}
+		self.accounts_by_address
+			.iter()
+			.filter(|(_, name)| name.eq_ignore_ascii_case(account))
+			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
+			.find_map(|domain| self.domain_submission_limits.get(domain).copied())
+	}
+
 	/// Verify a login with its password, enforcing TOTP when the account has a
 	/// secret: the last 6 digits of the password are the current TOTP code. This
 	/// is a thin wrapper over [`Directory::authenticate_with_ip`] for callers
 	/// without a client IP (app-password CIDR allowlists then never match).
-	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
-		self.authenticate_with_ip(login, password, None)
+	/// `protocol` tags the call site so an account restricted to a subset of
+	/// protocols is rejected here when the caller is not in that subset.
+	pub fn authenticate(
+		&self,
+		login: &str,
+		password: &str,
+		protocol: crate::config::Protocol,
+	) -> Option<String> {
+		self.authenticate_with_ip(login, password, None, protocol)
+	}
+
+	/// Every delivery address the directory resolves for `account`,
+	/// case-preserved. Empty when the account is unknown — callers treat that
+	/// as "no tenant membership" and skip per-tenant aggregates.
+	pub fn addresses_for(&self, account: &str) -> Vec<String> {
+		self.accounts_by_address
+			.iter()
+			.filter(|(_, owner)| owner.eq_ignore_ascii_case(account))
+			.map(|(address, _)| address.clone())
+			.collect()
 	}
 
 	/// Verify a login, falling back to the account's app passwords when the
 	/// primary password fails. `ip` is the client address used to enforce an app
 	/// password's CIDR allowlist (an allowlisted app password is unusable
-	/// without it).
+	/// without it). `protocol` tags the authentication path (SMTP submission,
+	/// IMAP, POP3, ManageSieve, the API, OAuth approval, or WebDAV) so an
+	/// account with a per-account `allowed_protocols` set can sign in only
+	/// through a protocol it actually opts into; every other path returns
+	/// `None` here, mirroring the wire-level no-oracle for an unknown account.
 	///
 	/// Fail-closed and no user-enumeration oracle: an unknown login returns
 	/// `None` from [`Directory::credentials`] before any hashing, exactly as a
 	/// known account whose primary and every app password mismatch — both end in
 	/// `None`. The app-password fallback runs only for a resolved account, so it
-	/// does not change the unknown-vs-known timing class.
+	/// does not change the unknown-vs-known timing class. The protocol
+	/// allowlist runs on the resolved account name, so a "wrong protocol" and
+	/// a "wrong password" share the same wire outcome.
 	///
 	/// LDAP is consulted last and only when the local credential path yields no
 	/// match: local and SQL accounts authenticate without an LDAP round trip, and
 	/// an LDAP-only login (no local entry) still gets a live bind. The LDAP path
 	/// fails closed to `None` (unknown user and bad password are indistinguishable).
+	///
+	/// The structured audit event is emitted on the way out, with the
+	/// resolved account (or `unknown` for a failure) and the login the client
+	/// presented — never the plaintext password nor the TOTP code.
 	pub fn authenticate_with_ip(
 		&self,
 		login: &str,
 		password: &str,
 		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
 	) -> Option<String> {
-		if let Some(account) = self.authenticate_local(login, password, ip) {
-			return Some(account);
+		let outcome = self
+			.authenticate_local(login, password, ip)
+			.or_else(|| {
+				// Local/SQL credentials did not match: try the live LDAP bind, if any.
+				self.ldap
+					.as_ref()
+					.and_then(|ldap| ldap.authenticate(login, password))
+			})
+			.and_then(|account| {
+				// The protocol allowlist is enforced after the local/LDAP
+				// credential check resolves an account. A restriction that
+				// denies this protocol returns None exactly like the disabled
+				// path, so the wire response is identical for "wrong password",
+				// "disabled", and "wrong protocol" — none reveals that the
+				// account exists at all.
+				self.is_protocol_allowed(&account, protocol)
+					.then_some(account)
+			});
+		self.record_auth_outcome(login, outcome.as_deref(), ip, protocol);
+		outcome
+	}
+
+	/// Emit the audit event and bump the counter for one authentication
+	/// attempt, with `outcome = None` for every failure path (unknown
+	/// account, disabled account, wrong password, app-password CIDR miss,
+	/// LDAP bind error) and `outcome = Some(account)` for a success. The
+	/// counter is the derived view; the tracing event on the `epistle::auth`
+	/// target is the primary record and is always emitted, including from
+	/// tests that did not attach a metrics handle.
+	fn record_auth_outcome(
+		&self,
+		login: &str,
+		outcome: Option<&str>,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) {
+		let event = match outcome {
+			Some(_) => crate::api::AuditEvent::LoginSucceeded,
+			None => crate::api::AuditEvent::LoginFailed,
+		};
+		crate::api::log_auth_attempt(event, login, outcome, ip, protocol);
+		if let Some(metrics) = &self.metrics {
+			match outcome {
+				Some(_) => metrics.auth_login_succeeded(),
+				None => metrics.auth_login_failed(),
+			}
 		}
-		// Local/SQL credentials did not match: try the live LDAP bind, if any.
-		if let Some(ldap) = &self.ldap {
-			return ldap.authenticate(login, password);
-		}
-		None
 	}
 
 	/// The local credential path: primary password (with TOTP when set), then the
@@ -350,15 +516,25 @@ impl Directory {
 	/// the remaining password on success, or `None` if the code is missing or
 	/// wrong.
 	fn totp_strip<'a>(&self, password: &'a str, secret: &str) -> Option<&'a str> {
-		let split = password.len().checked_sub(6)?;
+		// `str::split_at` panics when its index is not on a UTF-8 character
+		// boundary. Splitting by byte length is only safe when the trailing
+		// six bytes are ASCII digits: a digit is a single-byte character that
+		// cannot be a continuation byte, so the byte before them ends a
+		// character by construction. This keeps the split safe for non-ASCII
+		// passwords, which the policy is about to admit.
+		let bytes = password.as_bytes();
+		if bytes.len() < 7 || !bytes[bytes.len() - 6..].iter().all(u8::is_ascii_digit) {
+			return None;
+		}
+		let split = bytes.len() - 6;
 		let (pass, code) = password.split_at(split);
 		let code: u32 = code.parse().ok()?;
-		let bytes = crate::totp::decode_base32_secret(secret)?;
+		let secret_bytes = crate::totp::decode_base32_secret(secret)?;
 		let now = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0);
-		crate::totp::verify(&bytes, code, now).then_some(pass)
+		crate::totp::verify(&secret_bytes, code, now).then_some(pass)
 	}
 
 	/// Attach SCRAM credentials (account name → stored credentials).
@@ -550,5 +726,25 @@ mod tests;
 mod app_password_tests;
 
 #[cfg(test)]
+#[path = "directory_auth_audit_tests.rs"]
+mod auth_audit_tests;
+
+#[cfg(test)]
 #[path = "directory_masked_tests.rs"]
 mod masked_tests;
+
+#[cfg(test)]
+#[path = "directory_alias_tests.rs"]
+mod alias_tests;
+
+#[cfg(test)]
+#[path = "directory_protocol_tests.rs"]
+mod protocol_tests;
+
+#[cfg(test)]
+#[path = "directory_totp_tests.rs"]
+mod totp_tests;
+
+#[cfg(test)]
+#[path = "directory_test_support.rs"]
+mod test_support;

@@ -117,8 +117,9 @@ those are absent.
 
 The coverage gate is 90% with a fixed ignore regex for files that need a
 live service or are thin connection-accept glue (see `ci.yml`). The MSRV
-build exercises the `rustc` floor `debian/control` promises, currently
-1.88, and is pinned to 1.98 to match `ci.yml`'s default toolchain.
+build exercises the `rustc` floor `rust-version` declares, currently
+1.94 (set by sqlx 0.9's own `rust-version`), and is pinned to 1.98 to
+match `ci.yml`'s default toolchain.
 
 Two rules matter more than coverage:
 

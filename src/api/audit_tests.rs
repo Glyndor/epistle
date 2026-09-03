@@ -334,7 +334,9 @@ async fn password_reset_records_event_and_does_not_leak_credentials() {
 	);
 }
 
-/// Removing an account must emit `account.removed`.
+/// Removing an account must emit `account.removed` with the per-record
+/// counts the removal call returned; a regression here would let a
+/// `discard`-policy removal silently lose queued mail with no trace.
 #[tokio::test(flavor = "multi_thread")]
 async fn account_removal_records_event() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -345,7 +347,7 @@ async fn account_removal_records_event() {
 		let (status, body) = request(
 			&app,
 			"DELETE",
-			"/api/v1/accounts/frank",
+			"/api/v1/accounts/frank?queue=drain",
 			Some(TOKEN.as_str()),
 		)
 		.await;
@@ -394,7 +396,7 @@ async fn audit_log_records_client_ip_when_connect_info_is_present() {
 	let events = run_with_capture(async {
 		let mut request = Request::builder()
 			.method("DELETE")
-			.uri("/api/v1/accounts/gwen")
+			.uri("/api/v1/accounts/gwen?queue=drain")
 			.header(header::AUTHORIZATION, format!("Bearer {}", TOKEN.as_str()))
 			.body(Body::empty())
 			.expect("request");

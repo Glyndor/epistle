@@ -63,6 +63,12 @@ override_dh_auto_test:
 
 override_dh_auto_install:
 	install -D -m 0755 $(BUILT) debian/epistle/usr/bin/epistle
+	# debhelper 13 has no dh_installsysctl, and the file is renamed on the way
+	# in, which dh_install cannot do either, so it is installed by hand.
+	# /usr/lib/sysctl.d is the vendor location; /etc/sysctl.d stays the
+	# operator's, so an override survives an upgrade of this package.
+	install -D -m 0644 debian/epistle.sysctl \
+		debian/epistle/usr/lib/sysctl.d/30-glyndor-epistle.conf
 
 override_dh_auto_clean:
 	cargo clean

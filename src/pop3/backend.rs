@@ -46,12 +46,16 @@ impl Backend for MailboxBackend {
 	fn verify(&self, user: &str, pass: &str) -> Option<String> {
 		// Hold the directory snapshot for the whole lookup: credentials()
 		// borrows from it. No oracle — a wrong user and a wrong password both
-		// yield None.
+		// yield None, and so does an account whose `allowed_protocols` does
+		// not include POP3.
 		let directory = self.directory.current();
 		directory
 			.credentials(user)
 			.filter(|(_, hash)| crate::smtp::auth::verify_password(hash, pass))
 			.map(|(account, _)| account)
+			.filter(|account| {
+				directory.is_protocol_allowed(account, crate::config::Protocol::Pop3s)
+			})
 	}
 
 	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)> {

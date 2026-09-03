@@ -115,3 +115,42 @@ fn account_lookup_is_case_insensitive() {
 	assert_eq!(store.for_account("alice").len(), 1);
 	assert_eq!(store.for_account("ALICE").len(), 1);
 }
+
+/// Bulk removal must drop every app password for `account` and leave
+/// the bucket for a different account intact; a missing account returns
+/// `Ok(0)` without rewriting the file.
+#[test]
+fn remove_account_drops_only_the_targets() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	// Each secret is minted per call with a UUIDv7 and bound to a local,
+	// the pattern `directory_app_password_tests::app_password` and
+	// `removal_tests::a_recreated_account_*` already use; no test
+	// asserts on the value, so a literal reaching the hash slot would
+	// only feed `rust/hard-coded-cryptographic-value`.
+	let phone_secret = uuid::Uuid::now_v7().simple().to_string();
+	let laptop_secret = uuid::Uuid::now_v7().simple().to_string();
+	let server_secret = uuid::Uuid::now_v7().simple().to_string();
+	store
+		.add("alice", app_password("phone", &phone_secret))
+		.expect("add");
+	store
+		.add("alice", app_password("laptop", &laptop_secret))
+		.expect("add");
+	store
+		.add("bob", app_password("server", &server_secret))
+		.expect("add");
+
+	let removed = store.remove_account("alice").expect("bulk remove");
+	assert_eq!(removed, 2);
+	assert_eq!(store.for_account("alice").len(), 0);
+	assert_eq!(store.for_account("bob").len(), 1);
+
+	// Persistence after bulk remove.
+	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");
+	assert_eq!(reopened.for_account("alice").len(), 0);
+	assert_eq!(reopened.for_account("bob").len(), 1);
+
+	// Idempotent: a missing account returns zero without rewriting the file.
+	assert_eq!(store.remove_account("ghost").expect("ghost"), 0);
+}

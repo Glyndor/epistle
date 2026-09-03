@@ -14,6 +14,7 @@ use crate::storage::{FsSpool, MessageCrypto};
 use super::api_keys::Scope;
 use super::domain_scope::DomainScope;
 use super::error::ApiError;
+use super::tenant_limits::TenantLimits;
 
 /// The bearer credentials the middleware extracted from the request, stashed
 /// in request extensions so handlers can apply a fine-grained scope check on
@@ -69,44 +70,69 @@ struct Inner {
 	/// label so re-warning across the lifetime of a single process is
 	/// prevented.
 	legacy_warned: std::sync::Mutex<std::collections::HashSet<String>>,
+	/// Pluggable blob store. Defaults to the filesystem root at `data_dir`;
+	/// the S3 backend replaces it when `[storage.blobs] backend = "s3"` is
+	/// configured. The handler-side helpers do not know which is in play —
+	/// they speak to the trait the same way either way.
+	blob_backend: Arc<dyn crate::storage::BlobBackend>,
+	/// Per-tenant aggregate limits (accounts, storage, submission rate).
+	/// Empty when no `[[tenant]]` is configured; the empty state is the
+	/// identity, every check short-circuits to "no cap".
+	tenant_limits: TenantLimits,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
+///
+/// The clock and the window length are passed in by the caller so the limiter
+/// does not read `Instant::now()` itself. That makes the limiter's window
+/// logic deterministic from the tests' point of view (no sleeping, no
+/// flake under a loaded parallel run) and lets production code share one
+/// `now` value across the read and the record in the same request.
 struct AuthLimiter {
 	failures: u32,
 	window_start: std::time::Instant,
+	window: std::time::Duration,
 }
 
 const AUTH_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 const AUTH_MAX_FAILURES: u32 = 20;
 
 impl AuthLimiter {
-	fn new() -> Self {
+	/// Build a limiter that will roll its window every `window` starting at
+	/// `now`. `now` is taken at the call site (typically `Instant::now()`),
+	/// not read inside the limiter.
+	fn new(window: std::time::Duration, now: std::time::Instant) -> Self {
 		AuthLimiter {
 			failures: 0,
-			window_start: std::time::Instant::now(),
+			window_start: now,
+			window,
 		}
 	}
 
-	fn is_limited(&mut self) -> bool {
-		if self.window_start.elapsed() >= AUTH_WINDOW {
+	/// Roll the window if `now` is at or past its end, then report whether
+	/// the failure count has reached the threshold.
+	fn is_limited(&mut self, now: std::time::Instant) -> bool {
+		if now.duration_since(self.window_start) >= self.window {
 			self.failures = 0;
-			self.window_start = std::time::Instant::now();
+			self.window_start = now;
 		}
 		self.failures >= AUTH_MAX_FAILURES
 	}
 
-	fn record_failure(&mut self) {
-		if self.window_start.elapsed() >= AUTH_WINDOW {
+	/// Roll the window if `now` is at or past its end, then record a new
+	/// failure against the current window.
+	fn record_failure(&mut self, now: std::time::Instant) {
+		if now.duration_since(self.window_start) >= self.window {
 			self.failures = 0;
-			self.window_start = std::time::Instant::now();
+			self.window_start = now;
 		}
 		self.failures = self.failures.saturating_add(1);
 	}
 
-	fn reset(&mut self) {
+	/// Clear the count and start a fresh window at `now`.
+	fn reset(&mut self, now: std::time::Instant) {
 		self.failures = 0;
-		self.window_start = std::time::Instant::now();
+		self.window_start = now;
 	}
 }
 
@@ -164,11 +190,14 @@ impl ApiState {
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.to_string(),
-				data_dir,
+				data_dir: data_dir.clone(),
 				domains,
 				store,
 				spool,
-				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
+				auth_limiter: std::sync::Mutex::new(AuthLimiter::new(
+					AUTH_WINDOW,
+					std::time::Instant::now(),
+				)),
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
@@ -177,6 +206,8 @@ impl ApiState {
 				authz: None,
 				directory: None,
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
+				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
+				tenant_limits: TenantLimits::default(),
 			}),
 		}
 	}
@@ -196,16 +227,66 @@ impl ApiState {
 		self.inner.authz.as_deref()
 	}
 
+	/// Attach a different blob backend. Must be set before the state is
+	/// shared (it rebuilds the `Arc` inner). The default at construction
+	/// time is the on-disk pool at the configured `data_dir`; calling this
+	/// before the listener starts swaps in the operator-configured S3
+	/// backend.
+	pub fn with_blob_backend(mut self, backend: Arc<dyn crate::storage::BlobBackend>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.blob_backend = backend;
+		}
+		self
+	}
+
+	/// The blob backend serving this server. The upload and download
+	/// handlers go through this for every read and write; they do not know
+	/// whether the bytes end up on disk or in an S3 bucket.
+	pub fn blob_backend(&self) -> &Arc<dyn crate::storage::BlobBackend> {
+		&self.inner.blob_backend
+	}
+
 	/// Authenticate `login`/`password` against the account directory, returning
 	/// the resolved account identity. Used by the OAuth approval/authorize
 	/// endpoints to bind a grant to a real account. Fail-closed and free of any
 	/// user-enumeration oracle (see [`crate::smtp::directory::Directory::authenticate`]).
-	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+	///
+	/// `protocol` tags the call site so an account with a per-account
+	/// `allowed_protocols` set is rejected when this caller is not in the
+	/// set; the wire response is then identical to an unknown login.
+	///
+	/// Use [`ApiState::authenticate_with_ip`] when the request carries the
+	/// peer IP — the audit log attributes every authentication attempt to its
+	/// source IP, which is what the future IP-banning and credential-stuffing
+	/// detectors consume.
+	pub fn authenticate(
+		&self,
+		login: &str,
+		password: &str,
+		protocol: crate::config::Protocol,
+	) -> Option<String> {
+		self.authenticate_with_ip(login, password, None, protocol)
+	}
+
+	/// Authenticate `login`/`password` and attribute the attempt to `ip` in
+	/// the audit log. `None` for `ip` is the same as
+	/// [`ApiState::authenticate`]: the peer address was not available to the
+	/// caller, so it is logged as `unknown`. The audit counters are bumped
+	/// from the same path either way. `protocol` is forwarded to the
+	/// directory so a restricted account cannot authenticate through this
+	/// path.
+	pub fn authenticate_with_ip(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) -> Option<String> {
 		self.inner
 			.store
 			.handle()
 			.current()
-			.authenticate(login, password)
+			.authenticate_with_ip(login, password, ip, protocol)
 	}
 
 	/// Set the account names allowed to authenticate to the admin panel. Must be
@@ -293,6 +374,48 @@ impl ApiState {
 			.quota_limit
 			.store(bytes, std::sync::atomic::Ordering::Relaxed);
 		self
+	}
+
+	/// Replace the auth-failure limiter with one built around a custom
+	/// window. Test-only: the router-level rate-limit test builds its state
+	/// with a long window so the wall clock under a loaded parallel run is
+	/// never the thing under test. The window logic itself is covered by
+	/// `state_limiter_tests.rs`. Must be called before the state is shared
+	/// (the other builders quietly no-op when the `Arc` is already taken;
+	/// this one panics, because a test-only builder that silently does
+	/// nothing defeats its own control).
+	#[cfg(test)]
+	pub(crate) fn with_auth_window(mut self, window: std::time::Duration) -> Self {
+		let inner = Arc::get_mut(&mut self.inner)
+			.expect("with_auth_window must be called before the state is shared");
+		inner.auth_limiter =
+			std::sync::Mutex::new(AuthLimiter::new(window, std::time::Instant::now()));
+		self
+	}
+
+	/// Attach the per-tenant aggregate limits. Must be set before the state
+	/// is shared (it rebuilds the `Arc` inner). With no configured tenants
+	/// the runtime is the identity, every check returns "no cap". The
+	/// `Arc` lets the SMTP server share the same instance without a clone.
+	pub fn with_tenant_limits(mut self, limits: Arc<TenantLimits>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.tenant_limits = (*limits).clone();
+		}
+		self
+	}
+
+	/// The per-tenant aggregate limits. Empty when no `[[tenant]]` is
+	/// configured; the empty state short-circuits every check to "no cap",
+	/// which is the pre-tenancy behaviour bit-for-bit.
+	pub fn tenant_limits(&self) -> &TenantLimits {
+		&self.inner.tenant_limits
+	}
+
+	/// Shared handle for wiring the same limits into the SMTP server. Kept
+	/// separate from `tenant_limits()` so callers do not need to construct
+	/// an `Arc` themselves just to mirror the state.
+	pub fn tenant_limits_handle(&self) -> Arc<TenantLimits> {
+		Arc::new(self.inner.tenant_limits.clone())
 	}
 
 	/// The configured per-account storage quota in bytes (0 = unlimited).
@@ -532,6 +655,10 @@ pub async fn require_bearer_token(
 	mut request: Request,
 	next: Next,
 ) -> Result<Response, ApiError> {
+	// Read `now` once and pass the same value to both the pre-check and the
+	// record/reset at the bottom of the request, so a single request can never
+	// roll the window between the read and the write.
+	let now = std::time::Instant::now();
 	// Reject before any token work when failure budget is exhausted.
 	{
 		let mut limiter = state
@@ -539,7 +666,7 @@ pub async fn require_bearer_token(
 			.auth_limiter
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
-		if limiter.is_limited() {
+		if limiter.is_limited(now) {
 			return Err(ApiError::rate_limited());
 		}
 	}
@@ -575,9 +702,9 @@ pub async fn require_bearer_token(
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
 		if authorized {
-			limiter.reset();
+			limiter.reset(now);
 		} else {
-			limiter.record_failure();
+			limiter.record_failure(now);
 		}
 	}
 
@@ -600,3 +727,7 @@ pub async fn require_bearer_token(
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "state_limiter_tests.rs"]
+mod limiter_tests;

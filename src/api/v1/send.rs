@@ -59,6 +59,19 @@ pub async fn send(
 	if request.to.iter().any(|to| Address::parse(to).is_err()) {
 		return Err(ApiError::invalid_input("Invalid recipient address."));
 	}
+	// Per-tenant aggregate submission rate limit. Sits on top of the
+	// existing per-account limiter (which the SMTP session enforces); the
+	// empty `tenant_limits` is the identity and short-circuits.
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	if let Err(message) = state
+		.tenant_limits()
+		.check_aggregate_rate(std::slice::from_ref(&request.from), now)
+	{
+		return Err(ApiError::rate_limited_with_message(message));
+	}
 
 	let domain = state
 		.domains()

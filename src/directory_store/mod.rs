@@ -9,24 +9,32 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::Account;
+use crate::config::{Account, Protocol};
+use crate::directory_store::aliases::AliasStore;
 use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
 
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
 
+pub mod aliases;
 pub mod masked;
 mod names;
 use names::{validate_name, with_safe_names};
+mod app_passwords_api;
 mod masked_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
+
+pub mod removal;
+pub use removal::{QueuePolicy, Removed, remove_account};
 
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
 pub mod ldap;
 pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
+
+mod build;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -83,6 +91,14 @@ pub struct DynamicAccount {
 	/// to suspend an account without removing its mailbox.
 	#[serde(default)]
 	pub disabled: bool,
+	/// Restrict which authentication protocols this account may sign in
+	/// through. `None` (the default) means every protocol the directory
+	/// knows about — the pre-restriction behaviour. When set, only the
+	/// listed protocols authenticate this account; every other path rejects
+	/// identically to an unknown login, so the wire response never reveals
+	/// that the account exists.
+	#[serde(default)]
+	pub allowed_protocols: Option<Vec<Protocol>>,
 }
 
 impl DynamicAccount {
@@ -104,6 +120,7 @@ impl DynamicAccount {
 			scram: Some(scram),
 			totp_secret: None,
 			disabled: false,
+			allowed_protocols: None,
 		})
 	}
 }
@@ -152,11 +169,16 @@ pub struct AccountStore {
 	static_accounts: Vec<Account>,
 	/// Default storage quota (bytes) per domain.
 	domain_quotas: std::collections::HashMap<String, u64>,
+	/// Per-domain submission rate limit (messages/min) applied to authenticated
+	/// senders in that domain. Mirrors `domain_quotas` in shape and lifecycle.
+	domain_submission_limits: std::collections::HashMap<String, u32>,
 	/// Multi-target aliases from the static configuration.
 	aliases: Vec<crate::config::Alias>,
-	/// App passwords (secondary mail credentials) keyed by account, loaded from
-	/// `app_passwords.toml` at open time.
-	app_passwords: Vec<(String, AppPassword)>,
+	/// App passwords (secondary mail credentials) keyed by account; the
+	/// in-memory mirror of `app_passwords.toml`. Mutators keep disk and
+	/// memory in sync, so a removal takes effect on the next rebuild
+	/// without a server restart.
+	app_passwords: RwLock<Vec<(String, AppPassword)>>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
 	/// Accounts loaded from the SQL directory backend, refreshed periodically.
 	/// Static config and dynamic accounts take precedence over these on a name
@@ -172,6 +194,14 @@ pub struct AccountStore {
 	/// Wrapped in `Arc<RwLock<_>>` so the API can share the same handle and
 	/// mutate without going through `AccountStore`'s mutators.
 	masked: Arc<RwLock<MaskedAddressStore>>,
+	aliases_disabled: Arc<RwLock<AliasStore>>,
+	/// Shared metrics handle for the audit counters
+	/// (`auth_login_succeeded` / `auth_login_failed`). Threaded into every
+	/// rebuilt directory via [`AccountStore::with_metrics`] so the SMTP,
+	/// IMAP, ManageSieve, WebDAV, API and OAuth paths bump the same counters.
+	/// `None` in unit tests that do not exercise the counters — the
+	/// directory still emits the structured tracing event regardless.
+	metrics: Option<Arc<crate::metrics::Metrics>>,
 	handle: DirectoryHandle,
 }
 
@@ -194,7 +224,7 @@ impl AccountStore {
 		};
 
 		// App passwords are an optional sidecar; a missing file is an empty set.
-		let app_passwords = AppPasswordStore::open(data_dir)?.entries().collect();
+		let app_passwords = RwLock::new(AppPasswordStore::open(data_dir)?.entries().collect());
 
 		let masked = MaskedAddressStore::open(data_dir)?;
 
@@ -204,6 +234,7 @@ impl AccountStore {
 			domain_aliases,
 			static_accounts,
 			domain_quotas: std::collections::HashMap::new(),
+			domain_submission_limits: std::collections::HashMap::new(),
 			aliases: Vec::new(),
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
@@ -211,6 +242,8 @@ impl AccountStore {
 			ldap_accounts: RwLock::new(Vec::new()),
 			ldap_auth: None,
 			masked: Arc::new(RwLock::new(masked)),
+			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
+			metrics: None,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -220,6 +253,17 @@ impl AccountStore {
 	/// Set the per-domain default storage quotas and rebuild the directory.
 	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
 		self.domain_quotas = quotas;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Set the per-domain submission rate limits (messages/min) and rebuild
+	/// the directory.
+	pub fn with_domain_submission_limits(
+		mut self,
+		limits: std::collections::HashMap<String, u32>,
+	) -> Self {
+		self.domain_submission_limits = limits;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -251,6 +295,17 @@ impl AccountStore {
 	/// directory so per-request LDAP binds are wired in (builder form).
 	pub fn with_ldap_authenticator(mut self, ldap: Arc<LdapAuthenticator>) -> Self {
 		self.ldap_auth = Some(ldap);
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Attach the shared metrics handle so every directory rebuilt from
+	/// this point on bumps the audit counters (`auth_login_succeeded` /
+	/// `auth_login_failed`) on every password-based authentication
+	/// attempt. The structured tracing event is always emitted regardless
+	/// — the counter is a derived view.
+	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -483,84 +538,24 @@ impl AccountStore {
 		let dynamic = self.dynamic.read().expect("store lock");
 		let sql = self.sql_accounts.read().expect("store lock");
 		let ldap = self.ldap_accounts.read().expect("store lock");
-		// LDAP accounts are listed first, then SQL, so static config and dynamic
-		// accounts chained after take precedence on a name or address collision
-		// (the directory's maps keep the last writer): static > dynamic > SQL > LDAP.
-		let address_accounts = ldap
-			.iter()
-			.flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			})
-			.chain(sql.iter().flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			}))
-			.chain(self.static_accounts.iter().flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			}))
-			.chain(dynamic.iter().flat_map(|account| {
-				account
-					.addresses
-					.iter()
-					.map(|address| (address.clone(), account.name.clone()))
-			}))
-			.collect::<Vec<_>>();
-		let hashes = sql
-			.iter()
-			.filter_map(|account| {
-				account
-					.password_hash
-					.as_ref()
-					.map(|hash| (account.name.clone(), hash.clone()))
-			})
-			.chain(self.static_accounts.iter().filter_map(|account| {
-				account
-					.password_hash
-					.as_ref()
-					.map(|hash| (account.name.clone(), hash.clone()))
-			}))
-			.chain(
-				dynamic
-					.iter()
-					.map(|account| (account.name.clone(), account.password_hash.clone())),
-			)
-			.collect::<Vec<_>>();
+		let address_accounts =
+			build::address_accounts(&ldap, &sql, &self.static_accounts, &dynamic);
+		let allowed_protocols =
+			build::allowed_protocols(&self.static_accounts, &dynamic).collect::<Vec<_>>();
+		let hashes = build::password_hashes(&sql, &self.static_accounts, &dynamic);
 		let catch_all = self.static_accounts.iter().flat_map(|account| {
 			account
 				.catch_all
 				.iter()
 				.map(|domain| (domain.clone(), account.name.clone()))
 		});
-		// SCRAM credentials only exist for dynamic accounts (derived from the
-		// plaintext password at set time).
-		let scram = dynamic.iter().filter_map(|account| {
-			account
-				.scram
-				.clone()
-				.map(|stored| (account.name.clone(), stored))
-		});
-		let totp = dynamic.iter().filter_map(|account| {
-			account
-				.totp_secret
-				.clone()
-				.map(|secret| (account.name.clone(), secret))
-		});
-		// Disabled accounts are passed through to the directory as a name set so
-		// `authenticate_local` can reject them before any password work runs.
-		// The set rebuilds on every directory swap, mirroring how totp, scram
-		// and quotas are wired.
-		let disabled = dynamic
-			.iter()
-			.filter(|account| account.disabled)
-			.map(|account| account.name.clone());
+		let scram = build::scram(&dynamic);
+		let totp = build::totp(&dynamic);
+		// Disabled accounts are passed through to the directory as a name
+		// set so `authenticate_local` can reject them before any password
+		// work runs. The set rebuilds on every directory swap, mirroring
+		// how totp, scram and quotas are wired.
+		let disabled = build::disabled(&dynamic);
 		let account_quotas = self.static_accounts.iter().filter_map(|account| {
 			account
 				.quota_bytes
@@ -576,6 +571,7 @@ impl AccountStore {
 					(account.forward.clone(), account.forward_keep_local),
 				)
 			});
+		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
 		let aliases = self.aliases.iter().map(|alias| {
 			(
 				alias.address.clone(),
@@ -587,6 +583,7 @@ impl AccountStore {
 				},
 			)
 		});
+		let aliases = aliases.filter(|(address, _)| !disabled_lock.is_disabled(address));
 		// Masked email addresses: only enabled ones feed the directory so a
 		// disabled mask rejects like an unknown user and the SMTP `owns_address`
 		// check stays fail-closed.
@@ -596,7 +593,7 @@ impl AccountStore {
 			.expect("masked lock")
 			.entries()
 			.collect::<Vec<_>>();
-		Directory::new(self.domains.iter().cloned(), address_accounts)
+		let mut dir = Directory::new(self.domains.iter().cloned(), address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
@@ -605,11 +602,23 @@ impl AccountStore {
 			.with_disabled(disabled)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
+			.with_domain_submission_limits(self.domain_submission_limits.clone())
 			.with_forwards(forwards)
 			.with_aliases(aliases)
-			.with_app_passwords(self.app_passwords.iter().cloned())
+			.with_app_passwords(
+				self.app_passwords
+					.read()
+					.expect("app-passwords lock")
+					.iter()
+					.cloned(),
+			)
 			.with_ldap(self.ldap_auth.clone())
 			.with_masked(masked)
+			.with_allowed_protocols(allowed_protocols);
+		if let Some(metrics) = self.metrics.clone() {
+			dir = dir.with_metrics(metrics);
+		}
+		dir
 	}
 }
 

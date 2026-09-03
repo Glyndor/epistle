@@ -12,11 +12,15 @@ impl Session {
 			return self.auth_fail();
 		};
 		// Password + any TOTP second factor, or an app password (CIDR-checked
-		// against the peer IP); no oracle (unknown user == bad pw).
+		// against the peer IP); no oracle (unknown user == bad pw). The
+		// protocol tag is the listener kind this session serves (Submission
+		// or Submissions), so a per-account `allowed_protocols` that does
+		// not include it rejects exactly like an unknown login.
 		match self.directory.authenticate_with_ip(
 			&credentials.authcid,
 			&credentials.password,
 			self.peer_ip,
+			self.auth_protocol,
 		) {
 			Some(account) => self.auth_success(account),
 			None => self.auth_fail(),
@@ -41,6 +45,7 @@ impl Session {
 			user,
 			&String::from_utf8_lossy(&bytes),
 			self.peer_ip,
+			self.auth_protocol,
 		) {
 			Some(account) => self.auth_success(account),
 			None => self.auth_fail(),
@@ -67,14 +72,25 @@ impl Session {
 		if !authzid.is_empty() && authzid != identity {
 			return self.auth_fail();
 		}
-		// Resolve the certificate's email identity to a local account.
-		match crate::smtp::address::Address::parse(&identity) {
+		// Resolve the certificate's email identity to a local account, then
+		// enforce the per-account `allowed_protocols` against this session's
+		// listener kind. EXTERNAL reaches the directory through resolve() —
+		// not authenticate_with_ip — so the check has to be issued here too,
+		// with the same outcome as a missing or untrusted certificate.
+		let account = match crate::smtp::address::Address::parse(&identity) {
 			Ok(address) => match self.directory.resolve(&address) {
-				crate::smtp::directory::Resolution::Account(account) => self.auth_success(account),
-				_ => self.auth_fail(),
+				crate::smtp::directory::Resolution::Account(account) => account,
+				_ => return self.auth_fail(),
 			},
-			Err(_) => self.auth_fail(),
+			Err(_) => return self.auth_fail(),
+		};
+		if !self
+			.directory
+			.is_protocol_allowed(&account, self.auth_protocol)
+		{
+			return self.auth_fail();
 		}
+		self.auth_success(account)
 	}
 
 	fn auth_success(&mut self, account: String) -> Action {

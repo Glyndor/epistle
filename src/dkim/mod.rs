@@ -6,7 +6,7 @@ mod sign;
 mod signature;
 mod verify;
 
-pub use rotate::{ReloadableSigner, Rotator};
+pub use rotate::{ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator};
 pub(crate) use sign::load_ed25519_key;
 pub use sign::{Signer, SignerError, generate_key};
 pub use verify::{DkimOutcome, DkimResult, verify_message};

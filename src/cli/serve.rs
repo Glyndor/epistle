@@ -62,6 +62,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	if let Some(auth) = ldap_auth {
 		store = store.with_ldap_authenticator(auth);
 	}
+	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	// Probe the system clock before anything else binds a socket: a drift
+	// past the TOTP window breaks two-factor for every account at once,
+	// and the counter is what the alert engine reads. The probe sleeps
+	// for ~100 ms; doing it before listener setup means the metric is
+	// already in place if a slow startup happens to coincide with one.
+	crate::clock::check_drift(&metrics);
+	// The directory's audit counters are bumped from the SMTP, IMAP,
+	// ManageSieve, WebDAV, API and OAuth paths — every directory rebuilt
+	// here shares the same `Arc<Metrics>` so the counters are coherent.
+	store = store.with_metrics(metrics.clone());
 	let account_store = Arc::new(store);
 	let directory = account_store.handle();
 
@@ -69,9 +81,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// encryption enabled but no usable key the server refuses to start.
 	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
 		.map_err(std::io::Error::other)?;
-
-	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
-	let metrics = Arc::new(crate::metrics::Metrics::new());
 
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured.
@@ -159,10 +168,31 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
-	// Optional per-account submission rate limiter, shared across SMTP listeners.
-	let send_limiter = config
-		.submission_rate_limit_per_min
-		.map(|per_min| Arc::new(crate::smtp::ratelimit::SendLimiter::new(per_min, 60)));
+	// Optional per-account submission rate limiter, shared across SMTP
+	// listeners. The per-account `limit` is resolved at MAIL FROM time
+	// (per-domain override, then the server-wide default, then no limit at
+	// all); the limiter itself only owns the shared sliding-window state.
+	// It is created whenever any limit is configured, so a per-domain
+	// override without a global still gets a working limiter.
+	let has_any_submission_limit = config.submission_rate_limit_per_min.is_some()
+		|| !config.domain_submission_limits.is_empty();
+	let send_limiter =
+		has_any_submission_limit.then(|| Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)));
+
+	// Per-tenant aggregate limits. Built once from the static config; with
+	// no `[[tenant]]` blocks the result is the identity, every check is a
+	// no-op, and the wire below carries an empty `Arc`.
+	let tenant_limits = Arc::new(crate::api::TenantLimits::from_config(&config.tenants));
+
+	// Shared disk-space guard for `data_dir`. `MAIL FROM` rejects with
+	// `452` when the filesystem holding the spool cannot hold another
+	// message, so the remote retries instead of receiving `250` for a
+	// payload the server cannot write. One guard per listener would
+	// re-sample on every concurrent connection; one shared guard amortises
+	// the cache and keeps the measurement consistent across listeners.
+	let disk_guard = Arc::new(crate::smtp::diskspace::DiskGuard::new(
+		config.data_dir.clone(),
+	));
 
 	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
 	let max_conn = config.max_connections_per_listener.unwrap_or(0);
@@ -182,15 +212,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// the start, not the first mail that hits the band.
 	let llm_hook = crate::antispam::llm::LlmHook::from_config(config.antispam_llm.as_ref())?;
 
-	// Optional reputation database, migrated at startup.
-	let reputation_pool = match &config.database {
-		Some(db) => Some(
-			crate::db::connect(&db.url, db.max_connections)
-				.await
-				.map_err(std::io::Error::other)?,
-		),
-		None => None,
-	};
+	// Optional reputation database, migrated at startup. An unreachable
+	// database degrades the antispam engine instead of stopping the mail, unless
+	// `[database] directory = true` makes it the source of the accounts.
+	let reputation_pool = super::serve_tasks::connect_database(&config, &metrics).await?;
 
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
@@ -298,6 +323,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.api
 					.as_ref()
 					.ok_or_else(|| std::io::Error::other("api listener without [api] section"))?;
+				// Resolve the blob backend the operator configured: a missing
+				// or empty `[storage.blobs]` section defaults to the historical
+				// on-disk pool at `data_dir`; the S3 backend replaces it when
+				// the config names `backend = "s3"`. The constructor fails
+				// closed on missing S3 credentials.
+				let blob_backend = crate::storage::build_blob_backend(
+					&config.data_dir,
+					config.storage.as_ref().and_then(|s| s.blobs.as_ref()),
+				)?;
 				let mut state = crate::api::ApiState::new(
 					&api.token_hash,
 					config.data_dir.clone(),
@@ -308,7 +342,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_quota(config.quota_bytes.unwrap_or(0))
 				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone())
-				.with_directory(directory.clone());
+				.with_directory(directory.clone())
+				.with_blob_backend(blob_backend)
+				.with_tenant_limits(Arc::clone(&tenant_limits));
 				// Built-in OAuth authorization server, when a signing key is set.
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
 					state = state.with_authz(authz);
@@ -488,6 +524,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(limiter) = &send_limiter {
 					server = server.with_send_limiter(Arc::clone(limiter));
 				}
+				if !tenant_limits.is_empty() {
+					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
+				}
+				server = server.with_disk_guard(Arc::clone(&disk_guard));
 				if let Some(verifier) = &oauth_verifier {
 					server = server.with_oauth(Arc::clone(verifier));
 				}

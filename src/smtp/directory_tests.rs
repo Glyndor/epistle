@@ -1,6 +1,8 @@
 //! Tests for recipient resolution and the directory.
 
+use super::test_support::variant_name;
 use super::*;
+use crate::smtp::auth::tests::fixture_password;
 
 fn directory() -> Directory {
 	Directory::new(
@@ -60,7 +62,7 @@ fn alias_resolves_to_all_member_accounts() {
 			assert!(accounts.contains(&"bob".to_string()));
 			assert_eq!(accounts.len(), 2);
 		}
-		other => panic!("expected alias, got {other:?}"),
+		other => panic!("expected alias, got {}", variant_name(&other)),
 	}
 }
 
@@ -291,7 +293,7 @@ fn authenticate_enforces_totp_second_factor() {
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash("secret"),
+		crate::smtp::auth::tests::hash(fixture_password()),
 	)])
 	.with_totp([("alice".to_string(), crate::totp::encode_base32(secret))]);
 
@@ -301,22 +303,44 @@ fn authenticate_enforces_totp_second_factor() {
 		.unwrap_or(0);
 	let code = crate::totp::totp(secret, now);
 	// Password followed by the current 6-digit TOTP code.
-	let password = format!("secret{code:06}");
+	let password = format!("{}{code:06}", fixture_password());
 	assert_eq!(
-		directory.authenticate("alice", &password).as_deref(),
+		directory
+			.authenticate("alice", &password, crate::config::Protocol::Api)
+			.as_deref(),
 		Some("alice")
 	);
 	// A wrong code, or the bare password without a code, both fail.
-	assert!(directory.authenticate("alice", "secret000000").is_none());
-	assert!(directory.authenticate("alice", "secret").is_none());
+	assert!(
+		directory
+			.authenticate(
+				"alice",
+				&format!("{}000000", fixture_password()),
+				crate::config::Protocol::Api
+			)
+			.is_none()
+	);
+	assert!(
+		directory
+			.authenticate("alice", fixture_password(), crate::config::Protocol::Api)
+			.is_none()
+	);
 
 	// An account without a TOTP secret authenticates with just the password.
 	let plain = Directory::new(
 		["example.org".to_string()],
 		[("bob@example.org".to_string(), "bob".to_string())],
 	)
-	.with_password_hashes([("bob".to_string(), crate::smtp::auth::tests::hash("pw"))]);
-	assert_eq!(plain.authenticate("bob", "pw").as_deref(), Some("bob"));
+	.with_password_hashes([(
+		"bob".to_string(),
+		crate::smtp::auth::tests::hash(fixture_password()),
+	)]);
+	assert_eq!(
+		plain
+			.authenticate("bob", fixture_password(), crate::config::Protocol::Api)
+			.as_deref(),
+		Some("bob")
+	);
 }
 
 #[test]
@@ -352,4 +376,23 @@ fn list_headers_only_for_list_aliases() {
 		"{headers}"
 	);
 	assert!(headers.contains("List-Unsubscribe:"), "{headers}");
+}
+
+#[test]
+fn resolves_an_address_given_as_a_u_label_against_an_ascii_configured_domain() {
+	// The directory is configured with the ASCII A-label. A recipient
+	// arriving as the U-label still resolves, because the address parser
+	// stores the A-label and the lookup is on the A-label.
+	let dir = Directory::new(
+		["xn--bcher-kva.example".to_string()],
+		[(
+			"alice@xn--bcher-kva.example".to_string(),
+			"alice".to_string(),
+		)],
+	);
+	let address = Address::parse("alice@bücher.example").expect("valid u-label");
+	assert_eq!(
+		dir.resolve(&address),
+		Resolution::Account("alice".to_string())
+	);
 }

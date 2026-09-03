@@ -17,6 +17,7 @@ async fn archive_test_state() -> (tempfile::TempDir, ApiState) {
 		quota_bytes: None,
 		forward: Vec::new(),
 		forward_keep_local: true,
+		allowed_protocols: None,
 	}];
 	let store = std::sync::Arc::new(
 		crate::directory_store::AccountStore::open(

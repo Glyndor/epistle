@@ -109,6 +109,8 @@ group = "glyndor-epistle"  # optional; defaults to the user's primary group
 
 The drop fails closed: if the user/group cannot be resolved, the process is not root, or the drop cannot be verified (including that root can no longer be regained), the server refuses to start. Omit the section to run as whoever launched the process (for example under a systemd `User=`).
 
+The `.deb` creates `glyndor-epistle` for you, with `/var/lib/glyndor/epistle` at mode `0700`, the subuid/subgid ranges rootless Podman needs, and systemd linger so the account's services come back after a reboot. It also installs `/usr/lib/sysctl.d/30-glyndor-epistle.conf`, which sets `net.ipv4.ip_unprivileged_port_start = 25` so that the account can bind the SMTP port without root at all, which is what a rootless container needs. That floor is machine-wide rather than per-user: once it is applied, any local unprivileged user can bind ports from 25 up. On a dedicated mail host that is the trade worth making; on a shared host, read [Port 25 without root](docs/security.md#port-25-without-root) first and override the value in `/etc/sysctl.d` if you would rather not take it. The package attempts each step and warns on stderr when one does not take, never failing the install; `epistle init` is what verifies the result and refuses to continue when something is missing.
+
 ## ✨ Features
 
 - **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).
@@ -123,6 +125,7 @@ The drop fails closed: if the user/group cannot be resolved, the process is not 
 - [CLI reference](docs/cli.md) — every `epistle` command, plus the outbound retry/suppression policy.
 - [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
 - [Security](docs/security.md) — the transport, authentication, anti-abuse and at-rest controls, and how to report a vulnerability.
+- [Threat model](docs/threat-model.md) — assets, trust boundaries, each threat with its control and the test behind it, and the residual risks.
 
 ## 🧪 End-to-end test matrix
 

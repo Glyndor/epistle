@@ -233,7 +233,9 @@ impl Session {
 		let State::NotAuthenticated { login_failures } = &mut self.state else {
 			return Output::text(format!("{tag} BAD already authenticated\r\n"));
 		};
-		let verified = self.directory.authenticate(username, password);
+		let verified = self
+			.directory
+			.authenticate(username, password, self.auth_protocol);
 		match verified {
 			Some(account) => {
 				self.state = State::Authenticated { account };

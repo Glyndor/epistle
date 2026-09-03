@@ -17,6 +17,8 @@
 
 use std::net::IpAddr;
 
+use crate::config::Protocol;
+
 /// A privileged action taken against an account through the management API.
 ///
 /// Each variant maps to a stable string in the `event` field of the emitted
@@ -37,6 +39,14 @@ pub enum AuditEvent {
 	MaskedUpdated,
 	/// A masked email address was removed from an account.
 	MaskedRemoved,
+	/// A password-based authentication attempt (PLAIN, LOGIN, IMAP LOGIN,
+	/// WebDAV Basic, ManageSieve PLAIN, the API's credential-verification
+	/// endpoints) accepted the presented credentials and resolved an account.
+	LoginSucceeded,
+	/// The same attempt was rejected: the login was unknown, the account was
+	/// disabled, the password did not match, an app-password CIDR did not
+	/// admit the peer, or an LDAP bind failed.
+	LoginFailed,
 }
 
 impl AuditEvent {
@@ -50,6 +60,8 @@ impl AuditEvent {
 			AuditEvent::MaskedCreated => "masked.created",
 			AuditEvent::MaskedUpdated => "masked.updated",
 			AuditEvent::MaskedRemoved => "masked.removed",
+			AuditEvent::LoginSucceeded => "auth.login_succeeded",
+			AuditEvent::LoginFailed => "auth.login_failed",
 		}
 	}
 }
@@ -72,6 +84,71 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 		account = %account,
 		client_ip = %client_ip,
 		"privilege change"
+	);
+}
+
+/// Emit the per-record counts an account-removal call returned. Each
+/// tally is a separate structured field on the same `epistle::api::audit`
+/// event with `event = account.removed`, so an operator can filter on the
+/// `mailbox_files`, `masked_addresses`, `app_passwords`,
+/// `suppressed_addresses`, `queued_discarded` and `queued_left` fields
+/// directly: no second log line to correlate.
+pub fn log_account_removal(
+	account: &str,
+	client_ip: Option<IpAddr>,
+	counts: &crate::directory_store::Removed,
+) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	tracing::info!(
+		target: "epistle::api::audit",
+		event = AuditEvent::AccountRemoved.as_str(),
+		account = %account,
+		client_ip = %client_ip,
+		mailbox_files = counts.mailbox_files,
+		masked_addresses = counts.masked_addresses,
+		app_passwords = counts.app_passwords,
+		suppressed_addresses = counts.suppressed_addresses,
+		queued_discarded = counts.queued_messages_discarded,
+		queued_left = counts.queued_messages_left,
+		"account removed with footprint cleared"
+	);
+}
+
+/// Emit a structured audit event for a password-based authentication attempt
+/// (PLAIN / LOGIN / IMAP LOGIN / WebDAV Basic / ManageSieve PLAIN / API
+/// credential-verification). `login` is whatever the client presented as
+/// the authcid — for a failed attempt that name may not resolve to any
+/// account, in which case `account` is `None` and is rendered as `unknown`.
+/// The plaintext password and the TOTP code (when the account has 2FA) are
+/// never written to the log: only the result and the identifiers needed to
+/// correlate one attempt with the next do. `client_ip` follows the same
+/// `unknown` convention as [`log_privilege_change`]. `protocol` is the
+/// authentication path the request reached the server through (SMTP
+/// submission, IMAP, POP3, ManageSieve, the API, OAuth approval, WebDAV);
+/// operators correlate per-protocol blocks, and a rejection on a path the
+/// account never opted into is recorded as `auth.login_failed` like any
+/// other failure.
+pub fn log_auth_attempt(
+	event: AuditEvent,
+	login: &str,
+	account: Option<&str>,
+	client_ip: Option<IpAddr>,
+	protocol: Protocol,
+) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	let account = account.unwrap_or("unknown");
+	tracing::info!(
+		target: "epistle::auth",
+		event = event.as_str(),
+		login = %login,
+		account = %account,
+		client_ip = %client_ip,
+		protocol = protocol.as_str(),
+		"authentication attempt"
 	);
 }
 

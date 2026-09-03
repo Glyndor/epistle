@@ -69,6 +69,16 @@ impl Session {
 		let Some((account, _)) = self.directory.credentials(&username) else {
 			return self.scram_failure();
 		};
+		// SCRAM reaches the directory through scram_credentials(), not
+		// authenticate_with_ip — the per-account `allowed_protocols` check
+		// has to be issued here too. A restricted account fails closed
+		// with the same wire outcome as a wrong SCRAM proof.
+		if !self
+			.directory
+			.is_protocol_allowed(&account, self.auth_protocol)
+		{
+			return self.scram_failure();
+		}
 
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.

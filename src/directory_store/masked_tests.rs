@@ -138,6 +138,37 @@ fn remove_only_owner_can_delete() {
 	assert!(reopened.get(&entry.address).is_none());
 }
 
+/// Bulk removal must drop every entry owned by `account` and leave the
+/// ones from other accounts intact; a missing account is a no-op.
+#[test]
+fn remove_all_for_account_drops_only_the_targets() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = store(dir.path());
+	let alice1 = store.add("alice", "A", "example.org", 1).expect("a1");
+	let alice2 = store.add("alice", "B", "example.org", 2).expect("a2");
+	let bob1 = store.add("bob", "C", "example.org", 3).expect("b1");
+
+	let removed = store.remove_all_for_account("alice").expect("bulk remove");
+	assert_eq!(removed, 2);
+	assert!(store.get(&alice1.address).is_none());
+	assert!(store.get(&alice2.address).is_none());
+	assert_eq!(
+		store.get(&bob1.address).map(|e| e.account.as_str()),
+		Some("bob")
+	);
+
+	// Persistence after bulk remove.
+	let reopened = MaskedAddressStore::open(dir.path()).expect("reopen");
+	assert!(reopened.get(&alice1.address).is_none());
+	assert_eq!(
+		reopened.get(&bob1.address).map(|e| e.account.as_str()),
+		Some("bob")
+	);
+
+	// Idempotent: a missing account returns zero without rewriting the file.
+	assert_eq!(store.remove_all_for_account("ghost").expect("ghost"), 0);
+}
+
 #[test]
 fn touch_last_used_skips_disabled_and_foreign() {
 	let dir = tempfile::tempdir().expect("tempdir");

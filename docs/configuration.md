@@ -49,6 +49,7 @@ a connection URL.
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). |
 | `submission_rate_limit_per_min` | int | unset | Max messages an authenticated account may submit per minute (deferred with 450 over the limit). Absent disables it. |
+| `domain_submission_limits` | table | `{}` | `domain → msgs/min`: per-domain override for `submission_rate_limit_per_min`. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from one of the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain. |
 | `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` disables the feature; requests above the cap return `429`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
@@ -57,6 +58,7 @@ a connection URL.
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
+| `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
 
 ## Listeners
 
@@ -101,14 +103,16 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 ### `[dkim]`
 Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for receivers that lack Ed25519 support.
 
+Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
+
 | Key | Meaning |
 |---|---|
 | `selector` | Ed25519 selector (the `s=` tag). |
 | `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
 | `rsa_selector` | Optional RSA selector. |
 | `rsa_key_file` | Optional RSA private key. |
-| `rotate_days` | Automatic key rotation interval in days. Requires a `[dns]` provider to publish the new selector's TXT. Absent disables rotation. |
-| `rotate_overlap_days` | Days the previous selector's TXT stays published after a rotation so in-flight mail still verifies (default `7`). |
+| `rotate_days` | **Deprecated.** Ignored. Kept so existing configs keep parsing; a one-shot warning is logged at startup when present. Will be removed in a future release. |
+| `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
 ### `[api]`
 Management API (consumed by `epistle-panel`). Closed by default.
@@ -149,6 +153,22 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+### Uploaded blob storage
+
+JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the
+**last** four characters of the blob id: `blobs/ab/cd/<id>`, with the `.type`
+and `.owner` sidecars beside the payload.
+
+The shard comes from the end of the id rather than the start because blob ids
+are UUIDv7, whose first 48 bits are a timestamp — every blob written in the
+same era shares its leading characters, so sharding on them would file almost
+everything into one bucket while looking sharded.
+
+There is no migration. A blob written by an older version stays where it is
+and is still read, still counted against quota, and still reclaimed; only new
+blobs are written into the shards. Nothing needs to be moved and nothing needs
+configuring.
+
 ### IMAP COMPRESS=DEFLATE
 
 Advertised in `CAPABILITY` and enabled per connection by `COMPRESS DEFLATE`
@@ -186,12 +206,25 @@ response carries `Content-Type: application/scim+json`; errors follow
 RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
 
 ### `[database]`
-PostgreSQL backing for the antispam engine (reputation, Bayes).
+PostgreSQL backing for the antispam engine (reputation, Bayes). The server
+refuses to start against a PostgreSQL major older than 14 (the oldest major
+still in upstream support today); `serve` reads `SHOW server_version_num`
+after the pool is built and aborts with a `ServerTooOld` error before any
+migration runs, so a server below the floor fails as a sentence at startup
+rather than as an SQL syntax error in the first query.
 
 | Key | Meaning |
 |---|---|
-| `url` | Connection URL (keep the password in `${VAR}`). |
+| `url` | Connection URL (keep the password in `${VAR}`). Must be `sslmode=require` (or `verify-ca` / `verify-full`); an absent or weaker `sslmode` is rejected. A Unix-domain socket URL (`postgres://%2Fpath/...` or `postgres:///db?host=/path`) is accepted as is because there is no network on the path to intercept. |
 | `max_connections` | Pool size. |
+| `tls` | How the connection authenticates the PostgreSQL server. Defaults to `require`, which rejects any `sslmode` weaker than `require`. Set to `insecure` to assert that the connection stays on a network you trust (typically an internal container network with no gateway to the outside); an `insecure` connection is the operator's responsibility. |
+| `directory` | Resolve mail accounts from the SQL directory tables (off by default). |
+
+An unreachable database does not stop the server: the antispam engine is
+disabled, mail keeps flowing unfiltered, a warning is logged and the
+`database_unavailable` counter is incremented (alert on it). The exception is
+`directory = true`: the accounts themselves come from SQL, so there would be
+nobody to deliver to and the start fails.
 
 ### `[acme]`
 Automatic TLS certificates for the mail protocols (not the panel's web TLS).
@@ -307,7 +340,7 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
-`webhook_sent`.
+`webhook_sent`, `database_unavailable`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
@@ -336,6 +369,47 @@ guide's "Data at rest".
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
+
+### `[storage.blobs]`
+Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
+`backend = "fs"`) keeps the historical default of `<data_dir>/blobs/`,
+sharded two levels by the **last** four characters of the blob id, with a
+fallback to the flat layout for blobs written by older versions. Setting
+`backend = "s3"` redirects uploads to an S3-compatible bucket; the
+download handler and the `.owner` / `.type` sidecars follow the same path.
+
+| Key | Meaning |
+|---|---|
+| `backend` | Either `"fs"` (default; same as omitting the section) or `"s3"`. |
+| `endpoint` | S3 endpoint URL (`https://s3.us-east-1.amazonaws.com`, or a compatible service like MinIO at `http://minio.local:9000`). Required when `backend = "s3"`. |
+| `bucket` | Bucket name. Object keys are the raw blob id (`<uuid>` for the payload and `<uuid>.type` / `<uuid>.owner` for the sidecars). |
+| `region` | AWS region used for SigV4 signing (e.g. `us-east-1`). Setting it wrong returns `SignatureDoesNotMatch` from the server. |
+| `access_key_id` | Public access key id. Not a secret, so it lives in the config file. |
+| `secret_access_key_env` | Name of an env var holding the secret access key. The secret never appears in the config file. |
+| `secret_access_key_file` | Path to a `0600` file holding the secret access key. Takes precedence over `secret_access_key_env` when both are set. |
+
+Example S3 block:
+
+```toml
+[storage.blobs]
+backend = "s3"
+endpoint = "https://s3.us-east-1.amazonaws.com"
+bucket = "mail-blobs"
+region = "us-east-1"
+access_key_id = "AKIA-EXAMPLE"
+secret_access_key_env = "EPISTLE_S3_SECRET"
+```
+
+The S3 backend speaks the four verbs S3 exposes — `PutObject`, `GetObject`,
+`DeleteObject`, `ListObjectsV2` — over HTTPS with SigV4 signed by hand (no
+SDK dependency; the AWS SDK tree would be heavier than the four HTTP
+calls). A bucket that returns 401 or 403 surfaces as
+`BlobError::Auth`, never as "object not found", so an operator chasing
+wrong credentials is not led to chase a phantom missing blob. When
+`backend = "s3"` is set, blob-store reclaim (`reclaim_blobs`) and the
+`/api/v1/accounts/{name}/quota` path no longer walk the local filesystem
+— quota is enforced by the configured per-account limit and the operator
+manages bucket lifecycle on the S3 side.
 
 ### `[otel]`
 OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HTTP to a collector.
@@ -670,6 +744,36 @@ A multi-target alias: one address that delivers to several local accounts.
 
 ### Masked email addresses
 Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `429`.
+
+### `[[tenant]]`
+A tenant is a named group of domains with optional aggregate caps. Tenancy is what makes a resellable deployment work: each tenant gets its own per-account cap (already covered by `quota_bytes` / `domain_quotas`) plus aggregate caps the operator can promise to the tenant without having to revisit per-account limits. With no `[[tenant]]` block the server behaves exactly as it always has; the empty list is the identity.
+
+```toml
+[[tenant]]
+name = "acme"
+domains = ["acme.example", "acme-mail.example"]
+quota_bytes = 1073741824        # 1 GiB aggregate across every account in the tenant
+max_accounts = 50                # hard cap on accounts in the tenant's domains
+max_domains = 5                  # operator guard; never smaller than domains.len()
+submission_rate_limit_per_min = 200   # aggregate SMTP submission rate, on top of submission_rate_limit_per_min
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | Stable identifier shown in error messages. Operators see it; the network never does. |
+| `domains` | Domains that belong to the tenant. Every entry must also appear under the top-level `domains` list. |
+| `quota_bytes` | Aggregate storage cap (bytes) across every account in every domain of the tenant. Absent means no aggregate cap; the per-account and per-domain quotas still apply. |
+| `max_accounts` | Maximum number of accounts (static + dynamic) this tenant may hold. Absent means no cap. |
+| `max_domains` | Maximum number of domains this tenant may declare. Absent means no cap. The cap cannot be lower than `domains.len()` because that would make the tenant unloadable. |
+| `submission_rate_limit_per_min` | Aggregate submission rate ceiling for the tenant (messages per minute, summed across every authenticated sender in every domain of the tenant). Sits on top of — not in place of — the global `submission_rate_limit_per_min` per-account limiter. |
+
+Rules:
+
+- A domain can only belong to one tenant. A config that lists the same domain under two `[[tenant]]` blocks fails to load, with both tenant names in the message.
+- `quota_bytes` smaller than the sum of `domain_quotas` entries that fall inside the tenant is rejected at load time: a cap that cannot be reached would be a lie on the reseller agreement.
+- `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it.
+- `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
+- `submission_rate_limit_per_min` is enforced on authenticated `MAIL FROM` (over SMTP) and on `POST /api/v1/send`, on top of the global per-account limiter. A rejection is `429` from the API or `450 4.7.1` from SMTP.
 
 ### `[[transport]]`
 Outbound routing rules. Each rule matches by sender `account` (the envelope sender's local part) **or** recipient `domain`; a rule with neither is the catch-all. The most specific match wins (account > domain > catch-all). With no rule, mail is delivered directly via MX. Empty `[[transport]]` keeps that default.

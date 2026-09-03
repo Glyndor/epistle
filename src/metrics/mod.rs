@@ -73,6 +73,10 @@ const COUNTERS: &[(&str, &str)] = &[
 	("bounced", "bounced"),
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
+	("database_unavailable", "database_unavailable"),
+	("clock_drift_exceeded", "clock_drift_exceeded"),
+	("auth_login_succeeded", "auth_login_succeeded"),
+	("auth_login_failed", "auth_login_failed"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -104,6 +108,10 @@ pub struct Metrics {
 	bounced: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
+	database_unavailable: AtomicU64,
+	clock_drift_exceeded: AtomicU64,
+	auth_login_succeeded: AtomicU64,
+	auth_login_failed: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
@@ -175,6 +183,33 @@ impl Metrics {
 		self.webhook_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a startup that could not reach the configured database and carried
+	/// on without the antispam engine (advisory; mail keeps flowing, unfiltered).
+	pub fn database_unavailable(&self) {
+		self.database_unavailable.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a startup whose clock-drift probe observed a wall-clock jump
+	/// larger than the threshold tied to the TOTP acceptance window. The
+	/// counter is what the alert engine reads; a one-shot `warn!` at the
+	/// probe site is the human-readable companion.
+	pub fn clock_drift_exceeded(&self) {
+		self.clock_drift_exceeded.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a password-based authentication attempt that resolved an
+	/// account (PLAIN/LOGIN/IMAP LOGIN/WebDAV Basic/ManageSieve/API verify).
+	pub fn auth_login_succeeded(&self) {
+		self.auth_login_succeeded.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count the same surface that was rejected: unknown account, disabled
+	/// account, wrong password, app-password CIDR rejection, or an LDAP
+	/// bind failure.
+	pub fn auth_login_failed(&self) {
+		self.auth_login_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -243,6 +278,10 @@ impl Metrics {
 			"bounced" => &self.bounced,
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
+			"database_unavailable" => &self.database_unavailable,
+			"clock_drift_exceeded" => &self.clock_drift_exceeded,
+			"auth_login_succeeded" => &self.auth_login_succeeded,
+			"auth_login_failed" => &self.auth_login_failed,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -332,6 +371,26 @@ impl Metrics {
 				&self.webhook_failed,
 			),
 			(
+				"mail_database_unavailable_total",
+				"Startups that could not reach the database and ran without the antispam engine.",
+				&self.database_unavailable,
+			),
+			(
+				"mail_clock_drift_exceeded_total",
+				"Startups whose clock-drift probe observed a wall-clock jump past the TOTP acceptance window.",
+				&self.clock_drift_exceeded,
+			),
+			(
+				"mail_auth_login_succeeded_total",
+				"Password-based authentication attempts that resolved an account.",
+				&self.auth_login_succeeded,
+			),
+			(
+				"mail_auth_login_failed_total",
+				"Password-based authentication attempts that were rejected.",
+				&self.auth_login_failed,
+			),
+			(
 				"mail_llm_consulted_total",
 				"Messages sent to the LLM antispam hook (uncertain band only).",
 				&self.llm_consulted,
@@ -389,6 +448,9 @@ mod tests {
 		m.relayed();
 		m.deferred();
 		m.bounced();
+		m.auth_login_succeeded();
+		m.auth_login_succeeded();
+		m.auth_login_failed();
 		m.llm_consulted();
 		m.llm_consulted();
 		m.llm_quarantined();
@@ -407,6 +469,8 @@ mod tests {
 		);
 		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
 		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
+		assert!(r.contains("mail_auth_login_succeeded_total 2\n"), "{r}");
+		assert!(r.contains("mail_auth_login_failed_total 1\n"), "{r}");
 		assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
 		assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
 		assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
@@ -465,6 +529,10 @@ mod tests {
 			"bounced",
 			"webhook_sent",
 			"webhook_failed",
+			"database_unavailable",
+			"clock_drift_exceeded",
+			"auth_login_succeeded",
+			"auth_login_failed",
 		] {
 			assert!(snap.contains_key(name), "missing {name}");
 		}

@@ -3,54 +3,56 @@
 //!
 //! The JMAP upload/download handlers in the parent module delegate the actual
 //! filesystem work here. None of the items below know about axum or HTTP
-//! routing — they take a `data_dir` path and return plain `Option<Vec<u8>>`
-//! / `io::Result<()>` values that the handlers wrap. The split keeps the
-//! HTTP layer small and lets the storage code be tested directly off the
-//! filesystem.
+//! routing — they take a [`crate::storage::BlobBackend`] and return plain
+//! `Option<Vec<u8>>` / `io::Result<()>` values that the handlers wrap. The
+//! split keeps the HTTP layer small and lets the storage code be tested
+//! directly against either backend.
 
+use std::sync::Arc;
+
+use super::blob_path;
 use crate::imap::mailbox;
-use crate::storage::MessageCrypto;
+use crate::storage::{BlobBackend, MessageCrypto};
 
 /// Read an uploaded blob by id (rejecting any path separators in the id),
 /// decoding the at-rest envelope. Fails closed: a blob that cannot be decrypted
 /// is not returned rather than served as ciphertext, and a blob whose `.owner`
 /// sidecar does not name the requesting account is not returned either — the
 /// sidecar gates cross-account reads of the shared blob pool.
-pub(super) fn read_blob(
-	data_dir: &std::path::Path,
+pub(super) async fn read_blob(
+	backend: &Arc<dyn BlobBackend>,
 	account: &str,
 	blob_id: &str,
 	crypto: &MessageCrypto,
 ) -> Option<Vec<u8>> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
+	// Parse at the boundary: below this line the id is a `Uuid`, so a path
+	// built from it is bound to the configured backend's namespace.
+	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
 	// Owner sidecar is mandatory for every uploaded blob: missing, empty, or
 	// mismatching means the blob is not (or no longer) owned by `account`, so
 	// it must not be served. Pre-existing blobs from before this gate was
 	// introduced get an `.owner` written by the startup backfill; transient
 	// uploads that never get referenced stay sidecar-less and become
 	// unservable (the reclaim task sweeps them after their TTL anyway).
-	let blob_dir = data_dir.join("blobs");
-	let owner = std::fs::read_to_string(blob_dir.join(format!("{blob_id}.owner")))
-		.ok()
-		.filter(|value| !value.is_empty())?;
-	if owner != account {
+	let owner_bytes = backend.get(blob_id, ".owner").await.ok()??;
+	let owner = String::from_utf8(owner_bytes).ok()?;
+	if owner.as_str() != account {
 		return None;
 	}
-	let stored = std::fs::read(blob_dir.join(blob_id)).ok()?;
+	let stored = backend.get(blob_id, "").await.ok()??;
 	crypto.decode(&stored).ok()
 }
 
 /// Read the recorded media type of an uploaded blob, if any (the `.type`
 /// sidecar written at upload time). Returns `None` for stored messages.
-pub(super) fn read_blob_type(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	std::fs::read_to_string(data_dir.join("blobs").join(format!("{blob_id}.type")))
-		.ok()
-		.filter(|value| !value.is_empty())
+pub(super) async fn read_blob_type(
+	backend: &Arc<dyn BlobBackend>,
+	blob_id: &str,
+) -> Option<String> {
+	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
+	let bytes = backend.get(blob_id, ".type").await.ok()??;
+	let value = String::from_utf8(bytes).ok()?;
+	(!value.is_empty()).then_some(value)
 }
 
 /// Suffix written alongside every uploaded blob to record the account that
@@ -60,34 +62,28 @@ const OWNER_SIDECAR_SUFFIX: &str = ".owner";
 
 /// Write the `.owner` sidecar for an uploaded blob, recording the account that
 /// owns it. Used by the upload handler and by the startup backfill.
-pub(super) fn write_blob_owner(
-	data_dir: &std::path::Path,
-	blob_id: &str,
+pub(super) async fn write_blob_owner(
+	backend: &Arc<dyn BlobBackend>,
+	blob_id: uuid::Uuid,
 	account: &str,
-) -> std::io::Result<()> {
-	let dir = data_dir.join("blobs");
-	std::fs::create_dir_all(&dir)?;
-	std::fs::write(
-		dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")),
-		account.as_bytes(),
-	)
+) -> Result<(), crate::storage::BlobError> {
+	backend
+		.put(blob_id, OWNER_SIDECAR_SUFFIX, account.as_bytes())
+		.await
 }
 
 /// Read the recorded owner of an uploaded blob, if any. Visible to sibling
 /// test modules so they can assert on the sidecar without scraping the
 /// filesystem in two places.
 #[cfg(test)]
-pub(crate) fn read_blob_owner(data_dir: &std::path::Path, blob_id: &str) -> Option<String> {
-	if uuid::Uuid::parse_str(blob_id).is_err() {
-		return None;
-	}
-	std::fs::read_to_string(
-		data_dir
-			.join("blobs")
-			.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")),
-	)
-	.ok()
-	.filter(|value| !value.is_empty())
+pub(crate) async fn read_blob_owner(
+	backend: &Arc<dyn BlobBackend>,
+	blob_id: &str,
+) -> Option<String> {
+	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
+	let bytes = backend.get(blob_id, OWNER_SIDECAR_SUFFIX).await.ok()??;
+	let value = String::from_utf8(bytes).ok()?;
+	(!value.is_empty()).then_some(value)
 }
 
 /// Bytes counted against an account's storage quota: its stored mail (every
@@ -95,6 +91,11 @@ pub(crate) fn read_blob_owner(data_dir: &std::path::Path, blob_id: &str) -> Opti
 /// live in one shared `<data_dir>/blobs` pool that is not partitioned per
 /// account, so the whole pool is counted — a conservative, fail-closed choice
 /// that never under-counts usage when enforcing the quota on upload.
+///
+/// Sizes on the blob side are read directly off the filesystem rather than
+/// through the backend: the FS backend's `list()` only returns ids, and the
+/// S3 backend operator is expected to manage quota via bucket metrics (S3
+/// does not let us efficiently size the whole bucket through the LIST API).
 pub fn account_usage_bytes(
 	data_dir: &std::path::Path,
 	account: &str,
@@ -107,14 +108,17 @@ pub fn account_usage_bytes(
 /// their `.type` and `.owner` sidecars under `<data_dir>/blobs`.
 fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
 	let mut total = 0u64;
-	let Ok(entries) = std::fs::read_dir(data_dir.join("blobs")) else {
-		return 0;
-	};
-	for entry in entries.flatten() {
-		if let Ok(meta) = entry.metadata()
-			&& meta.is_file()
-		{
-			total = total.saturating_add(meta.len());
+	for (blob_id, path) in blob_path::walk(data_dir) {
+		for candidate in [
+			path,
+			blob_path::read_path(data_dir, blob_id, ".type"),
+			blob_path::read_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX),
+		] {
+			if let Ok(meta) = std::fs::metadata(&candidate)
+				&& meta.is_file()
+			{
+				total = total.saturating_add(meta.len());
+			}
 		}
 	}
 	total
@@ -127,35 +131,21 @@ fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
 /// `<data_dir>/blobs` is touched; stored mail under `<data_dir>/accounts` is
 /// never affected.
 pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> usize {
-	let dir = data_dir.join("blobs");
-	let Ok(entries) = std::fs::read_dir(&dir) else {
-		return 0;
-	};
 	let now = std::time::SystemTime::now();
 	let mut removed = 0;
-	for entry in entries.flatten() {
-		let name = entry.file_name();
-		// Sidecars are reclaimed alongside their payload, not on their own.
-		if name
-			.to_str()
-			.is_some_and(|name| name.ends_with(".type") || name.ends_with(OWNER_SIDECAR_SUFFIX))
-		{
-			continue;
-		}
-		// Only act on well-formed blob ids; ignore anything else in the dir.
-		let Some(blob_id) = name.to_str().filter(|id| uuid::Uuid::parse_str(id).is_ok()) else {
-			continue;
-		};
-		let expired = entry
-			.metadata()
+	// `walk` yields payloads only, from both the sharded and the flat layout,
+	// so a blob written before this change is still reclaimed.
+	for (blob_id, path) in blob_path::walk(data_dir) {
+		let expired = std::fs::metadata(&path)
 			.and_then(|meta| meta.modified())
 			.ok()
 			.and_then(|modified| now.duration_since(modified).ok())
 			.is_some_and(|age| age > ttl);
 		if expired {
-			let _ = std::fs::remove_file(dir.join(blob_id));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}.type")));
-			let _ = std::fs::remove_file(dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}")));
+			let _ = std::fs::remove_file(&path);
+			for sidecar in [".type", OWNER_SIDECAR_SUFFIX] {
+				let _ = std::fs::remove_file(blob_path::read_path(data_dir, blob_id, sidecar));
+			}
 			removed += 1;
 		}
 	}
@@ -247,11 +237,13 @@ pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) 
 				};
 				// A non-UUID filename means the message would not have been
 				// accepted by the snapshot; nothing to register.
-				if uuid::Uuid::parse_str(stem).is_err() {
+				// A non-UUID filename means the message would not have been
+				// accepted by the snapshot; nothing to register.
+				let Ok(blob_id) = uuid::Uuid::parse_str(stem) else {
 					continue;
-				}
+				};
 				stats.scanned = stats.scanned.saturating_add(1);
-				match ensure_blob_owner(data_dir, stem, account) {
+				match ensure_blob_owner(data_dir, blob_id, account) {
 					Ok(EnsureOutcome::Written) => {
 						stats.written = stats.written.saturating_add(1);
 					}
@@ -288,11 +280,12 @@ enum EnsureOutcome {
 /// aborting the whole pass.
 fn ensure_blob_owner(
 	data_dir: &std::path::Path,
-	blob_id: &str,
+	blob_id: uuid::Uuid,
 	account: &str,
 ) -> Result<EnsureOutcome, ()> {
-	let blob_dir = data_dir.join("blobs");
-	let owner_path = blob_dir.join(format!("{blob_id}{OWNER_SIDECAR_SUFFIX}"));
+	// Read through the fallback so a blob still in the flat layout is seen,
+	// and write to the shard so the backfill does not recreate the old shape.
+	let owner_path = blob_path::read_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
 	match std::fs::read_to_string(&owner_path) {
 		Ok(existing) if existing == account => Ok(EnsureOutcome::AlreadyCorrect),
 		Ok(_) => Ok(EnsureOutcome::Conflict),
@@ -304,11 +297,14 @@ fn ensure_blob_owner(
 			// in that case avoids creating an `.owner` for a non-existent
 			// blob (which would not affect the download check but would
 			// inflate the scan count).
-			if !blob_dir.join(blob_id).exists() {
+			if !blob_path::read_path(data_dir, blob_id, "").exists() {
 				Ok(EnsureOutcome::AlreadyCorrect)
 			} else {
-				std::fs::create_dir_all(&blob_dir).map_err(|_| ())?;
-				std::fs::write(&owner_path, account.as_bytes()).map_err(|_| ())?;
+				let write_to = blob_path::write_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
+				if let Some(parent) = write_to.parent() {
+					std::fs::create_dir_all(parent).map_err(|_| ())?;
+				}
+				std::fs::write(&write_to, account.as_bytes()).map_err(|_| ())?;
 				Ok(EnsureOutcome::Written)
 			}
 		}

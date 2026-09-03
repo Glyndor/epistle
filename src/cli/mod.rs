@@ -17,34 +17,41 @@ mod serve;
 mod serve_tasks;
 mod srv;
 mod suppression;
+#[cfg(test)]
+pub(crate) mod tracing_capture;
 mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
 
-use util::{
-	dkim_keygen, generate_secret, message_crypto, oauth_keygen, read_line, storage_keygen,
-	token_hash,
-};
+use util::{generate_secret, read_line};
 
 use std::path::PathBuf;
+
+#[cfg(test)]
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::Config;
+use crate::directory_store::removal::QueuePolicy;
 
 /// Headless mail server: SMTP, IMAP and modern email security through an
 /// API and CLI.
 #[derive(Debug, Parser)]
 #[command(name = "epistle", version, disable_help_subcommand = true)]
 pub struct Cli {
+	/// The parsed subcommand. Visible to the dispatch module so the
+	/// match arm there can read it without rebuilding the parser.
 	#[command(subcommand)]
-	command: Command,
+	pub(super) command: Command,
 }
 
+/// Every subcommand the `epistle` binary understands. Each variant
+/// corresponds to a top-level entry in `epistle --help`, with its own
+/// arguments; the `Cli::run` dispatch in `mod dispatch` pairs each
+/// variant with the right handler module.
 #[derive(Debug, Subcommand)]
-enum Command {
+pub enum Command {
 	/// Run the mail server.
 	Serve {
 		/// Path to the configuration file.
@@ -199,6 +206,24 @@ enum Command {
 		#[arg(long = "address", value_name = "ADDR", required = true)]
 		addresses: Vec<String>,
 	},
+	/// Remove a dynamic account and its whole footprint (mailbox,
+	/// masked addresses, app passwords, per-account suppression,
+	/// queued outbound mail). `--queue` chooses what to do with mail
+	/// in the outbound queue on behalf of the account: `discard` drops
+	/// it, `drain` leaves it to be delivered. The choice is required:
+	/// dropping mail silently is the worse default.
+	AccountRemove {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// The account name.
+		#[arg(long, value_name = "NAME")]
+		name: String,
+		/// What to do with queued outbound mail from the account:
+		/// `discard` (drop it) or `drain` (leave it for delivery).
+		#[arg(long = "queue", value_name = "POLICY", value_parser = accounts::parse_queue_policy)]
+		queue: QueuePolicy,
+	},
 	/// List the outbound delivery queue.
 	Queue {
 		/// Path to the configuration file.
@@ -297,277 +322,13 @@ enum Command {
 	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
 	/// Each subcommand targets one account.
 	Archive {
+		/// The archive sub-action (`list`, `restore`, `purge`).
 		#[command(subcommand)]
 		action: archive::Subcommand,
 	},
 }
 
-impl Cli {
-	/// Execute the parsed command.
-	pub fn run(self) -> ExitCode {
-		match self.command {
-			Command::Serve { config } => match Config::load(&config) {
-				Ok(config) => serve::run(config),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::ConfigCheck { config } => match Config::load(&config) {
-				Ok(_) => {
-					println!("configuration is valid");
-					ExitCode::SUCCESS
-				}
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Export {
-				config,
-				account,
-				maildir,
-			} => match Config::load(&config) {
-				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => match maildir {
-						Some(dir) => export::run_maildir(&config.data_dir, &account, &crypto, &dir),
-						None => export::run(
-							&config.data_dir,
-							&account,
-							&crypto,
-							&mut std::io::stdout().lock(),
-						),
-					},
-					Err(code) => code,
-				},
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Import {
-				config,
-				account,
-				maildir,
-			} => match Config::load(&config) {
-				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => match maildir {
-						Some(dir) => import::run_maildir(&config.data_dir, &account, &crypto, &dir),
-						None => import::run(
-							&config.data_dir,
-							&account,
-							&crypto,
-							std::io::stdin().lock(),
-						),
-					},
-					Err(code) => code,
-				},
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Backup { config } => match Config::load(&config) {
-				Ok(config) => backup::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Verify { config } => match Config::load(&config) {
-				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => {
-						verify::run(&config.data_dir, &crypto, &mut std::io::stdout().lock())
-					}
-					Err(code) => code,
-				},
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::VerifyDns { config } => match Config::load(&config) {
-				Ok(config) => verify_dns::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::DnsRecords { config } => match Config::load(&config) {
-				Ok(config) => dns_records::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Mobileconfig { config, account } => match Config::load(&config) {
-				Ok(config) => mobileconfig::run(&config, &account, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::SrvRecords { config } => match Config::load(&config) {
-				Ok(config) => srv::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Autoconfig { config, domain } => match Config::load(&config) {
-				Ok(config) => {
-					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
-				}
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Suppression {
-				config,
-				remove,
-				account,
-			} => match Config::load(&config) {
-				Ok(config) => suppression::run(
-					&config,
-					remove.as_deref(),
-					account.as_deref(),
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Autodiscover { config, domain } => match Config::load(&config) {
-				Ok(config) => {
-					autodiscover::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
-				}
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::ReportAbuse { config } => match Config::load(&config) {
-				Ok(config) => report_abuse::run(
-					&config,
-					std::io::stdin().lock(),
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Accounts { config } => match Config::load(&config) {
-				Ok(config) => accounts::list(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::AccountAdd {
-				config,
-				name,
-				addresses,
-			} => match Config::load(&config) {
-				Ok(config) => accounts::add(&config, &name, addresses, std::io::stdin().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Queue { config } => match Config::load(&config) {
-				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::DkimKeygen { out } => dkim_keygen(&out),
-			Command::StorageKeygen => storage_keygen(),
-			Command::OauthKeygen => oauth_keygen(),
-			Command::TokenHash => token_hash(),
-			Command::AppPasswordCreate {
-				config,
-				account,
-				label,
-				expires_at,
-				ip_cidr,
-			} => match Config::load(&config) {
-				Ok(config) => app_passwords::create(
-					&config,
-					&account,
-					&label,
-					expires_at,
-					ip_cidr,
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::AppPasswords { config } => match Config::load(&config) {
-				Ok(config) => app_passwords::list(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::AppPasswordRevoke {
-				config,
-				account,
-				label,
-			} => match Config::load(&config) {
-				Ok(config) => {
-					app_passwords::revoke(&config, &account, &label, &mut std::io::stdout().lock())
-				}
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::ApiKeyCreate {
-				config,
-				label,
-				expires_at,
-				ip_cidr,
-				scopes,
-				domains,
-			} => match Config::load(&config) {
-				Ok(config) => api_keys::create(
-					&config,
-					&label,
-					expires_at,
-					ip_cidr,
-					scopes,
-					domains,
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::ApiKeys { config } => match Config::load(&config) {
-				Ok(config) => api_keys::list(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::ApiKeyRevoke { config, label } => match Config::load(&config) {
-				Ok(config) => api_keys::revoke(&config, &label, &mut std::io::stdout().lock()),
-				Err(error) => {
-					eprintln!("error: {error}");
-					ExitCode::FAILURE
-				}
-			},
-			Command::Archive { action } => archive::dispatch(action, &mut std::io::stdout().lock()),
-		}
-	}
-}
+mod dispatch;
 
 #[cfg(test)]
 #[path = "cli_tests.rs"]
@@ -576,3 +337,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cli_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "cli_tests_c.rs"]
+mod tests_c;

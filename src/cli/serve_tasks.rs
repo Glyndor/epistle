@@ -187,6 +187,52 @@ fn spawn_jwks_refresh(
 	});
 }
 
+/// Connect to the configured database and apply its migrations, degrading when
+/// the database only backs the antispam engine.
+///
+/// The database plays two roles behind one connection, and only one of them can
+/// degrade. Reputation screening and the Bayesian corpus are advisory: without
+/// them mail arrives unfiltered, which is worse than filtered but far better
+/// than not arriving at all, so an unreachable database leaves the server
+/// running with those features off. The SQL directory is not advisory: with
+/// `[database] directory = true` the accounts themselves come from SQL, so
+/// without the database there is nobody to deliver to and starting would be a
+/// silent black hole. That case keeps failing closed.
+///
+/// The degraded path is announced twice on purpose: a `warn!` for whoever reads
+/// the log, and the `database_unavailable` counter so the alert engine in
+/// [`crate::alerts`] can act on it without anybody reading anything.
+pub(super) async fn connect_database(
+	config: &Config,
+	metrics: &crate::metrics::Metrics,
+) -> std::io::Result<Option<sqlx::PgPool>> {
+	let Some(db) = &config.database else {
+		return Ok(None);
+	};
+	match crate::db::connect(&db.url, db.tls, db.max_connections).await {
+		Ok(pool) => Ok(Some(pool)),
+		// Fatal: the directory backend resolves recipients from this database.
+		Err(error) if db.directory => Err(std::io::Error::other(format!(
+			"cannot reach the database, and `[database] directory = true` means the \
+			 mail accounts are resolved from it: starting would leave nobody to \
+			 deliver to. This failure is fatal for that reason only; with \
+			 `directory = false` the same failure merely disables the antispam \
+			 engine. Cause: {error}"
+		))),
+		Err(error) => {
+			metrics.database_unavailable();
+			tracing::warn!(
+				%error,
+				"cannot reach the database: starting without the antispam engine. \
+				 Reputation screening and the Bayesian corpus are disabled and mail \
+				 is accepted unfiltered. Account resolution is unaffected because \
+				 `[database] directory` is off."
+			);
+			Ok(None)
+		}
+	}
+}
+
 /// Load the SQL directory accounts into the store once, then spawn an hourly
 /// refresh task. A no-op unless `[database] directory = true` and a reputation
 /// pool is present. The initial load fails closed (a fatal startup error) so the
@@ -277,40 +323,133 @@ async fn load_ldap_blocking(
 		.map_err(std::io::Error::other)
 }
 
-/// Spawn the automatic DKIM key-rotation task when `[dkim] rotate_days` and a
-/// `[dns]` provider are both configured. Hourly ticks rotate/retire when due.
+/// Outcome of the pure rotation-decision policy. Returned by
+/// [`decide_dkim_rotation`] so the decision is unit-testable without
+/// spawning tokio tasks; [`spawn_dkim_rotation`] consumes it to log and
+/// (when `Run`) actually spawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum DkimRotationPlan {
+	/// Rotation will be spawned with the given timing (seconds) and the
+	/// deprecated config fields were ignored.
+	Run {
+		/// Seconds between automatic rotations.
+		interval: u64,
+		/// Seconds the previous selector's TXT stays published after a
+		/// rotation.
+		overlap: u64,
+		/// Whether the config still carried the now-ignored
+		/// `rotate_days` / `rotate_overlap_days` fields, so a one-shot
+		/// deprecation warning should be logged at startup.
+		deprecated_fields_present: bool,
+	},
+	/// Rotation will not run. The caller logs the reason once so the
+	/// operator is not left guessing.
+	Off,
+}
+
+/// Pure policy: should the DKIM rotation task be spawned, with what timing,
+/// and did the operator still set the now-ignored legacy fields? Pulled out
+/// of [`spawn_dkim_rotation`] so it can be exercised without I/O.
+pub(super) fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
+	let Some(dkim) = &config.dkim else {
+		return DkimRotationPlan::Off;
+	};
+	let deprecated = dkim.rotate_days.is_some() || dkim.rotate_overlap_days.is_some();
+	if config.dns.is_none() {
+		return DkimRotationPlan::Off;
+	}
+	DkimRotationPlan::Run {
+		interval: crate::dkim::ROTATE_INTERVAL_DAYS * 86_400,
+		overlap: crate::dkim::ROTATE_OVERLAP_DAYS * 86_400,
+		deprecated_fields_present: deprecated,
+	}
+}
+
+/// Spawn the automatic DKIM key-rotation task whenever `[dkim]` and `[dns]`
+/// are both configured. Rotation is a security property of the server, so
+/// it runs by default with the constant interval / overlap from
+/// [`crate::dkim`]; an operator does not opt in.
+///
+/// The legacy `rotate_days` / `rotate_overlap_days` fields on `[dkim]` are
+/// kept for backward compatibility (so existing configs keep loading under
+/// `deny_unknown_fields`) but are ignored: a one-shot deprecation warning
+/// is logged at startup when they appear. They will be removed in a future
+/// release.
+///
+/// When `[dns]` is absent, rotation cannot publish the new selector's TXT
+/// and so is not started — but the inactivity is logged once at startup
+/// rather than left silent.
 pub(super) fn spawn_dkim_rotation(
 	config: &Config,
 	dkim_signer: &Option<crate::dkim::ReloadableSigner>,
 ) {
-	let (Some(dkim), Some(signer), Some(dns)) = (&config.dkim, dkim_signer, &config.dns) else {
-		return;
-	};
-	let (Some(rotate_days), Some(provider)) = (dkim.rotate_days, dns.build()) else {
-		return;
-	};
-	let rotator = crate::dkim::Rotator::new(
-		config.data_dir.clone(),
-		signer.clone(),
-		provider,
-		dns.zone.clone(),
-		dns.zone.clone(),
-		u64::from(rotate_days) * 86_400,
-		u64::from(dkim.rotate_overlap_days) * 86_400,
-	);
-	tokio::spawn(async move {
-		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
-		loop {
-			ticker.tick().await;
-			let now = std::time::SystemTime::now()
-				.duration_since(std::time::UNIX_EPOCH)
-				.map(|d| d.as_secs())
-				.unwrap_or(0);
-			if let Err(error) = rotator.tick(now).await {
-				tracing::warn!(%error, "dkim rotation tick failed");
+	match decide_dkim_rotation(config) {
+		DkimRotationPlan::Off => {
+			// Only the "no [dns]" case is interesting to log here: rotation
+			// is a security property and the operator may have intended to
+			// enable it. Other "off" cases (no [dkim], no signer) are
+			// intentional and already visible from the surrounding config.
+			if config.dkim.is_some() && config.dns.is_none() {
+				tracing::info!(
+					"[dkim] rotation is inactive: no [dns] provider is configured; \
+                     DKIM keys will not rotate automatically"
+				);
 			}
 		}
-	});
+		DkimRotationPlan::Run {
+			interval,
+			overlap,
+			deprecated_fields_present,
+		} => {
+			if deprecated_fields_present {
+				tracing::warn!(
+					interval_days = crate::dkim::ROTATE_INTERVAL_DAYS,
+					overlap_days = crate::dkim::ROTATE_OVERLAP_DAYS,
+					"[dkim] rotate_days and rotate_overlap_days are deprecated and ignored; \
+                     rotation runs automatically every {} days with a {} day overlap",
+					crate::dkim::ROTATE_INTERVAL_DAYS,
+					crate::dkim::ROTATE_OVERLAP_DAYS,
+				);
+			}
+			// The decision says "Run" because [dns] is present; build the
+			// actual provider now. A missing or wrong [dns] falls through
+			// to the same "silent off" as before — that is a separate
+			// misconfiguration the operator must fix anyway (the DNS
+			// provider is also used elsewhere, e.g. ACME TLSA).
+			let Some(signer) = dkim_signer else {
+				return;
+			};
+			let Some(dns) = config.dns.as_ref() else {
+				return;
+			};
+			let Some(provider) = dns.build() else {
+				return;
+			};
+			let zone = dns.zone.clone();
+			let rotator = crate::dkim::Rotator::new(
+				config.data_dir.clone(),
+				signer.clone(),
+				provider,
+				zone.clone(),
+				zone,
+				interval,
+				overlap,
+			);
+			tokio::spawn(async move {
+				let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+				loop {
+					ticker.tick().await;
+					let now = std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.map(|d| d.as_secs())
+						.unwrap_or(0);
+					if let Err(error) = rotator.tick(now).await {
+						tracing::warn!(%error, "dkim rotation tick failed");
+					}
+				}
+			});
+		}
+	}
 }
 
 /// Spawn the metric alert engine when `[[alerts]]` is non-empty. A no-op when
@@ -388,3 +527,7 @@ pub(super) fn spawn_storage_maintenance(config: &Config) {
 	spawn_blob_reclamation(config);
 	spawn_archive_sweep(config);
 }
+
+#[cfg(test)]
+#[path = "serve_tasks_tests.rs"]
+mod tests;

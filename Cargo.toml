@@ -1,46 +1,52 @@
 [package]
 name = "epistle"
-version = "0.6.0"
+version = "0.8.0"
 edition = "2024"
-# The floor CI builds on, and the one `epistle` claims to support. It came from
-# a build that failed rather than from this file: `rcgen`, `time` and
-# `icu_properties` each wanted more than `edition = "2024"` implies, which is
-# why standards/testing forbids deriving a packaging floor from the manifest.
+# The floor CI builds on, and the one `epistle` claims to support. It now comes
+# from sqlx 0.9's own `rust-version` (1.94), so it is a derived floor rather
+# than a measured one; standards/testing forbids that derivation for packaging
+# floors, but this one is not a packaging floor.
 #
-# It lives here now because debian/control no longer carries one: the .deb is
-# built for musl with a rustup toolchain, so `Build-Depends` has no rustc to
-# declare. tests/msrv_agrees_with_ci.rs ties this to ci.yml's `msrv` input, and
-# cargo itself refuses to build on anything older.
-rust-version = "1.88"
+# The packaging path has none: debian/control carries no rustc on `Build-Depends`
+# because the .deb is built for musl with a rustup toolchain, and
+# `release.yml` pins that toolchain at 1.98.0. tests/msrv_agrees_with_ci.rs ties
+# this to ci.yml's `msrv` input, and cargo itself refuses to build on anything
+# older.
+#
+# 1.88 was the previous floor; it came from a build that failed (`rcgen`, `time`
+# and `icu_properties` each wanted more than `edition = "2024"` implies).
+rust-version = "1.94"
 license = "MIT"
 description = "Self-hosted, headless mail server: SMTP, IMAP and modern email security through an API and CLI."
 repository = "https://github.com/Glyndor/epistle"
 publish = false
 
 [dependencies]
-argon2 = "0.5.3"
+argon2 = "0.6.0"
 axum = { version = "0.8.9", features = ["ws"] }
 flate2 = "1.1.9"
 base64 = "0.23.1"
 clap = { version = "4.6.1", features = ["derive"] }
 hickory-resolver = { version = "0.26.1", features = ["dnssec-ring"] }
+idna = "1.1"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
 libc = "0.2.186"
 psl = "2.1.212"
 rcgen = "0.14.8"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 ring = "0.17.14"
-quick-xml = { version = "0.41", features = ["serialize"] }
-rand = "0.8.5"
+quick-xml = { version = "0.42", features = ["serialize"] }
+rand = "0.10.2"
 rustls-pki-types = "1.14.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "migrate", "uuid"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "migrate", "uuid"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time", "signal"] }
 tower-http = { version = "0.7.0", features = ["cors"] }
 tokio-rustls = "0.26.4"
 toml = "1.1.2"
+unicode-security = "0.1.2"
 url = "2.5.8"
 percent-encoding = "2.3.2"
 tracing = "0.1.44"
@@ -52,6 +58,7 @@ tracing-opentelemetry = "0.33"
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
+zeroize = "=1.9.0"
 
 [profile.release]
 lto = "thin"

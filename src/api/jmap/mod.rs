@@ -26,16 +26,17 @@ pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 
+pub(crate) mod blob_path;
 mod blobs;
 mod email;
 mod methods;
 mod objects;
 pub mod websocket;
 
-pub use blobs::{backfill_blob_ownership, reclaim_blobs};
+pub use blobs::{account_usage_bytes, backfill_blob_ownership, reclaim_blobs};
 
 #[cfg(test)]
-pub(crate) use blobs::{account_usage_bytes, read_blob_owner};
+pub(crate) use blobs::read_blob_owner;
 
 /// JMAP core capability URN.
 const CORE_CAPABILITY: &str = "urn:ietf:params:jmap:core";
@@ -295,13 +296,20 @@ pub async fn download(
 	if !state.accounts().iter().any(|a| a.name == account) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	let bytes = objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto())
-		.or_else(|| blobs::read_blob(state.data_dir(), &account, &blob_id, state.crypto()));
+	let stored_message =
+		objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto());
+	let uploaded = if stored_message.is_some() {
+		None
+	} else {
+		blobs::read_blob(state.blob_backend(), &account, &blob_id, state.crypto()).await
+	};
+	let bytes = stored_message.or(uploaded);
 	match bytes {
 		Some(bytes) => {
 			// Serve the media type recorded at upload time; stored messages and
 			// legacy blobs without a sidecar fall back to octet-stream.
-			let content_type = blobs::read_blob_type(state.data_dir(), &blob_id)
+			let content_type = blobs::read_blob_type(state.blob_backend(), &blob_id)
+				.await
 				.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_string());
 			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
 		}
@@ -365,6 +373,34 @@ pub async fn upload(
 				.into_response();
 		}
 	}
+	// Per-tenant aggregate storage cap (RFC 8620 §6.1; the same JMAP limit
+	// type as the per-account quota above). Sits on top of the per-account
+	// limit; either can fail and the rejection looks the same to the client.
+	// Empty `tenant_limits` is the identity, no extra work.
+	let account_addresses: Vec<String> = state
+		.accounts()
+		.into_iter()
+		.find(|view| view.name == account)
+		.map(|view| view.addresses)
+		.unwrap_or_default();
+	if let Err(message) = state.tenant_limits().check_aggregate_quota(
+		state.store(),
+		state.data_dir(),
+		state.crypto(),
+		&account_addresses,
+		body.len() as u64,
+	) {
+		return (
+			StatusCode::INSUFFICIENT_STORAGE,
+			Json(json!({
+				"type": "urn:ietf:params:jmap:error:limit",
+				"limit": "tenant_storage",
+				"status": 507,
+				"detail": message,
+			})),
+		)
+			.into_response();
+	}
 	// The blob's media type is the request Content-Type, echoed back and
 	// persisted so downloads serve it (RFC 8620 §6.1).
 	let content_type = headers
@@ -373,8 +409,9 @@ pub async fn upload(
 		.filter(|value| !value.is_empty())
 		.unwrap_or(DEFAULT_BLOB_TYPE)
 		.to_string();
-	let blob_id = uuid::Uuid::now_v7().to_string();
-	let dir = state.data_dir().join("blobs");
+	// Minted as a `Uuid` and kept as one: the string form is only for the
+	// response body, so nothing downstream can be handed a path fragment.
+	let blob_id = uuid::Uuid::now_v7();
 	// Encrypt the blob payload at rest like stored mail; the `.type` and
 	// `.owner` sidecars stay plaintext metadata.
 	let stored = match state.crypto().encode(&body) {
@@ -387,10 +424,15 @@ pub async fn upload(
 			);
 		}
 	};
-	if std::fs::create_dir_all(&dir).is_err()
-		|| std::fs::write(dir.join(&blob_id), &stored).is_err()
-		|| std::fs::write(dir.join(format!("{blob_id}.type")), &content_type).is_err()
-		|| blobs::write_blob_owner(state.data_dir(), &blob_id, &account).is_err()
+	let backend = state.blob_backend();
+	if backend.put(blob_id, "", &stored).await.is_err()
+		|| backend
+			.put(blob_id, ".type", content_type.as_bytes())
+			.await
+			.is_err()
+		|| blobs::write_blob_owner(backend, blob_id, &account)
+			.await
+			.is_err()
 	{
 		return jmap_error(
 			StatusCode::INTERNAL_SERVER_ERROR,

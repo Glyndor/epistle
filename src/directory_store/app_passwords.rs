@@ -152,6 +152,23 @@ impl AppPasswordStore {
 		self.persist()
 	}
 
+	/// Drop every app password for `account` (case-insensitive). Returns
+	/// the number that were removed; persists once at the end. Idempotent:
+	/// a missing account returns `Ok(0)` without rewriting the file. Used
+	/// by [`crate::directory_store::removal::remove_account`] to clear the
+	/// account's whole footprint in a single pass.
+	pub fn remove_account(&mut self, account: &str) -> Result<u32, StoreError> {
+		let account = account.to_ascii_lowercase();
+		let removed = match self.accounts.remove(&account) {
+			Some(list) => list.len() as u32,
+			None => return Ok(0),
+		};
+		if removed > 0 {
+			self.persist()?;
+		}
+		Ok(removed)
+	}
+
 	/// Every `(account, label, expires_at, ip_cidr)` for listing. Secrets and
 	/// hashes are never exposed.
 	pub fn list(&self) -> Vec<(String, String, Option<u64>, Option<String>)> {

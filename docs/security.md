@@ -6,7 +6,8 @@ the controls in place and how to report a vulnerability.
 
 For the requirement-by-requirement mapping to OWASP ASVS Level 3 — each control
 tied to the file and mechanism that implements it — see the
-[ASVS L3 sweep](asvs.md).
+[ASVS L3 sweep](asvs.md). For the assessor's view, one row per threat with the
+control, its test and the residual risks, see the [threat model](threat-model.md).
 
 ## Transport
 
@@ -47,6 +48,27 @@ tied to the file and mechanism that implements it — see the
   drop cannot be reversed (see the [configuration reference](configuration.md)).
 - The configuration file must be owner-only (`0600`); the server refuses to load
   a group/world-readable file. Secrets stay in the environment via `${VAR}`.
+
+### Port 25 without root
+
+The production shape is a rootless Podman stack under the isolated
+`glyndor-epistle` account, and a rootless container cannot ask the kernel for
+`CAP_NET_BIND_SERVICE`. The package therefore ships
+`/usr/lib/sysctl.d/30-glyndor-epistle.conf`, which sets
+`net.ipv4.ip_unprivileged_port_start = 25` so that the account can bind the
+SMTP port without ever being root.
+
+Read that as a machine-wide change, because it is one: the setting is a single
+global floor, not a per-user grant, so after it is applied **any** local
+unprivileged user can bind any port from 25 up, including 25, 80, 110, 143,
+443, 465, 587, 993 and 995. On a dedicated mail host, where the only accounts
+are the operator's and this one, that is the intended trade and it buys a
+server that never holds root. On a host shared with other services or other
+people, weigh it before installing: a low-privilege account there could squat a
+port a real service expects to claim later. `/etc/sysctl.d` stays yours, so a
+file with a higher `ip_unprivileged_port_start` there overrides the vendor one
+and survives upgrades of this package; the cost is that the rootless stack then
+needs a proxy or a port mapping in front of it.
 
 ## Email authentication and anti-spoofing
 

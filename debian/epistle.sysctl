@@ -1,0 +1,5 @@
+# Let the isolated, unprivileged epistle user bind port 25 for rootless
+# Podman. This lowers the floor for the whole machine, not only for epistle:
+# any local user can then bind ports 25 and above. On a dedicated mail host
+# that is the intended trade; on a shared host, review before installing.
+net.ipv4.ip_unprivileged_port_start = 25

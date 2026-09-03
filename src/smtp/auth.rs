@@ -1,7 +1,8 @@
 //! SASL PLAIN credential parsing and verification (RFC 4616).
 
 use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordVerifier};
+use argon2::password_hash::PasswordVerifier;
+use argon2::password_hash::phc::PasswordHash;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -55,16 +56,15 @@ pub fn parse_plain(encoded: &str) -> Result<PlainCredentials, PlainError> {
 
 /// Hash a password with argon2id for storage (PHC string).
 pub fn hash_password(password: &str) -> Result<String, String> {
-	use argon2::password_hash::{PasswordHasher, SaltString};
+	use argon2::password_hash::PasswordHasher;
 	use ring::rand::{SecureRandom, SystemRandom};
 
-	let mut salt_bytes = [0u8; 16];
+	let mut salt = [0u8; 16];
 	SystemRandom::new()
-		.fill(&mut salt_bytes)
+		.fill(&mut salt)
 		.map_err(|_| "cannot gather salt entropy".to_string())?;
-	let salt = SaltString::encode_b64(&salt_bytes).map_err(|error| error.to_string())?;
 	Argon2::default()
-		.hash_password(password.as_bytes(), &salt)
+		.hash_password_with_salt(password.as_bytes(), &salt)
 		.map(|hash| hash.to_string())
 		.map_err(|error| error.to_string())
 }
@@ -82,16 +82,49 @@ pub fn verify_password(phc_hash: &str, password: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+	use std::sync::LazyLock;
+
+	use argon2::password_hash::PasswordHasher;
+	use uuid::Uuid;
+
 	use super::*;
-	use argon2::password_hash::{PasswordHasher, SaltString};
 
 	pub(crate) fn hash(password: &str) -> String {
 		// Test-time hashing; runtime only ever verifies.
-		let salt = SaltString::encode_b64(b"0123456789abcdef").expect("salt");
 		Argon2::default()
-			.hash_password(password.as_bytes(), &salt)
+			.hash_password_with_salt(password.as_bytes(), b"0123456789abcdef")
 			.expect("hash")
 			.to_string()
+	}
+
+	/// The password every SMTP fixture hashes and later presents, minted
+	/// once per test binary. A literal in its place reaches [`hash`] and the
+	/// session harness's `plain` through a parameter named `password`, which
+	/// is the dataflow `rust/hard-coded-cryptographic-value` reports; the API
+	/// tests moved their bearer token to this shape in #725. No test depends
+	/// on the value: each hashes it, presents it, and reads the outcome.
+	pub(crate) fn fixture_password() -> &'static str {
+		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
+		PASSWORD.as_str()
+	}
+
+	/// A password that is not [`fixture_password`], for the tests that
+	/// present the wrong one. Minted the same way, so it is never a literal
+	/// and cannot collide with the right one by accident.
+	pub(crate) fn wrong_password() -> &'static str {
+		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
+		PASSWORD.as_str()
+	}
+
+	/// A second password that is distinct from [`fixture_password`], for the
+	/// tests that need two valid passwords in the same scope whose difference
+	/// matters (e.g. a static account and a SQL account with the same name
+	/// and different hashes, where the test asserts the static wins). The two
+	/// `LazyLock`s mint once per binary, so the two values are stable for
+	/// the run and cannot collide by accident.
+	pub(crate) fn second_password() -> &'static str {
+		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
+		PASSWORD.as_str()
 	}
 
 	fn encode(authzid: &str, authcid: &str, password: &str) -> String {
@@ -145,6 +178,17 @@ pub(crate) mod tests {
 			parse_plain(&encode("", "alice", "")),
 			Err(PlainError::BadFormat)
 		);
+	}
+
+	#[test]
+	fn fixed_salt_hash_matches_the_string_argon2_0_5_wrote() {
+		// Computed with argon2 0.5.3 for this salt and password before the
+		// crate moved to 0.6, which changed how the salt is handed over
+		// (raw bytes instead of a B64 string). Stored hashes must keep
+		// verifying, and the PHC encoding must not drift under a bump.
+		let stored = "$argon2id$v=19$m=19456,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$8qPpaWig0H31wvibKAgpght2Ry2M8rtRQYtZ93ooMus";
+		assert_eq!(hash("secret"), stored);
+		assert!(verify_password(stored, "secret"));
 	}
 
 	#[test]

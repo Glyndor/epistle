@@ -19,7 +19,9 @@ use serde::Deserialize;
 
 use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
+use crate::api::audit::{self, AuditEvent};
 use crate::api::state::ApiState;
+use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{DynamicAccount, StoreError};
 
 /// Build a SCIM `User` JSON from a `DynamicAccount` (RFC 7643 §4.1). The
@@ -246,6 +248,7 @@ pub async fn create_user(
 		scram,
 		totp_secret: None,
 		disabled: !active,
+		allowed_protocols: None,
 	};
 	state.store().add(account).map_err(store_to_scim)?;
 	let stored = lookup(&state, &body.user_name)?;
@@ -261,12 +264,27 @@ pub async fn get_user(
 	Ok(scim_resource(StatusCode::OK, render_user(&account)))
 }
 
-/// `DELETE /Users/{id}` — 204 with no body.
+/// `DELETE /Users/{id}` returns 204 with no body. Drains the account's
+/// queued mail by default (SCIM has no place for an operator to choose
+/// between discard and drain, and dropping mail silently is the worse
+/// default). Emits the same `account.removed` audit event as the
+/// management API so an IdP-driven deletion leaves the same trace as
+/// an operator-initiated one.
 pub async fn delete_user(
 	State(state): State<ApiState>,
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
-	state.store().remove(&id).map_err(store_to_scim)?;
+	let data_dir = state.data_dir().to_path_buf();
+	let counts = crate::directory_store::removal::remove_account(
+		state.store(),
+		state.spool(),
+		&data_dir,
+		&id,
+		QueuePolicy::Drain,
+	)
+	.map_err(store_to_scim)?;
+	audit::log_privilege_change(AuditEvent::AccountRemoved, &id, None);
+	audit::log_account_removal(&id, None, &counts);
 	Ok(StatusCode::NO_CONTENT)
 }
 
@@ -308,6 +326,7 @@ pub async fn put_user(
 				scram: existing.scram.clone(),
 				totp_secret: existing.totp_secret.clone(),
 				disabled: !body.active,
+				allowed_protocols: existing.allowed_protocols.clone(),
 			},
 		)
 		.map_err(store_to_scim)?;

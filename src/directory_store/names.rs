@@ -42,7 +42,7 @@ pub(super) fn with_safe_names<T>(
 		.collect()
 }
 
-pub(super) fn validate_name(name: &str) -> Result<(), StoreError> {
+pub(in crate::directory_store) fn validate_name(name: &str) -> Result<(), StoreError> {
 	let safe = !name.is_empty()
 		&& name.len() <= 64
 		&& name
