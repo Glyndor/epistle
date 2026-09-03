@@ -13,7 +13,7 @@ mod validate_database;
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
-	pub(super) fn validate(&self) -> Result<(), ConfigError> {
+	pub(crate) fn validate(&self) -> Result<(), ConfigError> {
 		validate_dns_name("hostname", &self.hostname)?;
 		self.validate_data_dir()?;
 		self.validate_domains()?;
@@ -292,7 +292,8 @@ impl Config {
 			}
 			if seen.contains(&alias_lc) {
 				return Err(ConfigError::Invalid(format!(
-					"domain alias \"{alias}\" is also a configured domain"
+					"domain alias \"{alias}\" is also a configured domain (cannot alias \
+					 a real domain to \"{target}\")"
 				)));
 			}
 			if alias_lc == target_lc {
