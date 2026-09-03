@@ -170,6 +170,30 @@ fn sysctl_lowers_the_port_floor_to_25() {
 }
 
 #[test]
+fn sample_unit_runs_as_the_isolated_user() {
+	let unit = read("docs/epistle.service");
+
+	for needle in [
+		"User=glyndor-epistle",
+		"Group=glyndor-epistle",
+		"ExecStart=/usr/bin/epistle",
+	] {
+		assert!(
+			unit.contains(needle),
+			"docs/epistle.service must carry {needle:?}: the unit runs under the persistent \
+			 account the package creates, and the package installs /usr/bin/epistle"
+		);
+	}
+
+	assert!(
+		!unit.contains("DynamicUser"),
+		"DynamicUser must not appear in docs/epistle.service, not even in a comment: a transient \
+		 account has no stable uid, no subuid range and no persistent home, so rootless Podman \
+		 cannot run under it"
+	);
+}
+
+#[test]
 fn maintainer_scripts_parse_as_posix_sh() {
 	for script in ["debian/epistle.postinst", "debian/epistle.postrm"] {
 		let output = match Command::new("sh")
