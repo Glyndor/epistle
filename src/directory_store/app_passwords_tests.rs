@@ -123,14 +123,22 @@ fn account_lookup_is_case_insensitive() {
 fn remove_account_drops_only_the_targets() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	// Each secret is minted per call with a UUIDv7 and bound to a local,
+	// the pattern `directory_app_password_tests::app_password` and
+	// `removal_tests::a_recreated_account_*` already use; no test
+	// asserts on the value, so a literal reaching the hash slot would
+	// only feed `rust/hard-coded-cryptographic-value`.
+	let phone_secret = uuid::Uuid::now_v7().simple().to_string();
+	let laptop_secret = uuid::Uuid::now_v7().simple().to_string();
+	let server_secret = uuid::Uuid::now_v7().simple().to_string();
 	store
-		.add("alice", app_password("phone", "secret"))
+		.add("alice", app_password("phone", &phone_secret))
 		.expect("add");
 	store
-		.add("alice", app_password("laptop", "other"))
+		.add("alice", app_password("laptop", &laptop_secret))
 		.expect("add");
 	store
-		.add("bob", app_password("server", "another"))
+		.add("bob", app_password("server", &server_secret))
 		.expect("add");
 
 	let removed = store.remove_account("alice").expect("bulk remove");
