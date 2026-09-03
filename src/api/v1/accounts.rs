@@ -1,14 +1,22 @@
 //! `/api/v1/accounts`: list, create, delete, change password.
+//!
+//! `DELETE /api/v1/accounts/{name}` requires the `?queue=` query
+//! parameter (`discard` or `drain`) so a misconfigured client never
+//! silently drops queued mail. The response carries the per-record
+//! counts removed (mailbox, satellites, queue), and an audit event is
+//! emitted on the `epistle::api::audit` target with the same counts
+//! plus the resolved client IP.
 
 use axum::Extension;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 
 use crate::api::audit::{self, AuditEvent};
 use crate::api::domain_scope::DomainScope;
 use crate::api::error::ApiError;
 use crate::api::state::{AccountView, ApiState, ClientIp, MatchedAuth};
+use crate::directory_store::removal::{QueuePolicy, Removed};
 use crate::directory_store::{DynamicAccount, StoreError};
 
 #[derive(Serialize)]
@@ -115,8 +123,32 @@ pub async fn create(
 }
 
 #[derive(Serialize)]
-pub struct Removed {
+pub struct RemovedResponse {
 	removed: String,
+	#[serde(flatten)]
+	counts: Removed,
+}
+
+/// Query parameters for `DELETE /api/v1/accounts/{name}`. `queue` is
+/// required: omitting it (or sending an unknown value) returns `400
+/// invalid_input` listing the two accepted values, so a misconfigured
+/// client never accidentally drops queued mail.
+#[derive(Deserialize)]
+pub struct RemoveQuery {
+	#[serde(default)]
+	queue: Option<String>,
+}
+
+/// Parse the `?queue=` query parameter into the typed policy. The API
+/// has no default: `queue=discard|drain` must be present.
+fn parse_queue_policy(value: Option<&str>) -> Result<QueuePolicy, ApiError> {
+	match value {
+		Some("discard") => Ok(QueuePolicy::Discard),
+		Some("drain") => Ok(QueuePolicy::Drain),
+		_ => Err(ApiError::invalid_input(
+			"queue parameter must be one of: discard, drain",
+		)),
+	}
 }
 
 pub async fn remove(
@@ -124,11 +156,24 @@ pub async fn remove(
 	Extension(client_ip): Extension<ClientIp>,
 	Extension(auth): Extension<MatchedAuth>,
 	Path(name): Path<String>,
-) -> Result<Json<Removed>, ApiError> {
+	Query(query): Query<RemoveQuery>,
+) -> Result<Json<RemovedResponse>, ApiError> {
 	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
-	state.store().remove(&name).map_err(store_error)?;
-	audit::log_privilege_change(AuditEvent::AccountRemoved, &name, client_ip.0);
-	Ok(Json(Removed { removed: name }))
+	let queue = parse_queue_policy(query.queue.as_deref())?;
+	let data_dir = state.data_dir().to_path_buf();
+	let counts = crate::directory_store::removal::remove_account(
+		state.store(),
+		state.spool(),
+		&data_dir,
+		&name,
+		queue,
+	)
+	.map_err(store_error)?;
+	audit::log_account_removal(&name, client_ip.0, &counts);
+	Ok(Json(RemovedResponse {
+		removed: name,
+		counts,
+	}))
 }
 
 #[derive(Deserialize)]

@@ -18,7 +18,7 @@ use super::util::message_crypto;
 
 /// Subcommands on the archive.
 #[derive(Debug, clap::Subcommand)]
-pub(super) enum Subcommand {
+pub enum Subcommand {
 	/// List every archived message for an account (id, mailbox, unix time).
 	List {
 		/// Path to the configuration file.

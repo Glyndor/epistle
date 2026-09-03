@@ -26,6 +26,7 @@ flags.
 |---|---|
 | `epistle accounts --config F` | List configured accounts. |
 | `epistle account-add --config F --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
+| `epistle account-remove --config F --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
 | `epistle app-password-create --config F --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
 | `epistle app-passwords --config F [--account N]` | List app passwords (label, expiry, IP restriction). |
 | `epistle app-password-revoke --config F --account N --label L` | Revoke an app password. |

@@ -252,6 +252,23 @@ impl MaskedAddressStore {
 		self.persist()
 	}
 
+	/// Remove every entry owned by `account` (case-insensitive). Returns the
+	/// number of entries removed; persists once at the end. Used by
+	/// [`crate::directory_store::removal::remove_account`] to drop the
+	/// account's whole footprint; persisting in one pass keeps the on-disk
+	/// file consistent with the in-memory state when a single account holds
+	/// many masks.
+	pub fn remove_all_for_account(&mut self, account: &str) -> Result<u32, StoreError> {
+		let account = account.to_ascii_lowercase();
+		let before = self.entries.len();
+		self.entries.retain(|_, entry| entry.account != account);
+		let removed = (before - self.entries.len()) as u32;
+		if removed > 0 {
+			self.persist()?;
+		}
+		Ok(removed)
+	}
+
 	/// Update `last_used_at` to `now` for an enabled address owned by
 	/// `account`. Silent no-op when the address is unknown, disabled, or
 	/// owned by another account (so the delivery hot path stays
