@@ -6,15 +6,16 @@
 //! counterpart this test compared against stopped existing.
 //!
 //! Retiring it was the wrong answer. The floor is still a real claim: epistle
-//! supports 1.88, and CI proves it by building there. What changed is where the
+//! supports 1.94, and CI proves it by building there. What changed is where the
 //! claim lives, so it moved to `rust-version` in `Cargo.toml`, which is where
 //! Rust keeps an MSRV and which cargo itself enforces.
 //!
-//! This is not the derivation standards/testing forbids. That rule is about
-//! deriving a **packaging** floor from the manifest, because the real floor
-//! comes from transitive dependencies rather than from `edition`. There is no
-//! packaging floor now. 1.88 still came from a build that failed, and it still
-//! moves the same way.
+//! 1.94 is now derived from sqlx 0.9's own `rust-version`, so it is a
+//! measured floor on the build graph rather than a packaging floor.
+//! Standards/testing forbids that derivation for packaging floors, but there is
+//! no packaging floor now. 1.88 was the previous floor and came from a build
+//! that failed (`rcgen`, `time` and `icu_properties`); sqlx 0.9 widened the
+//! graph past it.
 //!
 //! Before #735 the `MSRV` job was gated on an input this repository never
 //! passed, so it skipped and its gate read the skip as a pass. A bump that

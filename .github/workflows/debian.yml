@@ -36,9 +36,9 @@ jobs:
     with:
       package-name: epistle
       # Not the reusable's trixie default: trixie ships rustc 1.85 and the
-      # dependency floor is 1.88 (rcgen, time, time-macros), which edition 2024
-      # alone does not reveal. sid carries 1.95. Digest-pinned so the check runs
-      # against a fixed environment instead of a moving tag.
+      # dependency floor is 1.94 (set by sqlx 0.9's `rust-version`), which
+      # edition 2024 alone does not reveal. sid carries 1.95. Digest-pinned so
+      # the check runs against a fixed environment instead of a moving tag.
       debian-image: "debian:sid@sha256:24c766c06ebdbda66a026e92361ede7d9212819701b2fca82e347ef0c240cb2c"
       # Debian's toolchain ships no musl standard library, so debian/rules
       # builds for a target it has to bring itself. Keep this in step with
