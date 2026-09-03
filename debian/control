@@ -24,7 +24,7 @@ Rules-Requires-Root: no
 Package: epistle
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser
-Recommends: podman (>= 5.0), podup
+Recommends: podman (>= 5.0), podup, openssl
 Suggests: postgresql
 Description: self-hosted mail server with a management API and CLI
  epistle is a headless mail server: SMTP, IMAP4rev2, JMAP and POP3 with the
