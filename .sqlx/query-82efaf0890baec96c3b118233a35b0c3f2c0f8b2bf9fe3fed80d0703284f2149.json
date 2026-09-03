@@ -6,12 +6,24 @@
       {
         "ordinal": 0,
         "name": "ham_count",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reputation",
+            "name": "ham_count"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "spam_count",
-        "type_info": "Int8"
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reputation",
+            "name": "spam_count"
+          }
+        }
       }
     ],
     "parameters": {
