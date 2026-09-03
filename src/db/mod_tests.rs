@@ -1,9 +1,9 @@
 //! Tests for the PostgreSQL version floor and the pure function that enforces
-//! it. The `the_floor_constant_is_the_one_ci_tests` test, which guards the
-//! code/CI relationship, lives in this file but is added alongside the
-//! workflow change that gives it a matrix entry to look for.
+//! it.
 
 use super::*;
+use std::fs;
+use std::path::Path;
 
 /// A `server_version_num` at the floor decodes to the floor and passes.
 #[test]
@@ -35,4 +35,28 @@ fn major_below_the_floor_is_refused() {
 		}) => {}
 		other => panic!("expected ServerTooOld {{ found: 13, required: 14 }}, got {other:?}"),
 	}
+}
+
+/// The CI matrix in `.github/workflows/db.yml` must include a
+/// `postgres:<N>@sha256:...` image entry where `<N>` is
+/// [`MIN_SERVER_VERSION`]. Reading the workflow from disk makes the
+/// floor and the CI leg the same fact in two places: a change to one
+/// that the other does not track is caught here, not by a post-mortem
+/// against the wrong server.
+///
+/// The needle is `postgres:<N>@sha256:` (with the digest delimiter) so
+/// the test cannot false-positive on a comment that just names the
+/// major: the only place the image line appears is the matrix.
+#[test]
+fn the_floor_constant_is_the_one_ci_tests() {
+	let workflow =
+		fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/db.yml"))
+			.expect("read .github/workflows/db.yml");
+	let needle = format!("postgres:{MIN_SERVER_VERSION}@sha256:");
+	assert!(
+		workflow.contains(&needle),
+		".github/workflows/db.yml must carry {needle:?} in its matrix so the \
+		 floor declared in code and the floor tested in CI cannot drift apart; \
+		 the workflow was: {workflow}"
+	);
 }

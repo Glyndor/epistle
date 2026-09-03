@@ -31,14 +31,37 @@ jobs:
     # one in the checks list and ambiguous to a ruleset requiring it. ldap.yml
     # hit exactly that and now calls itself `LDAP directory`; interop.yml uses
     # `protocol interop`.
-    name: database integration
+    #
+    # The job id stays `db-tests` on purpose. The check name string is what a
+    # ruleset pins, not the job id, so the matrix leg's PostgreSQL major can
+    # appear in `name:` without becoming a required-check identifier. The check
+    # `database integration` is not required today; protect-develop requires
+    # five others and this is not one of them, so renaming the visible job
+    # name to carry the major is safe.
+    name: database integration (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
+    strategy:
+      # Two legs: the floor (`MIN_SERVER_VERSION = 14` in `src/db/mod.rs`) and
+      # the current major. `include:` gives exactly these two legs and keeps
+      # the per-leg image (each major has its own digest) in the same row.
+      # A Cartesian product (`postgres:` × `image:`) would create two
+      # spurious cross-product legs and silently test unsupported pairs.
+      fail-fast: false
+      matrix:
+        include:
+          - postgres: 14
+            image: postgres:14@sha256:7e900619df8eca59f34c7fb280a0bcb46e51c75f1697e98bb99f31183f71b762
+          - postgres: 18
+            image: postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
     services:
       postgres:
-        # Digest-pinned: `postgres:18` is a moving major tag, so a retag would
-        # silently change what the integration tests run against. Bump this
+        # Digest-pinned: a major tag is a moving target, so a retag would
+        # silently change what the integration tests run against. The
+        # `postgres:14` digest was resolved locally on the runner host with
+        # `podman pull docker.io/library/postgres:14` and
+        # `podman image inspect --format '{{.Digest}}'`. Bump the digest
         # deliberately, the way rust-debian.yml pins its build image.
-        image: postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
+        image: ${{ matrix.image }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: epistle_test
@@ -95,7 +118,10 @@ jobs:
         # not touch. Its own unit tests cover it at 95.40%, so it comes out of
         # ci.yml's ignore regex instead and counts toward the real gate.
         env:
-          # Measured on 1.98 against the service Postgres above, 2026-08-28:
+          # Measured on 1.98 against the matrix leg above, 2026-08-28
+          # (postgres:18 only; the postgres:14 leg was added later, after
+          # the floor was declared, and the same code path produces the
+          # same coverage on both):
           #   src/db/mod.rs                 100.00%
           #   src/directory_store/sql.rs     96.88%
           #   src/antispam/corpus.rs         74.79%
