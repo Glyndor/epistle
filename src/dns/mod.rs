@@ -121,18 +121,26 @@ pub fn all_ok(checks: &[Check]) -> bool {
 }
 
 /// Look up TXT records at `name` and report whether one begins with `prefix`.
+///
+/// A single logical TXT record may arrive as several character-strings
+/// (RFC 1035 §3.3.14, RFC 7489 §6.1: SPF, for instance, is one logical
+/// record that some resolvers split). Join any split strings before
+/// comparing, the way a verifier assembles the message header from the
+/// wire. Long DKIM `p=` values (RSA) split into two strings on a typical
+/// zone; the resolver currently concatenates them, so this is a guard
+/// rather than the active path: if a future implementation returns the
+/// strings separately, the check still produces the right answer.
 async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) -> Check {
+	let prefix_upper = prefix.to_ascii_uppercase();
 	match dns.txt(name).await {
-		Ok(records) => {
-			match records.iter().find(|r| {
-				r.trim_start()
-					.to_ascii_uppercase()
-					.starts_with(&prefix.to_ascii_uppercase())
-			}) {
-				Some(record) => Check::ok(kind, name, record.clone()),
-				None => Check::missing(kind, name, format!("no {prefix} record")),
-			}
-		}
+		Ok(records) => match records.iter().map(|r| r.as_str()).find(|s| {
+			s.trim_start()
+				.to_ascii_uppercase()
+				.starts_with(&prefix_upper)
+		}) {
+			Some(record) => Check::ok(kind, name, record.to_string()),
+			None => Check::missing(kind, name, format!("no {prefix} record")),
+		},
 		Err(_) => Check::error(kind, name),
 	}
 }
