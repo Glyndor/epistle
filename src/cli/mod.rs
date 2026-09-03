@@ -350,3 +350,7 @@ mod tests_b;
 #[cfg(test)]
 #[path = "cli_tests_c.rs"]
 mod tests_c;
+
+#[cfg(test)]
+#[path = "cli_tests_d.rs"]
+mod tests_d;
