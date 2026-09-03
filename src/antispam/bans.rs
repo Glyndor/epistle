@@ -95,7 +95,7 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		subject: &str,
 		protocol: &str,
 		now_secs: u64,
-	) -> impl std::future::Future<Output = ()> + Send;
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 
 	/// Whether `subject` is currently banned. `None` when the subject is
 	/// clean, or when the lookup failed (fail open).
@@ -103,19 +103,28 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		&self,
 		subject: &str,
 		now_secs: u64,
-	) -> impl std::future::Future<Output = Option<BanInfo>> + Send;
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<BanInfo>> + Send + '_>>;
 
 	/// A successful authentication clears the ban and the failure
 	/// history for `subject`.
-	fn clear_success(&self, subject: &str) -> impl std::future::Future<Output = ()> + Send;
+	fn clear_success(
+		&self,
+		subject: &str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 
 	/// Drop failures older than 24 hours and bans whose `until` is older
 	/// than 24 hours ago.
-	fn sweep(&self, now_secs: u64) -> impl std::future::Future<Output = ()> + Send;
+	fn sweep(
+		&self,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 
 	/// Drop every row for `account`, called from
 	/// [`crate::directory_store::removal::remove_account`].
-	fn remove_account(&self, account: &str) -> impl std::future::Future<Output = ()> + Send;
+	fn remove_account(
+		&self,
+		account: &str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 }
 
 /// Build the canonical `'ip:<addr>'` subject for `ip`.
@@ -201,7 +210,52 @@ impl PgBanStore {
 }
 
 impl BanStore for PgBanStore {
-	async fn record_failure(&self, subject: &str, protocol: &str, now_secs: u64) {
+	fn record_failure(
+		&self,
+		subject: &str,
+		protocol: &str,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let subject = subject.to_string();
+		let protocol = protocol.to_string();
+		Box::pin(async move { self.record_failure_inner(&subject, &protocol, now_secs).await })
+	}
+
+	fn is_banned(
+		&self,
+		subject: &str,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<BanInfo>> + Send + '_>> {
+		let subject = subject.to_string();
+		Box::pin(async move { self.is_banned_inner(&subject, now_secs).await })
+	}
+
+	fn clear_success(
+		&self,
+		subject: &str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let subject = subject.to_string();
+		Box::pin(async move { self.clear_success_inner(&subject).await })
+	}
+
+	fn sweep(
+		&self,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		Box::pin(async move { self.sweep_inner(now_secs).await })
+	}
+
+	fn remove_account(
+		&self,
+		account: &str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let account = account.to_string();
+		Box::pin(async move { self.remove_account_inner(&account).await })
+	}
+}
+
+impl PgBanStore {
+	async fn record_failure_inner(&self, subject: &str, protocol: &str, now_secs: u64) {
 		let id = Uuid::now_v7();
 		let window_start_secs = now_secs.saturating_sub(self.policy.window_secs);
 		let result = async {
@@ -268,7 +322,7 @@ impl BanStore for PgBanStore {
 		}
 	}
 
-	async fn is_banned(&self, subject: &str, now_secs: u64) -> Option<BanInfo> {
+	async fn is_banned_inner(&self, subject: &str, now_secs: u64) -> Option<BanInfo> {
 		let row: Result<Option<(i64, String)>, sqlx::Error> = sqlx::query_as(
 			"SELECT \
 			         EXTRACT(EPOCH FROM until)::BIGINT, \
@@ -292,7 +346,7 @@ impl BanStore for PgBanStore {
 		}
 	}
 
-	async fn clear_success(&self, subject: &str) {
+	async fn clear_success_inner(&self, subject: &str) {
 		let result = async {
 			let mut tx = self.pool.begin().await?;
 			sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
@@ -312,7 +366,7 @@ impl BanStore for PgBanStore {
 		}
 	}
 
-	async fn sweep(&self, now_secs: u64) {
+	async fn sweep_inner(&self, now_secs: u64) {
 		let horizon = now_secs.saturating_sub(24 * 60 * 60);
 		let result = async {
 			sqlx::query("DELETE FROM auth_failure WHERE seen_at < to_timestamp($1)")
@@ -331,7 +385,7 @@ impl BanStore for PgBanStore {
 		}
 	}
 
-	async fn remove_account(&self, account: &str) {
+	async fn remove_account_inner(&self, account: &str) {
 		let subject = subject_account(account);
 		let result = async {
 			let mut tx = self.pool.begin().await?;

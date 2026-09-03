@@ -83,72 +83,102 @@ impl FakeBanStore {
 }
 
 impl BanStore for FakeBanStore {
-	async fn record_failure(&self, subject: &str, _protocol: &str, now_secs: u64) {
-		let mut failures = self.failures.lock().expect("lock");
-		failures
-			.entry(subject.to_string())
-			.or_default()
-			.push(now_secs);
-		// Drop failures outside the window so the count matches the
-		// production SQL's `seen_at >= now - window_secs` predicate.
-		if let Some(entries) = failures.get_mut(subject) {
-			entries.retain(|t| *t >= now_secs.saturating_sub(self.policy.window_secs));
-		}
-		let in_window = failures.get(subject).map(|v| v.len()).unwrap_or(0);
-		drop(failures);
+	fn record_failure(
+		&self,
+		subject: &str,
+		protocol: &str,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let subject = subject.to_string();
+		let _protocol = protocol.to_string();
+		Box::pin(async move {
+			let mut failures = self.failures.lock().expect("lock");
+			failures
+				.entry(subject.to_string())
+				.or_default()
+				.push(now_secs);
+			// Drop failures outside the window so the count matches the
+			// production SQL's `seen_at >= now - window_secs` predicate.
+			if let Some(entries) = failures.get_mut(&subject) {
+				entries.retain(|t| *t >= now_secs.saturating_sub(self.policy.window_secs));
+			}
+			let in_window = failures.get(&subject).map(|v| v.len()).unwrap_or(0);
+			drop(failures);
 
-		if in_window >= self.policy.threshold as usize {
-			let mut strikes = self.strikes.lock().expect("lock");
-			let current = strikes.get(subject).copied().unwrap_or(0);
-			let next = current.saturating_add(1);
-			strikes.insert(subject.to_string(), next);
-			drop(strikes);
+			if in_window >= self.policy.threshold as usize {
+				let mut strikes = self.strikes.lock().expect("lock");
+				let current = strikes.get(&subject).copied().unwrap_or(0);
+				let next = current.saturating_add(1);
+				strikes.insert(subject.clone(), next);
+				drop(strikes);
 
-			let duration = self.policy.duration_for(next);
-			let info = BanInfo {
-				until_secs: now_secs.saturating_add(duration.as_secs()),
-				reason: self.reason(),
-			};
-			self.bans
-				.lock()
-				.expect("lock")
-				.insert(subject.to_string(), info);
-		}
+				let duration = self.policy.duration_for(next);
+				let info = BanInfo {
+					until_secs: now_secs.saturating_add(duration.as_secs()),
+					reason: self.reason(),
+				};
+				self.bans.lock().expect("lock").insert(subject, info);
+			}
+		})
 	}
 
-	async fn is_banned(&self, subject: &str, now_secs: u64) -> Option<BanInfo> {
-		if std::mem::take(&mut *self.next_is_banned_fails.lock().expect("lock")) {
-			return None;
-		}
-		let map = self.bans.lock().expect("lock");
-		map.get(subject)
-			.filter(|info| info.until_secs > now_secs)
-			.cloned()
+	fn is_banned(
+		&self,
+		subject: &str,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<BanInfo>> + Send + '_>> {
+		let subject = subject.to_string();
+		Box::pin(async move {
+			if std::mem::take(&mut *self.next_is_banned_fails.lock().expect("lock")) {
+				return None;
+			}
+			let map = self.bans.lock().expect("lock");
+			map.get(&subject)
+				.filter(|info| info.until_secs > now_secs)
+				.cloned()
+		})
 	}
 
-	async fn clear_success(&self, subject: &str) {
-		self.failures.lock().expect("lock").remove(subject);
-		self.bans.lock().expect("lock").remove(subject);
-		self.strikes.lock().expect("lock").remove(subject);
+	fn clear_success(
+		&self,
+		subject: &str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let subject = subject.to_string();
+		Box::pin(async move {
+			self.failures.lock().expect("lock").remove(&subject);
+			self.bans.lock().expect("lock").remove(&subject);
+			self.strikes.lock().expect("lock").remove(&subject);
+		})
 	}
 
-	async fn sweep(&self, now_secs: u64) {
-		let horizon = now_secs.saturating_sub(24 * 60 * 60);
-		let mut failures = self.failures.lock().expect("lock");
-		for entries in failures.values_mut() {
-			entries.retain(|t| *t >= horizon);
-		}
-		failures.retain(|_, entries| !entries.is_empty());
-		drop(failures);
-		let mut bans = self.bans.lock().expect("lock");
-		bans.retain(|_, info| info.until_secs >= horizon);
+	fn sweep(
+		&self,
+		now_secs: u64,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		Box::pin(async move {
+			let horizon = now_secs.saturating_sub(24 * 60 * 60);
+			let mut failures = self.failures.lock().expect("lock");
+			for entries in failures.values_mut() {
+				entries.retain(|t| *t >= horizon);
+			}
+			failures.retain(|_, entries| !entries.is_empty());
+			drop(failures);
+			let mut bans = self.bans.lock().expect("lock");
+			bans.retain(|_, info| info.until_secs >= horizon);
+		})
 	}
 
-	async fn remove_account(&self, account: &str) {
-		let subject = super::subject_account(account);
-		self.failures.lock().expect("lock").remove(&subject);
-		self.bans.lock().expect("lock").remove(&subject);
-		self.strikes.lock().expect("lock").remove(&subject);
+	fn remove_account(
+		&self,
+		account: &str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		let account = account.to_string();
+		Box::pin(async move {
+			let subject = super::subject_account(&account);
+			self.failures.lock().expect("lock").remove(&subject);
+			self.bans.lock().expect("lock").remove(&subject);
+			self.strikes.lock().expect("lock").remove(&subject);
+		})
 	}
 }
 
@@ -197,29 +227,15 @@ async fn fake_store_second_ban_doubles_the_duration() {
 	let subject = "ip:203.0.113.5";
 	let now: u64 = 1_700_000_000;
 
-	// First ban.
+	// First ban fires after 5 failures (the 5th trips the threshold).
 	for _ in 0..5 {
 		store.record_failure(subject, "smtp", now).await;
 	}
 	let first = store.is_banned(subject, now).await.expect("banned");
-	// Reset the rolling failures (clear_success does both) so the
-	// threshold path can fire again immediately.
-	store.clear_success(subject).await;
-	// Push the ban-end into the future so the second ban can stack
-	// without overwriting; the production schema upserts by subject.
-	{
-		let mut map = store.bans.lock().expect("lock");
-		map.insert(
-			subject.to_string(),
-			BanInfo {
-				until_secs: now + 600,
-				reason: first.reason.clone(),
-			},
-		);
-	}
-	for _ in 0..5 {
-		store.record_failure(subject, "smtp", now).await;
-	}
+	assert_eq!(first.until_secs - now, 60);
+	// One more failure re-fires the upsert: the existing ban is found,
+	// strikes goes from 1 to 2, and the new duration is base * 2 = 120.
+	store.record_failure(subject, "smtp", now).await;
 	let second = store.is_banned(subject, now).await.expect("banned");
 	assert!(
 		second.until_secs > first.until_secs,
@@ -227,8 +243,34 @@ async fn fake_store_second_ban_doubles_the_duration() {
 		second.until_secs,
 		first.until_secs
 	);
-	// The second strike on a 60-second base lasts 120 seconds.
 	assert_eq!(second.until_secs - now, 120);
+}
+
+#[tokio::test]
+async fn fake_store_backoff_caps_at_max_secs() {
+	let store = FakeBanStore::new(policy());
+	let subject = "ip:203.0.113.5";
+	let now: u64 = 1_700_000_000;
+	// Trip the threshold once: 5 failures → strikes = 1, 60s.
+	for _ in 0..5 {
+		store.record_failure(subject, "smtp", now).await;
+	}
+	let mut info = store.is_banned(subject, now).await.expect("banned");
+	assert_eq!(info.until_secs - now, 60);
+	// Keep recording failures: each one past the threshold increments
+	// strikes and re-upserts the ban with the doubled duration. The cap
+	// at 600s should hold once the doubling reaches it.
+	let mut expected: u64 = 60;
+	for i in 6..=15 {
+		store.record_failure(subject, "smtp", now).await;
+		info = store.is_banned(subject, now).await.expect("banned");
+		expected = expected.saturating_mul(2).min(600);
+		assert_eq!(
+			info.until_secs - now,
+			expected,
+			"failure #{i}: duration should be {expected}s"
+		);
+	}
 }
 
 #[tokio::test]

@@ -1,8 +1,29 @@
 //! Recipient resolution: which account, if any, receives an address.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 use super::address::Address;
+
+/// Run an async future synchronously from a non-async context. Every
+/// listener's authentication path is synchronous (the sans-IO state
+/// machines drive the I/O layer), so the ban store's async methods must
+/// be drained through this helper. The calls are short single-query
+/// reads and writes; the runtime is multi-threaded, so blocking the
+/// current worker briefly is acceptable. A panic in the ban store's
+/// fail-open path is still surfaced rather than swallowed.
+fn block_on_async<F: Future>(future: F) -> F::Output {
+	tokio::runtime::Handle::current().block_on(future)
+}
+
+/// Current Unix timestamp in seconds, with the same fall-back the rest of
+/// the auth path uses for an impossible pre-epoch clock.
+fn unix_now_secs() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
+}
 
 /// Outcome of resolving a recipient address.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +116,11 @@ pub struct Directory {
 	/// behaviour. Present (even empty) means only the listed protocols do;
 	/// the rest reject identically to an unknown login.
 	allowed_protocols: HashMap<String, HashSet<crate::config::Protocol>>,
+	/// Shared ban store consulted before any password hashing and updated
+	/// on every authentication outcome. `None` in deployments without
+	/// `[database]` — those fall back to the per-connection three-strikes
+	/// counters that the listeners already maintain.
+	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
 }
 
 impl Directory {
@@ -131,6 +157,7 @@ impl Directory {
 			masked_by_address: HashMap::new(),
 			metrics: None,
 			allowed_protocols: HashMap::new(),
+			ban_store: None,
 		}
 	}
 
@@ -264,6 +291,26 @@ impl Directory {
 		self.allowed_protocols
 			.get(&account.to_ascii_lowercase())
 			.is_none_or(|set| set.contains(&protocol))
+	}
+
+	/// Attach the shared ban store consulted on every password
+	/// authentication attempt. `None` (the default) keeps the per-connection
+	/// three-strikes counters as the only defence; with `[database]`
+	/// configured the `serve` builder wires in a [`PgBanStore`].
+	///
+	/// [`PgBanStore`]: crate::antispam::bans::PgBanStore
+	pub fn with_ban_store(
+		mut self,
+		store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
+	) -> Self {
+		self.ban_store = Some(store);
+		self
+	}
+
+	/// The ban store attached to this directory, if any. Public so the
+	/// listener tests can substitute a fake.
+	pub fn ban_store(&self) -> Option<&std::sync::Arc<dyn crate::antispam::bans::BanStore>> {
+		self.ban_store.as_ref()
 	}
 
 	/// Attach per-account storage quotas (account name → bytes).
@@ -416,8 +463,60 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
 	) -> Option<String> {
-		let outcome = self
-			.authenticate_local(login, password, ip)
+		// Ban check first: an active ban on the client IP or on the
+		// account is the answer, so the password verifier is never reached.
+		// The check runs before the credentials lookup so a banned IP
+		// cannot probe unknown logins either. The wire response is the
+		// generic "authentication failed" (no oracle), and the audit log
+		// records the rule that fired.
+		let outcome = self.check_bans_then_authenticate(login, password, ip, protocol);
+		self.record_auth_outcome(login, outcome.as_deref(), ip, protocol);
+		self.record_ban_outcome(login, outcome.as_deref(), ip, protocol);
+		outcome
+	}
+
+	/// The shared ban-aware authentication path used by every listener.
+	/// Refuses banned subjects before any hashing; otherwise runs the
+	/// local/LDAP/allowlist chain; then updates the ban store on the
+	/// outcome (record on failure, clear on success).
+	fn check_bans_then_authenticate(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) -> Option<String> {
+		if let Some(store) = self.ban_store.as_ref() {
+			let now_secs = unix_now_secs();
+			if let Some(ip) = ip
+				&& let Some(info) = block_on_async(store.is_banned(
+					&crate::antispam::bans::subject_ip(ip),
+					now_secs,
+				))
+			{
+				self.log_banned("ip", &ip.to_string(), &info.reason, info.until_secs, protocol);
+				return None;
+			}
+			// Resolve the account name before consulting its ban row so
+			// unknown logins cannot probe bans on accounts they cannot
+			// authenticate as.
+			if let Some((account, _)) = self.credentials(login)
+				&& let Some(info) = block_on_async(store.is_banned(
+					&crate::antispam::bans::subject_account(&account),
+					now_secs,
+				))
+			{
+				self.log_banned(
+					"account",
+					&account,
+					&info.reason,
+					info.until_secs,
+					protocol,
+				);
+				return None;
+			}
+		}
+		self.authenticate_local(login, password, ip)
 			.or_else(|| {
 				// Local/SQL credentials did not match: try the live LDAP bind, if any.
 				self.ldap
@@ -433,9 +532,75 @@ impl Directory {
 				// account exists at all.
 				self.is_protocol_allowed(&account, protocol)
 					.then_some(account)
-			});
-		self.record_auth_outcome(login, outcome.as_deref(), ip, protocol);
-		outcome
+			})
+	}
+
+	/// Emit a structured audit event when a ban fires. Distinct from
+	/// `record_auth_outcome`: the latter is the per-attempt login outcome
+	/// (succeeded/failed), while this one names the rule that fired so an
+	/// operator can correlate one log line with the same line in the ban
+	/// table.
+	fn log_banned(
+		&self,
+		kind: &str,
+		identifier: &str,
+		reason: &str,
+		until_secs: u64,
+		protocol: crate::config::Protocol,
+	) {
+		tracing::info!(
+			target: "epistle::auth",
+			event = "auth.banned",
+			kind = %kind,
+			identifier = %identifier,
+			reason = %reason,
+			until_secs = %until_secs,
+			protocol = protocol.as_str(),
+			"authentication refused by ban"
+		);
+	}
+
+	/// After the authentication outcome is known, write it back to the
+	/// shared ban store. A failure records against both the IP (when
+	/// known) and the resolved account; a success clears both. No ban
+	/// store means no-op, which keeps the listener test path identical
+	/// to the pre-ban-store behaviour.
+	fn record_ban_outcome(
+		&self,
+		login: &str,
+		outcome: Option<&str>,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) {
+		let Some(store) = self.ban_store.as_ref() else {
+			return;
+		};
+		let now_secs = unix_now_secs();
+		let protocol_str = protocol.as_str();
+		match outcome {
+			Some(account) => {
+				if let Some(ip) = ip {
+					block_on_async(store.clear_success(&crate::antispam::bans::subject_ip(ip)));
+				}
+				block_on_async(store.clear_success(&crate::antispam::bans::subject_account(account)));
+			}
+			None => {
+				if let Some(ip) = ip {
+					block_on_async(store.record_failure(
+						&crate::antispam::bans::subject_ip(ip),
+						protocol_str,
+						now_secs,
+					));
+				}
+				if let Some((account, _)) = self.credentials(login) {
+					block_on_async(store.record_failure(
+						&crate::antispam::bans::subject_account(&account),
+						protocol_str,
+						now_secs,
+					));
+				}
+			}
+		}
 	}
 
 	/// Emit the audit event and bump the counter for one authentication
