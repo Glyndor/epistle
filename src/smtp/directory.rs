@@ -516,15 +516,25 @@ impl Directory {
 	/// the remaining password on success, or `None` if the code is missing or
 	/// wrong.
 	fn totp_strip<'a>(&self, password: &'a str, secret: &str) -> Option<&'a str> {
-		let split = password.len().checked_sub(6)?;
+		// `str::split_at` panics when its index is not on a UTF-8 character
+		// boundary. Splitting by byte length is only safe when the trailing
+		// six bytes are ASCII digits: a digit is a single-byte character that
+		// cannot be a continuation byte, so the byte before them ends a
+		// character by construction. This keeps the split safe for non-ASCII
+		// passwords, which the policy is about to admit.
+		let bytes = password.as_bytes();
+		if bytes.len() < 7 || !bytes[bytes.len() - 6..].iter().all(u8::is_ascii_digit) {
+			return None;
+		}
+		let split = bytes.len() - 6;
 		let (pass, code) = password.split_at(split);
 		let code: u32 = code.parse().ok()?;
-		let bytes = crate::totp::decode_base32_secret(secret)?;
+		let secret_bytes = crate::totp::decode_base32_secret(secret)?;
 		let now = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0);
-		crate::totp::verify(&bytes, code, now).then_some(pass)
+		crate::totp::verify(&secret_bytes, code, now).then_some(pass)
 	}
 
 	/// Attach SCRAM credentials (account name → stored credentials).
@@ -730,6 +740,10 @@ mod alias_tests;
 #[cfg(test)]
 #[path = "directory_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+#[path = "directory_totp_tests.rs"]
+mod totp_tests;
 
 #[cfg(test)]
 #[path = "directory_test_support.rs"]
