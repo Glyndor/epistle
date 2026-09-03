@@ -128,6 +128,10 @@ mod jmap_tests_e;
 mod jmap_tests_f;
 
 #[cfg(test)]
+#[path = "jmap_tests_g.rs"]
+mod jmap_tests_g;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 

@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use crate::smtp::trace::ensure_submission_headers;
 use crate::util::header::sanitize_header_value;
 
 /// Serialize a JMAP Email submission object into an RFC 5322 message (Email/set
@@ -16,6 +17,12 @@ use crate::util::header::sanitize_header_value;
 /// collapses every control character to a single space and caps each value
 /// to the RFC 5322 998-octet line limit, so a single client submission
 /// cannot inflate a single header line past the standard.
+///
+/// `Message-ID` and `Date` are stamped when absent (matching the
+/// `EmailSubmission/set` path) so a draft already carries the id a future
+/// `EmailSubmission/set` call will queue it with; `domain` is the From
+/// address's domain, falling back to `localhost` when the spec had no
+/// address. Client-supplied Message-ID / Date are left alone.
 pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
 	let addresses = |field: &str| -> Option<String> {
 		let list = spec.get(field)?.as_array()?;
@@ -45,7 +52,11 @@ pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
 		.unwrap_or("");
 	headers.push_str("MIME-Version: 1.0\r\n");
 	headers.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-	format!("{headers}\r\n{body}").into_bytes()
+	let raw = format!("{headers}\r\n{body}").into_bytes();
+	let stamp_domain = addresses("from")
+		.and_then(|from| from.split_once('@').map(|(_, d)| d.to_ascii_lowercase()))
+		.unwrap_or_else(|| "localhost".to_string());
+	ensure_submission_headers(&raw, &stamp_domain, std::time::SystemTime::now())
 }
 
 /// Raw (plaintext) bytes of a stored message by id, searching the account's

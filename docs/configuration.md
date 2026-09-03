@@ -799,6 +799,18 @@ Outbound queue settings. Absent keeps the secure defaults.
 
 This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
 
+## JMAP submission
+
+The JMAP `EmailSubmission/set` and `Email/set` (create) handlers stamp a
+fresh `Message-ID` and `Date` header on every message that lacks them. The
+stamped `Message-ID` is `<uuidv7@envelope-domain>`, where the
+envelope-domain is the `envelope.mailFrom` domain (or the `From` header's
+domain for `Email/set` create), and the stamped `Date` is the RFC 5322
+form of the server's current UTC time. Client-supplied `Message-ID` and
+`Date` are left unchanged: a client that wants to set its own id sends
+one. The stamp only fires on authenticated submission; inbound relay
+mail from other servers is not modified.
+
 ## Example
 
 ```toml

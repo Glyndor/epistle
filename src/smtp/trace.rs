@@ -1,6 +1,7 @@
 //! Trace and authentication headers stamped onto accepted mail.
 
 use std::net::IpAddr;
+use std::time::SystemTime;
 
 use super::line::LineError;
 use super::reply::Reply;
@@ -104,46 +105,119 @@ pub(crate) fn format_auth_results(hostname: &str, methods: &[String]) -> String 
 	out
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn counts_received_headers_in_the_block_only() {
-		let data = b"Received: from a\r\nReceived: from b\r\n\tby folded\r\n\
-Subject: hi\r\n\r\nReceived: not a header in the body\r\n";
-		// Two Received headers; the folded continuation and the body line
-		// are not counted.
-		assert_eq!(received_hop_count(data), 2);
+/// Stamp the two submission-mandatory headers the receiver contract expects
+/// (`Message-ID` and `Date`) on an authenticated client submission when the
+/// client omitted them.
+///
+/// The function scans the header block (everything up to the first blank
+/// line, CRLF or LF terminator) for `Message-ID:` and `Date:` field names,
+/// case-insensitive and respecting folded continuation lines (a line that
+/// starts with WSP is part of the previous header, never a fresh one). If
+/// either field is absent the server adds it at the top of the block; the
+/// fresh pair is prepended in `Message-ID`, `Date` order so a single
+/// observation reveals both. When both are already present the bytes are
+/// returned unchanged.
+///
+/// Applied only on the authenticated submission paths: the SMTP relay hop
+/// from another server is never modified, so the inbound trace keeps the
+/// sender's own Message-ID and Date exactly as received. Receivers score
+/// outbound mail down (and Gmail and Yahoo have outright rejected it since
+/// 2024) when these headers are missing on authenticated submission, so
+/// the server stamps them only when the client forgot.
+///
+/// `domain` is the local part's authoritative domain (the reverse-path
+/// domain for the SMTP submission path, the envelope `mailFrom` for JMAP
+/// `EmailSubmission/set`). The minted `Message-ID` reads
+/// `<uuidv7@domain>`, matching the shape `POST /api/v1/send` already emits.
+pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let headers = &data[..header_end];
+	let body = &data[header_end..];
+	let (has_message_id, has_date) = scan_submission_headers(headers);
+	if has_message_id && has_date {
+		return data.to_vec();
 	}
-
-	#[test]
-	fn counts_zero_when_no_received_headers() {
-		assert_eq!(received_hop_count(b"From: a@b\r\n\r\nbody\r\n"), 0);
+	let mut prepended = String::new();
+	if !has_message_id {
+		prepended.push_str(&format!(
+			"Message-ID: <{}@{domain}>\r\n",
+			uuid::Uuid::now_v7()
+		));
 	}
-
-	#[test]
-	fn received_protocol_follows_rfc3848() {
-		// HELO is plain SMTP regardless of TLS or auth.
-		assert_eq!(received_protocol(false, false, false), "SMTP");
-		assert_eq!(received_protocol(false, true, true), "SMTP");
-		// EHLO gains S over TLS and A once authenticated.
-		assert_eq!(received_protocol(true, false, false), "ESMTP");
-		assert_eq!(received_protocol(true, true, false), "ESMTPS");
-		assert_eq!(received_protocol(true, false, true), "ESMTPA");
-		assert_eq!(received_protocol(true, true, true), "ESMTPSA");
+	if !has_date {
+		prepended.push_str(&format!("Date: {}\r\n", crate::clock::rfc5322(now)));
 	}
+	let mut out = Vec::with_capacity(data.len() + prepended.len());
+	out.extend_from_slice(prepended.as_bytes());
+	out.extend_from_slice(headers);
+	out.extend_from_slice(body);
+	out
+}
 
-	#[test]
-	fn spf_domain_prefers_mail_from_then_helo() {
-		assert_eq!(
-			spf_domain("a@Example.ORG", Some("helo.example")),
-			Some("example.org".to_string())
-		);
-		assert_eq!(
-			spf_domain("", Some("helo.example")),
-			Some("helo.example".to_string())
-		);
-		assert_eq!(spf_domain("", None), None);
+/// Byte index of the body's first byte (the start of the blank-line
+/// separator that ends the header block). The header block is everything
+/// up to but not including that separator; for CRLF CRLF the separator
+/// starts at the second `\r`, for LF LF it starts at the second `\n`.
+/// Returns `data.len()` when no blank line is present.
+fn header_block_end(data: &[u8]) -> usize {
+	let mut i = 0;
+	while i < data.len() {
+		if data[i] == b'\n' {
+			match data.get(i + 1) {
+				Some(b'\n') | Some(b'\r') => return i + 1,
+				_ => {}
+			}
+		}
+		i += 1;
+	}
+	data.len()
+}
+
+/// Whether the header block already carries each of `Message-ID:` and
+/// `Date:`. Field names match case-insensitively; folded continuation
+/// lines (starting with WSP) belong to the previous field and never start
+/// a new one.
+fn scan_submission_headers(headers: &[u8]) -> (bool, bool) {
+	let mut has_message_id = false;
+	let mut has_date = false;
+	for line in split_header_lines(headers) {
+		if line.is_empty() {
+			break;
+		}
+		if matches!(line.first(), Some(b' ' | b'\t')) {
+			continue;
+		}
+		let name = match line.iter().position(|&b| b == b':') {
+			Some(pos) => &line[..pos],
+			None => continue,
+		};
+		if name.eq_ignore_ascii_case(b"message-id") {
+			has_message_id = true;
+		} else if name.eq_ignore_ascii_case(b"date") {
+			has_date = true;
+		}
+		if has_message_id && has_date {
+			break;
+		}
+	}
+	(has_message_id, has_date)
+}
+
+/// Iterate the header block line by line, stripping the trailing CR of a
+/// CRLF terminator. A blank line is yielded as an empty slice.
+fn split_header_lines(headers: &[u8]) -> impl Iterator<Item = &[u8]> + '_ {
+	headers.split(|&b| b == b'\n').map(strip_cr)
+}
+
+/// Drop a trailing `\r` from a header line slice.
+fn strip_cr(line: &[u8]) -> &[u8] {
+	if line.last() == Some(&b'\r') {
+		&line[..line.len() - 1]
+	} else {
+		line
 	}
 }
+
+#[cfg(test)]
+#[path = "trace_tests.rs"]
+mod tests;
