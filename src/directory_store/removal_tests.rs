@@ -54,7 +54,7 @@ fn add_account(store: &AccountStore, name: &str, address: &str) {
 		.expect("add");
 }
 
-/// Seed every footprint the brief enumerates: two messages in the
+/// Seed every footprint an account leaves: two messages in the
 /// mailbox, one masked address, one app password, one suppressed
 /// recipient, plus two queued messages from the account's reverse
 /// path and one from a different account.

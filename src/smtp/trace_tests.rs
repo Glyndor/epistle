@@ -200,7 +200,7 @@ fn chrono_parse(value: &str) -> bool {
 
 /// An LF-only message (no CR) is still split correctly: the blank-line
 /// separator is `\n\n`, the header block ends at the first one and the
-/// stamper does not split a body line in two. Pinning the brief's "CRLF
+/// stamper does not split a body line in two. Pinning the "CRLF
 /// or LF" requirement.
 #[test]
 fn lf_only_messages_are_split_correctly() {

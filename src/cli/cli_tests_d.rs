@@ -48,7 +48,7 @@ fn dkim_keygen_rsa_writes_a_key_ring_can_load() {
 
 	// Re-load the produced PEM through ring's RSA loader directly: the
 	// same code path the outbound signer will follow. A key ring cannot
-	// load is a hard failure (the brief specifies it before writing).
+	// load is a hard failure (it is checked before anything is written).
 	let key = std::fs::read_to_string(&out).expect("pem read");
 	let body = {
 		let mut buf = String::new();
