@@ -76,6 +76,17 @@ impl Signer {
 		)
 	}
 
+	/// The DNS TXT record value for the optional RSA selector, in the form
+	/// `v=DKIM1; k=rsa; p=<base64 SubjectPublicKeyInfo DER>`. `None` when no
+	/// RSA key is configured. The `p=` value is the SPKI (RFC 6376 §3.6.1),
+	/// not the PKCS#1 `RSAPublicKey` ring produces: `openssl rsa -pubout`
+	/// prints the same envelope, which is what receivers verify against.
+	pub fn rsa_dns_record_value(&self) -> Option<String> {
+		let rsa = self.rsa.as_ref()?;
+		let spki = super::spki::spki_for_rsa(rsa.key.public_key().as_ref());
+		Some(format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki)))
+	}
+
 	/// Sign a raw message for `domain`, returning the full DKIM-Signature
 	/// header line (with trailing CRLF) to prepend.
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {

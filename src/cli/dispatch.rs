@@ -214,7 +214,7 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::DkimKeygen { out } => dkim_keygen(&out),
+			Command::DkimKeygen { out, rsa, bits } => dkim_keygen(&out, rsa, bits),
 			Command::StorageKeygen => storage_keygen(),
 			Command::OauthKeygen => oauth_keygen(),
 			Command::TokenHash => token_hash(),

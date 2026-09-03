@@ -46,17 +46,49 @@ cannot be automated by a DNS-provider integration — set it by hand.
 Authorizes your IP to send for the domain. `v=spf1 mx -all` authorizes whatever
 the MX points at; or pin the IP: `v=spf1 ip4:203.0.113.10 -all`. `-all` (hard
 fail) is recommended once you are sure every sender is listed.
-
 ### DKIM
+
 Sign outbound mail. Generate the key and record:
 
 ```sh
 epistle dkim-keygen --out /etc/glyndor/epistle/dkim/ed1.pem
 ```
 
-Publish the printed TXT at `ed1._domainkey.example.org`, and configure
-`[dkim] selector = "ed1"` / `key_file`. Add a second RSA selector
-(`rsa_selector`/`rsa_key_file`) for receivers without Ed25519 support.
+The default is an Ed25519 key (44-byte `p=`, always fits in one TXT
+string). For receivers without Ed25519 support, add an RSA selector:
+
+```sh
+epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
+```
+
+`--rsa` delegates to `openssl genpkey` and the binary must be on `PATH`
+(the Debian package installs it). `--bits` defaults to 2048 and accepts
+2048 or 4096 only.
+
+Publish the printed TXT at `<selector>._domainkey.example.org`, and
+configure `[dkim] selector` / `key_file`. Add the optional
+`rsa_selector` / `rsa_key_file` for the dual-signing path. A single
+message is then signed with both keys (RFC 8463); receivers that
+understand Ed25519 use that signature, the rest fall back to RSA.
+
+#### Long TXT values split at 255 octets
+
+RFC 1035 §3.3.14 caps each character-string at 255 octets, and RSA-2048
+`p=` is around 410 bytes (RSA-4096 around 755). When
+`epistle dns-records` prints the RSA selector's record, it splits the
+value at the boundary and quotes each part, so the operator can paste
+the line into a zone file directly:
+
+```
+rsasel._domainkey.example.org 3600 IN TXT ("v=DKIM1; k=rsa; p=MIIBIjANBgkq..."
+                                     "MIIBCgKCAQEA...")
+```
+
+Some DNS providers prefer the value as one long string and split it
+themselves on submit; `epistle dns-records` always emits the split form,
+which the same providers accept too. Receivers reassemble the strings
+the way every resolver does (RFC 1035 §3.3.14, §7), so the split is
+transparent on the wire.
 
 ## Reporting and policy
 

@@ -64,11 +64,20 @@ pub enum Command {
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
 	},
-	/// Generate an ed25519 DKIM key and print the DNS record value.
+	/// Generate a DKIM key and print the DNS record value.
 	DkimKeygen {
 		/// Where to write the private key (PKCS#8 PEM).
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
+		/// Generate an RSA key (via `openssl genpkey`) instead of the default
+		/// ed25519 key. The TXT record then uses `k=rsa` and is split across
+		/// 255-octet strings per RFC 1035 §3.3.14.
+		#[arg(long)]
+		rsa: bool,
+		/// RSA modulus size in bits, only meaningful with `--rsa`. Accepts
+		/// 2048 (default) or 4096.
+		#[arg(long, value_name = "BITS", default_value_t = 2048)]
+		bits: u32,
 	},
 	/// Generate a base64 32-byte at-rest message-encryption key and print it to
 	/// stdout. Store it off the data disk (an env var or a key file), then point
@@ -341,3 +350,7 @@ mod tests_b;
 #[cfg(test)]
 #[path = "cli_tests_c.rs"]
 mod tests_c;
+
+#[cfg(test)]
+#[path = "cli_tests_d.rs"]
+mod tests_d;
