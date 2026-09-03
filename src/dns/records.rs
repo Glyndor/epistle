@@ -161,7 +161,23 @@ pub fn txt_zone_form(value: &str) -> String {
 /// apex hostname `example.org` (which is its own zone) returns itself.
 /// Used to scope A/AAAA records to the right provider zone when the
 /// hostname is a sub-name.
-fn host_zone(hostname: &str) -> String {
+fn host_zone(hostname: &str, domains: &[String]) -> String {
+	// A configured domain that contains the hostname is the zone the
+	// operator's provider credentials cover; prefer the longest such match
+	// (`mx.mail.example.org` under `example.org`, not `mail.example.org`).
+	let mut best: Option<&str> = None;
+	for domain in domains {
+		let matches = hostname.eq_ignore_ascii_case(domain)
+			|| hostname
+				.strip_suffix(domain.as_str())
+				.is_some_and(|prefix| prefix.ends_with('.'));
+		if matches && best.is_none_or(|b| domain.len() > b.len()) {
+			best = Some(domain.as_str());
+		}
+	}
+	if let Some(zone) = best {
+		return zone.to_string();
+	}
 	match hostname.split_once('.') {
 		Some((_, rest)) => rest.to_string(),
 		None => hostname.to_string(),
@@ -206,7 +222,7 @@ pub fn build_records(
 	// defers instead of using the secondary MX.
 	if let Some(ip) = public_ipv4 {
 		records.push(PublishRecord {
-			zone: host_zone(hostname),
+			zone: host_zone(hostname, domains),
 			record: DnsRecord {
 				name: hostname.to_string(),
 				kind: RecordKind::A,
@@ -217,7 +233,7 @@ pub fn build_records(
 	}
 	if let Some(ip) = public_ipv6 {
 		records.push(PublishRecord {
-			zone: host_zone(hostname),
+			zone: host_zone(hostname, domains),
 			record: DnsRecord {
 				name: hostname.to_string(),
 				kind: RecordKind::Aaaa,
@@ -400,3 +416,7 @@ fn first_certificate_der(pem: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 #[path = "records_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "records_tests_b.rs"]
+mod tests_b;
