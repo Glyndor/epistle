@@ -206,7 +206,7 @@ pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCo
 fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as BASE64;
-	use ring::signature::{KeyPair, RSA_PKCS1_2048_8192_SHA256, RsaKeyPair, UnparsedPublicKey};
+	use ring::signature::{KeyPair, RsaKeyPair};
 	use std::io::Read;
 	use std::process::{Command, Stdio};
 
@@ -249,8 +249,6 @@ fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
 	let pkcs1 = pair.public_key().as_ref();
 	// Touch the parsed key through the verifier's algorithm so an opaque
 	// invalid one fails the same path the verifier will follow.
-	let parsed = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, pkcs1);
-	let _ = parsed;
 	let spki = crate::dkim::spki_for_rsa(pkcs1);
 	Ok((pem, format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki))))
 }
