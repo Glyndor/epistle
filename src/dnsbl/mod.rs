@@ -141,6 +141,86 @@ impl Dnsbl {
 			DnsblOutcome::NotListed
 		}
 	}
+
+	/// Screen `hosts` (the URL hosts found in the body) against every URIBL
+	/// zone. For each host with more than two labels, both the full host and
+	/// the registrable domain (Mozilla Public Suffix List) are queried. The
+	/// total query budget is capped at [`MAX_URL_QUERIES`] so a body with
+	/// hundreds of links cannot turn the delivery path into a DNS flood.
+	pub async fn check_url_hosts(&self, hosts: &[String], dns: &dyn DnsLookup) -> DnsblOutcome {
+		if self.url_zones.is_empty() || hosts.is_empty() {
+			return DnsblOutcome::NotListed;
+		}
+		let mut any_error = false;
+		let mut spent = 0usize;
+		'zones: for zone in &self.url_zones {
+			for host in hosts {
+				if spent >= MAX_URL_QUERIES {
+					tracing::debug!(
+						"URIBL query budget exhausted ({MAX_URL_QUERIES}), treating as not listed"
+					);
+					break 'zones;
+				}
+				let query = format!("{host}.{zone}");
+				match dns.addresses(&query).await {
+					Ok(addrs) => match classify_answer(&addrs) {
+						AnswerClass::Listed => return DnsblOutcome::Listed { zone: zone.clone() },
+						AnswerClass::Error => any_error = true,
+						AnswerClass::Ignored => {}
+					},
+					Err(DnsFailure::Temporary) => any_error = true,
+				}
+				spent += 1;
+				if host.split('.').count() > 2 && spent < MAX_URL_QUERIES {
+					let Some(reg_domain) = registrable_domain(host) else {
+						continue;
+					};
+					if reg_domain == host.as_str() {
+						continue;
+					}
+					let query = format!("{reg_domain}.{zone}");
+					match dns.addresses(&query).await {
+						Ok(addrs) => match classify_answer(&addrs) {
+							AnswerClass::Listed => {
+								return DnsblOutcome::Listed { zone: zone.clone() };
+							}
+							AnswerClass::Error => any_error = true,
+							AnswerClass::Ignored => {}
+						},
+						Err(DnsFailure::Temporary) => any_error = true,
+					}
+					spent += 1;
+				}
+			}
+		}
+		if any_error {
+			DnsblOutcome::Unavailable
+		} else {
+			DnsblOutcome::NotListed
+		}
+	}
+}
+
+/// Maximum number of DNS queries the URL host screen will issue per message.
+/// Beyond this the screen returns [`DnsblOutcome::NotListed`] with a debug
+/// log so a body with hundreds of links cannot turn the delivery path into a
+/// DNS flood.
+const MAX_URL_QUERIES: usize = 200;
+
+/// Registrable domain of `host` using the Mozilla Public Suffix List. Hosts
+/// with two labels or fewer are returned unchanged.
+fn registrable_domain(host: &str) -> Option<String> {
+	use psl::Psl;
+	let labels: Vec<&str> = host.split('.').collect();
+	if labels.len() <= 2 {
+		return Some(host.to_string());
+	}
+	if let Some(d) = psl::List.domain(host.as_bytes())
+		&& let Ok(s) = std::str::from_utf8(d.as_bytes())
+	{
+		return Some(s.to_ascii_lowercase());
+	}
+	Some(labels[labels.len() - 2..].join("."))
 }
 
 /// Classify the answer set of one DNSBL query.
