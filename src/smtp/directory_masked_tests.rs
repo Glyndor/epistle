@@ -37,7 +37,7 @@ fn enabled_mask_resolves_to_owner() {
 }
 
 /// A disabled mask is absent from the directory's map, so it rejects with
-/// `UnknownUser` exactly like an address that never existed. The brief is
+/// `UnknownUser` exactly like an address that never existed. The contract is
 /// explicit: the disabled-rejection response must not leak that one once did.
 #[test]
 fn disabled_mask_rejects_like_unknown_user() {
@@ -67,7 +67,7 @@ fn owns_address_rejects_other_accounts() {
 
 /// Static addresses win over a mask with the same local part: an operator
 /// who promoted a mask to a permanent address can keep both, and the static
-/// one takes precedence (the brief puts masks after static aliases).
+/// one takes precedence (masks resolve after static aliases).
 #[test]
 fn static_address_takes_precedence_over_mask() {
 	let directory = Directory::new(

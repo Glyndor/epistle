@@ -1,6 +1,6 @@
 //! SCIM `/Groups` endpoints — not implemented in this release.
 //!
-//! Groups are deliberately out of scope: the brief limits the work to
+//! Groups are deliberately out of scope: this implementation limits itself to
 //! `/Users`, and the directory has no notion of group membership yet
 //! (multi-target aliases are operator-configured, not user-provisioned).
 //! RFC 7644 §3.4 lets a server respond `501 Not Implemented` when a

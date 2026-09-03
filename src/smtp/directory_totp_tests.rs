@@ -7,7 +7,7 @@
 //! here next to the other `directory_*_tests.rs` files.
 //!
 //! The control test exercises two shapes of multibyte tail. The first
-//! is the brief's illustrative suffixes (e.g. `"correct-horse\u{00e9}"`,
+//! is a set of illustrative suffixes (e.g. `"correct-horse\u{00e9}"`,
 //! `"p\u{00e4}ssw\u{00f6}rd\u{00fc}"`); they are non-ASCII and the fix
 //! must handle them. The second is a constructed trigger where the
 //! byte-length split lands inside the last multibyte character; with
@@ -32,7 +32,7 @@ fn a_password_ending_in_a_multibyte_character_does_not_panic_with_totp() {
 	let directory = directory_with_totp(&uuid::Uuid::now_v7().into_bytes());
 	let fixture = fixture_password().to_string();
 
-	// The brief's illustrative suffixes. The byte-length split happens to
+	// Illustrative suffixes. The byte-length split happens to
 	// land on a UTF-8 boundary here, so the old code never panicked on
 	// these exact strings, but they exercise the same non-ASCII path
 	// that the fix now closes, and must continue to return `None`
