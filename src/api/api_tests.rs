@@ -6,6 +6,7 @@ use tower::ServiceExt;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 // The bearer token used by every API test is generated fresh at startup. A literal
 // bound to a constant named TOKEN triggered CodeQL `rust/hard-coded-cryptographic-value`.
@@ -373,7 +374,10 @@ async fn send_enqueues_and_validates() {
 #[tokio::test]
 async fn rate_limit_triggers_after_repeated_failures() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let app = router(test_state(dir.path(), 0));
+	// The wall clock under a loaded parallel run is not the thing under test
+	// here; the limiter's window logic is covered by `state_limiter_tests.rs`.
+	// Stretch the window so the 21 calls cannot span it.
+	let app = router(test_state(dir.path(), 0).with_auth_window(Duration::from_secs(3600)));
 	for _ in 0..20 {
 		let (status, _) = request(&app, "GET", "/api/v1/status", Some("wrong")).await;
 		assert_eq!(status, StatusCode::UNAUTHORIZED);

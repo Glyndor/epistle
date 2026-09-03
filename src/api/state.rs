@@ -82,41 +82,57 @@ struct Inner {
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
+///
+/// The clock and the window length are passed in by the caller so the limiter
+/// does not read `Instant::now()` itself. That makes the limiter's window
+/// logic deterministic from the tests' point of view (no sleeping, no
+/// flake under a loaded parallel run) and lets production code share one
+/// `now` value across the read and the record in the same request.
 struct AuthLimiter {
 	failures: u32,
 	window_start: std::time::Instant,
+	window: std::time::Duration,
 }
 
 const AUTH_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 const AUTH_MAX_FAILURES: u32 = 20;
 
 impl AuthLimiter {
-	fn new() -> Self {
+	/// Build a limiter that will roll its window every `window` starting at
+	/// `now`. `now` is taken at the call site (typically `Instant::now()`),
+	/// not read inside the limiter.
+	fn new(window: std::time::Duration, now: std::time::Instant) -> Self {
 		AuthLimiter {
 			failures: 0,
-			window_start: std::time::Instant::now(),
+			window_start: now,
+			window,
 		}
 	}
 
-	fn is_limited(&mut self) -> bool {
-		if self.window_start.elapsed() >= AUTH_WINDOW {
+	/// Roll the window if `now` is at or past its end, then report whether
+	/// the failure count has reached the threshold.
+	fn is_limited(&mut self, now: std::time::Instant) -> bool {
+		if now.duration_since(self.window_start) >= self.window {
 			self.failures = 0;
-			self.window_start = std::time::Instant::now();
+			self.window_start = now;
 		}
 		self.failures >= AUTH_MAX_FAILURES
 	}
 
-	fn record_failure(&mut self) {
-		if self.window_start.elapsed() >= AUTH_WINDOW {
+	/// Roll the window if `now` is at or past its end, then record a new
+	/// failure against the current window.
+	fn record_failure(&mut self, now: std::time::Instant) {
+		if now.duration_since(self.window_start) >= self.window {
 			self.failures = 0;
-			self.window_start = std::time::Instant::now();
+			self.window_start = now;
 		}
 		self.failures = self.failures.saturating_add(1);
 	}
 
-	fn reset(&mut self) {
+	/// Clear the count and start a fresh window at `now`.
+	fn reset(&mut self, now: std::time::Instant) {
 		self.failures = 0;
-		self.window_start = std::time::Instant::now();
+		self.window_start = now;
 	}
 }
 
@@ -178,7 +194,10 @@ impl ApiState {
 				domains,
 				store,
 				spool,
-				auth_limiter: std::sync::Mutex::new(AuthLimiter::new()),
+				auth_limiter: std::sync::Mutex::new(AuthLimiter::new(
+					AUTH_WINDOW,
+					std::time::Instant::now(),
+				)),
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
@@ -354,6 +373,23 @@ impl ApiState {
 		self.inner
 			.quota_limit
 			.store(bytes, std::sync::atomic::Ordering::Relaxed);
+		self
+	}
+
+	/// Replace the auth-failure limiter with one built around a custom
+	/// window. Test-only: the router-level rate-limit test builds its state
+	/// with a long window so the wall clock under a loaded parallel run is
+	/// never the thing under test. The window logic itself is covered by
+	/// `state_limiter_tests.rs`. Must be called before the state is shared
+	/// (the other builders quietly no-op when the `Arc` is already taken;
+	/// this one panics, because a test-only builder that silently does
+	/// nothing defeats its own control).
+	#[cfg(test)]
+	pub(crate) fn with_auth_window(mut self, window: std::time::Duration) -> Self {
+		let inner = Arc::get_mut(&mut self.inner)
+			.expect("with_auth_window must be called before the state is shared");
+		inner.auth_limiter =
+			std::sync::Mutex::new(AuthLimiter::new(window, std::time::Instant::now()));
 		self
 	}
 
@@ -619,6 +655,10 @@ pub async fn require_bearer_token(
 	mut request: Request,
 	next: Next,
 ) -> Result<Response, ApiError> {
+	// Read `now` once and pass the same value to both the pre-check and the
+	// record/reset at the bottom of the request, so a single request can never
+	// roll the window between the read and the write.
+	let now = std::time::Instant::now();
 	// Reject before any token work when failure budget is exhausted.
 	{
 		let mut limiter = state
@@ -626,7 +666,7 @@ pub async fn require_bearer_token(
 			.auth_limiter
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
-		if limiter.is_limited() {
+		if limiter.is_limited(now) {
 			return Err(ApiError::rate_limited());
 		}
 	}
@@ -662,9 +702,9 @@ pub async fn require_bearer_token(
 			.lock()
 			.unwrap_or_else(|p| p.into_inner());
 		if authorized {
-			limiter.reset();
+			limiter.reset(now);
 		} else {
-			limiter.record_failure();
+			limiter.record_failure(now);
 		}
 	}
 
@@ -687,3 +727,7 @@ pub async fn require_bearer_token(
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "state_limiter_tests.rs"]
+mod limiter_tests;
