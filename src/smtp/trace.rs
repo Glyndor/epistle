@@ -125,9 +125,9 @@ pub(crate) fn format_auth_results(hostname: &str, methods: &[String]) -> String 
 /// 2024) when these headers are missing on authenticated submission, so
 /// the server stamps them only when the client forgot.
 ///
-/// `domain` is the local part's authoritative domain — the reverse-path
+/// `domain` is the local part's authoritative domain (the reverse-path
 /// domain for the SMTP submission path, the envelope `mailFrom` for JMAP
-/// `EmailSubmission/set`. The minted `Message-ID` reads
+/// `EmailSubmission/set`). The minted `Message-ID` reads
 /// `<uuidv7@domain>`, matching the shape `POST /api/v1/send` already emits.
 pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> Vec<u8> {
 	let header_end = header_block_end(data);

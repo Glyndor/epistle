@@ -103,7 +103,7 @@ fn submit_email(
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
-	// path — bounces and similar).
+	// path, bounces and similar).
 	let stamp_domain = mail_from
 		.rsplit_once('@')
 		.map(|(_, d)| d.to_ascii_lowercase())

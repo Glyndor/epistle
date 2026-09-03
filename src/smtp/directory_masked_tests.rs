@@ -124,14 +124,14 @@ fn owns_address_consults_masked_store() {
 
 /// A mask must win over sub-addressing of a real account. The masked
 /// address carries the bare local part `alice` (which would be a sub-
-/// addressing collision if `alice+news` were instead the mask — the
+/// addressing collision if `alice+news` were instead the mask: the
 /// `MaskedAddressStore` would slugify the `+` away, so the directory
 /// sees `<label-slug>.<8 chars>@domain`; a synthetic collision is built
 /// here by giving `alice@example.org` an explicit account and putting a
 /// mask on `alice+news@example.org`).
 ///
 /// Without this ordering, sub-addressing would strip `alice+news` to
-/// `alice@example.org` and deliver to `alice` — bypassing the mask owner's
+/// `alice@example.org` and deliver to `alice`, bypassing the mask owner's
 /// intent.
 #[test]
 fn a_mask_beats_subaddressing_of_a_real_account() {
@@ -184,7 +184,7 @@ fn a_mask_beats_the_catch_all() {
 /// `validate_domains` in `src/config/validate.rs`). This pins the refusal:
 /// a future refactor that loosens the validator must decide whether the
 /// alias key is rewritten, whether the target domain is rewritten, or
-/// whether the entry is silently dropped — and the test must then pin
+/// whether the entry is silently dropped, and the test must then pin
 /// which. As it stands, the rejection is the contract: the same name
 /// cannot be both a domain and an alias, so the question of "which one
 /// wins" never arises.
