@@ -202,6 +202,20 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// no-op, and the wire below carries an empty `Arc`.
 	let tenant_limits = Arc::new(crate::api::TenantLimits::from_config(&config.tenants));
 
+	// Per-account correspondent store: one `Arc` shared by every SMTP
+	// listener and the API state. The store is opened here (and not
+	// inside `CorrespondentStore::open`) so a single underlying
+	// filesystem tree backs every submission path; recording on one
+	// path is immediately visible to the cap check on another.
+	let correspondents = Arc::new(
+		crate::storage::CorrespondentStore::open(&config.data_dir)
+			.map_err(std::io::Error::other)?,
+	);
+	// `daily_new_recipients` is the per-account cap; `None` disables it
+	// (the pre-feature behaviour). The cap is the same value across
+	// every submission path: a single source of truth at startup.
+	let daily_new_recipients = config.new_recipients_per_day;
+
 	// Shared disk-space guard for `data_dir`. `MAIL FROM` rejects with
 	// `452` when the filesystem holding the spool cannot hold another
 	// message, so the remote retries instead of receiving `250` for a
@@ -362,7 +376,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())
 				.with_blob_backend(blob_backend)
-				.with_tenant_limits(Arc::clone(&tenant_limits));
+				.with_tenant_limits(Arc::clone(&tenant_limits))
+				.with_correspondents((*correspondents).clone())
+				.with_new_recipients_per_day(daily_new_recipients);
 				// Built-in OAuth authorization server, when a signing key is set.
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
 					state = state.with_authz(authz);
@@ -563,6 +579,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
 				}
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
+				// Per-account rolling 24h new-recipient cap (plan 4.10).
+				// The shared `Arc<CorrespondentStore>` is the one already
+				// opened above; the cap itself comes from the static
+				// config so it is the same number across every listener.
+				server = server.with_correspondents(Arc::clone(&correspondents));
+				if daily_new_recipients.is_some() {
+					server = server.with_daily_new_recipients(daily_new_recipients);
+				}
 				if let Some(verifier) = &oauth_verifier {
 					server = server.with_oauth(Arc::clone(verifier));
 				}

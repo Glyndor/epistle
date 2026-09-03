@@ -45,6 +45,7 @@ fn digest_name(value: &str) -> String {
 /// racy operation is `new_in_last_day`, which reads a stat per marker
 /// and tolerates a fresh write appearing between the directory walk
 /// and the per-file stat.
+#[derive(Debug, Clone)]
 pub struct CorrespondentStore {
 	dir: PathBuf,
 }
@@ -56,6 +57,32 @@ pub struct Recorded {
 	pub new: u32,
 	/// Addresses that already had a marker for this account.
 	pub known: u32,
+}
+
+/// The decision returned by [`CorrespondentStore::enforce_new_recipient_cap`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapOutcome {
+	/// No cap is configured (or the store is unset), so the message is
+	/// always allowed through. The caller records every recipient so a
+	/// later submission sees them as known.
+	Uncapped,
+	/// The message fits inside the cap. The caller records every
+	/// recipient so a later submission sees them as known.
+	Allowed {
+		/// Number of fresh markers the call would create right now.
+		new: u32,
+	},
+	/// The message would exceed the cap. The caller rejects without
+	/// recording (no marker is written), so a retry tomorrow starts
+	/// from the same baseline.
+	Limited {
+		/// Number of fresh recipients this message would have introduced.
+		new: u32,
+		/// Markers already in the 24h window before this message.
+		already: u32,
+		/// Configured cap.
+		limit: u32,
+	},
 }
 
 impl CorrespondentStore {
@@ -108,7 +135,11 @@ impl CorrespondentStore {
 			// the daily cap without being readable by `knows`. Create
 			// the file `O_EXCL` so a parallel `record` cannot lose the
 			// race and silently double-count.
-			match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+			match fs::OpenOptions::new()
+				.write(true)
+				.create_new(true)
+				.open(&path)
+			{
 				Ok(_) => recorded.new += 1,
 				Err(error) if error.kind() == ErrorKind::AlreadyExists => recorded.known += 1,
 				Err(error) => return Err(error),
@@ -150,6 +181,63 @@ impl CorrespondentStore {
 			}
 		}
 		Ok(count)
+	}
+
+	/// Count the recipients in `recipients` that the account has not
+	/// previously written to, against the rolling 24h cap on first-time
+	/// recipients. Pure read: no marker is created here; the caller
+	/// calls `record` only after the cap accepts the submission, so a
+	/// refused submission leaves the baseline untouched.
+	///
+	/// An empty `account` or empty recipient list is `Uncapped`; a
+	/// `None` `limit` is `Uncapped`; a missing account directory
+	/// contributes zero already-seen recipients.
+	///
+	/// `limit = 0` is the "no recipients allowed" degenerate cap:
+	/// any non-empty submission is `Limited`. Operators do not
+	/// configure this; the validator at config-load time is a
+	/// separate concern.
+	pub fn enforce_new_recipient_cap(
+		&self,
+		account: &str,
+		recipients: &[&str],
+		limit: Option<u32>,
+	) -> std::io::Result<CapOutcome> {
+		let Some(limit) = limit else {
+			return Ok(CapOutcome::Uncapped);
+		};
+		if account.is_empty() || recipients.is_empty() {
+			return Ok(CapOutcome::Uncapped);
+		}
+		let mut new = 0u32;
+		for address in recipients {
+			if !self.marker(account, address).exists() {
+				new += 1;
+			}
+		}
+		let already = self.new_in_last_day(account)?;
+		// `already` counts every marker in the last 24h, including
+		// the ones this submission would create. Subtract `new`
+		// (count of fresh ones in this message) so the check
+		// models `already_other + new <= limit`, not
+		// `already_total + new <= limit`. Without this, every
+		// submission against a near-cap account would refuse on
+		// the second message to the same set of recipients,
+		// even when those recipients are all already known.
+		let already_other = already.saturating_sub(new);
+		if new == 0 {
+			// Every recipient is already known: nothing in the
+			// window moves and the limit is moot.
+			return Ok(CapOutcome::Allowed { new: 0 });
+		}
+		if already_other.saturating_add(new) > limit {
+			return Ok(CapOutcome::Limited {
+				new,
+				already: already_other,
+				limit,
+			});
+		}
+		Ok(CapOutcome::Allowed { new })
 	}
 
 	/// Drop every per-account marker for `account`. Returns the number

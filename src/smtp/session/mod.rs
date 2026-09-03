@@ -77,6 +77,17 @@ pub struct Session {
 	/// The client's peer IP, set by the network layer; used to enforce an app
 	/// password's CIDR allowlist during authentication.
 	peer_ip: Option<std::net::IpAddr>,
+	/// Per-account correspondent store; consulted at end-of-DATA to
+	/// enforce the rolling 24h new-recipient cap (plan 4.10). `None`
+	/// disables the cap (the default) so tests that do not exercise it
+	/// keep the pre-feature behaviour bit-for-bit.
+	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
+	/// Cap on first-time recipients per account in any rolling 24h
+	/// window. `None` disables the cap. `correspondents` and this field
+	/// are independent: a configured cap without a store short-circuits
+	/// to "no cap" rather than failing closed, so a missing wiring in a
+	/// test harness never blocks submission.
+	daily_new_recipients: Option<u32>,
 	/// The authentication protocol this session's listener serves;
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
@@ -111,6 +122,8 @@ impl Session {
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
+			correspondents: None,
+			daily_new_recipients: None,
 			auth_protocol: crate::config::Protocol::Submission,
 			metrics: None,
 		}
@@ -210,10 +223,27 @@ impl Session {
 
 	/// Attach a shared disk-space guard for `data_dir`. When set, `MAIL FROM`
 	/// is rejected with `452` if the filesystem cannot hold another message,
-	/// so the remote retries instead of receiving a `250` for a message the
-	/// server cannot write to the spool.
+	/// so the remote retries instead of accepting a message that will
+	/// fail to land in the spool.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.policy = self.policy.with_disk_guard(guard);
+		self
+	}
+
+	/// Attach the per-account correspondent store used to enforce the
+	/// rolling 24h new-recipient cap. Required for that feature; absent
+	/// here disables the cap and the SMTP path keeps the pre-feature
+	/// behaviour.
+	pub fn with_correspondents(mut self, store: Arc<crate::storage::CorrespondentStore>) -> Self {
+		self.correspondents = Some(store);
+		self
+	}
+
+	/// Set the rolling 24h cap on first-time recipients per account.
+	/// `None` disables the cap; the per-minute submission rate limit is
+	/// unchanged either way.
+	pub fn with_daily_new_recipients(mut self, limit: Option<u32>) -> Self {
+		self.daily_new_recipients = limit;
 		self
 	}
 
@@ -529,6 +559,51 @@ impl Session {
 					"message exceeds maximum size",
 				)));
 			}
+			// Rolling 24h cap on first-time recipients (plan 4.10):
+			// computed at end-of-DATA because only there is the full
+			// recipient list in scope. Only authenticated sessions are
+			// tracked: an unauthenticated connection does not have an
+			// account to attribute the recipients to.
+			if let Some(account) = self.authenticated.as_deref()
+				&& let (Some(store), Some(limit)) =
+					(self.correspondents.as_deref(), self.daily_new_recipients)
+			{
+				let recipient_refs: Vec<&str> =
+					message.recipients.iter().map(String::as_str).collect();
+				match store.enforce_new_recipient_cap(account, &recipient_refs, Some(limit)) {
+					Ok(crate::storage::CapOutcome::Limited {
+						new,
+						already,
+						limit,
+					}) => {
+						if let Some(metrics) = &self.metrics {
+							metrics.send_limited_new_recipients();
+						}
+						crate::api::log_send_limited(
+							account,
+							self.peer_ip,
+							new.saturating_add(already),
+							limit,
+						);
+						return Some(Action::Continue(Reply::single(
+							450,
+							"4.7.1 too many new recipients today; retry tomorrow",
+						)));
+					}
+					Ok(
+						crate::storage::CapOutcome::Allowed { .. }
+						| crate::storage::CapOutcome::Uncapped,
+					) => {
+						// Record only after the cap accepted the
+						// submission: a refused message leaves the
+						// baseline untouched.
+						let _ = store.record(account, &recipient_refs);
+					}
+					Err(error) => {
+						tracing::warn!(%account, %error, "correspondent store error; accepting");
+					}
+				}
+			}
 			return Some(Action::Deliver(Reply::ok(), message));
 		}
 
@@ -561,6 +636,9 @@ mod tests_auth;
 #[cfg(test)]
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;
+#[cfg(test)]
+#[path = "../session_tests_newrecipients.rs"]
+mod tests_newrecipients;
 #[cfg(test)]
 #[path = "../session_tests_oauth.rs"]
 mod tests_oauth;

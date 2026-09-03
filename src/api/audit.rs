@@ -47,6 +47,12 @@ pub enum AuditEvent {
 	/// disabled, the password did not match, an app-password CIDR did not
 	/// admit the peer, or an LDAP bind failed.
 	LoginFailed,
+	/// A submission was refused because the account would exceed the
+	/// rolling 24h cap on first-time recipients
+	/// (`Config::new_recipients_per_day`). The fast-evolving exfiltration
+	/// signal: a compromised account that stays under the per-minute rate
+	/// limit but fans out to fresh addresses.
+	SendLimited,
 }
 
 impl AuditEvent {
@@ -62,6 +68,7 @@ impl AuditEvent {
 			AuditEvent::MaskedRemoved => "masked.removed",
 			AuditEvent::LoginSucceeded => "auth.login_succeeded",
 			AuditEvent::LoginFailed => "auth.login_failed",
+			AuditEvent::SendLimited => "send.new_recipients_limited",
 		}
 	}
 }
@@ -84,6 +91,31 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 		account = %account,
 		client_ip = %client_ip,
 		"privilege change"
+	);
+}
+
+/// Emit a structured audit event for a submission refused because the
+/// account would exceed the daily new-recipient cap. Carries the
+/// numbers (count of new recipients, configured limit) so an operator
+/// chasing an exfiltration signal can read them straight off the log
+/// line without correlating with the metric counter.
+///
+/// `client_ip` follows the same `unknown` convention as
+/// [`log_privilege_change`]. This is the only emitter in this module
+/// that takes numeric fields, because it is the only one whose event
+/// is data-shaped rather than action-shaped.
+pub fn log_send_limited(account: &str, client_ip: Option<IpAddr>, count: u32, limit: u32) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	tracing::info!(
+		target: "epistle::api::audit",
+		event = AuditEvent::SendLimited.as_str(),
+		account = %account,
+		client_ip = %client_ip,
+		count = count,
+		limit = limit,
+		"submission limited by daily new-recipient cap"
 	);
 }
 

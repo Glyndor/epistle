@@ -104,6 +104,14 @@ pub struct Server {
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// Per-account correspondent store, consulted at end-of-DATA to
+	/// enforce the rolling 24h new-recipient cap. `None` disables the
+	/// cap (the default) so the pre-feature behaviour survives in
+	/// tests and in production builds that never enable the cap.
+	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
+	/// Rolling 24h cap on first-time recipients per account. Pairs with
+	/// `correspondents`; either absent disables the cap.
+	daily_new_recipients: Option<u32>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 	/// The authentication protocol this listener serves. Sessions tag every
@@ -144,6 +152,8 @@ impl Server {
 			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
+			correspondents: None,
+			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			auth_protocol: crate::config::Protocol::Submission,
 		}
@@ -210,6 +220,24 @@ impl Server {
 	/// instead of receiving `250` for a payload the spool cannot write.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.disk_guard = Some(guard);
+		self
+	}
+
+	/// Attach the per-account correspondent store. The end-of-DATA
+	/// check consults it for the rolling 24h new-recipient cap. The
+	/// store is shared across listeners by way of `Arc`, so a single
+	/// `CorrespondentStore::open(data_dir)` is enough.
+	pub fn with_correspondents(mut self, store: Arc<crate::storage::CorrespondentStore>) -> Self {
+		self.correspondents = Some(store);
+		self
+	}
+
+	/// Set the rolling 24h cap on first-time recipients per account
+	/// (`Config::new_recipients_per_day`). `None` disables the cap.
+	/// The cap only fires when a correspondent store has also been
+	/// attached; either field alone is a no-op.
+	pub fn with_daily_new_recipients(mut self, limit: Option<u32>) -> Self {
+		self.daily_new_recipients = limit;
 		self
 	}
 
@@ -360,6 +388,13 @@ impl Server {
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}
+		if let Some(store) = &self.correspondents {
+			session = session.with_correspondents(Arc::clone(store));
+		}
+		if self.daily_new_recipients.is_some() {
+			session = session.with_daily_new_recipients(self.daily_new_recipients);
+		}
+		session = session.with_metrics(Arc::clone(&self.metrics));
 		session
 	}
 
