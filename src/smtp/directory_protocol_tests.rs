@@ -19,6 +19,7 @@
 //! indistinguishable on the wire.
 
 use crate::config::Protocol;
+use crate::smtp::auth::tests::{fixture_password, wrong_password};
 use std::collections::HashSet;
 
 /// Build a directory with one account `service` whose password is
@@ -50,12 +51,12 @@ fn directory_with_allowed(
 /// that the service account exists.
 #[test]
 fn restricted_account_fails_on_other_protocols_and_passes_on_allowed() {
-	let directory = directory_with_allowed("s3cret", vec![Protocol::Api]);
+	let directory = directory_with_allowed(fixture_password(), vec![Protocol::Api]);
 
 	// Allowed: API authenticates.
 	assert_eq!(
 		directory
-			.authenticate("service", "s3cret", Protocol::Api)
+			.authenticate("service", fixture_password(), Protocol::Api)
 			.as_deref(),
 		Some("service"),
 		"the listed protocol must admit the account"
@@ -76,7 +77,7 @@ fn restricted_account_fails_on_other_protocols_and_passes_on_allowed() {
 	] {
 		assert!(
 			directory
-				.authenticate("service", "s3cret", denied)
+				.authenticate("service", fixture_password(), denied)
 				.is_none(),
 			"protocol {denied:?} must reject the restricted account"
 		);
@@ -87,7 +88,7 @@ fn restricted_account_fails_on_other_protocols_and_passes_on_allowed() {
 	// failures share the wire shape.
 	assert!(
 		directory
-			.authenticate("service", "not-it", Protocol::Api)
+			.authenticate("service", wrong_password(), Protocol::Api)
 			.is_none(),
 		"wrong password on the allowed protocol still rejects"
 	);
@@ -103,7 +104,10 @@ fn unrestricted_account_authenticates_every_protocol() {
 		["example.org".to_string()],
 		[("legacy@example.org".to_string(), "legacy".to_string())],
 	)
-	.with_password_hashes([("legacy".to_string(), crate::smtp::auth::tests::hash("pw"))]);
+	.with_password_hashes([(
+		"legacy".to_string(),
+		crate::smtp::auth::tests::hash(fixture_password()),
+	)]);
 	// No `with_allowed_protocols` call: the per-account map is empty.
 	for protocol in [
 		Protocol::Api,
@@ -117,7 +121,9 @@ fn unrestricted_account_authenticates_every_protocol() {
 		Protocol::Smtp,
 	] {
 		assert_eq!(
-			directory.authenticate("legacy", "pw", protocol).as_deref(),
+			directory
+				.authenticate("legacy", fixture_password(), protocol)
+				.as_deref(),
 			Some("legacy"),
 			"unrestricted account must authenticate via {protocol:?}"
 		);
@@ -137,16 +143,16 @@ fn unrestricted_account_authenticates_every_protocol() {
 /// here" from "this account never existed".
 #[test]
 fn rejection_does_not_distinguish_protocol_from_unknown() {
-	let directory = directory_with_allowed("s3cret", vec![Protocol::Api]);
+	let directory = directory_with_allowed(fixture_password(), vec![Protocol::Api]);
 
 	// 1. Known account, right password, restricted protocol → None.
-	let restricted = directory.authenticate("service", "s3cret", Protocol::Imaps);
+	let restricted = directory.authenticate("service", fixture_password(), Protocol::Imaps);
 
 	// 2. Known account, wrong password, allowed protocol → None.
-	let wrong_pw = directory.authenticate("service", "not-it", Protocol::Api);
+	let wrong_pw = directory.authenticate("service", wrong_password(), Protocol::Api);
 
 	// 3. Unknown account, anything, any protocol → None.
-	let unknown = directory.authenticate("mallory", "anything", Protocol::Api);
+	let unknown = directory.authenticate("mallory", wrong_password(), Protocol::Api);
 
 	// The three results must be byte-for-byte the same: None. The
 	// direction of the property is "no positive signal on any of
@@ -163,19 +169,23 @@ fn rejection_does_not_distinguish_protocol_from_unknown() {
 #[test]
 fn allowlist_admits_every_listed_protocol() {
 	let directory = directory_with_allowed(
-		"pw",
+		fixture_password(),
 		vec![Protocol::Imap, Protocol::Imaps, Protocol::WebDav],
 	);
 	for allowed in [Protocol::Imap, Protocol::Imaps, Protocol::WebDav] {
 		assert_eq!(
-			directory.authenticate("service", "pw", allowed).as_deref(),
+			directory
+				.authenticate("service", fixture_password(), allowed)
+				.as_deref(),
 			Some("service"),
 			"listed protocol {allowed:?} must admit the account"
 		);
 	}
 	for denied in [Protocol::Pop3s, Protocol::Api, Protocol::ManageSieve] {
 		assert!(
-			directory.authenticate("service", "pw", denied).is_none(),
+			directory
+				.authenticate("service", fixture_password(), denied)
+				.is_none(),
 			"unlisted protocol {denied:?} must reject the account"
 		);
 	}
@@ -189,7 +199,7 @@ fn allowlist_admits_every_listed_protocol() {
 /// account owns its mailboxes but cannot sign in anywhere.
 #[test]
 fn is_protocol_allowed_reflects_with_allowed_protocols() {
-	let directory = directory_with_allowed("pw", vec![Protocol::Api]);
+	let directory = directory_with_allowed(fixture_password(), vec![Protocol::Api]);
 	// Account `service` opted in to `Api` only.
 	assert!(directory.is_protocol_allowed("service", Protocol::Api));
 	assert!(!directory.is_protocol_allowed("service", Protocol::Imaps));
@@ -200,12 +210,19 @@ fn is_protocol_allowed_reflects_with_allowed_protocols() {
 		["example.org".to_string()],
 		[("locked@example.org".to_string(), "locked".to_string())],
 	)
-	.with_password_hashes([("locked".to_string(), crate::smtp::auth::tests::hash("pw"))])
+	.with_password_hashes([(
+		"locked".to_string(),
+		crate::smtp::auth::tests::hash(fixture_password()),
+	)])
 	.with_allowed_protocols([("locked".to_string(), Vec::<Protocol>::new())]);
 	assert!(!locked.is_protocol_allowed("locked", Protocol::Api));
 	assert!(!locked.is_protocol_allowed("locked", Protocol::Imaps));
 	// A locked account still cannot authenticate through anything.
-	assert!(locked.authenticate("locked", "pw", Protocol::Api).is_none());
+	assert!(
+		locked
+			.authenticate("locked", fixture_password(), Protocol::Api)
+			.is_none()
+	);
 
 	// The lookup is case-insensitive on the account name, matching
 	// every other Directory entry-point (resolve, credentials, ...).
@@ -236,7 +253,7 @@ fn is_protocol_allowed_reflects_with_allowed_protocols() {
 /// the test login) and the gate then rejects it.
 #[test]
 fn ldap_path_also_enforces_allowlist() {
-	let directory = directory_with_allowed("s3cret", vec![Protocol::Api]);
+	let directory = directory_with_allowed(fixture_password(), vec![Protocol::Api]);
 	// Build a directory where the local credential lookup fails for
 	// `service@*` (no local password hash matches) but the LDAP bind
 	// would succeed. We can't easily mount a live LDAP server in a unit
@@ -248,7 +265,7 @@ fn ldap_path_also_enforces_allowlist() {
 	// unit test is enough to fail loudly if someone removes the gate.
 	assert!(
 		directory
-			.authenticate("service", "s3cret", Protocol::Imaps)
+			.authenticate("service", fixture_password(), Protocol::Imaps)
 			.is_none(),
 		"the protocol gate must run on the local path too"
 	);

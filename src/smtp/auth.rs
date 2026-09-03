@@ -116,6 +116,17 @@ pub(crate) mod tests {
 		PASSWORD.as_str()
 	}
 
+	/// A second password that is distinct from [`fixture_password`], for the
+	/// tests that need two valid passwords in the same scope whose difference
+	/// matters (e.g. a static account and a SQL account with the same name
+	/// and different hashes, where the test asserts the static wins). The two
+	/// `LazyLock`s mint once per binary, so the two values are stable for
+	/// the run and cannot collide by accident.
+	pub(crate) fn second_password() -> &'static str {
+		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
+		PASSWORD.as_str()
+	}
+
 	fn encode(authzid: &str, authcid: &str, password: &str) -> String {
 		BASE64.encode(format!("{authzid}\0{authcid}\0{password}"))
 	}

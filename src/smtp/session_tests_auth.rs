@@ -99,9 +99,20 @@ fn scram_sha256_authenticates() {
 	use ring::{digest, hmac, pbkdf2};
 	use std::num::NonZeroU32;
 
-	let salt = b"saltsalt";
+	// Fresh CSPRNG salt; the literal `b"saltsalt"` is what the previous
+	// test carried and is what `rust/hard-coded-cryptographic-value`
+	// flagged: it is a fixed string reaching PBKDF2's `salt` parameter
+	// inside `ScramCredentials::derive`. Mintage happens once per call so
+	// the server-side derivation and the client-side derivation in this
+	// test agree on the same bytes.
+	let salt: [u8; 16] = {
+		use ring::rand::{SecureRandom, SystemRandom};
+		let mut bytes = [0u8; 16];
+		SystemRandom::new().fill(&mut bytes).expect("csprng");
+		bytes
+	};
 	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), salt, 4096));
+		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), &salt, 4096));
 	let directory = Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -136,7 +147,7 @@ fn scram_sha256_authenticates() {
 	pbkdf2::derive(
 		pbkdf2::PBKDF2_HMAC_SHA256,
 		NonZeroU32::new(4096).unwrap(),
-		salt,
+		&salt,
 		fixture_password().as_bytes(),
 		&mut salted,
 	);
@@ -165,11 +176,19 @@ fn scram_sha256_wrong_password_fails() {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 
-	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
-		fixture_password(),
-		b"saltsalt",
-		4096,
-	));
+	// Fresh CSPRNG salt; the previous test carried the literal `b"saltsalt"`
+	// and `rust/hard-coded-cryptographic-value` flagged it on its way to
+	// PBKDF2's `salt` parameter. Same shape as the passing test above:
+	// minted once per call so this test stands alone, not shared with the
+	// successful SCRAM exchange in `scram_sha256_authenticates`.
+	let salt: [u8; 16] = {
+		use ring::rand::{SecureRandom, SystemRandom};
+		let mut bytes = [0u8; 16];
+		SystemRandom::new().fill(&mut bytes).expect("csprng");
+		bytes
+	};
+	let stored =
+		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), &salt, 4096));
 	let directory = Arc::new(
 		Directory::new(
 			["example.org".to_string()],

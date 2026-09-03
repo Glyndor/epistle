@@ -15,6 +15,7 @@
 //! invariant stays honest: a disabled alias that shadows another
 //! resolution must not steal that resolution.
 
+use super::test_support::variant_name;
 use super::{AliasSpec, Directory, Resolution};
 use crate::directory_store::aliases::AliasStore;
 use crate::smtp::address::Address;
@@ -62,7 +63,7 @@ fn enabled_alias_resolves_to_members() {
 			assert!(members.contains(&"alice".to_string()));
 			assert!(members.contains(&"bob".to_string()));
 		}
-		other => panic!("expected alias, got {other:?}"),
+		other => panic!("expected alias, got {}", variant_name(&other)),
 	}
 }
 
