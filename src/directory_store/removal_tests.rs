@@ -295,7 +295,7 @@ fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() {
 		let result = remove_account(&store, &spool, dir.path(), bad, QueuePolicy::Drain);
 		assert!(
 			matches!(&result, Err(crate::directory_store::StoreError::Invalid(_))),
-			"{bad} should be rejected as invalid, got: {result:?}"
+			"{bad} should be rejected as invalid"
 		);
 		let after = sentinel.exists();
 		// The path does not exist before and must not exist after; the
