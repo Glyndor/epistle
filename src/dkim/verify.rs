@@ -111,18 +111,43 @@ async fn verify_one(
 		}
 	}
 
-	// Body hash first: cheap rejection without DNS.
-	let limited = match signature.body_length {
-		Some(length) if length <= message.body.len() => &message.body[..length],
-		Some(_) => {
+	// Body hash first: cheap rejection without DNS. The `l=` tag restricts
+	// how many canonicalised body bytes were signed. RFC 6376 §3.5 defines
+	// `l=` as "the number of octets in the body of the email after
+	// canonicalization included in the cryptographic hash", so a conforming
+	// signer sets `l=` to the length of the canonical body, not the raw body
+	// as received. Canonicalisation can shrink the body (relaxed collapses
+	// runs of WSP, simple strips trailing empty lines, both ensure a single
+	// trailing CRLF), so a raw body whose canonical form is shorter is
+	// perfectly legal and `l=` then sits below the raw length. Comparing
+	// against the raw length would refuse that legitimate mail.
+	//
+	// Compute the canonical body over the whole message first, then check
+	// `l=` against its length:
+	//
+	//   - `l=` larger than the canonical length  -> PermError (the tag
+	//     claims more bytes were signed than the body has).
+	//   - `l=` smaller than the canonical length  -> Fail (content after
+	//     the signed region, the append attack of §6.1.1; we refuse
+	//     outright, never silently truncate to `l=`).
+	//   - `l=` equal, or `l=` absent             -> hash the canonical
+	//     body as today.
+	let canonical_body = canon::body(signature.body_canon, message.body);
+	match signature.body_length {
+		Some(length) if length > canonical_body.len() => {
 			return DkimResult {
 				outcome: DkimOutcome::PermError,
 				domain,
 			};
 		}
-		None => message.body,
-	};
-	let canonical_body = canon::body(signature.body_canon, limited);
+		Some(length) if length < canonical_body.len() => {
+			return DkimResult {
+				outcome: DkimOutcome::Fail,
+				domain,
+			};
+		}
+		Some(_) | None => {}
+	}
 	let body_hash = ring::digest::digest(&ring::digest::SHA256, &canonical_body);
 	if body_hash.as_ref() != signature.body_hash.as_slice() {
 		return DkimResult {
