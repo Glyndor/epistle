@@ -87,6 +87,35 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 	);
 }
 
+/// Emit the per-record counts an account-removal call returned. Each
+/// tally is a separate structured field on the same `epistle::api::audit`
+/// event with `event = account.removed`, so an operator can filter on the
+/// `mailbox_files`, `masked_addresses`, `app_passwords`,
+/// `suppressed_addresses`, `queued_discarded` and `queued_left` fields
+/// directly: no second log line to correlate.
+pub fn log_account_removal(
+	account: &str,
+	client_ip: Option<IpAddr>,
+	counts: &crate::directory_store::Removed,
+) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	tracing::info!(
+		target: "epistle::api::audit",
+		event = AuditEvent::AccountRemoved.as_str(),
+		account = %account,
+		client_ip = %client_ip,
+		mailbox_files = counts.mailbox_files,
+		masked_addresses = counts.masked_addresses,
+		app_passwords = counts.app_passwords,
+		suppressed_addresses = counts.suppressed_addresses,
+		queued_discarded = counts.queued_messages_discarded,
+		queued_left = counts.queued_messages_left,
+		"account removed with footprint cleared"
+	);
+}
+
 /// Emit a structured audit event for a password-based authentication attempt
 /// (PLAIN / LOGIN / IMAP LOGIN / WebDAV Basic / ManageSieve PLAIN / API
 /// credential-verification). `login` is whatever the client presented as
