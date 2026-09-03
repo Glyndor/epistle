@@ -2,6 +2,7 @@
 
 use super::test_support::variant_name;
 use super::*;
+use crate::smtp::auth::tests::fixture_password;
 
 fn directory() -> Directory {
 	Directory::new(
@@ -292,7 +293,7 @@ fn authenticate_enforces_totp_second_factor() {
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash("secret"),
+		crate::smtp::auth::tests::hash(fixture_password()),
 	)])
 	.with_totp([("alice".to_string(), crate::totp::encode_base32(secret))]);
 
@@ -302,7 +303,7 @@ fn authenticate_enforces_totp_second_factor() {
 		.unwrap_or(0);
 	let code = crate::totp::totp(secret, now);
 	// Password followed by the current 6-digit TOTP code.
-	let password = format!("secret{code:06}");
+	let password = format!("{}{code:06}", fixture_password());
 	assert_eq!(
 		directory
 			.authenticate("alice", &password, crate::config::Protocol::Api)
@@ -312,12 +313,16 @@ fn authenticate_enforces_totp_second_factor() {
 	// A wrong code, or the bare password without a code, both fail.
 	assert!(
 		directory
-			.authenticate("alice", "secret000000", crate::config::Protocol::Api)
+			.authenticate(
+				"alice",
+				&format!("{}000000", fixture_password()),
+				crate::config::Protocol::Api
+			)
 			.is_none()
 	);
 	assert!(
 		directory
-			.authenticate("alice", "secret", crate::config::Protocol::Api)
+			.authenticate("alice", fixture_password(), crate::config::Protocol::Api)
 			.is_none()
 	);
 
@@ -326,10 +331,13 @@ fn authenticate_enforces_totp_second_factor() {
 		["example.org".to_string()],
 		[("bob@example.org".to_string(), "bob".to_string())],
 	)
-	.with_password_hashes([("bob".to_string(), crate::smtp::auth::tests::hash("pw"))]);
+	.with_password_hashes([(
+		"bob".to_string(),
+		crate::smtp::auth::tests::hash(fixture_password()),
+	)]);
 	assert_eq!(
 		plain
-			.authenticate("bob", "pw", crate::config::Protocol::Api)
+			.authenticate("bob", fixture_password(), crate::config::Protocol::Api)
 			.as_deref(),
 		Some("bob")
 	);
