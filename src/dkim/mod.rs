@@ -4,11 +4,13 @@ pub(crate) mod canon;
 pub mod rotate;
 mod sign;
 mod signature;
+mod spki;
 mod verify;
 
 pub use rotate::{ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator};
 pub(crate) use sign::load_ed25519_key;
 pub use sign::{Signer, SignerError, generate_key};
+pub(crate) use spki::spki_for_rsa;
 pub use verify::{DkimOutcome, DkimResult, verify_message};
 
 // Shared with the ARC implementation (RFC 8617 reuses DKIM's algorithm,
