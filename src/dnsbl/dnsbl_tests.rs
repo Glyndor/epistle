@@ -140,3 +140,25 @@ async fn an_answer_outside_127_8_is_ignored() {
 		DnsblOutcome::NotListed
 	);
 }
+
+#[tokio::test]
+async fn sender_domain_listed_in_a_domain_zone() {
+	let dns = ScriptedDns::with("sender.example.bl.example");
+	let dnsbl = Dnsbl::default().with_domain_zones(["bl.example".to_string()]);
+	assert_eq!(
+		dnsbl.check_domain("sender.example", &dns).await,
+		DnsblOutcome::Listed {
+			zone: "bl.example".to_string()
+		}
+	);
+}
+
+#[tokio::test]
+async fn domain_zones_disabled_never_lists() {
+	let dns = ScriptedDns::with("sender.example.bl.example");
+	let dnsbl = Dnsbl::new(["bl.example".to_string()]); // IP only.
+	assert_eq!(
+		dnsbl.check_domain("sender.example", &dns).await,
+		DnsblOutcome::NotListed
+	);
+}

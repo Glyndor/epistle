@@ -1,24 +1,24 @@
 //! DNS blocklist (DNSBL) lookups for inbound connection screening.
 //!
-//! A DNSBL publishes listed addresses as A records under a zone: the client
-//! IP is reversed and prefixed to the zone, and any returned address means
-//! the IP is listed. Lookups go through the shared [`DnsLookup`] trait so the
-//! logic is testable without a network.
+//! A DNSBL publishes listed addresses as A records under a zone: the target
+//! identifier (an IP, an envelope-sender domain, or a URL host) is prefixed to
+//! the zone and any returned address inside the response range means the
+//! identifier is listed. Lookups go through the shared [`DnsLookup`] trait so
+//! the logic is testable without a network.
 
 use std::net::IpAddr;
 
 use crate::spf::{DnsFailure, DnsLookup};
 
-/// The result of checking a client IP against the configured blocklists.
+/// The result of checking an identifier against the configured blocklists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnsblOutcome {
-	/// The IP is not listed on any configured zone.
+	/// The identifier is not listed on any configured zone.
 	NotListed,
-	/// The IP is listed on `zone` (a spam signal, not an automatic reject).
-	/// Carries the zone that listed the IP, so callers can log which blocklist
-	/// matched.
+	/// The identifier is listed on `zone`. Carries the zone that matched so
+	/// callers can log which blocklist fired.
 	Listed {
-		/// The DNSBL zone that returned a listing A record for the IP.
+		/// The DNSBL zone that returned a listing A record.
 		zone: String,
 	},
 	/// Every queried zone either returned an error code (Spamhaus uses
@@ -29,34 +29,103 @@ pub enum DnsblOutcome {
 }
 
 /// A set of DNSBL zones to screen connecting clients against.
+///
+/// Three independent zone lists share one checker, distinguished by which
+/// identifier they screen. Each list is consulted only when non-empty, so
+/// operators can enable any subset.
 #[derive(Debug, Clone, Default)]
 pub struct Dnsbl {
-	zones: Vec<String>,
+	ip_zones: Vec<String>,
+	domain_zones: Vec<String>,
+	url_zones: Vec<String>,
 }
 
 impl Dnsbl {
-	/// Build a blocklist checker for the given zones (e.g. `zen.example`).
+	/// Build a blocklist checker that screens only client IPs against `zones`
+	/// (e.g. `zen.spamhaus.org`). Use [`Self::with_domain_zones`] and
+	/// [`Self::with_url_zones`] to add RHSBL and URIBL lists.
 	pub fn new(zones: impl IntoIterator<Item = String>) -> Self {
 		Dnsbl {
-			zones: zones.into_iter().map(|z| z.to_ascii_lowercase()).collect(),
+			ip_zones: zones.into_iter().map(|z| z.to_ascii_lowercase()).collect(),
+			domain_zones: Vec::new(),
+			url_zones: Vec::new(),
 		}
 	}
 
-	/// Whether any zones are configured.
-	pub fn is_empty(&self) -> bool {
-		self.zones.is_empty()
+	/// Add right-hand-side (RHSBL) zones that screen the envelope sender's
+	/// domain (RFC 5782 §2.3). The returned builder keeps the IP zones
+	/// configured on `self`.
+	pub fn with_domain_zones(mut self, zones: impl IntoIterator<Item = String>) -> Self {
+		self.domain_zones = zones.into_iter().map(|z| z.to_ascii_lowercase()).collect();
+		self
 	}
 
-	/// Screen `ip` against every zone, returning on the first listing. When no
-	/// zone lists the IP but at least one errored, the result is `Unavailable`.
+	/// Add URI (URIBL) zones that screen the hosts of every URL found in the
+	/// body (RFC 5782 §2.3). The returned builder keeps the IP and domain
+	/// zones configured on `self`.
+	pub fn with_url_zones(mut self, zones: impl IntoIterator<Item = String>) -> Self {
+		self.url_zones = zones.into_iter().map(|z| z.to_ascii_lowercase()).collect();
+		self
+	}
+
+	/// Whether any of the three zone lists is non-empty.
+	pub fn is_empty(&self) -> bool {
+		self.ip_zones.is_empty() && self.domain_zones.is_empty() && self.url_zones.is_empty()
+	}
+
+	/// Whether any zone is configured that screens an IP. Used by the SMTP
+	/// path to gate the existing IP lookup.
+	pub fn has_ip_zones(&self) -> bool {
+		!self.ip_zones.is_empty()
+	}
+
+	/// Whether any zone is configured that screens an envelope-sender domain.
+	pub fn has_domain_zones(&self) -> bool {
+		!self.domain_zones.is_empty()
+	}
+
+	/// Whether any zone is configured that screens URL hosts in the body.
+	pub fn has_url_zones(&self) -> bool {
+		!self.url_zones.is_empty()
+	}
+
+	/// Screen `ip` against every IP zone, returning on the first listing. When
+	/// no zone lists the IP but at least one errored, the result is
+	/// `Unavailable`.
 	pub async fn check(&self, ip: IpAddr, dns: &dyn DnsLookup) -> DnsblOutcome {
-		if self.zones.is_empty() {
+		if self.ip_zones.is_empty() {
 			return DnsblOutcome::NotListed;
 		}
 		let reversed = reverse_ip(ip);
 		let mut any_error = false;
-		for zone in &self.zones {
+		for zone in &self.ip_zones {
 			let query = format!("{reversed}.{zone}");
+			match dns.addresses(&query).await {
+				Ok(addrs) => match classify_answer(&addrs) {
+					AnswerClass::Listed => return DnsblOutcome::Listed { zone: zone.clone() },
+					AnswerClass::Error => any_error = true,
+					AnswerClass::Ignored => {}
+				},
+				Err(DnsFailure::Temporary) => any_error = true,
+			}
+		}
+		if any_error {
+			DnsblOutcome::Unavailable
+		} else {
+			DnsblOutcome::NotListed
+		}
+	}
+
+	/// Screen `domain` against every RHSBL zone, returning on the first
+	/// listing. When no zone lists the domain but at least one errored, the
+	/// result is `Unavailable`.
+	pub async fn check_domain(&self, domain: &str, dns: &dyn DnsLookup) -> DnsblOutcome {
+		if self.domain_zones.is_empty() {
+			return DnsblOutcome::NotListed;
+		}
+		let mut any_error = false;
+		for zone in &self.domain_zones {
+			let query = format!("{domain}.{zone}");
 			match dns.addresses(&query).await {
 				Ok(addrs) => match classify_answer(&addrs) {
 					AnswerClass::Listed => return DnsblOutcome::Listed { zone: zone.clone() },
