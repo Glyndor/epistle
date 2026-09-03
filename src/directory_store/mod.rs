@@ -21,8 +21,12 @@ pub mod aliases;
 pub mod masked;
 mod names;
 use names::{validate_name, with_safe_names};
+mod app_passwords_api;
 mod masked_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
+
+pub mod removal;
+pub use removal::{QueuePolicy, Removed, remove_account};
 
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
@@ -170,9 +174,11 @@ pub struct AccountStore {
 	domain_submission_limits: std::collections::HashMap<String, u32>,
 	/// Multi-target aliases from the static configuration.
 	aliases: Vec<crate::config::Alias>,
-	/// App passwords (secondary mail credentials) keyed by account, loaded from
-	/// `app_passwords.toml` at open time.
-	app_passwords: Vec<(String, AppPassword)>,
+	/// App passwords (secondary mail credentials) keyed by account; the
+	/// in-memory mirror of `app_passwords.toml`. Mutators keep disk and
+	/// memory in sync, so a removal takes effect on the next rebuild
+	/// without a server restart.
+	app_passwords: RwLock<Vec<(String, AppPassword)>>,
 	dynamic: RwLock<Vec<DynamicAccount>>,
 	/// Accounts loaded from the SQL directory backend, refreshed periodically.
 	/// Static config and dynamic accounts take precedence over these on a name
@@ -218,7 +224,7 @@ impl AccountStore {
 		};
 
 		// App passwords are an optional sidecar; a missing file is an empty set.
-		let app_passwords = AppPasswordStore::open(data_dir)?.entries().collect();
+		let app_passwords = RwLock::new(AppPasswordStore::open(data_dir)?.entries().collect());
 
 		let masked = MaskedAddressStore::open(data_dir)?;
 
@@ -599,7 +605,13 @@ impl AccountStore {
 			.with_domain_submission_limits(self.domain_submission_limits.clone())
 			.with_forwards(forwards)
 			.with_aliases(aliases)
-			.with_app_passwords(self.app_passwords.iter().cloned())
+			.with_app_passwords(
+				self.app_passwords
+					.read()
+					.expect("app-passwords lock")
+					.iter()
+					.cloned(),
+			)
 			.with_ldap(self.ldap_auth.clone())
 			.with_masked(masked)
 			.with_allowed_protocols(allowed_protocols);

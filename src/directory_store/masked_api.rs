@@ -69,6 +69,24 @@ impl AccountStore {
 		Ok(())
 	}
 
+	/// Remove every masked address owned by `account`. Returns the number
+	/// removed. Used by
+	/// [`crate::directory_store::removal::remove_account`] to drop an
+	/// account's whole footprint without enumerating addresses one at a
+	/// time; the directory is rebuilt so the next resolution cycle stops
+	/// seeing the masks immediately.
+	pub fn remove_all_masked(&self, account: &str) -> Result<u32, StoreError> {
+		let removed = self
+			.masked
+			.write()
+			.expect("masked lock")
+			.remove_all_for_account(account)?;
+		if removed > 0 {
+			self.handle.replace(self.build_directory());
+		}
+		Ok(removed)
+	}
+
 	/// Best-effort touch of `last_used_at` on a successful delivery. Errors
 	/// are logged and swallowed; the SMTP path must not stall on the
 	/// metadata update.

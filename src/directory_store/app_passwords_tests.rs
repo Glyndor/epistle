@@ -115,3 +115,34 @@ fn account_lookup_is_case_insensitive() {
 	assert_eq!(store.for_account("alice").len(), 1);
 	assert_eq!(store.for_account("ALICE").len(), 1);
 }
+
+/// Bulk removal must drop every app password for `account` and leave
+/// the bucket for a different account intact; a missing account returns
+/// `Ok(0)` without rewriting the file.
+#[test]
+fn remove_account_drops_only_the_targets() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	store
+		.add("alice", app_password("phone", "secret"))
+		.expect("add");
+	store
+		.add("alice", app_password("laptop", "other"))
+		.expect("add");
+	store
+		.add("bob", app_password("server", "another"))
+		.expect("add");
+
+	let removed = store.remove_account("alice").expect("bulk remove");
+	assert_eq!(removed, 2);
+	assert_eq!(store.for_account("alice").len(), 0);
+	assert_eq!(store.for_account("bob").len(), 1);
+
+	// Persistence after bulk remove.
+	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");
+	assert_eq!(reopened.for_account("alice").len(), 0);
+	assert_eq!(reopened.for_account("bob").len(), 1);
+
+	// Idempotent: a missing account returns zero without rewriting the file.
+	assert_eq!(store.remove_account("ghost").expect("ghost"), 0);
+}

@@ -92,6 +92,43 @@ impl SuppressionList {
 		remove_marker(&self.account_dir(account).join(digest_name(address)))
 	}
 
+	/// Drop every per-account suppression entry for `account`
+	/// (case-insensitive). Returns the number removed. Idempotent: a
+	/// missing account directory returns `Ok(0)`. The directory itself is
+	/// also removed when it becomes empty, so a freshly re-created account
+	/// never inherits a previous owner's suppression file under that path.
+	/// Used by [`crate::directory_store::removal::remove_account`] to clear
+	/// the account's whole footprint in one pass.
+	pub fn remove_all_for(&self, account: &str) -> std::io::Result<u32> {
+		let dir = self.account_dir(account);
+		let entries = match std::fs::read_dir(&dir) {
+			Ok(entries) => entries,
+			Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+			Err(error) => return Err(error),
+		};
+		let mut removed = 0u32;
+		for entry in entries.flatten() {
+			// Skip the directory's own non-address bookkeeping if any is
+			// ever written; today read_addresses only returns true address
+			// markers, but `remove_dir_all` on the account_dir already
+			// handles the empty case. We only count address markers here.
+			match std::fs::remove_file(entry.path()) {
+				Ok(()) => removed += 1,
+				Err(error) if error.kind() == ErrorKind::NotFound => {}
+				Err(error) => return Err(error),
+			}
+		}
+		// Best effort: drop the empty parent dir so a recreated account
+		// starts clean. An `Err(NotFound)` is fine (already gone); other
+		// errors surface so the operator knows.
+		match std::fs::remove_dir(&dir) {
+			Ok(()) => {}
+			Err(error) if error.kind() == ErrorKind::NotFound => {}
+			Err(error) => return Err(error),
+		}
+		Ok(removed)
+	}
+
 	/// Every address suppressed for a specific account, sorted.
 	pub fn list_for(&self, account: &str) -> Vec<String> {
 		read_addresses(&self.account_dir(account))

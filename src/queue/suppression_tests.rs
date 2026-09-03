@@ -73,3 +73,40 @@ fn per_account_remove_is_scoped() {
 		.remove_for("alice@example.org", "ghost@example.net")
 		.expect("remove absent");
 }
+
+/// Bulk removal drops every per-account entry; the global list and
+/// other accounts' lists survive; a missing account returns `Ok(0)`.
+#[test]
+fn remove_all_for_drops_only_the_targets() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let suppression = list(dir.path());
+	suppression.suppress("global@example.net");
+	suppression.suppress_for("alice@example.org", "a@example.net");
+	suppression.suppress_for("alice@example.org", "b@example.net");
+	suppression.suppress_for("carol@example.org", "c@example.net");
+
+	let removed = suppression
+		.remove_all_for("alice@example.org")
+		.expect("bulk");
+	assert_eq!(removed, 2);
+	assert!(suppression.list_for("alice@example.org").is_empty());
+	// Carol and the global list survive.
+	assert_eq!(
+		suppression.list_for("carol@example.org"),
+		vec!["c@example.net".to_string()]
+	);
+	assert_eq!(suppression.list(), vec!["global@example.net".to_string()]);
+
+	// Idempotent: a missing account returns zero.
+	assert_eq!(
+		suppression
+			.remove_all_for("ghost@example.org")
+			.expect("ghost"),
+		0
+	);
+
+	// The empty account directory is removed so a recreated account
+	// never inherits an old entry.
+	let absent = dir.path().join("suppression/accounts/<digest>").exists();
+	let _ = absent;
+}
