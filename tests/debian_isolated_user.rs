@@ -156,6 +156,20 @@ fn maintainer_scripts_are_executable_in_git() {
 }
 
 #[test]
+fn sysctl_lowers_the_port_floor_to_25() {
+	let sysctl = read("debian/epistle.sysctl");
+
+	assert!(
+		sysctl
+			.lines()
+			.any(|line| line.trim() == "net.ipv4.ip_unprivileged_port_start = 25"),
+		"debian/epistle.sysctl must set net.ipv4.ip_unprivileged_port_start = 25: a rootless \
+		 container cannot be granted CAP_NET_BIND_SERVICE, so without this floor the isolated \
+		 account cannot bind the SMTP port at all. The file is: {sysctl}"
+	);
+}
+
+#[test]
 fn maintainer_scripts_parse_as_posix_sh() {
 	for script in ["debian/epistle.postinst", "debian/epistle.postrm"] {
 		let output = match Command::new("sh")
