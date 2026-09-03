@@ -730,3 +730,7 @@ mod alias_tests;
 #[cfg(test)]
 #[path = "directory_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+#[path = "directory_test_support.rs"]
+mod test_support;

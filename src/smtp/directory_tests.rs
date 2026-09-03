@@ -1,5 +1,6 @@
 //! Tests for recipient resolution and the directory.
 
+use super::test_support::variant_name;
 use super::*;
 
 fn directory() -> Directory {
@@ -60,7 +61,7 @@ fn alias_resolves_to_all_member_accounts() {
 			assert!(accounts.contains(&"bob".to_string()));
 			assert_eq!(accounts.len(), 2);
 		}
-		other => panic!("expected alias, got {other:?}"),
+		other => panic!("expected alias, got {}", variant_name(&other)),
 	}
 }
 
