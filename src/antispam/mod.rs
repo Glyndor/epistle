@@ -5,6 +5,7 @@
 //! such as DNSBL live in their own modules.
 
 pub mod arf;
+pub mod bans;
 pub mod bayes;
 pub mod corpus;
 pub mod greylist;
