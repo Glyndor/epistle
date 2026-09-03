@@ -334,6 +334,60 @@ impl Server {
 		}
 	}
 
+	/// Whether the envelope sender is known to **any** local recipient
+	/// account of this message (plan 4.6). Returns `(account, sender)`
+	/// for the first match so the run-loop can log which account
+	/// recognised the sender; the loop only needs to know *whether* the
+	/// fast path applies, but the (account, sender) pair is what the
+	/// debug log carries so an operator chasing a missed expectation
+	/// can see whose correspondent list held the answer.
+	///
+	/// Recipient-to-account resolution reuses `Directory::resolve` —
+	/// the same lookup the SMTP session uses to admit RCPT — so a
+	/// domain alias, a multi-target alias, sub-addressing, and the
+	/// catch-all all behave identically here.
+	///
+	/// `None` (no fast path) covers four cases: no correspondent store
+	/// wired in, an empty envelope sender (bounce, where greylisting is
+	/// also skipped via the unauthenticated check), an unparseable
+	/// recipient, or a sender the directory does not recognise as a
+	/// local account. The latter is the slow path on purpose: the
+	/// sender is not local, so no account owns it, so no correspondent
+	/// marker exists for it.
+	fn known_correspondent(
+		&self,
+		message: &crate::smtp::session::AcceptedMessage,
+	) -> Option<(String, String)> {
+		let store = self.correspondents.as_deref()?;
+		// An empty envelope sender is the null reverse path; greylisting
+		// is also skipped for it (the inbound is a bounce, not a fresh
+		// triplet). The fast path is a no-op there too: the
+		// correspondent store is keyed by sender address, and there is
+		// none to key on.
+		if message.reverse_path.is_empty() {
+			return None;
+		}
+		let sender = message.reverse_path.to_ascii_lowercase();
+		let directory = self.directory.current();
+		for recipient in &message.recipients {
+			let Ok(address) = crate::smtp::address::Address::parse(recipient) else {
+				continue;
+			};
+			let accounts = match directory.resolve(&address) {
+				crate::smtp::directory::Resolution::Account(account) => vec![account],
+				crate::smtp::directory::Resolution::Alias(accounts) => accounts,
+				crate::smtp::directory::Resolution::NotLocal
+				| crate::smtp::directory::Resolution::UnknownUser => continue,
+			};
+			for account in accounts {
+				if store.knows(&account, &sender) {
+					return Some((account, sender));
+				}
+			}
+		}
+		None
+	}
+
 	/// Screen unauthenticated clients against the given DNS blocklist zones.
 	pub fn with_dnsbl(mut self, dnsbl: crate::dnsbl::Dnsbl) -> Self {
 		self.dnsbl = dnsbl;
@@ -500,3 +554,7 @@ mod tests_auth;
 #[cfg(test)]
 #[path = "server_tests_urlbl.rs"]
 mod tests_urlbl;
+
+#[cfg(test)]
+#[path = "server_tests_correspondents.rs"]
+mod tests_correspondents;
