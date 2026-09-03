@@ -1,6 +1,7 @@
 //! Tests for the runtime account store and directory handle.
 
 use super::*;
+use crate::smtp::auth::tests::fixture_password;
 use crate::smtp::directory::Resolution;
 
 fn static_account() -> Account {
@@ -349,7 +350,7 @@ fn static_allowed_protocols_propagates_to_directory() {
 	let static_account = Account {
 		name: "service".to_string(),
 		addresses: vec!["service@example.org".to_string()],
-		password_hash: Some(crate::smtp::auth::tests::hash("s3cret")),
+		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -368,13 +369,13 @@ fn static_allowed_protocols_propagates_to_directory() {
 	// the allowed protocol admits, the unlisted one rejects.
 	assert_eq!(
 		directory
-			.authenticate("service", "s3cret", Protocol::Api)
+			.authenticate("service", fixture_password(), Protocol::Api)
 			.as_deref(),
 		Some("service"),
 	);
 	assert!(
 		directory
-			.authenticate("service", "s3cret", Protocol::Imaps)
+			.authenticate("service", fixture_password(), Protocol::Imaps)
 			.is_none(),
 		"static allowed_protocols must restrict authentication"
 	);
@@ -394,19 +395,19 @@ fn dynamic_allowed_protocols_propagates_to_directory() {
 	// The `dynamic` helper seeds a stub hash so other tests can poke
 	// `set_password_hash`; replace it with a real argon2id hash so the
 	// directory's password check matches the test password.
-	dynamic_account.password_hash = crate::smtp::auth::tests::hash("secret");
+	dynamic_account.password_hash = crate::smtp::auth::tests::hash(fixture_password());
 	dynamic_account.allowed_protocols = Some(vec![Protocol::Api]);
 	store.add(dynamic_account).expect("add");
 	let directory = store.handle().current();
 	assert_eq!(
 		directory
-			.authenticate("service", "secret", Protocol::Api)
+			.authenticate("service", fixture_password(), Protocol::Api)
 			.as_deref(),
 		Some("service"),
 	);
 	assert!(
 		directory
-			.authenticate("service", "secret", Protocol::Imaps)
+			.authenticate("service", fixture_password(), Protocol::Imaps)
 			.is_none(),
 		"dynamic allowed_protocols must restrict authentication"
 	);

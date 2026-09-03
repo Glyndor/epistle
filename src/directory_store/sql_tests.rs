@@ -7,6 +7,7 @@
 use super::SqlAccount;
 use crate::config::Account;
 use crate::directory_store::AccountStore;
+use crate::smtp::auth::tests::{fixture_password, second_password, wrong_password};
 use crate::smtp::directory::Resolution;
 
 fn static_account(name: &str, address: &str, password: Option<&str>) -> Account {
@@ -46,7 +47,7 @@ fn sql_accounts_resolve_and_authenticate() {
 	let store = store_with(Vec::new()).with_sql_accounts(vec![sql(
 		"carol",
 		"carol@example.org",
-		Some("hunter2"),
+		Some(fixture_password()),
 	)]);
 	let directory = store.handle().current();
 
@@ -55,11 +56,19 @@ fn sql_accounts_resolve_and_authenticate() {
 		Resolution::Account("carol".to_string())
 	);
 	assert_eq!(
-		directory.authenticate("carol@example.org", "hunter2", crate::config::Protocol::Api),
+		directory.authenticate(
+			"carol@example.org",
+			fixture_password(),
+			crate::config::Protocol::Api
+		),
 		Some("carol".to_string())
 	);
 	assert_eq!(
-		directory.authenticate("carol@example.org", "wrong", crate::config::Protocol::Api),
+		directory.authenticate(
+			"carol@example.org",
+			wrong_password(),
+			crate::config::Protocol::Api
+		),
 		None
 	);
 }
@@ -73,7 +82,11 @@ fn receive_only_sql_account_cannot_authenticate() {
 		Resolution::Account("dan".to_string())
 	);
 	assert_eq!(
-		directory.authenticate("dan@example.org", "anything", crate::config::Protocol::Api),
+		directory.authenticate(
+			"dan@example.org",
+			wrong_password(),
+			crate::config::Protocol::Api
+		),
 		None
 	);
 }
@@ -81,19 +94,25 @@ fn receive_only_sql_account_cannot_authenticate() {
 #[test]
 fn static_account_takes_precedence_over_sql() {
 	// Same name and address in both sources, different passwords: the static
-	// account's credentials must win.
+	// account's credentials must win. The two passwords are distinct on
+	// purpose, so the test pins that the SQL hash does not leak through
+	// when a static account with a different hash shadows it.
 	let store = store_with(vec![static_account(
 		"shared",
 		"shared@example.org",
-		Some("static-pass"),
+		Some(fixture_password()),
 	)])
-	.with_sql_accounts(vec![sql("shared", "shared@example.org", Some("sql-pass"))]);
+	.with_sql_accounts(vec![sql(
+		"shared",
+		"shared@example.org",
+		Some(second_password()),
+	)]);
 	let directory = store.handle().current();
 
 	assert_eq!(
 		directory.authenticate(
 			"shared@example.org",
-			"static-pass",
+			fixture_password(),
 			crate::config::Protocol::Api
 		),
 		Some("shared".to_string())
@@ -101,7 +120,7 @@ fn static_account_takes_precedence_over_sql() {
 	assert_eq!(
 		directory.authenticate(
 			"shared@example.org",
-			"sql-pass",
+			second_password(),
 			crate::config::Protocol::Api
 		),
 		None
