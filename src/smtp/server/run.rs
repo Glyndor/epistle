@@ -8,8 +8,8 @@ use crate::smtp::line::LineDecoder;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, format_auth_results, line_error_reply, received_header, received_hop_count,
-	spf_domain,
+	RECEIVED_HOP_LIMIT, ensure_submission_headers, format_auth_results, line_error_reply,
+	received_header, received_hop_count, spf_domain,
 };
 
 use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
@@ -377,6 +377,24 @@ impl Server {
 						session.authenticated().is_some(),
 						std::time::SystemTime::now(),
 					);
+					// Authenticated submission: stamp Message-ID and Date
+					// when the client omitted them. Domain is the
+					// reverse-path's domain (the authenticated account's own
+					// domain), with the server hostname as a last resort.
+					// Done before the Received block so the trace header
+					// stays the outermost line.
+					if session.authenticated().is_some() {
+						let stamp_domain = message
+							.reverse_path
+							.rsplit_once('@')
+							.map(|(_, d)| d.to_ascii_lowercase())
+							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
+						message.data = ensure_submission_headers(
+							&message.data,
+							&stamp_domain,
+							std::time::SystemTime::now(),
+						);
+					}
 					let mut stamped = header.into_bytes();
 					stamped.extend_from_slice(auth_headers.as_bytes());
 					stamped.append(&mut message.data);

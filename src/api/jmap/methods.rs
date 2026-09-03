@@ -6,6 +6,7 @@ use super::super::state::ApiState;
 use super::objects;
 
 use crate::smtp::address::Address;
+use crate::smtp::trace::ensure_submission_headers;
 
 /// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
 /// this server does not maintain a change log (`canCalculateChanges` is false),
@@ -99,10 +100,20 @@ fn submit_email(
 			return Err("forbiddenFrom");
 		}
 	}
+	// Stamp Message-ID and Date on the queued copy when the client did not
+	// include them. Domain is the envelope's MAIL FROM, falling back to the
+	// first configured domain when the envelope has none (the null reverse
+	// path — bounces and similar).
+	let stamp_domain = mail_from
+		.rsplit_once('@')
+		.map(|(_, d)| d.to_ascii_lowercase())
+		.or_else(|| state.domains().first().map(|d| d.to_ascii_lowercase()))
+		.unwrap_or_else(|| "localhost".to_string());
+	let stamped = ensure_submission_headers(&raw, &stamp_domain, std::time::SystemTime::now());
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,
 		recipients,
-		data: raw,
+		data: stamped,
 		require_tls: false,
 		mailbox: None,
 		no_dsn: Vec::new(),
