@@ -21,8 +21,10 @@ pub enum DnsblOutcome {
 		/// The DNSBL zone that returned a listing A record for the IP.
 		zone: String,
 	},
-	/// Every queried zone failed to resolve; the screen is inconclusive.
-	/// DNSBL is advisory, so callers must not reject solely on this.
+	/// Every queried zone either returned an error code (Spamhaus uses
+	/// `127.255.255.0/24` for "open resolver", "over quota", "no key", …) or
+	/// failed to resolve. The screen is inconclusive. DNSBL is advisory, so
+	/// callers must not reject solely on this.
 	Unavailable,
 }
 
@@ -48,15 +50,19 @@ impl Dnsbl {
 	/// Screen `ip` against every zone, returning on the first listing. When no
 	/// zone lists the IP but at least one errored, the result is `Unavailable`.
 	pub async fn check(&self, ip: IpAddr, dns: &dyn DnsLookup) -> DnsblOutcome {
+		if self.zones.is_empty() {
+			return DnsblOutcome::NotListed;
+		}
 		let reversed = reverse_ip(ip);
 		let mut any_error = false;
 		for zone in &self.zones {
 			let query = format!("{reversed}.{zone}");
 			match dns.addresses(&query).await {
-				Ok(addrs) if !addrs.is_empty() => {
-					return DnsblOutcome::Listed { zone: zone.clone() };
-				}
-				Ok(_) => {}
+				Ok(addrs) => match classify_answer(&addrs) {
+					AnswerClass::Listed => return DnsblOutcome::Listed { zone: zone.clone() },
+					AnswerClass::Error => any_error = true,
+					AnswerClass::Ignored => {}
+				},
 				Err(DnsFailure::Temporary) => any_error = true,
 			}
 		}
@@ -65,6 +71,45 @@ impl Dnsbl {
 		} else {
 			DnsblOutcome::NotListed
 		}
+	}
+}
+
+/// Classify the answer set of one DNSBL query.
+enum AnswerClass {
+	/// A listed answer (127.0.0.0/8 but outside the Spamhaus error range).
+	Listed,
+	/// An answer in `127.255.255.0/24` (Spamhaus error range), meaning the
+	/// query was rejected (open resolver, quota, no key, …). Treated as an
+	/// `Unavailable` signal, not a listing.
+	Error,
+	/// The answer is outside `127.0.0.0/8` (RFC 5782 §2.1 reserves the loopback
+	/// range for listings). Non-loopback answers are ignored.
+	Ignored,
+}
+
+fn classify_answer(addrs: &[IpAddr]) -> AnswerClass {
+	let mut listed = false;
+	let mut error = false;
+	for ip in addrs {
+		let IpAddr::V4(v4) = ip else {
+			continue;
+		};
+		let [a, b, c, _d] = v4.octets();
+		if a != 127 {
+			continue;
+		}
+		if b == 255 && c == 255 {
+			error = true;
+		} else {
+			listed = true;
+		}
+	}
+	if listed {
+		AnswerClass::Listed
+	} else if error {
+		AnswerClass::Error
+	} else {
+		AnswerClass::Ignored
 	}
 }
 

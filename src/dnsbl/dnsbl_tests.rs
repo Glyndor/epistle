@@ -24,6 +24,15 @@ impl ScriptedDns {
 			fail: false,
 		}
 	}
+
+	/// Build a stub that returns exactly one A record for `name`. Used by
+	/// the Spamhaus error-range and 127/8 mask tests.
+	fn with_answer(name: &str, addr: IpAddr) -> Self {
+		ScriptedDns {
+			listed: HashMap::from([(name.to_string(), vec![addr])]),
+			fail: false,
+		}
+	}
 }
 
 impl DnsLookup for ScriptedDns {
@@ -102,6 +111,30 @@ async fn no_zones_never_lists() {
 	let dns = ScriptedDns::with("5.2.0.192.bl.example");
 	let dnsbl = Dnsbl::default();
 	assert!(dnsbl.is_empty());
+	assert_eq!(
+		dnsbl.check(ipv4("192.0.2.5"), &dns).await,
+		DnsblOutcome::NotListed
+	);
+}
+
+#[tokio::test]
+async fn an_answer_in_the_spamhaus_error_range_is_unavailable() {
+	// Spamhaus returns 127.255.255.252 for an open resolver (no key). That
+	// must NOT be treated as a listing — it must read as Unavailable.
+	let dns = ScriptedDns::with_answer("5.2.0.192.bl.example", ipv4("127.255.255.252"));
+	let dnsbl = Dnsbl::new(["bl.example".to_string()]);
+	assert_eq!(
+		dnsbl.check(ipv4("192.0.2.5"), &dns).await,
+		DnsblOutcome::Unavailable
+	);
+}
+
+#[tokio::test]
+async fn an_answer_outside_127_8_is_ignored() {
+	// RFC 5782 §2.1 reserves 127.0.0.0/8 for listings; any answer outside it
+	// is not a listing and must be ignored.
+	let dns = ScriptedDns::with_answer("5.2.0.192.bl.example", ipv4("192.0.2.99"));
+	let dnsbl = Dnsbl::new(["bl.example".to_string()]);
 	assert_eq!(
 		dnsbl.check(ipv4("192.0.2.5"), &dns).await,
 		DnsblOutcome::NotListed
