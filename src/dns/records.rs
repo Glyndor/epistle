@@ -4,6 +4,8 @@
 //! handed to a [`super::provider::DnsProvider`] to publish, or printed for
 //! manual entry.
 
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
@@ -154,6 +156,18 @@ pub fn txt_zone_form(value: &str) -> String {
 	out
 }
 
+/// The DNS zone a hostname lives in: every label except the leftmost. A
+/// hostname like `mail.example.org` is in the `example.org` zone; an
+/// apex hostname `example.org` (which is its own zone) returns itself.
+/// Used to scope A/AAAA records to the right provider zone when the
+/// hostname is a sub-name.
+fn host_zone(hostname: &str) -> String {
+	match hostname.split_once('.') {
+		Some((_, rest)) => rest.to_string(),
+		None => hostname.to_string(),
+	}
+}
+
 /// The records to publish for the given domains and mail hostname.
 ///
 /// `dkim` lists every `<selector>._domainkey` value to emit (one per
@@ -166,6 +180,13 @@ pub fn txt_zone_form(value: &str) -> String {
 /// [`caa_ca_for_directory`], a single CAA `0 issue "<ca>"` is emitted for
 /// every domain, locking renewal to that CA. Unknown directories emit no
 /// CAA (a wrong value would block renewal).
+/// `public_ipv4` / `public_ipv6` are the hostname's A and AAAA addresses when
+/// the operator has set them in the config; when present, both are emitted in
+/// the zone of the hostname's domain, once (not per served domain), before
+/// the MX: an MX pointing at a name that does not resolve yet tries the
+/// resolver, fails, and yields a hard bounce instead of falling back to the
+/// next MX. Parameter order matches the read-the-config order.
+#[allow(clippy::too_many_arguments)]
 pub fn build_records(
 	domains: &[String],
 	hostname: &str,
@@ -174,8 +195,37 @@ pub fn build_records(
 	mta_sts_id: &str,
 	services: Services,
 	caa_directory: Option<&str>,
+	public_ipv4: Option<Ipv4Addr>,
+	public_ipv6: Option<Ipv6Addr>,
 ) -> Vec<PublishRecord> {
 	let mut records = Vec::new();
+	// Hostname address records: A and AAAA at the hostname, in the zone of the
+	// hostname's parent domain. Order matters: every MX below points at this
+	// name, so the address must publish first; a sender that resolves the MX
+	// to a hostname without addresses treats the destination as dead and
+	// defers instead of using the secondary MX.
+	if let Some(ip) = public_ipv4 {
+		records.push(PublishRecord {
+			zone: host_zone(hostname),
+			record: DnsRecord {
+				name: hostname.to_string(),
+				kind: RecordKind::A,
+				value: ip.to_string(),
+				ttl: TTL,
+			},
+		});
+	}
+	if let Some(ip) = public_ipv6 {
+		records.push(PublishRecord {
+			zone: host_zone(hostname),
+			record: DnsRecord {
+				name: hostname.to_string(),
+				kind: RecordKind::Aaaa,
+				value: ip.to_string(),
+				ttl: TTL,
+			},
+		});
+	}
 	for domain in domains {
 		let txt = |name: String, value: String| PublishRecord {
 			zone: domain.clone(),
@@ -226,7 +276,10 @@ pub fn build_records(
 			format!("_smtp._tls.{domain}"),
 			format!("v=TLSRPTv1; rua=mailto:tlsrpt@{domain}"),
 		));
-		// MX → the mail hostname at the standard priority.
+		// MX → the mail hostname at the standard priority. The hostname
+		// must resolve (its A/AAAA were emitted first, above), otherwise
+		// a sender that tries it bounces instead of falling back to the
+		// secondary MX.
 		records.push(PublishRecord {
 			zone: domain.clone(),
 			record: DnsRecord {

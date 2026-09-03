@@ -70,6 +70,8 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		// both SRVs and let the operator prune them by hand if needed.
 		Services::all(),
 		config.acme.as_ref().map(|a| a.directory_url.as_str()),
+		config.public_ipv4,
+		config.public_ipv6,
 	);
 	report(&recs, out)
 }
