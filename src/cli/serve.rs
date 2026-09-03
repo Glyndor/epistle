@@ -179,6 +179,24 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let send_limiter =
 		has_any_submission_limit.then(|| Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)));
 
+	// Optional per-client-IP and per-envelope-sender inbound rate limiters
+	// for unauthenticated sessions. The `per_min` ceiling lives alongside
+	// the limiter so the listener wiring is a single value (an
+	// `InboundLimit`). `None` disables the corresponding check at MAIL
+	// FROM time.
+	let inbound_ip_limit = config.inbound_rate_limit_per_ip_per_min.map(|per_min| {
+		crate::smtp::ratelimit::InboundLimit {
+			limiter: Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)),
+			per_min,
+		}
+	});
+	let inbound_sender_limit = config.inbound_rate_limit_per_sender_per_min.map(|per_min| {
+		crate::smtp::ratelimit::InboundLimit {
+			limiter: Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)),
+			per_min,
+		}
+	});
+
 	// Per-tenant aggregate limits. Built once from the static config; with
 	// no `[[tenant]]` blocks the result is the identity, every check is a
 	// no-op, and the wire below carries an empty `Arc`.
@@ -523,6 +541,19 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				if let Some(limiter) = &send_limiter {
 					server = server.with_send_limiter(Arc::clone(limiter));
+				}
+				if let Some(limit) = &inbound_ip_limit {
+					server = server.with_inbound_ip_limit(crate::smtp::ratelimit::InboundLimit {
+						limiter: Arc::clone(&limit.limiter),
+						per_min: limit.per_min,
+					});
+				}
+				if let Some(limit) = &inbound_sender_limit {
+					server =
+						server.with_inbound_sender_limit(crate::smtp::ratelimit::InboundLimit {
+							limiter: Arc::clone(&limit.limiter),
+							per_min: limit.per_min,
+						});
 				}
 				if !tenant_limits.is_empty() {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));

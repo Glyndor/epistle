@@ -90,6 +90,12 @@ pub struct Server {
 	/// is the fallback when the account's domain has no entry. `None`
 	/// together with no per-domain entry disables submission rate limiting.
 	global_submission_rate_limit_per_min: Option<u32>,
+	/// Shared per-client-IP inbound rate limiter (limiter + cap), consumed
+	/// at MAIL FROM by unauthenticated sessions.
+	inbound_ip_limit: Option<crate::smtp::ratelimit::InboundLimit>,
+	/// Shared per-envelope-sender inbound rate limiter (limiter + cap),
+	/// consumed at MAIL FROM by unauthenticated sessions.
+	inbound_sender_limit: Option<crate::smtp::ratelimit::InboundLimit>,
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
@@ -133,6 +139,8 @@ impl Server {
 			cbind_data: None,
 			send_limiter: None,
 			global_submission_rate_limit_per_min: None,
+			inbound_ip_limit: None,
+			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
 			max_connections: MAX_CONNECTIONS,
@@ -165,6 +173,26 @@ impl Server {
 	/// together with no per-domain entry disables submission rate limiting.
 	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
 		self.global_submission_rate_limit_per_min = limit;
+		self
+	}
+
+	/// Attach a shared per-client-IP inbound rate limiter (msgs/min).
+	/// Consumed at `MAIL FROM` for sessions that never authenticated; a
+	/// peer IP missing from the listener is skipped, the limit still
+	/// applied to the peers that are known.
+	pub fn with_inbound_ip_limit(mut self, limit: crate::smtp::ratelimit::InboundLimit) -> Self {
+		self.inbound_ip_limit = Some(limit);
+		self
+	}
+
+	/// Attach a shared per-envelope-sender inbound rate limiter (msgs/min).
+	/// Consumed at `MAIL FROM` for sessions that never authenticated; the
+	/// null sender (`<>`) used by bounces is always skipped.
+	pub fn with_inbound_sender_limit(
+		mut self,
+		limit: crate::smtp::ratelimit::InboundLimit,
+	) -> Self {
+		self.inbound_sender_limit = Some(limit);
 		self
 	}
 
@@ -307,7 +335,8 @@ impl Server {
 	fn new_session(&self) -> Session {
 		let mut session = Session::new(&self.hostname)
 			.with_directory(self.directory.current())
-			.with_auth_protocol(self.auth_protocol);
+			.with_auth_protocol(self.auth_protocol)
+			.with_metrics(Arc::clone(&self.metrics));
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
@@ -319,6 +348,14 @@ impl Server {
 		}
 		session =
 			session.with_global_submission_rate_limit(self.global_submission_rate_limit_per_min);
+		if let Some(ip_limit) = &self.inbound_ip_limit {
+			session =
+				session.with_inbound_ip_limit(Arc::clone(&ip_limit.limiter), ip_limit.per_min);
+		}
+		if let Some(sender_limit) = &self.inbound_sender_limit {
+			session = session
+				.with_inbound_sender_limit(Arc::clone(&sender_limit.limiter), sender_limit.per_min);
+		}
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}

@@ -80,6 +80,14 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
 
 - Layered inbound filtering: **greylisting**, a **Bayesian** filter, sender
   **reputation**, and optional **DNSBL** lookups, plus an external scanner hook.
+- **Per-IP and per-sender message rate limits** on unauthenticated
+  `MAIL FROM` (`inbound_rate_limit_per_ip_per_min`,
+  `inbound_rate_limit_per_sender_per_min`). A peer or envelope that
+  exceeds the cap is deferred with `450 4.7.1` so a real burst retries
+  rather than bounces; the counters live under the same
+  `mail_messages_rejected_total{reason="rate_limit"}` line as the other
+  inbound rejections. Bounces use the null reverse-path and are skipped
+  from the per-sender charge.
 - **Outbound suppression**: a hard bounce (permanent 5xx) suppresses the
   recipient so the server stops sending to dead addresses, protecting the
   sending IP's reputation.

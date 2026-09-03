@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use super::address::Address;
-use super::command::{Command, ParseError};
 use super::directory::{Directory, Resolution};
 use super::diskspace::DiskGuard;
 use super::reply::Reply;
@@ -25,8 +24,11 @@ pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;
 /// Maximum number of accepted recipients per transaction (RFC 5321 minimum).
 pub const MAX_RECIPIENTS: usize = 100;
 
+mod auth_dispatch;
+mod transaction_policy;
 #[path = "types.rs"]
 mod types;
+use transaction_policy::TransactionPolicy;
 use types::State;
 pub use types::{AcceptedMessage, Action};
 
@@ -58,14 +60,11 @@ pub struct Session {
 	/// `tls-server-end-point` channel-binding data (the server certificate
 	/// hash) when the connection is TLS; enables SCRAM-SHA-256-PLUS.
 	cbind_data: Option<Vec<u8>>,
-	/// Shared per-account submission rate limiter (authenticated senders).
-	send_limiter: Option<std::sync::Arc<super::ratelimit::SendLimiter>>,
-	/// Server-wide default submission rate limit (messages/min) for
-	/// authenticated senders. Per-domain limits on the active directory take
-	/// precedence; this is the fallback when the account's domain has no
-	/// entry. `None` together with no per-domain entry means no limit at
-	/// all (the limiter is skipped).
-	global_submission_rate_limit_per_min: Option<u32>,
+	/// All MAIL-FROM-time policy state this session consults: per-account
+	/// submission rate limit, per-client-IP and per-sender inbound rate
+	/// limits, and the shared disk-space guard. Identity by default; every
+	/// check short-circuits when nothing is wired in.
+	policy: TransactionPolicy,
 	/// Per-tenant aggregate submission limits (accounts, storage, rate).
 	/// On top of `send_limiter`; an empty value is the identity and every
 	/// check short-circuits.
@@ -78,15 +77,15 @@ pub struct Session {
 	/// The client's peer IP, set by the network layer; used to enforce an app
 	/// password's CIDR allowlist during authentication.
 	peer_ip: Option<std::net::IpAddr>,
-	/// Shared disk-space guard for `data_dir`. When set, `MAIL FROM` is
-	/// rejected with `452` if the filesystem cannot hold another message,
-	/// so the remote retries instead of accepting a message that will
-	/// fail to land in the spool.
-	disk_guard: Option<Arc<DiskGuard>>,
 	/// The authentication protocol this session's listener serves;
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
 	auth_protocol: crate::config::Protocol,
+	/// Shared metrics handle. Optional: with no metrics wired the inbound
+	/// rate-limit rejection still returns the 450 reply, the counter just
+	/// does not move. Server sets this to its own `Arc<Metrics>` so the
+	/// every-listener metric lands in the same registry.
+	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 }
 
 impl Session {
@@ -107,14 +106,13 @@ impl Session {
 			scram_nonce: None,
 			oauth: None,
 			cbind_data: None,
-			send_limiter: None,
-			global_submission_rate_limit_per_min: None,
+			policy: TransactionPolicy::default(),
 			tenant_limits: None,
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
-			disk_guard: None,
 			auth_protocol: crate::config::Protocol::Submission,
+			metrics: None,
 		}
 	}
 
@@ -139,12 +137,20 @@ impl Session {
 		self.peer_ip = ip;
 	}
 
+	/// Attach the shared metrics handle so session-side rejections (the
+	/// inbound per-IP / per-sender rate limits) increment the matching
+	/// counter. `None` is a fine default for tests that don't care.
+	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
+		self
+	}
+
 	/// Attach a shared per-account submission rate limiter.
 	pub fn with_send_limiter(
 		mut self,
 		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
 	) -> Self {
-		self.send_limiter = Some(limiter);
+		self.policy = self.policy.with_send_limiter(limiter);
 		self
 	}
 
@@ -155,7 +161,33 @@ impl Session {
 	/// account's domain has no entry. `None` together with no per-domain
 	/// entry means no limit at all.
 	pub fn with_global_submission_rate_limit(mut self, limit: Option<u32>) -> Self {
-		self.global_submission_rate_limit_per_min = limit;
+		self.policy = self.policy.with_global_submission_rate_limit(limit);
+		self
+	}
+
+	/// Attach a shared per-client-IP inbound rate limiter and its
+	/// per-minute cap. Consumed at `MAIL FROM` when the session never
+	/// authenticated and a peer IP is known; absent or unknown peer means
+	/// the check is skipped.
+	pub fn with_inbound_ip_limit(
+		mut self,
+		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
+		per_min: u32,
+	) -> Self {
+		self.policy = self.policy.with_inbound_ip_limit(limiter, per_min);
+		self
+	}
+
+	/// Attach a shared per-envelope-sender inbound rate limiter and its
+	/// per-minute cap. Consumed at `MAIL FROM` when the session never
+	/// authenticated and the reverse path is non-empty; the null sender
+	/// (`<>`) used by bounces is always skipped.
+	pub fn with_inbound_sender_limit(
+		mut self,
+		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
+		per_min: u32,
+	) -> Self {
+		self.policy = self.policy.with_inbound_sender_limit(limiter, per_min);
 		self
 	}
 
@@ -181,7 +213,7 @@ impl Session {
 	/// so the remote retries instead of receiving a `250` for a message the
 	/// server cannot write to the spool.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
-		self.disk_guard = Some(guard);
+		self.policy = self.policy.with_disk_guard(guard);
 		self
 	}
 
@@ -237,146 +269,6 @@ impl Session {
 	/// The greeting sent when the connection opens.
 	pub fn greeting(&self) -> Reply {
 		Reply::single(220, &format!("{} ESMTP ready", self.hostname))
-	}
-
-	/// Feed one command line (CRLF already stripped and enforced upstream).
-	pub fn command_line(&mut self, line: &str) -> Action {
-		match super::command::parse(line) {
-			Ok(command) => self.apply(command),
-			Err(ParseError::UnknownCommand) => Action::Continue(Reply::syntax_error()),
-			Err(ParseError::LineTooLong) => {
-				Action::Continue(Reply::single(500, "5.5.2 line too long"))
-			}
-			Err(ParseError::InvalidCharacters) => Action::Continue(Reply::syntax_error()),
-			Err(ParseError::InvalidArguments) => Action::Continue(Reply::invalid_arguments()),
-			Err(ParseError::UnsupportedParameter) => {
-				Action::Continue(Reply::single(555, "5.5.4 parameter not implemented"))
-			}
-		}
-	}
-
-	fn apply(&mut self, command: Command) -> Action {
-		match command {
-			Command::Helo { domain } => self.greet(domain, false),
-			Command::Ehlo { domain } => self.greet(domain, true),
-			Command::MailFrom {
-				reverse_path,
-				size,
-				require_tls,
-				..
-			} => self.mail_from(reverse_path, size, require_tls),
-			Command::RcptTo {
-				forward_path,
-				notify,
-				..
-			} => self.rcpt_to(forward_path, notify),
-			Command::Data => self.data(),
-			Command::Bdat { size, last } => self.bdat(size, last),
-			Command::Rset => {
-				self.reset();
-				Action::Continue(Reply::ok())
-			}
-			Command::Noop => Action::Continue(Reply::ok()),
-			Command::Quit => Action::Close(Reply::closing()),
-			Command::Vrfy => Action::Continue(Reply::vrfy_not_disclosed()),
-			Command::StartTls => self.start_tls(),
-			Command::Auth { mechanism, initial } => self.auth(&mechanism, initial),
-		}
-	}
-
-	fn auth(&mut self, mechanism: &str, initial: Option<String>) -> Action {
-		if !self.tls_active {
-			// Credentials never cross plaintext.
-			return Action::Continue(Reply::single(538, "5.7.11 encryption required for auth"));
-		}
-		if self.authenticated.is_some() {
-			return Action::Continue(Reply::bad_sequence());
-		}
-		if self.state != State::Greeted {
-			return Action::Continue(Reply::bad_sequence());
-		}
-		// Only negotiate a mechanism that is currently advertised (channel
-		// binding present for -PLUS, a verifier present for the OAuth ones).
-		let unsupported = || Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
-		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
-			return unsupported();
-		};
-		if !crate::sasl::is_available(
-			parsed,
-			self.client_identity.is_some(),
-			self.cbind_data.is_some(),
-			self.oauth.is_some(),
-		) {
-			return unsupported();
-		}
-		use crate::sasl::Mechanism;
-		match parsed {
-			Mechanism::External => match initial {
-				Some(response) => self.verify_external(&response),
-				None => {
-					self.pending_external = true;
-					Action::CollectAuthResponse(Reply::single(334, ""))
-				}
-			},
-			Mechanism::Plain => match initial {
-				Some(response) => self.verify_plain(&response),
-				None => Action::CollectAuthResponse(Reply::single(334, "")),
-			},
-			Mechanism::ScramSha256 => self.scram_begin(initial, false),
-			Mechanism::ScramSha256Plus => self.scram_begin(initial, true),
-			Mechanism::OauthBearer | Mechanism::Xoauth2 => self.oauth_bearer(mechanism, initial),
-			Mechanism::Login => match initial {
-				// Initial response is the username; prompt for the password.
-				Some(user) => self.login_username(&user),
-				None => {
-					self.pending_login = Some(None);
-					Action::CollectAuthResponse(Reply::single(334, "VXNlcm5hbWU6"))
-				}
-			},
-		}
-	}
-
-	/// Common AUTH failure: count it, no oracle, close after three.
-	fn auth_fail(&mut self) -> Action {
-		self.auth_failures += 1;
-		let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
-		if self.auth_failures >= 3 {
-			Action::Close(reply)
-		} else {
-			Action::Continue(reply)
-		}
-	}
-
-	/// Feed the response line of a challenged AUTH (server sent 334).
-	pub fn auth_line(&mut self, line: &str) -> Action {
-		if line == "*" {
-			self.pending_scram = None;
-			self.pending_login = None;
-			self.pending_external = false;
-			return Action::Continue(Reply::single(501, "5.7.0 authentication cancelled"));
-		}
-		// EXTERNAL: the challenged response is the (optional) authzid.
-		if std::mem::take(&mut self.pending_external) {
-			return self.verify_external(line);
-		}
-		// AUTH LOGIN's two-step username/password exchange.
-		if let Some(state) = self.pending_login.take() {
-			return match state {
-				None => self.login_username(line),
-				Some(user) => self.login_password(&user, line),
-			};
-		}
-		match self.pending_scram.take() {
-			Some(scram::PendingScram::ClientFirst(binding)) => {
-				self.scram_client_first(line, binding)
-			}
-			Some(scram::PendingScram::ClientFinal {
-				server,
-				credentials,
-				account,
-			}) => self.scram_client_final(line, *server, *credentials, &account),
-			None => self.verify_plain(line),
-		}
 	}
 
 	fn greet(&mut self, domain: String, esmtp: bool) -> Action {
@@ -464,17 +356,29 @@ impl Session {
 				// same way `Directory::quota_for` does), falling back to the
 				// server-wide default, falling back to no limit at all.
 				if let Some(account) = self.authenticated.clone()
-					&& let Some(limiter) = &self.send_limiter
-					&& let Some(limit) = self
-						.directory
-						.submission_limit_for(&account)
-						.or(self.global_submission_rate_limit_per_min)
-					&& !limiter.check(&account, limit, unix_now())
-				{
+					&& !self.policy.check_authenticated_submission(
+						&account,
+						&self.directory,
+						unix_now(),
+					) {
 					return Action::Continue(Reply::single(
 						450,
 						"4.7.1 sending rate limit exceeded; retry later",
 					));
+				}
+				// Per-IP and per-sender rate limits for unauthenticated sessions.
+				// Authenticated sessions are charged against the per-account limiter
+				// instead; mixing both for the same envelope would double-charge the
+				// authenticated sender's budget.
+				if self.authenticated.is_none()
+					&& let Some(reply) =
+						self.policy
+							.check_inbound(&reverse_path, self.peer_ip, unix_now())
+				{
+					if let Some(metrics) = &self.metrics {
+						metrics.rejected(crate::metrics::RejectReason::RateLimit);
+					}
+					return Action::Continue(reply);
 				}
 				// SIZE is declared up front: reject oversize without DATA.
 				if size.is_some_and(|s| s > MAX_MESSAGE_SIZE as u64) {
@@ -486,9 +390,7 @@ impl Session {
 				// Filesystem holding `data_dir` is too full to accept another
 				// message. Reject before `DATA` so the remote retries instead
 				// of receiving `250 OK` for a payload the spool cannot hold.
-				if let Some(guard) = &self.disk_guard
-					&& !guard.has_room(MAX_MESSAGE_SIZE as u64)
-				{
+				if !self.policy.spool_has_room(MAX_MESSAGE_SIZE as u64) {
 					return Action::Continue(Reply::single(
 						452,
 						"4.3.1 insufficient system storage; retry later",

@@ -209,6 +209,23 @@ pub struct Config {
 	/// the same shape and lifecycle.
 	#[serde(default)]
 	pub domain_submission_limits: std::collections::HashMap<String, u32>,
+	/// Messages an unauthenticated client IP may start per minute. Absent
+	/// disables the per-IP inbound limit. Enforced on
+	/// `MAIL FROM` for sessions that never authenticated; a send over the
+	/// cap is deferred with `450 4.7.1 too many messages from this client;
+	/// retry later` so a legitimate burst (a mailing list, a resend after
+	/// an outage) retries rather than bounces.
+	#[serde(default)]
+	pub inbound_rate_limit_per_ip_per_min: Option<u32>,
+	/// Messages a single envelope sender may start per minute across all
+	/// clients. Absent disables the per-sender inbound limit. Enforced on
+	/// `MAIL FROM` for sessions that never authenticated, lowercased
+	/// reverse path; the null sender (`<>`) used by bounces is skipped so
+	/// a verification failure does not exhaust the budget of a real
+	/// client. Over the cap is deferred with
+	/// `450 4.7.1 too many messages from this sender; retry later`.
+	#[serde(default)]
+	pub inbound_rate_limit_per_sender_per_min: Option<u32>,
 	/// Max concurrent connections per listener (back-pressure cap). Absent
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
@@ -299,6 +316,14 @@ impl std::fmt::Debug for Config {
 				&self.submission_rate_limit_per_min,
 			)
 			.field("domain_submission_limits", &self.domain_submission_limits)
+			.field(
+				"inbound_rate_limit_per_ip_per_min",
+				&self.inbound_rate_limit_per_ip_per_min,
+			)
+			.field(
+				"inbound_rate_limit_per_sender_per_min",
+				&self.inbound_rate_limit_per_sender_per_min,
+			)
 			.field(
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,

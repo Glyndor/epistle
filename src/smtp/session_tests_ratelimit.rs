@@ -230,3 +230,126 @@ fn external_rejects_mismatched_authzid() {
 	assert_eq!(reply_code(&action), 535);
 	assert_eq!(session.authenticated(), None);
 }
+
+#[test]
+fn an_unauthenticated_client_over_the_ip_limit_gets_450() {
+	// Two sends from one IP within the per-minute cap: both fit. The third
+	// over the cap, with the session never authenticated, must get a 450.
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let mut session = Session::new("mail.example.org")
+		.with_directory(inbound_test_directory())
+		.with_inbound_ip_limit(limiter, 2);
+	session.command_line("EHLO client.example.org");
+	session.set_peer_ip(Some(std::net::IpAddr::from([192, 0, 2, 7])));
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<attacker@example.org>")),
+		250
+	);
+	session.command_line("RSET");
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<attacker@example.org>")),
+		250
+	);
+	session.command_line("RSET");
+	// The third send is over the per-IP cap.
+	assert_eq!(
+		reply_code(&session.command_line("MAIL FROM:<attacker@example.org>")),
+		450
+	);
+}
+
+#[test]
+fn a_sender_over_the_sender_limit_gets_450_from_any_client() {
+	// The per-sender limiter is keyed by the lowercased reverse path: a
+	// fixed sender behind two different client IPs must still hit the cap
+	// across the window.
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let directory = inbound_test_directory();
+	// First peer: sends two messages fitting under the cap of 2.
+	let mut session_a = Session::new("mail.example.org")
+		.with_directory(Arc::clone(&directory))
+		.with_inbound_sender_limit(Arc::clone(&limiter), 2);
+	session_a.command_line("EHLO a.example.org");
+	session_a.set_peer_ip(Some(std::net::IpAddr::from([198, 51, 100, 10])));
+	assert_eq!(
+		reply_code(&session_a.command_line("MAIL FROM:<victim@example.org>")),
+		250
+	);
+	session_a.command_line("RSET");
+	assert_eq!(
+		reply_code(&session_a.command_line("MAIL FROM:<Victim@Example.org>")),
+		250,
+		"second send from the same lowercase sender must fit"
+	);
+	// Second peer from another address uses a fresh session, so the per-IP
+	// limit is irrelevant: the per-sender budget is shared across clients.
+	let mut session_b = Session::new("mail.example.org")
+		.with_directory(Arc::clone(&directory))
+		.with_inbound_sender_limit(Arc::clone(&limiter), 2);
+	session_b.command_line("EHLO b.example.org");
+	session_b.set_peer_ip(Some(std::net::IpAddr::from([198, 51, 100, 20])));
+	assert_eq!(
+		reply_code(&session_b.command_line("MAIL FROM:<victim@example.org>")),
+		450,
+		"third send across clients must be deferred for the same sender"
+	);
+}
+
+#[test]
+fn the_null_sender_is_never_sender_limited() {
+	// Bounces use the null reverse-path `<>` (RFC 5321 §4.5.5). Charging
+	// that against the per-sender budget would let a misconfigured
+	// upstream eat a legitimate sender's allowance on the first bounce.
+	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let mut session = Session::new("mail.example.org")
+		.with_directory(inbound_test_directory())
+		.with_inbound_sender_limit(limiter, 1);
+	session.command_line("EHLO client.example.org");
+	session.set_peer_ip(Some(std::net::IpAddr::from([192, 0, 2, 7])));
+	// Five null-sender MAIL FROMs in a row: the per-sender cap is 1 but
+	// every reply is 250 because the null sender is skipped.
+	for _ in 0..5 {
+		assert_eq!(reply_code(&session.command_line("MAIL FROM:<>")), 250);
+		session.command_line("RSET");
+	}
+}
+
+#[test]
+fn an_authenticated_session_is_not_subject_to_the_inbound_limits() {
+	// The inbound per-IP and per-sender limits are for *unauthenticated*
+	// traffic. A session that has authenticated must be charged against
+	// its per-account submission limit only; even one wired to 0 must
+	// never blow up on the inbound check.
+	let ip_limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let sender_limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
+	let mut session = Session::new("mail.example.org")
+		.with_directory(auth_directory())
+		.with_tls_active()
+		.with_inbound_ip_limit(ip_limiter, 1)
+		.with_inbound_sender_limit(sender_limiter, 1);
+	session.command_line("EHLO client.example.org");
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
+	// Three authenticated MAIL FROMs in a row: under the per-account cap
+	// (no submission limit configured), the inbound caps do nothing.
+	for _ in 0..3 {
+		assert_eq!(
+			reply_code(&session.command_line("MAIL FROM:<alice@example.org>")),
+			250
+		);
+		session.command_line("RSET");
+	}
+}
+
+fn inbound_test_directory() -> Arc<Directory> {
+	Arc::new(Directory::new(
+		["example.org".to_string()],
+		[
+			("alice@example.org".to_string(), "alice".to_string()),
+			("attacker@example.org".to_string(), "attacker".to_string()),
+			("victim@example.org".to_string(), "victim".to_string()),
+		],
+	))
+}
