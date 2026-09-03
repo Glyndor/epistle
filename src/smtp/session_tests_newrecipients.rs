@@ -20,11 +20,11 @@ fn alice_session_with_correspondents(
 		plain("alice", fixture_password())
 	));
 	assert_eq!(session.authenticated(), Some("alice"));
-	session = session.with_correspondents(store);
-	if limit.is_some() {
-		session = session.with_daily_new_recipients(limit);
+	let mut cap = super::cap::Cap::empty().with_correspondents(store);
+	if let Some(limit) = limit {
+		cap = cap.with_daily_new_recipients(Some(limit));
 	}
-	session
+	session.with_cap(cap)
 }
 
 fn submit_to(session: &mut Session, recipients: &[&str]) -> u16 {

@@ -12,6 +12,8 @@ use super::diskspace::DiskGuard;
 use super::reply::Reply;
 
 mod bdat;
+pub mod cap;
+mod finalise;
 mod login;
 mod oauth;
 mod scram;
@@ -77,17 +79,11 @@ pub struct Session {
 	/// The client's peer IP, set by the network layer; used to enforce an app
 	/// password's CIDR allowlist during authentication.
 	peer_ip: Option<std::net::IpAddr>,
-	/// Per-account correspondent store; consulted at end-of-DATA to
-	/// enforce the rolling 24h new-recipient cap (plan 4.10). `None`
-	/// disables the cap (the default) so tests that do not exercise it
-	/// keep the pre-feature behaviour bit-for-bit.
-	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
-	/// Cap on first-time recipients per account in any rolling 24h
-	/// window. `None` disables the cap. `correspondents` and this field
-	/// are independent: a configured cap without a store short-circuits
-	/// to "no cap" rather than failing closed, so a missing wiring in a
-	/// test harness never blocks submission.
-	daily_new_recipients: Option<u32>,
+	/// Per-account rolling 24h new-recipient cap (plan 4.10). The
+	/// fields it carries (correspondent store, daily limit, metrics
+	/// handle) live in `cap::Cap`; the SMTP path reads them through
+	/// `cap::check_or_reply` at end-of-DATA. Empty by default.
+	cap: cap::Cap,
 	/// The authentication protocol this session's listener serves;
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
@@ -122,8 +118,7 @@ impl Session {
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
-			correspondents: None,
-			daily_new_recipients: None,
+			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
 			metrics: None,
 		}
@@ -230,20 +225,11 @@ impl Session {
 		self
 	}
 
-	/// Attach the per-account correspondent store used to enforce the
-	/// rolling 24h new-recipient cap. Required for that feature; absent
-	/// here disables the cap and the SMTP path keeps the pre-feature
-	/// behaviour.
-	pub fn with_correspondents(mut self, store: Arc<crate::storage::CorrespondentStore>) -> Self {
-		self.correspondents = Some(store);
-		self
-	}
-
-	/// Set the rolling 24h cap on first-time recipients per account.
-	/// `None` disables the cap; the per-minute submission rate limit is
-	/// unchanged either way.
-	pub fn with_daily_new_recipients(mut self, limit: Option<u32>) -> Self {
-		self.daily_new_recipients = limit;
+	/// Replace the cap state (correspondent store, daily limit, metrics
+	/// handle). Wired by the listener at session-construction time so
+	/// the end-of-DATA check has the configured pair in scope.
+	pub fn with_cap(mut self, cap: cap::Cap) -> Self {
+		self.cap = cap;
 		self
 	}
 
@@ -527,87 +513,14 @@ impl Session {
 	/// Feed one data line (CRLF already stripped and enforced upstream).
 	/// Returns `None` while more lines are expected.
 	pub fn data_line(&mut self, line: &[u8]) -> Option<Action> {
-		let State::ReceivingData {
-			reverse_path,
-			recipients,
-			no_dsn,
-			size,
-			body,
-			require_tls,
-			..
-		} = &mut self.state
-		else {
-			// Programming error in the network layer; fail the transaction.
+		if line == b"." {
+			return Some(finalise::finalise_from_state(self));
+		}
+		// Dot-unstuffing (RFC 5321 section 4.5.2).
+		let State::ReceivingData { size, body, .. } = &mut self.state else {
 			self.reset();
 			return Some(Action::Continue(Reply::bad_sequence()));
 		};
-
-		if line == b"." {
-			let message = AcceptedMessage {
-				reverse_path: reverse_path.clone(),
-				recipients: recipients.clone(),
-				no_dsn: no_dsn.clone(),
-				data: body.clone(),
-				require_tls: *require_tls,
-				mailbox: None,
-			};
-			let oversize = *size > MAX_MESSAGE_SIZE;
-			self.state = State::Greeted;
-			if oversize {
-				return Some(Action::Continue(Reply::single(
-					552,
-					"message exceeds maximum size",
-				)));
-			}
-			// Rolling 24h cap on first-time recipients (plan 4.10):
-			// computed at end-of-DATA because only there is the full
-			// recipient list in scope. Only authenticated sessions are
-			// tracked: an unauthenticated connection does not have an
-			// account to attribute the recipients to.
-			if let Some(account) = self.authenticated.as_deref()
-				&& let (Some(store), Some(limit)) =
-					(self.correspondents.as_deref(), self.daily_new_recipients)
-			{
-				let recipient_refs: Vec<&str> =
-					message.recipients.iter().map(String::as_str).collect();
-				match store.enforce_new_recipient_cap(account, &recipient_refs, Some(limit)) {
-					Ok(crate::storage::CapOutcome::Limited {
-						new,
-						already,
-						limit,
-					}) => {
-						if let Some(metrics) = &self.metrics {
-							metrics.send_limited_new_recipients();
-						}
-						crate::api::log_send_limited(
-							account,
-							self.peer_ip,
-							new.saturating_add(already),
-							limit,
-						);
-						return Some(Action::Continue(Reply::single(
-							450,
-							"4.7.1 too many new recipients today; retry tomorrow",
-						)));
-					}
-					Ok(
-						crate::storage::CapOutcome::Allowed { .. }
-						| crate::storage::CapOutcome::Uncapped,
-					) => {
-						// Record only after the cap accepted the
-						// submission: a refused message leaves the
-						// baseline untouched.
-						let _ = store.record(account, &recipient_refs);
-					}
-					Err(error) => {
-						tracing::warn!(%account, %error, "correspondent store error; accepting");
-					}
-				}
-			}
-			return Some(Action::Deliver(Reply::ok(), message));
-		}
-
-		// Dot-unstuffing (RFC 5321 section 4.5.2).
 		let content = line.strip_prefix(b".").unwrap_or(line);
 		*size += content.len() + 2;
 		if *size <= MAX_MESSAGE_SIZE {

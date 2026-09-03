@@ -442,13 +442,19 @@ impl Server {
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}
+		// Build the cap state in one go: the listener already holds
+		// `correspondents`, `daily_new_recipients`, and a metrics handle;
+		// folding them into a `cap::Cap` keeps the session's field
+		// surface small (one slot, three sources).
+		let mut cap = crate::smtp::session::cap::Cap::empty();
 		if let Some(store) = &self.correspondents {
-			session = session.with_correspondents(Arc::clone(store));
+			cap = cap.with_correspondents(Arc::clone(store));
 		}
 		if self.daily_new_recipients.is_some() {
-			session = session.with_daily_new_recipients(self.daily_new_recipients);
+			cap = cap.with_daily_new_recipients(self.daily_new_recipients);
 		}
-		session = session.with_metrics(Arc::clone(&self.metrics));
+		cap = cap.with_metrics(Arc::clone(&self.metrics));
+		session = session.with_cap(cap);
 		session
 	}
 
