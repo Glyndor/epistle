@@ -19,6 +19,8 @@ fn builds_core_records_per_domain() {
 		"v1",
 		Services::all(),
 		None,
+		None,
+		None,
 	);
 
 	assert_eq!(
@@ -65,6 +67,8 @@ fn omits_dkim_when_absent_and_tlsa_when_no_cert() {
 		"v1",
 		Services::all(),
 		None,
+		None,
+		None,
 	);
 	assert!(!records.iter().any(|r| r.record.name.contains("_domainkey")));
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Tlsa));
@@ -79,6 +83,8 @@ fn tlsa_record_added_once_for_host() {
 		Some("3 0 1 abcd"),
 		"v1",
 		Services::all(),
+		None,
+		None,
 		None,
 	);
 	let tlsa: Vec<_> = records
@@ -100,6 +106,8 @@ fn builds_srv_records_for_mail_jmap_and_sieve() {
 		"v1",
 		Services::all(),
 		None,
+		None,
+		None,
 	);
 	let submissions = find(&records, "_submissions._tcp.example.org", RecordKind::Srv);
 	assert_eq!(submissions.record.value, "0 1 465 mail.example.org.");
@@ -118,6 +126,8 @@ fn builds_discovery_cnames_for_autoconfig_autodiscover_and_mta_sts() {
 		None,
 		"v1",
 		Services::all(),
+		None,
+		None,
 		None,
 	);
 	let autoconfig = find(&records, "autoconfig.example.org", RecordKind::Cname);
@@ -138,6 +148,8 @@ fn caldav_and_carddav_srv_are_optional() {
 		"v1",
 		Services::default(),
 		None,
+		None,
+		None,
 	);
 	assert!(
 		!without
@@ -156,6 +168,8 @@ fn caldav_and_carddav_srv_are_optional() {
 		None,
 		"v1",
 		Services::all(),
+		None,
+		None,
 		None,
 	);
 	assert!(
@@ -180,6 +194,8 @@ fn caa_emitted_for_known_lets_encrypt_directory() {
 		"v1",
 		Services::all(),
 		Some("https://acme-v02.api.letsencrypt.org/directory"),
+		None,
+		None,
 	);
 	let caa = find(&records, "example.org", RecordKind::Caa);
 	assert_eq!(caa.record.value, "0 issue \"letsencrypt.org\"");
@@ -195,6 +211,8 @@ fn caa_emitted_for_known_zerossl_directory() {
 		"v1",
 		Services::all(),
 		Some("https://acme.zerossl.com/v2/DV90"),
+		None,
+		None,
 	);
 	let caa = find(&records, "example.org", RecordKind::Caa);
 	assert_eq!(caa.record.value, "0 issue \"zerossl.com\"");
@@ -212,6 +230,8 @@ fn caa_omitted_for_unknown_acme_directory() {
 		"v1",
 		Services::all(),
 		Some("https://acme.example.com/directory"),
+		None,
+		None,
 	);
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
 }
@@ -226,6 +246,8 @@ fn caa_directory_with_trailing_slash_is_accepted() {
 		"v1",
 		Services::all(),
 		Some("https://acme-v02.api.letsencrypt.org/directory/"),
+		None,
+		None,
 	);
 	let caa = find(&records, "example.org", RecordKind::Caa);
 	assert_eq!(caa.record.value, "0 issue \"letsencrypt.org\"");
@@ -240,6 +262,8 @@ fn caa_is_none_when_acme_is_not_configured() {
 		None,
 		"v1",
 		Services::all(),
+		None,
+		None,
 		None,
 	);
 	assert!(!records.iter().any(|r| r.record.kind == RecordKind::Caa));
@@ -257,6 +281,8 @@ fn both_dkim_selectors_are_emitted() {
 		None,
 		"v1",
 		Services::all(),
+		None,
+		None,
 		None,
 	);
 	assert_eq!(
@@ -424,6 +450,6 @@ fn caa_is_withheld_for_a_directory_we_do_not_recognise() {
 	// renewal outright, while a missing CAA just leaves issuance unrestricted.
 	assert_eq!(
 		caa_ca_for_directory("https://acme.example.test/directory"),
-		None
+		None,
 	);
 }

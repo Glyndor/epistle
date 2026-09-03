@@ -42,6 +42,22 @@ must match the name the server HELOs with. Receivers check HELO ↔ PTR ↔ IP. 
 is set at the **IP owner (your VPS/host)**, not through your DNS provider, so it
 cannot be automated by a DNS-provider integration — set it by hand.
 
+`epistle verify-dns` checks the PTR for every address the hostname is supposed
+to answer on (the configured `public_ipv4` / `public_ipv6`, or whatever the
+hostname resolves to when neither is set). The three failure lines mean three
+different things and point at three different fixes:
+
+- `MISS PTR <ip>: no reverse record; ask the provider of this IP to point it
+  at <hostname>`: the IP owner has not set a PTR. Talk to the VPS / host
+  provider; they control this side of the DNS, not your zone file.
+- `MISS PTR <ip>: points at <name>, not <hostname>`: the PTR exists but
+  names something else (typically an old host from before a migration). Fix
+  the PTR at the IP owner.
+- `MISS PTR <ip>: <hostname> does not resolve back to <ip>`: the PTR points
+  at the right name but the name's A/AAAA does not include this IP. Forward
+  and reverse are out of sync; receivers that do forward-confirmation would
+  still treat this as a mismatch.
+
 ### SPF
 Authorizes your IP to send for the domain. `v=spf1 mx -all` authorizes whatever
 the MX points at; or pin the IP: `v=spf1 ip4:203.0.113.10 -all`. `-all` (hard

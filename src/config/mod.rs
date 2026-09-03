@@ -50,7 +50,7 @@ pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -122,6 +122,15 @@ fn default_masked_addresses_max() -> usize {
 pub struct Config {
 	/// Fully qualified hostname the server identifies as (EHLO, TLS).
 	pub hostname: String,
+	/// The public IPv4 address the hostname resolves to. Optional: when set,
+	/// `dns-records` emits the A record and `verify-dns` checks the PTR of
+	/// this address; when absent, `verify-dns` resolves the hostname instead.
+	#[serde(default)]
+	pub public_ipv4: Option<Ipv4Addr>,
+	/// Same for IPv6 (an AAAA record). Publishing SPF for a host that also
+	/// has AAAA without listing the IPv6 makes mail sent over IPv6 fail SPF.
+	#[serde(default)]
+	pub public_ipv6: Option<Ipv6Addr>,
 	/// Directory where all server state lives.
 	pub data_dir: PathBuf,
 	/// Domains this server accepts mail for. Required when any listener
@@ -286,6 +295,8 @@ impl std::fmt::Debug for Config {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("Config")
 			.field("hostname", &self.hostname)
+			.field("public_ipv4", &self.public_ipv4)
+			.field("public_ipv6", &self.public_ipv6)
 			.field("data_dir", &self.data_dir)
 			.field("domains", &self.domains)
 			.field("domain_aliases", &self.domain_aliases)
