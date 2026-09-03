@@ -206,7 +206,12 @@ response carries `Content-Type: application/scim+json`; errors follow
 RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
 
 ### `[database]`
-PostgreSQL backing for the antispam engine (reputation, Bayes).
+PostgreSQL backing for the antispam engine (reputation, Bayes). The server
+refuses to start against a PostgreSQL major older than 14 (the oldest major
+still in upstream support today); `serve` reads `SHOW server_version_num`
+after the pool is built and aborts with a `ServerTooOld` error before any
+migration runs, so a server below the floor fails as a sentence at startup
+rather than as an SQL syntax error in the first query.
 
 | Key | Meaning |
 |---|---|
