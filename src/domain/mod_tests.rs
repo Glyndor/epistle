@@ -106,3 +106,19 @@ fn rejects_a_domain_without_a_dot() {
 	assert_eq!(normalize("example"), Err(DomainError::Invalid));
 	assert_eq!(normalize("example."), Err(DomainError::Invalid));
 }
+
+#[test]
+fn rejects_a_single_script_label_with_an_ascii_skeleton() {
+	// Pure-Cyrillic `со` is single-script (mixed-script passes), but its
+	// skeleton is the ASCII string `co`, so only the skeleton check
+	// fires here. Deleting the skeleton check lets this through.
+	assert_eq!(normalize("со.example"), Err(DomainError::Confusable));
+}
+
+#[test]
+fn rejects_a_mixed_script_label_with_a_non_ascii_skeleton() {
+	// Latin `hello` + CJK `中` is mixed-script (the mixed-script check
+	// fires), but the skeleton still carries the CJK code point, so the
+	// skeleton check skips it. Only the mixed-script check fires here.
+	assert_eq!(normalize("hello中.example"), Err(DomainError::Confusable));
+}

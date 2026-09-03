@@ -4,6 +4,8 @@
 //! they are a recurring source of parser differentials and abuse, and real
 //! mail rarely needs them. Strictness here is a feature.
 
+use crate::domain::{DomainError, normalize};
+
 /// Maximum total address length (RFC 5321 section 4.5.3.1.3).
 const MAX_ADDRESS: usize = 254;
 /// Maximum local-part length (RFC 5321 section 4.5.3.1.1).
@@ -32,21 +34,31 @@ pub enum AddressError {
 	/// leading/trailing hyphen, an underscore, or an address-literal form
 	/// (deliberately refused).
 	InvalidDomain,
+	/// The domain mixed scripts, or its Unicode skeleton reduced to an all-ASCII
+	/// name (Unicode TR39): it was built to look like another address that
+	/// this server does not control.
+	ConfusableDomain,
 }
 
 impl Address {
-	/// Parse and validate an address.
+	/// Parse and validate an address. The stored `domain` is the lowercase
+	/// ASCII A-label returned by [`crate::domain::normalize`]: two
+	/// spellings of one internationalised domain land on the same key, and
+	/// a Cyrillic look-alike of a Latin name is refused before it ever
+	/// becomes a string the rest of the server can compare.
 	pub fn parse(raw: &str) -> Result<Self, AddressError> {
 		if raw.len() > MAX_ADDRESS {
 			return Err(AddressError::TooLong);
 		}
 		let (local_part, domain) = raw.rsplit_once('@').ok_or(AddressError::MissingAtSign)?;
 		validate_local_part(local_part)?;
-		validate_domain(domain)?;
+		let domain = normalize(domain).map_err(|err| match err {
+			DomainError::Invalid => AddressError::InvalidDomain,
+			DomainError::Confusable => AddressError::ConfusableDomain,
+		})?;
 		Ok(Address {
 			local_part: local_part.to_string(),
-			// Domains compare case-insensitively; store lowercase.
-			domain: domain.to_ascii_lowercase(),
+			domain,
 		})
 	}
 
@@ -55,7 +67,7 @@ impl Address {
 		&self.local_part
 	}
 
-	/// The lowercased domain.
+	/// The lowercase A-label of the domain.
 	pub fn domain(&self) -> &str {
 		&self.domain
 	}
@@ -82,32 +94,6 @@ fn validate_local_part(local_part: &str) -> Result<(), AddressError> {
 	for atom in local_part.split('.') {
 		if atom.is_empty() || !atom.chars().all(valid_atom_char) {
 			return Err(AddressError::InvalidLocalPart);
-		}
-	}
-	Ok(())
-}
-
-fn validate_domain(domain: &str) -> Result<(), AddressError> {
-	// RFC 5321 §4.5.3.1.2 caps a domain at 255 octets and the section
-	// header requires implementations to accept names of at least that
-	// size. 255 is the wire form: each label carries a length byte and
-	// the root label adds one more, so any presentation name is exactly
-	// two octets shorter than its wire encoding. 253 is the longest dot-
-	// separated string the wire cap can carry; raising this check would
-	// accept names that no DNS query can resolve.
-	if domain.is_empty() || domain.len() > 253 || !domain.contains('.') {
-		return Err(AddressError::InvalidDomain);
-	}
-	for label in domain.split('.') {
-		let valid = !label.is_empty()
-			&& label.len() <= 63
-			&& !label.starts_with('-')
-			&& !label.ends_with('-')
-			&& label.chars().all(|c| {
-				c.is_ascii_alphanumeric() || c == '-' || (!c.is_ascii() && !c.is_control())
-			});
-		if !valid {
-			return Err(AddressError::InvalidDomain);
 		}
 	}
 	Ok(())
