@@ -233,6 +233,13 @@ disabled, mail keeps flowing unfiltered, a warning is logged and the
 `directory = true`: the accounts themselves come from SQL, so there would be
 nobody to deliver to and the start fails.
 
+The same database backs the shared authentication ban store: every
+listener (SMTP submission, IMAP, POP3, ManageSieve, the API, OAuth
+device and PKCE grants) records failed authentications into the
+`auth_failure` table and consults the `auth_ban` table before any
+password hashing. Without `[database]`, the per-connection three-strikes
+counters each listener already maintains are the only defence.
+
 ### `[acme]`
 Automatic TLS certificates for the mail protocols (not the panel's web TLS).
 

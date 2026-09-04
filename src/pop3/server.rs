@@ -75,33 +75,39 @@ impl Server {
 				continue;
 			};
 			let server = Arc::clone(&self);
+			let peer_ip = peer.ip();
 			tokio::spawn(async move {
 				let _permit = permit;
-				if let Err(error) = server.handle(stream).await {
+				if let Err(error) = server.handle(stream, peer_ip).await {
 					tracing::debug!(%error, "POP3 connection closed");
 				}
 			});
 		}
 	}
 
-	async fn handle(&self, stream: TcpStream) -> std::io::Result<()> {
+	async fn handle(&self, stream: TcpStream, peer_ip: std::net::IpAddr) -> std::io::Result<()> {
 		let stream = self.tls.accept(stream).await?;
 		let backend = MailboxBackend::new_with_crypto(
 			self.directory.clone(),
 			self.data_dir.clone(),
 			self.crypto.clone(),
 		);
-		run(stream, backend).await
+		run(stream, backend, Some(peer_ip)).await
 	}
 }
 
 /// The protocol loop: greet, then read command lines and write responses until
 /// the session ends or the peer disconnects.
-async fn run<S>(mut stream: S, backend: MailboxBackend) -> std::io::Result<()>
+async fn run<S>(
+	mut stream: S,
+	backend: MailboxBackend,
+	peer_ip: Option<std::net::IpAddr>,
+) -> std::io::Result<()>
 where
 	S: AsyncRead + AsyncWrite + Unpin,
 {
 	let mut session = Session::new(backend);
+	session.set_peer_ip(peer_ip);
 	stream.write_all(&session.greeting().encode()).await?;
 
 	let mut decoder = LineDecoder::new();
@@ -175,7 +181,7 @@ mod tests {
 	#[tokio::test]
 	async fn too_many_errors_closes_connection() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None).await });
 		// Drain the greeting, then spam invalid commands.
 		let mut chunk = [0u8; 4096];
 		let _ = client.read(&mut chunk).await;
@@ -204,7 +210,7 @@ mod tests {
 	#[tokio::test]
 	async fn quit_after_greeting_closes_cleanly() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None).await });
 		let greeting = read_chunk(&mut client).await;
 		assert!(greeting.starts_with("+OK"), "{greeting}");
 		client.write_all(b"QUIT\r\n").await.expect("write");
@@ -219,7 +225,7 @@ mod tests {
 	#[tokio::test]
 	async fn eof_ends_the_session() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None).await });
 		let _ = read_chunk(&mut client).await;
 		drop(client); // client hangs up before any command.
 		assert!(task.await.expect("join").is_ok());
@@ -228,7 +234,7 @@ mod tests {
 	#[tokio::test]
 	async fn overlong_line_is_rejected() {
 		let (mut client, server) = duplex(256 * 1024);
-		let task = tokio::spawn(async move { run(server, backend()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None).await });
 		let _ = read_chunk(&mut client).await;
 		// A line far longer than the protocol allows.
 		let huge = vec![b'A'; 100 * 1024];
@@ -242,7 +248,7 @@ mod tests {
 	#[tokio::test]
 	async fn non_ascii_command_is_rejected() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None).await });
 		let _ = read_chunk(&mut client).await;
 		client.write_all(&[0xff, 0xfe]).await.expect("write");
 		client.write_all(b"\r\n").await.expect("write");
@@ -256,7 +262,7 @@ mod tests {
 	#[tokio::test(start_paused = true)]
 	async fn idle_timeout_closes_connection() {
 		let (mut client, server) = duplex(64 * 1024);
-		let task = tokio::spawn(async move { run(server, backend()).await });
+		let task = tokio::spawn(async move { run(server, backend(), None).await });
 		let _ = read_chunk(&mut client).await; // greeting
 		// Send nothing: the read timeout (paused clock) fires and closes.
 		let mut chunk = [0u8; 16];

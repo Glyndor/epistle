@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
+use crate::antispam::bans::BanStore;
 use crate::config::{Config, Listener};
 
 /// Bind a listener's socket and log it. Shared by every `serve` listener arm.
@@ -528,6 +529,71 @@ pub(super) fn spawn_storage_maintenance(config: &Config) {
 	spawn_archive_sweep(config);
 }
 
+/// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and
+/// `auth_ban` rows whose `until` is older than 24 hours ago, so the ban
+/// tables stay bounded. No-op when no database is configured; the ban
+/// store is absent in that case.
+pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
+	let Some(pool) = pool else {
+		return;
+	};
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|d| d.as_secs())
+				.unwrap_or(0);
+			let store = crate::antispam::bans::PgBanStore::new(pool.clone(), None);
+			store.sweep(now).await;
+		}
+	});
+}
+
 #[cfg(test)]
 #[path = "serve_tasks_tests.rs"]
 mod tests;
+
+/// Build the optional ARC sealer from `[arc]`: a DKIM-format ed25519 key
+/// under the server hostname. Absent config yields `None`; a key that does
+/// not load is fatal (fail closed), so a misconfigured sealer never lets
+/// mail through unsealed by accident.
+pub(super) fn build_arc_sealer(
+	config: &Config,
+) -> std::io::Result<Option<Arc<crate::arc::sealer::ArcSealer>>> {
+	let Some(arc) = &config.arc else {
+		return Ok(None);
+	};
+	let key = crate::dkim::load_ed25519_key(&arc.key_file).map_err(std::io::Error::other)?;
+	Ok(Some(Arc::new(crate::arc::sealer::ArcSealer::new(
+		key,
+		config.hostname.clone(),
+		arc.selector.clone(),
+	))))
+}
+
+/// Build the shared in-memory greylist when `greylist_delay_secs` is set,
+/// and spawn the hourly prune that drops triplets older than a day so the
+/// map stays bounded. `None` when greylisting is off.
+pub(super) fn build_greylist(
+	config: &Config,
+) -> Option<Arc<crate::antispam::greylist::MemoryGreylist>> {
+	(config.greylist_delay_secs > 0).then(|| {
+		let store = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+		let prune_store = Arc::clone(&store);
+		tokio::spawn(async move {
+			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+			loop {
+				interval.tick().await;
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_secs())
+					.unwrap_or(0);
+				prune_store.prune(now, 86_400);
+			}
+		});
+		store
+	})
+}

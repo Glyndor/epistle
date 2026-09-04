@@ -82,14 +82,28 @@ fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
 	.with_authz(authz)
 }
 
-/// POST a form body and return `(status, json)`.
+/// Wire a fixed peer IP into `ConnectInfo` so the OAuth grant handlers
+/// (which extract it from there) don't 500 on the test request.
+fn attach_peer(request: &mut Request<Body>) {
+	request
+		.extensions_mut()
+		.insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+			[203, 0, 113, 1],
+			12345,
+		))));
+}
+
+/// POST a form body and return `(status, json)`. Wires the peer IP
+/// into `ConnectInfo`; without it the extractor fails and the handler
+/// returns 500.
 async fn post_form(app: &axum::Router, path: &str, form: &str) -> (StatusCode, serde_json::Value) {
-	let request = Request::builder()
+	let mut request = Request::builder()
 		.method("POST")
 		.uri(path)
 		.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
 		.body(Body::from(form.to_string()))
 		.expect("request");
+	attach_peer(&mut request);
 	let response = app.clone().oneshot(request).await.expect("response");
 	let status = response.status();
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -387,13 +401,14 @@ async fn device_approve_accepts_basic_auth() {
 	let user_code = body["user_code"].as_str().expect("user_code").to_string();
 	// Credentials in an HTTP Basic header instead of body fields.
 	let basic = B64.encode(format!("{LOGIN}:{PASSWORD}"));
-	let request = Request::builder()
+	let mut request = Request::builder()
 		.method("POST")
 		.uri("/oauth/device/approve")
 		.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
 		.header(header::AUTHORIZATION, format!("Basic {basic}"))
 		.body(Body::from(format!("user_code={user_code}")))
 		.expect("request");
+	attach_peer(&mut request);
 	let response = app.oneshot(request).await.expect("response");
 	assert_eq!(response.status(), StatusCode::OK);
 }

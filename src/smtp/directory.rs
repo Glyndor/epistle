@@ -1,8 +1,43 @@
 //! Recipient resolution: which account, if any, receives an address.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 use super::address::Address;
+
+/// Run an async future synchronously from a non-async context. Every
+/// listener's authentication path is synchronous (the sans-IO state
+/// machines drive the I/O layer), so the ban store's async methods must
+/// be drained through this helper. The calls are short single-query
+/// reads and writes; the production runtime is multi-threaded, so the
+/// `block_in_place` worker park keeps sibling tasks on the same runtime
+/// running while the ban store completes. A current-thread runtime would
+/// deadlock on the helper, so the unit tests must declare
+/// `#[tokio::test(flavor = "multi_thread")]`; a panic surfaces the
+/// mistake at the call site.
+fn block_on_async<F: Future>(future: F) -> F::Output {
+	let handle = tokio::runtime::Handle::current();
+	match handle.runtime_flavor() {
+		tokio::runtime::RuntimeFlavor::MultiThread => {
+			tokio::task::block_in_place(move || handle.block_on(future))
+		}
+		tokio::runtime::RuntimeFlavor::CurrentThread => panic!(
+			"Directory::authenticate_with_ip cannot block a current-thread \
+			 tokio runtime; switch the test to #[tokio::test(flavor = \"multi_thread\")] \
+			 or remove the ban store"
+		),
+		_ => handle.block_on(future),
+	}
+}
+
+/// Current Unix timestamp in seconds, with the same fall-back the rest of
+/// the auth path uses for an impossible pre-epoch clock.
+fn unix_now_secs() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
+}
 
 /// Outcome of resolving a recipient address.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +130,11 @@ pub struct Directory {
 	/// behaviour. Present (even empty) means only the listed protocols do;
 	/// the rest reject identically to an unknown login.
 	allowed_protocols: HashMap<String, HashSet<crate::config::Protocol>>,
+	/// Shared ban store consulted before any password hashing and updated
+	/// on every authentication outcome. `None` in deployments without
+	/// `[database]`; those fall back to the per-connection three-strikes
+	/// counters that the listeners already maintain.
+	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
 }
 
 impl Directory {
@@ -131,6 +171,7 @@ impl Directory {
 			masked_by_address: HashMap::new(),
 			metrics: None,
 			allowed_protocols: HashMap::new(),
+			ban_store: None,
 		}
 	}
 
@@ -382,60 +423,6 @@ impl Directory {
 			.filter(|(_, owner)| owner.eq_ignore_ascii_case(account))
 			.map(|(address, _)| address.clone())
 			.collect()
-	}
-
-	/// Verify a login, falling back to the account's app passwords when the
-	/// primary password fails. `ip` is the client address used to enforce an app
-	/// password's CIDR allowlist (an allowlisted app password is unusable
-	/// without it). `protocol` tags the authentication path (SMTP submission,
-	/// IMAP, POP3, ManageSieve, the API, OAuth approval, or WebDAV) so an
-	/// account with a per-account `allowed_protocols` set can sign in only
-	/// through a protocol it actually opts into; every other path returns
-	/// `None` here, mirroring the wire-level no-oracle for an unknown account.
-	///
-	/// Fail-closed and no user-enumeration oracle: an unknown login returns
-	/// `None` from [`Directory::credentials`] before any hashing, exactly as a
-	/// known account whose primary and every app password mismatch — both end in
-	/// `None`. The app-password fallback runs only for a resolved account, so it
-	/// does not change the unknown-vs-known timing class. The protocol
-	/// allowlist runs on the resolved account name, so a "wrong protocol" and
-	/// a "wrong password" share the same wire outcome.
-	///
-	/// LDAP is consulted last and only when the local credential path yields no
-	/// match: local and SQL accounts authenticate without an LDAP round trip, and
-	/// an LDAP-only login (no local entry) still gets a live bind. The LDAP path
-	/// fails closed to `None` (unknown user and bad password are indistinguishable).
-	///
-	/// The structured audit event is emitted on the way out, with the
-	/// resolved account (or `unknown` for a failure) and the login the client
-	/// presented — never the plaintext password nor the TOTP code.
-	pub fn authenticate_with_ip(
-		&self,
-		login: &str,
-		password: &str,
-		ip: Option<std::net::IpAddr>,
-		protocol: crate::config::Protocol,
-	) -> Option<String> {
-		let outcome = self
-			.authenticate_local(login, password, ip)
-			.or_else(|| {
-				// Local/SQL credentials did not match: try the live LDAP bind, if any.
-				self.ldap
-					.as_ref()
-					.and_then(|ldap| ldap.authenticate(login, password))
-			})
-			.and_then(|account| {
-				// The protocol allowlist is enforced after the local/LDAP
-				// credential check resolves an account. A restriction that
-				// denies this protocol returns None exactly like the disabled
-				// path, so the wire response is identical for "wrong password",
-				// "disabled", and "wrong protocol" — none reveals that the
-				// account exists at all.
-				self.is_protocol_allowed(&account, protocol)
-					.then_some(account)
-			});
-		self.record_auth_outcome(login, outcome.as_deref(), ip, protocol);
-		outcome
 	}
 
 	/// Emit the audit event and bump the counter for one authentication
@@ -716,6 +703,9 @@ impl Directory {
 		Some(format!("{}@{}", &local[..cut], domain).to_ascii_lowercase())
 	}
 }
+
+#[path = "directory_bans.rs"]
+mod bans;
 
 #[cfg(test)]
 #[path = "directory_tests.rs"]

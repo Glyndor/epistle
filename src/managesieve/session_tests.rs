@@ -8,7 +8,12 @@ struct TestBackend {
 }
 
 impl Backend for TestBackend {
-	fn verify(&self, authcid: &str, password: &str) -> Option<String> {
+	fn verify(
+		&self,
+		authcid: &str,
+		password: &str,
+		_peer_ip: Option<std::net::IpAddr>,
+	) -> Option<String> {
 		(authcid == "alice@example.org" && password == "secret").then(|| "alice".to_string())
 	}
 	fn store(&self, account: &str) -> ScriptStore {
@@ -242,4 +247,95 @@ fn logout_is_final() {
 	let (mut s, _dir) = session(true);
 	let response = s.handle(Command::Logout);
 	assert!(response.is_final());
+}
+
+/// A ManageSieve authentication failure reaches the directory's
+/// `authenticate_with_ip` with the peer IP the network layer recorded.
+/// The test wires a backend that goes through the live directory (with
+/// a [`FakeBanStore`] attached), drives an `AUTHENTICATE PLAIN` with
+/// the wrong password, and asserts the fake recorded a failure for
+/// `ip:<peer>` and `account:<login>`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managesieve_failures_now_reach_the_directory() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
+	use std::collections::HashMap;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let directory = std::sync::Arc::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes(HashMap::from([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)]))
+		.with_ban_store(ban_store.clone()),
+	);
+	let accounts_root = dir.path().to_path_buf();
+	let backend = DirBackend {
+		directory,
+		accounts_root,
+	};
+	let mut session = Session::new(backend, true);
+	let peer: std::net::IpAddr = "203.0.113.30".parse().expect("peer");
+	session.set_peer_ip(Some(peer));
+	let bad = sasl_plain_initial("alice@example.org", "wrong");
+	let response = session.handle(Command::Authenticate {
+		mechanism: "PLAIN".to_string(),
+		initial: Some(bad),
+	});
+	assert_eq!(
+		response,
+		Response::No(Some("Authentication failed.".to_string())),
+		"ManageSieve failure must reach the directory and return NO"
+	);
+	assert!(
+		ban_store.call_count("record_failure") >= 2,
+		"ban store recorded {} failure(s); expected at least two (IP and account)",
+		ban_store.call_count("record_failure")
+	);
+	assert!(
+		ban_store.failure_count("ip:203.0.113.30", 0) >= 1,
+		"ban store did not record a failure for ip:203.0.113.30"
+	);
+	assert!(
+		ban_store.failure_count("account:alice", 0) >= 1,
+		"ban store did not record a failure for account:alice"
+	);
+}
+
+/// Backend that routes credential verification through the live
+/// directory (the production shape), keeping `store` for the in-memory
+/// script storage the session needs afterwards.
+struct DirBackend {
+	directory: std::sync::Arc<crate::smtp::directory::Directory>,
+	accounts_root: PathBuf,
+}
+
+impl Backend for DirBackend {
+	fn verify(
+		&self,
+		authcid: &str,
+		password: &str,
+		peer_ip: Option<std::net::IpAddr>,
+	) -> Option<String> {
+		self.directory.authenticate_with_ip(
+			authcid,
+			password,
+			peer_ip,
+			crate::config::Protocol::ManageSieve,
+		)
+	}
+	fn store(&self, account: &str) -> ScriptStore {
+		ScriptStore::new(&self.accounts_root, account)
+	}
+}
+
+/// Encode `\0authcid\0password` for SASL PLAIN initial response.
+fn sasl_plain_initial(authcid: &str, password: &str) -> String {
+	use base64::Engine;
+	base64::engine::general_purpose::STANDARD.encode(format!("\0{authcid}\0{password}"))
 }

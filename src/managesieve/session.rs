@@ -21,7 +21,14 @@ variables reject ereject copy body date comparator-i;ascii-numeric";
 /// Storage and authentication backing a session.
 pub trait Backend {
 	/// Verify SASL PLAIN credentials, returning the canonical account name.
-	fn verify(&self, authcid: &str, password: &str) -> Option<String>;
+	/// `peer_ip` is the client address the network layer recorded; the
+	/// ban store keys its per-IP row on it.
+	fn verify(
+		&self,
+		authcid: &str,
+		password: &str,
+		peer_ip: Option<std::net::IpAddr>,
+	) -> Option<String>;
 	/// The script store for an authenticated account.
 	fn store(&self, account: &str) -> ScriptStore;
 }
@@ -100,6 +107,10 @@ pub struct Session<B: Backend> {
 	account: Option<String>,
 	/// Failed `AUTHENTICATE` attempts on this connection.
 	auth_failures: u8,
+	/// The client peer IP, set by the network layer before the command
+	/// loop starts. Drives the per-IP ban store check on every
+	/// `AUTHENTICATE` attempt.
+	peer_ip: Option<std::net::IpAddr>,
 }
 
 impl<B: Backend> Session<B> {
@@ -111,12 +122,19 @@ impl<B: Backend> Session<B> {
 			tls,
 			account: None,
 			auth_failures: 0,
+			peer_ip: None,
 		}
 	}
 
 	/// Mark the transport as encrypted (called after a STARTTLS upgrade).
 	pub fn set_tls(&mut self) {
 		self.tls = true;
+	}
+
+	/// Set the client peer IP for ban-store enforcement. Called by the
+	/// network layer after `accept()`; `None` for in-memory tests.
+	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
+		self.peer_ip = ip;
 	}
 
 	/// The capability banner sent on connect and after STARTTLS.
@@ -201,7 +219,10 @@ impl<B: Backend> Session<B> {
 		}
 		let account = initial
 			.and_then(|encoded| crate::smtp::auth::parse_plain(&encoded).ok())
-			.and_then(|creds| self.backend.verify(&creds.authcid, &creds.password));
+			.and_then(|creds| {
+				self.backend
+					.verify(&creds.authcid, &creds.password, self.peer_ip)
+			});
 		match account {
 			Some(account) => {
 				self.account = Some(account);

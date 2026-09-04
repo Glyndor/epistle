@@ -11,7 +11,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
@@ -51,6 +51,7 @@ pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
 /// issued code is single-use and short-lived.
 pub async fn authorize(
 	State(state): State<ApiState>,
+	ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
@@ -78,11 +79,16 @@ pub async fn authorize(
 		return oauth_error("invalid_grant");
 	};
 	// The OAuth grant endpoints sit outside `require_bearer_token`, so the
-	// peer IP is not propagated as an extension here; the audit log records
-	// `unknown` for the IP — see `device::device_approve` for the same note.
-	let Some(account) =
-		state.authenticate_with_ip(&login, &password, None, crate::config::Protocol::Api)
-	else {
+	// peer IP is sourced from `ConnectInfo` here (wired in by the listener's
+	// `into_make_service_with_connect_info`) and forwarded to the ban-aware
+	// authentication path. The peer IP participates in the audit log and the
+	// shared ban table.
+	let Some(account) = state.authenticate_with_ip(
+		&login,
+		&password,
+		Some(peer.ip()),
+		crate::config::Protocol::Api,
+	) else {
 		return oauth_error("invalid_grant");
 	};
 

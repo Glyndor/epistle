@@ -70,10 +70,25 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// for ~100 ms; doing it before listener setup means the metric is
 	// already in place if a slow startup happens to coincide with one.
 	crate::clock::check_drift(&metrics);
+	// Optional reputation database, migrated at startup. An unreachable
+	// database degrades the antispam engine instead of stopping the mail, unless
+	// `[database] directory = true` makes it the source of the accounts.
+	let reputation_pool = super::serve_tasks::connect_database(&config, &metrics).await?;
+
 	// The directory's audit counters are bumped from the SMTP, IMAP,
 	// ManageSieve, WebDAV, API and OAuth paths — every directory rebuilt
 	// here shares the same `Arc<Metrics>` so the counters are coherent.
 	store = store.with_metrics(metrics.clone());
+	// When `[database]` is configured the shared ban store is built and
+	// attached to every rebuilt directory. Without a database, the ban
+	// store is absent and the per-connection three-strikes counters are
+	// the only defence; exactly the pre-table behaviour.
+	if let Some(pool) = &reputation_pool {
+		let ban_store: Arc<dyn crate::antispam::bans::BanStore> = Arc::new(
+			crate::antispam::bans::PgBanStore::new(pool.clone(), Some(metrics.clone())),
+		);
+		store = store.with_ban_store(ban_store);
+	}
 	let account_store = Arc::new(store);
 	let directory = account_store.handle();
 
@@ -120,18 +135,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Optional ARC sealer: seals inbound mail under the server hostname using
 	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed). The
 	// same sealer also seals forwarded mail (RFC 8617) via the delivery sink.
-	let arc_sealer = match &config.arc {
-		Some(arc) => {
-			let key =
-				crate::dkim::load_ed25519_key(&arc.key_file).map_err(std::io::Error::other)?;
-			Some(Arc::new(crate::arc::sealer::ArcSealer::new(
-				key,
-				config.hostname.clone(),
-				arc.selector.clone(),
-			)))
-		}
-		None => None,
-	};
+	let arc_sealer = super::serve_tasks::build_arc_sealer(&config)?;
 	if let Some(sealer) = &arc_sealer {
 		split = split.with_arc_sealer(Arc::clone(sealer));
 	}
@@ -139,22 +143,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Optional greylisting store, shared across SMTP listeners. A background
 	// task prunes stale triplets so the map stays bounded.
-	let greylist = (config.greylist_delay_secs > 0).then(|| {
-		let store = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
-		let prune_store = Arc::clone(&store);
-		tokio::spawn(async move {
-			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-			loop {
-				interval.tick().await;
-				let now = std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.map(|d| d.as_secs())
-					.unwrap_or(0);
-				prune_store.prune(now, 86_400);
-			}
-		});
-		store
-	});
+	let greylist = super::serve_tasks::build_greylist(&config);
 
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With
@@ -244,11 +233,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// the start, not the first mail that hits the band.
 	let llm_hook = crate::antispam::llm::LlmHook::from_config(config.antispam_llm.as_ref())?;
 
-	// Optional reputation database, migrated at startup. An unreachable
-	// database degrades the antispam engine instead of stopping the mail, unless
-	// `[database] directory = true` makes it the source of the accounts.
-	let reputation_pool = super::serve_tasks::connect_database(&config, &metrics).await?;
-
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
 		.await?;
@@ -298,6 +282,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	);
 
 	super::serve_tasks::spawn_storage_maintenance(&config);
+
+	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
+	// the tables stay bounded. No-op when no database is configured: the
+	// ban store is absent in that case.
+	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone());
 
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	let tls_acceptor = match &config.tls {
