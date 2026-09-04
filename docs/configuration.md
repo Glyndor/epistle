@@ -44,7 +44,9 @@ a connection URL.
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
 | `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
-| `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables DNSBL. |
+| `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
+| `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
+| `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
 | `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
 | `srs_secret` | string | unset | Secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Absent disables SRS. |

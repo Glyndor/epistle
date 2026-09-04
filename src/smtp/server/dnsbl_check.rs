@@ -57,8 +57,7 @@ impl Server {
 		// IP screen: client address against the IP blocklist zones.
 		if let Some(ip) = peer
 			&& self.dnsbl.has_ip_zones()
-			&& let crate::dnsbl::DnsblOutcome::Listed { zone } =
-				self.dnsbl.check(ip, dns).await
+			&& let crate::dnsbl::DnsblOutcome::Listed { zone } = self.dnsbl.check(ip, dns).await
 		{
 			tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
 			self.record_dnsbl_reject(&message.data);

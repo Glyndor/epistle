@@ -145,6 +145,14 @@ pub struct Config {
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]
 	pub dnsbl_zones: Vec<String>,
+	/// Right-hand-side blocklist zones queried with the envelope sender's
+	/// domain (RFC 5782 §2.3). Absent disables the sender-domain screen.
+	#[serde(default)]
+	pub dnsbl_domain_zones: Vec<String>,
+	/// URI blocklist zones queried with the host of every URL found in the
+	/// body (RFC 5782 §2.3). Absent disables the URL-host screen.
+	#[serde(default)]
+	pub dnsbl_url_zones: Vec<String>,
 	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
 	/// before accepting. 0 disables the slowdown (the default). Requires a
 	/// configured database.
@@ -301,6 +309,8 @@ impl std::fmt::Debug for Config {
 			.field("domains", &self.domains)
 			.field("domain_aliases", &self.domain_aliases)
 			.field("dnsbl_zones", &self.dnsbl_zones)
+			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
+			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
 			.field(
 				"first_time_sender_delay_secs",
 				&self.first_time_sender_delay_secs,

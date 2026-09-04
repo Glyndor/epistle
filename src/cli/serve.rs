@@ -504,7 +504,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				let mut server = Server::new(&config.hostname, Arc::clone(&sink))
 					.with_directory(directory.clone())
 					.with_spf(Arc::clone(&spf_dns))
-					.with_dnsbl(crate::dnsbl::Dnsbl::new(config.dnsbl_zones.clone()))
+					.with_dnsbl(
+						crate::dnsbl::Dnsbl::new(config.dnsbl_zones.clone())
+							.with_domain_zones(config.dnsbl_domain_zones.clone())
+							.with_url_zones(config.dnsbl_url_zones.clone()),
+					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
 					.with_max_connections(max_conn)
 					.with_report_dir(config.data_dir.clone());
