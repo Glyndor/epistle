@@ -37,15 +37,21 @@ struct DirectoryBackend {
 }
 
 impl Backend for DirectoryBackend {
-	fn verify(&self, authcid: &str, password: &str) -> Option<String> {
-		// ManageSieve only authenticates one protocol; the per-account
-		// `allowed_protocols` set must opt in here for an account to
-		// reach its scripts. The check rides on the wire as part of the
-		// generic "authentication failed" outcome — the same as an unknown
-		// login — so the response carries no oracle.
-		self.directory.current().authenticate(
+	fn verify(
+		&self,
+		authcid: &str,
+		password: &str,
+		peer_ip: Option<std::net::IpAddr>,
+	) -> Option<String> {
+		// Route through the directory's ban-aware path so the ban store
+		// sees this attempt. ManageSieve only authenticates one protocol;
+		// the per-account `allowed_protocols` set must opt in here for
+		// an account to reach its scripts, and the wire response still
+		// carries no oracle.
+		self.directory.current().authenticate_with_ip(
 			authcid,
 			password,
+			peer_ip,
 			crate::config::Protocol::ManageSieve,
 		)
 	}
@@ -91,21 +97,23 @@ impl Server {
 				continue;
 			};
 			let server = Arc::clone(&self);
+			let peer_ip = peer.ip();
 			tokio::spawn(async move {
 				let _permit = permit;
-				if let Err(error) = server.handle(stream).await {
+				if let Err(error) = server.handle(stream, peer_ip).await {
 					tracing::debug!(%error, "ManageSieve connection closed");
 				}
 			});
 		}
 	}
 
-	async fn handle(&self, stream: TcpStream) -> std::io::Result<()> {
+	async fn handle(&self, stream: TcpStream, peer_ip: std::net::IpAddr) -> std::io::Result<()> {
 		let backend = DirectoryBackend {
 			directory: self.directory.clone(),
 			accounts_root: self.accounts_root.clone(),
 		};
 		let mut session = Session::new(backend, false);
+		session.set_peer_ip(Some(peer_ip));
 		let mut stream: Box<dyn Connection> = Box::new(stream);
 
 		stream.write_all(&session.greeting().encode()).await?;

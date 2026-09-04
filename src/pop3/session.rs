@@ -11,7 +11,11 @@ use super::command::Command;
 /// tests supply an in-memory fake.
 pub trait Backend {
 	/// Verify credentials, returning the canonical account name on success.
-	fn verify(&self, user: &str, pass: &str) -> Option<String>;
+	/// `peer_ip` is the client address the network layer recorded; passing
+	/// `None` skips the ban-store check on the IP (the ban store already
+	/// handles `unknown` as "not banned"). The audit log and the per-IP
+	/// ban row are keyed on this address.
+	fn verify(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Option<String>;
 	/// The messages in the account's inbox at login: `(unique-id, bytes)`.
 	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)>;
 	/// Permanently remove the given unique-ids (committed at QUIT).
@@ -99,6 +103,10 @@ pub struct Session<B: Backend> {
 	user: Option<String>,
 	account: Option<String>,
 	messages: Vec<Message>,
+	/// The client peer IP, set by the network layer before the command
+	/// loop starts. Drives the per-IP ban store check on every
+	/// `USER`/`PASS`/`AUTH PLAIN` attempt.
+	peer_ip: Option<std::net::IpAddr>,
 }
 
 impl<B: Backend> Session<B> {
@@ -110,7 +118,14 @@ impl<B: Backend> Session<B> {
 			user: None,
 			account: None,
 			messages: Vec::new(),
+			peer_ip: None,
 		}
+	}
+
+	/// Set the client peer IP for ban-store enforcement. Called by the
+	/// network layer after `accept()`; `None` for in-memory tests.
+	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
+		self.peer_ip = ip;
 	}
 
 	/// The greeting sent on connect.
@@ -224,7 +239,10 @@ impl<B: Backend> Session<B> {
 		}
 		let account = initial
 			.and_then(|encoded| crate::smtp::auth::parse_plain(&encoded).ok())
-			.and_then(|creds| self.backend.verify(&creds.authcid, &creds.password));
+			.and_then(|creds| {
+				self.backend
+					.verify(&creds.authcid, &creds.password, self.peer_ip)
+			});
 		match account {
 			Some(account) => self.complete_login(account),
 			None => Response::Err("authentication failed".to_string()),
@@ -233,7 +251,7 @@ impl<B: Backend> Session<B> {
 
 	/// Verify a USER/PASS login and, on success, open the mailbox.
 	fn login(&mut self, user: &str, pass: &str) -> Response {
-		match self.backend.verify(user, pass) {
+		match self.backend.verify(user, pass, self.peer_ip) {
 			Some(account) => self.complete_login(account),
 			None => {
 				// No oracle: same message whether user or pass was wrong.

@@ -43,19 +43,17 @@ impl MailboxBackend {
 }
 
 impl Backend for MailboxBackend {
-	fn verify(&self, user: &str, pass: &str) -> Option<String> {
-		// Hold the directory snapshot for the whole lookup: credentials()
-		// borrows from it. No oracle — a wrong user and a wrong password both
-		// yield None, and so does an account whose `allowed_protocols` does
-		// not include POP3.
-		let directory = self.directory.current();
-		directory
-			.credentials(user)
-			.filter(|(_, hash)| crate::smtp::auth::verify_password(hash, pass))
-			.map(|(account, _)| account)
-			.filter(|account| {
-				directory.is_protocol_allowed(account, crate::config::Protocol::Pop3s)
-			})
+	fn verify(&self, user: &str, pass: &str, peer_ip: Option<std::net::IpAddr>) -> Option<String> {
+		// Route through the directory's ban-aware path: it consults the
+		// shared ban store before any hashing, records the failure on miss,
+		// and clears on success, so POP3 participates in the same audit and
+		// ban accounting as every other listener.
+		self.directory.current().authenticate_with_ip(
+			user,
+			pass,
+			peer_ip,
+			crate::config::Protocol::Pop3s,
+		)
 	}
 
 	fn load(&self, account: &str) -> Vec<(String, Vec<u8>)> {
@@ -123,12 +121,18 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let backend = backend(dir.path());
 		assert_eq!(
-			backend.verify("alice@example.org", "secret").as_deref(),
+			backend
+				.verify("alice@example.org", "secret", None)
+				.as_deref(),
 			Some("alice")
 		);
 		// Wrong password and unknown user both fail the same way.
-		assert!(backend.verify("alice@example.org", "wrong").is_none());
-		assert!(backend.verify("ghost@example.org", "secret").is_none());
+		assert!(backend.verify("alice@example.org", "wrong", None).is_none());
+		assert!(
+			backend
+				.verify("ghost@example.org", "secret", None)
+				.is_none()
+		);
 	}
 
 	#[test]

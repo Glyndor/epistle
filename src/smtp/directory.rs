@@ -9,11 +9,25 @@ use super::address::Address;
 /// listener's authentication path is synchronous (the sans-IO state
 /// machines drive the I/O layer), so the ban store's async methods must
 /// be drained through this helper. The calls are short single-query
-/// reads and writes; the runtime is multi-threaded, so blocking the
-/// current worker briefly is acceptable. A panic in the ban store's
-/// fail-open path is still surfaced rather than swallowed.
+/// reads and writes; the production runtime is multi-threaded, so the
+/// `block_in_place` worker park keeps sibling tasks on the same runtime
+/// running while the ban store completes. A current-thread runtime would
+/// deadlock on the helper, so the unit tests must declare
+/// `#[tokio::test(flavor = "multi_thread")]`; a panic surfaces the
+/// mistake at the call site.
 fn block_on_async<F: Future>(future: F) -> F::Output {
-	tokio::runtime::Handle::current().block_on(future)
+	let handle = tokio::runtime::Handle::current();
+	match handle.runtime_flavor() {
+		tokio::runtime::RuntimeFlavor::MultiThread => {
+			tokio::task::block_in_place(move || handle.block_on(future))
+		}
+		tokio::runtime::RuntimeFlavor::CurrentThread => panic!(
+			"Directory::authenticate_with_ip cannot block a current-thread \
+			 tokio runtime; switch the test to #[tokio::test(flavor = \"multi_thread\")] \
+			 or remove the ban store"
+		),
+		_ => handle.block_on(future),
+	}
 }
 
 /// Current Unix timestamp in seconds, with the same fall-back the rest of
@@ -489,30 +503,26 @@ impl Directory {
 		if let Some(store) = self.ban_store.as_ref() {
 			let now_secs = unix_now_secs();
 			if let Some(ip) = ip
-				&& let Some(info) = block_on_async(store.is_banned(
-					&crate::antispam::bans::subject_ip(ip),
-					now_secs,
-				))
-			{
-				self.log_banned("ip", &ip.to_string(), &info.reason, info.until_secs, protocol);
+				&& let Some(info) = block_on_async(
+					store.is_banned(&crate::antispam::bans::subject_ip(ip), now_secs),
+				) {
+				self.log_banned(
+					"ip",
+					&ip.to_string(),
+					&info.reason,
+					info.until_secs,
+					protocol,
+				);
 				return None;
 			}
 			// Resolve the account name before consulting its ban row so
 			// unknown logins cannot probe bans on accounts they cannot
 			// authenticate as.
 			if let Some((account, _)) = self.credentials(login)
-				&& let Some(info) = block_on_async(store.is_banned(
-					&crate::antispam::bans::subject_account(&account),
-					now_secs,
-				))
-			{
-				self.log_banned(
-					"account",
-					&account,
-					&info.reason,
-					info.until_secs,
-					protocol,
-				);
+				&& let Some(info) = block_on_async(
+					store.is_banned(&crate::antispam::bans::subject_account(&account), now_secs),
+				) {
+				self.log_banned("account", &account, &info.reason, info.until_secs, protocol);
 				return None;
 			}
 		}
@@ -582,7 +592,9 @@ impl Directory {
 				if let Some(ip) = ip {
 					block_on_async(store.clear_success(&crate::antispam::bans::subject_ip(ip)));
 				}
-				block_on_async(store.clear_success(&crate::antispam::bans::subject_account(account)));
+				block_on_async(
+					store.clear_success(&crate::antispam::bans::subject_account(account)),
+				);
 			}
 			None => {
 				if let Some(ip) = ip {

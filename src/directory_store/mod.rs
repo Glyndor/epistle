@@ -195,6 +195,12 @@ pub struct AccountStore {
 	/// mutate without going through `AccountStore`'s mutators.
 	masked: Arc<RwLock<MaskedAddressStore>>,
 	aliases_disabled: Arc<RwLock<AliasStore>>,
+	/// Shared ban store consulted before any password hashing and updated
+	/// on every authentication outcome. Threaded into every rebuilt
+	/// directory by [`AccountStore::with_ban_store`]. `None` in deployments
+	/// without `[database]` — the per-connection three-strikes counters are
+	/// the only defence on those.
+	ban_store: Option<Arc<dyn crate::antispam::bans::BanStore>>,
 	/// Shared metrics handle for the audit counters
 	/// (`auth_login_succeeded` / `auth_login_failed`). Threaded into every
 	/// rebuilt directory via [`AccountStore::with_metrics`] so the SMTP,
@@ -243,6 +249,7 @@ impl AccountStore {
 			ldap_auth: None,
 			masked: Arc::new(RwLock::new(masked)),
 			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
+			ban_store: None,
 			metrics: None,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
@@ -308,6 +315,23 @@ impl AccountStore {
 		self.metrics = Some(metrics);
 		self.handle.replace(self.build_directory());
 		self
+	}
+
+	/// Attach the shared ban store consulted on every password
+	/// authentication. `None` (the default) keeps the per-connection
+	/// three-strikes counters as the only defence; with `[database]`
+	/// configured the `serve` builder wires in a [`PgBanStore`].
+	///
+	/// [`PgBanStore`]: crate::antispam::bans::PgBanStore
+	pub fn with_ban_store(mut self, store: Arc<dyn crate::antispam::bans::BanStore>) -> Self {
+		self.ban_store = Some(store);
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// The ban store attached to this store, when one is.
+	pub fn ban_store(&self) -> Option<&Arc<dyn crate::antispam::bans::BanStore>> {
+		self.ban_store.as_ref()
 	}
 
 	/// Replace the LDAP-sourced resolution accounts and rebuild the directory.
@@ -617,6 +641,9 @@ impl AccountStore {
 			.with_allowed_protocols(allowed_protocols);
 		if let Some(metrics) = self.metrics.clone() {
 			dir = dir.with_metrics(metrics);
+		}
+		if let Some(ban_store) = self.ban_store.clone() {
+			dir = dir.with_ban_store(ban_store);
 		}
 		dir
 	}
