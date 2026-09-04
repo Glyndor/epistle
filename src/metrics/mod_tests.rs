@@ -46,6 +46,11 @@ fn counts_events() {
 	m.llm_consulted();
 	m.llm_quarantined();
 	m.llm_failed();
+	m.report_ingested(crate::reports::Kind::Dmarc);
+	m.report_ingested(crate::reports::Kind::TlsRpt);
+	m.report_rows_failing(crate::reports::Kind::Dmarc, 7);
+	m.report_rows_failing(crate::reports::Kind::TlsRpt, 4);
+	m.reports_dropped();
 	let r = m.render();
 	assert!(r.contains("mail_sieve_rejected_total 1\n"), "{r}");
 	assert!(r.contains("mail_vacation_sent_total 2\n"), "{r}");
@@ -65,6 +70,23 @@ fn counts_events() {
 	assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
 	assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
 	assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
+	assert!(
+		r.contains("mail_dmarc_reports_ingested_total 1\n"),
+		"{r}"
+	);
+	assert!(
+		r.contains("mail_tlsrpt_reports_ingested_total 1\n"),
+		"{r}"
+	);
+	assert!(
+		r.contains("mail_dmarc_report_rows_failing_total 7\n"),
+		"{r}"
+	);
+	assert!(
+		r.contains("mail_tlsrpt_failed_sessions_total 4\n"),
+		"{r}"
+	);
+	assert!(r.contains("mail_reports_dropped_total 1\n"), "{r}");
 	assert!(
 		r.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 2\n"),
 		"{r}"
@@ -128,6 +150,11 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"send_limited_new_recipients",
 		"subjectpass_passed",
 		"subjectpass_challenged",
+		"dmarc_reports_ingested",
+		"dmarc_report_rows_failing",
+		"tlsrpt_reports_ingested",
+		"tlsrpt_failed_sessions",
+		"reports_dropped",
 	] {
 		assert!(snap.contains_key(name), "missing {name}");
 	}

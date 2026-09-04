@@ -52,6 +52,9 @@ pub enum ReportError {
 	#[error("report attachment too large")]
 	TooLarge,
 	/// The encoding on the part is none of the ones [`Encoding`] lists.
+	/// Kept for the case where the MIME walker surfaces an unhandled
+	/// encoding rather than picking a default.
+	#[allow(dead_code)]
 	#[error("unsupported report encoding")]
 	UnsupportedEncoding,
 	/// The bytes are not a valid archive of the claimed encoding, or the
@@ -59,8 +62,10 @@ pub enum ReportError {
 	/// bit, encryption, multi-entry, data descriptor).
 	#[error("malformed report archive: {0}")]
 	Malformed(&'static str),
-	/// The base64 decode of the part failed (the part walker passed the
-	/// error through).
+	/// The base64 decode of the part failed. Currently the MIME walker
+	/// reports its own equivalent (`WalkError::InvalidBase64`); this
+	/// variant stays for callers that decode outside the walker.
+	#[allow(dead_code)]
 	#[error("invalid base64 in report attachment")]
 	InvalidBase64,
 }
