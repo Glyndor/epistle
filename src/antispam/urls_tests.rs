@@ -28,7 +28,7 @@ fn decodes_quoted_printable_soft_breaks_and_3d() {
 #[test]
 fn caps_and_dedupes() {
 	// a appears twice and the cap is 3; dedup must collapse the duplicate so
-	// the result has a.example, b.example, c.example — and the cap then stops
+	// the result has a.example, b.example, c.example, and the cap then stops
 	// further pushes.
 	let body =
 		b"http://a.example http://b.example http://a.example http://c.example http://d.example";

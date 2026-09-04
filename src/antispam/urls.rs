@@ -1,8 +1,8 @@
 //! URL host extraction from a MIME message body.
 //!
 //! Used by the URI DNSBL screen to feed [`crate::dnsbl::Dnsbl::check_url_hosts`].
-//! Only the host of every `http://` / `https://` URL is returned — never the
-//! path, query, or credentials — and only the first `cap` unique hosts in
+//! Only the host of every `http://` / `https://` URL is returned, never the
+//! path, query, or credentials, and only the first `cap` unique hosts in
 //! order of appearance.
 
 /// Maximum number of body bytes scanned (256 KiB). Beyond this the rest is

@@ -120,7 +120,7 @@ async fn no_zones_never_lists() {
 #[tokio::test]
 async fn an_answer_in_the_spamhaus_error_range_is_unavailable() {
 	// Spamhaus returns 127.255.255.252 for an open resolver (no key). That
-	// must NOT be treated as a listing — it must read as Unavailable.
+	// must NOT be treated as a listing; it must read as Unavailable.
 	let dns = ScriptedDns::with_answer("5.2.0.192.bl.example", ipv4("127.255.255.252"));
 	let dnsbl = Dnsbl::new(["bl.example".to_string()]);
 	assert_eq!(
