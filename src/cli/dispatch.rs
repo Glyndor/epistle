@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
-	dns_records, export, import, mobileconfig, queue, report_abuse, serve, srv, suppression,
+	dns_records, export, import, mobileconfig, queue, report_abuse, serve, srv, style, suppression,
 	verify, verify_dns,
 };
 use crate::config::Config;
@@ -22,7 +22,7 @@ impl Cli {
 			Command::Serve { config } => match Config::load(&config) {
 				Ok(config) => serve::run(config),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -32,7 +32,7 @@ impl Cli {
 					ExitCode::SUCCESS
 				}
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -54,7 +54,7 @@ impl Cli {
 					Err(code) => code,
 				},
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -76,7 +76,7 @@ impl Cli {
 					Err(code) => code,
 				},
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -87,7 +87,7 @@ impl Cli {
 					&mut std::io::stderr().lock(),
 				),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -99,35 +99,35 @@ impl Cli {
 					Err(code) => code,
 				},
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::VerifyDns { config } => match Config::load(&config) {
 				Ok(config) => verify_dns::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::DnsRecords { config } => match Config::load(&config) {
 				Ok(config) => dns_records::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::Mobileconfig { config, account } => match Config::load(&config) {
 				Ok(config) => mobileconfig::run(&config, &account, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::SrvRecords { config } => match Config::load(&config) {
 				Ok(config) => srv::run(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -136,7 +136,7 @@ impl Cli {
 					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
 				}
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -152,7 +152,7 @@ impl Cli {
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -161,7 +161,7 @@ impl Cli {
 					autodiscover::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
 				}
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -172,14 +172,14 @@ impl Cli {
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::Accounts { config } => match Config::load(&config) {
 				Ok(config) => accounts::list(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -190,7 +190,7 @@ impl Cli {
 			} => match Config::load(&config) {
 				Ok(config) => accounts::add(&config, &name, addresses, std::io::stdin().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -203,14 +203,14 @@ impl Cli {
 					accounts::remove(&config, &name, queue, &mut std::io::stdout().lock())
 				}
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::Queue { config } => match Config::load(&config) {
 				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -234,14 +234,14 @@ impl Cli {
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::AppPasswords { config } => match Config::load(&config) {
 				Ok(config) => app_passwords::list(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -254,7 +254,7 @@ impl Cli {
 					app_passwords::revoke(&config, &account, &label, &mut std::io::stdout().lock())
 				}
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
@@ -276,21 +276,21 @@ impl Cli {
 					&mut std::io::stdout().lock(),
 				),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::ApiKeys { config } => match Config::load(&config) {
 				Ok(config) => api_keys::list(&config, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::ApiKeyRevoke { config, label } => match Config::load(&config) {
 				Ok(config) => api_keys::revoke(&config, &label, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
