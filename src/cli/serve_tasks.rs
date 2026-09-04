@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
+use crate::antispam::bans::BanStore;
 use crate::config::{Config, Listener};
 
 /// Bind a listener's socket and log it. Shared by every `serve` listener arm.
@@ -526,6 +527,29 @@ pub(super) fn retention_days(config: &Config) -> u64 {
 pub(super) fn spawn_storage_maintenance(config: &Config) {
 	spawn_blob_reclamation(config);
 	spawn_archive_sweep(config);
+}
+
+/// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and
+/// `auth_ban` rows whose `until` is older than 24 hours ago, so the ban
+/// tables stay bounded. No-op when no database is configured — the ban
+/// store is absent in that case.
+pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
+	let Some(pool) = pool else {
+		return;
+	};
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|d| d.as_secs())
+				.unwrap_or(0);
+			let store = crate::antispam::bans::PgBanStore::new(pool.clone(), None);
+			store.sweep(now).await;
+		}
+	});
 }
 
 #[cfg(test)]
