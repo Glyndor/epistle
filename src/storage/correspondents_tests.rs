@@ -38,7 +38,7 @@ fn new_in_last_day_counts_only_recent_markers() {
 		.expect("record fresh");
 	// Backdate the marker two days so it sits outside the 24h window.
 	// `File::set_modified` is stable since Rust 1.75 and is the
-	// `filetime`-free path the brief asks for.
+	// path that needs no `filetime` dependency.
 	let marker = store.marker("alice@example.org", "fresh@example.net");
 	let stale = std::time::SystemTime::now() - Duration::from_secs(2 * 86400);
 	std::fs::File::options()

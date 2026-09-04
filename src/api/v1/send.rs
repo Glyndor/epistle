@@ -158,7 +158,7 @@ pub async fn send(
 /// Resolve `from` to the local account name that owns the address.
 /// Static config and dynamic accounts both win; on conflict the first
 /// match (the same precedence `Directory::owns_address` uses). Returns
-/// `None` when no account owns the address — the handler then rejects
+/// `None` when no account owns the address; the handler then rejects
 /// the submission as an invalid sender.
 fn resolve_account(state: &ApiState, from: &str) -> Option<String> {
 	let lower = from.to_ascii_lowercase();

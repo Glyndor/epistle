@@ -418,7 +418,7 @@ impl Server {
 					// the sender is a known correspondent: a real reply
 					// from a recipient account's history does not warrant
 					// the reputation-system's first-attempt penalty. The
-					// hard `Reject` branch is still honoured — a poor
+					// hard `Reject` branch is still honoured; a poor
 					// reputation is independent of whether the sender is
 					// known to a local account.
 					if let (Some(pool), Some(domain), None) = (

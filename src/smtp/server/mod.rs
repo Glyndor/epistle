@@ -342,8 +342,8 @@ impl Server {
 	/// debug log carries so an operator chasing a missed expectation
 	/// can see whose correspondent list held the answer.
 	///
-	/// Recipient-to-account resolution reuses `Directory::resolve` —
-	/// the same lookup the SMTP session uses to admit RCPT — so a
+	/// Recipient-to-account resolution reuses `Directory::resolve`,
+	/// the same lookup the SMTP session uses to admit RCPT, so a
 	/// domain alias, a multi-target alias, sub-addressing, and the
 	/// catch-all all behave identically here.
 	///

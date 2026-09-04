@@ -19,7 +19,7 @@ use super::{Action, MAX_MESSAGE_SIZE, Reply, Session, cap};
 /// command starts a fresh transaction. `running_size` is the
 /// per-line data-size counter (which can exceed `MAX_MESSAGE_SIZE`
 /// without truncating the body, because the accumulation path stops
-/// extending past the ceiling — the original check used `*size`,
+/// extending past the ceiling; the original check used `*size`,
 /// not `body.len()`).
 pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: usize) -> Action {
 	session.state = State::Greeted;

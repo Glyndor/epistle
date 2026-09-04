@@ -111,7 +111,7 @@ impl CorrespondentStore {
 
 	/// Mark every address in `recipients` as one `account` has written to.
 	/// Markers that already exist are not touched (mtime is the *first*
-	/// time, not the most recent — the daily cap keys off that). Returns
+	/// time, not the most recent; the daily cap keys off that). Returns
 	/// the count of freshly-created versus pre-existing markers.
 	///
 	/// An empty `account` or an empty recipient list is a no-op; an
