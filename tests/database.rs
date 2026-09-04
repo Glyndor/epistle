@@ -6,7 +6,8 @@
 // is exactly the case `DatabaseTls::Insecure` exists for: a private network the
 // operator vouches for. These tests exercise migrations, reputation and the
 // Bayes corpora, not the transport, so forcing `Require` here would only make
-// them fail on the absence of a certificate nobody issued.
+// them fail on the absence of a certificate nobody issued. The ban store
+// lives in `database_bans.rs` so the file stays under the per-file line cap.
 use epistle::config::DatabaseTls;
 use std::sync::LazyLock;
 

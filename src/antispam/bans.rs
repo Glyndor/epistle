@@ -74,7 +74,7 @@ impl BanPolicy {
 	/// first ban (strikes = 1) is `base_secs`; each subsequent ban doubles
 	/// it, capped at `max_secs`. Saturates the exponent at 20 so the
 	/// shift cannot overflow.
-	fn duration_for(&self, strikes: u32) -> Duration {
+	pub fn duration_for(&self, strikes: u32) -> Duration {
 		let exponent = strikes.saturating_sub(1).min(20);
 		let multiplier = 1u64 << exponent;
 		let secs = self.base_secs.saturating_mul(multiplier).min(self.max_secs);
@@ -83,8 +83,10 @@ impl BanPolicy {
 }
 
 /// The ban store interface consulted by every listener. The production
-/// implementation is [`PgBanStore`] (PostgreSQL-backed); the tests use
-/// [`crate::antispam::bans_tests::FakeBanStore`]. The directory holds an
+/// implementation is [`PgBanStore`] (PostgreSQL-backed); the unit tests
+/// use an in-memory fake that shares the trait surface so a listener
+/// test can swap it in and assert a banned subject never reaches the
+/// password verifier. The directory holds an
 /// `Option<Arc<dyn BanStore>>` so a deployment without `[database]`
 /// degrades to the per-connection three-strikes counters.
 pub trait BanStore: std::fmt::Debug + Send + Sync {
@@ -172,11 +174,7 @@ impl PgBanStore {
 
 	/// Build a store with a custom policy. Used by the integration tests
 	/// to shrink the window and the cap.
-	pub fn with_policy(
-		pool: PgPool,
-		metrics: Option<Arc<Metrics>>,
-		policy: BanPolicy,
-	) -> Self {
+	pub fn with_policy(pool: PgPool, metrics: Option<Arc<Metrics>>, policy: BanPolicy) -> Self {
 		Self {
 			pool,
 			policy,
@@ -218,7 +216,10 @@ impl BanStore for PgBanStore {
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let subject = subject.to_string();
 		let protocol = protocol.to_string();
-		Box::pin(async move { self.record_failure_inner(&subject, &protocol, now_secs).await })
+		Box::pin(async move {
+			self.record_failure_inner(&subject, &protocol, now_secs)
+				.await
+		})
 	}
 
 	fn is_banned(
@@ -283,12 +284,11 @@ impl PgBanStore {
 					"{} failed authentications in {} seconds",
 					self.policy.threshold, self.policy.window_secs
 				);
-				let existing: Option<(i32,)> = sqlx::query_as(
-					"SELECT strikes FROM auth_ban WHERE subject = $1 FOR UPDATE",
-				)
-				.bind(subject)
-				.fetch_optional(&mut *tx)
-				.await?;
+				let existing: Option<(i32,)> =
+					sqlx::query_as("SELECT strikes FROM auth_ban WHERE subject = $1 FOR UPDATE")
+						.bind(subject)
+						.fetch_optional(&mut *tx)
+						.await?;
 				let strikes: u32 = existing
 					.map(|(s,)| u32::try_from(s).unwrap_or(0))
 					.unwrap_or(0)
@@ -409,4 +409,4 @@ impl PgBanStore {
 
 #[cfg(test)]
 #[path = "bans_tests.rs"]
-mod tests;
+pub(crate) mod tests;

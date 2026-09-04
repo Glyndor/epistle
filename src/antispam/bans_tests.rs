@@ -36,6 +36,10 @@ pub struct FakeBanStore {
 	bans: Arc<Mutex<HashMap<String, BanInfo>>>,
 	strikes: Arc<Mutex<HashMap<String, u32>>>,
 	next_is_banned_fails: Arc<Mutex<bool>>,
+	/// Per-method call counters keyed on the method name, used by the
+	/// listener tests to assert the ban store is consulted on every
+	/// authentication attempt from every listener.
+	calls: Arc<Mutex<HashMap<&'static str, usize>>>,
 }
 
 impl std::fmt::Debug for FakeBanStore {
@@ -56,6 +60,7 @@ impl FakeBanStore {
 			bans: Arc::new(Mutex::new(HashMap::new())),
 			strikes: Arc::new(Mutex::new(HashMap::new())),
 			next_is_banned_fails: Arc::new(Mutex::new(false)),
+			calls: Arc::new(Mutex::new(HashMap::new())),
 		}
 	}
 
@@ -64,6 +69,36 @@ impl FakeBanStore {
 	pub fn fail_next_is_banned(self) -> Self {
 		*self.next_is_banned_fails.lock().expect("lock") = true;
 		self
+	}
+
+	/// Inject a live ban for `subject` so the listener tests can assert
+	/// the directory refuses the matching authentication attempt without
+	/// driving `record_failure` enough times to trip the threshold. The
+	/// ban is in force until the test calls [`Self::clear_success`] or
+	/// the fake is dropped.
+	pub fn arm_ban(&self, subject: &str, info: BanInfo) {
+		self.bans
+			.lock()
+			.expect("lock")
+			.insert(subject.to_string(), info);
+	}
+
+	/// How many times `method` has been called so far. The listener
+	/// tests use this to assert the ban store is consulted (and not
+	/// bypassed) on every authentication attempt.
+	pub fn call_count(&self, method: &str) -> usize {
+		self.calls
+			.lock()
+			.expect("lock")
+			.get(method)
+			.copied()
+			.unwrap_or(0)
+	}
+
+	/// Bump a per-method counter. Used internally by the trait impl.
+	fn record_call(&self, method: &'static str) {
+		let mut calls = self.calls.lock().expect("lock");
+		*calls.entry(method).or_insert(0) += 1;
 	}
 
 	/// How many failures are recorded for `subject` at or after `since`.
@@ -91,6 +126,7 @@ impl BanStore for FakeBanStore {
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let subject = subject.to_string();
 		let _protocol = protocol.to_string();
+		self.record_call("record_failure");
 		Box::pin(async move {
 			let mut failures = self.failures.lock().expect("lock");
 			failures
@@ -128,6 +164,7 @@ impl BanStore for FakeBanStore {
 		now_secs: u64,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<BanInfo>> + Send + '_>> {
 		let subject = subject.to_string();
+		self.record_call("is_banned");
 		Box::pin(async move {
 			if std::mem::take(&mut *self.next_is_banned_fails.lock().expect("lock")) {
 				return None;
@@ -144,6 +181,7 @@ impl BanStore for FakeBanStore {
 		subject: &str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let subject = subject.to_string();
+		self.record_call("clear_success");
 		Box::pin(async move {
 			self.failures.lock().expect("lock").remove(&subject);
 			self.bans.lock().expect("lock").remove(&subject);
@@ -155,6 +193,7 @@ impl BanStore for FakeBanStore {
 		&self,
 		now_secs: u64,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+		self.record_call("sweep");
 		Box::pin(async move {
 			let horizon = now_secs.saturating_sub(24 * 60 * 60);
 			let mut failures = self.failures.lock().expect("lock");
@@ -173,6 +212,7 @@ impl BanStore for FakeBanStore {
 		account: &str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let account = account.to_string();
+		self.record_call("remove_account");
 		Box::pin(async move {
 			let subject = super::subject_account(&account);
 			self.failures.lock().expect("lock").remove(&subject);
@@ -197,10 +237,7 @@ fn duration_for_doubles_and_caps() {
 #[test]
 fn subject_helpers_are_stable() {
 	assert_eq!(subject_ip(ip()), "ip:203.0.113.5");
-	assert_eq!(
-		super::subject_account("Alice"),
-		"account:alice"
-	);
+	assert_eq!(super::subject_account("Alice"), "account:alice");
 }
 
 #[tokio::test]
