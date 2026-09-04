@@ -198,7 +198,7 @@ pub struct AccountStore {
 	/// Shared ban store consulted before any password hashing and updated
 	/// on every authentication outcome. Threaded into every rebuilt
 	/// directory by [`AccountStore::with_ban_store`]. `None` in deployments
-	/// without `[database]` — the per-connection three-strikes counters are
+	/// without `[database]`; the per-connection three-strikes counters are
 	/// the only defence on those.
 	ban_store: Option<Arc<dyn crate::antispam::bans::BanStore>>,
 	/// Shared metrics handle for the audit counters

@@ -52,7 +52,7 @@ impl std::fmt::Debug for FakeBanStore {
 
 impl FakeBanStore {
 	/// Build a fake with `policy`. The policy is read but not enforced
-	/// inside the fake — the unit tests below are the enforcement.
+	/// inside the fake; the unit tests below are the enforcement.
 	pub fn new(policy: BanPolicy) -> Self {
 		Self {
 			policy,

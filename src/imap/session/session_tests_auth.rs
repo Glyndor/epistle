@@ -241,7 +241,7 @@ fn authenticate_external_rejects_mismatched_authzid() {
 /// `authenticate_with_ip` with the peer IP the network layer recorded
 /// on `set_peer_ip`. The test sets up a [`FakeBanStore`], drives LOGIN
 /// with a wrong password, and asserts the fake recorded a
-/// `record_failure` call keyed on `ip:<peer>` — the subject the
+/// `record_failure` call keyed on `ip:<peer>`; the subject the
 /// directory builds for the peer IP. The directory is the only place
 /// that builds `ip:<peer>` strings, so a count of one on the right
 /// subject is the proof the peer IP reached the ban path.

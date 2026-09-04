@@ -272,7 +272,7 @@ fn greeting_is_positive() {
 /// the ban store is consulted on the way through. The test drives a
 /// `USER` + `PASS` against the production [`crate::pop3::backend::MailboxBackend`]
 /// with a [`FakeBanStore`] attached, then asserts the fake recorded a
-/// `record_failure` call keyed on `ip:<peer>` and `account:<login>` —
+/// `record_failure` call keyed on `ip:<peer>` and `account:<login>` ,
 /// the two subjects the directory always records against.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pop3_failures_now_reach_the_directory() {

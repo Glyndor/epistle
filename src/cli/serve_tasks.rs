@@ -531,7 +531,7 @@ pub(super) fn spawn_storage_maintenance(config: &Config) {
 
 /// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and
 /// `auth_ban` rows whose `until` is older than 24 hours ago, so the ban
-/// tables stay bounded. No-op when no database is configured — the ban
+/// tables stay bounded. No-op when no database is configured; the ban
 /// store is absent in that case.
 pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
 	let Some(pool) = pool else {

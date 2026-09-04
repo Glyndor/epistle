@@ -419,7 +419,7 @@ async fn a_banned_ip_is_refused_before_hashing() {
 	);
 	// The audit channel emits the banned event with the rule that fired;
 	// no `auth.login_succeeded` event lands because the verifier never
-	// ran. The `login_failed` event still fires — the directory records
+	// ran. The `login_failed` event still fires; the directory records
 	// the outcome regardless.
 	let auth = auth_events(&events);
 	let kinds: Vec<_> = auth
@@ -438,7 +438,7 @@ async fn a_banned_ip_is_refused_before_hashing() {
 	);
 	// Failure counter moved: the ban path emits login_failed too (the
 	// wire response is identical for any failure), but the
-	// login_succeeded counter stays at zero — the property that proves
+	// login_succeeded counter stays at zero; the property that proves
 	// the verifier never returned Some.
 	assert_eq!(
 		metrics.snapshot().get("auth_login_failed").copied(),
@@ -447,6 +447,6 @@ async fn a_banned_ip_is_refused_before_hashing() {
 	assert_eq!(
 		metrics.snapshot().get("auth_login_succeeded").copied(),
 		Some(0),
-		"login_succeeded counter must stay at zero — verify_password was never called",
+		"login_succeeded counter must stay at zero; verify_password was never called",
 	);
 }

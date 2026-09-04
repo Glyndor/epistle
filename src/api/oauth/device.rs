@@ -104,8 +104,8 @@ pub async fn device_approve(
 	// Authenticate first, unconditionally, so the work done is the same whether or
 	// not the user_code exists (no timing oracle on code existence). The OAuth
 	// grant endpoints sit outside `require_bearer_token`, so the peer IP is
-	// sourced from `ConnectInfo` here — wired in by the listener's
-	// `into_make_service_with_connect_info` — and forwarded to the ban-aware
+	// sourced from `ConnectInfo` here; wired in by the listener's
+	// `into_make_service_with_connect_info`; and forwarded to the ban-aware
 	// authentication path.
 	let account = credentials.and_then(|(login, password)| {
 		// The OAuth approval flow is a user-facing API authentication: the

@@ -82,7 +82,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// When `[database]` is configured the shared ban store is built and
 	// attached to every rebuilt directory. Without a database, the ban
 	// store is absent and the per-connection three-strikes counters are
-	// the only defence — exactly the pre-table behaviour.
+	// the only defence; exactly the pre-table behaviour.
 	if let Some(pool) = &reputation_pool {
 		let ban_store: Arc<dyn crate::antispam::bans::BanStore> = Arc::new(
 			crate::antispam::bans::PgBanStore::new(pool.clone(), Some(metrics.clone())),
@@ -310,7 +310,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	super::serve_tasks::spawn_storage_maintenance(&config);
 
 	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
-	// the tables stay bounded. No-op when no database is configured —
+	// the tables stay bounded. No-op when no database is configured ,
 	// the ban store is absent in that case.
 	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone());
 
