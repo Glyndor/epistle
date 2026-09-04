@@ -360,6 +360,13 @@ impl Directory {
 			.map(|(targets, keep)| (targets.as_slice(), *keep))
 	}
 
+	/// The list of domains the server accepts mail for, lowercased. Used
+	/// by the report-ingest hook to recognise `postmaster@<domain>` and
+	/// `tlsrpt@<domain>` recipients against the served domain set.
+	pub fn domains(&self) -> Vec<String> {
+		self.domains.iter().cloned().collect()
+	}
+
 	/// The storage quota for an account: its own quota, else the quota of a
 	/// hosted domain it has an address in, else `None` (use the server default).
 	pub fn quota_for(&self, account: &str) -> Option<u64> {

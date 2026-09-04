@@ -20,7 +20,7 @@ use std::path::Path;
 use crate::smtp::session::AcceptedMessage;
 
 /// What kind of report we are looking at in an inbound message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
 	/// RFC 7489 aggregate (DMARC RUA). Sent by receivers about us.
 	Dmarc,
