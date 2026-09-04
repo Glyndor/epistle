@@ -53,7 +53,7 @@ jobs:
       #     end-to-end rather than by unit tests.
       # acme/transport and pop3/backend are well covered and deliberately NOT
       # excluded (they count toward the gate).
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap))\\.rs"
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap))\\.rs"
   dependabot-freshness:
     uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:
