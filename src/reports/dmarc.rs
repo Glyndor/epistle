@@ -118,7 +118,11 @@ fn sanitise_org(name: &str) -> &str {
 	// filename has to be normalised. For the org string itself we keep the
 	// raw value in the JSONL and only sanitise on the filename side, so a
 	// slash in an org name does not change the persisted record.
-	if name.is_empty() || name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
+	if name.is_empty()
+		|| name
+			.chars()
+			.all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+	{
 		name
 	} else {
 		// Allocate once at the boundary, then borrow it back into the
@@ -234,9 +238,10 @@ struct RawIdentifiers {
 
 /// Parse a DMARC aggregate report from its (already-decompressed) XML body.
 pub fn parse(xml: &[u8]) -> Result<DmarcReport, ParseError> {
-	let raw: RawReport = quick_xml::de::from_str(std::str::from_utf8(xml).map_err(|e| {
-		ParseError::Invalid(format!("xml is not utf-8: {e}"))
-	})?)
+	let raw: RawReport = quick_xml::de::from_str(
+		std::str::from_utf8(xml)
+			.map_err(|e| ParseError::Invalid(format!("xml is not utf-8: {e}")))?,
+	)
 	.map_err(|e| ParseError::Invalid(e.to_string()))?;
 	if raw.record.len() > MAX_ROWS {
 		return Err(ParseError::TooManyRows);
@@ -269,9 +274,9 @@ pub fn parse(xml: &[u8]) -> Result<DmarcReport, ParseError> {
 			dkim: None,
 			spf: None,
 		});
-		let ids = rec.identifiers.unwrap_or(RawIdentifiers {
-			header_from: None,
-		});
+		let ids = rec
+			.identifiers
+			.unwrap_or(RawIdentifiers { header_from: None });
 		records.push(Row {
 			source_ip: row.source_ip.unwrap_or_default(),
 			count: row.count.unwrap_or(0),

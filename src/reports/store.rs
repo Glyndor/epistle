@@ -59,7 +59,7 @@ fn ymd_to_unix(s: &str) -> Option<i64> {
 	let d: i64 = s[6..8].parse().ok()?;
 	let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
 	let era = y.div_euclid(400);
-	let yoe = (y - era * 400) as i64;
+	let yoe = y - era * 400;
 	let doy = (153 * m + 2) / 5 + d - 1;
 	let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
 	Some((era * 146097 + doe - 719468) * 86_400)
@@ -99,30 +99,34 @@ mod tests {
 		// 20240109 is within window.
 		prune(dir.path(), today, 4);
 
-		assert!(!dir
-			.path()
-			.join("reports")
-			.join("dmarc")
-			.join("20240101")
-			.exists());
-		assert!(!dir
-			.path()
-			.join("reports")
-			.join("dmarc")
-			.join("20240105")
-			.exists());
-		assert!(dir
-			.path()
-			.join("reports")
-			.join("dmarc")
-			.join("20240109")
-			.exists());
-		assert!(!dir
-			.path()
-			.join("reports")
-			.join("tlsrpt")
-			.join("20240101")
-			.exists());
+		assert!(
+			!dir.path()
+				.join("reports")
+				.join("dmarc")
+				.join("20240101")
+				.exists()
+		);
+		assert!(
+			!dir.path()
+				.join("reports")
+				.join("dmarc")
+				.join("20240105")
+				.exists()
+		);
+		assert!(
+			dir.path()
+				.join("reports")
+				.join("dmarc")
+				.join("20240109")
+				.exists()
+		);
+		assert!(
+			!dir.path()
+				.join("reports")
+				.join("tlsrpt")
+				.join("20240101")
+				.exists()
+		);
 	}
 
 	#[test]

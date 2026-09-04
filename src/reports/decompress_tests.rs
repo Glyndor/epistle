@@ -86,7 +86,10 @@ fn a_zip_with_a_data_descriptor_is_refused() {
 	let payload = b"<feedback/>";
 	let zip = build_zip_with_data_descriptor("report.xml", payload);
 	let err = inflate_attachment(&zip, Encoding::Zip).expect_err("data descriptor rejected");
-	assert!(matches!(err, ReportError::Malformed("data descriptor")), "{err:?}");
+	assert!(
+		matches!(err, ReportError::Malformed("data descriptor")),
+		"{err:?}"
+	);
 }
 
 /// 25 MiB of zeros compressed is a few KiB. The bomb trips on the way out
@@ -134,7 +137,11 @@ fn crc32(bytes: &[u8]) -> u32 {
 	for i in 0..256u32 {
 		let mut c = i;
 		for _ in 0..8 {
-			c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+			c = if c & 1 != 0 {
+				0xEDB88320 ^ (c >> 1)
+			} else {
+				c >> 1
+			};
 		}
 		table[i as usize] = c;
 	}

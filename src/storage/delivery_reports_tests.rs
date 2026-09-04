@@ -1,19 +1,22 @@
 //! Tests for the report-ingest hook into `LocalDelivery`.
 
 use super::*;
-use base64::Engine;
 use crate::directory_store::DirectoryHandle;
 use crate::reports::Kind;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::MessageSink;
 use crate::storage::LocalDelivery;
+use base64::Engine;
 
 fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(crate::smtp::directory::Directory::new(
 		["example.org".to_string()],
 		[
 			("alice@example.org".to_string(), "alice".to_string()),
-			("postmaster@example.org".to_string(), "postmaster".to_string()),
+			(
+				"postmaster@example.org".to_string(),
+				"postmaster".to_string(),
+			),
 			("tlsrpt@example.org".to_string(), "tlsrpt".to_string()),
 		],
 	))
@@ -230,11 +233,7 @@ fn tlsrpt_address_ingests_a_tlsrpt_report() {
 	let gz = enc.finish().expect("finish");
 	let payload = build_message(
 		"BOUND",
-		&[(
-			"application/tlsrpt+gzip".into(),
-			"base64".into(),
-			b64(&gz),
-		)],
+		&[("application/tlsrpt+gzip".into(), "base64".into(), b64(&gz))],
 	);
 	delivery
 		.deliver(message(&["tlsrpt@example.org"], &payload))

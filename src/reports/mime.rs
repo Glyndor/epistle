@@ -63,18 +63,17 @@ pub enum WalkError {
 pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> {
 	let parts = split_top_level(raw)?;
 	for part in &parts {
-		if let Some(ct) = part.content_type.as_deref() {
-			if let Some(encoding) = encoding_for(ct) {
-				if let Some(payload) = part.body_base64_decoded()? {
-					if payload.len() > MAX_COMPRESSED {
-						return Err(WalkError::TooLarge);
-					}
-					return Ok(FoundPart {
-						encoding,
-						bytes: payload,
-					});
-				}
+		if let Some(ct) = part.content_type.as_deref()
+			&& let Some(encoding) = encoding_for(ct)
+			&& let Some(payload) = part.body_base64_decoded()?
+		{
+			if payload.len() > MAX_COMPRESSED {
+				return Err(WalkError::TooLarge);
 			}
+			return Ok(FoundPart {
+				encoding,
+				bytes: payload,
+			});
 		}
 		// Some senders label the type as `application/octet-stream` and
 		// rely on the filename. Look one level deeper.
@@ -82,15 +81,12 @@ pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> 
 			.content_type
 			.as_deref()
 			.is_some_and(|ct| ct.starts_with("multipart/"))
+			&& let Some(inner_boundary) = part.boundary.as_deref()
 		{
-				if let Some(inner_boundary) = part.boundary.as_deref() {
-					let inner = split_with_boundary(&part.body, inner_boundary)?;
-				for inner_part in &inner {
-					if let Some(found) =
-						part_match(inner_part, kind, part.boundary.as_deref())?
-					{
-						return Ok(found);
-					}
+			let inner = split_with_boundary(&part.body, inner_boundary)?;
+			for inner_part in &inner {
+				if let Some(found) = part_match(inner_part, kind, part.boundary.as_deref())? {
+					return Ok(found);
 				}
 			}
 		}
@@ -116,9 +112,7 @@ fn part_match(
 	// is what the filename implies.
 	if let Some(filename) = part.filename.as_deref() {
 		let lower = filename.to_ascii_lowercase();
-		if kind == Kind::Dmarc
-			&& (lower.ends_with(".xml.gz") || lower.ends_with(".zip"))
-		{
+		if kind == Kind::Dmarc && (lower.ends_with(".xml.gz") || lower.ends_with(".zip")) {
 			let encoding = if lower.ends_with(".zip") {
 				Encoding::Zip
 			} else {
@@ -134,9 +128,7 @@ fn part_match(
 				}));
 			}
 		}
-		if kind == Kind::TlsRpt
-			&& (lower.ends_with(".json.gz") || lower.ends_with(".json"))
-		{
+		if kind == Kind::TlsRpt && (lower.ends_with(".json.gz") || lower.ends_with(".json")) {
 			let encoding = if lower.ends_with(".gz") {
 				Encoding::Gzip
 			} else {
@@ -219,7 +211,12 @@ fn split_top_level(raw: &[u8]) -> Result<Vec<ParsedPart>, WalkError> {
 	let body = &raw[headers_end + 4..];
 	let ct = header_value(headers, "content-type")
 		.ok_or(WalkError::Malformed("missing content-type"))?;
-	let base = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+	let base = ct
+		.split(';')
+		.next()
+		.unwrap_or("")
+		.trim()
+		.to_ascii_lowercase();
 	if !base.starts_with("multipart/") {
 		// Single-part: the body is one part with whatever content-type
 		// and transfer-encoding the message declares.
@@ -231,16 +228,13 @@ fn split_top_level(raw: &[u8]) -> Result<Vec<ParsedPart>, WalkError> {
 			body: body.to_vec(),
 		}]);
 	}
-	let boundary = parse_boundary_param(&ct)
-		.ok_or(WalkError::Malformed("multipart missing boundary"))?;
+	let boundary =
+		parse_boundary_param(&ct).ok_or(WalkError::Malformed("multipart missing boundary"))?;
 	let parts = split_with_boundary(body, &boundary)?;
 	Ok(parts)
 }
 
-fn split_with_boundary(
-	body: &[u8],
-	bouxtary: &str,
-) -> Result<Vec<ParsedPart>, WalkError> {
+fn split_with_boundary(body: &[u8], bouxtary: &str) -> Result<Vec<ParsedPart>, WalkError> {
 	let needle = format!("--{bouxtary}");
 	let haystack = body;
 	let mut parts = Vec::new();
@@ -288,9 +282,7 @@ fn parse_part(part_bytes: &[u8]) -> Result<ParsedPart, WalkError> {
 	let headers = &part_bytes[..headers_end];
 	let body = part_bytes[headers_end + 4..].to_vec();
 	let content_type = header_value(headers, "content-type");
-	let boundary = content_type
-		.as_deref()
-		.and_then(parse_boundary_param);
+	let boundary = content_type.as_deref().and_then(parse_boundary_param);
 	let filename = content_disposition_filename(headers);
 	let transfer_encoding = header_value(headers, "content-transfer-encoding");
 	Ok(ParsedPart {

@@ -109,7 +109,11 @@ impl TlsReport {
 }
 
 fn sanitise_org(name: &str) -> &str {
-	if name.is_empty() || name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
+	if name.is_empty()
+		|| name
+			.chars()
+			.all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+	{
 		name
 	} else {
 		Box::leak(

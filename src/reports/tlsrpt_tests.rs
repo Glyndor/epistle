@@ -96,9 +96,7 @@ fn failing_count_sums_across_policies() {
 /// specifies the schema but reserves room for forward-compatible additions.
 #[test]
 fn parses_with_unknown_top_level_field() {
-	let json = format!(
-		r#"{{"organization-name": "x", "date-range": {{"start-datetime": "0", "end-datetime": "1"}}, "report-id": "r", "future-field": "ignored", "policies": []}}"#
-	);
+	let json = r#"{"organization-name": "x", "date-range": {"start-datetime": "0", "end-datetime": "1"}, "report-id": "r", "future-field": "ignored", "policies": []}"#.to_string();
 	let report = parse(json.as_bytes()).expect("unknown field ignored");
 	assert_eq!(report.organization_name, "x");
 	assert!(report.policies.is_empty());

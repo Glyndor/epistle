@@ -38,11 +38,7 @@ fn finds_the_gzip_attachment() {
 		"BOUND",
 		&[
 			("text/plain".into(), "7bit".into(), "intro".into()),
-			(
-				"application/gzip".into(),
-				"base64".into(),
-				b64(&gz),
-			),
+			("application/gzip".into(), "base64".into(), b64(&gz)),
 		],
 	);
 	let found = find_report_part(&message, Kind::Dmarc).expect("found");
@@ -112,11 +108,7 @@ fn finds_the_tlsrpt_part() {
 	};
 	let message = build_message(
 		"BOUND",
-		&[(
-			"application/tlsrpt+gzip".into(),
-			"base64".into(),
-			b64(&gz),
-		)],
+		&[("application/tlsrpt+gzip".into(), "base64".into(), b64(&gz))],
 	);
 	let found = find_report_part(&message, Kind::TlsRpt).expect("found");
 	assert_eq!(found.bytes, gz);
