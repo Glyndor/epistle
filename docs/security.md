@@ -79,7 +79,10 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
 ## Anti-abuse
 
 - Layered inbound filtering: **greylisting**, a **Bayesian** filter, sender
-  **reputation**, and optional **DNSBL** lookups, plus an external scanner hook.
+  **reputation**, and optional **DNSBL** lookups across three lists (client
+  IP, envelope sender domain, URL hosts in the body), plus an external
+  scanner hook. All three DNSBL lists fail open on resolver errors so a
+  misconfigured upstream never blocks delivery.
 - **Per-IP and per-sender message rate limits** on unauthenticated
   `MAIL FROM` (`inbound_rate_limit_per_ip_per_min`,
   `inbound_rate_limit_per_sender_per_min`). A peer or envelope that
