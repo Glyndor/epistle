@@ -19,7 +19,7 @@ After publishing, verify with `epistle config-check` and an external checker.
 | Mail exchanger | `example.org` | MX | `10 mail.example.org.` |
 | SPF | `example.org` | TXT | `v=spf1 mx -all` |
 | DKIM | `<selector>._domainkey.example.org` | TXT | from `epistle dkim-keygen` |
-| DMARC | `_dmarc.example.org` | TXT | `v=DMARC1; p=quarantine; rua=mailto:dmarc@example.org` |
+| DMARC | `_dmarc.example.org` | TXT | `v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org` |
 | MTA-STS | `_mta-sts.example.org` | TXT | `v=STSv1; id=20260101000000` |
 | TLS-RPT | `_smtp._tls.example.org` | TXT | `v=TLSRPTv1; rua=mailto:tlsrpt@example.org` |
 | Reverse DNS (PTR) | the IP | PTR | `mail.example.org` (set at the IP's host) |
@@ -113,10 +113,15 @@ Ties SPF and DKIM together and tells receivers what to do on failure. Start at
 `p=none` to monitor, then move to `p=quarantine` and `p=reject`:
 
 ```
-v=DMARC1; p=quarantine; rua=mailto:dmarc@example.org; adkim=s; aspf=s
+v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org; adkim=s; aspf=s
 ```
 
-The server produces aggregate (RUA) reports for domains you host.
+The server produces aggregate (RUA) reports for domains you host. Inbound
+DMARC aggregate reports from receivers are ingested automatically: the
+deliverer recognises `postmaster@<domain>` as a report target, the JSONL
+store under `data_dir/reports/dmarc/YYYYMMDD/` keeps one parsed report per
+line, the alert engine can watch `dmarc_report_rows_failing`, and
+`epistle reports --config F [--days N]` summarises what receivers saw.
 
 ### MTA-STS
 Requires inbound senders to use verified TLS. Two parts:
@@ -135,7 +140,11 @@ Requires inbound senders to use verified TLS. Two parts:
 
 ### TLS-RPT
 Receives reports about TLS delivery problems: TXT at `_smtp._tls.example.org`
-with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`.
+with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`. The server ingests inbound
+TLS-RPT reports the same way it ingests DMARC: `tlsrpt@<domain>` is the
+envelope target, the JSONL store lives at
+`data_dir/reports/tlsrpt/YYYYMMDD/`, the alert engine can watch
+`tlsrpt_failed_sessions`, and `epistle reports` prints per-domain summaries.
 
 ### DANE (optional, needs DNSSEC)
 If the zone is DNSSEC-signed, publish a `TLSA` record for `mail.example.org:25`

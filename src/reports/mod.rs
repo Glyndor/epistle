@@ -10,10 +10,10 @@
 //! operator can read the raw report there. The hook only logs and counts.
 
 mod decompress;
-mod dmarc;
+pub mod dmarc;
 mod mime;
-mod store;
-mod tlsrpt;
+pub(crate) mod store;
+pub mod tlsrpt;
 
 use std::path::Path;
 
@@ -87,8 +87,7 @@ fn today_string() -> String {
 fn ingest_inner(_data_dir: &Path, kind: Kind, raw: &[u8]) -> Result<Box<dyn Report>, String> {
 	let part = mime::find_report_part(raw, kind).map_err(|e| e.to_string())?;
 	let (encoding, bytes) = (part.encoding, part.bytes);
-	let inflated =
-		decompress::inflate_attachment(&bytes, encoding).map_err(|e| e.to_string())?;
+	let inflated = decompress::inflate_attachment(&bytes, encoding).map_err(|e| e.to_string())?;
 	match kind {
 		Kind::Dmarc => dmarc::parse(&inflated)
 			.map(|r| Box::new(r) as Box<dyn Report>)
