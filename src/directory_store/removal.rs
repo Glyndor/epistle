@@ -25,6 +25,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,7 @@ use super::StoreError;
 use super::names::validate_name;
 use crate::queue::SuppressionList;
 use crate::storage::{CorrespondentStore, FsSpool};
+use tokio::runtime::Handle;
 
 /// What to do with the account's queued outbound mail when it is removed.
 ///
@@ -237,6 +239,18 @@ pub fn remove_account(
 
 	let mailbox_root = account_root(data_dir, name);
 	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
+
+	// Clear every ban row keyed on this account name so a recreated
+	// account does not inherit a ban from its predecessor. Runs on the
+	// caller's runtime: the ban store methods are async and the
+	// removal path is synchronous.
+	if let Some(ban_store) = store.ban_store() {
+		let store = Arc::clone(ban_store);
+		let name = name.to_string();
+		if let Ok(handle) = Handle::try_current() {
+			handle.block_on(store.remove_account(&name));
+		}
+	}
 
 	store.remove(name)?;
 
