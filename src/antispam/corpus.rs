@@ -21,6 +21,7 @@ use std::path::Path;
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use crate::storage::load_or_create_key_file;
 
 /// The shared corpus scope (the server's own accept/reject learning).
 pub const SHARED: &str = "";
@@ -39,7 +40,7 @@ impl BayesStore {
 	/// Open the store, loading the token key from `data_dir` or generating and
 	/// persisting a fresh `0600` key on first use.
 	pub fn open(pool: PgPool, data_dir: &Path) -> std::io::Result<Self> {
-		let key = load_or_create_key(data_dir)?;
+		let key = load_or_create_key_file(data_dir, KEY_FILE)?;
 		Ok(BayesStore { pool, key })
 	}
 
@@ -185,28 +186,6 @@ fn hash_token(key: &[u8], token: &str) -> String {
 		let _ = write!(acc, "{byte:02x}");
 		acc
 	})
-}
-
-/// Load the corpus token key from `data_dir`, generating a fresh `0600` key on
-/// first use. The key lives outside the database so a DB compromise cannot
-/// reverse the token hashes.
-fn load_or_create_key(data_dir: &Path) -> std::io::Result<[u8; 32]> {
-	let path = data_dir.join(KEY_FILE);
-	if let Ok(bytes) = std::fs::read(&path)
-		&& bytes.len() == 32
-	{
-		let mut key = [0u8; 32];
-		key.copy_from_slice(&bytes);
-		return Ok(key);
-	}
-	use ring::rand::SecureRandom;
-	let mut key = [0u8; 32];
-	ring::rand::SystemRandom::new()
-		.fill(&mut key)
-		.map_err(|_| std::io::Error::other("rng failure"))?;
-	std::fs::create_dir_all(data_dir)?;
-	crate::storage::write_secret(&path, &key)?;
-	Ok(key)
 }
 
 #[cfg(test)]

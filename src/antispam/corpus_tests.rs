@@ -22,8 +22,8 @@ fn hash_is_deterministic_and_key_dependent() {
 #[test]
 fn key_persists_and_reloads() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let first = load_or_create_key(dir.path()).expect("generate");
-	let second = load_or_create_key(dir.path()).expect("reload");
+	let first = load_or_create_key_file(dir.path(), KEY_FILE).expect("generate");
+	let second = load_or_create_key_file(dir.path(), KEY_FILE).expect("reload");
 	// The same key is returned on the second call (stable across restarts).
 	assert_eq!(first, second);
 }
@@ -33,7 +33,7 @@ fn key_persists_and_reloads() {
 fn key_file_is_owner_only() {
 	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().expect("tempdir");
-	load_or_create_key(dir.path()).expect("generate");
+	load_or_create_key_file(dir.path(), KEY_FILE).expect("generate");
 	let mode = std::fs::metadata(dir.path().join(KEY_FILE))
 		.expect("stat")
 		.permissions()
