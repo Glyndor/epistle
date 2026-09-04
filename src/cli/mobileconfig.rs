@@ -19,7 +19,7 @@ pub(super) fn run(config: &Config, account: &str, out: &mut impl std::io::Write)
 	) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening account store: {error}");
+			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -28,17 +28,17 @@ pub(super) fn run(config: &Config, account: &str, out: &mut impl std::io::Write)
 		.into_iter()
 		.find(|(name, _, _)| name == account)
 	else {
-		eprintln!("error: no such account \"{account}\"");
+		super::style::error(format_args!("no such account \"{account}\""));
 		return ExitCode::FAILURE;
 	};
 	let Some(email) = addresses.first() else {
-		eprintln!("error: account \"{account}\" has no address");
+		super::style::error(format_args!("account \"{account}\" has no address"));
 		return ExitCode::FAILURE;
 	};
 
 	let profile = build_profile(account, email, &config.hostname);
 	if out.write_all(profile.as_bytes()).is_err() {
-		eprintln!("error: writing profile");
+		super::style::error("writing profile");
 		return ExitCode::FAILURE;
 	}
 	ExitCode::SUCCESS

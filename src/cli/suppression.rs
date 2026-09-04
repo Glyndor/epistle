@@ -18,7 +18,7 @@ pub(super) fn run(
 	let list = match SuppressionList::open(&config.data_dir) {
 		Ok(list) => list,
 		Err(error) => {
-			eprintln!("error: cannot open suppression list: {error}");
+			super::style::error(format_args!("cannot open suppression list: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -28,7 +28,7 @@ pub(super) fn run(
 			None => list.remove(address),
 		};
 		if let Err(error) = result {
-			eprintln!("error: cannot remove {address}: {error}");
+			super::style::error(format_args!("cannot remove {address}: {error}"));
 			return ExitCode::FAILURE;
 		}
 		let _ = writeln!(out, "removed {address}");

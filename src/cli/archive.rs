@@ -92,7 +92,7 @@ pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) ->
 }
 
 fn error_exit(error: impl std::fmt::Display) -> ExitCode {
-	eprintln!("error: {error}");
+	super::style::error(error);
 	ExitCode::FAILURE
 }
 
@@ -116,7 +116,7 @@ fn list(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: listing archive: {error}");
+			super::style::error(format_args!("listing archive: {error}"));
 			ExitCode::FAILURE
 		}
 	}
@@ -142,7 +142,7 @@ fn restore(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: restoring archive entry: {error}");
+			super::style::error(format_args!("restoring archive entry: {error}"));
 			ExitCode::FAILURE
 		}
 	}
@@ -173,7 +173,7 @@ fn purge(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: purging archive: {error}");
+			super::style::error(format_args!("purging archive: {error}"));
 			ExitCode::FAILURE
 		}
 	}

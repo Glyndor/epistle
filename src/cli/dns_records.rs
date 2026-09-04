@@ -34,13 +34,15 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 								}
 							}
 							Err(error) => {
-								eprintln!("warning: cannot load RSA DKIM key: {error}");
+								super::style::warn(format_args!(
+									"cannot load RSA DKIM key: {error}"
+								));
 							}
 						}
 					}
 				}
 				Err(error) => {
-					eprintln!("warning: cannot load DKIM key: {error}");
+					super::style::warn(format_args!("cannot load DKIM key: {error}"));
 				}
 			}
 			pairs
@@ -54,7 +56,7 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		.and_then(|tls| match std::fs::read_to_string(&tls.cert_file) {
 			Ok(pem) => records::tlsa_full_cert(&pem),
 			Err(error) => {
-				eprintln!("warning: cannot read certificate: {error}");
+				super::style::warn(format_args!("cannot read certificate: {error}"));
 				None
 			}
 		});

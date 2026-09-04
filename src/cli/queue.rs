@@ -11,14 +11,14 @@ pub(super) fn list(data_dir: &Path, out: &mut impl std::io::Write) -> ExitCode {
 	let spool = match FsSpool::open(data_dir) {
 		Ok(spool) => spool,
 		Err(error) => {
-			eprintln!("error: opening spool: {error}");
+			super::style::error(format_args!("opening spool: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let ids = match spool.list() {
 		Ok(ids) => ids,
 		Err(error) => {
-			eprintln!("error: reading spool: {error}");
+			super::style::error(format_args!("reading spool: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};

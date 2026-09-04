@@ -19,7 +19,7 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening account store: {error}");
+			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -51,7 +51,7 @@ pub(super) fn add(
 		return ExitCode::FAILURE;
 	};
 	if let Err(rejection) = crate::password::validate(&password) {
-		eprintln!("error: {}", rejection.message());
+		super::style::error(rejection.message());
 		return ExitCode::FAILURE;
 	}
 	let store = match AccountStore::open(
@@ -62,14 +62,14 @@ pub(super) fn add(
 	) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening account store: {error}");
+			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let account = match DynamicAccount::with_password(name.to_string(), addresses, &password) {
 		Ok(account) => account,
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			return ExitCode::FAILURE;
 		}
 	};
@@ -79,7 +79,7 @@ pub(super) fn add(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}
@@ -122,14 +122,14 @@ pub(super) fn remove(
 	) {
 		Ok(store) => Arc::new(store),
 		Err(error) => {
-			eprintln!("error: opening account store: {error}");
+			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let spool = match FsSpool::open(&config.data_dir) {
 		Ok(spool) => spool,
 		Err(error) => {
-			eprintln!("error: opening spool: {error}");
+			super::style::error(format_args!("opening spool: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -149,15 +149,15 @@ pub(super) fn remove(
 			ExitCode::SUCCESS
 		}
 		Err(StoreError::NotFound(what)) => {
-			eprintln!("error: no such dynamic account: {what}");
+			super::style::error(format_args!("no such dynamic account: {what}"));
 			ExitCode::FAILURE
 		}
 		Err(StoreError::Invalid(message)) => {
-			eprintln!("error: {message}");
+			super::style::error(message);
 			ExitCode::FAILURE
 		}
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}

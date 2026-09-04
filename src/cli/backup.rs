@@ -23,7 +23,7 @@ pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Wri
 	let mut entries = match collect_files(&config.data_dir) {
 		Ok(entries) => entries,
 		Err(error) => {
-			eprintln!("error: reading data dir: {error}");
+			super::style::error(format_args!("reading data dir: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -33,14 +33,14 @@ pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Wri
 	if let Some(db) = &config.database {
 		match pg_dump(&db.url) {
 			Ok(dump) => entries.push(("database.sql".to_string(), 0o644, dump)),
-			Err(error) => eprintln!("warning: skipping pg_dump: {error}"),
+			Err(error) => super::style::warn(format_args!("skipping pg_dump: {error}")),
 		}
 	}
 
 	let archive = match tar_gz(&entries) {
 		Ok(archive) => archive,
 		Err(error) => {
-			eprintln!("error: building archive: {error}");
+			super::style::error(format_args!("building archive: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
