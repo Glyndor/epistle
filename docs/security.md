@@ -91,6 +91,25 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   `mail_messages_rejected_total{reason="rate_limit"}` line as the other
   inbound rejections. Bounces use the null reverse-path and are skipped
   from the per-sender charge.
+- **Shared authentication ban table** (requires `[database]`). Every
+  listener (SMTP submission, IMAP, POP3, ManageSieve, the API, OAuth
+  device and PKCE grants) records every password-authentication outcome
+  into the `auth_failure` table and consults the `auth_ban` table
+  before doing any password hashing. The product context's defaults:
+  5 failed authentications within 15 minutes fire a ban; the first ban
+  lasts 15 minutes, the next on the same subject doubles (30 minutes,
+  then an hour, ...), capped at 24 hours. A successful authentication
+  clears both the ban and the rolling failure history for the subject.
+  Bans are scoped to the peer IP (`ip:<addr>`) and the resolved account
+  name (`account:<login>`), so a brute-force attempt against one
+  account from a botnet still trips the IP half, and a credential
+  stuffing wave against one IP still trips the account half. The wire
+  response to a banned subject is identical to a wrong password (no
+  oracle); the audit log records the rule that fired under the
+  `auth.banned` event. The store is fail-open on database errors: a
+  flapping pool returns `None` to the ban check and bumps the
+  `database_unavailable` counter, the same discipline the reputation
+  screen follows.
 - **Outbound suppression**: a hard bounce (permanent 5xx) suppresses the
   recipient so the server stops sending to dead addresses, protecting the
   sending IP's reputation.
