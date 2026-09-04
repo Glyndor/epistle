@@ -17,8 +17,7 @@ fn decodes_quoted_printable_soft_breaks_and_3d() {
 	// A QP soft break INSIDE the host label must be unfolded so the host is
 	// reconstructed; =3D decoding lets an equals sign appear in URL context
 	// without breaking the scan.
-	let body =
-		b"see https://ex=\r\nample.com/?q=3D1 and http://oth=\r\ner.example/path";
+	let body = b"see https://ex=\r\nample.com/?q=3D1 and http://oth=\r\ner.example/path";
 	let hosts = extract_hosts(body, DEFAULT_HOST_CAP);
 	assert_eq!(
 		hosts,
@@ -31,7 +30,8 @@ fn caps_and_dedupes() {
 	// a appears twice and the cap is 3; dedup must collapse the duplicate so
 	// the result has a.example, b.example, c.example — and the cap then stops
 	// further pushes.
-	let body = b"http://a.example http://b.example http://a.example http://c.example http://d.example";
+	let body =
+		b"http://a.example http://b.example http://a.example http://c.example http://d.example";
 	let hosts = extract_hosts(body, 3);
 	assert_eq!(
 		hosts,
@@ -45,8 +45,7 @@ fn caps_and_dedupes() {
 
 #[test]
 fn ignores_ip_literals_and_localhost() {
-	let body =
-		b"links: http://127.0.0.1/x http://[::1]/y http://localhost/z http://real.example/p";
+	let body = b"links: http://127.0.0.1/x http://[::1]/y http://localhost/z http://real.example/p";
 	let hosts = extract_hosts(body, DEFAULT_HOST_CAP);
 	assert_eq!(hosts, vec!["real.example".to_string()]);
 }

@@ -15,6 +15,7 @@ use super::session::Session;
 use super::sink::MessageSink;
 use crate::directory_store::DirectoryHandle;
 
+mod dnsbl_check;
 mod run;
 
 /// Read buffer size per connection.
@@ -460,3 +461,7 @@ mod tests;
 #[cfg(test)]
 #[path = "server_tests_auth.rs"]
 mod tests_auth;
+
+#[cfg(test)]
+#[path = "server_tests_urlbl.rs"]
+mod tests_urlbl;

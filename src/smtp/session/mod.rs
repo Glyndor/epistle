@@ -222,6 +222,14 @@ impl Session {
 		self.authenticated.as_deref()
 	}
 
+	/// Mark this session as authenticated as `account` without going through
+	/// the SASL flow. Test-only: production code sets the field through the
+	/// AUTH command machinery.
+	#[cfg(test)]
+	pub fn mark_authenticated_for_test(&mut self, account: &str) {
+		self.authenticated = Some(account.to_string());
+	}
+
 	/// Mark this session as running inside TLS from the start
 	/// (implicit-TLS listeners).
 	pub fn with_tls_active(mut self) -> Self {

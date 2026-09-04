@@ -234,8 +234,7 @@ impl DnsLookup for CountingDns {
 	}
 
 	fn addresses(&self, name: &str) -> Fut<'_, Vec<IpAddr>> {
-		self.calls
-			.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+		self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 		let result = self.listed.get(name).cloned().unwrap_or_default();
 		Box::pin(async move { Ok(result) })
 	}

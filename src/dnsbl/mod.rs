@@ -145,8 +145,9 @@ impl Dnsbl {
 	/// Screen `hosts` (the URL hosts found in the body) against every URIBL
 	/// zone. For each host with more than two labels, both the full host and
 	/// the registrable domain (Mozilla Public Suffix List) are queried. The
-	/// total query budget is capped at [`MAX_URL_QUERIES`] so a body with
-	/// hundreds of links cannot turn the delivery path into a DNS flood.
+	/// total query budget is capped at `MAX_URL_QUERIES` (200) so a body
+	/// with hundreds of links cannot turn the delivery path into a DNS
+	/// flood.
 	pub async fn check_url_hosts(&self, hosts: &[String], dns: &dyn DnsLookup) -> DnsblOutcome {
 		if self.url_zones.is_empty() || hosts.is_empty() {
 			return DnsblOutcome::NotListed;

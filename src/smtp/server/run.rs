@@ -148,21 +148,12 @@ impl Server {
 					// SPF and DKIM apply to unauthenticated mail from a
 					// known peer.
 					let mut auth_headers = String::new();
-					// DNSBL screening: reject unauthenticated clients listed on a
-					// configured blocklist before any further processing.
-					if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated())
-						&& !self.dnsbl.is_empty()
-						&& let crate::dnsbl::DnsblOutcome::Listed { zone } =
-							self.dnsbl.check(ip, dns.as_ref()).await
-					{
-						tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
-						self.metrics.rejected(crate::metrics::RejectReason::Dnsbl);
-						self.train_corpus(&message.data, true);
-						send(
-							&mut stream,
-							&Reply::single(554, "5.7.1 client host blocked by DNS blocklist"),
-						)
-						.await?;
+					// DNSBL screening: reject an unauthenticated client whose
+					// IP, envelope sender domain, or URL host in the body is
+					// listed. All three lists fail open on `Unavailable`, so a
+					// misconfigured resolver does not block delivery.
+					if let Some(rejection) = self.screen_dnsbl(peer, &message, &session).await {
+						send(&mut stream, &rejection.reply()).await?;
 						continue;
 					}
 					// Greylisting: defer an unseen triplet's first attempt. A real
