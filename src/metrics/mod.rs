@@ -84,6 +84,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
+	("send_limited_new_recipients", "send_limited_new_recipients"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -120,6 +121,7 @@ pub struct Metrics {
 	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
+	send_limited_new_recipients: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
@@ -218,6 +220,16 @@ impl Metrics {
 		self.auth_login_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a submission refused because the account would exceed the
+	/// rolling 24h cap on first-time recipients (`Config::new_recipients_per_day`).
+	/// Distinct from the per-minute `submission_rate_limit_per_min`:
+	/// that limiter sees volume, this one sees *novel* addresses, which
+	/// is the slow-exfiltration signal.
+	pub fn send_limited_new_recipients(&self) {
+		self.send_limited_new_recipients
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -292,6 +304,7 @@ impl Metrics {
 			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
+			"send_limited_new_recipients" => &self.send_limited_new_recipients,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -414,6 +427,11 @@ impl Metrics {
 				"mail_llm_failed_total",
 				"LLM antispam hook calls that failed (the message was accepted).",
 				&self.llm_failed,
+			),
+			(
+				"mail_send_limited_new_recipients_total",
+				"Submissions refused because the account would exceed the daily cap on first-time recipients.",
+				&self.send_limited_new_recipients,
 			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
@@ -552,6 +570,7 @@ mod tests {
 			"clock_drift_exceeded",
 			"auth_login_succeeded",
 			"auth_login_failed",
+			"send_limited_new_recipients",
 		] {
 			assert!(snap.contains_key(name), "missing {name}");
 		}

@@ -104,6 +104,14 @@ pub struct Server {
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// Per-account correspondent store, consulted at end-of-DATA to
+	/// enforce the rolling 24h new-recipient cap. `None` disables the
+	/// cap (the default) so the pre-feature behaviour survives in
+	/// tests and in production builds that never enable the cap.
+	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
+	/// Rolling 24h cap on first-time recipients per account. Pairs with
+	/// `correspondents`; either absent disables the cap.
+	daily_new_recipients: Option<u32>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 	/// The authentication protocol this listener serves. Sessions tag every
@@ -144,6 +152,8 @@ impl Server {
 			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
+			correspondents: None,
+			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			auth_protocol: crate::config::Protocol::Submission,
 		}
@@ -210,6 +220,24 @@ impl Server {
 	/// instead of receiving `250` for a payload the spool cannot write.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.disk_guard = Some(guard);
+		self
+	}
+
+	/// Attach the per-account correspondent store. The end-of-DATA
+	/// check consults it for the rolling 24h new-recipient cap. The
+	/// store is shared across listeners by way of `Arc`, so a single
+	/// `CorrespondentStore::open(data_dir)` is enough.
+	pub fn with_correspondents(mut self, store: Arc<crate::storage::CorrespondentStore>) -> Self {
+		self.correspondents = Some(store);
+		self
+	}
+
+	/// Set the rolling 24h cap on first-time recipients per account
+	/// (`Config::new_recipients_per_day`). `None` disables the cap.
+	/// The cap only fires when a correspondent store has also been
+	/// attached; either field alone is a no-op.
+	pub fn with_daily_new_recipients(mut self, limit: Option<u32>) -> Self {
+		self.daily_new_recipients = limit;
 		self
 	}
 
@@ -306,6 +334,60 @@ impl Server {
 		}
 	}
 
+	/// Whether the envelope sender is known to **any** local recipient
+	/// account of this message (plan 4.6). Returns `(account, sender)`
+	/// for the first match so the run-loop can log which account
+	/// recognised the sender; the loop only needs to know *whether* the
+	/// fast path applies, but the (account, sender) pair is what the
+	/// debug log carries so an operator chasing a missed expectation
+	/// can see whose correspondent list held the answer.
+	///
+	/// Recipient-to-account resolution reuses `Directory::resolve`,
+	/// the same lookup the SMTP session uses to admit RCPT, so a
+	/// domain alias, a multi-target alias, sub-addressing, and the
+	/// catch-all all behave identically here.
+	///
+	/// `None` (no fast path) covers four cases: no correspondent store
+	/// wired in, an empty envelope sender (bounce, where greylisting is
+	/// also skipped via the unauthenticated check), an unparseable
+	/// recipient, or a sender the directory does not recognise as a
+	/// local account. The latter is the slow path on purpose: the
+	/// sender is not local, so no account owns it, so no correspondent
+	/// marker exists for it.
+	fn known_correspondent(
+		&self,
+		message: &crate::smtp::session::AcceptedMessage,
+	) -> Option<(String, String)> {
+		let store = self.correspondents.as_deref()?;
+		// An empty envelope sender is the null reverse path; greylisting
+		// is also skipped for it (the inbound is a bounce, not a fresh
+		// triplet). The fast path is a no-op there too: the
+		// correspondent store is keyed by sender address, and there is
+		// none to key on.
+		if message.reverse_path.is_empty() {
+			return None;
+		}
+		let sender = message.reverse_path.to_ascii_lowercase();
+		let directory = self.directory.current();
+		for recipient in &message.recipients {
+			let Ok(address) = crate::smtp::address::Address::parse(recipient) else {
+				continue;
+			};
+			let accounts = match directory.resolve(&address) {
+				crate::smtp::directory::Resolution::Account(account) => vec![account],
+				crate::smtp::directory::Resolution::Alias(accounts) => accounts,
+				crate::smtp::directory::Resolution::NotLocal
+				| crate::smtp::directory::Resolution::UnknownUser => continue,
+			};
+			for account in accounts {
+				if store.knows(&account, &sender) {
+					return Some((account, sender));
+				}
+			}
+		}
+		None
+	}
+
 	/// Screen unauthenticated clients against the given DNS blocklist zones.
 	pub fn with_dnsbl(mut self, dnsbl: crate::dnsbl::Dnsbl) -> Self {
 		self.dnsbl = dnsbl;
@@ -360,6 +442,19 @@ impl Server {
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}
+		// Build the cap state in one go: the listener already holds
+		// `correspondents`, `daily_new_recipients`, and a metrics handle;
+		// folding them into a `cap::Cap` keeps the session's field
+		// surface small (one slot, three sources).
+		let mut cap = crate::smtp::session::cap::Cap::empty();
+		if let Some(store) = &self.correspondents {
+			cap = cap.with_correspondents(Arc::clone(store));
+		}
+		if self.daily_new_recipients.is_some() {
+			cap = cap.with_daily_new_recipients(self.daily_new_recipients);
+		}
+		cap = cap.with_metrics(Arc::clone(&self.metrics));
+		session = session.with_cap(cap);
 		session
 	}
 
@@ -465,3 +560,7 @@ mod tests_auth;
 #[cfg(test)]
 #[path = "server_tests_urlbl.rs"]
 mod tests_urlbl;
+
+#[cfg(test)]
+#[path = "server_tests_correspondents.rs"]
+mod tests_correspondents;

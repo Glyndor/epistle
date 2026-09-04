@@ -7,6 +7,7 @@
 //! default install must work with zero external services.
 
 pub(crate) mod blob_backend;
+pub mod correspondents;
 mod crypto;
 mod delivery;
 mod routing;
@@ -18,6 +19,7 @@ mod spool;
 // "file_len - OVERHEAD". They were pub inside a private module, so a reader
 // could see the promise and not the value it refers to.
 pub use blob_backend::{BlobBackend, BlobError, FsBackend, S3Backend, build as build_blob_backend};
+pub use correspondents::{CapOutcome, CorrespondentStore, Recorded};
 pub use crypto::{CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64};
 pub use delivery::LocalDelivery;
 

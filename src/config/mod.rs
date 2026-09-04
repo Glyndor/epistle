@@ -215,6 +215,20 @@ pub struct Config {
 	/// disables per-account submission rate limiting.
 	#[serde(default)]
 	pub submission_rate_limit_per_min: Option<u32>,
+	/// Cap on the number of recipients an authenticated account may write
+	/// to for the first time in a rolling 24h window. Every submission path
+	/// (SMTP authenticated end-of-DATA, `POST /api/v1/send`, JMAP
+	/// `EmailSubmission/set`) computes the count of recipients the account
+	/// has not previously contacted, sums it with the number of markers
+	/// already inside the window, and refuses the message when the sum
+	/// would exceed this limit. Absent disables the cap (the default).
+	/// The intent is to stop the slow-exfiltration pattern a per-minute
+	/// rate limit cannot see: a compromised account can stay under
+	/// `submission_rate_limit_per_min` for hours while sending to fresh
+	/// addresses, and a daily ceiling on the *new* recipients makes that
+	/// visible.
+	#[serde(default)]
+	pub new_recipients_per_day: Option<u32>,
 	/// Per-domain submission rate limit (messages/min) for authenticated
 	/// senders in that domain. Resolved by walking the account's own
 	/// addresses — the same lookup [`crate::smtp::directory::Directory::quota_for`]
@@ -336,6 +350,7 @@ impl std::fmt::Debug for Config {
 				"submission_rate_limit_per_min",
 				&self.submission_rate_limit_per_min,
 			)
+			.field("new_recipients_per_day", &self.new_recipients_per_day)
 			.field("domain_submission_limits", &self.domain_submission_limits)
 			.field(
 				"inbound_rate_limit_per_ip_per_min",

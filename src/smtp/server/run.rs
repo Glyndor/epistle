@@ -156,10 +156,28 @@ impl Server {
 						send(&mut stream, &rejection.reply()).await?;
 						continue;
 					}
+					// Trusted-reply fast path (plan 4.6): when the envelope
+					// sender is known to any local recipient account, skip
+					// greylisting and the reputation first-time delay. The
+					// rest of the inbound stack still runs because a known
+					// correspondent's account can itself be compromised:
+					// DNSBL above, SPF/DKIM/DMARC below, the scanner and the
+					// LLM band. Resolution reuses `Directory::resolve` so a
+					// domain alias or a multi-target alias applies
+					// identically to how the recipient was admitted.
+					let known_correspondent = self.known_correspondent(&message);
+					if let Some((account, sender)) = known_correspondent.as_ref() {
+						tracing::debug!(
+							account = %account,
+							sender = %sender,
+							"trusted reply: skipping greylist and first-time delay"
+						);
+					}
 					// Greylisting: defer an unseen triplet's first attempt. A real
 					// MTA retries and is then accepted.
-					if let (Some((store, delay)), Some(ip), None) =
-						(&self.greylist, peer, session.authenticated())
+					if known_correspondent.is_none()
+						&& let (Some((store, delay)), Some(ip), None) =
+							(&self.greylist, peer, session.authenticated())
 						&& let Some(recipient) = message.recipients.first()
 					{
 						let now = std::time::SystemTime::now()
@@ -396,6 +414,13 @@ impl Server {
 						.map(|(_, d)| d.to_ascii_lowercase());
 					// Reputation screen for unauthenticated senders: reject a
 					// poor reputation, slow down a first-time sender.
+					// The slow path (`FirstTime` -> sleep) is skipped when
+					// the sender is a known correspondent: a real reply
+					// from a recipient account's history does not warrant
+					// the reputation-system's first-attempt penalty. The
+					// hard `Reject` branch is still honoured; a poor
+					// reputation is independent of whether the sender is
+					// known to a local account.
 					if let (Some(pool), Some(domain), None) = (
 						&self.reputation,
 						rep_domain.as_deref(),
@@ -412,7 +437,10 @@ impl Server {
 								self.metrics.quarantined();
 								message.mailbox = Some("Rejects".to_string());
 							}
-							Screen::FirstTime if !self.first_time_delay.is_zero() => {
+							Screen::FirstTime
+								if !self.first_time_delay.is_zero()
+									&& known_correspondent.is_none() =>
+							{
 								tokio::time::sleep(self.first_time_delay).await;
 							}
 							_ => {}

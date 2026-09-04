@@ -98,6 +98,26 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   count, so transient outages don't lose mail; a delay-warning DSN is sent once.
 - **ARF** abuse reports can be generated for offending messages
   (`epistle report-abuse`).
+- **Slow exfiltration via a compromised account**: a per-account submission
+  rate limit (`submission_rate_limit_per_min`) only sees volume, so a
+  hijacked account that stays under the per-minute ceiling can still
+  write to thousands of addresses it never legitimately contacted. The
+  daily new-recipient cap (`new_recipients_per_day`) closes that
+  loophole by tracking which recipients an account has written to and
+  refusing any submission whose set of fresh addresses would push the
+  rolling 24h total over the configured ceiling. Refusals are `450
+  4.7.1` on SMTP, `429 rate_limited` on the REST submission endpoint,
+  and the JMAP `tooManyRecipients` error type on `EmailSubmission/set`;
+  the audit channel carries `send.new_recipients_limited` with the
+  account, count and limit, and the `send_limited_new_recipients`
+  Prometheus counter bumps so an operator can alert on it.
+- **Reply fast path for known correspondents**: the same per-account
+  correspondent store powers an inbound optimisation. If the envelope
+  sender of an unauthenticated message is known to **any** local
+  recipient account of the same message, the greylist deferral and the
+  reputation `first_time_delay` are skipped. Nothing else changes:
+  DNSBL, SPF, DKIM, DMARC, the scanner and the LLM band still run,
+  because a known correspondent's account can itself be compromised.
 
 ## Data at rest
 

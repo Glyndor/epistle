@@ -44,6 +44,18 @@ struct Inner {
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<AuthLimiter>,
+	/// Per-account correspondent store: which addresses the account has
+	/// previously written to. The rolling 24h cap on first-time
+	/// recipients (`new_recipients_per_day`) reads from and writes to
+	/// this; tests can swap it out via [`ApiState::with_correspondents`]
+	/// so the same test tempdir is reused across handlers.
+	correspondents: Option<crate::storage::CorrespondentStore>,
+	/// Cap on first-time recipients per account in any rolling 24h window.
+	/// `None` disables the cap (the default). Lives on `ApiState` so
+	/// the REST and JMAP submission paths share a single source of
+	/// truth, and tests can rebuild `ApiState` with a tighter limit
+	/// without touching the file.
+	new_recipients_per_day: Option<u32>,
 	/// Account names allowed to authenticate to the admin panel.
 	admins: Vec<String>,
 	/// Per-account storage quota in bytes; 0 means unlimited.
@@ -198,6 +210,8 @@ impl ApiState {
 					AUTH_WINDOW,
 					std::time::Instant::now(),
 				)),
+				correspondents: None,
+				new_recipients_per_day: None,
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
@@ -402,6 +416,41 @@ impl ApiState {
 			inner.tenant_limits = (*limits).clone();
 		}
 		self
+	}
+
+	/// Attach the per-account correspondent store. Must be set before
+	/// the state is shared (it rebuilds the `Arc` inner). Required for
+	/// the rolling 24h new-recipient cap (`POST /api/v1/send`, JMAP
+	/// `EmailSubmission/set`); unset handlers fall through to the
+	/// pre-feature behaviour rather than silently skipping the cap.
+	pub fn with_correspondents(mut self, store: crate::storage::CorrespondentStore) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.correspondents = Some(store);
+		}
+		self
+	}
+
+	/// The per-account correspondent store when one has been attached.
+	/// `None` means the cap cannot be enforced; handlers fall through
+	/// to the pre-feature behaviour instead.
+	pub fn correspondents(&self) -> Option<&crate::storage::CorrespondentStore> {
+		self.inner.correspondents.as_ref()
+	}
+
+	/// Set the rolling 24h cap on first-time recipients per account
+	/// (`Config::new_recipients_per_day`). Must be set before the state
+	/// is shared (it rebuilds the `Arc` inner). `None` disables the cap.
+	pub fn with_new_recipients_per_day(mut self, limit: Option<u32>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.new_recipients_per_day = limit;
+		}
+		self
+	}
+
+	/// The configured daily new-recipient cap, when one is in effect.
+	/// `None` means the cap is disabled; every submission is allowed.
+	pub fn new_recipients_per_day(&self) -> Option<u32> {
+		self.inner.new_recipients_per_day
 	}
 
 	/// The per-tenant aggregate limits. Empty when no `[[tenant]]` is

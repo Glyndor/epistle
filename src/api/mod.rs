@@ -16,7 +16,7 @@ pub mod tenant_limits;
 pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeyStore};
-pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change};
+pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
@@ -90,6 +90,10 @@ mod tests;
 #[cfg(test)]
 #[path = "api_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "api_tests_newrecipients.rs"]
+mod tests_newrecipients;
 
 #[cfg(test)]
 #[path = "auth_tests.rs"]

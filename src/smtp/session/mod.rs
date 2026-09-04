@@ -12,6 +12,8 @@ use super::diskspace::DiskGuard;
 use super::reply::Reply;
 
 mod bdat;
+pub mod cap;
+mod finalise;
 mod login;
 mod oauth;
 mod scram;
@@ -77,6 +79,11 @@ pub struct Session {
 	/// The client's peer IP, set by the network layer; used to enforce an app
 	/// password's CIDR allowlist during authentication.
 	peer_ip: Option<std::net::IpAddr>,
+	/// Per-account rolling 24h new-recipient cap (plan 4.10). The
+	/// fields it carries (correspondent store, daily limit, metrics
+	/// handle) live in `cap::Cap`; the SMTP path reads them through
+	/// `cap::check_or_reply` at end-of-DATA. Empty by default.
+	cap: cap::Cap,
 	/// The authentication protocol this session's listener serves;
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
@@ -111,6 +118,7 @@ impl Session {
 			client_identity: None,
 			pending_external: false,
 			peer_ip: None,
+			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
 			metrics: None,
 		}
@@ -210,10 +218,18 @@ impl Session {
 
 	/// Attach a shared disk-space guard for `data_dir`. When set, `MAIL FROM`
 	/// is rejected with `452` if the filesystem cannot hold another message,
-	/// so the remote retries instead of receiving a `250` for a message the
-	/// server cannot write to the spool.
+	/// so the remote retries instead of accepting a message that will
+	/// fail to land in the spool.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.policy = self.policy.with_disk_guard(guard);
+		self
+	}
+
+	/// Replace the cap state (correspondent store, daily limit, metrics
+	/// handle). Wired by the listener at session-construction time so
+	/// the end-of-DATA check has the configured pair in scope.
+	pub fn with_cap(mut self, cap: cap::Cap) -> Self {
+		self.cap = cap;
 		self
 	}
 
@@ -497,42 +513,14 @@ impl Session {
 	/// Feed one data line (CRLF already stripped and enforced upstream).
 	/// Returns `None` while more lines are expected.
 	pub fn data_line(&mut self, line: &[u8]) -> Option<Action> {
-		let State::ReceivingData {
-			reverse_path,
-			recipients,
-			no_dsn,
-			size,
-			body,
-			require_tls,
-			..
-		} = &mut self.state
-		else {
-			// Programming error in the network layer; fail the transaction.
+		if line == b"." {
+			return Some(finalise::finalise_from_state(self));
+		}
+		// Dot-unstuffing (RFC 5321 section 4.5.2).
+		let State::ReceivingData { size, body, .. } = &mut self.state else {
 			self.reset();
 			return Some(Action::Continue(Reply::bad_sequence()));
 		};
-
-		if line == b"." {
-			let message = AcceptedMessage {
-				reverse_path: reverse_path.clone(),
-				recipients: recipients.clone(),
-				no_dsn: no_dsn.clone(),
-				data: body.clone(),
-				require_tls: *require_tls,
-				mailbox: None,
-			};
-			let oversize = *size > MAX_MESSAGE_SIZE;
-			self.state = State::Greeted;
-			if oversize {
-				return Some(Action::Continue(Reply::single(
-					552,
-					"message exceeds maximum size",
-				)));
-			}
-			return Some(Action::Deliver(Reply::ok(), message));
-		}
-
-		// Dot-unstuffing (RFC 5321 section 4.5.2).
 		let content = line.strip_prefix(b".").unwrap_or(line);
 		*size += content.len() + 2;
 		if *size <= MAX_MESSAGE_SIZE {
@@ -561,6 +549,9 @@ mod tests_auth;
 #[cfg(test)]
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;
+#[cfg(test)]
+#[path = "../session_tests_newrecipients.rs"]
+mod tests_newrecipients;
 #[cfg(test)]
 #[path = "../session_tests_oauth.rs"]
 mod tests_oauth;
