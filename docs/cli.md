@@ -4,6 +4,48 @@ All administration is done through the `epistle` command. Every command that nee
 configuration takes `--config <FILE>`. Run `epistle <command> --help` for the exact
 flags.
 
+## Output
+
+Every `epistle` subcommand splits its output into two streams by purpose:
+
+- **stdout** carries command data or listings and never carries an ANSI escape
+  sequence, no matter the terminal, no matter `NO_COLOR`, no matter the command.
+- **stderr** carries status, warnings, errors and progress and is the only stream
+  that may carry colour or a `\r`-rewritten progress line.
+
+Four commands produce binary or quoted data on stdout and would silently break if
+an escape sequence or spinner frame were ever written there, so they are pinned by
+`tests/cli_stdout_clean.rs`:
+
+| Command | stdout payload |
+|---|---|
+| `epistle backup --config F` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). |
+| `epistle export --config F --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
+| `epistle storage-keygen` | A single base64 32-byte at-rest key. |
+| `epistle oauth-keygen` | A PKCS#8 ES256 private key plus the matching public point. |
+
+`backup`'s `warnings` sink (the externally-referenced paths that are not in the
+archive) is also stderr, by the same rule.
+
+Colour on stderr follows the standard precedence: `NO_COLOR` disables it,
+`CLICOLOR_FORCE=1` enables it regardless of whether stderr is a terminal,
+otherwise it follows whether stderr is a terminal and `TERM`. `--help` (built
+by clap) and the four data commands always honour this. To force a specific
+look in a script:
+
+```sh
+# Coloured status, plain stdout data:
+epistle backup --config /etc/mail.toml > backup.tar.gz
+
+# Plain everywhere, for a log file:
+NO_COLOR=1 epistle backup --config /etc/mail.toml > backup.tar.gz
+```
+
+Progress is a single line on stderr (one tick per message for `import`, one tick
+per check for `verify-dns`) that gets cleared when the command finishes. When
+stderr is not a terminal, the progress line is suppressed and the summary is
+printed once at the end.
+
 ## Running the server
 
 | Command | What it does |
