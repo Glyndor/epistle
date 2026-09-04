@@ -1,0 +1,179 @@
+//! Uncertain-band logic for the SMTP server.
+//!
+//! Split out of `run.rs` to keep the connection loop's code-line count
+//! under the CI hard limit (500). The band is the slice of mail where the
+//! local Bayesian classifier is not confident in either direction; on an
+//! unauthenticated message the server consults the LLM hook (if any) and,
+//! when configured, the SubjectPass signed-retry-token path. The token
+//! path tempfails with a freshly minted `EP-<token>` the sender can paste
+//! in the `Subject:`; the retry that carries it is accepted as ham.
+//!
+//! The check runs after DNSBL, SPF, DMARC and the scanner hook in the
+//! caller, so a valid token never overrides a hard rejection.
+
+use tokio::io::AsyncWrite;
+
+use super::{Server, send};
+use crate::smtp::session::AcceptedMessage;
+
+/// What the caller should do after the band has had its say.
+pub(super) enum BandOutcome {
+	/// Continue with the post-band path (deliver or quarantine as configured).
+	Continue,
+	/// A `450 4.7.1` was sent to the client and the message must be
+	/// dropped: the sender is expected to retry with the token in the
+	/// subject, at which point the SubjectPass verifier will accept it.
+	Challenged,
+}
+
+impl Server {
+	/// Apply the uncertain-band logic to `message`. `is_authenticated` is
+	/// precomputed by the caller so this function stays free of the
+	/// session borrow. Returns `Continue` to let the caller proceed with
+	/// the normal accept/quarantine path, or `Challenged` after the band
+	/// has tempfailed the client and incremented the counter.
+	pub(super) async fn handle_uncertain_band<W>(
+		&self,
+		message: &mut AcceptedMessage,
+		is_authenticated: bool,
+		stream: &mut W,
+	) -> Result<BandOutcome, std::io::Error>
+	where
+		W: AsyncWrite + Unpin,
+	{
+		// Authenticated mail is never consulted: the directory already
+		// proves the sender's identity, so the band only acts on
+		// unauthenticated traffic.
+		let Some(bayes) = &self.bayes else {
+			return Ok(BandOutcome::Continue);
+		};
+		if is_authenticated {
+			return Ok(BandOutcome::Continue);
+		}
+
+		let text = String::from_utf8_lossy(&message.data);
+		let score = match bayes.score(crate::antispam::corpus::SHARED, &text).await {
+			Ok(score) => score,
+			Err(error) => {
+				// The Bayesian score fetch failed; treat the message as
+				// outside the band (Accept) rather than blocking mail on
+				// a DB hiccup.
+				self.metrics.llm_failed();
+				tracing::warn!(%error, "llm band score failed; accepting");
+				return Ok(BandOutcome::Continue);
+			}
+		};
+
+		// The band is bounded by the LLM hook when one is configured;
+		// without an LLM the entire `[0, 1]` range is the band, so the
+		// SubjectPass challenge path always runs.
+		let in_band = self
+			.llm
+			.as_ref()
+			.map(|llm| llm.is_uncertain(score))
+			.unwrap_or(true);
+		if !in_band {
+			return Ok(BandOutcome::Continue);
+		}
+
+		let Some(pass) = &self.subjectpass else {
+			// No SubjectPass configured: defer to the LLM hook only.
+			return self.handle_llm_only(message).await;
+		};
+
+		let subject = crate::antispam::subjectpass::header_value(&message.data, "subject");
+		let recipient = message.recipients.first().map(String::as_str).unwrap_or("");
+		let day = unix_day_now();
+
+		// Token in the subject: accept the message as ham and skip the band.
+		if pass.accepts(subject.as_deref(), &message.reverse_path, recipient, day) {
+			self.metrics.subjectpass_passed();
+			return Ok(BandOutcome::Continue);
+		}
+
+		// No valid token: try the LLM hook if one is configured. A
+		// `Failed` outcome falls through to the challenge.
+		if let Some(llm) = &self.llm {
+			self.metrics.llm_consulted();
+			match llm.classifier.consult(&message.data).await {
+				crate::antispam::llm::ConsultOutcome::Verdict(
+					crate::antispam::hook::HookVerdict::Quarantine,
+				) => {
+					self.metrics.llm_quarantined();
+					self.train_corpus(&message.data, true);
+					message.mailbox = Some("Rejects".to_string());
+					return Ok(BandOutcome::Continue);
+				}
+				crate::antispam::llm::ConsultOutcome::Verdict(_) => {
+					return Ok(BandOutcome::Continue);
+				}
+				crate::antispam::llm::ConsultOutcome::Failed => {
+					self.metrics.llm_failed();
+					send(
+						stream,
+						&crate::antispam::subjectpass::challenge_reply(
+							pass,
+							&message.reverse_path,
+							recipient,
+							day,
+						),
+					)
+					.await?;
+					self.metrics.subjectpass_challenged();
+					return Ok(BandOutcome::Challenged);
+				}
+			}
+		}
+
+		// No LLM, no token: challenge.
+		send(
+			stream,
+			&crate::antispam::subjectpass::challenge_reply(
+				pass,
+				&message.reverse_path,
+				recipient,
+				day,
+			),
+		)
+		.await?;
+		self.metrics.subjectpass_challenged();
+		Ok(BandOutcome::Challenged)
+	}
+
+	/// Apply the LLM-only band path (SubjectPass disabled). Same as the
+	/// historical behaviour: consult the hook, accept on `Accept`, drop
+	/// to `Rejects` on `Quarantine`, fail open on `Failed`.
+	async fn handle_llm_only(
+		&self,
+		message: &mut AcceptedMessage,
+	) -> Result<BandOutcome, std::io::Error> {
+		let Some(llm) = &self.llm else {
+			return Ok(BandOutcome::Continue);
+		};
+		self.metrics.llm_consulted();
+		match llm.classifier.consult(&message.data).await {
+			crate::antispam::llm::ConsultOutcome::Verdict(
+				crate::antispam::hook::HookVerdict::Quarantine,
+			) => {
+				self.metrics.llm_quarantined();
+				self.train_corpus(&message.data, true);
+				message.mailbox = Some("Rejects".to_string());
+			}
+			crate::antispam::llm::ConsultOutcome::Verdict(_) => {}
+			crate::antispam::llm::ConsultOutcome::Failed => {
+				self.metrics.llm_failed();
+			}
+		}
+		Ok(BandOutcome::Continue)
+	}
+}
+
+/// Today's day stamp as `unix_seconds / 86400`. SubjectPass binds its HMAC
+/// to the same 2-character base32 day stamp SRS uses, so today and
+/// yesterday are both valid for a fresh token.
+fn unix_day_now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs() / 86_400)
+		.unwrap_or(0)
+}

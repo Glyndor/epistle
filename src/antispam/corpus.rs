@@ -188,6 +188,41 @@ fn hash_token(key: &[u8], token: &str) -> String {
 	})
 }
 
+/// A pluggable scoring source for the uncertain band. The production
+/// implementation is [`BayesStore`]; tests use a small in-memory fake that
+/// returns a deterministic score so the SMTP path can be exercised
+/// without a database. The trait stays narrow (one async method, no
+/// lifetimes) so a `dyn BayesScorer` is cheap to share across listeners.
+pub trait BayesScorer: Send + Sync {
+	/// The probability a message is spam, in `[0, 1]`. A `score` of `0.5`
+	/// with no LLM verdict to lean on is the case SubjectPass is built for.
+	fn score<'a>(
+		&'a self,
+		scope: &'a str,
+		text: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>;
+
+	/// Train the corpus on `text` as ham (`spam = false`) or spam. The
+	/// default implementation is a no-op so a fake scoring source does not
+	/// need to back a database.
+	fn train(&self, _scope: &str, _text: &str, _spam: bool) {}
+}
+
+impl BayesScorer for BayesStore {
+	fn score<'a>(
+		&'a self,
+		scope: &'a str,
+		text: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>
+	{
+		Box::pin(async move { BayesStore::score(self, scope, text).await })
+	}
+
+	fn train(&self, scope: &str, text: &str, spam: bool) {
+		self.train_in_background(scope.to_string(), text.to_string(), spam);
+	}
+}
+
 #[cfg(test)]
 #[path = "corpus_tests.rs"]
 mod tests;

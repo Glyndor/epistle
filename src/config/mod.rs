@@ -32,7 +32,7 @@ pub use account::Account;
 pub use acme::Acme;
 pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
-pub use antispam::Llm;
+pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
 pub use database::{Database, DatabaseTls};
@@ -182,6 +182,11 @@ pub struct Config {
 	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
 	/// lands in an uncertain band. Absent disables the hook.
 	pub antispam_llm: Option<Llm>,
+	/// SubjectPass opt-in: signed retry token for the uncertain band.
+	/// Disabled by default; enabling requires a `[database]` section so the
+	/// band has a Bayesian score to fall back on.
+	#[serde(default)]
+	pub subjectpass: SubjectPass,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
@@ -336,6 +341,7 @@ impl std::fmt::Debug for Config {
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
 			.field("antispam_llm", &self.antispam_llm)
+			.field("subjectpass", &self.subjectpass)
 			.field("listeners", &self.listeners)
 			.field("accounts", &self.accounts)
 			.field("tls", &self.tls)

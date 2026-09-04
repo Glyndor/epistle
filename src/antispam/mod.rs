@@ -12,4 +12,5 @@ pub mod greylist;
 pub mod hook;
 pub mod llm;
 pub mod reputation;
+pub mod subjectpass;
 pub mod urls;

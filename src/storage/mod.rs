@@ -64,7 +64,10 @@ pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
 /// outside the database (so a DB compromise cannot reverse any HMAC they
 /// produce) and outside the world (so an opportunistic file read does not
 /// disclose them).
-pub(crate) fn load_or_create_key_file(data_dir: &std::path::Path, name: &str) -> std::io::Result<[u8; 32]> {
+pub(crate) fn load_or_create_key_file(
+	data_dir: &std::path::Path,
+	name: &str,
+) -> std::io::Result<[u8; 32]> {
 	let path = data_dir.join(name);
 	if let Ok(bytes) = std::fs::read(&path)
 		&& bytes.len() == 32

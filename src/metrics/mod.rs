@@ -125,6 +125,8 @@ pub struct Metrics {
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
+	subjectpass_passed: AtomicU64,
+	subjectpass_challenged: AtomicU64,
 }
 
 impl Metrics {
@@ -246,6 +248,19 @@ impl Metrics {
 	/// parse or shape failure). Fail-open: the message is still accepted.
 	pub fn llm_failed(&self) {
 		self.llm_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an unauthenticated message accepted because its subject carried
+	/// a valid SubjectPass token for the (sender, recipient, day) triple.
+	pub fn subjectpass_passed(&self) {
+		self.subjectpass_passed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an unauthenticated message in the uncertain band that was
+	/// tempfailed with a SubjectPass challenge (no token in the subject,
+	/// and either no LLM hook or the LLM hook call failed).
+	pub fn subjectpass_challenged(&self) {
+		self.subjectpass_challenged.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a rejected message by reason.
@@ -432,6 +447,14 @@ impl Metrics {
 				"mail_send_limited_new_recipients_total",
 				"Submissions refused because the account would exceed the daily cap on first-time recipients.",
 				&self.send_limited_new_recipients,
+				"mail_subjectpass_passed_total",
+				"Unauthenticated messages accepted by a valid SubjectPass token in the subject.",
+				&self.subjectpass_passed,
+			),
+			(
+				"mail_subjectpass_challenged_total",
+				"Unauthenticated messages tempfailed with a SubjectPass challenge.",
+				&self.subjectpass_challenged,
 			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));

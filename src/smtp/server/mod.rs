@@ -17,6 +17,7 @@ use crate::directory_store::DirectoryHandle;
 
 mod dnsbl_check;
 mod run;
+mod run_band;
 
 /// Read buffer size per connection.
 const READ_BUFFER: usize = 4096;
@@ -63,13 +64,20 @@ pub struct Server {
 	/// When set, accepted unauthenticated mail is recorded as ham.
 	reputation: Option<sqlx::PgPool>,
 	/// When set, the Bayesian corpus is trained on accept/reject decisions.
-	bayes: Option<crate::antispam::corpus::BayesStore>,
+	bayes: Option<std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
 	/// Optional LLM hook consulted for unauthenticated mail whose Bayesian
 	/// score sits inside the configured uncertain band. Outside the band the
 	/// classifier is not consulted at all, so a non-`None` value is cheap.
 	llm: Option<crate::antispam::llm::LlmHook>,
+	/// Optional SubjectPass instance: when set, the server tempfails messages
+	/// in the uncertain band with a signed retry token, and accepts the
+	/// retry that carries the matching token in its `Subject:`. The
+	/// validator refuses to enable it without a `[database]` section, so
+	/// the same Server build only enables it when the Bayesian score is
+	/// actually reachable.
+	subjectpass: Option<crate::antispam::subjectpass::SubjectPass>,
 	/// Shared metrics counters.
 	metrics: Arc<crate::metrics::Metrics>,
 	/// Delay applied to first-time unauthenticated senders. Zero disables it.
@@ -139,6 +147,7 @@ impl Server {
 			bayes: None,
 			hook: None,
 			llm: None,
+			subjectpass: None,
 			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
@@ -305,8 +314,20 @@ impl Server {
 	}
 
 	/// Train the (encrypted-at-rest) Bayesian corpus on accept/reject decisions.
-	pub fn with_bayes(mut self, store: crate::antispam::corpus::BayesStore) -> Self {
+	pub fn with_bayes(
+		mut self,
+		store: std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>,
+	) -> Self {
 		self.bayes = Some(store);
+		self
+	}
+
+	/// Enable SubjectPass: messages in the uncertain Bayesian band that lack a
+	/// valid token and cannot be resolved by an LLM hook are tempfailed with a
+	/// freshly minted token the sender can put in the subject. The validator
+	/// refuses to enable it without a `[database]` section.
+	pub fn with_subjectpass(mut self, pass: crate::antispam::subjectpass::SubjectPass) -> Self {
+		self.subjectpass = Some(pass);
 		self
 	}
 
@@ -326,11 +347,12 @@ impl Server {
 	/// Train the Bayesian corpus on a message in the background, when a
 	/// reputation/corpus database is configured. Accepted mail trains ham,
 	/// rejected mail trains spam, so the classifier learns from the server's
-	/// own accept/reject decisions.
+	/// own accept/reject decisions. The no-op default on the trait keeps a
+	/// fake scorer (test-only) cheap to wire in.
 	fn train_corpus(&self, data: &[u8], spam: bool) {
 		if let Some(bayes) = &self.bayes {
 			let text = String::from_utf8_lossy(data).into_owned();
-			bayes.train_in_background(crate::antispam::corpus::SHARED.to_string(), text, spam);
+			bayes.train(crate::antispam::corpus::SHARED, &text, spam);
 		}
 	}
 
@@ -564,3 +586,7 @@ mod tests_urlbl;
 #[cfg(test)]
 #[path = "server_tests_correspondents.rs"]
 mod tests_correspondents;
+
+#[cfg(test)]
+#[path = "server_tests_subjectpass.rs"]
+mod tests_subjectpass;
