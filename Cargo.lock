@@ -744,6 +744,8 @@ dependencies = [
 name = "epistle"
 version = "0.8.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "argon2",
  "axum",
  "base64 0.23.1",
