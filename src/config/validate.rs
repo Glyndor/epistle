@@ -11,7 +11,7 @@ mod validate_tenants;
 mod validate_database;
 
 #[path = "validate_addresses.rs"]
-pub(super) mod validate_addresses;
+pub(crate) mod validate_addresses;
 
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
