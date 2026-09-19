@@ -51,6 +51,12 @@ impl Server {
 		if is_authenticated {
 			return Ok(BandOutcome::Continue);
 		}
+		// Bounces (MAIL FROM:<>) carry no sender to challenge and no
+		// subject a real person ever reads: the band must not get in their
+		// way. Continue down the normal accept/quarantine path.
+		if message.reverse_path.is_empty() {
+			return Ok(BandOutcome::Continue);
+		}
 
 		let text = String::from_utf8_lossy(&message.data);
 		let score = match bayes.score(crate::antispam::corpus::SHARED, &text).await {

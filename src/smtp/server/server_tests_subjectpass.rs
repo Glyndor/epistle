@@ -229,6 +229,36 @@ async fn with_subjectpass_off_the_band_behaves_as_before() {
 	assert_eq!(sink.messages().len(), 1);
 }
 
+#[tokio::test]
+async fn a_null_reverse_path_is_never_challenged() {
+	// MAIL FROM:<> is a bounce: the envelope sender is empty, no person
+	// will ever paste a token into a bounce subject, and refusing the
+	// bounce would break delivery reports. SubjectPass is configured
+	// and the Bayes score would otherwise be inside the band, but the
+	// band has to step out of the way for the null sender.
+	let sink = Arc::new(MemorySink::new());
+	let scorer = FixedScorer::new(0.5);
+	let server = band_server(&sink, &scorer).with_subjectpass(subject_pass());
+
+	let script = subjectpass_script("", b"Subject: bounce\r\n\r\nbody\r\n");
+	let output = converse(server, None, script).await;
+
+	assert!(
+		!output.contains("550 5.7.1"),
+		"a bounce must not be challenged, got: {output}"
+	);
+	// The bounce continues down the normal accept path, which trains the
+	// ham corpus exactly as any other accepted unauthenticated message.
+	assert_eq!(
+		scorer.trained(),
+		vec![false],
+		"a bounce delivered through the normal path trains the ham corpus"
+	);
+	// Delivery still happened (the bounce reaches its recipient like
+	// any other accepted message).
+	assert_eq!(sink.messages().len(), 1, "a bounce must be delivered");
+}
+
 /// `unix_day_now` mirrors the helper in `run.rs`; redeclared here so the
 /// test's token matches the server's verifier clock.
 fn unix_day_now() -> u64 {
