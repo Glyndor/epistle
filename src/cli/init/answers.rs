@@ -157,6 +157,14 @@ pub enum Invalid {
 	DnsForbidden,
 	/// `dns.zone` is missing or empty.
 	DnsZoneMissing,
+	/// `dns.zone` is not a valid domain name (fails
+	/// `crate::domain::normalize`: bad shape, bad punycode, confusable
+	/// look-alike, etc.). Carries the reason so the operator sees
+	/// what to fix without having to read the validator's source.
+	DnsZoneInvalid {
+		value: String,
+		reason: String,
+	},
 	/// `dns.provider` is missing or empty.
 	DnsProviderMissing,
 	/// A domain does not fall inside `dns.zone`.
@@ -194,6 +202,9 @@ impl std::fmt::Display for Invalid {
 			Invalid::DnsRequired => f.write_str("mode = \"automatic\" requires [dns]"),
 			Invalid::DnsForbidden => f.write_str("mode = \"manual\" must not have [dns]"),
 			Invalid::DnsZoneMissing => f.write_str("dns.zone must be set"),
+			Invalid::DnsZoneInvalid { value, reason } => {
+				write!(f, "dns.zone {value:?} {reason}")
+			}
 			Invalid::DnsProviderMissing => f.write_str("dns.provider must be set"),
 			Invalid::DnsZoneScope { domain, zone } => {
 				write!(f, "domains: {domain:?} is not inside dns.zone {zone:?}")

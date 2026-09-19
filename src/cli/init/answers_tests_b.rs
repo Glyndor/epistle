@@ -202,3 +202,86 @@ fn empty_token_file_in_file_and_assistant_produce_the_same_invalid() {
 		"both paths must surface DnsTokenMissing: file={from_file:?}, assistant={from_assistant:?}"
 	);
 }
+
+/// A Unicode zone with its Unicode domain must validate: the
+/// previous shape compared the raw U-label zone against an A-label
+/// domain and rejected a perfectly aligned pair. The shared
+/// validator now normalises the zone before the scope check, so the
+/// two spellings of one domain produce the same outcome.
+#[test]
+fn unicode_dns_zone_with_its_unicode_domain_validates() {
+	let mut answers = minimal(Automatic);
+	answers.domains = vec!["bücher.example.org".to_string()];
+	answers.dns = Some(DnsAnswers {
+		provider: "cloudflare".to_string(),
+		zone: "bücher.example.org".to_string(),
+		token: None,
+		token_file: Some(PathBuf::from("/run/secrets/cf")),
+		token_env: None,
+	});
+	let result = answers.validate();
+	assert!(
+		result.is_ok(),
+		"unicode zone with matching unicode domain must validate, got {result:?}"
+	);
+}
+
+/// A zone that is not a valid domain name (`zone = "invalid"`) must
+/// surface as `Invalid::DnsZoneInvalid` from the file path. The
+/// shared validator runs `crate::domain::normalize` on the zone
+/// before the scope check; the same shape would be rejected by the
+/// assistant because `ask_domain` runs the same normaliser on
+/// every prompt line.
+#[test]
+fn invalid_dns_zone_in_answers_file_fails_validation() {
+	let mut answers = minimal(Automatic);
+	answers.dns = Some(DnsAnswers {
+		provider: "cloudflare".to_string(),
+		zone: "invalid".to_string(),
+		token: None,
+		token_file: Some(PathBuf::from("/run/secrets/cf")),
+		token_env: None,
+	});
+	let errors = answers
+		.validate()
+		.expect_err("invalid zone must surface as DnsZoneInvalid");
+	assert!(
+		errors
+			.iter()
+			.any(|e| matches!(e, Invalid::DnsZoneInvalid { .. })),
+		"invalid zone must surface as DnsZoneInvalid, got {errors:?}"
+	);
+}
+
+/// A zone with a confusable look-alike (Cyrillic that looks like
+/// `paypal.com`) must surface as `DnsZoneInvalid`. The same shape
+/// in the assistant is rejected by `ask_domain` because the prompt
+/// helper runs the same normaliser.
+#[test]
+fn confusable_dns_zone_in_answers_file_fails_validation() {
+	let mut answers = minimal(Automatic);
+	answers.dns = Some(DnsAnswers {
+		provider: "cloudflare".to_string(),
+		zone: "\u{0440}\u{0430}\u{04cf}pal.com".to_string(),
+		token: None,
+		token_file: Some(PathBuf::from("/run/secrets/cf")),
+		token_env: None,
+	});
+	let errors = answers
+		.validate()
+		.expect_err("confusable zone must surface as DnsZoneInvalid");
+	let has_zone_invalid = errors
+		.iter()
+		.any(|e| matches!(e, Invalid::DnsZoneInvalid { .. }));
+	let has_zone_scope = errors.iter().any(|e| matches!(
+		e,
+		Invalid::DnsZoneInvalid {
+			reason,
+			..
+		} if reason.contains("confusable")
+	));
+	assert!(
+		has_zone_invalid && has_zone_scope,
+		"confusable zone must surface as DnsZoneInvalid with the confusable reason: {errors:?}"
+	);
+}

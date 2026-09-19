@@ -108,12 +108,40 @@ fn check_dns(
 			if dns.zone.trim().is_empty() {
 				errors.push(Invalid::DnsZoneMissing);
 			} else {
-				let scope = ScopedSecret::new(dns.zone.clone(), "x");
-				for domain in domains {
-					if !scope.authorizes(domain) {
-						errors.push(Invalid::DnsZoneScope {
-							domain: domain.clone(),
-							zone: dns.zone.clone(),
+				// Validate `dns.zone` through the same normaliser that
+				// ran on `domains`, so the zone is stored as its
+				// A-label and the scope check compares like with like.
+				// The file path used to keep the raw string and then
+				// hand it to `ScopedSecret::authorizes`, which
+				// compared the U-label against an A-label domain and
+				// rejected a Unicode zone whose equivalent U-label
+				// matched. The assistant uses the same domain function
+				// on its prompts, so it never produced this shape.
+				// The shared validator must accept the same shapes.
+				match crate::domain::normalize(&dns.zone) {
+					Ok(zone_norm) => {
+						let scope = ScopedSecret::new(zone_norm.clone(), "x");
+						for domain in domains {
+							if !scope.authorizes(domain) {
+								errors.push(Invalid::DnsZoneScope {
+									domain: domain.clone(),
+									zone: dns.zone.clone(),
+								});
+							}
+						}
+					}
+					Err(why) => {
+						let reason = match why {
+							crate::domain::DomainError::Invalid => {
+								"is not a valid FQDN".to_string()
+							}
+							crate::domain::DomainError::Confusable => {
+								"is confusable with another name".to_string()
+							}
+						};
+						errors.push(Invalid::DnsZoneInvalid {
+							value: dns.zone.clone(),
+							reason,
 						});
 					}
 				}
@@ -221,10 +249,12 @@ pub(crate) fn validate(answers: &Answers) -> Result<Vec<Warning>, Vec<Invalid>> 
 	let normalised_domains = check_domains(&answers.domains, &mut errors);
 	check_hostname_vs_domains(&hostname_norm, &normalised_domains, &mut errors);
 	check_public_ips(answers, &mut errors);
+	// Use the normalised domains for the scope check so a Unicode
+	// zone compares against an A-label domain with the same shape.
 	check_dns(
 		answers.mode,
 		answers.dns.as_ref(),
-		&answers.domains,
+		&normalised_domains,
 		&mut errors,
 		&mut warnings,
 	);
