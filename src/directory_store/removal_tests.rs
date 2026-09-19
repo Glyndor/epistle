@@ -511,6 +511,17 @@ async fn removing_an_account_clears_its_ban_rows_and_leaves_other_accounts_banne
 /// `forget_scope` returns an error; `remove_account` propagates that
 /// as `StoreError::BayesPurge` and the dynamic-account row stays on
 /// disk for the operator to retry.
+///
+/// The retry half of the test re-runs `remove_account` against the
+/// same account with `bayes: None`. By the time the first call
+/// aborted, the mailbox, satellites and queue were already gone, so
+/// the second call must succeed, drop the dynamic-account row, and
+/// return counts that reflect an empty footprint rather than error
+/// when the cleanup steps find nothing left to clean. Without the
+/// guarantee that the second call succeeds, the `BayesPurge` abort
+/// buys the operator nothing: a recreated account after a transient
+/// bayes failure would still inherit the missing corpus the retry
+/// could not finish.
 #[tokio::test]
 async fn forgetting_the_corpus_failing_aborts_account_removal() {
 	use crate::antispam::corpus::BayesStore;
@@ -551,5 +562,46 @@ async fn forgetting_the_corpus_failing_aborts_account_removal() {
 	assert!(
 		reread.dynamic("alice").is_some(),
 		"the account row must survive when the corpus purge aborts"
+	);
+
+	// Retry: with no bayes store, the cleanup steps are idempotent
+	// (every footprint from the aborted call was already gone), the
+	// dynamic-account row drops, and the counts come back at zero
+	// rather than erroring on absent state. The fresh `AccountStore`
+	// below is the same instance the production retry would see
+	// (the in-memory mirror of a still-running process sees the same
+	// state because the aborted call never reached `store.remove`).
+	let retry = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("retry without a bayes store must succeed");
+	assert_eq!(
+		retry.mailbox_files, 0,
+		"the retry must not error on the absent mailbox: {retry:?}"
+	);
+	assert_eq!(retry.masked_addresses, 0);
+	assert_eq!(retry.app_passwords, 0);
+	assert_eq!(retry.suppressed_addresses, 0);
+	assert_eq!(retry.correspondent_addresses, 0);
+	assert_eq!(retry.queued_messages_discarded, 0);
+	assert_eq!(retry.queued_messages_left, 0);
+	assert_eq!(retry.bayes_tokens_removed, 0);
+
+	let reread = AccountStore::open(
+		dir.path(),
+		vec![DOMAIN.to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.expect("reopen store");
+	assert!(
+		reread.dynamic("alice").is_none(),
+		"the dynamic-account row must be gone after the retry"
 	);
 }
