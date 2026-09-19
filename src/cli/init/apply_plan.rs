@@ -66,7 +66,29 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		&oauth_private,
 		&oauth_public,
 	)?;
-	let mut steps = vec![
+	// Directory steps first: every write that follows needs the
+	// directory it lives in. The previous shape listed the five key
+	// writes ahead of the directory creation that those writes
+	// depend on, so the operator read a plan that said "we will
+	// write s1.pem" before "we will create data_dir". The apply
+	// phase creates the directories first, and the plan now
+	// mirrors that order so the operator sees the same shape they
+	// will see in the report.
+	let mut steps = Vec::new();
+	if !answers.data_dir.exists() {
+		steps.push(PlanStep::DataDir {
+			path: answers.data_dir.clone(),
+		});
+	}
+	if let Some(parent) = answers.config_path.parent()
+		&& !parent.as_os_str().is_empty()
+		&& !parent.exists()
+	{
+		steps.push(PlanStep::ConfigDir {
+			path: parent.to_path_buf(),
+		});
+	}
+	steps.extend([
 		PlanStep::DkimEd25519 {
 			path: s1.clone(),
 			reused: s1.exists(),
@@ -88,12 +110,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 			path: oauth_public.clone(),
 			reused: oauth_pair.public_reused,
 		},
-	];
-	if !answers.data_dir.exists() {
-		steps.push(PlanStep::DataDir {
-			path: answers.data_dir.clone(),
-		});
-	}
+	]);
 	let cert_exists = cert_path.exists();
 	let key_exists = key_path.exists();
 	if cert_exists && !key_exists {
@@ -113,14 +130,6 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		reused: cert_exists && key_exists,
 		key_reused: key_exists,
 	});
-	if let Some(parent) = answers.config_path.parent()
-		&& !parent.as_os_str().is_empty()
-		&& !parent.exists()
-	{
-		steps.push(PlanStep::ConfigDir {
-			path: parent.to_path_buf(),
-		});
-	}
 	let identical = config_is_identical_to_desired(
 		answers,
 		&s1,

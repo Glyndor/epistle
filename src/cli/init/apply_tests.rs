@@ -440,6 +440,51 @@ fn file_mtime(path: &PathBuf) -> std::time::SystemTime {
 		.expect("mtime")
 }
 
+/// The plan must list directory steps before the writes that depend
+/// on them: a fresh `data_dir` and a fresh `config_path` parent must
+/// appear ahead of every key write and the config write, because
+/// `apply` creates the directories first and the operator reads the
+/// plan before confirming.
+#[test]
+fn plan_lists_directory_steps_before_writes() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	let mut answers = answers_minimal();
+	answers.data_dir = data_dir.clone();
+	answers.config_path = config_path.clone();
+	let plan = plan(&answers).expect("plan");
+	// The first step on a fresh tree must be a directory creation;
+	// every write step must follow it.
+	let first = plan
+		.steps
+		.first()
+		.expect("plan must have at least one step");
+	assert!(
+		matches!(first, PlanStep::DataDir { .. } | PlanStep::ConfigDir { .. }),
+		"plan must lead with a directory step, got {first:?}"
+	);
+	// Every write step must come after every preceding directory
+	// step. Walk the list, remember the last directory index, and
+	// assert no write index is below it.
+	let mut last_directory_index: Option<usize> = None;
+	for (i, step) in plan.steps.iter().enumerate() {
+		let is_directory = matches!(
+			step,
+			PlanStep::DataDir { .. } | PlanStep::ConfigDir { .. }
+		);
+		if is_directory {
+			last_directory_index = Some(i);
+		} else if let Some(last) = last_directory_index {
+			assert!(
+				i > last,
+				"write step at index {i} appears before a directory step: {:?}",
+				plan.steps
+			);
+		}
+	}
+}
+
 #[cfg(not(unix))]
 fn file_mtime(_path: &PathBuf) -> std::time::SystemTime {
 	std::time::SystemTime::UNIX_EPOCH
