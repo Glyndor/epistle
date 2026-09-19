@@ -2,6 +2,7 @@ use super::super::command::SequenceSet;
 use super::mailbox::Snapshot;
 use super::{Command, SearchKey, mailbox};
 use crate::util::encoded_word;
+pub(super) use crate::util::header::header_value as header_value_raw;
 
 /// The command verb when it relies on message sequence numbers (and so is
 /// refused under UIDONLY), or `None` for UID-based and non-sequence commands.
@@ -166,23 +167,6 @@ fn decoded_header_matches(
 	};
 	let decoded = encoded_word::decode(&value);
 	decoded.to_ascii_lowercase().contains(needle)
-}
-
-/// Case-insensitive first occurrence of a header in the raw message bytes
-/// (before any lowercasing). Used by the decoded-search path so the
-/// base64 payload of a B-encoded-word survives intact.
-pub(super) fn header_value_raw(headers: &str, name: &str) -> Option<String> {
-	for line in headers.lines() {
-		if line.is_empty() {
-			break;
-		}
-		if let Some((key, value)) = line.split_once(':')
-			&& key.trim().eq_ignore_ascii_case(name)
-		{
-			return Some(value.trim().to_string());
-		}
-	}
-	None
 }
 
 /// Seconds elapsed from `t` to now. Negative when `t` is in the future.

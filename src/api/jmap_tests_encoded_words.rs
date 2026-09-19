@@ -5,18 +5,13 @@ use super::router;
 use super::tests::{TOKEN, request_with_body, test_state};
 use axum::http::StatusCode;
 
-/// Same guard as `jmap_email_set_sanitises_header_injection_in_subject`
-/// but for a non-ASCII subject: the sanitiser has to run BEFORE the
-/// RFC 2047 encoder so a CRLF in the user's text never lands inside an
-/// encoded-word and breaks out as a fresh header line on the wire.
+/// Sanitization must remove controls before RFC 2047 encoding so decoding
+/// the stored Subject cannot restore forbidden characters.
 #[tokio::test]
 async fn jmap_email_set_sanitises_header_injection_in_non_ascii_subject() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
 	let app = router(test_state(dir.path(), 0));
-	// The CRLF + Bcc payload rides inside what would otherwise be the
-	// encoded-word; if encoding ran on the raw value, the Bcc would land
-	// on its own line after the encoding pipeline.
 	let req = serde_json::json!({
 		"methodCalls": [["Email/set", {
 			"accountId": "alice",
@@ -50,13 +45,15 @@ async fn jmap_email_set_sanitises_header_injection_in_non_ascii_subject() {
 			"forged Bcc: must not appear as its own header: {line:?}"
 		);
 	}
-	let subject_line = text
-		.lines()
-		.find(|line| line.to_ascii_lowercase().starts_with("subject:"))
-		.expect("subject header");
+	let subject = crate::util::header::header_value(&text, "subject").expect("subject header");
+	let decoded = crate::util::encoded_word::decode(&subject);
+	assert_eq!(
+		decoded, "Reunión  Bcc: attacker@evil.example",
+		"decoded subject was not sanitized"
+	);
 	assert!(
-		!subject_line.contains('\r') && !subject_line.contains('\n'),
-		"Subject: line must not contain CRLF: {subject_line:?}"
+		!decoded.chars().any(char::is_control),
+		"decoded subject contains controls"
 	);
 }
 
@@ -183,4 +180,77 @@ async fn jmap_email_set_round_trips_non_ascii_subject() {
 		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
 	let email = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(email["subject"], "Reuni\u{00f3}n ma\u{00f1}ana");
+}
+
+async fn create_and_get(spec: serde_json::Value) -> serde_json::Value {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	let req = serde_json::json!({
+		"methodCalls": [["Email/set", {
+			"accountId": "alice", "create": {"draft": spec}
+		}, "c1"]]
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let id = body["methodResponses"][0][1]["created"]["draft"]["id"]
+		.as_str()
+		.expect("created id");
+	let req = serde_json::json!({
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id]}, "c2"]]
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	body["methodResponses"][0][1]["list"][0].clone()
+}
+
+#[tokio::test]
+async fn jmap_folded_subject_round_trip() {
+	let subject = "é".repeat(30);
+	let email = create_and_get(serde_json::json!({
+		"mailboxIds": {"INBOX": true}, "subject": subject
+	}))
+	.await;
+	assert_eq!(email["subject"], subject, "folded subject truncated");
+}
+
+#[tokio::test]
+async fn jmap_folded_address_name_round_trip() {
+	let addresses = serde_json::json!([{"name": "é".repeat(30), "email": "jane@example.org"}]);
+	let email = create_and_get(serde_json::json!({
+		"mailboxIds": {"INBOX": true}, "from": addresses, "to": addresses
+	}))
+	.await;
+	assert_eq!(email["from"], addresses, "folded From address truncated");
+	assert_eq!(email["to"], addresses, "folded To address truncated");
+}
+
+#[tokio::test]
+async fn jmap_ascii_address_phrases_round_trip() {
+	for name in [
+		"Doe, Jane",
+		"Jane \"JJ\" Doe",
+		r"Jane \ Doe",
+		"Jane <team>",
+		"Jane (team)",
+		"Jane: team;",
+	] {
+		let addresses = serde_json::json!([
+			{"name": name, "email": "jane@example.org"},
+			{"name": "Plain Name", "email": "plain@example.org"}
+		]);
+		let email = create_and_get(serde_json::json!({
+			"mailboxIds": {"INBOX": true}, "from": addresses, "to": addresses
+		}))
+		.await;
+		assert_eq!(
+			email["from"].as_array().unwrap().len(),
+			2,
+			"display name split into addresses"
+		);
+		assert_eq!(email["from"], addresses, "From phrase did not round trip");
+		assert_eq!(email["to"], addresses, "To phrase did not round trip");
+	}
 }

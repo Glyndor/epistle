@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::smtp::trace::ensure_submission_headers;
 use crate::util::encoded_word;
+pub(super) use crate::util::header::header_value;
 use crate::util::header::sanitize_header_value;
 
 /// Serialize a JMAP Email submission object into an RFC 5322 message (Email/set
@@ -89,7 +90,18 @@ fn render_address(addr: &Value) -> Option<String> {
 	match name {
 		Some(raw) => {
 			let sanitized = sanitize_header_value(raw);
-			let encoded = encoded_word::encode(&sanitized);
+			let encoded = if sanitized.is_ascii()
+				&& sanitized
+					.bytes()
+					.any(|b| !b.is_ascii_alphanumeric() && !b" !#$%&'*+-/=?^_`{|}~".contains(&b))
+			{
+				format!(
+					"\"{}\"",
+					sanitized.replace('\\', "\\\\").replace('"', "\\\"")
+				)
+			} else {
+				encoded_word::encode(&sanitized)
+			};
 			Some(format!("{encoded} <{sanitized_email}>"))
 		}
 		None => Some(sanitized_email),
@@ -193,21 +205,6 @@ fn encoded_word_decode_subject(value: &str) -> String {
 	encoded_word::decode(value)
 }
 
-/// First value of a header (case-insensitive), single-line.
-pub(super) fn header_value(headers: &str, name: &str) -> Option<String> {
-	for line in headers.lines() {
-		if line.is_empty() {
-			break;
-		}
-		if let Some((key, value)) = line.split_once(':')
-			&& key.trim().eq_ignore_ascii_case(name)
-		{
-			return Some(value.trim().to_string());
-		}
-	}
-	None
-}
-
 /// A JMAP address list `[{name, email}]` from a header value. The parser
 /// is address-list aware: a top-level comma separates addresses, but commas
 /// inside `<...>`, inside a quoted-string, or inside a `=?...?=` encoded
@@ -231,7 +228,7 @@ fn jmap_address(parsed: ParsedAddress) -> Value {
 			// Decoding happens AFTER the address-list split: an encoded-word
 			// whose payload contains `<`, `>`, `,` or CR/LF cannot inject a
 			// second address because the parser only saw the raw bytes.
-			let decoded = encoded_word::decode(&name);
+			let decoded = decode_display_name(&name);
 			let trimmed = decoded.trim();
 			if trimmed.is_empty() {
 				Value::Null
@@ -242,6 +239,25 @@ fn jmap_address(parsed: ParsedAddress) -> Value {
 		None => Value::Null,
 	};
 	json!({ "name": name, "email": parsed.email })
+}
+
+fn decode_display_name(name: &str) -> String {
+	if let Some(quoted) = name.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+		let mut decoded = String::with_capacity(quoted.len());
+		let mut chars = quoted.chars();
+		while let Some(c) = chars.next() {
+			if c == '\\' {
+				if let Some(escaped) = chars.next() {
+					decoded.push(escaped);
+				}
+			} else {
+				decoded.push(c);
+			}
+		}
+		decoded
+	} else {
+		encoded_word::decode(name)
+	}
 }
 
 /// One parsed address from an RFC 5322 address-list header value.
@@ -502,3 +518,7 @@ pub(super) fn mailbox_role(name: &str) -> Option<&'static str> {
 		_ => None,
 	}
 }
+
+#[cfg(test)]
+#[path = "objects_tests.rs"]
+mod tests;
