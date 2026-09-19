@@ -11,6 +11,7 @@ mod config_check;
 mod dns_records;
 mod export;
 mod import;
+mod local;
 mod mobileconfig;
 mod queue;
 mod report_abuse;
@@ -353,6 +354,20 @@ pub enum Command {
 		/// ceiling lives in `crate::reports::RETENTION_DAYS`.
 		#[arg(long, value_name = "N", default_value_t = reports::DEFAULT_DAYS)]
 		days: u32,
+	},
+	/// Self-contained loopback server: a test harness that touches nothing
+	/// outside `--dir` and the loopback interface. Generates a working
+	/// directory on first run, reuses it byte for byte on later runs,
+	/// and never opens an outbound SMTP connection. Not a deployment.
+	Local {
+		/// Directory the harness writes its state into. Created if missing.
+		#[arg(long, value_name = "DIR")]
+		dir: PathBuf,
+		/// First listener port; the six endpoints are
+		/// `port-base + {25, 587, 465, 143, 993, 8025}`. Default `10000` and
+		/// must keep every port inside `1024..=65535`.
+		#[arg(long, value_name = "N", default_value_t = local::DEFAULT_PORT_BASE)]
+		port_base: u16,
 	},
 }
 
