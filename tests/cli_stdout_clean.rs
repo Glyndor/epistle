@@ -234,3 +234,31 @@ fn config_check_missing_file_respects_no_color() {
 		String::from_utf8_lossy(&stderr)
 	);
 }
+
+/// `NO_COLOR=1` must silence stderr even when no other knob is pulling it
+/// toward colour: no `CLICOLOR_FORCE`, a colour-capable `TERM`. A piped
+/// stderr alone turns colour off in `anstream`, so this test removes that
+/// safety net by setting a colour-friendly `TERM` and proves the
+/// implementation reads `NO_COLOR` instead of relying on the pipe.
+#[test]
+fn config_check_respects_no_color_without_clicolor_force() {
+	let mut cmd = Command::new(binary());
+	cmd.args(["config-check", "--config", "/nonexistent/mail.toml"]);
+	cmd.env("NO_COLOR", "1");
+	cmd.env("TERM", "xterm-256color");
+	cmd.env_remove("CLICOLOR_FORCE");
+	cmd.env_remove("CLICOLOR");
+	cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+	let output = cmd.output().expect("spawn epistle");
+	let stderr = output.stderr;
+	let status = output.status;
+	assert!(
+		!status.success(),
+		"config-check with a missing file should fail"
+	);
+	assert!(
+		!has_ansi_escape(&stderr),
+		"NO_COLOR=1 was ignored; stderr still carries ANSI: {:?}",
+		String::from_utf8_lossy(&stderr)
+	);
+}
