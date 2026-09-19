@@ -98,6 +98,59 @@ pub(super) fn parse_queue_policy(value: &str) -> Result<QueuePolicy, String> {
 	}
 }
 
+/// Open the optional Bayesian store the operator's `[database]`
+/// section configures.
+///
+/// The decision is binary when `[database]` is set: either the pool
+/// opens and we hand the bayes store to `remove_account`, or it does
+/// not (the host is unreachable, the credentials are wrong, the
+/// migrations did not run) and we refuse the removal. A recreated
+/// account name would otherwise inherit the previous owner's
+/// training rows, which is the silent leak the abort exists to
+/// prevent: skipping the purge by accepting `connect_database`'s
+/// `Ok(None)` answer was the exact regression the helper made
+/// possible, so a `[database]` section is now a hard prerequisite for
+/// the bayes work. With no `[database]` at all there is no corpus
+/// to drop, so the caller proceeds without one.
+///
+/// Errors during the corpus-key file load (the only step `open_bayes`
+/// does not silently absorb) are returned as `Err` so the caller can
+/// route the failure through stderr (the standard `error:` decorator
+/// the rest of the CLI uses); stdout is reserved for the count
+/// summary.
+fn open_bayes_store(
+	config: &Config,
+	runtime: &tokio::runtime::Runtime,
+) -> Result<Option<crate::antispam::corpus::BayesStore>, String> {
+	if config.database.is_none() {
+		return Ok(None);
+	}
+	runtime.block_on(async {
+		let metrics = Arc::new(crate::metrics::Metrics::new());
+		let pool = match super::serve_tasks::connect_database(config, &metrics).await {
+			Ok(Some(pool)) => pool,
+			Ok(None) => {
+				return Err(
+					"the database holding the account's training could not be reached; \
+					 the removal was not started and can be retried once the database is back"
+						.to_string(),
+				);
+			}
+			Err(error) => return Err(format!("opening database: {error}")),
+		};
+		match super::serve_tasks::open_bayes(
+			config,
+			&Some(pool),
+			&MessageCrypto::disabled(),
+			&metrics,
+		) {
+			Ok(Some((store, _queue))) => Ok(Some(store)),
+			Ok(None) => Ok(None),
+			Err(error) => Err(format!("opening bayes store: {error}")),
+		}
+	})
+}
+
 /// Remove a dynamic account and its whole footprint (mailbox, masked
 /// addresses, app passwords, per-account suppression, queued outbound
 /// mail per `queue`). Prints the per-record counts to `out`, one per
@@ -142,13 +195,55 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
-	let result = runtime.block_on(remove_account(
+	let bayes_store = match open_bayes_store(config, &runtime) {
+		Ok(store) => store,
+		Err(message) => {
+			super::style::error(format_args!("account {name}: {message}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	let mut err = super::style::stderr();
+	remove_with_bayes(
+		&runtime,
 		&store,
 		&spool,
+		config,
+		name,
+		queue,
+		bayes_store.as_ref(),
+		out,
+		&mut err,
+	)
+}
+
+/// Inner removal helper that the tests drive directly with a
+/// hand-built [`BayesStore`]. The public [`remove`] opens the store
+/// from the configuration; tests bypass `open_bayes_store` to feed
+/// in a deterministic pool without touching the operator's
+/// `[database]` URL. The `err` sink is separate from `out` so
+/// decoration (`error:`, `warning:`) reaches the operator's terminal
+/// while `out` carries the count summary the rest of the CLI
+/// promises; tests pass a `Vec` wrapped in `AutoStream` so both
+/// streams are observable.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn remove_with_bayes(
+	runtime: &tokio::runtime::Runtime,
+	store: &Arc<AccountStore>,
+	spool: &FsSpool,
+	config: &Config,
+	name: &str,
+	queue: QueuePolicy,
+	bayes_store: Option<&crate::antispam::corpus::BayesStore>,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> ExitCode {
+	let result = runtime.block_on(remove_account(
+		store,
+		spool,
 		&config.data_dir,
 		name,
 		queue,
-		None,
+		bayes_store,
 	));
 	match result {
 		Ok(counts) => {
@@ -167,15 +262,25 @@ pub(super) fn remove(
 			ExitCode::SUCCESS
 		}
 		Err(StoreError::NotFound(what)) => {
-			super::style::error(format_args!("no such dynamic account: {what}"));
+			super::style::error_to(err, format_args!("no such dynamic account: {what}"));
 			ExitCode::FAILURE
 		}
 		Err(StoreError::Invalid(message)) => {
-			super::style::error(message);
+			super::style::error_to(err, message);
+			ExitCode::FAILURE
+		}
+		Err(error @ StoreError::BayesPurge { .. }) => {
+			super::style::warn_to(
+				err,
+				format_args!(
+					"bayes corpus purge failed for {name}; account retained, retry the removal once the database is reachable"
+				),
+			);
+			super::style::error_to(err, format_args!("{error}"));
 			ExitCode::FAILURE
 		}
 		Err(error) => {
-			super::style::error(error);
+			super::style::error_to(err, error);
 			ExitCode::FAILURE
 		}
 	}

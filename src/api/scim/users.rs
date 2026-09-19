@@ -85,6 +85,7 @@ fn store_to_scim(error: StoreError) -> ScimError {
 		StoreError::Invalid(what) => ScimError::invalid(what),
 		StoreError::LimitReached { .. } => ScimError::internal(),
 		StoreError::Io(_) => ScimError::internal(),
+		StoreError::BayesPurge { .. } => ScimError::internal(),
 	}
 }
 

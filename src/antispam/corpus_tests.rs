@@ -2,7 +2,8 @@
 //! trainer transition table and the score threshold (no database).
 
 use super::*;
-use crate::antispam::trainer::{BayesTrainer, MIN_TRUSTED_MESSAGES, RecordingTrainer};
+use crate::antispam::corpus::SHARED;
+use crate::antispam::trainer::{BayesTrainer, MIN_TRUSTED_MESSAGES, RecordingTrainer, is_trusted};
 use crate::imap::keyword::{JUNK, NOT_JUNK};
 use crate::imap::mailbox::Flag;
 use std::path::PathBuf;
@@ -167,32 +168,87 @@ async fn a_no_op_store_trains_nothing() {
 	);
 }
 
-/// An empty scope has fewer than `MIN_TRUSTED_MESSAGES` on every
-/// side, so the per-account score falls back to the shared corpus.
+/// Below [`MIN_TRUSTED_MESSAGES`] on either side, the per-account
+/// scorer falls back to the shared corpus: an account that has not
+/// trained enough on both sides cannot classify on noise. The
+/// boundary cases (`MIN - 1` against `MIN`, the other axis at `MIN`,
+/// and both axes one short) all resolve to the shared scope. The
+/// threshold helper ([`super::scoring_scope`]) is the one place the
+/// decision is made; these cases drive that helper through every
+/// off-by-one path the live scorer can hit.
 #[test]
 fn score_falls_back_to_shared_below_the_threshold() {
-	let untrained: Corpus = Corpus::default();
-	assert!(untrained.ham_messages < MIN_TRUSTED_MESSAGES);
-	assert!(untrained.spam_messages < MIN_TRUSTED_MESSAGES);
-	// Below the threshold on either side: still untrained.
-	let under_ham = Corpus {
-		ham_messages: MIN_TRUSTED_MESSAGES - 1,
-		spam_messages: MIN_TRUSTED_MESSAGES,
-	};
-	assert!(under_ham.ham_messages < MIN_TRUSTED_MESSAGES);
+	let account = "alice";
+	// Both axes empty.
+	assert_eq!(
+		super::scoring_scope(is_trusted(Corpus::default()), account),
+		SHARED
+	);
+	// Ham side one short of the threshold: still untrained, regardless of spam.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES - 1,
+				spam_messages: MIN_TRUSTED_MESSAGES,
+			}),
+			account
+		),
+		SHARED
+	);
+	// Spamming side one short of the threshold: still untrained, regardless of ham.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES,
+				spam_messages: MIN_TRUSTED_MESSAGES - 1,
+			}),
+			account
+		),
+		SHARED
+	);
 }
 
-/// At the threshold exactly the scope is trained; one message short
-/// and the fallback wins. Pins the `>=` boundary so a regression to
-/// `>` visibly drops the boundary case.
+/// At the threshold exactly the per-account scope is trusted; one
+/// message short and the fallback wins. Drives the `MIN` boundary
+/// directly through the `is_trusted` predicate that powers the SMTP
+/// scorer: a regression that switched `>=` to `>` would demote the
+/// exact-threshold case below the threshold and the assertion here
+/// would fail with the literal "wanted account, got shared".
 #[test]
 fn score_uses_the_account_scope_at_the_threshold() {
-	let corpus = Corpus {
-		ham_messages: MIN_TRUSTED_MESSAGES,
-		spam_messages: MIN_TRUSTED_MESSAGES,
-	};
-	assert!(corpus.ham_messages >= MIN_TRUSTED_MESSAGES);
-	assert!(corpus.spam_messages >= MIN_TRUSTED_MESSAGES);
+	let account = "alice";
+	// Both axes exactly at the threshold: trained.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES,
+				spam_messages: MIN_TRUSTED_MESSAGES,
+			}),
+			account
+		),
+		account
+	);
+	// One axis above the threshold, the other at it: trained.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES + 1,
+				spam_messages: MIN_TRUSTED_MESSAGES,
+			}),
+			account
+		),
+		account
+	);
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES,
+				spam_messages: MIN_TRUSTED_MESSAGES + 1,
+			}),
+			account
+		),
+		account
+	);
 }
 
 /// `forget_scope` removes every row under the scope and reports the
@@ -208,5 +264,170 @@ fn forget_scope_is_exposed_as_an_inherent_method() {
 	fn _accepts(store: &crate::antispam::corpus::BayesStore) {
 		let _fut: std::pin::Pin<Box<dyn Future<Output = Result<u64, sqlx::Error>> + Send + '_>> =
 			Box::pin(store.forget_scope("ignored"));
+	}
+}
+
+/// A training job that has already read its message off disk must
+/// not recreate the scope a concurrent removal is in the middle of
+/// purging. The tombstone lives on the store: `train` checks it
+/// before issuing any SQL, so a worker that drained its job between
+/// the removal's `forget_scope` start and commit returns silently
+/// rather than re-creating rows the purge just dropped.
+///
+/// The control half of the test removes the tombstone and calls
+/// `train` again; without the tombstone the same call must reach the
+/// SQL and surface the lazy-pool error, which proves the previous
+/// `Ok(())` came from the short-circuit rather than from the SQL
+/// succeeding on its own. Without this control the test would also
+/// pass for a `train` that returned `Ok(())` unconditionally, which
+/// is not the contract the helper guarantees.
+#[tokio::test]
+async fn a_tombstoned_scope_silently_drops_training() {
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	// Mark the scope as removed (mirrors what `forget_scope` does for
+	// the duration of its DELETE).
+	let tombstones = store.tombstones();
+	tombstones
+		.lock()
+		.unwrap_or_else(|error| error.into_inner())
+		.insert("alice".to_string());
+
+	// The lazy pool never connects, so a non-tombstoned `train` would
+	// bubble up the connection error. The tombstone check has to fire
+	// first and make `train` return `Ok(())` without touching the pool.
+	let result = store.train("alice", "any body text", true).await;
+	assert!(
+		result.is_ok(),
+		"tombstoned scope must short-circuit; got {result:?}"
+	);
+
+	// Lift the tombstone: the same call must now reach the SQL and
+	// surface the lazy-pool error, which proves the previous return
+	// value came from the check rather than from the SQL succeeding.
+	tombstones
+		.lock()
+		.unwrap_or_else(|error| error.into_inner())
+		.remove("alice");
+	let result = store.train("alice", "any body text", true).await;
+	assert!(
+		result.is_err(),
+		"with the tombstone lifted the call must reach the SQL and surface the lazy-pool error; got {result:?}"
+	);
+}
+
+/// `forget_scope` raises and lowers the tombstone around its DELETE
+/// so a worker draining a queued job cannot race with the purge. The
+/// tombstone is cleared on every exit path: a failed DELETE leaves
+/// the rows exactly where they were, so a tombstone that out-lived
+/// the failure would silently drop every later training job for
+/// that scope with no error and no log line until the next retry
+/// or the next process restart, which is the bug the helper now
+/// avoids. The per-store lock is what actually serializes the
+/// DELETE against a racing `train`; the tombstone is just a flag the
+/// worker consults, and the flag is meant to track the transaction,
+/// not its outcome.
+#[tokio::test]
+async fn forget_scope_sets_the_tombstone_for_its_duration() {
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	let result = store.forget_scope("alice").await;
+	assert!(
+		result.is_err(),
+		"lazy pool never connects; forget_scope must error"
+	);
+	assert!(
+		!store
+			.tombstones()
+			.lock()
+			.unwrap_or_else(|error| error.into_inner())
+			.contains("alice"),
+		"a failed DELETE leaves the rows in place; the tombstone must be cleared"
+	);
+}
+
+/// A failed `forget_scope` must leave the scope live for `train`:
+/// the rows are still there because the DELETE never committed, so
+/// the next training call must reach the SQL and surface the
+/// underlying pool error rather than being silently swallowed by a
+/// tombstone the failure left behind. With the lazy pool used below,
+/// `train` after the failed purge returns `Err(sqlx::Error::PoolTimedOut)`
+/// (the real failure mode when no connection can be acquired). Before
+/// the fix the tombstone stayed set on failure and `train` returned
+/// `Ok(())`, which silently dropped the message and left the
+/// recreated account inheriting whatever the worker would have
+/// trained.
+#[tokio::test]
+async fn a_failed_forget_scope_lets_a_followup_train_reach_the_sql() {
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	let result = store.forget_scope("alice").await;
+	assert!(
+		result.is_err(),
+		"lazy pool never connects; forget_scope must error"
+	);
+
+	let result = store.train("alice", "any body text", true).await;
+	assert!(
+		result.is_err(),
+		"a failed purge must not leave the scope tombstoned; train must surface the lazy-pool error, got {result:?}"
+	);
+}
+
+/// A panic elsewhere must not freeze every later spam-training call:
+/// the worker expects the corpus to keep absorbing marks no matter
+/// what unrelated branch the rest of the trainer took. The
+/// tombstone Mutex is poisoned here by holding it across a panic,
+/// which the production path tolerates by calling
+/// `unwrap_or_else(|e| e.into_inner())` for every consult. A naive
+/// `.lock().expect(...)` in `BayesStore::train` would propagate the
+/// poison as a panic for every later `train`; that regression is the
+/// one this test pins.
+///
+/// Sabotaged by reverting the train path to `.expect("tombstone
+/// lock")`: the assertion then surfaces with the panic message from
+/// the lock failure on its way to the SQL.
+#[tokio::test]
+async fn a_poisoned_tombstone_lock_still_allows_training() {
+	use std::panic::AssertUnwindSafe;
+	use std::sync::Arc;
+
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	// Poison the tombstone Mutex by holding it across a panic. The
+	// unreachable host inside the catch means the helper itself does
+	// not throw past the assertion.
+	let tombstones = Arc::clone(store.tombstones());
+	let result = std::panic::catch_unwind(AssertUnwindSafe(move || {
+		let _guard = tombstones.lock().unwrap_or_else(|error| error.into_inner());
+		panic!("simulated panic inside the tombstone Mutex");
+	}));
+	assert!(result.is_err(), "the helper panic must propagate");
+
+	// The lazy pool is unreachable, so the SQL would bubble a
+	// connection error (PoolTimedOut). What matters here is that
+	// the call returns Err, not a propagated panic from the
+	// tombstone Mutex. We probe that via `tokio::spawn`: an inner
+	// panic surfaces as `Err(JoinError)` with `is_panic()` true; a
+	// regular failure is `Ok(Err(_))` and is the non-panic outcome
+	// the production contract guarantees. The match never compares
+	// the inner Result to a custom value: any `Ok(_)` case (whether
+	// the SQL returned Ok or Err) means the inner future did not
+	// panic, which is exactly what the test pins.
+	let join = tokio::spawn(async move { store.train("alice", "any body text", true).await }).await;
+	match join {
+		Ok(_) => {}
+		Err(join_error) if join_error.is_panic() => {
+			panic!("train must not panic on a poisoned tombstone Mutex");
+		}
+		Err(_) => panic!("the spawned task was cancelled, not panicked"),
 	}
 }

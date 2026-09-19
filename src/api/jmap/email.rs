@@ -245,9 +245,32 @@ fn apply_email_update(
 			&& !target.eq_ignore_ascii_case(&source)
 		{
 			let raw = raw_for_move.map_err(|_| "serverFail")?;
-			mailbox::append(data_dir, account, target, &flags, &raw, crypto)
+			let new_id = mailbox::append(data_dir, account, target, &flags, &raw, crypto)
 				.map_err(|_| "serverFail")?;
-			return snapshot.remove_at(sequence).map_err(|_| "serverFail");
+			let result = snapshot.remove_at(sequence).map_err(|_| "serverFail");
+			// A combined "mark as junk" + "move to Junk" is the natural
+			// operation the JMAP client issues, and the source message
+			// has already been removed by the time we get here. Replay
+			// the same transition the STORE-only branch runs, against
+			// the destination message so the training worker reads the
+			// copy that actually carries the new flag set. The path is
+			// derived from the new id rather than looked up through the
+			// mailbox snapshot (which would race with the rename).
+			if patch.get("keywords").is_some()
+				&& let Some(queue) = state.training()
+			{
+				let new_path = mailbox::mailbox_dir(data_dir, account, target)
+					.map(|dir| dir.join(format!("{new_id}.eml")))
+					.unwrap_or_else(|| message_path.clone());
+				crate::imap::junk_trainer::enqueue_junk_transition(
+					queue,
+					account,
+					&current_flags,
+					&flags,
+					new_path,
+				);
+			}
+			return result;
 		}
 		if patch.get("keywords").is_some() {
 			let updated = snapshot
@@ -291,3 +314,7 @@ fn keyword_to_flag(keyword: &str) -> Result<crate::imap::mailbox::Flag, &'static
 		_ => Flag::parse(keyword).ok_or("invalidProperties"),
 	}
 }
+
+#[cfg(test)]
+#[path = "email_tests.rs"]
+mod tests;

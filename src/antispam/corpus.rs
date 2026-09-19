@@ -15,8 +15,9 @@
 //! per-instance hashes. The hash is deterministic, so lookups still work, and
 //! token identity (all the classifier needs) is preserved.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use sqlx::PgPool;
 
@@ -30,11 +31,39 @@ pub const SHARED: &str = "";
 /// The corpus key filename under the data directory.
 const KEY_FILE: &str = "bayes-corpus.key";
 
+/// The set of scope names whose removal is in flight or whose purge has
+/// just committed. The training worker consults the set before any
+/// `INSERT` so a job that drained between a removal's start and its
+/// commit cannot recreate rows the purge is dropping. The handle is
+/// shared with every clone of the [`BayesStore`] so all training paths
+/// see the same state.
+pub type TombstoneSet = Arc<Mutex<HashSet<String>>>;
+
+/// A fresh, empty tombstone set for tests and constructors that have
+/// no other source of one.
+pub fn new_tombstone_set() -> TombstoneSet {
+	Arc::new(Mutex::new(HashSet::new()))
+}
+
 /// A PostgreSQL-backed Bayesian corpus that stores tokens as keyed hashes.
 #[derive(Clone)]
 pub struct BayesStore {
 	pool: PgPool,
 	key: [u8; 32],
+	/// Scopes whose removal is currently happening, or has just
+	/// committed, so a training worker that has already read its
+	/// message off disk drops the job rather than recreating the
+	/// rows the purge is dropping. See [`BayesStore::train`].
+	tombstones: TombstoneSet,
+	/// Serializes `train` and `forget_scope` against each other within
+	/// this process so a worker that passed the tombstone check cannot
+	/// race the DELETE commit. Training is infrequent, so holding it
+	/// across the SQL is a fine trade for closing the window the
+	/// tombstone set alone cannot. The Mutex is per-instance: a removal
+	/// run from the CLI does not see the server's training worker
+	/// (different processes, different Mutexes); the cross-process
+	/// limit is named on [`BayesStore::forget_scope`].
+	scope_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BayesStore {
@@ -42,12 +71,32 @@ impl BayesStore {
 	/// persisting a fresh `0600` key on first use.
 	pub fn open(pool: PgPool, data_dir: &Path) -> std::io::Result<Self> {
 		let key = load_or_create_key_file(data_dir, KEY_FILE)?;
-		Ok(BayesStore { pool, key })
+		Ok(BayesStore {
+			pool,
+			key,
+			tombstones: new_tombstone_set(),
+			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
+		})
 	}
 
-	/// Build a store with an explicit key (tests).
+	/// Build a store with an explicit key (tests). The tombstone set
+	/// starts empty: callers can populate it through [`BayesStore::tombstones`]
+	/// when they want to simulate an in-flight removal.
 	pub fn with_key(pool: PgPool, key: [u8; 32]) -> Self {
-		BayesStore { pool, key }
+		BayesStore {
+			pool,
+			key,
+			tombstones: new_tombstone_set(),
+			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
+		}
+	}
+
+	/// The shared tombstone set the training worker consults before
+	/// every INSERT. Production keeps the set empty except inside
+	/// [`BayesStore::forget_scope`]; tests use it to drive the
+	/// race-condition test above without a database.
+	pub fn tombstones(&self) -> &TombstoneSet {
+		&self.tombstones
 	}
 
 	/// The stored (hashed) form of a token.
@@ -58,6 +107,28 @@ impl BayesStore {
 	/// Train the `scope` corpus on one message: bump the message total and each
 	/// token's ham or spam count, atomically.
 	pub async fn train(&self, scope: &str, text: &str, spam: bool) -> Result<(), sqlx::Error> {
+		// Hold the per-store lock for the duration of every train call so a
+		// worker that just passed the tombstone check cannot race the DELETE a
+		// concurrent `forget_scope` is committing. Training is infrequent, so
+		// holding the lock across the SQL is fine; the lock is per-instance
+		// and does not span processes.
+		let _scope_guard = self.scope_lock.lock().await;
+		// A scope whose removal is in flight (or has just committed and
+		// the tombstone has not yet been cleared) is on its way out:
+		// training now would recreate rows the purge is dropping. Drop
+		// the job silently so the worker's caller never sees an error
+		// for a message that no longer belongs to a live account. The
+		// lock is taken with `unwrap_or_else(|e| e.into_inner())` so a
+		// panic inside another train call does not poison every later
+		// spam-learning job through the worker.
+		if self
+			.tombstones
+			.lock()
+			.unwrap_or_else(|error| error.into_inner())
+			.contains(scope)
+		{
+			return Ok(());
+		}
 		let tokens: Vec<String> = bayes::tokenize(text).iter().map(|t| self.hash(t)).collect();
 		let ham_inc: i64 = if spam { 0 } else { 1 };
 		let spam_inc: i64 = if spam { 1 } else { 0 };
@@ -185,7 +256,49 @@ impl BayesStore {
 	/// count, in one transaction. Returns the number of token rows
 	/// removed. Account removal calls it so a recreated account name
 	/// does not inherit the previous user's training.
+	///
+	/// The scope is tombstoned before the transaction starts and the
+	/// tombstone is cleared when the transaction finishes, success or
+	/// failure: the row cannot have been dropped if the DELETE
+	/// returned an error, so a tombstone that out-lived the failure
+	/// would silently drop every later training job for that scope
+	/// with no error and no log line. The window the tombstone covers
+	/// is the transaction itself, which the per-store serialization
+	/// lock already holds for the same span, so within this process the
+	/// INSERT and the DELETE cannot interleave: a worker that drained
+	/// its job between the removal's start and its commit either
+	/// reaches `train` while the lock is held (and queues until the
+	/// DELETE is done) or reaches it after the lock is released (and
+	/// sees the cleared tombstone). Training is infrequent, so holding
+	/// the lock across the transaction is cheap.
+	///
+	/// **Known limit, per process.** The lock is per
+	/// [`BayesStore`] instance and shared across its clones, so two
+	/// processes do not see each other's lock: a `mail account-remove`
+	/// run while the `serve` process is alive does not coordinate with
+	/// the server's training worker. Cross-process removal therefore
+	/// still relies on a concurrent `serve` not having training jobs in
+	/// flight for the same account; in practice the server has already
+	/// dropped the message files for any purged user, but the
+	/// coordination is the operator's, not the helper's.
 	pub async fn forget_scope(&self, scope: &str) -> Result<u64, sqlx::Error> {
+		let _scope_guard = self.scope_lock.lock().await;
+		{
+			let mut tombstones = self
+				.tombstones
+				.lock()
+				.unwrap_or_else(|error| error.into_inner());
+			tombstones.insert(scope.to_string());
+		}
+		let result = self.forget_scope_inner(scope).await;
+		self.tombstones
+			.lock()
+			.unwrap_or_else(|error| error.into_inner())
+			.remove(scope);
+		result
+	}
+
+	async fn forget_scope_inner(&self, scope: &str) -> Result<u64, sqlx::Error> {
 		let mut tx = self.pool.begin().await?;
 		let tokens = sqlx::query!("DELETE FROM bayes_token WHERE scope = $1", scope,)
 			.execute(&mut *tx)
@@ -227,7 +340,7 @@ impl BayesTrainer for BayesStore {
 					return None;
 				}
 			};
-			let scope = if trained { account } else { SHARED };
+			let scope = scoring_scope(trained, account);
 			let text = String::from_utf8_lossy(text);
 			match self.score(scope, &text).await {
 				Ok(score) => Some(score),
@@ -238,6 +351,16 @@ impl BayesTrainer for BayesStore {
 			}
 		})
 	}
+}
+
+/// Pick the scope the per-account scorer should consult: the account's
+/// own corpus when it has reached the trusted threshold on both sides,
+/// the shared corpus otherwise. The decision lives in its own helper
+/// so the boundary conditions are unit-testable without a database;
+/// the SMTP hot path calls [`BayesStore::score_for_account`], which
+/// delegates here.
+pub fn scoring_scope(trained: bool, account: &str) -> &str {
+	if trained { account } else { SHARED }
 }
 
 /// The stored form of a token: a keyed HMAC-SHA256, hex-encoded. Deterministic

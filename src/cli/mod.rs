@@ -428,5 +428,9 @@ mod tests_c;
 mod tests_d;
 
 #[cfg(test)]
+#[path = "cli_tests_e.rs"]
+mod tests_e;
+
+#[cfg(test)]
 #[path = "mta_sts_serve_tests.rs"]
 mod mta_sts_serve_tests;

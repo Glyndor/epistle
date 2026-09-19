@@ -434,3 +434,47 @@ async fn an_alias_recipient_scores_under_the_first_member_account() {
 		"the band must score the alias under its first member account"
 	);
 }
+
+/// A scanner that returned `Quarantine` (an existing disposition) and
+/// `SubjectPass` are both configured. Before this fix, the band ran
+/// after the scanner and challenged the message with a 550 anyway,
+/// discarding the quarantine and teaching the spam corpus on every
+/// retry. The band must step out of the way once `mailbox` is set so
+/// the scanner's disposition is honoured and a retried message is
+/// only ever trained once.
+struct QuarantineStubHook;
+
+impl crate::antispam::hook::MailHook for QuarantineStubHook {
+	fn scan(
+		&self,
+		_raw: &[u8],
+	) -> std::pin::Pin<Box<dyn Future<Output = crate::antispam::hook::HookVerdict> + Send + '_>> {
+		Box::pin(async { crate::antispam::hook::HookVerdict::Quarantine })
+	}
+}
+
+#[tokio::test]
+async fn a_scanner_quarantine_with_subjectpass_does_not_challenge_again() {
+	let sink = Arc::new(MemorySink::new());
+	let scorer = FixedScorer::new(0.5);
+	let server = band_server(&sink, &scorer)
+		.with_hook(Arc::new(QuarantineStubHook) as Arc<dyn crate::antispam::hook::MailHook>)
+		.with_subjectpass(subject_pass());
+
+	let script = subjectpass_script(SENDER, b"Subject: hello\r\n\r\nbody\r\n");
+	let output = converse(server, None, script).await;
+
+	assert!(
+		!output.contains("550 5.7.1"),
+		"a scanner quarantine must not be re-challenged by SubjectPass; got: {output}"
+	);
+	// The scanner has decided this is spam and trained it once. The
+	// band must not add a second training call on the same message:
+	// a challenged discard would have trained nothing, while a
+	// retried message would have been trained at least once more.
+	assert_eq!(
+		scorer.trained(),
+		vec![true],
+		"only the scanner's spam training call must happen"
+	);
+}

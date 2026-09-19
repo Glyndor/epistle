@@ -257,23 +257,22 @@ pub async fn remove_account(
 	// without a corpus; the count stays at zero and the recreated
 	// account simply has no training history.
 	//
-	// A failure here does not block the removal: the mailbox,
-	// satellites and queue are already gone, the operator already
-	// asked for the account to be removed, and the worst the failure
-	// leaves behind is a stale row in the corpus (the recreated
-	// account inherits no flag, no messages and no history; only the
-	// corpus keeps a small number of token counts that a future
-	// training pass will overwrite). The footprint removal wins.
+	// A failure here aborts the whole removal rather than leaving the
+	// row in place: the mailbox, satellites and queue are already gone,
+	// so the only thing the aborted call leaves behind is the on-disk
+	// dynamic-account row, and the operator can retry. A recreated
+	// account name reusing a stale corpus is the silent leak this
+	// prevents, and `remove_account`'s own row in `accounts.toml` is
+	// the lever that lets the retry pick up where the first call
+	// stopped.
 	let bayes_tokens_removed = match bayes {
 		Some(store) => match store.forget_scope(name).await {
 			Ok(removed) => removed,
 			Err(error) => {
-				tracing::warn!(
-					account = %name,
-					%error,
-					"bayes forget_scope failed; account removed without dropping training rows",
-				);
-				0
+				return Err(StoreError::BayesPurge {
+					account: name.to_string(),
+					source: error,
+				});
 			}
 		},
 		None => 0,

@@ -59,6 +59,17 @@ impl Server {
 		if message.reverse_path.is_empty() {
 			return Ok(BandOutcome::Continue);
 		}
+		// An upstream scanner (or any other screening hook the run loop
+		// ran before the band) has already set a destination mailbox, so
+		// it has also already trained the message and decided what to do
+		// with it. A SubjectPass challenge would discard the message
+		// without training, contradicting that decision and quietly
+		// retraining the spam corpus on every retry. Stay out of the
+		// way and let the run loop deliver the message to the chosen
+		// mailbox.
+		if message.mailbox.is_some() {
+			return Ok(BandOutcome::Continue);
+		}
 
 		// Per-account scope: the first recipient that resolves to a local
 		// account wins, in envelope order. A scope with no own training

@@ -273,5 +273,6 @@ fn store_error(error: StoreError) -> ApiError {
 		StoreError::NotFound(_) => ApiError::not_found("no such dynamic account"),
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
+		StoreError::BayesPurge { .. } => ApiError::internal(),
 	}
 }
