@@ -159,7 +159,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		max_conn,
 		scanner_hook,
 		llm_hook,
-	} = super::serve_smtp_state::build_smtp_shared_state(&config)?;
+	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
 
 	// One Bayesian store and one training worker for the whole process.
 	// SMTP trains and scores through the store; IMAP and JMAP feed the

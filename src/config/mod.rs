@@ -20,6 +20,7 @@ mod oauth;
 mod otel;
 mod privileges;
 mod queue;
+mod scanner;
 mod storage;
 mod tenant;
 mod tls;
@@ -45,6 +46,7 @@ pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
+pub use scanner::{Antispam, ClamdOnFound};
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tenant::Tenant;
 pub use tls::Tls;
@@ -178,8 +180,11 @@ pub struct Config {
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
 	/// URL of an external scanner hook (ClamAV/Rspamd behind HTTP) consulted
-	/// for unauthenticated inbound mail. Absent disables scanning.
+	/// for unauthenticated inbound mail. Leave unset to disable HTTP scanning.
 	pub scanner_hook_url: Option<String>,
+	/// Unix socket scanner configuration. Absent disables clamd.
+	#[serde(default)]
+	pub antispam: Antispam,
 	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
 	/// lands in an uncertain band. Absent disables the hook.
 	pub antispam_llm: Option<Llm>,
@@ -349,6 +354,7 @@ impl std::fmt::Debug for Config {
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
+			.field("antispam", &self.antispam)
 			.field("antispam_llm", &self.antispam_llm)
 			.field("subjectpass", &self.subjectpass)
 			.field("listeners", &self.listeners)

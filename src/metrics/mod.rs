@@ -80,6 +80,8 @@ const COUNTERS: &[(&str, &str)] = &[
 	("bounced", "bounced"),
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
+	("scanner_clamd_failed", "scanner_clamd_failed"),
+	("scanner_clamd_skipped", "scanner_clamd_skipped"),
 	("database_unavailable", "database_unavailable"),
 	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
@@ -125,6 +127,8 @@ pub struct Metrics {
 	bounced: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
+	scanner_clamd_failed: AtomicU64,
+	scanner_clamd_skipped: AtomicU64,
 	database_unavailable: AtomicU64,
 	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
@@ -147,6 +151,16 @@ impl Metrics {
 	/// An empty metrics struct, with every counter at zero.
 	pub fn new() -> Self {
 		Self::default()
+	}
+
+	/// Count a clamd exchange failure that accepted the message.
+	pub fn scanner_clamd_failed(&self) {
+		self.scanner_clamd_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message skipped because it exceeded the clamd byte limit.
+	pub fn scanner_clamd_skipped(&self) {
+		self.scanner_clamd_skipped.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a connection dropped by the error-streak abuse guard.
@@ -366,6 +380,8 @@ impl Metrics {
 			"bounced" => &self.bounced,
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
+			"scanner_clamd_failed" => &self.scanner_clamd_failed,
+			"scanner_clamd_skipped" => &self.scanner_clamd_skipped,
 			"database_unavailable" => &self.database_unavailable,
 			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
@@ -466,6 +482,16 @@ impl Metrics {
 				"mail_webhook_failed_total",
 				"Webhook events that failed to deliver.",
 				&self.webhook_failed,
+			),
+			(
+				"mail_scanner_clamd_failed_total",
+				"Clamd scan failures that accepted the message.",
+				&self.scanner_clamd_failed,
+			),
+			(
+				"mail_scanner_clamd_skipped_total",
+				"Messages skipped because they exceeded the clamd byte limit.",
+				&self.scanner_clamd_skipped,
 			),
 			(
 				"mail_database_unavailable_total",
