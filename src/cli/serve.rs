@@ -6,7 +6,8 @@ use std::sync::Arc;
 use crate::config::{Config, ListenerKind};
 use crate::smtp::server::{Server, TlsMode};
 use crate::smtp::sink::MessageSink;
-use crate::storage::SplitDelivery;
+
+use super::serve_dkim::SplitCompanions;
 
 /// Run the server with a validated configuration.
 pub fn run(config: Config) -> ExitCode {
@@ -98,47 +99,22 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.map_err(std::io::Error::other)?;
 
 	// Local recipients go to account mailboxes; authenticated relay mail
-	// is queued in the outbound spool, DKIM-signed when configured.
-	let mut split =
-		SplitDelivery::new_with_crypto(&config.data_dir, directory.clone(), crypto.clone())?
-			.with_rules(config.rules.clone())
-			.with_metrics(metrics.clone());
-	// Hot-swappable DKIM signer, so automatic key rotation applies live.
-	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
-	if let Some(dkim) = &config.dkim {
-		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
-			.map_err(std::io::Error::other)?;
-		if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
-			signer = signer
-				.with_rsa(selector, key_file)
-				.map_err(std::io::Error::other)?;
-		}
-		let reloadable = crate::dkim::ReloadableSigner::new(Arc::new(signer));
-		split = split.with_signer(reloadable.clone());
-		dkim_signer = Some(reloadable);
-	}
-	if let Some(secret) = &config.srs_secret {
-		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
-		split = split.with_srs(srs, config.hostname.clone());
-	}
-	let webhook = match &config.webhook {
-		Some(webhook) => Some(Arc::new(
-			crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
-				.map_err(std::io::Error::other)?
-				.with_metrics(metrics.clone()),
-		)),
-		None => None,
-	};
-	if let Some(webhook) = &webhook {
-		split = split.with_webhook(Arc::clone(webhook));
-	}
-	// Optional ARC sealer: seals inbound mail under the server hostname using
-	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed). The
-	// same sealer also seals forwarded mail (RFC 8617) via the delivery sink.
-	let arc_sealer = super::serve_tasks::build_arc_sealer(&config)?;
-	if let Some(sealer) = &arc_sealer {
-		split = split.with_arc_sealer(Arc::clone(sealer));
-	}
+	// is queued in the outbound spool, DKIM-signed when configured. The
+	// split delivery and its four delivery-path companions (DKIM, SRS,
+	// webhook, ARC sealer) are wired in the same order here as before, in
+	// `serve_dkim::build_split_with_companions`, so failure messages stay
+	// identical.
+	let SplitCompanions {
+		split,
+		dkim_signer,
+		webhook,
+		arc_sealer,
+	} = super::serve_dkim::build_split_with_companions(
+		&config,
+		&metrics,
+		directory.clone(),
+		crypto.clone(),
+	)?;
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background

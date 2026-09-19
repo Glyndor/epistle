@@ -14,6 +14,7 @@ mod mobileconfig;
 mod queue;
 mod report_abuse;
 mod serve;
+mod serve_dkim;
 mod serve_tasks;
 mod srv;
 mod style;
