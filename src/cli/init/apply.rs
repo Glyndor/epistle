@@ -394,6 +394,115 @@ fn write_secret_with_report(
 	Ok(())
 }
 
+/// Lay down the five key-tree files under `keys_dir`:
+/// `s1.pem` (DKIM ed25519), `s2.pem` (DKIM RSA via openssl, or
+/// skipped when openssl is not on PATH, or refused when genpkey
+/// fails), `storage.key`, and the OAuth ES256 pair (private +
+/// public). Each step pushes a `Reused` or `Wrote` line into the
+/// report; a generation or write failure surfaces as
+/// `ApplyError::*` and the caller stops the run with the report
+/// of the keys that already landed.
+fn ensure_key_tree(
+	s1: &Path,
+	s2: &Path,
+	storage: &Path,
+	oauth_private: &Path,
+	oauth_public: &Path,
+	report: &mut Report,
+) -> Result<(), ApplyError> {
+	if s1.exists() {
+		report.steps.push(ReportStep::Reused(s1.to_path_buf()));
+	} else {
+		// A CSPRNG failure surfaces as `ApplyError::Rng` so the run
+		// exits 1 instead of panicking; a disk write failure routes
+		// through `write_secret_with_report` with the path intact.
+		let (pem, _record) = crate::dkim::generate_key()
+			.map_err(|error| ApplyError::Rng(format!("DKIM ed25519 key: {error}")))?;
+		write_secret_with_report(s1, pem.as_bytes(), report)?;
+	}
+
+	if s2.exists() {
+		report.steps.push(ReportStep::Reused(s2.to_path_buf()));
+	} else if openssl_available() {
+		let (pem, _record) = match crate::cli::util::generate_rsa_key(2048) {
+			Ok(pair) => pair,
+			Err(error) => {
+				// openssl is on PATH but the actual key generation
+				// failed (broken binary, missing entropy, etc.). The
+				// operator asked for the key, the key did not land:
+				// the run exits 1 with the report of the keys that
+				// did land rather than a silent Skipped line.
+				return Err(ApplyError::RsaKeygen(error.to_string()));
+			}
+		};
+		write_secret_with_report(s2, pem.as_bytes(), report)?;
+	} else {
+		report.steps.push(ReportStep::Skipped {
+			name: "dkim rsa key".to_string(),
+			reason: "openssl not on PATH; run \"epistle dkim-keygen --rsa\" to create it"
+				.to_string(),
+		});
+	}
+
+	if storage.exists() {
+		report.steps.push(ReportStep::Reused(storage.to_path_buf()));
+	} else {
+		let key = crate::storage::generate_key_base64()
+			.ok_or_else(|| ApplyError::Rng("storage key".to_string()))?;
+		write_secret_with_report(storage, key.as_bytes(), report)?;
+	}
+
+	if oauth_private.exists() {
+		report.steps.push(ReportStep::Reused(oauth_private.to_path_buf()));
+		let private_bytes = fs::read(oauth_private)
+			.map_err(|error| ApplyError::KeyWrite(oauth_private.to_path_buf(), error))?;
+		let private_text = std::str::from_utf8(&private_bytes).map_err(|_| {
+			ApplyError::OAuthPairIncomplete(format!(
+				"oauth private key {} is not valid utf-8; cannot derive the public key",
+				oauth_private.display()
+			))
+		})?;
+		let derived_public =
+			crate::cli::util::derive_oauth_public_from_private(private_text)
+				.ok_or_else(|| {
+					ApplyError::OAuthPairIncomplete(format!(
+						"oauth private key {} is not a valid PKCS#8 ES256 key; cannot derive the public key",
+						oauth_private.display()
+					))
+				})?;
+		if oauth_public.exists() {
+			let public_bytes = fs::read(oauth_public)
+				.map_err(|error| ApplyError::KeyWrite(oauth_public.to_path_buf(), error))?;
+			let public_text = std::str::from_utf8(&public_bytes).map_err(|_| {
+				ApplyError::OAuthPairIncomplete(format!(
+					"oauth public key {} is not valid utf-8",
+					oauth_public.display()
+				))
+			})?;
+			if public_text.trim() != derived_public.trim() {
+				return Err(ApplyError::OAuthPairMismatch);
+			}
+			report.steps.push(ReportStep::Reused(oauth_public.to_path_buf()));
+		} else {
+			write_secret_with_report(oauth_public, derived_public.as_bytes(), report)?;
+		}
+	} else if oauth_public.exists() {
+		return Err(ApplyError::OAuthPairIncomplete(format!(
+			"oauth public key {} exists but the matching private key {} is missing; restore the private key from backup or delete {} and rerun init",
+			oauth_public.display(),
+			oauth_private.display(),
+			oauth_public.display()
+		)));
+	} else {
+		let (private_b64, public_b64) = crate::cli::util::generate_oauth_keypair()
+			.ok_or_else(|| ApplyError::Rng("oauth key pair".to_string()))?;
+		write_secret_with_report(oauth_private, private_b64.as_bytes(), report)?;
+		write_secret_with_report(oauth_public, public_b64.as_bytes(), report)?;
+	}
+
+	Ok(())
+}
+
 /// True when `openssl` is on `PATH` and we can shell out to it. Used by
 /// the RSA DKIM key step; false leaves the step out of the apply phase
 /// and reports the gap on stderr.
@@ -431,195 +540,18 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	let oauth_private = keys_dir.join("oauth_signing.key");
 	let oauth_public = keys_dir.join("oauth_public.key");
 
-	if s1.exists() {
-		report.steps.push(ReportStep::Reused(s1.clone()));
-	} else {
-		// A CSPRNG failure surfaces as `ApplyError::Rng` so the run
-		// exits 1 instead of panicking; a disk write failure routes
-		// through `write_secret_with_report` with the path intact.
-		let (pem, _record) = match crate::dkim::generate_key() {
-			Ok(pair) => pair,
-			Err(error) => {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::Rng(format!("DKIM ed25519 key: {error}"))),
-				};
-			}
-		};
-		if let Err(error) = write_secret_with_report(&s1, pem.as_bytes(), &mut report) {
-			return ApplyOutcome {
-				report,
-				error: Some(error),
-			};
-		}
-	}
-
-	if s2.exists() {
-		report.steps.push(ReportStep::Reused(s2.clone()));
-	} else if openssl_available() {
-		match crate::cli::util::generate_rsa_key(2048) {
-			Ok((pem, _record)) => {
-				if let Err(error) = write_secret_with_report(&s2, pem.as_bytes(), &mut report) {
-					return ApplyOutcome {
-						report,
-						error: Some(error),
-					};
-				}
-			}
-			Err(error) => {
-				// openssl is on PATH but the actual key generation
-				// failed (broken binary, missing entropy, etc.). The
-				// operator asked for the key, the key did not land:
-				// stop the run with `ApplyOutcome.error` so the
-				// rendered report (which still lists the keys that
-				// did land, e.g. s1.pem) is followed by an exit-1
-				// diagnostic rather than a silent Skipped line that
-				// looks like a successful run.
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::RsaKeygen(error.to_string())),
-				};
-			}
-		}
-	} else {
-		report.steps.push(ReportStep::Skipped {
-			name: "dkim rsa key".to_string(),
-			reason: "openssl not on PATH; run \"epistle dkim-keygen --rsa\" to create it"
-				.to_string(),
-		});
-	}
-
-	if storage.exists() {
-		report.steps.push(ReportStep::Reused(storage.clone()));
-	} else {
-		let key = match crate::storage::generate_key_base64() {
-			Some(key) => key,
-			None => {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::Rng("storage key".to_string())),
-				};
-			}
-		};
-		if let Err(error) = write_secret_with_report(&storage, key.as_bytes(), &mut report) {
-			return ApplyOutcome {
-				report,
-				error: Some(error),
-			};
-		}
-	}
-
-	if oauth_private.exists() {
-		report.steps.push(ReportStep::Reused(oauth_private.clone()));
-		let private_bytes = match fs::read(&oauth_private) {
-			Ok(bytes) => bytes,
-			Err(error) => {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::KeyWrite(oauth_private.clone(), error)),
-				};
-			}
-		};
-		let private_text = match std::str::from_utf8(&private_bytes) {
-			Ok(text) => text,
-			Err(_) => {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::OAuthPairIncomplete(format!(
-						"oauth private key {} is not valid utf-8; cannot derive the public key",
-						oauth_private.display()
-					))),
-				};
-			}
-		};
-		let derived_public = match crate::cli::util::derive_oauth_public_from_private(private_text)
-		{
-			Some(derived) => derived,
-			None => {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::OAuthPairIncomplete(format!(
-						"oauth private key {} is not a valid PKCS#8 ES256 key; cannot derive the public key",
-						oauth_private.display()
-					))),
-				};
-			}
-		};
-		if oauth_public.exists() {
-			let public_bytes = match fs::read(&oauth_public) {
-				Ok(bytes) => bytes,
-				Err(error) => {
-					return ApplyOutcome {
-						report,
-						error: Some(ApplyError::KeyWrite(oauth_public.clone(), error)),
-					};
-				}
-			};
-			let public_text = match std::str::from_utf8(&public_bytes) {
-				Ok(text) => text,
-				Err(_) => {
-					return ApplyOutcome {
-						report,
-						error: Some(ApplyError::OAuthPairIncomplete(format!(
-							"oauth public key {} is not valid utf-8",
-							oauth_public.display()
-						))),
-					};
-				}
-			};
-			if public_text.trim() != derived_public.trim() {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::OAuthPairMismatch),
-				};
-			}
-			report.steps.push(ReportStep::Reused(oauth_public.clone()));
-		} else {
-			if let Err(error) =
-				write_secret_with_report(&oauth_public, derived_public.as_bytes(), &mut report)
-			{
-				return ApplyOutcome {
-					report,
-					error: Some(error),
-				};
-			}
-		}
-	} else if oauth_public.exists() {
+	if let Err(error) = ensure_key_tree(
+		&s1,
+		&s2,
+		&storage,
+		&oauth_private,
+		&oauth_public,
+		&mut report,
+	) {
 		return ApplyOutcome {
 			report,
-			error: Some(ApplyError::OAuthPairIncomplete(format!(
-				"oauth public key {} exists but the matching private key {} is missing; restore the private key from backup or delete {} and rerun init",
-				oauth_public.display(),
-				oauth_private.display(),
-				oauth_public.display()
-			))),
+			error: Some(error),
 		};
-	} else {
-		let (private_b64, public_b64) = match crate::cli::util::generate_oauth_keypair() {
-			Some(pair) => pair,
-			None => {
-				return ApplyOutcome {
-					report,
-					error: Some(ApplyError::Rng("oauth key pair".to_string())),
-				};
-			}
-		};
-		if let Err(error) =
-			write_secret_with_report(&oauth_private, private_b64.as_bytes(), &mut report)
-		{
-			return ApplyOutcome {
-				report,
-				error: Some(error),
-			};
-		}
-		if let Err(error) =
-			write_secret_with_report(&oauth_public, public_b64.as_bytes(), &mut report)
-		{
-			return ApplyOutcome {
-				report,
-				error: Some(error),
-			};
-		}
 	}
 
 	let dkim_ed25519_path = if s1.exists() { Some(s1.clone()) } else { None };
