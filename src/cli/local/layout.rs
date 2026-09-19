@@ -2,6 +2,7 @@
 //! written into a freshly-laid-out local directory.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rcgen::CertificateParams;
 
@@ -110,7 +111,7 @@ pub(super) fn write_with_mode(
 /// to.
 ///
 /// Two guarantees the credential files need that the obvious
-/// `open(O_TRUNC) → write_all → chmod` shape does not give:
+/// `open(O_TRUNC) write_all chmod` shape does not give:
 ///
 /// - The file must never be world-readable, even for an instant. The
 ///   naive shape opens with the default mode (0644 under a normal
@@ -124,6 +125,13 @@ pub(super) fn write_with_mode(
 ///   atomic on POSIX, so the operator either sees the old file or the
 ///   new file, never a half-written one. The temporary is unlinked by
 ///   the rename itself; no cleanup is needed.
+///
+/// `create_new(true)` plus the bounded retry below guard against the
+/// race where a previous crash left a sibling temp on disk under the
+/// exact name this run drew. The counter advances on every attempt,
+/// so the retry hits the next slot; after ten collisions the original
+/// error is forwarded so the operator sees the real reason the rename
+/// never happened.
 ///
 /// The trailing `set_mode` is kept so a target that pre-existed with a
 /// wider mode (e.g. an older `epistle local` that wrote 0644, or a
@@ -142,53 +150,104 @@ pub(super) fn write_with_replace(
 			format!("{} has no parent directory", path.display()),
 		))
 	})?;
-	let temp_path = sibling_temp_path(parent, path)?;
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::OpenOptionsExt;
-		let mut options = std::fs::OpenOptions::new();
-		// `create_new(true)` so a stale temporary left over from a
-		// previous crash (the rename never happened, the process died
-		// in between) cannot be silently reused and clobber the new
-		// contents. `sibling_temp_path` already picked a name, so the
-		// race-free behaviour is what `create_new` gives us.
-		options.write(true).create_new(true).mode(mode);
-		let mut file = options.open(&temp_path).map_err(super::LocalError::Io)?;
-		std::io::Write::write_all(&mut file, contents).map_err(super::LocalError::Io)?;
+	const MAX_RETRIES: usize = 10;
+	let mut original_exists: Option<std::io::Error> = None;
+	for _ in 0..=MAX_RETRIES {
+		match open_replace_temp(parent, path, mode) {
+			Ok((mut file, temp_path)) => {
+				if let Err(error) = std::io::Write::write_all(&mut file, contents) {
+					// The temp is open with `create_new`; remove it so
+					// the next run does not have to retry past a slot
+					// we already touched on a partial write.
+					let _ = std::fs::remove_file(&temp_path);
+					return Err(super::LocalError::Io(error));
+				}
+				drop(file);
+				std::fs::rename(&temp_path, path).map_err(super::LocalError::Io)?;
+				set_mode(path, mode)?;
+				return Ok(());
+			}
+			Err(super::LocalError::Io(error))
+				if error.kind() == std::io::ErrorKind::AlreadyExists =>
+			{
+				if original_exists.is_none() {
+					original_exists = Some(error);
+				}
+				continue;
+			}
+			Err(other) => return Err(other),
+		}
 	}
-	#[cfg(not(unix))]
-	{
-		let mut file = std::fs::OpenOptions::new()
-			.write(true)
-			.create_new(true)
-			.open(&temp_path)
-			.map_err(super::LocalError::Io)?;
-		std::io::Write::write_all(&mut file, contents).map_err(super::LocalError::Io)?;
-	}
-	std::fs::rename(&temp_path, path).map_err(super::LocalError::Io)?;
-	set_mode(path, mode)?;
-	Ok(())
+	Err(super::LocalError::Io(
+		original_exists.expect("retry loop forwarded no AlreadyExists error"),
+	))
+}
+
+/// Process-local counter that names every sibling-temp file. Lifted
+/// out of `sibling_temp_path` so the stale-temp test can peek what
+/// name the first attempt will draw without consuming a slot itself.
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_counter() -> u64 {
+	COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+fn compute_sibling_temp_path(parent: &Path, target: &Path, n: u64) -> std::path::PathBuf {
+	let file_name = target.file_name().expect("target has no file name");
+	let pid = std::process::id();
+	parent.join(format!(".{}-{pid}-{n}.tmp", file_name.to_string_lossy()))
 }
 
 /// Pick a sibling temporary file path inside `parent` for an atomic
-/// replace of `target`. The name is `.<target>.<pid>-<n>.tmp`, which
+/// replace of `target`. The name is `.<target>-<pid>-<n>.tmp`, which
 /// keeps it distinct from the real file so a stale temp from an earlier
 /// crash does not collide and the runtime can spot it (the leading dot
 /// hides it from directory listings by convention). The counter is
 /// process-local; `pid` keeps two concurrent processes on the same
 /// directory from clashing.
-fn sibling_temp_path(parent: &Path, target: &Path) -> std::io::Result<std::path::PathBuf> {
-	use std::sync::atomic::{AtomicU64, Ordering};
-	static COUNTER: AtomicU64 = AtomicU64::new(0);
-	let file_name = target.file_name().ok_or_else(|| {
-		std::io::Error::new(
-			std::io::ErrorKind::InvalidInput,
-			format!("{} has no file name", target.display()),
-		)
-	})?;
-	let pid = std::process::id();
-	let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-	Ok(parent.join(format!(".{}-{pid}-{n}.tmp", file_name.to_string_lossy())))
+fn sibling_temp_path(parent: &Path, target: &Path) -> std::path::PathBuf {
+	compute_sibling_temp_path(parent, target, next_counter())
+}
+
+/// Return the path the next call to `sibling_temp_path` would pick,
+/// without consuming a slot. Used by the stale-temp test to seed a
+/// collision on the first attempt.
+#[cfg(test)]
+pub(super) fn peek_sibling_temp_path(parent: &Path, target: &Path) -> std::path::PathBuf {
+	let n = COUNTER.load(Ordering::Relaxed);
+	compute_sibling_temp_path(parent, target, n)
+}
+
+/// Open the sibling temporary for an atomic replace of `target` under
+/// `parent`, returning the open file together with its path so a test
+/// can stat the file before the rename. The temp is created with
+/// `mode` from the very first byte (`OpenOptionsExt::mode` on Unix),
+/// not narrowed afterwards; `create_new(true)` makes the open fail
+/// with `AlreadyExists` if a previous run left a stale temp behind,
+/// which the retry loop in `write_with_replace` handles.
+pub(super) fn open_replace_temp(
+	parent: &Path,
+	target: &Path,
+	mode: u32,
+) -> Result<(std::fs::File, std::path::PathBuf), super::LocalError> {
+	let temp_path = sibling_temp_path(parent, target);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		let mut options = std::fs::OpenOptions::new();
+		options.write(true).create_new(true).mode(mode);
+		let file = options.open(&temp_path).map_err(super::LocalError::Io)?;
+		Ok((file, temp_path))
+	}
+	#[cfg(not(unix))]
+	{
+		let file = std::fs::OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&temp_path)
+			.map_err(super::LocalError::Io)?;
+		Ok((file, temp_path))
+	}
 }
 
 /// Generate a self-signed certificate for the harness hostname and write

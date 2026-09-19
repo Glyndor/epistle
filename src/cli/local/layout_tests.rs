@@ -477,3 +477,73 @@ fn replace_over_missing_file_creates_with_0600() {
 	assert_eq!(mode, 0o600, "fresh replace must produce 0600, got {mode:o}");
 	assert_eq!(std::fs::read(&target).expect("read"), b"fresh");
 }
+
+/// Pin: the temporary file `write_with_replace` writes through is
+/// 0600 from the moment `open_replace_temp` creates it. The trailing
+/// `set_mode` after the rename would mask a buggy open (it would
+/// narrow the target to 0600 regardless), so the assertion looks at
+/// the temp BEFORE the rename happens; with `.mode(0o666)` slipped in
+/// here, this test fails with the literal mode it read.
+#[cfg(unix)]
+#[test]
+fn replace_temp_file_is_created_with_mode_0600_from_first_byte() {
+	let dir = fresh_dir("replace-temp-mode");
+	let target = dir.path().join("mail.toml");
+	let (file, temp_path) =
+		layout::open_replace_temp(dir.path(), &target, 0o600).expect("open temp");
+
+	let mode = std::fs::metadata(&temp_path)
+		.expect("stat temp")
+		.permissions()
+		.mode()
+		& 0o777;
+	assert_eq!(
+		mode, 0o600,
+		"temp file must be 0600 from creation, got {mode:o}"
+	);
+
+	drop(file);
+	let _ = std::fs::remove_file(&temp_path);
+}
+
+/// Pin: `write_with_replace` recovers from a stale sibling temp left
+/// over from a previous crash. The counter advances on every attempt,
+/// so the first attempt hits `AlreadyExists` on the seeded file and
+/// the retry hits the next slot, which is free. Without the retry
+/// loop the test fails with the seeded `AlreadyExists` because the
+/// exclusive `create_new(true)` on the first attempt refuses to
+/// reuse the name.
+#[cfg(unix)]
+#[test]
+fn write_with_replace_recovers_from_stale_sibling_temp() {
+	let dir = fresh_dir("replace-stale-temp");
+	let target = dir.path().join("mail.toml");
+
+	let stale = layout::peek_sibling_temp_path(dir.path(), &target);
+	std::fs::write(&stale, b"stale from a previous crash").expect("seed stale temp");
+
+	layout::write_with_replace(&target, b"new contents", 0o600).expect("retry succeeds");
+
+	assert_eq!(
+		std::fs::read(&target).expect("read target"),
+		b"new contents",
+		"target must hold the new contents after the retry"
+	);
+
+	// The seeded stale file is what the retry skipped past; it stays
+	// on disk because nothing in the success path unlinks it. What
+	// the success path guarantees is that no temp file other than the
+	// stale one we seeded survives: the retry's own temp is unlinked
+	// by the rename.
+	let leftover: Vec<std::path::PathBuf> = std::fs::read_dir(dir.path())
+		.expect("readdir")
+		.flatten()
+		.filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+		.map(|entry| entry.path())
+		.collect();
+	assert_eq!(
+		leftover,
+		vec![stale.clone()],
+		"only the seeded stale temp may remain, found {leftover:?}"
+	);
+}
