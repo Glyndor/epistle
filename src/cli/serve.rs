@@ -522,7 +522,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					// The corpus key lives under data_dir, encrypted-at-rest tokens.
 					match crate::antispam::corpus::BayesStore::open(pool.clone(), &config.data_dir)
 					{
-						Ok(store) => server = server.with_bayes(store),
+						Ok(store) => {
+							let store: std::sync::Arc<dyn crate::antispam::corpus::BayesScorer> =
+								std::sync::Arc::new(store);
+							server = server.with_bayes(store)
+						}
 						Err(error) => {
 							super::style::error(format_args!(
 								"cannot open bayes corpus key: {error}"
@@ -542,6 +546,20 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						low: llm_hook.low,
 						high: llm_hook.high,
 					});
+				}
+				// SubjectPass: opt-in via [antispam] subjectpass = true, and
+				// only when the Bayesian corpus is also wired in (the
+				// validator refuses the configuration otherwise).
+				if config.subjectpass.enabled
+					&& let Some(_) = &reputation_pool
+				{
+					match crate::antispam::subjectpass::SubjectPass::open(&config.data_dir) {
+						Ok(pass) => server = server.with_subjectpass(pass),
+						Err(error) => {
+							eprintln!("error: cannot open subjectpass key: {error}");
+							return Err(error);
+						}
+					}
 				}
 				server = server.with_metrics(Arc::clone(&metrics));
 				if let Some(sealer) = &arc_sealer {

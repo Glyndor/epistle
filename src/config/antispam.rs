@@ -5,6 +5,11 @@
 //! confident outside it; an LLM is only worth calling when the local model is
 //! not). Fails open: any transport, timeout, parse or shape failure is logged
 //! at WARN and the message is accepted, so an outage never blocks mail.
+//!
+//! Also configures SubjectPass, the signed retry token for the uncertain
+//! band: when the band has no LLM verdict to lean on, the server refuses
+//! with a token the sender can put in the subject, and accepts the resend
+//! that carries it. Opt-in because it changes what remote senders see.
 
 use serde::Deserialize;
 
@@ -20,6 +25,21 @@ const DEFAULT_TIMEOUT_SECS: u64 = 10;
 /// Bytes of the raw message forwarded to the LLM. Small enough to keep token
 /// cost bounded; large enough for typical headers plus body.
 const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024;
+
+/// SubjectPass opt-in. `true` enables the signed retry token for the
+/// uncertain band; the default `false` keeps the historical behaviour (the
+/// band is consulted only when an LLM hook is configured, and quarantine is
+/// the only outcome).
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SubjectPass {
+	/// Whether to issue and verify SubjectPass tokens on the uncertain
+	/// band. When `false` (the default) the band falls back to its prior
+	/// behaviour: nothing rejected, nothing challenged, no behavioural
+	/// change for any sender.
+	#[serde(default)]
+	pub enabled: bool,
+}
 
 /// LLM-assisted antispam hook configuration. Present enables the hook; the
 /// configuration is keyed by an environment variable for the API secret so the

@@ -354,14 +354,11 @@ async fn unsupported_grant_type_is_rejected() {
 }
 
 #[test]
-fn authz_build_and_constant_time_eq() {
+fn authz_build() {
 	let keys = keys();
 	assert!(super::AuthzServer::new(&keys.private_b64, ISSUER, AUDIENCE).is_some());
 	// Malformed base64 private key → no server (fail closed).
 	assert!(super::AuthzServer::new("not base64!!!", ISSUER, AUDIENCE).is_none());
-	assert!(super::constant_time_eq(b"abc", b"abc"));
-	assert!(!super::constant_time_eq(b"abc", b"abd"));
-	assert!(!super::constant_time_eq(b"abc", b"ab"));
 }
 
 /// Minimal form-value encoder for the test bodies (spaces only — the test

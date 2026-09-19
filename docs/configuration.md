@@ -62,6 +62,7 @@ a connection URL.
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
 | `scanner_hook_url` | string | unset | External scanner hook (ClamAV/Rspamd behind HTTP) for unauthenticated inbound mail. Absent disables scanning. |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
+| `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
@@ -306,6 +307,47 @@ Example:
 endpoint = "https://api.openai.com/v1/chat/completions"
 api_key_env = "EPISTLE_LLM_API_KEY"
 model = "gpt-4o-mini"
+```
+
+### `[subjectpass]`
+Signed token for the uncertain Bayesian band. When a message's local
+Bayesian score lands in the configured uncertain band and no LLM verdict
+decides it (no LLM hook configured, or the LLM call failed), the server
+refuses it with `550 5.7.1 ... EP-XXXXXXXXXXXX`; the sender pastes the token
+into the `Subject:` and resends, and the resend is accepted as ham. The check
+runs after DNSBL, SPF, DMARC and the scanner hook, so a valid token never
+overrides a hard rejection. The token is per `(sender, recipient, day)`, so a
+stolen token gains one pair for one day.
+
+The refusal is permanent on purpose. A sending server that is given a `4xx`
+retries the same message, which never carries the token, and its author hears
+nothing until that queue gives up days later. A `5xx` makes the sending
+server bounce at once, and the bounce quotes the reply text below, token
+included. A challenged message is not stored and does not train the Bayesian
+corpus. The cost is that automated senders nobody reads the bounces of
+(newsletters, notifications) lose any message that lands in the band.
+
+Disabled by default: enabling it changes what remote senders see when their
+mail lands in the band, so the operator opts in. Requires `[database]`
+(without a Bayesian score there is no band to challenge). The key is held
+under `data_dir/subjectpass.key` (`0600` on disk, generated on first use);
+a token issued yesterday still verifies today, so a sender who resends past
+midnight still passes.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether to issue and verify SubjectPass tokens on the uncertain band. |
+
+Example:
+
+```toml
+subjectpass = { enabled = true }
+```
+
+The challenge text the sender sees:
+
+```
+550 5.7.1 this message needs a human; resend it with EP-XXXXXXXXXXXX anywhere in the subject
 ```
 
 ### `[[alerts]]`

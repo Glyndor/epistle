@@ -167,7 +167,7 @@ pub fn sha256_token_matches(stored: &str, token: &str) -> bool {
 			write!(s, "{b:02x}").ok();
 			s
 		});
-	crate::api::oauth::constant_time_eq(
+	crate::util::constant_time::eq(
 		expected_hex.to_ascii_lowercase().as_bytes(),
 		actual_hex.as_bytes(),
 	)

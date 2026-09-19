@@ -18,6 +18,7 @@ use super::{
 	AuthzServer, CODE_TTL_SECS, DeviceGrant, POLL_INTERVAL_SECS, oauth_error, parse_fields,
 };
 use crate::api::ApiState;
+use crate::util::constant_time;
 
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
@@ -122,7 +123,7 @@ pub async fn device_approve(
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
 	let grant = devices.values_mut().find(|g| {
-		super::constant_time_eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
+		constant_time::eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {

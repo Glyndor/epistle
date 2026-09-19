@@ -6,6 +6,8 @@
 
 use ring::hmac;
 
+use crate::util::constant_time;
+
 /// The HOTP/TOTP step in seconds (RFC 6238 default).
 pub const STEP_SECONDS: u64 = 30;
 /// Number of code digits (RFC 6238 default).
@@ -44,7 +46,7 @@ pub fn verify(secret: &[u8], code: u32, now_secs: u64) -> bool {
 			hotp(secret, step, DIGITS),
 			width = DIGITS as usize
 		);
-		constant_time_eq(candidate.as_bytes(), expected.as_bytes())
+		constant_time::eq(candidate.as_bytes(), expected.as_bytes())
 	})
 }
 
@@ -89,14 +91,6 @@ pub fn decode_base32_secret(secret: &str) -> Option<Vec<u8>> {
 		}
 	}
 	Some(out)
-}
-
-/// Length-aware constant-time byte comparison.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-	if a.len() != b.len() {
-		return false;
-	}
-	a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]

@@ -35,12 +35,32 @@ impl Config {
 		self.validate_alerts()?;
 		self.validate_tenants()?;
 		self.validate_database()?;
+		self.validate_subjectpass()?;
 		Ok(())
 	}
 
 	fn validate_antispam_llm(&self) -> Result<(), ConfigError> {
 		if let Some(llm) = &self.antispam_llm {
 			llm.validate()?;
+		}
+		Ok(())
+	}
+
+	fn validate_subjectpass(&self) -> Result<(), ConfigError> {
+		if !self.subjectpass.enabled {
+			return Ok(());
+		}
+		// SubjectPass challenges the uncertain Bayesian band; without a
+		// `[database]` there is no score to test against, so enabling it
+		// without a database is a logical impossibility the operator
+		// should hear about at load time.
+		if self.database.is_none() {
+			return Err(ConfigError::Invalid(
+				"[antispam] subjectpass = true requires a [database] section (the \
+				 uncertain band needs the Bayesian score). Add [database] or set \
+				 subjectpass = false."
+					.into(),
+			));
 		}
 		Ok(())
 	}
@@ -518,3 +538,7 @@ mod tests_g;
 #[cfg(test)]
 #[path = "validate_tests_h.rs"]
 mod tests_h;
+
+#[cfg(test)]
+#[path = "validate_tests_i.rs"]
+mod tests_i;

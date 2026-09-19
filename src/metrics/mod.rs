@@ -85,6 +85,8 @@ const COUNTERS: &[(&str, &str)] = &[
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
 	("send_limited_new_recipients", "send_limited_new_recipients"),
+	("subjectpass_passed", "subjectpass_passed"),
+	("subjectpass_challenged", "subjectpass_challenged"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -125,6 +127,8 @@ pub struct Metrics {
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
+	subjectpass_passed: AtomicU64,
+	subjectpass_challenged: AtomicU64,
 }
 
 impl Metrics {
@@ -248,6 +252,19 @@ impl Metrics {
 		self.llm_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count an unauthenticated message accepted because its subject carried
+	/// a valid SubjectPass token for the (sender, recipient, day) triple.
+	pub fn subjectpass_passed(&self) {
+		self.subjectpass_passed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an unauthenticated message in the uncertain band that was
+	/// refused with a SubjectPass challenge (no token in the subject,
+	/// and either no LLM hook or the LLM hook call failed).
+	pub fn subjectpass_challenged(&self) {
+		self.subjectpass_challenged.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a rejected message by reason.
 	pub fn rejected(&self, reason: RejectReason) {
 		self.counter(reason).fetch_add(1, Ordering::Relaxed);
@@ -305,6 +322,8 @@ impl Metrics {
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
+			"subjectpass_passed" => &self.subjectpass_passed,
+			"subjectpass_challenged" => &self.subjectpass_challenged,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -432,6 +451,16 @@ impl Metrics {
 				"mail_send_limited_new_recipients_total",
 				"Submissions refused because the account would exceed the daily cap on first-time recipients.",
 				&self.send_limited_new_recipients,
+			),
+			(
+				"mail_subjectpass_passed_total",
+				"Unauthenticated messages accepted by a valid SubjectPass token in the subject.",
+				&self.subjectpass_passed,
+			),
+			(
+				"mail_subjectpass_challenged_total",
+				"Unauthenticated messages refused with a SubjectPass challenge.",
+				&self.subjectpass_challenged,
 			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
@@ -571,6 +600,8 @@ mod tests {
 			"auth_login_succeeded",
 			"auth_login_failed",
 			"send_limited_new_recipients",
+			"subjectpass_passed",
+			"subjectpass_challenged",
 		] {
 			assert!(snap.contains_key(name), "missing {name}");
 		}

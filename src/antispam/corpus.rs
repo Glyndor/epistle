@@ -21,6 +21,7 @@ use std::path::Path;
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use crate::storage::load_or_create_key_file;
 
 /// The shared corpus scope (the server's own accept/reject learning).
 pub const SHARED: &str = "";
@@ -39,7 +40,7 @@ impl BayesStore {
 	/// Open the store, loading the token key from `data_dir` or generating and
 	/// persisting a fresh `0600` key on first use.
 	pub fn open(pool: PgPool, data_dir: &Path) -> std::io::Result<Self> {
-		let key = load_or_create_key(data_dir)?;
+		let key = load_or_create_key_file(data_dir, KEY_FILE)?;
 		Ok(BayesStore { pool, key })
 	}
 
@@ -187,26 +188,39 @@ fn hash_token(key: &[u8], token: &str) -> String {
 	})
 }
 
-/// Load the corpus token key from `data_dir`, generating a fresh `0600` key on
-/// first use. The key lives outside the database so a DB compromise cannot
-/// reverse the token hashes.
-fn load_or_create_key(data_dir: &Path) -> std::io::Result<[u8; 32]> {
-	let path = data_dir.join(KEY_FILE);
-	if let Ok(bytes) = std::fs::read(&path)
-		&& bytes.len() == 32
+/// A pluggable scoring source for the uncertain band. The production
+/// implementation is [`BayesStore`]; tests use a small in-memory fake that
+/// returns a deterministic score so the SMTP path can be exercised
+/// without a database. The trait stays narrow (one async method, no
+/// lifetimes) so a `dyn BayesScorer` is cheap to share across listeners.
+pub trait BayesScorer: Send + Sync {
+	/// The probability a message is spam, in `[0, 1]`. A `score` of `0.5`
+	/// with no LLM verdict to lean on is the case SubjectPass is built for.
+	fn score<'a>(
+		&'a self,
+		scope: &'a str,
+		text: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>;
+
+	/// Train the corpus on `text` as ham (`spam = false`) or spam. The
+	/// default implementation is a no-op so a fake scoring source does not
+	/// need to back a database.
+	fn train(&self, _scope: &str, _text: &str, _spam: bool) {}
+}
+
+impl BayesScorer for BayesStore {
+	fn score<'a>(
+		&'a self,
+		scope: &'a str,
+		text: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>
 	{
-		let mut key = [0u8; 32];
-		key.copy_from_slice(&bytes);
-		return Ok(key);
+		Box::pin(async move { BayesStore::score(self, scope, text).await })
 	}
-	use ring::rand::SecureRandom;
-	let mut key = [0u8; 32];
-	ring::rand::SystemRandom::new()
-		.fill(&mut key)
-		.map_err(|_| std::io::Error::other("rng failure"))?;
-	std::fs::create_dir_all(data_dir)?;
-	crate::storage::write_secret(&path, &key)?;
-	Ok(key)
+
+	fn train(&self, scope: &str, text: &str, spam: bool) {
+		self.train_in_background(scope.to_string(), text.to_string(), spam);
+	}
 }
 
 #[cfg(test)]
