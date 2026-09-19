@@ -32,6 +32,7 @@ impl Config {
 		self.validate_oauth()?;
 		self.validate_ldap()?;
 		self.validate_antispam_llm()?;
+		self.validate_scanner()?;
 		self.validate_alerts()?;
 		self.validate_tenants()?;
 		self.validate_database()?;

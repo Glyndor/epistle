@@ -60,13 +60,47 @@ a connection URL.
 | `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` disables the feature; requests above the cap return `429`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
-| `scanner_hook_url` | string | unset | External scanner hook (ClamAV/Rspamd behind HTTP) for unauthenticated inbound mail. Absent disables scanning. |
+| `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
+| `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
 | `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
+
+## `[antispam]` clamd scanner
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail. Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
+| `clamd_on_found` | `quarantine` or `reject` | `quarantine` | Quarantine a detected message in the Rejects mailbox, or reject it during SMTP delivery. Other values are invalid. |
+| `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
+| `clamd_max_bytes` | integer | `26214400` (25 MiB) | Messages above this size are accepted without opening the socket. A message exactly at the limit is scanned. |
+
+```toml
+[antispam]
+clamd_socket = "/run/clamav/clamd.sock"
+clamd_on_found = "quarantine"
+clamd_timeout_secs = 30
+clamd_max_bytes = 26214400
+```
+
+Epistle sends the raw message using clamd's
+[INSTREAM protocol](https://docs.clamav.net/manual/Usage/ClamdProtocol.html).
+It decompresses nothing locally. Set `MaxScanSize` and `MaxRecursion` in
+`clamd.conf` to bound decompression, and enable `AlertExceedsMax yes` so
+exceeding those limits yields a detection handled by `clamd_on_found`.
+Set `StreamMaxLength` at least as high as `clamd_max_bytes`.
+See the [clamd configuration reference](https://github.com/Cisco-Talos/clamav/blob/main/docs/man/clamd.conf.5.in).
+
+Scanner errors, missing sockets, malformed replies, and timeouts fail open:
+the message is accepted and `scanner_clamd_failed` increments. This includes
+`INSTREAM size limit exceeded. ERROR`. Oversize messages increment
+`scanner_clamd_skipped` instead. The Prometheus names are
+`mail_scanner_clamd_failed_total` and `mail_scanner_clamd_skipped_total`.
+Failure warnings are limited to one per minute per hook; detections log the
+signature and message size without message content.
 
 ## Listeners
 
@@ -453,7 +487,8 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
-`webhook_sent`, `database_unavailable`.
+`webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
+`scanner_clamd_skipped`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).

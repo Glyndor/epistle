@@ -7,6 +7,7 @@
 pub mod arf;
 pub mod bans;
 pub mod bayes;
+pub mod clamd;
 pub mod corpus;
 pub mod greylist;
 pub mod hook;

@@ -134,6 +134,8 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"bounced",
 		"webhook_sent",
 		"webhook_failed",
+		"scanner_clamd_failed",
+		"scanner_clamd_skipped",
 		"database_unavailable",
 		"clock_drift_exceeded",
 		"auth_login_succeeded",
@@ -149,5 +151,23 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"reports_dropped",
 	] {
 		assert!(snap.contains_key(name), "missing {name}");
+	}
+}
+
+#[test]
+fn clamd_counters_render_and_snapshot_independently() {
+	let metrics = Metrics::new();
+	metrics.scanner_clamd_failed();
+	metrics.scanner_clamd_skipped();
+	metrics.scanner_clamd_skipped();
+	let snapshot = metrics.snapshot();
+	assert_eq!(snapshot.get("scanner_clamd_failed"), Some(&1));
+	assert_eq!(snapshot.get("scanner_clamd_skipped"), Some(&2));
+	let rendered = metrics.render();
+	for (name, count) in [("scanner_clamd_failed", 1), ("scanner_clamd_skipped", 2)] {
+		assert!(metric_names().contains(&name));
+		assert!(rendered.contains(&format!("# TYPE mail_{name}_total counter\n")));
+		assert!(rendered.contains(&format!("# HELP mail_{name}_total ")));
+		assert!(rendered.contains(&format!("mail_{name}_total {count}\n")));
 	}
 }

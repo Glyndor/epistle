@@ -6,11 +6,14 @@
 //! code-line budget.
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::antispam::clamd::ClamdHook;
 use crate::antispam::hook::MailHook;
 use crate::antispam::llm::LlmHook;
 use crate::api::TenantLimits;
 use crate::config::Config;
+use crate::metrics::Metrics;
 use crate::smtp::diskspace::DiskGuard;
 use crate::storage::CorrespondentStore;
 
@@ -45,7 +48,10 @@ pub(super) struct SmtpSharedState {
 /// error); a malformed scanner-hook URL also fails closed; the LLM
 /// hook is built eagerly so a missing API key stops the start before
 /// the first mail that hits the uncertain band.
-pub(super) fn build_smtp_shared_state(config: &Config) -> std::io::Result<SmtpSharedState> {
+pub(super) fn build_smtp_shared_state(
+	config: &Config,
+	metrics: &Arc<Metrics>,
+) -> std::io::Result<SmtpSharedState> {
 	let tenant_limits = Arc::new(TenantLimits::from_config(&config.tenants));
 	let correspondents =
 		Arc::new(CorrespondentStore::open(&config.data_dir).map_err(std::io::Error::other)?);
@@ -56,7 +62,15 @@ pub(super) fn build_smtp_shared_state(config: &Config) -> std::io::Result<SmtpSh
 		Some(url) => Some(Arc::new(
 			crate::antispam::hook::HttpHook::new(url).map_err(std::io::Error::other)?,
 		)),
-		None => None,
+		None => config.antispam.clamd_socket.as_ref().map(|socket| {
+			Arc::new(
+				ClamdHook::new(socket.clone())
+					.with_on_found(config.antispam.clamd_on_found.into())
+					.with_timeout(Duration::from_secs(config.antispam.clamd_timeout_secs))
+					.with_max_bytes(config.antispam.clamd_max_bytes)
+					.with_metrics(Arc::clone(metrics)),
+			) as Arc<dyn MailHook>
+		}),
 	};
 	let llm_hook = LlmHook::from_config(config.antispam_llm.as_ref())?;
 	Ok(SmtpSharedState {
@@ -69,3 +83,7 @@ pub(super) fn build_smtp_shared_state(config: &Config) -> std::io::Result<SmtpSh
 		llm_hook,
 	})
 }
+
+#[cfg(test)]
+#[path = "serve_smtp_state_tests.rs"]
+mod tests;
