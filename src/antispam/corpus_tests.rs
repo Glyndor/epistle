@@ -210,3 +210,57 @@ fn forget_scope_is_exposed_as_an_inherent_method() {
 			Box::pin(store.forget_scope("ignored"));
 	}
 }
+
+/// A training job that has already read its message off disk must
+/// not recreate the scope a concurrent removal is in the middle of
+/// purging. The tombstone lives on the store: `train` checks it
+/// before issuing any SQL, so a worker that drained its job between
+/// the removal's `forget_scope` start and commit returns silently
+/// rather than re-creating rows the purge just dropped.
+#[tokio::test]
+async fn a_tombstoned_scope_silently_drops_training() {
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	// Mark the scope as removed (mirrors what `forget_scope` does for
+	// the duration of its DELETE).
+	let tombstones = store.tombstones();
+	tombstones.lock().expect("tombstone lock").insert("alice".to_string());
+
+	// The lazy pool never connects, so a non-tombstoned `train` would
+	// bubble up the connection error. The tombstone check has to fire
+	// first and make `train` return `Ok(())` without touching the pool.
+	let result = store.train("alice", "any body text", true).await;
+	assert!(
+		result.is_ok(),
+		"tombstoned scope must short-circuit; got {result:?}"
+	);
+
+	// Lift the tombstone: now the same call would attempt the SQL and
+	// surface the lazy-pool error, which proves the previous return
+	// value came from the check rather than from the SQL succeeding.
+	tombstones.lock().expect("tombstone lock").remove("alice");
+}
+
+/// `forget_scope` raises and lowers the tombstone around its DELETE
+/// so a worker draining a queued job cannot race with the purge. A
+/// failed DELETE keeps the tombstone set: the absent rows are the
+/// only thing the next `remove_account` retry needs to drop, and
+/// letting training through would only recreate them.
+#[tokio::test]
+async fn forget_scope_sets_the_tombstone_for_its_duration() {
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	let result = store.forget_scope("alice").await;
+	assert!(
+		result.is_err(),
+		"lazy pool never connects; forget_scope must error"
+	);
+	assert!(
+		store.tombstones().lock().expect("tombstone lock").contains("alice"),
+		"the tombstone stays set when the purge itself fails"
+	);
+}

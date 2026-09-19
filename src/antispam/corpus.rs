@@ -15,8 +15,9 @@
 //! per-instance hashes. The hash is deterministic, so lookups still work, and
 //! token identity (all the classifier needs) is preserved.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use sqlx::PgPool;
 
@@ -30,11 +31,30 @@ pub const SHARED: &str = "";
 /// The corpus key filename under the data directory.
 const KEY_FILE: &str = "bayes-corpus.key";
 
+/// The set of scope names whose removal is in flight or whose purge has
+/// just committed. The training worker consults the set before any
+/// `INSERT` so a job that drained between a removal's start and its
+/// commit cannot recreate rows the purge is dropping. The handle is
+/// shared with every clone of the [`BayesStore`] so all training paths
+/// see the same state.
+pub type TombstoneSet = Arc<Mutex<HashSet<String>>>;
+
+/// A fresh, empty tombstone set for tests and constructors that have
+/// no other source of one.
+pub fn new_tombstone_set() -> TombstoneSet {
+	Arc::new(Mutex::new(HashSet::new()))
+}
+
 /// A PostgreSQL-backed Bayesian corpus that stores tokens as keyed hashes.
 #[derive(Clone)]
 pub struct BayesStore {
 	pool: PgPool,
 	key: [u8; 32],
+	/// Scopes whose removal is currently happening, or has just
+	/// committed, so a training worker that has already read its
+	/// message off disk drops the job rather than recreating the
+	/// rows the purge is dropping. See [`BayesStore::train`].
+	tombstones: TombstoneSet,
 }
 
 impl BayesStore {
@@ -42,12 +62,30 @@ impl BayesStore {
 	/// persisting a fresh `0600` key on first use.
 	pub fn open(pool: PgPool, data_dir: &Path) -> std::io::Result<Self> {
 		let key = load_or_create_key_file(data_dir, KEY_FILE)?;
-		Ok(BayesStore { pool, key })
+		Ok(BayesStore {
+			pool,
+			key,
+			tombstones: new_tombstone_set(),
+		})
 	}
 
-	/// Build a store with an explicit key (tests).
+	/// Build a store with an explicit key (tests). The tombstone set
+	/// starts empty: callers can populate it through [`BayesStore::tombstones`]
+	/// when they want to simulate an in-flight removal.
 	pub fn with_key(pool: PgPool, key: [u8; 32]) -> Self {
-		BayesStore { pool, key }
+		BayesStore {
+			pool,
+			key,
+			tombstones: new_tombstone_set(),
+		}
+	}
+
+	/// The shared tombstone set the training worker consults before
+	/// every INSERT. Production keeps the set empty except inside
+	/// [`BayesStore::forget_scope`]; tests use it to drive the
+	/// race-condition test above without a database.
+	pub fn tombstones(&self) -> &TombstoneSet {
+		&self.tombstones
 	}
 
 	/// The stored (hashed) form of a token.
@@ -58,6 +96,14 @@ impl BayesStore {
 	/// Train the `scope` corpus on one message: bump the message total and each
 	/// token's ham or spam count, atomically.
 	pub async fn train(&self, scope: &str, text: &str, spam: bool) -> Result<(), sqlx::Error> {
+		// A scope whose removal is in flight (or has just committed and
+		// the tombstone has not yet been cleared) is on its way out:
+		// training now would recreate rows the purge is dropping. Drop
+		// the job silently so the worker's caller never sees an error
+		// for a message that no longer belongs to a live account.
+		if self.tombstones.lock().expect("tombstone lock").contains(scope) {
+			return Ok(());
+		}
 		let tokens: Vec<String> = bayes::tokenize(text).iter().map(|t| self.hash(t)).collect();
 		let ham_inc: i64 = if spam { 0 } else { 1 };
 		let spam_inc: i64 = if spam { 1 } else { 0 };
@@ -185,7 +231,31 @@ impl BayesStore {
 	/// count, in one transaction. Returns the number of token rows
 	/// removed. Account removal calls it so a recreated account name
 	/// does not inherit the previous user's training.
+///
+/// The scope is tombstoned before the transaction starts and the
+	/// tombstone is only cleared when the transaction commits. A
+	/// worker that has already read a message but has not yet called
+	/// `train` will see the tombstone and drop the job, so the DELETE
+	/// cannot race a queued training write. A failed DELETE keeps the
+	/// tombstone in place: the absent rows are still absent and the
+	/// only thing that would recreate them is a new training call,
+	/// which we are correct to suppress until the next retry commits.
 	pub async fn forget_scope(&self, scope: &str) -> Result<u64, sqlx::Error> {
+		{
+			let mut tombstones = self.tombstones.lock().expect("tombstone lock");
+			tombstones.insert(scope.to_string());
+		}
+		let result = self.forget_scope_inner(scope).await;
+		if result.is_ok() {
+			self.tombstones
+				.lock()
+				.expect("tombstone lock")
+				.remove(scope);
+		}
+		result
+	}
+
+	async fn forget_scope_inner(&self, scope: &str) -> Result<u64, sqlx::Error> {
 		let mut tx = self.pool.begin().await?;
 		let tokens = sqlx::query!("DELETE FROM bayes_token WHERE scope = $1", scope,)
 			.execute(&mut *tx)
