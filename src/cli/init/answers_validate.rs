@@ -118,20 +118,33 @@ fn check_dns(
 					}
 				}
 			}
-			let provided = [
-				dns.token.is_some(),
-				dns.token_file.is_some(),
-				dns.token_env.is_some(),
-			]
-			.iter()
-			.filter(|x| **x)
-			.count();
+			// An empty or whitespace-only value in any of the three
+			// sources counts as absent, so the assistant and the file
+			// path reject the same input with the same sentence. The
+			// assistant already trims before storing; the file path
+			// preserves the literal, hence this branch.
+			let token_present = dns
+				.token
+				.as_deref()
+				.is_some_and(|v| !v.trim().is_empty());
+			let token_file_present = dns.token_file.as_deref().is_some_and(|p| {
+				let s = p.to_string_lossy();
+				!s.trim().is_empty()
+			});
+			let token_env_present = dns
+				.token_env
+				.as_deref()
+				.is_some_and(|v| !v.trim().is_empty());
+			let provided = [token_present, token_file_present, token_env_present]
+				.iter()
+				.filter(|x| **x)
+				.count();
 			match provided {
 				0 => errors.push(Invalid::DnsTokenMissing),
 				1 => {}
 				_ => errors.push(Invalid::DnsTokenAmbiguous),
 			}
-			if dns.token.is_some() {
+			if token_present {
 				warnings.push(Warning {
 					field: "dns.token".to_string(),
 					message:

@@ -275,5 +275,9 @@ impl Answers {
 #[path = "answers_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "answers_tests_b.rs"]
+mod tests_b;
+
 #[path = "answers_validate.rs"]
 mod answers_validate;
