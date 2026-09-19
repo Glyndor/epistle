@@ -164,8 +164,14 @@ pub enum PtrOutcome {
 	/// No PTR record exists for the IP.
 	None,
 	/// PTR exists but points at a name other than the expected `hostname`.
-	/// The string is the joined list of names it currently points at.
-	PointsElsewhere(String),
+	/// Carries the requested host and the joined list of names it
+	/// currently points at so the renderer can name both halves.
+	PointsElsewhere {
+		/// The hostname the operator asked to verify against `ip`.
+		expected: String,
+		/// The joined list of names the existing PTR records name.
+		found: String,
+	},
 	/// PTR points at `hostname`, but `hostname` does not resolve back to `ip`.
 	/// The round trip is broken.
 	DoesNotResolveBack,
@@ -181,7 +187,10 @@ pub(crate) async fn classify_ptr(hostname: &str, ip: IpAddr, dns: &dyn DnsLookup
 		Err(_) => PtrOutcome::LookupError,
 		Ok(names) if names.is_empty() => PtrOutcome::None,
 		Ok(names) if !names.iter().any(|n| n.eq_ignore_ascii_case(hostname)) => {
-			PtrOutcome::PointsElsewhere(names.join(", "))
+			PtrOutcome::PointsElsewhere {
+				expected: hostname.to_string(),
+				found: names.join(", "),
+			}
 		}
 		Ok(_) => match dns.addresses(hostname).await {
 			Ok(addrs) if addrs.contains(&ip) => PtrOutcome::Ok,
@@ -206,11 +215,9 @@ async fn ptr_check(hostname: &str, ip: IpAddr, dns: &dyn DnsLookup) -> Check {
 			ip_str,
 			format!("no reverse record; ask the provider of this IP to point it at {hostname}"),
 		),
-		PtrOutcome::PointsElsewhere(other) => Check::missing(
-			kind_ref,
-			ip_str,
-			format!("points at {other}, not {hostname}"),
-		),
+		PtrOutcome::PointsElsewhere { expected, found } => {
+			Check::missing(kind_ref, ip_str, format!("points at {found}, not {expected}"))
+		}
 		PtrOutcome::Ok => Check::ok(kind_ref, ip_str, format!("→ {hostname}")),
 		PtrOutcome::DoesNotResolveBack => Check::missing(
 			kind_ref,

@@ -98,9 +98,16 @@ pub enum PtrReport {
 	/// Either way the operator's next move is to ask the IP provider to
 	/// publish a PTR, so the two cases share a verdict.
 	None,
-	/// The PTR exists but points at the named host. The operator needs to
-	/// ask the IP provider to change the PTR to `hostname`.
-	PointsElsewhere(String),
+	/// The PTR exists but points at a name other than the one the operator
+	/// asked the server to verify against. Carries both halves so the
+	/// diagnostic text names the requested hostname and the one currently
+	/// published in DNS.
+	PointsElsewhere {
+		/// The hostname the operator asked to verify against `ip`.
+		expected: String,
+		/// The joined list of names the existing PTR records name.
+		found: String,
+	},
 	/// The PTR points at `hostname`, but `hostname` does not resolve back to
 	/// `ip`. The operator needs to ask the DNS provider (the one that hosts
 	/// `hostname`'s zone) to add the matching A or AAAA record.
@@ -112,7 +119,9 @@ impl From<PtrOutcome> for PtrReport {
 		match outcome {
 			PtrOutcome::Ok => Self::Ok,
 			PtrOutcome::None => Self::None,
-			PtrOutcome::PointsElsewhere(name) => Self::PointsElsewhere(name),
+			PtrOutcome::PointsElsewhere { expected, found } => {
+				Self::PointsElsewhere { expected, found }
+			}
 			PtrOutcome::DoesNotResolveBack => Self::DoesNotResolveBack,
 			// A transient DNS error is not a verdict about the PTR itself;
 			// fold it into the "no reverse record" branch because the
@@ -139,10 +148,10 @@ impl fmt::Display for PtrReport {
 				"no reverse record; ask the owner of this IP (your VPS, host or \
 				 ISP) to publish a record pointing it at the hostname",
 			),
-			Self::PointsElsewhere(name) => write!(
+			Self::PointsElsewhere { expected, found } => write!(
 				f,
-				"reverse DNS currently points at {name}; ask the owner of this IP to \
-				 change it to point at the hostname"
+				"reverse DNS currently points at {found}; ask the owner of this IP to \
+				 change it to point at {expected}"
 			),
 			Self::DoesNotResolveBack => f.write_str(
 				"the hostname does not resolve back to this IP; ask the DNS provider \
