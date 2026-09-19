@@ -197,7 +197,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}
 	let worker = Arc::new(worker);
-	tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
+	if config.start_queue_worker() {
+		tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
+	} else {
+		tracing::info!("outbound delivery is held: queue worker not started");
+	}
 
 	// DMARC aggregate report flush runs hourly in the background.
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
