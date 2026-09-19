@@ -181,3 +181,180 @@ fn account_remove_unknown_account_returns_failure_without_touching_storage() {
 		"a missing account must not produce a success line; got: {text}"
 	);
 }
+
+/// The CLI's removal helper used to call `remove_account` with
+/// `None` for the bayes store regardless of `[database]`, so a
+/// CLI-driven recreation always inherited the previous owner's
+/// training rows. The helper now takes the store explicitly; this
+/// test feeds it a `BayesStore` backed by a `connect_lazy` pool
+/// (so the DELETE bubbles the lazy connect error up) and asserts
+/// the call surfaces `BayesPurge` rather than returning a clean
+/// success line.
+#[test]
+fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
+	use crate::antispam::corpus::BayesStore;
+	use std::sync::Arc;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let cfg = config_at(dir.path());
+	let config = crate::config::Config::load(cfg.path()).expect("load");
+
+	let store = Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir.path(),
+			vec!["example.org".to_string()],
+			std::collections::HashMap::new(),
+			Vec::new(),
+		)
+		.expect("store"),
+	);
+	store
+		.add(crate::directory_store::DynamicAccount {
+			name: "alice".to_string(),
+			addresses: vec!["alice@example.org".to_string()],
+			password_hash: "$argon2id$placeholder".to_string(),
+			scram: None,
+			totp_secret: None,
+			disabled: false,
+			allowed_protocols: None,
+		})
+		.expect("add alice");
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
+
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	let pool = runtime.block_on(async {
+		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+			.expect("lazy pool never connects")
+	});
+	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+
+	let mut out = Vec::new();
+	let exit = accounts::remove_with_bayes(
+		&runtime,
+		&store,
+		&spool,
+		&config,
+		"alice",
+		QueuePolicy::Drain,
+		Some(&bayes),
+		&mut out,
+	);
+	assert_eq!(
+		exit,
+		ExitCode::FAILURE,
+		"a failing bayes purge must abort the removal"
+	);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		text.contains("bayes corpus purge failed"),
+		"the bayes store was not consulted; output was: {text}"
+	);
+}
+
+/// With no bayes store passed in, the CLI silently dropped the
+/// corpus purge: this is the matching control case asserting the
+/// no-bayes path still finishes the on-disk work. Without the
+/// fix the bayes branch in `accounts::remove` was unconditional
+/// `None`, so this test would have caught that as "bayes work
+/// happened when none should" — pinning both sides keeps the
+/// test honest.
+#[test]
+fn cli_remove_completes_without_a_bayes_store() {
+	use std::sync::Arc;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let cfg = config_at(dir.path());
+	let config = crate::config::Config::load(cfg.path()).expect("load");
+
+	let store = Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir.path(),
+			vec!["example.org".to_string()],
+			std::collections::HashMap::new(),
+			Vec::new(),
+		)
+		.expect("store"),
+	);
+	store
+		.add(crate::directory_store::DynamicAccount {
+			name: "alice".to_string(),
+			addresses: vec!["alice@example.org".to_string()],
+			password_hash: "$argon2id$placeholder".to_string(),
+			scram: None,
+			totp_secret: None,
+			disabled: false,
+			allowed_protocols: None,
+		})
+		.expect("add alice");
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+	let mut out = Vec::new();
+	let exit = accounts::remove_with_bayes(
+		&runtime,
+		&store,
+		&spool,
+		&config,
+		"alice",
+		QueuePolicy::Drain,
+		None,
+		&mut out,
+	);
+	assert_eq!(exit, ExitCode::SUCCESS, "no-bayes path must succeed");
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		text.contains("bayes_tokens_removed: 0"),
+		"no-bayes path must report zero tokens dropped; got: {text}"
+	);
+}
+
+/// Without a bayes store passed in, the CLI was silently dropping
+/// the corpus purge; the regression test above asserts the new
+/// behaviour, so this is the symmetry check: with a bayes store
+/// the removal even on a missing account short-circuits to
+/// `NoFound` without raising the bayes error. Pins the early
+/// bail-out before any bayes work is attempted.
+#[test]
+fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
+	use crate::antispam::corpus::BayesStore;
+	use std::sync::Arc;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let cfg = config_at(dir.path());
+	let config = crate::config::Config::load(cfg.path()).expect("load");
+
+	let store = Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir.path(),
+			vec!["example.org".to_string()],
+			std::collections::HashMap::new(),
+			Vec::new(),
+		)
+		.expect("store"),
+	);
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	let pool = runtime.block_on(async {
+		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+			.expect("lazy pool never connects")
+	});
+	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+
+	let mut out = Vec::new();
+	let exit = accounts::remove_with_bayes(
+		&runtime,
+		&store,
+		&spool,
+		&config,
+		"ghost",
+		QueuePolicy::Drain,
+		Some(&bayes),
+		&mut out,
+	);
+	assert_eq!(exit, ExitCode::FAILURE, "unknown account must fail");
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(
+		!text.contains("bayes corpus purge failed"),
+		"a missing account must short-circuit before the bayes purge runs; got: {text}"
+	);
+}

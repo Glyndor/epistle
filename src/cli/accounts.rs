@@ -98,6 +98,39 @@ pub(super) fn parse_queue_policy(value: &str) -> Result<QueuePolicy, String> {
 	}
 }
 
+/// Open the optional Bayesian store the operator's `[database]`
+/// section configures: `None` without a database, `None` when the
+/// pool cannot connect (the removal still does its on-disk work and
+/// the corpus rows simply survive until the next attempt), and
+/// `Some(store)` when the pool opens. Errors during the corpus-key
+/// file load (the only step `open_bayes` does not silently absorb)
+/// are surfaced through `out` so the operator sees why their
+/// removal cannot finish.
+fn open_bayes_store(
+	config: &Config,
+	runtime: &tokio::runtime::Runtime,
+	out: &mut impl std::io::Write,
+) -> Option<crate::antispam::corpus::BayesStore> {
+	runtime.block_on(async {
+		let metrics = Arc::new(crate::metrics::Metrics::new());
+		let pool = match super::serve_tasks::connect_database(config, &metrics).await {
+			Ok(pool) => pool,
+			Err(error) => {
+				let _ = writeln!(out, "error: opening database: {error}");
+				return None;
+			}
+		};
+		match super::serve_tasks::open_bayes(config, &pool, &MessageCrypto::disabled(), &metrics) {
+			Ok(Some((store, _queue))) => Some(store),
+			Ok(None) => None,
+			Err(error) => {
+				let _ = writeln!(out, "error: opening bayes store: {error}");
+				None
+			}
+		}
+	})
+}
+
 /// Remove a dynamic account and its whole footprint (mailbox, masked
 /// addresses, app passwords, per-account suppression, queued outbound
 /// mail per `queue`). Prints the per-record counts to `out`, one per
@@ -142,13 +175,32 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
+	let bayes_store = open_bayes_store(config, &runtime, out);
+	remove_with_bayes(&runtime, &store, &spool, config, name, queue, bayes_store.as_ref(), out)
+}
+
+/// Inner removal helper that the tests drive directly with a
+/// hand-built [`BayesStore`]. The public [`remove`] opens the store
+/// from the configuration; tests bypass `open_bayes_store` to feed
+/// in a deterministic pool without touching the operator's
+/// `[database]` URL.
+pub(super) fn remove_with_bayes(
+	runtime: &tokio::runtime::Runtime,
+	store: &Arc<AccountStore>,
+	spool: &FsSpool,
+	config: &Config,
+	name: &str,
+	queue: QueuePolicy,
+	bayes_store: Option<&crate::antispam::corpus::BayesStore>,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let result = runtime.block_on(remove_account(
-		&store,
-		&spool,
+		store,
+		spool,
 		&config.data_dir,
 		name,
 		queue,
-		None,
+		bayes_store,
 	));
 	match result {
 		Ok(counts) => {
@@ -175,9 +227,10 @@ pub(super) fn remove(
 			ExitCode::FAILURE
 		}
 		Err(error @ StoreError::BayesPurge { .. }) => {
-			super::style::error(format_args!(
+			let _ = writeln!(
+				out,
 				"bayes corpus purge failed for {name}; account retained, retry the removal once the database is reachable"
-			));
+			);
 			super::style::error(error);
 			ExitCode::FAILURE
 		}
