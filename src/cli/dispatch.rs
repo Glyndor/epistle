@@ -81,11 +81,9 @@ impl Cli {
 				}
 			},
 			Command::Backup { config } => match Config::load(&config) {
-				Ok(config) => backup::run(
-					&config,
-					&mut std::io::stdout().lock(),
-					&mut style::stderr(),
-				),
+				Ok(config) => {
+					backup::run(&config, &mut std::io::stdout().lock(), &mut style::stderr())
+				}
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
