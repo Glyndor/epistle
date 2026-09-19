@@ -306,10 +306,16 @@ async fn a_tombstoned_scope_silently_drops_training() {
 }
 
 /// `forget_scope` raises and lowers the tombstone around its DELETE
-/// so a worker draining a queued job cannot race with the purge. A
-/// failed DELETE keeps the tombstone set: the absent rows are the
-/// only thing the next `remove_account` retry needs to drop, and
-/// letting training through would only recreate them.
+/// so a worker draining a queued job cannot race with the purge. The
+/// tombstone is cleared on every exit path: a failed DELETE leaves
+/// the rows exactly where they were, so a tombstone that out-lived
+/// the failure would silently drop every later training job for
+/// that scope with no error and no log line until the next retry
+/// or the next process restart, which is the bug the helper now
+/// avoids. The per-store lock is what actually serializes the
+/// DELETE against a racing `train`; the tombstone is just a flag the
+/// worker consults, and the flag is meant to track the transaction,
+/// not its outcome.
 #[tokio::test]
 async fn forget_scope_sets_the_tombstone_for_its_duration() {
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
@@ -322,12 +328,42 @@ async fn forget_scope_sets_the_tombstone_for_its_duration() {
 		"lazy pool never connects; forget_scope must error"
 	);
 	assert!(
-		store
+		!store
 			.tombstones()
 			.lock()
 			.unwrap_or_else(|error| error.into_inner())
 			.contains("alice"),
-		"the tombstone stays set when the purge itself fails"
+		"a failed DELETE leaves the rows in place; the tombstone must be cleared"
+	);
+}
+
+/// A failed `forget_scope` must leave the scope live for `train`:
+/// the rows are still there because the DELETE never committed, so
+/// the next training call must reach the SQL and surface the
+/// underlying pool error rather than being silently swallowed by a
+/// tombstone the failure left behind. With the lazy pool used below,
+/// `train` after the failed purge returns `Err(sqlx::Error::PoolTimedOut)`
+/// (the real failure mode when no connection can be acquired). Before
+/// the fix the tombstone stayed set on failure and `train` returned
+/// `Ok(())`, which silently dropped the message and left the
+/// recreated account inheriting whatever the worker would have
+/// trained.
+#[tokio::test]
+async fn a_failed_forget_scope_lets_a_followup_train_reach_the_sql() {
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	let result = store.forget_scope("alice").await;
+	assert!(
+		result.is_err(),
+		"lazy pool never connects; forget_scope must error"
+	);
+
+	let result = store.train("alice", "any body text", true).await;
+	assert!(
+		result.is_err(),
+		"a failed purge must not leave the scope tombstoned; train must surface the lazy-pool error, got {result:?}"
 	);
 }
 

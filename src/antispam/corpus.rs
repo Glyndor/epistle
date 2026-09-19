@@ -258,14 +258,19 @@ impl BayesStore {
 	/// does not inherit the previous user's training.
 	///
 	/// The scope is tombstoned before the transaction starts and the
-	/// tombstone is only cleared when the transaction commits, so a
-	/// worker that has already read its message but has not yet reached
-	/// `train` will see the tombstone and drop the job. The whole call
-	/// also holds the per-store serialization lock for its duration, so
-	/// a worker that passed the tombstone check is serialized against
-	/// the DELETE itself: the INSERT and the DELETE cannot interleave
-	/// inside this process. Training is infrequent, so holding the
-	/// lock across the transaction is cheap.
+	/// tombstone is cleared when the transaction finishes, success or
+	/// failure: the row cannot have been dropped if the DELETE
+	/// returned an error, so a tombstone that out-lived the failure
+	/// would silently drop every later training job for that scope
+	/// with no error and no log line. The window the tombstone covers
+	/// is the transaction itself, which the per-store serialization
+	/// lock already holds for the same span, so within this process the
+	/// INSERT and the DELETE cannot interleave: a worker that drained
+	/// its job between the removal's start and its commit either
+	/// reaches `train` while the lock is held (and queues until the
+	/// DELETE is done) or reaches it after the lock is released (and
+	/// sees the cleared tombstone). Training is infrequent, so holding
+	/// the lock across the transaction is cheap.
 	///
 	/// **Known limit, per process.** The lock is per
 	/// [`BayesStore`] instance and shared across its clones, so two
@@ -276,11 +281,6 @@ impl BayesStore {
 	/// flight for the same account; in practice the server has already
 	/// dropped the message files for any purged user, but the
 	/// coordination is the operator's, not the helper's.
-	///
-	/// A failed DELETE keeps the tombstone in place: the absent rows are
-	/// still absent and the only thing that would recreate them is a
-	/// new training call, which we are correct to suppress until the
-	/// next retry commits.
 	pub async fn forget_scope(&self, scope: &str) -> Result<u64, sqlx::Error> {
 		let _scope_guard = self.scope_lock.lock().await;
 		{
@@ -291,12 +291,10 @@ impl BayesStore {
 			tombstones.insert(scope.to_string());
 		}
 		let result = self.forget_scope_inner(scope).await;
-		if result.is_ok() {
-			self.tombstones
-				.lock()
-				.unwrap_or_else(|error| error.into_inner())
-				.remove(scope);
-		}
+		self.tombstones
+			.lock()
+			.unwrap_or_else(|error| error.into_inner())
+			.remove(scope);
 		result
 	}
 
