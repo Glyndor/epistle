@@ -184,16 +184,6 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 }
 
 #[test]
-fn constant_time_eq_helper_reports_mismatch() {
-	// Pin the shape of the helper that backs `verify`. It is the only path
-	// that touches the expected token bytes, so a regression here changes
-	// the timing surface of `verify` itself.
-	assert!(super::constant_time_eq(b"abcdef", b"abcdef"));
-	assert!(!super::constant_time_eq(b"abcdef", b"abcdfg"));
-	assert!(!super::constant_time_eq(b"abcdef", b"abcde"));
-}
-
-#[test]
 fn header_value_finds_subject_case_insensitively() {
 	let raw = b"From: a@example.org\r\nSubject: Hi there\r\n\r\nbody\r\n";
 	assert_eq!(header_value(raw, "subject").as_deref(), Some("Hi there"));

@@ -54,6 +54,7 @@ use std::path::Path;
 use ring::hmac;
 
 use crate::storage::load_or_create_key_file;
+use crate::util::constant_time;
 
 /// The SubjectPass token prefix the sender pastes into the subject. The
 /// short string makes the token visually distinct from the rest of the
@@ -69,21 +70,6 @@ const TS_MODULUS: u64 = 1024;
 /// 12 chars × 5 bits/char = 60 bits, plenty for replay resistance inside
 /// the two-day window.
 const TOKEN_CHARS: usize = 12;
-
-/// Length-aware constant-time byte comparison, used to verify tokens
-/// without leaking the matching prefix through timing. Always scans both
-/// inputs fully so a mismatch leaks neither the position nor (beyond
-/// length) the expected value.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-	if a.len() != b.len() {
-		return false;
-	}
-	let mut diff = 0u8;
-	for (x, y) in a.iter().zip(b.iter()) {
-		diff |= x ^ y;
-	}
-	diff == 0
-}
 
 /// Encode `days` (UNIX seconds / 86400) as the same two-character base32
 /// stamp SRS uses.
@@ -177,7 +163,7 @@ impl SubjectPass {
 		for &d in &[day, yesterday] {
 			let expected = self.issue(sender, recipient, d);
 			let expected_token = expected.strip_prefix(TOKEN_PREFIX).unwrap();
-			if constant_time_eq(token_bytes, expected_token.as_bytes()) {
+			if constant_time::eq(token_bytes, expected_token.as_bytes()) {
 				ok = true;
 			}
 		}

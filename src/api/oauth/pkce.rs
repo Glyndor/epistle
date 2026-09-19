@@ -17,10 +17,9 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 
-use super::{
-	ACCESS_TOKEN_TTL_SECS, AuthCode, CODE_TTL_SECS, constant_time_eq, oauth_error, parse_fields,
-};
+use super::{ACCESS_TOKEN_TTL_SECS, AuthCode, CODE_TTL_SECS, oauth_error, parse_fields};
 use crate::api::ApiState;
+use crate::util::constant_time;
 
 /// The grant-type identifier for the device-code flow (RFC 8628 §3.4).
 const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -171,7 +170,7 @@ fn redeem_authorization_code(
 	// BASE64URL(SHA256(code_verifier)) == code_challenge (RFC 7636 §4.6).
 	let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
 	let computed = B64URL.encode(digest.as_ref());
-	if !constant_time_eq(computed.as_bytes(), stored.code_challenge.as_bytes()) {
+	if !constant_time::eq(computed.as_bytes(), stored.code_challenge.as_bytes()) {
 		return oauth_error("invalid_grant");
 	}
 	match authz.issue_token(&stored.account, now) {
