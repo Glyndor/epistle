@@ -422,6 +422,7 @@ guide's "Data at rest".
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
+| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.

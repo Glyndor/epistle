@@ -13,6 +13,7 @@ mod import;
 mod mobileconfig;
 mod queue;
 mod report_abuse;
+mod reports;
 mod serve;
 mod serve_dkim;
 mod serve_ratelimit;
@@ -339,6 +340,18 @@ pub enum Command {
 		/// The archive sub-action (`list`, `restore`, `purge`).
 		#[command(subcommand)]
 		action: archive::Subcommand,
+	},
+	/// Summarise what receivers told us via DMRC aggregate reports and
+	/// TLS-RPT reports for the last `--days` days (default 7). Reads the
+	/// JSONL store under `data_dir/reports/`; never writes to it.
+	Reports {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// Number of past days to include. Defaults to 7; the retention
+		/// ceiling lives in `crate::reports::RETENTION_DAYS`.
+		#[arg(long, value_name = "N", default_value_t = reports::DEFAULT_DAYS)]
+		days: u32,
 	},
 }
 

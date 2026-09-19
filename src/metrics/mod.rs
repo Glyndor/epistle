@@ -87,6 +87,11 @@ const COUNTERS: &[(&str, &str)] = &[
 	("send_limited_new_recipients", "send_limited_new_recipients"),
 	("subjectpass_passed", "subjectpass_passed"),
 	("subjectpass_challenged", "subjectpass_challenged"),
+	("dmarc_reports_ingested", "dmarc_reports_ingested"),
+	("dmarc_report_rows_failing", "dmarc_report_rows_failing"),
+	("tlsrpt_reports_ingested", "tlsrpt_reports_ingested"),
+	("tlsrpt_failed_sessions", "tlsrpt_failed_sessions"),
+	("reports_dropped", "reports_dropped"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -124,6 +129,11 @@ pub struct Metrics {
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
 	send_limited_new_recipients: AtomicU64,
+	dmarc_reports_ingested: AtomicU64,
+	dmarc_report_rows_failing: AtomicU64,
+	tlsrpt_reports_ingested: AtomicU64,
+	tlsrpt_failed_sessions: AtomicU64,
+	reports_dropped: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
@@ -234,6 +244,33 @@ impl Metrics {
 			.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count one ingested DMARC aggregate or TLS-RPT report.
+	pub fn report_ingested(&self, kind: crate::reports::Kind) {
+		let counter = match kind {
+			crate::reports::Kind::Dmarc => &self.dmarc_reports_ingested,
+			crate::reports::Kind::TlsRpt => &self.tlsrpt_reports_ingested,
+		};
+		counter.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Sum the failing rows from an ingested report (DMARC rows whose
+	/// disposition is `quarantine`/`reject`, or with both dkim and spf
+	/// `fail`; for TLS-RPT, the `total-failure-session-count` from each
+	/// policy).
+	pub fn report_rows_failing(&self, kind: crate::reports::Kind, count: u64) {
+		let counter = match kind {
+			crate::reports::Kind::Dmarc => &self.dmarc_report_rows_failing,
+			crate::reports::Kind::TlsRpt => &self.tlsrpt_failed_sessions,
+		};
+		counter.fetch_add(count, Ordering::Relaxed);
+	}
+
+	/// Count an inbound report that was too large, malformed, or whose
+	/// encoding we did not support.
+	pub fn reports_dropped(&self) {
+		self.reports_dropped.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -324,6 +361,11 @@ impl Metrics {
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
 			"subjectpass_passed" => &self.subjectpass_passed,
 			"subjectpass_challenged" => &self.subjectpass_challenged,
+			"dmarc_reports_ingested" => &self.dmarc_reports_ingested,
+			"dmarc_report_rows_failing" => &self.dmarc_report_rows_failing,
+			"tlsrpt_reports_ingested" => &self.tlsrpt_reports_ingested,
+			"tlsrpt_failed_sessions" => &self.tlsrpt_failed_sessions,
+			"reports_dropped" => &self.reports_dropped,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -431,6 +473,31 @@ impl Metrics {
 				"mail_auth_login_failed_total",
 				"Password-based authentication attempts that were rejected.",
 				&self.auth_login_failed,
+			),
+			(
+				"mail_dmarc_reports_ingested_total",
+				"DMARC aggregate reports successfully ingested from a receiver.",
+				&self.dmarc_reports_ingested,
+			),
+			(
+				"mail_dmarc_report_rows_failing_total",
+				"DMARC report rows whose disposition was quarantine/reject or whose SPF and DKIM both failed.",
+				&self.dmarc_report_rows_failing,
+			),
+			(
+				"mail_tlsrpt_reports_ingested_total",
+				"TLS-RPT reports successfully ingested from a receiver.",
+				&self.tlsrpt_reports_ingested,
+			),
+			(
+				"mail_tlsrpt_failed_sessions_total",
+				"Outbound TLS sessions the receivers reported as failed across ingested TLS-RPT reports.",
+				&self.tlsrpt_failed_sessions,
+			),
+			(
+				"mail_reports_dropped_total",
+				"Inbound DMARC or TLS-RPT reports dropped for being too large, malformed, or using an unsupported encoding.",
+				&self.reports_dropped,
 			),
 			(
 				"mail_llm_consulted_total",

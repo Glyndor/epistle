@@ -521,12 +521,28 @@ pub(super) fn retention_days(config: &Config) -> u64 {
 		.map_or(0, |storage| storage.deleted_retention_days)
 }
 
+/// Spawn the hourly DMARC and TLS-RPT report sweep: drop day directories
+/// whose `YYYYMMDD` is older than [`crate::reports::RETENTION_DAYS`] (90).
+/// Runs in a single task because both buckets share the same window.
+pub(super) fn spawn_reports_sweep(config: &Config) {
+	let data_dir = config.data_dir.clone();
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			crate::reports::prune(&data_dir);
+		}
+	});
+}
+
 /// Spawn the periodic tasks that keep on-disk storage bounded: blob
 /// reclamation, and the archive sweep when retention is configured. Grouped
 /// so `serve` starts them together and neither can be forgotten on its own.
 pub(super) fn spawn_storage_maintenance(config: &Config) {
 	spawn_blob_reclamation(config);
 	spawn_archive_sweep(config);
+	spawn_reports_sweep(config);
 }
 
 /// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and

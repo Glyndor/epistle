@@ -1,5 +1,11 @@
 //! Local delivery: accepted inbound messages land in account mailboxes.
 
+#[path = "delivery_io.rs"]
+mod io;
+#[path = "delivery_policy.rs"]
+mod policy;
+#[path = "delivery_reports.rs"]
+mod reports;
 #[path = "delivery_vacation.rs"]
 mod vacation;
 
@@ -21,10 +27,10 @@ use super::spool::write_sync;
 /// Forward only while a message has crossed at most this many hops. A loop
 /// re-injects the message each round, accruing `Received:` headers; stopping
 /// well under RFC 5321's 100-hop ceiling breaks a forwarding loop early.
-const MAX_FORWARD_HOPS: usize = 25;
+pub(super) const MAX_FORWARD_HOPS: usize = 25;
 
 /// Count the `Received:` header lines in a raw message (its hop count).
-fn received_hops(data: &[u8]) -> usize {
+pub(super) fn received_hops(data: &[u8]) -> usize {
 	let head_end = data
 		.windows(4)
 		.position(|w| w == b"\r\n\r\n")
@@ -53,8 +59,10 @@ pub struct Delivered {
 #[derive(Debug)]
 pub struct LocalDelivery {
 	accounts_root: PathBuf,
+	data_dir: PathBuf,
 	directory: DirectoryHandle,
 	crypto: MessageCrypto,
+	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 }
 
 impl LocalDelivery {
@@ -76,9 +84,19 @@ impl LocalDelivery {
 		fs::create_dir_all(&accounts_root)?;
 		Ok(LocalDelivery {
 			accounts_root,
+			data_dir: data_dir.to_path_buf(),
 			directory,
 			crypto,
+			metrics: None,
 		})
+	}
+
+	/// Attach a metrics handle so the report-ingest hook can count
+	/// ingested and dropped reports. Builder pattern so the default
+	/// constructor stays unchanged for every existing call site.
+	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
+		self.metrics = Some(metrics);
+		self
 	}
 
 	/// Resolve recipients to their distinct accounts. The session already
@@ -131,7 +149,7 @@ impl LocalDelivery {
 		write_sync(&tmp_path, &self.crypto.encode(data)?)?;
 		fs::rename(&tmp_path, new_dir.join(format!("{id}.eml")))?;
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
-		write_flag_sidecar(&new_dir, id, flags);
+		io::write_flag_sidecar(&new_dir, id, flags);
 		Ok(id)
 	}
 
@@ -145,7 +163,7 @@ impl LocalDelivery {
 		mailbox: Option<&str>,
 	) -> Result<Delivered, SinkError> {
 		if let Some(name) = mailbox
-			&& !is_safe_mailbox(name)
+			&& !io::is_safe_mailbox(name)
 		{
 			return Err(SinkError::Unavailable(format!(
 				"unsafe mailbox name {name:?}"
@@ -159,12 +177,25 @@ impl LocalDelivery {
 		let listed = self.list_message(message);
 		let message = listed.as_ref().unwrap_or(message);
 		let mut delivered = Delivered::default();
+		// (Kind, domain) pairs already ingested for this message, so the report
+		// hook fires once per matching report even when an alias fans out to
+		// several accounts.
+		let mut ingested = reports::Ingested::new();
 		for account in &accounts {
-			let one = self.deliver_for_account(account, message, mailbox)?;
+			let one = self.deliver_for_account(account, message, mailbox, &mut ingested)?;
 			delivered.redirects.extend(one.redirects);
 			delivered.reject = delivered.reject.or(one.reject);
 			delivered.replies.extend(one.replies);
 		}
+		// Report-ingest hook: fires after normal delivery, never affects
+		// outcome, and never fires twice for the same (Kind, domain).
+		reports::ingest_for_recipients(
+			&self.data_dir,
+			&self.directory,
+			self.metrics.as_ref(),
+			message,
+			&mut ingested,
+		);
 		Ok(delivered)
 	}
 
@@ -194,6 +225,7 @@ impl LocalDelivery {
 		account: &str,
 		message: &AcceptedMessage,
 		hint: Option<&str>,
+		_ingested: &mut reports::Ingested,
 	) -> Result<Delivered, SinkError> {
 		let data = &message.data;
 		if let Some(mailbox) = hint {
@@ -229,7 +261,7 @@ impl LocalDelivery {
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		for folder in &outcome.fileinto {
-			if is_safe_mailbox(folder) {
+			if io::is_safe_mailbox(folder) {
 				self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
@@ -255,63 +287,6 @@ impl LocalDelivery {
 			replies,
 		})
 	}
-
-	/// Admin-configured external forwarding targets for an account, with the
-	/// keep-local flag. Empty when the account has no forwarding, the sender is
-	/// null (a bounce — never forward, loop risk), or the message has already
-	/// traversed too many hops (loop guard).
-	fn account_forwards(&self, account: &str, message: &AcceptedMessage) -> (Vec<String>, bool) {
-		let directory = self.directory.current();
-		let Some((targets, keep_local)) = directory.forwards(account) else {
-			return (Vec::new(), true);
-		};
-		if message.reverse_path.is_empty() || received_hops(&message.data) > MAX_FORWARD_HOPS {
-			return (Vec::new(), keep_local);
-		}
-		(targets.to_vec(), keep_local)
-	}
-
-	/// Evaluate the account's Sieve filter, if present and valid. Any read,
-	/// lex or parse failure yields `None` so delivery falls back to INBOX
-	/// rather than dropping mail.
-	fn sieve_outcome(
-		&self,
-		account: &str,
-		message: &AcceptedMessage,
-	) -> Option<crate::sieve::interp::Outcome> {
-		let path = self.accounts_root.join(account).join("filter.sieve");
-		let source = fs::read_to_string(path).ok()?;
-		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
-		let commands = crate::sieve::parser::parse(&tokens).ok()?;
-		let parsed = crate::sieve::interp::Message::parse(&message.data)
-			.with_envelope(message.reverse_path.clone(), message.recipients.clone());
-		Some(crate::sieve::interp::evaluate(&commands, &parsed))
-	}
-}
-
-/// A mailbox name safe to use as a single path segment.
-/// Persist Sieve-assigned flags as the message's IMAP `.flags` sidecar, so a
-/// `setflag`/`addflag` filter is reflected when the mailbox is opened.
-fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_tokens: &[String]) {
-	let flags: Vec<crate::imap::mailbox::Flag> = flag_tokens
-		.iter()
-		.filter_map(|token| crate::imap::mailbox::Flag::parse(token))
-		.collect();
-	if flags.is_empty() {
-		return;
-	}
-	if let Ok(bytes) = serde_json::to_vec(&flags) {
-		let _ = write_sync(&new_dir.join(format!("{id}.flags")), &bytes);
-	}
-}
-
-fn is_safe_mailbox(name: &str) -> bool {
-	!name.is_empty()
-		&& name.len() <= 64
-		&& !name.starts_with('.')
-		&& name
-			.chars()
-			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' '))
 }
 
 impl MessageSink for LocalDelivery {
