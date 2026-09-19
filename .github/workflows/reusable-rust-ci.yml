@@ -256,11 +256,15 @@ jobs:
           cargo llvm-cov --locked --workspace --all-features --summary-only --json --output-path coverage.json \
             ${COVERAGE_IGNORE_REGEX:+--ignore-filename-regex "$COVERAGE_IGNORE_REGEX"}
           PCT=$(python3 -c "import json; print(json.load(open('coverage.json'))['data'][0]['totals']['lines']['percent'])")
+          echo "Coverage: ${PCT}% (threshold: ${COVERAGE_THRESHOLD}%)"
           echo "### Coverage: ${PCT}% (threshold: ${COVERAGE_THRESHOLD}%)" >> "$GITHUB_STEP_SUMMARY"
           python3 - "$PCT" "$COVERAGE_THRESHOLD" <<'EOF'
           import sys
           pct, threshold = float(sys.argv[1]), float(sys.argv[2])
-          sys.exit(0 if pct >= threshold else 1)
+          if pct < threshold:
+              print(f"::error::Coverage {pct}% is below the {threshold}% threshold")
+              sys.exit(1)
+          sys.exit(0)
           EOF
 
   msrv:
