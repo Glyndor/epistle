@@ -143,7 +143,7 @@ fn part_match(part: &ParsedPart, kind: Kind) -> Result<Option<FoundPart>, WalkEr
 			let encoding = if lower.ends_with(".gz") {
 				Encoding::Gzip
 			} else {
-				Encoding::Zip
+				Encoding::Uncompressed
 			};
 			if let Some(payload) = part.body_decoded()? {
 				return Ok(Some(FoundPart {
@@ -164,7 +164,7 @@ fn encoding_for(content_type: &str) -> Option<Encoding> {
 		"application/gzip" | "application/x-gzip" => Some(Encoding::Gzip),
 		"application/zip" | "application/x-zip-compressed" => Some(Encoding::Zip),
 		"application/tlsrpt+gzip" => Some(Encoding::Gzip),
-		"application/tlsrpt+json" => Some(Encoding::Zip),
+		"application/tlsrpt+json" => Some(Encoding::Uncompressed),
 		_ => None,
 	}
 }
@@ -191,7 +191,12 @@ impl ParsedPart {
 			.unwrap_or("7bit")
 			.to_ascii_lowercase();
 		match encoding.as_str() {
-			"7bit" | "8bit" | "binary" => Ok(Some(self.body.clone())),
+			"7bit" | "8bit" | "binary" => {
+				if self.body.len() > MAX_COMPRESSED {
+					return Err(WalkError::TooLarge);
+				}
+				Ok(Some(self.body.clone()))
+			}
 			"base64" => {
 				let cleaned: Vec<u8> = self
 					.body
@@ -223,9 +228,10 @@ impl ParsedPart {
 /// part (the whole body), so the caller can use the same code path for a
 /// single-part message as for a multipart one.
 fn split_top_level(raw: &[u8]) -> Result<Vec<ParsedPart>, WalkError> {
-	let headers_end = find_headers_end(raw).ok_or(WalkError::Malformed("no header end"))?;
+	let (headers_end, separator_len) =
+		find_headers_end(raw).ok_or(WalkError::Malformed("no header end"))?;
 	let headers = &raw[..headers_end];
-	let body = &raw[headers_end + 4..];
+	let body = &raw[headers_end + separator_len..];
 	let ct = header_value(headers, "content-type")
 		.ok_or(WalkError::Malformed("missing content-type"))?;
 	let base = ct
@@ -282,9 +288,9 @@ fn split_with_boundary(body: &[u8], bouxtary: &str) -> Result<Vec<ParsedPart>, W
 		let body_end_rel = next_rel;
 		// Trim the CRLF before the next boundary.
 		let mut body_end = body_start + body_end_rel;
-		if body_end >= 2 && &haystack[body_end - 2..body_end] == b"\r\n" {
+		if body_end - body_start >= 2 && &haystack[body_end - 2..body_end] == b"\r\n" {
 			body_end -= 2;
-		} else if body_end >= 1 && &haystack[body_end - 1..body_end] == b"\n" {
+		} else if body_end > body_start && &haystack[body_end - 1..body_end] == b"\n" {
 			body_end -= 1;
 		}
 		let part_bytes = &haystack[body_start..body_end];
@@ -298,10 +304,10 @@ fn split_with_boundary(body: &[u8], bouxtary: &str) -> Result<Vec<ParsedPart>, W
 }
 
 fn parse_part(part_bytes: &[u8]) -> Result<ParsedPart, WalkError> {
-	let headers_end =
+	let (headers_end, separator_len) =
 		find_headers_end(part_bytes).ok_or(WalkError::Malformed("part has no headers"))?;
 	let headers = &part_bytes[..headers_end];
-	let body = part_bytes[headers_end + 4..].to_vec();
+	let body = part_bytes[headers_end + separator_len..].to_vec();
 	let content_type = header_value(headers, "content-type");
 	let boundary = content_type.as_deref().and_then(parse_boundary_param);
 	let filename = content_disposition_filename(headers);
@@ -347,8 +353,11 @@ fn parse_boundary_param(content_type: &str) -> Option<String> {
 	None
 }
 
-fn find_headers_end(raw: &[u8]) -> Option<usize> {
-	find_subslice(raw, b"\r\n\r\n").or_else(|| find_subslice(raw, b"\n\n"))
+fn find_headers_end(raw: &[u8]) -> Option<(usize, usize)> {
+	[b"\r\n\r\n".as_slice(), b"\n\n"]
+		.into_iter()
+		.filter_map(|separator| find_subslice(raw, separator).map(|pos| (pos, separator.len())))
+		.min_by_key(|&(pos, _)| pos)
 }
 
 fn header_value(headers: &[u8], name: &str) -> Option<String> {
@@ -367,28 +376,18 @@ fn header_value(headers: &[u8], name: &str) -> Option<String> {
 /// seeing an orphan `boundary="..."` line.
 fn unfold_headers(raw: &str) -> String {
 	let mut out = String::with_capacity(raw.len());
-	let mut continuation = false;
-	for line in raw.split('\n') {
-		let line = line.strip_suffix('\r').unwrap_or(line);
-		if line.is_empty() {
-			out.push_str("\r\n");
-			continuation = false;
-			continue;
-		}
-		if line.starts_with(' ') || line.starts_with('\t') {
-			if continuation {
-				out.push(' ');
-				out.push_str(line.trim_start());
-			} else {
-				out.push_str(line);
+	for line in raw.lines() {
+		if (line.starts_with(' ') || line.starts_with('\t')) && !out.is_empty() {
+			out.push(' ');
+			out.push_str(line.trim_start());
+		} else {
+			if !out.is_empty() {
 				out.push_str("\r\n");
 			}
-		} else {
 			out.push_str(line);
-			out.push_str("\r\n");
-			continuation = true;
 		}
 	}
+	out.push_str("\r\n");
 	out
 }
 
@@ -409,3 +408,7 @@ use super::Kind;
 #[cfg(test)]
 #[path = "mime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mime_tests_b.rs"]
+mod tests_b;

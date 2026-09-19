@@ -1,5 +1,34 @@
 use super::*;
 
+#[test]
+fn nested_policy_schema_is_accepted() {
+	let json = br#"{"organization-name":"org","date-range":{"start-datetime":"0","end-datetime":"1"},"report-id":"r","policies":[{"policy":{"policy-type":"sts","policy-domain":"example.org"},"summary":{"total-successful-session-count":1,"total-failure-session-count":0}}]}"#;
+	let report = parse(json).expect("nested policy");
+	assert_eq!(report.policies.len(), 1);
+	assert_eq!(report.policies[0].policy_type, "sts");
+	assert_eq!(report.policies[0].policy_domain, "example.org");
+	assert_eq!(report.policies[0].summary.total_successful_session_count, 1);
+}
+
+#[test]
+fn three_policies_over_the_limit_keep_the_prefix() {
+	let report =
+		parse(report_json(MAX_POLICIES + 3, 0, "o", "k").as_bytes()).expect("overflow kept");
+	assert_eq!(report.policies.len(), MAX_POLICIES);
+	assert!(report.truncated);
+}
+
+#[test]
+fn three_failures_over_the_limit_keep_the_prefix() {
+	let report =
+		parse(report_json(1, MAX_FAILURE_DETAILS + 3, "o", "k").as_bytes()).expect("overflow kept");
+	assert_eq!(
+		report.policies[0].failure_details.len(),
+		MAX_FAILURE_DETAILS
+	);
+	assert!(report.truncated);
+}
+
 const SAMPLE: &str = r#"{
   "organization-name": "google.com",
   "date-range": {
@@ -10,8 +39,7 @@ const SAMPLE: &str = r#"{
   "report-id": "2024-01-01-2024-01-02-google.com",
   "policies": [
     {
-      "policy-type": "sts",
-      "policy-domain": "example.org",
+      "policy": {"policy-type": "sts", "policy-domain": "example.org"},
       "summary": {
         "total-successful-session-count": 8,
         "total-failure-session-count": 2
@@ -26,8 +54,7 @@ const SAMPLE: &str = r#"{
       ]
     },
     {
-      "policy-type": "no-policy-found",
-      "policy-domain": "example.org",
+      "policy": {"policy-type": "no-policy-found", "policy-domain": "example.org"},
       "summary": {
         "total-successful-session-count": 0,
         "total-failure-session-count": 0
@@ -70,16 +97,14 @@ fn failing_count_sums_across_policies() {
   "report-id": "r",
   "policies": [
     {
-      "policy-type": "sts",
-      "policy-domain": "example.org",
+      "policy": {"policy-type": "sts", "policy-domain": "example.org"},
       "summary": {"total-successful-session-count": 0, "total-failure-session-count": 5},
       "failure-details": [
         {"result-type": "starttls-not-supported", "sending-mta-ip": "1.1.1.1", "receiving-mx-hostname": "mx", "failed-session-count": 2}
       ]
     },
     {
-      "policy-type": "tlsa",
-      "policy-domain": "example.org",
+      "policy": {"policy-type": "tlsa", "policy-domain": "example.org"},
       "summary": {"total-successful-session-count": 0, "total-failure-session-count": 3},
       "failure-details": [
         {"result-type": "certificate-expired", "sending-mta-ip": "1.1.1.2", "receiving-mx-hostname": "mx2", "failed-session-count": 3}
@@ -107,7 +132,7 @@ fn report_json(policies: usize, failures: usize, text: &str, keyword: &str) -> S
 		r#"{{"result-type":"{keyword}","sending-mta-ip":"{keyword}","receiving-mx-hostname":"{text}","failed-session-count":1}}"#
 	);
 	let policy = format!(
-		r#"{{"policy-type":"{keyword}","policy-domain":"{text}","summary":{{"total-successful-session-count":0,"total-failure-session-count":0}},"failure-details":[{}]}}"#,
+		r#"{{"policy":{{"policy-type":"{keyword}","policy-domain":"{text}"}},"summary":{{"total-successful-session-count":0,"total-failure-session-count":0}},"failure-details":[{}]}}"#,
 		vec![failure; failures].join(",")
 	);
 	format!(

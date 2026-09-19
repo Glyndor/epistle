@@ -76,9 +76,9 @@ pub fn cap_in_place(text: &mut String, max: usize) {
 }
 
 /// Deserialise a list and cap it at `max + 1` entries: enough to detect
-/// overflow without parsing a million-row bomb. The caller checks the
-/// returned vec's length: `len() > max` means overflow, and the caller
-/// truncates and sets a `truncated` flag.
+/// overflow. Remaining entries must be consumed without storing them so
+/// the enclosing deserializer can finish the document. The caller must
+/// bound the input size, then truncate and mark lists with `len() > max`.
 pub(super) fn capped_seq<'de, D, T>(deserializer: D, max: usize) -> Result<Vec<T>, D::Error>
 where
 	D: Deserializer<'de>,
@@ -99,12 +99,13 @@ where
 		fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
 			let cap = self.max.saturating_add(1);
 			let mut out = Vec::with_capacity(cap.min(8));
-			while let Some(item) = seq.next_element::<T>()? {
-				if out.len() >= cap {
-					break;
-				}
+			while out.len() < cap {
+				let Some(item) = seq.next_element::<T>()? else {
+					return Ok(out);
+				};
 				out.push(item);
 			}
+			while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
 			Ok(out)
 		}
 	}

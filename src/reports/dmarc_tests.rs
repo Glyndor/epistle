@@ -1,5 +1,12 @@
 use super::*;
 
+#[test]
+fn three_rows_over_the_limit_keep_the_prefix() {
+	let report = parse(report_with_empty_records(MAX_ROWS + 3).as_bytes()).expect("overflow kept");
+	assert_eq!(report.records.len(), MAX_ROWS);
+	assert!(report.truncated);
+}
+
 /// A Google-shaped report: full metadata, published policy, two records
 /// (one passing, one failing both SPF and DKIM).
 const GOOGLE_SHAPED: &str = r#"<?xml version="1.0" encoding="UTF-8" ?>

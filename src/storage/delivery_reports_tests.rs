@@ -226,7 +226,7 @@ fn tlsrpt_address_ingests_a_tlsrpt_report() {
 	let delivery = LocalDelivery::new(dir.path(), directory())
 		.expect("delivery")
 		.with_metrics(metrics.clone());
-	let json = br#"{"organization-name":"google.com","date-range":{"start-datetime":"2024-01-01T00:00:00Z","end-datetime":"2024-01-02T00:00:00Z"},"report-id":"rid","policies":[]}"#;
+	let json = br#"{"organization-name":"google.com","date-range":{"start-datetime":"2024-01-01T00:00:00Z","end-datetime":"2024-01-02T00:00:00Z"},"report-id":"rid","policies":[{"policy":{"policy-type":"sts","policy-domain":"example.org"},"summary":{"total-successful-session-count":1,"total-failure-session-count":0}}]}"#;
 	let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
 	use std::io::Write;
 	enc.write_all(json).expect("write");
@@ -240,6 +240,19 @@ fn tlsrpt_address_ingests_a_tlsrpt_report() {
 		.expect("deliver");
 	let snap = metrics.snapshot();
 	assert_eq!(snap.get("tlsrpt_reports_ingested"), Some(&1));
+	let root = dir.path().join("reports/tlsrpt");
+	let day = std::fs::read_dir(root)
+		.expect("report days")
+		.next()
+		.expect("day")
+		.expect("entry");
+	let line = std::fs::read_to_string(day.path().join("google.com.jsonl")).expect("stored report");
+	let report: crate::reports::tlsrpt::TlsReport =
+		serde_json::from_str(line.trim()).expect("stored JSON");
+	assert_eq!(report.policies.len(), 1);
+	assert_eq!(report.policies[0].policy_type, "sts");
+	assert_eq!(report.policies[0].policy_domain, "example.org");
+	assert_eq!(report.policies[0].summary.total_successful_session_count, 1);
 }
 
 /// With no metrics attached, the report still has to land as a JSONL

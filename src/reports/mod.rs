@@ -154,3 +154,7 @@ pub fn prune(data_dir: &Path) {
 /// Convenience re-export so the hook site can spell the metrics type
 /// without reaching into the `metrics` module separately.
 pub use crate::metrics::Metrics;
+
+#[cfg(test)]
+#[path = "ingest_tests.rs"]
+mod tests;

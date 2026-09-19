@@ -42,6 +42,8 @@ pub enum Encoding {
 	Gzip,
 	/// `Content-Type: application/zip` (also `application/x-zip-compressed`).
 	Zip,
+	/// Uncompressed JSON, subject to the same attachment size cap.
+	Uncompressed,
 }
 
 /// Why we refused to turn a report attachment into bytes.
@@ -69,6 +71,7 @@ pub fn inflate_attachment(bytes: &[u8], kind: Encoding) -> Result<Vec<u8>, Repor
 	match kind {
 		Encoding::Gzip => inflate_gzip(bytes),
 		Encoding::Zip => inflate_zip(bytes),
+		Encoding::Uncompressed => Ok(bytes.to_vec()),
 	}
 }
 
@@ -146,14 +149,14 @@ fn inflate_zip(bytes: &[u8]) -> Result<Vec<u8>, ReportError> {
 	// The fixed-size portion of the local file header is 30 bytes (ZIP
 	// §4.3.7); everything else is variable length and depends on the
 	// extra-field and filename lengths which we refuse to follow.
-	let version_needed = read_u16(bytes, 4);
+	let version_needed = read_u16(bytes, 4)?;
 	if version_needed > 63 {
 		// Anything needing more than the original 6.3 (the spec says
 		// current = 63 for the basic feature set) is more than a stored
 		// XML and we are not going to chase that compatibility story.
 		return Err(ReportError::Malformed("zip version unsupported"));
 	}
-	let flags = read_u16(bytes, 6);
+	let flags = read_u16(bytes, 6)?;
 	// Bit 0 = encryption; bit 6 = strong encryption. Both refused even
 	// when bit 3 is also set, so a sender cannot smuggle encrypted
 	// content under the "data descriptor" flag.
@@ -163,14 +166,14 @@ fn inflate_zip(bytes: &[u8]) -> Result<Vec<u8>, ReportError> {
 	if flags & 0b0100_0000 != 0 {
 		return Err(ReportError::Malformed("strong-encrypted zip"));
 	}
-	let method = read_u16(bytes, 8);
-	let _mod_time = read_u16(bytes, 10);
-	let _mod_date = read_u16(bytes, 12);
-	let _crc32 = read_u32(bytes, 14);
-	let mut compressed_size = read_u32(bytes, 18) as usize;
-	let mut uncompressed_size = read_u32(bytes, 22) as usize;
-	let filename_len = read_u16(bytes, 26) as usize;
-	let extra_len = read_u16(bytes, 28) as usize;
+	let method = read_u16(bytes, 8)?;
+	let _mod_time = read_u16(bytes, 10)?;
+	let _mod_date = read_u16(bytes, 12)?;
+	let _crc32 = read_u32(bytes, 14)?;
+	let mut compressed_size = read_u32(bytes, 18)? as usize;
+	let mut uncompressed_size = read_u32(bytes, 22)? as usize;
+	let filename_len = read_u16(bytes, 26)? as usize;
+	let extra_len = read_u16(bytes, 28)? as usize;
 	let data_offset = 30_usize
 		.checked_add(filename_len)
 		.and_then(|n| n.checked_add(extra_len))
@@ -244,7 +247,7 @@ fn inflate_deflate(entry: &[u8]) -> Result<Vec<u8>, ReportError> {
 /// local file header declares general-purpose bit 3.
 fn read_central_sizes(bytes: &[u8], data_end: usize) -> Result<(usize, usize), ReportError> {
 	let eocd_offset = find_eocd(bytes).ok_or(ReportError::Malformed("zip eocd missing"))?;
-	let comment_len = read_u16(bytes, eocd_offset + 20) as usize;
+	let comment_len = read_u16(bytes, eocd_offset + 20)? as usize;
 	let eocd_total = EOCD_FIXED_LEN
 		.checked_add(comment_len)
 		.ok_or(ReportError::Malformed("zip eocd overruns buffer"))?;
@@ -254,7 +257,7 @@ fn read_central_sizes(bytes: &[u8], data_end: usize) -> Result<(usize, usize), R
 	if eocd_end > bytes.len() {
 		return Err(ReportError::Malformed("zip eocd overruns buffer"));
 	}
-	let central_offset = read_u32(bytes, eocd_offset + 16) as usize;
+	let central_offset = read_u32(bytes, eocd_offset + 16)? as usize;
 	if central_offset == 0 {
 		return Err(ReportError::Malformed("zip central overruns"));
 	}
@@ -267,8 +270,8 @@ fn read_central_sizes(bytes: &[u8], data_end: usize) -> Result<(usize, usize), R
 	if bytes[central_offset..central_offset + 4] != CENTRAL_DIR_HEADER_SIG {
 		return Err(ReportError::Malformed("zip central signature"));
 	}
-	let central_compressed = read_u32(bytes, central_offset + 20) as usize;
-	let central_uncompressed = read_u32(bytes, central_offset + 24) as usize;
+	let central_compressed = read_u32(bytes, central_offset + 20)? as usize;
+	let central_uncompressed = read_u32(bytes, central_offset + 24)? as usize;
 	if central_compressed > bytes.len() {
 		return Err(ReportError::Malformed("zip central size overruns"));
 	}
@@ -293,7 +296,7 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
 	let window = bytes.len().min(EOCD_SCAN_WINDOW);
 	let start = bytes.len().saturating_sub(window);
 	let mut found = None;
-	for i in start..=bytes.len().saturating_sub(4) {
+	for i in start..=bytes.len() - EOCD_FIXED_LEN {
 		if bytes[i..i + 4] == EOCD_SIG {
 			match found {
 				None => found = Some(i),
@@ -304,17 +307,22 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
 	found
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> u16 {
-	u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ReportError> {
+	bytes
+		.get(offset..)
+		.and_then(|tail| tail.first_chunk::<2>())
+		.copied()
+		.map(u16::from_le_bytes)
+		.ok_or(ReportError::Malformed("zip field overruns buffer"))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-	u32::from_le_bytes([
-		bytes[offset],
-		bytes[offset + 1],
-		bytes[offset + 2],
-		bytes[offset + 3],
-	])
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ReportError> {
+	bytes
+		.get(offset..)
+		.and_then(|tail| tail.first_chunk::<4>())
+		.copied()
+		.map(u32::from_le_bytes)
+		.ok_or(ReportError::Malformed("zip field overruns buffer"))
 }
 
 #[cfg(test)]
