@@ -297,7 +297,7 @@ impl BayesTrainer for BayesStore {
 					return None;
 				}
 			};
-			let scope = if trained { account } else { SHARED };
+			let scope = scoring_scope(trained, account);
 			let text = String::from_utf8_lossy(text);
 			match self.score(scope, &text).await {
 				Ok(score) => Some(score),
@@ -307,6 +307,20 @@ impl BayesTrainer for BayesStore {
 				}
 			}
 		})
+	}
+}
+
+/// Pick the scope the per-account scorer should consult: the account's
+/// own corpus when it has reached the trusted threshold on both sides,
+/// the shared corpus otherwise. The decision lives in its own helper
+/// so the boundary conditions are unit-testable without a database;
+/// the SMTP hot path calls [`BayesStore::score_for_account`], which
+/// delegates here.
+pub fn scoring_scope<'a>(trained: bool, account: &'a str) -> &'a str {
+	if trained {
+		account
+	} else {
+		SHARED
 	}
 }
 

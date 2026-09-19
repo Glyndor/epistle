@@ -2,7 +2,10 @@
 //! trainer transition table and the score threshold (no database).
 
 use super::*;
-use crate::antispam::trainer::{BayesTrainer, MIN_TRUSTED_MESSAGES, RecordingTrainer};
+use crate::antispam::corpus::SHARED;
+use crate::antispam::trainer::{
+	BayesTrainer, MIN_TRUSTED_MESSAGES, RecordingTrainer, is_trusted,
+};
 use crate::imap::keyword::{JUNK, NOT_JUNK};
 use crate::imap::mailbox::Flag;
 use std::path::PathBuf;
@@ -167,32 +170,84 @@ async fn a_no_op_store_trains_nothing() {
 	);
 }
 
-/// An empty scope has fewer than `MIN_TRUSTED_MESSAGES` on every
-/// side, so the per-account score falls back to the shared corpus.
+/// Below [`MIN_TRUSTED_MESSAGES`] on either side, the per-account
+/// scorer falls back to the shared corpus: an account that has not
+/// trained enough on both sides cannot classify on noise. The
+/// boundary cases (`MIN - 1` against `MIN`, the other axis at `MIN`,
+/// and both axes one short) all resolve to the shared scope. The
+/// threshold helper ([`super::scoring_scope`]) is the one place the
+/// decision is made; these cases drive that helper through every
+/// off-by-one path the live scorer can hit.
 #[test]
 fn score_falls_back_to_shared_below_the_threshold() {
-	let untrained: Corpus = Corpus::default();
-	assert!(untrained.ham_messages < MIN_TRUSTED_MESSAGES);
-	assert!(untrained.spam_messages < MIN_TRUSTED_MESSAGES);
-	// Below the threshold on either side: still untrained.
-	let under_ham = Corpus {
-		ham_messages: MIN_TRUSTED_MESSAGES - 1,
-		spam_messages: MIN_TRUSTED_MESSAGES,
-	};
-	assert!(under_ham.ham_messages < MIN_TRUSTED_MESSAGES);
+	let account = "alice";
+	// Both axes empty.
+	assert_eq!(super::scoring_scope(is_trusted(Corpus::default()), account), SHARED);
+	// Ham side one short of the threshold: still untrained, regardless of spam.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES - 1,
+				spam_messages: MIN_TRUSTED_MESSAGES,
+			}),
+			account
+		),
+		SHARED
+	);
+	// Spamming side one short of the threshold: still untrained, regardless of ham.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES,
+				spam_messages: MIN_TRUSTED_MESSAGES - 1,
+			}),
+			account
+		),
+		SHARED
+	);
 }
 
-/// At the threshold exactly the scope is trained; one message short
-/// and the fallback wins. Pins the `>=` boundary so a regression to
-/// `>` visibly drops the boundary case.
+/// At the threshold exactly the per-account scope is trusted; one
+/// message short and the fallback wins. Drives the `MIN` boundary
+/// directly through the `is_trusted` predicate that powers the SMTP
+/// scorer: a regression that switched `>=` to `>` would demote the
+/// exact-threshold case below the threshold and the assertion here
+/// would fail with the literal "wanted account, got shared".
 #[test]
 fn score_uses_the_account_scope_at_the_threshold() {
-	let corpus = Corpus {
-		ham_messages: MIN_TRUSTED_MESSAGES,
-		spam_messages: MIN_TRUSTED_MESSAGES,
-	};
-	assert!(corpus.ham_messages >= MIN_TRUSTED_MESSAGES);
-	assert!(corpus.spam_messages >= MIN_TRUSTED_MESSAGES);
+	let account = "alice";
+	// Both axes exactly at the threshold: trained.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES,
+				spam_messages: MIN_TRUSTED_MESSAGES,
+			}),
+			account
+		),
+		account
+	);
+	// One axis above the threshold, the other at it: trained.
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES + 1,
+				spam_messages: MIN_TRUSTED_MESSAGES,
+			}),
+			account
+		),
+		account
+	);
+	assert_eq!(
+		super::scoring_scope(
+			is_trusted(Corpus {
+				ham_messages: MIN_TRUSTED_MESSAGES,
+				spam_messages: MIN_TRUSTED_MESSAGES + 1,
+			}),
+			account
+		),
+		account
+	);
 }
 
 /// `forget_scope` removes every row under the scope and reports the
