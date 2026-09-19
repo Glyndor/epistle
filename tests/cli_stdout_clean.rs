@@ -37,6 +37,14 @@ fn has_ansi_escape(bytes: &[u8]) -> bool {
 	bytes.windows(ESCAPE.len()).any(|window| window == ESCAPE)
 }
 
+/// Byte offset of the first escape sequence, for a failure message that must
+/// not print the stream itself: the keygen commands write key material there.
+fn escape_offset(bytes: &[u8]) -> Option<usize> {
+	bytes
+		.windows(ESCAPE.len())
+		.position(|window| window == ESCAPE)
+}
+
 /// Spawn `args` against the binary with the colour-forcing environment and
 /// `NO_COLOR` cleared. Returns the captured stdout and stderr bytes and the
 /// exit status.
@@ -68,10 +76,10 @@ fn restrict_config_permissions(_path: &Path) {}
 fn storage_keygen_stdout_is_clean() {
 	let (stdout, _stderr, status) = run_capture(&["storage-keygen"]);
 	assert!(status.success(), "storage-keygen exit code: {status:?}");
-	assert!(
-		!has_ansi_escape(&stdout),
-		"storage-keygen stdout contains an ANSI escape sequence: {:?}",
-		String::from_utf8_lossy(&stdout)
+	assert_eq!(
+		escape_offset(&stdout),
+		None,
+		"storage-keygen stdout carries an ANSI escape sequence at this byte offset"
 	);
 }
 
@@ -82,10 +90,10 @@ fn storage_keygen_stdout_is_clean() {
 fn oauth_keygen_stdout_is_clean() {
 	let (stdout, _stderr, status) = run_capture(&["oauth-keygen"]);
 	assert!(status.success(), "oauth-keygen exit code: {status:?}");
-	assert!(
-		!has_ansi_escape(&stdout),
-		"oauth-keygen stdout contains an ANSI escape sequence: {:?}",
-		String::from_utf8_lossy(&stdout)
+	assert_eq!(
+		escape_offset(&stdout),
+		None,
+		"oauth-keygen stdout carries an ANSI escape sequence at this byte offset"
 	);
 }
 
