@@ -15,9 +15,9 @@
 //! simple enough to split by hand, and a real MIME library would do more
 //! than we need without being any easier to bound. We support exactly
 //! the top level and one level of nesting (a report inside a forwarded
-//! message), and we refuse anything with more than [`MAX_PARTS`] parts
-//! total: that is the only thing the deliverer would have a problem
-//! with.
+//! message), and we refuse anything that exceeds [`MAX_PARTS`],
+//! [`MAX_NESTING_DEPTH`] or [`MAX_COMPRESSED`] on the base64 input:
+//! each of those is the bomb gate for the MIME walker.
 
 use base64::Engine;
 use thiserror::Error;
@@ -28,6 +28,12 @@ use super::decompress::{Encoding, MAX_COMPRESSED};
 /// part + attachment); a forwarded message might double that. Anything
 /// past 64 is a structure we have no business decoding.
 const MAX_PARTS: usize = 64;
+
+/// Hard cap on the multipart nesting depth the walker recurses into.
+/// Real-world messages are flat or one level deep (a report inside a
+/// forwarded message); more than [`MAX_NESTING_DEPTH`] is hostile and
+/// we refuse to walk further.
+const MAX_NESTING_DEPTH: u8 = 2;
 
 /// What we found after walking the message.
 #[derive(Debug)]
@@ -62,18 +68,26 @@ pub enum WalkError {
 /// operator's own outbound mail.
 pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> {
 	let parts = split_top_level(raw)?;
-	for part in &parts {
+	match walk_parts(&parts, kind, 1)? {
+		FoundPartWalk::Found(found) => Ok(found),
+		FoundPartWalk::Continue => Err(WalkError::NoReportPart),
+	}
+}
+
+fn walk_parts(
+	parts: &[ParsedPart],
+	kind: Kind,
+	depth: u8,
+) -> Result<FoundPartWalk, WalkError> {
+	for part in parts {
 		if let Some(ct) = part.content_type.as_deref()
 			&& let Some(encoding) = encoding_for(ct)
-			&& let Some(payload) = part.body_base64_decoded()?
+			&& let Some(payload) = part.body_decoded()?
 		{
-			if payload.len() > MAX_COMPRESSED {
-				return Err(WalkError::TooLarge);
-			}
-			return Ok(FoundPart {
+			return Ok(FoundPartWalk::Found(FoundPart {
 				encoding,
 				bytes: payload,
-			});
+			}));
 		}
 		// Some senders label the type as `application/octet-stream` and
 		// rely on the filename. Look one level deeper.
@@ -82,31 +96,35 @@ pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> 
 			.as_deref()
 			.is_some_and(|ct| ct.starts_with("multipart/"))
 			&& let Some(inner_boundary) = part.boundary.as_deref()
+			&& depth < MAX_NESTING_DEPTH
 		{
 			let inner = split_with_boundary(&part.body, inner_boundary)?;
-			for inner_part in &inner {
-				if let Some(found) = part_match(inner_part, kind, part.boundary.as_deref())? {
-					return Ok(found);
-				}
+			if let FoundPartWalk::Found(found) = walk_parts(&inner, kind, depth + 1)? {
+				return Ok(FoundPartWalk::Found(found));
 			}
 		}
 	}
 	// Filename match as a last resort: a part whose `Content-Type` is
 	// `application/octet-stream` but whose `Content-Disposition` says
 	// `report.xml.gz` still counts.
-	for part in &parts {
-		if let Some(found) = part_match(part, kind, None)? {
-			return Ok(found);
+	for part in parts {
+		if let Some(found) = part_match(part, kind)? {
+			return Ok(FoundPartWalk::Found(found));
 		}
 	}
-	Err(WalkError::NoReportPart)
+	Ok(FoundPartWalk::Continue)
 }
 
-fn part_match(
-	part: &ParsedPart,
-	kind: Kind,
-	_parent_boundary: Option<&str>,
-) -> Result<Option<FoundPart>, WalkError> {
+/// Recursive return: a part we matched, or the signal to keep walking.
+/// `Result<FoundPart, WalkError>` is already used by callers and does
+/// not encode "not found at this depth, try next", which is what
+/// `Continue` carries.
+enum FoundPartWalk {
+	Found(FoundPart),
+	Continue,
+}
+
+fn part_match(part: &ParsedPart, kind: Kind) -> Result<Option<FoundPart>, WalkError> {
 	// Filename match: any part ending in `.xml.gz` / `.zip` is DMARC; any
 	// part ending in `.json.gz` / `.json` is TLS-RPT. The actual encoding
 	// is what the filename implies.
@@ -118,10 +136,7 @@ fn part_match(
 			} else {
 				Encoding::Gzip
 			};
-			if let Some(payload) = part.body_base64_decoded()? {
-				if payload.len() > MAX_COMPRESSED {
-					return Err(WalkError::TooLarge);
-				}
+			if let Some(payload) = part.body_decoded()? {
 				return Ok(Some(FoundPart {
 					encoding,
 					bytes: payload,
@@ -134,10 +149,7 @@ fn part_match(
 			} else {
 				Encoding::Zip
 			};
-			if let Some(payload) = part.body_base64_decoded()? {
-				if payload.len() > MAX_COMPRESSED {
-					return Err(WalkError::TooLarge);
-				}
+			if let Some(payload) = part.body_decoded()? {
 				return Ok(Some(FoundPart {
 					encoding,
 					bytes: payload,
@@ -176,7 +188,7 @@ impl ParsedPart {
 	/// Decode the part body. Returns `None` when the part has no body or
 	/// when the `Content-Transfer-Encoding` is something other than the
 	/// ones we accept (we only see `7bit`, `8bit`, `base64`).
-	fn body_base64_decoded(&self) -> Result<Option<Vec<u8>>, WalkError> {
+	fn body_decoded(&self) -> Result<Option<Vec<u8>>, WalkError> {
 		let encoding = self
 			.transfer_encoding
 			.as_deref()
@@ -191,6 +203,15 @@ impl ParsedPart {
 					.copied()
 					.filter(|b| !b.is_ascii_whitespace())
 					.collect();
+				// Measure the largest possible decoded length first and
+				// refuse anything that cannot possibly fit inside the
+				// bomb gate. Every four base64 characters decode to at
+				// most three bytes; padding shortens the result but the
+				// upper bound is correct for the refusal check.
+				let upper = cleaned.len().saturating_mul(3) / 4;
+				if upper > MAX_COMPRESSED {
+					return Err(WalkError::TooLarge);
+				}
 				let bytes = base64::engine::general_purpose::STANDARD
 					.decode(&cleaned)
 					.map_err(|_| WalkError::InvalidBase64)?;
@@ -239,9 +260,12 @@ fn split_with_boundary(body: &[u8], bouxtary: &str) -> Result<Vec<ParsedPart>, W
 	let haystack = body;
 	let mut parts = Vec::new();
 	let mut cursor = 0usize;
-	while cursor < haystack.len() {
+	loop {
 		let Some(rel) = find_subslice(&haystack[cursor..], needle.as_bytes()) else {
-			break;
+			// Buffer ended without ever seeing the closing boundary.
+			// Real senders always include it; missing means the message
+			// was truncated or hostile. Either way we refuse.
+			return Err(WalkError::Malformed("missing closing boundary"));
 		};
 		let abs = cursor + rel;
 		let after = abs + needle.len();
@@ -257,8 +281,9 @@ fn split_with_boundary(body: &[u8], bouxtary: &str) -> Result<Vec<ParsedPart>, W
 			return Err(WalkError::Malformed("boundary not followed by line break"));
 		};
 		// Find the next boundary marker.
-		let next_rel = find_subslice(&haystack[body_start..], needle.as_bytes());
-		let body_end_rel = next_rel.unwrap_or(haystack.len() - body_start);
+		let next_rel = find_subslice(&haystack[body_start..], needle.as_bytes())
+			.ok_or(WalkError::Malformed("missing closing boundary"))?;
+		let body_end_rel = next_rel;
 		// Trim the CRLF before the next boundary.
 		let mut body_end = body_start + body_end_rel;
 		if body_end >= 2 && &haystack[body_end - 2..body_end] == b"\r\n" {
