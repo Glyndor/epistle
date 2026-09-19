@@ -66,7 +66,7 @@ fn normalized_subject_subject(snapshot: &Snapshot, message: &MessageRef) -> Stri
 			.or_else(|| lowered.strip_prefix("fw:"));
 		match stripped {
 			Some(rest) => subject = rest.to_string(),
-			None => return trimmed.to_string(),
+			None => return lowered,
 		}
 	}
 }

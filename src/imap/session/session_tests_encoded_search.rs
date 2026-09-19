@@ -30,12 +30,8 @@ fn search_subject_matches_decoded_subject() {
 	);
 }
 
-/// `SEARCH FROM <text>` matches the DECODED display name. The mail from
-/// `=?UTF-8?Q?Jos=C3=A9?= <jose@example.org>` decodes to `José`; a search
-/// for `josé` matches it. A search for `jose` would also match against
-/// the email part, so this case is left to that substring: the decoded
-/// display name is the differentiator when the name and the email
-/// spell the same string differently.
+/// The accented name must match only after decoding, with a nonmatching
+/// sender alongside it to rule out unconditional acceptance.
 #[test]
 fn search_from_matches_decoded_display_name() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -43,13 +39,22 @@ fn search_from_matches_decoded_display_name() {
 		dir.path(),
 		b"From: =?UTF-8?Q?Jos=C3=A9?= <sender@example.org>\r\n\r\nbody\r\n",
 	);
+	deliver(
+		dir.path(),
+		b"From: Other <other@example.org>\r\n\r\nbody\r\n",
+	);
 	let mut session = logged_in(dir.path());
 	session.command_line("a2 SELECT INBOX");
 
-	let response = text(&session.command_line("a3 SEARCH FROM \"jos\""));
+	let response = text(&session.command_line("a3 SEARCH FROM \"josé\""));
 	assert!(
 		response.contains("* SEARCH 1\r\n"),
 		"SEARCH FROM must hit the decoded display name: {response}"
+	);
+	let response = text(&session.command_line("a4 SEARCH FROM \"josè\""));
+	assert!(
+		response.contains("* SEARCH\r\n"),
+		"different accented name must not match: {response}"
 	);
 }
 
@@ -81,4 +86,68 @@ fn sort_subject_orders_by_decoded_subject() {
 		response.contains("* SORT 1 2"),
 		"SORT (SUBJECT) must rank by decoded base subject: {response}"
 	);
+}
+
+#[test]
+fn search_finds_folded_subject_continuation() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let subject = format!("{}tailneedle", "é".repeat(30));
+	let encoded = crate::util::encoded_word::encode(&subject);
+	deliver(
+		dir.path(),
+		format!("Subject: {encoded}\r\n\r\nbody\r\n").as_bytes(),
+	);
+	deliver(dir.path(), b"Subject: other\r\n\r\ntailneedle\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	let response = text(&session.command_line("a3 SEARCH SUBJECT tailneedle"));
+	assert!(
+		response.contains("* SEARCH 1\r\n"),
+		"folded subject search missed continuation: {response}"
+	);
+}
+
+#[test]
+fn sort_uses_folded_subject_continuation() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	for suffix in ["z", "a"] {
+		let subject = format!("{}{}", "é".repeat(30), suffix);
+		let encoded = crate::util::encoded_word::encode(&subject);
+		deliver(
+			dir.path(),
+			format!("Subject: {encoded}\r\n\r\nbody\r\n").as_bytes(),
+		);
+	}
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	let response = text(&session.command_line("a3 SORT (SUBJECT) UTF-8 ALL"));
+	assert!(
+		response.contains("* SORT 2 1\r\n"),
+		"folded subject sort ignored continuation: {response}"
+	);
+}
+
+#[test]
+fn sort_subject_normalizes_plain_and_encoded_case() {
+	for prefix in ["", "Re: ", "Fwd: "] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		for subject in [
+			format!("{prefix}apple"),
+			format!("{prefix}Banana"),
+			format!("=?UTF-8?Q?{}Apricot?=", prefix.replace(' ', "_")),
+			format!("=?UTF-8?Q?{}blueberry?=", prefix.replace(' ', "_")),
+		] {
+			deliver(
+				dir.path(),
+				format!("Subject: {subject}\r\n\r\nbody\r\n").as_bytes(),
+			);
+		}
+		let mut session = logged_in(dir.path());
+		session.command_line("a2 SELECT INBOX");
+		let response = text(&session.command_line("a3 SORT (SUBJECT) UTF-8 ALL"));
+		assert!(
+			response.contains("* SORT 1 3 2 4\r\n"),
+			"subject case changed ordering: {response}"
+		);
+	}
 }

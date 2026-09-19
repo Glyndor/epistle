@@ -24,7 +24,7 @@
 //! Greylisting keys on (client, sender, recipient) triplets; SubjectPass
 //! keys on (sender, recipient, day) signed with a per-instance HMAC key, so
 //! the resend does not need to come from the same IP, and a stolen token
-//! gains exactly one sender/recipient pair for one day.
+//! is worth that one sender/recipient pair until the end of the next day.
 //!
 //! ## The token
 //!
@@ -32,13 +32,12 @@
 //!   EP-<base32(HMAC-SHA256(key, lower(sender)|lower(recipient)|day))[:12]>
 //! ```
 //!
-//! The 12-character prefix is 60 bits, plenty for replay resistance inside
-//! the day window. The day is the same two-character base32 day stamp SRS
-//! uses (a `days mod 1024` value), and verification accepts the stamp of
-//! today and of the day before, so a sender who retries past midnight
-//! still passes. The key lives outside the database (so a DB compromise
-//! cannot forge tokens), the file is `0600`, and a fresh install has the
-//! helper mint a new one.
+//! The signed payload carries the absolute day number, so an expired token
+//! never becomes valid again on a later cycle (an earlier version signed
+//! `day % 1024` and a token came back every 1,024 days). Verification
+//! accepts today and yesterday, so a sender who retries past midnight still
+//! passes. The key lives outside the database in a `0600` file, minted once
+//! per installation.
 //!
 //! ## Where the check runs
 //!
@@ -61,24 +60,13 @@ use crate::util::constant_time;
 /// subject and lets a parser find it without parsing the whole header value.
 pub const TOKEN_PREFIX: &str = "EP-";
 
-/// The base32 day-stamp alphabet, matching [`crate::queue::srs`]. Two
-/// characters encode `days mod 1024`, so today and yesterday both verify.
+/// The token alphabet, matching [`crate::queue::srs`].
 const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-const TS_MODULUS: u64 = 1024;
 
 /// Number of base32 characters of the HMAC that form the on-wire token.
 /// 12 chars × 5 bits/char = 60 bits, plenty for replay resistance inside
 /// the two-day window.
 const TOKEN_CHARS: usize = 12;
-
-/// Encode `days` (UNIX seconds / 86400) as the same two-character base32
-/// stamp SRS uses.
-fn encode_day(days: u64) -> String {
-	let value = (days % TS_MODULUS) as usize;
-	let hi = BASE32[(value >> 5) & 31] as char;
-	let lo = BASE32[value & 31] as char;
-	format!("{hi}{lo}")
-}
 
 /// Base32-encode a byte slice using the SRS alphabet, MSB-first.
 fn base32_encode(bytes: &[u8]) -> String {
@@ -133,7 +121,7 @@ impl SubjectPass {
 			"{}|{}|{}",
 			sender.to_ascii_lowercase(),
 			recipient.to_ascii_lowercase(),
-			encode_day(day),
+			day,
 		);
 		let tag = hmac::sign(&self.key, payload.as_bytes());
 		let encoded = base32_encode(tag.as_ref());
@@ -143,9 +131,8 @@ impl SubjectPass {
 
 	/// Verify `candidate` (with or without the `EP-` prefix) for the given
 	/// `sender`/`recipient` on `day`. The day stamp must match either
-	/// `day` or `day - 1` (wrapping at the 1024-day boundary the same way
-	/// SRS handles wrap-around), so a token minted before midnight and
-	/// retried after still verifies.
+	/// `day` or `day - 1`, so a token minted before midnight is still
+	/// valid when retried the following day.
 	///
 	/// The comparison is constant-time against both candidate stamps; a
 	/// length mismatch short-circuits to `false` because the candidate
@@ -186,27 +173,21 @@ impl SubjectPass {
 		// not push a token-prefixed word into the next encoded-word. A
 		// malformed encoded-word is left as is by the decoder, so the
 		// tokenizer below still finds a plain `EP-...` token.
-		let decoded = crate::util::encoded_word::decode(subject);
-		for word in decoded.split_whitespace() {
-			// Match the prefix case-insensitively so a sender who types `ep-`
-			// or who copies the token with mixed case still hits the check.
-			let after_prefix = match strip_prefix_ci(word, TOKEN_PREFIX) {
-				Some(rest) => rest,
-				None => continue,
-			};
-			if after_prefix.len() != TOKEN_CHARS {
+		let decoded = crate::util::encoded_word::decode(subject).to_ascii_uppercase();
+		let bytes = decoded.as_bytes();
+		for (start, _) in decoded.match_indices(TOKEN_PREFIX) {
+			let end = start + TOKEN_PREFIX.len() + TOKEN_CHARS;
+			let Some(candidate) = decoded.get(start..end) else {
 				continue;
-			}
-			if after_prefix
-				.bytes()
-				.any(|b| !is_base32_char(b.to_ascii_uppercase()))
+			};
+			if (start > 0 && is_base32_char(bytes[start - 1]))
+				|| bytes.get(end).is_some_and(|b| is_base32_char(*b))
 			{
 				continue;
 			}
-			// Normalise to uppercase for the verifier (the token is base32
-			// uppercase; the verifier does the same on its computed value).
-			let normalised = after_prefix.to_ascii_uppercase();
-			if self.verify(&normalised, sender, recipient, day) {
+			if candidate[TOKEN_PREFIX.len()..].bytes().all(is_base32_char)
+				&& self.verify(candidate, sender, recipient, day)
+			{
 				return true;
 			}
 		}
@@ -217,17 +198,6 @@ impl SubjectPass {
 /// Whether `b` is one of the SRS base32 alphabet characters.
 fn is_base32_char(b: u8) -> bool {
 	b.is_ascii_uppercase() || (b'2'..=b'7').contains(&b)
-}
-
-/// Strip `prefix` from the start of `text` ignoring ASCII case.
-fn strip_prefix_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-	if text.len() >= prefix.len()
-		&& text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
-	{
-		Some(&text[prefix.len()..])
-	} else {
-		None
-	}
 }
 
 /// Locate the first RFC 5322 header named `name` (case-insensitive) and
@@ -285,3 +255,7 @@ pub fn challenge_reply(
 #[cfg(test)]
 #[path = "subjectpass_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "subjectpass_tests_b.rs"]
+mod tests_b;
