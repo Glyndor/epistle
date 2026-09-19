@@ -484,11 +484,12 @@ fn init_skips_the_rsa_dkim_step_when_openssl_is_absent() {
 }
 
 #[test]
-fn init_exits_one_when_plan_fails_on_an_unparseable_existing_config() {
+fn init_exits_two_when_plan_fails_on_an_unparseable_existing_config() {
 	// The answers file is valid and validates fine, but an existing
 	// config on disk is unparseable TOML. The plan step surfaces the
-	// read failure with exit code 1; no keys land on disk because
-	// the apply phase never runs.
+	// read failure with exit code 2: nothing was touched, and exit 2
+	// now widens to mean exactly that (invalid answers or a
+	// precondition that stopped the run before any effect).
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
@@ -518,8 +519,8 @@ fn init_exits_one_when_plan_fails_on_an_unparseable_existing_config() {
 	let output = cmd.output().expect("spawn epistle");
 	assert_eq!(
 		output.status.code(),
-		Some(1),
-		"plan failure must surface as exit code 1; got {:?}; stderr: {}",
+		Some(2),
+		"plan failure must surface as exit code 2 (nothing was touched); got {:?}; stderr: {}",
 		output.status,
 		String::from_utf8_lossy(&output.stderr)
 	);
