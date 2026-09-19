@@ -85,6 +85,8 @@ const COUNTERS: &[(&str, &str)] = &[
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
 	("send_limited_new_recipients", "send_limited_new_recipients"),
+	("subjectpass_passed", "subjectpass_passed"),
+	("subjectpass_challenged", "subjectpass_challenged"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -320,6 +322,8 @@ impl Metrics {
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
+			"subjectpass_passed" => &self.subjectpass_passed,
+			"subjectpass_challenged" => &self.subjectpass_challenged,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -447,6 +451,8 @@ impl Metrics {
 				"mail_send_limited_new_recipients_total",
 				"Submissions refused because the account would exceed the daily cap on first-time recipients.",
 				&self.send_limited_new_recipients,
+			),
+			(
 				"mail_subjectpass_passed_total",
 				"Unauthenticated messages accepted by a valid SubjectPass token in the subject.",
 				&self.subjectpass_passed,
@@ -594,6 +600,8 @@ mod tests {
 			"auth_login_succeeded",
 			"auth_login_failed",
 			"send_limited_new_recipients",
+			"subjectpass_passed",
+			"subjectpass_challenged",
 		] {
 			assert!(snap.contains_key(name), "missing {name}");
 		}
