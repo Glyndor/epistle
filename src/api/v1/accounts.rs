@@ -167,7 +167,9 @@ pub async fn remove(
 		&data_dir,
 		&name,
 		queue,
+		state.bayes_store(),
 	)
+	.await
 	.map_err(store_error)?;
 	audit::log_account_removal(&name, client_ip.0, &counts);
 	Ok(Json(RemovedResponse {

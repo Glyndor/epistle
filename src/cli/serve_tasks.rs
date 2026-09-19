@@ -635,3 +635,8 @@ pub(super) fn build_greylist(
 		store
 	})
 }
+
+#[path = "serve_bayes.rs"]
+mod bayes;
+
+pub(super) use bayes::open_bayes;

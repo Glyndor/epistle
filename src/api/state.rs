@@ -91,6 +91,10 @@ struct Inner {
 	/// Empty when no `[[tenant]]` is configured; the empty state is the
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
+	/// Per-account Bayesian wiring: the training queue and the
+	/// store, both `None` without a database. Builders and accessors
+	/// live in `state_bayes.rs`.
+	bayes: bayes::BayesBindings,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -222,6 +226,7 @@ impl ApiState {
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
+				bayes: bayes::BayesBindings::default(),
 			}),
 		}
 	}
@@ -772,6 +777,9 @@ pub async fn require_bearer_token(
 	});
 	Ok(next.run(request).await)
 }
+
+#[path = "state_bayes.rs"]
+mod bayes;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

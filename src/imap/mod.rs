@@ -6,6 +6,8 @@ pub mod command;
 mod compress;
 mod flags;
 mod index;
+pub mod junk_trainer;
+pub mod keyword;
 pub mod mailbox;
 pub mod metadata;
 mod modseq;

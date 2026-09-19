@@ -62,6 +62,8 @@ mod auth;
 mod basic;
 #[path = "session_tests_commands.rs"]
 mod commands_tests;
+#[path = "session_tests_keyword_search.rs"]
+mod keyword_search;
 #[path = "session_tests_metadata.rs"]
 mod metadata;
 #[path = "session_tests_misc.rs"]

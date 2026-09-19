@@ -13,4 +13,6 @@ pub mod hook;
 pub mod llm;
 pub mod reputation;
 pub mod subjectpass;
+pub mod trainer;
+pub mod training_queue;
 pub mod urls;

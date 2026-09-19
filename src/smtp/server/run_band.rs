@@ -58,15 +58,19 @@ impl Server {
 			return Ok(BandOutcome::Continue);
 		}
 
-		let text = String::from_utf8_lossy(&message.data);
-		let score = match bayes.score(crate::antispam::corpus::SHARED, &text).await {
-			Ok(score) => score,
-			Err(error) => {
-				// The Bayesian score fetch failed; treat the message as
-				// outside the band (Accept) rather than blocking mail on
-				// a DB hiccup.
+		// Per-account scope: the first local recipient (the same key the
+		// greylist triplet uses). An untrained scope falls back to the
+		// shared corpus, so an account that has never marked a message
+		// still gets the server's general training.
+		let account = message.recipients.first().cloned().unwrap_or_default();
+		let score = match bayes.score_for_account(&account, &message.data).await {
+			Some(score) => score,
+			None => {
+				// Score failed (DB hiccup or missing trainer); treat the
+				// message as outside the band (Accept) rather than
+				// blocking mail.
 				self.metrics.llm_failed();
-				tracing::warn!(%error, "llm band score failed; accepting");
+				tracing::warn!("llm band score unavailable; accepting");
 				return Ok(BandOutcome::Continue);
 			}
 		};

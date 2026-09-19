@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM bayes_token WHERE scope = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "68f05a69bcdd3002a157d3a7edd49f36f7248fe183e598c289115e4bc1022db8"
+}

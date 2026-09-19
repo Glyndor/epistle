@@ -191,6 +191,39 @@ command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
 context underneath a client that is already decoding would desynchronise it.
 
+### IMAP keywords
+
+`SELECT` advertises the system flags (`\Seen`, `\Answered`, `\Flagged`,
+`\Deleted`, `\Draft`) plus every user keyword currently in use in the
+mailbox, and `PERMANENTFLAGS` carries the same plus `\*` so STORE may
+introduce new keywords. The keywords per message are persisted on the
+sidecar next to the message body, and round-trip through FETCH, SEARCH
+and STORE without change.
+
+`SEARCH KEYWORD <atom>` and `SEARCH UNKEYWORD <atom>` match by atom,
+case-insensitively (RFC 9051 §2.3.2). A keyword is an atom: no
+leading `\`, no `(` `)` `{` `%` `*` `"` `]` `\`, no spaces, no
+control bytes, at most 64 bytes. A message carries at most 32
+keywords; STORE and APPEND reject more with `BAD` so the sidecar
+stays bounded.
+
+Reserved keywords the server keeps constants for are `$Junk`,
+`$NotJunk`, `$Forwarded`, `$Phishing`, and `$Important`. Clients
+can use any other valid atom too. `$Junk` is the spam signal:
+IMAP STORE that crosses the `$Junk` boundary trains the
+account's Bayesian scope (see below).
+
+### JMAP keyword round-trip
+
+JMAP `Email/set` accepts any `$keyword` value on a `keywords` patch;
+the four fixed JMAP keywords (`$seen`, `$answered`, `$flagged`,
+`$draft`) map to their IMAP system flags, and every other `$atom`
+is preserved as a `Flag::Keyword`. `Email/get` renders the keyword
+list back through the same mapping, so a custom `$keyword` set on
+a message round-trips through set+get without loss. `\Deleted` is
+intentionally not exposed on the JMAP side (RFC 8621 §4.1.1: J
+MAP has a separate `isDeleted` boolean).
+
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in
@@ -240,6 +273,30 @@ device and PKCE grants) records failed authentications into the
 `auth_failure` table and consults the `auth_ban` table before any
 password hashing. Without `[database]`, the per-connection three-strikes
 counters each listener already maintains are the only defence.
+
+### Per-account Bayesian training
+
+The Bayesian corpus is keyed by scope. Two scopes are in play:
+
+- The **shared** scope (`""`) is the server's own accept/reject learning.
+  SMTP accept/reject decisions (`train_in_background`) feed it.
+- The **account** scope (the local account name) is the per-user learning.
+  IMAP STORE and JMAP `Email/set` train it on a `$Junk` / `$NotJunk`
+  transition. Adding `$Junk` trains spam; adding `$NotJunk` or removing
+  `$Junk` trains ham. A STORE that touches neither keyword does not
+  train (the equality skip in `Snapshot::store_flags` keeps the
+  no-op out of the trainer).
+
+The LLM-assisted uncertain band uses `BayesStore::score_for_account`,
+which falls back to the shared scope for any account whose own scope
+has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
+the threshold the per-account classifier is not trustworthy, so the
+user gets the server's general training rather than a coin-flip.
+
+Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
+on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to
+drop every per-scope row. Without this, a recreated account would
+inherit the previous user's training.
 
 ### `[acme]`
 Automatic TLS certificates for the mail protocols (not the panel's web TLS).

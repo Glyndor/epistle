@@ -122,8 +122,8 @@ pub(super) fn email_object(
 
 	let mut keywords = serde_json::Map::new();
 	for flag in &message.flags {
-		if let Some(keyword) = jmap_keyword(*flag) {
-			keywords.insert(keyword.to_string(), Value::Bool(true));
+		if let Some(keyword) = jmap_keyword(flag) {
+			keywords.insert(keyword, Value::Bool(true));
 		}
 	}
 	// One text/plain body part (no MIME structure parsing yet); the body text
@@ -177,14 +177,20 @@ pub(super) fn address_list(value: Option<&str>) -> Value {
 }
 
 /// Map an IMAP flag to its JMAP keyword (RFC 8621 §4.1.1).
-pub(super) fn jmap_keyword(flag: crate::imap::mailbox::Flag) -> Option<&'static str> {
+///
+/// The four system flags map to the matching JMAP keywords. Any
+/// user-defined keyword is rendered as its own `$keyword` token so
+/// custom flags survive the Email/get round-trip. `\Deleted` is
+/// intentionally not mapped (JMAP uses a separate `isDeleted` boolean).
+pub(super) fn jmap_keyword(flag: &crate::imap::mailbox::Flag) -> Option<String> {
 	use crate::imap::mailbox::Flag;
 	match flag {
-		Flag::Seen => Some("$seen"),
-		Flag::Answered => Some("$answered"),
-		Flag::Flagged => Some("$flagged"),
-		Flag::Draft => Some("$draft"),
+		Flag::Seen => Some("$seen".to_string()),
+		Flag::Answered => Some("$answered".to_string()),
+		Flag::Flagged => Some("$flagged".to_string()),
+		Flag::Draft => Some("$draft".to_string()),
 		Flag::Deleted => None,
+		Flag::Keyword(keyword) => Some(keyword.as_str().to_string()),
 	}
 }
 

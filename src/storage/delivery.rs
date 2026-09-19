@@ -411,7 +411,9 @@ mod tests {
 			.find(|p| p.extension().is_some_and(|ext| ext == "flags"))
 			.expect("flags sidecar written");
 		let body = fs::read_to_string(sidecar).expect("read sidecar");
-		assert!(body.contains("Seen"), "{body}");
+		// The sidecar keeps the legacy wire shape: a bare lowercase token
+		// for system flags, so old readers see no format drift.
+		assert!(body.contains("\"seen\""), "{body}");
 	}
 
 	#[test]

@@ -485,6 +485,7 @@ impl Server {
 					) {
 						continue;
 					}
+
 					// Accepted unauthenticated mail trains the ham corpus —
 					// unless it was quarantined (already trained as spam).
 					if session.authenticated().is_none() && message.mailbox.is_none() {

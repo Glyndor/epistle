@@ -6,12 +6,12 @@
 //!
 //! Every operation is keyed by a `scope`: a per-account corpus, or the shared
 //! corpus [`SHARED`] (`""`) the server trains from its own accept/reject
-//! decisions. Scopes are isolated — training one account never affects another.
+//! decisions. Scopes are isolated: training one account never affects another.
 //!
 //! **Encryption at rest:** tokens are never stored in clear. Each token is
 //! replaced by a keyed HMAC-SHA256 of its text under a per-instance key held in
 //! a `0600` file outside the database, so a database compromise reveals neither
-//! the words users received nor what they marked as spam — only opaque,
+//! the words users received nor what they marked as spam, only opaque,
 //! per-instance hashes. The hash is deterministic, so lookups still work, and
 //! token identity (all the classifier needs) is preserved.
 
@@ -21,6 +21,7 @@ use std::path::Path;
 use sqlx::PgPool;
 
 use super::bayes::{self, Corpus, TokenCounts};
+use super::trainer::{BayesTrainer, TrainerFuture};
 use crate::storage::load_or_create_key_file;
 
 /// The shared corpus scope (the server's own accept/reject learning).
@@ -96,6 +97,17 @@ impl BayesStore {
 		tx.commit().await
 	}
 
+	/// Train in the background, logging on failure. Used on the delivery path so
+	/// learning never blocks or fails mail.
+	pub fn train_in_background(&self, scope: String, text: String, spam: bool) {
+		let store = self.clone();
+		tokio::spawn(async move {
+			if let Err(error) = store.train(&scope, &text, spam).await {
+				tracing::warn!(%error, "bayes training failed");
+			}
+		});
+	}
+
 	/// The trained message totals for `scope` (zero when untrained).
 	pub async fn corpus(&self, scope: &str) -> Result<Corpus, sqlx::Error> {
 		let row = sqlx::query!(
@@ -163,15 +175,68 @@ impl BayesStore {
 		))
 	}
 
-	/// Train in the background, logging on failure. Used on the delivery path so
-	/// learning never blocks or fails mail.
-	pub fn train_in_background(&self, scope: String, text: String, spam: bool) {
-		let store = self.clone();
-		tokio::spawn(async move {
-			if let Err(error) = store.train(&scope, &text, spam).await {
-				tracing::warn!(%error, "bayes training failed");
+	/// Whether `scope` holds enough ham and spam to be scored on its own
+	/// (see [`super::trainer::is_trusted`]).
+	pub async fn is_trained(&self, scope: &str) -> Result<bool, sqlx::Error> {
+		Ok(super::trainer::is_trusted(self.corpus(scope).await?))
+	}
+
+	/// Drop every row of `scope`: the message totals and every token
+	/// count, in one transaction. Returns the number of token rows
+	/// removed. Account removal calls it so a recreated account name
+	/// does not inherit the previous user's training.
+	pub async fn forget_scope(&self, scope: &str) -> Result<u64, sqlx::Error> {
+		let mut tx = self.pool.begin().await?;
+		let tokens = sqlx::query!("DELETE FROM bayes_token WHERE scope = $1", scope,)
+			.execute(&mut *tx)
+			.await?
+			.rows_affected();
+		sqlx::query!("DELETE FROM bayes_corpus WHERE scope = $1", scope,)
+			.execute(&mut *tx)
+			.await?;
+		tx.commit().await?;
+		Ok(tokens)
+	}
+}
+
+impl BayesTrainer for BayesStore {
+	fn train<'a>(&'a self, account: &'a str, text: Vec<u8>, spam: bool) -> TrainerFuture<'a, ()> {
+		Box::pin(async move {
+			// A user mark never trains the shared scope: that one learns
+			// from the server's own accept and reject decisions.
+			if account == SHARED {
+				return;
 			}
-		});
+			let text = String::from_utf8_lossy(&text);
+			if let Err(error) = BayesStore::train(self, account, &text, spam).await {
+				tracing::warn!(account, %error, "per-account bayes training failed");
+			}
+		})
+	}
+
+	fn score_for_account<'a>(
+		&'a self,
+		account: &'a str,
+		text: &'a [u8],
+	) -> TrainerFuture<'a, Option<f64>> {
+		Box::pin(async move {
+			let trained = match self.is_trained(account).await {
+				Ok(trained) => trained,
+				Err(error) => {
+					tracing::warn!(account, %error, "per-account bayes trained lookup failed");
+					return None;
+				}
+			};
+			let scope = if trained { account } else { SHARED };
+			let text = String::from_utf8_lossy(text);
+			match self.score(scope, &text).await {
+				Ok(score) => Some(score),
+				Err(error) => {
+					tracing::warn!(account, %error, "per-account bayes score failed");
+					None
+				}
+			}
+		})
 	}
 }
 
@@ -194,13 +259,25 @@ fn hash_token(key: &[u8], token: &str) -> String {
 /// without a database. The trait stays narrow (one async method, no
 /// lifetimes) so a `dyn BayesScorer` is cheap to share across listeners.
 pub trait BayesScorer: Send + Sync {
-	/// The probability a message is spam, in `[0, 1]`. A `score` of `0.5`
-	/// with no LLM verdict to lean on is the case SubjectPass is built for.
+	/// The probability a message is spam in `scope` (the shared corpus or a
+	/// per-account one), in `[0, 1]`. A `score` of `0.5` with no LLM verdict
+	/// to lean on is the case SubjectPass is built for.
 	fn score<'a>(
 		&'a self,
 		scope: &'a str,
 		text: &'a str,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>;
+
+	/// The probability a message is spam for the per-account scope keyed by
+	/// `account`. Falls back to the shared scope while the account is below
+	/// the trusted training threshold; returns `None` when the score could
+	/// not be computed (DB hiccup, scope lookup failed). The SMTP server uses
+	/// this to score inbound mail against the recipient's own training.
+	fn score_for_account<'a>(
+		&'a self,
+		account: &'a str,
+		text: &'a [u8],
+	) -> super::trainer::TrainerFuture<'a, Option<f64>>;
 
 	/// Train the corpus on `text` as ham (`spam = false`) or spam. The
 	/// default implementation is a no-op so a fake scoring source does not
@@ -216,6 +293,14 @@ impl BayesScorer for BayesStore {
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<f64, sqlx::Error>> + Send + 'a>>
 	{
 		Box::pin(async move { BayesStore::score(self, scope, text).await })
+	}
+
+	fn score_for_account<'a>(
+		&'a self,
+		account: &'a str,
+		text: &'a [u8],
+	) -> super::trainer::TrainerFuture<'a, Option<f64>> {
+		super::trainer::BayesTrainer::score_for_account(self, account, text)
 	}
 
 	fn train(&self, scope: &str, text: &str, spam: bool) {

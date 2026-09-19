@@ -102,7 +102,9 @@ pub(super) fn parse_queue_policy(value: &str) -> Result<QueuePolicy, String> {
 /// addresses, app passwords, per-account suppression, queued outbound
 /// mail per `queue`). Prints the per-record counts to `out`, one per
 /// line, on success. Errors short-circuit; a missing account is `exit 1`
-/// with a helpful message and no side effects.
+/// with a helpful message and no side effects. Spins up a short-lived
+/// runtime because `remove_account` is async (it consults the optional
+/// Bayesian store via sqlx).
 pub(super) fn remove(
 	config: &Config,
 	name: &str,
@@ -133,7 +135,22 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
-	match remove_account(&store, &spool, &config.data_dir, name, queue) {
+	let runtime = match tokio::runtime::Runtime::new() {
+		Ok(runtime) => runtime,
+		Err(error) => {
+			eprintln!("error: cannot start async runtime: {error}");
+			return ExitCode::FAILURE;
+		}
+	};
+	let result = runtime.block_on(remove_account(
+		&store,
+		&spool,
+		&config.data_dir,
+		name,
+		queue,
+		None,
+	));
+	match result {
 		Ok(counts) => {
 			let _ = writeln!(out, "removed account {name}");
 			let _ = writeln!(out, "mailbox_files: {}", counts.mailbox_files);
@@ -146,6 +163,7 @@ pub(super) fn remove(
 				counts.queued_messages_discarded
 			);
 			let _ = writeln!(out, "queued_messages_left: {}", counts.queued_messages_left);
+			let _ = writeln!(out, "bayes_tokens_removed: {}", counts.bayes_tokens_removed);
 			ExitCode::SUCCESS
 		}
 		Err(StoreError::NotFound(what)) => {
