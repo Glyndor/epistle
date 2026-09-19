@@ -16,6 +16,7 @@ mod dkim;
 mod dns;
 mod ldap;
 mod listener;
+mod mta_sts;
 mod oauth;
 mod otel;
 mod privileges;
@@ -42,6 +43,7 @@ pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
+pub use mta_sts::{MtaSts, MtaStsMode};
 pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
@@ -203,6 +205,9 @@ pub struct Config {
 	/// TLS material. Required by `submissions` listeners; enables STARTTLS
 	/// on `smtp` and `submission` listeners.
 	pub tls: Option<Tls>,
+	/// Public MTA-STS policy settings.
+	#[serde(default)]
+	pub mta_sts: MtaSts,
 	/// DKIM signing for outbound mail.
 	pub dkim: Option<Dkim>,
 	/// Management API. Required by `api` listeners.
@@ -360,6 +365,7 @@ impl std::fmt::Debug for Config {
 			.field("listeners", &self.listeners)
 			.field("accounts", &self.accounts)
 			.field("tls", &self.tls)
+			.field("mta_sts", &self.mta_sts)
 			.field("dkim", &self.dkim)
 			.field("api", &self.api)
 			.field("database", &self.database)

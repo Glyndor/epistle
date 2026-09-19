@@ -19,6 +19,12 @@ impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
 		match self.command {
+			Command::MtaStsServe {
+				policy_dir,
+				cert,
+				key,
+				listen,
+			} => super::mta_sts_serve::run(policy_dir, cert, key, listen),
 			Command::Serve { config } => match Config::load(&config) {
 				Ok(config) => serve::run(config),
 				Err(error) => {

@@ -8,10 +8,6 @@ use crate::config::Config;
 use crate::dns::provider::RecordKind;
 use crate::dns::records::{self, PublishRecord, Services, txt_zone_form};
 
-/// Default MTA-STS policy id; the operator bumps it whenever the policy served
-/// over HTTPS changes so resolvers refetch.
-const MTA_STS_ID: &str = "epistle1";
-
 /// Compute and print the expected records for the configured domains.
 pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	// DKIM records from the configured signer: the ed25519 selector always,
@@ -66,7 +62,7 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		&config.hostname,
 		&dkim_owned,
 		tlsa.as_deref(),
-		MTA_STS_ID,
+		&records::mta_sts_id(config),
 		// The `webdav` listener always exposes CalDAV/CardDAV when present;
 		// we don't have a flag for "operator disabled CalDAV only", so emit
 		// both SRVs and let the operator prune them by hand if needed.

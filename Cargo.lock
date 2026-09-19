@@ -753,6 +753,8 @@ dependencies = [
  "criterion",
  "flate2",
  "hickory-resolver",
+ "hyper",
+ "hyper-util",
  "idna",
  "ldap3",
  "libc",
