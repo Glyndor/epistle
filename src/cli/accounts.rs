@@ -99,34 +99,54 @@ pub(super) fn parse_queue_policy(value: &str) -> Result<QueuePolicy, String> {
 }
 
 /// Open the optional Bayesian store the operator's `[database]`
-/// section configures: `None` without a database, `None` when the
-/// pool cannot connect (the removal still does its on-disk work and
-/// the corpus rows simply survive until the next attempt), and
-/// `Some(store)` when the pool opens. Errors during the corpus-key
-/// file load (the only step `open_bayes` does not silently absorb)
-/// are surfaced through `out` so the operator sees why their
-/// removal cannot finish.
+/// section configures.
+///
+/// The decision is binary when `[database]` is set: either the pool
+/// opens and we hand the bayes store to `remove_account`, or it does
+/// not (the host is unreachable, the credentials are wrong, the
+/// migrations did not run) and we refuse the removal. A recreated
+/// account name would otherwise inherit the previous owner's
+/// training rows, which is the silent leak the abort exists to
+/// prevent: skipping the purge by accepting `connect_database`'s
+/// `Ok(None)` answer was the exact regression the helper made
+/// possible, so a `[database]` section is now a hard prerequisite for
+/// the bayes work. With no `[database]` at all there is no corpus
+/// to drop, so the caller proceeds without one.
+///
+/// Errors during the corpus-key file load (the only step `open_bayes`
+/// does not silently absorb) are returned as `Err` so the caller can
+/// route the failure through stderr (the standard `error:` decorator
+/// the rest of the CLI uses); stdout is reserved for the count
+/// summary.
 fn open_bayes_store(
 	config: &Config,
 	runtime: &tokio::runtime::Runtime,
-	out: &mut impl std::io::Write,
-) -> Option<crate::antispam::corpus::BayesStore> {
+) -> Result<Option<crate::antispam::corpus::BayesStore>, String> {
+	if config.database.is_none() {
+		return Ok(None);
+	}
 	runtime.block_on(async {
 		let metrics = Arc::new(crate::metrics::Metrics::new());
 		let pool = match super::serve_tasks::connect_database(config, &metrics).await {
-			Ok(pool) => pool,
-			Err(error) => {
-				let _ = writeln!(out, "error: opening database: {error}");
-				return None;
+			Ok(Some(pool)) => pool,
+			Ok(None) => {
+				return Err(
+					"the database holding the account's training could not be reached; \
+					 the removal was not started and can be retried once the database is back"
+						.to_string(),
+				);
 			}
+			Err(error) => return Err(format!("opening database: {error}")),
 		};
-		match super::serve_tasks::open_bayes(config, &pool, &MessageCrypto::disabled(), &metrics) {
-			Ok(Some((store, _queue))) => Some(store),
-			Ok(None) => None,
-			Err(error) => {
-				let _ = writeln!(out, "error: opening bayes store: {error}");
-				None
-			}
+		match super::serve_tasks::open_bayes(
+			config,
+			&Some(pool),
+			&MessageCrypto::disabled(),
+			&metrics,
+		) {
+			Ok(Some((store, _queue))) => Ok(Some(store)),
+			Ok(None) => Ok(None),
+			Err(error) => Err(format!("opening bayes store: {error}")),
 		}
 	})
 }
@@ -175,7 +195,13 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
-	let bayes_store = open_bayes_store(config, &runtime, out);
+	let bayes_store = match open_bayes_store(config, &runtime) {
+		Ok(store) => store,
+		Err(message) => {
+			super::style::error(format_args!("account {name}: {message}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	remove_with_bayes(
 		&runtime,
 		&store,
