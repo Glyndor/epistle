@@ -340,3 +340,45 @@ fn a_failing_count_near_the_integer_limit_saturates() {
 	}
 	assert_eq!(report.failing_count(), u64::MAX);
 }
+
+/// A DMARC aggregate with a `<!DOCTYPE>` declaring an internal entity
+/// and the entity referenced inside the body must not expand the
+/// reference. quick-xml 0.42 ships a `PredefinedEntityResolver` that
+/// only resolves the five XML predefined entities (`lt`, `gt`, `amp`,
+/// `apos`, `quot`); the resolver ignores `<!ENTITY>` declarations in
+/// the DOCTYPE, so any reference the deserialiser hits comes back as
+/// `EscapeError::UnrecognizedEntity`. The error short-circuits the
+/// parse into our `ParseError::Invalid`, which means the report is
+/// dropped and counted, never expanded into the billion-laughs bomb
+/// the entity chain (`&outer;` -> `&inner;&inner;&inner;&inner;`)
+/// would have produced.
+#[test]
+fn a_dmarc_xml_with_internal_entities_does_not_expand_them() {
+	let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE feedback [
+  <!ENTITY inner "pwned">
+  <!ENTITY outer "&inner;&inner;&inner;&inner;">
+]>
+<feedback>
+  <report_metadata>
+    <org_name>&outer;</org_name>
+    <report_id>rid</report_id>
+    <date_range><begin>0</begin><end>1</end></date_range>
+  </report_metadata>
+  <policy_published>
+    <domain>example.org</domain>
+    <p>none</p>
+    <pct>100</pct>
+  </policy_published>
+  <record/>
+</feedback>
+"#;
+	let err = parse(xml.as_bytes()).expect_err("unknown entity refused");
+	let ParseError::Invalid(text) = err else {
+		panic!("expected Invalid, got {err:?}");
+	};
+	assert!(
+		text.contains("unrecognized entity"),
+		"unexpected error text: {text}"
+	);
+}
