@@ -41,8 +41,8 @@ pub struct DmarcReport {
 	/// `policy_published` from `policy_published`.
 	pub policy_published: PolicyPublished,
 	/// Every `<record>` element of the document, capped at [`MAX_ROWS`].
-	/// When the document carried more entries, [`truncated`] is `true`
-	/// and only the first [`MAX_ROWS`] survived.
+	/// When the document carried more entries, [`Self::truncated`] is
+	/// `true` and only the first [`MAX_ROWS`] survived.
 	pub records: Vec<Row>,
 	/// `true` when one or more `<record>` entries were dropped because
 	/// the document exceeded [`MAX_ROWS`].
@@ -101,8 +101,10 @@ impl DmarcReport {
 			.fold(0u64, |total, row| total.saturating_add(row.count))
 	}
 
-	/// File-name component derived from `org_name`, see
-	/// [`bounds::file_component`].
+	/// File-name component derived from `org_name`. The mapping (alphanumerics,
+	/// `.` and `-` survive; everything else becomes `_`; capped at 64 bytes;
+	/// pure-dot names become `unknown`) is shared with the TLS-RPT parser
+	/// via the private `bounds::file_component`.
 	pub fn org(&self) -> String {
 		bounds::file_component(&self.org_name)
 	}

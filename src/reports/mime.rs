@@ -74,11 +74,7 @@ pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> 
 	}
 }
 
-fn walk_parts(
-	parts: &[ParsedPart],
-	kind: Kind,
-	depth: u8,
-) -> Result<FoundPartWalk, WalkError> {
+fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWalk, WalkError> {
 	for part in parts {
 		if let Some(ct) = part.content_type.as_deref()
 			&& let Some(encoding) = encoding_for(ct)

@@ -45,8 +45,8 @@ pub struct TlsReport {
 	#[serde(rename = "report-id")]
 	pub report_id: String,
 	/// `policies` from the top level, capped at [`MAX_POLICIES`].
-	/// When the document carried more entries, [`truncated`] is `true`
-	/// and only the first [`MAX_POLICIES`] survived.
+	/// When the document carried more entries, [`Self::truncated`] is
+	/// `true` and only the first [`MAX_POLICIES`] survived.
 	pub policies: Vec<Policy>,
 	/// `true` when one or more policies or failure-details were dropped
 	/// because the document exceeded the per-list cap.
@@ -124,8 +124,10 @@ impl TlsReport {
 			})
 	}
 
-	/// File-name component derived from `organization-name`, see
-	/// [`bounds::file_component`].
+	/// File-name component derived from `organization-name`. The mapping
+	/// (alphanumerics, `.` and `-` survive; everything else becomes `_`;
+	/// capped at 64 bytes; pure-dot names become `unknown`) is shared
+	/// with the DMARC parser via the private `bounds::file_component`.
 	pub fn org(&self) -> String {
 		bounds::file_component(&self.organization_name)
 	}

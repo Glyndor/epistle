@@ -179,11 +179,9 @@ fn the_failure_detail_limit_is_kept_and_one_more_marks_truncated() {
 		MAX_FAILURE_DETAILS
 	);
 	assert!(!inside.truncated);
-	let over = parse(report_json(1, MAX_FAILURE_DETAILS + 1, "o", "k").as_bytes()).expect("truncated");
-	assert_eq!(
-		over.policies[0].failure_details.len(),
-		MAX_FAILURE_DETAILS
-	);
+	let over =
+		parse(report_json(1, MAX_FAILURE_DETAILS + 1, "o", "k").as_bytes()).expect("truncated");
+	assert_eq!(over.policies[0].failure_details.len(), MAX_FAILURE_DETAILS);
 	assert!(over.truncated);
 }
 

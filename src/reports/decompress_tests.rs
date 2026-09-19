@@ -178,7 +178,10 @@ fn a_second_local_file_header_is_refused() {
 	}
 	let zip = build_zip_with_two_entries();
 	let err = inflate_attachment(&zip, Encoding::Zip).expect_err("multi-entry refused");
-	assert!(matches!(err, ReportError::Malformed("zip multi-entry")), "{err:?}");
+	assert!(
+		matches!(err, ReportError::Malformed("zip multi-entry")),
+		"{err:?}"
+	);
 }
 
 /// The end-of-central-directory record is missing from the scan window.

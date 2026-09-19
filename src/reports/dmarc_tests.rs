@@ -374,9 +374,7 @@ fn a_dmarc_xml_with_internal_entities_does_not_expand_them() {
 </feedback>
 "#;
 	let err = parse(xml.as_bytes()).expect_err("unknown entity refused");
-	let ParseError::Invalid(text) = err else {
-		panic!("expected Invalid, got {err:?}");
-	};
+	let ParseError::Invalid(text) = &err;
 	assert!(
 		text.contains("unrecognized entity"),
 		"unexpected error text: {text}"

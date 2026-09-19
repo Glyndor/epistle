@@ -12,8 +12,8 @@ fn separators_and_parent_references_are_mapped() {
 	let component = file_component("../../etc/cron.d/x");
 	assert_eq!(component, ".._.._etc_cron.d_x");
 	assert!(!component.contains('/'), "{component}");
-	// The exact example in the brief: a hostile `org_name` cannot leave
-	// the day directory it is joined to.
+	// The exact shape the file-component mapping must hold: a hostile
+	// `org_name` cannot leave the day directory it is joined to.
 	assert_eq!(file_component("../../etc/passwd"), ".._.._etc_passwd");
 	assert_eq!(file_component("a\\b\0c"), "a_b_c");
 }

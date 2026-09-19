@@ -9,7 +9,10 @@ fn append_writes_the_jsonl_at_0600_and_directories_at_0700() {
 	append(dir.path(), Kind::Dmarc, "20240101", "google.com", &report).expect("append");
 	let day_dir = dir.path().join("reports").join("dmarc").join("20240101");
 	let jsonl = day_dir.join("google.com.jsonl");
-	let jsonl_mode = std::fs::metadata(&jsonl).expect("stat").permissions().mode();
+	let jsonl_mode = std::fs::metadata(&jsonl)
+		.expect("stat")
+		.permissions()
+		.mode();
 	assert_eq!(
 		jsonl_mode & 0o777,
 		0o600,
