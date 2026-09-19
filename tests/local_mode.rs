@@ -49,9 +49,7 @@ const EADDRINUSE_TEXT: &str = "Address already in use";
 /// first byte is printable ASCII (`2` for SMTP, `*` for IMAP, `H` for
 /// HTTP). Asserting that the first byte is one of `0x16 / 0x15`
 /// differentiates TLS from everything else cleanly.
-const TLS_PROBE_BYTES: &[u8] = &[
-	0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00,
-];
+const TLS_PROBE_BYTES: &[u8] = &[0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00];
 
 /// Try once to open `addr` for reading. Returns `None` when the
 /// connection is refused or the kernel has not answered within the
@@ -112,7 +110,7 @@ fn probe_tls(stream: &mut TcpStream, phase: &str, deadline: Instant) -> Result<(
 		}
 	}
 	match total.first() {
-		Some(byte) if matches!(byte, 0x15 | 0x16) => Ok(()),
+		Some(0x15 | 0x16) => Ok(()),
 		_ => Err(format!(
 			"{phase}: implicit-TLS listener did not respond with TLS-shaped bytes; got {:?}",
 			total
@@ -335,7 +333,12 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	// and start with `220 `, otherwise the listener could pass the
 	// bind check without being SMTP.
 	let smtp_addr = SocketAddr::new(loopback, port_base + 25);
-	let mut smtp = wait_for_bind(smtp_addr, bind_deadline, "waiting for SMTP port", &mut child)?;
+	let mut smtp = wait_for_bind(
+		smtp_addr,
+		bind_deadline,
+		"waiting for SMTP port",
+		&mut child,
+	)?;
 	let banner = read_banner(
 		&mut smtp,
 		Instant::now() + Duration::from_secs(2),
@@ -367,8 +370,12 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 
 	// Submission (587): plaintext SMTP greeting, same contract as 25.
 	let submission_addr = SocketAddr::new(loopback, port_base + 587);
-	let mut submission =
-		wait_for_bind(submission_addr, bind_deadline, "waiting for submission port", &mut child)?;
+	let mut submission = wait_for_bind(
+		submission_addr,
+		bind_deadline,
+		"waiting for submission port",
+		&mut child,
+	)?;
 	let submission_banner = read_banner(
 		&mut submission,
 		Instant::now() + Duration::from_secs(2),
@@ -389,7 +396,12 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 
 	// IMAP (143): plaintext IMAP greeting, usually `* OK ... ready`.
 	let imap_addr = SocketAddr::new(loopback, port_base + 143);
-	let mut imap = wait_for_bind(imap_addr, bind_deadline, "waiting for IMAP port", &mut child)?;
+	let mut imap = wait_for_bind(
+		imap_addr,
+		bind_deadline,
+		"waiting for IMAP port",
+		&mut child,
+	)?;
 	let imap_banner = read_banner(
 		&mut imap,
 		Instant::now() + Duration::from_secs(2),
@@ -427,8 +439,17 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 
 	// IMAPS (993): implicit TLS, same probe as submissions.
 	let imaps_addr = SocketAddr::new(loopback, port_base + 993);
-	let mut imaps = wait_for_bind(imaps_addr, bind_deadline, "waiting for IMAPS port", &mut child)?;
-	probe_tls(&mut imaps, "IMAPS TLS probe", Instant::now() + Duration::from_secs(2))?;
+	let mut imaps = wait_for_bind(
+		imaps_addr,
+		bind_deadline,
+		"waiting for IMAPS port",
+		&mut child,
+	)?;
+	probe_tls(
+		&mut imaps,
+		"IMAPS TLS probe",
+		Instant::now() + Duration::from_secs(2),
+	)?;
 	drop(imaps);
 
 	// API (8025): plaintext HTTP. A `GET / HTTP/1.0` must come back

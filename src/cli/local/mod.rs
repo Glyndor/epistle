@@ -213,7 +213,9 @@ pub(super) fn banner_endpoints(config: &Config) -> Vec<(ListenerKind, u16)> {
 		.map(|listener| {
 			(
 				listener.kind,
-				listener.port.unwrap_or_else(|| listener.kind.default_port()),
+				listener
+					.port
+					.unwrap_or_else(|| listener.kind.default_port()),
 			)
 		})
 		.collect()

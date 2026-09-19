@@ -215,9 +215,11 @@ async fn ptr_check(hostname: &str, ip: IpAddr, dns: &dyn DnsLookup) -> Check {
 			ip_str,
 			format!("no reverse record; ask the provider of this IP to point it at {hostname}"),
 		),
-		PtrOutcome::PointsElsewhere { expected, found } => {
-			Check::missing(kind_ref, ip_str, format!("points at {found}, not {expected}"))
-		}
+		PtrOutcome::PointsElsewhere { expected, found } => Check::missing(
+			kind_ref,
+			ip_str,
+			format!("points at {found}, not {expected}"),
+		),
 		PtrOutcome::Ok => Check::ok(kind_ref, ip_str, format!("→ {hostname}")),
 		PtrOutcome::DoesNotResolveBack => Check::missing(
 			kind_ref,
