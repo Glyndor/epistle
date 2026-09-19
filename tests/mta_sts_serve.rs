@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use epistle::config::Tls;
+use epistle::metrics::Metrics;
 use epistle::mtasts::server::Server;
 use reqwest::{Client, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -74,7 +75,7 @@ impl Fixture {
 			.expect("loopback bind");
 		let addr = listener.local_addr().expect("address");
 		let client = client(&cert, addr);
-		let task = tokio::spawn(server.serve(listener));
+		let task = tokio::spawn(server.serve(listener, Arc::new(Metrics::new())));
 		Self {
 			dir,
 			addr,

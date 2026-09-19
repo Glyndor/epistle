@@ -2,6 +2,7 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -14,20 +15,31 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
 use crate::config::Tls;
+use crate::metrics::Metrics;
 use crate::tls::{TlsError, https::FileAcceptor};
 
 const POLICY_PATH: &str = "/.well-known/mta-sts.txt";
 const MAX_REQUEST_HEAD: usize = 8 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default cap on concurrent connections to the public MTA-STS listener.
+///
+/// The endpoint serves a single small text file and the public DNS record is
+/// fetched at most once per `max_age` (default one week), so a few hundred
+/// concurrent connections covers the burst that a TLS-RPT or DMARC sweep
+/// can produce without leaving a backlog the kernel will accept.
+const DEFAULT_MAX_CONNECTIONS: usize = 256;
+
 /// A dedicated HTTPS listener with certificate refresh on new connections.
 pub struct Server {
 	router: Router,
 	tls: FileAcceptor,
+	max_connections: usize,
 }
 
 impl Server {
@@ -38,12 +50,20 @@ impl Server {
 				.fallback(policy)
 				.with_state(policy_dir.join("mta-sts.txt")),
 			tls: FileAcceptor::new(tls)?,
+			max_connections: DEFAULT_MAX_CONNECTIONS,
 		})
+	}
+
+	/// Override the per-listener concurrency cap.
+	pub fn with_max_connections(mut self, max: usize) -> Self {
+		self.max_connections = max;
+		self
 	}
 
 	/// Serve a bound socket until cancelled or an accept error occurs.
 	/// Dropping this future aborts its active connections.
-	pub async fn serve(mut self, listener: TcpListener) -> io::Result<()> {
+	pub async fn serve(mut self, listener: TcpListener, metrics: Arc<Metrics>) -> io::Result<()> {
+		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		let mut connections = JoinSet::new();
 		loop {
 			tokio::select! {
@@ -51,7 +71,16 @@ impl Server {
 					let (stream, _) = accepted?;
 					let tls = self.tls.current();
 					let router = self.router.clone();
-					connections.spawn(connection(stream, tls, router));
+					let semaphore = Arc::clone(&semaphore);
+					let metrics = Arc::clone(&metrics);
+					connections.spawn(async move {
+						let Ok(_permit) = semaphore.try_acquire_owned() else {
+							metrics.mta_sts_connections_dropped();
+							drop(stream);
+							return;
+						};
+						connection(stream, tls, router).await;
+					});
 				}
 				Some(_) = connections.join_next(), if !connections.is_empty() => {}
 			}
@@ -132,3 +161,7 @@ mod tests;
 #[cfg(test)]
 #[path = "server_tests_http.rs"]
 mod tests_http;
+
+#[cfg(test)]
+#[path = "server_tests_connections.rs"]
+mod tests_connections;

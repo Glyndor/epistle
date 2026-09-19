@@ -36,7 +36,7 @@ pub(super) fn run(
 				listener.local_addr()?
 			);
 			tokio::select! {
-				result = server.serve(listener) => result,
+				result = server.serve(listener, std::sync::Arc::new(crate::metrics::Metrics::new())) => result,
 				result = tokio::signal::ctrl_c() => result,
 			}
 		})
