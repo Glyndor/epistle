@@ -16,6 +16,7 @@ mod report_abuse;
 mod serve;
 mod serve_dkim;
 mod serve_ratelimit;
+mod serve_smtp_state;
 mod serve_tasks;
 mod serve_tls;
 mod srv;

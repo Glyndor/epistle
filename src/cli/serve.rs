@@ -9,6 +9,7 @@ use crate::smtp::sink::MessageSink;
 
 use super::serve_dkim::SplitCompanions;
 use super::serve_ratelimit::RateLimiters;
+use super::serve_smtp_state::SmtpSharedState;
 use super::serve_tls::TlsStack;
 
 /// Run the server with a validated configuration.
@@ -144,52 +145,20 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		inbound_sender_limit,
 	} = super::serve_ratelimit::build_rate_limiters(&config);
 
-	// Per-tenant aggregate limits. Built once from the static config; with
-	// no `[[tenant]]` blocks the result is the identity, every check is a
-	// no-op, and the wire below carries an empty `Arc`.
-	let tenant_limits = Arc::new(crate::api::TenantLimits::from_config(&config.tenants));
-
-	// Per-account correspondent store: one `Arc` shared by every SMTP
-	// listener and the API state. The store is opened here (and not
-	// inside `CorrespondentStore::open`) so a single underlying
-	// filesystem tree backs every submission path; recording on one
-	// path is immediately visible to the cap check on another.
-	let correspondents = Arc::new(
-		crate::storage::CorrespondentStore::open(&config.data_dir)
-			.map_err(std::io::Error::other)?,
-	);
-	// `daily_new_recipients` is the per-account cap; `None` disables it
-	// (the pre-feature behaviour). The cap is the same value across
-	// every submission path: a single source of truth at startup.
-	let daily_new_recipients = config.new_recipients_per_day;
-
-	// Shared disk-space guard for `data_dir`. `MAIL FROM` rejects with
-	// `452` when the filesystem holding the spool cannot hold another
-	// message, so the remote retries instead of receiving `250` for a
-	// payload the server cannot write. One guard per listener would
-	// re-sample on every concurrent connection; one shared guard amortises
-	// the cache and keeps the measurement consistent across listeners.
-	let disk_guard = Arc::new(crate::smtp::diskspace::DiskGuard::new(
-		config.data_dir.clone(),
-	));
-
-	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
-	let max_conn = config.max_connections_per_listener.unwrap_or(0);
-
-	// Optional external scanner hook.
-	let scanner_hook: Option<Arc<dyn crate::antispam::hook::MailHook>> =
-		match &config.scanner_hook_url {
-			Some(url) => Some(Arc::new(
-				crate::antispam::hook::HttpHook::new(url).map_err(std::io::Error::other)?,
-			)),
-			None => None,
-		};
-
-	// Optional LLM-assisted antispam hook for the uncertain band. The API
-	// key is read from the environment via the configured variable name so it
-	// never lands in the config file. Built eagerly so a missing key fails
-	// the start, not the first mail that hits the band.
-	let llm_hook = crate::antispam::llm::LlmHook::from_config(config.antispam_llm.as_ref())?;
+	// Per-listener shared state: tenant limits, correspondent store, daily
+	// new-recipient cap, disk-space guard, max-connections cap, and the
+	// optional scanner and LLM antispam hooks. The helper preserves the
+	// fail-closed behaviour (a malformed scanner URL or missing LLM key
+	// still stops the start).
+	let SmtpSharedState {
+		tenant_limits,
+		correspondents,
+		daily_new_recipients,
+		disk_guard,
+		max_conn,
+		scanner_hook,
+		llm_hook,
+	} = super::serve_smtp_state::build_smtp_shared_state(&config)?;
 
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
