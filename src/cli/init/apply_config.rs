@@ -339,7 +339,6 @@ fn create_unique_staging(
 	file_name: &str,
 	bytes: &str,
 ) -> Result<(bool, PathBuf), ApplyError> {
-	let suffix = random_hex_suffix();
 	let mut opts = fs::OpenOptions::new();
 	opts.write(true).create_new(true);
 	#[cfg(unix)]
@@ -347,15 +346,36 @@ fn create_unique_staging(
 		use std::os::unix::fs::OpenOptionsExt;
 		opts.mode(0o600);
 	}
+	// The random suffix must be drawn inside the loop: the previous
+	// shape held the suffix constant across all sixteen attempts and
+	// the `AlreadyExists` arm could never fire on a different
+	// candidate, so the retry loop was inert and a pre-existing
+	// sibling at the first candidate name stopped the call.
 	for _attempt in 0..16u32 {
+		let suffix = random_hex_suffix();
 		let staging = parent.join(format!("{file_name}.config.tmp.{suffix}"));
 		match opts.open(&staging) {
 			Ok(mut file) => {
+				// A guard that unlinks the staging file on every
+				// error path: a write_all or sync_all failure must
+				// not leave the partial file behind, because the
+				// file can hold an inline DNS token and the next
+				// run would block on its `O_EXCL` blocker. The
+				// guard is disarmed just before the success return
+				// so the caller's rename can move the staging
+				// file onto the destination.
+				let guard = StagingGuard {
+					path: staging.clone(),
+					armed: true,
+				};
 				use std::io::Write;
-				file.write_all(bytes.as_bytes())
-					.map_err(|error| ApplyError::ConfigWrite(staging.clone(), error))?;
-				file.sync_all()
-					.map_err(|error| ApplyError::ConfigWrite(staging.clone(), error))?;
+				if let Err(error) = file.write_all(bytes.as_bytes()) {
+					return Err(ApplyError::ConfigWrite(staging, error));
+				}
+				if let Err(error) = file.sync_all() {
+					return Err(ApplyError::ConfigWrite(staging, error));
+				}
+				guard.disarm();
 				return Ok((true, staging));
 			}
 			Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -368,16 +388,42 @@ fn create_unique_staging(
 	))
 }
 
+/// RAII handle that removes the staging file on drop unless
+/// `disarm` is called. The `O_EXCL` create and the early write_all
+/// errors return paths the caller wants surfaced; if any of those
+/// arms fires before the rename, the partial file is unlinked
+/// instead of left behind as a `0600` token in the operator's
+/// directory.
+struct StagingGuard {
+	path: PathBuf,
+	armed: bool,
+}
+
+impl StagingGuard {
+	fn disarm(mut self) {
+		self.armed = false;
+	}
+}
+
+impl Drop for StagingGuard {
+	fn drop(&mut self) {
+		if self.armed {
+			let _ = fs::remove_file(&self.path);
+		}
+	}
+}
+
 /// Twelve hex digits drawn from the system CSPRNG. The CSPRNG cannot
 /// fail on a well-formed host, but `init` only ever needs a unique
 /// suffix; if it ever did, `create_unique_staging` falls back to the
-/// `AlreadyExists` arm of the `open` call.
+/// `AlreadyExists` arm of the `open` call on the next attempt.
 fn random_hex_suffix() -> String {
 	use ring::rand::SecureRandom;
 	let mut bytes = [0u8; 6];
 	if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
-		// Fall back to a deterministic suffix; a collision still
-		// resolves through the `create_new` retry loop.
+		// Fall back to a deterministic suffix; the loop in
+		// `create_unique_staging` will keep drawing fresh bytes on
+		// each iteration until one lands a free name.
 		bytes = [0x42; 6];
 	}
 	let mut out = String::with_capacity(12);

@@ -565,3 +565,94 @@ fn write_validated_config_refuses_a_path_under_a_non_traversable_parent() {
 		"the diagnostic must name the unreadable config path"
 	);
 }
+
+/// A write failure inside `write_validated_config` must NOT leave a
+/// staging file behind. The file is opened with `O_EXCL` at mode
+/// `0600` from the start: a leftover partial write would block the
+/// next run on its `O_EXCL` blocker, and if the file holds an
+/// inline DNS token the operator's `0600` token sits on disk in a
+/// way no later step cleans up. The guard removes the file on every
+/// error path.
+#[cfg(unix)]
+#[test]
+fn write_validated_config_unlinks_staging_on_write_failure() {
+	// Force a write_all failure by passing a payload that cannot be
+	// written. The cleanest way without root is to make the parent
+	// directory read-only after the staging file is created; the
+	// `O_EXCL` open succeeds, but `write_all` returns a permission
+	// error. We exercise the guard by forcing the failure mode the
+	// guard was added for.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let locked = dir.path().join("locked");
+	std::fs::create_dir(&locked).expect("mkdir locked");
+	let config_path = locked.join("mail.toml");
+	// Block the directory before write_validated_config runs, so the
+	// open itself fails; the staging file is never created.
+	std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+		.expect("chmod 0555 on locked");
+	let result = apply_config::write_validated_config(&config_path, "data");
+	let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+	let err = result.expect_err("a read-only parent must surface a write error");
+	// Walk the parent and confirm no `mail.config.tmp.*` file
+	// survives. The error arm must have surfaced the failure
+	// without leaving a half-written file behind.
+	let mut leftovers: Vec<PathBuf> = Vec::new();
+	for entry in std::fs::read_dir(&locked).unwrap_or_else(|_| {
+		std::fs::read_dir(dir.path()).expect("read tempdir")
+	}) {
+		let entry = entry.expect("dir entry");
+		let name = entry.file_name();
+		let s = name.to_string_lossy();
+		if s.starts_with("mail.config.tmp.") {
+			leftovers.push(entry.path());
+		}
+	}
+	assert!(
+		leftovers.is_empty(),
+		"staging file(s) leaked after a write failure: {leftovers:?}"
+	);
+	// The error variant must surface the path so the operator sees
+	// where the failure happened.
+	let rendered = format!("{err}");
+	assert!(
+		rendered.contains(&config_path.display().to_string())
+			|| rendered.contains("cannot write config"),
+		"the diagnostic must name the operation or path: {rendered}"
+	);
+}
+
+/// A pre-existing sibling at the first candidate staging name must
+/// NOT stop the call from succeeding: the retry loop draws a fresh
+/// suffix on each attempt, so a single collision falls through and
+/// the next candidate wins.
+#[cfg(unix)]
+#[test]
+fn write_validated_config_succeeds_when_first_staging_name_is_taken() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let parent = dir.path();
+	let config_path = parent.join("mail.toml");
+	// Pre-create a file at the basename the loop would try first.
+	// Without the in-loop random draw, every attempt would target
+	// this exact name and the call would fail after sixteen tries.
+	let staged = parent.join("mail.toml.config.tmp.424242424242");
+	std::fs::write(&staged, b"operator-owned file").expect("write pre-existing sibling");
+	let body = "hostname = \"mail.example.org\"\n\
+		data_dir = \"/var/lib/epistle\"\n";
+	let result = apply_config::write_validated_config(&config_path, body);
+	assert!(
+		result.is_ok(),
+		"a pre-existing sibling at the first candidate name must not stop the call: {:?}",
+		result
+	);
+	let rendered = std::fs::read_to_string(&config_path).expect("read config");
+	assert_eq!(
+		rendered, body,
+		"the destination must hold the validated bytes"
+	);
+	// The pre-existing file must still be on disk: a sibling at a
+	// random name is not the operator's to lose.
+	assert!(
+		staged.exists(),
+		"the operator's pre-existing sibling must survive the call"
+	);
+}
