@@ -202,7 +202,10 @@ async fn ptr_report_points_elsewhen_when_ptr_names_a_different_host() {
 	dns.addresses.insert("mail.example.org".into(), vec![ip]);
 	assert_eq!(
 		ptr_report("mail.example.org", ip, &dns).await,
-		PtrReport::PointsElsewhere("other.example".into())
+		PtrReport::PointsElsewhere {
+			expected: "mail.example.org".into(),
+			found: "other.example".into(),
+		}
 	);
 }
 
@@ -237,10 +240,23 @@ async fn ptr_report_folds_a_transient_lookup_error_into_none() {
 fn ptr_report_display_names_both_the_expected_and_found_host() {
 	// The Display text is the operator-facing output: for PointsElsewhere
 	// it must name both the expected hostname and the one actually found,
-	// so a third party (the IP provider) sees exactly what to change.
-	let report = PtrReport::PointsElsewhere("other.example".into());
+	// so a third party (the IP provider) sees exactly what to change. The
+	// previous assertion only checked the found name; the expected one
+	// had been dropped on the floor, the diagnostic lost the third piece
+	// of information the operator needs.
+	let report = PtrReport::PointsElsewhere {
+		expected: "mail.example.org".into(),
+		found: "other.example".into(),
+	};
 	let text = report.to_string();
-	assert!(text.contains("other.example"), "text was {text:?}");
+	assert!(
+		text.contains("mail.example.org"),
+		"expected hostname missing from {text:?}"
+	);
+	assert!(
+		text.contains("other.example"),
+		"found hostname missing from {text:?}"
+	);
 }
 
 #[test]
@@ -249,8 +265,11 @@ fn ptr_report_display_for_each_variant() {
 		(PtrReport::Ok, &["reverse DNS points at the hostname"]),
 		(PtrReport::None, &["no reverse record", "owner of this IP"]),
 		(
-			PtrReport::PointsElsewhere("other.example".into()),
-			&["other.example", "owner of this IP"],
+			PtrReport::PointsElsewhere {
+				expected: "mail.example.org".into(),
+				found: "other.example".into(),
+			},
+			&["other.example", "mail.example.org", "owner of this IP"],
 		),
 		(
 			PtrReport::DoesNotResolveBack,

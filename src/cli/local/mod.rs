@@ -121,14 +121,27 @@ impl std::fmt::Debug for Prepared {
 /// `epistle local` needs and returning the matching `Config`. The function
 /// is split out from `run` so unit tests can drive every layout / permission
 /// / idempotence pin without ever binding a listener.
+///
+/// Recovery from an interruption: each artifact is now skipped when its
+/// file already exists on disk. The credential pair (`mail.toml` plus
+/// `accounts.toml`) is regenerated together when either half is missing,
+/// because the API token hash inside `mail.toml` and the account password
+/// hash inside `accounts.toml` carry independent secrets and a partial
+/// state where only one half survived is not useful.
 pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError> {
 	config::check_port_base(port_base)?;
-	// Three outcomes from `layout::ensure_dir`: refuse (unrelated content),
-	// reuse (marker present AND `mail.toml` already there, idempotent), or
-	// generate (everything else: empty, marker-only, missing `mail.toml`).
-	// A missing `mail.toml` under an existing marker is a partial state we
-	// recover from by re-generating, not by refusing.
-	let outcome = layout::ensure_dir(dir)?;
+	layout::ensure_dir(dir)?;
+	// Marker is the trust anchor and is written first, immediately after
+	// `ensure_dir` accepts the directory. Writing it before any other
+	// artifact means a crash later in the run still leaves a directory a
+	// later run sees as ours: the marker is present, so `ensure_dir`
+	// accepts the directory, and the per-artifact scan below rebuilds
+	// whatever else is missing. Writing the marker last would mean a
+	// crash between the first artifact and the marker left a directory
+	// `ensure_dir` then refused as "not empty and was not created by
+	// epistle local", which is exactly the partial state this function
+	// exists to recover from.
+	layout::write_marker(&dir.join(MARKER_FILE))?;
 	let data_dir = dir.join("data");
 	layout::create_with_mode(&data_dir, 0o700)?;
 
@@ -139,38 +152,48 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 	let accounts_toml_path = data_dir.join("accounts.toml");
 
 	let mut password = None;
-	match outcome {
-		layout::Outcome::Reuse => {
-			// Idempotent: every file we would have written is already
-			// there from a previous run. Nothing to do.
-		}
-		layout::Outcome::Generate => {
-			let marker = dir.join(MARKER_FILE);
-			if !marker.exists() {
-				layout::write_marker(&marker)?;
-			}
-			layout::generate_certificate(&cert_path, &key_path)?;
-			layout::write_dkim_key(&dkim_path)?;
-			let api_token_hash = layout::generate_api_token_hash()?;
-			let pwd = layout::generate_account_password()?;
-			config::write_mail_toml(
-				dir,
-				port_base,
-				&cert_path,
-				&key_path,
-				&dkim_path,
-				&api_token_hash,
-			)?;
-			let account = crate::directory_store::DynamicAccount::with_password(
-				ACCOUNT_NAME.to_string(),
-				vec![format!("{ACCOUNT_NAME}@{DOMAIN}")],
-				&pwd,
-			)
-			.map_err(|error| LocalError::Account(error.to_string()))?;
-			layout::write_account(&accounts_toml_path, &account)?;
-			layout::enforce_mode(&accounts_toml_path, 0o600)?;
-			password = Some(pwd);
-		}
+
+	// Cert and key are paired: TLS material needs both, and a partial
+	// write that left only one is not loadable. Regenerating the pair is
+	// cheap, so the rule is "any missing piece regenerates the pair".
+	if !cert_path.exists() || !key_path.exists() {
+		std::fs::remove_file(&cert_path).ok();
+		std::fs::remove_file(&key_path).ok();
+		layout::generate_certificate(&cert_path, &key_path)?;
+	}
+
+	// DKIM key is independent; treat it like the certificate.
+	if !dkim_path.exists() {
+		std::fs::remove_file(&dkim_path).ok();
+		layout::write_dkim_key(&dkim_path)?;
+	}
+
+	// The credential pair. Either file present and valid is enough to
+	// reuse both; if either is missing, regenerate both with fresh
+	// secrets so they stay consistent with each other. An existing
+	// `mail.toml` that fails to parse is treated as missing for the
+	// same reason (next run would refuse to start anyway).
+	let mail_valid = mail_toml_path.exists() && config::load_local_config(&mail_toml_path).is_ok();
+	let accounts_present = accounts_toml_path.exists();
+	if !mail_valid || !accounts_present {
+		let api_token_hash = layout::generate_api_token_hash()?;
+		let pwd = layout::generate_account_password()?;
+		config::write_mail_toml_replace(
+			dir,
+			port_base,
+			&cert_path,
+			&key_path,
+			&dkim_path,
+			&api_token_hash,
+		)?;
+		let account = crate::directory_store::DynamicAccount::with_password(
+			ACCOUNT_NAME.to_string(),
+			vec![format!("{ACCOUNT_NAME}@{DOMAIN}")],
+			&pwd,
+		)
+		.map_err(|error| LocalError::Account(error.to_string()))?;
+		layout::write_account_replace(&accounts_toml_path, &account)?;
+		password = Some(pwd);
 	}
 
 	let config = config::load_local_config(&mail_toml_path)?;
@@ -180,6 +203,26 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 		account: ACCOUNT_NAME.to_string(),
 		password,
 	})
+}
+
+/// Build the `(kind, port)` list the banner prints, derived from the
+/// already-loaded `Config`. Reading the listeners (rather than the
+/// requested `--port-base`) is what guarantees the banner matches what
+/// `serve` will bind, including when an operator restarts a directory
+/// that was prepared earlier with a different base.
+pub(super) fn banner_endpoints(config: &Config) -> Vec<(ListenerKind, u16)> {
+	config
+		.listeners
+		.iter()
+		.map(|listener| {
+			(
+				listener.kind,
+				listener
+					.port
+					.unwrap_or_else(|| listener.kind.default_port()),
+			)
+		})
+		.collect()
 }
 
 /// Run `epistle local` end to end: prepare the directory, print the banner,
@@ -196,10 +239,7 @@ pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	let endpoints: Vec<(ListenerKind, u16)> = config::LISTENERS
-		.iter()
-		.map(|(kind, offset)| (*kind, port_base + offset))
-		.collect();
+	let endpoints = banner_endpoints(&prepared.config);
 	// The banner goes to stderr. stdout is reserved for command data on
 	// every command in this binary, and `epistle local` produces none, so
 	// stdout stays empty. The test in `local_tests.rs` pins both halves:

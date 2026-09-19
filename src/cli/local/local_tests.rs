@@ -3,7 +3,9 @@
 //! banner writer is handed `style::stderr()` and stdout stays empty.
 
 use super::test_support::{LISTENERS_FOR_TEST, fresh_dir};
-use super::{ACCOUNT_NAME, DEFAULT_PORT_BASE, DOMAIN, HOSTNAME, prepare, print_banner, run};
+use super::{
+	ACCOUNT_NAME, DEFAULT_PORT_BASE, DOMAIN, HOSTNAME, banner_endpoints, prepare, print_banner, run,
+};
 use crate::config::ListenerKind;
 
 /// Pin: the constants the contract fixes are exposed and correct.
@@ -124,6 +126,57 @@ fn banner_is_written_to_stderr_not_stdout() {
 		assert!(
 			!code_only.contains("println!"),
 			"{path} must not use println!; stdout stays empty"
+		);
+	}
+}
+
+/// Pin: restarting `epistle local` on a directory prepared with a
+/// different `--port-base` must still advertise the ports the server will
+/// actually bind. `banner_endpoints` reads the loaded `Config` rather
+/// than the freshly-supplied `port_base`, so the banner stops lying when
+/// an operator restarts a directory created earlier with another base.
+#[test]
+fn banner_lists_persisted_ports_not_the_requested_port_base() {
+	let dir = fresh_dir("banner-ports");
+	prepare(dir.path(), DEFAULT_PORT_BASE).expect("first prepare");
+	let second = prepare(dir.path(), 20_000).expect("second prepare");
+
+	// The helper that `run` consults. Asserting the helper on the second
+	// `Prepared` would have caught the bug independently of any change
+	// to `run`.
+	let persisted = banner_endpoints(&second.config);
+	let expected: std::collections::HashSet<u16> = LISTENERS_FOR_TEST
+		.iter()
+		.map(|(_, off)| DEFAULT_PORT_BASE + off)
+		.collect();
+	let actual: std::collections::HashSet<u16> = persisted.iter().map(|(_, p)| *p).collect();
+	assert_eq!(
+		actual, expected,
+		"banner_endpoints must read the loaded config, not the new port_base"
+	);
+
+	let mut sink: Vec<u8> = Vec::new();
+	print_banner(
+		dir.path(),
+		&persisted,
+		&second.account,
+		second.password.as_deref(),
+		&mut sink,
+	);
+	let banner = String::from_utf8(sink).expect("utf8");
+
+	assert!(
+		banner.contains("listening: 127.0.0.1:10025"),
+		"banner must carry the persisted SMTP port, got: {banner}"
+	);
+	assert!(
+		banner.contains("listening: 127.0.0.1:10993"),
+		"banner must carry the persisted IMAPS port, got: {banner}"
+	);
+	for (_, port) in &persisted {
+		assert!(
+			!((20_025..=29_999).contains(port)),
+			"banner must not advertise any port from the second-run base (20000), got: {banner}"
 		);
 	}
 }

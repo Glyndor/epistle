@@ -39,6 +39,18 @@ fn binary() -> &'static Path {
 /// uses it to decide "try a different port" vs "real regression".
 const EADDRINUSE_TEXT: &str = "Address already in use";
 
+/// A minimal TLS record carrying a malformed `ClientHello`: 5-byte
+/// record header (`content_type = 0x16 Handshake`, `version = 0x0301`,
+/// `length = 5`) plus a 5-byte ClientHello body whose own length says 1
+/// but the actual body is empty. A TLS server responds with either an
+/// Alert (`0x15`) or, for older implementations, a ServerHello (`0x16`)
+/// after it parses enough of the message to notice the mismatch; a
+/// non-TLS server either closes or returns a plaintext response whose
+/// first byte is printable ASCII (`2` for SMTP, `*` for IMAP, `H` for
+/// HTTP). Asserting that the first byte is one of `0x16 / 0x15`
+/// differentiates TLS from everything else cleanly.
+const TLS_PROBE_BYTES: &[u8] = &[0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00];
+
 /// Try once to open `addr` for reading. Returns `None` when the
 /// connection is refused or the kernel has not answered within the
 /// 200 ms connect timeout; the caller polls again. Anything else
@@ -59,6 +71,50 @@ fn try_connect(addr: SocketAddr, phase: &str) -> Option<TcpStream> {
 			None
 		}
 		Err(error) => panic!("{phase}: connect {addr}: {error:?}"),
+	}
+}
+
+/// Drive the implicit-TLS handshake probe against `stream`. Sends a
+/// record with a malformed ClientHello and reads whatever the server
+/// emits back. The first byte of the response must be a TLS content
+/// type (`0x15` Alert, `0x16` Handshake); anything else, including a
+/// cleanly-closed connection, fails the probe. Polled reads and a
+/// bounded deadline keep the test off any hard sleep.
+fn probe_tls(stream: &mut TcpStream, phase: &str, deadline: Instant) -> Result<(), String> {
+	use std::io::Write;
+	stream
+		.set_read_timeout(Some(Duration::from_millis(200)))
+		.map_err(|error| format!("{phase}: set_read_timeout: {error:?}"))?;
+	stream
+		.write_all(TLS_PROBE_BYTES)
+		.map_err(|error| format!("{phase}: write TLS probe: {error:?}"))?;
+	let mut chunk = [0u8; 32];
+	let mut total = Vec::new();
+	while Instant::now() < deadline && total.len() < chunk.len() {
+		match stream.read(&mut chunk) {
+			Ok(0) => break,
+			Ok(n) => {
+				total.extend_from_slice(&chunk[..n]);
+				if total.first().is_some_and(|b| matches!(b, 0x15 | 0x16)) {
+					return Ok(());
+				}
+				if total.len() >= 5 {
+					// Gave the server a fair window to send TLS-shaped bytes.
+					break;
+				}
+			}
+			Err(error)
+				if error.kind() == std::io::ErrorKind::WouldBlock
+					|| error.kind() == std::io::ErrorKind::TimedOut => {}
+			Err(error) => return Err(format!("{phase}: read TLS probe: {error:?}")),
+		}
+	}
+	match total.first() {
+		Some(0x15 | 0x16) => Ok(()),
+		_ => Err(format!(
+			"{phase}: implicit-TLS listener did not respond with TLS-shaped bytes; got {:?}",
+			total
+		)),
 	}
 }
 
@@ -269,10 +325,14 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	];
 	let mut child = Child::spawn(&args, dir);
 
-	let smtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port_base + 25);
-	let imaps_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port_base + 993);
 	let bind_deadline = Instant::now() + Duration::from_secs(10);
+	let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
+	// SMTP (25): the SMTP greeting is the strictest probe we have, so
+	// it stays first. The banner must advertise the harness hostname
+	// and start with `220 `, otherwise the listener could pass the
+	// bind check without being SMTP.
+	let smtp_addr = SocketAddr::new(loopback, port_base + 25);
 	let mut smtp = wait_for_bind(
 		smtp_addr,
 		bind_deadline,
@@ -308,23 +368,146 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		));
 	}
 
-	let mut imaps = wait_for_bind(
-		imaps_addr,
-		Instant::now() + Duration::from_secs(10),
-		"connecting to IMAPS",
+	// Negative control: probe_tls against the plaintext SMTP listener.
+	// A probe that always returned Ok would leave this section green,
+	// so the suite pins that a real probe can say NO. The port is
+	// `port_base + 25`; the failure message names it so a regression
+	// points at the listener instead of at the helper.
+	let mut smtp_tls = wait_for_bind(
+		smtp_addr,
+		bind_deadline,
+		"opening a fresh connection to the SMTP port for the negative TLS probe",
 		&mut child,
 	)?;
-	// Drive the IMAPS handshake so the test proves the TLS acceptor
-	// is live, not just that the port is open. We send one byte and
-	// read whatever the server emits back (a ServerHello or an Alert
-	// for the malformed input). Reading with a 200 ms timeout keeps
-	// this phase a poll on a condition rather than a fixed wait;
-	// under load the server may never reply to a partial ClientHello
-	// and that is fine, the TCP accept was already verified.
-	let _ = imaps.set_read_timeout(Some(Duration::from_millis(200)));
-	let mut probe = [0u8; 1];
-	let _ = imaps.read(&mut probe);
+	let smtp_tls_phase = format!("SMTP port {smtp_addr} must NOT be classified as TLS");
+	let smtp_tls_result = probe_tls(
+		&mut smtp_tls,
+		&smtp_tls_phase,
+		Instant::now() + Duration::from_secs(2),
+	);
+	drop(smtp_tls);
+	if smtp_tls_result.is_ok() {
+		let (_stdout, stderr) = child.kill_and_drain(
+			Instant::now() + Duration::from_secs(2),
+			"opening a fresh connection to the SMTP port for the negative TLS probe",
+		)?;
+		return Err(format!(
+			"opening a fresh connection to the SMTP port for the negative TLS probe: probe_tls returned Ok for the plaintext SMTP listener at {smtp_addr}; the probe must say NO when the listener is plaintext\nstderr:\n{}",
+			redact_password(&stderr)
+		));
+	}
+
+	// Submission (587): plaintext SMTP greeting, same contract as 25.
+	let submission_addr = SocketAddr::new(loopback, port_base + 587);
+	let mut submission = wait_for_bind(
+		submission_addr,
+		bind_deadline,
+		"waiting for submission port",
+		&mut child,
+	)?;
+	let submission_banner = read_banner(
+		&mut submission,
+		Instant::now() + Duration::from_secs(2),
+		"reading the submission banner",
+	)?;
+	drop(submission);
+	let submission_text = String::from_utf8_lossy(&submission_banner);
+	if !submission_text.starts_with("220 ") && !submission_text.starts_with("421 ") {
+		let (_stdout, stderr) = child.kill_and_drain(
+			Instant::now() + Duration::from_secs(2),
+			"reading the submission banner",
+		)?;
+		return Err(format!(
+			"reading the submission banner: greeting does not look like an SMTP response: {submission_text:?}\nstderr:\n{}",
+			redact_password(&stderr)
+		));
+	}
+
+	// IMAP (143): plaintext IMAP greeting, usually `* OK ... ready`.
+	let imap_addr = SocketAddr::new(loopback, port_base + 143);
+	let mut imap = wait_for_bind(
+		imap_addr,
+		bind_deadline,
+		"waiting for IMAP port",
+		&mut child,
+	)?;
+	let imap_banner = read_banner(
+		&mut imap,
+		Instant::now() + Duration::from_secs(2),
+		"reading the IMAP banner",
+	)?;
+	drop(imap);
+	let imap_text = String::from_utf8_lossy(&imap_banner);
+	if !imap_text.starts_with("* OK") {
+		let (_stdout, stderr) = child.kill_and_drain(
+			Instant::now() + Duration::from_secs(2),
+			"reading the IMAP banner",
+		)?;
+		return Err(format!(
+			"reading the IMAP banner: greeting does not look like an IMAP ready line: {imap_text:?}\nstderr:\n{}",
+			redact_password(&stderr)
+		));
+	}
+
+	// Submissions (465): implicit TLS. A TLS-shaped ClientHello probe
+	// must produce a TLS-shaped first byte; otherwise the listener is
+	// accepting TCP but not actually serving TLS.
+	let submissions_addr = SocketAddr::new(loopback, port_base + 465);
+	let mut submissions = wait_for_bind(
+		submissions_addr,
+		bind_deadline,
+		"waiting for submissions port",
+		&mut child,
+	)?;
+	probe_tls(
+		&mut submissions,
+		"submissions TLS probe",
+		Instant::now() + Duration::from_secs(2),
+	)?;
+	drop(submissions);
+
+	// IMAPS (993): implicit TLS, same probe as submissions.
+	let imaps_addr = SocketAddr::new(loopback, port_base + 993);
+	let mut imaps = wait_for_bind(
+		imaps_addr,
+		bind_deadline,
+		"waiting for IMAPS port",
+		&mut child,
+	)?;
+	probe_tls(
+		&mut imaps,
+		"IMAPS TLS probe",
+		Instant::now() + Duration::from_secs(2),
+	)?;
 	drop(imaps);
+
+	// API (8025): plaintext HTTP. A `GET / HTTP/1.0` must come back
+	// with an `HTTP/1.` status line so the listener is HTTP, not just
+	// an open port.
+	let api_addr = SocketAddr::new(loopback, port_base + 8025);
+	let mut api = wait_for_bind(api_addr, bind_deadline, "waiting for API port", &mut child)?;
+	use std::io::Write;
+	api.set_read_timeout(Some(Duration::from_millis(500)))
+		.map_err(|error| format!("waiting for API port: set_read_timeout: {error:?}"))?;
+	api.write_all(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+		.map_err(|error| format!("waiting for API port: write: {error:?}"))?;
+	let api_response = read_banner(
+		&mut api,
+		Instant::now() + Duration::from_secs(2),
+		"reading the API response",
+	)?;
+	drop(api);
+	let api_text = String::from_utf8_lossy(&api_response);
+	if !api_text.starts_with("HTTP/") {
+		let (_stdout, stderr) = child.kill_and_drain(
+			Instant::now() + Duration::from_secs(2),
+			"reading the API response",
+		)?;
+		return Err(format!(
+			"reading the API response: HTTP listener did not return an HTTP status line: {api_text:?}\nstderr:\n{}",
+			redact_password(&stderr)
+		));
+	}
 
 	// Kill the server, wait for the kernel to reap it, then drain
 	// both pipes so any later assertion can quote the child's

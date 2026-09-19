@@ -69,7 +69,7 @@ pub(super) fn check_port_base(port_base: u16) -> Result<(), super::LocalError> {
 /// function takes `dir` (not the file path) so the same `dir.join("data")`
 /// the layout module uses for the directory the spool lives in is the
 /// path the config names.
-pub(super) fn write_mail_toml(
+pub(super) fn write_mail_toml_replace(
 	dir: &Path,
 	port_base: u16,
 	cert_file: &Path,
@@ -114,7 +114,7 @@ pub(super) fn write_mail_toml(
 		dkim_file.display(),
 		api_token_hash,
 	);
-	super::layout::write_with_mode(&dir.join("mail.toml"), body.as_bytes(), 0o600)
+	super::layout::write_with_replace(&dir.join("mail.toml"), body.as_bytes(), 0o600)
 }
 
 /// The kebab-case spelling of a listener kind for the config file.
