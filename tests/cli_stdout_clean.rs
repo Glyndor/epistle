@@ -270,3 +270,38 @@ fn config_check_respects_no_color_without_clicolor_force() {
 		String::from_utf8_lossy(&stderr)
 	);
 }
+
+/// `reports` (the DMARC / TLS-RPT summary) routes its config-load failure
+/// through `style::error` like every other config-taking command, not
+/// through a raw `eprintln!`. A raw `eprintln!("error: ...")` reaches
+/// stderr as plain text, while `style::error` writes through the same
+/// `anstream` wrapper the rest of the CLI uses; with `CLICOLOR_FORCE=1`
+/// the wrapper preserves the ANSI codes. The escape sequence is the
+/// signal that the dispatch reached the styled branch; reverting the
+/// arm to `eprintln!` removes the escape and the test fails.
+#[test]
+fn reports_missing_file_stderr_carries_color() {
+	let mut cmd = Command::new(binary());
+	cmd.args(["reports", "--config", "/nonexistent/mail.toml"]);
+	with_color_env(&mut cmd);
+	cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+	let output = cmd.output().expect("spawn epistle");
+	let stdout = output.stdout;
+	let stderr = output.stderr;
+	let status = output.status;
+
+	assert!(
+		!status.success(),
+		"reports with a missing config should fail"
+	);
+	assert!(
+		!has_ansi_escape(&stdout),
+		"reports stdout carries an ANSI escape sequence: {:?}",
+		String::from_utf8_lossy(&stdout)
+	);
+	assert!(
+		has_ansi_escape(&stderr),
+		"reports stderr does NOT carry an ANSI escape sequence: {:?}",
+		String::from_utf8_lossy(&stderr)
+	);
+}

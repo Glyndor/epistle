@@ -1,4 +1,5 @@
-//! RFC 2047 encoded-word decoding for unstructured header values.
+//! RFC 2047 encoded-word decoding and encoding for unstructured header
+//! values.
 //!
 //! A header value with any non-ASCII character travels as one or more
 //! `=?charset?encoding?text?=` words. Code that searches a `Subject:` for a
@@ -20,10 +21,18 @@
 //! - a word whose decoded form would be longer than its encoded form is left
 //!   as it arrived, so the output is never longer than the input.
 //!
-//! The output is attacker-controlled text and may contain any character,
-//! including CR and LF. Pass it through
+//! The encoder produces only the `B` form, in UTF-8. A value that is
+//! entirely printable ASCII is returned unchanged; anything else becomes one
+//! or more `=?UTF-8?B?...?=` words, each at most 75 octets including the
+//! delimiters, separated by `\r\n ` when more than one word is needed. The
+//! cut between two adjacent words never lands in the middle of a UTF-8
+//! character, so every word decodes on its own to well-formed UTF-8.
+//!
+//! Decoder output is attacker-controlled text and may contain any
+//! character, including CR and LF. Pass it through
 //! [`crate::util::header::sanitize_header_value`] before writing it into a
-//! header.
+//! header. The encoder itself only sees input that has already been
+//! sanitized.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -59,6 +68,85 @@ pub fn decode(input: &str) -> String {
 		rest = &tail[literal..];
 	}
 	out
+}
+
+/// Length of the delimiters that wrap a UTF-8 B encoded-word.
+const B_DELIMITER: &str = "=?UTF-8?B?";
+const B_TAIL: &str = "?=";
+
+/// Maximum octets of input bytes per encoded-word: a base64 payload is a
+/// multiple of four characters, the 75-octet encoded-word limit leaves
+/// room for 63 base64 characters, and `63 / 4 * 3 = 45` input bytes
+/// encode into a single word.
+const MAX_BYTES_PER_WORD: usize = 45;
+
+/// Encode `value` for an unstructured header. A value that is entirely
+/// printable ASCII is returned unchanged. Anything else becomes one or more
+/// `=?UTF-8?B?...?=` words, each at most 75 octets including the
+/// delimiters, joined by `\r\n ` (RFC 5322 folding) when more than one word
+/// is needed.
+///
+/// The cut between two adjacent words never lands in the middle of a UTF-8
+/// character: every word decodes on its own to well-formed UTF-8, and the
+/// folded output round-trips through [`decode`] back to the input.
+pub fn encode(value: &str) -> String {
+	if is_printable_ascii(value) {
+		return value.to_string();
+	}
+	let mut out = String::with_capacity(value.len() + value.len() / 3);
+	let bytes = value.as_bytes();
+	let mut start = 0usize;
+	let mut first = true;
+	while start < bytes.len() {
+		let end = next_word_end(bytes, start);
+		let payload = BASE64.encode(&bytes[start..end]);
+		if !first {
+			out.push_str("\r\n ");
+		}
+		out.push_str(B_DELIMITER);
+		out.push_str(&payload);
+		out.push_str(B_TAIL);
+		first = false;
+		start = end;
+	}
+	out
+}
+
+/// True when every byte of `value` is printable ASCII (0x20-0x7E). No high
+/// bit, no control character, no DEL: a value that already fits on a
+/// header line as-is does not need an encoded-word at all.
+fn is_printable_ascii(value: &str) -> bool {
+	value.bytes().all(|b| (0x20..=0x7E).contains(&b))
+}
+
+/// Index just past the last byte of the next encoded-word, starting at
+/// `start`. The slice `bytes[start..end]` ends on a UTF-8 boundary and
+/// holds at most [`MAX_BYTES_PER_WORD`] bytes.
+fn next_word_end(bytes: &[u8], start: usize) -> usize {
+	let budget = MAX_BYTES_PER_WORD.min(bytes.len() - start);
+	let mut end = start + budget;
+	while end > start && !is_utf8_char_boundary(bytes, end) {
+		end -= 1;
+	}
+	// The maximum UTF-8 character length is four bytes, so the walk back
+	// can never run off the start: the previous character in `bytes` is
+	// at least one byte and `start` cannot sit inside it.
+	debug_assert!(end > start, "no UTF-8 boundary within MAX_BYTES_PER_WORD");
+	end
+}
+
+/// True when `index` is a position where a UTF-8 codepoint starts inside
+/// `bytes`. The end of `bytes` is always a boundary. The boundary check
+/// uses the same rules `str` does to keep the cut between two encoded
+/// words inside a codepoint: at `index`, the byte just before must NOT be
+/// a UTF-8 continuation byte, otherwise `index` is in the middle of a
+/// multi-byte codepoint and a slice ending here would carry a partial
+/// character.
+fn is_utf8_char_boundary(bytes: &[u8], index: usize) -> bool {
+	if index == 0 || index == bytes.len() {
+		return true;
+	}
+	bytes[index] & 0xC0 != 0x80
 }
 
 fn is_linear_whitespace(c: char) -> bool {

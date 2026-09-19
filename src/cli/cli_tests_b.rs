@@ -55,6 +55,9 @@ fn accounts_dispatch_succeeds() {
 #[test]
 fn dispatch_reports_config_load_failure() {
 	// A nonexistent config file makes every config-taking command fail.
+	// `reports` joins the set: its error arm is the one that used to print
+	// `error:` via `eprintln!`, so the dispatch has to reach the styled
+	// branch (and exit FAILURE) just like the others.
 	for args in [
 		vec![
 			"epistle",
@@ -67,6 +70,7 @@ fn dispatch_reports_config_load_failure() {
 		vec!["epistle", "queue", "--config", "/nope.toml"],
 		vec!["epistle", "accounts", "--config", "/nope.toml"],
 		vec!["epistle", "config-check", "--config", "/nope.toml"],
+		vec!["epistle", "reports", "--config", "/nope.toml"],
 	] {
 		assert_eq!(run(&args), ExitCode::FAILURE, "{args:?}");
 	}

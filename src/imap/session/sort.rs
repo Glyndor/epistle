@@ -1,10 +1,11 @@
 //! IMAP SORT command (RFC 5256).
 
 use super::super::command::SortKey;
-use super::helpers::{header_value, load_content, search_matches};
-use super::mailbox::MessageRef;
+use super::helpers::{header_value, header_value_raw, load_content, search_matches};
+use super::mailbox::{MessageRef, Snapshot};
 use super::state::State;
 use super::{Output, SearchKey, Session};
+use crate::util::encoded_word;
 
 /// A comparable SORT key value. Within one sort position every message yields
 /// the same variant, so cross-variant comparison never happens in practice.
@@ -15,8 +16,15 @@ enum SortValue {
 }
 
 /// The sort value of a message for one key. `text` is the lowercased message
-/// (headers + body), loaded only when a header-based key is present.
-fn sort_value(key: SortKey, message: &MessageRef, text: Option<&str>) -> SortValue {
+/// (headers + body), loaded only when a header-based key is present. SUBJECT
+/// is treated specially: the decoded subject is computed from the RAW bytes
+/// because lowercasing a B-encoded subject would mangle its base64 payload.
+fn sort_value(
+	key: SortKey,
+	message: &MessageRef,
+	snapshot: &Snapshot,
+	text: Option<&str>,
+) -> SortValue {
 	let arrival = || {
 		message
 			.internal_date
@@ -30,7 +38,7 @@ fn sort_value(key: SortKey, message: &MessageRef, text: Option<&str>) -> SortVal
 		SortKey::From => SortValue::Text(header_field(text, "from")),
 		SortKey::To => SortValue::Text(header_field(text, "to")),
 		SortKey::Cc => SortValue::Text(header_field(text, "cc")),
-		SortKey::Subject => SortValue::Text(normalized_subject(text)),
+		SortKey::Subject => SortValue::Text(normalized_subject_subject(snapshot, message)),
 	}
 }
 
@@ -40,15 +48,22 @@ fn header_field(text: Option<&str>, name: &str) -> String {
 }
 
 /// The Subject with a leading `re:`/`fwd:` run removed (RFC 5256 base subject,
-/// simplified).
-fn normalized_subject(text: Option<&str>) -> String {
-	let mut subject = header_field(text, "subject");
+/// simplified). Reads the raw message bytes so the RFC 2047 payload is
+/// decoded before the `re:` strip: a subject stored as
+/// `=?UTF-8?B?cmU6wqFIb2xhIQ==?=` collapses to `¡Hola!` and threads with
+/// `=?UTF-8?Q?Re:_=C2=A1Hola!?=`.
+fn normalized_subject_subject(snapshot: &Snapshot, message: &MessageRef) -> String {
+	let raw = snapshot.read(message).unwrap_or_default();
+	let text = String::from_utf8_lossy(&raw);
+	let subject = header_value_raw(&text, "subject").unwrap_or_default();
+	let mut subject = encoded_word::decode(&subject);
 	loop {
 		let trimmed = subject.trim_start();
-		let stripped = trimmed
+		let lowered = trimmed.to_ascii_lowercase();
+		let stripped = lowered
 			.strip_prefix("re:")
-			.or_else(|| trimmed.strip_prefix("fwd:"))
-			.or_else(|| trimmed.strip_prefix("fw:"));
+			.or_else(|| lowered.strip_prefix("fwd:"))
+			.or_else(|| lowered.strip_prefix("fw:"));
 		match stripped {
 			Some(rest) => subject = rest.to_string(),
 			None => return trimmed.to_string(),
@@ -69,12 +84,9 @@ impl Session {
 		};
 
 		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
-		let needs_headers = keys.iter().any(|(_, key)| {
-			matches!(
-				key,
-				SortKey::From | SortKey::To | SortKey::Cc | SortKey::Subject | SortKey::Date
-			)
-		});
+		let needs_text = keys
+			.iter()
+			.any(|(_, key)| matches!(key, SortKey::From | SortKey::To | SortKey::Cc));
 
 		// Collect matching messages with their sort values.
 		let mut items: Vec<(Vec<SortValue>, u32, u32)> = Vec::new();
@@ -89,10 +101,10 @@ impl Session {
 			if !matches {
 				continue;
 			}
-			let text = needs_headers.then(|| load_content(snapshot, message));
+			let text = needs_text.then(|| load_content(snapshot, message));
 			let values = keys
 				.iter()
-				.map(|(_, key)| sort_value(*key, message, text.as_deref()))
+				.map(|(_, key)| sort_value(*key, message, snapshot, text.as_deref()))
 				.collect();
 			items.push((values, seqno, message.uid));
 		}

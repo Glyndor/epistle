@@ -291,7 +291,7 @@ impl Cli {
 			Command::Reports { config, days } => match Config::load(&config) {
 				Ok(config) => reports::run(&config, days, &mut std::io::stdout().lock()),
 				Err(error) => {
-					eprintln!("error: {error}");
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},

@@ -3,7 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::decode;
+use super::{decode, encode};
 
 /// Inputs that look like the start of an encoded-word and are not one. Each
 /// has to come back byte for byte.
@@ -138,4 +138,96 @@ fn decoding_never_grows_the_input() {
 			"decoding grew {input:?}"
 		);
 	}
+}
+
+/// A pure-ASCII subject does not need an encoded-word; the encoder must
+/// return it byte-for-byte. A value that already fits on a header line
+/// as-is falls into the no-op branch.
+#[test]
+fn pure_ascii_passes_through() {
+	assert_eq!(encode("plain ascii"), "plain ascii");
+	assert_eq!(encode(""), "");
+	assert_eq!(encode("Re: project plan (FY26)"), "Re: project plan (FY26)");
+}
+
+/// Round-trip for short non-ASCII subjects: each input encodes to one or
+/// more well-formed B-encoded words and decodes back to the input.
+#[test]
+fn short_subjects_round_trip() {
+	for input in ["¡Hola!", "José Pérez"] {
+		let encoded = encode(input);
+		assert_ne!(encoded, input, "{input:?} must be encoded");
+		assert_eq!(decode(&encoded), input, "round-trip for {input:?}");
+		// Each short input fits in one word.
+		assert!(encoded.starts_with("=?UTF-8?B?"), "{encoded:?}");
+		assert!(encoded.ends_with("?="), "{encoded:?}");
+		assert!(!encoded.contains('\r'), "{encoded:?}");
+	}
+}
+
+/// Long inputs force the encoder to split into multiple folded words. The
+/// folded output must satisfy four invariants at once:
+///
+/// - it round-trips back to the original through `decode`;
+/// - each physical line (after splitting on `\r\n`) is at most 76 octets,
+///   the 75-octet encoded-word limit plus the leading folding whitespace;
+/// - each encoded-word by itself decodes to valid UTF-8, proving the cut
+///   between two words never landed inside a multi-byte character;
+/// - the boundaries between adjacent words fall on a UTF-8 codepoint
+///   boundary in the original input.
+#[test]
+fn long_inputs_split_on_utf8_boundaries() {
+	let two_byte = "ñ".repeat(200);
+	let three_byte = "日本語のテキスト".repeat(10);
+	for input in [&two_byte, &three_byte] {
+		let encoded = encode(input);
+		assert_ne!(encoded, *input);
+		// Round-trip: folding and the B decoder recover the input.
+		assert_eq!(decode(&encoded), *input, "round-trip failed for {input:?}");
+		// Folding only happens when there is more than one word.
+		let words: Vec<&str> = encoded.split("\r\n ").collect();
+		assert!(words.len() > 1, "long input did not fold: {encoded:?}");
+		// Every physical line is at most 76 octets.
+		for line in encoded.split("\r\n") {
+			assert!(
+				line.len() <= 76,
+				"line over 76 octets: {line:?} ({})",
+				line.len()
+			);
+		}
+		// Every encoded-word, taken by itself, decodes to valid UTF-8.
+		for word in &words {
+			let decoded = decode(word);
+			assert_eq!(
+				decoded,
+				std::str::from_utf8(decoded.as_bytes()).unwrap().to_string(),
+				"word {word:?} did not decode to valid UTF-8"
+			);
+		}
+		// The packed input bytes line up with the word boundaries: the input
+		// bytes that fed into each word, when read back as UTF-8, form the
+		// decoded word with no leftover or skip.
+		let total_input_bytes: usize = words
+			.iter()
+			.map(|word| {
+				let payload = word
+					.strip_prefix("=?UTF-8?B?")
+					.and_then(|w| w.strip_suffix("?="))
+					.expect("word wraps in delimiters");
+				let bytes = BASE64.decode(payload).expect("payload base64");
+				assert!(
+					std::str::from_utf8(&bytes).is_ok(),
+					"raw payload bytes are not valid UTF-8: {bytes:?}"
+				);
+				bytes.len()
+			})
+			.sum();
+		assert_eq!(total_input_bytes, input.len());
+	}
+}
+
+/// An empty input has nothing to encode and falls into the no-op branch.
+#[test]
+fn empty_input_is_a_no_op() {
+	assert_eq!(encode(""), "");
 }
