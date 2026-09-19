@@ -55,6 +55,15 @@ pub struct BayesStore {
 	/// message off disk drops the job rather than recreating the
 	/// rows the purge is dropping. See [`BayesStore::train`].
 	tombstones: TombstoneSet,
+	/// Serializes `train` and `forget_scope` against each other within
+	/// this process so a worker that passed the tombstone check cannot
+	/// race the DELETE commit. Training is infrequent, so holding it
+	/// across the SQL is a fine trade for closing the window the
+	/// tombstone set alone cannot. The Mutex is per-instance: a removal
+	/// run from the CLI does not see the server's training worker
+	/// (different processes, different Mutexes); the cross-process
+	/// limit is named on [`BayesStore::forget_scope`].
+	scope_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BayesStore {
@@ -66,6 +75,7 @@ impl BayesStore {
 			pool,
 			key,
 			tombstones: new_tombstone_set(),
+			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 		})
 	}
 
@@ -77,6 +87,7 @@ impl BayesStore {
 			pool,
 			key,
 			tombstones: new_tombstone_set(),
+			scope_lock: Arc::new(tokio::sync::Mutex::new(())),
 		}
 	}
 
@@ -96,15 +107,24 @@ impl BayesStore {
 	/// Train the `scope` corpus on one message: bump the message total and each
 	/// token's ham or spam count, atomically.
 	pub async fn train(&self, scope: &str, text: &str, spam: bool) -> Result<(), sqlx::Error> {
+		// Hold the per-store lock for the duration of every train call so a
+		// worker that just passed the tombstone check cannot race the DELETE a
+		// concurrent `forget_scope` is committing. Training is infrequent, so
+		// holding the lock across the SQL is fine; the lock is per-instance
+		// and does not span processes.
+		let _scope_guard = self.scope_lock.lock().await;
 		// A scope whose removal is in flight (or has just committed and
 		// the tombstone has not yet been cleared) is on its way out:
 		// training now would recreate rows the purge is dropping. Drop
 		// the job silently so the worker's caller never sees an error
-		// for a message that no longer belongs to a live account.
+		// for a message that no longer belongs to a live account. The
+		// lock is taken with `unwrap_or_else(|e| e.into_inner())` so a
+		// panic inside another train call does not poison every later
+		// spam-learning job through the worker.
 		if self
 			.tombstones
 			.lock()
-			.expect("tombstone lock")
+			.unwrap_or_else(|error| error.into_inner())
 			.contains(scope)
 		{
 			return Ok(());
@@ -238,23 +258,43 @@ impl BayesStore {
 	/// does not inherit the previous user's training.
 	///
 	/// The scope is tombstoned before the transaction starts and the
-	/// tombstone is only cleared when the transaction commits. A
-	/// worker that has already read a message but has not yet called
-	/// `train` will see the tombstone and drop the job, so the DELETE
-	/// cannot race a queued training write. A failed DELETE keeps the
-	/// tombstone in place: the absent rows are still absent and the
-	/// only thing that would recreate them is a new training call,
-	/// which we are correct to suppress until the next retry commits.
+	/// tombstone is only cleared when the transaction commits, so a
+	/// worker that has already read its message but has not yet reached
+	/// `train` will see the tombstone and drop the job. The whole call
+	/// also holds the per-store serialization lock for its duration, so
+	/// a worker that passed the tombstone check is serialized against
+	/// the DELETE itself: the INSERT and the DELETE cannot interleave
+	/// inside this process. Training is infrequent, so holding the
+	/// lock across the transaction is cheap.
+	///
+	/// **Known limit, per process.** The lock is per
+	/// [`BayesStore`] instance and shared across its clones, so two
+	/// processes do not see each other's lock: a `mail account-remove`
+	/// run while the `serve` process is alive does not coordinate with
+	/// the server's training worker. Cross-process removal therefore
+	/// still relies on a concurrent `serve` not having training jobs in
+	/// flight for the same account; in practice the server has already
+	/// dropped the message files for any purged user, but the
+	/// coordination is the operator's, not the helper's.
+	///
+	/// A failed DELETE keeps the tombstone in place: the absent rows are
+	/// still absent and the only thing that would recreate them is a
+	/// new training call, which we are correct to suppress until the
+	/// next retry commits.
 	pub async fn forget_scope(&self, scope: &str) -> Result<u64, sqlx::Error> {
+		let _scope_guard = self.scope_lock.lock().await;
 		{
-			let mut tombstones = self.tombstones.lock().expect("tombstone lock");
+			let mut tombstones = self
+				.tombstones
+				.lock()
+				.unwrap_or_else(|error| error.into_inner());
 			tombstones.insert(scope.to_string());
 		}
 		let result = self.forget_scope_inner(scope).await;
 		if result.is_ok() {
 			self.tombstones
 				.lock()
-				.expect("tombstone lock")
+				.unwrap_or_else(|error| error.into_inner())
 				.remove(scope);
 		}
 		result

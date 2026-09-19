@@ -284,7 +284,7 @@ async fn a_tombstoned_scope_silently_drops_training() {
 	let tombstones = store.tombstones();
 	tombstones
 		.lock()
-		.expect("tombstone lock")
+		.unwrap_or_else(|error| error.into_inner())
 		.insert("alice".to_string());
 
 	// The lazy pool never connects, so a non-tombstoned `train` would
@@ -299,7 +299,10 @@ async fn a_tombstoned_scope_silently_drops_training() {
 	// Lift the tombstone: now the same call would attempt the SQL and
 	// surface the lazy-pool error, which proves the previous return
 	// value came from the check rather than from the SQL succeeding.
-	tombstones.lock().expect("tombstone lock").remove("alice");
+	tombstones
+		.lock()
+		.unwrap_or_else(|error| error.into_inner())
+		.remove("alice");
 }
 
 /// `forget_scope` raises and lowers the tombstone around its DELETE
@@ -322,8 +325,60 @@ async fn forget_scope_sets_the_tombstone_for_its_duration() {
 		store
 			.tombstones()
 			.lock()
-			.expect("tombstone lock")
+			.unwrap_or_else(|error| error.into_inner())
 			.contains("alice"),
 		"the tombstone stays set when the purge itself fails"
 	);
+}
+
+/// A panic elsewhere must not freeze every later spam-training call:
+/// the worker expects the corpus to keep absorbing marks no matter
+/// what unrelated branch the rest of the trainer took. The
+/// tombstone Mutex is poisoned here by holding it across a panic,
+/// which the production path tolerates by calling
+/// `unwrap_or_else(|e| e.into_inner())` for every consult. A naive
+/// `.lock().expect(...)` in `BayesStore::train` would propagate the
+/// poison as a panic for every later `train`; that regression is the
+/// one this test pins.
+///
+/// Sabotaged by reverting the train path to `.expect("tombstone
+/// lock")`: the assertion then surfaces with the panic message from
+/// the lock failure on its way to the SQL.
+#[tokio::test]
+async fn a_poisoned_tombstone_lock_still_allows_training() {
+	use std::panic::AssertUnwindSafe;
+	use std::sync::Arc;
+
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let store = BayesStore::with_key(pool, [0u8; 32]);
+
+	// Poison the tombstone Mutex by holding it across a panic. The
+	// unreachable host inside the catch means the helper itself does
+	// not throw past the assertion.
+	let tombstones = Arc::clone(store.tombstones());
+	let result = std::panic::catch_unwind(AssertUnwindSafe(move || {
+		let _guard = tombstones.lock().unwrap_or_else(|error| error.into_inner());
+		panic!("simulated panic inside the tombstone Mutex");
+	}));
+	assert!(result.is_err(), "the helper panic must propagate");
+
+	// The lazy pool is unreachable, so the SQL would bubble a
+	// connection error (PoolTimedOut). What matters here is that
+	// the call returns Err, not a propagated panic from the
+	// tombstone Mutex. We probe that via `tokio::spawn`: an inner
+	// panic surfaces as `Err(JoinError)` with `is_panic()` true; a
+	// regular failure is `Ok(Err(_))` and is the non-panic outcome
+	// the production contract guarantees. The match never compares
+	// the inner Result to a custom value: any `Ok(_)` case (whether
+	// the SQL returned Ok or Err) means the inner future did not
+	// panic, which is exactly what the test pins.
+	let join = tokio::spawn(async move { store.train("alice", "any body text", true).await }).await;
+	match join {
+		Ok(_) => {}
+		Err(join_error) if join_error.is_panic() => {
+			panic!("train must not panic on a poisoned tombstone Mutex");
+		}
+		Err(_) => panic!("the spawned task was cancelled, not panicked"),
+	}
 }
