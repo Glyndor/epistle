@@ -160,15 +160,18 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 	tls.write_all(b"MAIL FROM:<alice@example.org>\r\nRCPT TO:<bob@elsewhere.example>\r\nDATA\r\n")
 		.await
 		.expect("mail/rcpt/data");
-	assert!(
-		reply(&mut tls).await.starts_with("250 "),
-		"MAIL FROM accepted"
+	// Do not count reads here. The batch above is pipelined, and under
+	// tokio-rustls 0.26.5 its three replies arrived in a single read, which
+	// left a second `reply` waiting on bytes that had already been consumed.
+	let mut batch = String::new();
+	while !batch.contains("354 ") {
+		batch.push_str(&reply(&mut tls).await);
+	}
+	assert_eq!(
+		batch.matches("250 ").count(),
+		2,
+		"MAIL FROM and RCPT TO accepted: {batch}"
 	);
-	assert!(
-		reply(&mut tls).await.starts_with("250 "),
-		"RCPT TO accepted"
-	);
-	assert!(reply(&mut tls).await.starts_with("354 "), "DATA go-ahead");
 	tls.write_all(b"Subject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n")
 		.await
 		.expect("data");
