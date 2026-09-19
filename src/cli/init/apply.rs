@@ -146,6 +146,13 @@ pub enum ApplyError {
 	/// the failure is in the key-generation step itself, before any
 	/// write would have happened.
 	RsaKeygen(String),
+	/// The system CSPRNG could not produce bytes for a key (DKIM
+	/// ed25519, certificate pair, storage, oauth). Carries the
+	/// failing source so the operator can see which key did not
+	/// land. The previous shape `expect`-panicked on the same
+	/// condition and exited 101 with no report; the run now exits
+	/// 1 with the report of what already landed.
+	Rng(String),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -189,6 +196,9 @@ impl std::fmt::Display for ApplyError {
 			),
 			ApplyError::RsaKeygen(reason) => {
 				write!(f, "cannot generate the RSA DKIM key: {reason}")
+			}
+			ApplyError::Rng(source) => {
+				write!(f, "system CSPRNG could not produce bytes for {source}")
 			}
 		}
 	}
@@ -348,13 +358,12 @@ fn ensure_self_signed_cert(
 		report.steps.push(ReportStep::Reused(key_path.clone()));
 		key_pair
 	} else {
-		// CSPRNG cannot fail on a well-formed host; a disk write can
-		// (full disk, leftover temp from a crashed run), so the
-		// generation step is a `expect` and the write step routes
-		// through `write_secret_with_report` to surface the failure
-		// with the path intact.
+		// `rcgen::KeyPair::generate` returns a Result on well-formed
+		// hosts; a CSPRNG failure surfaces here as
+		// `ApplyError::Rng` so the run exits 1 instead of panicking.
+		// The disk write still routes through `write_secret_with_report`.
 		let key_pair = rcgen::KeyPair::generate()
-			.expect("system CSPRNG should produce a certificate key pair");
+			.map_err(|error| ApplyError::Rng(format!("certificate key pair: {error}")))?;
 		write_secret_with_report(&key_path, key_pair.serialize_pem().as_bytes(), report)?;
 		key_pair
 	};
@@ -425,13 +434,18 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	if s1.exists() {
 		report.steps.push(ReportStep::Reused(s1.clone()));
 	} else {
-		// The CSPRNG cannot fail on a well-formed host; a disk write
-		// can (full disk, permission denied, a leftover temp from a
-		// crashed prior run), so the generation step is a `expect`
-		// and the write step routes through `write_secret_with_report`
-		// to surface the failure with the path intact.
-		let (pem, _record) =
-			crate::dkim::generate_key().expect("system CSPRNG should produce a DKIM ed25519 key");
+		// A CSPRNG failure surfaces as `ApplyError::Rng` so the run
+		// exits 1 instead of panicking; a disk write failure routes
+		// through `write_secret_with_report` with the path intact.
+		let (pem, _record) = match crate::dkim::generate_key() {
+			Ok(pair) => pair,
+			Err(error) => {
+				return ApplyOutcome {
+					report,
+					error: Some(ApplyError::Rng(format!("DKIM ed25519 key: {error}"))),
+				};
+			}
+		};
 		if let Err(error) = write_secret_with_report(&s1, pem.as_bytes(), &mut report) {
 			return ApplyOutcome {
 				report,
@@ -478,8 +492,15 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	if storage.exists() {
 		report.steps.push(ReportStep::Reused(storage.clone()));
 	} else {
-		let key = crate::storage::generate_key_base64()
-			.expect("system CSPRNG should produce a storage key");
+		let key = match crate::storage::generate_key_base64() {
+			Some(key) => key,
+			None => {
+				return ApplyOutcome {
+					report,
+					error: Some(ApplyError::Rng("storage key".to_string())),
+				};
+			}
+		};
 		if let Err(error) = write_secret_with_report(&storage, key.as_bytes(), &mut report) {
 			return ApplyOutcome {
 				report,
@@ -574,8 +595,15 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			))),
 		};
 	} else {
-		let (private_b64, public_b64) = crate::cli::util::generate_oauth_keypair()
-			.expect("system CSPRNG should produce an oauth keypair");
+		let (private_b64, public_b64) = match crate::cli::util::generate_oauth_keypair() {
+			Some(pair) => pair,
+			None => {
+				return ApplyOutcome {
+					report,
+					error: Some(ApplyError::Rng("oauth key pair".to_string())),
+				};
+			}
+		};
 		if let Err(error) =
 			write_secret_with_report(&oauth_private, private_b64.as_bytes(), &mut report)
 		{

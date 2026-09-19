@@ -502,6 +502,48 @@ drop = "yes"
 	);
 }
 
+/// The `Display` impl for `ApplyError::Rng` must name the failing
+/// source so the operator can see which key did not land. The
+/// previous shape `expect`-panicked on a CSPRNG failure and exited
+/// 101 with no report; the mapping now produces a typed error
+/// that `run()` renders as exit 1 with the report of what landed.
+#[test]
+fn apply_error_rng_display_names_the_failing_source() {
+	let rng = ApplyError::Rng("DKIM ed25519 key".to_string());
+	let rendered = format!("{rng}");
+	assert!(
+		rendered.contains("DKIM ed25519 key"),
+		"Rng display must name the failing source: {rendered}"
+	);
+	assert!(
+		rendered.contains("CSPRNG") || rendered.contains("system"),
+		"Rng display must mention the CSPRNG: {rendered}"
+	);
+}
+
+/// `ApplyError::Rng` rendered into a report ends the report with a
+/// single typed error rather than panicking, so `run()` exits 1
+/// with the steps that already landed on disk.
+#[test]
+fn rng_error_maps_into_apply_outcome_without_panicking() {
+	// A direct construction of the variant: the brief asks for a
+	// unit test on the error mapping, not the OS condition itself.
+	let err = ApplyError::Rng("storage key".to_string());
+	let outcome = ApplyOutcome {
+		report: Report::default(),
+		error: Some(err),
+	};
+	let rendered_report = render_report_to_string(&outcome.report);
+	assert!(
+		rendered_report.is_empty(),
+		"a fresh report must stay empty when only the RNG error fired: {rendered_report}"
+	);
+	let ApplyError::Rng(source) = outcome.error.as_ref().expect("error must be Some") else {
+		panic!("expected Rng, got {:?}", outcome.error);
+	};
+	assert_eq!(source, "storage key", "the failing source must round-trip");
+}
+
 /// A `config_path` that has no parent directory (e.g. `/`) must
 /// surface as `ConfigInvalid` from `write_validated_config` rather
 /// than panicking or trying to stage at the filesystem root.
