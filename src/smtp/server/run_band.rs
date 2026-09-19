@@ -204,11 +204,8 @@ impl Server {
 ///
 /// The first hit wins so two recipients in the same message never
 /// disagree about which scope is consulted: the envelope order is the
-/// order RCPT TO delivered them, the same order the SMTP session admits
-/// them in. A multi-target alias's second member is consulted only when
-/// no earlier recipient resolved to anything. For a `RCPT TO:<alias>`
-/// message the alias is the entire deliverable audience and the band
-/// picks whichever member the SMTP path happened to admit first.
+/// order RCPT TO delivered them. For a multi-target alias only its first
+/// target is ever consulted.
 ///
 /// Returning `None` means "no local recipient at all", so the caller
 /// scores against the shared corpus directly (see
