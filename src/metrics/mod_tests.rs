@@ -70,22 +70,13 @@ fn counts_events() {
 	assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
 	assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
 	assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
-	assert!(
-		r.contains("mail_dmarc_reports_ingested_total 1\n"),
-		"{r}"
-	);
-	assert!(
-		r.contains("mail_tlsrpt_reports_ingested_total 1\n"),
-		"{r}"
-	);
+	assert!(r.contains("mail_dmarc_reports_ingested_total 1\n"), "{r}");
+	assert!(r.contains("mail_tlsrpt_reports_ingested_total 1\n"), "{r}");
 	assert!(
 		r.contains("mail_dmarc_report_rows_failing_total 7\n"),
 		"{r}"
 	);
-	assert!(
-		r.contains("mail_tlsrpt_failed_sessions_total 4\n"),
-		"{r}"
-	);
+	assert!(r.contains("mail_tlsrpt_failed_sessions_total 4\n"), "{r}");
 	assert!(r.contains("mail_reports_dropped_total 1\n"), "{r}");
 	assert!(
 		r.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 2\n"),
