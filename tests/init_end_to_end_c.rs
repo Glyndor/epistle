@@ -327,8 +327,8 @@ fn init_refuses_a_symlinked_config_path() {
 	let second = run_init(&answers_changed);
 	assert_eq!(
 		second.status.code(),
-		Some(1),
-		"symlinked config_path must be refused as exit 1; stderr: {}",
+		Some(2),
+		"symlinked config_path must be refused as exit 2 (nothing was touched; the apply phase surfaces the refusal before writing the new bytes); stderr: {}",
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let stderr = String::from_utf8_lossy(&second.stderr);

@@ -453,7 +453,9 @@ fn ensure_key_tree(
 	}
 
 	if oauth_private.exists() {
-		report.steps.push(ReportStep::Reused(oauth_private.to_path_buf()));
+		report
+			.steps
+			.push(ReportStep::Reused(oauth_private.to_path_buf()));
 		let private_bytes = fs::read(oauth_private)
 			.map_err(|error| ApplyError::KeyWrite(oauth_private.to_path_buf(), error))?;
 		let private_text = std::str::from_utf8(&private_bytes).map_err(|_| {
@@ -462,14 +464,13 @@ fn ensure_key_tree(
 				oauth_private.display()
 			))
 		})?;
-		let derived_public =
-			crate::cli::util::derive_oauth_public_from_private(private_text)
-				.ok_or_else(|| {
-					ApplyError::OAuthPairIncomplete(format!(
-						"oauth private key {} is not a valid PKCS#8 ES256 key; cannot derive the public key",
-						oauth_private.display()
-					))
-				})?;
+		let derived_public = crate::cli::util::derive_oauth_public_from_private(private_text)
+			.ok_or_else(|| {
+				ApplyError::OAuthPairIncomplete(format!(
+					"oauth private key {} is not a valid PKCS#8 ES256 key; cannot derive the public key",
+					oauth_private.display()
+				))
+			})?;
 		if oauth_public.exists() {
 			let public_bytes = fs::read(oauth_public)
 				.map_err(|error| ApplyError::KeyWrite(oauth_public.to_path_buf(), error))?;
@@ -482,7 +483,9 @@ fn ensure_key_tree(
 			if public_text.trim() != derived_public.trim() {
 				return Err(ApplyError::OAuthPairMismatch);
 			}
-			report.steps.push(ReportStep::Reused(oauth_public.to_path_buf()));
+			report
+				.steps
+				.push(ReportStep::Reused(oauth_public.to_path_buf()));
 		} else {
 			write_secret_with_report(oauth_public, derived_public.as_bytes(), report)?;
 		}

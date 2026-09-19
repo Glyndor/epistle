@@ -139,7 +139,7 @@ fn check_dns(
 								"is confusable with another name".to_string()
 							}
 						};
-						errors.push(Invalid::DnsZoneInvalid {
+						errors.push(Invalid::DnsZoneMalformed {
 							value: dns.zone.clone(),
 							reason,
 						});
@@ -151,10 +151,7 @@ fn check_dns(
 			// path reject the same input with the same sentence. The
 			// assistant already trims before storing; the file path
 			// preserves the literal, hence this branch.
-			let token_present = dns
-				.token
-				.as_deref()
-				.is_some_and(|v| !v.trim().is_empty());
+			let token_present = dns.token.as_deref().is_some_and(|v| !v.trim().is_empty());
 			let token_file_present = dns.token_file.as_deref().is_some_and(|p| {
 				let s = p.to_string_lossy();
 				!s.trim().is_empty()

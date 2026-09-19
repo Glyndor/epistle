@@ -469,10 +469,7 @@ fn plan_lists_directory_steps_before_writes() {
 	// assert no write index is below it.
 	let mut last_directory_index: Option<usize> = None;
 	for (i, step) in plan.steps.iter().enumerate() {
-		let is_directory = matches!(
-			step,
-			PlanStep::DataDir { .. } | PlanStep::ConfigDir { .. }
-		);
+		let is_directory = matches!(step, PlanStep::DataDir { .. } | PlanStep::ConfigDir { .. });
 		if is_directory {
 			last_directory_index = Some(i);
 		} else if let Some(last) = last_directory_index {

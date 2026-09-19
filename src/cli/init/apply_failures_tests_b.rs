@@ -695,9 +695,9 @@ fn write_validated_config_unlinks_staging_on_write_failure() {
 	// survives. The error arm must have surfaced the failure
 	// without leaving a half-written file behind.
 	let mut leftovers: Vec<PathBuf> = Vec::new();
-	for entry in std::fs::read_dir(&locked).unwrap_or_else(|_| {
-		std::fs::read_dir(dir.path()).expect("read tempdir")
-	}) {
+	for entry in std::fs::read_dir(&locked)
+		.unwrap_or_else(|_| std::fs::read_dir(dir.path()).expect("read tempdir"))
+	{
 		let entry = entry.expect("dir entry");
 		let name = entry.file_name();
 		let s = name.to_string_lossy();

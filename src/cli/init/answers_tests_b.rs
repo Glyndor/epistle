@@ -227,7 +227,7 @@ fn unicode_dns_zone_with_its_unicode_domain_validates() {
 }
 
 /// A zone that is not a valid domain name (`zone = "invalid"`) must
-/// surface as `Invalid::DnsZoneInvalid` from the file path. The
+/// surface as `Invalid::DnsZoneMalformed` from the file path. The
 /// shared validator runs `crate::domain::normalize` on the zone
 /// before the scope check; the same shape would be rejected by the
 /// assistant because `ask_domain` runs the same normaliser on
@@ -244,17 +244,17 @@ fn invalid_dns_zone_in_answers_file_fails_validation() {
 	});
 	let errors = answers
 		.validate()
-		.expect_err("invalid zone must surface as DnsZoneInvalid");
+		.expect_err("invalid zone must surface as DnsZoneMalformed");
 	assert!(
 		errors
 			.iter()
-			.any(|e| matches!(e, Invalid::DnsZoneInvalid { .. })),
-		"invalid zone must surface as DnsZoneInvalid, got {errors:?}"
+			.any(|e| matches!(e, Invalid::DnsZoneMalformed { .. })),
+		"invalid zone must surface as DnsZoneMalformed, got {errors:?}"
 	);
 }
 
 /// A zone with a confusable look-alike (Cyrillic that looks like
-/// `paypal.com`) must surface as `DnsZoneInvalid`. The same shape
+/// `paypal.com`) must surface as `DnsZoneMalformed`. The same shape
 /// in the assistant is rejected by `ask_domain` because the prompt
 /// helper runs the same normaliser.
 #[test]
@@ -269,20 +269,22 @@ fn confusable_dns_zone_in_answers_file_fails_validation() {
 	});
 	let errors = answers
 		.validate()
-		.expect_err("confusable zone must surface as DnsZoneInvalid");
+		.expect_err("confusable zone must surface as DnsZoneMalformed");
 	let has_zone_invalid = errors
 		.iter()
-		.any(|e| matches!(e, Invalid::DnsZoneInvalid { .. }));
-	let has_zone_scope = errors.iter().any(|e| matches!(
-		e,
-		Invalid::DnsZoneInvalid {
-			reason,
-			..
-		} if reason.contains("confusable")
-	));
+		.any(|e| matches!(e, Invalid::DnsZoneMalformed { .. }));
+	let has_zone_scope = errors.iter().any(|e| {
+		matches!(
+			e,
+			Invalid::DnsZoneMalformed {
+				reason,
+				..
+			} if reason.contains("confusable")
+		)
+	});
 	assert!(
 		has_zone_invalid && has_zone_scope,
-		"confusable zone must surface as DnsZoneInvalid with the confusable reason: {errors:?}"
+		"confusable zone must surface as DnsZoneMalformed with the confusable reason: {errors:?}"
 	);
 }
 
@@ -299,7 +301,9 @@ fn config_path_root_is_rejected_by_the_validator() {
 		.validate()
 		.expect_err("config_path = `/` must be rejected by the validator");
 	assert!(
-		errors.iter().any(|e| matches!(e, Invalid::ConfigPathNoFileName)),
+		errors
+			.iter()
+			.any(|e| matches!(e, Invalid::ConfigPathNoFileName)),
 		"root config_path must surface as ConfigPathNoFileName, got {errors:?}"
 	);
 }
@@ -323,7 +327,9 @@ fn config_path_current_dir_is_rejected_by_the_validator() {
 		.validate()
 		.expect_err("config_path = `/.` must be rejected by the validator");
 	assert!(
-		errors.iter().any(|e| matches!(e, Invalid::ConfigPathNoFileName)),
+		errors
+			.iter()
+			.any(|e| matches!(e, Invalid::ConfigPathNoFileName)),
 		"`/.` config_path must surface as ConfigPathNoFileName, got {errors:?}"
 	);
 }
