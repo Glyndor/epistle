@@ -106,6 +106,11 @@ pub struct PublishRecord {
 
 const TTL: u32 = 3600;
 
+/// Derive the DNS policy identifier using the public policy writer's renderer.
+pub fn mta_sts_id(config: &crate::config::Config) -> String {
+	crate::mtasts::publish::publication(config).id
+}
+
 /// Split a TXT record value into the strings the wire format requires.
 ///
 /// RFC 1035 §3.3.14 caps each character-string at 255 octets, and most
@@ -321,8 +326,7 @@ pub fn build_records(
 		records.push(cname(format!("autodiscover.{domain}")));
 		// MTA-STS policy fetch (RFC 8461 §3.2): clients look up
 		// `mta-sts.<domain>` and fetch `https://mta-sts.<domain>/.well-known/mta-sts.txt`.
-		// epistle already serves the policy over HTTPS, so the CNAME makes
-		// that URL resolvable.
+		// The HTTPS endpoint must use a certificate covering this CNAME.
 		records.push(cname(format!("mta-sts.{domain}")));
 		// CAA (RFC 8659): lock cert issuance to the configured CA. Only
 		// emitted for CAs we recognise — a wrong value would block

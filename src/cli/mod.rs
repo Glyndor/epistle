@@ -13,6 +13,7 @@ mod export;
 mod import;
 mod local;
 mod mobileconfig;
+mod mta_sts_serve;
 mod queue;
 mod report_abuse;
 mod reports;
@@ -60,6 +61,21 @@ pub struct Cli {
 /// variant with the right handler module.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+	/// Serve the public MTA-STS policy over HTTPS.
+	MtaStsServe {
+		/// Directory containing mta-sts.txt.
+		#[arg(long, value_name = "DIR")]
+		policy_dir: PathBuf,
+		/// PEM certificate chain covering `mta-sts.<domain>`.
+		#[arg(long, value_name = "FILE")]
+		cert: PathBuf,
+		/// PEM private key for the certificate.
+		#[arg(long, value_name = "FILE")]
+		key: PathBuf,
+		/// HTTPS socket address.
+		#[arg(long, value_name = "ADDR", default_value = "0.0.0.0:8443")]
+		listen: std::net::SocketAddr,
+	},
 	/// Run the mail server.
 	Serve {
 		/// Path to the configuration file.
@@ -388,3 +404,7 @@ mod tests_c;
 #[cfg(test)]
 #[path = "cli_tests_d.rs"]
 mod tests_d;
+
+#[cfg(test)]
+#[path = "mta_sts_serve_tests.rs"]
+mod mta_sts_serve_tests;

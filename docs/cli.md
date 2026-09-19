@@ -55,9 +55,44 @@ printed once at the end.
 | Command | What it does |
 |---|---|
 | `epistle serve --config F` | Bind the configured listeners and run. |
+| `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
 | `epistle config-check --config F` | Validate the configuration and exit. |
 | `epistle verify --config F` | Check on-disk data integrity (run before an upgrade). |
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
+
+## `epistle mta-sts-serve`
+
+Run a second instance of the same binary for the public policy endpoint:
+
+```sh
+epistle mta-sts-serve --policy-dir /var/lib/epistle/mta-sts \
+  --cert /etc/epistle/mta-sts-cert.pem --key /etc/epistle/mta-sts-key.pem \
+  --listen 0.0.0.0:8443
+```
+
+`--listen` defaults to `0.0.0.0:8443`. Make this listener reachable on public
+HTTPS port 443 at `mta-sts.<domain>`. The certificate must cover that hostname
+for every served domain; a certificate covering only the mail hostname is
+insufficient. The command needs no mail configuration or database.
+
+`GET` and `HEAD` at `/.well-known/mta-sts.txt` read `DIR/mta-sts.txt` on each
+request and return `Content-Type: text/plain; charset=utf-8` with
+`Cache-Control: max-age=<policy max_age>`. Other paths and a missing policy
+return an empty 404. Other methods on the policy path return 405 with
+`Allow: GET, HEAD`. Invalid policy contents or read failures other than a
+missing file return an empty 500.
+
+TLS 1.2 and 1.3 are enabled. The HTTP request line and headers together are
+limited to 8 KiB, and each connection has a 30-second lifetime including the
+TLS handshake. Certificate and key file changes are checked on new
+connections. Valid replacements take effect without restarting; an invalid
+replacement retains the previous certificate and is retried on the next
+connection.
+
+Configure [`[mta_sts] policy_dir`](configuration.md#mta_sts) on the ordinary
+`serve` process to write the shared policy directory at startup. After changing
+the policy configuration, restart `serve` and republish the `_mta-sts` TXT
+record printed by `dns-records`; its ID is derived from the policy content.
 
 ## `epistle local` (test harness)
 

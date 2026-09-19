@@ -95,6 +95,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("tlsrpt_reports_ingested", "tlsrpt_reports_ingested"),
 	("tlsrpt_failed_sessions", "tlsrpt_failed_sessions"),
 	("reports_dropped", "reports_dropped"),
+	("mta_sts_connections_dropped", "mta_sts_connections_dropped"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -140,6 +141,7 @@ pub struct Metrics {
 	tlsrpt_reports_ingested: AtomicU64,
 	tlsrpt_failed_sessions: AtomicU64,
 	reports_dropped: AtomicU64,
+	mta_sts_connections_dropped: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
@@ -297,6 +299,13 @@ impl Metrics {
 		self.reports_dropped.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a public MTA-STS HTTPS connection dropped before the TLS
+	/// handshake because the listener's concurrency cap was already full.
+	pub fn mta_sts_connections_dropped(&self) {
+		self.mta_sts_connections_dropped
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -395,6 +404,7 @@ impl Metrics {
 			"tlsrpt_reports_ingested" => &self.tlsrpt_reports_ingested,
 			"tlsrpt_failed_sessions" => &self.tlsrpt_failed_sessions,
 			"reports_dropped" => &self.reports_dropped,
+			"mta_sts_connections_dropped" => &self.mta_sts_connections_dropped,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -537,6 +547,11 @@ impl Metrics {
 				"mail_reports_dropped_total",
 				"Inbound DMARC or TLS-RPT reports dropped for being too large, malformed, or using an unsupported encoding.",
 				&self.reports_dropped,
+			),
+			(
+				"mail_mta_sts_connections_dropped_total",
+				"Public MTA-STS HTTPS connections dropped before the TLS handshake because the listener's concurrency cap was full.",
+				&self.mta_sts_connections_dropped,
 			),
 			(
 				"mail_llm_consulted_total",

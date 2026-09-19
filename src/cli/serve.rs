@@ -44,6 +44,7 @@ pub fn run(config: Config) -> ExitCode {
 }
 
 async fn serve(config: Config) -> std::io::Result<()> {
+	crate::mtasts::publish::write_policy(&config)?;
 	// Single-signature DKIM warning at the very top of startup so it is
 	// visible before any listener binds. The wording is the shared helper
 	// reused by `config-check` and `verify-dns`.
@@ -541,3 +542,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "serve_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "serve_tests_mta_sts.rs"]
+mod tests_mta_sts;

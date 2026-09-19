@@ -133,6 +133,41 @@ Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 
 
 ## Sections
 
+### `[mta_sts]`
+
+Configure the policy published for this server's own mail domains:
+
+```toml
+[mta_sts]
+policy_dir = "/var/lib/epistle/mta-sts"
+mode = "testing"
+max_age = 604800
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `policy_dir` | path | unset | Directory where `serve` writes `mta-sts.txt` at startup. Unset disables writing. |
+| `mode` | `testing`, `enforce`, or `none` | `testing` | Enforcement mode announced to sending mail servers. |
+| `max_age` | unsigned integer | `604800` | Policy cache lifetime in seconds. |
+
+The file contains `version: STSv1`, the selected mode, an `mx:` line naming
+the configured `hostname` (the same host used in DNS MX records), and
+`max_age`. All configured domains share this policy. Startup creates the
+directory if needed and replaces the file atomically with permissions 0644.
+A write failure aborts startup.
+
+The `_mta-sts` TXT record printed by `epistle dns-records --config FILE` uses
+a content hash for its `id=` value. Identical policy contents keep the same ID;
+changing the mode, hostname, or cache lifetime changes it. Restart `serve`
+after changing these settings and publish the regenerated DNS records.
+
+Run [`epistle mta-sts-serve`](cli.md#epistle-mta-sts-serve) with the same policy
+directory and make it reachable at
+`https://mta-sts.<domain>/.well-known/mta-sts.txt` on port 443. Its default
+bind address is `0.0.0.0:8443`. The HTTPS certificate must cover
+`mta-sts.<domain>` for each domain, even when the CNAME points to the mail
+hostname. Supply that certificate and its private key with `--cert` and `--key`.
+
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
 
