@@ -5,19 +5,26 @@
 //! failed), the server faces a binary choice: accept or reject. Both have a
 //! cost: a quiet accept teaches the classifier that "uncertain" is the
 //! same as "spam" if it really is, and a hard reject bounces legitimate
-//! mail. SubjectPass splits the difference: tempfail with a token the
-//! sender can put in the subject, and accept the retry that carries it.
+//! mail. SubjectPass splits the difference: refuse with a token the sender
+//! can put in the subject, and accept the resend that carries it.
 //!
-//! ## Why a tempfail, not a quarantine
+//! ## Why a permanent refusal, not a tempfail
 //!
-//! The same property greylisting relies on: a real sender retries (people
-//! hit "send again" or their MTA queue holds the message), a spam cannon
-//! does not (it opens one socket and never reads its bounce). Greylisting
-//! keys on (client, sender, recipient) triplets; SubjectPass keys on
-//! (sender, recipient, day) signed with a per-instance HMAC key, so the
-//! same sender can prove they saw the challenge without needing to retry
-//! from the same IP, and a stolen token gains exactly one sender/recipient
-//! pair for one day.
+//! The challenge only works if a person reads it. A sending MTA that is
+//! given a 4xx keeps the message queued and retries the same bytes, which
+//! never carry the token, so every retry is challenged again and the author
+//! hears nothing until that queue gives up days later. A 5xx makes the
+//! sending MTA bounce at once, and the bounce quotes the reply text with the
+//! token in it. A spam cannon opens one socket and never reads its bounce.
+//!
+//! The message is dropped when it is challenged: it is not stored, and it
+//! does not train the corpus in either direction, because the server has
+//! asked a question rather than reached a verdict.
+//!
+//! Greylisting keys on (client, sender, recipient) triplets; SubjectPass
+//! keys on (sender, recipient, day) signed with a per-instance HMAC key, so
+//! the resend does not need to come from the same IP, and a stolen token
+//! gains exactly one sender/recipient pair for one day.
 //!
 //! ## The token
 //!
@@ -262,15 +269,15 @@ fn find_header_end(raw: &[u8]) -> Option<usize> {
 	raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 2)
 }
 
-/// The SMTP reply a sender sees when SubjectPass challenges them. The text
-/// is what a person will read: a human sentence plus the token they need
-/// to put in the subject. The `4.7.1` enhanced status code mirrors the
-/// per-IP/per-sender rate limits: temporary, retryable.
+/// The SMTP reply text a sender sees when SubjectPass challenges them. It
+/// reaches a person inside the bounce their own MTA writes, so it is one
+/// plain sentence plus the token to put in the subject. `<token>` stands for
+/// the whole token, prefix included.
 pub const CHALLENGE_TEXT: &str =
 	"this message needs a human; resend it with <token> anywhere in the subject";
 
-/// Compose the `450 4.7.1 ...` reply with a freshly minted token in place
-/// of `<token>`.
+/// Compose the `550 5.7.1 ...` reply with a freshly minted token in place
+/// of `<token>`. The code is permanent on purpose: see the module docs.
 pub fn challenge_reply(
 	pass: &SubjectPass,
 	sender: &str,
@@ -279,7 +286,7 @@ pub fn challenge_reply(
 ) -> crate::smtp::reply::Reply {
 	let token = pass.issue(sender, recipient, day);
 	let body = CHALLENGE_TEXT.replace("<token>", &token);
-	crate::smtp::reply::Reply::single(450, &format!("4.7.1 {body}"))
+	crate::smtp::reply::Reply::single(550, &format!("5.7.1 {body}"))
 }
 
 #[cfg(test)]

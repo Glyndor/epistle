@@ -470,8 +470,8 @@ impl Server {
 					// Uncertain-band logic: SubjectPass (if enabled) accepts
 					// the retry that carries a valid token in the subject,
 					// otherwise the band consults the LLM hook if one is
-					// configured, otherwise (no LLM verdict) it issues a
-					// 4.7.1 challenge with a fresh token. The check runs
+					// configured, otherwise (no LLM verdict) it refuses with
+					// a 550 5.7.1 challenge and a fresh token. The check runs
 					// after DNSBL, SPF, DMARC and the scanner hook, so a
 					// valid token never overrides a hard rejection.
 					if matches!(

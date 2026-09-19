@@ -4,9 +4,9 @@
 //! under the CI hard limit (500). The band is the slice of mail where the
 //! local Bayesian classifier is not confident in either direction; on an
 //! unauthenticated message the server consults the LLM hook (if any) and,
-//! when configured, the SubjectPass signed-retry-token path. The token
-//! path tempfails with a freshly minted `EP-<token>` the sender can paste
-//! in the `Subject:`; the retry that carries it is accepted as ham.
+//! when configured, the SubjectPass signed-token path. The token path
+//! refuses with `550 5.7.1` and a freshly minted token the sender can paste
+//! in the `Subject:`; the resend that carries it is accepted as ham.
 //!
 //! The check runs after DNSBL, SPF, DMARC and the scanner hook in the
 //! caller, so a valid token never overrides a hard rejection.
@@ -20,9 +20,10 @@ use crate::smtp::session::AcceptedMessage;
 pub(super) enum BandOutcome {
 	/// Continue with the post-band path (deliver or quarantine as configured).
 	Continue,
-	/// A `450 4.7.1` was sent to the client and the message must be
-	/// dropped: the sender is expected to retry with the token in the
-	/// subject, at which point the SubjectPass verifier will accept it.
+	/// A `550 5.7.1` challenge was sent to the client and the message must
+	/// be dropped without being stored or trained on: the sender is
+	/// expected to resend with the token in the subject, at which point the
+	/// SubjectPass verifier accepts it.
 	Challenged,
 }
 
@@ -31,7 +32,7 @@ impl Server {
 	/// precomputed by the caller so this function stays free of the
 	/// session borrow. Returns `Continue` to let the caller proceed with
 	/// the normal accept/quarantine path, or `Challenged` after the band
-	/// has tempfailed the client and incremented the counter.
+	/// has refused the message and incremented the counter.
 	pub(super) async fn handle_uncertain_band<W>(
 		&self,
 		message: &mut AcceptedMessage,

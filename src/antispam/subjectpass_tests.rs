@@ -170,7 +170,7 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 	let recipient = "bob@example.org";
 	let day = 20_000;
 	let rendered = challenge_reply(&p, sender, recipient, day).to_string();
-	assert!(rendered.starts_with("450 4.7.1 "), "{rendered}");
+	assert!(rendered.starts_with("550 5.7.1 "), "{rendered}");
 	// What a person copies out of the bounce is the whitespace-delimited
 	// word that starts with the prefix. It has to be the token itself, and
 	// it has to pass when pasted into a subject.

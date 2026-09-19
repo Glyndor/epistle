@@ -259,7 +259,7 @@ impl Metrics {
 	}
 
 	/// Count an unauthenticated message in the uncertain band that was
-	/// tempfailed with a SubjectPass challenge (no token in the subject,
+	/// refused with a SubjectPass challenge (no token in the subject,
 	/// and either no LLM hook or the LLM hook call failed).
 	pub fn subjectpass_challenged(&self) {
 		self.subjectpass_challenged.fetch_add(1, Ordering::Relaxed);
@@ -459,7 +459,7 @@ impl Metrics {
 			),
 			(
 				"mail_subjectpass_challenged_total",
-				"Unauthenticated messages tempfailed with a SubjectPass challenge.",
+				"Unauthenticated messages refused with a SubjectPass challenge.",
 				&self.subjectpass_challenged,
 			),
 		] {

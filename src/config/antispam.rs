@@ -7,8 +7,8 @@
 //! at WARN and the message is accepted, so an outage never blocks mail.
 //!
 //! Also configures SubjectPass, the signed retry token for the uncertain
-//! band: when the band has no LLM verdict to lean on, the server tempfails
-//! with a token the sender can put in the subject, and accepts the retry
+//! band: when the band has no LLM verdict to lean on, the server refuses
+//! with a token the sender can put in the subject, and accepts the resend
 //! that carries it. Opt-in because it changes what remote senders see.
 
 use serde::Deserialize;

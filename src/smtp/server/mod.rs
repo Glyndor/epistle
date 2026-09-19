@@ -71,9 +71,9 @@ pub struct Server {
 	/// score sits inside the configured uncertain band. Outside the band the
 	/// classifier is not consulted at all, so a non-`None` value is cheap.
 	llm: Option<crate::antispam::llm::LlmHook>,
-	/// Optional SubjectPass instance: when set, the server tempfails messages
-	/// in the uncertain band with a signed retry token, and accepts the
-	/// retry that carries the matching token in its `Subject:`. The
+	/// Optional SubjectPass instance: when set, the server refuses messages
+	/// in the uncertain band with `550 5.7.1` and a signed token, and accepts
+	/// the resend that carries the matching token in its `Subject:`. The
 	/// validator refuses to enable it without a `[database]` section, so
 	/// the same Server build only enables it when the Bayesian score is
 	/// actually reachable.
@@ -323,7 +323,7 @@ impl Server {
 	}
 
 	/// Enable SubjectPass: messages in the uncertain Bayesian band that lack a
-	/// valid token and cannot be resolved by an LLM hook are tempfailed with a
+	/// valid token and cannot be resolved by an LLM hook are refused with a
 	/// freshly minted token the sender can put in the subject. The validator
 	/// refuses to enable it without a `[database]` section.
 	pub fn with_subjectpass(mut self, pass: crate::antispam::subjectpass::SubjectPass) -> Self {

@@ -137,26 +137,31 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   reputation `first_time_delay` are skipped. Nothing else changes:
   DNSBL, SPF, DKIM, DMARC, the scanner and the LLM band still run,
   because a known correspondent's account can itself be compromised.
-- **Signed retry token for the uncertain band (SubjectPass).** A message whose
+- **Signed token for the uncertain band (SubjectPass).** A message whose
   local Bayesian score lands in the configured uncertain band and has no LLM
   verdict to lean on faces a binary choice: accept or reject. Both have a
-  cost, a quiet accept teaches the classifier that "uncertain" is the same
-  as "ham" if it is not, and a hard reject bounces legitimate mail. SubjectPass
-  splits the difference: the server tempfails with a token the sender can
-  paste in the `Subject:`, and accepts the retry that carries it. The same
-  property greylisting relies on holds here: a real sender retries (a person
-  hits "send again", or the MTA queue holds the message); a spam cannon does
-  not. The token is per `(sender, recipient, day)` and signed with an HMAC key
-  held on disk under `data_dir/subjectpass.key` (`0600`, generated on first
-  use), so a stolen token gains one pair for one day. The check runs after
-  DNSBL, SPF, DMARC and the scanner hook, so a valid token never overrides a
-  hard rejection. Opt-in (`subjectpass.enabled = true`) because it changes
-  what remote senders see, and requires `[database]` because the band needs
-  the Bayesian score to test against. **Cost:** one extra round trip for
-  unknown legitimate senders whose mail lands in the band, and the reply
-  text (`450 4.7.1 this message needs a human; resend it with EP-<token>
-  anywhere in the subject`) is what a person will read; keep it short and
-  human, because the alternative is a real person hitting a wall.
+  cost: a quiet accept teaches the classifier that "uncertain" is the same
+  as "ham" if it is not, and a silent reject loses legitimate mail.
+  SubjectPass splits the difference: the server refuses the message with
+  `550 5.7.1` and a token the sender can paste in the `Subject:`, and accepts
+  the resend that carries it. The refusal is permanent, not a `4xx`, because
+  a sending server retries a `4xx` with the same message, which never carries
+  the token, and its author hears nothing until that queue gives up days
+  later; a `5xx` is bounced to the author at once with the reply text in it.
+  A spam cannon does not read its bounces. A challenged message is not stored
+  and does not train the corpus. The token is per `(sender, recipient, day)`
+  and signed with an HMAC key held on disk under `data_dir/subjectpass.key`
+  (`0600`, generated on first use), so a stolen token gains one pair for one
+  day. The check runs after DNSBL, SPF, DMARC and the scanner hook, so a
+  valid token never overrides a hard rejection. Opt-in
+  (`subjectpass.enabled = true`) because it changes what remote senders see,
+  and requires `[database]` because the band needs the Bayesian score to test
+  against. **Cost:** one bounce and one resend for unknown legitimate senders
+  whose mail lands in the band, and a lost message for automated senders
+  whose bounces nobody reads. The reply text (`550 5.7.1 this message needs a
+  human; resend it with EP-XXXXXXXXXXXX anywhere in the subject`) is what a
+  person will read; keep it short and human, because the alternative is a
+  real person hitting a wall.
 
 ## Data at rest
 
