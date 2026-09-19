@@ -164,14 +164,23 @@ fn base32_encoding_round_trips_through_the_token() {
 }
 
 #[test]
-fn challenge_reply_carries_the_freshly_issued_token() {
+fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 	let p = pass();
-	let reply = challenge_reply(&p, "alice@example.org", "bob@example.org", 20_000);
-	let rendered = reply.to_string();
-	// 450 4.7.1 with the EP- prefix and the token in the body.
+	let sender = "alice@example.org";
+	let recipient = "bob@example.org";
+	let day = 20_000;
+	let rendered = challenge_reply(&p, sender, recipient, day).to_string();
 	assert!(rendered.starts_with("450 4.7.1 "), "{rendered}");
-	let token = p.issue("alice@example.org", "bob@example.org", 20_000);
-	assert!(rendered.contains(&token), "{rendered}");
+	// What a person copies out of the bounce is the whitespace-delimited
+	// word that starts with the prefix. It has to be the token itself, and
+	// it has to pass when pasted into a subject.
+	let word = rendered
+		.split_whitespace()
+		.find(|word| word.starts_with(TOKEN_PREFIX))
+		.expect("the reply carries a word with the token prefix");
+	assert_eq!(word, p.issue(sender, recipient, day), "{rendered}");
+	let subject = format!("Re: hello {word}");
+	assert!(p.accepts(Some(&subject), sender, recipient, day), "{rendered}");
 }
 
 #[test]

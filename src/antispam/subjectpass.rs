@@ -267,7 +267,7 @@ fn find_header_end(raw: &[u8]) -> Option<usize> {
 /// to put in the subject. The `4.7.1` enhanced status code mirrors the
 /// per-IP/per-sender rate limits: temporary, retryable.
 pub const CHALLENGE_TEXT: &str =
-	"this message needs a human; resend it with EP-<token> anywhere in the subject";
+	"this message needs a human; resend it with <token> anywhere in the subject";
 
 /// Compose the `450 4.7.1 ...` reply with a freshly minted token in place
 /// of `<token>`.
