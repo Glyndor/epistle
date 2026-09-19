@@ -139,6 +139,13 @@ pub enum ApplyError {
 	/// silently replace the link with a regular file; the operator
 	/// has to resolve the link by hand first.
 	ConfigSymlink(PathBuf),
+	/// `openssl` is on `PATH` but the `genpkey` invocation failed
+	/// (broken binary, missing entropy, etc.) and the RSA DKIM key
+	/// could not be produced. Carries the operator-facing reason.
+	/// Distinct from `KeyWrite` because no key file was attempted;
+	/// the failure is in the key-generation step itself, before any
+	/// write would have happened.
+	RsaKeygen(String),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -180,6 +187,9 @@ impl std::fmt::Display for ApplyError {
 				"config_path {} is a symlink; resolve the link (or replace it with its target) and rerun init",
 				path.display()
 			),
+			ApplyError::RsaKeygen(reason) => {
+				write!(f, "cannot generate the RSA DKIM key: {reason}")
+			}
 		}
 	}
 }
@@ -445,11 +455,16 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			Err(error) => {
 				// openssl is on PATH but the actual key generation
 				// failed (broken binary, missing entropy, etc.). The
-				// operator sees a Skipped line on stderr.
-				report.steps.push(ReportStep::Skipped {
-					name: "dkim rsa key".to_string(),
-					reason: error.to_string(),
-				});
+				// operator asked for the key, the key did not land:
+				// stop the run with `ApplyOutcome.error` so the
+				// rendered report (which still lists the keys that
+				// did land, e.g. s1.pem) is followed by an exit-1
+				// diagnostic rather than a silent Skipped line that
+				// looks like a successful run.
+				return ApplyOutcome {
+					report,
+					error: Some(ApplyError::RsaKeygen(error.to_string())),
+				};
 			}
 		}
 	} else {
