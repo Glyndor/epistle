@@ -27,11 +27,10 @@ pub(super) struct SplitCompanions {
 }
 
 /// Build [`SplitDelivery`] and attach the DKIM signer, SRS, webhook, and
-/// ARC sealer in the order they were wired inside `serve`. Failures surface
-/// in the same order as before the extraction: a missing `[dkim]` key stops
-/// the start before SRS / webhook / ARC are even attempted, a bad webhook
-/// URL stops before ARC, and a bad ARC key stops before the sink is
-/// returned. Errors carry the same text as the inline implementation.
+/// ARC sealer. Keep this order, because it is the order in which a bad
+/// configuration stops the start: a missing `[dkim]` key before SRS, the
+/// webhook and ARC are attempted, a bad webhook URL before ARC, and a bad
+/// ARC key before the sink is returned.
 pub(super) fn build_split_with_companions(
 	config: &Config,
 	metrics: &Arc<Metrics>,

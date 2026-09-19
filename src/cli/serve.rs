@@ -104,9 +104,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured. The
 	// split delivery and its four delivery-path companions (DKIM, SRS,
-	// webhook, ARC sealer) are wired in the same order here as before, in
-	// `serve_dkim::build_split_with_companions`, so failure messages stay
-	// identical.
+	// webhook, ARC sealer) are built by `serve_dkim::build_split_with_companions`.
 	let SplitCompanions {
 		split,
 		dkim_signer,
@@ -138,7 +136,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Per-listener rate limiters (submission, inbound per-IP, inbound per-sender).
 	// All three are shared across SMTP listeners and each one is created only
-	// when its `[server]` section is configured; the helper preserves that.
+	// when its `[server]` section is configured.
 	let RateLimiters {
 		send_limiter,
 		inbound_ip_limit,
@@ -147,9 +145,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Per-listener shared state: tenant limits, correspondent store, daily
 	// new-recipient cap, disk-space guard, max-connections cap, and the
-	// optional scanner and LLM antispam hooks. The helper preserves the
-	// fail-closed behaviour (a malformed scanner URL or missing LLM key
-	// still stops the start).
+	// optional scanner and LLM antispam hooks. Fail closed: a malformed
+	// scanner URL or a missing LLM key stops the start.
 	let SmtpSharedState {
 		tenant_limits,
 		correspondents,
@@ -217,8 +214,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
 	// renewal task. Loaded here so every listener picks the same acceptor up
-	// later; the helper preserves the same error text and the same warning
-	// when `[acme]` is set without `[tls]`.
+	// later. `[acme]` without `[tls]` warns and continues.
 	let TlsStack {
 		tls_acceptor,
 		reloadable_tls,

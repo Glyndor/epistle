@@ -28,8 +28,7 @@ pub(super) struct TlsStack {
 /// Load the TLS acceptor, build the reloadable variant, compute the
 /// SCRAM channel-binding hash, and spawn the ACME renewal task when one
 /// is configured. Failures propagate through `?` so a missing or
-/// malformed `[tls]` section stops the start with the same error text
-/// as before the extraction.
+/// malformed `[tls]` section stops the start.
 pub(super) fn build_tls(
 	config: &Config,
 	challenge_store: ChallengeStore,
