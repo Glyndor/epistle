@@ -25,7 +25,9 @@ use super::Kind;
 /// Append `report` as one JSON line to
 /// `{data_dir}/reports/{kind}/{day}/{org}.jsonl`. `org` must come from
 /// [`super::bounds::file_component`], which is what keeps the path inside
-/// the day directory. Directories are created on demand.
+/// the day directory. Directories are created on demand at mode `0700`
+/// and the JSONL file is opened at mode `0600`, the same shape
+/// `src/storage` uses for the mailbox tree.
 pub fn append(
 	data_dir: &Path,
 	kind: Kind,
@@ -35,14 +37,47 @@ pub fn append(
 ) -> std::io::Result<()> {
 	let dir = data_dir.join("reports").join(kind.dir_name()).join(day);
 	std::fs::create_dir_all(&dir)?;
+	set_owner_only_dir(&dir)?;
+	set_owner_only_dir(dir.parent().expect("kind dir"))?;
+	set_owner_only_dir(dir.parent().and_then(|p| p.parent()).expect("reports dir"))?;
 	let path = dir.join(format!("{org}.jsonl"));
 	let line = serde_json::to_string(report)
 		.map_err(|e| std::io::Error::other(format!("serialize report: {e}")))?;
-	let mut file = std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&path)?;
+	let mut options = std::fs::OpenOptions::new();
+	options.create(true).append(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(0o600);
+	}
+	let mut file = options.open(&path)?;
 	writeln!(file, "{line}")
+}
+
+/// Force the directory mode to `0700`. A directory that already existed
+/// with broader perms (a leftover from a pre-tightening deploy, for
+/// example) is normalised on the next write, the same shape the rest of
+/// `src/storage` uses for its secrets.
+#[cfg(unix)]
+fn set_owner_only_dir(path: &Path) -> std::io::Result<()> {
+	use std::os::unix::fs::PermissionsExt;
+	let metadata = std::fs::metadata(path)?;
+	if !metadata.is_dir() {
+		return Err(std::io::Error::other(format!(
+			"not a directory: {}",
+			path.display()
+		)));
+	}
+	let current = metadata.permissions().mode() & 0o777;
+	if current != 0o700 {
+		std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+	}
+	Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_dir(_path: &Path) -> std::io::Result<()> {
+	Ok(())
 }
 
 /// Remove day directories older than `days` under both report buckets.
