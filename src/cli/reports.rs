@@ -51,7 +51,7 @@ pub(super) fn run(config: &Config, days: u32, out: &mut impl std::io::Write) -> 
 	for kind in [Kind::Dmarc, Kind::TlsRpt] {
 		if let Err(error) = summarise(&config.data_dir, kind, today, days, out) {
 			errors += 1;
-			eprintln!("error: {} summary failed: {error}", label(kind));
+			super::style::error(format_args!("{} summary failed: {error}", label(kind)));
 		}
 	}
 	if errors > 0 {
