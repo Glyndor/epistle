@@ -112,6 +112,10 @@ mod jmap_tests;
 mod jmap_tests_b;
 
 #[cfg(test)]
+#[path = "jmap_tests_encoded_words.rs"]
+mod jmap_tests_encoded_words;
+
+#[cfg(test)]
 #[path = "jmap_tests_c.rs"]
 mod jmap_tests_c;
 

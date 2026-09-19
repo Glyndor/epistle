@@ -343,7 +343,7 @@ pub enum Command {
 		#[command(subcommand)]
 		action: archive::Subcommand,
 	},
-	/// Summarise what receivers told us via DMRC aggregate reports and
+	/// Summarise what receivers told us via DMARC aggregate reports and
 	/// TLS-RPT reports for the last `--days` days (default 7). Reads the
 	/// JSONL store under `data_dir/reports/`; never writes to it.
 	Reports {

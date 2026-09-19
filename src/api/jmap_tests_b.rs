@@ -226,7 +226,10 @@ async fn jmap_email_get_parses_message() {
 	assert_eq!(status, StatusCode::OK);
 	let email = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(email["subject"], "Hi there");
-	assert_eq!(email["from"][0]["email"], "Alice <a@example.org>");
+	// JMAP `from` is `[{name, email}]`: the display name lives in `name`
+	// and the angle-addr in `email` (RFC 8621 section 4.1.2.3, asAddresses).
+	assert_eq!(email["from"][0]["email"], "a@example.org");
+	assert_eq!(email["from"][0]["name"], "Alice");
 	assert_eq!(email["preview"], "the body");
 	// bodyValues exposes the decoded text body (RFC 8621 §4.1.4).
 	assert_eq!(email["bodyValues"]["0"]["value"], "the body\r\n");
