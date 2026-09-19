@@ -117,13 +117,13 @@ fn band_server(sink: &Arc<MemorySink>, scorer: &Arc<FixedScorer>) -> Server {
 /// Drive one whole SMTP conversation and return everything the server said.
 async fn converse(server: Server, peer: Option<std::net::IpAddr>, script: Vec<u8>) -> String {
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
-	let task = tokio::spawn(async move { server.handle(server_stream, peer).await });
+	let driver = tokio::spawn(async move { server.handle(server_stream, peer).await });
 	let (mut client_read, mut client_write) = tokio::io::split(client);
 	client_write.write_all(&script).await.expect("write");
 	client_write.shutdown().await.expect("shutdown");
 	let mut output = Vec::new();
 	client_read.read_to_end(&mut output).await.expect("read");
-	task.await.expect("task").expect("server result");
+	driver.await.expect("driver join").expect("server result");
 	String::from_utf8(output).expect("ascii")
 }
 

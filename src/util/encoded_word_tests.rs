@@ -64,7 +64,10 @@ fn text_around_a_word_is_kept_with_its_whitespace() {
 	assert_eq!(decode(""), "");
 	assert_eq!(decode("  "), "  ");
 	// Non-ASCII literal text next to a word: slicing stays on boundaries.
-	assert_eq!(decode("caf\u{e9} =?UTF-8?Q?x?= \u{e9}"), "caf\u{e9} x \u{e9}");
+	assert_eq!(
+		decode("caf\u{e9} =?UTF-8?Q?x?= \u{e9}"),
+		"caf\u{e9} x \u{e9}"
+	);
 }
 
 #[test]
@@ -105,7 +108,10 @@ fn hostile_input_comes_back_unchanged() {
 
 #[test]
 fn a_malformed_word_does_not_stop_the_next_one_from_decoding() {
-	assert_eq!(decode("=?UTF-8?B?!!!!?= =?UTF-8?Q?ok?="), "=?UTF-8?B?!!!!?= ok");
+	assert_eq!(
+		decode("=?UTF-8?B?!!!!?= =?UTF-8?Q?ok?="),
+		"=?UTF-8?B?!!!!?= ok"
+	);
 	assert_eq!(decode("=?UTF-8?Q?=?UTF-8?Q?ok?="), "=?UTF-8?Q?ok");
 }
 

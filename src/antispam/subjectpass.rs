@@ -8,7 +8,7 @@
 //! mail. SubjectPass splits the difference: refuse with a token the sender
 //! can put in the subject, and accept the resend that carries it.
 //!
-//! ## Why a permanent refusal, not a tempfail
+//! ## Why a permanent refusal
 //!
 //! The challenge only works if a person reads it. A sending MTA that is
 //! given a 4xx keeps the message queued and retries the same bytes, which
@@ -34,11 +34,11 @@
 //!
 //! The 12-character prefix is 60 bits, plenty for replay resistance inside
 //! the day window. The day is the same two-character base32 day stamp SRS
-//! uses (a `days mod 1024` value), so a token minted today also verifies
-//! yesterday's day stamp and vice versa; a sender who retries past
-//! midnight still passes. The key lives outside the database (so a DB
-//! compromise cannot forge tokens), the file is `0600`, and a fresh install
-//! has the helper mint a new one.
+//! uses (a `days mod 1024` value), and verification accepts the stamp of
+//! today and of the day before, so a sender who retries past midnight
+//! still passes. The key lives outside the database (so a DB compromise
+//! cannot forge tokens), the file is `0600`, and a fresh install has the
+//! helper mint a new one.
 //!
 //! ## Where the check runs
 //!

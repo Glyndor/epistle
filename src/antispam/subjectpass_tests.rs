@@ -1,13 +1,40 @@
 //! Tests for SubjectPass.
 //!
-//! Structural notes:
+//! What the tests pin:
 //!
-//! - `compare_is_constant_time` from the brief is not asserted with a fake.
-//!   The verify path uses an internal `constant_time_eq` helper, which is
-//!   straightforwardly constant-time (length-aware scan with an `|=` XOR
-//!   accumulator); a unit test for the helper below pins the shape, and the
-//!   brief allows dropping the structural test when a fake would be the only
-//!   way to assert it. The doc-comment on `verify` records the contract.
+//! - `a_token_verifies_for_its_pair_and_day`: a fresh token verifies the
+//!   sender, recipient and day that minted it.
+//! - `yesterdays_token_still_verifies_and_the_day_before_does_not`: the
+//!   two-day window (today and the day before) is exactly the window
+//!   `verify` accepts.
+//! - `a_token_for_another_recipient_does_not_verify` and
+//!   `a_token_for_another_sender_does_not_verify`: a token only verifies
+//!   for the (sender, recipient) pair that minted it.
+//! - `the_token_is_found_anywhere_in_the_subject_and_case_insensitively`:
+//!   `accepts()` finds an `EP-...` token in any whitespace-delimited word
+//!   of the subject and matches the prefix in either case.
+//! - `an_invalid_token_is_ignored_not_an_error`: a stray `EP-` shape
+//!   without a valid HMAC returns `false`, not a panic.
+//! - `a_different_key_does_not_validate`: tokens are bound to the
+//!   per-instance HMAC key.
+//! - `token_prefix_is_lowercase_in_subject_input`: the case-insensitive
+//!   prefix match covers both upper- and lowercase pastes.
+//! - `base32_encoding_round_trips_through_the_token`: the on-wire token
+//!   is all base32 alphabet characters.
+//! - `the_word_in_the_challenge_reply_is_the_token_and_passes`: the
+//!   whitespace-delimited `EP-` word in the `550 5.7.1` reply is exactly
+//!   the freshly issued token, and pasting it into `Subject: Re: hello <token>`
+//!   is accepted.
+//! - `header_value_finds_subject_case_insensitively`: the helper that
+//!   lifts the `Subject:` value out of the raw bytes is independent of
+//!   case and folds header continuations.
+//! - `open_persists_and_reloads_the_key` and
+//!   `the_persisted_key_file_is_owner_only`: the on-disk key is
+//!   reloaded across restarts and the file is `0600`.
+//! - `a_token_inside_an_rfc_2047_encoded_subject_is_accepted`: a
+//!   `Subject:` that travels as `=?UTF-8?B?...?=` or `=?UTF-8?Q?...?=`
+//!   is decoded before the token search; a token with one suffix
+//!   character changed is rejected under both encodings.
 
 use super::*;
 
@@ -245,7 +272,10 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 		.expect("the reply carries a word with the token prefix");
 	assert_eq!(word, p.issue(sender, recipient, day), "{rendered}");
 	let subject = format!("Re: hello {word}");
-	assert!(p.accepts(Some(&subject), sender, recipient, day), "{rendered}");
+	assert!(
+		p.accepts(Some(&subject), sender, recipient, day),
+		"{rendered}"
+	);
 }
 
 #[test]
