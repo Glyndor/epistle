@@ -88,13 +88,13 @@ fn probe_tls(stream: &mut TcpStream, phase: &str, deadline: Instant) -> Result<(
 	stream
 		.write_all(TLS_PROBE_BYTES)
 		.map_err(|error| format!("{phase}: write TLS probe: {error:?}"))?;
-	let mut buf = [0u8; 32];
+	let mut chunk = [0u8; 32];
 	let mut total = Vec::new();
-	while Instant::now() < deadline && total.len() < buf.len() {
-		match stream.read(&mut buf[total.len()..]) {
+	while Instant::now() < deadline && total.len() < chunk.len() {
+		match stream.read(&mut chunk) {
 			Ok(0) => break,
 			Ok(n) => {
-				total.extend_from_slice(&buf[..n]);
+				total.extend_from_slice(&chunk[..n]);
 				if total.first().is_some_and(|b| matches!(b, 0x15 | 0x16)) {
 					return Ok(());
 				}
@@ -364,6 +364,35 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		)?;
 		return Err(format!(
 			"reading the SMTP banner: greeting does not name mail.local.test: {banner_text:?}\nstderr:\n{}",
+			redact_password(&stderr)
+		));
+	}
+
+	// Negative control: probe_tls against the plaintext SMTP listener.
+	// A probe that always returned Ok would leave this section green,
+	// so the suite pins that a real probe can say NO. The port is
+	// `port_base + 25`; the failure message names it so a regression
+	// points at the listener instead of at the helper.
+	let mut smtp_tls = wait_for_bind(
+		smtp_addr,
+		bind_deadline,
+		"opening a fresh connection to the SMTP port for the negative TLS probe",
+		&mut child,
+	)?;
+	let smtp_tls_phase = format!("SMTP port {smtp_addr} must NOT be classified as TLS");
+	let smtp_tls_result = probe_tls(
+		&mut smtp_tls,
+		&smtp_tls_phase,
+		Instant::now() + Duration::from_secs(2),
+	);
+	drop(smtp_tls);
+	if smtp_tls_result.is_ok() {
+		let (_stdout, stderr) = child.kill_and_drain(
+			Instant::now() + Duration::from_secs(2),
+			"opening a fresh connection to the SMTP port for the negative TLS probe",
+		)?;
+		return Err(format!(
+			"opening a fresh connection to the SMTP port for the negative TLS probe: probe_tls returned Ok for the plaintext SMTP listener at {smtp_addr}; the probe must say NO when the listener is plaintext\nstderr:\n{}",
 			redact_password(&stderr)
 		));
 	}
