@@ -84,7 +84,7 @@ impl Cli {
 				Ok(config) => backup::run(
 					&config,
 					&mut std::io::stdout().lock(),
-					&mut std::io::stderr().lock(),
+					&mut style::stderr(),
 				),
 				Err(error) => {
 					style::error(error);
