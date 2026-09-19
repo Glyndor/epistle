@@ -107,43 +107,38 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 	);
 }
 
-/// The same failing case as the abort test, with the additional
-/// guard that the CLI's error/warning output reaches stderr and
-/// leaves stdout carrying only the count summary. A regression that
-/// puts `error: ...` lines on `out` instead of routing them through
-/// `super::style::error`/`style::warn` would feed structured errors
-/// into whatever pipes the count summary downstream; the assertion
-/// here is the one that flags that.
+/// The same failing case as the abort test, but driven through
+/// `remove_with_bayes` with an explicit `BayesStore` on a lazy pool
+/// so the helper reaches the `BayesPurge` arm of the failure path and
+/// the operator-facing warning and error lines both fire. The split
+/// between `out` and `err` is what the rest of the CLI promises: a
+/// piped run still sees only the count summary on stdout, while the
+/// operator's terminal sees the `warning:` about the retained
+/// account and the `error:` carrying the underlying purge failure.
 ///
-/// Sabotaged by re-introducing a `writeln!(out, "error: ...")`
-/// inside the unreachable-database branch (or any of the bayes
-/// error paths in `accounts::remove`); the test then surfaces
-/// `"error:" in stdout was <text>`.
+/// Three assertions pin the split: the exit code, the contents of
+/// the captured `err` sink, and the absence of either line on `out`.
+/// A regression that wrote `error: ...` or `warning: ...` to `out`
+/// (the original bug the test was supposed to catch, but never did
+/// because the unreachable-database branch never reached the Bayes
+/// arm and never wrote anything at all) fails the second assertion
+/// pair; a regression that swallowed the warning fails the third.
+///
+/// Sabotaged by re-introducing `writeln!(out, "warning: ...")`
+/// inside the BayesPurge arm of `remove_with_bayes`: the third
+/// assertion then surfaces `stdout must not carry warning: lines;
+/// got: "warning: ..."`.
 #[test]
 fn cli_remove_error_lines_do_not_pollute_stdout() {
-	use std::io::Write as _;
-	use std::net::TcpListener;
-
-	let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-	let port = listener.local_addr().expect("local addr").port();
-	drop(listener);
+	use crate::antispam::corpus::BayesStore;
+	use crate::cli::tests_b::config_at;
+	use std::sync::Arc;
 
 	let dir = tempfile::tempdir().expect("tempdir");
-	let toml = format!(
-		r#"hostname = "mail.example.org"
-data_dir = {:?}
-domains = ["example.org"]
+	let cfg = config_at(dir.path());
+	let config = crate::config::Config::load(cfg.path()).expect("load config");
 
-[database]
-url = "postgres://127.0.0.1:{port}/none?sslmode=require"
-"#,
-		dir.path()
-	);
-	let mut cfg_file = tempfile::NamedTempFile::new().expect("temp file");
-	cfg_file.write_all(toml.as_bytes()).expect("write cfg");
-	let config = crate::config::Config::load(cfg_file.path()).expect("load config");
-
-	let store = std::sync::Arc::new(
+	let store = Arc::new(
 		crate::directory_store::AccountStore::open(
 			dir.path(),
 			vec!["example.org".to_string()],
@@ -163,14 +158,59 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 			allowed_protocols: None,
 		})
 		.expect("add alice");
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
+
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	let pool = runtime.block_on(async {
+		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none").expect("lazy pool never connects")
+	});
+	let bayes = BayesStore::with_key(pool, [0u8; 32]);
 
 	let mut out = Vec::new();
-	let exit = accounts::remove(&config, "alice", QueuePolicy::Discard, &mut out);
-	assert_eq!(exit, ExitCode::FAILURE, "unreachable database must abort");
+	let mut err_buf = Vec::new();
+	let mut err_stream = anstream::AutoStream::new(&mut err_buf, anstream::ColorChoice::Auto);
+	let exit = accounts::remove_with_bayes(
+		&runtime,
+		&store,
+		&spool,
+		&config,
+		"alice",
+		QueuePolicy::Discard,
+		Some(&bayes),
+		&mut out,
+		&mut err_stream,
+	);
+	assert_eq!(
+		exit,
+		ExitCode::FAILURE,
+		"a failing bayes purge must abort the removal"
+	);
 
-	let text = String::from_utf8(out).expect("utf8 stdout");
+	let err_text = String::from_utf8(err_buf).expect("utf8 err");
 	assert!(
-		!text.contains("error:"),
-		"stdout must not carry error: lines; got: {text:?}"
+		err_text.contains("warning:"),
+		"the warning about the retained account must reach stderr; got: {err_text:?}"
+	);
+	assert!(
+		err_text.contains("bayes corpus purge failed"),
+		"the warning line must name the bayes purge; got: {err_text:?}"
+	);
+	assert!(
+		err_text.contains("error:"),
+		"the purge failure must reach stderr; got: {err_text:?}"
+	);
+
+	let out_text = String::from_utf8(out).expect("utf8 stdout");
+	assert!(
+		!out_text.contains("error:"),
+		"stdout must not carry error: lines; got: {out_text:?}"
+	);
+	assert!(
+		!out_text.contains("warning:"),
+		"stdout must not carry warning: lines; got: {out_text:?}"
+	);
+	assert!(
+		!out_text.contains("bayes corpus purge failed"),
+		"stdout must not carry the bayes warning; got: {out_text:?}"
 	);
 }
