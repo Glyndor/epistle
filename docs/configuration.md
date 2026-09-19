@@ -109,7 +109,7 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 | `client_ca` | PEM trust anchor for verifying TLS **client** certificates. When set, a client may authenticate with a certificate via SASL `EXTERNAL` (the account comes from the certificate's verified email SAN); clients without one fall back to password auth. Absent disables client-certificate auth. Requires a static certificate (not available under ACME, like SCRAM-SHA-256-PLUS). |
 
 ### `[dkim]`
-Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for receivers that lack Ed25519 support.
+Outbound DKIM signing. Ed25519 is primary; an RSA selector is also required from version 0.10 on so receivers that verify RSA alone still see a valid signature. Until then the server warns at startup and on `epistle config-check` / `epistle verify-dns` when the RSA pair is missing; the warning names `epistle dkim-keygen --rsa` as the remedy.
 
 Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
 
@@ -117,8 +117,8 @@ Key rotation is **automatic and always on** when a `[dns]` provider is configure
 |---|---|
 | `selector` | Ed25519 selector (the `s=` tag). |
 | `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
-| `rsa_selector` | Optional RSA selector. |
-| `rsa_key_file` | Optional RSA private key. |
+| `rsa_selector` | RSA selector. Required from the version above; a startup warning is logged before that whenever the field is absent. |
+| `rsa_key_file` | RSA private key paired with `rsa_selector`. Required from the version above. Generate with `epistle dkim-keygen --rsa`. |
 | `rotate_days` | **Deprecated.** Ignored. Kept so existing configs keep parsing; a one-shot warning is logged at startup when present. Will be removed in a future release. |
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 

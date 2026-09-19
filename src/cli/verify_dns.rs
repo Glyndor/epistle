@@ -9,6 +9,19 @@ use crate::spf::{DnsLookup, SystemDns};
 
 /// Run the DNS check against the system resolver.
 pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+	run_with_writers(config, out, &mut std::io::stderr().lock())
+}
+
+/// Same as [`run`], but writes the startup warnings (and any errors
+/// during resolver construction) to a caller-supplied stream. Lives
+/// separately so a test can assert on the warning text without forking
+/// the process.
+pub(super) fn run_with_writers(
+	config: &Config,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> ExitCode {
+	emit_single_signature_warning(config, err);
 	let dns = match SystemDns::from_system() {
 		Ok(dns) => dns,
 		Err(error) => {
@@ -35,6 +48,17 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		out,
 		progress,
 	))
+}
+
+/// Write the single-signature DKIM warning to `err` when the configuration
+/// would otherwise sign outbound mail with one key only. Lives here so
+/// `verify-dns` and `config-check` can share the call site, and so a
+/// test can capture it through an in-memory writer without going through
+/// the process boundary.
+pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std::io::Write) {
+	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(config) {
+		let _ = writeln!(err, "warning: {warning}");
+	}
 }
 
 /// The DKIM selectors epistle publishes (the Ed25519 selector plus an optional
@@ -242,5 +266,140 @@ mod tests {
 		assert_eq!(symbol(&check(Status::Ok).status), "ok  ");
 		assert_eq!(symbol(&check(Status::Missing).status), "MISS");
 		assert_eq!(symbol(&check(Status::LookupError).status), "err ");
+	}
+
+	#[test]
+	fn emit_single_signature_warning_writes_when_dkim_has_no_rsa() {
+		// The warning the operator sees is exactly what the helper produces.
+		// Captured through an in-memory writer so the assertion does not
+		// race with anything else writing to stderr.
+		let config: Config = toml::from_str(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+"#,
+		)
+		.expect("config");
+		let mut err = Vec::new();
+		emit_single_signature_warning(&config, &mut err);
+		let text = String::from_utf8(err).expect("utf8");
+		assert!(
+			text.contains("warning:"),
+			"emission must use the `warning:` prefix: {text}"
+		);
+		assert!(
+			text.contains("signs with one key only"),
+			"emission must reuse the shared helper text: {text}"
+		);
+	}
+
+	#[test]
+	fn emit_single_signature_warning_is_silent_when_both_rsa_fields_are_set() {
+		// Symmetric to the previous test: a fully-configured DKIM section
+		// must not produce a warning through this call site either.
+		let config: Config = toml::from_str(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+rsa_selector = "rsa1"
+rsa_key_file = "/etc/mail/rsa.pem"
+"#,
+		)
+		.expect("config");
+		let mut err = Vec::new();
+		emit_single_signature_warning(&config, &mut err);
+		assert!(
+			err.is_empty(),
+			"both RSA fields set: warning must not be written, got {err:?}"
+		);
+	}
+
+	#[test]
+	fn emit_single_signature_warning_is_silent_without_a_dkim_section() {
+		// The unsigned-server case is a separate finding (no [dkim] at
+		// all); this call site must not surface it.
+		let config: Config = toml::from_str(
+			r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+"#,
+		)
+		.expect("config");
+		let mut err = Vec::new();
+		emit_single_signature_warning(&config, &mut err);
+		assert!(
+			err.is_empty(),
+			"absent [dkim] must stay silent, got {err:?}"
+		);
+	}
+
+	#[test]
+	fn run_with_writers_writes_the_warning_before_dns_lookups() {
+		// `verify_dns::run_with_writers` is the entry point the dispatcher
+		// calls; the warning must land in the caller-supplied `err`
+		// writer before the function touches DNS. The hostname used here
+		// (`example.invalid`) is reserved by RFC 2606 to never resolve,
+		// so the test does not depend on the host's real DNS state and
+		// always finishes quickly with FAILURE (lookup error).
+		let config: Config = toml::from_str(
+			r#"
+hostname = "example.invalid"
+data_dir = "/var/lib/mail"
+domains = ["example.invalid"]
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+"#,
+		)
+		.expect("config");
+		let mut out = Vec::new();
+		let mut err = Vec::new();
+		let _ = run_with_writers(&config, &mut out, &mut err);
+		let err_text = String::from_utf8_lossy(&err);
+		assert!(
+			err_text.contains("warning:"),
+			"`verify-dns` call site must write the warning to err before DNS: {err_text}"
+		);
+		assert!(
+			err_text.contains("signs with one key only"),
+			"`verify-dns` call site must reuse the shared helper text: {err_text}"
+		);
+	}
+
+	#[test]
+	fn run_with_writers_is_silent_when_both_rsa_fields_are_set() {
+		// Symmetric to the previous test: a fully-configured DKIM section
+		// must not surface a warning through `verify-dns` either.
+		let config: Config = toml::from_str(
+			r#"
+hostname = "example.invalid"
+data_dir = "/var/lib/mail"
+domains = ["example.invalid"]
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+rsa_selector = "rsa1"
+rsa_key_file = "/etc/mail/rsa.pem"
+"#,
+		)
+		.expect("config");
+		let mut out = Vec::new();
+		let mut err = Vec::new();
+		let _ = run_with_writers(&config, &mut out, &mut err);
+		let err_text = String::from_utf8_lossy(&err);
+		assert!(
+			!err_text.contains("signs with one key only"),
+			"both RSA fields set: verify-dns must not emit the warning: {err_text}"
+		);
 	}
 }

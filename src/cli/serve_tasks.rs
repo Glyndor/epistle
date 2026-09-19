@@ -366,6 +366,18 @@ pub(super) fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 	}
 }
 
+/// What the single-signature DKIM warning will say at startup, if anything.
+/// Returns `None` when there is no warning to log (no `[dkim]` section, or
+/// both RSA fields configured). Pulled out of `serve::run` so the message is
+/// the only one in the codebase and so a test can assert the wording without
+/// binding a socket.
+pub(super) fn single_signature_dkim_warning(config: &Config) -> Option<String> {
+	config
+		.dkim
+		.as_ref()
+		.and_then(|dkim| dkim.single_signature_warning())
+}
+
 /// Spawn the automatic DKIM key-rotation task whenever `[dkim]` and `[dns]`
 /// are both configured. Rotation is a security property of the server, so
 /// it runs by default with the constant interval / overlap from

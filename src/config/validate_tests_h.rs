@@ -134,3 +134,96 @@ public_ipv6 = "2606:4700:4700::1111"
 		Some("2606:4700:4700::1111".into())
 	);
 }
+
+#[test]
+fn rejects_dkim_with_only_rsa_selector() {
+	// Setting `rsa_selector` without `rsa_key_file` points a published
+	// `_domainkey` TXT at a key we never load. The validator rejects the
+	// half-configured state so the misconfiguration cannot ship.
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+rsa_selector = "rsa1"
+"#,
+	);
+	let err = result.expect_err("half-configured RSA must be rejected");
+	let message = format!("{err:?}");
+	assert!(
+		message.contains("rsa_selector and rsa_key_file must be set together"),
+		"expected the rejection to name both fields, got {message:?}"
+	);
+}
+
+#[test]
+fn rejects_dkim_with_only_rsa_key_file() {
+	// Symmetric to the previous test: a key file without a selector has
+	// no TXT to point at, so the load must fail.
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+rsa_key_file = "/etc/mail/rsa.pem"
+"#,
+	);
+	let err = result.expect_err("half-configured RSA must be rejected");
+	let message = format!("{err:?}");
+	assert!(
+		message.contains("rsa_selector and rsa_key_file must be set together"),
+		"expected the rejection to name both fields, got {message:?}"
+	);
+}
+
+#[test]
+fn accepts_dkim_with_both_rsa_fields_set() {
+	// Both halves of the pair set: the validator must accept the config.
+	// The keys do not need to exist on disk at validate time (loading is
+	// the signer's job); the test only asserts the validator's gate.
+	let config = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+rsa_selector = "rsa1"
+rsa_key_file = "/etc/mail/rsa.pem"
+"#,
+	)
+	.expect("both RSA fields set must be accepted");
+	let dkim = config.dkim.expect("dkim section present");
+	assert_eq!(dkim.rsa_selector.as_deref(), Some("rsa1"));
+	assert_eq!(
+		dkim.rsa_key_file.as_ref().map(|p| p.to_str()),
+		Some(Some("/etc/mail/rsa.pem"))
+	);
+}
+
+#[test]
+fn accepts_dkim_with_neither_rsa_field_set() {
+	// Without RSA configured the validator must still accept the config:
+	// the runtime emits a startup warning (a single-signature warning),
+	// but a refusal here would refuse every installation that follows
+	// the current documentation, breaking upgrades.
+	let config = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+"#,
+	)
+	.expect("missing RSA must be accepted (warning, not refusal)");
+	assert!(config.dkim.is_some());
+}

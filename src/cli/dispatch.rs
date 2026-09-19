@@ -26,16 +26,11 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::ConfigCheck { config } => match Config::load(&config) {
-				Ok(_) => {
-					println!("configuration is valid");
-					ExitCode::SUCCESS
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::ConfigCheck { config } => {
+				let mut out = std::io::stdout().lock();
+				let mut err = std::io::stderr().lock();
+				super::config_check::run(&config, &mut out, &mut err)
+			}
 			Command::Export {
 				config,
 				account,
