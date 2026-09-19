@@ -11,6 +11,7 @@ mod config_check;
 mod dns_records;
 mod export;
 mod import;
+mod init;
 mod local;
 mod mobileconfig;
 mod mta_sts_serve;
@@ -32,6 +33,11 @@ mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+
+/// Re-export of the answers structure so integration tests can
+/// deserialise the `epistle init --print-answers` output without
+/// depending on the otherwise-private `init` module.
+pub use init::Answers;
 
 use util::{generate_secret, read_line};
 
@@ -384,6 +390,22 @@ pub enum Command {
 		/// must keep every port inside `1024..=65535`.
 		#[arg(long, value_name = "N", default_value_t = local::DEFAULT_PORT_BASE)]
 		port_base: u16,
+	},
+	/// First-run setup: validate the answers, generate the keys, write the
+	/// configuration file. Interactive when no `--answers` file is given.
+	/// DNS publishing and public-address detection are not implemented in
+	/// this build; the plan reports those steps as not implemented so the
+	/// operator knows what to expect.
+	Init {
+		/// Read answers from this TOML file instead of asking interactively.
+		#[arg(long, value_name = "FILE")]
+		answers: Option<PathBuf>,
+		/// Print the plan and exit without touching anything.
+		#[arg(long)]
+		dry_run: bool,
+		/// Print the answers template to stdout and exit.
+		#[arg(long)]
+		print_answers: bool,
 	},
 }
 

@@ -139,7 +139,7 @@ pub(super) fn oauth_keygen() -> ExitCode {
 /// PKCS#8 private key and the base64 raw public point. The two are a matching
 /// pair, so a token signed with the private key verifies against the public one.
 /// `None` only if the CSPRNG fails (fail closed).
-fn generate_oauth_keypair() -> Option<(String, String)> {
+pub(super) fn generate_oauth_keypair() -> Option<(String, String)> {
 	use base64::Engine;
 	use ring::rand::SystemRandom;
 	use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
@@ -152,6 +152,22 @@ fn generate_oauth_keypair() -> Option<(String, String)> {
 		b64.encode(pkcs8.as_ref()),
 		b64.encode(pair.public_key().as_ref()),
 	))
+}
+
+/// Derive the matching ES256 public key from a base64 PKCS#8 private key.
+/// `None` when the private key cannot be decoded as a P-256 PKCS#8 key
+/// (corrupt bytes, wrong algorithm, truncated PEM).
+pub(super) fn derive_oauth_public_from_private(private_b64: &str) -> Option<String> {
+	use base64::Engine;
+	use ring::rand::SystemRandom;
+	use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
+	let rng = SystemRandom::new();
+	let bytes = base64::engine::general_purpose::STANDARD
+		.decode(private_b64.as_bytes())
+		.ok()?;
+	let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &bytes, &rng).ok()?;
+	let b64 = base64::engine::general_purpose::STANDARD;
+	Some(b64.encode(pair.public_key().as_ref()))
 }
 
 pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCode {
@@ -203,7 +219,7 @@ pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCo
 ///
 /// `openssl` must be on `PATH`; the message names the package to install
 /// when it is not.
-fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
+pub(super) fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as BASE64;
 	use ring::signature::{KeyPair, RsaKeyPair};
@@ -257,6 +273,9 @@ fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
 /// closest equivalent on other platforms). Shared between the ed25519 and
 /// RSA paths so the file permissions do not drift between them.
 pub(super) fn write_key_pem(path: &std::path::Path, pem: &str) -> std::io::Result<()> {
+	// `init` reaches this through the same path; the function stays
+	// `pub(super)` so other CLI helpers can call it without exposing it
+	// beyond the `cli` module.
 	use std::io::Write;
 	let mut options = std::fs::OpenOptions::new();
 	options.write(true).create_new(true);
@@ -273,7 +292,7 @@ pub(super) fn write_key_pem(path: &std::path::Path, pem: &str) -> std::io::Resul
 /// Errors from the RSA keygen path. Each variant owns its own message so
 /// the CLI can `eprintln!` without an intermediate formatting step (and
 /// without a taint analyser reading a constant string into a key sink).
-enum KeygenError {
+pub(super) enum KeygenError {
 	OpenSslMissing,
 	OpenSslRead(std::io::Error),
 	OpenFailed(String),
