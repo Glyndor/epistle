@@ -142,3 +142,77 @@ fn run_exits_2_when_dns_has_two_token_sources() {
 		"two dns token sources must surface as exit code 2"
 	);
 }
+
+/// `config_path = "/"` is absolute, but the apply phase would
+/// discover it has no file name only after creating the data
+/// directory and writing every key. The validator catches the
+/// missing file name before any effect: the run exits 2 with no
+/// data directory on disk.
+#[test]
+fn run_exits_2_when_config_path_has_no_file_name() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let answers_file = dir.path().join("answers.toml");
+	let body = format!(
+		"mode = \"manual\"\n\
+		 hostname = \"mail.example.org\"\n\
+		 domains = [\"example.org\"]\n\
+		 data_dir = \"{}\"\n\
+		 config_path = \"/\"\n",
+		data_dir.display(),
+	);
+	std::fs::write(&answers_file, body).expect("write answers");
+	let args = Args {
+		answers: Some(answers_file),
+		dry_run: false,
+		print_answers: false,
+	};
+	let code = run(args);
+	assert_eq!(
+		code,
+		ExitCode::from(2),
+		"config_path = `/` must surface as exit code 2"
+	);
+	assert!(
+		!data_dir.exists(),
+		"data_dir must NOT exist after a rejected run: {}",
+		data_dir.display()
+	);
+}
+
+/// `config_path = data_dir` would let the staging step land the
+/// config inside the data directory. The validator catches the
+/// equality before any effect: the run exits 2 with no data
+/// directory on disk.
+#[test]
+fn run_exits_2_when_config_path_equals_data_dir() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let answers_file = dir.path().join("answers.toml");
+	let body = format!(
+		"mode = \"manual\"\n\
+		 hostname = \"mail.example.org\"\n\
+		 domains = [\"example.org\"]\n\
+		 data_dir = \"{}\"\n\
+		 config_path = \"{}\"\n",
+		data_dir.display(),
+		data_dir.display(),
+	);
+	std::fs::write(&answers_file, body).expect("write answers");
+	let args = Args {
+		answers: Some(answers_file),
+		dry_run: false,
+		print_answers: false,
+	};
+	let code = run(args);
+	assert_eq!(
+		code,
+		ExitCode::from(2),
+		"config_path == data_dir must surface as exit code 2"
+	);
+	assert!(
+		!data_dir.exists(),
+		"data_dir must NOT exist after a rejected run: {}",
+		data_dir.display()
+	);
+}

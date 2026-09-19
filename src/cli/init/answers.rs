@@ -177,6 +177,17 @@ pub enum Invalid {
 	DataDirNotAbsolute,
 	/// `config_path` is not absolute.
 	ConfigPathNotAbsolute,
+	/// `config_path` has no usable file-name component (e.g. `/` or
+	/// `.`). The apply phase rejects the same shape at the staging
+	/// step, but by then the data directory and every key are
+	/// already on disk; the validator catches it earlier so nothing
+	/// is touched.
+	ConfigPathNoFileName,
+	/// `config_path` equals `data_dir`. Writing the config and the
+	/// keys into the same directory is never what the operator
+	/// intended; a hand-crafted config that pointed at the data
+	/// directory would also let the staging step overwrite a key.
+	ConfigPathEqualsDataDir,
 	/// `services.api = true`: init cannot mint a management API
 	/// credential, so the operator must enable the api service by
 	/// editing the `[api]` section of the generated config after
@@ -215,6 +226,12 @@ impl std::fmt::Display for Invalid {
 			Invalid::DnsTokenMissing => f.write_str("dns: set one of token, token_file, token_env"),
 			Invalid::DataDirNotAbsolute => f.write_str("data_dir: must be an absolute path"),
 			Invalid::ConfigPathNotAbsolute => f.write_str("config_path: must be an absolute path"),
+			Invalid::ConfigPathNoFileName => {
+				f.write_str("config_path: must have a usable file name (not `/` or `.`)")
+			}
+			Invalid::ConfigPathEqualsDataDir => {
+				f.write_str("config_path: must not equal data_dir")
+			}
 			Invalid::ApiUnsupported => f.write_str(
 				"services.api: enable the management API by editing the [api] section of the generated config after init; init does not generate an api credential",
 			),

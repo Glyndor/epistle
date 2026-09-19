@@ -191,7 +191,41 @@ fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<In
 	}
 	if !config_path.is_absolute() {
 		errors.push(Invalid::ConfigPathNotAbsolute);
+		return;
 	}
+	// `config_path = "/"` is absolute, so the check above accepts it,
+	// but the apply phase rejects it at the staging step (no file
+	// name to stage next to). By then the data directory and every
+	// key have already been written. The validator catches the same
+	// shape earlier so nothing is touched.
+	if !path_has_a_file_name(config_path) {
+		errors.push(Invalid::ConfigPathNoFileName);
+	}
+	// Writing the config into the data directory would overwrite a
+	// key with the staging temp or the renamed config. The validator
+	// catches the equality before any effect, so the operator can
+	// fix the answer and rerun.
+	if data_dir == config_path {
+		errors.push(Invalid::ConfigPathEqualsDataDir);
+	}
+}
+
+/// True when `path` ends with a normal file-name component: not the
+/// root, not `.` or `..`, not an empty string. The apply phase
+/// requires the same shape to find a sibling staging file; the
+/// validator catches the missing piece earlier.
+fn path_has_a_file_name(path: &Path) -> bool {
+	let Some(name) = path.file_name() else {
+		return false;
+	};
+	let s = match name.to_str() {
+		Some(s) => s,
+		None => return false,
+	};
+	if s.is_empty() || s == "." || s == ".." {
+		return false;
+	}
+	true
 }
 
 fn check_services(services: &Services, errors: &mut Vec<Invalid>, warnings: &mut Vec<Warning>) {

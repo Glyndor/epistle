@@ -285,3 +285,64 @@ fn confusable_dns_zone_in_answers_file_fails_validation() {
 		"confusable zone must surface as DnsZoneInvalid with the confusable reason: {errors:?}"
 	);
 }
+
+/// `config_path = "/"` is absolute and so passed the absolute check,
+/// but the apply phase would discover it has no file name only after
+/// creating the data directory and writing every key. The validator
+/// now catches the missing file name before any effect, so the run
+/// exits 2 with nothing on disk.
+#[test]
+fn config_path_root_is_rejected_by_the_validator() {
+	let mut answers = minimal(Manual);
+	answers.config_path = PathBuf::from("/");
+	let errors = answers
+		.validate()
+		.expect_err("config_path = `/` must be rejected by the validator");
+	assert!(
+		errors.iter().any(|e| matches!(e, Invalid::ConfigPathNoFileName)),
+		"root config_path must surface as ConfigPathNoFileName, got {errors:?}"
+	);
+}
+
+/// `config_path = "."` (current directory) has no file name to stage
+/// next to. Same shape as the root case: the validator catches it
+/// before any effect.
+#[test]
+fn config_path_current_dir_is_rejected_by_the_validator() {
+	let mut answers = minimal(Manual);
+	answers.config_path = PathBuf::from(".");
+	// `path.file_name()` on `.` returns None, which is the right shape
+	// to test; but `.` is not absolute, so absolute check fires first.
+	// Use an absolute equivalent that the absolute check passes but
+	// `file_name()` returns None for. The apply phase's
+	// `write_validated_config` accepts `/` (no file name) and rejects
+	// `/.` (file name = `.`), so we test the second shape against the
+	// validator's same rule.
+	answers.config_path = PathBuf::from("/.");
+	let errors = answers
+		.validate()
+		.expect_err("config_path = `/.` must be rejected by the validator");
+	assert!(
+		errors.iter().any(|e| matches!(e, Invalid::ConfigPathNoFileName)),
+		"`/.` config_path must surface as ConfigPathNoFileName, got {errors:?}"
+	);
+}
+
+/// `config_path == data_dir` would let the staging step land the
+/// config inside the data directory and overwrite a key. The
+/// validator catches the equality before any effect.
+#[test]
+fn config_path_equals_data_dir_is_rejected_by_the_validator() {
+	let mut answers = minimal(Manual);
+	answers.data_dir = PathBuf::from("/var/lib/epistle");
+	answers.config_path = PathBuf::from("/var/lib/epistle");
+	let errors = answers
+		.validate()
+		.expect_err("config_path == data_dir must be rejected by the validator");
+	assert!(
+		errors
+			.iter()
+			.any(|e| matches!(e, Invalid::ConfigPathEqualsDataDir)),
+		"config_path == data_dir must surface as ConfigPathEqualsDataDir, got {errors:?}"
+	);
+}
