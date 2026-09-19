@@ -8,6 +8,7 @@ use crate::smtp::server::{Server, TlsMode};
 use crate::smtp::sink::MessageSink;
 
 use super::serve_dkim::SplitCompanions;
+use super::serve_ratelimit::RateLimiters;
 use super::serve_tls::TlsStack;
 
 /// Run the server with a validated configuration.
@@ -134,34 +135,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
-	// Optional per-account submission rate limiter, shared across SMTP
-	// listeners. The per-account `limit` is resolved at MAIL FROM time
-	// (per-domain override, then the server-wide default, then no limit at
-	// all); the limiter itself only owns the shared sliding-window state.
-	// It is created whenever any limit is configured, so a per-domain
-	// override without a global still gets a working limiter.
-	let has_any_submission_limit = config.submission_rate_limit_per_min.is_some()
-		|| !config.domain_submission_limits.is_empty();
-	let send_limiter =
-		has_any_submission_limit.then(|| Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)));
-
-	// Optional per-client-IP and per-envelope-sender inbound rate limiters
-	// for unauthenticated sessions. The `per_min` ceiling lives alongside
-	// the limiter so the listener wiring is a single value (an
-	// `InboundLimit`). `None` disables the corresponding check at MAIL
-	// FROM time.
-	let inbound_ip_limit = config.inbound_rate_limit_per_ip_per_min.map(|per_min| {
-		crate::smtp::ratelimit::InboundLimit {
-			limiter: Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)),
-			per_min,
-		}
-	});
-	let inbound_sender_limit = config.inbound_rate_limit_per_sender_per_min.map(|per_min| {
-		crate::smtp::ratelimit::InboundLimit {
-			limiter: Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)),
-			per_min,
-		}
-	});
+	// Per-listener rate limiters (submission, inbound per-IP, inbound per-sender).
+	// All three are shared across SMTP listeners and each one is created only
+	// when its `[server]` section is configured; the helper preserves that.
+	let RateLimiters {
+		send_limiter,
+		inbound_ip_limit,
+		inbound_sender_limit,
+	} = super::serve_ratelimit::build_rate_limiters(&config);
 
 	// Per-tenant aggregate limits. Built once from the static config; with
 	// no `[[tenant]]` blocks the result is the identity, every check is a
