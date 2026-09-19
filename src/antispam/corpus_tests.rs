@@ -273,6 +273,14 @@ fn forget_scope_is_exposed_as_an_inherent_method() {
 /// before issuing any SQL, so a worker that drained its job between
 /// the removal's `forget_scope` start and commit returns silently
 /// rather than re-creating rows the purge just dropped.
+///
+/// The control half of the test removes the tombstone and calls
+/// `train` again; without the tombstone the same call must reach the
+/// SQL and surface the lazy-pool error, which proves the previous
+/// `Ok(())` came from the short-circuit rather than from the SQL
+/// succeeding on its own. Without this control the test would also
+/// pass for a `train` that returned `Ok(())` unconditionally, which
+/// is not the contract the helper guarantees.
 #[tokio::test]
 async fn a_tombstoned_scope_silently_drops_training() {
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
@@ -296,13 +304,18 @@ async fn a_tombstoned_scope_silently_drops_training() {
 		"tombstoned scope must short-circuit; got {result:?}"
 	);
 
-	// Lift the tombstone: now the same call would attempt the SQL and
+	// Lift the tombstone: the same call must now reach the SQL and
 	// surface the lazy-pool error, which proves the previous return
 	// value came from the check rather than from the SQL succeeding.
 	tombstones
 		.lock()
 		.unwrap_or_else(|error| error.into_inner())
 		.remove("alice");
+	let result = store.train("alice", "any body text", true).await;
+	assert!(
+		result.is_err(),
+		"with the tombstone lifted the call must reach the SQL and surface the lazy-pool error; got {result:?}"
+	);
 }
 
 /// `forget_scope` raises and lowers the tombstone around its DELETE
