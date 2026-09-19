@@ -44,13 +44,10 @@ pub fn run(config: Config) -> ExitCode {
 }
 
 async fn serve(config: Config) -> std::io::Result<()> {
-	// Single-signature DKIM warning lives at the very top of startup so it
-	// is visible before any listener binds. The message itself is computed
-	// once in `single_signature_dkim_warning` and reused by `config-check`
-	// and `verify-dns`.
-	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(&config) {
-		tracing::warn!(remedy = "epistle dkim-keygen --rsa", "{warning}");
-	}
+	// Single-signature DKIM warning at the very top of startup so it is
+	// visible before any listener binds. The wording is the shared helper
+	// reused by `config-check` and `verify-dns`.
+	super::serve_tasks::log_single_signature_dkim_warning(&config);
 	if config.listeners.is_empty() {
 		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());

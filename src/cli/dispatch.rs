@@ -28,7 +28,7 @@ impl Cli {
 			},
 			Command::ConfigCheck { config } => {
 				let mut out = std::io::stdout().lock();
-				let mut err = std::io::stderr().lock();
+				let mut err = style::stderr();
 				super::config_check::run(&config, &mut out, &mut err)
 			}
 			Command::Export {

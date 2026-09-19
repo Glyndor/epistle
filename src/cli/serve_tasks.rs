@@ -378,6 +378,16 @@ pub(super) fn single_signature_dkim_warning(config: &Config) -> Option<String> {
 		.and_then(|dkim| dkim.single_signature_warning())
 }
 
+/// Emit the single-signature DKIM warning through `tracing` at the very top of
+/// startup so it lands in the log before any listener binds. A no-op when the
+/// helper returns `None`. The same wording is what `config-check` and
+/// `verify-dns` write to their `err` sinks through `style::warn_to`.
+pub(super) fn log_single_signature_dkim_warning(config: &Config) {
+	if let Some(warning) = single_signature_dkim_warning(config) {
+		tracing::warn!(remedy = "epistle dkim-keygen --rsa", "{warning}");
+	}
+}
+
 /// Spawn the automatic DKIM key-rotation task whenever `[dkim]` and `[dns]`
 /// are both configured. Rotation is a security property of the server, so
 /// it runs by default with the constant interval / overlap from

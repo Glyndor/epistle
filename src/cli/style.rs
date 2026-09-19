@@ -41,36 +41,60 @@ fn stderr_is_terminal() -> bool {
 	std::io::stderr().is_terminal()
 }
 
-/// `error: <msg>` on stderr, with `error:` bold red.
+/// `error: <msg>` on stderr, with `error:` bold red. Thin caller of
+/// [`error_to`]; the rendering lives there.
 pub(crate) fn error(msg: impl std::fmt::Display) {
-	let mut out = stderr();
-	let _ = writeln!(
-		out,
-		"{prefix}error:{reset} {msg}",
-		prefix = anstyle::Style::new()
-			.bold()
-			.fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Red))),
-		reset = anstyle::Reset,
-	);
+	error_to(&mut stderr(), msg);
 }
 
-/// `warning: <msg>` on stderr, with `warning:` bold yellow.
+/// `warning: <msg>` on stderr, with `warning:` bold yellow. Thin caller of
+/// [`warn_to`]; the rendering lives there.
 pub(crate) fn warn(msg: impl std::fmt::Display) {
 	warn_to(&mut stderr(), msg);
 }
 
+/// Prefix style for `error:` lines. The literal `error:` is bold red.
+const ERROR_PREFIX: anstyle::Style = anstyle::Style::new()
+	.bold()
+	.fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Red)));
+
+/// `error: <msg>` written to `out`, with `error:` bold red.
+///
+/// The styles are written unconditionally; the colour decision is made by the
+/// `anstream` wrapper the caller hands in. A `Vec<u8>` is wrapped by the test
+/// in `AutoStream::new(_, Auto)`, which strips the codes because the sink is
+/// not a terminal; the production caller passes [`stderr`] (an
+/// `AutoStream<Stderr>`) which keeps them when stderr is a terminal. A raw
+/// `Vec<u8>` writes the codes through verbatim, which is why every test wraps
+/// its sink.
+pub(crate) fn error_to(out: &mut impl Write, msg: impl std::fmt::Display) {
+	let _ = writeln!(
+		out,
+		"{prefix}error:{reset} {msg}",
+		prefix = ERROR_PREFIX,
+		reset = anstyle::Reset,
+	);
+}
+
+/// Prefix style for `warning:` lines. The literal `warning:` is bold yellow.
+const WARNING_PREFIX: anstyle::Style = anstyle::Style::new()
+	.bold()
+	.fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow)));
+
 /// `warning: <msg>` written to `out`, with `warning:` bold yellow.
 ///
-/// For commands that take their warning sink as a parameter (`backup`). The
-/// style is written unconditionally; the caller passes [`stderr`] so the
-/// colour decision is still made in one place, and a test passes a buffer.
+/// The styles are written unconditionally; the colour decision is made by the
+/// `anstream` wrapper the caller hands in. A `Vec<u8>` is wrapped by the test
+/// in `AutoStream::new(_, Auto)`, which strips the codes because the sink is
+/// not a terminal; the production caller passes [`stderr`] (an
+/// `AutoStream<Stderr>`) which keeps them when stderr is a terminal. A raw
+/// `Vec<u8>` writes the codes through verbatim, which is why every test wraps
+/// its sink.
 pub(crate) fn warn_to(out: &mut impl Write, msg: impl std::fmt::Display) {
 	let _ = writeln!(
 		out,
 		"{prefix}warning:{reset} {msg}",
-		prefix = anstyle::Style::new()
-			.bold()
-			.fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))),
+		prefix = WARNING_PREFIX,
 		reset = anstyle::Reset,
 	);
 }

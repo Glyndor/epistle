@@ -22,13 +22,13 @@ pub(super) fn run(
 			// the file is otherwise valid. The exit code stays SUCCESS: a
 			// warning is not a failure.
 			if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(&config) {
-				let _ = writeln!(err, "warning: {warning}");
+				super::style::warn_to(err, warning);
 			}
 			let _ = writeln!(out, "configuration is valid");
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			let _ = writeln!(err, "error: {error}");
+			super::style::error_to(err, error);
 			ExitCode::FAILURE
 		}
 	}
