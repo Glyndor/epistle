@@ -16,9 +16,7 @@ use crate::storage::MessageCrypto;
 /// (`api_tests::test_state`) but neither wires a training queue, so
 /// the JMAP-side tests roll their own here rather than overload the
 /// generic one.
-fn state_with_recording_training(
-	dir: &std::path::Path,
-) -> (ApiState, Arc<RecordingTrainer>) {
+fn state_with_recording_training(dir: &std::path::Path) -> (ApiState, Arc<RecordingTrainer>) {
 	let trainer = Arc::new(RecordingTrainer::new());
 	let metrics = Arc::new(crate::metrics::Metrics::new());
 	let queue = crate::antispam::training_queue::TrainingQueue::start(
@@ -93,29 +91,21 @@ async fn a_move_with_junk_keyword_queues_a_training_job_on_the_destination() {
 
 	// The message must now live under Junk, not INBOX. A fresh copy
 	// was appended during the move, so the new entry carries a
-	// different UUID from the source — what matters is the count
+	// different UUID from the source: what matters is the count
 	// and the flag set, not that the id survived.
-	let inbox_msgs: Vec<_> = mailbox::Snapshot::open(
-		dir.path(),
-		"alice",
-		"INBOX",
-		&MessageCrypto::disabled(),
-	)
-	.expect("open INBOX")
-	.messages()
-	.map(|m| m.id().to_string())
-	.collect();
+	let inbox_msgs: Vec<_> =
+		mailbox::Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled())
+			.expect("open INBOX")
+			.messages()
+			.map(|m| m.id().to_string())
+			.collect();
 	assert!(
 		inbox_msgs.is_empty(),
 		"the message should have moved out of INBOX; got: {inbox_msgs:?}"
 	);
-	let junk_snap = mailbox::Snapshot::open(
-		dir.path(),
-		"alice",
-		"Junk",
-		&MessageCrypto::disabled(),
-	)
-	.expect("open Junk");
+	let junk_snap =
+		mailbox::Snapshot::open(dir.path(), "alice", "Junk", &MessageCrypto::disabled())
+			.expect("open Junk");
 	let junk_msgs: Vec<_> = junk_snap
 		.messages()
 		.map(|m| (m.id().to_string(), m.flags.len()))
@@ -130,10 +120,10 @@ async fn a_move_with_junk_keyword_queues_a_training_job_on_the_destination() {
 		.next()
 		.expect("at least one junk message");
 	assert!(
-		junk_message.flags.iter().any(|f| match f {
-			crate::imap::mailbox::Flag::Keyword(k) if k.is_junk() => true,
-			_ => false,
-		}),
+		junk_message.flags.iter().any(|f| matches!(
+			f,
+			crate::imap::mailbox::Flag::Keyword(k) if k.is_junk()
+		)),
 		"the moved message should carry the $Junk keyword, got flags: {:?}",
 		junk_message.flags
 	);

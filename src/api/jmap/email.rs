@@ -245,9 +245,8 @@ fn apply_email_update(
 			&& !target.eq_ignore_ascii_case(&source)
 		{
 			let raw = raw_for_move.map_err(|_| "serverFail")?;
-			let new_id =
-				mailbox::append(data_dir, account, target, &flags, &raw, crypto)
-					.map_err(|_| "serverFail")?;
+			let new_id = mailbox::append(data_dir, account, target, &flags, &raw, crypto)
+				.map_err(|_| "serverFail")?;
 			let result = snapshot.remove_at(sequence).map_err(|_| "serverFail");
 			// A combined "mark as junk" + "move to Junk" is the natural
 			// operation the JMAP client issues, and the source message

@@ -101,7 +101,12 @@ impl BayesStore {
 		// training now would recreate rows the purge is dropping. Drop
 		// the job silently so the worker's caller never sees an error
 		// for a message that no longer belongs to a live account.
-		if self.tombstones.lock().expect("tombstone lock").contains(scope) {
+		if self
+			.tombstones
+			.lock()
+			.expect("tombstone lock")
+			.contains(scope)
+		{
 			return Ok(());
 		}
 		let tokens: Vec<String> = bayes::tokenize(text).iter().map(|t| self.hash(t)).collect();
@@ -231,8 +236,8 @@ impl BayesStore {
 	/// count, in one transaction. Returns the number of token rows
 	/// removed. Account removal calls it so a recreated account name
 	/// does not inherit the previous user's training.
-///
-/// The scope is tombstoned before the transaction starts and the
+	///
+	/// The scope is tombstoned before the transaction starts and the
 	/// tombstone is only cleared when the transaction commits. A
 	/// worker that has already read a message but has not yet called
 	/// `train` will see the tombstone and drop the job, so the DELETE
@@ -316,12 +321,8 @@ impl BayesTrainer for BayesStore {
 /// so the boundary conditions are unit-testable without a database;
 /// the SMTP hot path calls [`BayesStore::score_for_account`], which
 /// delegates here.
-pub fn scoring_scope<'a>(trained: bool, account: &'a str) -> &'a str {
-	if trained {
-		account
-	} else {
-		SHARED
-	}
+pub fn scoring_scope(trained: bool, account: &str) -> &str {
+	if trained { account } else { SHARED }
 }
 
 /// The stored form of a token: a keyed HMAC-SHA256, hex-encoded. Deterministic

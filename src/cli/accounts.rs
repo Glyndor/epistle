@@ -176,7 +176,16 @@ pub(super) fn remove(
 		}
 	};
 	let bayes_store = open_bayes_store(config, &runtime, out);
-	remove_with_bayes(&runtime, &store, &spool, config, name, queue, bayes_store.as_ref(), out)
+	remove_with_bayes(
+		&runtime,
+		&store,
+		&spool,
+		config,
+		name,
+		queue,
+		bayes_store.as_ref(),
+		out,
+	)
 }
 
 /// Inner removal helper that the tests drive directly with a
@@ -184,6 +193,7 @@ pub(super) fn remove(
 /// from the configuration; tests bypass `open_bayes_store` to feed
 /// in a deterministic pool without touching the operator's
 /// `[database]` URL.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn remove_with_bayes(
 	runtime: &tokio::runtime::Runtime,
 	store: &Arc<AccountStore>,

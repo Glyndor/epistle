@@ -3,9 +3,7 @@
 
 use super::*;
 use crate::antispam::corpus::SHARED;
-use crate::antispam::trainer::{
-	BayesTrainer, MIN_TRUSTED_MESSAGES, RecordingTrainer, is_trusted,
-};
+use crate::antispam::trainer::{BayesTrainer, MIN_TRUSTED_MESSAGES, RecordingTrainer, is_trusted};
 use crate::imap::keyword::{JUNK, NOT_JUNK};
 use crate::imap::mailbox::Flag;
 use std::path::PathBuf;
@@ -182,7 +180,10 @@ async fn a_no_op_store_trains_nothing() {
 fn score_falls_back_to_shared_below_the_threshold() {
 	let account = "alice";
 	// Both axes empty.
-	assert_eq!(super::scoring_scope(is_trusted(Corpus::default()), account), SHARED);
+	assert_eq!(
+		super::scoring_scope(is_trusted(Corpus::default()), account),
+		SHARED
+	);
 	// Ham side one short of the threshold: still untrained, regardless of spam.
 	assert_eq!(
 		super::scoring_scope(
@@ -281,7 +282,10 @@ async fn a_tombstoned_scope_silently_drops_training() {
 	// Mark the scope as removed (mirrors what `forget_scope` does for
 	// the duration of its DELETE).
 	let tombstones = store.tombstones();
-	tombstones.lock().expect("tombstone lock").insert("alice".to_string());
+	tombstones
+		.lock()
+		.expect("tombstone lock")
+		.insert("alice".to_string());
 
 	// The lazy pool never connects, so a non-tombstoned `train` would
 	// bubble up the connection error. The tombstone check has to fire
@@ -315,7 +319,11 @@ async fn forget_scope_sets_the_tombstone_for_its_duration() {
 		"lazy pool never connects; forget_scope must error"
 	);
 	assert!(
-		store.tombstones().lock().expect("tombstone lock").contains("alice"),
+		store
+			.tombstones()
+			.lock()
+			.expect("tombstone lock")
+			.contains("alice"),
 		"the tombstone stays set when the purge itself fails"
 	);
 }

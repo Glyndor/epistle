@@ -223,8 +223,7 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 
 	let runtime = tokio::runtime::Runtime::new().expect("runtime");
 	let pool = runtime.block_on(async {
-		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
-			.expect("lazy pool never connects")
+		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none").expect("lazy pool never connects")
 	});
 	let bayes = BayesStore::with_key(pool, [0u8; 32]);
 
@@ -256,7 +255,7 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 /// no-bayes path still finishes the on-disk work. Without the
 /// fix the bayes branch in `accounts::remove` was unconditional
 /// `None`, so this test would have caught that as "bayes work
-/// happened when none should" — pinning both sides keeps the
+/// happened when none should"; pinning both sides keeps the
 /// test honest.
 #[test]
 fn cli_remove_completes_without_a_bayes_store() {
@@ -335,8 +334,7 @@ fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
 	let runtime = tokio::runtime::Runtime::new().expect("runtime");
 	let pool = runtime.block_on(async {
-		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
-			.expect("lazy pool never connects")
+		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none").expect("lazy pool never connects")
 	});
 	let bayes = BayesStore::with_key(pool, [0u8; 32]);
 
