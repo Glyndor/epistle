@@ -54,11 +54,35 @@ fn throttle_edge_is_one_hundred_milliseconds_from_the_last_draw() {
 }
 
 #[test]
-fn warn_to_writes_the_styled_prefix_then_the_message() {
+fn warn_to_writes_warning_prefix_then_the_message_into_a_buffer() {
+	// The sink is wrapped in `anstream::AutoStream::new(_, Auto)`: the wrapper
+	// decides to strip the prefix codes because the underlying writer is not a
+	// terminal, so the buffer ends up with plain text the operator can grep.
 	let mut sink = Vec::new();
-	warn_to(&mut sink, format_args!("skipping {}", "pg_dump"));
+	let mut stream = anstream::AutoStream::new(&mut sink, anstream::ColorChoice::Auto);
+	warn_to(&mut stream, "hello");
+	assert_eq!(sink, b"warning: hello\n");
+}
+
+#[test]
+fn error_to_writes_error_prefix_then_the_message_into_a_buffer() {
+	let mut sink = Vec::new();
+	let mut stream = anstream::AutoStream::new(&mut sink, anstream::ColorChoice::Auto);
+	error_to(&mut stream, "hello");
+	assert_eq!(sink, b"error: hello\n");
+}
+
+#[test]
+fn warn_to_keeps_the_codes_when_the_wrapper_is_a_terminal() {
+	// The same prefix bytes, written into a wrapper that reports itself as a
+	// terminal: the codes must reach the sink verbatim. We model the
+	// "terminal" case by handing `anstream` `AlwaysAnsi`, which is what the
+	// production wrapper does when stderr is a TTY.
+	let mut sink = Vec::new();
+	let mut stream = anstream::AutoStream::new(&mut sink, anstream::ColorChoice::AlwaysAnsi);
+	warn_to(&mut stream, "hello");
 	assert_eq!(
 		String::from_utf8_lossy(&sink),
-		"\x1b[1m\x1b[33mwarning:\x1b[0m skipping pg_dump\n"
+		"\x1b[1m\x1b[33mwarning:\x1b[0m hello\n"
 	);
 }

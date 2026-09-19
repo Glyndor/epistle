@@ -7,6 +7,7 @@ mod archive;
 mod autoconfig;
 mod autodiscover;
 mod backup;
+mod config_check;
 mod dns_records;
 mod export;
 mod import;

@@ -9,6 +9,19 @@ use crate::spf::{DnsLookup, SystemDns};
 
 /// Run the DNS check against the system resolver.
 pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+	run_with_writers(config, out, &mut super::style::stderr())
+}
+
+/// Same as [`run`], but writes the startup warnings (and any errors
+/// during resolver construction) to a caller-supplied stream. Lives
+/// separately so a test can assert on the warning text without forking
+/// the process.
+pub(super) fn run_with_writers(
+	config: &Config,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> ExitCode {
+	emit_single_signature_warning(config, err);
 	let dns = match SystemDns::from_system() {
 		Ok(dns) => dns,
 		Err(error) => {
@@ -35,6 +48,17 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		out,
 		progress,
 	))
+}
+
+/// Write the single-signature DKIM warning to `err` when the configuration
+/// would otherwise sign outbound mail with one key only. Lives here so
+/// `verify-dns` and `config-check` can share the call site, and so a
+/// test can capture it through an in-memory writer without going through
+/// the process boundary.
+pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std::io::Write) {
+	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(config) {
+		super::style::warn_to(err, warning);
+	}
 }
 
 /// The DKIM selectors epistle publishes (the Ed25519 selector plus an optional
@@ -123,124 +147,5 @@ fn symbol(status: &Status) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::dns::Check;
-	use crate::spf::DnsFailure;
-	use std::collections::HashMap;
-	use std::net::IpAddr;
-	use std::pin::Pin;
-
-	#[derive(Default)]
-	struct FakeDns {
-		txt: HashMap<String, Vec<String>>,
-		mx: HashMap<String, Vec<String>>,
-		addresses: HashMap<String, Vec<IpAddr>>,
-		ptr: HashMap<IpAddr, Vec<String>>,
-	}
-
-	impl DnsLookup for FakeDns {
-		fn txt(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let v = self.txt.get(name).cloned().unwrap_or_default();
-			Box::pin(async move { Ok(v) })
-		}
-		fn addresses(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DnsFailure>> + Send + '_>> {
-			let v = self.addresses.get(name).cloned().unwrap_or_default();
-			Box::pin(async move { Ok(v) })
-		}
-		fn mx(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let v = self.mx.get(name).cloned().unwrap_or_default();
-			Box::pin(async move { Ok(v) })
-		}
-		fn ptr(
-			&self,
-			ip: IpAddr,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let v = self.ptr.get(&ip).cloned().unwrap_or_default();
-			Box::pin(async move { Ok(v) })
-		}
-	}
-
-	#[tokio::test]
-	async fn report_fails_and_prints_on_missing_records() {
-		let dns = FakeDns::default();
-		let mut out = Vec::new();
-		let code = report(
-			&["example.org".to_string()],
-			"mail.example.org",
-			None,
-			None,
-			&[],
-			&dns,
-			&mut out,
-			crate::cli::style::Progress::start("checking"),
-		)
-		.await;
-		assert_eq!(code, ExitCode::FAILURE);
-		let text = String::from_utf8(out).expect("utf8");
-		assert!(text.contains("example.org:"), "{text}");
-		assert!(text.contains("MISS"), "{text}");
-	}
-
-	#[tokio::test]
-	async fn report_succeeds_when_records_present() {
-		let mut dns = FakeDns::default();
-		dns.mx
-			.insert("example.org".into(), vec!["mail.example.org".into()]);
-		dns.txt
-			.insert("example.org".into(), vec!["v=spf1 -all".into()]);
-		dns.txt
-			.insert("_dmarc.example.org".into(), vec!["v=DMARC1; p=none".into()]);
-		dns.txt
-			.insert("_mta-sts.example.org".into(), vec!["v=STSv1; id=1".into()]);
-		// The hostname resolves, the PTR confirms the round trip, and the
-		// configured addresses are None so the host check falls back to the
-		// resolver's answer.
-		dns.addresses.insert(
-			"mail.example.org".into(),
-			vec!["203.0.113.10".parse().unwrap()],
-		);
-		dns.ptr.insert(
-			"203.0.113.10".parse().unwrap(),
-			vec!["mail.example.org".into()],
-		);
-		let mut out = Vec::new();
-		let code = report(
-			&["example.org".to_string()],
-			"mail.example.org",
-			None,
-			None,
-			&[],
-			&dns,
-			&mut out,
-			crate::cli::style::Progress::start("checking"),
-		)
-		.await;
-		assert_eq!(code, ExitCode::SUCCESS);
-	}
-
-	fn check(status: Status) -> Check {
-		Check {
-			kind: "X".into(),
-			name: "n".into(),
-			status,
-			detail: "d".into(),
-		}
-	}
-
-	#[test]
-	fn symbols_cover_every_status() {
-		assert_eq!(symbol(&check(Status::Ok).status), "ok  ");
-		assert_eq!(symbol(&check(Status::Missing).status), "MISS");
-		assert_eq!(symbol(&check(Status::LookupError).status), "err ");
-	}
-}
+#[path = "verify_dns_tests.rs"]
+mod tests;

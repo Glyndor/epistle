@@ -36,7 +36,7 @@ pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
 pub use database::{Database, DatabaseTls};
-pub use dkim::Dkim;
+pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};

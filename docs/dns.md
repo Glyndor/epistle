@@ -82,10 +82,11 @@ epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
 2048 or 4096 only.
 
 Publish the printed TXT at `<selector>._domainkey.example.org`, and
-configure `[dkim] selector` / `key_file`. Add the optional
-`rsa_selector` / `rsa_key_file` for the dual-signing path. A single
-message is then signed with both keys (RFC 8463); receivers that
-understand Ed25519 use that signature, the rest fall back to RSA.
+configure `[dkim] selector` / `key_file`. Add `rsa_selector` /
+`rsa_key_file` for the dual-signing path (required from version 0.10;
+a startup warning is logged before that whenever the pair is missing).
+A single message is then signed with both keys (RFC 8463); receivers
+that understand Ed25519 use that signature, the rest fall back to RSA.
 
 #### Long TXT values split at 255 octets
 
