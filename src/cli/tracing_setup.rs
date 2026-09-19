@@ -28,7 +28,7 @@ pub(super) fn init_tracing(config: &Config) -> Option<opentelemetry_sdk::trace::
 				Some(provider)
 			}
 			Err(error) => {
-				eprintln!("warning: OTLP trace export disabled: {error}");
+				super::style::warn(format_args!("OTLP trace export disabled: {error}"));
 				None
 			}
 		},

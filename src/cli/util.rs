@@ -57,7 +57,7 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputEr
 			return Err(InputError);
 		}
 		None => {
-			super::style::error("no input — pipe or type the value on stdin");
+			super::style::error("no input: pipe or type the value on stdin");
 			return Err(InputError);
 		}
 	};
