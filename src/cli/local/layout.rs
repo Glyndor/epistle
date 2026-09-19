@@ -5,52 +5,35 @@ use std::path::Path;
 
 use rcgen::CertificateParams;
 
-/// Create `dir` if it does not exist; if it exists and is empty, leave it
-/// alone; if it exists with content but no marker, refuse. Returns the
-/// [`Outcome`] `prepare` should follow.
-pub(super) fn ensure_dir(dir: &Path) -> Result<Outcome, super::LocalError> {
-	let outcome = match std::fs::metadata(dir) {
-		Ok(metadata) => {
-			if !metadata.is_dir() {
-				return Err(super::LocalError::Io(std::io::Error::new(
-					std::io::ErrorKind::AlreadyExists,
-					format!("{} is not a directory", dir.display()),
-				)));
-			}
-			let marker = dir.join(super::MARKER_FILE);
-			if !marker.exists() {
-				let has_content = std::fs::read_dir(dir)
-					.map_err(super::LocalError::Io)?
-					.next()
-					.is_some();
-				if has_content {
-					return Err(super::LocalError::NotEmpty(dir.to_path_buf()));
-				}
-				Outcome::Generate
-			} else {
-				// Marker present: the directory is "ours". The per-
-				// artifact scan in `prepare` decides what is missing
-				// and writes it; nothing here can pre-empt that.
-				Outcome::Generate
-			}
-		}
+/// Confirm `dir` exists and is either empty or already marked as ours.
+/// Creates the directory with mode `0700` if it does not exist; if it
+/// does and holds entries that are not our marker, refuses with
+/// [`super::LocalError::NotEmpty`].
+pub(super) fn ensure_dir(dir: &Path) -> Result<(), super::LocalError> {
+	let metadata = match std::fs::metadata(dir) {
+		Ok(metadata) => metadata,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
 			create_with_mode(dir, 0o700)?;
-			Outcome::Generate
+			return Ok(());
 		}
 		Err(error) => return Err(super::LocalError::Io(error)),
 	};
-	Ok(outcome)
-}
-
-/// What `ensure_dir` decided about the directory at the given path.
-/// Currently the only decision is "is this our directory, and does the
-/// path exist"; the per-artifact fill-in happens in `prepare`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Outcome {
-	/// The directory is ours (or just got created). `prepare` walks the
-	/// artifact list and writes anything that is missing.
-	Generate,
+	if !metadata.is_dir() {
+		return Err(super::LocalError::Io(std::io::Error::new(
+			std::io::ErrorKind::AlreadyExists,
+			format!("{} is not a directory", dir.display()),
+		)));
+	}
+	if !dir.join(super::MARKER_FILE).exists() {
+		let has_content = std::fs::read_dir(dir)
+			.map_err(super::LocalError::Io)?
+			.next()
+			.is_some();
+		if has_content {
+			return Err(super::LocalError::NotEmpty(dir.to_path_buf()));
+		}
+	}
+	Ok(())
 }
 
 /// Create `path` as a directory with `mode` (no-op when it already exists).
@@ -83,8 +66,14 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<(), super::LocalError> {
 	Ok(())
 }
 
-/// Write the marker file, owner-readable only.
+/// Write the marker file, owner-readable only. Idempotent: a marker that
+/// is already on disk is left alone. `prepare` calls this on every run
+/// (it is the trust anchor), and the second run must not fail just
+/// because the first one already left the file behind.
 pub(super) fn write_marker(path: &Path) -> Result<(), super::LocalError> {
+	if path.exists() {
+		return Ok(());
+	}
 	write_with_mode(path, b"", 0o600)
 }
 

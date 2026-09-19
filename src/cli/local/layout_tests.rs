@@ -7,7 +7,7 @@ use std::path::Path;
 use std::os::unix::fs::PermissionsExt;
 
 use super::test_support::{fresh_dir, load_for_test, open_store_for_test};
-use super::{ACCOUNT_NAME, DEFAULT_PORT_BASE, LocalError, prepare};
+use super::{ACCOUNT_NAME, DEFAULT_PORT_BASE, LocalError, layout, prepare};
 
 /// Walk every entry under `root`, returning a sorted list of paths.
 fn list_under(root: &Path) -> Vec<std::path::PathBuf> {
@@ -289,5 +289,104 @@ fn password_never_written_in_clear_anywhere_under_dir() {
 		found_in.is_empty(),
 		"password bytes appeared in: {:?}",
 		found_in
+	);
+}
+
+/// Pin: an interrupted first run that left the marker AND the
+/// certificate on disk is recoverable: a second `prepare` succeeds and
+/// produces the full layout. The marker is the trust anchor and is
+/// written first, immediately after `ensure_dir` accepts the directory.
+/// This test simulates the boundary "certificate step finished, mail.toml
+/// step not started" by running the same functions `prepare` calls, in
+/// the same order, then hands control back.
+#[test]
+fn partial_init_with_marker_written_first_recovers_from_interruption_after_cert() {
+	let dir = fresh_dir("partial-marker-first");
+	let cert_path = dir.path().join("cert.pem");
+	let key_path = dir.path().join("key.pem");
+	let marker_path = dir.path().join(".epistle-local");
+
+	// Step into `prepare` and stop after the certificate has been
+	// generated but before DKIM, mail.toml and accounts.toml have been
+	// written.
+	layout::ensure_dir(dir.path()).expect("ensure_dir creates the directory");
+	layout::write_marker(&marker_path).expect("write marker");
+	layout::generate_certificate(&cert_path, &key_path).expect("write certificate");
+
+	assert!(
+		marker_path.exists(),
+		"simulated interruption must have left the marker on disk"
+	);
+	assert!(
+		cert_path.exists() && key_path.exists(),
+		"simulated interruption must have left the certificate pair on disk"
+	);
+	assert!(
+		!dir.path().join("mail.toml").exists(),
+		"the simulated interruption must happen BEFORE mail.toml is written"
+	);
+	assert!(
+		!dir.path().join("data").join("accounts.toml").exists(),
+		"the simulated interruption must happen BEFORE accounts.toml is written"
+	);
+
+	// The second `prepare` must recover the partial directory. The
+	// marker is present, so `ensure_dir` accepts; the per-artifact scan
+	// rebuilds everything that is missing.
+	let _ = prepare(dir.path(), DEFAULT_PORT_BASE).expect("recovery completes");
+
+	for name in [
+		".epistle-local",
+		"cert.pem",
+		"key.pem",
+		"dkim.pem",
+		"mail.toml",
+	] {
+		assert!(
+			dir.path().join(name).exists(),
+			"recovery must leave {name} on disk"
+		);
+	}
+	assert!(
+		dir.path().join("data").join("accounts.toml").exists(),
+		"recovery must leave accounts.toml on disk"
+	);
+}
+
+/// Pin: the same interruption but with the marker step skipped (the old
+/// order, where the marker was written LAST) leaves a directory the next
+/// `prepare` REFUSES with `NotEmpty`. This is the failure mode the
+/// marker-first rewrite exists to remove: a partial directory that
+/// `ensure_dir` cannot tell apart from an unrelated one.
+#[test]
+fn partial_init_with_marker_written_last_after_cert_is_refused() {
+	let dir = fresh_dir("partial-marker-last");
+	let cert_path = dir.path().join("cert.pem");
+	let key_path = dir.path().join("key.pem");
+
+	// Same steps as the recovery test, minus the marker step. The
+	// directory now holds the certificate pair but no marker, which
+	// looks identical to "this directory was not created by
+	// `epistle local`".
+	layout::ensure_dir(dir.path()).expect("ensure_dir creates the directory");
+	layout::generate_certificate(&cert_path, &key_path).expect("write certificate");
+
+	let second = prepare(dir.path(), DEFAULT_PORT_BASE);
+	match second {
+		Err(LocalError::NotEmpty(path)) => {
+			assert_eq!(
+				path, dir.path(),
+				"the refusal must name the directory itself"
+			);
+		}
+		Err(other) => panic!("old-order partial state must be refused with NotEmpty, got {other:?}"),
+		Ok(_) => panic!("old-order partial state must be refused, prepare returned Ok"),
+	}
+
+	// The certificate survived the refusal: nothing was written or
+	// removed on the rejection path.
+	assert!(
+		cert_path.exists(),
+		"refusal must leave the existing files alone"
 	);
 }

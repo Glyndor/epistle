@@ -130,7 +130,18 @@ impl std::fmt::Debug for Prepared {
 /// state where only one half survived is not useful.
 pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError> {
 	config::check_port_base(port_base)?;
-	let _ = layout::ensure_dir(dir)?;
+	layout::ensure_dir(dir)?;
+	// Marker is the trust anchor and is written first, immediately after
+	// `ensure_dir` accepts the directory. Writing it before any other
+	// artifact means a crash later in the run still leaves a directory a
+	// later run sees as ours: the marker is present, so `ensure_dir`
+	// accepts the directory, and the per-artifact scan below rebuilds
+	// whatever else is missing. Writing the marker last would mean a
+	// crash between the first artifact and the marker left a directory
+	// `ensure_dir` then refused as "not empty and was not created by
+	// epistle local", which is exactly the partial state this function
+	// exists to recover from.
+	layout::write_marker(&dir.join(MARKER_FILE))?;
 	let data_dir = dir.join("data");
 	layout::create_with_mode(&data_dir, 0o700)?;
 
@@ -139,7 +150,6 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 	let dkim_path = dir.join("dkim.pem");
 	let mail_toml_path = dir.join("mail.toml");
 	let accounts_toml_path = data_dir.join("accounts.toml");
-	let marker_path = dir.join(MARKER_FILE);
 
 	let mut password = None;
 
@@ -184,12 +194,6 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 		.map_err(|error| LocalError::Account(error.to_string()))?;
 		layout::write_account_replace(&accounts_toml_path, &account)?;
 		password = Some(pwd);
-	}
-
-	// Marker is the trust anchor. Written last so a directory that
-	// holds unrelated files but no marker is still refused.
-	if !marker_path.exists() {
-		layout::write_marker(&marker_path)?;
 	}
 
 	let config = config::load_local_config(&mail_toml_path)?;
