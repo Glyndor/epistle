@@ -185,6 +185,76 @@ fn refusal_dir_with_unrelated_content_is_refused_then_accepted_with_marker() {
 	);
 }
 
+/// Pin: a directory that holds the marker, certificate, key, DKIM key
+/// and `mail.toml`, but no `accounts.toml`, is still treated as a partial
+/// state and `prepare` writes the missing file and mints a password. The
+/// previous behaviour (returning `Reuse` from `ensure_dir` because both
+/// the marker and `mail.toml` were present) left the directory looking
+/// initialised while the runtime had no account to authenticate with.
+#[test]
+fn partial_init_after_mail_toml_completes_accounts_toml() {
+	let dir = fresh_dir("partial-after-mail-toml");
+	let _ = prepare(dir.path(), DEFAULT_PORT_BASE).expect("first prepare");
+
+	// Drop only `accounts.toml`. The marker, mail.toml and the rest of
+	// the artifacts stay: the fixture is a mid-`prepare` interruption,
+	// captured at the account-write boundary.
+	let marker = dir.path().join(".epistle-local");
+	let accounts_path = dir.path().join("data").join("accounts.toml");
+	std::fs::remove_file(&accounts_path).expect("remove accounts.toml");
+
+	let second = prepare(dir.path(), DEFAULT_PORT_BASE).expect("retry completes");
+	assert!(
+		second.password.is_some(),
+		"missing accounts.toml forces regeneration of the credential pair, so a password is minted"
+	);
+	assert!(
+		accounts_path.exists(),
+		"retry must write accounts.toml so the runtime can authenticate"
+	);
+	assert!(
+		marker.exists(),
+		"retry must re-mark the directory once it is complete"
+	);
+}
+
+/// Pin: a directory where `cert.pem` already exists from a partial write
+/// is completed by `prepare` without `AlreadyExists`. The previous
+/// behaviour (running `Outcome::Generate` again because the marker was
+/// present but `mail.toml` was missing, and then unconditionally calling
+/// `write_with_mode(cert.pem, ...)` whose exclusive `create_new(true)`
+/// failed on the existing file) left the operator with no documented
+/// recovery. Per-artifact skip-if-exists is the contract.
+#[test]
+fn partial_init_after_cert_does_not_collide_with_existing_cert() {
+	let dir = fresh_dir("partial-after-cert");
+	let _ = prepare(dir.path(), DEFAULT_PORT_BASE).expect("first prepare");
+
+	// Drop everything except `cert.pem`. The marker stays (the
+	// directory is "ours"): the retry must rebuild the missing files
+	// without colliding with the cert that already survived the first
+	// crash.
+	std::fs::remove_file(dir.path().join("key.pem")).expect("remove key");
+	std::fs::remove_file(dir.path().join("dkim.pem")).expect("remove dkim");
+	std::fs::remove_file(dir.path().join("mail.toml")).expect("remove mail.toml");
+	std::fs::remove_file(dir.path().join("data").join("accounts.toml"))
+		.expect("remove accounts.toml");
+
+	let _second = prepare(dir.path(), DEFAULT_PORT_BASE).expect("retry completes after cert");
+	assert!(
+		dir.path().join("cert.pem").exists(),
+		"the existing cert must survive a retry"
+	);
+	assert!(
+		dir.path().join("key.pem").exists(),
+		"the missing key must be regenerated when cert survived"
+	);
+	assert!(
+		dir.path().join("mail.toml").exists(),
+		"mail.toml must be written to bring the directory back to a usable state"
+	);
+}
+
 /// Pin: no file under `<DIR>` contains the generated password bytes.
 /// The password comes from the same generator the rest of the code uses
 /// for seeded credentials; a test never passes a literal.

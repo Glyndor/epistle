@@ -18,7 +18,6 @@ pub(super) fn ensure_dir(dir: &Path) -> Result<Outcome, super::LocalError> {
 				)));
 			}
 			let marker = dir.join(super::MARKER_FILE);
-			let config = dir.join("mail.toml");
 			if !marker.exists() {
 				let has_content = std::fs::read_dir(dir)
 					.map_err(super::LocalError::Io)?
@@ -28,13 +27,10 @@ pub(super) fn ensure_dir(dir: &Path) -> Result<Outcome, super::LocalError> {
 					return Err(super::LocalError::NotEmpty(dir.to_path_buf()));
 				}
 				Outcome::Generate
-			} else if config.exists() {
-				Outcome::Reuse
 			} else {
-				// Marker but no `mail.toml`: a partial state the operator
-				// is allowed to be in (e.g. they moved the cert in but
-				// not yet the rest). The marker is ours, the dir is ours,
-				// so we regenerate.
+				// Marker present: the directory is "ours". The per-
+				// artifact scan in `prepare` decides what is missing
+				// and writes it; nothing here can pre-empt that.
 				Outcome::Generate
 			}
 		}
@@ -47,17 +43,14 @@ pub(super) fn ensure_dir(dir: &Path) -> Result<Outcome, super::LocalError> {
 	Ok(outcome)
 }
 
-/// What `ensure_dir` decided about the directory at the given path. The
-/// three-way split is what `prepare` consumes; collapsing it to `bool`
-/// would lose the "marker present but `mail.toml` missing" case, which
-/// `prepare` recovers from by re-generating.
+/// What `ensure_dir` decided about the directory at the given path.
+/// Currently the only decision is "is this our directory, and does the
+/// path exist"; the per-artifact fill-in happens in `prepare`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Outcome {
-	/// Generate every artifact: missing dir, empty dir, marker present
-	/// but the rest of the layout not yet written.
+	/// The directory is ours (or just got created). `prepare` walks the
+	/// artifact list and writes anything that is missing.
 	Generate,
-	/// Reuse everything: marker present AND `mail.toml` already there.
-	Reuse,
 }
 
 /// Create `path` as a directory with `mode` (no-op when it already exists).
@@ -119,9 +112,26 @@ pub(super) fn write_with_mode(
 	Ok(())
 }
 
-/// Tighten the mode on `path` if it is currently wider than `mode`.
-pub(super) fn enforce_mode(path: &Path, mode: u32) -> Result<(), super::LocalError> {
-	set_mode(path, mode)
+/// Write `contents` to `path` with `mode`, replacing any existing file. The
+/// caller has already decided overwriting is safe (typically because the
+/// file is the credential pair `mail.toml` + `accounts.toml` and at least
+/// one half is missing, so the only consistent state is to mint a fresh
+/// password and rewrite both files together). The mode is set on the new
+/// file; a file that existed before is replaced, not appended to.
+pub(super) fn write_with_replace(
+	path: &Path,
+	contents: &[u8],
+	mode: u32,
+) -> Result<(), super::LocalError> {
+	let mut file = std::fs::OpenOptions::new()
+		.write(true)
+		.create(true)
+		.truncate(true)
+		.open(path)
+		.map_err(super::LocalError::Io)?;
+	std::io::Write::write_all(&mut file, contents).map_err(super::LocalError::Io)?;
+	set_mode(path, mode)?;
+	Ok(())
 }
 
 /// Generate a self-signed certificate for the harness hostname and write
@@ -174,10 +184,11 @@ pub(super) fn generate_account_password() -> Result<String, super::LocalError> {
 	super::super::util::generate_secret().ok_or(super::LocalError::CsprngUnavailable)
 }
 
-/// Persist the dynamic account to `<data_dir>/accounts.toml` using the same
-/// on-disk format `AccountStore::open` reads, so the second run finds it
-/// without a separate path.
-pub(super) fn write_account(
+/// Persist the dynamic account to `<data_dir>/accounts.toml`, replacing
+/// any existing file. The credential-pair recovery in `prepare` calls
+/// this when `accounts.toml` is missing alongside a valid `mail.toml`,
+/// so the file must be replaceable rather than exclusive.
+pub(super) fn write_account_replace(
 	path: &Path,
 	account: &crate::directory_store::DynamicAccount,
 ) -> Result<(), super::LocalError> {
@@ -189,5 +200,5 @@ pub(super) fn write_account(
 		accounts: vec![account],
 	})
 	.map_err(|error| super::LocalError::Account(error.to_string()))?;
-	write_with_mode(path, body.as_bytes(), 0o600)
+	write_with_replace(path, body.as_bytes(), 0o600)
 }
