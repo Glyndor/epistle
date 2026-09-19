@@ -8,6 +8,7 @@ use crate::smtp::server::{Server, TlsMode};
 use crate::smtp::sink::MessageSink;
 
 use super::serve_dkim::SplitCompanions;
+use super::serve_tls::TlsStack;
 
 /// Run the server with a validated configuration.
 pub fn run(config: Config) -> ExitCode {
@@ -264,52 +265,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// ban store is absent in that case.
 	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone());
 
-	// TLS is loaded once and shared; failure to load is fatal (fail closed).
-	let tls_acceptor = match &config.tls {
-		Some(tls_config) => Some(crate::tls::acceptor(tls_config).map_err(std::io::Error::other)?),
-		None => None,
-	};
-	// SMTP listeners use a hot-reloadable acceptor so renewed certificates
-	// apply without a restart; IMAP keeps the static acceptor for now.
-	let reloadable_tls = tls_acceptor
-		.clone()
-		.map(crate::tls::ReloadableAcceptor::new);
-
-	// SCRAM-SHA-256-PLUS channel binding (tls-server-end-point). Offered only
-	// with a static [tls] certificate: under ACME the certificate is reloaded at
-	// runtime, which would make a fixed hash stale, so -PLUS stays off there and
-	// clients fall back to plain SCRAM.
-	let channel_binding = match (&config.tls, &config.acme) {
-		(Some(tls), None) => crate::tls::tls_server_end_point(tls),
-		_ => None,
-	};
-
-	// ACME automatic renewal: obtain/renew certificates and hot-reload the SMTP
-	// acceptor. Requires a [tls] bootstrap certificate to reload into.
-	if let Some(acme) = &config.acme {
-		match &reloadable_tls {
-			Some(reloadable) => {
-				// When a DNS provider is configured, refresh the TLSA record on
-				// every certificate rotation.
-				let tlsa = config
-					.dns
-					.as_ref()
-					.and_then(|dns| dns.build())
-					.map(|provider| (provider, config.hostname.clone()));
-				tokio::spawn(crate::acme::renew::run(
-					acme.directory_url.clone(),
-					acme.contacts.clone(),
-					acme.domains.clone(),
-					challenge_store.clone(),
-					config.data_dir.clone(),
-					reloadable.clone(),
-					u64::from(acme.renew_before_days),
-					tlsa,
-				));
-			}
-			None => tracing::warn!("[acme] is configured but [tls] is not; skipping ACME renewal"),
-		}
-	}
+	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
+	// renewal task. Loaded here so every listener picks the same acceptor up
+	// later; the helper preserves the same error text and the same warning
+	// when `[acme]` is set without `[tls]`.
+	let TlsStack {
+		tls_acceptor,
+		reloadable_tls,
+		channel_binding,
+	} = super::serve_tls::build_tls(&config, challenge_store.clone())?;
 
 	let mut tasks = Vec::new();
 	for listener_config in &config.listeners {
