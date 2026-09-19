@@ -6,6 +6,7 @@ pub mod bunny;
 pub mod check_host;
 pub mod cloudflare;
 pub mod desec;
+pub mod detect;
 pub mod digitalocean;
 pub mod dnsimple;
 pub mod gcloud;
@@ -151,3 +152,4 @@ async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) ->
 mod tests;
 
 pub use check_host::check_host;
+pub use detect::{LocalGlobals, PtrReport, detect, local_global_addresses, ptr_report};

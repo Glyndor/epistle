@@ -25,6 +25,7 @@ mod tenant;
 mod tls;
 mod transport;
 mod validate;
+pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
 

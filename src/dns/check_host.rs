@@ -148,6 +148,49 @@ async fn address_check(kind: &str, hostname: &str, expected: IpAddr, dns: &dyn D
 	}
 }
 
+/// One PTR lookup, classified into a structured outcome. Shared between the
+/// `verify-dns` report (which renders each variant as a [`Check`] with the
+/// operator-facing text) and the `init` flow's [`crate::dns::detect::PtrReport`]
+/// (which renders each variant through `Display`).
+///
+/// A single source keeps the wording consistent across surfaces: the three
+/// operator-facing strings `verify-dns` pins in its tests live here, and the
+/// `init` flow borrows the same classification without copying the rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PtrOutcome {
+	/// Forward-confirmed: PTR points at `hostname` and `hostname` resolves
+	/// back to `ip`.
+	Ok,
+	/// No PTR record exists for the IP.
+	None,
+	/// PTR exists but points at a name other than the expected `hostname`.
+	/// The string is the joined list of names it currently points at.
+	PointsElsewhere(String),
+	/// PTR points at `hostname`, but `hostname` does not resolve back to `ip`.
+	/// The round trip is broken.
+	DoesNotResolveBack,
+	/// The DNS lookup itself failed transiently. The PTR status is unknown.
+	LookupError,
+}
+
+/// Run the three PTR queries once and classify the result. The function does
+/// not construct any user-facing text: that is the renderer's job, which keeps
+/// the wording consistent between the two callers.
+pub(crate) async fn classify_ptr(hostname: &str, ip: IpAddr, dns: &dyn DnsLookup) -> PtrOutcome {
+	match dns.ptr(ip).await {
+		Err(_) => PtrOutcome::LookupError,
+		Ok(names) if names.is_empty() => PtrOutcome::None,
+		Ok(names) if !names.iter().any(|n| n.eq_ignore_ascii_case(hostname)) => {
+			PtrOutcome::PointsElsewhere(names.join(", "))
+		}
+		Ok(_) => match dns.addresses(hostname).await {
+			Ok(addrs) if addrs.contains(&ip) => PtrOutcome::Ok,
+			Ok(_) => PtrOutcome::DoesNotResolveBack,
+			Err(_) => PtrOutcome::LookupError,
+		},
+	}
+}
+
 /// One `PTR` check for `ip`. The detail string is the user-facing error:
 /// each failure mode gets its own wording because the fix is different in
 /// each case (talk to the IP provider, talk to the DNS provider, talk to
@@ -156,31 +199,23 @@ async fn ptr_check(hostname: &str, ip: IpAddr, dns: &dyn DnsLookup) -> Check {
 	let kind = format!("PTR {ip}");
 	let ip_str = ip.to_string();
 	let kind_ref = &kind;
-	match dns.ptr(ip).await {
-		Err(_) => Check::error(kind_ref, ip_str.clone()),
-		Ok(names) if names.is_empty() => Check::missing(
+	match classify_ptr(hostname, ip, dns).await {
+		PtrOutcome::LookupError => Check::error(kind_ref, ip_str),
+		PtrOutcome::None => Check::missing(
 			kind_ref,
-			ip_str.clone(),
+			ip_str,
 			format!("no reverse record; ask the provider of this IP to point it at {hostname}"),
 		),
-		Ok(names) if !names.iter().any(|n| n.eq_ignore_ascii_case(hostname)) => {
-			let other = names.join(", ");
-			Check::missing(
-				kind_ref,
-				ip_str.clone(),
-				format!("points at {other}, not {hostname}"),
-			)
-		}
-		Ok(_) => match dns.addresses(hostname).await {
-			Ok(addrs) if addrs.contains(&ip) => {
-				Check::ok(kind_ref, ip_str.clone(), format!("→ {hostname}"))
-			}
-			Ok(_) => Check::missing(
-				kind_ref,
-				ip_str.clone(),
-				format!("{hostname} does not resolve back to {ip}"),
-			),
-			Err(_) => Check::error(kind_ref, ip_str),
-		},
+		PtrOutcome::PointsElsewhere(other) => Check::missing(
+			kind_ref,
+			ip_str,
+			format!("points at {other}, not {hostname}"),
+		),
+		PtrOutcome::Ok => Check::ok(kind_ref, ip_str, format!("→ {hostname}")),
+		PtrOutcome::DoesNotResolveBack => Check::missing(
+			kind_ref,
+			ip_str,
+			format!("{hostname} does not resolve back to {ip}"),
+		),
 	}
 }
