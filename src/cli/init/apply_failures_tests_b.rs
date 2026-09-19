@@ -502,6 +502,62 @@ drop = "yes"
 	);
 }
 
+/// A nested operator table that happens to carry a key whose name
+/// matches a managed key (e.g. an operator-added `[operator]`
+/// table with a `domains` field) must NOT lose the field. The
+/// managed-key removal in `reconcile` applies to the root table
+/// only; nested tables are owned by the operator and pass through
+/// verbatim. The previous shape removed `INIT_MANAGED_KEYS` from
+/// every table the recursion visited, which silently wiped a key
+/// the operator had added.
+#[test]
+fn reconcile_preserves_a_managed_key_inside_a_nested_table() {
+	// Both sides carry the same `[operator]` table with a `domains`
+	// field. The previous shape wiped `operator.domains` because
+	// `domains` is in INIT_MANAGED_KEYS and the removal applied at
+	// every recursion depth. The fix removes only at the root.
+	let existing: toml::Value = toml::from_str(
+		r#"
+hostname = "mail.example.org"
+
+[operator]
+domains = "operator-owned"
+keep = "yes"
+"#,
+	)
+	.expect("parse existing");
+	let desired: toml::Value = toml::from_str(
+		r#"
+hostname = "mail.example.org"
+
+[operator]
+add = "new"
+"#,
+	)
+	.expect("parse desired");
+	let merged = apply_config::reconcile(existing, desired);
+	let operator = merged
+		.get("operator")
+		.expect("operator table must survive")
+		.as_table()
+		.expect("operator is a table");
+	assert_eq!(
+		operator.get("domains"),
+		Some(&toml::Value::String("operator-owned".to_string())),
+		"the operator's nested `domains` must NOT be removed: {operator:?}"
+	);
+	assert_eq!(
+		operator.get("keep"),
+		Some(&toml::Value::String("yes".to_string())),
+		"keys present only in existing must be preserved at the nested level"
+	);
+	assert_eq!(
+		operator.get("add"),
+		Some(&toml::Value::String("new".to_string())),
+		"keys present only in desired must be added at the nested level"
+	);
+}
+
 /// The `Display` impl for `ApplyError::Rng` must name the failing
 /// source so the operator can see which key did not land. The
 /// previous shape `expect`-panicked on a CSPRNG failure and exited

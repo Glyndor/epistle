@@ -208,7 +208,7 @@ pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWr
 			let existing_value: toml::Value = parsed(&existing).map_err(|e| {
 				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
 			})?;
-			let merged = merge_tables(existing_value, desired_value);
+			let merged = reconcile(existing_value, desired_value);
 			if merged == parsed(&existing)? {
 				if let Err(error) = Config::load(path) {
 					return Err(ApplyError::ConfigInvalid(format!(
@@ -234,12 +234,18 @@ pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWr
 }
 
 /// Reconcile a desired TOML value with an existing one. Every key
-/// listed in `INIT_MANAGED_KEYS` is taken from the desired value: when
-/// present in desired, it replaces the existing entry; when absent in
-/// desired, it is removed from the existing entry entirely. Keys not
-/// in that list are preserved as the operator added them. Tables are
-/// reconciled recursively; arrays are replaced wholesale because
-/// listeners and the dns section are managed as a whole by `init`.
+/// listed in `INIT_MANAGED_KEYS` is removed from the root table of
+/// the existing value (so the desired config can drop a previously
+/// managed entry that the operator no longer wants) and replaced
+/// from the desired value when present there. Keys not in that list
+/// are preserved as the operator added them. The removal applies
+/// at the root only: a nested operator table that happens to carry
+/// a key whose name matches a managed key is preserved verbatim,
+/// because `init` does not own the contents of nested tables.
+///
+/// Tables are reconciled recursively for keys the operator and
+/// `init` both write; arrays are replaced wholesale because listeners
+/// and the dns section are managed as a whole by `init`.
 pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Value {
 	use toml::Value;
 	match (existing, desired) {
@@ -249,7 +255,27 @@ pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Va
 			}
 			for (key, value) in desired_table {
 				let new = match existing_table.remove(&key) {
-					Some(existing_inner) => reconcile(existing_inner, value),
+					Some(existing_inner) => reconcile_inner(existing_inner, value),
+					None => value,
+				};
+				existing_table.insert(key, new);
+			}
+			Value::Table(existing_table)
+		}
+		(_, desired) => desired,
+	}
+}
+
+/// Recurse into a nested table without applying the managed-key
+/// removal. The root table is the only place `init` owns keys by
+/// name, so a nested operator table keeps every key it had.
+fn reconcile_inner(existing: toml::Value, desired: toml::Value) -> toml::Value {
+	use toml::Value;
+	match (existing, desired) {
+		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
+			for (key, value) in desired_table {
+				let new = match existing_table.remove(&key) {
+					Some(existing_inner) => reconcile_inner(existing_inner, value),
 					None => value,
 				};
 				existing_table.insert(key, new);
@@ -262,15 +288,6 @@ pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Va
 
 fn parsed(text: &str) -> Result<toml::Value, ApplyError> {
 	toml::from_str(text).map_err(|error| ApplyError::ConfigEncode(error.to_string()))
-}
-
-/// Merge two TOML tables: keys present in both keep the desired value;
-/// keys present only in the existing one are preserved. Tables are
-/// merged recursively; arrays are replaced wholesale because listeners
-/// are managed as a whole by `init` and the operator cannot meaningfully
-/// add to them through the file.
-fn merge_tables(existing: toml::Value, desired: toml::Value) -> toml::Value {
-	reconcile(existing, desired)
 }
 
 /// Write `bytes` to `path` after staging them on a sibling file with

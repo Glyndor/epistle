@@ -299,7 +299,7 @@ fn config_is_identical_to_desired(
 			std::io::Error::other(error.to_string()),
 		)
 	})?;
-	let merged = merge_tables_for_plan(existing_value, desired_value);
+	let merged = apply_config::reconcile(existing_value, desired_value);
 	let existing_parsed = toml::from_str(&existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),
@@ -322,13 +322,6 @@ fn config_is_identical_to_desired(
 	} else {
 		Ok(false)
 	}
-}
-
-/// Merge two TOML tables for the plan-only identity check. Uses the
-/// same reconciliation as the apply phase so the plan cannot claim a
-/// config is `identical` while the apply phase rewrites it.
-fn merge_tables_for_plan(existing: toml::Value, desired: toml::Value) -> toml::Value {
-	apply_config::reconcile(existing, desired)
 }
 
 /// Count of top-level keys the apply phase writes into the desired
