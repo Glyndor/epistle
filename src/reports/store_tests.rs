@@ -1,5 +1,43 @@
 use super::*;
 
+#[test]
+fn concurrent_appends_keep_every_record_on_its_own_line() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let barrier = std::sync::Barrier::new(8);
+	std::thread::scope(|scope| {
+		for writer in 0..8 {
+			let dir = dir.path();
+			let barrier = &barrier;
+			scope.spawn(move || {
+				barrier.wait();
+				for record in 0..200 {
+					append(
+						dir,
+						Kind::Dmarc,
+						"20240101",
+						"org",
+						&serde_json::json!({"id": writer * 200 + record}),
+					)
+					.expect("append");
+				}
+			});
+		}
+	});
+	let bytes = std::fs::read_to_string(dir.path().join("reports/dmarc/20240101/org.jsonl"))
+		.expect("read JSONL");
+	let mut ids = std::collections::BTreeSet::new();
+	for line in bytes.lines() {
+		let value: serde_json::Value =
+			serde_json::from_str(line).expect("one JSON object per line");
+		assert!(
+			ids.insert(value["id"].as_u64().expect("record id")),
+			"duplicate record"
+		);
+	}
+	assert!(bytes.ends_with('\n'));
+	assert_eq!(ids, (0..1600).collect());
+}
+
 #[cfg(unix)]
 #[test]
 fn append_writes_the_jsonl_at_0600_and_directories_at_0700() {

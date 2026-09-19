@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn truncated_eocd_tail_is_refused() {
+	let mut bytes = vec![0; 30];
+	bytes[..4].copy_from_slice(&LOCAL_FILE_HEADER_SIG);
+	bytes[6] = FLAG_DATA_DESCRIPTOR as u8;
+	bytes.extend_from_slice(&EOCD_SIG);
+	let err = inflate_attachment(&bytes, Encoding::Zip).expect_err("truncated EOCD");
+	assert!(matches!(err, ReportError::Malformed("zip eocd missing")));
+}
+
+#[test]
+fn zip_integer_reads_check_truncation_and_extreme_offsets() {
+	let bytes = [1, 2, 3, 4];
+	assert_eq!(read_u16(&bytes, 2).expect("two bytes remain"), 0x0403);
+	assert_eq!(read_u32(&bytes, 0).expect("four bytes remain"), 0x04030201);
+	for offset in [3, 4, usize::MAX] {
+		assert!(matches!(
+			read_u16(&bytes, offset),
+			Err(ReportError::Malformed("zip field overruns buffer"))
+		));
+		assert!(matches!(
+			read_u32(&bytes, offset),
+			Err(ReportError::Malformed("zip field overruns buffer"))
+		));
+	}
+}
+
 fn gzip(bytes: &[u8]) -> Vec<u8> {
 	let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
 	use std::io::Write;
@@ -280,13 +307,12 @@ fn central_size_larger_than_the_buffer_is_refused() {
 	);
 }
 
-/// A central directory header whose compressed-size field is between the
-/// buffer length and MAX_COMPRESSED still trips the size cap.
+/// Exercise the central-directory cap directly so the outer input cap
+/// cannot satisfy this assertion first.
 #[test]
 fn central_size_above_max_compressed_is_refused() {
-	fn build_zip_above_cap() -> Vec<u8> {
-		// Local header with bit 3 set, no data payload (we never get to
-		// read it; the cap fires first).
+	fn build_zip_at_size(claimed: u32) -> Vec<u8> {
+		// Leave local sizes zero and declare bit 3 for the central-directory lookup.
 		let mut out = Vec::new();
 		out.extend_from_slice(&LOCAL_FILE_HEADER_SIG);
 		out.extend_from_slice(&20u16.to_le_bytes());
@@ -300,11 +326,9 @@ fn central_size_above_max_compressed_is_refused() {
 		out.extend_from_slice(&5u16.to_le_bytes());
 		out.extend_from_slice(&0u16.to_le_bytes());
 		out.extend_from_slice(b"a.xml");
-		// Fake data block of MAX_COMPRESSED + 1 bytes: above the cap
-		// but below the buffer.
-		let claimed = (MAX_COMPRESSED as u32) + 1;
+		// Keep the complete buffer larger than the claimed data size.
 		out.extend_from_slice(&vec![0u8; claimed as usize]);
-		// Central directory header at the start, sized to claim
+		// Central directory header after the data block, sized to claim
 		// `claimed` bytes; the real buffer is bigger than the claim so
 		// the "central size larger than the buffer" check passes and
 		// the "above MAX_COMPRESSED" check fires.
@@ -339,8 +363,13 @@ fn central_size_above_max_compressed_is_refused() {
 		out.extend_from_slice(&0u16.to_le_bytes());
 		out
 	}
-	let zip = build_zip_above_cap();
-	let err = inflate_attachment(&zip, Encoding::Zip).expect_err("above MAX_COMPRESSED");
+	let inside = build_zip_at_size(MAX_COMPRESSED as u32);
+	assert_eq!(
+		read_central_sizes(&inside, 35).expect("central size at cap"),
+		(MAX_COMPRESSED, 0)
+	);
+	let zip = build_zip_at_size(MAX_COMPRESSED as u32 + 1);
+	let err = read_central_sizes(&zip, 35).expect_err("central size above MAX_COMPRESSED");
 	assert!(matches!(err, ReportError::TooLarge), "{err:?}");
 }
 

@@ -41,17 +41,20 @@ pub fn append(
 	set_owner_only_dir(dir.parent().expect("kind dir"))?;
 	set_owner_only_dir(dir.parent().and_then(|p| p.parent()).expect("reports dir"))?;
 	let path = dir.join(format!("{org}.jsonl"));
-	let line = serde_json::to_string(report)
+	let mut line = serde_json::to_vec(report)
 		.map_err(|e| std::io::Error::other(format!("serialize report: {e}")))?;
+	line.push(b'\n');
 	let mut options = std::fs::OpenOptions::new();
-	options.create(true).append(true);
+	options.create(true).read(true).append(true);
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::OpenOptionsExt;
 		options.mode(0o600);
 	}
 	let mut file = options.open(&path)?;
-	writeln!(file, "{line}")
+	// Hold the file lock through all writes, including partial-write retries.
+	file.lock()?;
+	file.write_all(&line)
 }
 
 /// Force the directory mode to `0700`. A directory that already existed

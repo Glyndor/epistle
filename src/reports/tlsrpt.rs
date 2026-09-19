@@ -176,11 +176,16 @@ struct RawTlsReport {
 }
 
 #[derive(serde::Deserialize)]
-struct RawPolicy {
+struct RawPolicyDetails {
 	#[serde(rename = "policy-type")]
 	policy_type: String,
 	#[serde(rename = "policy-domain")]
 	policy_domain: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RawPolicy {
+	policy: RawPolicyDetails,
 	summary: Summary,
 	#[serde(
 		rename = "failure-details",
@@ -204,8 +209,8 @@ pub fn parse(json: &[u8]) -> Result<TlsReport, ParseError> {
 			truncated = true;
 		}
 		policies.push(Policy {
-			policy_type: raw_policy.policy_type,
-			policy_domain: raw_policy.policy_domain,
+			policy_type: raw_policy.policy.policy_type,
+			policy_domain: raw_policy.policy.policy_domain,
 			summary: raw_policy.summary,
 			failure_details,
 		});
