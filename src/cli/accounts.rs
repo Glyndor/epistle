@@ -202,6 +202,7 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
+	let mut err = super::style::stderr();
 	remove_with_bayes(
 		&runtime,
 		&store,
@@ -211,6 +212,7 @@ pub(super) fn remove(
 		queue,
 		bayes_store.as_ref(),
 		out,
+		&mut err,
 	)
 }
 
@@ -218,7 +220,11 @@ pub(super) fn remove(
 /// hand-built [`BayesStore`]. The public [`remove`] opens the store
 /// from the configuration; tests bypass `open_bayes_store` to feed
 /// in a deterministic pool without touching the operator's
-/// `[database]` URL.
+/// `[database]` URL. The `err` sink is separate from `out` so
+/// decoration (`error:`, `warning:`) reaches the operator's terminal
+/// while `out` carries the count summary the rest of the CLI
+/// promises; tests pass a `Vec` wrapped in `AutoStream` so both
+/// streams are observable.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn remove_with_bayes(
 	runtime: &tokio::runtime::Runtime,
@@ -229,6 +235,7 @@ pub(super) fn remove_with_bayes(
 	queue: QueuePolicy,
 	bayes_store: Option<&crate::antispam::corpus::BayesStore>,
 	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
 ) -> ExitCode {
 	let result = runtime.block_on(remove_account(
 		store,
@@ -255,23 +262,25 @@ pub(super) fn remove_with_bayes(
 			ExitCode::SUCCESS
 		}
 		Err(StoreError::NotFound(what)) => {
-			super::style::error(format_args!("no such dynamic account: {what}"));
+			super::style::error_to(err, format_args!("no such dynamic account: {what}"));
 			ExitCode::FAILURE
 		}
 		Err(StoreError::Invalid(message)) => {
-			super::style::error(message);
+			super::style::error_to(err, message);
 			ExitCode::FAILURE
 		}
 		Err(error @ StoreError::BayesPurge { .. }) => {
-			let _ = writeln!(
-				out,
-				"bayes corpus purge failed for {name}; account retained, retry the removal once the database is reachable"
+			super::style::warn_to(
+				err,
+				format_args!(
+					"bayes corpus purge failed for {name}; account retained, retry the removal once the database is reachable"
+				),
 			);
-			super::style::error(error);
+			super::style::error_to(err, format_args!("{error}"));
 			ExitCode::FAILURE
 		}
 		Err(error) => {
-			super::style::error(error);
+			super::style::error_to(err, error);
 			ExitCode::FAILURE
 		}
 	}

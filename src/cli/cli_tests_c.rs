@@ -228,6 +228,8 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 	let bayes = BayesStore::with_key(pool, [0u8; 32]);
 
 	let mut out = Vec::new();
+	let mut err_buf = Vec::new();
+	let mut err_stream = anstream::AutoStream::new(&mut err_buf, anstream::ColorChoice::Auto);
 	let exit = accounts::remove_with_bayes(
 		&runtime,
 		&store,
@@ -237,16 +239,22 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 		QueuePolicy::Drain,
 		Some(&bayes),
 		&mut out,
+		&mut err_stream,
 	);
 	assert_eq!(
 		exit,
 		ExitCode::FAILURE,
 		"a failing bayes purge must abort the removal"
 	);
-	let text = String::from_utf8(out).expect("utf8");
+	let err_text = String::from_utf8(err_buf).expect("utf8");
 	assert!(
-		text.contains("bayes corpus purge failed"),
-		"the bayes store was not consulted; output was: {text}"
+		err_text.contains("bayes corpus purge failed"),
+		"the bayes store was not consulted; stderr was: {err_text}"
+	);
+	let out_text = String::from_utf8(out).expect("utf8 stdout");
+	assert!(
+		!out_text.contains("bayes corpus purge failed"),
+		"the bayes warning must not pollute stdout; got: {out_text}"
 	);
 }
 
@@ -289,6 +297,8 @@ fn cli_remove_completes_without_a_bayes_store() {
 	let runtime = tokio::runtime::Runtime::new().expect("runtime");
 
 	let mut out = Vec::new();
+	let mut err_buf = Vec::new();
+	let mut err_stream = anstream::AutoStream::new(&mut err_buf, anstream::ColorChoice::Auto);
 	let exit = accounts::remove_with_bayes(
 		&runtime,
 		&store,
@@ -298,6 +308,7 @@ fn cli_remove_completes_without_a_bayes_store() {
 		QueuePolicy::Drain,
 		None,
 		&mut out,
+		&mut err_stream,
 	);
 	assert_eq!(exit, ExitCode::SUCCESS, "no-bayes path must succeed");
 	let text = String::from_utf8(out).expect("utf8");
@@ -339,6 +350,8 @@ fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
 	let bayes = BayesStore::with_key(pool, [0u8; 32]);
 
 	let mut out = Vec::new();
+	let mut err_buf = Vec::new();
+	let mut err_stream = anstream::AutoStream::new(&mut err_buf, anstream::ColorChoice::Auto);
 	let exit = accounts::remove_with_bayes(
 		&runtime,
 		&store,
@@ -348,11 +361,17 @@ fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
 		QueuePolicy::Drain,
 		Some(&bayes),
 		&mut out,
+		&mut err_stream,
 	);
 	assert_eq!(exit, ExitCode::FAILURE, "unknown account must fail");
-	let text = String::from_utf8(out).expect("utf8");
+	let err_text = String::from_utf8(err_buf).expect("utf8");
+	let out_text = String::from_utf8(out).expect("utf8 stdout");
 	assert!(
-		!text.contains("bayes corpus purge failed"),
-		"a missing account must short-circuit before the bayes purge runs; got: {text}"
+		!err_text.contains("bayes corpus purge failed"),
+		"a missing account must short-circuit before the bayes purge runs; got stderr: {err_text}"
+	);
+	assert!(
+		!out_text.contains("bayes corpus purge failed"),
+		"a missing account must keep stdout free of the bayes warning; got: {out_text}"
 	);
 }
