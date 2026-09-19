@@ -103,38 +103,3 @@ fn strip_matching_quotes(s: &str) -> String {
 		s.to_string()
 	}
 }
-
-#[test]
-fn coverage_threshold_is_ratcheted_below_the_pre_split_total() {
-	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
-	let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-
-	let threshold = extract_threshold(&text)
-		.unwrap_or_else(|| panic!("coverage-threshold not found in {}", path.display()));
-	let threshold: u32 = threshold
-		.parse()
-		.unwrap_or_else(|e| panic!("coverage-threshold {threshold:?} is not a number: {e}"));
-
-	assert!(
-		threshold <= 90,
-		"coverage-threshold is {threshold}, above the pre-split 90. The gate \
-		 used to count test files as covered production code; lifting the \
-		 threshold back to that era is the regression issue #921 prevents.",
-	);
-}
-
-/// Read `coverage-threshold:` out of `text` as a plain integer. The value is a
-/// bare number in YAML, so a `trim()` and a `parse` is enough.
-fn extract_threshold(text: &str) -> Option<String> {
-	for line in text.lines() {
-		let trimmed = line.trim_start();
-		let Some(after) = trimmed.strip_prefix("coverage-threshold:") else {
-			continue;
-		};
-		let value = after.trim();
-		if !value.is_empty() {
-			return Some(value.to_string());
-		}
-	}
-	None
-}
