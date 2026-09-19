@@ -91,13 +91,10 @@ struct Inner {
 	/// Empty when no `[[tenant]]` is configured; the empty state is the
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
-	/// The bounded queue to the per-account Bayesian trainer. `Email/set`
-	/// feeds it on a `$Junk` / `$NotJunk` change. `None` without a
-	/// database, and `Email/set` answers the same.
-	training: Option<crate::antispam::training_queue::TrainingQueue>,
-	/// The Bayesian store, so account removal can drop the corpus rows
-	/// of the account. `None` without a database.
-	bayes_store: Option<crate::antispam::corpus::BayesStore>,
+	/// Per-account Bayesian wiring: the training queue and the
+	/// store, both `None` without a database. Builders and accessors
+	/// live in `state_bayes.rs`.
+	bayes: bayes::BayesBindings,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -229,8 +226,7 @@ impl ApiState {
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
-				training: None,
-				bayes_store: None,
+				bayes: bayes::BayesBindings::default(),
 			}),
 		}
 	}
@@ -414,38 +410,6 @@ impl ApiState {
 		inner.auth_limiter =
 			std::sync::Mutex::new(AuthLimiter::new(window, std::time::Instant::now()));
 		self
-	}
-
-	/// Attach the training queue. Must be set before the state is shared.
-	pub fn with_training(
-		mut self,
-		training: crate::antispam::training_queue::TrainingQueue,
-	) -> Self {
-		if let Some(inner) = Arc::get_mut(&mut self.inner) {
-			inner.training = Some(training);
-		}
-		self
-	}
-
-	/// Attach the Bayesian store. Must be set before the state is shared.
-	pub fn with_bayes_store(mut self, store: crate::antispam::corpus::BayesStore) -> Self {
-		if let Some(inner) = Arc::get_mut(&mut self.inner) {
-			inner.bayes_store = Some(store);
-		}
-		self
-	}
-
-	/// The training queue wired into the API state, when one was
-	/// attached.
-	pub fn training(&self) -> Option<&crate::antispam::training_queue::TrainingQueue> {
-		self.inner.training.as_ref()
-	}
-
-	/// The underlying `BayesStore` wired into the API state, when one
-	/// was attached. Account-removal uses it to drop the account's
-	/// per-scope rows.
-	pub fn bayes_store(&self) -> Option<&crate::antispam::corpus::BayesStore> {
-		self.inner.bayes_store.as_ref()
 	}
 
 	/// Attach the per-tenant aggregate limits. Must be set before the state
@@ -813,6 +777,9 @@ pub async fn require_bearer_token(
 	});
 	Ok(next.run(request).await)
 }
+
+#[path = "state_bayes.rs"]
+mod bayes;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

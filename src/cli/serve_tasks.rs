@@ -234,33 +234,6 @@ pub(super) async fn connect_database(
 	}
 }
 
-/// Open the Bayesian store over `pool` and start the one training worker
-/// of the process. `None` without a database. A corpus key that cannot
-/// be read or created stops the start (fail closed).
-pub(super) fn open_bayes(
-	config: &Config,
-	pool: &Option<sqlx::PgPool>,
-	crypto: &crate::storage::MessageCrypto,
-	metrics: &Arc<crate::metrics::Metrics>,
-) -> std::io::Result<
-	Option<(
-		crate::antispam::corpus::BayesStore,
-		crate::antispam::training_queue::TrainingQueue,
-	)>,
-> {
-	let Some(pool) = pool else {
-		return Ok(None);
-	};
-	let store = crate::antispam::corpus::BayesStore::open(pool.clone(), &config.data_dir)
-		.inspect_err(|error| eprintln!("error: cannot open bayes corpus key: {error}"))?;
-	let queue = crate::antispam::training_queue::TrainingQueue::start(
-		Arc::new(store.clone()),
-		crypto.clone(),
-		Arc::clone(metrics),
-	);
-	Ok(Some((store, queue)))
-}
-
 /// Load the SQL directory accounts into the store once, then spawn an hourly
 /// refresh task. A no-op unless `[database] directory = true` and a reputation
 /// pool is present. The initial load fails closed (a fatal startup error) so the
@@ -662,3 +635,8 @@ pub(super) fn build_greylist(
 		store
 	})
 }
+
+#[path = "serve_bayes.rs"]
+mod bayes;
+
+pub(super) use bayes::open_bayes;
