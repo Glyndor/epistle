@@ -375,11 +375,14 @@ fn partial_init_with_marker_written_last_after_cert_is_refused() {
 	match second {
 		Err(LocalError::NotEmpty(path)) => {
 			assert_eq!(
-				path, dir.path(),
+				path,
+				dir.path(),
 				"the refusal must name the directory itself"
 			);
 		}
-		Err(other) => panic!("old-order partial state must be refused with NotEmpty, got {other:?}"),
+		Err(other) => {
+			panic!("old-order partial state must be refused with NotEmpty, got {other:?}")
+		}
 		Ok(_) => panic!("old-order partial state must be refused, prepare returned Ok"),
 	}
 
@@ -389,4 +392,88 @@ fn partial_init_with_marker_written_last_after_cert_is_refused() {
 		cert_path.exists(),
 		"refusal must leave the existing files alone"
 	);
+}
+
+/// Pin: `write_with_replace` over a target that exists with mode `0644`
+/// narrows it to `0600` and leaves no temporary file behind. The
+/// previous shape opened with the default mode (0644 under a normal
+/// umask), wrote, and only then narrowed via `chmod`, which left the
+/// wider mode on disk for the duration of the write and on disk if a
+/// crash interrupted the run between the open and the chmod.
+#[cfg(unix)]
+#[test]
+fn replace_over_existing_world_readable_file_narrows_to_0600_and_cleans_up_temp() {
+	let dir = fresh_dir("replace-mode");
+	let target = dir.path().join("mail.toml");
+
+	// Pre-create the target with mode 0644 (the wider mode the fix is
+	// closing) so the test exercises the narrow-on-replace path.
+	std::fs::write(&target, b"old").expect("write old");
+	std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).expect("chmod 0644");
+	let mode_before = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+	assert_eq!(mode_before, 0o644, "fixture must start at 0644");
+
+	// The replacement writes a credential file with mode 0600.
+	layout::write_with_replace(&target, b"new", 0o600).expect("replace");
+
+	// Mode is narrowed on the now-replaced file.
+	let mode_after = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+	assert_eq!(
+		mode_after, 0o600,
+		"replaced file must be 0600, got {mode_after:o}"
+	);
+	assert_eq!(
+		std::fs::read(&target).expect("read after replace"),
+		b"new",
+		"the contents must be the new payload, not a truncated mix of old and new"
+	);
+
+	// No temporary file remains. `write_with_replace` writes through a
+	// sibling `<dir>/.mail.toml-<pid>-<n>.tmp` and renames over the
+	// target, so a half-written `mail.toml` cannot outlive the call.
+	let leftover: Vec<_> = std::fs::read_dir(dir.path())
+		.expect("readdir")
+		.flatten()
+		.filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+		.collect();
+	assert!(
+		leftover.is_empty(),
+		"the sibling temporary must be renamed over the target, found {leftover:?}"
+	);
+}
+
+/// Pin: `write_with_replace` over a path whose parent directory does
+/// not exist yet still fails closed, because the temporary file lives
+/// in the same directory as the target and the rename cannot cross
+/// directories.
+#[cfg(unix)]
+#[test]
+fn replace_into_missing_parent_directory_errors() {
+	let dir = fresh_dir("replace-missing-parent");
+	let target = dir.path().join("nope").join("mail.toml");
+	let result = layout::write_with_replace(&target, b"x", 0o600);
+	assert!(
+		result.is_err(),
+		"replace into a missing parent must error, got {result:?}"
+	);
+	// Neither the parent nor the target was created on the error path.
+	assert!(
+		!dir.path().join("nope").exists(),
+		"parent must not be created"
+	);
+	assert!(!target.exists(), "target must not be created");
+}
+
+/// Pin: a fresh replace over a non-existent target still produces a
+/// 0600 file with the right contents. The atomic-replace path must
+/// work for the first write, not only the overwrite case.
+#[cfg(unix)]
+#[test]
+fn replace_over_missing_file_creates_with_0600() {
+	let dir = fresh_dir("replace-fresh");
+	let target = dir.path().join("mail.toml");
+	layout::write_with_replace(&target, b"fresh", 0o600).expect("fresh replace");
+	let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+	assert_eq!(mode, 0o600, "fresh replace must produce 0600, got {mode:o}");
+	assert_eq!(std::fs::read(&target).expect("read"), b"fresh");
 }

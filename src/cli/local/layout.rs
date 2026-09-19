@@ -101,26 +101,94 @@ pub(super) fn write_with_mode(
 	Ok(())
 }
 
-/// Write `contents` to `path` with `mode`, replacing any existing file. The
-/// caller has already decided overwriting is safe (typically because the
-/// file is the credential pair `mail.toml` + `accounts.toml` and at least
-/// one half is missing, so the only consistent state is to mint a fresh
-/// password and rewrite both files together). The mode is set on the new
-/// file; a file that existed before is replaced, not appended to.
+/// Write `contents` to `path` with `mode`, replacing any existing file.
+/// The caller has already decided overwriting is safe (typically because
+/// the file is the credential pair `mail.toml` + `accounts.toml` and at
+/// least one half is missing, so the only consistent state is to mint a
+/// fresh password and rewrite both files together). The mode is set on
+/// the new file; a file that existed before is replaced, not appended
+/// to.
+///
+/// Two guarantees the credential files need that the obvious
+/// `open(O_TRUNC) → write_all → chmod` shape does not give:
+///
+/// - The file must never be world-readable, even for an instant. The
+///   naive shape opens with the default mode (0644 under a normal
+///   umask), writes, and only then narrows to 0600; an interrupted run
+///   leaves the wider mode on disk. We open the temporary with
+///   `OpenOptionsExt::mode(mode)` so the new file is 0600 from the
+///   first byte.
+/// - An interrupted run must not leave a truncated `mail.toml` on
+///   disk that the runtime then tries to load. We write to a sibling
+///   temporary file and `rename(2)` over the target; the rename is
+///   atomic on POSIX, so the operator either sees the old file or the
+///   new file, never a half-written one. The temporary is unlinked by
+///   the rename itself; no cleanup is needed.
+///
+/// The trailing `set_mode` is kept so a target that pre-existed with a
+/// wider mode (e.g. an older `epistle local` that wrote 0644, or a
+/// hand-edited 0644 file) is narrowed on the next replace. With the
+/// fix above the target inherits the temporary's 0600 on rename, so
+/// the call is a defensive no-op on every fresh write and only fires
+/// on a directory that already drifted.
 pub(super) fn write_with_replace(
 	path: &Path,
 	contents: &[u8],
 	mode: u32,
 ) -> Result<(), super::LocalError> {
-	let mut file = std::fs::OpenOptions::new()
-		.write(true)
-		.create(true)
-		.truncate(true)
-		.open(path)
-		.map_err(super::LocalError::Io)?;
-	std::io::Write::write_all(&mut file, contents).map_err(super::LocalError::Io)?;
+	let parent = path.parent().ok_or_else(|| {
+		super::LocalError::Io(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			format!("{} has no parent directory", path.display()),
+		))
+	})?;
+	let temp_path = sibling_temp_path(parent, path)?;
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		let mut options = std::fs::OpenOptions::new();
+		// `create_new(true)` so a stale temporary left over from a
+		// previous crash (the rename never happened, the process died
+		// in between) cannot be silently reused and clobber the new
+		// contents. `sibling_temp_path` already picked a name, so the
+		// race-free behaviour is what `create_new` gives us.
+		options.write(true).create_new(true).mode(mode);
+		let mut file = options.open(&temp_path).map_err(super::LocalError::Io)?;
+		std::io::Write::write_all(&mut file, contents).map_err(super::LocalError::Io)?;
+	}
+	#[cfg(not(unix))]
+	{
+		let mut file = std::fs::OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&temp_path)
+			.map_err(super::LocalError::Io)?;
+		std::io::Write::write_all(&mut file, contents).map_err(super::LocalError::Io)?;
+	}
+	std::fs::rename(&temp_path, path).map_err(super::LocalError::Io)?;
 	set_mode(path, mode)?;
 	Ok(())
+}
+
+/// Pick a sibling temporary file path inside `parent` for an atomic
+/// replace of `target`. The name is `.<target>.<pid>-<n>.tmp`, which
+/// keeps it distinct from the real file so a stale temp from an earlier
+/// crash does not collide and the runtime can spot it (the leading dot
+/// hides it from directory listings by convention). The counter is
+/// process-local; `pid` keeps two concurrent processes on the same
+/// directory from clashing.
+fn sibling_temp_path(parent: &Path, target: &Path) -> std::io::Result<std::path::PathBuf> {
+	use std::sync::atomic::{AtomicU64, Ordering};
+	static COUNTER: AtomicU64 = AtomicU64::new(0);
+	let file_name = target.file_name().ok_or_else(|| {
+		std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			format!("{} has no file name", target.display()),
+		)
+	})?;
+	let pid = std::process::id();
+	let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+	Ok(parent.join(format!(".{}-{pid}-{n}.tmp", file_name.to_string_lossy())))
 }
 
 /// Generate a self-signed certificate for the harness hostname and write
