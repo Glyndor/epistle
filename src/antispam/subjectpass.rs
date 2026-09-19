@@ -175,12 +175,19 @@ impl SubjectPass {
 	/// `false` for an absent or malformed subject; an invalid token is
 	/// silently ignored, not an error. The token search is case-insensitive
 	/// (the prefix and the base32 suffix), so a sender who pastes the token
-	/// in mixed case still passes.
+	/// in mixed case still passes. RFC 2047 encoded-words in the subject are
+	/// decoded first: a sender whose mail client encoded an accent in the
+	/// subject still gets the token check on the decoded text.
 	pub fn accepts(&self, subject: Option<&str>, sender: &str, recipient: &str, day: u64) -> bool {
 		let Some(subject) = subject else {
 			return false;
 		};
-		for word in subject.split_whitespace() {
+		// RFC 2047 decode first, so an accent in the original Subject: does
+		// not push a token-prefixed word into the next encoded-word. A
+		// malformed encoded-word is left as is by the decoder, so the
+		// tokenizer below still finds a plain `EP-...` token.
+		let decoded = crate::util::encoded_word::decode(subject);
+		for word in decoded.split_whitespace() {
 			// Match the prefix case-insensitively so a sender who types `ep-`
 			// or who copies the token with mixed case still hits the check.
 			let after_prefix = match strip_prefix_ci(word, TOKEN_PREFIX) {

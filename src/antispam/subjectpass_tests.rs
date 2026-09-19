@@ -121,6 +121,71 @@ fn an_invalid_token_is_ignored_not_an_error() {
 	assert!(!p.accepts(Some(bad), sender, recipient, day));
 }
 
+/// Wrap the plain `plain` text plus `token` in an RFC 2047 encoded-word
+/// under `encoding` (B or Q). The token rides in plain ASCII, so the
+/// encoding only has to cover the wrapper; this isolates the test from
+/// any case-folding the wrapper would force on the token suffix.
+fn encoded_subject(plain: &str, token: &str, encoding: char) -> String {
+	let wrapped = format!("{plain} {token}");
+	let payload: String = match encoding {
+		'B' | 'b' => {
+			use base64::Engine;
+			use base64::engine::general_purpose::STANDARD as B64;
+			B64.encode(wrapped.as_bytes())
+		}
+		'Q' | 'q' => {
+			let mut out = String::with_capacity(wrapped.len() * 3);
+			for byte in wrapped.bytes() {
+				if byte == b' ' {
+					out.push('_');
+				} else if byte.is_ascii_graphic() && byte != b'=' && byte != b'?' && byte != b'_' {
+					out.push(byte as char);
+				} else {
+					out.push_str(&format!("={byte:02X}"));
+				}
+			}
+			out
+		}
+		_ => panic!("encoding must be B or Q"),
+	};
+	format!("=?UTF-8?{encoding}?{payload}?=")
+}
+
+#[test]
+fn a_token_inside_an_rfc_2047_encoded_subject_is_accepted() {
+	let p = pass();
+	let sender = "alice@example.org";
+	let recipient = "bob@example.org";
+	let day = 20_000;
+	let token = p.issue(sender, recipient, day);
+	let b_subject = encoded_subject("hello", &token, 'B');
+	let q_subject = encoded_subject("hello", &token, 'Q');
+	assert!(
+		p.accepts(Some(&b_subject), sender, recipient, day),
+		"B-encoded subject {b_subject:?} should still verify the token"
+	);
+	assert!(
+		p.accepts(Some(&q_subject), sender, recipient, day),
+		"Q-encoded subject {q_subject:?} should still verify the token"
+	);
+	// The same subjects with one token byte changed must NOT verify.
+	let mut bad_token: String = token.clone();
+	// Flip the last base32 character of the token to a different base32
+	// char. The prefix is preserved so the word still splits cleanly;
+	// only the HMAC changes.
+	let mut last = bad_token.pop().unwrap();
+	if last == 'A' {
+		last = 'B';
+	} else {
+		last = 'A';
+	}
+	bad_token.push(last);
+	let b_bad = encoded_subject("hello", &bad_token, 'B');
+	let q_bad = encoded_subject("hello", &bad_token, 'Q');
+	assert!(!p.accepts(Some(&b_bad), sender, recipient, day));
+	assert!(!p.accepts(Some(&q_bad), sender, recipient, day));
+}
+
 #[test]
 fn a_different_key_does_not_validate() {
 	let p = pass();
