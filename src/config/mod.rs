@@ -316,6 +316,14 @@ pub struct Config {
 	/// alert engine entirely (the default).
 	#[serde(default)]
 	pub alerts: Vec<Alert>,
+	/// When `true`, the outbound queue worker is not started: mail submitted
+	/// for a recipient outside a configured domain stays in the spool, and
+	/// no outbound SMTP connection is ever opened. Only `epistle local`
+	/// sets this; the field is `#[serde(skip)]` so `Config::load` cannot
+	/// produce `true` from a TOML file (the loader would reject such a
+	/// file as an unknown field, by design).
+	#[serde(skip, default)]
+	pub hold_outbound: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -382,6 +390,7 @@ impl std::fmt::Debug for Config {
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)
 			.field("alerts", &self.alerts)
+			.field("hold_outbound", &self.hold_outbound)
 			.finish()
 	}
 }
@@ -413,6 +422,15 @@ impl Config {
 	/// The loopback address listeners bind to unless explicitly configured.
 	pub const fn default_bind_addr() -> IpAddr {
 		IpAddr::V4(Ipv4Addr::LOCALHOST)
+	}
+
+	/// Whether the outbound queue worker should be started for this config.
+	/// `false` only when `hold_outbound` is `true`, a flag `epistle local`
+	/// sets to keep the harness from opening any outbound SMTP connection.
+	/// Pulled out so the `serve` startup path and the unit tests share the
+	/// same source of truth.
+	pub fn start_queue_worker(&self) -> bool {
+		!self.hold_outbound
 	}
 }
 
@@ -467,6 +485,10 @@ fn check_permissions(_path: &Path) -> Result<(), ConfigError> {
 #[cfg(test)]
 #[path = "redaction_tests.rs"]
 mod redaction_tests;
+
+#[cfg(test)]
+#[path = "hold_outbound_tests.rs"]
+mod hold_outbound_tests;
 
 #[cfg(test)]
 mod tests {
