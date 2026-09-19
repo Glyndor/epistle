@@ -14,6 +14,8 @@
 use tokio::io::AsyncWrite;
 
 use super::{Server, send};
+use crate::smtp::address::Address;
+use crate::smtp::directory::{Directory, Resolution};
 use crate::smtp::session::AcceptedMessage;
 
 /// What the caller should do after the band has had its say.
@@ -58,12 +60,19 @@ impl Server {
 			return Ok(BandOutcome::Continue);
 		}
 
-		// Per-account scope: the first local recipient (the same key the
-		// greylist triplet uses). An untrained scope falls back to the
-		// shared corpus, so an account that has never marked a message
-		// still gets the server's general training.
-		let account = message.recipients.first().cloned().unwrap_or_default();
-		let score = match bayes.score_for_account(&account, &message.data).await {
+		// Per-account scope: the first recipient that resolves to a local
+		// account wins, in envelope order. A scope with no own training
+		// falls back to the shared corpus inside `score_for_account`, so
+		// an account that has never marked a message still gets the
+		// server's general training. With no resolvable recipient the
+		// band consults the shared corpus directly: nothing the
+		// per-account scope would have answered could change the
+		// outcome.
+		let account = scoring_account(&self.directory.current(), &message.recipients);
+		let scope = account
+			.as_deref()
+			.unwrap_or(crate::antispam::corpus::SHARED);
+		let score = match bayes.score_for_account(scope, &message.data).await {
 			Some(score) => score,
 			None => {
 				// Score failed (DB hiccup or missing trainer); treat the
@@ -179,6 +188,47 @@ impl Server {
 	}
 }
 
+/// Pick the account name the uncertain-band scorer should ask the corpus
+/// to score `text` against.
+///
+/// The governing account is the first recipient in envelope order that
+/// resolves to a local account:
+/// - `Resolution::Account(name)` contributes `name`;
+/// - `Resolution::Alias(targets)` contributes the first target (the
+///   multi-target alias is local by construction, so its members are
+///   themselves accounts);
+/// - `Resolution::NotLocal`, `Resolution::UnknownUser`, and an address
+///   that fails `Address::parse` are skipped, as a remote recipient is
+///   not an account this server trains for, and an unknown local user
+///   has no account name to key on.
+///
+/// The first hit wins so two recipients in the same message never
+/// disagree about which scope is consulted: the envelope order is the
+/// order RCPT TO delivered them, the same order the SMTP session admits
+/// them in. A multi-target alias's second member is consulted only when
+/// no earlier recipient resolved to anything. For a `RCPT TO:<alias>`
+/// message the alias is the entire deliverable audience and the band
+/// picks whichever member the SMTP path happened to admit first.
+///
+/// Returning `None` means "no local recipient at all", so the caller
+/// scores against the shared corpus directly (see
+/// [`crate::antispam::corpus::SHARED`]).
+fn scoring_account(directory: &Directory, recipients: &[String]) -> Option<String> {
+	for recipient in recipients {
+		let Ok(address) = Address::parse(recipient) else {
+			continue;
+		};
+		match directory.resolve(&address) {
+			Resolution::Account(name) => return Some(name),
+			Resolution::Alias(mut targets) if !targets.is_empty() => {
+				return Some(targets.remove(0));
+			}
+			Resolution::Alias(_) | Resolution::NotLocal | Resolution::UnknownUser => continue,
+		}
+	}
+	None
+}
+
 /// Today's day stamp as `unix_seconds / 86400`. SubjectPass binds its HMAC
 /// to the same 2-character base32 day stamp SRS uses, so today and
 /// yesterday are both valid for a fresh token.
@@ -188,3 +238,7 @@ fn unix_day_now() -> u64 {
 		.map(|d| d.as_secs() / 86_400)
 		.unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "run_band_tests.rs"]
+mod tests;

@@ -19,6 +19,35 @@ fn subjectpass_directory() -> DirectoryHandle {
 	))
 }
 
+/// Directory used by the per-account scope tests: identical to
+/// [`subjectpass_directory`] but adds `sales@example.org` as a
+/// multi-target alias whose first member is `bob`.
+fn alias_directory() -> DirectoryHandle {
+	let aliases = [(
+		"sales@example.org".to_string(),
+		crate::smtp::directory::AliasSpec {
+			members: vec![
+				"bob@example.org".to_string(),
+				"alice@example.org".to_string(),
+			],
+			senders: Vec::new(),
+			hidden: false,
+			list_id: None,
+		},
+	)];
+	DirectoryHandle::new(
+		Directory::new(
+			["example.org".to_string()],
+			[
+				("alice@example.org".to_string(), "alice".to_string()),
+				("bob@example.org".to_string(), "bob".to_string()),
+				("b@example.org".to_string(), "bob".to_string()),
+			],
+		)
+		.with_aliases(aliases),
+	)
+}
+
 /// DNS stub that lists 192.0.2.7 on the `bl.example` blocklist. Copied
 /// from `server_tests.rs` because the struct lives in that module and is
 /// not reachable across the test-module boundary.
@@ -56,6 +85,10 @@ struct FixedScorer {
 	score: f64,
 	account_score: std::sync::Mutex<Option<f64>>,
 	trained: std::sync::Mutex<Vec<bool>>,
+	/// Every `account` argument the scorer was asked to score against, in
+	/// the order it was asked. The band is expected to consult the scope
+	/// that the recipient resolved to, not the envelope address.
+	accounts_asked: std::sync::Mutex<Vec<String>>,
 }
 
 impl FixedScorer {
@@ -64,6 +97,7 @@ impl FixedScorer {
 			score,
 			account_score: std::sync::Mutex::new(Some(score)),
 			trained: std::sync::Mutex::new(Vec::new()),
+			accounts_asked: std::sync::Mutex::new(Vec::new()),
 		})
 	}
 
@@ -77,6 +111,13 @@ impl FixedScorer {
 
 	fn trained(&self) -> Vec<bool> {
 		self.trained.lock().expect("trained lock").clone()
+	}
+
+	fn accounts_asked(&self) -> Vec<String> {
+		self.accounts_asked
+			.lock()
+			.expect("accounts_asked lock")
+			.clone()
 	}
 }
 
@@ -93,9 +134,13 @@ impl crate::antispam::corpus::BayesScorer for FixedScorer {
 
 	fn score_for_account<'a>(
 		&'a self,
-		_account: &'a str,
+		account: &'a str,
 		_text: &'a [u8],
 	) -> crate::antispam::trainer::TrainerFuture<'a, Option<f64>> {
+		self.accounts_asked
+			.lock()
+			.expect("accounts_asked lock")
+			.push(account.to_string());
 		let value = *self.account_score.lock().expect("account_score lock");
 		Box::pin(async move { value })
 	}
@@ -109,8 +154,14 @@ const SENDER: &str = "alice@example.org";
 const RECIPIENT: &str = "bob@example.org";
 
 fn subjectpass_script(reverse_path: &str, headers_and_body: &[u8]) -> Vec<u8> {
+	subjectpass_script_for(reverse_path, RECIPIENT, headers_and_body)
+}
+
+/// Same script with the recipient picked by the caller, used by the
+/// per-account scope tests that need to deliver to a non-default address.
+fn subjectpass_script_for(reverse_path: &str, recipient: &str, headers_and_body: &[u8]) -> Vec<u8> {
 	let mut script = format!(
-		"EHLO client.example.org\r\nMAIL FROM:<{reverse_path}>\r\nRCPT TO:<{RECIPIENT}>\r\nDATA\r\n"
+		"EHLO client.example.org\r\nMAIL FROM:<{reverse_path}>\r\nRCPT TO:<{recipient}>\r\nDATA\r\n"
 	)
 	.into_bytes();
 	script.extend_from_slice(headers_and_body);
@@ -128,8 +179,18 @@ fn subject_pass() -> crate::antispam::subjectpass::SubjectPass {
 }
 
 fn band_server(sink: &Arc<MemorySink>, scorer: &Arc<FixedScorer>) -> Server {
+	band_server_with(sink, scorer, subjectpass_directory())
+}
+
+/// Same as `band_server` but lets the caller pick the directory. The
+/// per-account scope tests use this to plug in an alias-aware directory.
+fn band_server_with(
+	sink: &Arc<MemorySink>,
+	scorer: &Arc<FixedScorer>,
+	directory: DirectoryHandle,
+) -> Server {
 	Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
-		.with_directory(subjectpass_directory())
+		.with_directory(directory)
 		.with_bayes(scorer.clone() as Arc<dyn crate::antispam::corpus::BayesScorer>)
 }
 
@@ -313,4 +374,63 @@ fn unix_day_now() -> u64 {
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs() / 86_400)
 		.unwrap_or(0)
+}
+
+/// The uncertain band must score under the scope of the account the
+/// recipient resolves to, not the envelope address. The scorer records
+/// every `account` it was asked about, so the test pins both the
+/// delivery itself and the scope string the server consulted.
+#[tokio::test]
+async fn the_band_scores_under_the_resolved_account_scope() {
+	let sink = Arc::new(MemorySink::new());
+	let scorer = FixedScorer::new(0.5);
+	let server = band_server(&sink, &scorer).with_subjectpass(subject_pass());
+
+	// RCPT TO:<alice@example.org>: the band must ask the scorer for
+	// `alice`, the directory-resolved account name. The envelope
+	// address (`alice@example.org`) would be the wrong key: training
+	// writes to the account name, so a query by address always misses
+	// the per-account corpus.
+	let script = subjectpass_script_for(
+		SENDER,
+		"alice@example.org",
+		b"Subject: hello\r\n\r\nbody\r\n",
+	);
+	let output = converse(server, None, script).await;
+	assert!(
+		sink.messages().is_empty(),
+		"no SubjectPass token was supplied, so the message must be challenged: {output}"
+	);
+	assert_eq!(
+		scorer.accounts_asked(),
+		vec!["alice".to_string()],
+		"the band asked the scorer for the envelope address, not the resolved account"
+	);
+}
+
+/// Same shape, but the recipient is a multi-target alias. The alias's
+/// first member is the scope the SMTP server should consult, so the
+/// scorer is asked for `bob` (and not for `sales@example.org`).
+#[tokio::test]
+async fn an_alias_recipient_scores_under_the_first_member_account() {
+	let sink = Arc::new(MemorySink::new());
+	let scorer = FixedScorer::new(0.5);
+	let server =
+		band_server_with(&sink, &scorer, alias_directory()).with_subjectpass(subject_pass());
+
+	let script = subjectpass_script_for(
+		SENDER,
+		"sales@example.org",
+		b"Subject: hello\r\n\r\nbody\r\n",
+	);
+	let output = converse(server, None, script).await;
+	assert!(
+		sink.messages().is_empty(),
+		"no SubjectPass token was supplied, so the message must be challenged: {output}"
+	);
+	assert_eq!(
+		scorer.accounts_asked(),
+		vec!["bob".to_string()],
+		"the band must score the alias under its first member account"
+	);
 }
