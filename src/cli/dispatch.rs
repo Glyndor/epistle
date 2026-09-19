@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
-	dns_records, export, import, local, mobileconfig, queue, report_abuse, reports, serve, srv, style,
-	suppression, verify, verify_dns,
+	dns_records, export, import, local, mobileconfig, queue, report_abuse, reports, serve, srv,
+	style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
