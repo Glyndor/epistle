@@ -23,22 +23,22 @@ pub(super) fn create(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if scopes.is_empty() {
-		eprintln!(
-			"error: --scope is required (repeat to grant more than one: read, write, send, scim)"
+		super::style::error(
+			"--scope is required (repeat to grant more than one: read, write, send, scim)",
 		);
 		return ExitCode::FAILURE;
 	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
 		None => {
-			eprintln!("error: cannot gather randomness for the key");
+			super::style::error("cannot gather randomness for the key");
 			return ExitCode::FAILURE;
 		}
 	};
 	let mut store = match ApiKeyStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening API key store: {error}");
+			super::style::error(format_args!("opening API key store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -57,7 +57,7 @@ pub(super) fn create(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}
@@ -68,7 +68,7 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	let store = match ApiKeyStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening API key store: {error}");
+			super::style::error(format_args!("opening API key store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -114,7 +114,7 @@ pub(super) fn revoke(config: &Config, label: &str, out: &mut impl std::io::Write
 	let mut store = match ApiKeyStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening API key store: {error}");
+			super::style::error(format_args!("opening API key store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -124,7 +124,7 @@ pub(super) fn revoke(config: &Config, label: &str, out: &mut impl std::io::Write
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}

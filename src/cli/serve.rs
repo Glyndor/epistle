@@ -13,7 +13,7 @@ pub fn run(config: Config) -> ExitCode {
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {
-			eprintln!("error: cannot start async runtime: {error}");
+			super::style::error(format_args!("cannot start async runtime: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -33,7 +33,7 @@ pub fn run(config: Config) -> ExitCode {
 	match result {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}
@@ -41,7 +41,7 @@ pub fn run(config: Config) -> ExitCode {
 
 async fn serve(config: Config) -> std::io::Result<()> {
 	if config.listeners.is_empty() {
-		eprintln!("warning: no listeners configured, nothing to serve");
+		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());
 	}
 
@@ -524,7 +524,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					{
 						Ok(store) => server = server.with_bayes(store),
 						Err(error) => {
-							eprintln!("error: cannot open bayes corpus key: {error}");
+							super::style::error(format_args!(
+								"cannot open bayes corpus key: {error}"
+							));
 							return Err(error);
 						}
 					}

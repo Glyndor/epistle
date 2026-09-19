@@ -16,6 +16,7 @@ mod report_abuse;
 mod serve;
 mod serve_tasks;
 mod srv;
+mod style;
 mod suppression;
 #[cfg(test)]
 pub(crate) mod tracing_capture;

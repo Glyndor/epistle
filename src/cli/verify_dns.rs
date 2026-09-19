@@ -12,18 +12,19 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	let dns = match SystemDns::from_system() {
 		Ok(dns) => dns,
 		Err(error) => {
-			eprintln!("error: cannot start resolver: {error}");
+			super::style::error(format_args!("cannot start resolver: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {
-			eprintln!("error: cannot start async runtime: {error}");
+			super::style::error(format_args!("cannot start async runtime: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let selectors = dkim_selectors(config);
+	let progress = crate::cli::style::Progress::start("checking");
 	runtime.block_on(report(
 		&config.domains,
 		&config.hostname,
@@ -32,6 +33,7 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		&selectors,
 		&dns,
 		out,
+		progress,
 	))
 }
 
@@ -50,7 +52,9 @@ fn dkim_selectors(config: &Config) -> Vec<String> {
 
 /// Check the hostname's addresses and their reverse DNS first, then every
 /// domain. The exit code is failure if any expected record is missing (lookup
-/// errors are inconclusive, not failures).
+/// errors are inconclusive, not failures). Each check rewrites the progress
+/// line on stderr so a long run does not look stuck.
+#[allow(clippy::too_many_arguments)]
 async fn report(
 	domains: &[String],
 	hostname: &str,
@@ -59,8 +63,10 @@ async fn report(
 	selectors: &[String],
 	dns: &dyn DnsLookup,
 	out: &mut impl std::io::Write,
+	mut progress: crate::cli::style::Progress,
 ) -> ExitCode {
 	let mut all_ok = true;
+	let mut done = 0usize;
 	let _ = writeln!(out, "{hostname}:");
 	let host_checks = dns::check_host(hostname, public_ipv4, public_ipv6, dns).await;
 	for check in &host_checks {
@@ -71,6 +77,8 @@ async fn report(
 			check.kind,
 			check.detail
 		);
+		done += 1;
+		progress.tick(done);
 	}
 	if !dns::all_ok(&host_checks) {
 		all_ok = false;
@@ -86,14 +94,21 @@ async fn report(
 				check.kind,
 				check.detail
 			);
+			done += 1;
+			progress.tick(done);
 		}
 		if !dns::all_ok(&checks) {
 			all_ok = false;
 		}
 	}
 	if all_ok {
+		progress.finish(&format!(
+			"verified {done} records across {} domains",
+			domains.len()
+		));
 		ExitCode::SUCCESS
 	} else {
+		progress.finish("DNS drift detected");
 		ExitCode::FAILURE
 	}
 }
@@ -167,6 +182,7 @@ mod tests {
 			&[],
 			&dns,
 			&mut out,
+			crate::cli::style::Progress::start("checking"),
 		)
 		.await;
 		assert_eq!(code, ExitCode::FAILURE);
@@ -206,6 +222,7 @@ mod tests {
 			&[],
 			&dns,
 			&mut out,
+			crate::cli::style::Progress::start("checking"),
 		)
 		.await;
 		assert_eq!(code, ExitCode::SUCCESS);

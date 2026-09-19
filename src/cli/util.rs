@@ -53,16 +53,16 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputEr
 	let value = match reader.lines().next() {
 		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
 		Some(Err(error)) => {
-			eprintln!("error: reading stdin: {error}");
+			super::style::error(format_args!("reading stdin: {error}"));
 			return Err(InputError);
 		}
 		None => {
-			eprintln!("error: no input — pipe or type the value on stdin");
+			super::style::error("no input: pipe or type the value on stdin");
 			return Err(InputError);
 		}
 	};
 	if value.is_empty() {
-		eprintln!("error: input must not be empty");
+		super::style::error("input must not be empty");
 		return Err(InputError);
 	}
 	Ok(value)
@@ -93,7 +93,7 @@ pub(super) fn message_crypto(
 	config: &crate::config::Config,
 ) -> Result<crate::storage::MessageCrypto, ExitCode> {
 	crate::storage::MessageCrypto::from_config(config.storage.as_ref()).map_err(|error| {
-		eprintln!("error: {error}");
+		super::style::error(error);
 		ExitCode::FAILURE
 	})
 }
@@ -108,7 +108,7 @@ pub(super) fn storage_keygen() -> ExitCode {
 			ExitCode::SUCCESS
 		}
 		None => {
-			eprintln!("error: system CSPRNG unavailable");
+			super::style::error("system CSPRNG unavailable");
 			ExitCode::FAILURE
 		}
 	}
@@ -129,7 +129,7 @@ pub(super) fn oauth_keygen() -> ExitCode {
 			ExitCode::SUCCESS
 		}
 		None => {
-			eprintln!("error: system CSPRNG unavailable");
+			super::style::error("system CSPRNG unavailable");
 			ExitCode::FAILURE
 		}
 	}
@@ -156,21 +156,21 @@ fn generate_oauth_keypair() -> Option<(String, String)> {
 
 pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCode {
 	if out.exists() {
-		eprintln!(
-			"error: {} already exists, refusing to overwrite",
+		super::style::error(format_args!(
+			"{} already exists, refusing to overwrite",
 			out.display()
-		);
+		));
 		return ExitCode::FAILURE;
 	}
 	if rsa && !matches!(bits, 2048 | 4096) {
-		eprintln!("error: --bits must be 2048 or 4096 (got {bits})");
+		super::style::error(format_args!("--bits must be 2048 or 4096 (got {bits})"));
 		return ExitCode::FAILURE;
 	}
 	let (pem, record) = if rsa {
 		match generate_rsa_key(bits) {
 			Ok(generated) => generated,
 			Err(error) => {
-				eprintln!("error: {error}");
+				super::style::error(error);
 				return ExitCode::FAILURE;
 			}
 		}
@@ -178,13 +178,13 @@ pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCo
 		match crate::dkim::generate_key() {
 			Ok(generated) => generated,
 			Err(error) => {
-				eprintln!("error: {error}");
+				super::style::error(error);
 				return ExitCode::FAILURE;
 			}
 		}
 	};
 	if let Err(error) = write_key_pem(out, &pem) {
-		eprintln!("error: cannot write {}: {error}", out.display());
+		super::style::error(format_args!("cannot write {}: {error}", out.display()));
 		return ExitCode::FAILURE;
 	}
 	println!("private key written to {}", out.display());
