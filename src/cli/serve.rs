@@ -6,7 +6,11 @@ use std::sync::Arc;
 use crate::config::{Config, ListenerKind};
 use crate::smtp::server::{Server, TlsMode};
 use crate::smtp::sink::MessageSink;
-use crate::storage::SplitDelivery;
+
+use super::serve_dkim::SplitCompanions;
+use super::serve_ratelimit::RateLimiters;
+use super::serve_smtp_state::SmtpSharedState;
+use super::serve_tls::TlsStack;
 
 /// Run the server with a validated configuration.
 pub fn run(config: Config) -> ExitCode {
@@ -98,47 +102,20 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.map_err(std::io::Error::other)?;
 
 	// Local recipients go to account mailboxes; authenticated relay mail
-	// is queued in the outbound spool, DKIM-signed when configured.
-	let mut split =
-		SplitDelivery::new_with_crypto(&config.data_dir, directory.clone(), crypto.clone())?
-			.with_rules(config.rules.clone())
-			.with_metrics(metrics.clone());
-	// Hot-swappable DKIM signer, so automatic key rotation applies live.
-	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
-	if let Some(dkim) = &config.dkim {
-		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
-			.map_err(std::io::Error::other)?;
-		if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
-			signer = signer
-				.with_rsa(selector, key_file)
-				.map_err(std::io::Error::other)?;
-		}
-		let reloadable = crate::dkim::ReloadableSigner::new(Arc::new(signer));
-		split = split.with_signer(reloadable.clone());
-		dkim_signer = Some(reloadable);
-	}
-	if let Some(secret) = &config.srs_secret {
-		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
-		split = split.with_srs(srs, config.hostname.clone());
-	}
-	let webhook = match &config.webhook {
-		Some(webhook) => Some(Arc::new(
-			crate::webhook::Webhook::new(&webhook.url, webhook.secret.clone())
-				.map_err(std::io::Error::other)?
-				.with_metrics(metrics.clone()),
-		)),
-		None => None,
-	};
-	if let Some(webhook) = &webhook {
-		split = split.with_webhook(Arc::clone(webhook));
-	}
-	// Optional ARC sealer: seals inbound mail under the server hostname using
-	// a DKIM-format ed25519 key. Failure to load is fatal (fail closed). The
-	// same sealer also seals forwarded mail (RFC 8617) via the delivery sink.
-	let arc_sealer = super::serve_tasks::build_arc_sealer(&config)?;
-	if let Some(sealer) = &arc_sealer {
-		split = split.with_arc_sealer(Arc::clone(sealer));
-	}
+	// is queued in the outbound spool, DKIM-signed when configured. The
+	// split delivery and its four delivery-path companions (DKIM, SRS,
+	// webhook, ARC sealer) are built by `serve_dkim::build_split_with_companions`.
+	let SplitCompanions {
+		split,
+		dkim_signer,
+		webhook,
+		arc_sealer,
+	} = super::serve_dkim::build_split_with_companions(
+		&config,
+		&metrics,
+		directory.clone(),
+		crypto.clone(),
+	)?;
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
@@ -157,81 +134,28 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
 
-	// Optional per-account submission rate limiter, shared across SMTP
-	// listeners. The per-account `limit` is resolved at MAIL FROM time
-	// (per-domain override, then the server-wide default, then no limit at
-	// all); the limiter itself only owns the shared sliding-window state.
-	// It is created whenever any limit is configured, so a per-domain
-	// override without a global still gets a working limiter.
-	let has_any_submission_limit = config.submission_rate_limit_per_min.is_some()
-		|| !config.domain_submission_limits.is_empty();
-	let send_limiter =
-		has_any_submission_limit.then(|| Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)));
+	// Per-listener rate limiters (submission, inbound per-IP, inbound per-sender).
+	// All three are shared across SMTP listeners and each one is created only
+	// when its `[server]` section is configured.
+	let RateLimiters {
+		send_limiter,
+		inbound_ip_limit,
+		inbound_sender_limit,
+	} = super::serve_ratelimit::build_rate_limiters(&config);
 
-	// Optional per-client-IP and per-envelope-sender inbound rate limiters
-	// for unauthenticated sessions. The `per_min` ceiling lives alongside
-	// the limiter so the listener wiring is a single value (an
-	// `InboundLimit`). `None` disables the corresponding check at MAIL
-	// FROM time.
-	let inbound_ip_limit = config.inbound_rate_limit_per_ip_per_min.map(|per_min| {
-		crate::smtp::ratelimit::InboundLimit {
-			limiter: Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)),
-			per_min,
-		}
-	});
-	let inbound_sender_limit = config.inbound_rate_limit_per_sender_per_min.map(|per_min| {
-		crate::smtp::ratelimit::InboundLimit {
-			limiter: Arc::new(crate::smtp::ratelimit::SendLimiter::new(60)),
-			per_min,
-		}
-	});
-
-	// Per-tenant aggregate limits. Built once from the static config; with
-	// no `[[tenant]]` blocks the result is the identity, every check is a
-	// no-op, and the wire below carries an empty `Arc`.
-	let tenant_limits = Arc::new(crate::api::TenantLimits::from_config(&config.tenants));
-
-	// Per-account correspondent store: one `Arc` shared by every SMTP
-	// listener and the API state. The store is opened here (and not
-	// inside `CorrespondentStore::open`) so a single underlying
-	// filesystem tree backs every submission path; recording on one
-	// path is immediately visible to the cap check on another.
-	let correspondents = Arc::new(
-		crate::storage::CorrespondentStore::open(&config.data_dir)
-			.map_err(std::io::Error::other)?,
-	);
-	// `daily_new_recipients` is the per-account cap; `None` disables it
-	// (the pre-feature behaviour). The cap is the same value across
-	// every submission path: a single source of truth at startup.
-	let daily_new_recipients = config.new_recipients_per_day;
-
-	// Shared disk-space guard for `data_dir`. `MAIL FROM` rejects with
-	// `452` when the filesystem holding the spool cannot hold another
-	// message, so the remote retries instead of receiving `250` for a
-	// payload the server cannot write. One guard per listener would
-	// re-sample on every concurrent connection; one shared guard amortises
-	// the cache and keeps the measurement consistent across listeners.
-	let disk_guard = Arc::new(crate::smtp::diskspace::DiskGuard::new(
-		config.data_dir.clone(),
-	));
-
-	// Per-listener concurrency cap; 0 keeps each protocol's built-in default.
-	let max_conn = config.max_connections_per_listener.unwrap_or(0);
-
-	// Optional external scanner hook.
-	let scanner_hook: Option<Arc<dyn crate::antispam::hook::MailHook>> =
-		match &config.scanner_hook_url {
-			Some(url) => Some(Arc::new(
-				crate::antispam::hook::HttpHook::new(url).map_err(std::io::Error::other)?,
-			)),
-			None => None,
-		};
-
-	// Optional LLM-assisted antispam hook for the uncertain band. The API
-	// key is read from the environment via the configured variable name so it
-	// never lands in the config file. Built eagerly so a missing key fails
-	// the start, not the first mail that hits the band.
-	let llm_hook = crate::antispam::llm::LlmHook::from_config(config.antispam_llm.as_ref())?;
+	// Per-listener shared state: tenant limits, correspondent store, daily
+	// new-recipient cap, disk-space guard, max-connections cap, and the
+	// optional scanner and LLM antispam hooks. Fail closed: a malformed
+	// scanner URL or a missing LLM key stops the start.
+	let SmtpSharedState {
+		tenant_limits,
+		correspondents,
+		daily_new_recipients,
+		disk_guard,
+		max_conn,
+		scanner_hook,
+		llm_hook,
+	} = super::serve_smtp_state::build_smtp_shared_state(&config)?;
 
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
@@ -288,52 +212,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// ban store is absent in that case.
 	super::serve_tasks::spawn_ban_sweep(reputation_pool.clone());
 
-	// TLS is loaded once and shared; failure to load is fatal (fail closed).
-	let tls_acceptor = match &config.tls {
-		Some(tls_config) => Some(crate::tls::acceptor(tls_config).map_err(std::io::Error::other)?),
-		None => None,
-	};
-	// SMTP listeners use a hot-reloadable acceptor so renewed certificates
-	// apply without a restart; IMAP keeps the static acceptor for now.
-	let reloadable_tls = tls_acceptor
-		.clone()
-		.map(crate::tls::ReloadableAcceptor::new);
-
-	// SCRAM-SHA-256-PLUS channel binding (tls-server-end-point). Offered only
-	// with a static [tls] certificate: under ACME the certificate is reloaded at
-	// runtime, which would make a fixed hash stale, so -PLUS stays off there and
-	// clients fall back to plain SCRAM.
-	let channel_binding = match (&config.tls, &config.acme) {
-		(Some(tls), None) => crate::tls::tls_server_end_point(tls),
-		_ => None,
-	};
-
-	// ACME automatic renewal: obtain/renew certificates and hot-reload the SMTP
-	// acceptor. Requires a [tls] bootstrap certificate to reload into.
-	if let Some(acme) = &config.acme {
-		match &reloadable_tls {
-			Some(reloadable) => {
-				// When a DNS provider is configured, refresh the TLSA record on
-				// every certificate rotation.
-				let tlsa = config
-					.dns
-					.as_ref()
-					.and_then(|dns| dns.build())
-					.map(|provider| (provider, config.hostname.clone()));
-				tokio::spawn(crate::acme::renew::run(
-					acme.directory_url.clone(),
-					acme.contacts.clone(),
-					acme.domains.clone(),
-					challenge_store.clone(),
-					config.data_dir.clone(),
-					reloadable.clone(),
-					u64::from(acme.renew_before_days),
-					tlsa,
-				));
-			}
-			None => tracing::warn!("[acme] is configured but [tls] is not; skipping ACME renewal"),
-		}
-	}
+	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
+	// renewal task. Loaded here so every listener picks the same acceptor up
+	// later. `[acme]` without `[tls]` warns and continues.
+	let TlsStack {
+		tls_acceptor,
+		reloadable_tls,
+		channel_binding,
+	} = super::serve_tls::build_tls(&config, challenge_store.clone())?;
 
 	let mut tasks = Vec::new();
 	for listener_config in &config.listeners {
