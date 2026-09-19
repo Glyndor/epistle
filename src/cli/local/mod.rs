@@ -201,6 +201,24 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 	})
 }
 
+/// Build the `(kind, port)` list the banner prints, derived from the
+/// already-loaded `Config`. Reading the listeners (rather than the
+/// requested `--port-base`) is what guarantees the banner matches what
+/// `serve` will bind, including when an operator restarts a directory
+/// that was prepared earlier with a different base.
+pub(super) fn banner_endpoints(config: &Config) -> Vec<(ListenerKind, u16)> {
+	config
+		.listeners
+		.iter()
+		.map(|listener| {
+			(
+				listener.kind,
+				listener.port.unwrap_or_else(|| listener.kind.default_port()),
+			)
+		})
+		.collect()
+}
+
 /// Run `epistle local` end to end: prepare the directory, print the banner,
 /// then hand off to the same `serve::run` `epistle serve` uses, with the
 /// generated in-memory config. The banner uses `starting` rather than
@@ -215,10 +233,7 @@ pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	let endpoints: Vec<(ListenerKind, u16)> = config::LISTENERS
-		.iter()
-		.map(|(kind, offset)| (*kind, port_base + offset))
-		.collect();
+	let endpoints = banner_endpoints(&prepared.config);
 	// The banner goes to stderr. stdout is reserved for command data on
 	// every command in this binary, and `epistle local` produces none, so
 	// stdout stays empty. The test in `local_tests.rs` pins both halves:
