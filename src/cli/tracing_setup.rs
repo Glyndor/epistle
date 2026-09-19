@@ -17,8 +17,13 @@ pub(super) fn init_tracing(config: &Config) -> Option<opentelemetry_sdk::trace::
 	let filter = tracing_subscriber::EnvFilter::try_from_default_env()
 		.unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 	let mut layers: Vec<BoxedLayer> = vec![match config.log_format {
-		crate::config::LogFormat::Json => tracing_subscriber::fmt::layer().json().boxed(),
-		crate::config::LogFormat::Text => tracing_subscriber::fmt::layer().boxed(),
+		crate::config::LogFormat::Json => tracing_subscriber::fmt::layer()
+			.json()
+			.with_writer(std::io::stderr)
+			.boxed(),
+		crate::config::LogFormat::Text => tracing_subscriber::fmt::layer()
+			.with_writer(std::io::stderr)
+			.boxed(),
 	}];
 
 	let provider = match &config.otel {

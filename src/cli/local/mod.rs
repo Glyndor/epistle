@@ -154,7 +154,7 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 			let api_token_hash = layout::generate_api_token_hash()?;
 			let pwd = layout::generate_account_password()?;
 			config::write_mail_toml(
-				&mail_toml_path,
+				dir,
 				port_base,
 				&cert_path,
 				&key_path,
@@ -184,7 +184,10 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 
 /// Run `epistle local` end to end: prepare the directory, print the banner,
 /// then hand off to the same `serve::run` `epistle serve` uses, with the
-/// generated in-memory config.
+/// generated in-memory config. The banner uses `starting` rather than
+/// `ready`: `serve` has no hook that fires after binding, so any "ready"
+/// printed before `serve::run` returned would be a lie the operator
+/// catches the first time a listener fails to bind.
 pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 	let prepared = match prepare(&dir, port_base) {
 		Ok(prepared) => prepared,
@@ -216,6 +219,12 @@ pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 /// the run that generated it; the operator is told it will not be shown
 /// again so they do not expect a repeat on a second `epistle local`.
 ///
+/// The first line says `starting`, not `ready`: `serve` prints nothing
+/// the operator can hook into between binding and the first failure, so
+/// the word would either be a lie (printed before binding) or require
+/// restructuring `serve` to add a callback. The latter is a `serve`
+/// change this branch explicitly does not make.
+///
 /// The writer is taken as `&mut impl Write` so the test passes a
 /// `Vec<u8>` and asserts the bytes the operator would see on stderr.
 pub(super) fn print_banner(
@@ -225,7 +234,7 @@ pub(super) fn print_banner(
 	password: Option<&str>,
 	out: &mut impl Write,
 ) {
-	let _ = writeln!(out, "epistle local: ready");
+	let _ = writeln!(out, "epistle local: starting");
 	let _ = writeln!(out, "  directory: {}", dir.display());
 	for (kind, port) in endpoints {
 		let _ = writeln!(

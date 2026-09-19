@@ -93,9 +93,13 @@ What it does:
   opened, and there is no `[database]` section. The flag is internal to
   `Config` (`hold_outbound`) and `serde` cannot set it; only `epistle local`
   sets it.
-- On start it prints to STDERR: the directory, the six `127.0.0.1:<port>`
+- On start it prints to STDERR: a first line that says `epistle local:
+  starting`, followed by the directory, the six `127.0.0.1:<port>`
   endpoints, the account name, and the password ONLY on the run that
-  generated it, with a line saying it is shown once. stdout stays empty.
+  generated it, with a line saying it is shown once. The summary uses
+  `starting` because `serve` does not hook the operator from "bound" to
+  "first failure" and `epistle local` does not add that hook here. stdout
+  stays empty.
 
 This is a test harness, not a deployment. There is no ACME, no DNS lookups at
 startup, no DNSBL, no greylisting, no `[database]`, and the configuration

@@ -57,8 +57,20 @@ pub(super) fn check_port_base(port_base: u16) -> Result<(), super::LocalError> {
 /// Render the `mail.toml` that `epistle config-check` accepts. Built in
 /// memory and emitted through `Display` so the on-disk layout exactly
 /// matches the format `toml::to_string` would produce for the same data.
+///
+/// `dir` is the harness base directory; the file is written to
+/// `<dir>/mail.toml` and the `data_dir` it references is `<dir>/data`. The
+/// previous iteration passed the future `mail.toml` path as `dir` and
+/// computed `path.join("data")`, which produced
+/// `data_dir = "<dir>/mail.toml/data"`, a path inside a regular file.
+/// `serve` then tried to create the spool under that path and
+/// `FsSpool::open_with_crypto` failed with
+/// `Not a directory (os error 20)` on the first `create_dir_all`. The
+/// function takes `dir` (not the file path) so the same `dir.join("data")`
+/// the layout module uses for the directory the spool lives in is the
+/// path the config names.
 pub(super) fn write_mail_toml(
-	path: &Path,
+	dir: &Path,
 	port_base: u16,
 	cert_file: &Path,
 	key_file: &Path,
@@ -95,14 +107,14 @@ pub(super) fn write_mail_toml(
          [api]\n\
          token_hash = \"{}\"\n\
          admins = [\"{ACCOUNT_NAME}\"]\n",
-		path.join("data").display(),
+		dir.join("data").display(),
 		listeners.join("\n"),
 		cert_file.display(),
 		key_file.display(),
 		dkim_file.display(),
 		api_token_hash,
 	);
-	super::layout::write_with_mode(path, body.as_bytes(), 0o600)
+	super::layout::write_with_mode(&dir.join("mail.toml"), body.as_bytes(), 0o600)
 }
 
 /// The kebab-case spelling of a listener kind for the config file.

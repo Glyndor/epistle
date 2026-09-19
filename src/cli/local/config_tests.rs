@@ -136,3 +136,31 @@ fn held_outbound_config_is_true_loader_rejects_toml_field_decision_pure() {
 	);
 	assert!(!reloaded.start_queue_worker());
 }
+
+/// Pin: the generated `mail.toml` names `<dir>/data` as its `data_dir`,
+/// and that path is an existing directory on disk. The previous
+/// `write_mail_toml` took the future `mail.toml` path as `dir` and computed
+/// `path.join("data")`, which produced `data_dir = "<dir>/mail.toml/data"`,
+/// a directory under a regular file. `serve` then asked
+/// `FsSpool::open_with_crypto` to create the spool under that path and
+/// `create_dir_all` returned `Not a directory (os error 20)`, so the
+/// process exited before any listener bound. The test loads the file back
+/// through `Config::load` (the same path `serve` walks) and asserts the
+/// two halves of the invariant: the path the config names and the
+/// filesystem state under it.
+#[test]
+fn data_dir_is_sibling_of_mail_toml_not_under_it() {
+	let dir = fresh_dir("datadir");
+	prepare(dir.path(), DEFAULT_PORT_BASE).expect("prepare");
+
+	let config = load_for_test(&dir.path().join("mail.toml")).expect("reloads");
+	assert_eq!(
+		config.data_dir,
+		dir.path().join("data"),
+		"data_dir must point at <dir>/data, not at any path under mail.toml"
+	);
+	assert!(
+		dir.path().join("data").is_dir(),
+		"<dir>/data must be the existing directory the spool opens under, not a path inside mail.toml"
+	);
+}

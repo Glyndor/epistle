@@ -75,7 +75,7 @@ fn banner_is_written_to_stderr_not_stdout() {
 	let banner = String::from_utf8(sink).expect("banner is utf8");
 
 	assert!(
-		banner.contains("epistle local: ready"),
+		banner.contains("epistle local: starting"),
 		"banner must announce itself, got: {banner:?}"
 	);
 	assert!(
