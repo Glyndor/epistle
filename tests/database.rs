@@ -345,3 +345,231 @@ async fn bayes_per_account_corpora_are_isolated() {
 		.await
 		.expect("clear alice corpus");
 }
+
+/// Below the [`MIN_TRUSTED_MESSAGES`] threshold the per-account score
+/// falls back to the shared corpus: an account that has not trained
+/// anything yet gets the server's general training rather than a
+/// coin-flip. Trained by the trainer abstraction under the same trait
+/// the production store implements.
+#[tokio::test]
+async fn score_falls_back_to_shared_below_the_threshold() {
+	use epistle::antispam::corpus;
+	use epistle::antispam::trainer::BayesTrainer;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+		.await
+		.expect("connect and migrate");
+
+	// A unique account so reruns stay isolated.
+	let account = format!("fallback-{}", uuid::Uuid::now_v7());
+	let store = corpus::BayesStore::with_key(pool.clone(), [11u8; 32]);
+
+	// Train the shared scope with a marker so it has a real signal.
+	for _ in 0..30 {
+		store
+			.train(corpus::SHARED, "xxmarker shared spam", true)
+			.await
+			.expect("train shared spam");
+		store
+			.train(corpus::SHARED, "ordinary ham body", false)
+			.await
+			.expect("train shared ham");
+	}
+
+	// `score_for_account` on an untrained scope returns the shared
+	// corpus's score; the marker should look spammy.
+	let shared_score = store
+		.score(corpus::SHARED, "xxmarker")
+		.await
+		.expect("score shared");
+	let account_score = store
+		.score_for_account(&account, b"xxmarker")
+		.await
+		.expect("score for account");
+	assert!(
+		(account_score - shared_score).abs() < 1e-9,
+		"account {account_score} vs shared {shared_score}"
+	);
+
+	// Cleanup.
+	sqlx::query("DELETE FROM bayes_token WHERE scope = $1")
+		.bind(&account)
+		.execute(&pool)
+		.await
+		.expect("clear account tokens");
+	sqlx::query("DELETE FROM bayes_corpus WHERE scope = $1")
+		.bind(&account)
+		.execute(&pool)
+		.await
+		.expect("clear account corpus");
+	sqlx::query("DELETE FROM bayes_token WHERE scope = ''")
+		.execute(&pool)
+		.await
+		.expect("clear shared tokens");
+	sqlx::query("UPDATE bayes_corpus SET ham_messages = 0, spam_messages = 0 WHERE scope = ''")
+		.execute(&pool)
+		.await
+		.expect("reset shared corpus");
+}
+
+/// At the [`MIN_TRUSTED_MESSAGES`] threshold on every side the
+/// per-account score uses the account's scope (not the shared
+/// fallback). The shared scope may have arbitrary prior counts from
+/// concurrent tests; we use the account's own marker to assert that
+/// the per-account classifier is consulted when trained.
+#[tokio::test]
+async fn score_uses_the_account_scope_at_the_threshold() {
+	use epistle::antispam::corpus;
+	use epistle::antispam::trainer::BayesTrainer;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+		.await
+		.expect("connect and migrate");
+
+	let account = format!("trained-{}", uuid::Uuid::now_v7());
+	let store = corpus::BayesStore::with_key(pool.clone(), [12u8; 32]);
+
+	// A unique marker that only this account's corpus has seen, so
+	// the per-account scope is the only one that recognises it. The
+	// shared corpus has no row for it, so `score` on the shared scope
+	// falls through to a neutral 0.5 (one unknown token).
+	let marker = format!("qqacct-{}", uuid::Uuid::now_v7());
+	let spam_text = format!("{marker} very spammy content words here");
+	let threshold: u64 = epistle::antispam::trainer::MIN_TRUSTED_MESSAGES;
+
+	// Train ham to the threshold with the marker always present (the
+	// `xxfiller` token pads the count without affecting the marker's
+	// probability math).
+	for _ in 0..threshold {
+		store
+			.train(&account, &format!("xxhamfiller-{marker}"), false)
+			.await
+			.expect("train account ham");
+	}
+	// And spam to the threshold, so the scope is at the boundary on
+	// every side.
+	for _ in 0..threshold {
+		store
+			.train(&account, &spam_text, true)
+			.await
+			.expect("train account spam");
+	}
+	let trained = store.is_trained(&account).await.expect("is_trained");
+	assert!(trained, "both sides at the threshold: trained");
+
+	// The per-account score for the marker is high (spam-only in this
+	// account). The shared scope has not seen the marker and falls
+	// through to neutral. The per-account scope wins.
+	let account_score = store
+		.score_for_account(&account, spam_text.as_bytes())
+		.await
+		.expect("score for account");
+	let shared_score = store
+		.score(corpus::SHARED, &spam_text)
+		.await
+		.expect("score shared");
+	assert!(
+		account_score > shared_score,
+		"trained account {account_score} should score its marker higher than the shared scope {shared_score}"
+	);
+	assert!(account_score > 0.5, "trained account {account_score}");
+
+	// Cleanup.
+	sqlx::query("DELETE FROM bayes_token WHERE scope = $1")
+		.bind(&account)
+		.execute(&pool)
+		.await
+		.expect("clear account tokens");
+	sqlx::query("DELETE FROM bayes_corpus WHERE scope = $1")
+		.bind(&account)
+		.execute(&pool)
+		.await
+		.expect("clear account corpus");
+}
+
+/// `forget_scope` removes every row under the named scope, returns the
+/// number of token rows dropped, and leaves other scopes alone.
+#[tokio::test]
+async fn forget_scope_removes_only_that_scope() {
+	use epistle::antispam::corpus;
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+		.await
+		.expect("connect and migrate");
+
+	let store = corpus::BayesStore::with_key(pool.clone(), [13u8; 32]);
+	let victim = format!("victim-{}", uuid::Uuid::now_v7());
+	let bystander = format!("bystander-{}", uuid::Uuid::now_v7());
+
+	// Train both scopes so each has rows to lose.
+	for _ in 0..6 {
+		store
+			.train(&victim, "zzvictim token", true)
+			.await
+			.expect("train victim spam");
+		store
+			.train(&victim, "ordinary body", false)
+			.await
+			.expect("train victim ham");
+		store
+			.train(&bystander, "wwbystander token", true)
+			.await
+			.expect("train bystander spam");
+		store
+			.train(&bystander, "ordinary body", false)
+			.await
+			.expect("train bystander ham");
+	}
+
+	// Confirm both scopes have rows.
+	let victim_corpus_before = store.corpus(&victim).await.expect("corpus victim");
+	let bystander_corpus_before = store.corpus(&bystander).await.expect("corpus bystander");
+	assert!(victim_corpus_before.spam_messages > 0);
+	assert!(bystander_corpus_before.spam_messages > 0);
+
+	// Drop the victim's scope. The bystander is untouched.
+	let dropped = store.forget_scope(&victim).await.expect("forget victim");
+	assert!(dropped > 0, "should have removed some token rows");
+
+	let victim_corpus_after = store.corpus(&victim).await.expect("corpus victim after");
+	let bystander_corpus_after = store
+		.corpus(&bystander)
+		.await
+		.expect("corpus bystander after");
+	assert_eq!(
+		victim_corpus_after.ham_messages, 0,
+		"victim ham must be gone"
+	);
+	assert_eq!(
+		victim_corpus_after.spam_messages, 0,
+		"victim spam must be gone"
+	);
+	assert_eq!(
+		bystander_corpus_after.spam_messages, bystander_corpus_before.spam_messages,
+		"bystander spam untouched"
+	);
+
+	// Cleanup the bystander so reruns stay isolated.
+	sqlx::query("DELETE FROM bayes_token WHERE scope = $1")
+		.bind(&bystander)
+		.execute(&pool)
+		.await
+		.expect("clear bystander tokens");
+	sqlx::query("DELETE FROM bayes_corpus WHERE scope = $1")
+		.bind(&bystander)
+		.execute(&pool)
+		.await
+		.expect("clear bystander corpus");
+}

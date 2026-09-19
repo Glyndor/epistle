@@ -143,6 +143,10 @@ pub struct Session {
 	/// `Imaps` to match the historical behaviour (`imaps` is the default
 	/// listener and what tests assume).
 	pub(super) auth_protocol: crate::config::Protocol,
+	/// The bounded queue to the per-account Bayesian trainer. STORE feeds
+	/// it on a `$Junk` / `$NotJunk` change. `None` disables training and
+	/// STORE answers the same.
+	pub(super) training: Option<crate::antispam::training_queue::TrainingQueue>,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -218,6 +222,7 @@ impl Session {
 			compressing: false,
 			saved_search: None,
 			auth_protocol: crate::config::Protocol::Imaps,
+			training: None,
 		}
 	}
 
@@ -228,6 +233,13 @@ impl Session {
 	/// `Protocol::Imap` for the STARTTLS port 143).
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
 		self.auth_protocol = protocol;
+		self
+	}
+
+	/// Attach the training queue, so a `$Junk` / `$NotJunk` change made
+	/// through STORE teaches the scope of the account.
+	pub fn with_training(mut self, queue: crate::antispam::training_queue::TrainingQueue) -> Self {
+		self.training = Some(queue);
 		self
 	}
 

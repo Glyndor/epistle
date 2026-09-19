@@ -33,15 +33,45 @@ impl Session {
 			}
 			_ => String::new(),
 		};
+		// FLAGS advertises the system flags plus every user keyword currently
+		// in use in the mailbox (RFC 9051 §6.3.1: the response lists the
+		// flags the client can set on a message). PERMANENTFLAGS carries the
+		// five system flags and the `\*` marker so the client may introduce
+		// new keywords via STORE.
+		let keyword_tokens: Vec<String> = {
+			let mut all = Vec::new();
+			for message in snapshot.messages() {
+				for keyword in mailbox::keywords_in(&message.flags) {
+					all.push(keyword.as_str().to_string());
+				}
+			}
+			let mut seen: Vec<String> = Vec::new();
+			all.retain(|name| {
+				let fresh = !seen.iter().any(|s| s.eq_ignore_ascii_case(name));
+				if fresh {
+					seen.push(name.clone());
+				}
+				fresh
+			});
+			all
+		};
+		let flags_line = if keyword_tokens.is_empty() {
+			"* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)\r\n".to_string()
+		} else {
+			format!(
+				"* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft {})\r\n",
+				keyword_tokens.join(" ")
+			)
+		};
 		let response = format!(
 			"* {count} EXISTS\r\n\
-* OK [UIDVALIDITY {validity}] UIDs valid\r\n\
-* OK [UIDNEXT {next}] predicted next UID\r\n\
-* OK [MAILBOXID (M{validity})] mailbox object id\r\n\
-* OK [HIGHESTMODSEQ {modseq}] highest mod-sequence\r\n\
-* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)\r\n\
-* OK [PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)] limits\r\n\
-{vanished}{tag} OK [{mode}] {verb} completed\r\n",
+			 * OK [UIDVALIDITY {validity}] UIDs valid\r\n\
+			 * OK [UIDNEXT {next}] predicted next UID\r\n\
+			 * OK [MAILBOXID (M{validity})] mailbox object id\r\n\
+			 * OK [HIGHESTMODSEQ {modseq}] highest mod-sequence\r\n\
+			 {flags_line}\
+			 * OK [PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft \\*)] limits\r\n\
+			 {vanished}{tag} OK [{mode}] {verb} completed\r\n",
 			count = snapshot.len(),
 			validity = snapshot.uid_validity(),
 			next = snapshot.uid_next(),

@@ -25,7 +25,6 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +33,6 @@ use super::StoreError;
 use super::names::validate_name;
 use crate::queue::SuppressionList;
 use crate::storage::{CorrespondentStore, FsSpool};
-use tokio::runtime::Handle;
 
 /// What to do with the account's queued outbound mail when it is removed.
 ///
@@ -81,6 +79,10 @@ pub struct Removed {
 	/// Queued messages left untouched because the queue policy was
 	/// [`QueuePolicy::Drain`].
 	pub queued_messages_left: u32,
+	/// Per-token Bayesian rows dropped from the account's scope so a
+	/// recreated name does not inherit the previous user's training.
+	/// `0` when no database is wired or the scope was empty.
+	pub bayes_tokens_removed: u64,
 }
 
 /// The full filesystem path to an account's mailbox root. Centralised so
@@ -202,16 +204,20 @@ fn process_spool_queue(
 ///    suppression entries).
 /// 5. Recursively remove the mailbox directory at
 ///    `<data_dir>/accounts/<name>`.
-/// 6. Finally call `store.remove` so the directory row is the last
+/// 6. Drop the per-account Bayesian rows so a recreated name does not
+///    inherit the previous user's training. Tolerates a missing
+///    database (`None` for `bayes`) by counting zero.
+/// 7. Finally call `store.remove` so the directory row is the last
 ///    thing the on-disk state loses. A crash mid-flight therefore
 ///    leaves an account that still exists and can be re-removed, never
 ///    a ghost with data on disk.
-pub fn remove_account(
+pub async fn remove_account(
 	store: &AccountStore,
 	spool: &FsSpool,
 	data_dir: &Path,
 	name: &str,
 	queue: QueuePolicy,
+	bayes: Option<&crate::antispam::corpus::BayesStore>,
 ) -> Result<Removed, StoreError> {
 	validate_name(name)?;
 	if store.dynamic(name).is_none() {
@@ -241,16 +247,37 @@ pub fn remove_account(
 	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
 
 	// Clear every ban row keyed on this account name so a recreated
-	// account does not inherit a ban from its predecessor. Runs on the
-	// caller's runtime: the ban store methods are async and the
-	// removal path is synchronous.
+	// account does not inherit a ban from its predecessor.
 	if let Some(ban_store) = store.ban_store() {
-		let store = Arc::clone(ban_store);
-		let name = name.to_string();
-		if let Ok(handle) = Handle::try_current() {
-			handle.block_on(store.remove_account(&name));
-		}
+		ban_store.remove_account(name).await;
 	}
+
+	// Drop the per-account Bayesian rows last (after every on-disk
+	// footprint is gone). A missing database means the operator runs
+	// without a corpus; the count stays at zero and the recreated
+	// account simply has no training history.
+	//
+	// A failure here does not block the removal: the mailbox,
+	// satellites and queue are already gone, the operator already
+	// asked for the account to be removed, and the worst the failure
+	// leaves behind is a stale row in the corpus (the recreated
+	// account inherits no flag, no messages and no history; only the
+	// corpus keeps a small number of token counts that a future
+	// training pass will overwrite). The footprint removal wins.
+	let bayes_tokens_removed = match bayes {
+		Some(store) => match store.forget_scope(name).await {
+			Ok(removed) => removed,
+			Err(error) => {
+				tracing::warn!(
+					account = %name,
+					%error,
+					"bayes forget_scope failed; account removed without dropping training rows",
+				);
+				0
+			}
+		},
+		None => 0,
+	};
 
 	store.remove(name)?;
 
@@ -262,6 +289,7 @@ pub fn remove_account(
 		correspondent_addresses,
 		queued_messages_discarded,
 		queued_messages_left,
+		bayes_tokens_removed,
 	})
 }
 

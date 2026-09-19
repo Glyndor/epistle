@@ -102,8 +102,8 @@ fn seed(dir: &Path, store: &Arc<AccountStore>, spool: &FsSpool, name: &str) {
 	enqueue(spool, "carol@elsewhere.example", "other");
 }
 
-#[test]
-fn removing_an_account_deletes_its_mailbox_directory() {
+#[tokio::test]
+async fn removing_an_account_deletes_its_mailbox_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	seed(dir.path(), &store, &spool, "alice");
@@ -111,8 +111,16 @@ fn removing_an_account_deletes_its_mailbox_directory() {
 	let mailbox_root = dir.path().join("accounts/alice");
 	assert!(mailbox_root.join("new/first.eml").exists());
 
-	let result =
-		remove_account(&store, &spool, dir.path(), "alice", QueuePolicy::Drain).expect("remove");
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("remove");
 
 	// The directory is gone (or at minimum empty).
 	assert_eq!(result.masked_addresses, 1);
@@ -126,13 +134,22 @@ fn removing_an_account_deletes_its_mailbox_directory() {
 	);
 }
 
-#[test]
-fn recreating_the_name_starts_from_an_empty_mailbox() {
+#[tokio::test]
+async fn recreating_the_name_starts_from_an_empty_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	seed(dir.path(), &store, &spool, "victim");
 
-	remove_account(&store, &spool, dir.path(), "victim", QueuePolicy::Drain).expect("remove");
+	remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"victim",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("remove");
 	assert!(store.dynamic("victim").is_none());
 
 	// Recreating with the same name: the mailbox is empty.
@@ -151,8 +168,8 @@ fn recreating_the_name_starts_from_an_empty_mailbox() {
 	);
 }
 
-#[test]
-fn removing_an_account_drops_its_masked_addresses_app_passwords_and_suppressions() {
+#[tokio::test]
+async fn removing_an_account_drops_its_masked_addresses_app_passwords_and_suppressions() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	seed(dir.path(), &store, &spool, "bob");
@@ -173,8 +190,9 @@ fn removing_an_account_drops_its_masked_addresses_app_passwords_and_suppressions
 		1
 	);
 
-	let result =
-		remove_account(&store, &spool, dir.path(), "bob", QueuePolicy::Drain).expect("remove");
+	let result = remove_account(&store, &spool, dir.path(), "bob", QueuePolicy::Drain, None)
+		.await
+		.expect("remove");
 	assert_eq!(result.masked_addresses, 1);
 	assert_eq!(result.app_passwords, 1);
 	assert_eq!(result.suppressed_addresses, 1);
@@ -194,8 +212,8 @@ fn removing_an_account_drops_its_masked_addresses_app_passwords_and_suppressions
 	);
 }
 
-#[test]
-fn discard_removes_only_the_accounts_queued_messages() {
+#[tokio::test]
+async fn discard_removes_only_the_accounts_queued_messages() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	seed(dir.path(), &store, &spool, "alice");
@@ -213,8 +231,16 @@ fn discard_removes_only_the_accounts_queued_messages() {
 		.count();
 	assert_eq!(other_count_before, 1);
 
-	let result =
-		remove_account(&store, &spool, dir.path(), "alice", QueuePolicy::Discard).expect("remove");
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Discard,
+		None,
+	)
+	.await
+	.expect("remove");
 	assert_eq!(result.queued_messages_discarded, 2);
 	assert_eq!(result.queued_messages_left, 0);
 
@@ -230,14 +256,22 @@ fn discard_removes_only_the_accounts_queued_messages() {
 	}
 }
 
-#[test]
-fn drain_leaves_the_queue_untouched() {
+#[tokio::test]
+async fn drain_leaves_the_queue_untouched() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	seed(dir.path(), &store, &spool, "alice");
 
-	let result =
-		remove_account(&store, &spool, dir.path(), "alice", QueuePolicy::Drain).expect("remove");
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("remove");
 	assert_eq!(result.queued_messages_discarded, 0);
 	assert_eq!(result.queued_messages_left, 2);
 
@@ -245,13 +279,21 @@ fn drain_leaves_the_queue_untouched() {
 	assert_eq!(remaining.len(), 3, "all three envelopes stay");
 }
 
-#[test]
-fn an_unknown_name_is_not_found_and_touches_nothing() {
+#[tokio::test]
+async fn an_unknown_name_is_not_found_and_touches_nothing() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	seed(dir.path(), &store, &spool, "alice");
 
-	let result = remove_account(&store, &spool, dir.path(), "ghost", QueuePolicy::Drain);
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"ghost",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await;
 	assert!(matches!(
 		result,
 		Err(crate::directory_store::StoreError::NotFound(_))
@@ -279,8 +321,8 @@ fn an_unknown_name_is_not_found_and_touches_nothing() {
 /// A name with path separators or shell metacharacters must be
 /// rejected by the validator before any directory is touched, even if
 /// the directory is currently absent.
-#[test]
-fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() {
+#[tokio::test]
+async fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 
@@ -292,7 +334,8 @@ fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() {
 	] {
 		let sentinel = dir.path().join("accounts").join(bad);
 		let before = sentinel.exists();
-		let result = remove_account(&store, &spool, dir.path(), bad, QueuePolicy::Drain);
+		let result =
+			remove_account(&store, &spool, dir.path(), bad, QueuePolicy::Drain, None).await;
 		assert!(
 			matches!(&result, Err(crate::directory_store::StoreError::Invalid(_))),
 			"{bad} should be rejected as invalid"
@@ -312,8 +355,8 @@ fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() {
 /// keeps applying through every `build_directory()`. Without the
 /// retain-on-remove step, removing alice and recreating her would let
 /// the previous owner's app password authenticate the new account.
-#[test]
-fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
+#[tokio::test]
+async fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let (store, spool) = store_and_spool(dir.path());
 	let primary = crate::smtp::auth::tests::fixture_password().to_string();
@@ -346,7 +389,16 @@ fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
 	);
 
 	// Remove alice; the disk and in-memory app passwords must move together.
-	remove_account(&store, &spool, dir.path(), "alice", QueuePolicy::Drain).expect("remove");
+	remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("remove");
 	assert!(store.dynamic("alice").is_none());
 
 	// Recreate alice with a fresh primary password.
@@ -387,4 +439,102 @@ fn add_account_with_primary_hash(
 			allowed_protocols: None,
 		})
 		.expect("add");
+}
+
+/// A removed account's ban rows go with it, and the clearing runs on the
+/// caller's runtime. `#[tokio::test]` puts the call inside a runtime
+/// worker, the position both API handlers call from, so a `block_on`
+/// in the removal path panics here instead of in production.
+#[tokio::test]
+async fn removing_an_account_clears_its_ban_rows_and_leaves_other_accounts_banned() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore, subject_account};
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let bans = FakeBanStore::new(BanPolicy {
+		window_secs: 60,
+		threshold: 5,
+		base_secs: 60,
+		max_secs: 600,
+	});
+	let store = Arc::new(
+		AccountStore::open(
+			dir.path(),
+			vec![DOMAIN.to_string()],
+			std::collections::HashMap::new(),
+			Vec::new(),
+		)
+		.expect("open store")
+		.with_ban_store(Arc::new(bans.clone())),
+	);
+	let spool = FsSpool::open(dir.path()).expect("open spool");
+	add_account(&store, "alice", "alice@example.org");
+	add_account(&store, "bob", "bob@example.org");
+	let now: u64 = 1_700_000_000;
+	for name in ["alice", "bob"] {
+		bans.arm_ban(
+			&subject_account(name),
+			BanInfo {
+				until_secs: now + 600,
+				reason: "armed by the test".to_string(),
+			},
+		);
+	}
+
+	remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("remove");
+
+	assert_eq!(bans.call_count("remove_account"), 1);
+	assert!(
+		bans.is_banned(&subject_account("alice"), now)
+			.await
+			.is_none(),
+		"the removed account's ban must not survive for a recreated name"
+	);
+	assert!(
+		bans.is_banned(&subject_account("bob"), now).await.is_some(),
+		"another account's ban is not this removal's to clear"
+	);
+}
+
+/// `BayesStore::forget_scope` failing must not block the account
+/// removal. The lazy pool below cannot acquire a connection, so the
+/// first SQL call returns an error; the removal still completes and
+/// `bayes_tokens_removed` reads zero.
+#[tokio::test]
+async fn forgetting_the_corpus_failing_does_not_block_account_removal() {
+	use crate::antispam::corpus::BayesStore;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (store, spool) = store_and_spool(dir.path());
+	add_account(&store, "alice", "alice@example.org");
+
+	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
+		.expect("lazy pool never connects");
+	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+
+	let removed = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		Some(&bayes),
+	)
+	.await
+	.expect("remove must succeed even when forget_scope fails");
+
+	assert_eq!(removed.bayes_tokens_removed, 0);
+	assert!(
+		store.dynamic("alice").is_none(),
+		"the account row must be gone regardless of the corpus failure"
+	);
 }

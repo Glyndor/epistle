@@ -281,7 +281,9 @@ pub async fn delete_user(
 		&data_dir,
 		&id,
 		QueuePolicy::Drain,
+		state.bayes_store(),
 	)
+	.await
 	.map_err(store_to_scim)?;
 	audit::log_privilege_change(AuditEvent::AccountRemoved, &id, None);
 	audit::log_account_removal(&id, None, &counts);

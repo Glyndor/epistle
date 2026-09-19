@@ -7,6 +7,23 @@ use super::mailbox::{Flag, render_flags};
 use super::state::State;
 use super::{FetchItem, Output, Session, StoreMode};
 
+/// The flag set a STORE in `mode` with `flags` leaves on a message that
+/// carries `current`. Keywords match without regard to case, and the
+/// result holds each flag once.
+fn next_flags(mode: StoreMode, current: &[Flag], flags: &[Flag]) -> Vec<Flag> {
+	let mut next: Vec<Flag> = match mode {
+		StoreMode::Set => flags.to_vec(),
+		StoreMode::Add => current.iter().chain(flags).cloned().collect(),
+		StoreMode::Remove => current
+			.iter()
+			.filter(|flag| !super::mailbox::flag_set_contains(flags, flag))
+			.cloned()
+			.collect(),
+	};
+	super::mailbox::dedup_flags(&mut next);
+	next
+}
+
 impl Session {
 	// CONDSTORE adds the seventh data argument; a params struct would not read
 	// any clearer than the flat command shape here.
@@ -24,14 +41,18 @@ impl Session {
 		let uidonly = self.uidonly;
 		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`.
 		let saved = self.saved_seqnos_for(uid);
+		// Cloned before `self.state` is borrowed mutably below.
+		let training = self.training.clone();
 		let State::Selected {
 			snapshot,
 			read_only,
+			account,
 			..
 		} = &mut self.state
 		else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
+		let account = account.clone();
 		if *read_only {
 			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
 		}
@@ -43,8 +64,37 @@ impl Session {
 				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
 			}
 		}
+		super::mailbox::dedup_flags(&mut flags);
+		// Per-message keyword cap, checked before any message is touched.
+		// A FLAGS list over the cap is refused whatever the mailbox holds.
+		if matches!(mode, StoreMode::Set) && super::mailbox::count_keywords(&flags).is_none() {
+			return Output::text(format!(
+				"{tag} BAD too many keywords (max {})\r\n",
+				super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
+			));
+		}
 
 		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		// +FLAGS overshoots only through what a message already carries,
+		// so every selected message is checked first: either all of them
+		// take the new keywords or none is changed.
+		if matches!(mode, StoreMode::Add) {
+			for sequence_number in 1..=total {
+				let Some(message) = snapshot.by_sequence(sequence_number) else {
+					continue;
+				};
+				let selector = if uid { message.uid } else { sequence_number };
+				if sequence.contains(selector, total, &saved)
+					&& super::mailbox::count_keywords(&next_flags(mode, &message.flags, &flags))
+						.is_none()
+				{
+					return Output::text(format!(
+						"{tag} NO [LIMIT] too many keywords on a message (max {})\r\n",
+						super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
+					));
+				}
+			}
+		}
 		let mut response = String::new();
 		let mut modified: Vec<u32> = Vec::new();
 		for sequence_number in 1..=total {
@@ -62,31 +112,30 @@ impl Session {
 				continue;
 			}
 			let message_uid = message.uid;
-			let mut updated: Vec<Flag> = match mode {
-				StoreMode::Set => flags.clone(),
-				StoreMode::Add => {
-					let mut existing = message.flags.clone();
-					for flag in &flags {
-						if !existing.contains(flag) {
-							existing.push(*flag);
-						}
-					}
-					existing
-				}
-				StoreMode::Remove => message
-					.flags
-					.iter()
-					.copied()
-					.filter(|flag| !flags.contains(flag))
-					.collect(),
-			};
-			updated.dedup();
+			let updated = next_flags(mode, &message.flags, &flags);
+			// The flags before `store_flags` rewrites them, and the file a
+			// training job would name. The message itself is not read here.
+			let previous_flags = message.flags.clone();
+			let message_path = snapshot.message_path(message);
 			let stored = match snapshot.store_flags(sequence_number, updated) {
-				Ok(stored) => render_flags(stored),
+				Ok(stored) => stored.to_vec(),
 				Err(_) => {
 					return Output::text(format!("{tag} NO cannot store flags\r\n"));
 				}
 			};
+			// A `$Junk` / `$NotJunk` change queues a training job. The
+			// queue never waits and a full one drops the job, so the
+			// STORE reply does not depend on it.
+			if let Some(queue) = &training {
+				super::super::junk_trainer::enqueue_junk_transition(
+					queue,
+					&account,
+					&previous_flags,
+					&stored,
+					message_path,
+				);
+			}
+			let stored_render = render_flags(&stored);
 			if !silent {
 				// CONDSTORE: a conditional STORE reports the new mod-sequence.
 				let modseq = snapshot.by_sequence(sequence_number).map(|m| m.modseq);
@@ -97,7 +146,7 @@ impl Session {
 				if uidonly {
 					// UIDONLY: the UID leads the UIDFETCH response, not a data item.
 					response.push_str(&format!(
-						"* UIDFETCH {message_uid} ({modseq}FLAGS {stored})\r\n"
+						"* UIDFETCH {message_uid} ({modseq}FLAGS {stored_render})\r\n"
 					));
 				} else {
 					let uid_part = if uid {
@@ -106,7 +155,7 @@ impl Session {
 						String::new()
 					};
 					response.push_str(&format!(
-						"* {sequence_number} FETCH ({uid_part}{modseq}FLAGS {stored})\r\n"
+						"* {sequence_number} FETCH ({uid_part}{modseq}FLAGS {stored_render})\r\n"
 					));
 				}
 			}

@@ -1,5 +1,17 @@
 //! Filesystem-backed mailboxes: INBOX at `accounts/<name>/new/`, other
 //! mailboxes under `accounts/<name>/folders/<mailbox>/new/`.
+//!
+//! The mailbox snapshot, the per-mailbox CRUD and the message-counter
+//! helpers live in this file. The [`Flag`] type, its serde shape and
+//! the helpers that operate on flag sets live in a sibling module;
+//! callers reach the type through the `crate::imap::mailbox` path
+//! the rest of the crate already uses.
+
+mod flag;
+
+pub use flag::{
+	Flag, count_keywords, dedup_flags, flag_key, flag_set_contains, keywords_in, render_flags,
+};
 
 use std::path::{Path, PathBuf};
 
@@ -82,68 +94,6 @@ impl MessageRef {
 			modseq,
 		}
 	}
-}
-
-/// Supported permanent flags (RFC 9051 section 2.3.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Flag {
-	/// `\Seen`: the message has been read.
-	Seen,
-	/// `\Answered`: a reply has been sent.
-	Answered,
-	/// `\Flagged`: marked for attention (the "star" in most clients).
-	Flagged,
-	/// `\Deleted`: marked for removal; expunged at CLOSE or explicit EXPUNGE.
-	Deleted,
-	/// `\Draft`: not yet sent.
-	Draft,
-}
-
-impl Flag {
-	/// Parse the IMAP flag token.
-	pub fn parse(token: &str) -> Option<Flag> {
-		match token.to_ascii_lowercase().as_str() {
-			"\\seen" => Some(Flag::Seen),
-			"\\answered" => Some(Flag::Answered),
-			"\\flagged" => Some(Flag::Flagged),
-			"\\deleted" => Some(Flag::Deleted),
-			"\\draft" => Some(Flag::Draft),
-			_ => None,
-		}
-	}
-
-	/// The wire representation.
-	pub fn as_str(self) -> &'static str {
-		match self {
-			Flag::Seen => "\\Seen",
-			Flag::Answered => "\\Answered",
-			Flag::Flagged => "\\Flagged",
-			Flag::Deleted => "\\Deleted",
-			Flag::Draft => "\\Draft",
-		}
-	}
-}
-
-/// Render a flag list for FETCH/STORE responses.
-///
-/// Builds the parenthesized list in a single pre-sized allocation, without the
-/// intermediate `Vec<&str>` that `join` would require — this runs once per
-/// message in every FETCH FLAGS / STORE response.
-pub fn render_flags(flags: &[Flag]) -> String {
-	// "(" + ")" + flag tokens + single-space separators between them.
-	let capacity = 2
-		+ flags.iter().map(|flag| flag.as_str().len()).sum::<usize>()
-		+ flags.len().saturating_sub(1);
-	let mut out = String::with_capacity(capacity);
-	out.push('(');
-	for (index, flag) in flags.iter().enumerate() {
-		if index > 0 {
-			out.push(' ');
-		}
-		out.push_str(flag.as_str());
-	}
-	out.push(')');
-	out
 }
 
 /// Whether a client-supplied mailbox name is safe and supported.
@@ -321,7 +271,6 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	super::subscriptions::subscribe(data_dir, account, mailbox)
 }
-
 /// Remove a subscription. Silently succeeds if not subscribed.
 pub fn unsubscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	super::subscriptions::unsubscribe(data_dir, account, mailbox)
@@ -333,5 +282,5 @@ pub fn list_subscribed(data_dir: &Path, account: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[path = "mailbox_tests.rs"]
+#[path = "../mailbox_tests.rs"]
 mod tests;

@@ -54,6 +54,7 @@ impl crate::spf::DnsLookup for SubjectpassListingDns {
 /// corpus (`true` is spam, `false` is ham).
 struct FixedScorer {
 	score: f64,
+	account_score: std::sync::Mutex<Option<f64>>,
 	trained: std::sync::Mutex<Vec<bool>>,
 }
 
@@ -61,8 +62,17 @@ impl FixedScorer {
 	fn new(score: f64) -> Arc<Self> {
 		Arc::new(FixedScorer {
 			score,
+			account_score: std::sync::Mutex::new(Some(score)),
 			trained: std::sync::Mutex::new(Vec::new()),
 		})
+	}
+
+	/// Force the per-account scorer to `None`, mirroring the DB-hiccup path
+	/// where `score_for_account` cannot resolve. `score(scope, text)` still
+	/// answers the configured value, so a test that accidentally reaches
+	/// for the wrong method is not silently mis-tested.
+	fn with_unavailable_account_score(self: &Arc<Self>) {
+		*self.account_score.lock().expect("account_score lock") = None;
 	}
 
 	fn trained(&self) -> Vec<bool> {
@@ -79,6 +89,15 @@ impl crate::antispam::corpus::BayesScorer for FixedScorer {
 	{
 		let score = self.score;
 		Box::pin(async move { Ok(score) })
+	}
+
+	fn score_for_account<'a>(
+		&'a self,
+		_account: &'a str,
+		_text: &'a [u8],
+	) -> crate::antispam::trainer::TrainerFuture<'a, Option<f64>> {
+		let value = *self.account_score.lock().expect("account_score lock");
+		Box::pin(async move { value })
 	}
 
 	fn train(&self, _scope: &str, _text: &str, spam: bool) {
@@ -257,6 +276,34 @@ async fn a_null_reverse_path_is_never_challenged() {
 	// Delivery still happened (the bounce reaches its recipient like
 	// any other accepted message).
 	assert_eq!(sink.messages().len(), 1, "a bounce must be delivered");
+}
+
+#[tokio::test]
+async fn a_per_account_scorer_returning_none_accepts_without_a_challenge() {
+	// The band cannot read a per-account score (DB hiccup or an
+	// untrained scope that the corpus could not even resolve). The
+	// SMTP path must not punish the message for a backend error:
+	// refuse to challenge, accept the message, and let it continue
+	// down the normal delivery path.
+	let sink = Arc::new(MemorySink::new());
+	let scorer = FixedScorer::new(0.5);
+	scorer.with_unavailable_account_score();
+	let server = band_server(&sink, &scorer).with_subjectpass(subject_pass());
+
+	let script = subjectpass_script(SENDER, b"Subject: hello\r\n\r\nbody\r\n");
+	let output = converse(server, None, script).await;
+
+	assert!(
+		!output.contains("550 5.7.1"),
+		"a missing per-account score must not produce a SubjectPass challenge, got: {output}"
+	);
+	// The message still flows through the normal accept path and is
+	// stored.
+	assert_eq!(
+		sink.messages().len(),
+		1,
+		"the message must still be delivered"
+	);
 }
 
 /// `unix_day_now` mirrors the helper in `run.rs`; redeclared here so the

@@ -161,6 +161,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		llm_hook,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config)?;
 
+	// One Bayesian store and one training worker for the whole process.
+	// SMTP trains and scores through the store; IMAP and JMAP feed the
+	// worker's bounded queue; account removal drops rows through the store.
+	let bayes = super::serve_tasks::open_bayes(&config, &reputation_pool, &crypto, &metrics)?;
+
 	// Optional SQL directory backend: load accounts into the store and refresh.
 	super::serve_tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store))
 		.await?;
@@ -258,6 +263,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_tenant_limits(Arc::clone(&tenant_limits))
 				.with_correspondents((*correspondents).clone())
 				.with_new_recipients_per_day(daily_new_recipients);
+				if let Some((store, queue)) = &bayes {
+					state = state
+						.with_training(queue.clone())
+						.with_bayes_store(store.clone());
+				}
 				// Built-in OAuth authorization server, when a signing key is set.
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
 					state = state.with_authz(authz);
@@ -328,6 +338,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				)
 				.with_crypto(crypto.clone())
 				.with_retention_days(super::serve_tasks::retention_days(&config));
+				if let Some((_, queue)) = &bayes {
+					imap_server = imap_server.with_training(queue.clone());
+				}
 				if let Some(bytes) = config.quota_bytes {
 					imap_server = imap_server.with_quota(bytes);
 				}
@@ -409,20 +422,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_report_dir(config.data_dir.clone());
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
-					// The corpus key lives under data_dir, encrypted-at-rest tokens.
-					match crate::antispam::corpus::BayesStore::open(pool.clone(), &config.data_dir)
-					{
-						Ok(store) => {
-							let store: std::sync::Arc<dyn crate::antispam::corpus::BayesScorer> =
-								std::sync::Arc::new(store);
-							server = server.with_bayes(store)
-						}
-						Err(error) => {
-							super::style::error(format_args!(
-								"cannot open bayes corpus key: {error}"
-							));
-							return Err(error);
-						}
+					if let Some((store, _)) = &bayes {
+						let store: Arc<dyn crate::antispam::corpus::BayesScorer> =
+							Arc::new(store.clone());
+						server = server.with_bayes(store);
 					}
 				}
 				if let Some(hook) = &scanner_hook {

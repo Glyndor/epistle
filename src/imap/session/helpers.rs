@@ -83,7 +83,14 @@ pub(super) fn search_matches(
 ) -> bool {
 	match key {
 		SearchKey::All => true,
-		SearchKey::FlagIs(flag, wanted) => message.flags.contains(flag) == *wanted,
+		SearchKey::FlagIs(flag, wanted) => {
+			let has = if flag.is_keyword() {
+				super::mailbox::flag_set_contains(&message.flags, flag)
+			} else {
+				message.flags.contains(flag)
+			};
+			has == *wanted
+		}
 		SearchKey::Sequence(set) => set.contains(seqno, total, saved),
 		SearchKey::UidSet(set) => set.contains(message.uid, total, saved),
 		SearchKey::Header(name, needle) => {

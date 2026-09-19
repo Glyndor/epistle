@@ -151,6 +151,59 @@ async fn jmap_email_set_updates_keywords() {
 	);
 }
 
+/// A custom `$keyword` (anything outside the four fixed JMAP keywords)
+/// survives Email/set → Email/get untouched. RFC 8621 §4.1.1 leaves
+/// the door open for clients to define their own; the keyword
+/// round-trips as a `Flag::Keyword` on the IMAP side and as the raw
+/// `$atom` on the JMAP side.
+#[tokio::test]
+async fn a_custom_keyword_round_trips_through_email_set_and_get() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"Subject: x\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+
+	// Email/set updates keywords to include both a system and a custom one.
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"update": { id.to_string(): {
+				"keywords": {
+					"$seen": true,
+					"$Forwarded": true,
+					"$Phishing": true,
+				},
+			}},
+		}, "c1"]],
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(body["methodResponses"][0][1]["updated"][id.to_string()].is_null());
+
+	// Email/get echoes the keywords back: the system keyword under its
+	// canonical `$seen` name and the custom keywords verbatim.
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id.to_string()]}, "c2"]],
+	});
+	let (_, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	let keywords = &body["methodResponses"][0][1]["list"][0]["keywords"];
+	assert_eq!(keywords["$seen"], true);
+	assert_eq!(keywords["$Forwarded"], true);
+	assert_eq!(keywords["$Phishing"], true);
+	// Three keywords, exactly the three we set.
+	assert_eq!(keywords.as_object().expect("object").len(), 3);
+}
+
 #[tokio::test]
 async fn jmap_email_get_parses_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -390,4 +443,76 @@ async fn jmap_email_set_sanitises_header_injection_in_subject() {
 		!subject_line.contains('\r') && !subject_line.contains('\n'),
 		"Subject: line must not contain CRLF: {subject_line:?}"
 	);
+}
+
+/// A JMAP keyword that is not a valid IMAP atom must be refused with
+/// `invalidProperties`. The IMAP STORE path already rejects the same
+/// shape with `BAD`; JMAP must not silently drop a flag the client
+/// asked to set.
+#[tokio::test]
+async fn jmap_email_set_refuses_an_invalid_imap_keyword() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"Subject: x\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+	// A space inside the keyword is an atom-special; the IMAP
+	// validator rejects it.
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"update": { id.to_string(): {
+				"keywords": { "$bad space": true },
+			}},
+		}, "c1"]],
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let update = &body["methodResponses"][0][1]["notUpdated"][id.to_string()];
+	assert_eq!(update["type"], "invalidProperties");
+}
+
+/// A JMAP keyword at the boundary (32 keywords on the message) is
+/// accepted; the 33rd is refused with `invalidProperties` so the
+/// per-message cap is enforced across all three paths.
+#[tokio::test]
+async fn jmap_email_set_refuses_more_than_32_keywords() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let inbox = dir.path().join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&inbox).expect("mkdir");
+	let id = uuid::Uuid::now_v7();
+	std::fs::write(
+		inbox.join(format!("{id}.eml")),
+		b"Subject: x\r\n\r\nbody\r\n",
+	)
+	.expect("write");
+	let app = router(test_state(dir.path(), 0));
+	// 33 reserved-style keywords (RFC 9051 says IMAP keywords match
+	// without regard to case, but the validator preserves the wire
+	// token).
+	let mut keywords = serde_json::Map::new();
+	for i in 0..33 {
+		keywords.insert(format!("$k{i:02}"), serde_json::json!(true));
+	}
+	let req = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:mail"],
+		"methodCalls": [["Email/set", {
+			"accountId": "alice",
+			"update": { id.to_string(): {
+				"keywords": keywords,
+			}},
+		}, "c1"]],
+	});
+	let (status, body) =
+		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
+	assert_eq!(status, StatusCode::OK);
+	let update = &body["methodResponses"][0][1]["notUpdated"][id.to_string()];
+	assert_eq!(update["type"], "invalidProperties");
 }

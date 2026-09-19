@@ -85,6 +85,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
 	("send_limited_new_recipients", "send_limited_new_recipients"),
+	("bayes_training_dropped", "bayes_training_dropped"),
 	("subjectpass_passed", "subjectpass_passed"),
 	("subjectpass_challenged", "subjectpass_challenged"),
 	("dmarc_reports_ingested", "dmarc_reports_ingested"),
@@ -129,6 +130,7 @@ pub struct Metrics {
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
 	send_limited_new_recipients: AtomicU64,
+	bayes_training_dropped: AtomicU64,
 	dmarc_reports_ingested: AtomicU64,
 	dmarc_report_rows_failing: AtomicU64,
 	tlsrpt_reports_ingested: AtomicU64,
@@ -242,6 +244,16 @@ impl Metrics {
 	pub fn send_limited_new_recipients(&self) {
 		self.send_limited_new_recipients
 			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a per-account Bayesian training job dropped because the
+	/// bounded queue that hands work from STORE / `Email/set` to the
+	/// one training worker was full. The queue is advisory and never
+	/// blocks the protocol reply, so a non-zero counter means the
+	/// worker cannot keep up with the rate of `$Junk` flag flips and
+	/// the operator should widen the queue or scale training.
+	pub fn bayes_training_dropped(&self) {
+		self.bayes_training_dropped.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count one ingested DMARC aggregate or TLS-RPT report.
@@ -359,6 +371,7 @@ impl Metrics {
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
 			"send_limited_new_recipients" => &self.send_limited_new_recipients,
+			"bayes_training_dropped" => &self.bayes_training_dropped,
 			"subjectpass_passed" => &self.subjectpass_passed,
 			"subjectpass_challenged" => &self.subjectpass_challenged,
 			"dmarc_reports_ingested" => &self.dmarc_reports_ingested,
@@ -518,6 +531,11 @@ impl Metrics {
 				"mail_send_limited_new_recipients_total",
 				"Submissions refused because the account would exceed the daily cap on first-time recipients.",
 				&self.send_limited_new_recipients,
+			),
+			(
+				"mail_bayes_training_dropped_total",
+				"Per-account Bayesian training jobs dropped because the bounded hand-off queue was full.",
+				&self.bayes_training_dropped,
 			),
 			(
 				"mail_subjectpass_passed_total",

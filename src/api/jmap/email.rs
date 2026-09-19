@@ -93,7 +93,7 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	let mut not_updated = serde_json::Map::new();
 	if let Some(update) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in update {
-			match apply_email_update(state.data_dir(), account, id, patch, state.crypto()) {
+			match apply_email_update(state, account, id, patch) {
 				Ok(()) => {
 					updated.insert(id.clone(), Value::Null);
 				}
@@ -139,16 +139,18 @@ fn create_email(
 		.and_then(|m| m.iter().find(|(_, v)| v.as_bool() == Some(true)))
 		.map(|(name, _)| name.clone())
 		.unwrap_or_else(|| "INBOX".to_string());
-	let flags: Vec<crate::imap::mailbox::Flag> = spec
-		.get("keywords")
-		.and_then(Value::as_object)
-		.map(|kw| {
-			kw.iter()
-				.filter(|(_, v)| v.as_bool() == Some(true))
-				.filter_map(|(k, _)| keyword_to_flag(k))
-				.collect()
-		})
-		.unwrap_or_default();
+	let flags: Vec<crate::imap::mailbox::Flag> = {
+		let mut out: Vec<crate::imap::mailbox::Flag> = Vec::new();
+		if let Some(kw) = spec.get("keywords").and_then(Value::as_object) {
+			for (k, v) in kw {
+				if v.as_bool() != Some(true) {
+					continue;
+				}
+				out.push(keyword_to_flag(k)?);
+			}
+		}
+		out
+	};
 	let raw = objects::build_rfc5322(spec);
 	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
 		.map_err(|_| "serverFail")?;
@@ -184,11 +186,10 @@ fn destroy_email(data_dir: &std::path::Path, account: &str, id: &str) -> Result<
 /// Apply a `keywords` replacement to a message, mapping JMAP keywords to IMAP
 /// flags. Returns a JMAP SetError type string on failure.
 fn apply_email_update(
-	data_dir: &std::path::Path,
+	state: &ApiState,
 	account: &str,
 	id: &str,
 	patch: &Value,
-	crypto: &crate::storage::MessageCrypto,
 ) -> Result<(), &'static str> {
 	use crate::imap::mailbox::{self, Flag};
 	let uuid = uuid::Uuid::parse_str(id).map_err(|_| "notFound")?;
@@ -198,6 +199,8 @@ fn apply_email_update(
 		.and_then(|m| m.iter().find(|(_, v)| v.as_bool() == Some(true)))
 		.map(|(name, _)| name.clone());
 
+	let data_dir = state.data_dir();
+	let crypto = state.crypto();
 	for source in mailbox::list(data_dir, account) {
 		let Ok(mut snapshot) = mailbox::Snapshot::open(data_dir, account, &source, crypto) else {
 			continue;
@@ -206,49 +209,85 @@ fn apply_email_update(
 			continue;
 		};
 		let sequence = u32::try_from(index + 1).unwrap_or(u32::MAX);
-		// Read the bytes and current flags before any mutation.
-		let (raw, current_flags) = {
+		// Read the current flags and the message path before any mutation.
+		// The path is enough for the training worker, which loads the
+		// body itself when it drains its job.
+		let (current_flags, message_path) = {
 			let message = snapshot.by_sequence(sequence).ok_or("notFound")?;
-			(
-				snapshot.read(message).map_err(|_| "serverFail")?,
-				message.flags.clone(),
-			)
+			(message.flags.clone(), snapshot.message_path(message))
 		};
+		// The raw bytes are still needed if the patch is going to APPEND
+		// to another mailbox; the STORE case no longer reads them.
+		let raw_for_move: std::io::Result<Vec<u8>> = snapshot
+			.by_sequence(sequence)
+			.ok_or_else(|| std::io::Error::other("no such message"))
+			.and_then(|m| snapshot.read(m));
 		let flags: Vec<Flag> = match patch.get("keywords").and_then(Value::as_object) {
-			Some(kw) => kw
-				.iter()
-				.filter(|(_, set)| set.as_bool() == Some(true))
-				.filter_map(|(keyword, _)| keyword_to_flag(keyword))
-				.collect(),
-			None => current_flags,
+			Some(kw) => {
+				let mut out: Vec<Flag> = Vec::new();
+				for (keyword, set) in kw {
+					if set.as_bool() != Some(true) {
+						continue;
+					}
+					out.push(keyword_to_flag(keyword)?);
+				}
+				// Same per-message cap IMAP STORE / APPEND enforce;
+				// refusing here keeps the three paths consistent.
+				if mailbox::count_keywords(&out).is_none() {
+					return Err("invalidProperties");
+				}
+				out
+			}
+			None => current_flags.clone(),
 		};
 		// A different target mailbox means move (append there, drop here).
 		if let Some(target) = &target
 			&& !target.eq_ignore_ascii_case(&source)
 		{
+			let raw = raw_for_move.map_err(|_| "serverFail")?;
 			mailbox::append(data_dir, account, target, &flags, &raw, crypto)
 				.map_err(|_| "serverFail")?;
 			return snapshot.remove_at(sequence).map_err(|_| "serverFail");
 		}
 		if patch.get("keywords").is_some() {
-			return snapshot
+			let updated = snapshot
 				.store_flags(sequence, flags)
-				.map(|_| ())
-				.map_err(|_| "serverFail");
+				.map_err(|_| "serverFail")?;
+			// The same decision IMAP STORE takes on a `$Junk` / `$NotJunk`
+			// change. The queue never waits, so the reply does not depend
+			// on it.
+			if let Some(queue) = state.training() {
+				crate::imap::junk_trainer::enqueue_junk_transition(
+					queue,
+					account,
+					&current_flags,
+					updated,
+					message_path,
+				);
+			}
+			return Ok(());
 		}
 		return Ok(());
 	}
 	Err("notFound")
 }
 
-/// Map a JMAP keyword to an IMAP flag, or `None` for unsupported keywords.
-fn keyword_to_flag(keyword: &str) -> Option<crate::imap::mailbox::Flag> {
+/// Map a JMAP keyword to an IMAP flag, or `Err` for unsupported keywords.
+///
+/// The four fixed JMAP keywords (`$seen`, `$answered`, `$flagged`, `$draft`)
+/// map to the matching IMAP system flags. Any other `$keyword` token is
+/// validated against the IMAP atom rules (see
+/// [`crate::imap::keyword::validate`]) and turned into a [`Flag::Keyword`]
+/// when valid; an invalid token returns `Err` so the caller can refuse
+/// the call with `invalidProperties` rather than silently dropping the
+/// flag the client sent.
+fn keyword_to_flag(keyword: &str) -> Result<crate::imap::mailbox::Flag, &'static str> {
 	use crate::imap::mailbox::Flag;
 	match keyword {
-		"$seen" => Some(Flag::Seen),
-		"$answered" => Some(Flag::Answered),
-		"$flagged" => Some(Flag::Flagged),
-		"$draft" => Some(Flag::Draft),
-		_ => None,
+		"$seen" => Ok(Flag::Seen),
+		"$answered" => Ok(Flag::Answered),
+		"$flagged" => Ok(Flag::Flagged),
+		"$draft" => Ok(Flag::Draft),
+		_ => Flag::parse(keyword).ok_or("invalidProperties"),
 	}
 }

@@ -198,6 +198,28 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 		"UNANSWERED" => (SearchKey::FlagIs(Flag::Answered, false), after),
 		"DRAFT" => (SearchKey::FlagIs(Flag::Draft, true), after),
 		"UNDRAFT" => (SearchKey::FlagIs(Flag::Draft, false), after),
+		// KEYWORD <atom>: matches when the message carries that user keyword
+		// (case-insensitive). UNKEYWORD is the negation. Parsed through the
+		// generic `FlagIs(Flag::Keyword, bool)` so the same code path the
+		// system flags use does the membership test; the keyword's own
+		// validator rejects bad atoms here so a malformed token surfaces as
+		// a SEARCH parse error rather than a runtime mismatch.
+		"KEYWORD" => {
+			let (needle, rest) = parse_astring(after)?;
+			let keyword = super::super::mailbox::Flag::parse(&needle)?;
+			if !keyword.is_keyword() {
+				return None;
+			}
+			(SearchKey::FlagIs(keyword, true), rest.trim_start())
+		}
+		"UNKEYWORD" => {
+			let (needle, rest) = parse_astring(after)?;
+			let keyword = super::super::mailbox::Flag::parse(&needle)?;
+			if !keyword.is_keyword() {
+				return None;
+			}
+			(SearchKey::FlagIs(keyword, false), rest.trim_start())
+		}
 		"FROM" | "TO" | "SUBJECT" | "CC" | "BCC" => {
 			let (needle, rest) = parse_astring(after)?;
 			(

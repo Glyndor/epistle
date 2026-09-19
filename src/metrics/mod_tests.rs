@@ -139,6 +139,7 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"auth_login_succeeded",
 		"auth_login_failed",
 		"send_limited_new_recipients",
+		"bayes_training_dropped",
 		"subjectpass_passed",
 		"subjectpass_challenged",
 		"dmarc_reports_ingested",
