@@ -25,7 +25,6 @@ pub(super) fn ingest_for_recipients(
 	message: &AcceptedMessage,
 	ingested: &mut Ingested,
 ) {
-	let Some(metrics) = metrics else { return };
 	let domains = directory_handle.current().domains();
 	if domains.is_empty() {
 		return;
@@ -42,7 +41,7 @@ pub(super) fn ingest_for_recipients(
 		if !ingested.insert((kind, domain.to_string())) {
 			continue;
 		}
-		reports::ingest(data_dir, kind, message, metrics);
+		reports::ingest(data_dir, kind, message, metrics.map(|arc| arc.as_ref()));
 	}
 }
 

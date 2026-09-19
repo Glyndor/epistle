@@ -9,6 +9,7 @@
 //! Errors do not block delivery. The mail still lands in the mailbox; the
 //! operator can read the raw report there. The hook only logs and counts.
 
+mod bounds;
 mod decompress;
 pub mod dmarc;
 mod mime;
@@ -38,28 +39,68 @@ impl Kind {
 	}
 }
 
+/// A parsed report: either a DMARC aggregate or a TLS-RPT report. The
+/// enum is the seam between the kind-specific parsers and the persist
+/// path: callers `match` on it once instead of going through a trait with
+/// `unreachable!` defaults for the wrong kind.
+pub enum Parsed {
+	/// A parsed DMARC aggregate report.
+	Dmarc(dmarc::DmarcReport),
+	/// A parsed TLS-RPT report.
+	TlsRpt(tlsrpt::TlsReport),
+}
+
+impl Parsed {
+	/// File-name component the JSONL file is stored under.
+	fn org(&self) -> String {
+		match self {
+			Parsed::Dmarc(r) => r.org(),
+			Parsed::TlsRpt(r) => r.org(),
+		}
+	}
+
+	/// Sum of failing rows (DMARC) or failed sessions (TLS-RPT) the
+	/// metrics counter will add.
+	fn failing_count(&self) -> u64 {
+		match self {
+			Parsed::Dmarc(r) => r.failing_count(),
+			Parsed::TlsRpt(r) => r.failing_count(),
+		}
+	}
+}
+
 /// Ingest one inbound report message. Failures are logged at `warn` with
 /// the reason and counted via `reports_dropped`; they do not affect
-/// delivery (the mail still reaches the named mailbox).
-pub fn ingest(data_dir: &Path, kind: Kind, message: &AcceptedMessage, metrics: &Metrics) {
-	let report = match ingest_inner(data_dir, kind, &message.data) {
+/// delivery (the mail still reaches the named mailbox). `metrics` is
+/// optional: when `None`, the report is still parsed and persisted, only
+/// the counters are skipped (the operator's terminal still sees the log
+/// line).
+pub fn ingest(data_dir: &Path, kind: Kind, message: &AcceptedMessage, metrics: Option<&Metrics>) {
+	let report = match ingest_inner(kind, &message.data) {
 		Ok(report) => report,
 		Err(reason) => {
-			metrics.reports_dropped();
+			if let Some(metrics) = metrics {
+				metrics.reports_dropped();
+			}
 			tracing::warn!(kind = kind.dir_name(), %reason, "report ingestion failed");
 			return;
 		}
 	};
-	metrics.report_ingested(kind);
-	let failing = report.failing_count();
-	if failing > 0 {
-		metrics.report_rows_failing(kind, failing);
+	if let Some(metrics) = metrics {
+		metrics.report_ingested(kind);
+		let failing = report.failing_count();
+		if failing > 0 {
+			metrics.report_rows_failing(kind, failing);
+		}
 	}
-	if let Err(error) = persist(data_dir, kind, report.as_ref()) {
-		metrics.reports_dropped();
+	if let Err(error) = persist(data_dir, &report) {
+		if let Some(metrics) = metrics {
+			metrics.reports_dropped();
+		}
 		tracing::warn!(kind = kind.dir_name(), %error, "report persist failed");
 		return;
 	}
+	let failing = report.failing_count();
 	tracing::info!(
 		kind = kind.dir_name(),
 		org = %report.org(),
@@ -68,11 +109,11 @@ pub fn ingest(data_dir: &Path, kind: Kind, message: &AcceptedMessage, metrics: &
 	);
 }
 
-fn persist(data_dir: &Path, kind: Kind, report: &dyn Report) -> std::io::Result<()> {
+fn persist(data_dir: &Path, report: &Parsed) -> std::io::Result<()> {
 	let today = today_string();
-	match kind {
-		Kind::Dmarc => dmarc::append(data_dir, &today, report.as_dmarc()),
-		Kind::TlsRpt => tlsrpt::append(data_dir, &today, report.as_tlsrpt()),
+	match report {
+		Parsed::Dmarc(r) => dmarc::append(data_dir, &today, r),
+		Parsed::TlsRpt(r) => tlsrpt::append(data_dir, &today, r),
 	}
 }
 
@@ -84,62 +125,17 @@ fn today_string() -> String {
 	crate::dmarc::aggregate::unix_to_day(ts)
 }
 
-fn ingest_inner(_data_dir: &Path, kind: Kind, raw: &[u8]) -> Result<Box<dyn Report>, String> {
+fn ingest_inner(kind: Kind, raw: &[u8]) -> Result<Parsed, String> {
 	let part = mime::find_report_part(raw, kind).map_err(|e| e.to_string())?;
 	let (encoding, bytes) = (part.encoding, part.bytes);
 	let inflated = decompress::inflate_attachment(&bytes, encoding).map_err(|e| e.to_string())?;
 	match kind {
 		Kind::Dmarc => dmarc::parse(&inflated)
-			.map(|r| Box::new(r) as Box<dyn Report>)
+			.map(Parsed::Dmarc)
 			.map_err(|e| e.to_string()),
 		Kind::TlsRpt => tlsrpt::parse(&inflated)
-			.map(|r| Box::new(r) as Box<dyn Report>)
+			.map(Parsed::TlsRpt)
 			.map_err(|e| e.to_string()),
-	}
-}
-
-/// A parsed report: the contract the hook needs to count and persist it.
-trait Report {
-	/// Downcast to a DMARC report for the [`dmarc::append`] call.
-	fn as_dmarc(&self) -> &dmarc::DmarcReport;
-	/// Downcast to a TLS-RPT report for the [`tlsrpt::append`] call.
-	fn as_tlsrpt(&self) -> &tlsrpt::TlsReport;
-	/// Sanitised org name used as the JSONL filename.
-	fn org(&self) -> &str;
-	/// Number of rows counted in the failing counter.
-	fn failing_count(&self) -> u64;
-}
-
-impl Report for dmarc::DmarcReport {
-	fn as_dmarc(&self) -> &dmarc::DmarcReport {
-		self
-	}
-	fn as_tlsrpt(&self) -> &tlsrpt::TlsReport {
-		// Unreachable: the dispatch in `ingest` only calls `as_tlsrpt` on
-		// TLS-RPT reports. Falling back to a default keeps the API
-		// uniform without introducing a second trait.
-		unreachable!("dmarc report used in tlsrpt path")
-	}
-	fn org(&self) -> &str {
-		dmarc::DmarcReport::org(self)
-	}
-	fn failing_count(&self) -> u64 {
-		dmarc::DmarcReport::failing_count(self)
-	}
-}
-
-impl Report for tlsrpt::TlsReport {
-	fn as_dmarc(&self) -> &dmarc::DmarcReport {
-		unreachable!("tlsrpt report used in dmarc path")
-	}
-	fn as_tlsrpt(&self) -> &tlsrpt::TlsReport {
-		self
-	}
-	fn org(&self) -> &str {
-		tlsrpt::TlsReport::org(self)
-	}
-	fn failing_count(&self) -> u64 {
-		tlsrpt::TlsReport::failing_count(self)
 	}
 }
 

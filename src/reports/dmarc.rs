@@ -10,10 +10,12 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-/// Refuse a document with more than this many rows. Google and Microsoft
-/// rarely send more than a few hundred in a single report; an order of
-/// magnitude above that is still safe to ingest but a hostile report
-/// could try to balloon our memory.
+use super::bounds::{self, MAX_KEYWORD, MAX_TEXT};
+
+/// Most `<record>` entries kept from one report. Google and Microsoft
+/// rarely send more than a few hundred; 10 000 is one order of magnitude
+/// above the largest realistic report and still small enough to keep the
+/// deserialiser bounded.
 pub const MAX_ROWS: usize = 10_000;
 
 /// Why a parsed document was refused, beyond "wrong shape".
@@ -22,9 +24,6 @@ pub enum ParseError {
 	/// The XML is malformed or has the wrong shape.
 	#[error("invalid DMARC aggregate XML: {0}")]
 	Invalid(String),
-	/// The document has more than [`MAX_ROWS`] records.
-	#[error("DMARC aggregate report has too many records (>{MAX_ROWS})")]
-	TooManyRows,
 }
 
 /// One parsed DMARC aggregate report.
@@ -41,8 +40,14 @@ pub struct DmarcReport {
 	pub date_range: DateRange,
 	/// `policy_published` from `policy_published`.
 	pub policy_published: PolicyPublished,
-	/// Every `<record>` element of the document.
+	/// Every `<record>` element of the document, capped at [`MAX_ROWS`].
+	/// When the document carried more entries, [`truncated`] is `true`
+	/// and only the first [`MAX_ROWS`] survived.
 	pub records: Vec<Row>,
+	/// `true` when one or more `<record>` entries were dropped because
+	/// the document exceeded [`MAX_ROWS`].
+	#[serde(default)]
+	pub truncated: bool,
 }
 
 /// `<date_range>` block.
@@ -93,13 +98,13 @@ impl DmarcReport {
 		self.records
 			.iter()
 			.filter(|row| is_failing(row))
-			.map(|row| row.count)
-			.sum()
+			.fold(0u64, |total, row| total.saturating_add(row.count))
 	}
 
-	/// Sanitised `org_name` for use as a JSONL file name.
-	pub fn org(&self) -> &str {
-		sanitise_org(&self.org_name)
+	/// File-name component derived from `org_name`, see
+	/// [`bounds::file_component`].
+	pub fn org(&self) -> String {
+		bounds::file_component(&self.org_name)
 	}
 }
 
@@ -111,53 +116,11 @@ fn is_failing(row: &Row) -> bool {
 	disposition_failing || auth_failing
 }
 
-fn sanitise_org(name: &str) -> &str {
-	// The org_name is human-set; the JSONL filename lives under
-	// data_dir/reports/dmarc/{YYYYMMDD}/. We borrow the same approach as
-	// `dmarc::aggregate::record_path`: anything that would not be safe as a
-	// filename has to be normalised. For the org string itself we keep the
-	// raw value in the JSONL and only sanitise on the filename side, so a
-	// slash in an org name does not change the persisted record.
-	if name.is_empty()
-		|| name
-			.chars()
-			.all(|c| c.is_alphanumeric() || c == '.' || c == '-')
-	{
-		name
-	} else {
-		// Allocate once at the boundary, then borrow it back into the
-		// caller. The caller never outlives this scope.
-		Box::leak(
-			name.chars()
-				.map(|c| {
-					if c.is_alphanumeric() || c == '.' || c == '-' {
-						c
-					} else {
-						'_'
-					}
-				})
-				.collect::<String>()
-				.into_boxed_str(),
-		)
-	}
-}
-
 /// Persist the JSONL line under
-/// `{data_dir}/reports/dmarc/{YYYYMMDD}/{org}.jsonl`. The directory is
-/// created on demand; a missing data_dir is propagated as an error.
+/// `{data_dir}/reports/dmarc/{YYYYMMDD}/{org}.jsonl`, where `{org}` is
+/// [`DmarcReport::org`].
 pub fn append(data_dir: &Path, day: &str, report: &DmarcReport) -> std::io::Result<()> {
-	let dir = data_dir.join("reports").join("dmarc").join(day);
-	std::fs::create_dir_all(&dir)?;
-	let path = dir.join(format!("{}.jsonl", report.org()));
-	use std::io::Write;
-	let mut file = std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&path)?;
-	let line = serde_json::to_string(report)
-		.map_err(|e| std::io::Error::other(format!("serialize dmarc report: {e}")))?;
-	writeln!(file, "{line}")?;
-	Ok(())
+	super::store::append(data_dir, super::Kind::Dmarc, day, &report.org(), report)
 }
 
 #[derive(Deserialize)]
@@ -166,8 +129,14 @@ struct RawReport {
 	report_metadata: Option<RawReportMetadata>,
 	#[serde(default, rename = "policy_published")]
 	policy_published: Option<RawPolicyPublished>,
-	#[serde(default, rename = "record")]
+	#[serde(default, rename = "record", deserialize_with = "capped_records")]
 	record: Vec<RawRecord>,
+}
+
+fn capped_records<'de, D: serde::Deserializer<'de>>(
+	deserializer: D,
+) -> Result<Vec<RawRecord>, D::Error> {
+	bounds::capped_seq(deserializer, MAX_ROWS)
 }
 
 #[derive(Deserialize)]
@@ -242,10 +211,7 @@ pub fn parse(xml: &[u8]) -> Result<DmarcReport, ParseError> {
 		std::str::from_utf8(xml)
 			.map_err(|e| ParseError::Invalid(format!("xml is not utf-8: {e}")))?,
 	)
-	.map_err(|e| ParseError::Invalid(e.to_string()))?;
-	if raw.record.len() > MAX_ROWS {
-		return Err(ParseError::TooManyRows);
-	}
+	.map_err(|e| ParseError::Invalid(bounds::cap_text(&e.to_string(), MAX_TEXT)))?;
 	let meta = raw.report_metadata.unwrap_or(RawReportMetadata {
 		org_name: None,
 		email: None,
@@ -262,8 +228,9 @@ pub fn parse(xml: &[u8]) -> Result<DmarcReport, ParseError> {
 		sp: None,
 		pct: None,
 	});
-	let mut records = Vec::with_capacity(raw.record.len());
-	for rec in raw.record {
+	let (truncated, raw_records) = bounds::truncate(raw.record, MAX_ROWS);
+	let mut records = Vec::with_capacity(raw_records.len());
+	for rec in raw_records {
 		let row = rec.row.unwrap_or(RawRow {
 			source_ip: None,
 			count: None,
@@ -278,30 +245,43 @@ pub fn parse(xml: &[u8]) -> Result<DmarcReport, ParseError> {
 			.identifiers
 			.unwrap_or(RawIdentifiers { header_from: None });
 		records.push(Row {
-			source_ip: row.source_ip.unwrap_or_default(),
+			source_ip: keyword(row.source_ip),
 			count: row.count.unwrap_or(0),
-			disposition: eval.disposition.unwrap_or_default(),
-			dkim: eval.dkim.unwrap_or_default(),
-			spf: eval.spf.unwrap_or_default(),
-			header_from: ids.header_from.unwrap_or_default(),
+			disposition: keyword(eval.disposition),
+			dkim: keyword(eval.dkim),
+			spf: keyword(eval.spf),
+			header_from: text(ids.header_from),
 		});
 	}
 	Ok(DmarcReport {
-		org_name: meta.org_name.unwrap_or_default(),
-		email: meta.email,
-		report_id: meta.report_id.unwrap_or_default(),
+		org_name: text(meta.org_name),
+		email: meta.email.map(|e| bounds::cap_text(&e, MAX_TEXT)),
+		report_id: text(meta.report_id),
 		date_range: DateRange {
 			begin: range.begin.unwrap_or(0),
 			end: range.end.unwrap_or(0),
 		},
 		policy_published: PolicyPublished {
-			domain: pub_.domain.unwrap_or_default(),
-			p: pub_.p.unwrap_or_else(|| "none".into()),
-			sp: pub_.sp,
+			domain: text(pub_.domain),
+			p: pub_
+				.p
+				.map_or_else(|| "none".into(), |p| bounds::cap_text(&p, MAX_KEYWORD)),
+			sp: pub_.sp.map(|sp| bounds::cap_text(&sp, MAX_KEYWORD)),
 			pct: pub_.pct.unwrap_or(100),
 		},
 		records,
+		truncated,
 	})
+}
+
+/// A free-text field, absent as empty, capped at [`MAX_TEXT`].
+fn text(value: Option<String>) -> String {
+	value.map_or_else(String::new, |v| bounds::cap_text(&v, MAX_TEXT))
+}
+
+/// A keyword-like field, absent as empty, capped at [`MAX_KEYWORD`].
+fn keyword(value: Option<String>) -> String {
+	value.map_or_else(String::new, |v| bounds::cap_text(&v, MAX_KEYWORD))
 }
 
 #[cfg(test)]

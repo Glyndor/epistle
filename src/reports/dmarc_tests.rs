@@ -118,9 +118,11 @@ fn parses_a_report_with_unknown_elements() {
 	assert_eq!(report.records.len(), 1);
 }
 
-/// More than 10 000 rows is refused. We synthesise 10 001 cheaply.
+/// More than 10 000 rows is truncated and the JSONL marker is set. The
+/// first MAX_ROWS survive, the rest are dropped, and the document still
+/// parses so a hostile bulk report cannot deny a small legitimate one.
 #[test]
-fn more_than_10000_rows_is_refused() {
+fn more_than_10000_rows_is_truncated_and_marked() {
 	let mut xml = String::from(
 		r#"<?xml version="1.0" encoding="UTF-8" ?>
 <feedback>
@@ -154,12 +156,13 @@ fn more_than_10000_rows_is_refused() {
 			 \x20\x20\x20\x20<identifiers>\n\
 			 \x20\x20\x20\x20\x20\x20\x20\x20<header_from>example.org</header_from>\n\
 			 \x20\x20\x20\x20</identifiers>\n\
-			 \x20\x20</record>\n"
+			 \x20\x20\x20\x20</record>\n"
 		));
 	}
 	xml.push_str("</feedback>\n");
-	let err = parse(xml.as_bytes()).expect_err("over the row cap");
-	assert!(matches!(err, ParseError::TooManyRows), "{err:?}");
+	let report = parse(xml.as_bytes()).expect("truncated, not refused");
+	assert_eq!(report.records.len(), MAX_ROWS);
+	assert!(report.truncated);
 }
 
 /// The failing-row counter sums by `count`, so a single reject row with
@@ -211,12 +214,129 @@ fn failing_count_includes_both_auth_failures() {
 	assert_eq!(report.failing_count(), 4);
 }
 
-/// The filename under which the report is persisted is the sanitised org
-/// name. An org with a `/` lands on disk as `_` to stay a single path
-/// segment.
+/// One report whose metadata and single record are filled by the caller.
+fn report_with(org: &str, report_id: &str, source_ip: &str, header_from: &str) -> String {
+	format!(
+		"<feedback><report_metadata><org_name>{org}</org_name>\
+		 <email>{org}</email><report_id>{report_id}</report_id></report_metadata>\
+		 <policy_published><domain>{header_from}</domain><p>{source_ip}</p>\
+		 <sp>{source_ip}</sp></policy_published>\
+		 <record><row><source_ip>{source_ip}</source_ip><count>1</count>\
+		 <policy_evaluated><disposition>{source_ip}</disposition><dkim>{source_ip}</dkim>\
+		 <spf>{source_ip}</spf></policy_evaluated></row>\
+		 <identifiers><header_from>{header_from}</header_from></identifiers></record>\
+		 </feedback>"
+	)
+}
+
 #[test]
-fn org_filename_is_sanitised() {
-	assert_eq!(sanitise_org("google.com"), "google.com");
-	let sanitised = sanitise_org("with/slash");
-	assert!(!sanitised.contains('/'), "{sanitised}");
+fn fields_at_their_limits_are_stored_whole() {
+	let text = "t".repeat(MAX_TEXT);
+	let keyword = "k".repeat(MAX_KEYWORD);
+	let report = parse(report_with(&text, &text, &keyword, &text).as_bytes()).expect("parses");
+	assert_eq!(report.org_name, text);
+	assert_eq!(report.email.as_deref(), Some(text.as_str()));
+	assert_eq!(report.report_id, text);
+	assert_eq!(report.policy_published.domain, text);
+	assert_eq!(report.policy_published.p, keyword);
+	assert_eq!(
+		report.policy_published.sp.as_deref(),
+		Some(keyword.as_str())
+	);
+	let row = &report.records[0];
+	assert_eq!(row.source_ip, keyword);
+	assert_eq!(row.disposition, keyword);
+	assert_eq!(row.dkim, keyword);
+	assert_eq!(row.spf, keyword);
+	assert_eq!(row.header_from, text);
+}
+
+#[test]
+fn fields_over_their_limits_are_cut() {
+	let text = "t".repeat(MAX_TEXT + 1);
+	let keyword = "k".repeat(MAX_KEYWORD + 1);
+	let report = parse(report_with(&text, &text, &keyword, &text).as_bytes()).expect("parses");
+	let text_lengths = [
+		report.org_name.len(),
+		report.email.as_deref().map_or(0, str::len),
+		report.report_id.len(),
+		report.policy_published.domain.len(),
+		report.records[0].header_from.len(),
+	];
+	assert_eq!(text_lengths, [MAX_TEXT; 5]);
+	let row = &report.records[0];
+	let keyword_lengths = [
+		report.policy_published.p.len(),
+		report.policy_published.sp.as_deref().map_or(0, str::len),
+		row.source_ip.len(),
+		row.disposition.len(),
+		row.dkim.len(),
+		row.spf.len(),
+	];
+	assert_eq!(keyword_lengths, [MAX_KEYWORD; 6]);
+}
+
+fn report_with_empty_records(records: usize) -> String {
+	let mut xml = String::from("<feedback>");
+	for _ in 0..records {
+		xml.push_str("<record/>");
+	}
+	xml.push_str("</feedback>");
+	xml
+}
+
+#[test]
+fn exactly_the_row_limit_is_accepted() {
+	let report = parse(report_with_empty_records(MAX_ROWS).as_bytes()).expect("at the cap");
+	assert_eq!(report.records.len(), MAX_ROWS);
+}
+
+#[test]
+fn one_row_over_the_limit_is_truncated_and_marked() {
+	let report = parse(report_with_empty_records(MAX_ROWS + 1).as_bytes()).expect("kept");
+	assert_eq!(report.records.len(), MAX_ROWS);
+	assert!(report.truncated);
+}
+
+#[test]
+fn at_the_row_limit_truncated_is_false() {
+	let report = parse(report_with_empty_records(MAX_ROWS).as_bytes()).expect("kept");
+	assert_eq!(report.records.len(), MAX_ROWS);
+	assert!(!report.truncated);
+}
+
+/// The file name comes from the shared component mapping, so a hostile
+/// `org_name` still lands inside the day directory.
+#[test]
+fn a_hostile_org_name_stays_inside_the_day_directory() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut report = parse(GOOGLE_SHAPED.as_bytes()).expect("parses");
+	report.org_name = "../../../escape/..".into();
+	append(dir.path(), "20240101", &report).expect("append");
+	let day_dir = dir.path().join("reports").join("dmarc").join("20240101");
+	let written: Vec<_> = std::fs::read_dir(&day_dir)
+		.expect("day dir")
+		.map(|entry| entry.expect("entry").path())
+		.collect();
+	assert_eq!(written.len(), 1, "{written:?}");
+	assert_eq!(written[0].parent(), Some(day_dir.as_path()));
+	assert_eq!(
+		written[0].file_name().and_then(|name| name.to_str()),
+		Some(".._.._.._escape_...jsonl")
+	);
+	assert!(!dir.path().join("escape").exists());
+	// The record itself keeps the name the sender wrote.
+	let line = std::fs::read_to_string(&written[0]).expect("read");
+	let stored: DmarcReport = serde_json::from_str(line.trim()).expect("json");
+	assert_eq!(stored.org_name, "../../../escape/..");
+}
+
+#[test]
+fn a_failing_count_near_the_integer_limit_saturates() {
+	let mut report = parse(GOOGLE_SHAPED.as_bytes()).expect("parses");
+	for row in &mut report.records {
+		row.count = u64::MAX;
+		row.disposition = "reject".into();
+	}
+	assert_eq!(report.failing_count(), u64::MAX);
 }

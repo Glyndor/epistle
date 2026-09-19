@@ -17,7 +17,33 @@
 //! `days`. The hourly storage-maintenance task in `serve_tasks.rs` calls
 //! it with the retention constant from `crate::reports::RETENTION_DAYS`.
 
+use std::io::Write;
 use std::path::Path;
+
+use super::Kind;
+
+/// Append `report` as one JSON line to
+/// `{data_dir}/reports/{kind}/{day}/{org}.jsonl`. `org` must come from
+/// [`super::bounds::file_component`], which is what keeps the path inside
+/// the day directory. Directories are created on demand.
+pub fn append(
+	data_dir: &Path,
+	kind: Kind,
+	day: &str,
+	org: &str,
+	report: &impl serde::Serialize,
+) -> std::io::Result<()> {
+	let dir = data_dir.join("reports").join(kind.dir_name()).join(day);
+	std::fs::create_dir_all(&dir)?;
+	let path = dir.join(format!("{org}.jsonl"));
+	let line = serde_json::to_string(report)
+		.map_err(|e| std::io::Error::other(format!("serialize report: {e}")))?;
+	let mut file = std::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(&path)?;
+	writeln!(file, "{line}")
+}
 
 /// Remove day directories older than `days` under both report buckets.
 /// `today` is the current `YYYYMMDD` string. Days are whole days; a day
@@ -66,72 +92,5 @@ fn ymd_to_unix(s: &str) -> Option<i64> {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn day_diff_handles_year_and_month_boundaries() {
-		// 2024 is a leap year.
-		assert_eq!(day_diff("20240301", "20240228"), 2);
-		assert_eq!(day_diff("20240101", "20231231"), 1);
-		assert_eq!(day_diff("20240110", "20240105"), 5);
-	}
-
-	#[test]
-	fn prune_drops_days_older_than_window_and_keeps_recent() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let today = "20240110";
-		// Two old, one recent.
-		for day in ["20240101", "20240105", "20240109"] {
-			let path = dir.path().join("reports").join("dmarc").join(day);
-			std::fs::create_dir_all(&path).expect("mkdir");
-			std::fs::write(path.join("example.jsonl"), b"old line\n").expect("write");
-		}
-		// Also keep a file at root level for `tlsrpt`.
-		let tls_root = dir.path().join("reports").join("tlsrpt");
-		std::fs::create_dir_all(&tls_root).expect("mkdir");
-		let path = tls_root.join("20240101");
-		std::fs::create_dir_all(&path).expect("mkdir");
-		std::fs::write(path.join("example.jsonl"), b"old line\n").expect("write");
-
-		// 4-day window: only 2024-01-05 and earlier are older than
-		// (today - 4 = 2024-01-06). Wait, that's 1 and 5 are older,
-		// 20240109 is within window.
-		prune(dir.path(), today, 4);
-
-		assert!(
-			!dir.path()
-				.join("reports")
-				.join("dmarc")
-				.join("20240101")
-				.exists()
-		);
-		assert!(
-			!dir.path()
-				.join("reports")
-				.join("dmarc")
-				.join("20240105")
-				.exists()
-		);
-		assert!(
-			dir.path()
-				.join("reports")
-				.join("dmarc")
-				.join("20240109")
-				.exists()
-		);
-		assert!(
-			!dir.path()
-				.join("reports")
-				.join("tlsrpt")
-				.join("20240101")
-				.exists()
-		);
-	}
-
-	#[test]
-	fn prune_is_safe_when_no_reports_directory() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		prune(dir.path(), "20240110", 90);
-	}
-}
+#[path = "store_tests.rs"]
+mod tests;

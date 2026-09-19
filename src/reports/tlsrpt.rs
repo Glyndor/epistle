@@ -7,6 +7,20 @@
 
 use std::path::Path;
 
+use super::bounds::{self, MAX_KEYWORD, MAX_TEXT};
+
+/// Most `policies` entries kept from one report. A sender reports one entry
+/// per policy domain and policy type; a typical report about this server
+/// names a handful. Documents with more entries have the overflow dropped
+/// and [`TlsReport::truncated`] set to `true`.
+pub const MAX_POLICIES: usize = 1_000;
+
+/// Most `failure-details` entries kept from one policy. RFC 8460 groups
+/// failures by result type, sending IP and receiving MX, so even a bad day
+/// produces tens. A policy with more is truncated and the parent report is
+/// marked.
+pub const MAX_FAILURE_DETAILS: usize = 1_000;
+
 /// Why a parsed JSON document was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -30,9 +44,14 @@ pub struct TlsReport {
 	/// `report-id` from the top level.
 	#[serde(rename = "report-id")]
 	pub report_id: String,
-	/// `policies` from the top level.
-	#[serde(default)]
+	/// `policies` from the top level, capped at [`MAX_POLICIES`].
+	/// When the document carried more entries, [`truncated`] is `true`
+	/// and only the first [`MAX_POLICIES`] survived.
 	pub policies: Vec<Policy>,
+	/// `true` when one or more policies or failure-details were dropped
+	/// because the document exceeded the per-list cap.
+	#[serde(default)]
+	pub truncated: bool,
 }
 
 /// RFC 8460 §4.4 `date-range` block.
@@ -57,7 +76,9 @@ pub struct Policy {
 	pub policy_domain: String,
 	/// `summary` block.
 	pub summary: Summary,
-	/// `failure-details` (absent when every session succeeded).
+	/// `failure-details` (absent when every session succeeded), capped
+	/// at [`MAX_FAILURE_DETAILS`]. When the policy carried more entries
+	/// the parent report's [`TlsReport::truncated`] is `true`.
 	#[serde(rename = "failure-details", default)]
 	pub failure_details: Vec<Failure>,
 }
@@ -98,60 +119,117 @@ impl TlsReport {
 		self.policies
 			.iter()
 			.flat_map(|p| p.failure_details.iter())
-			.map(|f| f.failed_session_count)
-			.sum()
+			.fold(0u64, |total, f| {
+				total.saturating_add(f.failed_session_count)
+			})
 	}
 
-	/// Sanitised `organization-name` for the JSONL filename.
-	pub fn org(&self) -> &str {
-		sanitise_org(&self.organization_name)
+	/// File-name component derived from `organization-name`, see
+	/// [`bounds::file_component`].
+	pub fn org(&self) -> String {
+		bounds::file_component(&self.organization_name)
 	}
-}
 
-fn sanitise_org(name: &str) -> &str {
-	if name.is_empty()
-		|| name
-			.chars()
-			.all(|c| c.is_alphanumeric() || c == '.' || c == '-')
-	{
-		name
-	} else {
-		Box::leak(
-			name.chars()
-				.map(|c| {
-					if c.is_alphanumeric() || c == '.' || c == '-' {
-						c
-					} else {
-						'_'
-					}
-				})
-				.collect::<String>()
-				.into_boxed_str(),
-		)
+	/// Cap every free-text field copied from the document, see
+	/// [`bounds::cap_text`].
+	fn cap_fields(&mut self) {
+		bounds::cap_in_place(&mut self.organization_name, MAX_TEXT);
+		bounds::cap_in_place(&mut self.report_id, MAX_TEXT);
+		if let Some(contact) = self.contact_info.as_mut() {
+			bounds::cap_in_place(contact, MAX_TEXT);
+		}
+		bounds::cap_in_place(&mut self.date_range.start_datetime, MAX_KEYWORD);
+		bounds::cap_in_place(&mut self.date_range.end_datetime, MAX_KEYWORD);
+		for policy in &mut self.policies {
+			bounds::cap_in_place(&mut policy.policy_type, MAX_KEYWORD);
+			bounds::cap_in_place(&mut policy.policy_domain, MAX_TEXT);
+			for failure in &mut policy.failure_details {
+				bounds::cap_in_place(&mut failure.result_type, MAX_KEYWORD);
+				bounds::cap_in_place(&mut failure.sending_mta_ip, MAX_KEYWORD);
+				bounds::cap_in_place(&mut failure.receiving_mx_hostname, MAX_TEXT);
+			}
+		}
 	}
 }
 
 /// Persist the JSONL line under
-/// `{data_dir}/reports/tlsrpt/{YYYYMMDD}/{org}.jsonl`. The directory is
-/// created on demand.
+/// `{data_dir}/reports/tlsrpt/{YYYYMMDD}/{org}.jsonl`, where `{org}` is
+/// [`TlsReport::org`].
 pub fn append(data_dir: &Path, day: &str, report: &TlsReport) -> std::io::Result<()> {
-	let dir = data_dir.join("reports").join("tlsrpt").join(day);
-	std::fs::create_dir_all(&dir)?;
-	let path = dir.join(format!("{}.jsonl", report.org()));
-	use std::io::Write;
-	let mut file = std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&path)?;
-	let line = serde_json::to_string(report)
-		.map_err(|e| std::io::Error::other(format!("serialize tlsrpt report: {e}")))?;
-	writeln!(file, "{line}")?;
-	Ok(())
+	super::store::append(data_dir, super::Kind::TlsRpt, day, &report.org(), report)
+}
+
+#[derive(serde::Deserialize)]
+struct RawTlsReport {
+	#[serde(rename = "organization-name")]
+	organization_name: String,
+	#[serde(rename = "date-range")]
+	date_range: DateRange,
+	#[serde(rename = "contact-info", default)]
+	contact_info: Option<String>,
+	#[serde(rename = "report-id")]
+	report_id: String,
+	#[serde(default, deserialize_with = "capped_policies")]
+	policies: Vec<RawPolicy>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawPolicy {
+	#[serde(rename = "policy-type")]
+	policy_type: String,
+	#[serde(rename = "policy-domain")]
+	policy_domain: String,
+	summary: Summary,
+	#[serde(
+		rename = "failure-details",
+		default,
+		deserialize_with = "capped_failures"
+	)]
+	failure_details: Vec<Failure>,
 }
 
 /// Parse a TLS-RPT report from its (already-decompressed) JSON body.
 pub fn parse(json: &[u8]) -> Result<TlsReport, ParseError> {
-	serde_json::from_slice(json).map_err(|e| ParseError::Invalid(e.to_string()))
+	let raw: RawTlsReport = serde_json::from_slice(json)
+		.map_err(|e| ParseError::Invalid(bounds::cap_text(&e.to_string(), MAX_TEXT)))?;
+	let (policies_overflow, raw_policies) = bounds::truncate(raw.policies, MAX_POLICIES);
+	let mut truncated = policies_overflow;
+	let mut policies = Vec::with_capacity(raw_policies.len());
+	for raw_policy in raw_policies {
+		let (failures_overflow, failure_details) =
+			bounds::truncate(raw_policy.failure_details, MAX_FAILURE_DETAILS);
+		if failures_overflow {
+			truncated = true;
+		}
+		policies.push(Policy {
+			policy_type: raw_policy.policy_type,
+			policy_domain: raw_policy.policy_domain,
+			summary: raw_policy.summary,
+			failure_details,
+		});
+	}
+	let mut report = TlsReport {
+		organization_name: raw.organization_name,
+		date_range: raw.date_range,
+		contact_info: raw.contact_info,
+		report_id: raw.report_id,
+		policies,
+		truncated,
+	};
+	report.cap_fields();
+	Ok(report)
+}
+
+fn capped_policies<'de, D: serde::Deserializer<'de>>(
+	deserializer: D,
+) -> Result<Vec<RawPolicy>, D::Error> {
+	bounds::capped_seq(deserializer, MAX_POLICIES)
+}
+
+fn capped_failures<'de, D: serde::Deserializer<'de>>(
+	deserializer: D,
+) -> Result<Vec<Failure>, D::Error> {
+	bounds::capped_seq(deserializer, MAX_FAILURE_DETAILS)
 }
 
 #[cfg(test)]

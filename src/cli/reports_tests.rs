@@ -35,6 +35,7 @@ fn google_report() -> DmarcReport {
 			dmarc_row("209.85.220.41", 5, "pass", "pass", "none"),
 			dmarc_row("203.0.113.7", 3, "fail", "fail", "reject"),
 		],
+		truncated: false,
 	}
 }
 
@@ -61,6 +62,7 @@ fn tlsrpt_report() -> TlsReport {
 				failed_session_count: 2,
 			}],
 		}],
+		truncated: false,
 	}
 }
 

@@ -241,3 +241,37 @@ fn tlsrpt_address_ingests_a_tlsrpt_report() {
 	let snap = metrics.snapshot();
 	assert_eq!(snap.get("tlsrpt_reports_ingested"), Some(&1));
 }
+
+/// With no metrics attached, the report still has to land as a JSONL
+/// line: the operator's local copy is the fallback that makes the
+/// unauthenticated-input story survivable.
+#[test]
+fn a_report_still_persists_when_metrics_is_none() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// No `.with_metrics(...)` call: `self.metrics` stays `None`.
+	let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+	let payload = build_message(
+		"BOUND",
+		&[(
+			"application/gzip".into(),
+			"base64".into(),
+			b64(&dmarc_report_bytes()),
+		)],
+	);
+	delivery
+		.deliver(message(&["postmaster@example.org"], &payload))
+		.expect("deliver");
+	let reports_root = dir.path().join("reports").join("dmarc");
+	let mut found = false;
+	for entry in std::fs::read_dir(&reports_root)
+		.expect("reports root")
+		.flatten()
+	{
+		let day_dir = entry.path();
+		if day_dir.is_dir() && day_dir.join("google.com.jsonl").exists() {
+			found = true;
+			break;
+		}
+	}
+	assert!(found, "no DMARC JSONL persisted under {reports_root:?}");
+}
