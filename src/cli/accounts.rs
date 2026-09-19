@@ -174,6 +174,13 @@ pub(super) fn remove(
 			super::style::error(message);
 			ExitCode::FAILURE
 		}
+		Err(error @ StoreError::BayesPurge { .. }) => {
+			super::style::error(format_args!(
+				"bayes corpus purge failed for {name}; account retained, retry the removal once the database is reachable"
+			));
+			super::style::error(error);
+			ExitCode::FAILURE
+		}
 		Err(error) => {
 			super::style::error(error);
 			ExitCode::FAILURE

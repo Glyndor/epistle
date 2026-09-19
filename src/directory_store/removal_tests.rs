@@ -505,12 +505,14 @@ async fn removing_an_account_clears_its_ban_rows_and_leaves_other_accounts_banne
 	);
 }
 
-/// `BayesStore::forget_scope` failing must not block the account
-/// removal. The lazy pool below cannot acquire a connection, so the
-/// first SQL call returns an error; the removal still completes and
-/// `bayes_tokens_removed` reads zero.
+/// `BayesStore::forget_scope` failing must abort the account removal
+/// so a recreated account does not inherit the previous owner's
+/// training rows. The lazy pool below cannot acquire a connection, so
+/// `forget_scope` returns an error; `remove_account` propagates that
+/// as `StoreError::BayesPurge` and the dynamic-account row stays on
+/// disk for the operator to retry.
 #[tokio::test]
-async fn forgetting_the_corpus_failing_does_not_block_account_removal() {
+async fn forgetting_the_corpus_failing_aborts_account_removal() {
 	use crate::antispam::corpus::BayesStore;
 
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -521,7 +523,7 @@ async fn forgetting_the_corpus_failing_does_not_block_account_removal() {
 		.expect("lazy pool never connects");
 	let bayes = BayesStore::with_key(pool, [0u8; 32]);
 
-	let removed = remove_account(
+	let result = remove_account(
 		&store,
 		&spool,
 		dir.path(),
@@ -529,12 +531,25 @@ async fn forgetting_the_corpus_failing_does_not_block_account_removal() {
 		QueuePolicy::Drain,
 		Some(&bayes),
 	)
-	.await
-	.expect("remove must succeed even when forget_scope fails");
-
-	assert_eq!(removed.bayes_tokens_removed, 0);
+	.await;
+	let error = result.expect_err("removal must abort when the corpus purge fails");
 	assert!(
-		store.dynamic("alice").is_none(),
-		"the account row must be gone regardless of the corpus failure"
+		matches!(error, crate::directory_store::StoreError::BayesPurge { ref account, .. } if account == "alice"),
+		"got {error:?}"
+	);
+
+	// The account row survives: a retry can drop the corpus rows and
+	// finish the removal without recreating a new account that would
+	// inherit the stale scope.
+	let reread = AccountStore::open(
+		dir.path(),
+		vec![DOMAIN.to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.expect("reopen store");
+	assert!(
+		reread.dynamic("alice").is_some(),
+		"the account row must survive when the corpus purge aborts"
 	);
 }

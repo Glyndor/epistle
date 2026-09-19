@@ -159,6 +159,17 @@ pub enum StoreError {
 	/// carries the cause.
 	#[error("storage failure: {0}")]
 	Io(#[from] std::io::Error),
+	/// The per-account Bayesian purge could not be completed. The
+	/// dynamic-account row is left on disk so a retry can drop the
+	/// corpus rows and finish the removal; this prevents a recreated
+	/// account from inheriting the previous user's training.
+	#[error("bayes purge failed for {account}: {source}")]
+	BayesPurge {
+		/// The account whose per-scope rows could not be dropped.
+		account: String,
+		/// The underlying `sqlx::Error` returned by the corpus purge.
+		source: sqlx::Error,
+	},
 }
 
 /// The mutable account store: static accounts + persisted dynamic ones.
