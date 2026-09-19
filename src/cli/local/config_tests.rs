@@ -1,16 +1,23 @@
 //! Tests for `local/config.rs`: port-base range, loopback binding, and
 //! the `hold_outbound` invariant that the TOML loader cannot set.
 
-use super::test_support::{LISTENERS_FOR_TEST, build_config_for_test, fresh_dir, load_for_test};
+use std::collections::HashSet;
+
+use super::test_support::{LISTENERS_FOR_TEST, fresh_dir, load_for_test};
 use super::{DEFAULT_PORT_BASE, LocalError, prepare};
 
-/// Pin: every listener address in the generated `Config` is the loopback
-/// IPv4 address; the six expected ports appear for `--port-base 10000`
-/// and for `--port-base 20000`.
+/// Pin: the `mail.toml` written by `prepare` lists six loopback listeners
+/// at the expected offsets. The test used to construct an in-memory
+/// `Config` directly, bypassing the on-disk `write_mail_toml` /
+/// `Config::load` round trip; that meant a TOML-formatting bug in the
+/// production write path could pass the unit test while breaking the
+/// binary. The test now exercises the same loader the binary uses.
 #[test]
 fn loopback_every_listener_is_127_and_six_ports_match() {
 	for port_base in [DEFAULT_PORT_BASE, 20_000] {
-		let config = build_config_for_test(port_base).expect("build config");
+		let dir = fresh_dir(&format!("loopback-{port_base}"));
+		prepare(dir.path(), port_base).expect("prepare");
+		let config = load_for_test(&dir.path().join("mail.toml")).expect("mail.toml loads");
 		assert_eq!(config.listeners.len(), LISTENERS_FOR_TEST.len());
 		let mut seen: Vec<(std::net::IpAddr, u16)> = Vec::new();
 		for listener in &config.listeners {
@@ -25,11 +32,11 @@ fn loopback_every_listener_is_127_and_six_ports_match() {
 				listener.port.unwrap_or(listener.kind.default_port()),
 			));
 		}
-		let expected: std::collections::HashSet<u16> = LISTENERS_FOR_TEST
+		let expected: HashSet<u16> = LISTENERS_FOR_TEST
 			.iter()
 			.map(|(_, off)| port_base + off)
 			.collect();
-		let actual: std::collections::HashSet<u16> = seen.iter().map(|(_, p)| *p).collect();
+		let actual: HashSet<u16> = seen.iter().map(|(_, p)| *p).collect();
 		assert_eq!(
 			actual, expected,
 			"the six endpoints must match the contract"
