@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
-use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::SubscriberExt;
 
 struct FakeClamd {
@@ -285,25 +284,36 @@ fn fifty_failures_warn_once_per_minute_with_injected_clock() {
 	});
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn detection_logs_signature_and_size_without_message() {
 	let raw = uuid::Uuid::now_v7().simple().to_string();
-	let fake = FakeClamd::start(raw.len(), b"stream: Eicar-Test-Signature FOUND\0");
-	let hook = ClamdHook::new(fake.socket.clone());
 	let warnings = Warnings::default();
-	let subscriber = tracing_subscriber::registry().with(warnings.clone());
-	assert_eq!(
-		scan(&hook, raw.as_bytes())
-			.with_subscriber(subscriber)
-			.await,
-		HookVerdict::Quarantine
+	let events = warnings.0.clone();
+	let subscriber = tracing_subscriber::registry().with(warnings);
+	// `with_subscriber` would scope the dispatcher to one future's polling
+	// and drop the warn that this test pins when the warn fires from a path
+	// the wrapper does not cover. Set the dispatcher for the entire test
+	// body via `block_in_place` + `Handle::block_on`, the same pattern used
+	// in `crate::api::audit_tests::run_with_capture`, so the warn is
+	// captured regardless of which thread the polling lands on.
+	tokio::task::block_in_place(|| {
+		tracing::subscriber::with_default(subscriber, || {
+			tokio::runtime::Handle::current().block_on(async {
+				let fake = FakeClamd::start(raw.len(), b"stream: Eicar-Test-Signature FOUND\0");
+				let hook = ClamdHook::new(fake.socket.clone());
+				assert_eq!(scan(&hook, raw.as_bytes()).await, HookVerdict::Quarantine);
+				assert!(!fake.finish().await.is_empty());
+			});
+		});
+	});
+	let captured = events.lock().expect("warnings");
+	assert_eq!(captured.len(), 1);
+	assert!(captured[0].contains("signature=\"Eicar-Test-Signature\""));
+	assert!(captured[0].contains(&format!("message_bytes={}", raw.len())));
+	assert!(
+		!captured[0].contains(&raw),
+		"message content appeared in log"
 	);
-	assert!(!fake.finish().await.is_empty());
-	let events = warnings.0.lock().expect("warnings");
-	assert_eq!(events.len(), 1);
-	assert!(events[0].contains("signature=\"Eicar-Test-Signature\""));
-	assert!(events[0].contains(&format!("message_bytes={}", raw.len())));
-	assert!(!events[0].contains(&raw), "message content appeared in log");
 }
 
 #[tokio::test]
@@ -377,31 +387,42 @@ async fn disconnected_peer_and_blocked_write_fail_open() {
 	}
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn stream_detection_logs_signature_and_size_without_message() {
 	let raw = uuid::Uuid::now_v7().simple().to_string();
-	let (client, mut server) = tokio::io::duplex(1024);
-	let peer = tokio::spawn(async move {
-		let mut request = [0; 50];
-		server.read_exact(&mut request).await.expect("request");
-		server
-			.write_all(b"stream: Eicar-Test-Signature FOUND\0")
-			.await
-			.expect("reply");
-	});
-	let hook = ClamdHook::new(PathBuf::from("unused.sock"));
 	let warnings = Warnings::default();
-	let subscriber = tracing_subscriber::registry().with(warnings.clone());
-	assert_eq!(
-		hook.scan_with(raw.as_bytes(), async { Ok(client) })
-			.with_subscriber(subscriber)
-			.await,
-		HookVerdict::Quarantine
+	let events = warnings.0.clone();
+	let subscriber = tracing_subscriber::registry().with(warnings);
+	// See detection_logs_signature_and_size_without_message above: set the
+	// dispatcher for the whole test body via `block_in_place` +
+	// `Handle::block_on` so the warn always lands on the capture layer.
+	tokio::task::block_in_place(|| {
+		tracing::subscriber::with_default(subscriber, || {
+			tokio::runtime::Handle::current().block_on(async {
+				let (client, mut server) = tokio::io::duplex(1024);
+				let peer = tokio::spawn(async move {
+					let mut request = [0; 50];
+					server.read_exact(&mut request).await.expect("request");
+					server
+						.write_all(b"stream: Eicar-Test-Signature FOUND\0")
+						.await
+						.expect("reply");
+				});
+				let hook = ClamdHook::new(PathBuf::from("unused.sock"));
+				assert_eq!(
+					hook.scan_with(raw.as_bytes(), async { Ok(client) }).await,
+					HookVerdict::Quarantine
+				);
+				peer.await.expect("fake");
+			});
+		});
+	});
+	let captured = events.lock().expect("warnings");
+	assert_eq!(captured.len(), 1);
+	assert!(captured[0].contains("signature=\"Eicar-Test-Signature\""));
+	assert!(captured[0].contains(&format!("message_bytes={}", raw.len())));
+	assert!(
+		!captured[0].contains(&raw),
+		"message content appeared in log"
 	);
-	peer.await.expect("fake");
-	let events = warnings.0.lock().expect("warnings");
-	assert_eq!(events.len(), 1);
-	assert!(events[0].contains("signature=\"Eicar-Test-Signature\""));
-	assert!(events[0].contains(&format!("message_bytes={}", raw.len())));
-	assert!(!events[0].contains(&raw), "message content appeared in log");
 }
