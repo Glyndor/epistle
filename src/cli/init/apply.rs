@@ -647,3 +647,7 @@ mod tests_failures;
 #[cfg(test)]
 #[path = "apply_failures_tests_b.rs"]
 mod tests_failures_b;
+
+#[cfg(test)]
+#[path = "apply_failures_tests_c.rs"]
+mod tests_failures_c;
