@@ -319,6 +319,48 @@ fn write_validated_config_refuses_a_path_under_a_non_traversable_parent() {
 	);
 }
 
+/// A `config_path` that already exists as a symlink to a real
+/// file must surface as `ConfigSymlink` from `write_validated_config`
+/// without ever opening the staging file. The plan phase runs the
+/// same check, but the path can become a symlink between plan and
+/// apply, so the writer keeps its own guard. Removing the check
+/// from `write_validated_config` would let the writer follow the
+/// symlink, rename the staging file to it, and silently overwrite
+/// the operator's target file.
+#[cfg(unix)]
+#[test]
+fn write_validated_config_refuses_a_symlinked_config_path() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let target = dir.path().join("managed.toml");
+	let target_body = b"target: untouched by init\n";
+	std::fs::write(&target, target_body).expect("write target");
+	let config_path = dir.path().join("mail.toml");
+	std::os::unix::fs::symlink(&target, &config_path).expect("create symlink");
+	let err = apply_config::write_validated_config(&config_path, "body")
+		.expect_err("a symlinked config path must be refused");
+	let ApplyError::ConfigSymlink(path) = &err else {
+		panic!("expected ConfigSymlink, got {err:?}");
+	};
+	assert_eq!(
+		path, &config_path,
+		"the diagnostic must name the symlinked config path"
+	);
+	// The symlink must still be a link, and the target must still
+	// hold the operator's original bytes: the refusal fires before
+	// any staging file is opened, so the operator's target file is
+	// untouched.
+	let meta = std::fs::symlink_metadata(&config_path).expect("symlink_metadata");
+	assert!(
+		meta.file_type().is_symlink(),
+		"config_path must still be a symlink after the refusal"
+	);
+	let still = std::fs::read(&target).expect("read target");
+	assert_eq!(
+		still, target_body,
+		"the symlink target must be unchanged on disk"
+	);
+}
+
 /// A write failure inside `write_validated_config` must NOT leave a
 /// staging file behind. The file is opened with `O_EXCL` at mode
 /// `0600` from the start: a leftover partial write would block the
