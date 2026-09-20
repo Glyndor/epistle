@@ -762,3 +762,31 @@ fn write_validated_config_succeeds_when_first_staging_name_is_taken() {
 		"the operator's pre-existing sibling must survive the call"
 	);
 }
+
+/// A symlinked `config_path` must surface as `ConfigSymlink` from the
+/// plan phase before any effect is taken. The plan is a preflight, not
+/// a lock: the path can still become a symlink between plan and apply,
+/// and `write_validated_config` keeps its own check as a safety net.
+/// The integration test `init_refuses_a_symlinked_config_path` in
+/// `tests/init_end_to_end_c.rs` drives the same shape through the
+/// `run()` entry point and asserts exit 2 with no data_dir on disk;
+/// this unit test pins the plan-phase refusal directly.
+#[cfg(unix)]
+#[test]
+fn plan_refuses_a_symlinked_config_path() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let config_path = dir.path().join("mail.toml");
+	let target = dir.path().join("managed.toml");
+	std::fs::write(&target, b"target: untouched by init\n").expect("write target");
+	std::os::unix::fs::symlink(&target, &config_path).expect("create symlink");
+	let err = apply_plan::plan(&answers_minimal(&data_dir, &config_path))
+		.expect_err("plan must refuse a symlinked config_path");
+	let ApplyError::ConfigSymlink(path) = &err else {
+		panic!("expected ConfigSymlink, got {err:?}");
+	};
+	assert_eq!(
+		path, &config_path,
+		"the diagnostic must name the symlinked config path"
+	);
+}

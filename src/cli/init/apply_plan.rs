@@ -50,6 +50,22 @@ pub(crate) fn which_openssl_for_tests() -> bool {
 /// decision on every step so a step that succeeds in `plan` cannot
 /// silently disappear in `apply`.
 pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
+	// A symlinked `config_path` is a fact about the disk that costs
+	// one `symlink_metadata` call and needs no effects at all: the
+	// apply phase already refuses to follow a symlink, but by then
+	// every key file and the self-signed cert pair are already on
+	// disk. The plan is a preflight, not a lock: the path can still
+	// become a symlink between plan and apply, and `write_validated_config`
+	// keeps its own check as a safety net. Other read failures
+	// (a non-traversable parent, a permissions refusal) are left for
+	// the apply phase to surface with exit 1 so the operator sees
+	// the partial report of the keys that did land.
+	#[cfg(unix)]
+	if let Ok(meta) = std::fs::symlink_metadata(&answers.config_path)
+		&& meta.file_type().is_symlink()
+	{
+		return Err(ApplyError::ConfigSymlink(answers.config_path.clone()));
+	}
 	let keys_dir = answers.data_dir.join("keys");
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
