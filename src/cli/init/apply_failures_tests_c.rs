@@ -234,8 +234,9 @@ fn apply_error_rng_display_names_the_failing_source() {
 /// with the steps that already landed on disk.
 #[test]
 fn rng_error_maps_into_apply_outcome_without_panicking() {
-	// A direct construction of the variant: the brief asks for a
-	// unit test on the error mapping, not the OS condition itself.
+	// A direct construction of the variant: a unit test pins the
+	// error mapping without depending on the OS condition that
+	// would force a real CSPRNG failure.
 	let err = ApplyError::Rng("storage key".to_string());
 	let outcome = ApplyOutcome {
 		report: Report::default(),
