@@ -208,7 +208,7 @@ pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWr
 			let existing_value: toml::Value = parsed(&existing).map_err(|e| {
 				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
 			})?;
-			let merged = merge_tables(existing_value, desired_value);
+			let merged = reconcile(existing_value, desired_value);
 			if merged == parsed(&existing)? {
 				if let Err(error) = Config::load(path) {
 					return Err(ApplyError::ConfigInvalid(format!(
@@ -234,12 +234,18 @@ pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWr
 }
 
 /// Reconcile a desired TOML value with an existing one. Every key
-/// listed in `INIT_MANAGED_KEYS` is taken from the desired value: when
-/// present in desired, it replaces the existing entry; when absent in
-/// desired, it is removed from the existing entry entirely. Keys not
-/// in that list are preserved as the operator added them. Tables are
-/// reconciled recursively; arrays are replaced wholesale because
-/// listeners and the dns section are managed as a whole by `init`.
+/// listed in `INIT_MANAGED_KEYS` is removed from the root table of
+/// the existing value (so the desired config can drop a previously
+/// managed entry that the operator no longer wants) and replaced
+/// from the desired value when present there. Keys not in that list
+/// are preserved as the operator added them. The removal applies
+/// at the root only: a nested operator table that happens to carry
+/// a key whose name matches a managed key is preserved verbatim,
+/// because `init` does not own the contents of nested tables.
+///
+/// Tables are reconciled recursively for keys the operator and
+/// `init` both write; arrays are replaced wholesale because listeners
+/// and the dns section are managed as a whole by `init`.
 pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Value {
 	use toml::Value;
 	match (existing, desired) {
@@ -249,7 +255,27 @@ pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Va
 			}
 			for (key, value) in desired_table {
 				let new = match existing_table.remove(&key) {
-					Some(existing_inner) => reconcile(existing_inner, value),
+					Some(existing_inner) => reconcile_inner(existing_inner, value),
+					None => value,
+				};
+				existing_table.insert(key, new);
+			}
+			Value::Table(existing_table)
+		}
+		(_, desired) => desired,
+	}
+}
+
+/// Recurse into a nested table without applying the managed-key
+/// removal. The root table is the only place `init` owns keys by
+/// name, so a nested operator table keeps every key it had.
+fn reconcile_inner(existing: toml::Value, desired: toml::Value) -> toml::Value {
+	use toml::Value;
+	match (existing, desired) {
+		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
+			for (key, value) in desired_table {
+				let new = match existing_table.remove(&key) {
+					Some(existing_inner) => reconcile_inner(existing_inner, value),
 					None => value,
 				};
 				existing_table.insert(key, new);
@@ -262,15 +288,6 @@ pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Va
 
 fn parsed(text: &str) -> Result<toml::Value, ApplyError> {
 	toml::from_str(text).map_err(|error| ApplyError::ConfigEncode(error.to_string()))
-}
-
-/// Merge two TOML tables: keys present in both keep the desired value;
-/// keys present only in the existing one are preserved. Tables are
-/// merged recursively; arrays are replaced wholesale because listeners
-/// are managed as a whole by `init` and the operator cannot meaningfully
-/// add to them through the file.
-fn merge_tables(existing: toml::Value, desired: toml::Value) -> toml::Value {
-	reconcile(existing, desired)
 }
 
 /// Write `bytes` to `path` after staging them on a sibling file with
@@ -339,7 +356,6 @@ fn create_unique_staging(
 	file_name: &str,
 	bytes: &str,
 ) -> Result<(bool, PathBuf), ApplyError> {
-	let suffix = random_hex_suffix();
 	let mut opts = fs::OpenOptions::new();
 	opts.write(true).create_new(true);
 	#[cfg(unix)]
@@ -347,15 +363,36 @@ fn create_unique_staging(
 		use std::os::unix::fs::OpenOptionsExt;
 		opts.mode(0o600);
 	}
+	// The random suffix must be drawn inside the loop: the previous
+	// shape held the suffix constant across all sixteen attempts and
+	// the `AlreadyExists` arm could never fire on a different
+	// candidate, so the retry loop was inert and a pre-existing
+	// sibling at the first candidate name stopped the call.
 	for _attempt in 0..16u32 {
+		let suffix = random_hex_suffix();
 		let staging = parent.join(format!("{file_name}.config.tmp.{suffix}"));
 		match opts.open(&staging) {
 			Ok(mut file) => {
+				// A guard that unlinks the staging file on every
+				// error path: a write_all or sync_all failure must
+				// not leave the partial file behind, because the
+				// file can hold an inline DNS token and the next
+				// run would block on its `O_EXCL` blocker. The
+				// guard is disarmed just before the success return
+				// so the caller's rename can move the staging
+				// file onto the destination.
+				let guard = StagingGuard {
+					path: staging.clone(),
+					armed: true,
+				};
 				use std::io::Write;
-				file.write_all(bytes.as_bytes())
-					.map_err(|error| ApplyError::ConfigWrite(staging.clone(), error))?;
-				file.sync_all()
-					.map_err(|error| ApplyError::ConfigWrite(staging.clone(), error))?;
+				if let Err(error) = file.write_all(bytes.as_bytes()) {
+					return Err(ApplyError::ConfigWrite(staging, error));
+				}
+				if let Err(error) = file.sync_all() {
+					return Err(ApplyError::ConfigWrite(staging, error));
+				}
+				guard.disarm();
 				return Ok((true, staging));
 			}
 			Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -368,16 +405,42 @@ fn create_unique_staging(
 	))
 }
 
+/// RAII handle that removes the staging file on drop unless
+/// `disarm` is called. The `O_EXCL` create and the early write_all
+/// errors return paths the caller wants surfaced; if any of those
+/// arms fires before the rename, the partial file is unlinked
+/// instead of left behind as a `0600` token in the operator's
+/// directory.
+struct StagingGuard {
+	path: PathBuf,
+	armed: bool,
+}
+
+impl StagingGuard {
+	fn disarm(mut self) {
+		self.armed = false;
+	}
+}
+
+impl Drop for StagingGuard {
+	fn drop(&mut self) {
+		if self.armed {
+			let _ = fs::remove_file(&self.path);
+		}
+	}
+}
+
 /// Twelve hex digits drawn from the system CSPRNG. The CSPRNG cannot
 /// fail on a well-formed host, but `init` only ever needs a unique
 /// suffix; if it ever did, `create_unique_staging` falls back to the
-/// `AlreadyExists` arm of the `open` call.
+/// `AlreadyExists` arm of the `open` call on the next attempt.
 fn random_hex_suffix() -> String {
 	use ring::rand::SecureRandom;
 	let mut bytes = [0u8; 6];
 	if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
-		// Fall back to a deterministic suffix; a collision still
-		// resolves through the `create_new` retry loop.
+		// Fall back to a deterministic suffix; the loop in
+		// `create_unique_staging` will keep drawing fresh bytes on
+		// each iteration until one lands a free name.
 		bytes = [0x42; 6];
 	}
 	let mut out = String::with_capacity(12);

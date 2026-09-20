@@ -31,8 +31,10 @@ pub struct Args {
 	pub print_answers: bool,
 }
 
-/// Exit codes: 0 done or nothing to do; 1 a step
-/// failed after effects were applied; 2 invalid answers, nothing touched.
+/// Exit codes: 0 done or nothing to do; 1 a step failed after
+/// effects were applied (the report names which step); 2 nothing
+/// was touched, either because the answers were invalid or
+/// because a precondition stopped the run before any effect.
 const EXIT_OK: u8 = 0;
 const EXIT_PARTIAL: u8 = 1;
 const EXIT_INVALID: u8 = 2;
@@ -71,8 +73,15 @@ pub fn run(args: Args) -> ExitCode {
 	let plan = match apply::plan(&answers) {
 		Ok(plan) => plan,
 		Err(error) => {
+			// A plan failure means a precondition stopped the run
+			// before any effect: an existing config that cannot be
+			// parsed, an incomplete key pair, a permissions refusal
+			// on the keys dir. Nothing has been written, so the
+			// exit code that says "look at what landed on your
+			// machine" (1) is the wrong signal. 2 widens to cover
+			// this case: nothing was touched.
 			crate::cli::style::error(error);
-			return ExitCode::from(EXIT_PARTIAL);
+			return ExitCode::from(EXIT_INVALID);
 		}
 	};
 	render_plan(&plan);

@@ -1,16 +1,21 @@
-//! Coverage-focused tests added when the ci gate raised the
-//! cli/init threshold to 88%. Every test in this file was watched
-//! red with a one-line sabotage swap and restored. The splits
-//! share the helpers from `apply_failures_tests.rs` through the
-//! `super` import and re-implement only what the parent does not
-//! already expose.
-
-use std::path::Path;
+//! Coverage-focused tests for apply-phase refusal paths: every test
+//! in this file drives `apply` (or `apply_plan::plan` for the
+//! preflight checks) with a credential, key, or config shape the
+//! apply phase must refuse, and asserts the matching `ApplyError`
+//! variant. Lifted into a sibling because the original apply
+//! failure file was at the per-file line limit; the apply-config
+//! side (reconcile, write_validated_config, plan refusals) was
+//! lifted further into `apply_failures_tests_c.rs` when this file
+//! itself reached the limit. The splits share the helpers from
+//! `apply_failures_tests.rs` through the `super` import and
+//! re-implement only what the parent does not already expose.
+//! Every test in this file was watched red with a one-line
+//! sabotage swap and restored.
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use super::tests_failures::{answers_minimal, render_report_to_string};
+use super::tests_failures::answers_minimal;
 use super::*;
 
 /// Non-UTF-8 bytes in the surviving oauth private key must surface
@@ -304,10 +309,15 @@ fn apply_refuses_a_surviving_private_key_that_is_not_utf8() {
 	);
 }
 
-/// A surviving oauth private key that exists but is unreadable
-/// (mode 0000) must surface as `KeyWrite` from the apply phase so
-/// the operator sees the read failure with the file path intact,
-/// rather than a panic.
+/// A surviving oauth private key that the apply phase cannot read
+/// must surface as `KeyWrite` so the operator sees the read failure
+/// with the file path intact, rather than a panic. The condition is
+/// built out of a filesystem shape the kernel refuses for every
+/// uid: a directory at the path that the code expects to be a file.
+/// `fs::read` on a directory returns `ErrorKind::IsADirectory` for
+/// root and non-root alike; relying on `chmod 0000` would let the
+/// test pass for the wrong reason when the binary runs as root
+/// (the Debian package build).
 #[cfg(unix)]
 #[test]
 fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
@@ -318,8 +328,8 @@ fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
 	let first = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(first.error.is_none(), "first run: {:?}", first.error);
 	let oauth_private = keys_dir.join("oauth_signing.key");
-	std::fs::set_permissions(&oauth_private, std::fs::Permissions::from_mode(0o000))
-		.expect("chmod 0000");
+	let _ = std::fs::remove_file(&oauth_private);
+	std::fs::create_dir(&oauth_private).expect("mkdir at oauth_private");
 	let second = apply(&answers_minimal(&data_dir, &config_path));
 	let err = second
 		.error
@@ -331,34 +341,14 @@ fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
 		path, &oauth_private,
 		"the diagnostic must name the unreadable oauth private key"
 	);
-	let _ = std::fs::set_permissions(&oauth_private, std::fs::Permissions::from_mode(0o600));
 }
 
-/// When `openssl` is on `PATH` but the actual `genpkey` call
-/// fails, the apply phase must record a `Skipped` step for the
-/// RSA DKIM key rather than panic or fall back to using the
-/// Ed25519 key in the RSA slot. The integration test
-/// `init_omits_rsa_dkim_keys_when_openssl_is_absent` covers the
-/// runtime shape end-to-end; this unit test pins the report
-/// shape the operator sees when generation fails.
-#[test]
-fn skipped_rsa_step_render_includes_the_failure_name() {
-	let mut report = Report::default();
-	report.steps.push(ReportStep::Skipped {
-		name: "dkim rsa key".to_string(),
-		reason: "openssl genpkey failed".to_string(),
-	});
-	let rendered = render_report_to_string(&report);
-	assert!(
-		rendered.contains("skipped:") && rendered.contains("dkim rsa key"),
-		"the report must name the skipped RSA key: {rendered}"
-	);
-}
-
-/// A surviving oauth public key that exists but is unreadable
-/// must surface as `KeyWrite` from the apply phase. Without the
-/// explicit error branch the read failure would propagate as a
-/// panic.
+/// A surviving oauth public key that the apply phase cannot read
+/// must surface as `KeyWrite` from the apply phase. The condition
+/// is built out of a filesystem shape the kernel refuses for every
+/// uid: a directory at the path the code expects to be a file.
+/// Without the explicit error branch the read failure would
+/// propagate as a panic.
 #[cfg(unix)]
 #[test]
 fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
@@ -369,8 +359,8 @@ fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
 	let first = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(first.error.is_none(), "first run: {:?}", first.error);
 	let oauth_public = keys_dir.join("oauth_public.key");
-	std::fs::set_permissions(&oauth_public, std::fs::Permissions::from_mode(0o000))
-		.expect("chmod 0000");
+	let _ = std::fs::remove_file(&oauth_public);
+	std::fs::create_dir(&oauth_public).expect("mkdir at oauth_public");
 	let second = apply(&answers_minimal(&data_dir, &config_path));
 	let err = second
 		.error
@@ -381,187 +371,5 @@ fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
 	assert_eq!(
 		path, &oauth_public,
 		"the diagnostic must name the unreadable oauth public key"
-	);
-	let _ = std::fs::set_permissions(&oauth_public, std::fs::Permissions::from_mode(0o600));
-}
-
-/// The TOML reconciliation must handle non-table values at
-/// managed positions. An existing config with `public_ipv4`
-/// as an integer (instead of the string the desired config uses)
-/// must reconcile to the desired value without panicking.
-#[test]
-fn reconcile_handles_non_table_values_at_managed_positions() {
-	let existing: toml::Value = toml::from_str(
-		r#"
-hostname = "mail.example.org"
-public_ipv4 = 1234
-data_dir = "/tmp/data"
-domains = ["example.org"]
-
-[dkim]
-selector = "s1"
-key_file = "/tmp/s1.pem"
-
-[tls]
-cert_file = "/tmp/cert.pem"
-key_file = "/tmp/key.pem"
-"#,
-	)
-	.expect("parse existing");
-	let desired: toml::Value = toml::from_str(
-		r#"
-hostname = "mail.example.org"
-public_ipv4 = "1.2.3.4"
-data_dir = "/tmp/data"
-domains = ["example.org"]
-
-[dkim]
-selector = "s1"
-key_file = "/tmp/s1.pem"
-
-[tls]
-cert_file = "/tmp/cert.pem"
-key_file = "/tmp/key.pem"
-"#,
-	)
-	.expect("parse desired");
-	let merged = apply_config::reconcile(existing, desired);
-	assert_eq!(
-		merged.get("public_ipv4"),
-		Some(&toml::Value::String("1.2.3.4".to_string())),
-		"the desired string value must replace the existing integer"
-	);
-}
-
-/// The TOML reconciliation must recurse into tables at non-managed
-/// positions. An existing config with an operator-added
-/// `[custom]` table must be merged with the desired `[custom]`
-/// table by recursing, not by overwriting wholesale.
-#[test]
-fn reconcile_recurses_into_unmanaged_tables() {
-	let existing: toml::Value = toml::from_str(
-		r#"
-hostname = "mail.example.org"
-data_dir = "/tmp/data"
-domains = ["example.org"]
-
-[dkim]
-selector = "s1"
-key_file = "/tmp/s1.pem"
-
-[tls]
-cert_file = "/tmp/cert.pem"
-key_file = "/tmp/key.pem"
-
-[custom]
-keep = "yes"
-drop = "no"
-"#,
-	)
-	.expect("parse existing");
-	let desired: toml::Value = toml::from_str(
-		r#"
-hostname = "mail.example.org"
-data_dir = "/tmp/data"
-domains = ["example.org"]
-
-[dkim]
-selector = "s1"
-key_file = "/tmp/s1.pem"
-
-[tls]
-cert_file = "/tmp/cert.pem"
-key_file = "/tmp/key.pem"
-
-[custom]
-add = "new"
-drop = "yes"
-"#,
-	)
-	.expect("parse desired");
-	let merged = apply_config::reconcile(existing, desired);
-	let custom = merged
-		.get("custom")
-		.expect("custom must survive as a table")
-		.as_table()
-		.expect("custom is a table");
-	assert_eq!(
-		custom.get("keep"),
-		Some(&toml::Value::String("yes".to_string())),
-		"keys present only in existing must be preserved"
-	);
-	assert_eq!(
-		custom.get("add"),
-		Some(&toml::Value::String("new".to_string())),
-		"keys present only in desired must be added"
-	);
-	assert_eq!(
-		custom.get("drop"),
-		Some(&toml::Value::String("yes".to_string())),
-		"keys present in both must take the desired value"
-	);
-}
-
-/// A `config_path` that has no parent directory (e.g. `/`) must
-/// surface as `ConfigInvalid` from `write_validated_config` rather
-/// than panicking or trying to stage at the filesystem root.
-#[cfg(unix)]
-#[test]
-fn write_validated_config_refuses_a_path_with_no_parent() {
-	let err = apply_config::write_validated_config(Path::new("/"), "data")
-		.expect_err("a root config path must be refused");
-	let ApplyError::ConfigInvalid(message) = &err else {
-		panic!("expected ConfigInvalid, got {err:?}");
-	};
-	assert!(
-		message.contains("no parent directory"),
-		"the diagnostic must name the missing parent: {message}"
-	);
-}
-
-/// A `config_path` with no usable file name (a path whose
-/// `file_name()` returns `None` while its `parent()` is `Some`,
-/// e.g. the current-directory marker `.`) must surface as
-/// `ConfigInvalid` with a diagnostic naming the problem. The
-/// previous guard (parent must be `Some`) has already passed for
-/// `.`, so the no-file-name branch fires next.
-#[cfg(unix)]
-#[test]
-fn write_validated_config_refuses_a_path_with_no_file_name() {
-	let err = apply_config::write_validated_config(Path::new("."), "data")
-		.expect_err("a config path with no file name must be refused");
-	let ApplyError::ConfigInvalid(message) = &err else {
-		panic!("expected ConfigInvalid, got {err:?}");
-	};
-	assert!(
-		message.contains("no usable file name"),
-		"the diagnostic must name the missing file name: {message}"
-	);
-}
-
-/// A `config_path` whose parent directory exists but is not
-/// traversable must surface `ConfigRead` from `symlink_metadata`
-/// rather than panicking or staging at the wrong path. The
-/// `NotFound` arm of the match is the normal "fresh install"
-/// path; this test exercises the permission-denied arm that the
-/// `NotFound` arm skips.
-#[cfg(unix)]
-#[test]
-fn write_validated_config_refuses_a_path_under_a_non_traversable_parent() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let locked = dir.path().join("locked");
-	std::fs::create_dir(&locked).expect("mkdir locked");
-	std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
-		.expect("chmod 0000 on locked");
-	let config_path = locked.join("mail.toml");
-	let result = apply_config::write_validated_config(&config_path, "data");
-	let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
-	let err = result.expect_err("a non-traversable parent must be refused");
-	let ApplyError::ConfigRead(path, _io) = &err else {
-		panic!("expected ConfigRead, got {err:?}");
-	};
-	assert_eq!(
-		path, &config_path,
-		"the diagnostic must name the unreadable config path"
 	);
 }

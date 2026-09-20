@@ -284,14 +284,17 @@ fn init_does_not_delete_an_unrelated_sibling_with_the_staging_basename() {
 /// Finding 10: a `config_path` that is a symlink to its managed
 /// target must be refused with a message naming the link, rather
 /// than silently replacing the link with a regular file and
-/// leaving the original target stale.
+/// leaving the original target stale. The plan phase catches the
+/// symlink before any effect; the run exits 2 with no `data_dir`
+/// on disk and the symlink target untouched.
 #[cfg(unix)]
 #[test]
 fn init_refuses_a_symlinked_config_path() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
-	let body_initial = format!(
+	let target = dir.path().join("managed.toml");
+	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
@@ -300,41 +303,29 @@ fn init_refuses_a_symlinked_config_path() {
 		data_dir.display(),
 		config_path.display(),
 	);
-	let answers = write_answers(dir.path(), "answers_initial.toml", &body_initial);
-	let first = run_init(&answers);
-	assert!(
-		first.status.success(),
-		"initial run must succeed; stderr: {}",
-		String::from_utf8_lossy(&first.stderr)
-	);
-	// Move the live config aside and replace it with a symlink to
-	// its previous location, so the symlink carries the same
-	// content the operator expects but the write path would now
-	// follow the link rather than the symlink itself.
-	let managed = dir.path().join("managed.toml");
-	std::fs::rename(&config_path, &managed).expect("rename live config");
-	std::os::unix::fs::symlink(&managed, &config_path).expect("create symlink");
-	let body_changed = format!(
-		"mode = \"manual\"\n\
-		 hostname = \"mail2.example.org\"\n\
-		 domains = [\"example.org\"]\n\
-		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
-		data_dir.display(),
-		config_path.display(),
-	);
-	let answers_changed = write_answers(dir.path(), "answers_changed.toml", &body_changed);
-	let second = run_init(&answers_changed);
+	let answers = write_answers(dir.path(), "answers.toml", &body);
+	// Lay down a real target file so the symlink points at known
+	// bytes the test can assert against, then create the symlink
+	// at `config_path` pointing at it. The plan phase must
+	// detect the symlink before any effect.
+	std::fs::write(&target, b"target: untouched by init\n").expect("write target");
+	std::os::unix::fs::symlink(&target, &config_path).expect("create symlink");
+	let output = run_init(&answers);
 	assert_eq!(
-		second.status.code(),
-		Some(1),
-		"symlinked config_path must be refused as exit 1; stderr: {}",
-		String::from_utf8_lossy(&second.stderr)
+		output.status.code(),
+		Some(2),
+		"symlinked config_path must be refused as exit 2 (nothing was touched; the plan phase surfaces the refusal before writing the new bytes); stderr: {}",
+		String::from_utf8_lossy(&output.stderr)
 	);
-	let stderr = String::from_utf8_lossy(&second.stderr);
+	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(
 		stderr.contains("symlink"),
 		"the error must name the symlink: {stderr}"
+	);
+	assert!(
+		!data_dir.exists(),
+		"no data_dir must have been created: {}",
+		data_dir.display()
 	);
 	let still_symlink = std::fs::symlink_metadata(&config_path)
 		.expect("stat")
@@ -344,10 +335,10 @@ fn init_refuses_a_symlinked_config_path() {
 		still_symlink,
 		"the symlink must NOT have been replaced with a regular file"
 	);
-	let target_after = std::fs::read_to_string(&managed).expect("read target");
-	assert!(
-		!target_after.contains("mail2.example.org"),
-		"the target file must not have been silently rewritten: {target_after}"
+	let target_after = std::fs::read_to_string(&target).expect("read target");
+	assert_eq!(
+		target_after, "target: untouched by init\n",
+		"the symlink target must NOT have been touched: {target_after}"
 	);
 }
 

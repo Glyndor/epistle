@@ -176,6 +176,10 @@ fn multiple_dns_token_sources_is_an_error() {
 	);
 }
 
+/// Empty `dns.token` and the other token sources count as absent
+/// are pinned in `answers_tests_b.rs` to keep this file under the
+/// per-file line limit.
+
 #[test]
 fn automatic_dns_outside_zone_is_an_error() {
 	let mut answers = minimal(Automatic);

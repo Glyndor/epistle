@@ -160,9 +160,11 @@ The command shapes are:
 
 The TOML fields the file accepts and the assistant asks for are the same. Every
 field is a key with the same name as the question, and a missing key fails the
-validator before any side effect runs. Exit codes are `0` (done or nothing to do),
-`1` (a step failed after effects were applied; the report names which step), and
-`2` (invalid answers, nothing touched).
+validator before any side effect runs. Exit codes are `0` (done or nothing to
+do), `1` (a step failed after effects were applied; the report names which
+step), and `2` (nothing was touched, either because the answers were invalid or
+because a precondition stopped the run before any effect: the existing config
+could not be parsed, a required key pair was incomplete, and so on).
 
 What this build does:
 

@@ -50,6 +50,22 @@ pub(crate) fn which_openssl_for_tests() -> bool {
 /// decision on every step so a step that succeeds in `plan` cannot
 /// silently disappear in `apply`.
 pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
+	// A symlinked `config_path` is a fact about the disk that costs
+	// one `symlink_metadata` call and needs no effects at all: the
+	// apply phase already refuses to follow a symlink, but by then
+	// every key file and the self-signed cert pair are already on
+	// disk. The plan is a preflight, not a lock: the path can still
+	// become a symlink between plan and apply, and `write_validated_config`
+	// keeps its own check as a safety net. Other read failures
+	// (a non-traversable parent, a permissions refusal) are left for
+	// the apply phase to surface with exit 1 so the operator sees
+	// the partial report of the keys that did land.
+	#[cfg(unix)]
+	if let Ok(meta) = std::fs::symlink_metadata(&answers.config_path)
+		&& meta.file_type().is_symlink()
+	{
+		return Err(ApplyError::ConfigSymlink(answers.config_path.clone()));
+	}
 	let keys_dir = answers.data_dir.join("keys");
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
@@ -66,7 +82,29 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		&oauth_private,
 		&oauth_public,
 	)?;
-	let mut steps = vec![
+	// Directory steps first: every write that follows needs the
+	// directory it lives in. The previous shape listed the five key
+	// writes ahead of the directory creation that those writes
+	// depend on, so the operator read a plan that said "we will
+	// write s1.pem" before "we will create data_dir". The apply
+	// phase creates the directories first, and the plan now
+	// mirrors that order so the operator sees the same shape they
+	// will see in the report.
+	let mut steps = Vec::new();
+	if !answers.data_dir.exists() {
+		steps.push(PlanStep::DataDir {
+			path: answers.data_dir.clone(),
+		});
+	}
+	if let Some(parent) = answers.config_path.parent()
+		&& !parent.as_os_str().is_empty()
+		&& !parent.exists()
+	{
+		steps.push(PlanStep::ConfigDir {
+			path: parent.to_path_buf(),
+		});
+	}
+	steps.extend([
 		PlanStep::DkimEd25519 {
 			path: s1.clone(),
 			reused: s1.exists(),
@@ -88,12 +126,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 			path: oauth_public.clone(),
 			reused: oauth_pair.public_reused,
 		},
-	];
-	if !answers.data_dir.exists() {
-		steps.push(PlanStep::DataDir {
-			path: answers.data_dir.clone(),
-		});
-	}
+	]);
 	let cert_exists = cert_path.exists();
 	let key_exists = key_path.exists();
 	if cert_exists && !key_exists {
@@ -113,14 +146,6 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		reused: cert_exists && key_exists,
 		key_reused: key_exists,
 	});
-	if let Some(parent) = answers.config_path.parent()
-		&& !parent.as_os_str().is_empty()
-		&& !parent.exists()
-	{
-		steps.push(PlanStep::ConfigDir {
-			path: parent.to_path_buf(),
-		});
-	}
 	let identical = config_is_identical_to_desired(
 		answers,
 		&s1,
@@ -290,7 +315,7 @@ fn config_is_identical_to_desired(
 			std::io::Error::other(error.to_string()),
 		)
 	})?;
-	let merged = merge_tables_for_plan(existing_value, desired_value);
+	let merged = apply_config::reconcile(existing_value, desired_value);
 	let existing_parsed = toml::from_str(&existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),
@@ -313,13 +338,6 @@ fn config_is_identical_to_desired(
 	} else {
 		Ok(false)
 	}
-}
-
-/// Merge two TOML tables for the plan-only identity check. Uses the
-/// same reconciliation as the apply phase so the plan cannot claim a
-/// config is `identical` while the apply phase rewrites it.
-fn merge_tables_for_plan(existing: toml::Value, desired: toml::Value) -> toml::Value {
-	apply_config::reconcile(existing, desired)
 }
 
 /// Count of top-level keys the apply phase writes into the desired
