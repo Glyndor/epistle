@@ -304,10 +304,15 @@ fn apply_refuses_a_surviving_private_key_that_is_not_utf8() {
 	);
 }
 
-/// A surviving oauth private key that exists but is unreadable
-/// (mode 0000) must surface as `KeyWrite` from the apply phase so
-/// the operator sees the read failure with the file path intact,
-/// rather than a panic.
+/// A surviving oauth private key that the apply phase cannot read
+/// must surface as `KeyWrite` so the operator sees the read failure
+/// with the file path intact, rather than a panic. The condition is
+/// built out of a filesystem shape the kernel refuses for every
+/// uid: a directory at the path that the code expects to be a file.
+/// `fs::read` on a directory returns `ErrorKind::IsADirectory` for
+/// root and non-root alike; relying on `chmod 0000` would let the
+/// test pass for the wrong reason when the binary runs as root
+/// (the Debian package build).
 #[cfg(unix)]
 #[test]
 fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
@@ -318,8 +323,8 @@ fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
 	let first = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(first.error.is_none(), "first run: {:?}", first.error);
 	let oauth_private = keys_dir.join("oauth_signing.key");
-	std::fs::set_permissions(&oauth_private, std::fs::Permissions::from_mode(0o000))
-		.expect("chmod 0000");
+	let _ = std::fs::remove_file(&oauth_private);
+	std::fs::create_dir(&oauth_private).expect("mkdir at oauth_private");
 	let second = apply(&answers_minimal(&data_dir, &config_path));
 	let err = second
 		.error
@@ -331,7 +336,6 @@ fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
 		path, &oauth_private,
 		"the diagnostic must name the unreadable oauth private key"
 	);
-	let _ = std::fs::set_permissions(&oauth_private, std::fs::Permissions::from_mode(0o600));
 }
 
 /// When `openssl` is on `PATH` but the actual `genpkey` call
@@ -355,10 +359,12 @@ fn skipped_rsa_step_render_includes_the_failure_name() {
 	);
 }
 
-/// A surviving oauth public key that exists but is unreadable
-/// must surface as `KeyWrite` from the apply phase. Without the
-/// explicit error branch the read failure would propagate as a
-/// panic.
+/// A surviving oauth public key that the apply phase cannot read
+/// must surface as `KeyWrite` from the apply phase. The condition
+/// is built out of a filesystem shape the kernel refuses for every
+/// uid: a directory at the path the code expects to be a file.
+/// Without the explicit error branch the read failure would
+/// propagate as a panic.
 #[cfg(unix)]
 #[test]
 fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
@@ -369,8 +375,8 @@ fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
 	let first = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(first.error.is_none(), "first run: {:?}", first.error);
 	let oauth_public = keys_dir.join("oauth_public.key");
-	std::fs::set_permissions(&oauth_public, std::fs::Permissions::from_mode(0o000))
-		.expect("chmod 0000");
+	let _ = std::fs::remove_file(&oauth_public);
+	std::fs::create_dir(&oauth_public).expect("mkdir at oauth_public");
 	let second = apply(&answers_minimal(&data_dir, &config_path));
 	let err = second
 		.error
@@ -382,7 +388,6 @@ fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
 		path, &oauth_public,
 		"the diagnostic must name the unreadable oauth public key"
 	);
-	let _ = std::fs::set_permissions(&oauth_public, std::fs::Permissions::from_mode(0o600));
 }
 
 /// The TOML reconciliation must handle non-table values at
@@ -637,23 +642,26 @@ fn write_validated_config_refuses_a_path_with_no_file_name() {
 	);
 }
 
-/// A `config_path` whose parent directory exists but is not
-/// traversable must surface `ConfigRead` from `symlink_metadata`
-/// rather than panicking or staging at the wrong path. The
+/// A `config_path` whose parent cannot be traversed must surface
+/// `ConfigRead` from `symlink_metadata` rather than panicking or
+/// staging at the wrong path. The condition is built out of a
+/// filesystem shape the kernel refuses for every uid: a regular
+/// file where the parent directory would be. `symlink_metadata`
+/// on `<file>/mail.toml` then returns `ErrorKind::NotADirectory`
+/// for root and non-root alike; relying on `chmod 0000` on a
+/// directory would let the test pass for the wrong reason when
+/// the binary runs as root (the Debian package build). The
 /// `NotFound` arm of the match is the normal "fresh install"
-/// path; this test exercises the permission-denied arm that the
+/// path; this test exercises the non-`NotFound` arm that the
 /// `NotFound` arm skips.
 #[cfg(unix)]
 #[test]
 fn write_validated_config_refuses_a_path_under_a_non_traversable_parent() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let locked = dir.path().join("locked");
-	std::fs::create_dir(&locked).expect("mkdir locked");
-	std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
-		.expect("chmod 0000 on locked");
+	std::fs::write(&locked, b"a regular file, not a directory").expect("write locked");
 	let config_path = locked.join("mail.toml");
 	let result = apply_config::write_validated_config(&config_path, "data");
-	let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
 	let err = result.expect_err("a non-traversable parent must be refused");
 	let ApplyError::ConfigRead(path, _io) = &err else {
 		panic!("expected ConfigRead, got {err:?}");
