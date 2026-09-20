@@ -121,9 +121,10 @@ fn init_exits_one_when_openssl_genpkey_fails_and_carries_no_rsa_selector() {
 
 /// Acceptance pairing of `init_exits_one_when_openssl_genpkey_fails`:
 /// the shim succeeds on every subcommand, the run completes, the
-/// config carries `rsa_selector`, and exit code is 0. The brief asks
-/// for a rejection test paired with an acceptance test of the same
-/// shape just inside the limit.
+/// config carries `rsa_selector`, and exit code is 0. A rejection
+/// test is only worth as much as the acceptance test of the same
+/// shape next to it: without this one, a run that always failed
+/// would satisfy the pair above.
 #[cfg(unix)]
 #[test]
 fn init_succeeds_and_writes_rsa_selector_when_openssl_shim_succeeds() {
