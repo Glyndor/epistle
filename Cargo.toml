@@ -55,7 +55,7 @@ url = "2.5.8"
 percent-encoding = "2.3.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-opentelemetry = "0.32"
+opentelemetry = "0.33"
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 tracing-opentelemetry = "0.33"
