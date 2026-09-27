@@ -108,30 +108,68 @@ fn check_dns(
 			if dns.zone.trim().is_empty() {
 				errors.push(Invalid::DnsZoneMissing);
 			} else {
-				let scope = ScopedSecret::new(dns.zone.clone(), "x");
-				for domain in domains {
-					if !scope.authorizes(domain) {
-						errors.push(Invalid::DnsZoneScope {
-							domain: domain.clone(),
-							zone: dns.zone.clone(),
+				// Validate `dns.zone` through the same normaliser that
+				// ran on `domains`, so the zone is stored as its
+				// A-label and the scope check compares like with like.
+				// The file path used to keep the raw string and then
+				// hand it to `ScopedSecret::authorizes`, which
+				// compared the U-label against an A-label domain and
+				// rejected a Unicode zone whose equivalent U-label
+				// matched. The assistant uses the same domain function
+				// on its prompts, so it never produced this shape.
+				// The shared validator must accept the same shapes.
+				match crate::domain::normalize(&dns.zone) {
+					Ok(zone_norm) => {
+						let scope = ScopedSecret::new(zone_norm.clone(), "x");
+						for domain in domains {
+							if !scope.authorizes(domain) {
+								errors.push(Invalid::DnsZoneScope {
+									domain: domain.clone(),
+									zone: dns.zone.clone(),
+								});
+							}
+						}
+					}
+					Err(why) => {
+						let reason = match why {
+							crate::domain::DomainError::Invalid => {
+								"is not a valid FQDN".to_string()
+							}
+							crate::domain::DomainError::Confusable => {
+								"is confusable with another name".to_string()
+							}
+						};
+						errors.push(Invalid::DnsZoneMalformed {
+							value: dns.zone.clone(),
+							reason,
 						});
 					}
 				}
 			}
-			let provided = [
-				dns.token.is_some(),
-				dns.token_file.is_some(),
-				dns.token_env.is_some(),
-			]
-			.iter()
-			.filter(|x| **x)
-			.count();
+			// An empty or whitespace-only value in any of the three
+			// sources counts as absent, so the assistant and the file
+			// path reject the same input with the same sentence. The
+			// assistant already trims before storing; the file path
+			// preserves the literal, hence this branch.
+			let token_present = dns.token.as_deref().is_some_and(|v| !v.trim().is_empty());
+			let token_file_present = dns.token_file.as_deref().is_some_and(|p| {
+				let s = p.to_string_lossy();
+				!s.trim().is_empty()
+			});
+			let token_env_present = dns
+				.token_env
+				.as_deref()
+				.is_some_and(|v| !v.trim().is_empty());
+			let provided = [token_present, token_file_present, token_env_present]
+				.iter()
+				.filter(|x| **x)
+				.count();
 			match provided {
 				0 => errors.push(Invalid::DnsTokenMissing),
 				1 => {}
 				_ => errors.push(Invalid::DnsTokenAmbiguous),
 			}
-			if dns.token.is_some() {
+			if token_present {
 				warnings.push(Warning {
 					field: "dns.token".to_string(),
 					message:
@@ -150,6 +188,68 @@ fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<In
 	}
 	if !config_path.is_absolute() {
 		errors.push(Invalid::ConfigPathNotAbsolute);
+		return;
+	}
+	// `config_path = "/"` is absolute, so the check above accepts it,
+	// but the apply phase rejects it at the staging step (no file
+	// name to stage next to). By then the data directory and every
+	// key have already been written. The validator catches the same
+	// shape earlier so nothing is touched.
+	if !path_has_a_file_name(config_path) {
+		errors.push(Invalid::ConfigPathNoFileName);
+	}
+	// Writing the config into the data directory would overwrite a
+	// key with the staging temp or the renamed config. The validator
+	// catches the equality before any effect, so the operator can
+	// fix the answer and rerun.
+	if data_dir == config_path {
+		errors.push(Invalid::ConfigPathEqualsDataDir);
+	}
+	// `init` owns `<data_dir>/keys` and lands the staging step
+	// inside `config_path.parent()`. A `config_path` that resolves
+	// inside the keys directory would race the staging temp against
+	// a key the same run is about to write. The component comparison
+	// keeps a path whose name only *starts* with `keys` (a
+	// sibling directory the operator owns) accepted.
+	if path_is_inside_keys_dir(data_dir, config_path) {
+		errors.push(Invalid::ConfigPathInsideKeysDir);
+	}
+}
+
+/// True when `path` ends with a normal file-name component: not the
+/// root, not `.` or `..`, not an empty string, not a trailing
+/// separator or a separator followed by `.` or `..`. The apply
+/// phase requires the same shape to find a sibling staging file; the
+/// validator catches the missing piece earlier. `Path::components()`
+/// silently elides a trailing `/.` to its parent, so the textual check
+/// below is what surfaces that shape.
+fn path_has_a_file_name(path: &Path) -> bool {
+	if let Some(text) = path.as_os_str().to_str()
+		&& (text.ends_with('/') || text.ends_with("/.") || text.ends_with("/.."))
+	{
+		return false;
+	}
+	matches!(
+		path.components().next_back(),
+		Some(std::path::Component::Normal(_))
+	)
+}
+
+/// True when `<data_dir>/keys` is a strict componentwise prefix of
+/// `config_path`. The comparison walks `Path::components` so a path
+/// like `<data_dir>/keysfoo/mail.toml` does not match: `keys` is a
+/// sibling directory, not a prefix component.
+fn path_is_inside_keys_dir(data_dir: &Path, config_path: &Path) -> bool {
+	let keys_dir = data_dir.join("keys");
+	let mut kc = keys_dir.components();
+	let mut cc = config_path.components();
+	loop {
+		match (kc.next(), cc.next()) {
+			(Some(a), Some(b)) if a == b => continue,
+			(Some(_), _) => return false,
+			(None, Some(_)) => return true,
+			(None, None) => return false,
+		}
 	}
 }
 
@@ -208,10 +308,12 @@ pub(crate) fn validate(answers: &Answers) -> Result<Vec<Warning>, Vec<Invalid>> 
 	let normalised_domains = check_domains(&answers.domains, &mut errors);
 	check_hostname_vs_domains(&hostname_norm, &normalised_domains, &mut errors);
 	check_public_ips(answers, &mut errors);
+	// Use the normalised domains for the scope check so a Unicode
+	// zone compares against an A-label domain with the same shape.
 	check_dns(
 		answers.mode,
 		answers.dns.as_ref(),
-		&answers.domains,
+		&normalised_domains,
 		&mut errors,
 		&mut warnings,
 	);

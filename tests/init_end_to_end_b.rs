@@ -204,8 +204,8 @@ fn init_refuses_when_only_oauth_public_survives() {
 	let second = run_init(&answers);
 	assert_eq!(
 		second.status.code(),
-		Some(1),
-		"second run must surface the incomplete pair as exit 1; stderr: {}",
+		Some(2),
+		"second run must surface the incomplete pair as exit 2 (nothing was touched; the plan phase surfaces the refusal before any effect); stderr: {}",
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let stderr = String::from_utf8_lossy(&second.stderr);
@@ -328,8 +328,9 @@ fn init_rebuilds_cert_from_existing_key_when_only_key_survives() {
 }
 
 /// Finding 4 (binary, cert only): when only `cert.pem` survives,
-/// the run must exit 1 with a recoverable diagnostic and the
-/// surviving cert bytes must remain untouched.
+/// the run must exit 2 with a recoverable diagnostic and the
+/// surviving cert bytes must remain untouched. The plan phase
+/// surfaces the refusal before any effect.
 #[test]
 fn init_refuses_when_only_self_signed_cert_survives() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -358,8 +359,8 @@ fn init_refuses_when_only_self_signed_cert_survives() {
 	let second = run_init(&answers);
 	assert_eq!(
 		second.status.code(),
-		Some(1),
-		"second run must refuse the asymmetric pair as exit 1; stderr: {}",
+		Some(2),
+		"second run must refuse the asymmetric pair as exit 2 (nothing was touched; the plan phase surfaces the refusal before any effect); stderr: {}",
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let stderr = String::from_utf8_lossy(&second.stderr);
