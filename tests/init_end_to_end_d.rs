@@ -92,8 +92,8 @@ fn init_refuses_when_existing_config_has_insecure_permissions() {
 	};
 	assert_eq!(
 		second.status.code(),
-		Some(1),
-		"init must exit 1 on an existing invalid config; stderr: {}",
+		Some(2),
+		"init must exit 2 on an existing invalid config (nothing was touched; the plan phase surfaces the refusal before any effect); stderr: {}",
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let stderr = String::from_utf8_lossy(&second.stderr);
@@ -170,8 +170,8 @@ fn init_refuses_when_existing_config_has_an_unknown_top_level_key() {
 	};
 	assert_eq!(
 		second.status.code(),
-		Some(1),
-		"init must exit 1 on an existing invalid config; stderr: {}",
+		Some(2),
+		"init must exit 2 on an existing invalid config (nothing was touched; the plan phase surfaces the refusal before any effect); stderr: {}",
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let stderr = String::from_utf8_lossy(&second.stderr);
