@@ -121,65 +121,177 @@ impl std::fmt::Debug for Prepared {
 /// `epistle local` needs and returning the matching `Config`. The function
 /// is split out from `run` so unit tests can drive every layout / permission
 /// / idempotence pin without ever binding a listener.
+///
+/// Recovery from an interruption: each artifact is skipped when its file
+/// already exists on disk. The credential pair (`mail.toml` plus
+/// `accounts.toml`) is regenerated together when either half is missing,
+/// because the API token hash inside `mail.toml` and the account password
+/// hash inside `accounts.toml` carry independent secrets and a partial
+/// state where only one half survived is not useful.
 pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError> {
 	config::check_port_base(port_base)?;
-	// Three outcomes from `layout::ensure_dir`: refuse (unrelated content),
-	// reuse (marker present AND `mail.toml` already there, idempotent), or
-	// generate (everything else: empty, marker-only, missing `mail.toml`).
-	// A missing `mail.toml` under an existing marker is a partial state we
-	// recover from by re-generating, not by refusing.
-	let outcome = layout::ensure_dir(dir)?;
-	let data_dir = dir.join("data");
-	layout::create_with_mode(&data_dir, 0o700)?;
+	layout::ensure_dir(dir)?;
+	// Marker is the trust anchor and is written first, immediately after
+	// `ensure_dir` accepts the directory. Writing it before any other
+	// artifact means a crash later in the run still leaves a directory a
+	// later run sees as ours: the marker is present, so `ensure_dir`
+	// accepts the directory, and the per-artifact scan below rebuilds
+	// whatever else is missing. Writing the marker last would mean a
+	// crash between the first artifact and the marker left a directory
+	// `ensure_dir` then refused as "not empty and was not created by
+	// epistle local", which is exactly the partial state this function
+	// exists to recover from.
+	layout::write_marker(&dir.join(MARKER_FILE))?;
 
+	// Test-only fault point: a synthetic failure `prepare` can be
+	// driven into to prove the marker is written before any other
+	// artifact, including before the data directory is created. The
+	// call is placed AFTER `write_marker` (so a successful arming
+	// leaves the marker on disk) and BEFORE the data directory or any
+	// artifact (so neither the data directory nor any artifact is on
+	// disk when the fault fires). Together those pin the
+	// marker-first ordering invariant of `prepare`. Outside tests the
+	// function is a no-op returning `Ok(())`, so the production path
+	// is unaffected.
+	layout::fault_after_marker()?;
+
+	let data_dir = dir.join("data");
 	let cert_path = dir.join("cert.pem");
 	let key_path = dir.join("key.pem");
 	let dkim_path = dir.join("dkim.pem");
 	let mail_toml_path = dir.join("mail.toml");
 	let accounts_toml_path = data_dir.join("accounts.toml");
 
-	let mut password = None;
-	match outcome {
-		layout::Outcome::Reuse => {
-			// Idempotent: every file we would have written is already
-			// there from a previous run. Nothing to do.
-		}
-		layout::Outcome::Generate => {
-			let marker = dir.join(MARKER_FILE);
-			if !marker.exists() {
-				layout::write_marker(&marker)?;
+	// Decide the credential-pair outcome BEFORE creating the data
+	// directory, regenerating the certificate, or writing the DKIM
+	// key. A `mail.toml` or `accounts.toml` that is on disk but
+	// unusable is an operator-fixable error; an error run that
+	// regenerated the cert/key/dkim in the meantime would leave the
+	// directory in a half-changed state (fresh cert/key, broken
+	// `mail.toml`) that a fix-up run could not recognise. The
+	// evaluation is read-only: the data directory does not have to
+	// exist for `load_accounts_outcome` to return a `Missing` outcome
+	// (a fresh directory implies a fresh credential pair), and the
+	// `Unusable` arm carries the standard diagnostic. Once the
+	// outcome is decided, the rest of the run is a no-op when the
+	// pair is reusable, and an artifact-creation pass when it is not.
+	let mail_outcome = config::load_local_config_outcome(&mail_toml_path)?;
+	let accounts_outcome = config::load_accounts_outcome(&data_dir)?;
+	let pair_usable = matches!(
+		(&mail_outcome, &accounts_outcome),
+		(
+			config::MailConfigOutcome::Loaded(_),
+			config::AccountsOutcome::Loaded
+		)
+	);
+	if !pair_usable {
+		match mail_outcome {
+			config::MailConfigOutcome::Unusable(diagnostic) => {
+				return Err(LocalError::Io(std::io::Error::other(diagnostic)));
 			}
-			layout::generate_certificate(&cert_path, &key_path)?;
-			layout::write_dkim_key(&dkim_path)?;
-			let api_token_hash = layout::generate_api_token_hash()?;
-			let pwd = layout::generate_account_password()?;
-			config::write_mail_toml(
-				dir,
-				port_base,
-				&cert_path,
-				&key_path,
-				&dkim_path,
-				&api_token_hash,
-			)?;
-			let account = crate::directory_store::DynamicAccount::with_password(
-				ACCOUNT_NAME.to_string(),
-				vec![format!("{ACCOUNT_NAME}@{DOMAIN}")],
-				&pwd,
-			)
-			.map_err(|error| LocalError::Account(error.to_string()))?;
-			layout::write_account(&accounts_toml_path, &account)?;
-			layout::enforce_mode(&accounts_toml_path, 0o600)?;
-			password = Some(pwd);
+			config::MailConfigOutcome::Missing | config::MailConfigOutcome::Loaded(_) => {}
+		}
+		match accounts_outcome {
+			config::AccountsOutcome::Unusable(diagnostic) => {
+				return Err(LocalError::Io(std::io::Error::other(diagnostic)));
+			}
+			config::AccountsOutcome::Missing | config::AccountsOutcome::Loaded => {}
 		}
 	}
 
-	let config = config::load_local_config(&mail_toml_path)?;
+	// Now it is safe to write the data directory and the other
+	// artifacts. Each step is skipped if the file is already on disk
+	// (and non-empty for the cert/key/dkim shape).
+	layout::create_with_mode(&data_dir, 0o700)?;
+
+	let mut password = None;
+
+	// Cert and key are paired: TLS material needs both, and a partial
+	// write that left only one is not loadable. A zero-length file is
+	// treated as missing because a partial write or a hand-truncated
+	// file can leave an empty `cert.pem` / `key.pem` on disk; the
+	// runtime would refuse to load it. Regenerating the pair is cheap,
+	// so the rule is "any missing or empty piece regenerates the pair".
+	if !layout::is_nonempty_file(&cert_path) || !layout::is_nonempty_file(&key_path) {
+		let _ = std::fs::remove_file(&cert_path);
+		let _ = std::fs::remove_file(&key_path);
+		layout::generate_certificate(&cert_path, &key_path)?;
+	}
+
+	// DKIM key is independent; treat it like the certificate. Same
+	// zero-length rule for the same reason.
+	if !layout::is_nonempty_file(&dkim_path) {
+		let _ = std::fs::remove_file(&dkim_path);
+		layout::write_dkim_key(&dkim_path)?;
+	}
+
+	// Regenerate the credential pair only when at least one half is
+	// missing. Both files are rewritten together because the API
+	// token hash inside `mail.toml` and the account password hash
+	// inside `accounts.toml` are independent secrets; a partial
+	// state where only one half was rewritten is not loadable.
+	let config = if !pair_usable {
+		let api_token_hash = layout::generate_api_token_hash()?;
+		let pwd = layout::generate_account_password()?;
+		config::write_mail_toml_replace(
+			dir,
+			port_base,
+			&cert_path,
+			&key_path,
+			&dkim_path,
+			&api_token_hash,
+		)?;
+		let account = crate::directory_store::DynamicAccount::with_password(
+			ACCOUNT_NAME.to_string(),
+			vec![format!("{ACCOUNT_NAME}@{DOMAIN}")],
+			&pwd,
+		)
+		.map_err(|error| LocalError::Account(error.to_string()))?;
+		layout::write_account_replace(&accounts_toml_path, &account)?;
+		password = Some(pwd);
+		// Reload to pick up the just-written `mail.toml`; the early
+		// `Loaded(_)` shape is the on-disk file from a previous run
+		// and we just overwrote it.
+		config::load_local_config(&mail_toml_path)?
+	} else {
+		match mail_outcome {
+			config::MailConfigOutcome::Loaded(config) => *config,
+			// `pair_usable` requires `mail_outcome` to be `Loaded`;
+			// the only way to reach this arm otherwise is a logic
+			// error in the matches! above, which the test in
+			// `idempotence_second_run_reuses_every_generated_file`
+			// already exercises.
+			config::MailConfigOutcome::Missing | config::MailConfigOutcome::Unusable(_) => {
+				unreachable!()
+			}
+		}
+	};
 
 	Ok(Prepared {
 		config,
 		account: ACCOUNT_NAME.to_string(),
 		password,
 	})
+}
+
+/// Build the `(kind, port)` list the banner prints, derived from the
+/// already-loaded `Config`. Reading the listeners (rather than the
+/// requested `--port-base`) is what guarantees the banner matches what
+/// `serve` will bind, including when an operator restarts a directory
+/// that was prepared earlier with a different base.
+pub(super) fn banner_endpoints(config: &Config) -> Vec<(ListenerKind, u16)> {
+	config
+		.listeners
+		.iter()
+		.map(|listener| {
+			(
+				listener.kind,
+				listener
+					.port
+					.unwrap_or_else(|| listener.kind.default_port()),
+			)
+		})
+		.collect()
 }
 
 /// Run `epistle local` end to end: prepare the directory, print the banner,
@@ -196,10 +308,7 @@ pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	let endpoints: Vec<(ListenerKind, u16)> = config::LISTENERS
-		.iter()
-		.map(|(kind, offset)| (*kind, port_base + offset))
-		.collect();
+	let endpoints = banner_endpoints(&prepared.config);
 	// The banner goes to stderr. stdout is reserved for command data on
 	// every command in this binary, and `epistle local` produces none, so
 	// stdout stays empty. The test in `local_tests.rs` pins both halves:
@@ -261,6 +370,10 @@ mod test_support;
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod layout_tests;
+
+#[cfg(test)]
+#[path = "layout_replace_tests.rs"]
+mod layout_replace_tests;
 
 #[cfg(test)]
 #[path = "config_tests.rs"]
