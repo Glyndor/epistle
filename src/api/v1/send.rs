@@ -79,11 +79,10 @@ pub async fn send(
 		return Err(ApiError::rate_limited_with_message(message));
 	}
 
-	// Resolve `request.from` to the local account that owns it. The
-	// brief asks us to use what the directory already exposes; we read
-	// the account views on the store (the same walk `owns_address`
-	// performs on the SMTP path) so the API and SMTP paths can never
-	// disagree on ownership.
+	// Resolve `request.from` to the local account that owns it, using
+	// only what the directory already exposes: we read the account views
+	// on the store (the same walk `owns_address` performs on the SMTP
+	// path) so the API and SMTP paths can never disagree on ownership.
 	let account = match resolve_account(&state, &request.from) {
 		Some(account) => account,
 		None => {
