@@ -677,6 +677,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "socket2",
  "sqlx",
  "thiserror",
  "tokio",

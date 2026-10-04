@@ -131,6 +131,28 @@ impl ListenerKind {
 			ListenerKind::WebDav => 8090,
 		}
 	}
+
+	/// The kebab-case spelling the TOML serialisation round-trips
+	/// through (`deny_unknown_fields` and the `[[listeners]]`
+	/// array-of-tables in particular). The `init` plan renders this
+	/// verbatim in the listeners step so the operator can match what
+	/// the plan says against the `kind = "..."` line in the config.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			ListenerKind::Smtp => "smtp",
+			ListenerKind::Submission => "submission",
+			ListenerKind::Submissions => "submissions",
+			ListenerKind::Api => "api",
+			ListenerKind::Imaps => "imaps",
+			ListenerKind::Imap => "imap",
+			ListenerKind::Pop3s => "pop3s",
+			ListenerKind::ManageSieve => "manage-sieve",
+			ListenerKind::Metrics => "metrics",
+			ListenerKind::Acme => "acme",
+			ListenerKind::Autoconfig => "autoconfig",
+			ListenerKind::WebDav => "web-dav",
+		}
+	}
 }
 
 /// A single network listener.

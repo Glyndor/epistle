@@ -235,6 +235,19 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		channel_binding,
 	} = super::serve_tls::build_tls(&config, challenge_store.clone())?;
 
+	// Pre-pass: collect every port that has a `0.0.0.0` listener so the
+	// `[::]:P` bind path knows whether to switch the socket to
+	// `only_v6(true)` and coexist with the explicit IPv4 bind
+	// instead of failing with `EADDRINUSE`. The set is read once
+	// here so the loop below can hand it to every bind call without
+	// re-walking the listener list.
+	let ipv4_any_ports: std::collections::HashSet<u16> = config
+		.listeners
+		.iter()
+		.filter(|l| matches!(l.addr, std::net::IpAddr::V4(v4) if v4.is_unspecified()))
+		.map(|l| l.socket_addr().port())
+		.collect();
+
 	let mut tasks = Vec::new();
 	for listener_config in &config.listeners {
 		match listener_config.kind {
@@ -277,7 +290,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
 					state = state.with_authz(authz);
 				}
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::api::router(state);
 				tasks.push(tokio::spawn(async move {
 					// Serve with the peer address attached so API-key CIDR
@@ -291,7 +304,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}));
 			}
 			ListenerKind::Acme => {
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::acme::http01::router(challenge_store.clone());
 				tasks.push(tokio::spawn(async move {
 					axum::serve(listener, router)
@@ -300,7 +313,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}));
 			}
 			ListenerKind::Metrics => {
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let metrics = Arc::clone(&metrics);
 				let router = axum::Router::new().route(
 					"/metrics",
@@ -333,7 +346,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					ListenerKind::Imap => crate::imap::server::TlsMode::StartTls,
 					_ => crate::imap::server::TlsMode::Implicit,
 				};
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let mut imap_server = crate::imap::server::Server::new(
 					&config.hostname,
 					config.data_dir.clone(),
@@ -364,7 +377,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						"POP3S listener without TLS configured",
 					));
 				};
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let server = Arc::new(
 					crate::pop3::server::Server::new(
 						config.data_dir.clone(),
@@ -377,7 +390,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
 			ListenerKind::Autoconfig => {
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router =
 					crate::autodiscovery::router(config.hostname.clone(), config.domains.clone());
 				tasks.push(tokio::spawn(async move {
@@ -387,7 +400,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}));
 			}
 			ListenerKind::WebDav => {
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::webdav::router(directory.clone(), config.data_dir.clone());
 				tasks.push(super::serve_tasks::serve_http(listener, router));
 			}
@@ -397,7 +410,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						"ManageSieve listener without TLS configured",
 					));
 				};
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let server = Arc::new(
 					crate::managesieve::server::Server::new(
 						config.data_dir.clone(),
@@ -409,7 +422,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
 			ListenerKind::Smtp | ListenerKind::Submission | ListenerKind::Submissions => {
-				let listener = super::serve_tasks::bind(listener_config).await?;
+				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let mode = match listener_config.kind {
 					ListenerKind::Submissions => TlsMode::Implicit,
 					_ => TlsMode::Opportunistic,

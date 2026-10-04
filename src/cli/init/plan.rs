@@ -8,6 +8,7 @@
 //! shape of what the operator sees.
 
 use std::fmt;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 /// One step the operator sees in the plan.
@@ -117,6 +118,46 @@ pub enum PlanStep {
 		/// Path the data directory will live at.
 		path: PathBuf,
 	},
+	/// The listeners `init` will write into the config, one per
+	/// line. Always rendered; the operator must see every bind
+	/// address the server will publish. When the existing config
+	/// on disk already carries a non-empty `listeners` array,
+	/// `init` does not write its own: the operator put those
+	/// listeners there on purpose (a metrics endpoint, a port-
+	/// shifted IMAP for a sidecar, ...) and `init` keeps them
+	/// exactly as they are. The `entries` field then carries the
+	/// kept listeners verbatim so the operator still sees the bind
+	/// addresses `serve` will expose, and `kept` says so in words.
+	Listeners {
+		/// Every listener the config will carry after this `init`
+		/// run. When `kept` is `true` these are the existing
+		/// listeners read off disk; when `false`, they are the
+		/// ones `build_config` synthesised from the answers.
+		entries: Vec<ListenerEntry>,
+		/// `true` when the existing config had a non-empty
+		/// `listeners` array and `init` kept it as-is. The plan
+		/// renders a "keep the N already in <path>" line in that
+		/// case so the operator sees both the intent and the bind
+		/// addresses that survive.
+		kept: bool,
+	},
+}
+
+/// One line in the `Listeners` plan step. Carries the kind, the
+/// bind address, and the port the schema will assign so the line
+/// the operator reads matches the address the config will load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListenerEntry {
+	/// Service the listener exposes (smtp, submission, imap, ...).
+	pub kind: String,
+	/// Bind address. Mail listeners always carry the dual-stack
+	/// IPv6 any (`::`); the management API listener always carries
+	/// loopback (`127.0.0.1`) because it is closed to the network
+	/// by design.
+	pub addr: IpAddr,
+	/// Port the listener will bind to (the schema default for the
+	/// kind; the apply phase does not override it).
+	pub port: u16,
 }
 
 impl fmt::Display for PlanStep {
@@ -217,6 +258,37 @@ impl fmt::Display for PlanStep {
 			PlanStep::DataDir { path } => {
 				write!(f, "data dir: create {} (mode 0700)", path.display())
 			}
+			PlanStep::Listeners { entries, kept } => {
+				if *kept {
+					let count = entries.len();
+					let plural = if count == 1 { "" } else { "s" };
+					writeln!(
+						f,
+						"keep the {count} listener{plural} already in <config>; \
+						 init does not overwrite the operator's listeners"
+					)?;
+					for entry in entries {
+						writeln!(
+							f,
+							"       {:<12} {}",
+							entry.kind,
+							SocketAddr::new(entry.addr, entry.port)
+						)?;
+					}
+					Ok(())
+				} else {
+					writeln!(f, "listeners:")?;
+					for entry in entries {
+						writeln!(
+							f,
+							"       {:<12} {}",
+							entry.kind,
+							SocketAddr::new(entry.addr, entry.port)
+						)?;
+					}
+					Ok(())
+				}
+			}
 		}
 	}
 }
@@ -230,7 +302,11 @@ pub struct Plan {
 
 impl Plan {
 	/// Print the plan to `out` as a numbered list, one step per line.
-	/// Empty plans print nothing.
+	/// Empty plans print nothing. Every mail listener binds the
+	/// dual-stack IPv6 any (`::`) so an IPv4 client and an IPv6
+	/// client can both reach the server; the management API listener
+	/// binds loopback (`127.0.0.1`) regardless because it is closed
+	/// to the network by design.
 	pub fn write_to(&self, out: &mut impl fmt::Write) -> fmt::Result {
 		for (i, step) in self.steps.iter().enumerate() {
 			writeln!(out, "  {}. {step}", i + 1)?;

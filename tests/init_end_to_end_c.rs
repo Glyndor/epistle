@@ -26,11 +26,17 @@ fn run_init(answers: &Path) -> std::process::Output {
 	cmd.output().expect("spawn epistle")
 }
 
-/// Finding 5 (services): turning off every service in the answers
-/// file must remove the listeners the previous run wrote. The merge
-/// must not preserve absent managed fields.
+/// A re-run of `init` against a config that already carries a
+/// non-empty `listeners` array keeps every listener on disk,
+/// regardless of which services the new answers turn on or off. The
+/// merge must not silently drop listeners init wrote earlier (or
+/// listeners the operator added by hand) when the answers file asks
+/// for a smaller set of services. The `smtp` listener is the only
+/// one init writes unconditionally, so an init-only baseline with
+/// no operator input leaves all previously written listeners
+/// untouched.
 #[test]
-fn init_clears_listeners_when_services_are_disabled() {
+fn init_keeps_existing_listeners_across_a_service_toggle() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
@@ -82,10 +88,18 @@ fn init_clears_listeners_when_services_are_disabled() {
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let off_text = std::fs::read_to_string(&config_path).expect("read config");
-	assert!(
-		!off_text.contains("[[listeners]]"),
-		"all listeners must be removed when every service is disabled: {off_text}"
-	);
+	// The existing `listeners` array on disk is kept as-is. Every
+	// listener the first run wrote (smtp, imap, submission, pop3s,
+	// manage-sieve) survives the second run, because the merge sees
+	// the existing non-empty array and stops touching the `listeners`
+	// key. Operators who want the smaller set edit the config by
+	// hand; `init` no longer silently shrinks it.
+	for kind in ["smtp", "imap", "submission", "pop3s", "manage-sieve"] {
+		assert!(
+			off_text.contains(&format!("kind = \"{kind}\"")),
+			"every existing listener must survive the second init run; missing `{kind}` in: {off_text}"
+		);
+	}
 }
 
 /// Finding 5 (dns): switching from automatic to manual mode must
@@ -373,7 +387,7 @@ fn init_staging_config_is_owner_only_from_the_start() {
 	let answers = write_answers(dir.path(), "answers.toml", &body);
 	// Wrap the binary call with `std::process::Command` so the
 	// umask the child sees is 022. With the old `fs::write` +
-	// chmod path the staging file would briefly live as 0644; the
+	// chmod path the staging file would temporarily live as 0644. The
 	// `O_EXCL` + 0600 from `create_new(true)` path means the file
 	// is 0600 from the very first byte.
 	let mut cmd = Command::new(binary());

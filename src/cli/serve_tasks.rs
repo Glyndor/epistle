@@ -6,14 +6,17 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::antispam::bans::BanStore;
-use crate::config::{Config, Listener};
+use crate::config::Config;
 
-/// Bind a listener's socket and log it. Shared by every `serve` listener arm.
-pub(super) async fn bind(listener: &Listener) -> std::io::Result<TcpListener> {
-	let addr = listener.socket_addr();
-	let bound = TcpListener::bind(addr).await?;
-	tracing::info!(%addr, kind = ?listener.kind, "listening");
-	Ok(bound)
+/// Bind a listener's socket and log it. Thin wrapper over the
+/// `bind` module so the existing callers stay unchanged; the
+/// dual-stack switch for the IPv6-unspecified address lives in
+/// [`bind::bind_listener`].
+pub(super) async fn bind(
+	listener: &crate::config::Listener,
+	ipv4_any_ports: &std::collections::HashSet<u16>,
+) -> std::io::Result<TcpListener> {
+	bind::bind_listener(listener, ipv4_any_ports).await
 }
 
 /// Spawn an axum router on a bound listener, returning the serving task. Shared
@@ -640,3 +643,6 @@ pub(super) fn build_greylist(
 mod bayes;
 
 pub(super) use bayes::open_bayes;
+
+#[path = "serve_bind.rs"]
+mod bind;
