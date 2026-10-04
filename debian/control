@@ -23,7 +23,7 @@ Rules-Requires-Root: no
 
 Package: epistle
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup
+Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup (>= 5.10.10)
 Recommends: openssl
 Suggests: postgresql
 Description: self-hosted mail server with a management API and CLI

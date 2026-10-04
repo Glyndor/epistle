@@ -72,7 +72,7 @@ key_file = "/tmp/key.pem"
 "#,
 	)
 	.expect("parse desired");
-	let merged = apply_config::reconcile(existing, desired);
+	let merged = apply_config::reconcile(existing, desired, false);
 	assert_eq!(
 		merged.get("public_ipv4"),
 		Some(&toml::Value::String("1.2.3.4".to_string())),
@@ -126,7 +126,7 @@ drop = "yes"
 "#,
 	)
 	.expect("parse desired");
-	let merged = apply_config::reconcile(existing, desired);
+	let merged = apply_config::reconcile(existing, desired, false);
 	let custom = merged
 		.get("custom")
 		.expect("custom must survive as a table")
@@ -182,7 +182,7 @@ add = "new"
 "#,
 	)
 	.expect("parse desired");
-	let merged = apply_config::reconcile(existing, desired);
+	let merged = apply_config::reconcile(existing, desired, false);
 	let operator = merged
 		.get("operator")
 		.expect("operator table must survive")

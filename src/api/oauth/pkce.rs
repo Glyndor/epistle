@@ -54,6 +54,9 @@ pub async fn authorize(
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
+	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
+	// canonicalize so the ban / audit pipeline sees a plain `IpAddr::V4`.
+	let peer = crate::net::canonical_peer(peer);
 	let Some(authz) = state.authz() else {
 		return oauth_error("invalid_request");
 	};

@@ -344,7 +344,8 @@ fn build_config_includes_the_api_listener_when_services_request_it() {
 	let cert = std::path::PathBuf::from("/var/lib/epistle/keys/cert.pem");
 	let key = std::path::PathBuf::from("/var/lib/epistle/keys/key.pem");
 	let ed = std::path::PathBuf::from("/var/lib/epistle/keys/s1.pem");
-	let desired = apply_config::build_config(&answers, Some(&ed), None, &cert, &key)
+	let mail_addr: std::net::IpAddr = std::net::Ipv6Addr::UNSPECIFIED.into();
+	let desired = apply_config::build_config(&answers, mail_addr, Some(&ed), None, &cert, &key)
 		.expect("build_config with api");
 	assert!(
 		desired.listeners.iter().any(|l| l.kind == "api"),

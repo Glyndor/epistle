@@ -529,6 +529,11 @@ pub(super) fn openssl_available() -> bool {
 /// including the ones that landed before a later step failed; the
 /// caller renders the partial report before the error so the operator
 /// can see exactly what is on disk.
+///
+/// Mail listeners bind the dual-stack IPv6 any (`::`) so an IPv4
+/// client and an IPv6 client can both reach the server. The
+/// management API listener binds loopback (`127.0.0.1`) because it
+/// is closed to the network by design.
 pub fn apply(answers: &Answers) -> ApplyOutcome {
 	let mut report = Report::default();
 	if let Err(error) = ensure_data_dir(&answers.data_dir, &mut report) {
@@ -591,6 +596,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// the invariant for the next reader.
 	let desired = apply_config::build_config(
 		answers,
+		std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
 		dkim_ed25519_path.as_deref(),
 		dkim_rsa_path.as_deref(),
 		&cert_path,
@@ -602,7 +608,28 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// way it would is if a future field required custom serialisation
 	// that returned an error, which is currently impossible.
 	let desired_bytes = toml::to_string(&desired).expect("DesiredConfig serialises without errors");
-	match apply_config::merge_with_existing(&answers.config_path, &desired_bytes) {
+	// `init` keeps the operator's listeners when the existing config
+	// already carries a non-empty `listeners` array. The plan phase
+	// computes the same flag from the disk state; `apply` re-reads
+	// the file once here so the apply path agrees with what the
+	// plan promised, even when the operator edited the file between
+	// the plan prompt and the apply run.
+	let keep_existing_listeners =
+		match apply_config::existing_operators_listeners(&answers.config_path) {
+			Ok(Some(_)) => true,
+			Ok(None) => false,
+			Err(error) => {
+				return ApplyOutcome {
+					report,
+					error: Some(error),
+				};
+			}
+		};
+	match apply_config::merge_with_existing(
+		&answers.config_path,
+		&desired_bytes,
+		keep_existing_listeners,
+	) {
 		Ok(apply_config::ConfigWrite::Identical) => report
 			.steps
 			.push(ReportStep::ConfigIdentical(answers.config_path.clone())),
@@ -649,6 +676,18 @@ mod tests_c;
 #[cfg(test)]
 #[path = "apply_tests_d.rs"]
 mod tests_d;
+
+#[cfg(test)]
+#[path = "apply_bind_tests.rs"]
+mod tests_bind;
+
+#[cfg(test)]
+#[path = "apply_keep_listeners_tests.rs"]
+mod tests_keep_listeners;
+
+#[cfg(test)]
+#[path = "apply_listeners_lines_tests.rs"]
+mod tests_listeners_lines;
 
 #[cfg(test)]
 #[path = "apply_failures_tests.rs"]

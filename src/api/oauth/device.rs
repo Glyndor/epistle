@@ -107,7 +107,10 @@ pub async fn device_approve(
 	// grant endpoints sit outside `require_bearer_token`, so the peer IP is
 	// sourced from `ConnectInfo` here; wired in by the listener's
 	// `into_make_service_with_connect_info`; and forwarded to the ban-aware
-	// authentication path.
+	// authentication path. A dual-stack `::` listener reports an IPv4 peer as
+	// `::ffff:a.b.c.d`; canonicalize so the ban / audit pipeline sees a plain
+	// `IpAddr::V4`.
+	let peer = crate::net::canonical_peer(peer);
 	let account = credentials.and_then(|(login, password)| {
 		// The OAuth approval flow is a user-facing API authentication: the
 		// account must opt into `api` in its `allowed_protocols` to bind a

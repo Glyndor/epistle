@@ -33,6 +33,7 @@ pub mod jwt;
 pub mod managesieve;
 pub mod metrics;
 pub mod mtasts;
+pub mod net;
 pub mod oauth;
 pub mod password;
 pub mod pop3;

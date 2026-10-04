@@ -3,6 +3,7 @@
 //! sibling so `apply.rs` keeps under the per-file line limit.
 
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -12,8 +13,10 @@ use crate::cli::init::apply::ApplyError;
 use crate::config::Config;
 
 /// Build the desired `Config` value from the answers. Each listener
-/// line gets the kind and lets the schema default the address and port
-/// (loopback binding is left as the config default).
+/// line carries its kind and an explicit `addr`; the operator-visible
+/// default of `127.0.0.1` is no longer the answer for any listener
+/// `init` writes, because loopback-only mail listeners receive no
+/// mail and serve nobody.
 #[derive(Debug, Serialize)]
 pub(super) struct DesiredConfig {
 	pub(super) hostname: String,
@@ -23,7 +26,6 @@ pub(super) struct DesiredConfig {
 	pub(super) public_ipv6: Option<String>,
 	pub(super) data_dir: String,
 	pub(super) domains: Vec<String>,
-	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub(super) listeners: Vec<DesiredListener>,
 	pub(super) dkim: DesiredDkim,
 	pub(super) tls: DesiredTls,
@@ -34,6 +36,11 @@ pub(super) struct DesiredConfig {
 #[derive(Debug, Serialize)]
 pub(super) struct DesiredListener {
 	pub(super) kind: String,
+	/// Bind address the listener uses. Always written so the schema
+	/// default (`127.0.0.1`) cannot silently take over: an init
+	/// config that names only `kind` would bind loopback and miss
+	/// every packet the network delivers.
+	pub(super) addr: IpAddr,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,8 +84,16 @@ pub(super) enum ConfigWrite {
 
 /// Construct the desired config tree from the answers and the paths to
 /// the keys `apply` generated.
+///
+/// `mail_addr` is the bind address used by every mail-facing listener
+/// (smtp, submission, imap, pop3s, manage-sieve, web-dav). The
+/// management API listener is closed to the network by design and
+/// binds loopback (`127.0.0.1`) regardless. `mail_addr` is decided
+/// once in `plan` so the operator sees the same address on the
+/// confirmation prompt that `apply` writes into the config.
 pub(super) fn build_config(
 	answers: &Answers,
+	mail_addr: IpAddr,
 	dkim_ed25519: Option<&Path>,
 	dkim_rsa: Option<&Path>,
 	cert_file: &Path,
@@ -86,34 +101,49 @@ pub(super) fn build_config(
 ) -> Result<DesiredConfig, ApplyError> {
 	let mut listeners = Vec::new();
 	let services: Services = answers.services;
+	// SMTP (port 25, inbound mail) is always written. It is the
+	// listener the rest of the internet talks to, and a fresh install
+	// that does not bind it receives no mail. The kind is unconditional
+	// even when every other optional service is off, so the operator
+	// never has to add it back by hand.
+	listeners.push(DesiredListener {
+		kind: "smtp".to_string(),
+		addr: mail_addr,
+	});
 	if services.imap {
 		listeners.push(DesiredListener {
 			kind: "imap".to_string(),
+			addr: mail_addr,
 		});
 	}
 	if services.submission {
 		listeners.push(DesiredListener {
 			kind: "submission".to_string(),
+			addr: mail_addr,
 		});
 	}
 	if services.pop3 {
 		listeners.push(DesiredListener {
 			kind: "pop3s".to_string(),
+			addr: mail_addr,
 		});
 	}
 	if services.managesieve {
 		listeners.push(DesiredListener {
 			kind: "manage-sieve".to_string(),
+			addr: mail_addr,
 		});
 	}
 	if services.webdav {
 		listeners.push(DesiredListener {
 			kind: "web-dav".to_string(),
+			addr: mail_addr,
 		});
 	}
 	if services.api {
 		listeners.push(DesiredListener {
 			kind: "api".to_string(),
+			addr: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
 		});
 	}
 
@@ -197,10 +227,21 @@ const INIT_MANAGED_KEYS: &[&str] = &[
 /// - file on disk with the same shape but different values: rewrite
 ///   (Updated), with unknown top-level keys preserved.
 ///
+/// When `keep_existing_listeners` is `true`, the existing `listeners`
+/// array on disk is preserved verbatim and the desired `listeners`
+/// array is dropped: the operator already put a `metrics` listener,
+/// or pinned `imap` to a sidecar port, and `init` does not silently
+/// overwrite their work. The desired config still carries every
+/// other managed key.
+///
 /// Comments are not preserved: the merge goes through `toml::Value` and
 /// the resulting document is re-serialised. The plan step mentions this
 /// so the operator knows what to expect.
-pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWrite, ApplyError> {
+pub(super) fn merge_with_existing(
+	path: &Path,
+	desired: &str,
+	keep_existing_listeners: bool,
+) -> Result<ConfigWrite, ApplyError> {
 	let desired_value: toml::Value =
 		toml::from_str(desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	match fs::read_to_string(path) {
@@ -208,7 +249,7 @@ pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWr
 			let existing_value: toml::Value = parsed(&existing).map_err(|e| {
 				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
 			})?;
-			let merged = reconcile(existing_value, desired_value);
+			let merged = reconcile(existing_value, desired_value, keep_existing_listeners);
 			if merged == parsed(&existing)? {
 				if let Err(error) = Config::load(path) {
 					return Err(ApplyError::ConfigInvalid(format!(
@@ -243,17 +284,33 @@ pub(super) fn merge_with_existing(path: &Path, desired: &str) -> Result<ConfigWr
 /// a key whose name matches a managed key is preserved verbatim,
 /// because `init` does not own the contents of nested tables.
 ///
+/// When `keep_existing_listeners` is `true`, the `listeners` key is
+/// skipped on both sides: the existing array survives untouched and
+/// the desired one is dropped. The flag is set only when the
+/// existing config already carries a non-empty `listeners` array on
+/// disk.
+///
 /// Tables are reconciled recursively for keys the operator and
 /// `init` both write; arrays are replaced wholesale because listeners
 /// and the dns section are managed as a whole by `init`.
-pub(crate) fn reconcile(existing: toml::Value, desired: toml::Value) -> toml::Value {
+pub(crate) fn reconcile(
+	existing: toml::Value,
+	desired: toml::Value,
+	keep_existing_listeners: bool,
+) -> toml::Value {
 	use toml::Value;
 	match (existing, desired) {
 		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
 			for key in INIT_MANAGED_KEYS {
+				if *key == "listeners" && keep_existing_listeners {
+					continue;
+				}
 				existing_table.remove(*key);
 			}
 			for (key, value) in desired_table {
+				if key == "listeners" && keep_existing_listeners {
+					continue;
+				}
 				let new = match existing_table.remove(&key) {
 					Some(existing_inner) => reconcile_inner(existing_inner, value),
 					None => value,
@@ -288,6 +345,69 @@ fn reconcile_inner(existing: toml::Value, desired: toml::Value) -> toml::Value {
 
 fn parsed(text: &str) -> Result<toml::Value, ApplyError> {
 	toml::from_str(text).map_err(|error| ApplyError::ConfigEncode(error.to_string()))
+}
+
+/// Read the config at `path` and return every listener the operator
+/// already has on disk, when the file exists and the `listeners`
+/// array is non-empty. `Ok(None)` covers four cases the caller
+/// treats the same: no file on disk, an I/O failure reading it
+/// (e.g. the parent is a regular file rather than a directory; the
+/// apply phase surfaces those with its own error), the file exists
+/// but has no `listeners` key, and the `listeners` array is present
+/// but empty. In all four cases `init` writes its own array.
+///
+/// `Ok(Some(_))` carries one `Listener` per existing entry, with the
+/// listener's kind, the explicit bind address the operator wrote (or
+/// the schema default when omitted), and the explicit port (or the
+/// schema default for the kind). The plan uses these to render what
+/// `serve` will actually expose; the apply phase uses the same
+/// signal to decide whether the merge preserves the `listeners`
+/// array verbatim or replaces it with its own.
+///
+/// A file the rest of the CLI would reject (the `Config::load` path
+/// the plan mirrors) surfaces as a hard error here so the apply
+/// phase cannot "succeed" against a config `serve` would refuse to
+/// start with.
+pub(crate) fn existing_operators_listeners(
+	path: &Path,
+) -> Result<Option<Vec<crate::config::Listener>>, ApplyError> {
+	let text = match fs::read_to_string(path) {
+		Ok(text) => text,
+		// An unreadable file is a precondition the apply phase will
+		// surface with its own error variant; the plan here only
+		// decides what listeners to render, and "no existing
+		// listeners" is the safe choice when the disk cannot be read.
+		// The apply phase re-reads the file and reports the failure
+		// with its own error message.
+		Err(_) => return Ok(None),
+	};
+	let value: toml::Value = match toml::from_str(&text) {
+		Ok(value) => value,
+		Err(_) => return Ok(None),
+	};
+	let Some(arr) = value.get("listeners").and_then(|v| v.as_array()) else {
+		return Ok(None);
+	};
+	if arr.is_empty() {
+		return Ok(None);
+	}
+	let mut out = Vec::with_capacity(arr.len());
+	for entry in arr {
+		let listener: crate::config::Listener = entry.clone().try_into().map_err(|error| {
+			ApplyError::ConfigInvalid(format!(
+				"existing listener in {} does not parse: {error}",
+				path.display()
+			))
+		})?;
+		out.push(listener);
+	}
+	if let Err(error) = Config::load(path) {
+		return Err(ApplyError::ConfigInvalid(format!(
+			"existing config at {} has listeners but does not load: {error}",
+			path.display()
+		)));
+	}
+	Ok(Some(out))
 }
 
 /// Write `bytes` to `path` after staging them on a sibling file with

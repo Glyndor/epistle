@@ -728,10 +728,14 @@ pub async fn require_bearer_token(
 	// The client IP for API-key CIDR allowlists. `ConnectInfo` is present when
 	// the router is served with `into_make_service_with_connect_info`; absent
 	// (e.g. in tests) it is `None`, so an IP-restricted key cannot match.
+	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
+	// canonicalize here so an operator who pinned `192.0.2.0/24` on their key
+	// still gets matched by an IPv4 client that connected through the dual-stack
+	// bind. The audit channel uses the same canonical form.
 	let client_ip = request
 		.extensions()
 		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-		.map(|info| info.0.ip());
+		.map(|info| crate::net::canonical_peer(info.0).ip());
 
 	let token = request
 		.headers()

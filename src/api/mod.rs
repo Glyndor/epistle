@@ -146,3 +146,7 @@ mod tenancy_tests;
 #[cfg(test)]
 #[path = "tenant_limits_tests_e2e.rs"]
 mod tenant_limits_tests_e2e;
+
+#[cfg(test)]
+#[path = "cidr_dual_stack_tests.rs"]
+mod cidr_dual_stack_tests;

@@ -92,6 +92,10 @@ impl Server {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
+			// A dual-stack `::` listener reports an IPv4 peer as
+			// `::ffff:a.b.c.d`; canonicalize so the audit channel and the
+			// ban-aware authentication path see a plain `IpAddr::V4`.
+			let peer = crate::net::canonical_peer(peer);
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
 				tracing::warn!(%peer, "ManageSieve connection limit reached, dropping");
 				continue;

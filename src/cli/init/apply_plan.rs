@@ -8,7 +8,7 @@
 use super::Answers;
 use super::ApplyError;
 use super::apply_config;
-use crate::cli::init::plan::{Plan, PlanStep};
+use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
 /// True when `openssl` is on `PATH` and the RSA DKIM key step can be
 /// generated. Used by the plan step so the operator sees the skip text
@@ -49,6 +49,11 @@ pub(crate) fn which_openssl_for_tests() -> bool {
 /// apply phase would leave alone. The apply phase re-derives the
 /// decision on every step so a step that succeeds in `plan` cannot
 /// silently disappear in `apply`.
+///
+/// Mail listeners always bind the dual-stack IPv6 any (`::`) so an
+/// IPv4 client and an IPv6 client can both reach the server. There
+/// is no host probe: `init` runs only inside containers, where `::`
+/// binds regardless of the host's network namespace.
 pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 	// A symlinked `config_path` is a fact about the disk that costs
 	// one `symlink_metadata` call and needs no effects at all: the
@@ -155,8 +160,33 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		reused: cert_exists && key_exists,
 		key_reused: key_exists,
 	});
+	// When the config on disk already has a non-empty `listeners`
+	// array the operator put there on purpose, `init` does not
+	// overwrite it. The plan step renders the kept listeners so the
+	// operator still sees the bind addresses `serve` will expose,
+	// and the apply phase reads the same flag from the disk so the
+	// two agree. The check is read-only: `apply_config::merge_with_existing`
+	// does its own read and tolerates the operator editing the file
+	// between the plan prompt and the apply run.
+	let existing_listeners = apply_config::existing_operators_listeners(&answers.config_path)?;
+	steps.push(PlanStep::Listeners {
+		entries: if let Some(existing) = &existing_listeners {
+			existing
+				.iter()
+				.map(|l| ListenerEntry {
+					kind: l.kind.as_str().to_string(),
+					addr: l.addr,
+					port: l.port.unwrap_or_else(|| l.kind.default_port()),
+				})
+				.collect()
+		} else {
+			listener_entries(answers.services)
+		},
+		kept: existing_listeners.is_some(),
+	});
 	let identical = config_is_identical_to_desired(
 		answers,
+		std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
 		&s1,
 		&s2,
 		&cert_path,
@@ -179,6 +209,70 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		});
 	}
 	Ok(Plan { steps })
+}
+
+/// Build the listener lines the plan prints, in the same order
+/// `build_config` writes them. `smtp` first (always), then the
+/// service-toggle listeners, then `api` (always loopback). Mail
+/// listeners bind the dual-stack IPv6 any (`::`); the API listener
+/// binds loopback (`127.0.0.1`) regardless. The port is read from
+/// `crate::config::ListenerKind::default_port()` so a future change
+/// to the schema default flows through both the plan and the serve
+/// path together; the schema-vs-plan drift test in
+/// `apply_listeners_lines_tests.rs` is what catches a
+/// `listener_entries` that hardcoded the old number alongside a
+/// `ListenerKind` that switched.
+fn listener_entries(services: crate::cli::init::answers::Services) -> Vec<ListenerEntry> {
+	let mail_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+	let mut entries = Vec::new();
+	entries.push(ListenerEntry {
+		kind: "smtp".to_string(),
+		addr: mail_addr,
+		port: crate::config::ListenerKind::Smtp.default_port(),
+	});
+	if services.imap {
+		entries.push(ListenerEntry {
+			kind: "imap".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Imap.default_port(),
+		});
+	}
+	if services.submission {
+		entries.push(ListenerEntry {
+			kind: "submission".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Submission.default_port(),
+		});
+	}
+	if services.pop3 {
+		entries.push(ListenerEntry {
+			kind: "pop3s".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Pop3s.default_port(),
+		});
+	}
+	if services.managesieve {
+		entries.push(ListenerEntry {
+			kind: "manage-sieve".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::ManageSieve.default_port(),
+		});
+	}
+	if services.webdav {
+		entries.push(ListenerEntry {
+			kind: "web-dav".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::WebDav.default_port(),
+		});
+	}
+	if services.api {
+		entries.push(ListenerEntry {
+			kind: "api".to_string(),
+			addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+			port: crate::config::ListenerKind::Api.default_port(),
+		});
+	}
+	entries
 }
 
 /// What the apply phase will do for the OAuth ES256 key pair. `private_reused`
@@ -281,6 +375,7 @@ fn resolve_oauth_pair(
 /// of the CLI would refuse.
 fn config_is_identical_to_desired(
 	answers: &Answers,
+	mail_addr: std::net::IpAddr,
 	dkim_ed25519: &std::path::Path,
 	dkim_rsa: &std::path::Path,
 	cert_file: &std::path::Path,
@@ -309,6 +404,7 @@ fn config_is_identical_to_desired(
 	};
 	let desired = apply_config::build_config(
 		answers,
+		mail_addr,
 		Some(dkim_ed25519),
 		dkim_rsa_for_desired,
 		cert_file,
@@ -324,7 +420,7 @@ fn config_is_identical_to_desired(
 			std::io::Error::other(error.to_string()),
 		)
 	})?;
-	let merged = apply_config::reconcile(existing_value, desired_value);
+	let merged = apply_config::reconcile(existing_value, desired_value, false);
 	let existing_parsed = toml::from_str(&existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),

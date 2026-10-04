@@ -485,6 +485,12 @@ impl Server {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
+			// A dual-stack `::` listener reports an IPv4 peer as
+			// `::ffff:a.b.c.d`; canonicalize before the address reaches
+			// SPF, DNSBL, the ban table, the greylist, the inbound rate
+			// limit and the audit log so a v4-mapped form cannot slip
+			// past an `IpAddr::V4`-typed check anywhere downstream.
+			let peer = crate::net::canonical_peer(peer);
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
 				tracing::warn!(%peer, "SMTP connection limit reached, dropping");
 				continue;
@@ -590,3 +596,7 @@ mod tests_correspondents;
 #[cfg(test)]
 #[path = "server_tests_subjectpass.rs"]
 mod tests_subjectpass;
+
+#[cfg(test)]
+#[path = "server_tests_dual_stack.rs"]
+mod tests_dual_stack;
