@@ -30,8 +30,8 @@ flate2 = "1.1.9"
 base64 = "0.23.1"
 clap = { version = "4.6.1", features = ["derive"] }
 hickory-resolver = { version = "0.26.1", features = ["dnssec-ring"] }
-hyper = { version = "=1.11.0", features = ["server", "http1"] }
-hyper-util = { version = "=0.1.20", features = ["tokio", "service"] }
+hyper = { version = "=1.11.1", features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", features = ["tokio", "service"] }
 idna = "1.1"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
 libc = "0.2.186"
@@ -55,10 +55,10 @@ url = "2.5.8"
 percent-encoding = "2.3.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-opentelemetry = "0.32"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.33"
+opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.34"
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
