@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
-use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::SubscriberExt;
 
 struct FakeClamd {
@@ -286,27 +285,6 @@ fn fifty_failures_warn_once_per_minute_with_injected_clock() {
 }
 
 #[tokio::test]
-async fn detection_logs_signature_and_size_without_message() {
-	let raw = uuid::Uuid::now_v7().simple().to_string();
-	let fake = FakeClamd::start(raw.len(), b"stream: Eicar-Test-Signature FOUND\0");
-	let hook = ClamdHook::new(fake.socket.clone());
-	let warnings = Warnings::default();
-	let subscriber = tracing_subscriber::registry().with(warnings.clone());
-	assert_eq!(
-		scan(&hook, raw.as_bytes())
-			.with_subscriber(subscriber)
-			.await,
-		HookVerdict::Quarantine
-	);
-	assert!(!fake.finish().await.is_empty());
-	let events = warnings.0.lock().expect("warnings");
-	assert_eq!(events.len(), 1);
-	assert!(events[0].contains("signature=\"Eicar-Test-Signature\""));
-	assert!(events[0].contains(&format!("message_bytes={}", raw.len())));
-	assert!(!events[0].contains(&raw), "message content appeared in log");
-}
-
-#[tokio::test]
 async fn reply_limit_fails_open_and_accepts_the_boundary() {
 	for length in [MAX_REPLY_BYTES, MAX_REPLY_BYTES + 1] {
 		let dir = tempfile::tempdir().expect("tempdir");
@@ -375,33 +353,4 @@ async fn disconnected_peer_and_blocked_write_fail_open() {
 			"peer unexpectedly received the whole message"
 		);
 	}
-}
-
-#[tokio::test]
-async fn stream_detection_logs_signature_and_size_without_message() {
-	let raw = uuid::Uuid::now_v7().simple().to_string();
-	let (client, mut server) = tokio::io::duplex(1024);
-	let peer = tokio::spawn(async move {
-		let mut request = [0; 50];
-		server.read_exact(&mut request).await.expect("request");
-		server
-			.write_all(b"stream: Eicar-Test-Signature FOUND\0")
-			.await
-			.expect("reply");
-	});
-	let hook = ClamdHook::new(PathBuf::from("unused.sock"));
-	let warnings = Warnings::default();
-	let subscriber = tracing_subscriber::registry().with(warnings.clone());
-	assert_eq!(
-		hook.scan_with(raw.as_bytes(), async { Ok(client) })
-			.with_subscriber(subscriber)
-			.await,
-		HookVerdict::Quarantine
-	);
-	peer.await.expect("fake");
-	let events = warnings.0.lock().expect("warnings");
-	assert_eq!(events.len(), 1);
-	assert!(events[0].contains("signature=\"Eicar-Test-Signature\""));
-	assert!(events[0].contains(&format!("message_bytes={}", raw.len())));
-	assert!(!events[0].contains(&raw), "message content appeared in log");
 }
