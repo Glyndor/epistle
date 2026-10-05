@@ -325,10 +325,26 @@ rather than as an SQL syntax error in the first query.
 
 | Key | Meaning |
 |---|---|
-| `url` | Connection URL (keep the password in `${VAR}`). Must be `sslmode=require` (or `verify-ca` / `verify-full`); an absent or weaker `sslmode` is rejected. A Unix-domain socket URL (`postgres://%2Fpath/...` or `postgres:///db?host=/path`) is accepted as is because there is no network on the path to intercept. |
+| `url` | Connection URL. Must be `sslmode=require` (or `verify-ca` / `verify-full`); an absent or weaker `sslmode` is rejected. A Unix-domain socket URL (`postgres://%2Fpath/...` or `postgres:///db?host=/path`) is accepted as is because there is no network on the path to intercept. Omit the password when `password_file` is set; sqlx rejects the empty-host form `postgres://user@/db?host=...`. |
+| `password_file` | Path to a file holding the PostgreSQL password. Read once at pool construction; one trailing newline is stripped (and a preceding carriage return, the form a Windows editor would leave). The file must exist, be a regular file, and not be group- or world-accessible (`mode & 0o077 == 0`, the rule `Config::load` applies to the config file itself; `0400` and `0600` both pass). Refused when the URL also carries a password (two sources for one secret is ambiguous). Use this when the secret cannot live in the config file: the recommended container deployment mounts the password as a read-only podup secret at a known path. |
 | `max_connections` | Pool size. |
 | `tls` | How the connection authenticates the PostgreSQL server. Defaults to `require`, which rejects any `sslmode` weaker than `require`. Set to `insecure` to assert that the connection stays on a network you trust (typically an internal container network with no gateway to the outside); an `insecure` connection is the operator's responsibility. |
 | `directory` | Resolve mail accounts from the SQL directory tables (off by default). |
+
+Example: a Unix-socket deployment with the password held outside the config file.
+
+```toml
+[database]
+url = "postgres://epistle@%2Frun%2Fpostgresql/epistle"
+password_file = "/run/secrets/epistle_db_password"
+```
+
+The percent-encoded host (`%2Frun%2Fpostgresql`) is the form sqlx accepts for a
+Unix-domain socket URL: every `/` in the socket directory is encoded as `%2F`.
+The `host=` query-parameter form (`postgres:///db?host=/run/postgresql`) is also
+accepted, with three slashes after the scheme because the authority is empty;
+sqlx rejects the empty-host form `postgres://user@/db?host=...` and the URL
+must use one of the two spellings above.
 
 An unreachable database does not stop the server: the antispam engine is
 disabled, mail keeps flowing unfiltered, a warning is logged and the

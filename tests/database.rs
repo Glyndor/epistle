@@ -43,7 +43,7 @@ async fn migrations_apply_and_reputation_roundtrips() {
 		return;
 	};
 
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -83,7 +83,7 @@ async fn reputation_record_accumulates_and_judges() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -130,7 +130,7 @@ async fn reputation_screen_maps_verdicts() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -168,7 +168,7 @@ async fn bayes_corpus_trains_and_scores() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -225,7 +225,7 @@ async fn sql_directory_loads_resolves_and_authenticates() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -291,7 +291,7 @@ async fn bayes_per_account_corpora_are_isolated() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -360,7 +360,7 @@ async fn score_falls_back_to_shared_below_the_threshold() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -430,7 +430,7 @@ async fn score_uses_the_account_scope_at_the_threshold() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 
@@ -505,7 +505,7 @@ async fn forget_scope_removes_only_that_scope() {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
 	};
-	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5)
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 

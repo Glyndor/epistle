@@ -63,15 +63,23 @@ use serde::Deserialize;
 /// Errors produced while loading or validating a configuration file.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-	/// The configuration file could not be read from disk: missing file,
-	/// permission denied, or another I/O failure. The variant carries the
-	/// path that was attempted and the underlying `std::io::Error`.
-	#[error("cannot read config file {path}: {source}")]
+	/// A file the configuration needed could not be read from disk: missing
+	/// file, permission denied, or another I/O failure. The variant carries
+	/// the path that was attempted, the underlying `std::io::Error`, and a
+	/// short `kind` so the same variant can report both the config file
+	/// itself and the `[database] password_file` secret (the operator reads
+	/// a different fix for each one, but the I/O surface is the same).
+	#[error("cannot read {kind} {path}: {source}")]
 	Read {
-		/// Path passed to `Config::load`.
+		/// Path that failed to read.
 		path: PathBuf,
 		/// Underlying I/O error returned by `std::fs`.
 		source: std::io::Error,
+		/// What kind of file the rejected path was. `"config file"` for the
+		/// loader, `"[database] password_file"` for the database password
+		/// secret; both can fail with the same I/O error, but the operator
+		/// reads a different fix.
+		kind: &'static str,
 	},
 	/// The file was read but its contents are not valid TOML, or they contain
 	/// an unknown key (the schema is `deny_unknown_fields`). Carries the path
@@ -84,14 +92,24 @@ pub enum ConfigError {
 		source: Box<toml::de::Error>,
 	},
 	/// The configuration file is group- or world-readable (or writable): on
-	/// Unix the loader requires mode `0600`. Carries the path and the
-	/// observed permission bits (masked to the low 9).
-	#[error("config file {path} is group/world-accessible (mode {mode:#o}); restrict it to 0600")]
+	/// Unix the loader requires mode `0600`. Carries the path, the
+	/// observed permission bits (masked to the low 9) and a short
+	/// description of what kind of file it was (so the same variant can be
+	/// reused for the `[database] password_file` check, which produces the
+	/// same kind of refusal for a different file).
+	#[error(
+		"{kind} {path} is group/world-accessible (mode {mode:#o}); restrict it to owner-only (0600 or 0400)"
+	)]
 	InsecurePermissions {
 		/// Path whose permissions were rejected.
 		path: PathBuf,
 		/// Observed permission mode, masked to `0o777`.
 		mode: u32,
+		/// What kind of file the rejected path was. `"config file"` for the
+		/// loader, `"[database] password_file"` for the database password
+		/// secret; both can fail with the same bit pattern, but the operator
+		/// reads a different fix.
+		kind: &'static str,
 	},
 	/// The configuration referenced `${VAR}` for a variable that is not set
 	/// in the process environment. Carries the variable name.
@@ -418,10 +436,11 @@ impl Config {
 	/// credentials (e.g. the database password) can stay in the environment or
 	/// a secret store rather than on disk.
 	pub fn load(path: &Path) -> Result<Self, ConfigError> {
-		check_permissions(path)?;
+		check_permissions(path, "config file")?;
 		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
 			path: path.to_path_buf(),
 			source,
+			kind: "config file",
 		})?;
 		let expanded = expand_env(&raw)?;
 		let config: Config = toml::from_str(&expanded).map_err(|source| ConfigError::Parse {
@@ -468,16 +487,19 @@ fn expand_env(raw: &str) -> Result<String, ConfigError> {
 	Ok(out)
 }
 
-/// Reject a config file that is readable or writable by group or others: it may
-/// hold secrets (or `${VAR}` references aside, paths and tokens), so it must be
-/// owner-only. Best effort on non-Unix platforms.
+/// Reject a file that is readable or writable by group or others: it may hold
+/// secrets, so it must be owner-only. `kind` labels the message the operator
+/// will read in the refusal (`"config file"` for the loader, `"[database]
+/// password_file"` for the database secret). Best effort on non-Unix platforms
+/// where the bit check is meaningless and the check passes through.
 #[cfg(unix)]
-fn check_permissions(path: &Path) -> Result<(), ConfigError> {
+pub(super) fn check_permissions(path: &Path, kind: &'static str) -> Result<(), ConfigError> {
 	use std::os::unix::fs::PermissionsExt;
 	let mode = std::fs::metadata(path)
 		.map_err(|source| ConfigError::Read {
 			path: path.to_path_buf(),
 			source,
+			kind: "config file",
 		})?
 		.permissions()
 		.mode();
@@ -485,6 +507,7 @@ fn check_permissions(path: &Path) -> Result<(), ConfigError> {
 		return Err(ConfigError::InsecurePermissions {
 			path: path.to_path_buf(),
 			mode: mode & 0o777,
+			kind,
 		});
 	}
 	Ok(())
