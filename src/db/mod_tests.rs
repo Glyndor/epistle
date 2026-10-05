@@ -113,21 +113,32 @@ fn password_file_strips_one_line_ending() {
 	// would Debug-print the value on mismatch, dumping the file
 	// content into the CI log. The fixture is a literal here, but
 	// the function's return type is secret-shaped, so the same
-	// shape the other round settled for is applied.
+	// shape the other round settled for is applied. The `expect`
+	// messages describe the trailing bytes only, never the password
+	// itself; on an unexpected `Err` the panic would otherwise
+	// carry the file content the test wrote.
 	assert!(
-		read_password_file(&write_bytes(&path, b"pw\n")).expect("pw\\n") == "pw",
+		read_password_file(&write_bytes(&path, b"pw\n"))
+			.expect("read password file with one trailing newline")
+			== "pw",
 		"`\\n` is one line ending and must be stripped"
 	);
 	assert!(
-		read_password_file(&write_bytes(&path, b"pw\r\n")).expect("pw\\r\\n") == "pw",
+		read_password_file(&write_bytes(&path, b"pw\r\n"))
+			.expect("read password file with trailing CRLF")
+			== "pw",
 		"`\\r\\n` is one line ending and must be stripped"
 	);
 	assert!(
-		read_password_file(&write_bytes(&path, b"pw\r")).expect("pw\\r") == "pw\r",
+		read_password_file(&write_bytes(&path, b"pw\r"))
+			.expect("read password file with bare trailing CR")
+			== "pw\r",
 		"a bare `\\r` is not a line ending; the password keeps it"
 	);
 	assert!(
-		read_password_file(&write_bytes(&path, b"pw\n\n")).expect("pw\\n\\n") == "pw\n",
+		read_password_file(&write_bytes(&path, b"pw\n\n"))
+			.expect("read password file with two trailing newlines")
+			== "pw\n",
 		"only one line ending is stripped; an inner `\\n` stays"
 	);
 }
