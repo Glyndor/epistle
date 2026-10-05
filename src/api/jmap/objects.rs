@@ -450,6 +450,18 @@ enum EncodedWordEnd {
 fn encoded_word_end_inline(value: &str, start: usize) -> EncodedWordEnd {
 	let after = &value[start + 2..];
 	let Some(end) = after.find("?=") else {
+		// Count the work the suffix search did even on a miss. The
+		// historical counter only tallied the success path, so an
+		// algorithm that re-searched the whole suffix on every opener
+		// stayed below the bound: the outer loop's three byte checks
+		// are ~3 * len and the inner work is uncounted. With this
+		// counter, a re-search shows up as a per-opener cost.
+		#[cfg(test)]
+		{
+			for _ in 0..(after.len() + 4) {
+				step_tokenizer();
+			}
+		}
 		return EncodedWordEnd::NoCloser;
 	};
 	// Confirm every component is non-empty ASCII graphic.

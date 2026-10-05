@@ -78,7 +78,10 @@ fn unterminated_encoded_word_does_not_re_search_the_suffix() {
 	// The same shape, with `=?` openers and no `?=`. The historical
 	// `find_encoded_word_end` did a `payload.find("?=")` and walked the
 	// components on every opener, which is the O(N * L) path the issue
-	// names for encoded-words as well.
+	// names for encoded-words as well. The tokenizer is called twice
+	// per header (once in `split_top_level`, once in `find_angle_addr`),
+	// and each call counts the suffix search, so the bound is
+	// `5 * len` to keep a small slack above the theoretical `4 * len`.
 	let mut value = String::with_capacity(8_192 * 2);
 	for _ in 0..8_192 {
 		value.push_str("=?x");
@@ -88,7 +91,7 @@ fn unterminated_encoded_word_does_not_re_search_the_suffix() {
 	let steps = reset_tokenizer_steps();
 	let len = value.len() as u64;
 	assert!(
-		steps <= len * 4,
+		steps <= len * 5,
 		"encoded-word scan should stay within a small constant of the header length, got {steps} for {len} bytes"
 	);
 }
