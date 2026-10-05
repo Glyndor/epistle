@@ -60,10 +60,13 @@ fn port_range_upper_bound_refused_with_named_port_nearest_passes() {
 			// operator needs to fix the offset.
 			assert_eq!(port, 65_587_u32, "first out-of-range port must be 65587");
 		}
-		other => panic!(
-			"expected PortOutOfRange, got {}",
-			local_error_name(&other.expect_err("Err arm"))
-		),
+		// The `Ok` arm carries a `Prepared`, whose `Debug` would echo
+		// the freshly generated `Config` and through it the API
+		// token hash. The panic must name the outcome, never the
+		// value, so a regression here does not dump the secret into
+		// the CI log.
+		Ok(_) => panic!("expected PortOutOfRange, got Ok"),
+		Err(other) => panic!("expected PortOutOfRange, got {}", local_error_name(&other)),
 	}
 
 	// Nearest port-base that passes the upper bound: 57510 keeps the API
@@ -83,15 +86,21 @@ fn port_range_lower_bound_refused_with_named_port_nearest_passes() {
 			// below 1024.
 			assert_eq!(port, 1023_u32, "first under-range port must be 1023");
 		}
-		other => panic!(
-			"expected PortOutOfRange, got {}",
-			local_error_name(&other.expect_err("Err arm"))
-		),
+		// The `Ok` arm carries a `Prepared`, whose `Debug` would echo
+		// the freshly generated `Config` and through it the API
+		// token hash. The panic must name the outcome, never the
+		// value, so a regression here does not dump the secret into
+		// the CI log.
+		Ok(_) => panic!("expected PortOutOfRange, got Ok"),
+		Err(other) => panic!("expected PortOutOfRange, got {}", local_error_name(&other)),
 	}
 
 	// 999 keeps +25 at exactly 1024, the inclusive lower bound.
 	let passing = prepare(tempfile::tempdir().expect("tempdir").path(), 999);
-	assert!(passing.is_ok(), "999 must pass: {passing:?}");
+	assert!(
+		passing.is_ok(),
+		"999 must pass: a passing base returned Err"
+	);
 }
 
 /// Pin: the generated `Config` has `hold_outbound == true`; the
@@ -216,8 +225,8 @@ fn unreadable_mail_toml_propagates_and_does_not_wipe_accounts() {
 	);
 
 	let accounts_after = std::fs::read(&accounts_path).expect("read accounts.toml after");
-	assert_eq!(
-		accounts_before, accounts_after,
+	assert!(
+		accounts_before == accounts_after,
 		"accounts.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -262,13 +271,13 @@ fn world_readable_mail_toml_propagates_and_does_not_wipe_credentials() {
 	);
 
 	let mail_after = std::fs::read(&mail_toml).expect("read mail.toml after");
-	assert_eq!(
-		mail_before, mail_after,
+	assert!(
+		mail_before == mail_after,
 		"mail.toml must be byte-for-byte identical when prepare fails"
 	);
 	let accounts_after = std::fs::read(&accounts_path).expect("read accounts.toml after");
-	assert_eq!(
-		accounts_before, accounts_after,
+	assert!(
+		accounts_before == accounts_after,
 		"accounts.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -302,8 +311,8 @@ fn empty_accounts_toml_returns_unusable_error_and_does_not_wipe_mail_toml() {
 	);
 
 	let mail_after = std::fs::read(&mail_toml).expect("read mail.toml after");
-	assert_eq!(
-		mail_before, mail_after,
+	assert!(
+		mail_before == mail_after,
 		"mail.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -338,8 +347,8 @@ fn garbage_accounts_toml_returns_unusable_error_and_does_not_wipe_mail_toml() {
 	);
 
 	let mail_after = std::fs::read(&mail_toml).expect("read mail.toml after");
-	assert_eq!(
-		mail_before, mail_after,
+	assert!(
+		mail_before == mail_after,
 		"mail.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -364,15 +373,16 @@ fn second_prepare_against_a_valid_pair_is_byte_identical() {
 		second.password.is_none(),
 		"second run must NOT regenerate the credential pair"
 	);
-	assert_eq!(
-		std::fs::read_to_string(dir.path().join("mail.toml")).expect("read mail.toml after"),
-		mail_before,
+	let mail_after =
+		std::fs::read_to_string(dir.path().join("mail.toml")).expect("read mail.toml after");
+	assert!(
+		mail_after == mail_before,
 		"mail.toml must be byte-identical on the second run"
 	);
-	assert_eq!(
-		std::fs::read_to_string(dir.path().join("data").join("accounts.toml"))
-			.expect("read accounts.toml after"),
-		accounts_before,
+	let accounts_after = std::fs::read_to_string(dir.path().join("data").join("accounts.toml"))
+		.expect("read accounts.toml after");
+	assert!(
+		accounts_after == accounts_before,
 		"accounts.toml must be byte-identical on the second run"
 	);
 	// First run minted; second run reused. They are intentionally not equal.
@@ -430,12 +440,12 @@ fn unset_env_var_in_token_hash_returns_unusable_error() {
 
 	let mail_after = std::fs::read(&mail_toml).expect("read mail.toml after");
 	let accounts_after = std::fs::read(&accounts_path).expect("read accounts.toml after");
-	assert_eq!(
-		mail_before, mail_after,
+	assert!(
+		mail_before == mail_after,
 		"mail.toml must be byte-for-byte identical when prepare fails"
 	);
-	assert_eq!(
-		accounts_before, accounts_after,
+	assert!(
+		accounts_before == accounts_after,
 		"accounts.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -481,12 +491,12 @@ fn truncated_masked_json_returns_unusable_error() {
 
 	let mail_after = std::fs::read(&mail_toml).expect("read mail.toml after");
 	let accounts_after = std::fs::read(&accounts_path).expect("read accounts.toml after");
-	assert_eq!(
-		mail_before, mail_after,
+	assert!(
+		mail_before == mail_after,
 		"mail.toml must be byte-for-byte identical when prepare fails"
 	);
-	assert_eq!(
-		accounts_before, accounts_after,
+	assert!(
+		accounts_before == accounts_after,
 		"accounts.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -527,12 +537,12 @@ fn invalid_toml_mail_toml_returns_unusable_error() {
 
 	let mail_after = std::fs::read(&mail_toml).expect("read mail.toml after");
 	let accounts_after = std::fs::read(&accounts_path).expect("read accounts.toml after");
-	assert_eq!(
-		mail_before, mail_after,
+	assert!(
+		mail_before == mail_after,
 		"mail.toml must be byte-for-byte identical when prepare fails"
 	);
-	assert_eq!(
-		accounts_before, accounts_after,
+	assert!(
+		accounts_before == accounts_after,
 		"accounts.toml must be byte-for-byte identical when prepare fails"
 	);
 }
@@ -728,9 +738,12 @@ fn invalid_mail_toml_does_not_regenerate_certificate_or_dkim() {
 	);
 
 	// `dkim.pem` must be byte-identical for the same reason.
+	// `dkim.pem` carries the DKIM signing private key, so an
+	// `assert_eq!` on the byte arrays would Debug-print the full
+	// PEM on mismatch and dump the key into the CI log.
 	let dkim_after = std::fs::read(&dkim_path).expect("read dkim.pem after");
-	assert_eq!(
-		dkim_before, dkim_after,
+	assert!(
+		dkim_before == dkim_after,
 		"dkim.pem must be byte-identical to the first run: the credential-pair check ran before the dkim step, so the dkim step did not run"
 	);
 
