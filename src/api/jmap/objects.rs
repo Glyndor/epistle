@@ -278,32 +278,94 @@ fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 		.collect()
 }
 
+/// Test-only step counter incremented once per byte the address-header
+/// tokenizer examines. Lets a regression test assert the per-call work
+/// stays bounded (linear in the header length, not quadratic in the
+/// number of openers). The counter is per-thread so parallel tests do
+/// not observe each other's increments.
+#[cfg(test)]
+thread_local! {
+	static TOKENIZER_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_tokenizer_steps() -> u64 {
+	TOKENIZER_STEPS.with(|c| c.replace(0))
+}
+
+/// Count one byte the tokenizer examined. The historical
+/// `find_matching` / `find_quoted_end` / `find_encoded_word_end`
+/// helpers each walked the remaining suffix of the value, so a header
+/// with N unterminated openers ran in O(N * length) time; the
+/// single-pass tokenizer below visits each byte once.
+#[cfg(test)]
+fn step_tokenizer() {
+	TOKENIZER_STEPS.with(|c| c.set(c.get() + 1));
+}
+
 /// Split `value` at every `delimiter` that sits at top level: outside
 /// `<...>`, outside `"..."`, and outside `=?...?=` encoded-words. A
 /// delimiter that the parser cannot match against its closing form is
 /// treated as text, so a stray `<` does not swallow the rest of the value.
+///
+/// The scan is a single forward pass. When an opener is seen, the
+/// matching closer is located by advancing through the rest of the
+/// bytes once and the cursor jumps past it; if no closer exists the
+/// opener is left as text and the cursor advances by one byte. A
+/// short-circuit flag remembers when the search for a closer came up
+/// empty, so subsequent openers of the same kind skip the suffix
+/// scan instead of re-walking the rest of the header.
 fn split_top_level(value: &str, delimiter: char) -> Vec<String> {
 	let mut out = Vec::new();
 	let mut start = 0usize;
 	let bytes = value.as_bytes();
 	let mut i = 0usize;
+	let mut no_more_angle = false;
+	let mut no_more_quoted = false;
+	let mut no_more_encoded = false;
 	while i < bytes.len() {
+		#[cfg(test)]
+		step_tokenizer();
 		let byte = bytes[i];
-		if byte == b'<' {
-			if let Some(close) = find_matching(value, i, b'>') {
-				i = close + 1;
-				continue;
+		if byte == b'<' && !no_more_angle {
+			let end = skip_angle_addr(bytes, i);
+			if end > i + 1 {
+				i = end;
+			} else {
+				no_more_angle = true;
+				if byte == delimiter as u8 {
+					out.push(value[start..i].to_string());
+					start = i + 1;
+				}
+				i += 1;
 			}
-		} else if byte == b'"' {
-			if let Some(close) = find_quoted_end(value, i + 1) {
-				i = close + 1;
-				continue;
+			continue;
+		}
+		if byte == b'"' && !no_more_quoted {
+			let end = skip_quoted_string(bytes, i);
+			if end > i + 1 {
+				i = end;
+			} else {
+				no_more_quoted = true;
+				if byte == delimiter as u8 {
+					out.push(value[start..i].to_string());
+					start = i + 1;
+				}
+				i += 1;
 			}
-		} else if byte == b'='
-			&& value[i..].starts_with("=?")
-			&& let Some(close) = find_encoded_word_end(value, i)
-		{
-			i = close;
+			continue;
+		}
+		if byte == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'?' && !no_more_encoded {
+			if let Some(close) = encoded_word_end_inline(value, i) {
+				i = close;
+			} else {
+				no_more_encoded = true;
+				if byte == delimiter as u8 {
+					out.push(value[start..i].to_string());
+					start = i + 1;
+				}
+				i += 1;
+			}
 			continue;
 		}
 		if byte == delimiter as u8 {
@@ -316,42 +378,45 @@ fn split_top_level(value: &str, delimiter: char) -> Vec<String> {
 	out
 }
 
-/// Find the index of the closing character that matches `value[opening]`.
-/// `opening` must point at `<`. Returns the index of `>`, or `None` when
-/// the open has no matching close (the caller treats this as text).
-fn find_matching(value: &str, opening: usize, close: u8) -> Option<usize> {
-	let bytes = value.as_bytes();
-	let mut i = opening + 1;
+/// Advance past `<...>` starting at `bytes[start]` (which must be `<`).
+/// Returns the index just past the closing `>`, or `start + 1` when
+/// the open has no matching close. A backslash escapes the next byte
+/// inside the angle-addr.
+fn skip_angle_addr(bytes: &[u8], start: usize) -> usize {
+	let mut i = start + 1;
 	while i < bytes.len() {
+		#[cfg(test)]
+		step_tokenizer();
 		match bytes[i] {
 			b'\\' if i + 1 < bytes.len() => i += 2,
-			b if b == close => return Some(i),
+			b'>' => return i + 1,
 			_ => i += 1,
 		}
 	}
-	None
+	start + 1
 }
 
-/// Find the index of the closing `"` for a quoted-string that opens at
-/// `start` (which must point just past the opening `"`). A backslash
-/// escapes the next byte. Returns `None` for an unterminated string.
-fn find_quoted_end(value: &str, start: usize) -> Option<usize> {
-	let bytes = value.as_bytes();
-	let mut i = start;
+/// Advance past `"..."` starting at `bytes[start]` (which must be `"`).
+/// Returns the index just past the closing `"`, or `start + 1` when
+/// the string is unterminated. A backslash escapes the next byte.
+fn skip_quoted_string(bytes: &[u8], start: usize) -> usize {
+	let mut i = start + 1;
 	while i < bytes.len() {
+		#[cfg(test)]
+		step_tokenizer();
 		match bytes[i] {
 			b'\\' if i + 1 < bytes.len() => i += 2,
-			b'"' => return Some(i),
+			b'"' => return i + 1,
 			_ => i += 1,
 		}
 	}
-	None
+	start + 1
 }
 
-/// Find the position just past the closing `?=` of the encoded-word that
-/// starts at `start` (which must point at `=`). Returns `None` when the
-/// fragment is not a complete encoded-word.
-fn find_encoded_word_end(value: &str, start: usize) -> Option<usize> {
+/// Find the position just past the closing `?=` of the encoded-word
+/// that starts at `value[start]` (which must point at `=`). Returns
+/// `None` when the fragment is not a complete encoded-word.
+fn encoded_word_end_inline(value: &str, start: usize) -> Option<usize> {
 	let after = &value[start + 2..];
 	let end = after.find("?=")?;
 	// Confirm every component is non-empty ASCII graphic.
@@ -371,6 +436,12 @@ fn find_encoded_word_end(value: &str, start: usize) -> Option<usize> {
 		|| !text.bytes().all(|b| b.is_ascii_graphic())
 	{
 		return None;
+	}
+	#[cfg(test)]
+	{
+		for _ in 0..(end + 4) {
+			step_tokenizer();
+		}
 	}
 	Some(start + 2 + end + 2)
 }
@@ -403,32 +474,46 @@ fn find_angle_addr(value: &str) -> Option<(usize, usize)> {
 	let bytes = value.as_bytes();
 	let mut last: Option<(usize, usize)> = None;
 	let mut i = 0usize;
+	let mut no_more_angle = false;
+	let mut no_more_quoted = false;
+	let mut no_more_encoded = false;
 	while i < bytes.len() {
-		match bytes[i] {
-			b'<' => {
-				if let Some(close) = find_matching(value, i, b'>') {
-					last = Some((i, close));
-					i = close + 1;
-					continue;
-				}
+		#[cfg(test)]
+		step_tokenizer();
+		let byte = bytes[i];
+		if byte == b'<' && !no_more_angle {
+			let start = i;
+			let end = skip_angle_addr(bytes, i);
+			if end > start + 1 {
+				last = Some((start, end - 1));
+				i = end;
+			} else {
+				no_more_angle = true;
 				i += 1;
 			}
-			b'"' => {
-				if let Some(close) = find_quoted_end(value, i + 1) {
-					i = close + 1;
-					continue;
-				}
-				i += 1;
-			}
-			b'=' if value[i..].starts_with("=?") => {
-				if let Some(end) = find_encoded_word_end(value, i) {
-					i = end;
-					continue;
-				}
-				i += 1;
-			}
-			_ => i += 1,
+			continue;
 		}
+		if byte == b'"' && !no_more_quoted {
+			let start = i;
+			let end = skip_quoted_string(bytes, i);
+			if end > start + 1 {
+				i = end;
+			} else {
+				no_more_quoted = true;
+				i += 1;
+			}
+			continue;
+		}
+		if byte == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'?' && !no_more_encoded {
+			if let Some(close) = encoded_word_end_inline(value, i) {
+				i = close;
+			} else {
+				no_more_encoded = true;
+				i += 1;
+			}
+			continue;
+		}
+		i += 1;
 	}
 	last
 }
