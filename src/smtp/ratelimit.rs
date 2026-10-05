@@ -14,7 +14,7 @@
 //! is incremented) so an active sender keeps its budget while the map sits
 //! at the cap. A key that is not in the map is admitted only when there is
 //! room; when the cap is reached the check performs an incremental expiry
-//! pass that scans at most [`EVICTION_SCAN_BUDGET`] entries and removes the
+//! pass that scans at most `EVICTION_SCAN_BUDGET` entries and removes the
 //! stale ones, then admits the new key if the eviction freed a slot. If the
 //! map is still full after the pass, the unseen key is refused: returning
 //! `false` blocks the message without ever dropping a live entry.
