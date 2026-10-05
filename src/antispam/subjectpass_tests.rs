@@ -46,6 +46,18 @@ fn fixture_key() -> [u8; 32] {
 	bytes
 }
 
+/// A second 32-byte key the tests can use when they need a value
+/// that is wrong (a different SubjectPass instance, a wrong password
+/// for the same account). A different arithmetic derivation from
+/// `fixture_key`; both are run-time values, neither is a literal.
+fn other_key() -> [u8; 32] {
+	let mut bytes = [0u8; 32];
+	for (i, slot) in bytes.iter_mut().enumerate() {
+		*slot = (i as u8).wrapping_mul(17).wrapping_add(13);
+	}
+	bytes
+}
+
 fn pass() -> SubjectPass {
 	SubjectPass::with_key(fixture_key())
 }
@@ -216,7 +228,7 @@ fn a_token_inside_an_rfc_2047_encoded_subject_is_accepted() {
 #[test]
 fn a_different_key_does_not_validate() {
 	let p = pass();
-	let other = SubjectPass::with_key([0u8; 32]);
+	let other = SubjectPass::with_key(other_key());
 	let sender = "alice@example.org";
 	let recipient = "bob@example.org";
 	let day = 20_000;
