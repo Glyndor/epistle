@@ -32,7 +32,8 @@ fn init_warns_about_an_inline_dns_token() {
 	// on stderr before any apply work happens.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"automatic\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -42,7 +43,9 @@ fn init_warns_about_an_inline_dns_token() {
 		 [dns]\n\
 		 provider = \"cloudflare\"\n\
 		 zone = \"example.org\"\n\
-		 token = \"inline-value\"\n",
+		 token = \"inline-value\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -73,7 +76,8 @@ fn init_warns_when_imap_and_submission_are_both_false() {
 	// read; the validator surfaces a non-fatal warning.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -86,7 +90,8 @@ fn init_warns_when_imap_and_submission_are_both_false() {
 		 pop3 = false\n\
 		 managesieve = false\n\
 		 webdav = false\n\
-		 api = false\n",
+		 api = false\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -123,13 +128,16 @@ fn init_warns_about_an_existing_data_dir_with_loose_permissions() {
 	std::fs::create_dir(&data_dir).expect("mkdir data");
 	std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o755))
 		.expect("chmod 0755");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -175,13 +183,16 @@ fn init_mentions_openssl_when_it_is_not_on_path() {
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

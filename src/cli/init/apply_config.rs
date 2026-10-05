@@ -3,14 +3,14 @@
 //! sibling so `apply.rs` keeps under the per-file line limit.
 
 use std::fs;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::cli::init::answers::{Answers, Services};
 use crate::cli::init::apply::ApplyError;
-use crate::config::Config;
+use crate::config::{Config, Listener, ListenerKind};
 
 /// Build the desired `Config` value from the answers. Each listener
 /// line carries its kind and an explicit `addr`; the operator-visible
@@ -31,6 +31,8 @@ pub(super) struct DesiredConfig {
 	pub(super) tls: DesiredTls,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) dns: Option<DesiredDns>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(super) database: Option<DesiredDatabase>,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +73,20 @@ pub(super) struct DesiredDns {
 	pub(super) token_env: Option<String>,
 }
 
+/// The `[database]` section `init` writes when the operator asks
+/// for the database service. The URL is the percent-encoded socket
+/// form (`postgres://epistle@%2Frun%2Fpostgresql/epistle`) so the
+/// same connection string works on the host (where `init` and
+/// `config-check` run) and inside the `mail` container (where
+/// `serve` runs). The password file points at the secret the
+/// compose file mounts; the `mail` container reads it through the
+/// data-directory bind mount at the same path.
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredDatabase {
+	pub(super) url: String,
+	pub(super) password_file: String,
+}
+
 /// The outcome of trying to merge the desired config with whatever is
 /// on disk. `Identical` means the file is already byte-for-byte what we
 /// want and stays untouched; `Wrote` means the file did not exist or
@@ -100,7 +116,7 @@ pub(super) fn build_config(
 	key_file: &Path,
 ) -> Result<DesiredConfig, ApplyError> {
 	let mut listeners = Vec::new();
-	let services: Services = answers.services;
+	let services: &Services = &answers.services;
 	// SMTP (port 25, inbound mail) is always written. It is the
 	// listener the rest of the internet talks to, and a fresh install
 	// that does not bind it receives no mail. The kind is unconditional
@@ -182,6 +198,24 @@ pub(super) fn build_config(
 		token_env: d.token_env.clone(),
 	});
 
+	// The `[database]` section is written only when the operator
+	// opted into the database service. The URL is the percent-encoded
+	// socket form; the password file is the secret the compose
+	// file mounts into the `mail` container. Both the host (where
+	// `init` and `config-check` run) and the container (where
+	// `serve` runs) see the same path because the data directory
+	// is bind-mounted at the same path on both sides.
+	let database = if answers.services.database {
+		Some(DesiredDatabase {
+			url: "postgres://epistle@%2Frun%2Fpostgresql/epistle".to_string(),
+			password_file: crate::cli::init::compose::db_password_path(&answers.data_dir)
+				.display()
+				.to_string(),
+		})
+	} else {
+		None
+	};
+
 	Ok(DesiredConfig {
 		hostname: answers.hostname.clone(),
 		public_ipv4: answers.public_ipv4.map(|a| a.to_string()),
@@ -195,6 +229,7 @@ pub(super) fn build_config(
 			key_file: key_file.display().to_string(),
 		},
 		dns,
+		database,
 	})
 }
 
@@ -204,6 +239,22 @@ pub(super) fn build_config(
 /// the `[dns]` section, or every listener actually clears the entry
 /// from the file instead of leaving it preserved as an "operator
 /// setting" the operator never asked for.
+///
+/// `[database]` is intentionally absent from both this list and
+/// from `DROP_WHEN_NOT_IN_DESIRED`. The apply phase only manages
+/// the table when `services.database = true`: the desired config
+/// carries `url` and `password_file`, and the merge replaces those
+/// two keys while preserving every other key the operator added
+/// (`directory`, `max_connections`, future fields). When
+/// `services.database = false`, the table is left untouched: an
+/// operator who runs their own PostgreSQL outside the stack has
+/// the table in the config the apply phase should not touch, and
+/// wiping the whole table on a re-run would silently drop their
+/// setup. The previous shape listed `database` in
+/// `DROP_WHEN_NOT_IN_DESIRED` and removed the whole table on
+/// `database = false`; a re-run with the database service off
+/// and a `[database]` table the operator wanted to keep lost the
+/// table every time.
 const INIT_MANAGED_KEYS: &[&str] = &[
 	"hostname",
 	"public_ipv4",
@@ -215,6 +266,96 @@ const INIT_MANAGED_KEYS: &[&str] = &[
 	"tls",
 	"dns",
 ];
+
+/// The dual-stack IPv6 any address every mail listener binds when
+/// `init` writes the config. The `apply` phase uses the same
+/// constant so the plan and the apply path agree on what address
+/// the listener will reach the wire with. A loopback-only mail
+/// listener would receive no mail.
+const MAIL_BIND_ADDR: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
+
+/// The loopback address the management API listener binds when
+/// `init` writes the config. The API is closed to the network by
+/// design; the operator reaches it through the host's pasta
+/// mapping once the stack is up.
+const API_BIND_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+/// Return the listeners `init` will write into the config: either
+/// the operator's existing array (when the keep-existing-listeners
+/// path applies) or the array derived from the answers. The compose
+/// step uses this to derive the `ports:` list so a published port
+/// always matches a listener init just wrote.
+///
+/// Mirrors the keep-existing-listeners decision `merge_with_existing`
+/// makes: a non-empty `listeners` array on disk is preserved as-is,
+/// and `init` does not write its own. The same flag is read off
+/// disk twice (here and in `merge_with_existing`); a hand-edited
+/// file between the two reads would already be racy by design.
+pub(crate) fn listeners_to_write(answers: &Answers) -> Result<Vec<Listener>, ApplyError> {
+	if let Some(existing) = existing_operators_listeners(&answers.config_path)? {
+		return Ok(existing);
+	}
+	Ok(desired_listeners(&answers.services))
+}
+
+/// Build the listener array `init` would write from the answers.
+/// `smtp` is always present; the rest follow the `Services` flags.
+/// Mail listeners bind the dual-stack IPv6 any (`::`); the API
+/// listener binds loopback (`127.0.0.1`) and is closed to the
+/// network by design. Port is left as `None` so the schema default
+/// is what `serve` binds; the published-ports helper resolves it
+/// from the kind.
+fn desired_listeners(services: &Services) -> Vec<Listener> {
+	let mut listeners = Vec::new();
+	listeners.push(Listener {
+		kind: ListenerKind::Smtp,
+		addr: MAIL_BIND_ADDR,
+		port: None,
+	});
+	if services.imap {
+		listeners.push(Listener {
+			kind: ListenerKind::Imap,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.submission {
+		listeners.push(Listener {
+			kind: ListenerKind::Submission,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.pop3 {
+		listeners.push(Listener {
+			kind: ListenerKind::Pop3s,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.managesieve {
+		listeners.push(Listener {
+			kind: ListenerKind::ManageSieve,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.webdav {
+		listeners.push(Listener {
+			kind: ListenerKind::WebDav,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.api {
+		listeners.push(Listener {
+			kind: ListenerKind::Api,
+			addr: API_BIND_ADDR,
+			port: None,
+		});
+	}
+	listeners
+}
 
 /// Merge the desired config with the file on disk. Three outcomes:
 /// - no file on disk: write the desired one (Wrote);
@@ -307,6 +448,15 @@ pub(crate) fn reconcile(
 				}
 				existing_table.remove(*key);
 			}
+			// `[database]` is not in `INIT_MANAGED_KEYS` and is never
+			// in `DROP_WHEN_NOT_IN_DESIRED`: the apply phase only
+			// touches the table when the desired config carries it
+			// (i.e. `services.database = true`), and the per-key
+			// merge below replaces `url` and `password_file` while
+			// preserving the operator's other fields. A re-run with
+			// `services.database = false` leaves the table untouched,
+			// so an operator who runs their own PostgreSQL keeps
+			// their setup across `init` invocations.
 			for (key, value) in desired_table {
 				if key == "listeners" && keep_existing_listeners {
 					continue;
@@ -364,10 +514,14 @@ fn parsed(text: &str) -> Result<toml::Value, ApplyError> {
 /// signal to decide whether the merge preserves the `listeners`
 /// array verbatim or replaces it with its own.
 ///
-/// A file the rest of the CLI would reject (the `Config::load` path
-/// the plan mirrors) surfaces as a hard error here so the apply
-/// phase cannot "succeed" against a config `serve` would refuse to
-/// start with.
+/// The helper deliberately does not run `Config::load` on the
+/// on-disk file. The rest of the apply path validates the merged
+/// config before it lands, so a stale `[database].password_file` (or
+/// any other unrelated section the operator left in a shape
+/// `serve` would later refuse) cannot block listener discovery. A
+/// reconciliation that re-points the password file at the data-dir
+/// secret on this same run needs the helper to return the existing
+/// listeners first.
 pub(crate) fn existing_operators_listeners(
 	path: &Path,
 ) -> Result<Option<Vec<crate::config::Listener>>, ApplyError> {
@@ -400,12 +554,6 @@ pub(crate) fn existing_operators_listeners(
 			))
 		})?;
 		out.push(listener);
-	}
-	if let Err(error) = Config::load(path) {
-		return Err(ApplyError::ConfigInvalid(format!(
-			"existing config at {} has listeners but does not load: {error}",
-			path.display()
-		)));
 	}
 	Ok(Some(out))
 }

@@ -55,13 +55,14 @@ fn init_exits_one_when_openssl_genpkey_fails_and_carries_no_rsa_selector() {
 		.expect("chmod 0755 on shim");
 
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -184,13 +185,14 @@ fn init_succeeds_and_writes_rsa_selector_when_openssl_shim_succeeds() {
 		.expect("chmod 0755 on shim");
 
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

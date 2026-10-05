@@ -43,6 +43,7 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
+		image: None,
 	}
 }
 
@@ -94,6 +95,7 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	};
 
 	let outcome = apply(&answers);
@@ -190,6 +192,7 @@ fn plan_renders_kept_listeners_when_existing_config_has_them() {
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	};
 	let plan = crate::cli::init::apply::plan(&answers).expect("plan");
 
@@ -315,5 +318,87 @@ fn existing_operators_listeners_is_none_when_array_is_empty() {
 	assert!(
 		out.is_none(),
 		"no listeners key in the existing config must yield Ok(None); got: {out:?}"
+	);
+}
+
+/// A re-run against a config whose `[database].password_file`
+/// points at a path that no longer exists must still extract the
+/// listeners so the apply phase can reconcile the stale
+/// password_file away. Before the fix, `existing_operators_listeners`
+/// called `Config::load` on the on-disk file; the validator's
+/// database check opens the password file and fails on
+/// `NotFound`, so the helper returned an error and `init` exited
+/// before the reconciliation that would have replaced the stale
+/// path. With the fix, the helper returns the listener array
+/// verbatim and the merge drops the stale `password_file`
+/// because the desired config supplies the fresh one.
+#[test]
+fn existing_operators_listeners_survives_a_stale_password_file() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config_path = dir.path().join("mail.toml");
+	let stale = dir.path().join("missing_password_file");
+	// A complete config with a non-empty listeners array and a
+	// `[database].password_file` pointing at a path that does
+	// not exist. The validator refuses to load this file
+	// (`ConfigError::Read { kind: "[database] password_file", ... }`),
+	// so the previous shape that called `Config::load` here
+	// returned an error before returning the listeners.
+	let body = format!(
+		"\
+		hostname = \"mail.example.org\"\n\
+		data_dir = \"/var/lib/epistle\"\n\
+		domains = [\"example.org\"]\n\n\
+		[tls]\n\
+		cert_file = \"/var/lib/epistle/keys/cert.pem\"\n\
+		key_file = \"/var/lib/epistle/keys/key.pem\"\n\n\
+		[database]\n\
+		url = \"postgres://epistle@%2Frun%2Fpostgresql/epistle\"\n\
+		password_file = \"{}\"\n\n\
+		[[listeners]]\n\
+		kind = \"imap\"\n\
+		addr = \"127.0.0.1\"\n\
+		port = 1143\n",
+		stale.display()
+	);
+	write_0600(&config_path, &body);
+	let listeners = apply_config::existing_operators_listeners(&config_path)
+		.expect("listener discovery must not fail on a stale password_file")
+		.expect("a non-empty listeners array must come back as Some(_)");
+	assert_eq!(
+		listeners.len(),
+		1,
+		"the kept listener must come back from the helper; got: {listeners:?}"
+	);
+	assert_eq!(listeners[0].kind, ListenerKind::Imap);
+
+	// Drive the full apply phase against the same config so the
+	// reconciliation replaces the stale `password_file` with the
+	// one the apply phase writes under the data directory.
+	let data_dir = dir.path().join("data");
+	let mut answers = answers_minimal();
+	answers.data_dir = data_dir.clone();
+	answers.config_path = config_path.clone();
+	answers.services.database = true;
+	let outcome = apply(&answers);
+	assert!(
+		outcome.error.is_none(),
+		"apply must succeed against a stale password_file; got: {:?}",
+		outcome.error
+	);
+	let written = std::fs::read_to_string(&config_path).expect("read merged config");
+	assert!(
+		!written.contains(&stale.display().to_string()),
+		"the stale password_file path must not be in the merged config; got: {written}"
+	);
+	assert!(
+		written.contains("epistle_db_password"),
+		"the merged config must point at the freshly written password file; got: {written}"
+	);
+	assert!(
+		data_dir
+			.join("secrets")
+			.join("epistle_db_password")
+			.exists(),
+		"the freshly written password file must exist on disk; got: {written}"
 	);
 }

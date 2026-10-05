@@ -26,6 +26,7 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
+		image: None,
 	}
 }
 
@@ -50,6 +51,7 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();
@@ -84,6 +86,7 @@ fn build_config_with_every_service_on_uses_mail_addr_for_every_mail_listener_and
 		managesieve: true,
 		webdav: true,
 		api: true,
+		database: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();
@@ -240,6 +243,7 @@ fn build_config_with_api_writes_api_listener_on_loopback() {
 		managesieve: false,
 		webdav: false,
 		api: true,
+		database: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();

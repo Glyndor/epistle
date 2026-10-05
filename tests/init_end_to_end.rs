@@ -26,7 +26,9 @@ fn make_answers_body(data_dir: &Path, config_path: &Path) -> String {
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"8.8.8.8\"\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	)
@@ -211,6 +213,109 @@ fn apply_creates_every_file_with_the_right_mode_and_config_check_passes() {
 
 #[cfg(unix)]
 #[test]
+fn second_apply_with_database_leaves_compose_and_password_files_untouched() {
+	// The `database = false` half of the rerun story is
+	// pinned by `second_apply_is_a_noop_on_disk_and_uses_reuse_identical`
+	// in a different shape. The `database = true` half
+	// has to walk two more files: the database password
+	// (`<data_dir>/secrets/epistle_db_password`) and the
+	// compose file (`<data_dir>/compose/compose.yaml`).
+	// The password is reused byte-for-byte (rotating it
+	// would lock epistle out of the existing database)
+	// and the compose file is rendered byte-for-byte
+	// from the answers (it carries the freshly minted
+	// password path), so both must come out of the
+	// second apply with the same bytes and the same
+	// mtime as the first. A regression that touched
+	// either of them would re-write a file the plan
+	// said was identical.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	let body = format!(
+		"mode = \"manual\"\n\
+		 hostname = \"mail.example.org\"\n\
+		 domains = [\"example.org\"]\n\
+		 data_dir = \"{}\"\n\
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = true\n",
+		data_dir.display(),
+		config_path.display(),
+	);
+	let answers = write_answers(dir.path(), "answers.toml", &body);
+	let mut cmd = Command::new(binary());
+	cmd.args(["init", "--answers", answers.to_str().unwrap()]);
+	cmd.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped());
+	let output = cmd.output().expect("first apply");
+	assert!(
+		output.status.success(),
+		"first apply failed: {:?}",
+		output.status
+	);
+
+	// Walk the second-apply target files: the database
+	// password and the compose file. A regression that
+	// touched either of them under a `database = true`
+	// re-run would re-write a file the plan said was
+	// identical.
+	let password_path = data_dir.join("secrets").join("epistle_db_password");
+	let compose_path = data_dir.join("compose").join("compose.yaml");
+	let pwd_hash = sha256_of(&password_path);
+	let pwd_mtime = mtime(&password_path);
+	let compose_hash = sha256_of(&compose_path);
+	let compose_mtime = mtime(&compose_path);
+
+	let mut cmd = Command::new(binary());
+	cmd.args(["init", "--answers", answers.to_str().unwrap()]);
+	cmd.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped());
+	let output = cmd.output().expect("second apply");
+	assert!(
+		output.status.success(),
+		"second apply failed: {:?}; stderr: {}",
+		output.status,
+		String::from_utf8_lossy(&output.stderr)
+	);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		!stderr.contains("epistle_db_password")
+			|| stderr.contains("reused:")
+			|| stderr.contains("config identical"),
+		"the database password must be reused on a database = true re-run, not regenerated; stderr: {stderr}"
+	);
+	assert!(
+		!stderr.contains("compose.yaml") || stderr.contains("identical"),
+		"the compose file must be identical on a database = true re-run, not regenerated; stderr: {stderr}"
+	);
+
+	assert_eq!(
+		sha256_of(&password_path),
+		pwd_hash,
+		"the database password must be byte-identical after the second apply"
+	);
+	assert_eq!(
+		mtime(&password_path),
+		pwd_mtime,
+		"the database password mtime must be unchanged after the second apply"
+	);
+	assert_eq!(
+		sha256_of(&compose_path),
+		compose_hash,
+		"the compose file must be byte-identical after the second apply"
+	);
+	assert_eq!(
+		mtime(&compose_path),
+		compose_mtime,
+		"the compose file mtime must be unchanged after the second apply"
+	);
+}
+
+#[cfg(unix)]
+#[test]
 fn second_apply_is_a_noop_on_disk_and_uses_reuse_identical() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
@@ -227,6 +332,64 @@ fn second_apply_is_a_noop_on_disk_and_uses_reuse_identical() {
 		.stderr(Stdio::piped());
 	let output = cmd.output().expect("first apply");
 	assert!(output.status.success());
+
+	// Walk the plan on the data dir the first apply populated,
+	// so a regression that drops a reuse from the plan (or makes
+	// the apply phase regenerate) shows up here as a missing
+	// `reuse` line in the rendered plan.
+	let plan_cmd_args = ["init", "--answers", answers.to_str().unwrap(), "--dry-run"];
+	let plan_output = Command::new(binary())
+		.args(plan_cmd_args)
+		.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped())
+		.output()
+		.expect("plan");
+	assert!(
+		plan_output.status.success(),
+		"plan exit: {:?}",
+		plan_output.status
+	);
+	let plan_stderr = String::from_utf8_lossy(&plan_output.stderr);
+	for needle in [
+		"dkim ed25519 key: reuse",
+		"storage key: reuse",
+		"oauth private key: reuse",
+		"oauth public key: reuse",
+	] {
+		assert!(
+			plan_stderr.contains(needle),
+			"dry-run plan must name the reuse for {needle}; got: {plan_stderr}"
+		);
+	}
+	// The RSA DKIM key step is `reuse` only when openssl is on
+	// PATH AND the operator already wrote `s2.pem`. The plan
+	// renders `skip` (with a hand-run `dkim-keygen` hint) when
+	// openssl is missing and the file is absent, and `generate`
+	// when openssl is on PATH and the file is absent. A second
+	// apply against a tree that already has the file is `reuse`
+	// in both cases. The two assertions below pin both shapes
+	// against the openssl signal the rest of the test already
+	// reads.
+	if openssl_on_path() {
+		assert!(
+			plan_stderr.contains("dkim rsa key: reuse"),
+			"dry-run plan must reuse the RSA key when openssl is on PATH; got: {plan_stderr}"
+		);
+	} else {
+		assert!(
+			plan_stderr.contains("dkim rsa key: skip"),
+			"dry-run plan must skip the RSA key when openssl is missing; got: {plan_stderr}"
+		);
+	}
+	assert!(
+		plan_stderr.contains("config:"),
+		"dry-run plan must list the config step; got: {plan_stderr}"
+	);
+	assert!(
+		plan_stderr.contains("identical"),
+		"dry-run plan must say the config is identical; got: {plan_stderr}"
+	);
 
 	let mut hashes = Vec::new();
 	let mut mtimes = Vec::new();
@@ -275,8 +438,8 @@ fn second_apply_is_a_noop_on_disk_and_uses_reuse_identical() {
 		);
 	}
 
-	// Every key step and the config step must say reuse / identical.
-	// None must say generate.
+	// Every key step and the config step must say reuse / identical
+	// in the apply-phase report. None must say generate.
 	assert!(
 		stderr.contains("reuse") && stderr.contains("identical"),
 		"second apply must reuse every key and leave the config identical; stderr: {stderr}"
@@ -298,7 +461,9 @@ fn invalid_answers_reports_every_problem_and_creates_nothing() {
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"10.0.0.1\"\n\
 		 data_dir = \"relative/path\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		config_path.display(),
 	);
 	let answers = write_answers(dir.path(), "answers.toml", &body);
@@ -411,7 +576,9 @@ fn interactive_run_exits_0_when_user_declines_confirmation() {
 					 \n\
 					 \n\
 					 /tmp/{name}/data\n\
-					 /tmp/{name}/mail.toml\n\
+					 /tmp/{name}/etc/mail.toml\n\
+					 \n\
+					 \n\
 					 \n\
 					 \n\
 					 \n\
@@ -448,13 +615,15 @@ fn init_skips_the_rsa_dkim_step_when_openssl_is_absent() {
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -492,7 +661,8 @@ fn init_exits_two_when_plan_fails_on_an_unparseable_existing_config() {
 	// precondition that stopped the run before any effect).
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	std::fs::write(&config_path, "this is not = valid TOML\tbroken\n")
 		.expect("write unparseable config");
 	#[cfg(unix)]
@@ -506,7 +676,9 @@ fn init_exits_two_when_plan_fails_on_an_unparseable_existing_config() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

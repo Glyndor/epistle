@@ -35,6 +35,7 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
+		image: None,
 	}
 }
 
@@ -158,6 +159,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	};
 	answers.mode = crate::cli::init::answers::Mode::Manual;
 	let outcome = apply(&answers);

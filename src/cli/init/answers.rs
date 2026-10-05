@@ -46,7 +46,7 @@ pub struct DnsAnswers {
 }
 
 /// The set of services the operator wants to expose.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Services {
 	/// IMAP listener (defaults to `true`).
@@ -67,6 +67,13 @@ pub struct Services {
 	/// Management API listener (defaults to `false`).
 	#[serde(default)]
 	pub api: bool,
+	/// Bring up the stack's PostgreSQL (directory, bans, antispam).
+	/// When `true`, `init` writes a `[database]` section to the config,
+	/// mints the database password, and adds the postgres service to
+	/// the compose file. No default: a missing field is an error that
+	/// names `services.database` so the operator has to make the
+	/// choice explicitly.
+	pub database: bool,
 }
 
 const fn default_true() -> bool {
@@ -75,6 +82,13 @@ const fn default_true() -> bool {
 
 impl Default for Services {
 	fn default() -> Self {
+		// `database` is the only field without a `serde(default)` and
+		// without an opinion here. The file path requires the
+		// operator to state the choice, so the `Default` impl mirrors
+		// what a hand-written `Services` with the same listener
+		// defaults would look like for a test that does not care
+		// about the database. Tests that do care pass `database`
+		// explicitly.
 		Self {
 			imap: true,
 			submission: true,
@@ -82,6 +96,7 @@ impl Default for Services {
 			managesieve: false,
 			webdav: false,
 			api: false,
+			database: false,
 		}
 	}
 }
@@ -112,9 +127,22 @@ pub struct Answers {
 	/// manual mode.
 	#[serde(default)]
 	pub dns: Option<DnsAnswers>,
-	/// Which services to expose.
-	#[serde(default)]
+	/// Which services to expose. The whole `[services]` table is
+	/// required: a missing table must not silently default to
+	/// `database = false` and let a hand-typed answers file skip the
+	/// explicit choice. Tests pin this with
+	/// `services_table_is_required`.
 	pub services: Services,
+	/// Optional override for the `mail` service image. The default is
+	/// `ghcr.io/glyndor/epistle:<CARGO_PKG_VERSION>` resolved at build
+	/// time, which is what a release-pinned install uses. Tests and
+	/// local builds pass a different image (e.g.
+	/// `localhost/epistle:dev`). `None` lets the default apply.
+	/// Validated non-empty and whitespace-free when set so the compose
+	/// writer cannot produce a bare `image:` key or a value that
+	/// splits across two array entries.
+	#[serde(default)]
+	pub image: Option<String>,
 }
 
 /// A non-fatal problem the operator should see before the file is
@@ -188,11 +216,60 @@ pub enum Invalid {
 	/// `config_path` is inside `<data_dir>/keys`. `init` owns that
 	/// directory and would race the staging step against itself.
 	ConfigPathInsideKeysDir,
+	/// `config_path`'s directory and `data_dir` overlap, so the
+	/// compose file would mount the same path twice (once for
+	/// the data directory, once for the config directory) and
+	/// podman would refuse the container. The config mount is
+	/// read-only, so a single shared mount cannot satisfy both
+	/// roles. Either direction is caught: a `config_path` whose
+	/// parent equals or sits inside `data_dir`, and a `data_dir`
+	/// that equals or sits inside `config_path`'s parent. The
+	/// comparison normalises `.` and `..` lexically and
+	/// canonicalises both paths when they exist on disk, so
+	/// `data_dir = "/srv/epistle/data"` and
+	/// `config_path = "/srv/epistle/spare/../data/mail.toml"`
+	/// are caught here even though the textual paths look
+	/// disjoint.
+	ConfigMountsOverlap {
+		data_dir: String,
+		config_dir: String,
+	},
+	/// `data_dir` or `config_path` contains a `..` component that
+	/// cannot be resolved lexically (e.g. `data_dir = "/../foo"`).
+	/// The path is absolute but tries to escape its root before
+	/// any directory is named, so the lexical normalisation that
+	/// the overlap check relies on has nothing to compare. The
+	/// validator refuses the input before any effect rather than
+	/// silently normalising to a path the operator did not write.
+	PathParentEscapesRoot { field: String, value: String },
+	/// `data_dir` or `config_path` contains a `$` that compose
+	/// would interpolate at `podup config` time. The compose
+	/// file mounts the two paths verbatim on both sides of the
+	/// colon; a `$VAR` in the source path resolves to the empty
+	/// string (or a value `podup` reads from the host
+	/// environment) while the rendered `mail.toml` keeps the
+	/// literal `$VAR` in its `data` and key paths, and the
+	/// container cannot find the keys the host generated. The
+	/// validator catches the `$` before any effect, and the
+	/// operator has to write the resolved path directly.
+	PathInterpolated { field: String, value: String },
 	/// `services.api = true`: init cannot mint a management API
 	/// credential, so the operator must enable the api service by
 	/// editing the `[api]` section of the generated config after
 	/// `init` returns.
 	ApiUnsupported,
+	/// `image` is set but empty or contains whitespace. The
+	/// compose file pins the image as a single string, so an empty
+	/// value would resolve to a bare `image:` key and whitespace
+	/// inside would split it across two values.
+	ImageMalformed(String),
+	/// `image` has no tag or digest. The compose writer needs a
+	/// pinned reference; an untagged image (e.g. `ghcr.io/.../epistle`)
+	/// would default to `:latest` and break reproducible
+	/// installs, which is exactly what the operator avoided by
+	/// using `init` instead of `podup run`. The same check rejects
+	/// an explicit `:latest` tag, which is no better.
+	ImageUntagged(String),
 }
 
 impl std::fmt::Display for Invalid {
@@ -235,8 +312,36 @@ impl std::fmt::Display for Invalid {
 			Invalid::ConfigPathInsideKeysDir => f.write_str(
 				"config_path: must not be inside data_dir/keys",
 			),
+			Invalid::ConfigMountsOverlap {
+				data_dir,
+				config_dir,
+			} => write!(
+				f,
+				"data_dir {data_dir:?} and config_path's directory {config_dir:?} must not overlap; \
+				 the compose file mounts both, and podman refuses duplicate mount destinations"
+			),
+			Invalid::PathParentEscapesRoot { field, value } => write!(
+				f,
+				"{field} {value:?}: contains `..` that escapes the path root; \
+				 write the path without `..` components"
+			),
+			Invalid::PathInterpolated { field, value } => write!(
+				f,
+				"{field} {value:?}: must not contain a `$`; compose would interpolate it \
+				 and the rendered mail.toml would still carry the literal `$VAR` in its \
+				 data and key paths, so the container could not find the generated keys. \
+				 Write the resolved path directly."
+			),
 			Invalid::ApiUnsupported => f.write_str(
 				"services.api: enable the management API by editing the [api] section of the generated config after init; init does not generate an api credential",
+			),
+			Invalid::ImageMalformed(value) => write!(
+				f,
+				"image {value:?}: must be non-empty and contain no whitespace"
+			),
+			Invalid::ImageUntagged(value) => write!(
+				f,
+				"image {value:?}: must include a tag that is not 'latest' or a @sha256: digest"
 			),
 		}
 	}
@@ -286,18 +391,20 @@ impl Answers {
 		 # public_ipv4 = \"203.0.113.10\"    # optional; must be a global unicast address\n\
 		 # public_ipv6 = \"2001:db8::10\"    # optional; must be a global unicast address\n\
 		 data_dir = \"/var/lib/glyndor/epistle\"\n\
-		 config_path = \"/etc/epistle/mail.toml\"\n\n\
+		 config_path = \"/etc/epistle/mail.toml\"\n\
+		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\n\
 		 # [dns]                             # only with mode = \"automatic\"\n\
 		 # provider = \"cloudflare\"          # cloudflare, route53, dnsimple, ...\n\
 		 # zone = \"example.org\"\n\
 		 # token_file = \"/run/secrets/epistle-dns\"  # or token_env = \"NAME\"; token = \"...\" is accepted with one warning\n\n\
-		 [services]                        # each true | false; defaults: imap, submission true; the rest false\n\
+		 [services]                        # required; each true | false; defaults: imap, submission true; the rest false\n\
 		 imap = true\n\
 		 submission = true\n\
 		 # pop3 = false\n\
 		 # managesieve = false\n\
 		 # webdav = false\n\
-		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n"
+		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n\
+		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n"
 			.to_string()
 	}
 }

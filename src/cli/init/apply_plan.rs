@@ -8,6 +8,7 @@
 use super::Answers;
 use super::ApplyError;
 use super::apply_config;
+use crate::cli::init::compose;
 use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
 /// True when `openssl` is on `PATH` and the RSA DKIM key step can be
@@ -180,7 +181,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 				})
 				.collect()
 		} else {
-			listener_entries(answers.services)
+			listener_entries(&answers.services)
 		},
 		kept: existing_listeners.is_some(),
 	});
@@ -195,12 +196,43 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 	)?;
 	let file_exists = answers.config_path.exists();
 	let count = managed_key_count(answers);
+	// The database password step goes in the plan before the
+	// config step: the config's `[database]` section points at the
+	// password file, and `Config::load` opens it during validation.
+	// The plan mirrors the apply order so the operator sees the
+	// same shape they will see in the report.
+	if answers.services.database {
+		let path = crate::cli::init::compose::db_password_path(&answers.data_dir);
+		// The plan says `reused: true` only when the apply
+		// phase will actually reuse the file: it exists, is
+		// non-empty, and can be read. A directory at the path
+		// or a `mode 0o000` file would fail the apply phase
+		// with `ExistingSecretUnreadable`; the plan surfaces
+		// the same shape by reading the bytes here and only
+		// saying `reuse` when the read returned non-empty
+		// content. A non-existent or empty file is reported
+		// as `reused: false` (the apply will mint a new one).
+		let reused = crate::cli::init::compose::db_password_reused(&answers.data_dir);
+		steps.push(PlanStep::DbPassword { path, reused });
+	}
 	steps.push(PlanStep::Config {
 		path: answers.config_path.clone(),
 		identical,
 		file_exists,
 		count,
 		preserves_comments: false,
+	});
+	// The compose file is the last step. It is regenerated when
+	// the answers change, byte-for-byte otherwise. The plan tells
+	// the operator whether the file already matches the desired
+	// version, will be written, or will be updated.
+	let compose_path = crate::cli::init::compose::compose_file_path(&answers.data_dir);
+	let compose_identical = compose_is_identical_to_desired(answers)?;
+	let compose_file_exists = compose_path.exists();
+	steps.push(PlanStep::ComposeFile {
+		path: compose_path,
+		identical: compose_identical,
+		file_exists: compose_file_exists,
 	});
 	if let Some(dns) = &answers.dns {
 		steps.push(PlanStep::Dns {
@@ -222,7 +254,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 /// `apply_listeners_lines_tests.rs` is what catches a
 /// `listener_entries` that hardcoded the old number alongside a
 /// `ListenerKind` that switched.
-fn listener_entries(services: crate::cli::init::answers::Services) -> Vec<ListenerEntry> {
+fn listener_entries(services: &crate::cli::init::answers::Services) -> Vec<ListenerEntry> {
 	let mail_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
 	let mut entries = Vec::new();
 	entries.push(ListenerEntry {
@@ -449,7 +481,10 @@ fn config_is_identical_to_desired(
 /// config. Used by the plan to tell the operator how much a rewrite
 /// will touch. Six keys are always written (`hostname`, `data_dir`,
 /// `domains`, `listeners`, `dkim`, `tls`); `public_ipv4`, `public_ipv6`,
-/// and `dns` are added when the operator supplied them.
+/// `dns`, and `database` are added when the operator supplied them.
+/// `database` is special: only `url` and `password_file` are managed
+/// inside the table; the rest (`directory`, `max_connections`, `tls`)
+/// are the operator's to keep.
 fn managed_key_count(answers: &Answers) -> usize {
 	let mut count = 6;
 	if answers.public_ipv4.is_some() {
@@ -461,5 +496,25 @@ fn managed_key_count(answers: &Answers) -> usize {
 	if answers.dns.is_some() {
 		count += 1;
 	}
+	if answers.services.database {
+		count += 1;
+	}
 	count
+}
+
+/// `true` when the compose file on disk is already byte-for-byte
+/// the bytes the apply phase would write. Used by the plan to
+/// decide whether the compose file step says `identical, not
+/// touched` or `update` / `write`. A read failure here only
+/// means "we cannot tell"; the apply phase re-renders the file
+/// and writes it, which is the right behaviour when the disk
+/// state is unknown.
+fn compose_is_identical_to_desired(answers: &Answers) -> Result<bool, ApplyError> {
+	let path = compose::compose_file_path(&answers.data_dir);
+	let existing = match std::fs::read_to_string(&path) {
+		Ok(text) => text,
+		Err(_) => return Ok(false),
+	};
+	let desired = compose::render_for(answers, answers.services.database)?;
+	Ok(existing == desired)
 }

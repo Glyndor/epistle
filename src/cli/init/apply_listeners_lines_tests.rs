@@ -27,6 +27,7 @@ fn answers_with_services(services: Services) -> Answers {
 		config_path: std::path::PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services,
+		image: None,
 	}
 }
 
@@ -45,6 +46,7 @@ fn plan_listeners_render_one_per_line_with_padded_kind() {
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	});
 	let plan = plan(&answers).expect("plan");
 	let mut rendered = String::new();
@@ -170,6 +172,7 @@ fn plan_listeners_step_has_one_line_per_listener() {
 		managesieve: true,
 		webdav: true,
 		api: true,
+		database: false,
 	});
 	let plan = plan(&answers).expect("plan");
 	let mut rendered = String::new();
@@ -246,6 +249,7 @@ fn listener_entries_match_schema_default_ports() {
 		managesieve: true,
 		webdav: true,
 		api: true,
+		database: false,
 	}))
 	.expect("plan");
 	let entries: Vec<&ListenerEntry> = plan
