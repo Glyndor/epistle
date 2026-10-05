@@ -326,8 +326,12 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 		},
 	);
 	let directory = scram_directory_with_ban_store(ban_store.clone());
-	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
-		.with_scram_nonce("SN");
+	let mut session = Session::new(
+		"mail.example.org",
+		tmp.path().to_path_buf(),
+		directory.clone(),
+	)
+	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
 	let out = text(&session.command_line(&format!(
@@ -356,14 +360,18 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 /// path uses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_failure_adds_one_strike() {
-	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
 	let directory = scram_directory_with_ban_store(ban_store.clone());
-	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
-		.with_scram_nonce("SN");
+	let mut session = Session::new(
+		"mail.example.org",
+		tmp.path().to_path_buf(),
+		directory.clone(),
+	)
+	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.43".parse().expect("peer")));
 
 	let out = text(&session.command_line(&format!(
@@ -417,8 +425,12 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 		},
 	);
 	let directory = scram_directory_with_ban_store(ban_store.clone());
-	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
-		.with_scram_nonce("SN");
+	let mut session = Session::new(
+		"mail.example.org",
+		tmp.path().to_path_buf(),
+		directory.clone(),
+	)
+	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.44".parse().expect("peer")));
 
 	for _ in 0..3 {
@@ -441,7 +453,7 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 		.unwrap_or(0);
 	let info = tokio::task::block_in_place(|| {
 		tokio::runtime::Handle::current()
-			.block_on(ban_store.is_banned(&"ip:203.0.113.44".to_string(), now))
+			.block_on(ban_store.is_banned("ip:203.0.113.44", now))
 	})
 	.expect("ban still in force");
 	assert_eq!(

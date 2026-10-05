@@ -134,9 +134,7 @@ impl Directory {
 		// password check rejected a known login (e.g. wrong password, an
 		// app-password CIDR miss, a protocol allowlist denial). An unknown
 		// login never reaches the account side.
-		let account_for_record = verified
-			.as_deref()
-			.or(resolved_account.as_deref());
+		let account_for_record = verified.as_deref().or(resolved_account.as_deref());
 		self.record_ban_outcome(login, account_for_record, verified.is_some(), ip, protocol);
 		verified
 	}
@@ -165,9 +163,9 @@ impl Directory {
 		};
 		let now_secs = unix_now_secs();
 		if let Some(ip) = ip
-			&& let Some(info) = block_on_async(
-				store.is_banned(&crate::antispam::bans::subject_ip(ip), now_secs),
-			) {
+			&& let Some(info) =
+				block_on_async(store.is_banned(&crate::antispam::bans::subject_ip(ip), now_secs))
+		{
 			self.log_banned(
 				"ip",
 				&ip.to_string(),

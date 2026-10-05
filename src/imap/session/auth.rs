@@ -443,12 +443,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 	/// both. The ban check at the start of the exchange already decided
 	/// whether to refuse the attempt; a ban refusal never reaches this
 	/// helper, so the strike count and ban expiry stay where they were.
-	fn record_scram_outcome(
-		&self,
-		login: &str,
-		account: Option<&str>,
-		success: bool,
-	) {
+	fn record_scram_outcome(&self, login: &str, account: Option<&str>, success: bool) {
 		self.directory.record_ban_outcome(
 			login,
 			account,

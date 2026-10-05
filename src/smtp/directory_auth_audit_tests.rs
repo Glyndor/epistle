@@ -503,7 +503,7 @@ async fn a_ban_refusal_does_not_add_a_strike_and_does_not_extend_the_ban() {
 		.unwrap_or(0);
 	let info = tokio::task::block_in_place(|| {
 		tokio::runtime::Handle::current()
-			.block_on(ban_store.is_banned(&"ip:203.0.113.50".to_string(), now))
+			.block_on(ban_store.is_banned("ip:203.0.113.50", now))
 	})
 	.expect("ban still in force");
 	assert_eq!(
