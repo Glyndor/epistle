@@ -207,13 +207,18 @@ fn a_token_inside_an_rfc_2047_encoded_subject_is_accepted() {
 	let token = p.issue(sender, recipient, day);
 	let b_subject = encoded_subject("hello", &token, 'B');
 	let q_subject = encoded_subject("hello", &token, 'Q');
+	// The encoded subjects carry the SubjectPass token. If the
+	// RFC 2047 decoder regresses, the test fails here; the
+	// panic message must not echo either encoded subject, or it
+	// would dump the token in the (Base64-decodable) B form
+	// and in the (Q-decodable) Q form straight into the CI log.
 	assert!(
 		p.accepts(Some(&b_subject), sender, recipient, day),
-		"B-encoded subject {b_subject:?} should still verify the token"
+		"B-encoded subject must still verify the token"
 	);
 	assert!(
 		p.accepts(Some(&q_subject), sender, recipient, day),
-		"Q-encoded subject {q_subject:?} should still verify the token"
+		"Q-encoded subject must still verify the token"
 	);
 	// The same subjects with one token byte changed must NOT verify.
 	let mut bad_token: String = token.clone();
@@ -267,6 +272,10 @@ fn base32_encoding_round_trips_through_the_token() {
 	let token = p.issue("alice@example.org", "bob@example.org", 1);
 	let suffix = token.strip_prefix(TOKEN_PREFIX).unwrap();
 	assert_eq!(suffix.len(), TOKEN_CHARS);
+	// The suffix is the credential payload: any panic that
+	// interpolates it would dump the SubjectPass token into
+	// the CI log. Name the off-alphabet byte in hex; the
+	// suffix itself never appears in the message.
 	for byte in suffix.bytes() {
 		assert!(
 			byte.is_ascii_uppercase() || (b'2'..=b'7').contains(&byte),
