@@ -56,6 +56,66 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 	);
 }
 
+/// A malformed client-first sent from an already-banned IP does not
+/// extend the ban and does not add a strike. The previous behaviour
+/// recorded a failure first and only then checked the ban, so an
+/// unbanned peer could trip the threshold with bad-base64 requests
+/// and then keep extending the ban by reconnecting after the
+/// per-connection three-strikes limit closed the socket. The fix
+/// consults the IP ban before recording the failure, so a banned
+/// peer's garbage requests stay a no-op against the shared store.
+/// The test arms an active IP ban, drives three malformed
+/// client-firsts (rebuilding the session each time because the
+/// per-connection three-strikes limit closes the socket), and
+/// asserts the ban expiry has not moved and no new failure landed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_malformed_client_first_while_banned_does_not_extend_ban() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
+
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let original_until: u64 = 1_900_000_000;
+	ban_store.arm_ban(
+		"ip:203.0.113.60",
+		BanInfo {
+			until_secs: original_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
+
+	for _ in 0..3 {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
+			.with_scram_nonce("SN");
+		session.set_peer_ip(Some("203.0.113.60".parse().expect("peer")));
+		// Invalid base64: bypasses the SCRAM username parse, the
+		// credential lookup, and any ban check that runs after the
+		// record_failure call.
+		let out = text(&session.command_line("a AUTHENTICATE SCRAM-SHA-256 !!!not-base64"));
+		assert!(out.contains("a NO"), "{out}");
+	}
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"a banned IP sending garbage must not record a failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
+	);
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.60", now))
+	})
+	.expect("ban still in force");
+	assert_eq!(
+		info.until_secs, original_until,
+		"the ban's until_secs must not have moved"
+	);
+}
+
 /// An IMAP LOGIN attempt routes through the directory's
 /// `authenticate_with_ip` with the peer IP the network layer recorded
 /// on `set_peer_ip`. The test sets up a [`FakeBanStore`], drives LOGIN

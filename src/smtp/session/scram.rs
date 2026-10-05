@@ -57,16 +57,25 @@ impl Session {
 	/// credentials and answer with the server-first challenge.
 	pub(super) fn scram_client_first(&mut self, encoded: &str, binding: ChannelBinding) -> Action {
 		let Some(client_first) = decode(encoded) else {
-			// A malformed client-first (invalid base64) still counts as
-			// an authentication failure for the shared ban accounting.
-			// The login and the resolved account are both unknown, so
-			// the IP-side strike is the only one recorded.
+			// A malformed client-first (invalid base64) is a failure, but
+			// the IP ban is consulted first so a banned peer cannot extend
+			// its own ban by sending garbage: refused attempts never record
+			// a strike. With no username there is no account row to check,
+			// so the ban is the IP ban only.
+			if self.is_ip_banned() {
+				return self.scram_failure();
+			}
 			self.record_scram_outcome("", None, false);
 			return self.scram_failure();
 		};
 		let Some(username) = username_of(&client_first) else {
-			// A well-formed base64 client-first without a username tag
-			// is still a malformed client-first for ban accounting.
+			// A well-formed base64 client-first without a username tag is
+			// still a malformed client-first. The same IP-ban-first rule
+			// applies: a banned peer must not be able to extend its own
+			// ban by sending repeated tag-less garbage.
+			if self.is_ip_banned() {
+				return self.scram_failure();
+			}
 			self.record_scram_outcome("", None, false);
 			return self.scram_failure();
 		};
@@ -252,6 +261,20 @@ impl Session {
 			self.peer_ip,
 			self.auth_protocol,
 		);
+	}
+
+	/// Whether the peer IP is currently banned. Used by the malformed
+	/// client-first branches, which never see a username and so cannot
+	/// consult the account ban: only the IP ban can refuse them. A
+	/// banned IP must not be able to extend its own ban by sending
+	/// garbage, so the branches short-circuit here before recording a
+	/// strike.
+	fn is_ip_banned(&self) -> bool {
+		matches!(
+			self.directory
+				.check_ban("", self.peer_ip, self.auth_protocol),
+			BanOutcome::Banned
+		)
 	}
 
 	/// The SCRAM server nonce: the injected one in tests, else fresh randomness.
