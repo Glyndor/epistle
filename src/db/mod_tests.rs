@@ -6,12 +6,42 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
+/// The variant name of a `DbError`, for the assertion messages that
+/// must not print the full Debug. The `PasswordFile` variant carries a
+/// path and a `PasswordFileError`, neither of which is a credential
+/// itself, but the panic message has to be a CI log; printing the
+/// full Debug would make the line wider and noisier than the
+/// diagnosis needs. The match is exhaustive on purpose: a new
+/// variant added to `DbError` breaks this file at compile time, so
+/// the next caller cannot fall through and print the whole struct.
+fn error_name(error: &DbError) -> &'static str {
+	match error {
+		DbError::Connect(_) => "Connect",
+		DbError::Migrate(_) => "Migrate",
+		DbError::InvalidUrl(_) => "InvalidUrl",
+		DbError::ServerTooOld { .. } => "ServerTooOld",
+		DbError::BadServerVersion(_) => "BadServerVersion",
+		DbError::PasswordFile { .. } => "PasswordFile",
+	}
+}
+
+/// "Ok(<N>)" or "<error variant>", for the `Ok(N)` fall-through cases
+/// of the floor tests: the result carries the decoded major in the
+/// `Ok` arm, the error variant in the `Err` arm. The match is
+/// exhaustive on purpose for the same reason `error_name` is.
+fn result_name(result: &Result<u32, DbError>) -> String {
+	match result {
+		Ok(major) => format!("Ok({major})"),
+		Err(error) => error_name(error).to_string(),
+	}
+}
+
 /// A `server_version_num` at the floor decodes to the floor and passes.
 #[test]
 fn major_at_the_floor_passes() {
 	match major_meets_floor(140_012, MIN_SERVER_VERSION) {
 		Ok(14) => {}
-		other => panic!("expected Ok(14), got {other:?}"),
+		other => panic!("expected Ok(14), got {}", result_name(&other)),
 	}
 }
 
@@ -21,7 +51,7 @@ fn major_at_the_floor_passes() {
 fn major_above_the_floor_passes() {
 	match major_meets_floor(180_001, MIN_SERVER_VERSION) {
 		Ok(18) => {}
-		other => panic!("expected Ok(18), got {other:?}"),
+		other => panic!("expected Ok(18), got {}", result_name(&other)),
 	}
 }
 
@@ -34,7 +64,10 @@ fn major_below_the_floor_is_refused() {
 			found: 13,
 			required: 14,
 		}) => {}
-		other => panic!("expected ServerTooOld {{ found: 13, required: 14 }}, got {other:?}"),
+		other => panic!(
+			"expected ServerTooOld {{ found: 13, required: 14 }}, got {}",
+			result_name(&other)
+		),
 	}
 }
 
@@ -129,7 +162,7 @@ fn password_file_refuses_an_empty_secret_after_stripping() {
 			kind: PasswordFileError::Empty,
 			..
 		} => {}
-		other => panic!("expected PasswordFile {{ Empty, .. }}, got {other:?}"),
+		other => panic!("expected PasswordFile {{ Empty, .. }}, got {}", error_name(&other)),
 	}
 }
 
@@ -175,7 +208,7 @@ fn password_file_refuses_a_group_readable_file() {
 			mode, 0o644,
 			"the observed mode must round-trip through the variant"
 		),
-		other => panic!("expected InsecureMode {{ mode: 0o644, .. }}, got {other:?}"),
+		other => panic!("expected InsecureMode {{ mode: 0o644, .. }}, got {}", error_name(&other)),
 	}
 }
 
@@ -202,7 +235,7 @@ fn password_file_refuses_a_symlink() {
 			Some(libc::ELOOP),
 			"O_NOFOLLOW on a symlink returns ELOOP, got {source:?}"
 		),
-		other => panic!("expected PasswordFile {{ Io(ELOOP), .. }}, got {other:?}"),
+		other => panic!("expected PasswordFile {{ Io(ELOOP), .. }}, got {}", error_name(&other)),
 	}
 }
 
@@ -240,7 +273,7 @@ fn password_file_refuses_a_fifo_without_blocking() {
 			kind: PasswordFileError::Io(_),
 			..
 		} => {}
-		other => panic!("expected PasswordFile with NotRegularFile or Io, got {other:?}"),
+		other => panic!("expected PasswordFile with NotRegularFile or Io, got {}", error_name(&other)),
 	}
 }
 
@@ -273,6 +306,6 @@ fn password_file_refuses_a_fifo_with_a_writer() {
 			kind: PasswordFileError::NotRegularFile,
 			..
 		} => {}
-		other => panic!("expected PasswordFile {{ NotRegularFile, .. }}, got {other:?}"),
+		other => panic!("expected PasswordFile {{ NotRegularFile, .. }}, got {}", error_name(&other)),
 	}
 }
