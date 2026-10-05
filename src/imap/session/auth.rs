@@ -338,15 +338,22 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		};
 		// Ban check before any credential lookup: an active ban on the
 		// client IP or on the account short-circuits the exchange with the
-		// same wire outcome as a wrong SCRAM proof, and the SCRAM
-		// credential lookup never happens. A ban refusal is distinct from
-		// a credential failure: the strike count and ban expiry do not
-		// move, so the ban keeps ending when it was going to end.
+		// same wire outcome as a wrong SCRAM proof (a `+` continuation
+		// with a fake server-first, then NO at client-final), and the
+		// SCRAM credential lookup never happens. A ban refusal is
+		// distinct from a credential failure: the strike count and ban
+		// expiry do not move, so the ban keeps ending when it was going
+		// to end. The fake server-first keeps the refusal
+		// indistinguishable from a normal exchange on the wire; the fake
+		// credentials make every client proof fail the same way a wrong
+		// password would.
 		let resolved = match self
 			.directory
 			.check_ban(&username, self.peer_ip, self.auth_protocol)
 		{
-			BanOutcome::Banned => return self.auth_failure(tag),
+		BanOutcome::Banned => {
+			return self.scram_ban_refusal(tag, &client_first, binding);
+		}
 			BanOutcome::Clear { account } => account,
 		};
 		let mut account_for_record = resolved;
@@ -384,6 +391,41 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			server: Box::new(server),
 			credentials: Box::new(credentials),
 			account,
+		});
+		continuation(&BASE64.encode(server_first))
+	}
+
+	/// A ban refusal at client-first: build a server-first from fake
+	/// SCRAM credentials so the wire reply is the same `+` continuation
+	/// a normal exchange produces, then stash the fake server and
+	/// credentials in `pending_auth` so the client-final handler will
+	/// see the proof fail exactly like a wrong password. The strike
+	/// count and ban expiry stay where they were: a ban refusal is
+	/// distinct from a credential failure, and no `record_ban_outcome`
+	/// call follows.
+	fn scram_ban_refusal(
+		&mut self,
+		tag: &str,
+		client_first: &str,
+		binding: ChannelBinding,
+	) -> Output {
+		let Some(nonce) = self.fresh_nonce() else {
+			// CSPRNG failure while building the fake server-first: the
+			// no-oracle fallback is the immediate NO a malformed
+			// exchange would produce. A banned subject still cannot
+			// authenticate, the ban is unchanged, and the refusal
+			// remains indistinguishable from a wrong-password NO.
+			return self.auth_failure(tag);
+		};
+		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
+		let Ok((_user, server_first)) = server.first(client_first, &fake_scram_credentials()) else {
+			return self.auth_failure(tag);
+		};
+		self.pending_auth = Some(PendingAuth::ScramFinal {
+			tag: tag.to_string(),
+			server: Box::new(server),
+			credentials: Box::new(fake_scram_credentials()),
+			account: String::new(),
 		});
 		continuation(&BASE64.encode(server_first))
 	}
@@ -502,6 +544,20 @@ fn continuation(challenge_b64: &str) -> Output {
 
 fn decode(encoded: &str) -> Option<String> {
 	String::from_utf8(BASE64.decode(encoded).ok()?).ok()
+}
+
+/// SCRAM credentials with a fixed salt and zero keys, used only to
+/// build a server-first message the client can echo back. The
+/// `StoredKey` is all zeros, so any client proof that comes back will
+/// fail the verifier exactly like a wrong password — which is the
+/// point: the ban refusal looks like a wrong password on the wire.
+fn fake_scram_credentials() -> crate::smtp::scram::ScramCredentials {
+	crate::smtp::scram::ScramCredentials {
+		salt: vec![0u8; 16],
+		iterations: 4096,
+		stored_key: [0u8; 32],
+		server_key: [0u8; 32],
+	}
 }
 
 /// Extract the bearer token from a base64 OAUTHBEARER/XOAUTH2 initial response.

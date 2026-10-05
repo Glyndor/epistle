@@ -307,10 +307,10 @@ fn scram_directory_with_ban_store(
 /// lookup runs. The test arms a ban on the peer IP, drives a SCRAM
 /// client-first, and asserts the ban store was consulted, the
 /// `scram_credentials` lookup count did not move (the exchange was
-/// short-circuited), and the wire reply is the same NO a wrong SCRAM
-/// proof produces. The lookup count delta is the property that proves a
-/// banned IP cannot probe whether an account exists by sending a
-/// SCRAM client-first.
+/// short-circuited), and the wire reply is the same `+`-then-NO a
+/// wrong SCRAM proof produces. The lookup count delta is the property
+/// that proves a banned IP cannot probe whether an account exists by
+/// sending a SCRAM client-first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	use crate::antispam::bans::tests::FakeBanStore;
@@ -335,17 +335,38 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
 	let before = crate::smtp::directory_scram_test_counter::count();
-	let out = text(&session.command_line(&format!(
+	// A ban refusal at client-first looks like a normal exchange on
+	// the wire: a `+` continuation with a server-first, then NO when
+	// the proof fails. The wrong-password shape is the same and the
+	// test asserts the property is the shape, not the immediate code.
+	let action = session.command_line(&format!(
 		"a AUTHENTICATE SCRAM-SHA-256 {}",
 		B64.encode("n,,n=alice,r=CN")
-	)));
-	let after = crate::smtp::directory_scram_test_counter::count();
+	));
+	assert!(
+		action.collect_auth,
+		"a ban refusal at client-first must request a continuation, like a normal exchange"
+	);
+	// The proof is a no-op placeholder; the verifier rejects it
+	// because the stored key behind the fake server-first is all
+	// zeros. The wire reply is the same NO a wrong password would
+	// produce.
+	let bad_proof = B64.encode([0u8; 32]);
+	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
+	let after = crate::smtp::directory_scram_test_counter::count();
 
 	assert!(
 		ban_store.call_count("is_banned") >= 1,
 		"ban store consulted {} times, expected at least one is_banned",
 		ban_store.call_count("is_banned")
+	);
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"ban refusal must not record a failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
 	);
 	assert_eq!(
 		after - before,
@@ -411,7 +432,9 @@ async fn imap_scram_failure_adds_one_strike() {
 /// a strike. The test arms a ban, drives a SCRAM client-first with the
 /// right username, and asserts the ban store received no
 /// `record_failure` call (a ban refusal is distinct from a credential
-/// failure) and the ban's `until_secs` is unchanged.
+/// failure) and the ban's `until_secs` is unchanged. The exchange
+/// still produces a `+`-then-NO wire shape so a banned IP cannot
+/// distinguish its refusal from a wrong password.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 	use crate::antispam::bans::tests::FakeBanStore;
@@ -436,11 +459,23 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.44".parse().expect("peer")));
 
+	// A ban refusal at client-first still challenges with a `+` and
+	// then fails at client-final with NO, the same shape a wrong SCRAM
+	// proof produces. The proof is a no-op placeholder; the verifier
+	// rejects it because the stored key behind the fake server-first
+	// is all zeros.
+	let bad_proof = B64.encode([0u8; 32]);
+	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
 	for _ in 0..3 {
-		let out = text(&session.command_line(&format!(
+		let action = session.command_line(&format!(
 			"a AUTHENTICATE SCRAM-SHA-256 {}",
 			B64.encode("n,,n=alice,r=CN")
-		)));
+		));
+		assert!(
+			action.collect_auth,
+			"a ban refusal at client-first must request a continuation, like a normal exchange"
+		);
+		let out = text(&session.auth_response(&B64.encode(&client_final)));
 		assert!(out.contains("a NO"), "{out}");
 	}
 

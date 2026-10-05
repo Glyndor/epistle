@@ -327,10 +327,10 @@ fn valid_client_final(client_first: &str, server_first: &str, password: &str) ->
 /// lookup runs. The test arms a ban on the peer IP, drives a SCRAM
 /// client-first, and asserts the ban store was consulted, the
 /// `scram_credentials` lookup count did not move (the exchange was
-/// short-circuited), and the wire reply is the same 535 a wrong SCRAM
-/// proof produces. The lookup count delta is the property that proves a
-/// banned IP cannot probe whether an account exists by sending a
-/// SCRAM client-first.
+/// short-circuited), and the wire reply is the same 334-then-535 a
+/// wrong SCRAM proof produces. The lookup count delta is the property
+/// that proves a banned IP cannot probe whether an account exists by
+/// sending a SCRAM client-first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	use crate::antispam::bans::tests::FakeBanStore;
@@ -354,18 +354,35 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
 	let before = crate::smtp::directory_scram_test_counter::count();
+	// A ban refusal at client-first looks like a normal exchange on
+	// the wire: a 334 with a server-first, then a 535 when the proof
+	// fails. The wrong-password shape is the same and the test asserts
+	// the property is the shape, not the immediate code.
 	let action = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
-	let after = crate::smtp::directory_scram_test_counter::count();
 	assert_eq!(
 		reply_code(&action),
-		535,
-		"a banned IP must receive the same 535 a wrong SCRAM proof does"
+		334,
+		"a ban refusal at client-first must challenge with a 334, like a normal exchange"
 	);
+	// The proof the client sends is computed against the fake
+	// server-first we just sent; the verifier rejects it because the
+	// fake stored key is all zeros. The wire reply is the same 535 a
+	// wrong password would produce.
+	let bad_proof = b64_bytes(&[0u8; 32]);
+	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
+	let after = crate::smtp::directory_scram_test_counter::count();
 
 	assert!(
 		ban_store.call_count("is_banned") >= 1,
 		"ban store consulted {} times, expected at least one is_banned",
 		ban_store.call_count("is_banned")
+	);
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"ban refusal must not record a failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
 	);
 	assert_eq!(
 		after - before,
@@ -430,7 +447,9 @@ async fn smtp_scram_failure_adds_one_strike() {
 /// a strike. The test arms a ban, drives a SCRAM client-first with the
 /// right username, and asserts the ban store received no
 /// `record_failure` call (a ban refusal is distinct from a credential
-/// failure) and the ban's `until_secs` is unchanged.
+/// failure) and the ban's `until_secs` is unchanged. The exchange
+/// still produces a 334-then-535 wire shape so a banned IP cannot
+/// distinguish its refusal from a wrong password.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 	use crate::antispam::bans::tests::FakeBanStore;
@@ -454,12 +473,25 @@ async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.44".parse().expect("peer")));
 
+	// A ban refusal at client-first still challenges with a 334 and
+	// then fails at client-final with a 535, the same shape a wrong
+	// SCRAM proof produces. The proof is a no-op placeholder; the
+	// verifier rejects it because the stored key behind the fake
+	// server-first is all zeros.
+	let bad_proof = b64_bytes(&[0u8; 32]);
+	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
 	for _ in 0..3 {
+		let action =
+			session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
 		assert_eq!(
-			reply_code(
-				&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")))
-			),
-			535
+			reply_code(&action),
+			334,
+			"a ban refusal at client-first must challenge with a 334, like a normal exchange"
+		);
+		assert_eq!(
+			reply_code(&session.auth_line(&b64(&client_final))),
+			535,
+			"a ban refusal at client-final must reject the proof with a 535"
 		);
 	}
 
