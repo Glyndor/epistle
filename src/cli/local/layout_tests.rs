@@ -6,7 +6,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use super::test_support::{fresh_dir, load_for_test, open_store_for_test};
+use super::test_support::{fresh_dir, load_for_test, local_error_name, open_store_for_test};
 use super::{ACCOUNT_NAME, DEFAULT_PORT_BASE, LocalError, layout, prepare};
 
 /// Walk every entry under `root`, returning a sorted list of paths.
@@ -161,7 +161,10 @@ fn refusal_dir_with_unrelated_content_is_refused_then_accepted_with_marker() {
 				"NotEmpty path must be the directory itself"
 			);
 		}
-		other => panic!("expected NotEmpty, got {other:?}"),
+		other => panic!(
+			"expected NotEmpty, got {}",
+			local_error_name(other.as_ref().err().expect("Err arm"))
+		),
 	}
 
 	// The unrelated file is still exactly there: nothing was written.
@@ -380,7 +383,10 @@ fn partial_init_with_marker_written_last_after_cert_is_refused() {
 			);
 		}
 		Err(other) => {
-			panic!("partial state without marker must be refused with NotEmpty, got {other:?}")
+			panic!(
+				"partial state without marker must be refused with NotEmpty, got {}",
+				local_error_name(&other)
+			)
 		}
 		Ok(_) => panic!("partial state without marker must be refused, prepare returned Ok"),
 	}
