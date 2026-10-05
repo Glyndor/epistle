@@ -258,9 +258,14 @@ fn init_preserves_unknown_top_level_keys_across_a_managed_rewrite() {
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let after = std::fs::read_to_string(&config_path).expect("read config");
+	// The merged file carries the inline `srs_secret` fixture.
+	// A panic that interpolated the full file would dump the
+	// SRS secret into the CI log; a boolean captures the
+	// contract without echoing the file.
+	let has_kept_srs = after.contains("srs_secret = \"kept by the operator\"");
 	assert!(
-		after.contains("srs_secret = \"kept by the operator\""),
-		"the operator-added unknown key must survive the rewrite: {after}"
+		has_kept_srs,
+		"the operator-added unknown key must survive the rewrite"
 	);
 }
 
