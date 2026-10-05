@@ -229,3 +229,46 @@ fn map_size_never_exceeds_the_cap_under_one_hundred_thousand_distinct_senders() 
 	assert!(admitted <= MAX_ENTRIES);
 	assert!(admitted > MAX_ENTRIES / 2);
 }
+
+#[test]
+fn renewing_keys_at_the_iteration_front_cannot_starve_the_eviction_pass() {
+	// The state map is a BTreeMap, so it iterates in lexicographic key
+	// order. The names are zero-padded to four digits so k0000..k9999
+	// sit in numeric order, which puts k0000..k0063 at the very front
+	// of every eviction pass. With the old implementation each call's
+	// eviction pass restarts from the front: when those front 64 keys
+	// kept getting renewed and the rest went stale, the pass kept
+	// seeing the same fresh entries and refused every unseen sender
+	// forever, even though the other 9,936 entries were stale and
+	// could have been evicted. The fix persists a cursor across calls
+	// so the eviction pass makes progress through the whole map.
+	let limiter = WindowLimiter::new(60);
+	let t0 = 1_000;
+	// Fill the cap with k0000..k9999. The BTreeMap sorts them by key,
+	// so the first 64 in iteration order are k0000..k0063.
+	for i in 0..MAX_ENTRIES {
+		limiter.check(&format!("k{i:04}"), u32::MAX, t0);
+	}
+	// Advance time by two windows so the original entries are stale,
+	// then renew the front 64 keys. The renewal keeps them fresh at
+	// the head of the iteration; without a cursor the eviction pass
+	// keeps reading them and never sees the stale entries behind.
+	let t1 = t0 + 120;
+	for i in 0..64 {
+		limiter.check(&format!("k{i:04}"), u32::MAX, t1);
+	}
+	// The renewing k0000..k0063 are fresh, the other 9,936 are stale.
+	// The cursor advances by EVICTION_SCAN_BUDGET per call, so a
+	// handful of passes drain the stale entries and admit the unseen
+	// key.
+	for _pass in 0..(MAX_ENTRIES / EVICTION_SCAN_BUDGET + 4) {
+		// Keep the front 64 keys fresh across the loop.
+		for i in 0..64 {
+			limiter.check(&format!("k{i:04}"), u32::MAX, t1);
+		}
+		if limiter.check("late", u32::MAX, t1) {
+			return;
+		}
+	}
+	panic!("renewing keys at the iteration front starved the eviction pass");
+}

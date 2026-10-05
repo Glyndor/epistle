@@ -23,7 +23,7 @@
 //! is expected to skip the call when the resolved limit is `None`, so a
 //! literal zero only appears when an operator deliberately configured it.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 /// Hard cap on the `state` map. Once [`MAX_ENTRIES`] distinct keys are
@@ -32,10 +32,11 @@ use std::sync::Mutex;
 pub const MAX_ENTRIES: usize = 10_000;
 
 /// Maximum number of map entries the incremental expiry pass scans per
-/// `check` call. Each scan entry is one O(1) hashmap read, so a single
-/// `check` does at most this many reads of stale `window_start` values
-/// beyond the active-key lookup. Bounded so a fully-saturated limiter
-/// cannot do O(map_size) work per call.
+/// `check` call. Each scan entry is one O(log n) lookup on the [`BTreeMap`]
+/// plus a window-start comparison, so a single `check` does at most this
+/// many lookups of stale `window_start` values beyond the active-key
+/// lookup. Bounded so a fully-saturated limiter cannot do O(map_size)
+/// work per call.
 const EVICTION_SCAN_BUDGET: usize = 64;
 
 /// A shared, fixed-window rate limiter keyed by an arbitrary string.
@@ -47,8 +48,18 @@ const EVICTION_SCAN_BUDGET: usize = 64;
 pub struct WindowLimiter {
 	/// Window length in seconds.
 	window_secs: u64,
-	/// Per-key `(window_start_epoch, count_in_window)`.
-	state: Mutex<HashMap<String, (u64, u32)>>,
+	/// Per-key `(window_start_epoch, count_in_window)`. A [`BTreeMap`] is
+	/// used so the incremental expiry pass has a deterministic iteration
+	/// order; the cursor below advances across calls and a renewing entry
+	/// at the front of the iteration cannot starve the entries behind it.
+	state: Mutex<BTreeMap<String, (u64, u32)>>,
+	/// Last key the incremental expiry pass examined. The next pass scans
+	/// the keys strictly greater than this one and wraps around to the
+	/// smallest key when the end is reached. Without a persistent cursor
+	/// every call would restart from the smallest key and a renewing
+	/// entry at the front of the iteration would lock the rest of the
+	/// map out of the eviction pass forever.
+	cursor: Mutex<Option<String>>,
 	/// Test-only counter of map entries the incremental expiry pass has
 	/// scanned. Lets a regression test assert that the per-call work stays
 	/// bounded when the map sits at the cap.
@@ -80,7 +91,8 @@ impl WindowLimiter {
 	pub fn new(window_secs: u64) -> Self {
 		WindowLimiter {
 			window_secs: window_secs.max(1),
-			state: Mutex::new(HashMap::new()),
+			state: Mutex::new(BTreeMap::new()),
+			cursor: Mutex::new(None),
 			#[cfg(test)]
 			scan_count: Mutex::new(0),
 		}
@@ -124,25 +136,51 @@ impl WindowLimiter {
 			// whose window started more than two window-lengths ago, and
 			// admit the new key only if a slot was freed. The active-key
 			// path above never reaches this branch, so live budgets are
-			// preserved even when the map is saturated.
+			// preserved even when the map is saturated. The cursor below
+			// makes the pass advance across calls: a renewing entry at
+			// the front of the iteration cannot starve the entries behind
+			// it because the next call resumes strictly after the last
+			// entry this one examined, then wraps back to the smallest
+			// key once the end is reached.
 			let cutoff = now.saturating_sub(self.window_secs.saturating_mul(2));
-			let mut scanned = 0usize;
+			let cursor = self.cursor.lock().expect("cursor").clone();
+			let keys: Vec<String> = state.keys().cloned().collect();
+			let keys_len = keys.len();
+			let start_idx = match cursor.as_ref() {
+				Some(c) => keys.iter().position(|k| k > c).unwrap_or(0),
+				None => 0,
+			};
 			let mut stale: Vec<String> = Vec::new();
-			for (k, (start, _count)) in state.iter() {
-				if *start <= cutoff {
-					stale.push(k.clone());
+			#[cfg_attr(not(test), allow(unused_assignments))]
+			let mut scanned = 0usize;
+			let mut last_key: Option<String> = None;
+			if keys_len > 0 {
+				for offset in 0..EVICTION_SCAN_BUDGET {
+					let idx = (start_idx + offset) % keys_len;
+					let key = &keys[idx];
+					let (start, _) = state.get(key).expect("key present in state");
+					if *start <= cutoff {
+						stale.push(key.clone());
+					}
+					scanned += 1;
+					last_key = Some(key.clone());
 				}
-				scanned += 1;
-				if scanned >= EVICTION_SCAN_BUDGET {
-					break;
-				}
+			}
+			// Update the cursor so the next call resumes after the last
+			// entry examined. The advance is what defeats the starvation
+			// case: a renewing entry at the front of the iteration is
+			// left behind on the next call.
+			if let Some(last) = last_key {
+				*self.cursor.lock().expect("cursor") = Some(last);
+			} else {
+				*self.cursor.lock().expect("cursor") = None;
+			}
+			for k in &stale {
+				state.remove(k);
 			}
 			#[cfg(test)]
 			{
 				*self.scan_count.lock().expect("scan count") += scanned as u64;
-			}
-			for k in &stale {
-				state.remove(k);
 			}
 			if state.len() >= MAX_ENTRIES {
 				return false;
