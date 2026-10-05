@@ -250,3 +250,84 @@ fn a_message_with_too_many_parts_is_refused() {
 		"{err:?}"
 	);
 }
+
+/// Craft the input the issue names: a boundary of 64 KiB of hyphens plus a
+/// trailing byte, declared in a multipart Content-Type, with a body of
+/// hyphens the search would otherwise have to walk. The boundary is
+/// invalid per RFC 2046 (70-octet cap) and the walker must refuse
+/// it before the linear scan runs. The work counter must stay
+/// proportional to the body length, not the body times the boundary
+/// length, which is the shape the sabotage reintroduces.
+#[test]
+fn boundary_over_70_octets_is_refused_with_bounded_work() {
+	let boundary: String = std::iter::repeat('-').take(65_536).collect();
+	let body_len: usize = 1 << 20; // 1 MiB of hyphens
+	let mut raw = Vec::with_capacity(body_len + 128);
+	raw.extend_from_slice(
+		format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n").as_bytes(),
+	);
+	raw.extend(std::iter::repeat(b'-').take(body_len));
+	reset_scan_steps();
+	let err = find_report_part(&raw, Kind::Dmarc).expect_err("oversized boundary refused");
+	let steps = reset_scan_steps();
+	assert!(
+		matches!(err, WalkError::Malformed("boundary too long")),
+		"expected boundary-too-long error, got {err:?}"
+	);
+	// The cap check is O(1); the search never runs. The dominant cost
+	// in the counter is the header scan (`find_headers_end` calls
+	// `find_subslice` to locate `\r\n\r\n` and `\n\n`), which is
+	// O(body.len()). A 70-octet cap is enough to keep the total work
+	// proportional to the body length. The sabotage (no cap) runs
+	// `find_subslice` with a 64 KiB needle on every position and
+	// drives the counter past body.len() * 64 KiB.
+	assert!(
+		steps <= body_len as u64 * 200,
+		"oversized boundary forced search work: {steps} steps for {body_len} bytes"
+	);
+}
+
+fn build_multipart_with_hyphen_body(boundary: &str, body_len: usize) -> Vec<u8> {
+	let mut raw = Vec::new();
+	raw.extend_from_slice(
+		format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n").as_bytes(),
+	);
+	raw.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+	raw.extend_from_slice(b"Content-Type: application/gzip\r\n");
+	raw.extend_from_slice(b"Content-Transfer-Encoding: base64\r\n\r\n");
+	let gz = {
+		use flate2::write::GzEncoder;
+		use std::io::Write;
+		let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+		enc.write_all(b"<feedback/>").expect("write");
+		enc.finish().expect("finish")
+	};
+	raw.extend_from_slice(b64(&gz).as_bytes());
+	raw.extend_from_slice(b"\r\n");
+	raw.extend(std::iter::repeat(b'-').take(body_len));
+	raw.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+	raw
+}
+
+/// A boundary at the 70-octet cap and a body of hyphens: the linear scan
+/// must walk the body once and only check each line's prefix against
+/// the boundary. Doubling the body must at most roughly double the
+/// step counter, with a fixed slack for the per-call overhead.
+#[test]
+fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
+	let boundary: String = std::iter::repeat('-').take(MAX_BOUNDARY_LEN).collect();
+	let small = build_multipart_with_hyphen_body(&boundary, 1 << 19);
+	let large = build_multipart_with_hyphen_body(&boundary, 1 << 20);
+	reset_scan_steps();
+	find_report_part(&small, Kind::Dmarc).expect("small parses");
+	let small_steps = reset_scan_steps();
+	reset_scan_steps();
+	find_report_part(&large, Kind::Dmarc).expect("large parses");
+	let large_steps = reset_scan_steps();
+	// linear: count(2N) <= 2 * count(N) + slack
+	assert!(
+		large_steps as u128 <= small_steps as u128 * 2 + 4096,
+		"step count grew superlinearly: small={small_steps}, large={large_steps}"
+	);
+}
+
