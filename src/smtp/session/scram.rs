@@ -19,6 +19,15 @@ pub(super) enum PendingScram {
 		server: Box<ScramServer>,
 		credentials: Box<ScramCredentials>,
 		account: String,
+		/// `true` when the server-first was a ban-refusal fake: a real
+		/// ban was in force at client-first, so the proof must be
+		/// refused at client-final even if the ban has since
+		/// expired. A banned subject who completes the exchange
+		/// against a stale ban row must not be able to clear the
+		/// row with a valid proof (the credentials are fake) and
+		/// must not be able to extend the row with a bad one
+		/// (the refusal path records no strike).
+		ban_refusal: bool,
 	},
 }
 
@@ -140,6 +149,7 @@ impl Session {
 			server: Box::new(server),
 			credentials: Box::new(credentials),
 			account,
+			ban_refusal: false,
 		});
 		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
 	}
@@ -178,6 +188,7 @@ impl Session {
 			server: Box::new(server),
 			credentials: Box::new(fake_scram_credentials_for(username)),
 			account: username.to_string(),
+			ban_refusal: true,
 		});
 		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
 	}
@@ -190,18 +201,22 @@ impl Session {
 		mut server: ScramServer,
 		credentials: ScramCredentials,
 		account: &str,
+		ban_refusal: bool,
 	) -> Action {
-		// Recheck the ban before evaluating the proof: a ban triggered
-		// between client-first and client-final must not be bypassed by a
-		// pending proof. The ban refusal is distinct from a credential
-		// failure: no strike is recorded, so a banned subject that
-		// completes a SCRAM exchange cannot clear its own ban with a
-		// valid proof and cannot extend the ban with a bad one.
-		if matches!(
-			self.directory
-				.check_ban(account, self.peer_ip, self.auth_protocol),
-			BanOutcome::Banned
-		) {
+		// A ban-refusal exchange stays refused at client-final even if
+		// the ban has since expired: a banned subject who started the
+		// SCRAM exchange during a real ban must not be able to clear
+		// the row with a valid proof (the credentials here are fake)
+		// or extend the row with a bad one (no strike is recorded).
+		// The recheck below catches the case where the ban fires
+		// after the client-first, and the flag catches the case
+		// where it expires between the two.
+		if ban_refusal
+			|| matches!(
+				self.directory
+					.check_ban(account, self.peer_ip, self.auth_protocol),
+				BanOutcome::Banned
+			) {
 			return self.scram_failure();
 		}
 		let Some(client_final) = decode(encoded) else {
