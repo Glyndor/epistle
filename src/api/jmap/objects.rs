@@ -356,15 +356,28 @@ fn split_top_level(value: &str, delimiter: char) -> Vec<String> {
 			continue;
 		}
 		if byte == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'?' && !no_more_encoded {
-			if let Some(close) = encoded_word_end_inline(value, i) {
-				i = close;
-			} else {
-				no_more_encoded = true;
-				if byte == delimiter as u8 {
-					out.push(value[start..i].to_string());
-					start = i + 1;
+			match encoded_word_end_inline(value, i) {
+				EncodedWordEnd::Found(close) => i = close,
+				EncodedWordEnd::NoCloser => {
+					no_more_encoded = true;
+					if byte == delimiter as u8 {
+						out.push(value[start..i].to_string());
+						start = i + 1;
+					}
+					i += 1;
 				}
-				i += 1;
+				EncodedWordEnd::Invalid => {
+					// Treat the `=?` as plain text. The first `=?` in a
+					// header is permitted atom text (RFC 5322 §3.2.3),
+					// and a later opener may still form a valid
+					// encoded-word; we must not disable recognition for
+					// the rest of the header.
+					if byte == delimiter as u8 {
+						out.push(value[start..i].to_string());
+						start = i + 1;
+					}
+					i += 1;
+				}
 			}
 			continue;
 		}
@@ -414,19 +427,45 @@ fn skip_quoted_string(bytes: &[u8], start: usize) -> usize {
 }
 
 // Find the position just past the closing `?=` of the encoded-word
-// that starts at `value[start]` (which must point at `=`). Returns
-// `None` when the fragment is not a complete encoded-word.
-fn encoded_word_end_inline(value: &str, start: usize) -> Option<usize> {
+// that starts at `value[start]` (which must point at `=`). The three
+// outcomes are distinct because the caller needs to know whether to
+// keep looking for later encoded-words or give up entirely: an invalid
+// candidate is just text, while the absence of any `?=` closer in the
+// rest of the header means no later opener can match either.
+enum EncodedWordEnd {
+	/// Position just past the closing `?=` of a valid encoded-word.
+	Found(usize),
+	/// The rest of the header has no `?=` at all; no later opener can
+	/// form an encoded-word, so the caller can short-circuit further
+	/// suffix searches.
+	NoCloser,
+	/// The candidate at `start` is not a valid encoded-word (wrong
+	/// component count, empty or non-graphic parts). Treat the `=?` as
+	/// plain text and keep scanning; a later opener may still be valid.
+	Invalid,
+}
+
+// Find the position just past the closing `?=` of the encoded-word
+// that starts at `value[start]` (which must point at `=`).
+fn encoded_word_end_inline(value: &str, start: usize) -> EncodedWordEnd {
 	let after = &value[start + 2..];
-	let end = after.find("?=")?;
+	let Some(end) = after.find("?=") else {
+		return EncodedWordEnd::NoCloser;
+	};
 	// Confirm every component is non-empty ASCII graphic.
 	let payload = &after[..end];
 	let mut parts = payload.split('?');
-	let charset = parts.next()?;
-	let encoding = parts.next()?;
-	let text = parts.next()?;
+	let Some(charset) = parts.next() else {
+		return EncodedWordEnd::Invalid;
+	};
+	let Some(encoding) = parts.next() else {
+		return EncodedWordEnd::Invalid;
+	};
+	let Some(text) = parts.next() else {
+		return EncodedWordEnd::Invalid;
+	};
 	if parts.next().is_some() {
-		return None;
+		return EncodedWordEnd::Invalid;
 	}
 	if charset.is_empty()
 		|| encoding.is_empty()
@@ -435,7 +474,7 @@ fn encoded_word_end_inline(value: &str, start: usize) -> Option<usize> {
 		|| !encoding.bytes().all(|b| b.is_ascii_graphic())
 		|| !text.bytes().all(|b| b.is_ascii_graphic())
 	{
-		return None;
+		return EncodedWordEnd::Invalid;
 	}
 	#[cfg(test)]
 	{
@@ -443,7 +482,7 @@ fn encoded_word_end_inline(value: &str, start: usize) -> Option<usize> {
 			step_tokenizer();
 		}
 	}
-	Some(start + 2 + end + 2)
+	EncodedWordEnd::Found(start + 2 + end + 2)
 }
 
 // One address: extract the angle-addr email if present, otherwise treat
@@ -505,11 +544,13 @@ fn find_angle_addr(value: &str) -> Option<(usize, usize)> {
 			continue;
 		}
 		if byte == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'?' && !no_more_encoded {
-			if let Some(close) = encoded_word_end_inline(value, i) {
-				i = close;
-			} else {
-				no_more_encoded = true;
-				i += 1;
+			match encoded_word_end_inline(value, i) {
+				EncodedWordEnd::Found(close) => i = close,
+				EncodedWordEnd::NoCloser => {
+					no_more_encoded = true;
+					i += 1;
+				}
+				EncodedWordEnd::Invalid => i += 1,
 			}
 			continue;
 		}

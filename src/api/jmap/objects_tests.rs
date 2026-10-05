@@ -92,3 +92,27 @@ fn unterminated_encoded_word_does_not_re_search_the_suffix() {
 		"encoded-word scan should stay within a small constant of the header length, got {steps} for {len} bytes"
 	);
 }
+
+#[test]
+fn an_invalid_encoded_word_candidate_does_not_disable_later_recognition() {
+	// The leading `=?` is permitted atom text (RFC 5322 §3.2.3) and is
+	// followed by a space, so it is not a valid encoded-word opener.
+	// The historical tokenizer treated the validation failure as
+	// "no closer exists" and disabled encoded-word recognition for the
+	// rest of the header, which split the second address on the comma
+	// inside the Q-encoded display name. The fix distinguishes
+	// "invalid candidate" from "no closer exists": the first `=?` is
+	// left as text and the Q-encoded comma stays inside the
+	// encoded-word, so the header parses to the two addresses the
+	// writer wrote.
+	let value = "=? <one@example.org>, (=?UTF-8?Q?Doe,Jane?=) <two@example.org>";
+	let parsed = address_list(Some(value));
+	let arr = parsed.as_array().expect("address list");
+	assert_eq!(
+		arr.len(),
+		2,
+		"invalid opener must not poison later encoded-word recognition, got {arr:?}"
+	);
+	assert_eq!(arr[0]["email"], "one@example.org");
+	assert_eq!(arr[1]["email"], "two@example.org");
+}
