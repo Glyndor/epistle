@@ -61,6 +61,26 @@ printed once at the end.
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
 
+## Stack (`epistle stack`)
+
+A thin wrapper around `podup` that drives the compose file `epistle
+init` writes at `<data_dir>/compose/compose.yaml`. Every subcommand
+takes the same `--config F` every other data command takes; the
+compose file's path is read from `data_dir`, never set on the
+command line. `podup --version` runs first and refuses anything
+below the `5.10.10` floor `debian/control` declares. `stack` exits
+non-zero when `podup` does, with a one-line stderr error that names
+the failed `podup` command.
+
+| Command | What it does |
+|---|---|
+| `epistle stack up --config F` | Start the stack in the background: `podup -f <compose> up -d`. |
+| `epistle stack down --config F` | Stop the stack: `podup -f <compose> down`. The volumes are never removed: the database lives in one. |
+| `epistle stack ps --config F` | List the running services as a four-column table (service, state, health, published ports). |
+| `epistle stack ps --config F --json` | Same data, re-serialised as JSON in the stable shape `epistle` owns (the podup JSON, minus fields `epistle` does not render). |
+| `epistle stack logs --config F [--follow] [<service>]` | Stream the service logs. With `--follow`, do not return until interrupted. |
+| `epistle stack restart --config F [<service>]` | Restart the whole stack, or one service. |
+
 ## `epistle mta-sts-serve`
 
 Run a second instance of the same binary for the public policy endpoint:

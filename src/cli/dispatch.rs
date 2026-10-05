@@ -11,7 +11,7 @@ use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, tok
 use super::{
 	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
 	dns_records, export, import, init, local, mobileconfig, queue, report_abuse, reports, serve,
-	srv, style, suppression, verify, verify_dns,
+	srv, stack, style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -311,6 +311,21 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
+			Command::Stack { config, action } => match config {
+				Some(path) => match Config::load(&path) {
+					Ok(config) => stack::run(&config, action.into()),
+					Err(error) => {
+						style::error(error);
+						ExitCode::FAILURE
+					}
+				},
+				None => {
+					style::error(
+						"`epistle stack` requires `--config FILE`; pass the path to the configuration file",
+					);
+					ExitCode::FAILURE
+				}
+			},
 		}
 	}
 }

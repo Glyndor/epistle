@@ -68,6 +68,17 @@ host with the same data directory, the same config file, and the same
 
 ## Running it
 
+Bring the stack up with `epistle stack up`, which runs the same
+`podup -f <compose> up -d` you would have written by hand. The
+compose file lives at `<data_dir>/compose/compose.yaml`, the path
+`epistle init` writes and the only one `stack` looks at. The
+`--config` flag takes the same `mail.toml` every other command
+takes, and `data_dir` is read from it. The `stack` subcommand is a
+thin wrapper around podup and is not a replacement: every other
+`epistle` subcommand keeps working exactly the way it did, against
+the same data dir, the same config file, the same `glyndor-epistle`
+account.
+
 The minimum a Podman or Docker compose unit needs is:
 
 ```sh
