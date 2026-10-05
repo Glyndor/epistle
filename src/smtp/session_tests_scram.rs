@@ -173,4 +173,3 @@ fn scram_repeated_failures_close_the_connection() {
 		"third failure must close"
 	);
 }
-

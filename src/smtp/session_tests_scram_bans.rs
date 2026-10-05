@@ -6,7 +6,7 @@
 //! helpers. Reuses the `reply_code`, `b64`, `b64_bytes`, and
 //! `TapEhlo` helpers from `tests_scram` so both files stay in sync.
 
-use super::tests_scram::{b64, b64_bytes, reply_code, TapEhlo};
+use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
 use super::*;
 
 /// Build a directory that has SCRAM credentials for `alice` AND has a
@@ -64,16 +64,12 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 
 	// Invalid base64.
 	assert_eq!(
-		reply_code(
-			&session.command_line("AUTH SCRAM-SHA-256 !!!not-base64")
-		),
+		reply_code(&session.command_line("AUTH SCRAM-SHA-256 !!!not-base64")),
 		535
 	);
 	// Valid base64 but no username tag.
 	assert_eq!(
-		reply_code(
-			&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,x=y")))
-		),
+		reply_code(&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,x=y")))),
 		535
 	);
 
@@ -592,7 +588,8 @@ async fn smtp_scram_success_clears_ban_store() {
 	);
 	// The two ban rows are gone.
 	let ip_info = tokio::task::block_in_place(|| {
-		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.51", 1_900_000_000))
+		tokio::runtime::Handle::current()
+			.block_on(ban_store.is_banned("ip:203.0.113.51", 1_900_000_000))
 	});
 	let account_info = tokio::task::block_in_place(|| {
 		tokio::runtime::Handle::current()

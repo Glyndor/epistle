@@ -4,8 +4,8 @@
 //! `unauth()` helpers from the sibling `auth` module so both files
 //! stay in sync.
 
-use super::text;
 use super::auth::{directory_with_ban_store, unauth};
+use super::text;
 use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -150,12 +150,8 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	);
 	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
-	let mut session = Session::new(
-		"mail.example.org",
-		tmp.path().to_path_buf(),
-		directory,
-	)
-	.with_scram_nonce("SN");
+	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
+		.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
 	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
@@ -464,12 +460,8 @@ async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
 	);
 	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
-	let mut session = Session::new(
-		"mail.example.org",
-		tmp.path().to_path_buf(),
-		directory,
-	)
-	.with_scram_nonce("SN");
+	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
+		.with_scram_nonce("SN");
 	// A fresh IP, not banned at the IP level, so a missing account
 	// check would let the exchange reach the credential lookup.
 	session.set_peer_ip(Some("203.0.113.50".parse().expect("peer")));
@@ -555,12 +547,8 @@ async fn imap_scram_success_clears_ban_store() {
 		},
 	);
 	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
-	let mut session = Session::new(
-		"mail.example.org",
-		tmp.path().to_path_buf(),
-		directory,
-	)
-	.with_scram_nonce("SN");
+	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
+		.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.51".parse().expect("peer")));
 
 	// Drive a full successful SCRAM exchange: well-formed client-first,
@@ -584,7 +572,8 @@ async fn imap_scram_success_clears_ban_store() {
 	);
 	// The two ban rows are gone.
 	let ip_info = tokio::task::block_in_place(|| {
-		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.51", 1_900_000_000))
+		tokio::runtime::Handle::current()
+			.block_on(ban_store.is_banned("ip:203.0.113.51", 1_900_000_000))
 	});
 	let account_info = tokio::task::block_in_place(|| {
 		tokio::runtime::Handle::current()
