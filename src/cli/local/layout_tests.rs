@@ -128,12 +128,16 @@ fn idempotence_second_run_reuses_every_generated_file() {
 	let second_accounts = std::fs::read_to_string(dir.path().join("data").join("accounts.toml"))
 		.expect("read accounts.toml");
 
+	// `accounts.toml` carries the password hash; an `assert_eq!`
+	// on the file contents would Debug-print both copies on
+	// mismatch, dumping the hash into the CI log. The boolean
+	// form pins the same invariant without carrying the secret.
 	assert_eq!(
 		first_hashes, second_hashes,
 		"every file must be byte-identical"
 	);
-	assert_eq!(
-		first_accounts, second_accounts,
+	assert!(
+		first_accounts == second_accounts,
 		"accounts.toml must not change"
 	);
 	assert!(
@@ -161,10 +165,13 @@ fn refusal_dir_with_unrelated_content_is_refused_then_accepted_with_marker() {
 				"NotEmpty path must be the directory itself"
 			);
 		}
-		other => panic!(
-			"expected NotEmpty, got {}",
-			local_error_name(other.as_ref().expect_err("Err arm"))
-		),
+		// The `Ok` arm carries a `Prepared`, whose `Debug` would echo
+		// the freshly generated `Config` and through it the API
+		// token hash. The panic must name the outcome, never the
+		// value, so a regression here does not dump the secret into
+		// the CI log.
+		Ok(_) => panic!("expected NotEmpty, got Ok"),
+		Err(other) => panic!("expected NotEmpty, got {}", local_error_name(&other)),
 	}
 
 	// The unrelated file is still exactly there: nothing was written.
