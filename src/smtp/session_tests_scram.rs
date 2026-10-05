@@ -174,6 +174,55 @@ fn scram_repeated_failures_close_the_connection() {
 	);
 }
 
+/// A malformed client-first (invalid base64 or a missing username
+/// tag) is recorded as a shared-accounting failure: the IP-side
+/// strike is recorded even though the login and the resolved account
+/// are unknown, so an unbanned peer cannot repeatedly send garbage to
+/// avoid the ban store. Without the recording, three malformed
+/// attempts would close the connection (per-connection counter) but
+/// leave the shared ban store untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smtp_scram_malformed_client_first_records_a_strike() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
+
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let directory = scram_directory_with_ban_store(ban_store.clone());
+
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory.clone())
+		.with_tls_active()
+		.with_scram_nonce("SN")
+		.tap_ehlo();
+	session.set_peer_ip(Some("203.0.113.46".parse().expect("peer")));
+
+	// Invalid base64.
+	assert_eq!(
+		reply_code(
+			&session.command_line("AUTH SCRAM-SHA-256 !!!not-base64")
+		),
+		535
+	);
+	// Valid base64 but no username tag.
+	assert_eq!(
+		reply_code(
+			&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,x=y")))
+		),
+		535
+	);
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		2,
+		"two malformed client-firsts must record two IP-side strikes, got {}",
+		ban_store.call_count("record_failure")
+	);
+	assert!(
+		ban_store.failure_count("ip:203.0.113.46", 0) >= 2,
+		"ban store did not record a strike for ip:203.0.113.46"
+	);
+}
+
 /// Build a directory that has SCRAM credentials for `alice` AND has a
 /// ban store attached. Used by the ban-interaction tests below to
 /// assert SCRAM consults the ban store before any credential lookup and

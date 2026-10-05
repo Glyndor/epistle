@@ -331,9 +331,17 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 
 	fn scram_first(&mut self, tag: &str, encoded: &str, binding: ChannelBinding) -> Output {
 		let Some(client_first) = decode(encoded) else {
+			// A malformed client-first (invalid base64) still counts as
+			// an authentication failure for the shared ban accounting.
+			// The login and the resolved account are both unknown, so
+			// the IP-side strike is the only one recorded.
+			self.record_scram_outcome("", None, false);
 			return self.auth_failure(tag);
 		};
 		let Some(username) = username_of(&client_first) else {
+			// A well-formed base64 client-first without a username tag
+			// is still a malformed client-first for ban accounting.
+			self.record_scram_outcome("", None, false);
 			return self.auth_failure(tag);
 		};
 		// Ban check before any credential lookup: an active ban on the

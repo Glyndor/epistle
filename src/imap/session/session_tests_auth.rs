@@ -76,6 +76,52 @@ fn authenticate_login_rejects_bad_base64_username() {
 	assert!(out.contains("a NO"), "{out}");
 }
 
+/// A malformed client-first (invalid base64 or a missing username
+/// tag) is recorded as a shared-accounting failure: the IP-side
+/// strike is recorded even though the login and the resolved account
+/// are unknown, so an unbanned peer cannot repeatedly send garbage to
+/// avoid the ban store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_malformed_client_first_records_a_strike() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let mut session = Session::new(
+		"mail.example.org",
+		tmp.path().to_path_buf(),
+		directory.clone(),
+	)
+	.with_scram_nonce("SN");
+	session.set_peer_ip(Some("203.0.113.46".parse().expect("peer")));
+
+	// Invalid base64.
+	let out = text(&session.command_line(&format!(
+		"a AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("!!!not-base64")
+	)));
+	assert!(out.contains("a NO"), "{out}");
+	// Valid base64 but no username tag.
+	let out = text(&session.command_line(&format!(
+		"a AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("n,,x=y")
+	)));
+	assert!(out.contains("a NO"), "{out}");
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		2,
+		"two malformed client-firsts must record two IP-side strikes, got {}",
+		ban_store.call_count("record_failure")
+	);
+	assert!(
+		ban_store.failure_count("ip:203.0.113.46", 0) >= 2,
+		"ban store did not record a strike for ip:203.0.113.46"
+	);
+}
+
 #[test]
 fn authenticate_unsupported_mechanism() {
 	let tmp = tempfile::tempdir().expect("tempdir");
