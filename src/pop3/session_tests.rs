@@ -280,6 +280,7 @@ async fn pop3_failures_now_reach_the_directory() {
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::directory_store::DirectoryHandle;
 	use crate::pop3::backend::MailboxBackend;
+	use crate::smtp::auth::tests::{fixture_password, wrong_password};
 	use std::collections::HashMap;
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -290,7 +291,7 @@ async fn pop3_failures_now_reach_the_directory() {
 	)
 	.with_password_hashes(HashMap::from([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash("secret"),
+		crate::smtp::auth::tests::hash(fixture_password()),
 	)]))
 	.with_ban_store(ban_store.clone());
 	let handle = DirectoryHandle::new(directory);
@@ -307,7 +308,7 @@ async fn pop3_failures_now_reach_the_directory() {
 	));
 	// Wrong password: directory returns None, ban store records a
 	// failure for both the peer IP and the resolved account.
-	let r = session.handle(Command::Pass("wrong".into()));
+	let r = session.handle(Command::Pass(wrong_password().into()));
 	assert_eq!(r, Response::Err("authentication failed".to_string()));
 
 	assert!(
@@ -326,7 +327,7 @@ async fn pop3_failures_now_reach_the_directory() {
 			)
 			.with_password_hashes(HashMap::from([(
 				"alice".to_string(),
-				crate::smtp::auth::tests::hash("secret"),
+				crate::smtp::auth::tests::hash(fixture_password()),
 			)]))
 			.with_ban_store(ban_store.clone()),
 		),
@@ -339,7 +340,7 @@ async fn pop3_failures_now_reach_the_directory() {
 		Response::Ok(_)
 	));
 	assert!(matches!(
-		session.handle(Command::Pass("secret".into())),
+		session.handle(Command::Pass(fixture_password().into())),
 		Response::Ok(_)
 	));
 	assert!(
