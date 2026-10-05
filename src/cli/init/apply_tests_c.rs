@@ -12,6 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use super::apply_config;
 use super::*;
+use super::tests_failures::apply_error_name;
 use crate::cli::init::answers::{DnsAnswers, Mode, Services};
 
 fn answers_minimal() -> Answers {
@@ -194,7 +195,8 @@ fn apply_fails_when_config_path_has_no_parent() {
 		.expect("apply must fail when config_path has no parent");
 	assert!(
 		matches!(err, ApplyError::ConfigInvalid(_)),
-		"expected ConfigInvalid, got {err:?}"
+		"expected ConfigInvalid, got {}",
+		apply_error_name(&err)
 	);
 	let rendered = format!("{err}");
 	assert!(
@@ -317,7 +319,8 @@ fn apply_rejects_an_existing_config_that_is_unparseable() {
 	let err = outcome.error.expect("apply must surface the parse failure");
 	assert!(
 		matches!(err, ApplyError::ConfigRead(_, _)),
-		"expected ConfigRead, got {err:?}"
+		"expected ConfigRead, got {}",
+		apply_error_name(&err)
 	);
 	// The unparseable file must still be on disk; the apply phase
 	// must not have replaced it with a candidate that never
@@ -398,7 +401,7 @@ fn apply_refuses_an_orphan_oauth_public_key() {
 		.error
 		.expect("second apply with orphan oauth_public must refuse");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!("expected OAuthPairIncomplete, got {}", apply_error_name(&err));
 	};
 	assert!(
 		message.contains("oauth_signing.key"),
@@ -452,7 +455,8 @@ fn apply_fails_when_existing_data_dir_blocks_keys_dir_creation() {
 		.expect("apply must fail when keys dir cannot be created");
 	assert!(
 		matches!(err, ApplyError::KeysDir(_, _)),
-		"expected KeysDir, got {err:?}"
+		"expected KeysDir, got {}",
+		apply_error_name(&err)
 	);
 	assert!(
 		format!("{err}").contains("keys"),

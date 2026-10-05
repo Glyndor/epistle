@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
+use super::tests_failures::apply_error_name;
 use crate::cli::init::answers::Services;
 
 #[cfg(unix)]
@@ -243,7 +244,7 @@ fn apply_does_not_validate_a_bad_candidate_config() {
 		let after = std::fs::read(&config_path).expect("read config");
 		assert_eq!(before, after);
 	} else {
-		panic!("expected ConfigInvalid, got {err:?}");
+		panic!("expected ConfigInvalid, got {}", apply_error_name(&err));
 	}
 }
 

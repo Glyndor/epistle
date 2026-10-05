@@ -10,6 +10,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use super::*;
+use super::tests_failures::apply_error_name;
 use crate::cli::init::answers::{Mode, Services};
 
 fn answers_minimal() -> Answers {
@@ -156,7 +157,8 @@ fn plan_fails_when_existing_config_is_not_valid_toml() {
 	let err = plan(&answers).expect_err("plan must surface the parse failure");
 	assert!(
 		matches!(err, ApplyError::ConfigRead(_, _)),
-		"expected ConfigRead, got {err:?}"
+		"expected ConfigRead, got {}",
+		apply_error_name(&err)
 	);
 	assert!(
 		format!("{err}").contains("read"),
