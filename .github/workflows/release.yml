@@ -295,3 +295,225 @@ jobs:
             --generate-notes \
             --verify-tag \
             dist/*
+
+  # Off by default. The variable `EPISTLE_PUBLISH_IMAGE` is the
+  # single switch; the workflow file lives in the repo, so the job
+  # exists and is reviewable, but it does nothing until the owner
+  # creates the ghcr.io/glyndor/epistle package and turns the
+  # variable on. The existing `build` job (which signs, attests and
+  # creates the GitHub release) runs regardless, so a cut tag still
+  # reaches the .deb and the tarball even if the image never
+  # ships.
+  image-build:
+    name: Build and push image (${{ matrix.arch }})
+    needs: build
+    if: vars.EPISTLE_PUBLISH_IMAGE == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # The release job receives `v0.8.0`; the image tags are
+      # unqualified, so strip the leading `v` once and pass it
+      # down.
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      REGISTRY_IMAGE: ghcr.io/glyndor/epistle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Build the image for ${{ matrix.arch }}
+        env:
+          # `VERSION` keeps its leading `v` here; the OCI label
+          # records the unversioned `0.8.0` so the image is
+          # addressable on its own. `REVISION` is the commit the
+          # checkout above actually produced, not `${{ github.sha }}`:
+          # on `workflow_dispatch` with a tag input, `github.sha` is
+          # the dispatch commit (a ref-creation event in the UI), not
+          # the commit the tag points at. `git rev-parse HEAD` reads
+          # the commit the runner's working tree is on, which is the
+          # tag's commit because the checkout step above checked out
+          # the tag.
+          LABEL_VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          crate_version="${LABEL_VERSION#v}"
+          revision="$(git rev-parse HEAD)"
+          podman build \
+            --platform "linux/${{ matrix.arch }}" \
+            --build-arg "VERSION=${crate_version}" \
+            --build-arg "REVISION=${revision}" \
+            -t "${REGISTRY_IMAGE}:${crate_version}-${{ matrix.arch }}" \
+            .
+
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `podman login` accepts `--password-stdin` so the token
+          # never lands on the command line or in the runner log.
+          echo "${GH_TOKEN}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push ${{ matrix.arch }} image
+        env:
+          CRATE_VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          crate_version="${CRATE_VERSION#v}"
+          podman push \
+            "${REGISTRY_IMAGE}:${crate_version}-${{ matrix.arch }}"
+
+  image-manifest:
+    name: Publish multi-arch image manifest
+    needs: image-build
+    if: vars.EPISTLE_PUBLISH_IMAGE == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Provenance is signed with the GitHub OIDC token. The
+      # `attestations: write` permission is what the workflow-run
+      # token needs to upload the signed envelope to the
+      # repository's attestations endpoint.
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      REGISTRY_IMAGE: ghcr.io/glyndor/epistle
+    steps:
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `actions/attest-build-provenance` with `push-to-registry: true`
+          # reads `~/.docker/config.json`, the docker config file. podman's
+          # default auth file lives elsewhere under `~/.config/containers/`
+          # and is invisible to that action, so the attestation step would
+          # fail to push the signed envelope. `--compat-auth-file` writes
+          # the docker-shaped file podman's auth dir would have produced
+          # (supported on podman 4.9+) so the OIDC-signed envelope lands at
+          # the registry.
+          mkdir -p "$HOME/.docker"
+          echo "${GH_TOKEN}" | podman login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin \
+            --compat-auth-file "$HOME/.docker/config.json"
+
+      - name: Build and push the multi-arch manifest list
+        id: tags
+        env:
+          CRATE_VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          # `.github/scripts/image_tags.py` is the gate that decides
+          # which tags a given version publishes. Prereleases like
+          # `1.0.0-rc.1` publish the exact tag only; plain versions
+          # publish the exact, the `<major>.<minor>`, and the `<major>`
+          # tags. A prerelease that produced floating tags would move
+          # `:0` onto a candidate and a consumer pinning the major
+          # would pull the candidate as if it were the next stable.
+          # The test in `.github/scripts/test_image_tags.py` pins the
+          # behaviour; `scripts.yml` discovers it on its own.
+          mapfile -t tags < <(python3 "$GITHUB_WORKSPACE/.github/scripts/image_tags.py" "${CRATE_VERSION}")
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "::error::image_tags.py produced no tags for ${CRATE_VERSION}"
+            exit 1
+          fi
+          printf 'Publishing tags:'
+          printf ' %s' "${tags[@]}"
+          printf '\n'
+          # The list of tags is emitted as a `tags` output (newline-
+          # separated) so the next step can read it without re-running
+          # the gate. Quoting the joined string preserves the
+          # newlines through GitHub Actions' output encoding.
+          {
+            printf 'tags<<EOF\n'
+            printf '%s\n' "${tags[@]}"
+            printf 'EOF\n'
+          } >> "$GITHUB_OUTPUT"
+          # Each tag points at the same manifest list, so a consumer
+          # pinning `0.8` keeps getting patches and a consumer
+          # pinning `0` keeps getting minors.
+          for tag in "${tags[@]}"; do
+            podman manifest create "${REGISTRY_IMAGE}:${tag}"
+            # `manifest create` accepts references on the command
+            # line too, but pulling them in by transport here keeps
+            # the list's contents visible at the top of the job
+            # and leaves `manifest create` to handle the empty-list
+            # start state.
+            podman manifest add "${REGISTRY_IMAGE}:${tag}" \
+              "docker://${REGISTRY_IMAGE}:${crate_version}-amd64"
+            podman manifest add "${REGISTRY_IMAGE}:${tag}" \
+              "docker://${REGISTRY_IMAGE}:${crate_version}-arm64"
+            podman manifest push --all \
+              --digestfile "$RUNNER_TEMP/digest-${tag}" \
+              "${REGISTRY_IMAGE}:${tag}"
+          done
+
+      - name: Read back the manifest digest for the pinned tag
+        id: digest
+        env:
+          CRATE_VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          crate_version="${CRATE_VERSION#v}"
+          # `podman manifest inspect --format` does not exist on
+          # podman 5.x, so the digest is taken from the file
+          # `manifest push --digestfile` wrote. The list of tags is
+          # the one the previous step published, read back from its
+          # output: prereleases publish one tag, plain versions
+          # three, and the assertion below requires all of them to
+          # point at the same list. Any divergence means the
+          # registry is serving different lists and the attestation
+          # would land on the wrong one.
+          mapfile -t tags <<< "${{ steps.tags.outputs.tags }}"
+          # mapfile reads the trailing newline as an empty last
+          # element; drop it so the loop does not iterate over a
+          # blank tag.
+          if [ "${#tags[@]}" -gt 0 ] && [ -z "${tags[-1]}" ]; then
+            unset 'tags[-1]'
+          fi
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "::error::no tags were published for ${CRATE_VERSION}"
+            exit 1
+          fi
+          for tag in "${tags[@]}"; do
+            f="$RUNNER_TEMP/digest-${tag}"
+            if [ ! -s "$f" ]; then
+              echo "::error::no digest was written for tag ${tag}"
+              exit 1
+            fi
+            d=$(cat "$f")
+            if [ -z "${full_digest:-}" ]; then
+              full_digest="$d"
+            elif [ "$d" != "$full_digest" ]; then
+              echo "::error::tag ${tag} digest ${d} differs from ${tags[0]} digest ${full_digest}; the published tags must point at the same list"
+              exit 1
+            fi
+          done
+          digest="$full_digest"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Manifest digest for ${REGISTRY_IMAGE}:${crate_version}: ${digest}"
+
+      - name: Attest the multi-arch image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          # The same action the .deb and the binary attest; the
+          # SHA is already pinned at the top of this workflow.
+          # `subject-name` + `subject-digest` target an OCI image
+          # in the registry rather than a local file.
+          subject-name: ${{ env.REGISTRY_IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+

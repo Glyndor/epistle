@@ -1,0 +1,153 @@
+name: Container
+
+# Build the image and exercise the three smoke checks: --version matches
+# the crate version, `config-check --config /dev/null` under --network
+# none fails without a panic, and the runtime user is 65532. A change
+# that only touches code paths inside the image but not any of the
+# listed inputs cannot break the smoke checks, so it would not pay to
+# run them. Pushing to `develop` is the gate where every PR is in, so
+# the run fires there unconditionally.
+#
+# The list deliberately includes the workflow file itself. A workflow
+# whose `paths:` does not list itself never runs on the pull request
+# that edits it, so a broken Containerfile-only change merges without
+# ever having exercised the smoke checks (db.yml:13-16, the same
+# pattern).
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    paths:
+      - ".github/workflows/container.yml"
+      - "Containerfile"
+      - ".containerignore"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - ".sqlx/**"
+      # `migrations/**` is copied by the Containerfile and the SQL
+      # queries are checked against them at build time; a migration
+      # change that does not trigger a rebuild embeds a stale set.
+      - "migrations/**"
+      # `benches/**` is copied into the builder stage so a benchmark
+      # build that the smoke checks do not see can still break a
+      # release if the Containerfile stops compiling them.
+      - "benches/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and smoke-test image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the crate version
+        id: version
+        run: |
+          set -euo pipefail
+          # `cargo metadata` is not on the runner by default and the rest of
+          # this workflow does not need a Rust toolchain, so read the
+          # version from Cargo.toml directly. The `version = "X.Y.Z"` line
+          # lives in `[package]`; the rest of the file has none.
+          crate_version=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          if [ -z "$crate_version" ]; then
+            echo "::error::could not parse version from Cargo.toml"
+            exit 1
+          fi
+          echo "crate=${crate_version}" >> "$GITHUB_OUTPUT"
+          echo "Crate version: ${crate_version}"
+
+      - name: Build the image
+        env:
+          CRATE_VERSION: ${{ steps.version.outputs.crate }}
+        run: |
+          set -euo pipefail
+          # `podman` ships on the runner; no build action. The label values
+          # are stamped here so the smoke check can compare `--version`
+          # against them.
+          #
+          # `--platform linux/amd64` is load-bearing: the Containerfile's
+          # `case` on `$TARGETARCH` only arms for `amd64` and `arm64`, and
+          # podman 4.9 on `ubuntu-latest` does not pre-fill `TARGETARCH`
+          # unless a platform is requested. Building without the flag hits
+          # the wildcard arm with `TARGETARCH=` and the build dies with
+          # `no musl target mapped`.
+          podman build \
+            --platform linux/amd64 \
+            --build-arg "VERSION=${CRATE_VERSION}" \
+            --build-arg "REVISION=${GITHUB_SHA}" \
+            -t epistle:ci .
+
+      - name: --version matches Cargo.toml
+        env:
+          CRATE_VERSION: ${{ steps.version.outputs.crate }}
+        run: |
+          set -euo pipefail
+          # `--version` prints `epistle <version>`. The full image reference
+          # must be qualified because the `nonroot` distroless base
+          # declares `io.containers.autoupdate=registry`, which makes
+          # `podman run` reject the bare `epistle:ci` short name with
+          # `auto updates require fully-qualified image reference`.
+          out=$(podman run --rm localhost/epistle:ci --version)
+          echo "epistle --version: ${out}"
+          # Strip the leading `epistle ` and any trailing whitespace; what
+          # remains is the version string `clap` printed.
+          printed=${out#epistle }
+          if [ "$printed" != "$CRATE_VERSION" ]; then
+            echo "::error::--version printed '${printed}', Cargo.toml says '${CRATE_VERSION}'"
+            exit 1
+          fi
+
+      - name: config-check rejects /dev/null without a panic
+        run: |
+          set -euo pipefail
+          # `--network none` is the whole point: config-check opens no
+          # sockets, so any successful network call here would be a
+          # different failure than the spec is testing. Fail loudly if
+          # the binary starts to talk.
+          set +e
+          out=$(podman run --rm --network none \
+            localhost/epistle:ci config-check --config /dev/null 2>&1)
+          rc=$?
+          set -e
+          echo "config-check exit: ${rc}"
+          echo "config-check output:"
+          printf '%s\n' "$out"
+          # Exit code 1 is what `config-check` returns for a config
+          # error, and only for a config error: `clap` returns 2 for a
+          # usage error, a panic returns 139, and exit 0 is the
+          # success path. Accepting any non-zero exit (the old shape)
+          # would treat a missing subcommand, a typo, or a crash as
+          # a passing smoke check. The substring guards the same
+          # property on the output side: a config-check that exits 1
+          # for a different reason (the parser panicking on its own
+          # error path, for example) is still a regression.
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::config-check exited ${rc}; expected 1 against /dev/null"
+            exit 1
+          fi
+          if ! printf '%s' "$out" | grep -qF 'is group/world-accessible'; then
+            echo "::error::config-check output is missing the 'is group/world-accessible' diagnostic; the binary may have failed for a different reason"
+            exit 1
+          fi
+          if printf '%s' "$out" | grep -qi 'panicked'; then
+            echo "::error::config-check output contains 'panicked' (a panic is not a controlled error)"
+            exit 1
+          fi
+
+      - name: Runtime user is 65532
+        run: |
+          set -euo pipefail
+          user=$(podman image inspect \
+            --format '{{.Config.User}}' localhost/epistle:ci)
+          echo "User: ${user}"
+          if [ "$user" != "65532:65532" ]; then
+            echo "::error::image User is '${user}', expected 65532:65532"
+            exit 1
+          fi
