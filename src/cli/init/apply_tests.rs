@@ -280,9 +280,14 @@ fn apply_preserves_unknown_top_level_keys() {
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
 	drop(outcome);
 	let merged = std::fs::read_to_string(&config_path).expect("read merged");
+	// The merged file carries the inline `srs_secret = "keep-me"`
+	// fixture. A panic that interpolated the full file would
+	// dump the SRS secret into the CI log; a boolean captures
+	// the contract without echoing the file.
+	let has_srs = merged.contains("srs_secret");
 	assert!(
-		merged.contains("srs_secret"),
-		"unknown top-level key srs_secret must be preserved: {merged}"
+		has_srs,
+		"unknown top-level key srs_secret must be preserved"
 	);
 }
 
