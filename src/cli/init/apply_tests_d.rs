@@ -114,17 +114,26 @@ fn apply_rewrites_managed_keys_and_preserves_unknown_ones() {
 	let outcome = apply(&answers);
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
 	let merged = std::fs::read_to_string(&config_path).expect("read merged");
+	// The merged config carries the inline `srs_secret` fixture.
+	// The contract assertions must not echo the full file: if
+	// the rewrite drops the dkim or tls block, the panic would
+	// dump the SRS secret into the CI log alongside the
+	// diagnosis. The booleans capture the check; the messages
+	// name the missing block only.
+	let has_srs = merged.contains("srs_secret");
+	let has_dkim = merged.contains("dkim");
+	let has_tls = merged.contains("tls");
 	assert!(
-		merged.contains("srs_secret"),
-		"unknown top-level key must survive the rewrite: {merged}"
+		has_srs,
+		"unknown top-level key must survive the rewrite"
 	);
 	assert!(
-		merged.contains("dkim"),
-		"managed dkim block must be written into the existing config: {merged}"
+		has_dkim,
+		"managed dkim block must be written into the existing config"
 	);
 	assert!(
-		merged.contains("tls"),
-		"managed tls block must be written into the existing config: {merged}"
+		has_tls,
+		"managed tls block must be written into the existing config"
 	);
 	assert!(
 		outcome
