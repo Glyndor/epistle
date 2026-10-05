@@ -9,13 +9,15 @@
 //!
 //! ## Bounded memory
 //!
-//! The `state` map grows monotonically with every distinct key an attacker
-//! is willing to feed. To keep memory finite under attack, every [`SendLimiter::check`]
-//! sweeps entries whose window started more than **two window lengths ago**
-//! whenever the map holds more than `EVICTION_THRESHOLD` entries. With a
-//! 60-second window the steady-state map holds at most `EVICTION_THRESHOLD`
-//! plus the handful of fresh keys that just landed; an active churning peer
-//! cannot push it past that bound because the next `check` re-sweeps.
+//! The `state` map is capped at [`MAX_ENTRIES`] entries. A key already in
+//! the map is handled in place (its window is reset if stale and its count
+//! is incremented) so an active sender keeps its budget while the map sits
+//! at the cap. A key that is not in the map is admitted only when there is
+//! room; when the cap is reached the check performs an incremental expiry
+//! pass that scans at most [`EVICTION_SCAN_BUDGET`] entries and removes the
+//! stale ones, then admits the new key if the eviction freed a slot. If the
+//! map is still full after the pass, the unseen key is refused: returning
+//! `false` blocks the message without ever dropping a live entry.
 //!
 //! `limit == 0` is treated as "no limit" (always allowed): the policy layer
 //! is expected to skip the call when the resolved limit is `None`, so a
@@ -24,9 +26,17 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Soft cap on the `state` map. Once exceeded, [`WindowLimiter::check`]
-/// runs a sweep and keeps the map under this size.
-const EVICTION_THRESHOLD: usize = 10_000;
+/// Hard cap on the `state` map. Once [`MAX_ENTRIES`] distinct keys are
+/// tracked, an unseen key is refused unless the incremental expiry pass
+/// makes room first.
+pub const MAX_ENTRIES: usize = 10_000;
+
+/// Maximum number of map entries the incremental expiry pass scans per
+/// `check` call. Each scan entry is one O(1) hashmap read, so a single
+/// `check` does at most this many reads of stale `window_start` values
+/// beyond the active-key lookup. Bounded so a fully-saturated limiter
+/// cannot do O(map_size) work per call.
+const EVICTION_SCAN_BUDGET: usize = 64;
 
 /// A shared, fixed-window rate limiter keyed by an arbitrary string.
 ///
@@ -39,6 +49,11 @@ pub struct WindowLimiter {
 	window_secs: u64,
 	/// Per-key `(window_start_epoch, count_in_window)`.
 	state: Mutex<HashMap<String, (u64, u32)>>,
+	/// Test-only counter of map entries the incremental expiry pass has
+	/// scanned. Lets a regression test assert that the per-call work stays
+	/// bounded when the map sits at the cap.
+	#[cfg(test)]
+	scan_count: Mutex<u64>,
 }
 
 /// Backwards-compatible alias. Kept so existing call sites (per-account
@@ -66,6 +81,8 @@ impl WindowLimiter {
 		WindowLimiter {
 			window_secs: window_secs.max(1),
 			state: Mutex::new(HashMap::new()),
+			#[cfg(test)]
+			scan_count: Mutex::new(0),
 		}
 	}
 
@@ -78,25 +95,60 @@ impl WindowLimiter {
 	/// counting this event, so a key that has been idle longer than the
 	/// window gets a fresh budget. The window is the fixed-window kind: a
 	/// continuous burst for `window_secs` then a hard reset.
+	///
+	/// The map size is capped at [`MAX_ENTRIES`]. When a brand-new key
+	/// would push the map past the cap, the call performs a bounded
+	/// incremental expiry pass and admits the key only if a slot was
+	/// freed. The active-key path (the entry is already present) never
+	/// evicts; an existing sender keeps its budget through every call
+	/// that hits a full map.
 	pub fn check(&self, key: &str, limit: u32, now: u64) -> bool {
 		if limit == 0 {
 			return true;
 		}
+		let key_lc = key.to_ascii_lowercase();
 		let mut state = self.state.lock().expect("send limiter");
-		let entry = state.entry(key.to_ascii_lowercase()).or_insert((now, 0));
-		if now.saturating_sub(entry.0) >= self.window_secs {
-			*entry = (now, 0);
+		if let Some(entry) = state.get_mut(&key_lc) {
+			if now.saturating_sub(entry.0) >= self.window_secs {
+				*entry = (now, 0);
+			}
+			if entry.1 >= limit {
+				return false;
+			}
+			entry.1 += 1;
+			return true;
 		}
-		if entry.1 >= limit {
-			return false;
-		}
-		entry.1 += 1;
-		if state.len() > EVICTION_THRESHOLD {
-			// Two-window cutoff: even a slow-churning key gets swept out
-			// long before the window it tracks becomes meaningful again.
+		if state.len() >= MAX_ENTRIES {
+			// Unseen key at the cap: do an incremental expiry pass that
+			// scans at most EVICTION_SCAN_BUDGET entries, drop the ones
+			// whose window started more than two window-lengths ago, and
+			// admit the new key only if a slot was freed. The active-key
+			// path above never reaches this branch, so live budgets are
+			// preserved even when the map is saturated.
 			let cutoff = now.saturating_sub(self.window_secs.saturating_mul(2));
-			state.retain(|_key, (start, _count)| *start > cutoff);
+			let mut scanned = 0usize;
+			let mut stale: Vec<String> = Vec::new();
+			for (k, (start, _count)) in state.iter() {
+				if *start <= cutoff {
+					stale.push(k.clone());
+				}
+				scanned += 1;
+				if scanned >= EVICTION_SCAN_BUDGET {
+					break;
+				}
+			}
+			#[cfg(test)]
+			{
+				*self.scan_count.lock().expect("scan count") += scanned as u64;
+			}
+			for k in &stale {
+				state.remove(k);
+			}
+			if state.len() >= MAX_ENTRIES {
+				return false;
+			}
 		}
+		state.insert(key_lc, (now, 1));
 		true
 	}
 
@@ -106,6 +158,14 @@ impl WindowLimiter {
 	#[cfg(test)]
 	fn len(&self) -> usize {
 		self.state.lock().expect("send limiter").len()
+	}
+
+	/// Total number of map entries the incremental expiry pass has scanned
+	/// across every `check` call so far. Test-only counter used to assert
+	/// the per-call work stays bounded.
+	#[cfg(test)]
+	fn scan_count(&self) -> u64 {
+		*self.scan_count.lock().expect("scan count")
 	}
 }
 
