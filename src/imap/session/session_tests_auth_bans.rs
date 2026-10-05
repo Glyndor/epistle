@@ -531,13 +531,14 @@ async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
 /// proof is the only path that lets a banned subject recover; the
 /// PLAIN path does the same thing.
 ///
-/// The test arms bans on both the IP and the account, but with
-/// `until_secs` in the past so the ban store treats them as expired
-/// at lookup time. The active ban store still has the rows, so a
-/// successful proof must remove them via `clear_success`. If the
-/// success path forgot to call `record_ban_outcome(true)`, the bans
-/// would still be in the store and the assertions at the end would
-/// fail.
+/// The test arms bans on both the IP and the account with
+/// `until_secs` slightly below the live wall clock, so the recheck
+/// at client-first and client-final sees them as expired (the
+/// exchange is allowed to run) but the rows are still in the store
+/// and visible to a manual query. The test inspects the rows
+/// directly so a successful proof that forgot to call
+/// `clear_success` would leave them in place, which the assertion
+/// would catch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_success_clears_ban_store() {
 	use crate::antispam::bans::tests::FakeBanStore;
@@ -545,22 +546,27 @@ async fn imap_scram_success_clears_ban_store() {
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	// Arm the bans with `until_secs` in the past so the recheck at
-	// client-first and client-final does not see them as active. The
-	// rows still live in the store and a successful proof must
-	// remove them.
-	let expired_until: u64 = 1;
+	// `until_secs` just before the live wall clock: the SCRAM
+	// recheck at `unix_now()` sees the rows as expired and lets the
+	// exchange through, but a manual query at `until_secs - 1` still
+	// sees them. The visible-until-expiry delta is the test's
+	// evidence the rows are gone only when `clear_success` ran.
+	let visible_until: u64 = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
+		.saturating_sub(60);
 	ban_store.arm_ban(
 		"ip:203.0.113.51",
 		BanInfo {
-			until_secs: expired_until,
+			until_secs: visible_until,
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
 	ban_store.arm_ban(
 		"account:alice",
 		BanInfo {
-			until_secs: expired_until,
+			until_secs: visible_until,
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
@@ -588,14 +594,15 @@ async fn imap_scram_success_clears_ban_store() {
 		"a successful SCRAM exchange must clear both IP and account, got {} clear_success calls",
 		ban_store.call_count("clear_success")
 	);
-	// The two ban rows are gone.
+	// The two ban rows are gone. Query at `visible_until - 1` so the
+	// row is in scope; the only way `is_banned` returns `None` is
+	// that `clear_success` actually removed the row.
+	let probe = visible_until.saturating_sub(1);
 	let ip_info = tokio::task::block_in_place(|| {
-		tokio::runtime::Handle::current()
-			.block_on(ban_store.is_banned("ip:203.0.113.51", 1_900_000_000))
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.51", probe))
 	});
 	let account_info = tokio::task::block_in_place(|| {
-		tokio::runtime::Handle::current()
-			.block_on(ban_store.is_banned("account:alice", 1_900_000_000))
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("account:alice", probe))
 	});
 	assert!(
 		ip_info.is_none(),
