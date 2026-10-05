@@ -41,12 +41,12 @@ const MAX_NESTING_DEPTH: u8 = 2;
 /// position; refuse them up front.
 const MAX_BOUNDARY_LEN: usize = 70;
 
-/// Test-only step counter incremented once per byte comparison the
-/// delimiter search performs. Lets a regression test assert the
-/// per-call work stays bounded when the body holds a long run of
-/// characters that share a prefix with the boundary. The counter is
-/// per-thread so parallel tests do not observe each other's
-/// increments.
+// Test-only step counter incremented once per byte comparison the
+// delimiter search performs. Lets a regression test assert the
+// per-call work stays bounded when the body holds a long run of
+// characters that share a prefix with the boundary. The counter is
+// per-thread so parallel tests do not observe each other's
+// increments.
 #[cfg(test)]
 thread_local! {
 	static SCAN_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

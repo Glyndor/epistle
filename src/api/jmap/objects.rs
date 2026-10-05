@@ -278,11 +278,11 @@ fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 		.collect()
 }
 
-/// Test-only step counter incremented once per byte the address-header
-/// tokenizer examines. Lets a regression test assert the per-call work
-/// stays bounded (linear in the header length, not quadratic in the
-/// number of openers). The counter is per-thread so parallel tests do
-/// not observe each other's increments.
+// Test-only step counter incremented once per byte the address-header
+// tokenizer examines. Lets a regression test assert the per-call work
+// stays bounded (linear in the header length, not quadratic in the
+// number of openers). The counter is per-thread so parallel tests do
+// not observe each other's increments.
 #[cfg(test)]
 thread_local! {
 	static TOKENIZER_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -378,10 +378,10 @@ fn split_top_level(value: &str, delimiter: char) -> Vec<String> {
 	out
 }
 
-/// Advance past `<...>` starting at `bytes[start]` (which must be `<`).
-/// Returns the index just past the closing `>`, or `start + 1` when
-/// the open has no matching close. A backslash escapes the next byte
-/// inside the angle-addr.
+// Advance past `<...>` starting at `bytes[start]` (which must be `<`).
+// Returns the index just past the closing `>`, or `start + 1` when
+// the open has no matching close. A backslash escapes the next byte
+// inside the angle-addr.
 fn skip_angle_addr(bytes: &[u8], start: usize) -> usize {
 	let mut i = start + 1;
 	while i < bytes.len() {
@@ -396,9 +396,9 @@ fn skip_angle_addr(bytes: &[u8], start: usize) -> usize {
 	start + 1
 }
 
-/// Advance past `"..."` starting at `bytes[start]` (which must be `"`).
-/// Returns the index just past the closing `"`, or `start + 1` when
-/// the string is unterminated. A backslash escapes the next byte.
+// Advance past `"..."` starting at `bytes[start]` (which must be `"`).
+// Returns the index just past the closing `"`, or `start + 1` when
+// the string is unterminated. A backslash escapes the next byte.
 fn skip_quoted_string(bytes: &[u8], start: usize) -> usize {
 	let mut i = start + 1;
 	while i < bytes.len() {
@@ -413,9 +413,9 @@ fn skip_quoted_string(bytes: &[u8], start: usize) -> usize {
 	start + 1
 }
 
-/// Find the position just past the closing `?=` of the encoded-word
-/// that starts at `value[start]` (which must point at `=`). Returns
-/// `None` when the fragment is not a complete encoded-word.
+// Find the position just past the closing `?=` of the encoded-word
+// that starts at `value[start]` (which must point at `=`). Returns
+// `None` when the fragment is not a complete encoded-word.
 fn encoded_word_end_inline(value: &str, start: usize) -> Option<usize> {
 	let after = &value[start + 2..];
 	let end = after.find("?=")?;
@@ -446,9 +446,9 @@ fn encoded_word_end_inline(value: &str, start: usize) -> Option<usize> {
 	Some(start + 2 + end + 2)
 }
 
-/// One address: extract the angle-addr email if present, otherwise treat
-/// the whole value as the email. Everything before the last `<` is the
-/// display name, when an angle-addr was found.
+// One address: extract the angle-addr email if present, otherwise treat
+// the whole value as the email. Everything before the last `<` is the
+// display name, when an angle-addr was found.
 fn parse_address(raw: &str) -> ParsedAddress {
 	let trimmed = raw.trim();
 	if let Some((open, close)) = find_angle_addr(trimmed) {

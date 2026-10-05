@@ -106,7 +106,11 @@ fn scan_step_count_grows_at_most_linearly_on_the_crafted_input() {
 	reset_scan_steps();
 	let hosts = extract_hosts(&body, scan_cap);
 	let steps = reset_scan_steps();
-	assert_eq!(hosts.len(), 1, "dedup keeps exactly one host, got {hosts:?}");
+	assert_eq!(
+		hosts.len(),
+		1,
+		"dedup keeps exactly one host, got {hosts:?}"
+	);
 	assert_eq!(hosts[0], "a.b");
 	// Linear bound: the forward scan advances at least one byte per
 	// iteration and at most `7 + host_length` bytes per scheme match,
@@ -152,4 +156,3 @@ fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
 		"step count grew superlinearly: small={small_steps}, large={large_steps}"
 	);
 }
-

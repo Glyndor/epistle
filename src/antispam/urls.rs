@@ -13,11 +13,11 @@ pub const MAX_SCAN_BYTES: usize = 256 * 1024;
 /// guidance of "first few dozen" hosts.
 pub const DEFAULT_HOST_CAP: usize = 50;
 
-/// Test-only step counter incremented once per byte the scheme scan
-/// examines. Lets a regression test assert the per-call work stays
-/// bounded (linear in the scan window, not quadratic in the number of
-/// matches). The counter is per-thread so parallel tests do not
-/// observe each other's increments.
+// Test-only step counter incremented once per byte the scheme scan
+// examines. Lets a regression test assert the per-call work stays
+// bounded (linear in the scan window, not quadratic in the number of
+// matches). The counter is per-thread so parallel tests do not
+// observe each other's increments.
 #[cfg(test)]
 thread_local! {
 	static SCAN_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -97,7 +97,12 @@ fn hex_value(b: u8) -> Option<u8> {
 /// re-scanning the suffix on every match. Hosts are deduplicated and
 /// bounded inline so the function never materialises more than `cap`
 /// unique results, and the scan stops as soon as the cap is reached.
-fn scan_hosts(input: &[u8], cap: usize, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>) {
+fn scan_hosts(
+	input: &[u8],
+	cap: usize,
+	out: &mut Vec<String>,
+	seen: &mut std::collections::HashSet<String>,
+) {
 	let bytes = input;
 	let mut i = 0usize;
 	while i < bytes.len() {
@@ -165,6 +170,8 @@ fn is_host_byte(b: u8) -> bool {
 	matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.')
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 	if needle.is_empty() || haystack.len() < needle.len() {
 		return None;

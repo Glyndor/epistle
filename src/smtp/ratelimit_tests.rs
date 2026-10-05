@@ -75,7 +75,11 @@ fn the_map_refuses_unseen_keys_once_the_cap_is_full() {
 		"an unseen key at the cap must be refused"
 	);
 	// The cap is still 10_000: the refusal did not push the map past it.
-	assert_eq!(limiter.len(), MAX_ENTRIES, "the cap must not grow past MAX_ENTRIES");
+	assert_eq!(
+		limiter.len(),
+		MAX_ENTRIES,
+		"the cap must not grow past MAX_ENTRIES"
+	);
 }
 
 #[test]
@@ -108,7 +112,10 @@ fn an_active_key_keeps_its_budget_when_the_map_is_full() {
 	// Establish alice's budget: two events in the window.
 	assert!(limiter.check("alice", 2, 1_000));
 	assert!(limiter.check("alice", 2, 1_000));
-	assert!(!limiter.check("alice", 2, 1_000), "third event must be blocked");
+	assert!(
+		!limiter.check("alice", 2, 1_000),
+		"third event must be blocked"
+	);
 	// Fill the cap with other senders, still inside alice's window. Alice
 	// already occupies one slot, so we admit MAX_ENTRIES - 1 peers.
 	for i in 0..MAX_ENTRIES - 1 {

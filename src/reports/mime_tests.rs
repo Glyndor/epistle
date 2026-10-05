@@ -260,13 +260,13 @@ fn a_message_with_too_many_parts_is_refused() {
 /// length, which is the shape the sabotage reintroduces.
 #[test]
 fn boundary_over_70_octets_is_refused_with_bounded_work() {
-	let boundary: String = std::iter::repeat('-').take(65_536).collect();
+	let boundary: String = "-".repeat(65_536);
 	let body_len: usize = 1 << 20; // 1 MiB of hyphens
 	let mut raw = Vec::with_capacity(body_len + 128);
 	raw.extend_from_slice(
 		format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n").as_bytes(),
 	);
-	raw.extend(std::iter::repeat(b'-').take(body_len));
+	raw.extend(std::iter::repeat_n(b'-', body_len));
 	reset_scan_steps();
 	let err = find_report_part(&raw, Kind::Dmarc).expect_err("oversized boundary refused");
 	let steps = reset_scan_steps();
@@ -304,7 +304,7 @@ fn build_multipart_with_hyphen_body(boundary: &str, body_len: usize) -> Vec<u8> 
 	};
 	raw.extend_from_slice(b64(&gz).as_bytes());
 	raw.extend_from_slice(b"\r\n");
-	raw.extend(std::iter::repeat(b'-').take(body_len));
+	raw.extend(std::iter::repeat_n(b'-', body_len));
 	raw.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 	raw
 }
@@ -315,7 +315,7 @@ fn build_multipart_with_hyphen_body(boundary: &str, body_len: usize) -> Vec<u8> 
 /// step counter, with a fixed slack for the per-call overhead.
 #[test]
 fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
-	let boundary: String = std::iter::repeat('-').take(MAX_BOUNDARY_LEN).collect();
+	let boundary: String = "-".repeat(MAX_BOUNDARY_LEN);
 	let small = build_multipart_with_hyphen_body(&boundary, 1 << 19);
 	let large = build_multipart_with_hyphen_body(&boundary, 1 << 20);
 	reset_scan_steps();
@@ -330,4 +330,3 @@ fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
 		"step count grew superlinearly: small={small_steps}, large={large_steps}"
 	);
 }
-
