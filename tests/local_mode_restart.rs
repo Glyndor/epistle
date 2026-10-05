@@ -13,7 +13,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 mod common;
-use common::{Child, is_eaddrinuse, pick_port_base, read_banner, redact_password, wait_for_bind};
+use common::{
+	BANNER_READ_DEADLINE, BIND_DEADLINE, Child, is_eaddrinuse, pick_port_base, read_banner,
+	redact_password, wait_for_bind,
+};
 
 /// Run the harness against a directory twice, with different
 /// port bases, and assert the second run advertises the first
@@ -63,7 +66,7 @@ fn run_restart_pair() -> Result<(), String> {
 		port_base_q.as_str(),
 	];
 	let mut child = Child::spawn(&args, dir.path());
-	let bind_deadline = Instant::now() + Duration::from_secs(10);
+	let bind_deadline = Instant::now() + BIND_DEADLINE;
 	// The persisted P-relative SMTP port is the one the
 	// runtime will actually bind; wait for it.
 	let smtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), base_p + 25);
@@ -75,13 +78,13 @@ fn run_restart_pair() -> Result<(), String> {
 	)?;
 	let banner = read_banner(
 		&mut smtp,
-		Instant::now() + Duration::from_secs(2),
+		Instant::now() + BANNER_READ_DEADLINE,
 		"reading the second-run SMTP banner",
 	)?;
 	drop(smtp);
 	if !banner.starts_with(b"220 ") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the second-run SMTP banner",
 		)?;
 		return Err(format!(
@@ -90,10 +93,8 @@ fn run_restart_pair() -> Result<(), String> {
 			redact_password(&stderr)
 		));
 	}
-	let (_stdout, stderr) = child.kill_and_drain(
-		Instant::now() + Duration::from_secs(2),
-		"killing second run",
-	)?;
+	let (_stdout, stderr) =
+		child.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, "killing second run")?;
 	let stderr_text = redact_password(&stderr);
 	// Every endpoint line in the second run's banner must
 	// name a P-relative port, never a Q-relative one. The
@@ -144,7 +145,7 @@ fn run_until_listening_and_kill(dir: &Path, base_p: u16) -> Result<(), String> {
 		port_base_str.as_str(),
 	];
 	let mut child = Child::spawn(&args, dir);
-	let bind_deadline = Instant::now() + Duration::from_secs(10);
+	let bind_deadline = Instant::now() + BIND_DEADLINE;
 	let smtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), base_p + 25);
 	let _ = wait_for_bind(
 		smtp_addr,
@@ -153,6 +154,6 @@ fn run_until_listening_and_kill(dir: &Path, base_p: u16) -> Result<(), String> {
 		&mut child,
 	)?;
 	let (_stdout, _stderr) =
-		child.kill_and_drain(Instant::now() + Duration::from_secs(2), "killing first run")?;
+		child.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, "killing first run")?;
 	Ok(())
 }

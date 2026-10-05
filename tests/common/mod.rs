@@ -24,6 +24,36 @@ pub fn binary() -> &'static Path {
 /// uses it to decide "try a different port" vs "real regression".
 pub const EADDRINUSE_TEXT: &str = "Address already in use";
 
+/// Maximum time the harness waits for the `epistle local` child to
+/// bind every listener before failing the attempt. The bind check
+/// itself is a poll on `connect` succeeding, so a passing run
+/// returns as soon as the last port accepts a connection; the
+/// deadline is the safety net for a slow start. Sized to fit the
+/// cost of running the test binary under `cargo llvm-cov` on a
+/// shared runner, where the instrumented child can take noticeably
+/// longer to reach its `listen` calls.
+pub const BIND_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Maximum time the harness waits for a single banner or greeting
+/// read (SMTP, submission, IMAP, or the HTTP status line) to
+/// complete. The reader polls on `we saw CRLF`, so a passing run
+/// returns as soon as the terminator lands in the buffer; the
+/// deadline is the safety net for a listener that accepts TCP and
+/// never greets. Sized to fit the same slow-start budget as
+/// [`BIND_DEADLINE`].
+pub const BANNER_READ_DEADLINE: Duration = Duration::from_secs(15);
+
+/// Read and write timeouts the TLS probe installs on the TCP
+/// socket before driving the handshake. Without them a peer that
+/// accepts the TCP connection and never answers blocks `read` /
+/// `write` forever and the test harness cannot reap the child
+/// process; setting SO_RCVTIMEO / SO_SNDTIMEO turns a stuck peer
+/// into a `TimedOut` error the probe can name with the phase. The
+/// hung-peer test pins the silent case with a watchdog of three
+/// times this constant.
+#[allow(dead_code)] // only the `local_mode` target drives a TLS handshake; the restart target shares the constant.
+pub const TLS_PROBE_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Try once to open `addr` for reading. Returns `None` when the
 /// connection is refused or the kernel has not answered within the
 /// 200 ms connect timeout; the caller polls again. Anything else
@@ -66,7 +96,7 @@ pub fn wait_for_bind(
 		match child.proc.try_wait() {
 			Ok(Some(status)) => {
 				let (_stdout, stderr) =
-					child.kill_and_drain(Instant::now() + Duration::from_secs(2), phase)?;
+					child.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, phase)?;
 				return Err(format!(
 					"{phase}: child exited before binding {addr}: status {status:?}\nstderr:\n{}",
 					redact_password(&stderr)
@@ -77,7 +107,7 @@ pub fn wait_for_bind(
 		}
 		if Instant::now() >= deadline {
 			let (_stdout, stderr) =
-				child.kill_and_drain(Instant::now() + Duration::from_secs(2), phase)?;
+				child.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, phase)?;
 			return Err(format!(
 				"{phase}: port {addr} did not start accepting within {budget:?}\nstderr:\n{}",
 				redact_password(&stderr)
