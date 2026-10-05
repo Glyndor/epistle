@@ -158,12 +158,17 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> std::path::PathBuf {
 fn password_file_refuses_an_empty_secret_after_stripping() {
 	let dir = tempdir().expect("tempdir");
 	let path = dir.path().join("pw");
-	match read_password_file(&write_bytes(&path, b"\n")).expect_err("\\n alone must error") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&write_bytes(&path, b"\n")) {
+		Ok(_) => panic!("\\n alone must error, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::Empty,
 			..
-		} => {}
-		other => panic!(
+		}) => {}
+		Err(other) => panic!(
 			"expected PasswordFile {{ Empty, .. }}, got {}",
 			error_name(&other)
 		),
@@ -286,16 +291,21 @@ fn password_file_refuses_a_fifo_without_blocking() {
 	// being a FIFO).
 	let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
 	assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-	match read_password_file(&path).expect_err("FIFO must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&path) {
+		Ok(_) => panic!("FIFO must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::NotRegularFile,
 			..
-		} => {}
-		DbError::PasswordFile {
+		}) => {}
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::Io(_),
 			..
-		} => {}
-		other => panic!(
+		}) => {}
+		Err(other) => panic!(
 			"expected PasswordFile with NotRegularFile or Io, got {}",
 			error_name(&other)
 		),
@@ -326,12 +336,17 @@ fn password_file_refuses_a_fifo_with_a_writer() {
 		.write(true)
 		.open(&path)
 		.expect("open fifo rdwr");
-	match read_password_file(&path).expect_err("FIFO with a writer must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&path) {
+		Ok(_) => panic!("FIFO with a writer must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::NotRegularFile,
 			..
-		} => {}
-		other => panic!(
+		}) => {}
+		Err(other) => panic!(
 			"expected PasswordFile {{ NotRegularFile, .. }}, got {}",
 			error_name(&other)
 		),
