@@ -330,3 +330,71 @@ fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
 		"step count grew superlinearly: small={small_steps}, large={large_steps}"
 	);
 }
+
+/// Build a multipart whose body between the opening and closing
+/// boundaries is a near-match for the 70-hyphen boundary: 71 hyphens
+/// followed by 'x', repeated. The needle is 72 hyphens (`--` + 70
+/// hyphens). Every 72-byte window holds a mismatch at byte 71 (or
+/// earlier, when the window is shifted by 1), so no position in the
+/// body contains a full 72-byte match for the needle. The closing
+/// boundary sits at the very end of the body, so the search has to
+/// walk the whole near-match to find it.
+fn build_multipart_with_near_match_body(boundary: &str, body_len: usize) -> Vec<u8> {
+	let mut raw = Vec::new();
+	raw.extend_from_slice(
+		format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n").as_bytes(),
+	);
+	raw.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+	raw.extend_from_slice(b"Content-Type: application/gzip\r\n");
+	raw.extend_from_slice(b"Content-Transfer-Encoding: base64\r\n\r\n");
+	let gz = {
+		use flate2::write::GzEncoder;
+		use std::io::Write;
+		let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+		enc.write_all(b"<feedback/>").expect("write");
+		enc.finish().expect("finish")
+	};
+	raw.extend_from_slice(b64(&gz).as_bytes());
+	raw.extend_from_slice(b"\r\n");
+	// 71 hyphens + 'x' = 72 bytes. Every 72-byte window in the repeated
+	// body has a mismatch at byte 71 (the 'x'), so the 72-byte needle
+	// has no full match anywhere in the body. The closing boundary
+	// only matches because its first 72 bytes are exactly the needle.
+	let pattern = format!("{}x", "-".repeat(MAX_BOUNDARY_LEN + 1));
+	let repeats = body_len / pattern.len();
+	let body = pattern.repeat(repeats);
+	raw.extend_from_slice(body.as_bytes());
+	raw.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+	raw
+}
+
+/// The near-match fixture exposes the difference between the linear
+/// scan and the historical `find_subslice` search. The needle is 72
+/// hyphens (`--` + 70 hyphens) and the body is the periodic
+/// 71-hyphen + 'x' pattern, so the body has no full match anywhere.
+/// The historical `find_subslice` would walk every position, comparing
+/// 72 bytes at each step, which for a 1 MiB body is on the order of
+/// 72 million compares. The linear scan checks one line's prefix and
+/// stops after the single mismatch. The bound sits well above the
+/// linear scan and well below `find_subslice`.
+#[test]
+fn delimiter_scan_stays_bounded_on_a_near_match_ending_in_a_different_byte() {
+	let boundary: String = "-".repeat(MAX_BOUNDARY_LEN);
+	let body_len: usize = 1 << 20; // 1 MiB
+	let raw = build_multipart_with_near_match_body(&boundary, body_len);
+	reset_scan_steps();
+	let _ = find_report_part(&raw, Kind::Dmarc);
+	let steps = reset_scan_steps();
+	// The find_subslice algorithm would record O(body_len * 72)
+	// compares for the boundary search, which is around 75 million
+	// for a 1 MiB body. The header scan in `find_headers_end`
+	// contributes another O(body_len) for the `\n\n` fallback, which
+	// the linear and historical search share. The bound sits well
+	// above the linear scan (a few million) and well below the
+	// quadratic path (`O(body * needle)`).
+	let bound: u64 = 10_000_000;
+	assert!(
+		steps <= bound,
+		"delimiter scan did O(body * needle) work: {steps} steps for {body_len} bytes"
+	);
+}
