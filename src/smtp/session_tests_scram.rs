@@ -187,7 +187,7 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 	use crate::antispam::bans::tests::FakeBanStore;
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
@@ -226,25 +226,78 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 /// Build a directory that has SCRAM credentials for `alice` AND has a
 /// ban store attached. Used by the ban-interaction tests below to
 /// assert SCRAM consults the ban store before any credential lookup and
-/// records the outcome (success clears, failure adds a strike).
+/// records the outcome (success clears, failure adds a strike). The
+/// optional `lookup_counter` is attached as a per-Directory SCRAM
+/// credential-lookup counter; the ban tests inject a fresh atomic
+/// here so they can assert the lookup never happened without racing
+/// other tests in the same process on a shared counter.
 fn scram_directory_with_ban_store(
 	ban_store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
+	lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	let stored =
 		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
-	Arc::new(
-		Directory::new(
-			["example.org".to_string()],
-			[("alice@example.org".to_string(), "alice".to_string())],
-		)
-		.with_password_hashes([(
-			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
-		)])
-		.with_scram([("alice".to_string(), stored)])
-		.with_ban_store(ban_store),
+	let mut directory = Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
 	)
+	.with_password_hashes([(
+		"alice".to_string(),
+		crate::smtp::auth::tests::hash("secret"),
+	)])
+	.with_scram([("alice".to_string(), stored)])
+	.with_ban_store(ban_store);
+	if let Some(counter) = lookup_counter {
+		directory = directory.with_scram_lookup_counter(counter);
+	}
+	Arc::new(directory)
+}
+
+/// A SCRAM success drives the credential lookup, so the per-test
+/// counter is bumped. This is the property that catches a regression
+/// where the per-test counter stops being used and a process-wide
+/// atomic is used in its place: a ban test that snapshots the
+/// per-test counter and asserts the delta is zero would still pass
+/// (the per-test counter is not bumped either way), but the
+/// per-test counter would lose its diagnostic value because it no
+/// longer reflects what `scram_credentials` did for this test. A
+/// non-ban exchange that bumps the per-test counter is the only
+/// direct evidence the counter is wired to the lookup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smtp_scram_lookup_counter_is_per_test() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
+
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
+
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory)
+		.with_tls_active()
+		.with_scram_nonce("SN")
+		.tap_ehlo();
+	session.set_peer_ip(Some("203.0.113.47".parse().expect("peer")));
+
+	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	// A non-banned, well-formed client-first drives a SCRAM credential
+	// lookup. The per-test counter must move; otherwise the ban test's
+	// "delta is zero when a ban short-circuits" assertion would be a
+	// tautology.
+	assert_eq!(
+		reply_code(
+			&session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")))
+		),
+		334
+	);
+	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	assert_eq!(
+		after - before,
+		1,
+		"a non-banned SCRAM exchange must bump the per-test counter exactly once (delta: {})",
+		after - before
+	);
 }
 
 /// A SCRAM ban triggered between client-first and client-final must
@@ -261,7 +314,7 @@ async fn smtp_scram_client_final_rechecks_ban() {
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
@@ -393,16 +446,17 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 
 	let mut session = Session::new("mail.example.org")
-		.with_directory(directory.clone())
+		.with_directory(directory)
 		.with_tls_active()
 		.with_scram_nonce("SN")
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count();
+	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
 	// A ban refusal at client-first looks like a normal exchange on
 	// the wire: a 334 with a server-first, then a 535 when the proof
 	// fails. The wrong-password shape is the same and the test asserts
@@ -420,7 +474,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	let bad_proof = b64_bytes(&[0u8; 32]);
 	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
-	let after = crate::smtp::directory_scram_test_counter::count();
+	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
 
 	assert!(
 		ban_store.call_count("is_banned") >= 1,
@@ -453,7 +507,7 @@ async fn smtp_scram_failure_adds_one_strike() {
 	use crate::antispam::bans::tests::FakeBanStore;
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
@@ -513,7 +567,7 @@ async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())

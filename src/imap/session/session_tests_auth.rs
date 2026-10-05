@@ -88,7 +88,7 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 	let mut session = Session::new(
 		"mail.example.org",
 		tmp.path().to_path_buf(),
@@ -328,25 +328,32 @@ async fn imap_login_records_the_peer_ip() {
 /// ban store attached. Used by the ban-interaction tests below to
 /// assert IMAP SCRAM consults the ban store before any credential
 /// lookup and records the outcome (success clears, failure adds a
-/// strike).
+/// strike). The optional `lookup_counter` is attached as a
+/// per-Directory SCRAM credential-lookup counter; the ban tests
+/// inject a fresh atomic here so they can assert the lookup never
+/// happened without racing other tests in the same process on a
+/// shared counter.
 fn scram_directory_with_ban_store(
 	ban_store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
+	lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	let stored =
 		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
-	Arc::new(
-		Directory::new(
-			["example.org".to_string()],
-			[("alice@example.org".to_string(), "alice".to_string())],
-		)
-		.with_password_hashes([(
-			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
-		)])
-		.with_scram([("alice".to_string(), stored)])
-		.with_ban_store(ban_store),
+	let mut directory = Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
 	)
+	.with_password_hashes([(
+		"alice".to_string(),
+		crate::smtp::auth::tests::hash("secret"),
+	)])
+	.with_scram([("alice".to_string(), stored)])
+	.with_ban_store(ban_store);
+	if let Some(counter) = lookup_counter {
+		directory = directory.with_scram_lookup_counter(counter);
+	}
+	Arc::new(directory)
 }
 
 /// A banned IP is refused on IMAP SCRAM before the SCRAM credential
@@ -371,16 +378,17 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 	let mut session = Session::new(
 		"mail.example.org",
 		tmp.path().to_path_buf(),
-		directory.clone(),
+		directory,
 	)
 	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
-	let before = crate::smtp::directory_scram_test_counter::count();
+	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
 	// A ban refusal at client-first looks like a normal exchange on
 	// the wire: a `+` continuation with a server-first, then NO when
 	// the proof fails. The wrong-password shape is the same and the
@@ -401,7 +409,7 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
-	let after = crate::smtp::directory_scram_test_counter::count();
+	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
 
 	assert!(
 		ban_store.call_count("is_banned") >= 1,
@@ -435,7 +443,7 @@ async fn imap_scram_failure_adds_one_strike() {
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 	let mut session = Session::new(
 		"mail.example.org",
 		tmp.path().to_path_buf(),
@@ -496,7 +504,7 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 	let mut session = Session::new(
 		"mail.example.org",
 		tmp.path().to_path_buf(),
@@ -560,7 +568,7 @@ async fn imap_scram_client_final_rechecks_ban() {
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 	let mut session = Session::new(
 		"mail.example.org",
 		tmp.path().to_path_buf(),

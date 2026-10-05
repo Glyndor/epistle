@@ -135,6 +135,12 @@ pub struct Directory {
 	/// `[database]`; those fall back to the per-connection three-strikes
 	/// counters that the listeners already maintain.
 	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
+	/// Test-only SCRAM credential-lookup counter. The ban tests inject
+	/// a fresh `Arc<AtomicUsize>` per test via
+	/// `with_scram_lookup_counter` so the delta they assert is
+	/// isolated from any other test in the same `cargo test` process.
+	#[cfg(test)]
+	scram_lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl Directory {
@@ -172,6 +178,8 @@ impl Directory {
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
+			#[cfg(test)]
+			scram_lookup_counter: None,
 		}
 	}
 
@@ -543,15 +551,33 @@ impl Directory {
 		self
 	}
 
+	/// Test-only: attach a per-directory SCRAM credential-lookup
+	/// counter. The ban tests inject a fresh `Arc<AtomicUsize>` per
+	/// test, snapshot the counter before driving the exchange, and
+	/// assert the delta is zero when a ban short-circuits the lookup.
+	/// The counter is per-Directory so parallel tests in the same
+	/// `cargo test` process do not race on a shared atomic.
+	#[cfg(test)]
+	pub fn with_scram_lookup_counter(
+		mut self,
+		counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+	) -> Self {
+		self.scram_lookup_counter = Some(counter);
+		self
+	}
+
 	/// Resolve a login to its SCRAM credentials, or `None` when the identity is
 	/// unknown or has no SCRAM credentials.
 	pub fn scram_credentials(&self, login: &str) -> Option<super::scram::ScramCredentials> {
-		// Test-only: bump the global lookup counter so the ban tests can
-		// assert the SCRAM credential lookup never happens when a ban
-		// short-circuits the exchange. The counter lives in a `cfg(test)`
-		// module so the production build does not pay for it.
+		// Test-only: bump the per-directory lookup counter so the ban
+		// tests can assert the SCRAM credential lookup never happens
+		// when a ban short-circuits the exchange. The counter is
+		// per-Directory (set via `with_scram_lookup_counter`) so parallel
+		// tests in the same process do not race on a shared atomic.
 		#[cfg(test)]
-		crate::smtp::directory_scram_test_counter::record();
+		if let Some(counter) = self.scram_lookup_counter.as_ref() {
+			counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		}
 		let account = if login.contains('@') {
 			let address = Address::parse(login).ok()?;
 			match self.resolve(&address) {
