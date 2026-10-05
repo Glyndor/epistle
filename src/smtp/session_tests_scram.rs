@@ -254,7 +254,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 /// strike to the ban store. The test drives a full SCRAM exchange with
 /// a wrong client proof, asserts the wire reply is 535, and asserts the
 /// ban store received exactly one `record_failure` call keyed on
-/// `ip:<peer>` and one on `account:<login>` — the same keying the PLAIN
+/// `ip:<peer>` and one on `account:<login>`, the same keying the PLAIN
 /// path uses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_failure_adds_one_strike() {
