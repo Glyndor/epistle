@@ -14,7 +14,10 @@ use base64::engine::general_purpose::STANDARD as B64;
 /// tag) is recorded as a shared-accounting failure: the IP-side
 /// strike is recorded even though the login and the resolved account
 /// are unknown, so an unbanned peer cannot repeatedly send garbage to
-/// avoid the ban store.
+/// avoid the ban store. The first sub-case must send bytes that
+/// fail the IMAP base64 decode (so the SCRAM layer never sees
+/// them): wrapping the bad string in `B64.encode` would only
+/// exercise the missing-username branch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_malformed_client_first_records_a_strike() {
 	use crate::antispam::bans::BanPolicy;
@@ -31,13 +34,17 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.46".parse().expect("peer")));
 
-	// Invalid base64.
-	let out = text(&session.command_line(&format!(
-		"a AUTHENTICATE SCRAM-SHA-256 {}",
-		B64.encode("!!!not-base64")
-	)));
+	// Invalid base64: the bytes that follow the SASL mechanism
+	// name are themselves not valid base64, so the IMAP layer
+	// fails before the SCRAM client-first handler ever runs. A
+	// regression that drops the record_failure call from the
+	// IMAP decode-error branch would leave this sub-case with
+	// zero strikes recorded.
+	let out = text(&session.command_line("a AUTHENTICATE SCRAM-SHA-256 !!!not-base64"));
 	assert!(out.contains("a NO"), "{out}");
-	// Valid base64 but no username tag.
+	// Valid base64 but no username tag: the IMAP layer decodes
+	// the SASL continuation line successfully, the SCRAM layer
+	// parses the message and finds no `n=` tag.
 	let out = text(&session.command_line(&format!(
 		"a AUTHENTICATE SCRAM-SHA-256 {}",
 		B64.encode("n,,x=y")
