@@ -559,7 +559,7 @@ fn decode(encoded: &str) -> Option<String> {
 /// SCRAM credentials with a fixed salt and zero keys, used only to
 /// build a server-first message the client can echo back. The
 /// `StoredKey` is all zeros, so any client proof that comes back will
-/// fail the verifier exactly like a wrong password — which is the
+/// fail the verifier exactly like a wrong password, which is the
 /// point: the ban refusal looks like a wrong password on the wire.
 fn fake_scram_credentials() -> crate::smtp::scram::ScramCredentials {
 	crate::smtp::scram::ScramCredentials {
