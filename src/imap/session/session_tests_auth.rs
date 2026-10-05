@@ -452,8 +452,7 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
 	let info = tokio::task::block_in_place(|| {
-		tokio::runtime::Handle::current()
-			.block_on(ban_store.is_banned("ip:203.0.113.44", now))
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.44", now))
 	})
 	.expect("ban still in force");
 	assert_eq!(
