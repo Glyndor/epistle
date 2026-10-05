@@ -3,6 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+use crate::smtp::directory::bans::BanOutcome;
 use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 
 use crate::smtp::address::Address;
@@ -335,12 +336,29 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		let Some(username) = username_of(&client_first) else {
 			return self.auth_failure(tag);
 		};
+		// Ban check before any credential lookup: an active ban on the
+		// client IP or on the account short-circuits the exchange with the
+		// same wire outcome as a wrong SCRAM proof, and the SCRAM
+		// credential lookup never happens. A ban refusal is distinct from
+		// a credential failure: the strike count and ban expiry do not
+		// move, so the ban keeps ending when it was going to end.
+		let resolved = match self
+			.directory
+			.check_ban(&username, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.auth_failure(tag),
+			BanOutcome::Clear { account } => account,
+		};
+		let mut account_for_record = resolved;
 		let Some(credentials) = self.directory.scram_credentials(&username) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.auth_failure(tag);
 		};
 		let Some((account, _)) = self.directory.credentials(&username) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.auth_failure(tag);
 		};
+		account_for_record = Some(account.clone());
 		// SCRAM bypasses authenticate_with_ip, so the per-account
 		// `allowed_protocols` check has to be issued here. A restricted
 		// account fails with the same wire outcome as a wrong SCRAM proof.
@@ -348,14 +366,17 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			.directory
 			.is_protocol_allowed(&account, self.auth_protocol)
 		{
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.auth_failure(tag);
 		}
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.auth_failure(tag);
 		};
 		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.auth_failure(tag);
 		};
 		self.pending_auth = Some(PendingAuth::ScramFinal {
@@ -376,10 +397,17 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		account: &str,
 	) -> Output {
 		let Some(client_final) = decode(encoded) else {
+			self.record_scram_outcome(account, Some(account), false);
 			return self.auth_failure(tag);
 		};
 		match server.finish(&client_final, &credentials) {
 			Ok(server_final) => {
+				// Clear the ban store for both subjects on a successful
+				// proof; the ban check at client-first already consulted
+				// the same store with the same keys, so the success here
+				// undoes any in-flight strikes the same way the PLAIN path
+				// does.
+				self.record_scram_outcome(account, Some(account), true);
 				self.state = State::Authenticated {
 					account: account.to_string(),
 				};
@@ -388,7 +416,10 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 					BASE64.encode(server_final)
 				))
 			}
-			Err(_) => self.auth_failure(tag),
+			Err(_) => {
+				self.record_scram_outcome(account, Some(account), false);
+				self.auth_failure(tag)
+			}
 		}
 	}
 
@@ -403,6 +434,28 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			}
 		}
 		Output::text(format!("{tag} NO authentication failed\r\n"))
+	}
+
+	/// Write the outcome of a SCRAM authentication attempt back to the
+	/// shared ban store, keyed exactly as the PLAIN path keys it
+	/// (`ip:<peer>` and the account the credential check resolved). A
+	/// success clears both subjects; a failure records a strike against
+	/// both. The ban check at the start of the exchange already decided
+	/// whether to refuse the attempt; a ban refusal never reaches this
+	/// helper, so the strike count and ban expiry stay where they were.
+	fn record_scram_outcome(
+		&self,
+		login: &str,
+		account: Option<&str>,
+		success: bool,
+	) {
+		self.directory.record_ban_outcome(
+			login,
+			account,
+			success,
+			self.peer_ip,
+			self.auth_protocol,
+		);
 	}
 
 	fn pending_auth_tag(&self) -> String {

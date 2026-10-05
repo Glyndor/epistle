@@ -135,6 +135,14 @@ pub struct Directory {
 	/// `[database]`; those fall back to the per-connection three-strikes
 	/// counters that the listeners already maintain.
 	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
+	/// Test-only counter for `scram_credentials` lookups. The SCRAM
+	/// listener tests assert this stays at zero when a ban short-circuits
+	/// the exchange: the ban check has to run before any SCRAM credential
+	/// lookup, and a stray lookup would let a banned IP probe whether the
+	/// account exists. The field is `cfg(test)` so the production build
+	/// does not pay for it.
+	#[cfg(test)]
+	scram_credentials_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl Directory {
@@ -172,6 +180,8 @@ impl Directory {
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
+			#[cfg(test)]
+			scram_credentials_calls: std::sync::atomic::AtomicUsize::new(0),
 		}
 	}
 
@@ -546,6 +556,11 @@ impl Directory {
 	/// Resolve a login to its SCRAM credentials, or `None` when the identity is
 	/// unknown or has no SCRAM credentials.
 	pub fn scram_credentials(&self, login: &str) -> Option<super::scram::ScramCredentials> {
+		#[cfg(test)]
+		{
+			self.scram_credentials_calls
+				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		}
 		let account = if login.contains('@') {
 			let address = Address::parse(login).ok()?;
 			match self.resolve(&address) {
@@ -556,6 +571,15 @@ impl Directory {
 			login.to_ascii_lowercase()
 		};
 		self.scram.get(&account)?.to_credentials()
+	}
+
+	/// Test-only: how many times `scram_credentials` has been called. The
+	/// ban-store tests assert this stays at zero when a ban short-circuits
+	/// the SCRAM exchange.
+	#[cfg(test)]
+	pub fn scram_credentials_calls(&self) -> usize {
+		self.scram_credentials_calls
+			.load(std::sync::atomic::Ordering::Relaxed)
 	}
 
 	/// Attach domain aliases (alias domain → target domain). Both sides are
@@ -712,7 +736,7 @@ impl Directory {
 }
 
 #[path = "directory_bans.rs"]
-mod bans;
+pub mod bans;
 
 #[cfg(test)]
 #[path = "directory_tests.rs"]

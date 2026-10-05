@@ -277,3 +277,175 @@ async fn imap_login_records_the_peer_ip() {
 		"ban store did not record a failure for account:alice"
 	);
 }
+
+/// Build a directory that has SCRAM credentials for `alice` AND has a
+/// ban store attached. Used by the ban-interaction tests below to
+/// assert IMAP SCRAM consults the ban store before any credential
+/// lookup and records the outcome (success clears, failure adds a
+/// strike).
+fn scram_directory_with_ban_store(
+	ban_store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
+) -> Arc<Directory> {
+	use crate::smtp::scram::{ScramCredentials, ScramStored};
+	let stored =
+		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	Arc::new(
+		Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)
+		.with_password_hashes([(
+			"alice".to_string(),
+			crate::smtp::auth::tests::hash("secret"),
+		)])
+		.with_scram([("alice".to_string(), stored)])
+		.with_ban_store(ban_store),
+	)
+}
+
+/// A banned IP is refused on IMAP SCRAM before the SCRAM credential
+/// lookup runs. The test arms a ban on the peer IP, drives a SCRAM
+/// client-first, and asserts the ban store was consulted, the
+/// `scram_credentials` lookup count is zero (the exchange was
+/// short-circuited), and the wire reply is the same NO a wrong SCRAM
+/// proof produces. The lookup count is the property that proves a
+/// banned IP cannot probe whether an account exists by sending a
+/// SCRAM client-first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy};
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	ban_store.arm_ban(
+		"ip:203.0.113.42",
+		BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
+		.with_scram_nonce("SN");
+	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
+
+	let out = text(&session.command_line(&format!(
+		"a AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	)));
+	assert!(out.contains("a NO"), "{out}");
+
+	assert!(
+		ban_store.call_count("is_banned") >= 1,
+		"ban store consulted {} times, expected at least one is_banned",
+		ban_store.call_count("is_banned")
+	);
+	assert_eq!(
+		directory.scram_credentials_calls(),
+		0,
+		"the SCRAM credential lookup must not happen when a ban short-circuits the exchange"
+	);
+}
+
+/// A SCRAM failure (a wrong proof against valid credentials) adds one
+/// strike to the ban store. The test drives a full SCRAM exchange with
+/// a wrong client proof, asserts the wire reply is NO, and asserts the
+/// ban store received exactly one `record_failure` call keyed on
+/// `ip:<peer>` and one on `account:<login>` — the same keying the PLAIN
+/// path uses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_failure_adds_one_strike() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::BanPolicy;
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
+		.with_scram_nonce("SN");
+	session.set_peer_ip(Some("203.0.113.43".parse().expect("peer")));
+
+	let out = text(&session.command_line(&format!(
+		"a AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	)));
+	assert!(out.starts_with("+ "), "{out}");
+
+	// The client-final carries a zeroed proof, so the verifier rejects
+	// it. The exact shape of the failure is irrelevant: the point is
+	// that the ban store records one strike.
+	let bad_proof = B64.encode([0u8; 32]);
+	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let out = text(&session.auth_response(&B64.encode(&client_final)));
+	assert!(out.contains("a NO"), "{out}");
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		2,
+		"ban store recorded {} failure(s); expected exactly two (IP and account)",
+		ban_store.call_count("record_failure")
+	);
+	assert!(
+		ban_store.failure_count("ip:203.0.113.43", 0) >= 1,
+		"ban store did not record a strike for ip:203.0.113.43"
+	);
+	assert!(
+		ban_store.failure_count("account:alice", 0) >= 1,
+		"ban store did not record a strike for account:alice"
+	);
+}
+
+/// Attempts during an active ban do not extend the ban and do not add
+/// a strike. The test arms a ban, drives a SCRAM client-first with the
+/// right username, and asserts the ban store received no
+/// `record_failure` call (a ban refusal is distinct from a credential
+/// failure) and the ban's `until_secs` is unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_attempts_during_ban_do_not_extend_it() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let original_until: u64 = 1_900_000_000;
+	ban_store.arm_ban(
+		"ip:203.0.113.44",
+		BanInfo {
+			until_secs: original_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let directory = scram_directory_with_ban_store(ban_store.clone());
+	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory.clone())
+		.with_scram_nonce("SN");
+	session.set_peer_ip(Some("203.0.113.44".parse().expect("peer")));
+
+	for _ in 0..3 {
+		let out = text(&session.command_line(&format!(
+			"a AUTHENTICATE SCRAM-SHA-256 {}",
+			B64.encode("n,,n=alice,r=CN")
+		)));
+		assert!(out.contains("a NO"), "{out}");
+	}
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"ban refusal must not record a failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
+	);
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current()
+			.block_on(ban_store.is_banned(&"ip:203.0.113.44".to_string(), now))
+	})
+	.expect("ban still in force");
+	assert_eq!(
+		info.until_secs, original_until,
+		"the ban's until_secs must not have moved"
+	);
+}

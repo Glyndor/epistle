@@ -3,6 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+use super::super::directory::bans::BanOutcome;
 use super::super::reply::Reply;
 use super::super::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 use super::{Action, Session};
@@ -61,14 +62,35 @@ impl Session {
 		let Some(username) = username_of(&client_first) else {
 			return self.scram_failure();
 		};
+		// Ban check before any credential lookup: an active ban on the
+		// client IP or on the account short-circuits the exchange with the
+		// same wire outcome as a wrong SCRAM proof, and the SCRAM
+		// credential lookup never happens. A ban refusal is distinct from
+		// a credential failure: the strike count and ban expiry do not
+		// move, so the ban keeps ending when it was going to end.
+		let resolved = match self
+			.directory
+			.check_ban(&username, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.scram_failure(),
+			BanOutcome::Clear { account } => account,
+		};
+		// From here on, any failure records a strike against the IP and
+		// against the account the credential check resolved. The account
+		// starts as whatever the ban check saw and is replaced once
+		// `scram_credentials` confirms it.
+		let mut account_for_record = resolved;
 		// Resolve credentials and the canonical account name (no oracle: a
 		// missing user fails exactly like a bad password later).
 		let Some(credentials) = self.directory.scram_credentials(&username) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
 		let Some((account, _)) = self.directory.credentials(&username) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
+		account_for_record = Some(account.clone());
 		// SCRAM reaches the directory through scram_credentials(), not
 		// authenticate_with_ip — the per-account `allowed_protocols` check
 		// has to be issued here too. A restricted account fails closed
@@ -77,15 +99,18 @@ impl Session {
 			.directory
 			.is_protocol_allowed(&account, self.auth_protocol)
 		{
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		}
 
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
 		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
 		self.pending_scram = Some(PendingScram::ClientFinal {
@@ -106,17 +131,27 @@ impl Session {
 		account: &str,
 	) -> Action {
 		let Some(client_final) = decode(encoded) else {
+			self.record_scram_outcome(account, Some(account), false);
 			return self.scram_failure();
 		};
 		match server.finish(&client_final, &credentials) {
 			Ok(server_final) => {
+				// Clear the ban store for both subjects on a successful
+				// proof; the ban check at client-first already consulted
+				// the same store with the same keys, so the success here
+				// undoes any in-flight strikes the same way the PLAIN path
+				// does.
+				self.record_scram_outcome(account, Some(account), true);
 				self.authenticated = Some(account.to_string());
 				Action::Continue(Reply::single(
 					235,
 					&format!("2.7.0 {}", BASE64.encode(server_final)),
 				))
 			}
-			Err(_) => self.scram_failure(),
+			Err(_) => {
+				self.record_scram_outcome(account, Some(account), false);
+				self.scram_failure()
+			}
 		}
 	}
 
@@ -135,6 +170,28 @@ impl Session {
 		} else {
 			Action::Continue(reply)
 		}
+	}
+
+	/// Write the outcome of a SCRAM authentication attempt back to the
+	/// shared ban store, keyed exactly as the PLAIN path keys it
+	/// (`ip:<peer>` and the account the credential check resolved). A
+	/// success clears both subjects; a failure records a strike against
+	/// both. The ban check at the start of the exchange already decided
+	/// whether to refuse the attempt; a ban refusal never reaches this
+	/// helper, so the strike count and ban expiry stay where they were.
+	fn record_scram_outcome(
+		&self,
+		login: &str,
+		account: Option<&str>,
+		success: bool,
+	) {
+		self.directory.record_ban_outcome(
+			login,
+			account,
+			success,
+			self.peer_ip,
+			self.auth_protocol,
+		);
 	}
 
 	/// The SCRAM server nonce: the injected one in tests, else fresh randomness.
