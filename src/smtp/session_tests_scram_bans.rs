@@ -8,6 +8,7 @@
 
 use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
 use super::*;
+use base64::Engine;
 
 /// Build a directory that has SCRAM credentials for `alice` AND has a
 /// ban store attached. Used by the ban-interaction tests below to
@@ -265,7 +266,9 @@ fn valid_client_final(client_first: &str, server_first: &str, password: &str) ->
 /// short-circuited), and the wire reply is the same 334-then-535 a
 /// wrong SCRAM proof produces. The lookup count delta is the property
 /// that proves a banned IP cannot probe whether an account exists by
-/// sending a SCRAM client-first.
+/// sending a SCRAM client-first. The test also asserts the salt in
+/// the server-first is not the all-zero tell-tale a banned subject
+/// could use to distinguish a refusal from a real exchange.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	use crate::antispam::bans::tests::FakeBanStore;
@@ -299,6 +302,22 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 		reply_code(&action),
 		334,
 		"a ban refusal at client-first must challenge with a 334, like a normal exchange"
+	);
+	// The server-first's salt must be derived from the username, not
+	// the all-zero pattern that would let a banned subject identify
+	// the refusal by the wire shape.
+	let challenge = decode_server_first(&scram_challenge_text(&action));
+	let salt_field = challenge
+		.split(',')
+		.find_map(|field| field.strip_prefix("s="))
+		.expect("s= in server-first");
+	let salt = base64::engine::general_purpose::STANDARD
+		.decode(salt_field)
+		.expect("base64 salt");
+	assert_ne!(
+		salt,
+		vec![0u8; 16],
+		"the ban refusal's server-first salt must not be all zeros"
 	);
 	// The proof the client sends is computed against the fake
 	// server-first we just sent; the verifier rejects it because the

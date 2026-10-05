@@ -427,14 +427,15 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			return self.auth_failure(tag);
 		};
 		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
-		let Ok((_user, server_first)) = server.first(client_first, &fake_scram_credentials())
+		let Ok((_user, server_first)) =
+			server.first(client_first, &fake_scram_credentials_for(username))
 		else {
 			return self.auth_failure(tag);
 		};
 		self.pending_auth = Some(PendingAuth::ScramFinal {
 			tag: tag.to_string(),
 			server: Box::new(server),
-			credentials: Box::new(fake_scram_credentials()),
+			credentials: Box::new(fake_scram_credentials_for(username)),
 			account: username.to_string(),
 		});
 		continuation(&BASE64.encode(server_first))
@@ -556,14 +557,21 @@ fn decode(encoded: &str) -> Option<String> {
 	String::from_utf8(BASE64.decode(encoded).ok()?).ok()
 }
 
-/// SCRAM credentials with a fixed salt and zero keys, used only to
-/// build a server-first message the client can echo back. The
-/// `StoredKey` is all zeros, so any client proof that comes back will
-/// fail the verifier exactly like a wrong password, which is the
-/// point: the ban refusal looks like a wrong password on the wire.
-fn fake_scram_credentials() -> crate::smtp::scram::ScramCredentials {
+/// SCRAM credentials used only to build a server-first message the
+/// client can echo back. The `StoredKey` and `ServerKey` are all
+/// zeros, so any client proof that comes back will fail the verifier
+/// exactly like a wrong password, which is the point: the ban
+/// refusal looks like a wrong password on the wire. The salt is
+/// derived from the username (SHA-256, first 16 bytes) so the
+/// server-first does not carry the tell-tale all-zero salt a banned
+/// subject could use to distinguish a refusal from a real exchange.
+fn fake_scram_credentials_for(username: &str) -> crate::smtp::scram::ScramCredentials {
+	use ring::digest;
+	let mut salt = [0u8; 16];
+	let hash = digest::digest(&digest::SHA256, username.as_bytes());
+	salt.copy_from_slice(&hash.as_ref()[..16]);
 	crate::smtp::scram::ScramCredentials {
-		salt: vec![0u8; 16],
+		salt: salt.to_vec(),
 		iterations: 4096,
 		stored_key: [0u8; 32],
 		server_key: [0u8; 32],
