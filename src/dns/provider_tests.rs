@@ -106,7 +106,14 @@ fn scoped_secret_from_env_reads_and_rejects_empty() {
 	unsafe { std::env::set_var("EPISTLE_TEST_DNS_TOKEN_A", "  abc  ") };
 	let secret =
 		ScopedSecret::from_env("example.org", "EPISTLE_TEST_DNS_TOKEN_A").expect("present");
-	assert_eq!(secret.token(), "abc");
+	// `assert_eq!` on `secret.token()` would Debug-print the
+	// token on a mismatch, dumping the credential into the
+	// CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		secret.token() == "abc",
+		"the env var must be trimmed and loaded"
+	);
 	unsafe { std::env::set_var("EPISTLE_TEST_DNS_TOKEN_B", "   ") };
 	assert!(ScopedSecret::from_env("example.org", "EPISTLE_TEST_DNS_TOKEN_B").is_none());
 	assert!(ScopedSecret::from_env("example.org", "EPISTLE_TEST_DNS_TOKEN_UNSET").is_none());
@@ -130,7 +137,14 @@ fn scoped_secret_from_file_enforces_permissions() {
 	// Owner-only: accepted and trimmed.
 	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
 	let secret = ScopedSecret::from_file("example.org", &path).expect("load");
-	assert_eq!(secret.token(), "secret-token");
+	// `assert_eq!` on `secret.token()` would Debug-print the
+	// token on a mismatch, dumping the credential into the
+	// CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		secret.token() == "secret-token",
+		"the file must be loaded and trimmed"
+	);
 	assert_eq!(secret.zone(), "example.org");
 }
 
