@@ -57,8 +57,14 @@ fn key_persists_and_reloads() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let first = load_or_create_key_file(dir.path(), KEY_FILE).expect("generate");
 	let second = load_or_create_key_file(dir.path(), KEY_FILE).expect("reload");
-	// The same key is returned on the second call (stable across restarts).
-	assert_eq!(first, second);
+	// The same key is returned on the second call (stable across
+	// restarts). `assert_eq!` would Debug-print both 32-byte keys
+	// on mismatch and dump the credential into the CI log; the
+	// boolean form names the outcome without carrying either key.
+	assert!(
+		first == second,
+		"the reloaded key must be byte-identical to the first call"
+	);
 }
 
 #[cfg(unix)]
