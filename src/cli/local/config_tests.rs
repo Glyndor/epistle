@@ -567,7 +567,14 @@ fn relative_data_dir_loader_returns_diagnostic_that_names_data_dir() {
 	);
 	std::fs::write(&mail_toml, patched).expect("write relative data_dir");
 
-	let err = load_for_test(&mail_toml).expect_err("relative data_dir is an error");
+	// `load_for_test` returns the `Config` whose `Debug` carries the
+	// `api.token_hash`. `expect_err` on the unexpected success would
+	// Debug-print that struct into the CI log. Use a match that names
+	// the outcome without ever carrying the value.
+	let err = match load_for_test(&mail_toml) {
+		Ok(_) => panic!("relative data_dir is an error, got Ok"),
+		Err(error) => error,
+	};
 	let rendered = format!("{err}");
 	assert!(
 		rendered.contains("mail.toml"),
