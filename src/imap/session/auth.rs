@@ -396,6 +396,19 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		credentials: ScramCredentials,
 		account: &str,
 	) -> Output {
+		// Recheck the ban before evaluating the proof: a ban triggered
+		// between client-first and client-final must not be bypassed by a
+		// pending proof. The ban refusal is distinct from a credential
+		// failure: no strike is recorded, so a banned subject that
+		// completes a SCRAM exchange cannot clear its own ban with a
+		// valid proof and cannot extend the ban with a bad one.
+		if matches!(
+			self.directory
+				.check_ban(account, self.peer_ip, self.auth_protocol),
+			BanOutcome::Banned
+		) {
+			return self.auth_failure(tag);
+		}
 		let Some(client_final) = decode(encoded) else {
 			self.record_scram_outcome(account, Some(account), false);
 			return self.auth_failure(tag);

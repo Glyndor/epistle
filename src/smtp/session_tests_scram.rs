@@ -198,6 +198,131 @@ fn scram_directory_with_ban_store(
 	)
 }
 
+/// A SCRAM ban triggered between client-first and client-final must
+/// not be bypassed by a pending proof. The test arms a ban on the
+/// account after the client-first has been challenged, then submits a
+/// valid client-final: the exchange is refused with 535, the ban store
+/// receives no `record_failure` (a ban refusal is distinct from a
+/// credential failure) and no `clear_success` (a valid proof against a
+/// now-banned account must not authenticate and must not clear the
+/// ban).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smtp_scram_client_final_rechecks_ban() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy};
+
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let directory = scram_directory_with_ban_store(ban_store.clone());
+
+	let mut session = Session::new("mail.example.org")
+		.with_directory(directory.clone())
+		.with_tls_active()
+		.with_scram_nonce("SN")
+		.tap_ehlo();
+	session.set_peer_ip(Some("203.0.113.45".parse().expect("peer")));
+
+	// client-first is well-formed; the ban check passes.
+	let challenge = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
+	assert_eq!(reply_code(&challenge), 334);
+	let server_first = decode_server_first(&scram_challenge_text(&challenge));
+	ban_store.arm_ban(
+		"account:alice",
+		BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+
+	// A valid client-final: the proof matches the real credentials, but
+	// the ban recheck at client-final must refuse it.
+	let client_final = valid_client_final("n,,n=alice,r=CN", &server_first, "secret");
+	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
+	assert_eq!(
+		ban_store.call_count("clear_success"),
+		0,
+		"a ban refused at client-final must not clear_success: got {} clear_success calls",
+		ban_store.call_count("clear_success")
+	);
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"a ban refused at client-final must not record_failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
+	);
+}
+
+/// Strip the `334 <base64>\r\n` envelope from a SCRAM challenge reply
+/// and decode the base64 payload, so the test can feed the server-first
+/// into the SCRAM proof computation.
+fn decode_server_first(reply: &str) -> String {
+	use base64::Engine;
+	let trimmed = reply.trim_start_matches("334 ").trim_end();
+	let raw = base64::engine::general_purpose::STANDARD
+		.decode(trimmed)
+		.expect("base64 server-first");
+	String::from_utf8(raw).expect("utf8 server-first")
+}
+
+/// Render a SCRAM challenge action to its wire text so the test can
+/// pull the base64 server-first out of the `334` line.
+fn scram_challenge_text(action: &Action) -> String {
+	match action {
+		Action::Continue(r)
+		| Action::CollectData(r)
+		| Action::UpgradeTls(r)
+		| Action::CollectAuthResponse(r)
+		| Action::Close(r) => r.to_string(),
+		Action::Deliver(r, _) => r.to_string(),
+		Action::CollectChunk { .. } => String::new(),
+	}
+}
+
+/// Compute a valid SCRAM-SHA-256 client-final against the given
+/// `server_first` for a session whose password is `password`. The
+/// `client_first` is the same `n,,n=alice,r=CN` shape the SMTP listener
+/// expects; the test does not negotiate channel binding.
+fn valid_client_final(client_first: &str, server_first: &str, password: &str) -> String {
+	use base64::Engine;
+	use ring::{digest, hmac, pbkdf2};
+	use std::num::NonZeroU32;
+
+	let salt_field = server_first
+		.split(',')
+		.find_map(|field| field.strip_prefix("s="))
+		.expect("s= in server-first");
+	let salt = base64::engine::general_purpose::STANDARD
+		.decode(salt_field)
+		.expect("base64 salt");
+	let combined_nonce = server_first
+		.split(',')
+		.find_map(|field| field.strip_prefix("r="))
+		.expect("r= in server-first");
+	let without_proof = format!("c=biws,r={combined_nonce}");
+	let auth_message = format!("{client_first},{server_first},{without_proof}");
+
+	let mut salted = [0u8; 32];
+	pbkdf2::derive(
+		pbkdf2::PBKDF2_HMAC_SHA256,
+		NonZeroU32::new(4096).unwrap(),
+		&salt,
+		password.as_bytes(),
+		&mut salted,
+	);
+	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");
+	let stored_key = digest::digest(&digest::SHA256, client_key.as_ref());
+	let client_sig = hmac::sign(
+		&hmac::Key::new(hmac::HMAC_SHA256, stored_key.as_ref()),
+		auth_message.as_bytes(),
+	);
+	let proof: Vec<u8> = client_key
+		.as_ref()
+		.iter()
+		.zip(client_sig.as_ref())
+		.map(|(a, b)| a ^ b)
+		.collect();
+	format!("{without_proof},p={}", b64_bytes(&proof))
+}
+
 /// A banned IP is refused on SMTP SCRAM before the SCRAM credential
 /// lookup runs. The test arms a ban on the peer IP, drives a SCRAM
 /// client-first, and asserts the ban store was consulted, the
