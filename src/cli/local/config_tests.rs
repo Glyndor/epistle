@@ -62,7 +62,7 @@ fn port_range_upper_bound_refused_with_named_port_nearest_passes() {
 		}
 		other => panic!(
 			"expected PortOutOfRange, got {}",
-			local_error_name(other.err().as_ref().expect("Err arm"))
+			local_error_name(&other.expect_err("Err arm"))
 		),
 	}
 
@@ -85,7 +85,7 @@ fn port_range_lower_bound_refused_with_named_port_nearest_passes() {
 		}
 		other => panic!(
 			"expected PortOutOfRange, got {}",
-			local_error_name(other.err().as_ref().expect("Err arm"))
+			local_error_name(&other.expect_err("Err arm"))
 		),
 	}
 

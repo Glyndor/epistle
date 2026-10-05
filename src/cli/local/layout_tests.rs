@@ -163,7 +163,7 @@ fn refusal_dir_with_unrelated_content_is_refused_then_accepted_with_marker() {
 		}
 		other => panic!(
 			"expected NotEmpty, got {}",
-			local_error_name(other.as_ref().err().expect("Err arm"))
+			local_error_name(other.as_ref().expect_err("Err arm"))
 		),
 	}
 
