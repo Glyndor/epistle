@@ -79,8 +79,14 @@ async fn upsert_puts_quoted_txt_with_correct_subname() {
 	assert!(body.contains("\"type\":\"TXT\""), "{body}");
 	// TXT content is quoted (escaped within the JSON string).
 	assert!(body.contains("v=DMARC1; p=none"), "{body}");
-	// Token auth, not bearer.
-	assert_eq!(s.auth.as_deref(), Some("Token tok"));
+	// Token auth, not bearer. `assert_eq!` on `s.auth` would
+	// Debug-print the actual API token on a mismatch, dumping
+	// the credential into the CI log. The boolean form names
+	// the contract without echoing the payload.
+	assert!(
+		s.auth.as_deref() == Some("Token tok"),
+		"the deSEC request must carry the fixture API token"
+	);
 }
 
 #[tokio::test]
