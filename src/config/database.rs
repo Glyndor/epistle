@@ -1,5 +1,7 @@
 //! Database configuration: the PostgreSQL backing for the antispam engine.
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 /// The default connection-pool ceiling.
@@ -55,16 +57,30 @@ pub struct Database {
 	/// for what each variant accepts and what it gives up.
 	#[serde(default)]
 	pub tls: DatabaseTls,
+	/// Path to a file holding the PostgreSQL password, one trailing newline
+	/// stripped. Read once at pool construction. Use this when the URL
+	/// cannot carry the secret directly (the recommended container
+	/// deployment: podup mounts the password as a read-only secret under
+	/// `/run/secrets/<name>`, owned by the container's uid with mode
+	/// `0400`). Refused when the URL already carries a password (two
+	/// sources for one secret is ambiguous); the file must exist, be a
+	/// regular file, and not be group- or world-accessible.
+	#[serde(default)]
+	pub password_file: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Database {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		// The URL embeds the connection password; redact it whole.
+		// The URL embeds the connection password; redact it whole. The
+		// password_file field is a path on disk, so it is safe to print
+		// verbatim (the contents are read at pool construction;
+		// epistle never logs or prints the connection options).
 		f.debug_struct("Database")
 			.field("url", &"***")
 			.field("max_connections", &self.max_connections)
 			.field("directory", &self.directory)
 			.field("tls", &self.tls)
+			.field("password_file", &self.password_file)
 			.finish()
 	}
 }
@@ -115,5 +131,25 @@ tls = "insecure"
 		let result: Result<Database, _> =
 			toml::from_str("url = \"postgres://localhost/mail\"\ntls = \"maybe\"\n");
 		assert!(result.is_err(), "unknown tls value must be rejected");
+	}
+
+	#[test]
+	fn parses_password_file() {
+		let db: Database = toml::from_str(
+			r#"url = "postgres://epistle@%2Frun%2Fpostgresql/epistle"
+password_file = "/run/secrets/epistle_db_password"
+"#,
+		)
+		.expect("parse");
+		assert_eq!(
+			db.password_file,
+			Some(PathBuf::from("/run/secrets/epistle_db_password"))
+		);
+	}
+
+	#[test]
+	fn password_file_defaults_to_none() {
+		let db: Database = toml::from_str(r#"url = "postgres://localhost/mail""#).expect("parse");
+		assert!(db.password_file.is_none());
 	}
 }

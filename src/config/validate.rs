@@ -562,3 +562,7 @@ mod tests_h;
 #[cfg(test)]
 #[path = "validate_tests_i.rs"]
 mod tests_i;
+
+#[cfg(test)]
+#[path = "validate_tests_j.rs"]
+mod tests_j;
