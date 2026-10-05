@@ -348,16 +348,22 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 		.dns
 		.as_ref()
 		.expect("automatic mode must populate [dns]");
-	assert_eq!(dns.token.as_deref(), Some(token.as_str()));
+	assert!(
+		dns.token.as_deref() == Some(token.as_str()),
+		"the [dns] token must round-trip through automatic mode"
+	);
 	assert_eq!(dns.provider, "cloudflare");
 	assert_eq!(dns.zone, "example.org");
 	assert!(
 		text.contains("dns provider") && text.contains("dns zone") && text.contains("dns token"),
 		"every dns prompt must be rendered: {text}"
 	);
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
 	assert!(
 		!text.contains(&token),
-		"the token value must not appear in the rendered prompts: {text}"
+		"the token value must not appear in the rendered prompts"
 	);
 }
 
