@@ -109,24 +109,25 @@ fn the_floor_constant_is_the_one_ci_tests() {
 fn password_file_strips_one_line_ending() {
 	let dir = tempdir().expect("tempdir");
 	let path = dir.path().join("pw");
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\n")).expect("pw\\n"),
-		"pw",
+	// `read_password_file` returns the secret string; an `assert_eq!`
+	// would Debug-print the value on mismatch, dumping the file
+	// content into the CI log. The fixture is a literal here, but
+	// the function's return type is secret-shaped, so the same
+	// shape the other round settled for is applied.
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\n")).expect("pw\\n") == "pw",
 		"`\\n` is one line ending and must be stripped"
 	);
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\r\n")).expect("pw\\r\\n"),
-		"pw",
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\r\n")).expect("pw\\r\\n") == "pw",
 		"`\\r\\n` is one line ending and must be stripped"
 	);
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\r")).expect("pw\\r"),
-		"pw\r",
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\r")).expect("pw\\r") == "pw\r",
 		"a bare `\\r` is not a line ending; the password keeps it"
 	);
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\n\n")).expect("pw\\n\\n"),
-		"pw\n",
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\n\n")).expect("pw\\n\\n") == "pw\n",
 		"only one line ending is stripped; an inner `\\n` stays"
 	);
 }
@@ -180,10 +181,13 @@ fn password_file_refuses_an_empty_secret_after_stripping() {
 fn password_file_reads_a_0600_file() {
 	let dir = tempdir().expect("tempdir");
 	let path = dir.path().join("pw_0600");
-	assert_eq!(
+	// `read_password_file` returns the secret string; an `assert_eq!`
+	// would Debug-print the value on mismatch, dumping the file
+	// content into the CI log.
+	assert!(
 		read_password_file(&write_bytes(&path, b"correct horse battery staple\n"))
-			.expect("0600 reads"),
-		"correct horse battery staple",
+			.expect("0600 reads")
+			== "correct horse battery staple",
 		"a 0600 file with a trailing newline is read and trimmed"
 	);
 }
@@ -203,15 +207,20 @@ fn password_file_refuses_a_group_readable_file() {
 	let path = dir.path().join("pw_0644");
 	write_bytes(&path, b"pw\n");
 	fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod 0644");
-	match read_password_file(&path).expect_err("0644 must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&path) {
+		Ok(_) => panic!("0644 must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::InsecureMode { mode },
 			..
-		} => assert_eq!(
-			mode, 0o644,
+		}) => assert!(
+			mode == 0o644,
 			"the observed mode must round-trip through the variant"
 		),
-		other => panic!(
+		Err(other) => panic!(
 			"expected InsecureMode {{ mode: 0o644, .. }}, got {}",
 			error_name(&other)
 		),
@@ -232,16 +241,20 @@ fn password_file_refuses_a_symlink() {
 	write_bytes(&target, b"pw\n");
 	let link = dir.path().join("pw_link");
 	std::os::unix::fs::symlink(&target, &link).expect("symlink");
-	match read_password_file(&link).expect_err("symlink must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&link) {
+		Ok(_) => panic!("symlink must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::Io(source),
 			..
-		} => assert_eq!(
-			source.raw_os_error(),
-			Some(libc::ELOOP),
-			"O_NOFOLLOW on a symlink returns ELOOP, got {source:?}"
+		}) => assert!(
+			source.raw_os_error() == Some(libc::ELOOP),
+			"O_NOFOLLOW on a symlink returns ELOOP"
 		),
-		other => panic!(
+		Err(other) => panic!(
 			"expected PasswordFile {{ Io(ELOOP), .. }}, got {}",
 			error_name(&other)
 		),
