@@ -552,11 +552,7 @@ impl Directory {
 	}
 
 	/// Test-only: attach a per-directory SCRAM credential-lookup
-	/// counter. The ban tests inject a fresh `Arc<AtomicUsize>` per
-	/// test, snapshot the counter before driving the exchange, and
-	/// assert the delta is zero when a ban short-circuits the lookup.
-	/// The counter is per-Directory so parallel tests in the same
-	/// `cargo test` process do not race on a shared atomic.
+	/// counter.
 	#[cfg(test)]
 	pub fn with_scram_lookup_counter(
 		mut self,

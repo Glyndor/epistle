@@ -84,9 +84,9 @@ impl Session {
 			.directory
 			.check_ban(&username, self.peer_ip, self.auth_protocol)
 		{
-		BanOutcome::Banned => {
-			return self.scram_ban_refusal(&client_first, binding, &username);
-		}
+			BanOutcome::Banned => {
+				return self.scram_ban_refusal(&client_first, binding, &username);
+			}
 			BanOutcome::Clear { account } => account,
 		};
 		// From here on, any failure records a strike against the IP and
@@ -160,7 +160,8 @@ impl Session {
 			return self.scram_failure();
 		};
 		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
-		let Ok((_user, server_first)) = server.first(client_first, &fake_scram_credentials()) else {
+		let Ok((_user, server_first)) = server.first(client_first, &fake_scram_credentials())
+		else {
 			return self.scram_failure();
 		};
 		self.pending_scram = Some(PendingScram::ClientFinal {

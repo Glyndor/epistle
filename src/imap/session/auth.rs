@@ -359,9 +359,9 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			.directory
 			.check_ban(&username, self.peer_ip, self.auth_protocol)
 		{
-		BanOutcome::Banned => {
-			return self.scram_ban_refusal(tag, &client_first, binding, &username);
-		}
+			BanOutcome::Banned => {
+				return self.scram_ban_refusal(tag, &client_first, binding, &username);
+			}
 			BanOutcome::Clear { account } => account,
 		};
 		let mut account_for_record = resolved;
@@ -427,7 +427,8 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			return self.auth_failure(tag);
 		};
 		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
-		let Ok((_user, server_first)) = server.first(client_first, &fake_scram_credentials()) else {
+		let Ok((_user, server_first)) = server.first(client_first, &fake_scram_credentials())
+		else {
 			return self.auth_failure(tag);
 		};
 		self.pending_auth = Some(PendingAuth::ScramFinal {
