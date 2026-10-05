@@ -415,8 +415,12 @@ fn apply_refuses_an_orphan_oauth_public_key() {
 		"a fresh private key must NOT have been written"
 	);
 	let public_after = std::fs::read(&oauth_public).expect("read public");
-	assert_eq!(
-		public_before, public_after,
+	// Comparing SPKI byte arrays with `assert_eq!` would Debug-print
+	// the full public key on mismatch, dumping it into the CI log.
+	// A boolean assertion pins the same invariant without carrying
+	// the bytes.
+	assert!(
+		public_before == public_after,
 		"public key bytes must be untouched"
 	);
 }

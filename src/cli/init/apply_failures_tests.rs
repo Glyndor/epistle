@@ -309,12 +309,16 @@ fn apply_derives_missing_oauth_public_from_existing_private() {
 	assert!(outcome2.error.is_none(), "second run: {:?}", outcome2.error);
 	let private_after = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
-	assert_eq!(
-		private_first, private_after,
+	// Comparing PKCS#8 / SPKI byte arrays with `assert_eq!` would
+	// Debug-print the full private key on mismatch, dumping it into
+	// the CI log. A boolean assertion pins the same invariant
+	// without carrying the bytes.
+	assert!(
+		private_first == private_after,
 		"the private key must not be regenerated when only the public is missing"
 	);
-	assert_eq!(
-		public, public_after,
+	assert!(
+		public == public_after,
 		"the derived public key must match the one the first run wrote"
 	);
 }
@@ -352,7 +356,10 @@ fn apply_refuses_when_only_oauth_public_survives() {
 	// Public key bytes must be unchanged: refusing the run is not
 	// an excuse to overwrite the surviving material.
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
-	assert_eq!(public_before, public_after);
+	// Comparing SPKI byte arrays with `assert_eq!` would
+	// Debug-print the full public key on mismatch. A boolean
+	// assertion pins the same invariant without carrying the bytes.
+	assert!(public_before == public_after);
 	assert!(
 		!keys_dir.join("oauth_signing.key").exists(),
 		"a fresh private key must NOT have been written when only the public survived"
@@ -390,9 +397,16 @@ fn apply_refuses_when_oauth_pair_does_not_correspond() {
 	};
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
 	let private_after = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
-	assert_eq!(public_after, public_b, "public key bytes must be untouched");
-	assert_eq!(
-		private_after, private_a,
+	// Comparing the byte arrays with `assert_eq!` would Debug-print
+	// the full PKCS#8 / SPKI on mismatch, dumping the private key
+	// (or its modified form) into the CI log. A boolean assertion
+	// pins the same invariant without carrying the bytes.
+	assert!(
+		public_after == public_b,
+		"public key bytes must be untouched"
+	);
+	assert!(
+		private_after == private_a,
 		"private key bytes must be untouched"
 	);
 }
@@ -422,8 +436,12 @@ fn apply_regenerates_cert_from_existing_key_when_only_key_survives() {
 		second.error
 	);
 	let key_after = std::fs::read(&key_path).expect("read key");
-	assert_eq!(
-		key_before, key_after,
+	// Comparing PEM byte arrays with `assert_eq!` would Debug-print
+	// the full private key on mismatch, dumping it into the CI log.
+	// A boolean assertion pins the same invariant without carrying
+	// the bytes.
+	assert!(
+		key_before == key_after,
 		"the existing private key must not be regenerated when only the cert is missing"
 	);
 	assert!(
@@ -468,8 +486,11 @@ fn apply_refuses_when_only_cert_survives() {
 		"the diagnostic must name the missing key: {message}"
 	);
 	let cert_after = std::fs::read(&cert_path).expect("read cert");
-	assert_eq!(
-		cert_before, cert_after,
+	// Comparing PEM byte arrays with `assert_eq!` would Debug-print
+	// the full certificate on mismatch. A boolean assertion pins
+	// the same invariant without carrying the bytes.
+	assert!(
+		cert_before == cert_after,
 		"the surviving certificate must NOT be overwritten"
 	);
 	assert!(
