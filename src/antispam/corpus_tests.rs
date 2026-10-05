@@ -36,10 +36,20 @@ fn hash_is_deterministic_and_key_dependent() {
 	// Different keys -> different hashes (per-instance confidentiality).
 	assert_ne!(hash_token(&k1, &token_a), hash_token(&k2, &token_a));
 	// The hash is 64 hex chars and never contains the plaintext.
+	// The `assert!` messages must not carry `h` itself: the
+	// failure mode the contract guards against is precisely
+	// `h` containing the token, so any message that interpolates
+	// the hash would dump the credential into the CI log.
 	let h = hash_token(&k1, &token_a);
-	assert_eq!(h.len(), 64, "{h}");
-	assert!(!h.contains(&token_a), "{h}");
-	assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "{h}");
+	assert_eq!(h.len(), 64, "the keyed HMAC-SHA256 must hex-encode to 64 chars");
+	assert!(
+		!h.contains(&token_a),
+		"the keyed hash must not contain the plaintext token"
+	);
+	assert!(
+		h.chars().all(|c| c.is_ascii_hexdigit()),
+		"the keyed hash must be all hex"
+	);
 }
 
 #[test]
