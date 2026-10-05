@@ -32,21 +32,16 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 mod common;
-use common::{Child, is_eaddrinuse, pick_port_base, read_banner, redact_password, wait_for_bind};
+use common::{
+	BANNER_READ_DEADLINE, BIND_DEADLINE, Child, TLS_PROBE_IO_TIMEOUT, is_eaddrinuse,
+	pick_port_base, read_banner, redact_password, wait_for_bind,
+};
 
 /// Server name the harness exposes. Mirrors `HOSTNAME` in
 /// `src/cli/local/mod.rs`; pinned here so a future rename breaks
 /// the test rather than silently passing the TLS handshake against
 /// the wrong name.
 const TLS_SERVER_NAME: &str = "mail.local.test";
-
-/// Read and write timeouts the TLS probe installs on the TCP socket
-/// before driving the handshake. Without them a peer that accepts
-/// the TCP connection and never answers blocks `read` / `write`
-/// forever and the test harness cannot reap the child process;
-/// setting SO_RCVTIMEO / SO_SNDTIMEO turns a stuck peer into a
-/// `TimedOut` error the probe can name with the phase.
-const TLS_PROBE_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Drive a real TLS 1.2+/1.3 client handshake against `stream` and
 /// return the first protocol line the server emits through the
@@ -59,7 +54,7 @@ const TLS_PROBE_IO_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// Time bound: each read and each write on the underlying `TcpStream`
 /// is bounded by the socket-level `SO_RCVTIMEO` / `SO_SNDTIMEO`
-/// timeouts (the [`TLS_PROBE_IO_TIMEOUT`] constant, currently 2 s).
+/// timeouts (the [`TLS_PROBE_IO_TIMEOUT`] constant, currently 10 s).
 /// The handshake loop is a `complete_io` per direction, and the
 /// greeting read is one `read` per chunk; every one of those calls
 /// returns `TimedOut` after the timeout, so a peer that accepts the
@@ -70,8 +65,8 @@ const TLS_PROBE_IO_TIMEOUT: Duration = Duration::from_secs(2);
 /// that answers one byte at a time can hold the probe open across
 /// many timeout windows. The hung-peer test
 /// (`tls_probe_returns_timeout_error_against_hung_peer`) pins the
-/// silent case with a 10 s watchdog that fails the test if the
-/// probe has not returned by then.
+/// silent case with a watchdog of three times [`TLS_PROBE_IO_TIMEOUT`]
+/// that fails the test if the probe has not returned by then.
 fn probe_tls_real(stream: TcpStream, phase: &str, cert_pem_path: &Path) -> Result<String, String> {
 	// Install the ring provider once. The runtime's serve path installs
 	// the same provider on startup; a parallel `cargo test` run can
@@ -201,7 +196,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	];
 	let mut child = Child::spawn(&args, dir);
 
-	let bind_deadline = Instant::now() + Duration::from_secs(10);
+	let bind_deadline = Instant::now() + BIND_DEADLINE;
 	let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
 	let cert_pem_path = dir.join("cert.pem");
 
@@ -218,7 +213,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	)?;
 	let banner = read_banner(
 		&mut smtp,
-		Instant::now() + Duration::from_secs(2),
+		Instant::now() + BANNER_READ_DEADLINE,
 		"reading the SMTP banner",
 	)?;
 	drop(smtp);
@@ -226,7 +221,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 
 	if !banner_text.starts_with("220 ") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the SMTP banner",
 		)?;
 		return Err(format!(
@@ -236,7 +231,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	}
 	if !banner_text.contains("mail.local.test") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the SMTP banner",
 		)?;
 		return Err(format!(
@@ -269,14 +264,14 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	)?;
 	let submission_banner = read_banner(
 		&mut submission,
-		Instant::now() + Duration::from_secs(2),
+		Instant::now() + BANNER_READ_DEADLINE,
 		"reading the submission banner",
 	)?;
 	drop(submission);
 	let submission_text = String::from_utf8_lossy(&submission_banner);
 	if !submission_text.starts_with("220 ") && !submission_text.starts_with("421 ") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the submission banner",
 		)?;
 		return Err(format!(
@@ -295,14 +290,14 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	)?;
 	let imap_banner = read_banner(
 		&mut imap,
-		Instant::now() + Duration::from_secs(2),
+		Instant::now() + BANNER_READ_DEADLINE,
 		"reading the IMAP banner",
 	)?;
 	drop(imap);
 	let imap_text = String::from_utf8_lossy(&imap_banner);
 	if !imap_text.starts_with("* OK") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the IMAP banner",
 		)?;
 		return Err(format!(
@@ -330,7 +325,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	)?;
 	if !submissions_greeting.starts_with("220 ") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the submissions greeting",
 		)?;
 		return Err(format!(
@@ -355,7 +350,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	)?;
 	if !imaps_greeting.starts_with("* OK") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the IMAPS greeting",
 		)?;
 		return Err(format!(
@@ -376,14 +371,14 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		.map_err(|error| format!("waiting for API port: write: {error:?}"))?;
 	let api_response = read_banner(
 		&mut api,
-		Instant::now() + Duration::from_secs(2),
+		Instant::now() + BANNER_READ_DEADLINE,
 		"reading the API response",
 	)?;
 	drop(api);
 	let api_text = String::from_utf8_lossy(&api_response);
 	if !api_text.starts_with("HTTP/") {
 		let (_stdout, stderr) = child.kill_and_drain(
-			Instant::now() + Duration::from_secs(2),
+			Instant::now() + BANNER_READ_DEADLINE,
 			"reading the API response",
 		)?;
 		return Err(format!(
@@ -398,7 +393,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	// pipes; calling `read_to_end` on a still-running child's pipe
 	// would block forever.
 	let (stdout, stderr) = child.kill_and_drain(
-		Instant::now() + Duration::from_secs(2),
+		Instant::now() + BANNER_READ_DEADLINE,
 		"waiting for the child to exit",
 	)?;
 	if !stdout.is_empty() {
@@ -459,19 +454,20 @@ fn local_mode_spawns_and_listens_on_six_loopback_ports() {
 }
 
 /// Pin: the TLS probe cannot hang the suite when a peer accepts TCP
-/// and never answers the handshake. The probe installs a 2 s read +
+/// and never answers the handshake. The probe installs a 10 s read +
 /// write timeout on the `TcpStream` before driving the handshake, so
 /// a stuck peer surfaces as `Err("... handshake did not complete
-/// within 2s")` rather than wedging the test thread.
+/// within 10s")` rather than wedging the test thread.
 ///
 /// The test runs the probe in its own thread and collects the result
-/// over an `mpsc` channel; the main thread calls `recv_timeout` with a
-/// 10 s budget. A regression that drops the read timeout makes the
-/// probe hang past its internal budget, so the channel never sees a
-/// message, `recv_timeout` returns `Timeout`, and the test panics
-/// with a message naming the hang. A regression that wedges the probe
-/// thread therefore fails the test by its own 10 s guard, NOT by
-/// hanging the test harness; the suite continues.
+/// over an `mpsc` channel; the main thread calls `recv_timeout` with
+/// a budget of three times [`TLS_PROBE_IO_TIMEOUT`]. A regression
+/// that drops the read timeout makes the probe hang past its internal
+/// budget, so the channel never sees a message, `recv_timeout`
+/// returns `Timeout`, and the test panics with a message naming the
+/// hang. A regression that wedges the probe thread therefore fails
+/// the test by its own watchdog, NOT by hanging the test harness;
+/// the suite continues.
 ///
 /// The probe thread is NOT joined at the end: it may still be blocked
 /// on a stalled read, and the OS reaps it when the test process exits.
@@ -505,8 +501,8 @@ fn tls_probe_returns_timeout_error_against_hung_peer() {
 
 	// Peer: accept the connection and hold the socket open until the
 	// `stop` flag is set. The socket stays alive across the probe's
-	// 2 s read timeout AND the test's 10 s wall-clock guard, so the
-	// only path the probe has to returning is through its own
+	// 10 s read timeout AND the test's wall-clock guard, so the only
+	// path the probe has to returning is through its own
 	// SO_RCVTIMEO timeout; a peer-side close would surface as
 	// ConnectionReset and not exercise the timeout.
 	let stop = Arc::new(AtomicBool::new(false));
@@ -520,8 +516,9 @@ fn tls_probe_returns_timeout_error_against_hung_peer() {
 	});
 
 	// Probe: run on its own thread and send the result back over a
-	// channel. The main thread waits at most 10 s; beyond that the
-	// probe has hung and the test fails by its own budget.
+	// channel. The main thread waits at most three times
+	// `TLS_PROBE_IO_TIMEOUT`; beyond that the probe has hung and the
+	// test fails by its own budget.
 	let (tx, rx) = mpsc::channel::<Result<String, String>>();
 	let probe_phase = format!("hung peer at 127.0.0.1:{port}");
 	let probe_cert_path = cert_path.clone();
@@ -531,10 +528,13 @@ fn tls_probe_returns_timeout_error_against_hung_peer() {
 		let _ = tx.send(result);
 	});
 
-	let result = match rx.recv_timeout(Duration::from_secs(10)) {
+	let watchdog = TLS_PROBE_IO_TIMEOUT * 3;
+	let result = match rx.recv_timeout(watchdog) {
 		Ok(result) => result,
 		Err(mpsc::RecvTimeoutError::Timeout) => {
-			panic!("probe hung past its 10 s wall-clock budget (the read timeout was dropped)")
+			panic!(
+				"probe hung past its {watchdog:?} wall-clock budget (the read timeout was dropped)"
+			)
 		}
 		Err(mpsc::RecvTimeoutError::Disconnected) => {
 			panic!("probe thread disconnected before sending a result")
