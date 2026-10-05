@@ -279,7 +279,7 @@ fn base32_encoding_round_trips_through_the_token() {
 	for byte in suffix.bytes() {
 		assert!(
 			byte.is_ascii_uppercase() || (b'2'..=b'7').contains(&byte),
-			"non-base32 byte {byte:?} in {suffix:?}"
+			"non-base32 byte {byte:02x} in the token suffix"
 		);
 	}
 }
