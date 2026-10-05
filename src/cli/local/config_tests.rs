@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use super::test_support::{
 	LISTENERS_FOR_TEST, fresh_dir, load_accounts_outcome_for_test, load_for_test,
-	open_store_for_test,
+	local_error_name, open_store_for_test,
 };
 use super::{ACCOUNT_NAME, DEFAULT_PORT_BASE, DOMAIN, LocalError, prepare};
 
@@ -60,7 +60,10 @@ fn port_range_upper_bound_refused_with_named_port_nearest_passes() {
 			// operator needs to fix the offset.
 			assert_eq!(port, 65_587_u32, "first out-of-range port must be 65587");
 		}
-		other => panic!("expected PortOutOfRange, got {other:?}"),
+		other => panic!(
+			"expected PortOutOfRange, got {}",
+			local_error_name(other.err().as_ref().expect("Err arm"))
+		),
 	}
 
 	// Nearest port-base that passes the upper bound: 57510 keeps the API
@@ -80,7 +83,10 @@ fn port_range_lower_bound_refused_with_named_port_nearest_passes() {
 			// below 1024.
 			assert_eq!(port, 1023_u32, "first under-range port must be 1023");
 		}
-		other => panic!("expected PortOutOfRange, got {other:?}"),
+		other => panic!(
+			"expected PortOutOfRange, got {}",
+			local_error_name(other.err().as_ref().expect("Err arm"))
+		),
 	}
 
 	// 999 keeps +25 at exactly 1024, the inclusive lower bound.
@@ -598,7 +604,26 @@ fn accounts_path_stat_error_is_unusable_not_missing() {
 				"unusable diagnostic must carry the standard remedy, got: {diagnostic}"
 			);
 		}
-		other => panic!("accounts path stat error must be Unusable, got {other:?}"),
+		other => panic!(
+			"accounts path stat error must be Unusable, got {}",
+			accounts_outcome_name(&other)
+		),
+	}
+}
+
+/// The variant name of an `AccountsOutcome`, for the assertion
+/// message that must not print the full Debug. The `Unusable`
+/// variant carries a diagnostic string the operator reads in the
+/// log; the panic message has to be a CI log too, and printing the
+/// full Debug makes the line wider than the diagnosis needs. The
+/// match is exhaustive on purpose: a new variant added to
+/// `AccountsOutcome` breaks this file at compile time, so the
+/// next caller cannot fall through and print the whole struct.
+fn accounts_outcome_name(outcome: &super::config::AccountsOutcome) -> &'static str {
+	match outcome {
+		super::config::AccountsOutcome::Missing => "Missing",
+		super::config::AccountsOutcome::Loaded => "Loaded",
+		super::config::AccountsOutcome::Unusable(_) => "Unusable",
 	}
 }
 #[test]
