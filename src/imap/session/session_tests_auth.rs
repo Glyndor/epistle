@@ -593,7 +593,7 @@ async fn imap_scram_client_final_rechecks_ban() {
 
 	// A valid client-final: the proof matches the real credentials, but
 	// the ban recheck at client-final must refuse it.
-	let client_final = valid_client_final("n,,n=alice,r=CN", &server_first, "secret");
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
 	assert_eq!(
@@ -665,4 +665,164 @@ fn valid_client_final(client_first: &str, server_first: &str, password: &str) ->
 		.map(|(a, b)| a ^ b)
 		.collect();
 	format!("{without_proof},p={}", B64.encode(&proof))
+}
+
+/// A SCRAM account-level ban is enforced: a ban on
+/// `account:alice` short-circuits a SCRAM exchange from a fresh IP
+/// with the same shape as an IP ban, no record_failure call, and the
+/// ban expiry unchanged. The test arms the ban, drives a SCRAM
+/// client-first from a different IP than the existing IP-ban tests
+/// use, and asserts the wire reply is the same `+`-then-NO a wrong
+/// SCRAM proof produces.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let original_until: u64 = 1_900_000_000;
+	ban_store.arm_ban(
+		"account:alice",
+		BanInfo {
+			until_secs: original_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
+	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
+	let mut session = Session::new(
+		"mail.example.org",
+		tmp.path().to_path_buf(),
+		directory,
+	)
+	.with_scram_nonce("SN");
+	// A fresh IP, not banned at the IP level, so a missing account
+	// check would let the exchange reach the credential lookup.
+	session.set_peer_ip(Some("203.0.113.50".parse().expect("peer")));
+
+	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+	let action = session.command_line(&format!(
+		"a AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	));
+	assert!(
+		action.collect_auth,
+		"a banned account must request a continuation, like a normal exchange"
+	);
+	let bad_proof = B64.encode([0u8; 32]);
+	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let out = text(&session.auth_response(&B64.encode(&client_final)));
+	assert!(out.contains("a NO"), "{out}");
+	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"account ban refusal must not record a failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
+	);
+	assert_eq!(
+		after - before,
+		0,
+		"the SCRAM credential lookup must not happen when an account ban short-circuits the exchange (delta: {})",
+		after - before
+	);
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("account:alice", now))
+	})
+	.expect("ban still in force");
+	assert_eq!(
+		info.until_secs, original_until,
+		"the account ban's until_secs must not have moved"
+	);
+}
+
+/// A SCRAM success clears the ban store: the success path calls
+/// `record_ban_outcome` with `success = true`, which routes to
+/// `clear_success` for both the IP and the account. A successful
+/// proof is the only path that lets a banned subject recover; the
+/// PLAIN path does the same thing.
+///
+/// The test arms bans on both the IP and the account, but with
+/// `until_secs` in the past so the ban store treats them as expired
+/// at lookup time. The active ban store still has the rows, so a
+/// successful proof must remove them via `clear_success`. If the
+/// success path forgot to call `record_ban_outcome(true)`, the bans
+/// would still be in the store and the assertions at the end would
+/// fail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imap_scram_success_clears_ban_store() {
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	// Arm the bans with `until_secs` in the past so the recheck at
+	// client-first and client-final does not see them as active. The
+	// rows still live in the store and a successful proof must
+	// remove them.
+	let expired_until: u64 = 1;
+	ban_store.arm_ban(
+		"ip:203.0.113.51",
+		BanInfo {
+			until_secs: expired_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	ban_store.arm_ban(
+		"account:alice",
+		BanInfo {
+			until_secs: expired_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
+	let mut session = Session::new(
+		"mail.example.org",
+		tmp.path().to_path_buf(),
+		directory,
+	)
+	.with_scram_nonce("SN");
+	session.set_peer_ip(Some("203.0.113.51".parse().expect("peer")));
+
+	// Drive a full successful SCRAM exchange: well-formed client-first,
+	// then a valid client-final whose proof matches the real
+	// credentials.
+	let challenge = session.command_line(&format!(
+		"a AUTHENTICATE SCRAM-SHA-256 {}",
+		B64.encode("n,,n=alice,r=CN")
+	));
+	assert!(challenge.collect_auth, "expected a continuation");
+	let server_first = decode_server_first(&text(&challenge));
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
+	let out = text(&session.auth_response(&B64.encode(&client_final)));
+	assert!(out.contains("a OK"), "{out}");
+
+	assert_eq!(
+		ban_store.call_count("clear_success"),
+		2,
+		"a successful SCRAM exchange must clear both IP and account, got {} clear_success calls",
+		ban_store.call_count("clear_success")
+	);
+	// The two ban rows are gone.
+	let ip_info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.51", 1_900_000_000))
+	});
+	let account_info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current()
+			.block_on(ban_store.is_banned("account:alice", 1_900_000_000))
+	});
+	assert!(
+		ip_info.is_none(),
+		"the IP ban row must be cleared after a successful SCRAM exchange"
+	);
+	assert!(
+		account_info.is_none(),
+		"the account ban row must be cleared after a successful SCRAM exchange"
+	);
 }

@@ -85,7 +85,7 @@ impl Session {
 			.check_ban(&username, self.peer_ip, self.auth_protocol)
 		{
 		BanOutcome::Banned => {
-			return self.scram_ban_refusal(&client_first, binding);
+			return self.scram_ban_refusal(&client_first, binding, &username);
 		}
 			BanOutcome::Clear { account } => account,
 		};
@@ -142,7 +142,15 @@ impl Session {
 	/// fail exactly like a wrong password. The strike count and ban
 	/// expiry stay where they were: a ban refusal is distinct from a
 	/// credential failure, and no `record_ban_outcome` call follows.
-	fn scram_ban_refusal(&mut self, client_first: &str, binding: ChannelBinding) -> Action {
+	/// The username from the client-first is stashed as the account so
+	/// the client-final ban recheck can resolve and consult the same
+	/// account ban the client-first check saw.
+	fn scram_ban_refusal(
+		&mut self,
+		client_first: &str,
+		binding: ChannelBinding,
+		username: &str,
+	) -> Action {
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure while building the fake server-first: the
 			// no-oracle fallback is the immediate 535 a malformed
@@ -158,7 +166,7 @@ impl Session {
 		self.pending_scram = Some(PendingScram::ClientFinal {
 			server: Box::new(server),
 			credentials: Box::new(fake_scram_credentials()),
-			account: String::new(),
+			account: username.to_string(),
 		});
 		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
 	}

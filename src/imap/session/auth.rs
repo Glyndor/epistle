@@ -360,7 +360,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			.check_ban(&username, self.peer_ip, self.auth_protocol)
 		{
 		BanOutcome::Banned => {
-			return self.scram_ban_refusal(tag, &client_first, binding);
+			return self.scram_ban_refusal(tag, &client_first, binding, &username);
 		}
 			BanOutcome::Clear { account } => account,
 		};
@@ -416,6 +416,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		tag: &str,
 		client_first: &str,
 		binding: ChannelBinding,
+		username: &str,
 	) -> Output {
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure while building the fake server-first: the
@@ -433,7 +434,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			tag: tag.to_string(),
 			server: Box::new(server),
 			credentials: Box::new(fake_scram_credentials()),
-			account: String::new(),
+			account: username.to_string(),
 		});
 		continuation(&BASE64.encode(server_first))
 	}
