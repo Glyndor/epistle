@@ -737,11 +737,19 @@ fn invalid_mail_toml_does_not_regenerate_certificate_or_dkim() {
 	);
 
 	// `cert.pem` must be byte-identical to the file the first
-	// `prepare` wrote: nothing regenerated it.
+	// `prepare` wrote: nothing regenerated it. The PEM cert
+	// contains the public key, so an `assert_eq!` on the byte
+	// arrays would Debug-print the full PEM on mismatch and dump
+	// the key material into the CI log. A boolean check with a
+	// length-only message preserves the diagnosis without ever
+	// carrying the bytes.
 	let cert_after = std::fs::read(&cert_path).expect("read cert.pem after");
-	assert_eq!(
-		cert_before, cert_after,
-		"cert.pem must be byte-identical to the first run: the credential-pair check ran before the cert step, so the cert step did not run"
+	assert!(
+		cert_before == cert_after,
+		"cert.pem must be byte-identical to the first run (lengths {} and {}); \
+		 the credential-pair check ran before the cert step, so the cert step did not run",
+		cert_before.len(),
+		cert_after.len(),
 	);
 
 	// `dkim.pem` must be byte-identical for the same reason.
