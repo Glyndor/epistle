@@ -212,7 +212,14 @@ async fn upsert_creates_subdomain_txt_with_bearer_auth() {
 		.await
 		.expect("upsert");
 	let s = state.lock().unwrap();
-	assert_eq!(s.auth.as_deref(), Some("Bearer tok"));
+	// `assert_eq!` on `s.auth` would Debug-print the actual
+	// API token on a mismatch, dumping the credential into
+	// the CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		s.auth.as_deref() == Some("Bearer tok"),
+		"the DNSimple request must carry the fixture API token"
+	);
 	// One list call (to look for a pre-existing record), then a POST to create.
 	let posts = s.calls.iter().filter(|c| c.starts_with("POST")).count();
 	let gets = s.calls.iter().filter(|c| c.starts_with("GET")).count();
