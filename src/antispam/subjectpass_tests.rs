@@ -70,8 +70,16 @@ fn a_token_verifies_for_its_pair_and_day() {
 	let day = 20_000;
 	let token = p.issue(sender, recipient, day);
 	// The token has the EP- prefix and the expected suffix length.
-	assert!(token.starts_with(TOKEN_PREFIX), "{token}");
-	assert_eq!(token.len(), TOKEN_PREFIX.len() + TOKEN_CHARS, "{token}");
+	// The token is a SubjectPass credential; on failure, the
+	// message must name the condition without carrying the value.
+	assert!(
+		token.starts_with(TOKEN_PREFIX),
+		"token must carry the EP- prefix"
+	);
+	assert!(
+		token.len() == TOKEN_PREFIX.len() + TOKEN_CHARS,
+		"token length must be prefix plus suffix"
+	);
 	assert!(p.verify(&token, sender, recipient, day));
 }
 
@@ -274,7 +282,13 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 	let recipient = "bob@example.org";
 	let day = 20_000;
 	let rendered = challenge_reply(&p, sender, recipient, day).to_string();
-	assert!(rendered.starts_with("550 5.7.1 "), "{rendered}");
+	// The rendered reply carries the SubjectPass token; on
+	// failure the message must not echo the rendered text, which
+	// would dump the token into the CI log.
+	assert!(
+		rendered.starts_with("550 5.7.1 "),
+		"the reply must lead with the SMTP 5.7.1 refusal"
+	);
 	// What a person copies out of the bounce is the whitespace-delimited
 	// word that starts with the prefix. It has to be the token itself, and
 	// it has to pass when pasted into a subject.
@@ -282,11 +296,14 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 		.split_whitespace()
 		.find(|word| word.starts_with(TOKEN_PREFIX))
 		.expect("the reply carries a word with the token prefix");
-	assert_eq!(word, p.issue(sender, recipient, day), "{rendered}");
+	assert!(
+		word == p.issue(sender, recipient, day),
+		"the word in the reply must be the token itself"
+	);
 	let subject = format!("Re: hello {word}");
 	assert!(
 		p.accepts(Some(&subject), sender, recipient, day),
-		"{rendered}"
+		"the pasted token must verify"
 	);
 }
 
