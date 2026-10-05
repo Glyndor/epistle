@@ -16,11 +16,12 @@ pub const DEFAULT_HOST_CAP: usize = 50;
 /// Test-only step counter incremented once per byte the scheme scan
 /// examines. Lets a regression test assert the per-call work stays
 /// bounded (linear in the scan window, not quadratic in the number of
-/// matches). The counter is global so a single `extract_hosts` call
-/// reports the total work across the QP pass, the scheme scan and the
-/// `find_subslice` helper used by the historical implementation.
+/// matches). The counter is per-thread so parallel tests do not
+/// observe each other's increments.
 #[cfg(test)]
-static SCAN_STEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+	static SCAN_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// Scan at most the first [`MAX_SCAN_BYTES`] bytes of `body` and return up to
 /// `cap` unique URL hosts (deduped, lower-cased, IP literals and `localhost`
@@ -101,7 +102,7 @@ fn scan_hosts(input: &[u8], cap: usize, out: &mut Vec<String>, seen: &mut std::c
 	let mut i = 0usize;
 	while i < bytes.len() {
 		#[cfg(test)]
-		SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		SCAN_STEPS.with(|c| c.set(c.get() + 1));
 		// Fast path: match `http://` (7 bytes) or `https://` (8 bytes) at
 		// the current position. A direct byte compare is O(1) per
 		// position; the old `find_subslice(rest, b"http://")` call was
@@ -170,7 +171,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 	}
 	for i in 0..=(haystack.len() - needle.len()) {
 		#[cfg(test)]
-		SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		SCAN_STEPS.with(|c| c.set(c.get() + 1));
 		if &haystack[i..i + needle.len()] == needle {
 			return Some(i);
 		}
@@ -211,7 +212,7 @@ fn is_ip_literal(host: &str) -> bool {
 /// delta a single `extract_hosts` call contributed.
 #[cfg(test)]
 fn reset_scan_steps() -> u64 {
-	SCAN_STEPS.swap(0, std::sync::atomic::Ordering::Relaxed)
+	SCAN_STEPS.with(|c| c.replace(0))
 }
 
 #[cfg(test)]
