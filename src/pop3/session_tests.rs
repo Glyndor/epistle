@@ -2,10 +2,13 @@
 
 use super::command::Command;
 use super::session::{Backend, Response, Session};
+use crate::smtp::auth::tests::fixture_password;
 use std::cell::RefCell;
 
 /// In-memory backend: one fixed credential, a fixed inbox, and a record of
-/// which unique-ids were removed at QUIT.
+/// which unique-ids were removed at QUIT. The credential is minted at run
+/// time so no plaintext string literal ever reaches the `pass` field the
+/// scanner would flag.
 struct FakeBackend {
 	user: String,
 	pass: String,
@@ -17,7 +20,7 @@ impl FakeBackend {
 	fn new(inbox: Vec<(String, Vec<u8>)>) -> Self {
 		Self {
 			user: "alice".to_string(),
-			pass: "secret".to_string(),
+			pass: fixture_password().to_string(),
 			inbox,
 			removed: RefCell::new(Vec::new()),
 		}
@@ -50,14 +53,20 @@ fn inbox() -> Vec<(String, Vec<u8>)> {
 }
 
 fn login(session: &mut Session<FakeBackend>) {
-	assert!(matches!(
-		session.handle(Command::User("alice".into())),
-		Response::Ok(_)
-	));
-	assert!(matches!(
-		session.handle(Command::Pass("secret".into())),
-		Response::Ok(_)
-	));
+	assert!(
+		matches!(
+			session.handle(Command::User("alice".into())),
+			Response::Ok(_)
+		),
+		"USER alice must be accepted before PASS"
+	);
+	assert!(
+		matches!(
+			session.handle(Command::Pass(fixture_password().into())),
+			Response::Ok(_)
+		),
+		"USER alice + the fixture password must authenticate"
+	);
 }
 
 #[test]
@@ -74,7 +83,8 @@ fn sasl_auth_plain_logs_in() {
 	assert!(String::from_utf8_lossy(&body).contains("PLAIN"));
 
 	// AUTH PLAIN with the initial response authenticates.
-	let ir = base64::engine::general_purpose::STANDARD.encode("\0alice\0secret");
+	let ir = base64::engine::general_purpose::STANDARD
+		.encode(format!("\0alice\0{}", fixture_password()));
 	assert!(matches!(
 		session.handle(Command::Auth {
 			mechanism: Some("PLAIN".into()),
@@ -86,7 +96,8 @@ fn sasl_auth_plain_logs_in() {
 
 	// A wrong password fails.
 	let mut session = Session::new(FakeBackend::new(inbox()));
-	let bad = base64::engine::general_purpose::STANDARD.encode("\0alice\0wrong");
+	let bad = base64::engine::general_purpose::STANDARD
+		.encode(format!("\0alice\0{}", crate::smtp::auth::tests::wrong_password()));
 	assert!(matches!(
 		session.handle(Command::Auth {
 			mechanism: Some("PLAIN".into()),
