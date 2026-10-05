@@ -213,8 +213,18 @@ async fn upsert_txt_under_subdomain_sends_relative_name_and_two_auth_headers() {
 		"{put_body}"
 	);
 	// Auth: two separate headers, exactly as Spaceship documents.
-	assert_eq!(s.api_key.as_deref(), Some("AK"));
-	assert_eq!(s.api_secret.as_deref(), Some("SK"));
+	// `assert_eq!` on `s.api_key` / `s.api_secret` would
+	// Debug-print the actual API key and secret on a mismatch,
+	// dumping the credentials into the CI log. The boolean
+	// form names the contract without echoing the payload.
+	assert!(
+		s.api_key.as_deref() == Some("AK"),
+		"the Spaceship request must carry the fixture API key"
+	);
+	assert!(
+		s.api_secret.as_deref() == Some("SK"),
+		"the Spaceship request must carry the fixture API secret"
+	);
 }
 
 #[tokio::test]
