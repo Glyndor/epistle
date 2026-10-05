@@ -278,7 +278,7 @@ impl ScramServer {
 		for i in 0..32 {
 			client_key[i] = proof[i] ^ client_signature[i];
 		}
-		if !crate::api::oauth::constant_time_eq(&sha256(&client_key), &credentials.stored_key) {
+		if !crate::util::constant_time::eq(&sha256(&client_key), &credentials.stored_key) {
 			return Err(ScramError::AuthenticationFailed);
 		}
 

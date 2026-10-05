@@ -25,7 +25,7 @@ impl FakeBackend {
 }
 
 impl Backend for FakeBackend {
-	fn verify(&self, user: &str, pass: &str) -> Option<String> {
+	fn verify(&self, user: &str, pass: &str, _peer_ip: Option<std::net::IpAddr>) -> Option<String> {
 		(user == self.user && pass == self.pass).then(|| self.user.clone())
 	}
 	fn load(&self, _account: &str) -> Vec<(String, Vec<u8>)> {
@@ -266,4 +266,85 @@ fn noop_and_user_pass_after_login() {
 fn greeting_is_positive() {
 	let session = Session::new(FakeBackend::new(inbox()));
 	assert!(matches!(session.greeting(), Response::Ok(_)));
+}
+
+/// A POP3 failure reaches the directory's `authenticate_with_ip` and
+/// the ban store is consulted on the way through. The test drives a
+/// `USER` + `PASS` against the production [`crate::pop3::backend::MailboxBackend`]
+/// with a [`FakeBanStore`] attached, then asserts the fake recorded a
+/// `record_failure` call keyed on `ip:<peer>` and `account:<login>` ,
+/// the two subjects the directory always records against.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pop3_failures_now_reach_the_directory() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::directory_store::DirectoryHandle;
+	use crate::pop3::backend::MailboxBackend;
+	use std::collections::HashMap;
+
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
+	let directory = crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	)
+	.with_password_hashes(HashMap::from([(
+		"alice".to_string(),
+		crate::smtp::auth::tests::hash("secret"),
+	)]))
+	.with_ban_store(ban_store.clone());
+	let handle = DirectoryHandle::new(directory);
+	let backend = MailboxBackend::new(handle, tmp.path().to_path_buf());
+
+	let peer: std::net::IpAddr = "203.0.113.10".parse().expect("peer");
+	let mut session = Session::new(backend);
+	session.set_peer_ip(Some(peer));
+	// Greeting is consumed by the server in production; we skip past it.
+	assert!(matches!(session.greeting(), Response::Ok(_)));
+	assert!(matches!(
+		session.handle(Command::User("alice@example.org".into())),
+		Response::Ok(_)
+	));
+	// Wrong password: directory returns None, ban store records a
+	// failure for both the peer IP and the resolved account.
+	let r = session.handle(Command::Pass("wrong".into()));
+	assert_eq!(r, Response::Err("authentication failed".to_string()));
+
+	assert!(
+		ban_store.call_count("record_failure") >= 2,
+		"ban store recorded {} failure(s); expected one for the IP and one for the account",
+		ban_store.call_count("record_failure")
+	);
+	// A fresh session with the right password reaches the directory
+	// through `authenticate_with_ip` and the success path clears both
+	// the IP and the account on the ban store.
+	let mut session = Session::new(MailboxBackend::new(
+		DirectoryHandle::new(
+			crate::smtp::directory::Directory::new(
+				["example.org".to_string()],
+				[("alice@example.org".to_string(), "alice".to_string())],
+			)
+			.with_password_hashes(HashMap::from([(
+				"alice".to_string(),
+				crate::smtp::auth::tests::hash("secret"),
+			)]))
+			.with_ban_store(ban_store.clone()),
+		),
+		tmp.path().to_path_buf(),
+	));
+	session.set_peer_ip(Some(peer));
+	let _ = session.greeting();
+	assert!(matches!(
+		session.handle(Command::User("alice@example.org".into())),
+		Response::Ok(_)
+	));
+	assert!(matches!(
+		session.handle(Command::Pass("secret".into())),
+		Response::Ok(_)
+	));
+	assert!(
+		ban_store.call_count("clear_success") >= 2,
+		"ban store recorded {} clear(s); expected one for the IP and one for the account",
+		ban_store.call_count("clear_success")
+	);
 }

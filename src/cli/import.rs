@@ -11,7 +11,8 @@ use crate::imap::mailbox::{self, Flag};
 use crate::storage::MessageCrypto;
 
 /// Import the mbox on `reader` into `account`'s INBOX, encrypting at rest through
-/// `crypto`, returning the count.
+/// `crypto`, returning the count. The progress line on stderr rewrites once per
+/// message delivered (no-op when stderr is not a terminal).
 pub(super) fn run(
 	data_dir: &Path,
 	account: &str,
@@ -20,6 +21,7 @@ pub(super) fn run(
 ) -> ExitCode {
 	let mut current: Option<Vec<u8>> = None;
 	let mut imported = 0u64;
+	let mut progress = super::style::Progress::start("importing");
 	let deliver = |body: Vec<u8>| {
 		// Drop the trailing blank line separating mbox entries.
 		let trimmed = body.strip_suffix(b"\r\n").unwrap_or(&body);
@@ -30,7 +32,7 @@ pub(super) fn run(
 	};
 	for line in reader.lines() {
 		let Ok(line) = line else {
-			eprintln!("error: reading stdin");
+			super::style::error("reading stdin");
 			return ExitCode::FAILURE;
 		};
 		if line.starts_with("From ") {
@@ -39,6 +41,7 @@ pub(super) fn run(
 				&& deliver(body)
 			{
 				imported += 1;
+				progress.tick(imported as usize);
 			}
 			current = Some(Vec::new());
 			continue;
@@ -57,8 +60,9 @@ pub(super) fn run(
 		&& deliver(body)
 	{
 		imported += 1;
+		progress.tick(imported as usize);
 	}
-	eprintln!("imported {imported} messages into {account}");
+	progress.finish(&format!("imported {imported} messages into {account}"));
 	ExitCode::SUCCESS
 }
 
@@ -91,7 +95,7 @@ pub(super) fn run_maildir(
 	let entries = match std::fs::read_dir(maildir) {
 		Ok(entries) => entries,
 		Err(error) => {
-			eprintln!("error: reading {}: {error}", maildir.display());
+			super::style::error(format_args!("reading {}: {error}", maildir.display()));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -111,7 +115,9 @@ pub(super) fn run_maildir(
 		let raw = folder.file_name().and_then(|n| n.to_str()).unwrap_or("");
 		let name = raw.trim_start_matches('.');
 		if !mailbox::valid_name(name) {
-			eprintln!("warning: skipping folder \"{raw}\" (not a valid mailbox name)");
+			super::style::warn(format_args!(
+				"skipping folder \"{raw}\" (not a valid mailbox name)"
+			));
 			continue;
 		}
 		targets.push((name.to_string(), folder));
@@ -134,13 +140,15 @@ pub(super) fn run_maildir(
 		match result {
 			Ok(count) => imported += count,
 			Err(error) => {
-				eprintln!("error: {error}");
+				super::style::error(error);
 				return ExitCode::FAILURE;
 			}
 		}
 	}
 
-	eprintln!("imported {imported} messages into {account}");
+	let mut progress = super::style::Progress::start("importing");
+	progress.tick(imported as usize);
+	progress.finish(&format!("imported {imported} messages into {account}"));
 	ExitCode::SUCCESS
 }
 

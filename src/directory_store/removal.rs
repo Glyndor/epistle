@@ -32,7 +32,7 @@ use super::AccountStore;
 use super::StoreError;
 use super::names::validate_name;
 use crate::queue::SuppressionList;
-use crate::storage::FsSpool;
+use crate::storage::{CorrespondentStore, FsSpool};
 
 /// What to do with the account's queued outbound mail when it is removed.
 ///
@@ -68,12 +68,21 @@ pub struct Removed {
 	pub app_passwords: u32,
 	/// Number of per-account suppression entries removed.
 	pub suppressed_addresses: u32,
+	/// Number of correspondent markers removed. Tracks who the account
+	/// has previously written to; clearing the markers is part of the
+	/// account-removal footprint so a re-created account does not
+	/// inherit yesterday's recipient list and slip the daily new-cap.
+	pub correspondent_addresses: u32,
 	/// Queued messages dropped because the queue policy was
 	/// [`QueuePolicy::Discard`].
 	pub queued_messages_discarded: u32,
 	/// Queued messages left untouched because the queue policy was
 	/// [`QueuePolicy::Drain`].
 	pub queued_messages_left: u32,
+	/// Per-token Bayesian rows dropped from the account's scope so a
+	/// recreated name does not inherit the previous user's training.
+	/// `0` when no database is wired or the scope was empty.
+	pub bayes_tokens_removed: u64,
 }
 
 /// The full filesystem path to an account's mailbox root. Centralised so
@@ -195,16 +204,20 @@ fn process_spool_queue(
 ///    suppression entries).
 /// 5. Recursively remove the mailbox directory at
 ///    `<data_dir>/accounts/<name>`.
-/// 6. Finally call `store.remove` so the directory row is the last
+/// 6. Drop the per-account Bayesian rows so a recreated name does not
+///    inherit the previous user's training. Tolerates a missing
+///    database (`None` for `bayes`) by counting zero.
+/// 7. Finally call `store.remove` so the directory row is the last
 ///    thing the on-disk state loses. A crash mid-flight therefore
 ///    leaves an account that still exists and can be re-removed, never
 ///    a ghost with data on disk.
-pub fn remove_account(
+pub async fn remove_account(
 	store: &AccountStore,
 	spool: &FsSpool,
 	data_dir: &Path,
 	name: &str,
 	queue: QueuePolicy,
+	bayes: Option<&crate::antispam::corpus::BayesStore>,
 ) -> Result<Removed, StoreError> {
 	validate_name(name)?;
 	if store.dynamic(name).is_none() {
@@ -225,8 +238,45 @@ pub fn remove_account(
 	let suppression = SuppressionList::open(data_dir).map_err(StoreError::Io)?;
 	let suppressed_addresses = suppression.remove_all_for(name).map_err(StoreError::Io)?;
 
+	let correspondents = CorrespondentStore::open(data_dir).map_err(StoreError::Io)?;
+	let correspondent_addresses = correspondents
+		.remove_all_for(name)
+		.map_err(StoreError::Io)?;
+
 	let mailbox_root = account_root(data_dir, name);
 	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
+
+	// Clear every ban row keyed on this account name so a recreated
+	// account does not inherit a ban from its predecessor.
+	if let Some(ban_store) = store.ban_store() {
+		ban_store.remove_account(name).await;
+	}
+
+	// Drop the per-account Bayesian rows last (after every on-disk
+	// footprint is gone). A missing database means the operator runs
+	// without a corpus; the count stays at zero and the recreated
+	// account simply has no training history.
+	//
+	// A failure here aborts the whole removal rather than leaving the
+	// row in place: the mailbox, satellites and queue are already gone,
+	// so the only thing the aborted call leaves behind is the on-disk
+	// dynamic-account row, and the operator can retry. A recreated
+	// account name reusing a stale corpus is the silent leak this
+	// prevents, and `remove_account`'s own row in `accounts.toml` is
+	// the lever that lets the retry pick up where the first call
+	// stopped.
+	let bayes_tokens_removed = match bayes {
+		Some(store) => match store.forget_scope(name).await {
+			Ok(removed) => removed,
+			Err(error) => {
+				return Err(StoreError::BayesPurge {
+					account: name.to_string(),
+					source: error,
+				});
+			}
+		},
+		None => 0,
+	};
 
 	store.remove(name)?;
 
@@ -235,8 +285,10 @@ pub fn remove_account(
 		masked_addresses,
 		app_passwords,
 		suppressed_addresses,
+		correspondent_addresses,
 		queued_messages_discarded,
 		queued_messages_left,
+		bayes_tokens_removed,
 	})
 }
 

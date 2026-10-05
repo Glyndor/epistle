@@ -277,3 +277,65 @@ async fn unreachable_database_with_directory_is_fatal_and_says_why() {
 	// A fatal start is not a degradation, so it must not fire the advisory counter.
 	assert_eq!(metrics.snapshot().get("database_unavailable"), Some(&0));
 }
+
+// --- single-signature DKIM startup warning ------------------------------
+
+#[test]
+fn single_signature_dkim_warning_is_none_without_a_dkim_section() {
+	let config = parse(BASE);
+	assert!(
+		super::single_signature_dkim_warning(&config).is_none(),
+		"missing [dkim] must not warn (an unsigned server is a different finding)"
+	);
+}
+
+#[test]
+fn single_signature_dkim_warning_uses_the_dkim_method_text() {
+	// The helper is the one shared text source for serve / config-check /
+	// verify-dns. Drift between the three call sites is exactly what this
+	// test is supposed to catch: the helper forwards what `Dkim` says.
+	let config = parse(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+"#,
+	);
+	let warning = super::single_signature_dkim_warning(&config)
+		.expect("missing RSA must surface a startup warning");
+	assert!(
+		warning.contains("signs with one key only"),
+		"warning must reuse the wording the Dkim method produces: {warning}"
+	);
+	assert!(
+		warning.contains("dkim-keygen --rsa"),
+		"warning must point at the remedy command: {warning}"
+	);
+	assert!(
+		warning.contains(crate::config::DKIM_RSA_REQUIRED_FROM),
+		"warning must name the version that flips to refusal: {warning}"
+	);
+}
+
+#[test]
+fn single_signature_dkim_warning_is_none_when_both_rsa_fields_are_set() {
+	let config = parse(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+
+[dkim]
+selector = "mail"
+key_file = "/etc/mail/dkim.pem"
+rsa_selector = "rsa1"
+rsa_key_file = "/etc/mail/rsa.pem"
+"#,
+	);
+	assert!(
+		super::single_signature_dkim_warning(&config).is_none(),
+		"both RSA fields set: helper must stay silent so the call sites do too"
+	);
+}

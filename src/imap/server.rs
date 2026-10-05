@@ -67,9 +67,12 @@ pub struct Server {
 	retention_days: u64,
 	/// The authentication protocol this listener serves (`Imap` or
 	/// `Imaps`); tagged on every password attempt through this server so a
-	/// per-account `allowed_protocols` can admit or reject it. Default
+	/// per-account `allowed_protocols` set can admit or reject it. Default
 	/// `Protocol::Imaps` matches the historical behaviour.
 	auth_protocol: crate::config::Protocol,
+	/// The bounded queue to the per-account Bayesian trainer, handed to
+	/// every session. `None` disables training and STORE answers the same.
+	training: Option<crate::antispam::training_queue::TrainingQueue>,
 }
 
 impl Server {
@@ -95,6 +98,7 @@ impl Server {
 			crypto: crate::storage::MessageCrypto::disabled(),
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
+			training: None,
 		}
 	}
 
@@ -148,6 +152,13 @@ impl Server {
 		self
 	}
 
+	/// Attach the training queue, shared with the JMAP state so both
+	/// protocols feed the one worker of the process.
+	pub fn with_training(mut self, queue: crate::antispam::training_queue::TrainingQueue) -> Self {
+		self.training = Some(queue);
+		self
+	}
+
 	/// Build a session with this server's quota, OAuth and channel-binding.
 	fn new_session(&self) -> Session {
 		let mut session = Session::new(
@@ -163,6 +174,9 @@ impl Server {
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
 		}
+		if let Some(queue) = &self.training {
+			session = session.with_training(queue.clone());
+		}
 		session
 	}
 
@@ -171,6 +185,10 @@ impl Server {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
+			// A dual-stack `::` listener reports an IPv4 peer as
+			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
+			// session consults at authentication sees a plain `IpAddr::V4`.
+			let peer = crate::net::canonical_peer(peer);
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
 				tracing::warn!(%peer, "IMAP connection limit reached, dropping");
 				continue;

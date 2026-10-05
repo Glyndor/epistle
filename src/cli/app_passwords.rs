@@ -20,21 +20,21 @@ pub(super) fn create(
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
 		None => {
-			eprintln!("error: cannot gather randomness for the secret");
+			super::style::error("cannot gather randomness for the secret");
 			return ExitCode::FAILURE;
 		}
 	};
 	let hash = match crate::smtp::auth::hash_password(&secret) {
 		Ok(hash) => hash,
 		Err(error) => {
-			eprintln!("error: cannot hash secret: {error}");
+			super::style::error(format_args!("cannot hash secret: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let mut store = match AppPasswordStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening app-password store: {error}");
+			super::style::error(format_args!("opening app-password store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -51,7 +51,7 @@ pub(super) fn create(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}
@@ -62,7 +62,7 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	let store = match AppPasswordStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening app-password store: {error}");
+			super::style::error(format_args!("opening app-password store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -86,7 +86,7 @@ pub(super) fn revoke(
 	let mut store = match AppPasswordStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
-			eprintln!("error: opening app-password store: {error}");
+			super::style::error(format_args!("opening app-password store: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -96,7 +96,7 @@ pub(super) fn revoke(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
-			eprintln!("error: {error}");
+			super::style::error(error);
 			ExitCode::FAILURE
 		}
 	}

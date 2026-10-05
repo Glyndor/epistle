@@ -9,28 +9,56 @@ use crate::spf::{DnsLookup, SystemDns};
 
 /// Run the DNS check against the system resolver.
 pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+	run_with_writers(config, out, &mut super::style::stderr())
+}
+
+/// Same as [`run`], but writes the startup warnings (and any errors
+/// during resolver construction) to a caller-supplied stream. Lives
+/// separately so a test can assert on the warning text without forking
+/// the process.
+pub(super) fn run_with_writers(
+	config: &Config,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> ExitCode {
+	emit_single_signature_warning(config, err);
 	let dns = match SystemDns::from_system() {
 		Ok(dns) => dns,
 		Err(error) => {
-			eprintln!("error: cannot start resolver: {error}");
+			super::style::error(format_args!("cannot start resolver: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {
-			eprintln!("error: cannot start async runtime: {error}");
+			super::style::error(format_args!("cannot start async runtime: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let selectors = dkim_selectors(config);
+	let progress = crate::cli::style::Progress::start("checking");
 	runtime.block_on(report(
 		&config.domains,
 		&config.hostname,
+		config.public_ipv4,
+		config.public_ipv6,
 		&selectors,
 		&dns,
 		out,
+		progress,
 	))
+}
+
+/// Write the single-signature DKIM warning to `err` when the configuration
+/// would otherwise sign outbound mail with one key only. Lives here so
+/// `verify-dns` and `config-check` can share the call site, and so a
+/// test can capture it through an in-memory writer without going through
+/// the process boundary.
+pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std::io::Write) {
+	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(config) {
+		super::style::warn_to(err, warning);
+	}
 }
 
 /// The DKIM selectors epistle publishes (the Ed25519 selector plus an optional
@@ -46,16 +74,39 @@ fn dkim_selectors(config: &Config) -> Vec<String> {
 	selectors
 }
 
-/// Check every domain and write a report; the exit code is failure if any
-/// expected record is missing (lookup errors are inconclusive, not failures).
+/// Check the hostname's addresses and their reverse DNS first, then every
+/// domain. The exit code is failure if any expected record is missing (lookup
+/// errors are inconclusive, not failures). Each check rewrites the progress
+/// line on stderr so a long run does not look stuck.
+#[allow(clippy::too_many_arguments)]
 async fn report(
 	domains: &[String],
 	hostname: &str,
+	public_ipv4: Option<std::net::Ipv4Addr>,
+	public_ipv6: Option<std::net::Ipv6Addr>,
 	selectors: &[String],
 	dns: &dyn DnsLookup,
 	out: &mut impl std::io::Write,
+	mut progress: crate::cli::style::Progress,
 ) -> ExitCode {
 	let mut all_ok = true;
+	let mut done = 0usize;
+	let _ = writeln!(out, "{hostname}:");
+	let host_checks = dns::check_host(hostname, public_ipv4, public_ipv6, dns).await;
+	for check in &host_checks {
+		let _ = writeln!(
+			out,
+			"  {} {}: {}",
+			symbol(&check.status),
+			check.kind,
+			check.detail
+		);
+		done += 1;
+		progress.tick(done);
+	}
+	if !dns::all_ok(&host_checks) {
+		all_ok = false;
+	}
 	for domain in domains {
 		let _ = writeln!(out, "{domain}:");
 		let checks = dns::check_domain(domain, hostname, selectors, dns).await;
@@ -67,14 +118,21 @@ async fn report(
 				check.kind,
 				check.detail
 			);
+			done += 1;
+			progress.tick(done);
 		}
 		if !dns::all_ok(&checks) {
 			all_ok = false;
 		}
 	}
 	if all_ok {
+		progress.finish(&format!(
+			"verified {done} records across {} domains",
+			domains.len()
+		));
 		ExitCode::SUCCESS
 	} else {
+		progress.finish("DNS drift detected");
 		ExitCode::FAILURE
 	}
 }
@@ -89,97 +147,5 @@ fn symbol(status: &Status) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::dns::Check;
-	use crate::spf::DnsFailure;
-	use std::collections::HashMap;
-	use std::pin::Pin;
-
-	#[derive(Default)]
-	struct FakeDns {
-		txt: HashMap<String, Vec<String>>,
-		mx: HashMap<String, Vec<String>>,
-	}
-
-	impl DnsLookup for FakeDns {
-		fn txt(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let v = self.txt.get(name).cloned().unwrap_or_default();
-			Box::pin(async move { Ok(v) })
-		}
-		fn addresses(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-		{
-			Box::pin(async move { Ok(Vec::new()) })
-		}
-		fn mx(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let v = self.mx.get(name).cloned().unwrap_or_default();
-			Box::pin(async move { Ok(v) })
-		}
-	}
-
-	#[tokio::test]
-	async fn report_fails_and_prints_on_missing_records() {
-		let dns = FakeDns::default();
-		let mut out = Vec::new();
-		let code = report(
-			&["example.org".to_string()],
-			"mail.example.org",
-			&[],
-			&dns,
-			&mut out,
-		)
-		.await;
-		assert_eq!(code, ExitCode::FAILURE);
-		let text = String::from_utf8(out).expect("utf8");
-		assert!(text.contains("example.org:"), "{text}");
-		assert!(text.contains("MISS"), "{text}");
-	}
-
-	#[tokio::test]
-	async fn report_succeeds_when_records_present() {
-		let mut dns = FakeDns::default();
-		dns.mx
-			.insert("example.org".into(), vec!["mail.example.org".into()]);
-		dns.txt
-			.insert("example.org".into(), vec!["v=spf1 -all".into()]);
-		dns.txt
-			.insert("_dmarc.example.org".into(), vec!["v=DMARC1; p=none".into()]);
-		dns.txt
-			.insert("_mta-sts.example.org".into(), vec!["v=STSv1; id=1".into()]);
-		let mut out = Vec::new();
-		let code = report(
-			&["example.org".to_string()],
-			"mail.example.org",
-			&[],
-			&dns,
-			&mut out,
-		)
-		.await;
-		assert_eq!(code, ExitCode::SUCCESS);
-	}
-
-	fn check(status: Status) -> Check {
-		Check {
-			kind: "X".into(),
-			name: "n".into(),
-			status,
-			detail: "d".into(),
-		}
-	}
-
-	#[test]
-	fn symbols_cover_every_status() {
-		assert_eq!(symbol(&check(Status::Ok).status), "ok  ");
-		assert_eq!(symbol(&check(Status::Missing).status), "MISS");
-		assert_eq!(symbol(&check(Status::LookupError).status), "err ");
-	}
-}
+#[path = "verify_dns_tests.rs"]
+mod tests;

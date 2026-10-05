@@ -4,6 +4,11 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// The first version of epistle that refuses to start without the dual-signing
+/// pair. Before this version the server prints a single-signature warning; at
+/// and after this version the configuration is rejected at load time.
+pub const DKIM_RSA_REQUIRED_FROM: &str = "0.10";
+
 /// Outbound DKIM signing material.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,81 +39,30 @@ pub struct Dkim {
 	pub rotate_overlap_days: Option<u32>,
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn parses_dkim_section() {
-		let dkim: Dkim = toml::from_str(
-			r#"
-selector = "mail"
-key_file = "/etc/mail/dkim.pem"
-"#,
-		)
-		.expect("parse dkim");
-		assert_eq!(dkim.selector, "mail");
-		// Deprecated fields default to None when absent.
-		assert!(dkim.rotate_days.is_none());
-		assert!(dkim.rotate_overlap_days.is_none());
-	}
-
-	#[test]
-	fn rejects_missing_fields_and_unknown_keys() {
-		assert!(toml::from_str::<Dkim>(r#"selector = "mail""#).is_err());
-		assert!(
-			toml::from_str::<Dkim>(
-				r#"
-				selector = "mail"
-				key_file = "/k.pem"
-				algorithm = "rsa"
-				"#
-			)
-			.is_err()
-		);
-	}
-
-	#[test]
-	fn deprecated_rotation_fields_still_parse() {
-		// Existing configs written before the interval became constant must
-		// keep loading: `deny_unknown_fields` would otherwise reject the
-		// whole file on upgrade. The values are captured but never read.
-		let dkim: Dkim = toml::from_str(
-			r#"
-selector = "mail"
-key_file = "/k.pem"
-rotate_days = 30
-rotate_overlap_days = 3
-"#,
-		)
-		.expect("deprecated fields parse");
-		assert_eq!(dkim.rotate_days, Some(30));
-		assert_eq!(dkim.rotate_overlap_days, Some(3));
-	}
-
-	#[test]
-	fn only_one_deprecated_field_is_enough_to_be_ignored() {
-		// Either field set on its own is also tolerated.
-		let only_days: Dkim = toml::from_str(
-			r#"
-selector = "mail"
-key_file = "/k.pem"
-rotate_days = 30
-"#,
-		)
-		.expect("parse");
-		assert_eq!(only_days.rotate_days, Some(30));
-		assert!(only_days.rotate_overlap_days.is_none());
-
-		let only_overlap: Dkim = toml::from_str(
-			r#"
-selector = "mail"
-key_file = "/k.pem"
-rotate_overlap_days = 21
-"#,
-		)
-		.expect("parse");
-		assert!(only_overlap.rotate_days.is_none());
-		assert_eq!(only_overlap.rotate_overlap_days, Some(21));
+impl Dkim {
+	/// Warning text when only one DKIM signature is going to be produced.
+	///
+	/// Returns `None` when both `rsa_selector` and `rsa_key_file` are set, and
+	/// the exact text of the warning otherwise. The single source of the
+	/// message keeps `serve`, `config-check` and `verify-dns` from drifting;
+	/// the three call sites are tested through this method instead of through
+	/// their respective outputs.
+	pub fn single_signature_warning(&self) -> Option<String> {
+		if self.rsa_selector.is_some() && self.rsa_key_file.is_some() {
+			return None;
+		}
+		Some(format!(
+			"[dkim] signs with one key only. \
+			 Receivers that verify RSA alone treat this mail as unsigned. \
+			 Generate an RSA key with \"epistle dkim-keygen --rsa\", \
+			 publish the TXT record \"epistle dns-records\" prints, \
+			 and set rsa_selector and rsa_key_file. \
+			 From version {version} the server refuses to start without them.",
+			version = DKIM_RSA_REQUIRED_FROM,
+		))
 	}
 }
+
+#[cfg(test)]
+#[path = "dkim_tests.rs"]
+mod tests;

@@ -39,26 +39,68 @@ a connection URL.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `hostname` | string | — (required) | FQDN the server identifies as (EHLO, TLS, HELO/PTR). One consistent name for all outbound. |
+| `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, RFC 6598), multicast, broadcast and the documentation ranges are refused at validate time: only a global unicast address is accepted. |
+| `public_ipv6` | IPv6 | unset | Same for IPv6. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
 | `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. |
 | `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
-| `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables DNSBL. |
+| `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
+| `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
+| `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
 | `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
 | `srs_secret` | string | unset | Secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Absent disables SRS. |
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). |
 | `submission_rate_limit_per_min` | int | unset | Max messages an authenticated account may submit per minute (deferred with 450 over the limit). Absent disables it. |
+| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default). The `init` scaffold later sets a default of 200. |
 | `domain_submission_limits` | table | `{}` | `domain → msgs/min`: per-domain override for `submission_rate_limit_per_min`. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from one of the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain. |
+| `inbound_rate_limit_per_ip_per_min` | int | unset | Max messages an unauthenticated client IP may start per minute. Sessions that authenticate are charged against the submission limiters instead; bounces (null sender) are not charged against the per-sender limit. A send over the cap is deferred with `450 4.7.1 too many messages from this client; retry later`; the temporary code lets a real burst (a mailing list, a resend after an outage) retry rather than bounce. Absent disables the per-IP limit. |
+| `inbound_rate_limit_per_sender_per_min` | int | unset | Max messages a single envelope sender may start per minute across all clients (lowercased reverse path). Excludes the null sender used by bounces. A send over the cap is deferred with `450 4.7.1 too many messages from this sender; retry later`. Absent disables the per-sender limit. |
 | `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` disables the feature; requests above the cap return `429`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
-| `scanner_hook_url` | string | unset | External scanner hook (ClamAV/Rspamd behind HTTP) for unauthenticated inbound mail. Absent disables scanning. |
+| `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
+| `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
+| `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
+
+## `[antispam]` clamd scanner
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail. Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
+| `clamd_on_found` | `quarantine` or `reject` | `quarantine` | Quarantine a detected message in the Rejects mailbox, or reject it during SMTP delivery. Other values are invalid. |
+| `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
+| `clamd_max_bytes` | integer | `26214400` (25 MiB) | Messages above this size are accepted without opening the socket. A message exactly at the limit is scanned. |
+
+```toml
+[antispam]
+clamd_socket = "/run/clamav/clamd.sock"
+clamd_on_found = "quarantine"
+clamd_timeout_secs = 30
+clamd_max_bytes = 26214400
+```
+
+Epistle sends the raw message using clamd's
+[INSTREAM protocol](https://docs.clamav.net/manual/Usage/ClamdProtocol.html).
+It decompresses nothing locally. Set `MaxScanSize` and `MaxRecursion` in
+`clamd.conf` to bound decompression, and enable `AlertExceedsMax yes` so
+exceeding those limits yields a detection handled by `clamd_on_found`.
+Set `StreamMaxLength` at least as high as `clamd_max_bytes`.
+See the [clamd configuration reference](https://github.com/Cisco-Talos/clamav/blob/main/docs/man/clamd.conf.5.in).
+
+Scanner errors, missing sockets, malformed replies, and timeouts fail open:
+the message is accepted and `scanner_clamd_failed` increments. This includes
+`INSTREAM size limit exceeded. ERROR`. Oversize messages increment
+`scanner_clamd_skipped` instead. The Prometheus names are
+`mail_scanner_clamd_failed_total` and `mail_scanner_clamd_skipped_total`.
+Failure warnings are limited to one per minute per hook; detections log the
+signature and message size without message content.
 
 ## Listeners
 
@@ -91,6 +133,41 @@ Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 
 
 ## Sections
 
+### `[mta_sts]`
+
+Configure the policy published for this server's own mail domains:
+
+```toml
+[mta_sts]
+policy_dir = "/var/lib/epistle/mta-sts"
+mode = "testing"
+max_age = 604800
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `policy_dir` | path | unset | Directory where `serve` writes `mta-sts.txt` at startup. Unset disables writing. |
+| `mode` | `testing`, `enforce`, or `none` | `testing` | Enforcement mode announced to sending mail servers. |
+| `max_age` | unsigned integer | `604800` | Policy cache lifetime in seconds. |
+
+The file contains `version: STSv1`, the selected mode, an `mx:` line naming
+the configured `hostname` (the same host used in DNS MX records), and
+`max_age`. All configured domains share this policy. Startup creates the
+directory if needed and replaces the file atomically with permissions 0644.
+A write failure aborts startup.
+
+The `_mta-sts` TXT record printed by `epistle dns-records --config FILE` uses
+a content hash for its `id=` value. Identical policy contents keep the same ID;
+changing the mode, hostname, or cache lifetime changes it. Restart `serve`
+after changing these settings and publish the regenerated DNS records.
+
+Run [`epistle mta-sts-serve`](cli.md#epistle-mta-sts-serve) with the same policy
+directory and make it reachable at
+`https://mta-sts.<domain>/.well-known/mta-sts.txt` on port 443. Its default
+bind address is `0.0.0.0:8443`. The HTTPS certificate must cover
+`mta-sts.<domain>` for each domain, even when the CNAME points to the mail
+hostname. Supply that certificate and its private key with `--cert` and `--key`.
+
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
 
@@ -101,7 +178,7 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 | `client_ca` | PEM trust anchor for verifying TLS **client** certificates. When set, a client may authenticate with a certificate via SASL `EXTERNAL` (the account comes from the certificate's verified email SAN); clients without one fall back to password auth. Absent disables client-certificate auth. Requires a static certificate (not available under ACME, like SCRAM-SHA-256-PLUS). |
 
 ### `[dkim]`
-Outbound DKIM signing. Ed25519 is primary; an RSA selector can be added for receivers that lack Ed25519 support.
+Outbound DKIM signing. Ed25519 is primary; an RSA selector is also required from version 0.10 on so receivers that verify RSA alone still see a valid signature. Until then the server warns at startup and on `epistle config-check` / `epistle verify-dns` when the RSA pair is missing; the warning names `epistle dkim-keygen --rsa` as the remedy.
 
 Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
 
@@ -109,8 +186,8 @@ Key rotation is **automatic and always on** when a `[dns]` provider is configure
 |---|---|
 | `selector` | Ed25519 selector (the `s=` tag). |
 | `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
-| `rsa_selector` | Optional RSA selector. |
-| `rsa_key_file` | Optional RSA private key. |
+| `rsa_selector` | RSA selector. Required from the version above; a startup warning is logged before that whenever the field is absent. |
+| `rsa_key_file` | RSA private key paired with `rsa_selector`. Required from the version above. Generate with `epistle dkim-keygen --rsa`. |
 | `rotate_days` | **Deprecated.** Ignored. Kept so existing configs keep parsing; a one-shot warning is logged at startup when present. Will be removed in a future release. |
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
@@ -183,6 +260,39 @@ command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
 context underneath a client that is already decoding would desynchronise it.
 
+### IMAP keywords
+
+`SELECT` advertises the system flags (`\Seen`, `\Answered`, `\Flagged`,
+`\Deleted`, `\Draft`) plus every user keyword currently in use in the
+mailbox, and `PERMANENTFLAGS` carries the same plus `\*` so STORE may
+introduce new keywords. The keywords per message are persisted on the
+sidecar next to the message body, and round-trip through FETCH, SEARCH
+and STORE without change.
+
+`SEARCH KEYWORD <atom>` and `SEARCH UNKEYWORD <atom>` match by atom,
+case-insensitively (RFC 9051 §2.3.2). A keyword is an atom: no
+leading `\`, no `(` `)` `{` `%` `*` `"` `]` `\`, no spaces, no
+control bytes, at most 64 bytes. A message carries at most 32
+keywords; STORE and APPEND reject more with `BAD` so the sidecar
+stays bounded.
+
+Reserved keywords the server keeps constants for are `$Junk`,
+`$NotJunk`, `$Forwarded`, `$Phishing`, and `$Important`. Clients
+can use any other valid atom too. `$Junk` is the spam signal:
+IMAP STORE that crosses the `$Junk` boundary trains the
+account's Bayesian scope (see below).
+
+### JMAP keyword round-trip
+
+JMAP `Email/set` accepts any `$keyword` value on a `keywords` patch;
+the four fixed JMAP keywords (`$seen`, `$answered`, `$flagged`,
+`$draft`) map to their IMAP system flags, and every other `$atom`
+is preserved as a `Flag::Keyword`. `Email/get` renders the keyword
+list back through the same mapping, so a custom `$keyword` set on
+a message round-trips through set+get without loss. `\Deleted` is
+intentionally not exposed on the JMAP side (RFC 8621 §4.1.1: J
+MAP has a separate `isDeleted` boolean).
+
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in
@@ -215,16 +325,63 @@ rather than as an SQL syntax error in the first query.
 
 | Key | Meaning |
 |---|---|
-| `url` | Connection URL (keep the password in `${VAR}`). Must be `sslmode=require` (or `verify-ca` / `verify-full`); an absent or weaker `sslmode` is rejected. A Unix-domain socket URL (`postgres://%2Fpath/...` or `postgres:///db?host=/path`) is accepted as is because there is no network on the path to intercept. |
+| `url` | Connection URL. Must be `sslmode=require` (or `verify-ca` / `verify-full`); an absent or weaker `sslmode` is rejected. A Unix-domain socket URL (`postgres://%2Fpath/...` or `postgres:///db?host=/path`) is accepted as is because there is no network on the path to intercept. Omit the password when `password_file` is set; sqlx rejects the empty-host form `postgres://user@/db?host=...`. |
+| `password_file` | Path to a file holding the PostgreSQL password. Read once at pool construction; one trailing newline is stripped (and a preceding carriage return, the form a Windows editor would leave). The file must exist, be a regular file, and not be group- or world-accessible (`mode & 0o077 == 0`, the rule `Config::load` applies to the config file itself; `0400` and `0600` both pass). Refused when the URL also carries a password (two sources for one secret is ambiguous). Use this when the secret cannot live in the config file: the recommended container deployment mounts the password as a read-only podup secret at a known path. |
 | `max_connections` | Pool size. |
 | `tls` | How the connection authenticates the PostgreSQL server. Defaults to `require`, which rejects any `sslmode` weaker than `require`. Set to `insecure` to assert that the connection stays on a network you trust (typically an internal container network with no gateway to the outside); an `insecure` connection is the operator's responsibility. |
 | `directory` | Resolve mail accounts from the SQL directory tables (off by default). |
+
+Example: a Unix-socket deployment with the password held outside the config file.
+
+```toml
+[database]
+url = "postgres://epistle@%2Frun%2Fpostgresql/epistle"
+password_file = "/run/secrets/epistle_db_password"
+```
+
+The percent-encoded host (`%2Frun%2Fpostgresql`) is the form sqlx accepts for a
+Unix-domain socket URL: every `/` in the socket directory is encoded as `%2F`.
+The `host=` query-parameter form (`postgres:///db?host=/run/postgresql`) is also
+accepted, with three slashes after the scheme because the authority is empty;
+sqlx rejects the empty-host form `postgres://user@/db?host=...` and the URL
+must use one of the two spellings above.
 
 An unreachable database does not stop the server: the antispam engine is
 disabled, mail keeps flowing unfiltered, a warning is logged and the
 `database_unavailable` counter is incremented (alert on it). The exception is
 `directory = true`: the accounts themselves come from SQL, so there would be
 nobody to deliver to and the start fails.
+
+The same database backs the shared authentication ban store: every
+listener (SMTP submission, IMAP, POP3, ManageSieve, the API, OAuth
+device and PKCE grants) records failed authentications into the
+`auth_failure` table and consults the `auth_ban` table before any
+password hashing. Without `[database]`, the per-connection three-strikes
+counters each listener already maintains are the only defence.
+
+### Per-account Bayesian training
+
+The Bayesian corpus is keyed by scope. Two scopes are in play:
+
+- The **shared** scope (`""`) is the server's own accept/reject learning.
+  SMTP accept/reject decisions (`train_in_background`) feed it.
+- The **account** scope (the local account name) is the per-user learning.
+  IMAP STORE and JMAP `Email/set` train it on a `$Junk` / `$NotJunk`
+  transition. Adding `$Junk` trains spam; adding `$NotJunk` or removing
+  `$Junk` trains ham. A STORE that touches neither keyword does not
+  train (the equality skip in `Snapshot::store_flags` keeps the
+  no-op out of the trainer).
+
+The LLM-assisted uncertain band uses `BayesStore::score_for_account`,
+which falls back to the shared scope for any account whose own scope
+has fewer than `MIN_TRUSTED_MESSAGES` (200) on either side. Below
+the threshold the per-account classifier is not trustworthy, so the
+user gets the server's general training rather than a coin-flip.
+
+Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
+on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to
+drop every per-scope row. Without this, a recreated account would
+inherit the previous user's training.
 
 ### `[acme]`
 Automatic TLS certificates for the mail protocols (not the panel's web TLS).
@@ -294,6 +451,47 @@ api_key_env = "EPISTLE_LLM_API_KEY"
 model = "gpt-4o-mini"
 ```
 
+### `[subjectpass]`
+Signed token for the uncertain Bayesian band. When a message's local
+Bayesian score lands in the configured uncertain band and no LLM verdict
+decides it (no LLM hook configured, or the LLM call failed), the server
+refuses it with `550 5.7.1 ... EP-XXXXXXXXXXXX`; the sender pastes the token
+into the `Subject:` and resends, and the resend is accepted as ham. The check
+runs after DNSBL, SPF, DMARC and the scanner hook, so a valid token never
+overrides a hard rejection. The token is per `(sender, recipient, day)`, so a
+stolen token gains one pair for one day.
+
+The refusal is permanent on purpose. A sending server that is given a `4xx`
+retries the same message, which never carries the token, and its author hears
+nothing until that queue gives up days later. A `5xx` makes the sending
+server bounce at once, and the bounce quotes the reply text below, token
+included. A challenged message is not stored and does not train the Bayesian
+corpus. The cost is that automated senders nobody reads the bounces of
+(newsletters, notifications) lose any message that lands in the band.
+
+Disabled by default: enabling it changes what remote senders see when their
+mail lands in the band, so the operator opts in. Requires `[database]`
+(without a Bayesian score there is no band to challenge). The key is held
+under `data_dir/subjectpass.key` (`0600` on disk, generated on first use);
+a token issued yesterday still verifies today, so a sender who resends past
+midnight still passes.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether to issue and verify SubjectPass tokens on the uncertain band. |
+
+Example:
+
+```toml
+subjectpass = { enabled = true }
+```
+
+The challenge text the sender sees:
+
+```
+550 5.7.1 this message needs a human; resend it with EP-XXXXXXXXXXXX anywhere in the subject
+```
+
 ### `[[alerts]]`
 Metric alerts. Each block is one rule; an empty list (the default) disables
 the engine entirely. Every `window_secs` the engine reads the chosen counter,
@@ -340,7 +538,8 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
-`webhook_sent`, `database_unavailable`.
+`webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
+`scanner_clamd_skipped`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
@@ -366,6 +565,7 @@ guide's "Data at rest".
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
+| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
@@ -796,6 +996,18 @@ Outbound queue settings. Absent keeps the secure defaults.
 | `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
 
 This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
+
+## JMAP submission
+
+The JMAP `EmailSubmission/set` and `Email/set` (create) handlers stamp a
+fresh `Message-ID` and `Date` header on every message that lacks them. The
+stamped `Message-ID` is `<uuidv7@envelope-domain>`, where the
+envelope-domain is the `envelope.mailFrom` domain (or the `From` header's
+domain for `Email/set` create), and the stamped `Date` is the RFC 5322
+form of the server's current UTC time. Client-supplied `Message-ID` and
+`Date` are left unchanged: a client that wants to set its own id sends
+one. The stamp only fires on authenticated submission; inbound relay
+mail from other servers is not modified.
 
 ## Example
 

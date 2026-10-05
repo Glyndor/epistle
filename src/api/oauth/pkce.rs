@@ -11,16 +11,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 
-use super::{
-	ACCESS_TOKEN_TTL_SECS, AuthCode, CODE_TTL_SECS, constant_time_eq, oauth_error, parse_fields,
-};
+use super::{ACCESS_TOKEN_TTL_SECS, AuthCode, CODE_TTL_SECS, oauth_error, parse_fields};
 use crate::api::ApiState;
+use crate::util::constant_time;
 
 /// The grant-type identifier for the device-code flow (RFC 8628 §3.4).
 const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -51,9 +50,13 @@ pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
 /// issued code is single-use and short-lived.
 pub async fn authorize(
 	State(state): State<ApiState>,
+	ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
+	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
+	// canonicalize so the ban / audit pipeline sees a plain `IpAddr::V4`.
+	let peer = crate::net::canonical_peer(peer);
 	let Some(authz) = state.authz() else {
 		return oauth_error("invalid_request");
 	};
@@ -78,11 +81,16 @@ pub async fn authorize(
 		return oauth_error("invalid_grant");
 	};
 	// The OAuth grant endpoints sit outside `require_bearer_token`, so the
-	// peer IP is not propagated as an extension here; the audit log records
-	// `unknown` for the IP — see `device::device_approve` for the same note.
-	let Some(account) =
-		state.authenticate_with_ip(&login, &password, None, crate::config::Protocol::Api)
-	else {
+	// peer IP is sourced from `ConnectInfo` here (wired in by the listener's
+	// `into_make_service_with_connect_info`) and forwarded to the ban-aware
+	// authentication path. The peer IP participates in the audit log and the
+	// shared ban table.
+	let Some(account) = state.authenticate_with_ip(
+		&login,
+		&password,
+		Some(peer.ip()),
+		crate::config::Protocol::Api,
+	) else {
 		return oauth_error("invalid_grant");
 	};
 
@@ -165,7 +173,7 @@ fn redeem_authorization_code(
 	// BASE64URL(SHA256(code_verifier)) == code_challenge (RFC 7636 §4.6).
 	let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
 	let computed = B64URL.encode(digest.as_ref());
-	if !constant_time_eq(computed.as_bytes(), stored.code_challenge.as_bytes()) {
+	if !constant_time::eq(computed.as_bytes(), stored.code_challenge.as_bytes()) {
 		return oauth_error("invalid_grant");
 	}
 	match authz.issue_token(&stored.account, now) {

@@ -176,20 +176,6 @@ fn random_user_code_chars_with(
 	Some(out)
 }
 
-/// Constant-time-ish byte comparison: always scans both inputs fully, so a
-/// mismatch leaks neither the position nor (beyond length) the expected value.
-/// Used to compare PKCE challenges.
-pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-	if a.len() != b.len() {
-		return false;
-	}
-	let mut diff = 0u8;
-	for (x, y) in a.iter().zip(b.iter()) {
-		diff |= x ^ y;
-	}
-	diff == 0
-}
-
 /// Parse a request body that is either `application/x-www-form-urlencoded` or
 /// `application/json` (an object of string values) into a field map. Anything
 /// else, or a malformed body, yields an empty map — the handler then rejects on

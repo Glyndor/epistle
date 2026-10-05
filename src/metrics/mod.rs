@@ -25,6 +25,10 @@ pub enum RejectReason {
 	/// Rejected because the message was a loop (our own envelope sender on
 	/// a received message, e.g. via SRS / an alias chain).
 	Loop,
+	/// Rejected at `MAIL FROM` because the unauthenticated client tripped
+	/// the configured per-IP or per-sender rate limit. The reply is `450`,
+	/// so the rejection is temporary and the peer is expected to retry.
+	RateLimit,
 }
 
 impl RejectReason {
@@ -36,17 +40,19 @@ impl RejectReason {
 			RejectReason::Reputation => "reputation",
 			RejectReason::Scanner => "scanner",
 			RejectReason::Loop => "loop",
+			RejectReason::RateLimit => "rate_limit",
 		}
 	}
 }
 
-const REASONS: [RejectReason; 6] = [
+const REASONS: [RejectReason; 7] = [
 	RejectReason::Dnsbl,
 	RejectReason::Spf,
 	RejectReason::Dmarc,
 	RejectReason::Reputation,
 	RejectReason::Scanner,
 	RejectReason::Loop,
+	RejectReason::RateLimit,
 ];
 
 /// Canonical short names of every counter, paired with the matching field.
@@ -64,6 +70,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("rejected_reputation", "rejected_reputation"),
 	("rejected_scanner", "rejected_scanner"),
 	("rejected_loop", "rejected_loop"),
+	("rejected_rate_limit", "rejected_rate_limit"),
 	("abuse_dropped", "abuse_dropped"),
 	("sieve_rejected", "sieve_rejected"),
 	("vacation_sent", "vacation_sent"),
@@ -73,10 +80,22 @@ const COUNTERS: &[(&str, &str)] = &[
 	("bounced", "bounced"),
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
+	("scanner_clamd_failed", "scanner_clamd_failed"),
+	("scanner_clamd_skipped", "scanner_clamd_skipped"),
 	("database_unavailable", "database_unavailable"),
 	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
 	("auth_login_failed", "auth_login_failed"),
+	("send_limited_new_recipients", "send_limited_new_recipients"),
+	("bayes_training_dropped", "bayes_training_dropped"),
+	("subjectpass_passed", "subjectpass_passed"),
+	("subjectpass_challenged", "subjectpass_challenged"),
+	("dmarc_reports_ingested", "dmarc_reports_ingested"),
+	("dmarc_report_rows_failing", "dmarc_report_rows_failing"),
+	("tlsrpt_reports_ingested", "tlsrpt_reports_ingested"),
+	("tlsrpt_failed_sessions", "tlsrpt_failed_sessions"),
+	("reports_dropped", "reports_dropped"),
+	("mta_sts_connections_dropped", "mta_sts_connections_dropped"),
 ];
 
 /// Canonical short names of every counter, sorted.
@@ -99,6 +118,7 @@ pub struct Metrics {
 	rejected_reputation: AtomicU64,
 	rejected_scanner: AtomicU64,
 	rejected_loop: AtomicU64,
+	rejected_rate_limit: AtomicU64,
 	abuse_dropped: AtomicU64,
 	sieve_rejected: AtomicU64,
 	vacation_sent: AtomicU64,
@@ -108,19 +128,41 @@ pub struct Metrics {
 	bounced: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
+	scanner_clamd_failed: AtomicU64,
+	scanner_clamd_skipped: AtomicU64,
 	database_unavailable: AtomicU64,
 	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
 	auth_login_failed: AtomicU64,
+	send_limited_new_recipients: AtomicU64,
+	bayes_training_dropped: AtomicU64,
+	dmarc_reports_ingested: AtomicU64,
+	dmarc_report_rows_failing: AtomicU64,
+	tlsrpt_reports_ingested: AtomicU64,
+	tlsrpt_failed_sessions: AtomicU64,
+	reports_dropped: AtomicU64,
+	mta_sts_connections_dropped: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
 	llm_failed: AtomicU64,
+	subjectpass_passed: AtomicU64,
+	subjectpass_challenged: AtomicU64,
 }
 
 impl Metrics {
 	/// An empty metrics struct, with every counter at zero.
 	pub fn new() -> Self {
 		Self::default()
+	}
+
+	/// Count a clamd exchange failure that accepted the message.
+	pub fn scanner_clamd_failed(&self) {
+		self.scanner_clamd_failed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a message skipped because it exceeded the clamd byte limit.
+	pub fn scanner_clamd_skipped(&self) {
+		self.scanner_clamd_skipped.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a connection dropped by the error-streak abuse guard.
@@ -210,6 +252,60 @@ impl Metrics {
 		self.auth_login_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count a submission refused because the account would exceed the
+	/// rolling 24h cap on first-time recipients (`Config::new_recipients_per_day`).
+	/// Distinct from the per-minute `submission_rate_limit_per_min`:
+	/// that limiter sees volume, this one sees *novel* addresses, which
+	/// is the slow-exfiltration signal.
+	pub fn send_limited_new_recipients(&self) {
+		self.send_limited_new_recipients
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a per-account Bayesian training job dropped because the
+	/// bounded queue that hands work from STORE / `Email/set` to the
+	/// one training worker was full. The queue is advisory and never
+	/// blocks the protocol reply, so a non-zero counter means the
+	/// worker cannot keep up with the rate of `$Junk` flag flips and
+	/// the operator should widen the queue or scale training.
+	pub fn bayes_training_dropped(&self) {
+		self.bayes_training_dropped.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count one ingested DMARC aggregate or TLS-RPT report.
+	pub fn report_ingested(&self, kind: crate::reports::Kind) {
+		let counter = match kind {
+			crate::reports::Kind::Dmarc => &self.dmarc_reports_ingested,
+			crate::reports::Kind::TlsRpt => &self.tlsrpt_reports_ingested,
+		};
+		counter.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Sum the failing rows from an ingested report (DMARC rows whose
+	/// disposition is `quarantine`/`reject`, or with both dkim and spf
+	/// `fail`; for TLS-RPT, the `total-failure-session-count` from each
+	/// policy).
+	pub fn report_rows_failing(&self, kind: crate::reports::Kind, count: u64) {
+		let counter = match kind {
+			crate::reports::Kind::Dmarc => &self.dmarc_report_rows_failing,
+			crate::reports::Kind::TlsRpt => &self.tlsrpt_failed_sessions,
+		};
+		counter.fetch_add(count, Ordering::Relaxed);
+	}
+
+	/// Count an inbound report that was too large, malformed, or whose
+	/// encoding we did not support.
+	pub fn reports_dropped(&self) {
+		self.reports_dropped.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a public MTA-STS HTTPS connection dropped before the TLS
+	/// handshake because the listener's concurrency cap was already full.
+	pub fn mta_sts_connections_dropped(&self) {
+		self.mta_sts_connections_dropped
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a message sent to the LLM antispam hook for a second opinion.
 	/// Only incremented when the local Bayesian score sits inside the
 	/// configured uncertain band, so it measures the real cost of the feature.
@@ -228,6 +324,19 @@ impl Metrics {
 		self.llm_failed.fetch_add(1, Ordering::Relaxed);
 	}
 
+	/// Count an unauthenticated message accepted because its subject carried
+	/// a valid SubjectPass token for the (sender, recipient, day) triple.
+	pub fn subjectpass_passed(&self) {
+		self.subjectpass_passed.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an unauthenticated message in the uncertain band that was
+	/// refused with a SubjectPass challenge (no token in the subject,
+	/// and either no LLM hook or the LLM hook call failed).
+	pub fn subjectpass_challenged(&self) {
+		self.subjectpass_challenged.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// Count a rejected message by reason.
 	pub fn rejected(&self, reason: RejectReason) {
 		self.counter(reason).fetch_add(1, Ordering::Relaxed);
@@ -241,6 +350,7 @@ impl Metrics {
 			RejectReason::Reputation => &self.rejected_reputation,
 			RejectReason::Scanner => &self.rejected_scanner,
 			RejectReason::Loop => &self.rejected_loop,
+			RejectReason::RateLimit => &self.rejected_rate_limit,
 		}
 	}
 
@@ -269,6 +379,7 @@ impl Metrics {
 			"rejected_reputation" => &self.rejected_reputation,
 			"rejected_scanner" => &self.rejected_scanner,
 			"rejected_loop" => &self.rejected_loop,
+			"rejected_rate_limit" => &self.rejected_rate_limit,
 			"abuse_dropped" => &self.abuse_dropped,
 			"sieve_rejected" => &self.sieve_rejected,
 			"vacation_sent" => &self.vacation_sent,
@@ -278,10 +389,22 @@ impl Metrics {
 			"bounced" => &self.bounced,
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
+			"scanner_clamd_failed" => &self.scanner_clamd_failed,
+			"scanner_clamd_skipped" => &self.scanner_clamd_skipped,
 			"database_unavailable" => &self.database_unavailable,
 			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
 			"auth_login_failed" => &self.auth_login_failed,
+			"send_limited_new_recipients" => &self.send_limited_new_recipients,
+			"bayes_training_dropped" => &self.bayes_training_dropped,
+			"subjectpass_passed" => &self.subjectpass_passed,
+			"subjectpass_challenged" => &self.subjectpass_challenged,
+			"dmarc_reports_ingested" => &self.dmarc_reports_ingested,
+			"dmarc_report_rows_failing" => &self.dmarc_report_rows_failing,
+			"tlsrpt_reports_ingested" => &self.tlsrpt_reports_ingested,
+			"tlsrpt_failed_sessions" => &self.tlsrpt_failed_sessions,
+			"reports_dropped" => &self.reports_dropped,
+			"mta_sts_connections_dropped" => &self.mta_sts_connections_dropped,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -371,6 +494,16 @@ impl Metrics {
 				&self.webhook_failed,
 			),
 			(
+				"mail_scanner_clamd_failed_total",
+				"Clamd scan failures that accepted the message.",
+				&self.scanner_clamd_failed,
+			),
+			(
+				"mail_scanner_clamd_skipped_total",
+				"Messages skipped because they exceeded the clamd byte limit.",
+				&self.scanner_clamd_skipped,
+			),
+			(
 				"mail_database_unavailable_total",
 				"Startups that could not reach the database and ran without the antispam engine.",
 				&self.database_unavailable,
@@ -391,6 +524,36 @@ impl Metrics {
 				&self.auth_login_failed,
 			),
 			(
+				"mail_dmarc_reports_ingested_total",
+				"DMARC aggregate reports successfully ingested from a receiver.",
+				&self.dmarc_reports_ingested,
+			),
+			(
+				"mail_dmarc_report_rows_failing_total",
+				"DMARC report rows whose disposition was quarantine/reject or whose SPF and DKIM both failed.",
+				&self.dmarc_report_rows_failing,
+			),
+			(
+				"mail_tlsrpt_reports_ingested_total",
+				"TLS-RPT reports successfully ingested from a receiver.",
+				&self.tlsrpt_reports_ingested,
+			),
+			(
+				"mail_tlsrpt_failed_sessions_total",
+				"Outbound TLS sessions the receivers reported as failed across ingested TLS-RPT reports.",
+				&self.tlsrpt_failed_sessions,
+			),
+			(
+				"mail_reports_dropped_total",
+				"Inbound DMARC or TLS-RPT reports dropped for being too large, malformed, or using an unsupported encoding.",
+				&self.reports_dropped,
+			),
+			(
+				"mail_mta_sts_connections_dropped_total",
+				"Public MTA-STS HTTPS connections dropped before the TLS handshake because the listener's concurrency cap was full.",
+				&self.mta_sts_connections_dropped,
+			),
+			(
 				"mail_llm_consulted_total",
 				"Messages sent to the LLM antispam hook (uncertain band only).",
 				&self.llm_consulted,
@@ -405,6 +568,26 @@ impl Metrics {
 				"LLM antispam hook calls that failed (the message was accepted).",
 				&self.llm_failed,
 			),
+			(
+				"mail_send_limited_new_recipients_total",
+				"Submissions refused because the account would exceed the daily cap on first-time recipients.",
+				&self.send_limited_new_recipients,
+			),
+			(
+				"mail_bayes_training_dropped_total",
+				"Per-account Bayesian training jobs dropped because the bounded hand-off queue was full.",
+				&self.bayes_training_dropped,
+			),
+			(
+				"mail_subjectpass_passed_total",
+				"Unauthenticated messages accepted by a valid SubjectPass token in the subject.",
+				&self.subjectpass_passed,
+			),
+			(
+				"mail_subjectpass_challenged_total",
+				"Unauthenticated messages refused with a SubjectPass challenge.",
+				&self.subjectpass_challenged,
+			),
 		] {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
 			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
@@ -414,127 +597,5 @@ impl Metrics {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn renders_zero_counters() {
-		let rendered = Metrics::new().render();
-		assert!(rendered.contains("mail_connections_total 0\n"));
-		assert!(rendered.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 0\n"));
-		// Every reason label is present.
-		for label in ["dnsbl", "spf", "dmarc", "reputation", "scanner"] {
-			assert!(rendered.contains(&format!("reason=\"{label}\"")), "{label}");
-		}
-	}
-
-	#[test]
-	fn counts_events() {
-		let m = Metrics::new();
-		m.connection();
-		m.connection();
-		m.accepted();
-		m.quarantined();
-		m.rejected(RejectReason::Dnsbl);
-		m.rejected(RejectReason::Dnsbl);
-		m.rejected(RejectReason::Dmarc);
-		m.abuse_dropped();
-		m.sieve_rejected();
-		m.vacation_sent();
-		m.vacation_sent();
-		m.forwarded();
-		m.relayed();
-		m.relayed();
-		m.relayed();
-		m.deferred();
-		m.bounced();
-		m.auth_login_succeeded();
-		m.auth_login_succeeded();
-		m.auth_login_failed();
-		m.llm_consulted();
-		m.llm_consulted();
-		m.llm_quarantined();
-		m.llm_failed();
-		let r = m.render();
-		assert!(r.contains("mail_sieve_rejected_total 1\n"), "{r}");
-		assert!(r.contains("mail_vacation_sent_total 2\n"), "{r}");
-		assert!(r.contains("mail_forwarded_total 1\n"), "{r}");
-		assert!(r.contains("mail_relayed_total 3\n"), "{r}");
-		assert!(r.contains("mail_deferred_total 1\n"), "{r}");
-		assert!(r.contains("mail_bounced_total 1\n"), "{r}");
-		assert!(r.contains("mail_connections_total 2\n"), "{r}");
-		assert!(
-			r.contains("mail_connections_abuse_dropped_total 1\n"),
-			"{r}"
-		);
-		assert!(r.contains("mail_messages_accepted_total 1\n"), "{r}");
-		assert!(r.contains("mail_messages_quarantined_total 1\n"), "{r}");
-		assert!(r.contains("mail_auth_login_succeeded_total 2\n"), "{r}");
-		assert!(r.contains("mail_auth_login_failed_total 1\n"), "{r}");
-		assert!(r.contains("mail_llm_consulted_total 2\n"), "{r}");
-		assert!(r.contains("mail_llm_quarantined_total 1\n"), "{r}");
-		assert!(r.contains("mail_llm_failed_total 1\n"), "{r}");
-		assert!(
-			r.contains("mail_messages_rejected_total{reason=\"dnsbl\"} 2\n"),
-			"{r}"
-		);
-		assert!(
-			r.contains("mail_messages_rejected_total{reason=\"dmarc\"} 1\n"),
-			"{r}"
-		);
-	}
-
-	#[test]
-	fn render_is_valid_exposition_with_help_and_type() {
-		let r = Metrics::new().render();
-		assert!(r.contains("# TYPE mail_connections_total counter"));
-		assert!(r.contains("# HELP mail_messages_accepted_total"));
-	}
-
-	#[test]
-	fn snapshot_lists_every_counter_and_keeps_it_sorted() {
-		let m = Metrics::new();
-		m.connection();
-		m.connection();
-		m.accepted();
-		m.bounced();
-		m.bounced();
-		m.bounced();
-		let snap = m.snapshot();
-		assert_eq!(snap.get("connections"), Some(&2));
-		assert_eq!(snap.get("accepted"), Some(&1));
-		assert_eq!(snap.get("bounced"), Some(&3));
-		// Sorted alphabetically.
-		let keys: Vec<&str> = snap.keys().copied().collect();
-		let mut sorted = keys.clone();
-		sorted.sort_unstable();
-		assert_eq!(keys, sorted);
-		// Every counter the alert engine accepts is present at zero.
-		for name in [
-			"connections",
-			"accepted",
-			"quarantined",
-			"rejected_dnsbl",
-			"rejected_spf",
-			"rejected_dmarc",
-			"rejected_reputation",
-			"rejected_scanner",
-			"rejected_loop",
-			"abuse_dropped",
-			"sieve_rejected",
-			"vacation_sent",
-			"forwarded",
-			"relayed",
-			"deferred",
-			"bounced",
-			"webhook_sent",
-			"webhook_failed",
-			"database_unavailable",
-			"clock_drift_exceeded",
-			"auth_login_succeeded",
-			"auth_login_failed",
-		] {
-			assert!(snap.contains_key(name), "missing {name}");
-		}
-	}
-}
+#[path = "mod_tests.rs"]
+mod tests;

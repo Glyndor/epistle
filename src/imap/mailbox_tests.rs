@@ -172,6 +172,74 @@ fn flag_tokens_parse_and_render() {
 }
 
 #[test]
+fn parses_a_keyword_atom() {
+	// A non-backslash atom without atom-specials parses as a Keyword.
+	let flag = Flag::parse("$Junk").expect("$Junk is a valid keyword");
+	assert!(matches!(flag, Flag::Keyword(_)));
+	assert_eq!(flag.as_str(), "$Junk");
+}
+
+#[test]
+fn refuses_a_backslash_or_a_space_in_a_keyword() {
+	// A backslash-prefixed atom is the system-flag namespace, not a keyword.
+	assert!(Flag::parse("\\Recent").is_none());
+	// Atom-specials (space, parens, %, *, ", ], {, \) are rejected by the
+	// RFC 9051 atom grammar.
+	assert!(Flag::parse("hello world").is_none());
+	assert!(Flag::parse("(group)").is_none());
+	assert!(Flag::parse("a%b").is_none());
+	assert!(Flag::parse("a*b").is_none());
+	assert!(Flag::parse("a\"b").is_none());
+	assert!(Flag::parse("a]b").is_none());
+	assert!(Flag::parse("a{b").is_none());
+}
+
+#[test]
+fn keywords_compare_case_insensitively() {
+	let set = vec![Flag::parse("$Junk").expect("$Junk parses")];
+	let upper = Flag::parse("$JUNK").expect("uppercase $JUNK parses");
+	let lower = Flag::parse("$junk").expect("lowercase $junk parses");
+	// The same key (lowercased) matches regardless of the source case.
+	assert!(crate::imap::mailbox::flag_set_contains(&set, &upper));
+	assert!(crate::imap::mailbox::flag_set_contains(&set, &lower));
+	// A different keyword does not match.
+	let other = Flag::parse("$Forwarded").expect("$Forwarded parses");
+	assert!(!crate::imap::mailbox::flag_set_contains(&set, &other));
+}
+
+#[test]
+fn system_flags_still_serialise_as_before() {
+	// Sidecars written by the old code used the canonical lowercased wire
+	// token; the new format must still decode those.
+	let old_format = br#"["seen","deleted"]"#;
+	let flags: Vec<Flag> = serde_json::from_slice(old_format).expect("decode old sidecar");
+	assert_eq!(
+		flags,
+		vec![Flag::Seen, Flag::Deleted],
+		"old sidecar must still load"
+	);
+}
+
+#[test]
+fn a_sidecar_with_keywords_round_trips() {
+	let original = vec![
+		Flag::Seen,
+		Flag::parse("$Junk").expect("$Junk parses"),
+		Flag::Draft,
+	];
+	let bytes = serde_json::to_vec(&original).expect("encode");
+	let decoded: Vec<Flag> = serde_json::from_slice(&bytes).expect("decode");
+	assert_eq!(decoded, original);
+	// The wire form keeps the raw keyword case the caller supplied.
+	let as_text = std::str::from_utf8(&bytes).expect("utf8");
+	assert!(as_text.contains("$Junk"), "{as_text}");
+	// System flags stay as bare strings; keywords become the
+	// self-describing object form so the two never collide.
+	assert!(as_text.contains("\"seen\""), "{as_text}");
+	assert!(as_text.contains("\"name\""), "{as_text}");
+}
+
+#[test]
 fn name_validation() {
 	assert!(valid_name("Sent"));
 	assert!(valid_name("My Folder.2024"));

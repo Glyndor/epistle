@@ -14,9 +14,10 @@ on:
       # list omits itself does not run on the pull request that changes
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/db.yml"
+      - "src/**"
+      - "tests/**"
       - "migrations/**"
-      - "src/db/**"
-      - "tests/database.rs"
+      - ".sqlx/**"
       - "Cargo.toml"
       - "Cargo.lock"
 
@@ -106,30 +107,42 @@ jobs:
         # module that needs PostgreSQL) and this job, the one that does exercise
         # them, never looked at a number.
         #
-        # The assertion is per file, not a global percentage. `--test database`
-        # instruments the whole tree from a single test target, so the global
-        # figure lands near 2.5% and says nothing about anything; the four files
-        # below are what this job exists to cover, so they are what it asserts.
+        # The assertion is per file, not a global percentage. The combined run
+        # instruments the whole tree from `--tests` (every lib test plus every
+        # integration target), so the global figure lands near 2.5% and says
+        # nothing about anything; the four files below are what this job
+        # exists to cover, so they are what it asserts.
         #
         # src/antispam/hook.rs is deliberately NOT in this list even though
         # ci.yml excludes it. Measured here it is 0.00%: the scanner hook talks
-        # HTTP to ClamAV/Rspamd, needs no database, and tests/database.rs never
-        # imports it. Gating it here would be a floor over a file this job does
-        # not touch. Its own unit tests cover it at 95.40%, so it comes out of
-        # ci.yml's ignore regex instead and counts toward the real gate.
+        # HTTP to ClamAV/Rspamd, needs no database, and the database test
+        # targets never imports it. Gating it here would be a floor over a
+        # file this job does not touch. Its own unit tests cover it at 95.40%,
+        # so it comes out of ci.yml's ignore regex instead and counts toward
+        # the real gate.
+        #
+        # Rule: every `tests/*.rs` that reads `DATABASE_URL` runs in this job
+        # because `--tests` instruments every test target; the previous
+        # `--test database --test database_bans --test database_password_file`
+        # list was a maintainer's-eye view of "the tests that matter" and
+        # missed any new database test the operator added without updating
+        # the list. `--tests` closes that hole at the cost of a longer
+        # coverage run; the cost is paid once per push, not on every PR,
+        # because the path filter keeps the workflow off unrelated PRs.
         env:
-          # Measured on 1.98 against the matrix leg above, 2026-08-28
-          # (postgres:18 only; the postgres:14 leg was added later, after
-          # the floor was declared, and the same code path produces the
-          # same coverage on both):
-          #   src/db/mod.rs                 100.00%
+          # Measured on 1.98 against postgres:18 (a throwaway
+          # `podman run -d docker.io/library/postgres:18` on the same
+          # toolchain, 2026-10-05, after Item 1 added `open_password_file`
+          # with two unreachable-in-practice error mappings that pull the
+          # file below 100%):
+          #   src/db/mod.rs                  88.79%
           #   src/directory_store/sql.rs     96.88%
-          #   src/antispam/corpus.rs         74.79%
-          #   src/antispam/reputation.rs     73.85%
+          #   src/antispam/corpus.rs         73.15%
+          #   src/antispam/reputation.rs     79.75%
           # The floor is today's worst file rounded down to the ten, not 90. A
           # threshold above what the tree actually has would make this gate red
           # on its first run, and a gate that is born red is a gate somebody
-          # silences. Raise it deliberately as the numbers improve — it is meant
+          # silences. Raise it deliberately as the numbers improve; it is meant
           # to move, but only upward and only on purpose.
           COVERAGE_THRESHOLD: "70"
           COVERAGE_FILES: |
@@ -138,7 +151,18 @@ jobs:
             src/antispam/corpus.rs
             src/directory_store/sql.rs
         run: |
-          cargo llvm-cov --locked --test database --summary-only --json --output-path coverage.json
+          # `--tests` instruments every test target (lib tests plus every
+          # integration test) so a new `tests/database_*.rs` is run
+          # automatically. The old `--test database --test database_bans
+          # --test database_password_file` form is a maintainer's-eye view of
+          # the database tests; the companion test that pinned it
+          # (`tests/workflow_db_test_targets.rs`) was deleted in this commit
+          # because the explicit list missed indirect reads and matched
+          # comments, two failure modes the static mechanism cannot suffer
+          # from.
+          cargo llvm-cov --locked \
+            --tests \
+            --summary-only --json --output-path coverage.json
           python3 - <<'EOF'
           import json
           import os

@@ -59,6 +59,7 @@ impl Session {
 			reverse_path,
 			recipients,
 			no_dsn,
+			size,
 			body,
 			require_tls,
 			..
@@ -74,7 +75,6 @@ impl Session {
 			require_tls: *require_tls,
 			mailbox: None,
 		};
-		self.state = State::Greeted;
-		Action::Deliver(Reply::ok(), message)
+		super::finalise::finalise(self, message, *size)
 	}
 }

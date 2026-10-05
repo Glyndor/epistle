@@ -231,6 +231,57 @@ fn malformed_records_are_rejected() {
 	assert!(parse_record(&format!("{id} 1 2 3.9999999999 4 ")).is_none());
 }
 
+/// A keyword in the index field must round-trip with its case preserved.
+/// The format uses a `k:` prefix on the wire so a keyword atom that
+/// happens to equal a system-flag token can never be confused for one.
+#[test]
+fn keywords_survive_the_index_round_trip() {
+	let id = Uuid::now_v7();
+	let original = MessageRef::from_index(
+		1,
+		id,
+		1,
+		vec![
+			Flag::Seen,
+			Flag::parse("$Junk").expect("$Junk parses"),
+			Flag::parse("$Forwarded").expect("$Forwarded parses"),
+		],
+		std::time::UNIX_EPOCH,
+		1,
+	);
+	let mut buf = String::new();
+	write_record(&mut buf, &original);
+	let parsed = parse_record(buf.trim_end_matches('\n')).expect("parse");
+	assert_eq!(parsed.flags, original.flags, "keywords must round-trip");
+	// Case is preserved on the wire, not normalised to lowercase.
+	let parsed_again = parsed.flags.iter().find_map(|f| match f {
+		Flag::Keyword(k) => Some(k.as_str().to_string()),
+		_ => None,
+	});
+	assert_eq!(parsed_again.as_deref(), Some("$Junk"));
+}
+
+/// An unknown `\`-prefixed token still fails closed (the writer only
+/// emits the five known system flags, so anything else is corruption or
+/// a format drift the loader must not silently accept).
+#[test]
+fn an_unknown_system_token_still_fails_closed() {
+	let id = Uuid::now_v7();
+	// A `\`-prefixed token that is not one of the five system flags.
+	let bad = format!("{id} 1 2 3.0 4 \\Bogus");
+	assert!(
+		parse_record(&bad).is_none(),
+		"unknown \\-prefixed token must fail closed"
+	);
+	// A keyword without the `k:` prefix is also refused: the writer would
+	// have emitted it with the prefix, so the absence signals corruption.
+	let bad_keyword = format!("{id} 1 2 3.0 4 Junk");
+	assert!(
+		parse_record(&bad_keyword).is_none(),
+		"keyword without k: prefix must fail closed"
+	);
+}
+
 #[test]
 fn missing_index_is_treated_as_absent() {
 	let dir = tempfile::tempdir().expect("tempdir");

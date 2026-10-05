@@ -47,6 +47,12 @@ pub enum AuditEvent {
 	/// disabled, the password did not match, an app-password CIDR did not
 	/// admit the peer, or an LDAP bind failed.
 	LoginFailed,
+	/// A submission was refused because the account would exceed the
+	/// rolling 24h cap on first-time recipients
+	/// (`Config::new_recipients_per_day`). The fast-evolving exfiltration
+	/// signal: a compromised account that stays under the per-minute rate
+	/// limit but fans out to fresh addresses.
+	SendLimited,
 }
 
 impl AuditEvent {
@@ -62,6 +68,7 @@ impl AuditEvent {
 			AuditEvent::MaskedRemoved => "masked.removed",
 			AuditEvent::LoginSucceeded => "auth.login_succeeded",
 			AuditEvent::LoginFailed => "auth.login_failed",
+			AuditEvent::SendLimited => "send.new_recipients_limited",
 		}
 	}
 }
@@ -87,12 +94,37 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 	);
 }
 
+/// Emit a structured audit event for a submission refused because the
+/// account would exceed the daily new-recipient cap. Carries the
+/// numbers (count of new recipients, configured limit) so an operator
+/// chasing an exfiltration signal can read them straight off the log
+/// line without correlating with the metric counter.
+///
+/// `client_ip` follows the same `unknown` convention as
+/// [`log_privilege_change`]. This is the only emitter in this module
+/// that takes numeric fields, because it is the only one whose event
+/// is data-shaped rather than action-shaped.
+pub fn log_send_limited(account: &str, client_ip: Option<IpAddr>, count: u32, limit: u32) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	tracing::info!(
+		target: "epistle::api::audit",
+		event = AuditEvent::SendLimited.as_str(),
+		account = %account,
+		client_ip = %client_ip,
+		count = count,
+		limit = limit,
+		"submission limited by daily new-recipient cap"
+	);
+}
+
 /// Emit the per-record counts an account-removal call returned. Each
 /// tally is a separate structured field on the same `epistle::api::audit`
 /// event with `event = account.removed`, so an operator can filter on the
 /// `mailbox_files`, `masked_addresses`, `app_passwords`,
-/// `suppressed_addresses`, `queued_discarded` and `queued_left` fields
-/// directly: no second log line to correlate.
+/// `suppressed_addresses`, `correspondent_addresses`, `queued_discarded`
+/// and `queued_left` fields directly: no second log line to correlate.
 pub fn log_account_removal(
 	account: &str,
 	client_ip: Option<IpAddr>,
@@ -110,6 +142,7 @@ pub fn log_account_removal(
 		masked_addresses = counts.masked_addresses,
 		app_passwords = counts.app_passwords,
 		suppressed_addresses = counts.suppressed_addresses,
+		correspondent_addresses = counts.correspondent_addresses,
 		queued_discarded = counts.queued_messages_discarded,
 		queued_left = counts.queued_messages_left,
 		"account removed with footprint cleared"

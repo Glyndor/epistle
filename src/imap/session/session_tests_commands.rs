@@ -159,6 +159,33 @@ fn append_stores_message_with_flags() {
 	assert!(response.contains("Subject: bye"), "{response}");
 }
 
+/// APPEND refuses a flag list that would put the message over the
+/// per-message cap. The check happens before the literal is read, so
+/// the mailbox is left untouched.
+#[test]
+fn append_refuses_more_than_32_keywords() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	// 33 keywords: $k00..$k32.
+	let many: String = (0..=32)
+		.map(|i| format!("$k{i:02}"))
+		.collect::<Vec<_>>()
+		.join(" ");
+	let output = session.command_line(&format!("a2 APPEND INBOX ({many}) {{5}}"));
+	let response = text(&output);
+	assert!(
+		response.contains("a2 BAD"),
+		"APPEND over the cap must be refused: {response}"
+	);
+	assert!(
+		response.contains("too many keywords"),
+		"the diagnostic names the limit: {response}"
+	);
+	// The literal collection was never started, so the mailbox stays
+	// empty.
+	assert_eq!(output.collect_literal, None);
+}
+
 #[test]
 fn append_requires_authentication_and_known_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");

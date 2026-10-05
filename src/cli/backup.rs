@@ -23,7 +23,7 @@ pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Wri
 	let mut entries = match collect_files(&config.data_dir) {
 		Ok(entries) => entries,
 		Err(error) => {
-			eprintln!("error: reading data dir: {error}");
+			super::style::error(format_args!("reading data dir: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -33,14 +33,14 @@ pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Wri
 	if let Some(db) = &config.database {
 		match pg_dump(&db.url) {
 			Ok(dump) => entries.push(("database.sql".to_string(), 0o644, dump)),
-			Err(error) => eprintln!("warning: skipping pg_dump: {error}"),
+			Err(error) => super::style::warn(format_args!("skipping pg_dump: {error}")),
 		}
 	}
 
 	let archive = match tar_gz(&entries) {
 		Ok(archive) => archive,
 		Err(error) => {
-			eprintln!("error: building archive: {error}");
+			super::style::error(format_args!("building archive: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -122,9 +122,11 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 	}
 
 	if !entries.is_empty() {
-		let _ = writeln!(
+		super::style::warn_to(
 			warnings,
-			"warning: this backup archives {archived} files under data_dir only. The configuration references the following paths outside data_dir that are NOT in this archive — back them up separately or the corresponding capability will not work after a restore:"
+			format_args!(
+				"this backup archives {archived} files under data_dir only. The configuration references the following paths outside data_dir that are NOT in this archive. Back them up separately or the corresponding capability will not work after a restore:"
+			),
 		);
 		for entry in &entries {
 			let _ = writeln!(warnings, "  - {entry}");
@@ -132,9 +134,9 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 	}
 
 	if !encryption_key.is_empty() {
-		let _ = writeln!(
+		super::style::warn_to(
 			warnings,
-			"warning: this backup carries the on-disk mail encrypted at rest. The [storage] encryption key is intentionally not in data_dir (storage-keygen: \"Store it off the data disk ... never written into data_dir\"). Without it the mail content in this archive is unrecoverable — save the key separately:"
+			"this backup carries the on-disk mail encrypted at rest. The [storage] encryption key is intentionally not in data_dir (storage-keygen: \"Store it off the data disk ... never written into data_dir\"). Without it the mail content in this archive is unrecoverable. Save the key separately:",
 		);
 		for entry in &encryption_key {
 			let _ = writeln!(warnings, "  - {entry}");

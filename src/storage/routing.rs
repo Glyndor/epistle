@@ -78,9 +78,14 @@ impl SplitDelivery {
 		}
 	}
 
-	/// Record Sieve delivery outcomes to these process metrics.
+	/// Record Sieve delivery outcomes to these process metrics. The same
+	/// handle is also threaded into the inner [`LocalDelivery`] so the
+	/// report-ingest hook can count `dmarc_reports_ingested`,
+	/// `tlsrpt_reports_ingested`, `dmarc_report_rows_failing`,
+	/// `tlsrpt_failed_sessions`, and `reports_dropped`.
 	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
-		self.metrics = Some(metrics);
+		self.metrics = Some(metrics.clone());
+		self.local = self.local.with_metrics(metrics);
 		self
 	}
 

@@ -79,7 +79,37 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
 ## Anti-abuse
 
 - Layered inbound filtering: **greylisting**, a **Bayesian** filter, sender
-  **reputation**, and optional **DNSBL** lookups, plus an external scanner hook.
+  **reputation**, and optional **DNSBL** lookups across three lists (client
+  IP, envelope sender domain, URL hosts in the body), plus an external
+  scanner hook. All three DNSBL lists fail open on resolver errors so a
+  misconfigured upstream never blocks delivery.
+- **Per-IP and per-sender message rate limits** on unauthenticated
+  `MAIL FROM` (`inbound_rate_limit_per_ip_per_min`,
+  `inbound_rate_limit_per_sender_per_min`). A peer or envelope that
+  exceeds the cap is deferred with `450 4.7.1` so a real burst retries
+  rather than bounces; the counters live under the same
+  `mail_messages_rejected_total{reason="rate_limit"}` line as the other
+  inbound rejections. Bounces use the null reverse-path and are skipped
+  from the per-sender charge.
+- **Shared authentication ban table** (requires `[database]`). Every
+  listener (SMTP submission, IMAP, POP3, ManageSieve, the API, OAuth
+  device and PKCE grants) records every password-authentication outcome
+  into the `auth_failure` table and consults the `auth_ban` table
+  before doing any password hashing. The product context's defaults:
+  5 failed authentications within 15 minutes fire a ban; the first ban
+  lasts 15 minutes, the next on the same subject doubles (30 minutes,
+  then an hour, ...), capped at 24 hours. A successful authentication
+  clears both the ban and the rolling failure history for the subject.
+  Bans are scoped to the peer IP (`ip:<addr>`) and the resolved account
+  name (`account:<login>`), so a brute-force attempt against one
+  account from a botnet still trips the IP half, and a credential
+  stuffing wave against one IP still trips the account half. The wire
+  response to a banned subject is identical to a wrong password (no
+  oracle); the audit log records the rule that fired under the
+  `auth.banned` event. The store is fail-open on database errors: a
+  flapping pool returns `None` to the ban check and bumps the
+  `database_unavailable` counter, the same discipline the reputation
+  screen follows.
 - **Outbound suppression**: a hard bounce (permanent 5xx) suppresses the
   recipient so the server stops sending to dead addresses, protecting the
   sending IP's reputation.
@@ -87,6 +117,51 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   count, so transient outages don't lose mail; a delay-warning DSN is sent once.
 - **ARF** abuse reports can be generated for offending messages
   (`epistle report-abuse`).
+- **Slow exfiltration via a compromised account**: a per-account submission
+  rate limit (`submission_rate_limit_per_min`) only sees volume, so a
+  hijacked account that stays under the per-minute ceiling can still
+  write to thousands of addresses it never legitimately contacted. The
+  daily new-recipient cap (`new_recipients_per_day`) closes that
+  loophole by tracking which recipients an account has written to and
+  refusing any submission whose set of fresh addresses would push the
+  rolling 24h total over the configured ceiling. Refusals are `450
+  4.7.1` on SMTP, `429 rate_limited` on the REST submission endpoint,
+  and the JMAP `tooManyRecipients` error type on `EmailSubmission/set`;
+  the audit channel carries `send.new_recipients_limited` with the
+  account, count and limit, and the `send_limited_new_recipients`
+  Prometheus counter bumps so an operator can alert on it.
+- **Reply fast path for known correspondents**: the same per-account
+  correspondent store powers an inbound optimisation. If the envelope
+  sender of an unauthenticated message is known to **any** local
+  recipient account of the same message, the greylist deferral and the
+  reputation `first_time_delay` are skipped. Nothing else changes:
+  DNSBL, SPF, DKIM, DMARC, the scanner and the LLM band still run,
+  because a known correspondent's account can itself be compromised.
+- **Signed token for the uncertain band (SubjectPass).** A message whose
+  local Bayesian score lands in the configured uncertain band and has no LLM
+  verdict to lean on faces a binary choice: accept or reject. Both have a
+  cost: a quiet accept teaches the classifier that "uncertain" is the same
+  as "ham" if it is not, and a silent reject loses legitimate mail.
+  SubjectPass splits the difference: the server refuses the message with
+  `550 5.7.1` and a token the sender can paste in the `Subject:`, and accepts
+  the resend that carries it. The refusal is permanent, not a `4xx`, because
+  a sending server retries a `4xx` with the same message, which never carries
+  the token, and its author hears nothing until that queue gives up days
+  later; a `5xx` is bounced to the author at once with the reply text in it.
+  A spam cannon does not read its bounces. A challenged message is not stored
+  and does not train the corpus. The token is per `(sender, recipient, day)`
+  and signed with an HMAC key held on disk under `data_dir/subjectpass.key`
+  (`0600`, generated on first use), so a stolen token gains one pair for one
+  day. The check runs after DNSBL, SPF, DMARC and the scanner hook, so a
+  valid token never overrides a hard rejection. Opt-in
+  (`subjectpass.enabled = true`) because it changes what remote senders see,
+  and requires `[database]` because the band needs the Bayesian score to test
+  against. **Cost:** one bounce and one resend for unknown legitimate senders
+  whose mail lands in the band, and a lost message for automated senders
+  whose bounces nobody reads. The reply text (`550 5.7.1 this message needs a
+  human; resend it with EP-XXXXXXXXXXXX anywhere in the subject`) is what a
+  person will read; keep it short and human, because the alternative is a
+  real person hitting a wall.
 
 ## Data at rest
 

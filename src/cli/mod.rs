@@ -7,15 +7,25 @@ mod archive;
 mod autoconfig;
 mod autodiscover;
 mod backup;
+mod config_check;
 mod dns_records;
 mod export;
 mod import;
+mod init;
+mod local;
 mod mobileconfig;
+mod mta_sts_serve;
 mod queue;
 mod report_abuse;
+mod reports;
 mod serve;
+mod serve_dkim;
+mod serve_ratelimit;
+mod serve_smtp_state;
 mod serve_tasks;
+mod serve_tls;
 mod srv;
+mod style;
 mod suppression;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
@@ -23,6 +33,11 @@ mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+
+/// Re-export of the answers structure so integration tests can
+/// deserialise the `epistle init --print-answers` output without
+/// depending on the otherwise-private `init` module.
+pub use init::Answers;
 
 use util::{generate_secret, read_line};
 
@@ -52,6 +67,21 @@ pub struct Cli {
 /// variant with the right handler module.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+	/// Serve the public MTA-STS policy over HTTPS.
+	MtaStsServe {
+		/// Directory containing mta-sts.txt.
+		#[arg(long, value_name = "DIR")]
+		policy_dir: PathBuf,
+		/// PEM certificate chain covering `mta-sts.<domain>`.
+		#[arg(long, value_name = "FILE")]
+		cert: PathBuf,
+		/// PEM private key for the certificate.
+		#[arg(long, value_name = "FILE")]
+		key: PathBuf,
+		/// HTTPS socket address.
+		#[arg(long, value_name = "ADDR", default_value = "0.0.0.0:8443")]
+		listen: std::net::SocketAddr,
+	},
 	/// Run the mail server.
 	Serve {
 		/// Path to the configuration file.
@@ -64,11 +94,20 @@ pub enum Command {
 		#[arg(long, value_name = "FILE")]
 		config: PathBuf,
 	},
-	/// Generate an ed25519 DKIM key and print the DNS record value.
+	/// Generate a DKIM key and print the DNS record value.
 	DkimKeygen {
 		/// Where to write the private key (PKCS#8 PEM).
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
+		/// Generate an RSA key (via `openssl genpkey`) instead of the default
+		/// ed25519 key. The TXT record then uses `k=rsa` and is split across
+		/// 255-octet strings per RFC 1035 §3.3.14.
+		#[arg(long)]
+		rsa: bool,
+		/// RSA modulus size in bits, only meaningful with `--rsa`. Accepts
+		/// 2048 (default) or 4096.
+		#[arg(long, value_name = "BITS", default_value_t = 2048)]
+		bits: u32,
 	},
 	/// Generate a base64 32-byte at-rest message-encryption key and print it to
 	/// stdout. Store it off the data disk (an env var or a key file), then point
@@ -326,6 +365,48 @@ pub enum Command {
 		#[command(subcommand)]
 		action: archive::Subcommand,
 	},
+	/// Summarise what receivers told us via DMARC aggregate reports and
+	/// TLS-RPT reports for the last `--days` days (default 7). Reads the
+	/// JSONL store under `data_dir/reports/`; never writes to it.
+	Reports {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+		/// Number of past days to include. Defaults to 7; the retention
+		/// ceiling lives in `crate::reports::RETENTION_DAYS`.
+		#[arg(long, value_name = "N", default_value_t = reports::DEFAULT_DAYS)]
+		days: u32,
+	},
+	/// Self-contained loopback server: a test harness that touches nothing
+	/// outside `--dir` and the loopback interface. Generates a working
+	/// directory on first run, reuses it byte for byte on later runs,
+	/// and never opens an outbound SMTP connection. Not a deployment.
+	Local {
+		/// Directory the harness writes its state into. Created if missing.
+		#[arg(long, value_name = "DIR")]
+		dir: PathBuf,
+		/// First listener port; the six endpoints are
+		/// `port-base + {25, 587, 465, 143, 993, 8025}`. Default `10000` and
+		/// must keep every port inside `1024..=65535`.
+		#[arg(long, value_name = "N", default_value_t = local::DEFAULT_PORT_BASE)]
+		port_base: u16,
+	},
+	/// First-run setup: validate the answers, generate the keys, write the
+	/// configuration file. Interactive when no `--answers` file is given.
+	/// DNS publishing and public-address detection are not implemented in
+	/// this build; the plan reports those steps as not implemented so the
+	/// operator knows what to expect.
+	Init {
+		/// Read answers from this TOML file instead of asking interactively.
+		#[arg(long, value_name = "FILE")]
+		answers: Option<PathBuf>,
+		/// Print the plan and exit without touching anything.
+		#[arg(long)]
+		dry_run: bool,
+		/// Print the answers template to stdout and exit.
+		#[arg(long)]
+		print_answers: bool,
+	},
 }
 
 mod dispatch;
@@ -341,3 +422,15 @@ mod tests_b;
 #[cfg(test)]
 #[path = "cli_tests_c.rs"]
 mod tests_c;
+
+#[cfg(test)]
+#[path = "cli_tests_d.rs"]
+mod tests_d;
+
+#[cfg(test)]
+#[path = "cli_tests_e.rs"]
+mod tests_e;
+
+#[cfg(test)]
+#[path = "mta_sts_serve_tests.rs"]
+mod mta_sts_serve_tests;

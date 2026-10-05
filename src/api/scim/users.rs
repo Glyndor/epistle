@@ -85,6 +85,7 @@ fn store_to_scim(error: StoreError) -> ScimError {
 		StoreError::Invalid(what) => ScimError::invalid(what),
 		StoreError::LimitReached { .. } => ScimError::internal(),
 		StoreError::Io(_) => ScimError::internal(),
+		StoreError::BayesPurge { .. } => ScimError::internal(),
 	}
 }
 
@@ -281,7 +282,9 @@ pub async fn delete_user(
 		&data_dir,
 		&id,
 		QueuePolicy::Drain,
+		state.bayes_store(),
 	)
+	.await
 	.map_err(store_to_scim)?;
 	audit::log_privilege_change(AuditEvent::AccountRemoved, &id, None);
 	audit::log_account_removal(&id, None, &counts);

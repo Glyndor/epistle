@@ -15,7 +15,9 @@ use super::session::Session;
 use super::sink::MessageSink;
 use crate::directory_store::DirectoryHandle;
 
+mod dnsbl_check;
 mod run;
+mod run_band;
 
 /// Read buffer size per connection.
 const READ_BUFFER: usize = 4096;
@@ -62,13 +64,20 @@ pub struct Server {
 	/// When set, accepted unauthenticated mail is recorded as ham.
 	reputation: Option<sqlx::PgPool>,
 	/// When set, the Bayesian corpus is trained on accept/reject decisions.
-	bayes: Option<crate::antispam::corpus::BayesStore>,
+	bayes: Option<std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>>,
 	/// Optional external scanner hook consulted for unauthenticated mail.
 	hook: Option<Arc<dyn crate::antispam::hook::MailHook>>,
 	/// Optional LLM hook consulted for unauthenticated mail whose Bayesian
 	/// score sits inside the configured uncertain band. Outside the band the
 	/// classifier is not consulted at all, so a non-`None` value is cheap.
 	llm: Option<crate::antispam::llm::LlmHook>,
+	/// Optional SubjectPass instance: when set, the server refuses messages
+	/// in the uncertain band with `550 5.7.1` and a signed token, and accepts
+	/// the resend that carries the matching token in its `Subject:`. The
+	/// validator refuses to enable it without a `[database]` section, so
+	/// the same Server build only enables it when the Bayesian score is
+	/// actually reachable.
+	subjectpass: Option<crate::antispam::subjectpass::SubjectPass>,
 	/// Shared metrics counters.
 	metrics: Arc<crate::metrics::Metrics>,
 	/// Delay applied to first-time unauthenticated senders. Zero disables it.
@@ -90,6 +99,12 @@ pub struct Server {
 	/// is the fallback when the account's domain has no entry. `None`
 	/// together with no per-domain entry disables submission rate limiting.
 	global_submission_rate_limit_per_min: Option<u32>,
+	/// Shared per-client-IP inbound rate limiter (limiter + cap), consumed
+	/// at MAIL FROM by unauthenticated sessions.
+	inbound_ip_limit: Option<crate::smtp::ratelimit::InboundLimit>,
+	/// Shared per-envelope-sender inbound rate limiter (limiter + cap),
+	/// consumed at MAIL FROM by unauthenticated sessions.
+	inbound_sender_limit: Option<crate::smtp::ratelimit::InboundLimit>,
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
@@ -97,6 +112,14 @@ pub struct Server {
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// Per-account correspondent store, consulted at end-of-DATA to
+	/// enforce the rolling 24h new-recipient cap. `None` disables the
+	/// cap (the default) so the pre-feature behaviour survives in
+	/// tests and in production builds that never enable the cap.
+	correspondents: Option<Arc<crate::storage::CorrespondentStore>>,
+	/// Rolling 24h cap on first-time recipients per account. Pairs with
+	/// `correspondents`; either absent disables the cap.
+	daily_new_recipients: Option<u32>,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 	/// The authentication protocol this listener serves. Sessions tag every
@@ -124,6 +147,7 @@ impl Server {
 			bayes: None,
 			hook: None,
 			llm: None,
+			subjectpass: None,
 			metrics: Arc::new(crate::metrics::Metrics::new()),
 			first_time_delay: std::time::Duration::ZERO,
 			report_dir: None,
@@ -133,8 +157,12 @@ impl Server {
 			cbind_data: None,
 			send_limiter: None,
 			global_submission_rate_limit_per_min: None,
+			inbound_ip_limit: None,
+			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
+			correspondents: None,
+			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			auth_protocol: crate::config::Protocol::Submission,
 		}
@@ -168,6 +196,26 @@ impl Server {
 		self
 	}
 
+	/// Attach a shared per-client-IP inbound rate limiter (msgs/min).
+	/// Consumed at `MAIL FROM` for sessions that never authenticated; a
+	/// peer IP missing from the listener is skipped, the limit still
+	/// applied to the peers that are known.
+	pub fn with_inbound_ip_limit(mut self, limit: crate::smtp::ratelimit::InboundLimit) -> Self {
+		self.inbound_ip_limit = Some(limit);
+		self
+	}
+
+	/// Attach a shared per-envelope-sender inbound rate limiter (msgs/min).
+	/// Consumed at `MAIL FROM` for sessions that never authenticated; the
+	/// null sender (`<>`) used by bounces is always skipped.
+	pub fn with_inbound_sender_limit(
+		mut self,
+		limit: crate::smtp::ratelimit::InboundLimit,
+	) -> Self {
+		self.inbound_sender_limit = Some(limit);
+		self
+	}
+
 	/// Attach per-tenant aggregate limits. On top of the per-account
 	/// limiter; the SMTP path checks both before accepting MAIL FROM.
 	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
@@ -181,6 +229,24 @@ impl Server {
 	/// instead of receiving `250` for a payload the spool cannot write.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.disk_guard = Some(guard);
+		self
+	}
+
+	/// Attach the per-account correspondent store. The end-of-DATA
+	/// check consults it for the rolling 24h new-recipient cap. The
+	/// store is shared across listeners by way of `Arc`, so a single
+	/// `CorrespondentStore::open(data_dir)` is enough.
+	pub fn with_correspondents(mut self, store: Arc<crate::storage::CorrespondentStore>) -> Self {
+		self.correspondents = Some(store);
+		self
+	}
+
+	/// Set the rolling 24h cap on first-time recipients per account
+	/// (`Config::new_recipients_per_day`). `None` disables the cap.
+	/// The cap only fires when a correspondent store has also been
+	/// attached; either field alone is a no-op.
+	pub fn with_daily_new_recipients(mut self, limit: Option<u32>) -> Self {
+		self.daily_new_recipients = limit;
 		self
 	}
 
@@ -248,8 +314,20 @@ impl Server {
 	}
 
 	/// Train the (encrypted-at-rest) Bayesian corpus on accept/reject decisions.
-	pub fn with_bayes(mut self, store: crate::antispam::corpus::BayesStore) -> Self {
+	pub fn with_bayes(
+		mut self,
+		store: std::sync::Arc<dyn crate::antispam::corpus::BayesScorer>,
+	) -> Self {
 		self.bayes = Some(store);
+		self
+	}
+
+	/// Enable SubjectPass: messages in the uncertain Bayesian band that lack a
+	/// valid token and cannot be resolved by an LLM hook are refused with a
+	/// freshly minted token the sender can put in the subject. The validator
+	/// refuses to enable it without a `[database]` section.
+	pub fn with_subjectpass(mut self, pass: crate::antispam::subjectpass::SubjectPass) -> Self {
+		self.subjectpass = Some(pass);
 		self
 	}
 
@@ -269,12 +347,67 @@ impl Server {
 	/// Train the Bayesian corpus on a message in the background, when a
 	/// reputation/corpus database is configured. Accepted mail trains ham,
 	/// rejected mail trains spam, so the classifier learns from the server's
-	/// own accept/reject decisions.
+	/// own accept/reject decisions. The no-op default on the trait keeps a
+	/// fake scorer (test-only) cheap to wire in.
 	fn train_corpus(&self, data: &[u8], spam: bool) {
 		if let Some(bayes) = &self.bayes {
 			let text = String::from_utf8_lossy(data).into_owned();
-			bayes.train_in_background(crate::antispam::corpus::SHARED.to_string(), text, spam);
+			bayes.train(crate::antispam::corpus::SHARED, &text, spam);
 		}
+	}
+
+	/// Whether the envelope sender is known to **any** local recipient
+	/// account of this message (plan 4.6). Returns `(account, sender)`
+	/// for the first match so the run-loop can log which account
+	/// recognised the sender; the loop only needs to know *whether* the
+	/// fast path applies, but the (account, sender) pair is what the
+	/// debug log carries so an operator chasing a missed expectation
+	/// can see whose correspondent list held the answer.
+	///
+	/// Recipient-to-account resolution reuses `Directory::resolve`,
+	/// the same lookup the SMTP session uses to admit RCPT, so a
+	/// domain alias, a multi-target alias, sub-addressing, and the
+	/// catch-all all behave identically here.
+	///
+	/// `None` (no fast path) covers four cases: no correspondent store
+	/// wired in, an empty envelope sender (bounce, where greylisting is
+	/// also skipped via the unauthenticated check), an unparseable
+	/// recipient, or a sender the directory does not recognise as a
+	/// local account. The latter is the slow path on purpose: the
+	/// sender is not local, so no account owns it, so no correspondent
+	/// marker exists for it.
+	fn known_correspondent(
+		&self,
+		message: &crate::smtp::session::AcceptedMessage,
+	) -> Option<(String, String)> {
+		let store = self.correspondents.as_deref()?;
+		// An empty envelope sender is the null reverse path; greylisting
+		// is also skipped for it (the inbound is a bounce, not a fresh
+		// triplet). The fast path is a no-op there too: the
+		// correspondent store is keyed by sender address, and there is
+		// none to key on.
+		if message.reverse_path.is_empty() {
+			return None;
+		}
+		let sender = message.reverse_path.to_ascii_lowercase();
+		let directory = self.directory.current();
+		for recipient in &message.recipients {
+			let Ok(address) = crate::smtp::address::Address::parse(recipient) else {
+				continue;
+			};
+			let accounts = match directory.resolve(&address) {
+				crate::smtp::directory::Resolution::Account(account) => vec![account],
+				crate::smtp::directory::Resolution::Alias(accounts) => accounts,
+				crate::smtp::directory::Resolution::NotLocal
+				| crate::smtp::directory::Resolution::UnknownUser => continue,
+			};
+			for account in accounts {
+				if store.knows(&account, &sender) {
+					return Some((account, sender));
+				}
+			}
+		}
+		None
 	}
 
 	/// Screen unauthenticated clients against the given DNS blocklist zones.
@@ -307,7 +440,8 @@ impl Server {
 	fn new_session(&self) -> Session {
 		let mut session = Session::new(&self.hostname)
 			.with_directory(self.directory.current())
-			.with_auth_protocol(self.auth_protocol);
+			.with_auth_protocol(self.auth_protocol)
+			.with_metrics(Arc::clone(&self.metrics));
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
@@ -319,9 +453,30 @@ impl Server {
 		}
 		session =
 			session.with_global_submission_rate_limit(self.global_submission_rate_limit_per_min);
+		if let Some(ip_limit) = &self.inbound_ip_limit {
+			session =
+				session.with_inbound_ip_limit(Arc::clone(&ip_limit.limiter), ip_limit.per_min);
+		}
+		if let Some(sender_limit) = &self.inbound_sender_limit {
+			session = session
+				.with_inbound_sender_limit(Arc::clone(&sender_limit.limiter), sender_limit.per_min);
+		}
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}
+		// Build the cap state in one go: the listener already holds
+		// `correspondents`, `daily_new_recipients`, and a metrics handle;
+		// folding them into a `cap::Cap` keeps the session's field
+		// surface small (one slot, three sources).
+		let mut cap = crate::smtp::session::cap::Cap::empty();
+		if let Some(store) = &self.correspondents {
+			cap = cap.with_correspondents(Arc::clone(store));
+		}
+		if self.daily_new_recipients.is_some() {
+			cap = cap.with_daily_new_recipients(self.daily_new_recipients);
+		}
+		cap = cap.with_metrics(Arc::clone(&self.metrics));
+		session = session.with_cap(cap);
 		session
 	}
 
@@ -330,6 +485,12 @@ impl Server {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		loop {
 			let (stream, peer) = listener.accept().await?;
+			// A dual-stack `::` listener reports an IPv4 peer as
+			// `::ffff:a.b.c.d`; canonicalize before the address reaches
+			// SPF, DNSBL, the ban table, the greylist, the inbound rate
+			// limit and the audit log so a v4-mapped form cannot slip
+			// past an `IpAddr::V4`-typed check anywhere downstream.
+			let peer = crate::net::canonical_peer(peer);
 			let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
 				tracing::warn!(%peer, "SMTP connection limit reached, dropping");
 				continue;
@@ -423,3 +584,19 @@ mod tests;
 #[cfg(test)]
 #[path = "server_tests_auth.rs"]
 mod tests_auth;
+
+#[cfg(test)]
+#[path = "server_tests_urlbl.rs"]
+mod tests_urlbl;
+
+#[cfg(test)]
+#[path = "server_tests_correspondents.rs"]
+mod tests_correspondents;
+
+#[cfg(test)]
+#[path = "server_tests_subjectpass.rs"]
+mod tests_subjectpass;
+
+#[cfg(test)]
+#[path = "server_tests_dual_stack.rs"]
+mod tests_dual_stack;

@@ -16,15 +16,18 @@ mod dkim;
 mod dns;
 mod ldap;
 mod listener;
+mod mta_sts;
 mod oauth;
 mod otel;
 mod privileges;
 mod queue;
+mod scanner;
 mod storage;
 mod tenant;
 mod tls;
 mod transport;
 mod validate;
+pub(crate) use validate::validate_addresses::{non_global_ipv4_reason, non_global_ipv6_reason};
 pub(crate) use validate::validate_dns_name;
 mod webhook;
 
@@ -32,25 +35,27 @@ pub use account::Account;
 pub use acme::Acme;
 pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
-pub use antispam::Llm;
+pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
 pub use database::{Database, DatabaseTls};
-pub use dkim::Dkim;
+pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
+pub use mta_sts::{MtaSts, MtaStsMode};
 pub use oauth::Oauth;
 pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
+pub use scanner::{Antispam, ClamdOnFound};
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tenant::Tenant;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -58,15 +63,23 @@ use serde::Deserialize;
 /// Errors produced while loading or validating a configuration file.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-	/// The configuration file could not be read from disk: missing file,
-	/// permission denied, or another I/O failure. The variant carries the
-	/// path that was attempted and the underlying `std::io::Error`.
-	#[error("cannot read config file {path}: {source}")]
+	/// A file the configuration needed could not be read from disk: missing
+	/// file, permission denied, or another I/O failure. The variant carries
+	/// the path that was attempted, the underlying `std::io::Error`, and a
+	/// short `kind` so the same variant can report both the config file
+	/// itself and the `[database] password_file` secret (the operator reads
+	/// a different fix for each one, but the I/O surface is the same).
+	#[error("cannot read {kind} {path}: {source}")]
 	Read {
-		/// Path passed to `Config::load`.
+		/// Path that failed to read.
 		path: PathBuf,
 		/// Underlying I/O error returned by `std::fs`.
 		source: std::io::Error,
+		/// What kind of file the rejected path was. `"config file"` for the
+		/// loader, `"[database] password_file"` for the database password
+		/// secret; both can fail with the same I/O error, but the operator
+		/// reads a different fix.
+		kind: &'static str,
 	},
 	/// The file was read but its contents are not valid TOML, or they contain
 	/// an unknown key (the schema is `deny_unknown_fields`). Carries the path
@@ -79,14 +92,24 @@ pub enum ConfigError {
 		source: Box<toml::de::Error>,
 	},
 	/// The configuration file is group- or world-readable (or writable): on
-	/// Unix the loader requires mode `0600`. Carries the path and the
-	/// observed permission bits (masked to the low 9).
-	#[error("config file {path} is group/world-accessible (mode {mode:#o}); restrict it to 0600")]
+	/// Unix the loader requires mode `0600`. Carries the path, the
+	/// observed permission bits (masked to the low 9) and a short
+	/// description of what kind of file it was (so the same variant can be
+	/// reused for the `[database] password_file` check, which produces the
+	/// same kind of refusal for a different file).
+	#[error(
+		"{kind} {path} is group/world-accessible (mode {mode:#o}); restrict it to owner-only (0600 or 0400)"
+	)]
 	InsecurePermissions {
 		/// Path whose permissions were rejected.
 		path: PathBuf,
 		/// Observed permission mode, masked to `0o777`.
 		mode: u32,
+		/// What kind of file the rejected path was. `"config file"` for the
+		/// loader, `"[database] password_file"` for the database password
+		/// secret; both can fail with the same bit pattern, but the operator
+		/// reads a different fix.
+		kind: &'static str,
 	},
 	/// The configuration referenced `${VAR}` for a variable that is not set
 	/// in the process environment. Carries the variable name.
@@ -122,6 +145,15 @@ fn default_masked_addresses_max() -> usize {
 pub struct Config {
 	/// Fully qualified hostname the server identifies as (EHLO, TLS).
 	pub hostname: String,
+	/// The public IPv4 address the hostname resolves to. Optional: when set,
+	/// `dns-records` emits the A record and `verify-dns` checks the PTR of
+	/// this address; when absent, `verify-dns` resolves the hostname instead.
+	#[serde(default)]
+	pub public_ipv4: Option<Ipv4Addr>,
+	/// Same for IPv6 (an AAAA record). Publishing SPF for a host that also
+	/// has AAAA without listing the IPv6 makes mail sent over IPv6 fail SPF.
+	#[serde(default)]
+	pub public_ipv6: Option<Ipv6Addr>,
 	/// Directory where all server state lives.
 	pub data_dir: PathBuf,
 	/// Domains this server accepts mail for. Required when any listener
@@ -136,6 +168,14 @@ pub struct Config {
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]
 	pub dnsbl_zones: Vec<String>,
+	/// Right-hand-side blocklist zones queried with the envelope sender's
+	/// domain (RFC 5782 §2.3). Absent disables the sender-domain screen.
+	#[serde(default)]
+	pub dnsbl_domain_zones: Vec<String>,
+	/// URI blocklist zones queried with the host of every URL found in the
+	/// body (RFC 5782 §2.3). Absent disables the URL-host screen.
+	#[serde(default)]
+	pub dnsbl_url_zones: Vec<String>,
 	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
 	/// before accepting. 0 disables the slowdown (the default). Requires a
 	/// configured database.
@@ -160,11 +200,19 @@ pub struct Config {
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
 	/// URL of an external scanner hook (ClamAV/Rspamd behind HTTP) consulted
-	/// for unauthenticated inbound mail. Absent disables scanning.
+	/// for unauthenticated inbound mail. Leave unset to disable HTTP scanning.
 	pub scanner_hook_url: Option<String>,
+	/// Unix socket scanner configuration. Absent disables clamd.
+	#[serde(default)]
+	pub antispam: Antispam,
 	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
 	/// lands in an uncertain band. Absent disables the hook.
 	pub antispam_llm: Option<Llm>,
+	/// SubjectPass opt-in: signed retry token for the uncertain band.
+	/// Disabled by default; enabling requires a `[database]` section so the
+	/// band has a Bayesian score to fall back on.
+	#[serde(default)]
+	pub subjectpass: SubjectPass,
 	/// Network listeners. Empty means the server starts nothing.
 	#[serde(default)]
 	pub listeners: Vec<Listener>,
@@ -175,6 +223,9 @@ pub struct Config {
 	/// TLS material. Required by `submissions` listeners; enables STARTTLS
 	/// on `smtp` and `submission` listeners.
 	pub tls: Option<Tls>,
+	/// Public MTA-STS policy settings.
+	#[serde(default)]
+	pub mta_sts: MtaSts,
 	/// DKIM signing for outbound mail.
 	pub dkim: Option<Dkim>,
 	/// Management API. Required by `api` listeners.
@@ -198,6 +249,20 @@ pub struct Config {
 	/// disables per-account submission rate limiting.
 	#[serde(default)]
 	pub submission_rate_limit_per_min: Option<u32>,
+	/// Cap on the number of recipients an authenticated account may write
+	/// to for the first time in a rolling 24h window. Every submission path
+	/// (SMTP authenticated end-of-DATA, `POST /api/v1/send`, JMAP
+	/// `EmailSubmission/set`) computes the count of recipients the account
+	/// has not previously contacted, sums it with the number of markers
+	/// already inside the window, and refuses the message when the sum
+	/// would exceed this limit. Absent disables the cap (the default).
+	/// The intent is to stop the slow-exfiltration pattern a per-minute
+	/// rate limit cannot see: a compromised account can stay under
+	/// `submission_rate_limit_per_min` for hours while sending to fresh
+	/// addresses, and a daily ceiling on the *new* recipients makes that
+	/// visible.
+	#[serde(default)]
+	pub new_recipients_per_day: Option<u32>,
 	/// Per-domain submission rate limit (messages/min) for authenticated
 	/// senders in that domain. Resolved by walking the account's own
 	/// addresses — the same lookup [`crate::smtp::directory::Directory::quota_for`]
@@ -209,6 +274,23 @@ pub struct Config {
 	/// the same shape and lifecycle.
 	#[serde(default)]
 	pub domain_submission_limits: std::collections::HashMap<String, u32>,
+	/// Messages an unauthenticated client IP may start per minute. Absent
+	/// disables the per-IP inbound limit. Enforced on
+	/// `MAIL FROM` for sessions that never authenticated; a send over the
+	/// cap is deferred with `450 4.7.1 too many messages from this client;
+	/// retry later` so a legitimate burst (a mailing list, a resend after
+	/// an outage) retries rather than bounces.
+	#[serde(default)]
+	pub inbound_rate_limit_per_ip_per_min: Option<u32>,
+	/// Messages a single envelope sender may start per minute across all
+	/// clients. Absent disables the per-sender inbound limit. Enforced on
+	/// `MAIL FROM` for sessions that never authenticated, lowercased
+	/// reverse path; the null sender (`<>`) used by bounces is skipped so
+	/// a verification failure does not exhaust the budget of a real
+	/// client. Over the cap is deferred with
+	/// `450 4.7.1 too many messages from this sender; retry later`.
+	#[serde(default)]
+	pub inbound_rate_limit_per_sender_per_min: Option<u32>,
 	/// Max concurrent connections per listener (back-pressure cap). Absent
 	/// uses each protocol's built-in default. Excess connections are dropped.
 	#[serde(default)]
@@ -263,16 +345,28 @@ pub struct Config {
 	/// alert engine entirely (the default).
 	#[serde(default)]
 	pub alerts: Vec<Alert>,
+	/// When `true`, the outbound queue worker is not started: mail submitted
+	/// for a recipient outside a configured domain stays in the spool, and
+	/// no outbound SMTP connection is ever opened. Only `epistle local`
+	/// sets this; the field is `#[serde(skip)]` so `Config::load` cannot
+	/// produce `true` from a TOML file (the loader would reject such a
+	/// file as an unknown field, by design).
+	#[serde(skip, default)]
+	pub hold_outbound: bool,
 }
 
 impl std::fmt::Debug for Config {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("Config")
 			.field("hostname", &self.hostname)
+			.field("public_ipv4", &self.public_ipv4)
+			.field("public_ipv6", &self.public_ipv6)
 			.field("data_dir", &self.data_dir)
 			.field("domains", &self.domains)
 			.field("domain_aliases", &self.domain_aliases)
 			.field("dnsbl_zones", &self.dnsbl_zones)
+			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
+			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
 			.field(
 				"first_time_sender_delay_secs",
 				&self.first_time_sender_delay_secs,
@@ -283,10 +377,13 @@ impl std::fmt::Debug for Config {
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
+			.field("antispam", &self.antispam)
 			.field("antispam_llm", &self.antispam_llm)
+			.field("subjectpass", &self.subjectpass)
 			.field("listeners", &self.listeners)
 			.field("accounts", &self.accounts)
 			.field("tls", &self.tls)
+			.field("mta_sts", &self.mta_sts)
 			.field("dkim", &self.dkim)
 			.field("api", &self.api)
 			.field("database", &self.database)
@@ -298,7 +395,16 @@ impl std::fmt::Debug for Config {
 				"submission_rate_limit_per_min",
 				&self.submission_rate_limit_per_min,
 			)
+			.field("new_recipients_per_day", &self.new_recipients_per_day)
 			.field("domain_submission_limits", &self.domain_submission_limits)
+			.field(
+				"inbound_rate_limit_per_ip_per_min",
+				&self.inbound_rate_limit_per_ip_per_min,
+			)
+			.field(
+				"inbound_rate_limit_per_sender_per_min",
+				&self.inbound_rate_limit_per_sender_per_min,
+			)
 			.field(
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,
@@ -315,6 +421,7 @@ impl std::fmt::Debug for Config {
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)
 			.field("alerts", &self.alerts)
+			.field("hold_outbound", &self.hold_outbound)
 			.finish()
 	}
 }
@@ -329,10 +436,11 @@ impl Config {
 	/// credentials (e.g. the database password) can stay in the environment or
 	/// a secret store rather than on disk.
 	pub fn load(path: &Path) -> Result<Self, ConfigError> {
-		check_permissions(path)?;
+		check_permissions(path, "config file")?;
 		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
 			path: path.to_path_buf(),
 			source,
+			kind: "config file",
 		})?;
 		let expanded = expand_env(&raw)?;
 		let config: Config = toml::from_str(&expanded).map_err(|source| ConfigError::Parse {
@@ -346,6 +454,15 @@ impl Config {
 	/// The loopback address listeners bind to unless explicitly configured.
 	pub const fn default_bind_addr() -> IpAddr {
 		IpAddr::V4(Ipv4Addr::LOCALHOST)
+	}
+
+	/// Whether the outbound queue worker should be started for this config.
+	/// `false` only when `hold_outbound` is `true`, a flag `epistle local`
+	/// sets to keep the harness from opening any outbound SMTP connection.
+	/// Pulled out so the `serve` startup path and the unit tests share the
+	/// same source of truth.
+	pub fn start_queue_worker(&self) -> bool {
+		!self.hold_outbound
 	}
 }
 
@@ -370,16 +487,19 @@ fn expand_env(raw: &str) -> Result<String, ConfigError> {
 	Ok(out)
 }
 
-/// Reject a config file that is readable or writable by group or others: it may
-/// hold secrets (or `${VAR}` references aside, paths and tokens), so it must be
-/// owner-only. Best effort on non-Unix platforms.
+/// Reject a file that is readable or writable by group or others: it may hold
+/// secrets, so it must be owner-only. `kind` labels the message the operator
+/// will read in the refusal (`"config file"` for the loader, `"[database]
+/// password_file"` for the database secret). Best effort on non-Unix platforms
+/// where the bit check is meaningless and the check passes through.
 #[cfg(unix)]
-fn check_permissions(path: &Path) -> Result<(), ConfigError> {
+pub(super) fn check_permissions(path: &Path, kind: &'static str) -> Result<(), ConfigError> {
 	use std::os::unix::fs::PermissionsExt;
 	let mode = std::fs::metadata(path)
 		.map_err(|source| ConfigError::Read {
 			path: path.to_path_buf(),
 			source,
+			kind: "config file",
 		})?
 		.permissions()
 		.mode();
@@ -387,6 +507,7 @@ fn check_permissions(path: &Path) -> Result<(), ConfigError> {
 		return Err(ConfigError::InsecurePermissions {
 			path: path.to_path_buf(),
 			mode: mode & 0o777,
+			kind,
 		});
 	}
 	Ok(())
@@ -400,6 +521,10 @@ fn check_permissions(_path: &Path) -> Result<(), ConfigError> {
 #[cfg(test)]
 #[path = "redaction_tests.rs"]
 mod redaction_tests;
+
+#[cfg(test)]
+#[path = "hold_outbound_tests.rs"]
+mod hold_outbound_tests;
 
 #[cfg(test)]
 mod tests {

@@ -53,16 +53,16 @@ pub(super) fn read_line(reader: impl std::io::BufRead) -> Result<String, InputEr
 	let value = match reader.lines().next() {
 		Some(Ok(line)) => line.trim_end_matches('\r').to_owned(),
 		Some(Err(error)) => {
-			eprintln!("error: reading stdin: {error}");
+			super::style::error(format_args!("reading stdin: {error}"));
 			return Err(InputError);
 		}
 		None => {
-			eprintln!("error: no input — pipe or type the value on stdin");
+			super::style::error("no input: pipe or type the value on stdin");
 			return Err(InputError);
 		}
 	};
 	if value.is_empty() {
-		eprintln!("error: input must not be empty");
+		super::style::error("input must not be empty");
 		return Err(InputError);
 	}
 	Ok(value)
@@ -93,7 +93,7 @@ pub(super) fn message_crypto(
 	config: &crate::config::Config,
 ) -> Result<crate::storage::MessageCrypto, ExitCode> {
 	crate::storage::MessageCrypto::from_config(config.storage.as_ref()).map_err(|error| {
-		eprintln!("error: {error}");
+		super::style::error(error);
 		ExitCode::FAILURE
 	})
 }
@@ -108,7 +108,7 @@ pub(super) fn storage_keygen() -> ExitCode {
 			ExitCode::SUCCESS
 		}
 		None => {
-			eprintln!("error: system CSPRNG unavailable");
+			super::style::error("system CSPRNG unavailable");
 			ExitCode::FAILURE
 		}
 	}
@@ -129,7 +129,7 @@ pub(super) fn oauth_keygen() -> ExitCode {
 			ExitCode::SUCCESS
 		}
 		None => {
-			eprintln!("error: system CSPRNG unavailable");
+			super::style::error("system CSPRNG unavailable");
 			ExitCode::FAILURE
 		}
 	}
@@ -139,7 +139,7 @@ pub(super) fn oauth_keygen() -> ExitCode {
 /// PKCS#8 private key and the base64 raw public point. The two are a matching
 /// pair, so a token signed with the private key verifies against the public one.
 /// `None` only if the CSPRNG fails (fail closed).
-fn generate_oauth_keypair() -> Option<(String, String)> {
+pub(super) fn generate_oauth_keypair() -> Option<(String, String)> {
 	use base64::Engine;
 	use ring::rand::SystemRandom;
 	use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
@@ -154,43 +154,189 @@ fn generate_oauth_keypair() -> Option<(String, String)> {
 	))
 }
 
-pub(super) fn dkim_keygen(out: &std::path::Path) -> ExitCode {
+/// Derive the matching ES256 public key from a base64 PKCS#8 private key.
+/// `None` when the private key cannot be decoded as a P-256 PKCS#8 key
+/// (corrupt bytes, wrong algorithm, truncated PEM).
+pub(super) fn derive_oauth_public_from_private(private_b64: &str) -> Option<String> {
+	use base64::Engine;
+	use ring::rand::SystemRandom;
+	use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
+	let rng = SystemRandom::new();
+	let bytes = base64::engine::general_purpose::STANDARD
+		.decode(private_b64.as_bytes())
+		.ok()?;
+	let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &bytes, &rng).ok()?;
+	let b64 = base64::engine::general_purpose::STANDARD;
+	Some(b64.encode(pair.public_key().as_ref()))
+}
+
+pub(super) fn dkim_keygen(out: &std::path::Path, rsa: bool, bits: u32) -> ExitCode {
 	if out.exists() {
-		eprintln!(
-			"error: {} already exists, refusing to overwrite",
+		super::style::error(format_args!(
+			"{} already exists, refusing to overwrite",
 			out.display()
-		);
+		));
 		return ExitCode::FAILURE;
 	}
-	let (pem, record) = match crate::dkim::generate_key() {
-		Ok(generated) => generated,
-		Err(error) => {
-			eprintln!("error: {error}");
-			return ExitCode::FAILURE;
+	if rsa && !matches!(bits, 2048 | 4096) {
+		super::style::error(format_args!("--bits must be 2048 or 4096 (got {bits})"));
+		return ExitCode::FAILURE;
+	}
+	let (pem, record) = if rsa {
+		match generate_rsa_key(bits) {
+			Ok(generated) => generated,
+			Err(error) => {
+				super::style::error(error);
+				return ExitCode::FAILURE;
+			}
+		}
+	} else {
+		match crate::dkim::generate_key() {
+			Ok(generated) => generated,
+			Err(error) => {
+				super::style::error(error);
+				return ExitCode::FAILURE;
+			}
 		}
 	};
-	// The private key must never be group/world readable.
-	let result = {
-		use std::io::Write;
-		let mut options = std::fs::OpenOptions::new();
-		options.write(true).create_new(true);
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::OpenOptionsExt;
-			options.mode(0o600);
-		}
-		options
-			.open(out)
-			.and_then(|mut file| file.write_all(pem.as_bytes()))
-	};
-	if let Err(error) = result {
-		eprintln!("error: cannot write {}: {error}", out.display());
+	if let Err(error) = write_key_pem(out, &pem) {
+		super::style::error(format_args!("cannot write {}: {error}", out.display()));
 		return ExitCode::FAILURE;
 	}
 	println!("private key written to {}", out.display());
 	println!("publish this TXT record at <selector>._domainkey.<your-domain>:");
 	println!("{record}");
 	ExitCode::SUCCESS
+}
+
+/// Generate an RSA DKIM key by asking `openssl genpkey` to produce a
+/// PKCS#8 PEM, returning the PEM and the matching DKIM DNS record value
+/// (`v=DKIM1; k=rsa; p=<base64 SPKI>`). The PEM is validated through
+/// `ring`'s PKCS#8 loader before it is written to disk or printed, so a
+/// process that depends on the loader (outbound signing, the publish
+/// record, the verifier) cannot trip on an `openssl` build we never
+/// actually parsed.
+///
+/// `openssl` must be on `PATH`; the message names the package to install
+/// when it is not.
+pub(super) fn generate_rsa_key(bits: u32) -> Result<(String, String), KeygenError> {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as BASE64;
+	use ring::signature::{KeyPair, RsaKeyPair};
+	use std::io::Read;
+	use std::process::{Command, Stdio};
+
+	let mut child = Command::new("openssl")
+		.args([
+			"genpkey",
+			"-algorithm",
+			"RSA",
+			"-pkeyopt",
+			&format!("rsa_keygen_bits:{bits}"),
+			"-outform",
+			"PEM",
+		])
+		.stdin(Stdio::null())
+		.stdout(Stdio::piped())
+		.stderr(Stdio::piped())
+		.spawn()
+		.map_err(|error| match error.kind() {
+			std::io::ErrorKind::NotFound => KeygenError::OpenSslMissing,
+			_ => KeygenError::OpenSslRead(error),
+		})?;
+
+	let mut pem = String::new();
+	if let Some(mut stdout) = child.stdout.take() {
+		let mut limited = (&mut stdout).take(64 * 1024);
+		limited
+			.read_to_string(&mut pem)
+			.map_err(KeygenError::OpenSslRead)?;
+	}
+	let output = child.wait_with_output().map_err(KeygenError::OpenSslRead)?;
+	if !output.status.success() {
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		return Err(KeygenError::OpenFailed(stderr.into_owned()));
+	}
+
+	// Validate through ring before we trust the bytes: the rendered record
+	// has to come from a key we can actually sign with.
+	let der = pem_body(&pem).ok_or(KeygenError::InvalidKey)?;
+	let pair = RsaKeyPair::from_pkcs8(&der).map_err(|_| KeygenError::InvalidKey)?;
+	let pkcs1 = pair.public_key().as_ref();
+	// Touch the parsed key through the verifier's algorithm so an opaque
+	// invalid one fails the same path the verifier will follow.
+	let spki = crate::dkim::spki_for_rsa(pkcs1);
+	Ok((pem, format!("v=DKIM1; k=rsa; p={}", BASE64.encode(spki))))
+}
+
+/// Write the generated PEM to `path` with mode 0600 on Unix (or the
+/// closest equivalent on other platforms). Shared between the ed25519 and
+/// RSA paths so the file permissions do not drift between them.
+pub(super) fn write_key_pem(path: &std::path::Path, pem: &str) -> std::io::Result<()> {
+	// `init` reaches this through the same path; the function stays
+	// `pub(super)` so other CLI helpers can call it without exposing it
+	// beyond the `cli` module.
+	use std::io::Write;
+	let mut options = std::fs::OpenOptions::new();
+	options.write(true).create_new(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(0o600);
+	}
+	options
+		.open(path)
+		.and_then(|mut file| file.write_all(pem.as_bytes()))
+}
+
+/// Errors from the RSA keygen path. Each variant owns its own message so
+/// the CLI can `eprintln!` without an intermediate formatting step (and
+/// without a taint analyser reading a constant string into a key sink).
+pub(super) enum KeygenError {
+	OpenSslMissing,
+	OpenSslRead(std::io::Error),
+	OpenFailed(String),
+	InvalidKey,
+}
+
+impl std::fmt::Display for KeygenError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			KeygenError::OpenSslMissing => f.write_str(
+				"`openssl` was not found on PATH; install it (Debian/Ubuntu: `apt install openssl`)",
+			),
+			KeygenError::OpenSslRead(error) => write!(f, "cannot read `openssl` output: {error}"),
+			KeygenError::OpenFailed(stderr) => write!(f, "`openssl genpkey` failed: {stderr}"),
+			KeygenError::InvalidKey => {
+				f.write_str("the key `openssl` produced is not a valid PKCS#8 RSA key")
+			}
+		}
+	}
+}
+
+/// Extract the DER body of a single-block PEM file. Duplicated here from
+/// `crate::dkim::sign::pem_body` because that one is `fn` (not `pub`).
+fn pem_body(pem: &str) -> Option<Vec<u8>> {
+	use base64::Engine;
+	use base64::engine::general_purpose::STANDARD as BASE64;
+	let mut body = String::new();
+	let mut inside = false;
+	for line in pem.lines() {
+		if line.starts_with("-----BEGIN ") {
+			inside = true;
+			continue;
+		}
+		if line.starts_with("-----END ") {
+			break;
+		}
+		if inside {
+			body.push_str(line.trim());
+		}
+	}
+	if body.is_empty() {
+		return None;
+	}
+	BASE64.decode(body).ok()
 }
 
 #[cfg(test)]

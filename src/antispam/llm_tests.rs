@@ -1,5 +1,5 @@
 //! End-to-end tests for the LLM antispam classifier against an in-process
-//! axum mock. Covers every behaviour the brief asked for:
+//! axum mock. Covers every behaviour the hook promises:
 //!
 //! * p outside the band -> zero requests hit the mock.
 //! * p inside the band + `spam:true confidence>=0.8` -> Quarantine.

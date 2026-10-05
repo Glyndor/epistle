@@ -33,6 +33,15 @@ impl Session {
 				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
 			}
 		}
+		// A literal-bearing APPEND can only fail the keyword cap on Set
+		// semantics (REPLACE has the same check via the replaced message);
+		// refuse here so the client never sends the literal.
+		if super::mailbox::count_keywords(&flags).is_none() {
+			return Output::text(format!(
+				"{tag} BAD too many keywords (max {})\r\n",
+				super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
+			));
+		}
 		self.pending_append = Some(PendingLiteral {
 			tag: tag.to_string(),
 			mailbox: mailbox.to_string(),
@@ -99,6 +108,12 @@ impl Session {
 				Some(flag) => flags.push(flag),
 				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
 			}
+		}
+		if super::mailbox::count_keywords(&flags).is_none() {
+			return Output::text(format!(
+				"{tag} BAD too many keywords (max {})\r\n",
+				super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
+			));
 		}
 		self.pending_append = Some(PendingLiteral {
 			tag: tag.to_string(),

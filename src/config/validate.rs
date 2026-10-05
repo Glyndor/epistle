@@ -10,11 +10,15 @@ mod validate_tenants;
 #[path = "validate_database.rs"]
 mod validate_database;
 
+#[path = "validate_addresses.rs"]
+pub(crate) mod validate_addresses;
+
 impl Config {
 	/// Validate the configuration. Any violation is an error: the server
 	/// refuses to start rather than run with a questionable setup.
-	pub(super) fn validate(&self) -> Result<(), ConfigError> {
+	pub(crate) fn validate(&self) -> Result<(), ConfigError> {
 		validate_dns_name("hostname", &self.hostname)?;
+		self.validate_addresses()?;
 		self.validate_data_dir()?;
 		self.validate_domains()?;
 		self.validate_accounts()?;
@@ -28,15 +32,55 @@ impl Config {
 		self.validate_oauth()?;
 		self.validate_ldap()?;
 		self.validate_antispam_llm()?;
+		self.validate_scanner()?;
 		self.validate_alerts()?;
 		self.validate_tenants()?;
 		self.validate_database()?;
+		self.validate_subjectpass()?;
+		self.validate_dkim()?;
 		Ok(())
+	}
+
+	fn validate_dkim(&self) -> Result<(), ConfigError> {
+		let Some(dkim) = &self.dkim else {
+			return Ok(());
+		};
+		// The RSA selector and key file are a pair: the configured selector
+		// points at a `_domainkey` TXT published for the key, so leaving one
+		// side unset means the published record is unreachable (or, if the
+		// key file is set without the selector, the key has no TXT at all).
+		// Treat the half-configured state as a load-time error so it cannot
+		// ship.
+		match (&dkim.rsa_selector, &dkim.rsa_key_file) {
+			(Some(_), Some(_)) | (None, None) => Ok(()),
+			_ => Err(ConfigError::Invalid(
+				"rsa_selector and rsa_key_file must be set together".into(),
+			)),
+		}
 	}
 
 	fn validate_antispam_llm(&self) -> Result<(), ConfigError> {
 		if let Some(llm) = &self.antispam_llm {
 			llm.validate()?;
+		}
+		Ok(())
+	}
+
+	fn validate_subjectpass(&self) -> Result<(), ConfigError> {
+		if !self.subjectpass.enabled {
+			return Ok(());
+		}
+		// SubjectPass challenges the uncertain Bayesian band; without a
+		// `[database]` there is no score to test against, so enabling it
+		// without a database is a logical impossibility the operator
+		// should hear about at load time.
+		if self.database.is_none() {
+			return Err(ConfigError::Invalid(
+				"[antispam] subjectpass = true requires a [database] section (the \
+				 uncertain band needs the Bayesian score). Add [database] or set \
+				 subjectpass = false."
+					.into(),
+			));
 		}
 		Ok(())
 	}
@@ -292,7 +336,8 @@ impl Config {
 			}
 			if seen.contains(&alias_lc) {
 				return Err(ConfigError::Invalid(format!(
-					"domain alias \"{alias}\" is also a configured domain"
+					"domain alias \"{alias}\" is also a configured domain (cannot alias \
+					 a real domain to \"{target}\")"
 				)));
 			}
 			if alias_lc == target_lc {
@@ -513,3 +558,11 @@ mod tests_g;
 #[cfg(test)]
 #[path = "validate_tests_h.rs"]
 mod tests_h;
+
+#[cfg(test)]
+#[path = "validate_tests_i.rs"]
+mod tests_i;
+
+#[cfg(test)]
+#[path = "validate_tests_j.rs"]
+mod tests_j;

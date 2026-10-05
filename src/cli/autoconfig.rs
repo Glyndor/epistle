@@ -17,7 +17,7 @@ pub(super) fn run(
 	let domain = match domain {
 		Some(domain) => {
 			if !config.domains.iter().any(|d| d == domain) {
-				eprintln!("error: \"{domain}\" is not a configured domain");
+				super::style::error(format_args!("\"{domain}\" is not a configured domain"));
 				return ExitCode::FAILURE;
 			}
 			domain
@@ -25,7 +25,7 @@ pub(super) fn run(
 		None => match config.domains.first() {
 			Some(domain) => domain.as_str(),
 			None => {
-				eprintln!("error: no domains are configured");
+				super::style::error("no domains are configured");
 				return ExitCode::FAILURE;
 			}
 		},
@@ -33,7 +33,7 @@ pub(super) fn run(
 
 	let xml = crate::autodiscovery::autoconfig(domain, &config.hostname);
 	if out.write_all(xml.as_bytes()).is_err() {
-		eprintln!("error: writing autoconfig");
+		super::style::error("writing autoconfig");
 		return ExitCode::FAILURE;
 	}
 	ExitCode::SUCCESS

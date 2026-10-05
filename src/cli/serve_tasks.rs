@@ -5,14 +5,18 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
-use crate::config::{Config, Listener};
+use crate::antispam::bans::BanStore;
+use crate::config::Config;
 
-/// Bind a listener's socket and log it. Shared by every `serve` listener arm.
-pub(super) async fn bind(listener: &Listener) -> std::io::Result<TcpListener> {
-	let addr = listener.socket_addr();
-	let bound = TcpListener::bind(addr).await?;
-	tracing::info!(%addr, kind = ?listener.kind, "listening");
-	Ok(bound)
+/// Bind a listener's socket and log it. Thin wrapper over the
+/// `bind` module so the existing callers stay unchanged; the
+/// dual-stack switch for the IPv6-unspecified address lives in
+/// [`bind::bind_listener`].
+pub(super) async fn bind(
+	listener: &crate::config::Listener,
+	ipv4_any_ports: &std::collections::HashSet<u16>,
+) -> std::io::Result<TcpListener> {
+	bind::bind_listener(listener, ipv4_any_ports).await
 }
 
 /// Spawn an axum router on a bound listener, returning the serving task. Shared
@@ -209,7 +213,14 @@ pub(super) async fn connect_database(
 	let Some(db) = &config.database else {
 		return Ok(None);
 	};
-	match crate::db::connect(&db.url, db.tls, db.max_connections).await {
+	match crate::db::connect(
+		&db.url,
+		db.tls,
+		db.max_connections,
+		db.password_file.as_deref(),
+	)
+	.await
+	{
 		Ok(pool) => Ok(Some(pool)),
 		// Fatal: the directory backend resolves recipients from this database.
 		Err(error) if db.directory => Err(std::io::Error::other(format!(
@@ -362,6 +373,28 @@ pub(super) fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 		interval: crate::dkim::ROTATE_INTERVAL_DAYS * 86_400,
 		overlap: crate::dkim::ROTATE_OVERLAP_DAYS * 86_400,
 		deprecated_fields_present: deprecated,
+	}
+}
+
+/// What the single-signature DKIM warning will say at startup, if anything.
+/// Returns `None` when there is no warning to log (no `[dkim]` section, or
+/// both RSA fields configured). Pulled out of `serve::run` so the message is
+/// the only one in the codebase and so a test can assert the wording without
+/// binding a socket.
+pub(super) fn single_signature_dkim_warning(config: &Config) -> Option<String> {
+	config
+		.dkim
+		.as_ref()
+		.and_then(|dkim| dkim.single_signature_warning())
+}
+
+/// Emit the single-signature DKIM warning through `tracing` at the very top of
+/// startup so it lands in the log before any listener binds. A no-op when the
+/// helper returns `None`. The same wording is what `config-check` and
+/// `verify-dns` write to their `err` sinks through `style::warn_to`.
+pub(super) fn log_single_signature_dkim_warning(config: &Config) {
+	if let Some(warning) = single_signature_dkim_warning(config) {
+		tracing::warn!(remedy = "epistle dkim-keygen --rsa", "{warning}");
 	}
 }
 
@@ -520,14 +553,103 @@ pub(super) fn retention_days(config: &Config) -> u64 {
 		.map_or(0, |storage| storage.deleted_retention_days)
 }
 
+/// Spawn the hourly DMARC and TLS-RPT report sweep: drop day directories
+/// whose `YYYYMMDD` is older than [`crate::reports::RETENTION_DAYS`] (90).
+/// Runs in a single task because both buckets share the same window.
+pub(super) fn spawn_reports_sweep(config: &Config) {
+	let data_dir = config.data_dir.clone();
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			crate::reports::prune(&data_dir);
+		}
+	});
+}
+
 /// Spawn the periodic tasks that keep on-disk storage bounded: blob
 /// reclamation, and the archive sweep when retention is configured. Grouped
 /// so `serve` starts them together and neither can be forgotten on its own.
 pub(super) fn spawn_storage_maintenance(config: &Config) {
 	spawn_blob_reclamation(config);
 	spawn_archive_sweep(config);
+	spawn_reports_sweep(config);
+}
+
+/// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and
+/// `auth_ban` rows whose `until` is older than 24 hours ago, so the ban
+/// tables stay bounded. No-op when no database is configured; the ban
+/// store is absent in that case.
+pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
+	let Some(pool) = pool else {
+		return;
+	};
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		loop {
+			ticker.tick().await;
+			let now = std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.map(|d| d.as_secs())
+				.unwrap_or(0);
+			let store = crate::antispam::bans::PgBanStore::new(pool.clone(), None);
+			store.sweep(now).await;
+		}
+	});
 }
 
 #[cfg(test)]
 #[path = "serve_tasks_tests.rs"]
 mod tests;
+
+/// Build the optional ARC sealer from `[arc]`: a DKIM-format ed25519 key
+/// under the server hostname. Absent config yields `None`; a key that does
+/// not load is fatal (fail closed), so a misconfigured sealer never lets
+/// mail through unsealed by accident.
+pub(super) fn build_arc_sealer(
+	config: &Config,
+) -> std::io::Result<Option<Arc<crate::arc::sealer::ArcSealer>>> {
+	let Some(arc) = &config.arc else {
+		return Ok(None);
+	};
+	let key = crate::dkim::load_ed25519_key(&arc.key_file).map_err(std::io::Error::other)?;
+	Ok(Some(Arc::new(crate::arc::sealer::ArcSealer::new(
+		key,
+		config.hostname.clone(),
+		arc.selector.clone(),
+	))))
+}
+
+/// Build the shared in-memory greylist when `greylist_delay_secs` is set,
+/// and spawn the hourly prune that drops triplets older than a day so the
+/// map stays bounded. `None` when greylisting is off.
+pub(super) fn build_greylist(
+	config: &Config,
+) -> Option<Arc<crate::antispam::greylist::MemoryGreylist>> {
+	(config.greylist_delay_secs > 0).then(|| {
+		let store = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+		let prune_store = Arc::clone(&store);
+		tokio::spawn(async move {
+			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+			loop {
+				interval.tick().await;
+				let now = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.map(|d| d.as_secs())
+					.unwrap_or(0);
+				prune_store.prune(now, 86_400);
+			}
+		});
+		store
+	})
+}
+
+#[path = "serve_bayes.rs"]
+mod bayes;
+
+pub(super) use bayes::open_bayes;
+
+#[path = "serve_bind.rs"]
+mod bind;

@@ -28,12 +28,12 @@
 //! the index simply goes stale (its stamp no longer matches the current
 //! generation) and is rebuilt on the next open that needs it.
 //!
-//! ## Format (version 1)
+//! ## Format (version 2)
 //!
 //! A UTF-8 text file, one record per line, fields separated by a single space:
 //!
 //! ```text
-//! EPISTLE-MAILBOX-INDEX 1
+//! EPISTLE-MAILBOX-INDEX 2
 //! gen <highest_modseq> <message_count>
 //! <uuid> <uid> <plaintext_size> <internaldate_secs>.<nanos> <modseq> <flag,flag,...>
 //! ...
@@ -42,9 +42,15 @@
 //! Line 1 is the magic + format version; an unknown version is ignored. Line 2
 //! is the generation stamp: the mailbox's highest mod-sequence and the `.eml`
 //! file count at build time. The remaining lines are the message records in the
-//! same sequence order `Snapshot::open` produces (UUID-sorted). Flags are the
-//! lowercase wire tokens without the leading backslash, comma-joined; an empty
-//! flag set is a trailing empty field.
+//! same sequence order `Snapshot::open` produces (UUID-sorted). Flags are
+//! comma-joined: system flag tokens carry their lowercase wire form without the
+//! leading backslash (e.g. `seen`), user keywords carry a `k:` prefix and the
+//! raw atom (e.g. `k:Junk`); an empty flag set is a trailing empty field.
+//!
+//! Version 2 added user-defined keywords (RFC 9051 §2.3.2). A version-1 index
+//! (no keywords in the file) is still parseable: every token is treated as a
+//! system flag, and any future migration is the file-write that bumps the
+//! header.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -60,7 +66,7 @@ const FILE_NAME: &str = ".index";
 const MAGIC: &str = "EPISTLE-MAILBOX-INDEX";
 
 /// Current on-disk format version. A file with any other version is ignored.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// The path of a mailbox's index file.
 fn index_path(account_dir: &Path) -> PathBuf {
@@ -163,17 +169,36 @@ fn parse_time(field: &str) -> Option<SystemTime> {
 	Some(UNIX_EPOCH + Duration::new(secs, nanos))
 }
 
-/// Parse the comma-joined flag field. An empty field is the empty flag set; an
-/// unrecognized flag token fails closed (the writer only emits known tokens, so
-/// an unknown one signals corruption or a format drift).
+/// Parse the comma-joined flag field. An empty field is the empty flag set.
+///
+/// System flag tokens are emitted as the lowercase wire form without the
+/// leading backslash (e.g. `seen`); user keywords carry a `k:` prefix to
+/// distinguish them from any future system token (`k:junk`). An unknown
+/// system token still fails closed: the writer only emits known tokens,
+/// so an unknown one signals corruption or a format drift. A keyword
+/// that fails validation also fails closed.
 fn parse_flags(field: &str) -> Option<Vec<Flag>> {
 	if field.is_empty() {
 		return Some(Vec::new());
 	}
-	field
-		.split(',')
-		.map(|token| Flag::parse(&format!("\\{token}")))
-		.collect()
+	let mut flags = Vec::with_capacity(field.split(',').count());
+	for token in field.split(',') {
+		let flag = if let Some(name) = token.strip_prefix("k:") {
+			Flag::parse(name).filter(|f| f.is_keyword())?
+		} else {
+			let parsed = Flag::parse(&format!("\\{token}"))?;
+			if parsed.is_keyword() {
+				// A non-`k:` token resolved to a Keyword, which means the
+				// writer or a hand-edit slipped a keyword through without
+				// the keyword prefix. Refuse rather than silently accept,
+				// because the index format would no longer be self-describing.
+				return None;
+			}
+			parsed
+		};
+		flags.push(flag);
+	}
+	Some(flags)
 }
 
 /// Write a fresh index for `messages`, stamped with `generation`, atomically
@@ -219,8 +244,16 @@ fn write_record(out: &mut String, message: &MessageRef) {
 		if index > 0 {
 			out.push(',');
 		}
-		// The wire token without its leading backslash (e.g. "seen").
-		out.push_str(&flag.as_str()[1..].to_ascii_lowercase());
+		// System flag tokens are written as their lowercase wire form
+		// without the leading backslash (e.g. `seen`). User keywords keep
+		// their case and carry a `k:` prefix to make them unambiguous on
+		// the round-trip.
+		if flag.is_keyword() {
+			out.push_str("k:");
+			out.push_str(flag.as_str());
+		} else {
+			out.push_str(&flag.as_str()[1..].to_ascii_lowercase());
+		}
 	}
 	out.push('\n');
 }

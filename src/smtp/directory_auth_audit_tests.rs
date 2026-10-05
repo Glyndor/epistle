@@ -22,6 +22,8 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::*;
+use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::{BanInfo, BanPolicy};
 use crate::smtp::auth::tests::{fixture_password, wrong_password};
 
 #[derive(Clone, Debug)]
@@ -352,5 +354,99 @@ fn captured_log_never_carries_password_or_totp_code() {
 	assert!(
 		!blob.contains(&totp_b32),
 		"audit channel leaked the TOTP secret in some field",
+	);
+}
+
+/// A banned IP is refused before any password hashing. The test sets up
+/// `alice` with a hash of [`fixture_password`], attaches a [`FakeBanStore`]
+/// that returns a live ban for the peer IP, then submits the right
+/// password. A correct password would normally succeed; if the ban store
+/// is consulted first the result is `None`. The fake's per-method call
+/// counter on `is_banned` proves the ban store was consulted, and the
+/// audit channel carries the `auth.banned` event with the rule that
+/// fired (not `auth.login_succeeded`, which is what a successful
+/// verify would emit).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_banned_ip_is_refused_before_hashing() {
+	let ban_store = FakeBanStore::new(BanPolicy::default());
+	ban_store.arm_ban(
+		"ip:203.0.113.7",
+		BanInfo {
+			until_secs: u64::MAX,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	let directory = directory_with_alice(fixture_password())
+		.with_metrics(metrics.clone())
+		.with_ban_store(Arc::new(ban_store.clone()));
+
+	let peer: std::net::IpAddr = "203.0.113.7".parse().expect("peer");
+	let events = {
+		// The capture layer is installed for the lifetime of this scope;
+		// the authentication call happens inside `with_default` so the
+		// `auth.banned` event lands on it.
+		let cap = Capture::default();
+		let events = cap.events.clone();
+		let subscriber = Registry::default().with(LevelFilter::INFO).with(cap);
+		tracing::subscriber::with_default(subscriber, || {
+			// Right password: without the ban store, this would resolve
+			// to Some("alice"). The ban store short-circuits the lookup,
+			// so the hashing path is never reached and the result is None.
+			assert!(
+				directory
+					.authenticate_with_ip(
+						"alice",
+						fixture_password(),
+						Some(peer),
+						crate::config::Protocol::Api
+					)
+					.is_none(),
+				"a banned IP must be refused even with the right password"
+			);
+		});
+		Arc::try_unwrap(events)
+			.map(|m| m.into_inner().unwrap())
+			.unwrap_or_default()
+	};
+
+	// The ban store was consulted exactly once for the IP.
+	assert_eq!(
+		ban_store.call_count("is_banned"),
+		1,
+		"ban store consulted {0} times, expected exactly one is_banned",
+		ban_store.call_count("is_banned")
+	);
+	// The audit channel emits the banned event with the rule that fired;
+	// no `auth.login_succeeded` event lands because the verifier never
+	// ran. The `login_failed` event still fires; the directory records
+	// the outcome regardless.
+	let auth = auth_events(&events);
+	let kinds: Vec<_> = auth
+		.iter()
+		.map(|e| e.fields.get("event").cloned())
+		.collect();
+	assert!(
+		kinds.iter().any(|k| k.as_deref() == Some("auth.banned")),
+		"expected an auth.banned event with the rule, got {kinds:?}",
+	);
+	assert!(
+		!kinds
+			.iter()
+			.any(|k| k.as_deref() == Some("auth.login_succeeded")),
+		"a banned attempt must never produce a login_succeeded event",
+	);
+	// Failure counter moved: the ban path emits login_failed too (the
+	// wire response is identical for any failure), but the
+	// login_succeeded counter stays at zero; the property that proves
+	// the verifier never returned Some.
+	assert_eq!(
+		metrics.snapshot().get("auth_login_failed").copied(),
+		Some(1)
+	);
+	assert_eq!(
+		metrics.snapshot().get("auth_login_succeeded").copied(),
+		Some(0),
+		"login_succeeded counter must stay at zero; verify_password was never called",
 	);
 }

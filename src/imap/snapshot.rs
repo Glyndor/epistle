@@ -180,6 +180,13 @@ impl Snapshot {
 		self.crypto.decode(&stored)
 	}
 
+	/// The on-disk path of a message: the worker's read step names this file
+	/// rather than copying the bytes at STORE time, so the protocol reply
+	/// never has to wait for the body to be loaded into memory.
+	pub fn message_path(&self, message: &super::mailbox::MessageRef) -> std::path::PathBuf {
+		self.account_dir.join(format!("{}.eml", message.id()))
+	}
+
 	/// Replace the flags of the message at `sequence` (1-based), persisting
 	/// crash-safely. Returns the new flag set.
 	pub fn store_flags(

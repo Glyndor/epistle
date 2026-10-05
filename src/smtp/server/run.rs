@@ -8,8 +8,8 @@ use crate::smtp::line::LineDecoder;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, format_auth_results, line_error_reply, received_header, received_hop_count,
-	spf_domain,
+	RECEIVED_HOP_LIMIT, ensure_submission_headers, format_auth_results, line_error_reply,
+	received_header, received_hop_count, spf_domain,
 };
 
 use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
@@ -148,27 +148,36 @@ impl Server {
 					// SPF and DKIM apply to unauthenticated mail from a
 					// known peer.
 					let mut auth_headers = String::new();
-					// DNSBL screening: reject unauthenticated clients listed on a
-					// configured blocklist before any further processing.
-					if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated())
-						&& !self.dnsbl.is_empty()
-						&& let crate::dnsbl::DnsblOutcome::Listed { zone } =
-							self.dnsbl.check(ip, dns.as_ref()).await
-					{
-						tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
-						self.metrics.rejected(crate::metrics::RejectReason::Dnsbl);
-						self.train_corpus(&message.data, true);
-						send(
-							&mut stream,
-							&Reply::single(554, "5.7.1 client host blocked by DNS blocklist"),
-						)
-						.await?;
+					// DNSBL screening: reject an unauthenticated client whose
+					// IP, envelope sender domain, or URL host in the body is
+					// listed. All three lists fail open on `Unavailable`, so a
+					// misconfigured resolver does not block delivery.
+					if let Some(rejection) = self.screen_dnsbl(peer, &message, &session).await {
+						send(&mut stream, &rejection.reply()).await?;
 						continue;
+					}
+					// Trusted-reply fast path (plan 4.6): when the envelope
+					// sender is known to any local recipient account, skip
+					// greylisting and the reputation first-time delay. The
+					// rest of the inbound stack still runs because a known
+					// correspondent's account can itself be compromised:
+					// DNSBL above, SPF/DKIM/DMARC below, the scanner and the
+					// LLM band. Resolution reuses `Directory::resolve` so a
+					// domain alias or a multi-target alias applies
+					// identically to how the recipient was admitted.
+					let known_correspondent = self.known_correspondent(&message);
+					if let Some((account, sender)) = known_correspondent.as_ref() {
+						tracing::debug!(
+							account = %account,
+							sender = %sender,
+							"trusted reply: skipping greylist and first-time delay"
+						);
 					}
 					// Greylisting: defer an unseen triplet's first attempt. A real
 					// MTA retries and is then accepted.
-					if let (Some((store, delay)), Some(ip), None) =
-						(&self.greylist, peer, session.authenticated())
+					if known_correspondent.is_none()
+						&& let (Some((store, delay)), Some(ip), None) =
+							(&self.greylist, peer, session.authenticated())
 						&& let Some(recipient) = message.recipients.first()
 					{
 						let now = std::time::SystemTime::now()
@@ -377,6 +386,24 @@ impl Server {
 						session.authenticated().is_some(),
 						std::time::SystemTime::now(),
 					);
+					// Authenticated submission: stamp Message-ID and Date
+					// when the client omitted them. Domain is the
+					// reverse-path's domain (the authenticated account's own
+					// domain), with the server hostname as a last resort.
+					// Done before the Received block so the trace header
+					// stays the outermost line.
+					if session.authenticated().is_some() {
+						let stamp_domain = message
+							.reverse_path
+							.rsplit_once('@')
+							.map(|(_, d)| d.to_ascii_lowercase())
+							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
+						message.data = ensure_submission_headers(
+							&message.data,
+							&stamp_domain,
+							std::time::SystemTime::now(),
+						);
+					}
 					let mut stamped = header.into_bytes();
 					stamped.extend_from_slice(auth_headers.as_bytes());
 					stamped.append(&mut message.data);
@@ -387,6 +414,13 @@ impl Server {
 						.map(|(_, d)| d.to_ascii_lowercase());
 					// Reputation screen for unauthenticated senders: reject a
 					// poor reputation, slow down a first-time sender.
+					// The slow path (`FirstTime` -> sleep) is skipped when
+					// the sender is a known correspondent: a real reply
+					// from a recipient account's history does not warrant
+					// the reputation-system's first-attempt penalty. The
+					// hard `Reject` branch is still honoured; a poor
+					// reputation is independent of whether the sender is
+					// known to a local account.
 					if let (Some(pool), Some(domain), None) = (
 						&self.reputation,
 						rep_domain.as_deref(),
@@ -403,7 +437,10 @@ impl Server {
 								self.metrics.quarantined();
 								message.mailbox = Some("Rejects".to_string());
 							}
-							Screen::FirstTime if !self.first_time_delay.is_zero() => {
+							Screen::FirstTime
+								if !self.first_time_delay.is_zero()
+									&& known_correspondent.is_none() =>
+							{
 								tokio::time::sleep(self.first_time_delay).await;
 							}
 							_ => {}
@@ -430,41 +467,25 @@ impl Server {
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}
-					// LLM-assisted screening (unauthenticated mail only, and only
-					// when the local Bayesian score lands in the configured
-					// uncertain band — outside it the local classifier is
-					// trusted and the LLM is not paid for).
-					if let (Some(llm), Some(bayes), None) =
-						(&self.llm, &self.bayes, session.authenticated())
-					{
-						let text = String::from_utf8_lossy(&message.data);
-						match bayes.score(crate::antispam::corpus::SHARED, &text).await {
-							Ok(score) if llm.is_uncertain(score) => {
-								self.metrics.llm_consulted();
-								match llm.classifier.consult(&message.data).await {
-									crate::antispam::llm::ConsultOutcome::Verdict(
-										crate::antispam::hook::HookVerdict::Quarantine,
-									) => {
-										self.metrics.llm_quarantined();
-										self.train_corpus(&message.data, true);
-										message.mailbox = Some("Rejects".to_string());
-									}
-									crate::antispam::llm::ConsultOutcome::Verdict(_) => {}
-									crate::antispam::llm::ConsultOutcome::Failed => {
-										self.metrics.llm_failed();
-									}
-								}
-							}
-							Ok(_) => {}
-							Err(error) => {
-								// The Bayesian score fetch failed; treat the
-								// message as outside the band (Accept) rather
-								// than blocking mail on a DB hiccup.
-								self.metrics.llm_failed();
-								tracing::warn!(%error, "llm band score failed; accepting");
-							}
-						}
+					// Uncertain-band logic: SubjectPass (if enabled) accepts
+					// the retry that carries a valid token in the subject,
+					// otherwise the band consults the LLM hook if one is
+					// configured, otherwise (no LLM verdict) it refuses with
+					// a 550 5.7.1 challenge and a fresh token. The check runs
+					// after DNSBL, SPF, DMARC and the scanner hook, so a
+					// valid token never overrides a hard rejection.
+					if matches!(
+						self.handle_uncertain_band(
+							&mut message,
+							session.authenticated().is_some(),
+							&mut stream
+						)
+						.await?,
+						super::run_band::BandOutcome::Challenged
+					) {
+						continue;
 					}
+
 					// Accepted unauthenticated mail trains the ham corpus —
 					// unless it was quarantined (already trained as spam).
 					if session.authenticated().is_none() && message.mailbox.is_none() {

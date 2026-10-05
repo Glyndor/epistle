@@ -58,8 +58,10 @@ fn select_reports_exists_and_uidvalidity() {
 		response.contains("FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)"),
 		"{response}"
 	);
+	// PERMANENTFLAGS carries `\*` so clients can introduce new keywords
+	// via STORE (RFC 9051 §6.3.1).
 	assert!(
-		response.contains("[PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)]"),
+		response.contains("[PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft \\*)]"),
 		"{response}"
 	);
 	assert!(
@@ -269,4 +271,50 @@ fn store_rejects_unsupported_flag() {
 	session.command_line("a2 SELECT INBOX");
 	let output = session.command_line(r"a3 STORE 1 +FLAGS (\Recent)");
 	assert!(text(&output).contains("a3 BAD"), "{}", text(&output));
+}
+
+/// STORE accepts a user keyword and SELECT advertises it next to the
+/// system flags (RFC 9051 §6.3.1: the FLAGS response lists every flag
+/// the client can set on a message, including any in use).
+#[test]
+fn store_accepts_a_keyword_and_select_advertises_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"hello\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	let output = session.command_line("a3 STORE 1 +FLAGS ($Junk)");
+	let response = text(&output);
+	// The STORE response echoes the new flag list with the keyword.
+	assert!(response.contains("* 1 FETCH (FLAGS ($Junk))"), "{response}");
+	assert!(response.contains("a3 OK"), "{response}");
+
+	// A fresh SELECT advertises the keyword in FLAGS.
+	let output = session.command_line("a4 SELECT INBOX");
+	let response = text(&output);
+	assert!(
+		response.contains("FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft $Junk)"),
+		"{response}"
+	);
+}
+
+/// STORE refuses a SET that would put the message over the per-message
+/// keyword cap (32 keywords). The check happens before any message is
+/// touched, so the mailbox stays untouched.
+#[test]
+fn store_refuses_more_than_32_keywords() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"hello\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+	// 33 user keywords: $k00..$k32.
+	let many: String = (0..=32)
+		.map(|i| format!("$k{i:02}"))
+		.collect::<Vec<_>>()
+		.join(" ");
+	let output = session.command_line(&format!("a3 STORE 1 FLAGS ({many})"));
+	assert!(text(&output).contains("a3 BAD"), "{}", text(&output));
+	// The set was not stored; the message still has no flags.
+	let output = session.command_line("a4 FETCH 1 (FLAGS)");
+	let response = text(&output);
+	assert!(response.contains("FLAGS ()"), "{response}");
 }

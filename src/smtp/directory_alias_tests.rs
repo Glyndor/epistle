@@ -1,6 +1,6 @@
 //! Tests for the disabled-multi-target-alias slice of `Directory`:
 //! resolution fall-through, send-as denial, and the disabled-rejection
-//! contract. The brief is explicit: a disabled alias rejects identically
+//! contract. The rule is explicit: a disabled alias rejects identically
 //! to one that never existed and lets the next step of `resolve` run.
 //!
 //! Resolution order (see `Directory::resolve`):
@@ -69,7 +69,7 @@ fn enabled_alias_resolves_to_members() {
 
 /// A disabled multi-target alias is absent from the directory's `aliases`
 /// map, so resolution rejects with `UnknownUser` — indistinguishable from
-/// an alias that never existed. The brief's "rejection does not reveal
+/// an alias that never existed. The "rejection does not reveal
 /// that the address existed" check.
 #[test]
 fn disabled_alias_rejects_like_unknown_user() {

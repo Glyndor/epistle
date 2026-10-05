@@ -49,8 +49,8 @@ configure)
 		echo "epistle: systemd is not running, so linger was not enabled for glyndor-epistle; epistle init will check it" >&2
 	fi
 
-	# 4. Prepare the rootless Podman runtime for the new ranges. Podman is a
-	# Recommends, so its absence is not worth a word.
+	# 4. Prepare the rootless Podman runtime for the new ranges. Podman arrives
+	# through podup, a Depends, so it is only absent under --force-depends.
 	if command -v podman >/dev/null 2>&1; then
 		if ! runuser -u glyndor-epistle -- podman system migrate; then
 			echo "epistle: podman system migrate failed for glyndor-epistle; epistle init will check the rootless runtime" >&2

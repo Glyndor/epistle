@@ -1,5 +1,7 @@
 //! TLS material loading: PEM files into a rustls acceptor.
 
+pub(crate) mod https;
+
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 

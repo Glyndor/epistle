@@ -167,7 +167,9 @@ pub async fn remove(
 		&data_dir,
 		&name,
 		queue,
+		state.bayes_store(),
 	)
+	.await
 	.map_err(store_error)?;
 	audit::log_account_removal(&name, client_ip.0, &counts);
 	Ok(Json(RemovedResponse {
@@ -271,5 +273,6 @@ fn store_error(error: StoreError) -> ApiError {
 		StoreError::NotFound(_) => ApiError::not_found("no such dynamic account"),
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
+		StoreError::BayesPurge { .. } => ApiError::internal(),
 	}
 }

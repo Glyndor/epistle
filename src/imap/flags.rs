@@ -36,6 +36,22 @@ pub(super) fn write_flags(account_dir: &Path, id: Uuid, flags: &[Flag]) -> std::
 
 /// Whether two flag lists denote the same flag set, independent of order or
 /// duplicates. Used to detect a no-op STORE and avoid a redundant disk write.
+/// Keyword comparison is case-insensitive (RFC 9051 §2.3.2 atoms).
 pub(super) fn flags_equal(current: &[Flag], next: &[Flag]) -> bool {
-	current.iter().all(|flag| next.contains(flag)) && next.iter().all(|flag| current.contains(flag))
+	current
+		.iter()
+		.all(|flag| contains_keyword_aware(next, flag))
+		&& next
+			.iter()
+			.all(|flag| contains_keyword_aware(current, flag))
+}
+
+/// Membership check that compares keywords case-insensitively. The
+/// derived `PartialEq` on `Flag` compares `Keyword` strings structurally,
+/// which would let `$Junk` and `$junk` coexist in a set; the IMAP
+/// matching rule says they should be treated as the same.
+fn contains_keyword_aware(set: &[Flag], flag: &Flag) -> bool {
+	let needle = crate::imap::mailbox::flag_key(flag);
+	set.iter()
+		.any(|existing| crate::imap::mailbox::flag_key(existing) == needle)
 }

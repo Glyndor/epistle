@@ -35,6 +35,33 @@ pub fn sanitize_header_value(value: &str) -> String {
 	result
 }
 
+/// The first field named `name` (ASCII case-insensitive), with its
+/// continuation lines unfolded. Stops at the blank line that ends the header
+/// block.
+pub fn header_value(headers: &str, name: &str) -> Option<String> {
+	let mut lines = headers.lines().peekable();
+	while let Some(line) = lines.next() {
+		if line.is_empty() {
+			break;
+		}
+		if line.starts_with([' ', '\t']) {
+			continue;
+		}
+		if let Some((key, value)) = line.split_once(':')
+			&& key.trim().eq_ignore_ascii_case(name)
+		{
+			let mut value = value.trim().to_string();
+			while let Some(line) = lines.peek().filter(|l| l.starts_with([' ', '\t'])) {
+				value.push(' ');
+				value.push_str(line.trim());
+				lines.next();
+			}
+			return Some(value);
+		}
+	}
+	None
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -98,3 +125,7 @@ mod tests {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "header_value_tests.rs"]
+mod value_tests;

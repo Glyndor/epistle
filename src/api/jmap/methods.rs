@@ -6,6 +6,7 @@ use super::super::state::ApiState;
 use super::objects;
 
 use crate::smtp::address::Address;
+use crate::smtp::trace::ensure_submission_headers;
 
 /// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
 /// this server does not maintain a change log (`canCalculateChanges` is false),
@@ -99,10 +100,52 @@ fn submit_email(
 			return Err("forbiddenFrom");
 		}
 	}
+	// Stamp Message-ID and Date on the queued copy when the client did not
+	// include them. Domain is the envelope's MAIL FROM, falling back to the
+	// first configured domain when the envelope has none (the null reverse
+	// path, bounces and similar).
+	let stamp_domain = mail_from
+		.rsplit_once('@')
+		.map(|(_, d)| d.to_ascii_lowercase())
+		.or_else(|| state.domains().first().map(|d| d.to_ascii_lowercase()))
+		.unwrap_or_else(|| "localhost".to_string());
+	let stamped = ensure_submission_headers(&raw, &stamp_domain, std::time::SystemTime::now());
+	// Rolling 24h cap on first-time recipients (plan 4.10). The
+	// account name is the JMAP `accountId` argument: the client is
+	// acting on behalf of itself, so the per-day ceiling lives there.
+	// `tooManyRecipients` is the JMAP error type that names the
+	// resource; RFC 8621 §3.6.2 carries it through. The on-wire error
+	// keeps the same wording as the SMTP / REST paths so an operator
+	// reading either log can correlate by the message.
+	if let (Some(store), Some(limit)) = (state.correspondents(), state.new_recipients_per_day()) {
+		let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
+		match store.enforce_new_recipient_cap(account, &recipient_refs, Some(limit)) {
+			Ok(crate::storage::CapOutcome::Limited {
+				new,
+				already,
+				limit,
+			}) => {
+				crate::api::log_send_limited(account, None, new.saturating_add(already), limit);
+				return Err("tooManyRecipients");
+			}
+			Ok(
+				crate::storage::CapOutcome::Allowed { .. } | crate::storage::CapOutcome::Uncapped,
+			) => {
+				let _ = store.record(account, &recipient_refs);
+			}
+			Err(error) => {
+				tracing::warn!(
+					account = %account,
+					%error,
+					"correspondent store error; accepting"
+				);
+			}
+		}
+	}
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,
 		recipients,
-		data: raw,
+		data: stamped,
 		require_tls: false,
 		mailbox: None,
 		no_dsn: Vec::new(),

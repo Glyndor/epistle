@@ -44,6 +44,18 @@ struct Inner {
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<AuthLimiter>,
+	/// Per-account correspondent store: which addresses the account has
+	/// previously written to. The rolling 24h cap on first-time
+	/// recipients (`new_recipients_per_day`) reads from and writes to
+	/// this; tests can swap it out via [`ApiState::with_correspondents`]
+	/// so the same test tempdir is reused across handlers.
+	correspondents: Option<crate::storage::CorrespondentStore>,
+	/// Cap on first-time recipients per account in any rolling 24h window.
+	/// `None` disables the cap (the default). Lives on `ApiState` so
+	/// the REST and JMAP submission paths share a single source of
+	/// truth, and tests can rebuild `ApiState` with a tighter limit
+	/// without touching the file.
+	new_recipients_per_day: Option<u32>,
 	/// Account names allowed to authenticate to the admin panel.
 	admins: Vec<String>,
 	/// Per-account storage quota in bytes; 0 means unlimited.
@@ -79,6 +91,10 @@ struct Inner {
 	/// Empty when no `[[tenant]]` is configured; the empty state is the
 	/// identity, every check short-circuits to "no cap".
 	tenant_limits: TenantLimits,
+	/// Per-account Bayesian wiring: the training queue and the
+	/// store, both `None` without a database. Builders and accessors
+	/// live in `state_bayes.rs`.
+	bayes: bayes::BayesBindings,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -198,6 +214,8 @@ impl ApiState {
 					AUTH_WINDOW,
 					std::time::Instant::now(),
 				)),
+				correspondents: None,
+				new_recipients_per_day: None,
 				admins: Vec::new(),
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
@@ -208,6 +226,7 @@ impl ApiState {
 				legacy_warned: std::sync::Mutex::new(std::collections::HashSet::new()),
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
+				bayes: bayes::BayesBindings::default(),
 			}),
 		}
 	}
@@ -404,6 +423,41 @@ impl ApiState {
 		self
 	}
 
+	/// Attach the per-account correspondent store. Must be set before
+	/// the state is shared (it rebuilds the `Arc` inner). Required for
+	/// the rolling 24h new-recipient cap (`POST /api/v1/send`, JMAP
+	/// `EmailSubmission/set`); unset handlers fall through to the
+	/// pre-feature behaviour rather than silently skipping the cap.
+	pub fn with_correspondents(mut self, store: crate::storage::CorrespondentStore) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.correspondents = Some(store);
+		}
+		self
+	}
+
+	/// The per-account correspondent store when one has been attached.
+	/// `None` means the cap cannot be enforced; handlers fall through
+	/// to the pre-feature behaviour instead.
+	pub fn correspondents(&self) -> Option<&crate::storage::CorrespondentStore> {
+		self.inner.correspondents.as_ref()
+	}
+
+	/// Set the rolling 24h cap on first-time recipients per account
+	/// (`Config::new_recipients_per_day`). Must be set before the state
+	/// is shared (it rebuilds the `Arc` inner). `None` disables the cap.
+	pub fn with_new_recipients_per_day(mut self, limit: Option<u32>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.new_recipients_per_day = limit;
+		}
+		self
+	}
+
+	/// The configured daily new-recipient cap, when one is in effect.
+	/// `None` means the cap is disabled; every submission is allowed.
+	pub fn new_recipients_per_day(&self) -> Option<u32> {
+		self.inner.new_recipients_per_day
+	}
+
 	/// The per-tenant aggregate limits. Empty when no `[[tenant]]` is
 	/// configured; the empty state short-circuits every check to "no cap",
 	/// which is the pre-tenancy behaviour bit-for-bit.
@@ -598,7 +652,7 @@ impl ApiState {
 					write!(s, "{b:02x}").ok();
 					s
 				});
-			crate::api::oauth::constant_time_eq(expected_hex.as_bytes(), actual_hex.as_bytes())
+			crate::util::constant_time::eq(expected_hex.as_bytes(), actual_hex.as_bytes())
 		} else {
 			// Backward compat: argon2id PHC (legacy; generate new hash with `mail token-hash`).
 			crate::smtp::auth::verify_password(stored, token)
@@ -674,10 +728,14 @@ pub async fn require_bearer_token(
 	// The client IP for API-key CIDR allowlists. `ConnectInfo` is present when
 	// the router is served with `into_make_service_with_connect_info`; absent
 	// (e.g. in tests) it is `None`, so an IP-restricted key cannot match.
+	// A dual-stack `::` listener reports an IPv4 peer as `::ffff:a.b.c.d`;
+	// canonicalize here so an operator who pinned `192.0.2.0/24` on their key
+	// still gets matched by an IPv4 client that connected through the dual-stack
+	// bind. The audit channel uses the same canonical form.
 	let client_ip = request
 		.extensions()
 		.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-		.map(|info| info.0.ip());
+		.map(|info| crate::net::canonical_peer(info.0).ip());
 
 	let token = request
 		.headers()
@@ -723,6 +781,9 @@ pub async fn require_bearer_token(
 	});
 	Ok(next.run(request).await)
 }
+
+#[path = "state_bayes.rs"]
+mod bayes;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

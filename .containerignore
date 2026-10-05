@@ -1,0 +1,34 @@
+# Trim the build context. The Containerfile only reads the sources,
+# `Cargo.toml`, `Cargo.lock` and the committed `.sqlx/` cache, so
+# everything else is wasted bytes that podman has to scan and tar.
+# Same exclusions `.gitignore` carries, plus a few build-only paths
+# that the spec for this file calls out by name.
+
+# Build output. `cargo build` re-creates it inside the builder stage.
+target/
+# The fuzz crate is a separate workspace; its build is driven by
+# `cargo fuzz` and its `target/` is not a build input.
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/
+# Git metadata. Never part of a build context.
+.git/
+# Generated SBOMs and notices from the supply-chain workflow.
+*.cdx.json
+NOTICES.html
+# Research notes kept locally. Never committed and never built.
+research/
+# Local virtualenv from the signing step (release.yml).
+.venv/
+# Agent / tool artifacts that should never reach a registry.
+.claude/
+.agents/
+.cursor/
+.aider*
+.continue/
+.playwright-mcp/
+**/*-mcp/
+# cargo-mutants output.
+mutants.out/
+mutants.out.old/

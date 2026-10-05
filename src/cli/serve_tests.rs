@@ -68,3 +68,105 @@ async fn serve_fails_on_unwritable_data_dir() {
 	let config = test_config(Path::new("/proc/no-such-dir"), vec![listener]);
 	assert!(serve(config).await.is_err());
 }
+
+#[test]
+fn serve_emits_single_signature_dkim_warning_at_startup() {
+	// The DKIM single-signature warning is the very first thing `serve`
+	// does after loading the config — before listeners bind, before the
+	// AccountStore opens. Empty listener list returns early after the
+	// no-listeners notice (which is `eprintln!`, not `tracing`), so a
+	// captured event with `remedy = "epistle dkim-keygen --rsa"` proves
+	// the call site is wired to the shared helper.
+	//
+	// `run_with_capture` requires a sync closure, and the surrounding
+	// test framework may already be inside a tokio runtime, so we drive
+	// `serve::serve` from a fresh current-thread runtime here.
+	use super::super::tracing_capture::run_with_capture;
+	use tracing::Level;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut config: Config = toml::from_str(&format!(
+		"
+hostname = \"mail.example.org\"
+data_dir = {:?}
+domains = [\"example.org\"]
+
+[dkim]
+selector = \"mail\"
+key_file = \"/etc/mail/dkim.pem\"
+",
+		dir.path()
+	))
+	.expect("config");
+	// No listeners: serve returns Ok(()) after the warning is logged.
+	config.listeners.clear();
+
+	let events = run_with_capture(|| {
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.expect("runtime");
+		let _ = runtime.block_on(serve(config));
+	});
+	let warning = events
+		.iter()
+		.find(|e| e.level == Level::WARN && e.fields.contains_key("remedy"))
+		.expect("expected a tracing::warn! with the remedy field");
+	assert_eq!(
+		warning.fields.get("remedy").map(String::as_str),
+		Some("epistle dkim-keygen --rsa"),
+		"remedy field must name the keygen command"
+	);
+	let message = warning
+		.fields
+		.get("message")
+		.expect("message field")
+		.as_str();
+	assert!(
+		message.contains("signs with one key only"),
+		"warning message must use the shared helper text: {message}"
+	);
+	assert!(
+		message.contains(crate::config::DKIM_RSA_REQUIRED_FROM),
+		"warning message must name the version that flips to refusal: {message}"
+	);
+}
+
+#[test]
+fn serve_is_silent_on_dkim_when_both_rsa_fields_are_set() {
+	// Symmetric to the previous test: a fully-configured DKIM section
+	// must not log the single-signature warning. The no-listeners notice
+	// is `eprintln!`, so the captured events list must not contain any
+	// event with the `remedy` field.
+	use super::super::tracing_capture::run_with_capture;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut config: Config = toml::from_str(&format!(
+		"
+hostname = \"mail.example.org\"
+data_dir = {:?}
+domains = [\"example.org\"]
+
+[dkim]
+selector = \"mail\"
+key_file = \"/etc/mail/dkim.pem\"
+rsa_selector = \"rsa1\"
+rsa_key_file = \"/etc/mail/rsa.pem\"
+",
+		dir.path()
+	))
+	.expect("config");
+	config.listeners.clear();
+
+	let events = run_with_capture(|| {
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.expect("runtime");
+		let _ = runtime.block_on(serve(config));
+	});
+	assert!(
+		events.iter().all(|e| !e.fields.contains_key("remedy")),
+		"both RSA fields set: serve must not log the single-signature warning, got {events:?}"
+	);
+}

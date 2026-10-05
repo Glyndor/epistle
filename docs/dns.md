@@ -19,7 +19,7 @@ After publishing, verify with `epistle config-check` and an external checker.
 | Mail exchanger | `example.org` | MX | `10 mail.example.org.` |
 | SPF | `example.org` | TXT | `v=spf1 mx -all` |
 | DKIM | `<selector>._domainkey.example.org` | TXT | from `epistle dkim-keygen` |
-| DMARC | `_dmarc.example.org` | TXT | `v=DMARC1; p=quarantine; rua=mailto:dmarc@example.org` |
+| DMARC | `_dmarc.example.org` | TXT | `v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org` |
 | MTA-STS | `_mta-sts.example.org` | TXT | `v=STSv1; id=20260101000000` |
 | TLS-RPT | `_smtp._tls.example.org` | TXT | `v=TLSRPTv1; rua=mailto:tlsrpt@example.org` |
 | Reverse DNS (PTR) | the IP | PTR | `mail.example.org` (set at the IP's host) |
@@ -42,21 +42,70 @@ must match the name the server HELOs with. Receivers check HELO ↔ PTR ↔ IP. 
 is set at the **IP owner (your VPS/host)**, not through your DNS provider, so it
 cannot be automated by a DNS-provider integration — set it by hand.
 
+`epistle verify-dns` checks the PTR for every address the hostname is supposed
+to answer on (the configured `public_ipv4` / `public_ipv6`, or whatever the
+hostname resolves to when neither is set). The three failure lines mean three
+different things and point at three different fixes:
+
+- `MISS PTR <ip>: no reverse record; ask the provider of this IP to point it
+  at <hostname>`: the IP owner has not set a PTR. Talk to the VPS / host
+  provider; they control this side of the DNS, not your zone file.
+- `MISS PTR <ip>: points at <name>, not <hostname>`: the PTR exists but
+  names something else (typically an old host from before a migration). Fix
+  the PTR at the IP owner.
+- `MISS PTR <ip>: <hostname> does not resolve back to <ip>`: the PTR points
+  at the right name but the name's A/AAAA does not include this IP. Forward
+  and reverse are out of sync; receivers that do forward-confirmation would
+  still treat this as a mismatch.
+
 ### SPF
 Authorizes your IP to send for the domain. `v=spf1 mx -all` authorizes whatever
 the MX points at; or pin the IP: `v=spf1 ip4:203.0.113.10 -all`. `-all` (hard
 fail) is recommended once you are sure every sender is listed.
-
 ### DKIM
+
 Sign outbound mail. Generate the key and record:
 
 ```sh
 epistle dkim-keygen --out /etc/glyndor/epistle/dkim/ed1.pem
 ```
 
-Publish the printed TXT at `ed1._domainkey.example.org`, and configure
-`[dkim] selector = "ed1"` / `key_file`. Add a second RSA selector
-(`rsa_selector`/`rsa_key_file`) for receivers without Ed25519 support.
+The default is an Ed25519 key (44-byte `p=`, always fits in one TXT
+string). For receivers without Ed25519 support, add an RSA selector:
+
+```sh
+epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
+```
+
+`--rsa` delegates to `openssl genpkey` and the binary must be on `PATH`
+(the Debian package installs it). `--bits` defaults to 2048 and accepts
+2048 or 4096 only.
+
+Publish the printed TXT at `<selector>._domainkey.example.org`, and
+configure `[dkim] selector` / `key_file`. Add `rsa_selector` /
+`rsa_key_file` for the dual-signing path (required from version 0.10;
+a startup warning is logged before that whenever the pair is missing).
+A single message is then signed with both keys (RFC 8463); receivers
+that understand Ed25519 use that signature, the rest fall back to RSA.
+
+#### Long TXT values split at 255 octets
+
+RFC 1035 §3.3.14 caps each character-string at 255 octets, and RSA-2048
+`p=` is around 410 bytes (RSA-4096 around 755). When
+`epistle dns-records` prints the RSA selector's record, it splits the
+value at the boundary and quotes each part, so the operator can paste
+the line into a zone file directly:
+
+```
+rsasel._domainkey.example.org 3600 IN TXT ("v=DKIM1; k=rsa; p=MIIBIjANBgkq..."
+                                     "MIIBCgKCAQEA...")
+```
+
+Some DNS providers prefer the value as one long string and split it
+themselves on submit; `epistle dns-records` always emits the split form,
+which the same providers accept too. Receivers reassemble the strings
+the way every resolver does (RFC 1035 §3.3.14, §7), so the split is
+transparent on the wire.
 
 ## Reporting and policy
 
@@ -65,10 +114,15 @@ Ties SPF and DKIM together and tells receivers what to do on failure. Start at
 `p=none` to monitor, then move to `p=quarantine` and `p=reject`:
 
 ```
-v=DMARC1; p=quarantine; rua=mailto:dmarc@example.org; adkim=s; aspf=s
+v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org; adkim=s; aspf=s
 ```
 
-The server produces aggregate (RUA) reports for domains you host.
+The server produces aggregate (RUA) reports for domains you host. Inbound
+DMARC aggregate reports from receivers are ingested automatically: the
+deliverer recognises `postmaster@<domain>` as a report target, the JSONL
+store under `data_dir/reports/dmarc/YYYYMMDD/` keeps one parsed report per
+line, the alert engine can watch `dmarc_report_rows_failing`, and
+`epistle reports --config F [--days N]` summarises what receivers saw.
 
 ### MTA-STS
 Requires inbound senders to use verified TLS. Two parts:
@@ -87,7 +141,11 @@ Requires inbound senders to use verified TLS. Two parts:
 
 ### TLS-RPT
 Receives reports about TLS delivery problems: TXT at `_smtp._tls.example.org`
-with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`.
+with `v=TLSRPTv1; rua=mailto:tlsrpt@example.org`. The server ingests inbound
+TLS-RPT reports the same way it ingests DMARC: `tlsrpt@<domain>` is the
+envelope target, the JSONL store lives at
+`data_dir/reports/tlsrpt/YYYYMMDD/`, the alert engine can watch
+`tlsrpt_failed_sessions`, and `epistle reports` prints per-domain summaries.
 
 ### DANE (optional, needs DNSSEC)
 If the zone is DNSSEC-signed, publish a `TLSA` record for `mail.example.org:25`

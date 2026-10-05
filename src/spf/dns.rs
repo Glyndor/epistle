@@ -37,6 +37,14 @@ pub trait DnsLookup: Send + Sync {
 	fn tlsa(&self, _name: &str) -> Lookup<'_, Vec<TlsaRecord>> {
 		Box::pin(async { Ok(Vec::new()) })
 	}
+	/// PTR (reverse DNS) records for an IP address: every name the address
+	/// points at, in lower case without a trailing dot. A reverse lookup that
+	/// yields no answer returns an empty vector, not an error. The default
+	/// implementation returns no records so a fixture that does not care
+	/// about reverse DNS keeps compiling.
+	fn ptr(&self, _ip: IpAddr) -> Lookup<'_, Vec<String>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
 }
 
 /// Real resolver on top of hickory.
@@ -162,6 +170,27 @@ impl DnsLookup for SystemDns {
 					_ => None,
 				})
 				.collect())
+		})
+	}
+
+	fn ptr(&self, ip: IpAddr) -> Lookup<'_, Vec<String>> {
+		Box::pin(async move {
+			use hickory_resolver::net::{DnsError, NetError};
+			use hickory_resolver::proto::rr::RData;
+			match self.resolver.reverse_lookup(ip).await {
+				Ok(lookup) => Ok(lookup
+					.answers()
+					.iter()
+					.filter_map(|record| match &record.data {
+						RData::PTR(ptr) => {
+							Some(ptr.0.to_utf8().trim_end_matches('.').to_ascii_lowercase())
+						}
+						_ => None,
+					})
+					.collect()),
+				Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok(Vec::new()),
+				Err(_) => Err(DnsFailure::Temporary),
+			}
 		})
 	}
 }

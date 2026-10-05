@@ -49,7 +49,7 @@ const SERVICES: &[Service] = &[
 /// domain, pointing at the server hostname.
 pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	if config.domains.is_empty() {
-		eprintln!("error: no domains are configured");
+		super::style::error("no domains are configured");
 		return ExitCode::FAILURE;
 	}
 	let host = &config.hostname;

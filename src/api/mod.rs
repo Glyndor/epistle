@@ -16,7 +16,7 @@ pub mod tenant_limits;
 pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeyStore};
-pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change};
+pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
@@ -92,6 +92,10 @@ mod tests;
 mod tests_b;
 
 #[cfg(test)]
+#[path = "api_tests_newrecipients.rs"]
+mod tests_newrecipients;
+
+#[cfg(test)]
 #[path = "auth_tests.rs"]
 mod auth_tests;
 
@@ -106,6 +110,10 @@ mod jmap_tests;
 #[cfg(test)]
 #[path = "jmap_tests_b.rs"]
 mod jmap_tests_b;
+
+#[cfg(test)]
+#[path = "jmap_tests_encoded_words.rs"]
+mod jmap_tests_encoded_words;
 
 #[cfg(test)]
 #[path = "jmap_tests_c.rs"]
@@ -128,9 +136,17 @@ mod jmap_tests_e;
 mod jmap_tests_f;
 
 #[cfg(test)]
+#[path = "jmap_tests_g.rs"]
+mod jmap_tests_g;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 
 #[cfg(test)]
 #[path = "tenant_limits_tests_e2e.rs"]
 mod tenant_limits_tests_e2e;
+
+#[cfg(test)]
+#[path = "cidr_dual_stack_tests.rs"]
+mod cidr_dual_stack_tests;

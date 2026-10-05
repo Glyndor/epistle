@@ -19,11 +19,11 @@ pub(super) fn run(
 ) -> ExitCode {
 	let mut message = Vec::new();
 	if input.read_to_end(&mut message).is_err() {
-		eprintln!("error: reading the offending message from stdin");
+		super::style::error("reading the offending message from stdin");
 		return ExitCode::FAILURE;
 	}
 	if message.is_empty() {
-		eprintln!("error: no message on stdin");
+		super::style::error("no message on stdin");
 		return ExitCode::FAILURE;
 	}
 	let report = build_report(config, &message);
@@ -34,7 +34,7 @@ pub(super) fn run(
 			.write_all(format!("\r\n--{}--\r\n", boundary(&message)).as_bytes())
 			.is_err()
 	{
-		eprintln!("error: writing report");
+		super::style::error("writing report");
 		return ExitCode::FAILURE;
 	}
 	ExitCode::SUCCESS

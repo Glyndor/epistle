@@ -10,7 +10,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 
@@ -18,6 +18,7 @@ use super::{
 	AuthzServer, CODE_TTL_SECS, DeviceGrant, POLL_INTERVAL_SECS, oauth_error, parse_fields,
 };
 use crate::api::ApiState;
+use crate::util::constant_time;
 
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
@@ -90,6 +91,7 @@ pub async fn device_authorization(
 /// was wrong (no user-enumeration / code-probing oracle).
 pub async fn device_approve(
 	State(state): State<ApiState>,
+	ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 	headers: HeaderMap,
 	body: axum::body::Bytes,
 ) -> Response {
@@ -103,20 +105,28 @@ pub async fn device_approve(
 	// Authenticate first, unconditionally, so the work done is the same whether or
 	// not the user_code exists (no timing oracle on code existence). The OAuth
 	// grant endpoints sit outside `require_bearer_token`, so the peer IP is
-	// not propagated as an extension here; the audit log records `unknown`
-	// for the IP and a follow-up wires `ConnectInfo` in when the listener is
-	// built with `into_make_service_with_connect_info`.
+	// sourced from `ConnectInfo` here; wired in by the listener's
+	// `into_make_service_with_connect_info`; and forwarded to the ban-aware
+	// authentication path. A dual-stack `::` listener reports an IPv4 peer as
+	// `::ffff:a.b.c.d`; canonicalize so the ban / audit pipeline sees a plain
+	// `IpAddr::V4`.
+	let peer = crate::net::canonical_peer(peer);
 	let account = credentials.and_then(|(login, password)| {
 		// The OAuth approval flow is a user-facing API authentication: the
 		// account must opt into `api` in its `allowed_protocols` to bind a
 		// grant, matching how `/api/v1/auth/verify` tags its callers.
-		state.authenticate_with_ip(&login, &password, None, crate::config::Protocol::Api)
+		state.authenticate_with_ip(
+			&login,
+			&password,
+			Some(peer.ip()),
+			crate::config::Protocol::Api,
+		)
 	});
 
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
 	let grant = devices.values_mut().find(|g| {
-		super::constant_time_eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
+		constant_time::eq(g.user_code.as_bytes(), user_code.as_bytes()) && g.expires_at > now
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {
