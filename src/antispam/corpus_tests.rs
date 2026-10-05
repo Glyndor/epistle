@@ -41,7 +41,11 @@ fn hash_is_deterministic_and_key_dependent() {
 	// `h` containing the token, so any message that interpolates
 	// the hash would dump the credential into the CI log.
 	let h = hash_token(&k1, &token_a);
-	assert_eq!(h.len(), 64, "the keyed HMAC-SHA256 must hex-encode to 64 chars");
+	assert_eq!(
+		h.len(),
+		64,
+		"the keyed HMAC-SHA256 must hex-encode to 64 chars"
+	);
 	assert!(
 		!h.contains(&token_a),
 		"the keyed hash must not contain the plaintext token"

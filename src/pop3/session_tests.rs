@@ -96,8 +96,10 @@ fn sasl_auth_plain_logs_in() {
 
 	// A wrong password fails.
 	let mut session = Session::new(FakeBackend::new(inbox()));
-	let bad = base64::engine::general_purpose::STANDARD
-		.encode(format!("\0alice\0{}", crate::smtp::auth::tests::wrong_password()));
+	let bad = base64::engine::general_purpose::STANDARD.encode(format!(
+		"\0alice\0{}",
+		crate::smtp::auth::tests::wrong_password()
+	));
 	assert!(matches!(
 		session.handle(Command::Auth {
 			mechanism: Some("PLAIN".into()),

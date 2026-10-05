@@ -123,10 +123,7 @@ fn apply_rewrites_managed_keys_and_preserves_unknown_ones() {
 	let has_srs = merged.contains("srs_secret");
 	let has_dkim = merged.contains("dkim");
 	let has_tls = merged.contains("tls");
-	assert!(
-		has_srs,
-		"unknown top-level key must survive the rewrite"
-	);
+	assert!(has_srs, "unknown top-level key must survive the rewrite");
 	assert!(
 		has_dkim,
 		"managed dkim block must be written into the existing config"
