@@ -151,9 +151,9 @@ impl WindowLimiter {
 				None => 0,
 			};
 			let mut stale: Vec<String> = Vec::new();
-			#[cfg_attr(not(test), allow(unused_assignments))]
-			let mut scanned = 0usize;
 			let mut last_key: Option<String> = None;
+			#[cfg(test)]
+			let mut scanned: u64 = 0;
 			if keys_len > 0 {
 				for offset in 0..EVICTION_SCAN_BUDGET {
 					let idx = (start_idx + offset) % keys_len;
@@ -162,7 +162,10 @@ impl WindowLimiter {
 					if *start <= cutoff {
 						stale.push(key.clone());
 					}
-					scanned += 1;
+					#[cfg(test)]
+					{
+						scanned += 1;
+					}
 					last_key = Some(key.clone());
 				}
 			}
@@ -180,7 +183,7 @@ impl WindowLimiter {
 			}
 			#[cfg(test)]
 			{
-				*self.scan_count.lock().expect("scan count") += scanned as u64;
+				*self.scan_count.lock().expect("scan count") += scanned;
 			}
 			if state.len() >= MAX_ENTRIES {
 				return false;
