@@ -306,9 +306,9 @@ fn scram_directory_with_ban_store(
 /// A banned IP is refused on IMAP SCRAM before the SCRAM credential
 /// lookup runs. The test arms a ban on the peer IP, drives a SCRAM
 /// client-first, and asserts the ban store was consulted, the
-/// `scram_credentials` lookup count is zero (the exchange was
+/// `scram_credentials` lookup count did not move (the exchange was
 /// short-circuited), and the wire reply is the same NO a wrong SCRAM
-/// proof produces. The lookup count is the property that proves a
+/// proof produces. The lookup count delta is the property that proves a
 /// banned IP cannot probe whether an account exists by sending a
 /// SCRAM client-first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -334,10 +334,12 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	.with_scram_nonce("SN");
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
+	let before = crate::smtp::directory_scram_test_counter::count();
 	let out = text(&session.command_line(&format!(
 		"a AUTHENTICATE SCRAM-SHA-256 {}",
 		B64.encode("n,,n=alice,r=CN")
 	)));
+	let after = crate::smtp::directory_scram_test_counter::count();
 	assert!(out.contains("a NO"), "{out}");
 
 	assert!(
@@ -346,9 +348,10 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 		ban_store.call_count("is_banned")
 	);
 	assert_eq!(
-		directory.scram_credentials_calls(),
+		after - before,
 		0,
-		"the SCRAM credential lookup must not happen when a ban short-circuits the exchange"
+		"the SCRAM credential lookup must not happen when a ban short-circuits the exchange (delta: {})",
+		after - before
 	);
 }
 
