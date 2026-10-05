@@ -341,7 +341,10 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 	);
 	let (out, result) = harness(&input);
 	let text = parse_out(&out);
-	assert!(result.is_ok(), "got {text}");
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
+	assert!(result.is_ok(), "automatic mode must succeed");
 	let filled = result.unwrap();
 	let dns = filled
 		.answers
@@ -354,9 +357,12 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 	);
 	assert_eq!(dns.provider, "cloudflare");
 	assert_eq!(dns.zone, "example.org");
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
 	assert!(
 		text.contains("dns provider") && text.contains("dns zone") && text.contains("dns token"),
-		"every dns prompt must be rendered: {text}"
+		"every dns prompt must be rendered"
 	);
 	// The captured `text` is operator-visible prompts; if the test
 	// fails it carries the token, so the message must name the
