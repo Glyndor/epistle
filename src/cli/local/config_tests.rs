@@ -4,8 +4,8 @@
 use std::collections::HashSet;
 
 use super::test_support::{
-	LISTENERS_FOR_TEST, fresh_dir, load_accounts_outcome_for_test, load_for_test,
-	local_error_name, open_store_for_test,
+	LISTENERS_FOR_TEST, fresh_dir, load_accounts_outcome_for_test, load_for_test, local_error_name,
+	open_store_for_test,
 };
 use super::{ACCOUNT_NAME, DEFAULT_PORT_BASE, DOMAIN, LocalError, prepare};
 

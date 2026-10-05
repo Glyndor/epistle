@@ -340,7 +340,10 @@ fn apply_refuses_when_only_oauth_public_survives() {
 		.error
 		.expect("apply must refuse when only the public key survives");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {}", apply_error_name(&err));
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("oauth_signing.key"),
@@ -455,7 +458,10 @@ fn apply_refuses_when_only_cert_survives() {
 		.error
 		.expect("apply must refuse when only the cert survives");
 	let ApplyError::CertPairIncomplete(message) = &err else {
-		panic!("expected CertPairIncomplete, got {}", apply_error_name(&err));
+		panic!(
+			"expected CertPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("key.pem"),

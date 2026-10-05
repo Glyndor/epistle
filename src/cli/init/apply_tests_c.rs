@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
 
 use super::apply_config;
-use super::*;
 use super::tests_failures::apply_error_name;
+use super::*;
 use crate::cli::init::answers::{DnsAnswers, Mode, Services};
 
 fn answers_minimal() -> Answers {
@@ -401,7 +401,10 @@ fn apply_refuses_an_orphan_oauth_public_key() {
 		.error
 		.expect("second apply with orphan oauth_public must refuse");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {}", apply_error_name(&err));
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("oauth_signing.key"),

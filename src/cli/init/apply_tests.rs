@@ -6,8 +6,8 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use super::*;
 use super::tests_failures::apply_error_name;
+use super::*;
 use crate::cli::init::answers::Services;
 
 #[cfg(unix)]

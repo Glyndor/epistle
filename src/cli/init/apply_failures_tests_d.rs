@@ -7,8 +7,8 @@
 //! the suffix source and the write step so a controlled collision
 //! sequence and a forced write failure can be exercised.
 
-use super::*;
 use super::tests_failures::apply_error_name;
+use super::*;
 
 #[cfg(unix)]
 fn real_write(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {

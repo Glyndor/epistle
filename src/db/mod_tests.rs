@@ -162,7 +162,10 @@ fn password_file_refuses_an_empty_secret_after_stripping() {
 			kind: PasswordFileError::Empty,
 			..
 		} => {}
-		other => panic!("expected PasswordFile {{ Empty, .. }}, got {}", error_name(&other)),
+		other => panic!(
+			"expected PasswordFile {{ Empty, .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -208,7 +211,10 @@ fn password_file_refuses_a_group_readable_file() {
 			mode, 0o644,
 			"the observed mode must round-trip through the variant"
 		),
-		other => panic!("expected InsecureMode {{ mode: 0o644, .. }}, got {}", error_name(&other)),
+		other => panic!(
+			"expected InsecureMode {{ mode: 0o644, .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -235,7 +241,10 @@ fn password_file_refuses_a_symlink() {
 			Some(libc::ELOOP),
 			"O_NOFOLLOW on a symlink returns ELOOP, got {source:?}"
 		),
-		other => panic!("expected PasswordFile {{ Io(ELOOP), .. }}, got {}", error_name(&other)),
+		other => panic!(
+			"expected PasswordFile {{ Io(ELOOP), .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -273,7 +282,10 @@ fn password_file_refuses_a_fifo_without_blocking() {
 			kind: PasswordFileError::Io(_),
 			..
 		} => {}
-		other => panic!("expected PasswordFile with NotRegularFile or Io, got {}", error_name(&other)),
+		other => panic!(
+			"expected PasswordFile with NotRegularFile or Io, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -306,6 +318,9 @@ fn password_file_refuses_a_fifo_with_a_writer() {
 			kind: PasswordFileError::NotRegularFile,
 			..
 		} => {}
-		other => panic!("expected PasswordFile {{ NotRegularFile, .. }}, got {}", error_name(&other)),
+		other => panic!(
+			"expected PasswordFile {{ NotRegularFile, .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }

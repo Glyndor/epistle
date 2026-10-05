@@ -9,8 +9,8 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
-use super::*;
 use super::tests_failures::apply_error_name;
+use super::*;
 use crate::cli::init::answers::{Mode, Services};
 
 fn answers_minimal() -> Answers {
