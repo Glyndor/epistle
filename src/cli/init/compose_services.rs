@@ -47,11 +47,12 @@ impl ComposeService {
 	/// container sees the same file the host wrote.
 	pub(super) fn new_mail(
 		image: &str,
-		config_path: &Path,
-		data_dir: &Path,
+		answers: &Answers,
 		database: bool,
 		published_ports: Vec<String>,
 	) -> Self {
+		let config_path = &answers.config_path;
+		let data_dir = &answers.data_dir;
 		let config_dir = config_path.parent().unwrap_or_else(|| Path::new("/"));
 		let mut volumes = Vec::new();
 		volumes.push(VolumeMount::bind(config_dir, config_dir, true));
@@ -64,6 +65,14 @@ impl ComposeService {
 		volumes.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
 		let mut environment = BTreeMap::new();
 		environment.insert("TZ".to_string(), "UTC".to_string());
+		if let Some(dns) = &answers.dns {
+			if let Some(name) = &dns.token_env {
+				environment.insert(name.clone(), format!("${{{name}}}"));
+			}
+			if let Some(path) = &dns.token_file {
+				volumes.push(VolumeMount::bind(path, path, true));
+			}
+		}
 		Self {
 			image: image.to_string(),
 			entrypoint: None,

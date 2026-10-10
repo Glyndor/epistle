@@ -483,13 +483,7 @@ impl ComposeFile {
 		let mut services = BTreeMap::new();
 		services.insert(
 			"mail".to_string(),
-			ComposeService::new_mail(
-				&image,
-				&answers.config_path,
-				&answers.data_dir,
-				database,
-				published_ports,
-			),
+			ComposeService::new_mail(&image, answers, database, published_ports),
 		);
 		services.insert(
 			"clamav".to_string(),
@@ -621,3 +615,7 @@ mod tests_password_volume;
 #[cfg(test)]
 #[path = "compose_tests_bind_paths.rs"]
 mod tests_bind_paths;
+
+#[cfg(test)]
+#[path = "compose_tests_dns_credentials.rs"]
+mod tests_dns_credentials;
