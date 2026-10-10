@@ -17,7 +17,7 @@ fn default_data_dir_is_below_the_service_home() {
 
 #[test]
 fn data_dir_rejects_the_running_users_home_and_ancestors() {
-	let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+	let home = passwd_home();
 	for path in [&home, home.parent().unwrap()] {
 		let mut answers = minimal();
 		answers.data_dir = path.into();
@@ -41,7 +41,7 @@ fn data_dir_rejects_the_running_users_home_and_ancestors() {
 
 #[test]
 fn data_dir_rejects_top_level_host_runtime_directories() {
-	let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+	let home = passwd_home();
 	for marker in [".local/share/containers", ".config/systemd"] {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::create_dir_all(dir.path().join(marker)).unwrap();
@@ -68,7 +68,7 @@ fn data_dir_rejects_top_level_host_runtime_directories() {
 #[test]
 fn data_dir_accepts_a_child_of_home() {
 	let mut answers = minimal();
-	answers.data_dir = PathBuf::from(std::env::var_os("HOME").unwrap()).join("data");
+	answers.data_dir = passwd_home().join("data");
 	assert!(
 		answers.validate().is_ok(),
 		"home/data must remain a valid data directory"
@@ -78,7 +78,7 @@ fn data_dir_accepts_a_child_of_home() {
 #[test]
 fn data_dir_rejects_home_aliases_and_parent_components() {
 	use std::os::unix::fs::symlink;
-	let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+	let home = passwd_home();
 	let dir = tempfile::tempdir().unwrap();
 	let alias = dir.path().join("home");
 	symlink(&home, &alias).unwrap();
@@ -110,4 +110,24 @@ fn data_dir_rejects_home_aliases_and_parent_components() {
 			"home aliases and parent components must not bypass data isolation"
 		);
 	}
+}
+
+/// The home directory from the passwd entry of the user running the
+/// test, which is what init checks; `$HOME` can differ (CI sets it to a
+/// workspace directory).
+fn passwd_home() -> PathBuf {
+	let uid = std::process::Command::new("id")
+		.arg("-u")
+		.output()
+		.expect("id -u");
+	let uid = String::from_utf8(uid.stdout)
+		.expect("utf-8")
+		.trim()
+		.to_string();
+	let entry = std::process::Command::new("getent")
+		.args(["passwd", &uid])
+		.output()
+		.expect("getent passwd");
+	let entry = String::from_utf8(entry.stdout).expect("utf-8");
+	PathBuf::from(entry.trim().split(':').nth(5).expect("home field"))
 }
