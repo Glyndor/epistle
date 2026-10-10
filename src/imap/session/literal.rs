@@ -239,4 +239,24 @@ impl Session {
 			"* {seq} EXPUNGE\r\n{tag} OK {code}REPLACE completed\r\n"
 		))
 	}
+
+	/// Reject an APPEND/REPLACE whose literal was not followed by CRLF
+	/// (RFC 9051 §6.3.2). The literal body is discarded and the message
+	/// is not stored: this is called by the server after it has read both
+	/// the literal bytes and the two trailer bytes, before any side effect
+	/// on the mailbox.
+	pub fn literal_bad_trailer(&mut self) -> Output {
+		let Some(pending) = self.pending_append.take() else {
+			return Output::text("* BAD unexpected literal\r\n".to_string());
+		};
+		let verb = if pending.replace.is_some() {
+			"REPLACE"
+		} else {
+			"APPEND"
+		};
+		Output::text(format!(
+			"{} BAD {} literal must be followed by CRLF\r\n",
+			pending.tag, verb
+		))
+	}
 }

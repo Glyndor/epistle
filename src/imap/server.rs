@@ -357,12 +357,14 @@ impl Server {
 					break;
 				}
 				if let Some(size) = output.collect_literal {
-					// Read exactly `size` literal bytes (plus trailing CRLF
-					// which the line decoder will consume as an empty line).
-					// The literal read is bounded by the same idle/command
-					// deadline as any other read: a client that announces
-					// a large payload and then stalls would otherwise hold
-					// the connection forever (RFC 9051 §5.4 spirit).
+					// Read exactly `size` literal bytes, then verify the
+					// next two octets are CRLF (RFC 9051 §6.3.2). Without
+					// the trailer check the message is appended before the
+					// client has shown it understood the framing, and a
+					// malicious peer can store an unwanted message by
+					// sending any two non-CRLF bytes after the literal.
+					// Both reads are bounded by the same idle/command
+					// deadline as any other read.
 					let mut literal = decoder.take_buffered(size);
 					let mut chunk = [0u8; 4096];
 					while literal.len() < size {
@@ -391,7 +393,44 @@ impl Server {
 							decoder.feed(&chunk[needed..read]);
 						}
 					}
-					output = session.literal_done(&literal);
+					// Now consume exactly two bytes for the trailer. The
+					// decoder keeps any surplus for the next command line.
+					let mut trailer = decoder.take_buffered(2);
+					while trailer.len() < 2 {
+						let read = match tokio::time::timeout(
+							self.read_timeout,
+							stream.read(&mut chunk),
+						)
+						.await
+						{
+							Ok(Ok(n)) => n,
+							Ok(Err(e)) => return Err(e),
+							Err(_) => {
+								tracing::debug!("IMAP literal trailer timeout, closing");
+								let _ = stream.write_all(b"* BYE read timeout\r\n").await;
+								return Ok(());
+							}
+						};
+						if read == 0 {
+							return Ok(());
+						}
+						let needed = 2 - trailer.len();
+						if read <= needed {
+							trailer.extend_from_slice(&chunk[..read]);
+						} else {
+							trailer.extend_from_slice(&chunk[..needed]);
+							decoder.feed(&chunk[needed..read]);
+						}
+					}
+					if trailer == b"\r\n" {
+						output = session.literal_done(&literal);
+					} else {
+						// Put the non-CRLF trailer bytes back into the
+						// decoder so the next command line sees them; the
+						// session rejects without storing the message.
+						decoder.feed(&trailer);
+						output = session.literal_bad_trailer();
+					}
 					continue;
 				}
 				if output.collect_auth {
