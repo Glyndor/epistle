@@ -100,9 +100,7 @@ pub(super) fn literal_announcement(args: &str) -> Option<LiteralAnnouncement> {
 /// parser may have rejected the line; in that case the session uses this
 /// to know how many bytes (RFC 7888 §4) the network layer must discard.
 pub(crate) fn literal_announcement_in_line(line: &str) -> Option<LiteralAnnouncement> {
-	let mut parts = line.splitn(2, ' ');
-	let verb = parts.next()?;
-	let args = parts.next()?;
+	let (verb, args) = line.split_once(' ')?;
 	if !verb.eq_ignore_ascii_case("APPEND") && !verb.eq_ignore_ascii_case("REPLACE") {
 		return None;
 	}

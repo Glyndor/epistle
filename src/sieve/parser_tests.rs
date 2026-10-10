@@ -28,6 +28,7 @@ fn rejects_deeply_nested_block_with_nesting_error() {
 }
 
 #[test]
+#[allow(clippy::single_char_add_str)]
 fn modest_nesting_still_parses() {
 	// 32 nested `if true {` blocks is well below the limit; the parser
 	// must accept it.

@@ -81,6 +81,7 @@ impl Session {
 
 	/// Begin REPLACE (RFC 8508): validate the source message and append target,
 	/// then collect the literal. Requires a selected, writable mailbox.
+	#[allow(clippy::too_many_arguments)]
 	pub(super) fn replace_begin(
 		&mut self,
 		tag: &str,
