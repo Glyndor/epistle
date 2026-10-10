@@ -26,6 +26,7 @@ pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 
+mod address_tokenizer;
 pub(crate) mod blob_path;
 mod blobs;
 mod email;

@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use super::address_tokenizer::{find_angle_addr, split_top_level};
 use crate::smtp::trace::ensure_submission_headers;
 use crate::util::encoded_word;
 pub(super) use crate::util::header::header_value;
@@ -268,7 +269,10 @@ struct ParsedAddress {
 
 /// Split a header value into individual addresses at top-level commas,
 /// then peel off the angle-addr (the `<...>` portion, which holds the
-/// actual email) and the leading phrase (the display name).
+/// actual email) and the leading phrase (the display name). The
+/// tokenizer that splits at top-level commas and locates the
+/// angle-addr lives in [`super::address_tokenizer`] so the parser and
+/// its work counter can evolve independently.
 fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 	let parts = split_top_level(value, ',');
 	parts
@@ -278,106 +282,9 @@ fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 		.collect()
 }
 
-/// Split `value` at every `delimiter` that sits at top level: outside
-/// `<...>`, outside `"..."`, and outside `=?...?=` encoded-words. A
-/// delimiter that the parser cannot match against its closing form is
-/// treated as text, so a stray `<` does not swallow the rest of the value.
-fn split_top_level(value: &str, delimiter: char) -> Vec<String> {
-	let mut out = Vec::new();
-	let mut start = 0usize;
-	let bytes = value.as_bytes();
-	let mut i = 0usize;
-	while i < bytes.len() {
-		let byte = bytes[i];
-		if byte == b'<' {
-			if let Some(close) = find_matching(value, i, b'>') {
-				i = close + 1;
-				continue;
-			}
-		} else if byte == b'"' {
-			if let Some(close) = find_quoted_end(value, i + 1) {
-				i = close + 1;
-				continue;
-			}
-		} else if byte == b'='
-			&& value[i..].starts_with("=?")
-			&& let Some(close) = find_encoded_word_end(value, i)
-		{
-			i = close;
-			continue;
-		}
-		if byte == delimiter as u8 {
-			out.push(value[start..i].to_string());
-			start = i + 1;
-		}
-		i += 1;
-	}
-	out.push(value[start..].to_string());
-	out
-}
-
-/// Find the index of the closing character that matches `value[opening]`.
-/// `opening` must point at `<`. Returns the index of `>`, or `None` when
-/// the open has no matching close (the caller treats this as text).
-fn find_matching(value: &str, opening: usize, close: u8) -> Option<usize> {
-	let bytes = value.as_bytes();
-	let mut i = opening + 1;
-	while i < bytes.len() {
-		match bytes[i] {
-			b'\\' if i + 1 < bytes.len() => i += 2,
-			b if b == close => return Some(i),
-			_ => i += 1,
-		}
-	}
-	None
-}
-
-/// Find the index of the closing `"` for a quoted-string that opens at
-/// `start` (which must point just past the opening `"`). A backslash
-/// escapes the next byte. Returns `None` for an unterminated string.
-fn find_quoted_end(value: &str, start: usize) -> Option<usize> {
-	let bytes = value.as_bytes();
-	let mut i = start;
-	while i < bytes.len() {
-		match bytes[i] {
-			b'\\' if i + 1 < bytes.len() => i += 2,
-			b'"' => return Some(i),
-			_ => i += 1,
-		}
-	}
-	None
-}
-
-/// Find the position just past the closing `?=` of the encoded-word that
-/// starts at `start` (which must point at `=`). Returns `None` when the
-/// fragment is not a complete encoded-word.
-fn find_encoded_word_end(value: &str, start: usize) -> Option<usize> {
-	let after = &value[start + 2..];
-	let end = after.find("?=")?;
-	// Confirm every component is non-empty ASCII graphic.
-	let payload = &after[..end];
-	let mut parts = payload.split('?');
-	let charset = parts.next()?;
-	let encoding = parts.next()?;
-	let text = parts.next()?;
-	if parts.next().is_some() {
-		return None;
-	}
-	if charset.is_empty()
-		|| encoding.is_empty()
-		|| text.is_empty()
-		|| !charset.bytes().all(|b| b.is_ascii_graphic())
-		|| !encoding.bytes().all(|b| b.is_ascii_graphic())
-		|| !text.bytes().all(|b| b.is_ascii_graphic())
-	{
-		return None;
-	}
-	Some(start + 2 + end + 2)
-}
-
-/// One address: extract the angle-addr email if present, otherwise treat
-/// the whole value as the email. Everything before the last `<` is the
-/// display name, when an angle-addr was found.
+// One address: extract the angle-addr email if present, otherwise treat
+// the whole value as the email. Everything before the last `<` is the
+// display name, when an angle-addr was found.
 fn parse_address(raw: &str) -> ParsedAddress {
 	let trimmed = raw.trim();
 	if let Some((open, close)) = find_angle_addr(trimmed) {
@@ -392,45 +299,6 @@ fn parse_address(raw: &str) -> ParsedAddress {
 		name: None,
 		email: trimmed.to_string(),
 	}
-}
-
-/// The byte positions of `<` and `>` that wrap the email of an address,
-/// both outside any quoted-string and outside any encoded-word. The
-/// returned pair is the LAST angle-addr in `value`, matching the position
-/// where the email sits at the tail of an RFC 5322 address. Returns `None`
-/// when no angle-addr is present.
-fn find_angle_addr(value: &str) -> Option<(usize, usize)> {
-	let bytes = value.as_bytes();
-	let mut last: Option<(usize, usize)> = None;
-	let mut i = 0usize;
-	while i < bytes.len() {
-		match bytes[i] {
-			b'<' => {
-				if let Some(close) = find_matching(value, i, b'>') {
-					last = Some((i, close));
-					i = close + 1;
-					continue;
-				}
-				i += 1;
-			}
-			b'"' => {
-				if let Some(close) = find_quoted_end(value, i + 1) {
-					i = close + 1;
-					continue;
-				}
-				i += 1;
-			}
-			b'=' if value[i..].starts_with("=?") => {
-				if let Some(end) = find_encoded_word_end(value, i) {
-					i = end;
-					continue;
-				}
-				i += 1;
-			}
-			_ => i += 1,
-		}
-	}
-	last
 }
 
 /// Map an IMAP flag to its JMAP keyword (RFC 8621 §4.1.1).

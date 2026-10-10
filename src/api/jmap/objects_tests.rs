@@ -1,3 +1,4 @@
+use super::address_list;
 use super::render_address;
 use serde_json::json;
 
@@ -17,4 +18,23 @@ fn address_phrases_quote_and_escape_wire_syntax() {
 			"display name must be a valid phrase"
 		);
 	}
+}
+
+/// Integration check: the address_list pipeline (split_top_level,
+/// parse_address, find_angle_addr) returns the two addresses the
+/// RFC 5322 §3.2.3 atom text and the RFC 2047 encoded-word encode.
+/// The tokenizer-only regressions live with the tokenizer module;
+/// this is here so the full pipeline is exercised end-to-end.
+#[test]
+fn an_invalid_encoded_word_candidate_does_not_disable_later_recognition() {
+	let value = "=? <one@example.org>, (=?UTF-8?Q?Doe,Jane?=) <two@example.org>";
+	let parsed = address_list(Some(value));
+	let arr = parsed.as_array().expect("address list");
+	assert_eq!(
+		arr.len(),
+		2,
+		"invalid opener must not poison later encoded-word recognition, got {arr:?}"
+	);
+	assert_eq!(arr[0]["email"], "one@example.org");
+	assert_eq!(arr[1]["email"], "two@example.org");
 }

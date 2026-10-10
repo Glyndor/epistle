@@ -13,6 +13,16 @@ pub const MAX_SCAN_BYTES: usize = 256 * 1024;
 /// guidance of "first few dozen" hosts.
 pub const DEFAULT_HOST_CAP: usize = 50;
 
+// Test-only step counter incremented once per byte the scheme scan
+// examines. Lets a regression test assert the per-call work stays
+// bounded (linear in the scan window, not quadratic in the number of
+// matches). The counter is per-thread so parallel tests do not
+// observe each other's increments.
+#[cfg(test)]
+thread_local! {
+	static SCAN_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Scan at most the first [`MAX_SCAN_BYTES`] bytes of `body` and return up to
 /// `cap` unique URL hosts (deduped, lower-cased, IP literals and `localhost`
 /// dropped). Quoted-printable soft breaks (`=\r\n`) are unfolded and `=3D`
@@ -30,15 +40,7 @@ pub fn extract_hosts(body: &[u8], cap: usize) -> Vec<String> {
 		body
 	};
 	let decoded = unfold_quoted_printable(scan_window);
-	for host in scan_hosts(&decoded) {
-		if !seen.insert(host.clone()) {
-			continue;
-		}
-		if out.len() >= cap {
-			break;
-		}
-		out.push(host);
-	}
+	scan_hosts(&decoded, cap, &mut out, &mut seen);
 	out
 }
 
@@ -91,34 +93,62 @@ fn hex_value(b: u8) -> Option<u8> {
 	}
 }
 
-/// Iterate every `http(s)://host` host found in `input`, decoded form.
-fn scan_hosts(input: &[u8]) -> Vec<String> {
-	let mut hosts = Vec::new();
-	let mut offset = 0;
-	while offset < input.len() {
-		let rest = &input[offset..];
-		let http = find_subslice(rest, b"http://");
-		let https = find_subslice(rest, b"https://");
-		let pick = match (http, https) {
-			(Some(a), Some(b)) => {
-				if a <= b {
-					(a, "http")
-				} else {
-					(b, "https")
-				}
+/// Single forward scan that recognises `http://` and `https://` without
+/// re-scanning the suffix on every match. Hosts are deduplicated and
+/// bounded inline so the function never materialises more than `cap`
+/// unique results, and the scan stops as soon as the cap is reached.
+fn scan_hosts(
+	input: &[u8],
+	cap: usize,
+	out: &mut Vec<String>,
+	seen: &mut std::collections::HashSet<String>,
+) {
+	let bytes = input;
+	let mut i = 0usize;
+	while i < bytes.len() {
+		#[cfg(test)]
+		SCAN_STEPS.with(|c| c.set(c.get() + 1));
+		// Fast path: match `http://` (7 bytes) or `https://` (8 bytes) at
+		// the current position. A direct byte compare is O(1) per
+		// position; the old `find_subslice(rest, b"http://")` call was
+		// O(rest) and made the whole scan quadratic when the body held
+		// many URLs.
+		if i + 7 <= bytes.len() && &bytes[i..i + 7] == b"http://" {
+			let host_start = i + 7;
+			let (host, consumed) = read_host(&bytes[host_start..]);
+			i = host_start + consumed;
+			push_unique(host, cap, out, seen);
+			if out.len() >= cap {
+				return;
 			}
-			(Some(a), None) => (a, "http"),
-			(None, Some(b)) => (b, "https"),
-			(None, None) => break,
-		};
-		let after = offset + pick.0 + pick.1.len() + 3; // past "://"
-		let (host, consumed) = read_host(&input[after..]);
-		offset = after + consumed;
-		if let Some(host) = host {
-			hosts.push(host);
+			continue;
 		}
+		if i + 8 <= bytes.len() && &bytes[i..i + 8] == b"https://" {
+			let host_start = i + 8;
+			let (host, consumed) = read_host(&bytes[host_start..]);
+			i = host_start + consumed;
+			push_unique(host, cap, out, seen);
+			if out.len() >= cap {
+				return;
+			}
+			continue;
+		}
+		i += 1;
 	}
-	hosts
+}
+
+fn push_unique(
+	host: Option<String>,
+	cap: usize,
+	out: &mut Vec<String>,
+	seen: &mut std::collections::HashSet<String>,
+) {
+	if let Some(host) = host
+		&& seen.insert(host.clone())
+		&& out.len() < cap
+	{
+		out.push(host);
+	}
 }
 
 /// Read a host starting at `input[0]`. Returns the host and the number of
@@ -140,13 +170,20 @@ fn is_host_byte(b: u8) -> bool {
 	matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.')
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 	if needle.is_empty() || haystack.len() < needle.len() {
 		return None;
 	}
-	haystack
-		.windows(needle.len())
-		.position(|window| window == needle)
+	for i in 0..=(haystack.len() - needle.len()) {
+		#[cfg(test)]
+		SCAN_STEPS.with(|c| c.set(c.get() + 1));
+		if &haystack[i..i + needle.len()] == needle {
+			return Some(i);
+		}
+	}
+	None
 }
 
 fn normalize_host(raw: &[u8]) -> Option<String> {
@@ -175,6 +212,14 @@ fn normalize_host(raw: &[u8]) -> Option<String> {
 
 fn is_ip_literal(host: &str) -> bool {
 	host.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// Reset and read the test-only step counter. Returns the counter to zero
+/// and hands the previous total to the caller so a test can assert the
+/// delta a single `extract_hosts` call contributed.
+#[cfg(test)]
+fn reset_scan_steps() -> u64 {
+	SCAN_STEPS.with(|c| c.replace(0))
 }
 
 #[cfg(test)]
