@@ -66,7 +66,7 @@ fn mail_volumes_have_identical_paths_on_both_sides_of_the_colon() {
 		.expect("volumes is an array");
 	for entry in volumes {
 		let s = entry.as_str().expect("volume is a string");
-		if s.contains(':') && !s.contains("epistle-pg") {
+		if s.starts_with('/') {
 			let (host, rest) = s.split_once(':').expect("colon present");
 			let container = rest.split(':').next().unwrap_or(rest);
 			assert_eq!(
@@ -86,9 +86,13 @@ fn mail_depends_on_db_when_database_is_on() {
 }
 
 #[test]
-fn mail_has_no_depends_on_when_database_is_off() {
+fn mail_depends_only_on_clamav_when_database_is_off() {
 	let value = render(&minimal_answers(), false);
-	assert!(value["services"]["mail"].get("depends_on").is_none());
+	assert_eq!(
+		value["services"]["mail"]["depends_on"]["clamav"]["condition"],
+		"service_healthy"
+	);
+	assert!(value["services"]["mail"]["depends_on"].get("db").is_none());
 }
 
 #[test]

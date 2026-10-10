@@ -123,10 +123,8 @@ fn database_off_has_no_db_no_secrets_no_volumes() {
 		0,
 		"with database off the top-level secrets block must be empty"
 	);
-	assert!(
-		value["volumes"].is_null() || value["volumes"].as_object().is_some_and(|o| o.is_empty()),
-		"with database off the top-level volumes block must be absent or empty"
-	);
+	assert!(value["volumes"].get("epistle-pgdata").is_none());
+	assert!(value["volumes"].get("epistle-pgsock").is_none());
 }
 
 #[test]

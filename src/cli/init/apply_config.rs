@@ -33,6 +33,12 @@ pub(super) struct DesiredConfig {
 	pub(super) dns: Option<DesiredDns>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) database: Option<DesiredDatabase>,
+	pub(super) antispam: DesiredAntispam,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredAntispam {
+	clamd_socket: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -230,6 +236,9 @@ pub(super) fn build_config(
 		},
 		dns,
 		database,
+		antispam: DesiredAntispam {
+			clamd_socket: "/run/clamav/clamd.sock".to_string(),
+		},
 	})
 }
 
@@ -739,3 +748,7 @@ fn random_hex_suffix() -> String {
 	}
 	out
 }
+
+#[cfg(test)]
+#[path = "apply_config_tests_clamav.rs"]
+mod tests_clamav;
