@@ -131,10 +131,28 @@ impl<B: Backend> Session<B> {
 		self.tls = true;
 	}
 
+	/// Adopt `account` as the authenticated account without going through
+	/// `AUTHENTICATE`. The session must already be over TLS (`set_tls`).
+	/// Test-only: lets the test suite exercise an authenticated session
+	/// without a STARTTLS handshake.
+	#[cfg(test)]
+	pub fn adopt_account_for_test(&mut self, account: &str) {
+		self.account = Some(account.to_string());
+	}
+
 	/// Set the client peer IP for ban-store enforcement. Called by the
 	/// network layer after `accept()`; `None` for in-memory tests.
 	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
 		self.peer_ip = ip;
+	}
+
+	/// Whether an account has been adopted via `AUTHENTICATE` (or the
+	/// test-only `adopt_account_for_test`). The command loop uses this
+	/// to pick the right read deadline, short pre-auth, longer
+	/// post-auth, so a slow client cannot exhaust the listener's
+	/// connection slots.
+	pub fn account_is_some(&self) -> bool {
+		self.account.is_some()
 	}
 
 	/// The capability banner sent on connect and after STARTTLS.

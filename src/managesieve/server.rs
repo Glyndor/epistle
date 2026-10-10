@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
@@ -25,8 +25,13 @@ use super::store::ScriptStore;
 const READ_BUFFER: usize = 4096;
 /// Idle timeout before the connection is dropped (30 minutes).
 const TIMEOUT: Duration = Duration::from_secs(1800);
-/// The largest script literal accepted, guarding against memory exhaustion.
-const MAX_LITERAL: usize = 1 << 20;
+/// Pre-authentication read deadline. An unauthenticated client must
+/// not be able to hold a connection slot forever, so the deadline is
+/// much shorter than the post-auth one.
+const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default maximum script literal size (1 MiB). Configurable per server
+/// so the test suite can drive a small bound.
+const DEFAULT_MAX_LITERAL: usize = 1 << 20;
 /// Default max concurrent connections for a ManageSieve listener.
 const MAX_CONNECTIONS: usize = 100;
 
@@ -66,6 +71,8 @@ pub struct Server {
 	accounts_root: PathBuf,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	max_literal: usize,
+	preauth_timeout: Duration,
 }
 
 impl Server {
@@ -76,6 +83,8 @@ impl Server {
 			accounts_root: data_dir.join("accounts"),
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			max_literal: DEFAULT_MAX_LITERAL,
+			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
 		}
 	}
 
@@ -84,6 +93,25 @@ impl Server {
 		if max > 0 {
 			self.max_connections = max;
 		}
+		self
+	}
+
+	/// Set the maximum script literal size accepted by this server.
+	/// `0` keeps the default of 1 MiB; tests use a small bound so they
+	/// can drive a "too large" rejection without sending megabytes.
+	pub fn with_max_literal(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_literal = max;
+		}
+		self
+	}
+
+	/// Set the pre-authentication read deadline. The default is 60
+	/// seconds, short enough that an idle attacker cannot exhaust the
+	/// listener's connection slots. Tests use a 2-second bound so a
+	/// regression is caught in seconds, not minutes.
+	pub fn with_preauth_timeout(mut self, timeout: Duration) -> Self {
+		self.preauth_timeout = timeout;
 		self
 	}
 
@@ -111,76 +139,210 @@ impl Server {
 		}
 	}
 
-	async fn handle(&self, stream: TcpStream, peer_ip: std::net::IpAddr) -> std::io::Result<()> {
+	async fn handle(
+		&self,
+		stream: tokio::net::TcpStream,
+		peer_ip: std::net::IpAddr,
+	) -> std::io::Result<()> {
+		self.handle_inner(stream, peer_ip).await
+	}
+
+	/// Drive one connection from the command loop, given any bidirectional
+	/// stream. Public so the test suite can drive it with an in-memory
+	/// `tokio::io::duplex` pair without going through a real listener.
+	pub async fn handle_stream<S>(&self, stream: S) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
+		self.handle_inner(
+			stream,
+			std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+		)
+		.await
+	}
+
+	/// Test-only: drive the command loop with a pre-authenticated
+	/// session for `account`. Avoids a STARTTLS handshake so the test
+	/// can use an in-memory `tokio::io::duplex` pair directly.
+	#[cfg(test)]
+	pub async fn handle_preauth_for_test<S>(&self, stream: S, account: &str) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
+		let backend = DirectoryBackend {
+			directory: self.directory.clone(),
+			accounts_root: self.accounts_root.clone(),
+		};
+		let mut session = Session::new(backend, true);
+		session.adopt_account_for_test(account);
+		run_command_loop(
+			stream,
+			session,
+			self.max_literal,
+			self.preauth_timeout,
+			None,
+		)
+		.await
+	}
+
+	async fn handle_inner<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
 		let backend = DirectoryBackend {
 			directory: self.directory.clone(),
 			accounts_root: self.accounts_root.clone(),
 		};
 		let mut session = Session::new(backend, false);
 		session.set_peer_ip(Some(peer_ip));
-		let mut stream: Box<dyn Connection> = Box::new(stream);
+		run_command_loop(
+			stream,
+			session,
+			self.max_literal,
+			self.preauth_timeout,
+			Some(&self.tls),
+		)
+		.await
+	}
+}
 
-		stream.write_all(&session.greeting().encode()).await?;
-		stream.flush().await?;
+/// Drive the command loop with the given pre-built session. Both the
+/// real connection path and the test-only pre-authenticated path share
+/// this body so the literal-framing rules cannot diverge.
+async fn run_command_loop<S, B>(
+	stream: S,
+	mut session: Session<B>,
+	max_literal: usize,
+	preauth_timeout: Duration,
+	tls_acceptor: Option<&tokio_rustls::TlsAcceptor>,
+) -> std::io::Result<()>
+where
+	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	B: Backend,
+{
+	let mut stream: Box<dyn Connection> = Box::new(stream);
+	stream.write_all(&session.greeting().encode()).await?;
+	stream.flush().await?;
 
-		let mut decoder = LineDecoder::new();
-		let mut buffer = [0u8; READ_BUFFER];
-		loop {
-			let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer).await? else {
+	let mut decoder = LineDecoder::new();
+	let mut buffer = [0u8; READ_BUFFER];
+	loop {
+		let read_deadline = if session.account_is_some() {
+			TIMEOUT
+		} else {
+			preauth_timeout
+		};
+		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
+		else {
+			write(
+				&mut stream,
+				&Response::Bye("Pre-authentication timeout.".into()),
+			)
+			.await?;
+			return Ok(());
+		};
+		let Ok(line) = String::from_utf8(line) else {
+			write(
+				&mut stream,
+				&Response::No(Some("Non-UTF-8 command.".into())),
+			)
+			.await?;
+			continue;
+		};
+		if line.trim().is_empty() {
+			continue;
+		}
+
+		// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
+		let literal = match command::trailing_literal(&line) {
+			Some(literal) if literal.len > max_literal => {
+				write(&mut stream, &Response::Bye("literal too large".into())).await?;
 				return Ok(());
-			};
-			let Ok(line) = String::from_utf8(line) else {
-				write(
-					&mut stream,
-					&Response::No(Some("Non-UTF-8 command.".into())),
-				)
-				.await?;
-				continue;
-			};
-			if line.trim().is_empty() {
-				continue;
 			}
-
-			// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
-			let literal = match command::trailing_literal(&line) {
-				Some(literal) if literal.len > MAX_LITERAL => {
-					write(&mut stream, &Response::No(Some("Script too large.".into()))).await?;
+			Some(literal) => {
+				// Reject commands whose failure is known before the script arrives.
+				// Only a non-synchronizing literal has bytes to discard on rejection.
+				let rejection = match command::parse(&line, None) {
+					Err(command::ParseError::MissingLiteral) if !session.account_is_some() => {
+						Some("Authenticate first.")
+					}
+					Err(command::ParseError::MissingLiteral) => None,
+					Err(_) => Some("Bad command."),
+					Ok(_) => None,
+				};
+				if let Some(message) = rejection {
+					write(&mut stream, &Response::No(Some(message.into()))).await?;
+					if !literal.synchronizing {
+						match discard::literal(
+							&mut *stream,
+							&mut decoder,
+							literal.len,
+							read_deadline,
+						)
+						.await
+						{
+							Ok(drained) if drained.complete => {}
+							Ok(_) => return Ok(()),
+							Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+								write(&mut stream, &Response::Bye("read timeout".into())).await?;
+								return Ok(());
+							}
+							Err(error) => return Err(error),
+						}
+					}
 					continue;
 				}
-				Some(literal) => {
-					Some(read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await?)
+				match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
+					Some(bytes) => Some(bytes),
+					None => {
+						// The connection closed before the announced
+						// literal size arrived: drop the partial payload
+						// instead of parsing it as a complete script.
+						write(
+							&mut stream,
+							&Response::No(Some("Literal truncated by connection close.".into())),
+						)
+						.await?;
+						continue;
+					}
 				}
-				None => None,
-			};
+			}
+			None => None,
+		};
 
-			let response = match command::parse(&line, literal) {
-				Ok(command) => session.handle(command),
-				Err(_) => Response::No(Some("Bad command.".into())),
-			};
-			let upgrade = response.starts_tls();
-			let close = response.is_final();
-			write(&mut stream, &response).await?;
-			if close {
+		let response = match command::parse(&line, literal) {
+			Ok(command) => session.handle(command),
+			Err(_) => Response::No(Some("Bad command.".into())),
+		};
+		let upgrade = response.starts_tls();
+		let close = response.is_final();
+		write(&mut stream, &response).await?;
+		if close {
+			return Ok(());
+		}
+		if upgrade {
+			let Some(tls) = tls_acceptor else {
 				return Ok(());
-			}
-			if upgrade {
-				let upgraded = self.tls.accept(stream).await?;
-				stream = Box::new(upgraded);
-				session.set_tls();
-				decoder = LineDecoder::new();
-				// RFC 5804 §2.2: re-issue capabilities after the TLS handshake.
-				stream.write_all(&session.greeting().encode()).await?;
-				stream.flush().await?;
-			}
+			};
+			let upgraded = tls.accept(stream).await?;
+			stream = Box::new(upgraded);
+			session.set_tls();
+			decoder = LineDecoder::new();
+			stream.write_all(&session.greeting().encode()).await?;
+			stream.flush().await?;
 		}
 	}
 }
 
-/// Read one command line, or `None` on clean EOF/timeout.
+/// Read one command line, or `None` on clean EOF/timeout. `deadline`
+/// is the per-read timeout the caller wants to enforce; the post-auth
+/// deadline is generous (30 minutes), the pre-auth deadline is tight
+/// so an idle attacker cannot exhaust the listener's connection slots.
 async fn read_line(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
+	deadline: Duration,
 ) -> std::io::Result<Option<Vec<u8>>> {
 	loop {
 		match decoder.next_line() {
@@ -188,7 +350,7 @@ async fn read_line(
 			Ok(None) => {}
 			Err(_) => return Ok(None),
 		}
-		let read = match tokio::time::timeout(TIMEOUT, stream.read(buffer)).await {
+		let read = match tokio::time::timeout(deadline, stream.read(buffer)).await {
 			Ok(Ok(n)) => n,
 			Ok(Err(error)) => return Err(error),
 			Err(_) => return Ok(None),
@@ -200,19 +362,21 @@ async fn read_line(
 	}
 }
 
-/// Read exactly `size` literal octets. The trailing CRLF after the literal is
-/// left for the next `read_line`, which skips it as a blank line.
+/// Read exactly `size` literal octets, or detect a truncated connection
+/// and return `None` so the caller can reject the command. The trailing
+/// CRLF after the literal is left for the next `read_line`, which skips
+/// it as a blank line.
 async fn read_literal(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
 	size: usize,
-) -> std::io::Result<Vec<u8>> {
+) -> std::io::Result<Option<Vec<u8>>> {
 	let mut literal = decoder.take_buffered(size);
 	while literal.len() < size {
 		let read = stream.read(buffer).await?;
 		if read == 0 {
-			break;
+			return Ok(None);
 		}
 		let needed = size - literal.len();
 		if read <= needed {
@@ -222,7 +386,7 @@ async fn read_literal(
 			decoder.feed(&buffer[needed..read]);
 		}
 	}
-	Ok(literal)
+	Ok(Some(literal))
 }
 
 /// Write a response and flush.
@@ -234,3 +398,14 @@ async fn write(stream: &mut Box<dyn Connection>, response: &Response) -> std::io
 /// A boxable bidirectional stream (plain or TLS).
 trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
+
+#[cfg(test)]
+#[path = "server_tests_literals.rs"]
+mod tests_literals;
+
+#[path = "server_discard.rs"]
+mod discard;
+
+#[cfg(test)]
+#[path = "server_tests_discard.rs"]
+mod tests_discard;

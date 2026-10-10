@@ -42,6 +42,19 @@ impl LineDecoder {
 		self.buffer.drain(..take).collect()
 	}
 
+	/// Discard up to `max` buffered literal bytes without allocating storage
+	/// for them. Any following command stays in the decoder.
+	pub fn discard_buffered(&mut self, max: usize) -> usize {
+		let take = self.buffer.len().min(max);
+		self.buffer.drain(..take);
+		take
+	}
+
+	#[cfg(test)]
+	pub(crate) fn buffer_capacity(&self) -> usize {
+		self.buffer.capacity()
+	}
+
 	/// Try to extract the next complete line (without CRLF). Returns
 	/// `Ok(None)` when more bytes are needed.
 	pub fn next_line(&mut self) -> Result<Option<Vec<u8>>, LineError> {

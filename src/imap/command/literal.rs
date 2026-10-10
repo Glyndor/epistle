@@ -3,7 +3,7 @@
 //! network layer collects after the command line.
 
 use super::parse::{MAX_APPEND_SIZE, parse_astring};
-use super::{Command, ParseError};
+use super::{Command, LiteralAnnouncement, ParseError};
 
 /// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date is
 /// accepted and ignored.
@@ -13,11 +13,12 @@ pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError>
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
-	let (flags, size) = parse_flags_and_literal(rest.trim(), &bad)?;
+	let (flags, literal) = parse_flags_and_literal(rest.trim(), &bad)?;
 	Ok(Command::Append {
 		mailbox,
 		flags,
-		size,
+		size: literal.size,
+		synchronizing: literal.synchronizing,
 	})
 }
 
@@ -35,22 +36,27 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
-	let (flags, size) = parse_flags_and_literal(rest.trim(), &bad)?;
+	let (flags, literal) = parse_flags_and_literal(rest.trim(), &bad)?;
 	Ok(Command::Replace {
 		sequence,
 		mailbox,
 		flags,
-		size,
+		size: literal.size,
 		uid,
+		synchronizing: literal.synchronizing,
 	})
 }
 
 /// Parse an optional `(flags)` group followed by the `{n}` / `{n+}` literal
-/// count shared by APPEND and REPLACE.
+/// count shared by APPEND and REPLACE. The literal's synchronizing flag
+/// (the optional `+` after the size) tells the network layer whether the
+/// client will already have sent the literal before reading the response
+/// (RFC 7888): for the non-synchronizing `{n+}` form the bytes arrive even
+/// when the command is rejected, and the server must consume them.
 fn parse_flags_and_literal(
 	rest: &str,
 	bad: &impl Fn() -> ParseError,
-) -> Result<(Vec<String>, usize), ParseError> {
+) -> Result<(Vec<String>, LiteralAnnouncement), ParseError> {
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
 		(
@@ -64,14 +70,39 @@ fn parse_flags_and_literal(
 		(Vec::new(), rest)
 	};
 
-	let size_text = literal_text
-		.strip_prefix('{')
-		.and_then(|t| t.strip_suffix('}'))
-		.ok_or_else(bad)?;
-	let size_text = size_text.strip_suffix('+').unwrap_or(size_text);
-	let size: usize = size_text.parse().map_err(|_| bad())?;
-	if size == 0 || size > MAX_APPEND_SIZE {
+	let literal = literal_announcement(literal_text).ok_or_else(bad)?;
+	if literal.size == 0 || literal.size > MAX_APPEND_SIZE {
 		return Err(bad());
 	}
-	Ok((flags, size))
+	Ok((flags, literal))
+}
+
+/// Pull the trailing `{n}` / `{n+}` size off a literal-bearing command's
+/// argument tail. Returns `None` when the tail does not end in a literal
+/// announcement, which the parser then reports as `BadArguments`.
+pub(super) fn literal_announcement(args: &str) -> Option<LiteralAnnouncement> {
+	let inner = args.trim().strip_suffix('}')?;
+	let open = inner.rfind('{')?;
+	let digits = &inner[open + 1..];
+	let (digits, synchronizing) = match digits.strip_suffix('+') {
+		Some(rest) => (rest, false),
+		None => (digits, true),
+	};
+	let size = digits.parse().ok()?;
+	Some(LiteralAnnouncement {
+		size,
+		synchronizing,
+	})
+}
+
+/// Find the literal announcement in a full command line, but only for
+/// commands that actually carry literals (`APPEND` / `REPLACE`). The
+/// parser may have rejected the line; in that case the session uses this
+/// to know how many bytes (RFC 7888 §4) the network layer must discard.
+pub(crate) fn literal_announcement_in_line(line: &str) -> Option<LiteralAnnouncement> {
+	let (verb, args) = line.split_once(' ')?;
+	if !verb.eq_ignore_ascii_case("APPEND") && !verb.eq_ignore_ascii_case("REPLACE") {
+		return None;
+	}
+	literal_announcement(args)
 }

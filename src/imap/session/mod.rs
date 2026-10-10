@@ -50,7 +50,17 @@ impl Session {
 				return Output::text(format!("{tag} BAD unknown command\r\n"));
 			}
 			Err(ParseError::BadArguments(tag)) => {
-				return Output::text(format!("{tag} BAD invalid arguments\r\n"));
+				// RFC 7888 §4: when an APPEND/REPLACE command fails to parse
+				// but the line announced a non-synchronizing literal, the
+				// payload is already on the wire and must be discarded so it
+				// does not arrive as the next command.
+				let mut output = Output::text(format!("{tag} BAD invalid arguments\r\n"));
+				if let Some(announcement) = super::command::literal_announcement_in_line(line)
+					&& !announcement.synchronizing
+				{
+					output.discard_literal = Some(announcement.size);
+				}
+				return output;
 			}
 		};
 		self.apply(tagged)
@@ -172,14 +182,16 @@ impl Session {
 				mailbox,
 				flags,
 				size,
-			} => self.append_begin(&tag, &mailbox, &flags, size),
+				synchronizing,
+			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing),
 			Command::Replace {
 				sequence,
 				mailbox,
 				flags,
 				size,
 				uid,
-			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid),
+				synchronizing,
+			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid, synchronizing),
 			Command::Fetch {
 				sequence,
 				items,
