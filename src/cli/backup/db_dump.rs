@@ -34,6 +34,14 @@ use std::process::{Command, Stdio};
 use crate::cli::init::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, compose_file_path};
 use crate::config::Database;
 
+#[cfg(test)]
+#[path = "db_dump_tests_debug.rs"]
+mod tests_debug;
+
+#[cfg(test)]
+#[path = "db_dump_tests_clean.rs"]
+mod tests_clean;
+
 /// The path of `database.sql` inside the backup archive.
 pub(crate) const DATABASE_SQL_NAME: &str = "database.sql";
 
@@ -117,11 +125,26 @@ impl std::error::Error for BackupError {}
 /// `argv` is what the kernel would publish through `/proc/<pid>/cmdline`,
 /// so a test that walks `argv` and finds the secret anywhere there is a
 /// regression we want to catch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CommandSpec {
 	argv: Vec<String>,
 	env: Vec<(String, String)>,
 	stdin_payload: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for CommandSpec {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let env: Vec<_> = self
+			.env
+			.iter()
+			.map(|(key, _)| (key, "<redacted>"))
+			.collect();
+		f.debug_struct("CommandSpec")
+			.field("argv", &self.argv)
+			.field("env", &env)
+			.field("stdin_len", &self.stdin_payload.as_ref().map(Vec::len))
+			.finish()
+	}
 }
 
 impl CommandSpec {
@@ -270,6 +293,8 @@ pub(crate) fn host_pg_dump_spec(db: &Database) -> Result<CommandSpec, BackupErro
 	let mut spec = CommandSpec::new(vec![
 		"pg_dump".to_string(),
 		"-Fp".to_string(),
+		"--clean".to_string(),
+		"--if-exists".to_string(),
 		"--no-owner".to_string(),
 		"--no-privileges".to_string(),
 		url_without_password,
@@ -294,6 +319,7 @@ pub(crate) fn host_psql_load_spec(db: &Database, sql: &[u8]) -> Result<CommandSp
 		"psql".to_string(),
 		"-v".to_string(),
 		"ON_ERROR_STOP=1".to_string(),
+		"-1".to_string(),
 		"-X".to_string(),
 	];
 	// When the password comes from `password_file`, psql would otherwise
@@ -321,7 +347,7 @@ pub(crate) fn container_pg_dump_spec(compose: &Path) -> Result<CommandSpec, Back
 	}
 	let compose_str = compose.to_string_lossy().into_owned();
 	let script = format!(
-		r#"PGPASSWORD="$(cat '{DATABASE_PASSWORD_FILE}')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U '{DATABASE_USER}' -d '{DATABASE_NAME}'"#
+		r#"PGPASSWORD="$(cat '{DATABASE_PASSWORD_FILE}')" exec pg_dump -Fp --clean --if-exists --no-owner --no-privileges -h '/var/run/postgresql' -U '{DATABASE_USER}' -d '{DATABASE_NAME}'"#
 	);
 	let spec = CommandSpec::new(vec![
 		"podup".to_string(),
