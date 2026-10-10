@@ -72,3 +72,6 @@ mod metadata;
 mod misc;
 #[path = "session_tests_search.rs"]
 mod search;
+
+#[path = "session_tests_rev1.rs"]
+mod rev1;

@@ -25,6 +25,11 @@ mod thread;
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
 impl Session {
+	#[cfg(test)]
+	fn rev2_enabled(&self) -> bool {
+		self.imap4rev2
+	}
+
 	/// The greeting sent when the connection opens.
 	pub fn greeting(&self) -> Output {
 		Output::text(format!(
@@ -314,7 +319,10 @@ impl Session {
 		let enabled: Vec<&str> = capabilities
 			.iter()
 			.filter_map(|cap| match cap.to_ascii_uppercase().as_str() {
-				"IMAP4REV2" => Some("IMAP4rev2"),
+				"IMAP4REV2" => {
+					self.imap4rev2 = true;
+					Some("IMAP4rev2")
+				}
 				"CONDSTORE" => Some("CONDSTORE"),
 				"QRESYNC" => Some("QRESYNC"),
 				"UIDONLY" => {
