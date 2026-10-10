@@ -156,6 +156,15 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
+	/// Replay a backup tar.gz (read from stdin) over the data directory and,
+	/// when a database is configured, into the database. The hard rule
+	/// matches `backup`: a `database.sql` in the archive that cannot be
+	/// loaded is a restore error, not a silent skip.
+	Restore {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE")]
+		config: PathBuf,
+	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
 		/// Path to the configuration file.

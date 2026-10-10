@@ -100,6 +100,23 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Restore { config } => match Config::load(&config) {
+				Ok(config) => {
+					let mut input = Vec::new();
+					if let Err(error) =
+						std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut input)
+					{
+						style::error(format_args!("reading archive from stdin: {error}"));
+						ExitCode::FAILURE
+					} else {
+						backup::run_restore(&config, &input, &mut std::io::stdout().lock())
+					}
+				}
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
 			Command::Verify { config } => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
 					Ok(crypto) => {

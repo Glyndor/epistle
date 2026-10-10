@@ -137,11 +137,14 @@ impl ComposeService {
 	/// authentication round-trip works.
 	pub(super) fn new_db() -> Self {
 		let mut environment = BTreeMap::new();
-		environment.insert("POSTGRES_USER".to_string(), "epistle".to_string());
-		environment.insert("POSTGRES_DB".to_string(), "epistle".to_string());
+		environment.insert(
+			"POSTGRES_USER".to_string(),
+			super::DATABASE_USER.to_string(),
+		);
+		environment.insert("POSTGRES_DB".to_string(), super::DATABASE_NAME.to_string());
 		environment.insert(
 			"POSTGRES_PASSWORD_FILE".to_string(),
-			"/run/secrets/epistle_db_password".to_string(),
+			super::DATABASE_PASSWORD_FILE.to_string(),
 		);
 		environment.insert(
 			"POSTGRES_INITDB_ARGS".to_string(),
