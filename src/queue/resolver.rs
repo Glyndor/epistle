@@ -37,7 +37,9 @@ impl MxConnector {
 	/// shared `system_resolver` so the TCP-only + DNSSEC contract stays in
 	/// one place (see `crate::spf::system_resolver` for the rationale).
 	pub fn from_system() -> std::io::Result<Self> {
-		Ok(MxConnector { resolver: crate::spf::system_resolver()? })
+		Ok(MxConnector {
+			resolver: crate::spf::system_resolver()?,
+		})
 	}
 
 	/// MX hostnames in preference order; implicit MX (the domain itself,

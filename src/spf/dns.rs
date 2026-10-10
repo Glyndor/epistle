@@ -26,8 +26,9 @@ pub(crate) fn system_resolver_config() -> std::io::Result<ResolverConfig> {
 /// Build the resolver options the system resolver uses: defaults from
 /// `/etc/resolv.conf`, DNSSEC validation enabled.
 pub(crate) fn system_resolver_options() -> ResolverOpts {
-	let (_config, mut opts) =
-		hickory_resolver::system_conf::read_system_conf().map_err(std::io::Error::other).unwrap();
+	let (_config, mut opts) = hickory_resolver::system_conf::read_system_conf()
+		.map_err(std::io::Error::other)
+		.unwrap();
 	opts.validate = true;
 	opts
 }
@@ -118,7 +119,9 @@ impl SystemDns {
 	/// against a non-validating-aware path, answers come back unauthenticated
 	/// and TLSA lookups yield nothing, so DANE simply does not engage.
 	pub fn from_system() -> std::io::Result<Self> {
-		Ok(SystemDns { resolver: system_resolver()? })
+		Ok(SystemDns {
+			resolver: system_resolver()?,
+		})
 	}
 
 	async fn lookup(
