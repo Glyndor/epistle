@@ -10,7 +10,7 @@ fn postinst_enables_the_service_socket_with_runtime_environment_and_tolerates_fa
 				let dir = tempfile::tempdir().unwrap();
 				let root = dir.path();
 				let runtime = root.join("run/user/103");
-				std::fs::create_dir_all(root.join("state")).unwrap();
+				std::fs::create_dir_all(root.join("state/data")).unwrap();
 				std::fs::create_dir_all(root.join("config")).unwrap();
 				if systemd {
 					std::fs::create_dir_all(root.join("run/systemd/system")).unwrap();

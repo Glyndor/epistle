@@ -89,12 +89,12 @@ podman run --rm \
   -p 143:143 -p 993:993 -p 995:995 \
   -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
-  -v /var/lib/glyndor/epistle:/var/lib/glyndor/epistle \
+  -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
   ghcr.io/glyndor/epistle:0.8.0
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
-`/var/lib/glyndor/epistle` mount carries the on-disk mail store. Both are
+`/var/lib/glyndor/epistle/data` mount carries the on-disk mail store. The account home stays outside the writable mount, keeping Podman storage and systemd user units on the host. Both are
 created and owned by the `glyndor-epistle` account the `.deb` postinst sets
 up (`debian/epistle.postinst`); running the container under that same uid is
 what the existing rootless Podman stack under `podup` does.
@@ -123,7 +123,7 @@ services:
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
-      - /var/lib/glyndor/epistle:/var/lib/glyndor/epistle
+      - /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data
 ```
 
 Both the failing default and the working mapping were checked on this
@@ -141,7 +141,7 @@ and, when `services.database = true`, the database password and the
 podup compose file. Bringing the stack up is a single command:
 
 ```sh
-podup -f /var/lib/glyndor/epistle/compose/compose.yaml up -d
+podup -f /var/lib/glyndor/epistle/data/compose/compose.yaml up -d
 ```
 
 The compose file is JSON (the repository has no YAML crate). The
@@ -161,7 +161,7 @@ The data directory (`<data_dir>`) and the directory holding
 `mail.toml` (`<config_dir>`, the parent of the `config_path` answer)
 are bind-mounted at the same path on both sides of the keep-id
 mapping. A path the operator sees on the host
-(`/var/lib/glyndor/epistle/keys/s1.pem`) is the same path inside
+(`/var/lib/glyndor/epistle/data/keys/s1.pem`) is the same path inside
 the container, so every entry `init` wrote into `mail.toml` resolves
 the same way during a host `config-check` and during the in-container
 `serve`. A different path on each side would force the operator to

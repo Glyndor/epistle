@@ -79,3 +79,6 @@ fn print_answers_carries_nothing_on_stderr() {
 		"init --print-answers wrote to stderr: {stderr}"
 	);
 }
+
+#[path = "init/data_dir.rs"]
+mod data_dir;
