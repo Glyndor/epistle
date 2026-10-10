@@ -144,11 +144,22 @@ impl Session {
 	}
 
 	pub(super) fn close(&mut self, tag: &str) -> Output {
-		match &self.state {
-			State::Selected { account, .. } => {
-				self.state = State::Authenticated {
-					account: account.clone(),
-				};
+		match &mut self.state {
+			State::Selected {
+				snapshot,
+				read_only,
+				account,
+				..
+			} => {
+				// RFC 9051 §6.4.1: CLOSE on a read-write selection silently
+				// expunges every \Deleted message; on EXAMINE (read-only) it
+				// expunges nothing. Either way no untagged EXPUNGE responses
+				// are sent, the session returns to authenticated.
+				if !*read_only {
+					let _ = snapshot.expunge();
+				}
+				let prev = std::mem::take(account);
+				self.state = State::Authenticated { account: prev };
 				Output::text(format!("{tag} OK CLOSE completed\r\n"))
 			}
 			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),

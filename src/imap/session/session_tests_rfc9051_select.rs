@@ -66,3 +66,51 @@ fn failed_examine_deselects_with_closed_just_like_select() {
 	let response = text(&session.command_line("a3 EXPUNGE"));
 	assert_eq!(response, "a3 BAD no mailbox selected\r\n");
 }
+
+#[test]
+fn close_on_read_write_silently_expunges_deleted() {
+	// RFC 9051 §6.4.1: CLOSE on a read-write selection permanently
+	// removes every \Deleted message and returns silently — no untagged
+	// EXPUNGE responses, just the tagged OK.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: keeps\r\n\r\nkeep\r\n");
+	deliver(dir.path(), b"Subject: deletes\r\n\r\ndelete\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a1 SELECT INBOX");
+	session.command_line(r"a2 STORE 2 +FLAGS (\Deleted)");
+	let output = session.command_line("a3 CLOSE");
+	let response = text(&output);
+	assert_eq!(
+		response, "a3 OK CLOSE completed\r\n",
+		"CLOSE on read-write must not emit EXPUNGE responses"
+	);
+
+	// After CLOSE the session is authenticated. Re-selecting INBOX shows
+	// only the one message that survived the silent expunge.
+	session.command_line("a4 SELECT INBOX");
+	let response = text(&session.command_line("a5 STATUS INBOX (MESSAGES)"));
+	assert!(response.contains("MESSAGES 1"), "{response}");
+}
+
+#[test]
+fn close_on_examine_does_not_expunge() {
+	// RFC 9051 §6.4.1: CLOSE on a read-only selection is an explicit
+	// quit without an expunge. The mailbox on disk is left untouched.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: keeps\r\n\r\nkeep\r\n");
+	deliver(dir.path(), b"Subject: deletes\r\n\r\ndelete\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a1 EXAMINE INBOX");
+	session.command_line(r"a2 STORE 2 +FLAGS (\Deleted)");
+	let output = session.command_line("a3 CLOSE");
+	let response = text(&output);
+	assert_eq!(
+		response, "a3 OK CLOSE completed\r\n",
+		"CLOSE on EXAMINE must still return OK and not advertise expunges"
+	);
+
+	// Both messages remain on disk, including the \Deleted one.
+	session.command_line("a4 SELECT INBOX");
+	let response = text(&session.command_line("a5 STATUS INBOX (MESSAGES)"));
+	assert!(response.contains("MESSAGES 2"), "{response}");
+}
