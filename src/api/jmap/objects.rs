@@ -3,6 +3,7 @@
 
 use serde_json::{Value, json};
 
+use super::address_tokenizer::{find_angle_addr, split_top_level};
 use crate::smtp::trace::ensure_submission_headers;
 use crate::util::encoded_word;
 pub(super) use crate::util::header::header_value;
@@ -268,7 +269,10 @@ struct ParsedAddress {
 
 /// Split a header value into individual addresses at top-level commas,
 /// then peel off the angle-addr (the `<...>` portion, which holds the
-/// actual email) and the leading phrase (the display name).
+/// actual email) and the leading phrase (the display name). The
+/// tokenizer that splits at top-level commas and locates the
+/// angle-addr lives in [`super::address_tokenizer`] so the parser and
+/// its work counter can evolve independently.
 fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 	let parts = split_top_level(value, ',');
 	parts
@@ -276,225 +280,6 @@ fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 		.map(|raw| parse_address(&raw))
 		.filter(|addr| !addr.email.is_empty())
 		.collect()
-}
-
-// Test-only step counter incremented once per byte the address-header
-// tokenizer examines. Lets a regression test assert the per-call work
-// stays bounded (linear in the header length, not quadratic in the
-// number of openers). The counter is per-thread so parallel tests do
-// not observe each other's increments.
-#[cfg(test)]
-thread_local! {
-	static TOKENIZER_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-fn reset_tokenizer_steps() -> u64 {
-	TOKENIZER_STEPS.with(|c| c.replace(0))
-}
-
-/// Count one byte the tokenizer examined. The historical
-/// `find_matching` / `find_quoted_end` / `find_encoded_word_end`
-/// helpers each walked the remaining suffix of the value, so a header
-/// with N unterminated openers ran in O(N * length) time; the
-/// single-pass tokenizer below visits each byte once.
-#[cfg(test)]
-fn step_tokenizer() {
-	TOKENIZER_STEPS.with(|c| c.set(c.get() + 1));
-}
-
-/// Split `value` at every `delimiter` that sits at top level: outside
-/// `<...>`, outside `"..."`, and outside `=?...?=` encoded-words. A
-/// delimiter that the parser cannot match against its closing form is
-/// treated as text, so a stray `<` does not swallow the rest of the value.
-///
-/// The scan is a single forward pass. When an opener is seen, the
-/// matching closer is located by advancing through the rest of the
-/// bytes once and the cursor jumps past it; if no closer exists the
-/// opener is left as text and the cursor advances by one byte. A
-/// short-circuit flag remembers when the search for a closer came up
-/// empty, so subsequent openers of the same kind skip the suffix
-/// scan instead of re-walking the rest of the header.
-fn split_top_level(value: &str, delimiter: char) -> Vec<String> {
-	let mut out = Vec::new();
-	let mut start = 0usize;
-	let bytes = value.as_bytes();
-	let mut i = 0usize;
-	let mut no_more_angle = false;
-	let mut no_more_quoted = false;
-	let mut no_more_encoded = false;
-	while i < bytes.len() {
-		#[cfg(test)]
-		step_tokenizer();
-		let byte = bytes[i];
-		if byte == b'<' && !no_more_angle {
-			let end = skip_angle_addr(bytes, i);
-			if end > i + 1 {
-				i = end;
-			} else {
-				no_more_angle = true;
-				if byte == delimiter as u8 {
-					out.push(value[start..i].to_string());
-					start = i + 1;
-				}
-				i += 1;
-			}
-			continue;
-		}
-		if byte == b'"' && !no_more_quoted {
-			let end = skip_quoted_string(bytes, i);
-			if end > i + 1 {
-				i = end;
-			} else {
-				no_more_quoted = true;
-				if byte == delimiter as u8 {
-					out.push(value[start..i].to_string());
-					start = i + 1;
-				}
-				i += 1;
-			}
-			continue;
-		}
-		if byte == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'?' && !no_more_encoded {
-			match encoded_word_end_inline(value, i) {
-				EncodedWordEnd::Found(close) => i = close,
-				EncodedWordEnd::NoCloser => {
-					no_more_encoded = true;
-					if byte == delimiter as u8 {
-						out.push(value[start..i].to_string());
-						start = i + 1;
-					}
-					i += 1;
-				}
-				EncodedWordEnd::Invalid => {
-					// Treat the `=?` as plain text. The first `=?` in a
-					// header is permitted atom text (RFC 5322 §3.2.3),
-					// and a later opener may still form a valid
-					// encoded-word; we must not disable recognition for
-					// the rest of the header.
-					if byte == delimiter as u8 {
-						out.push(value[start..i].to_string());
-						start = i + 1;
-					}
-					i += 1;
-				}
-			}
-			continue;
-		}
-		if byte == delimiter as u8 {
-			out.push(value[start..i].to_string());
-			start = i + 1;
-		}
-		i += 1;
-	}
-	out.push(value[start..].to_string());
-	out
-}
-
-// Advance past `<...>` starting at `bytes[start]` (which must be `<`).
-// Returns the index just past the closing `>`, or `start + 1` when
-// the open has no matching close. A backslash escapes the next byte
-// inside the angle-addr.
-fn skip_angle_addr(bytes: &[u8], start: usize) -> usize {
-	let mut i = start + 1;
-	while i < bytes.len() {
-		#[cfg(test)]
-		step_tokenizer();
-		match bytes[i] {
-			b'\\' if i + 1 < bytes.len() => i += 2,
-			b'>' => return i + 1,
-			_ => i += 1,
-		}
-	}
-	start + 1
-}
-
-// Advance past `"..."` starting at `bytes[start]` (which must be `"`).
-// Returns the index just past the closing `"`, or `start + 1` when
-// the string is unterminated. A backslash escapes the next byte.
-fn skip_quoted_string(bytes: &[u8], start: usize) -> usize {
-	let mut i = start + 1;
-	while i < bytes.len() {
-		#[cfg(test)]
-		step_tokenizer();
-		match bytes[i] {
-			b'\\' if i + 1 < bytes.len() => i += 2,
-			b'"' => return i + 1,
-			_ => i += 1,
-		}
-	}
-	start + 1
-}
-
-// Find the position just past the closing `?=` of the encoded-word
-// that starts at `value[start]` (which must point at `=`). The three
-// outcomes are distinct because the caller needs to know whether to
-// keep looking for later encoded-words or give up entirely: an invalid
-// candidate is just text, while the absence of any `?=` closer in the
-// rest of the header means no later opener can match either.
-enum EncodedWordEnd {
-	/// Position just past the closing `?=` of a valid encoded-word.
-	Found(usize),
-	/// The rest of the header has no `?=` at all; no later opener can
-	/// form an encoded-word, so the caller can short-circuit further
-	/// suffix searches.
-	NoCloser,
-	/// The candidate at `start` is not a valid encoded-word (wrong
-	/// component count, empty or non-graphic parts). Treat the `=?` as
-	/// plain text and keep scanning; a later opener may still be valid.
-	Invalid,
-}
-
-// Find the position just past the closing `?=` of the encoded-word
-// that starts at `value[start]` (which must point at `=`).
-fn encoded_word_end_inline(value: &str, start: usize) -> EncodedWordEnd {
-	let after = &value[start + 2..];
-	let Some(end) = after.find("?=") else {
-		// Count the work the suffix search did even on a miss. The
-		// historical counter only tallied the success path, so an
-		// algorithm that re-searched the whole suffix on every opener
-		// stayed below the bound: the outer loop's three byte checks
-		// are ~3 * len and the inner work is uncounted. With this
-		// counter, a re-search shows up as a per-opener cost.
-		#[cfg(test)]
-		{
-			for _ in 0..(after.len() + 4) {
-				step_tokenizer();
-			}
-		}
-		return EncodedWordEnd::NoCloser;
-	};
-	// Confirm every component is non-empty ASCII graphic.
-	let payload = &after[..end];
-	let mut parts = payload.split('?');
-	let Some(charset) = parts.next() else {
-		return EncodedWordEnd::Invalid;
-	};
-	let Some(encoding) = parts.next() else {
-		return EncodedWordEnd::Invalid;
-	};
-	let Some(text) = parts.next() else {
-		return EncodedWordEnd::Invalid;
-	};
-	if parts.next().is_some() {
-		return EncodedWordEnd::Invalid;
-	}
-	if charset.is_empty()
-		|| encoding.is_empty()
-		|| text.is_empty()
-		|| !charset.bytes().all(|b| b.is_ascii_graphic())
-		|| !encoding.bytes().all(|b| b.is_ascii_graphic())
-		|| !text.bytes().all(|b| b.is_ascii_graphic())
-	{
-		return EncodedWordEnd::Invalid;
-	}
-	#[cfg(test)]
-	{
-		for _ in 0..(end + 4) {
-			step_tokenizer();
-		}
-	}
-	EncodedWordEnd::Found(start + 2 + end + 2)
 }
 
 // One address: extract the angle-addr email if present, otherwise treat
@@ -514,61 +299,6 @@ fn parse_address(raw: &str) -> ParsedAddress {
 		name: None,
 		email: trimmed.to_string(),
 	}
-}
-
-/// The byte positions of `<` and `>` that wrap the email of an address,
-/// both outside any quoted-string and outside any encoded-word. The
-/// returned pair is the LAST angle-addr in `value`, matching the position
-/// where the email sits at the tail of an RFC 5322 address. Returns `None`
-/// when no angle-addr is present.
-fn find_angle_addr(value: &str) -> Option<(usize, usize)> {
-	let bytes = value.as_bytes();
-	let mut last: Option<(usize, usize)> = None;
-	let mut i = 0usize;
-	let mut no_more_angle = false;
-	let mut no_more_quoted = false;
-	let mut no_more_encoded = false;
-	while i < bytes.len() {
-		#[cfg(test)]
-		step_tokenizer();
-		let byte = bytes[i];
-		if byte == b'<' && !no_more_angle {
-			let start = i;
-			let end = skip_angle_addr(bytes, i);
-			if end > start + 1 {
-				last = Some((start, end - 1));
-				i = end;
-			} else {
-				no_more_angle = true;
-				i += 1;
-			}
-			continue;
-		}
-		if byte == b'"' && !no_more_quoted {
-			let start = i;
-			let end = skip_quoted_string(bytes, i);
-			if end > start + 1 {
-				i = end;
-			} else {
-				no_more_quoted = true;
-				i += 1;
-			}
-			continue;
-		}
-		if byte == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'?' && !no_more_encoded {
-			match encoded_word_end_inline(value, i) {
-				EncodedWordEnd::Found(close) => i = close,
-				EncodedWordEnd::NoCloser => {
-					no_more_encoded = true;
-					i += 1;
-				}
-				EncodedWordEnd::Invalid => i += 1,
-			}
-			continue;
-		}
-		i += 1;
-	}
-	last
 }
 
 /// Map an IMAP flag to its JMAP keyword (RFC 8621 §4.1.1).
