@@ -137,10 +137,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 					.then_some(account)
 			});
 		match outcome {
-			Some(account) => {
-				self.state = State::Authenticated { account };
-				Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
-			}
+			Some(account) => self.auth_success(tag, account, "AUTHENTICATE completed"),
 			None => self.auth_failure(tag),
 		}
 	}
@@ -224,10 +221,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 				.authenticate_with_ip(user, &pass, self.peer_ip, self.auth_protocol)
 		});
 		match verified {
-			Some(account) => {
-				self.state = State::Authenticated { account };
-				Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
-			}
+			Some(account) => self.auth_success(tag, account, "AUTHENTICATE completed"),
 			None => self.auth_failure(tag),
 		}
 	}
@@ -293,8 +287,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		{
 			return self.auth_failure(tag);
 		}
-		self.state = State::Authenticated { account };
-		Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
+		self.auth_success(tag, account, "AUTHENTICATE completed")
 	}
 
 	fn auth_plain(&mut self, tag: &str, encoded: &str) -> Output {
@@ -315,10 +308,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 				)
 			});
 		match verified {
-			Some(account) => {
-				self.state = State::Authenticated { account };
-				Output::text(format!("{tag} OK AUTHENTICATE completed\r\n"))
-			}
+			Some(account) => self.auth_success(tag, account, "AUTHENTICATE completed"),
 			None => self.auth_failure(tag),
 		}
 	}
@@ -499,13 +489,14 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 				// undoes any in-flight strikes the same way the PLAIN path
 				// does.
 				self.record_scram_outcome(account, Some(account), true);
-				self.state = State::Authenticated {
-					account: account.to_string(),
-				};
-				Output::text(format!(
-					"{tag} OK [SASL {}] AUTHENTICATE completed\r\n",
-					BASE64.encode(server_final)
-				))
+				self.auth_success(
+					tag,
+					account.to_string(),
+					&format!(
+						"[SASL {}] AUTHENTICATE completed",
+						BASE64.encode(server_final)
+					),
+				)
 			}
 			Err(_) => {
 				self.record_scram_outcome(account, Some(account), false);

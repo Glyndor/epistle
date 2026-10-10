@@ -345,7 +345,7 @@ fn examine_is_read_only() {
 fn unknown_mailbox_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
-	let output = session.command_line("a2 SELECT Archive");
+	let output = session.command_line("a2 SELECT Missing");
 	assert!(text(&output).contains("a2 NO"));
 }
 
@@ -412,7 +412,7 @@ fn status_requires_authentication_and_existing_mailbox() {
 	assert!(text(&output).contains("a1 NO"), "{}", text(&output));
 
 	let mut session = logged_in(dir.path());
-	let output = session.command_line("a2 STATUS Archive (MESSAGES)");
+	let output = session.command_line("a2 STATUS Missing (MESSAGES)");
 	assert!(text(&output).contains("a2 NO"), "{}", text(&output));
 }
 

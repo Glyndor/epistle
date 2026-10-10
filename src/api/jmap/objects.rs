@@ -380,7 +380,7 @@ pub(super) fn mailbox_role(name: &str) -> Option<&'static str> {
 		"inbox" => Some("inbox"),
 		"sent" => Some("sent"),
 		"drafts" => Some("drafts"),
-		"junk" | "spam" => Some("junk"),
+		"junk" | "spam" | "rejects" => Some("junk"),
 		"trash" => Some("trash"),
 		"archive" => Some("archive"),
 		_ => None,
@@ -390,3 +390,7 @@ pub(super) fn mailbox_role(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 #[path = "objects_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "objects_tests_default_mailboxes.rs"]
+mod default_mailboxes;

@@ -135,6 +135,9 @@ impl LocalDelivery {
 	) -> std::io::Result<Uuid> {
 		let id = Uuid::now_v7();
 		let account_dir = self.accounts_root.join(account);
+		if !account_dir.join("new").is_dir() {
+			crate::imap::mailbox::ensure_defaults(&self.data_dir, account)?;
+		}
 		// INBOX is the account root; named mailboxes live under folders/.
 		let base = match mailbox {
 			Some(name) => account_dir.join("folders").join(name),
@@ -300,7 +303,7 @@ impl MessageSink for LocalDelivery {
 mod tests {
 	use super::*;
 
-	fn directory() -> DirectoryHandle {
+	pub(super) fn directory() -> DirectoryHandle {
 		DirectoryHandle::new(crate::smtp::directory::Directory::new(
 			["example.org".to_string()],
 			[
@@ -311,7 +314,7 @@ mod tests {
 		))
 	}
 
-	fn message(recipients: &[&str]) -> AcceptedMessage {
+	pub(super) fn message(recipients: &[&str]) -> AcceptedMessage {
 		AcceptedMessage {
 			reverse_path: "sender@elsewhere.example".into(),
 			recipients: recipients.iter().map(|r| r.to_string()).collect(),
@@ -488,3 +491,7 @@ mod tests {
 #[cfg(test)]
 #[path = "delivery_forward_tests.rs"]
 mod forward_tests;
+
+#[cfg(test)]
+#[path = "delivery_tests_default_mailboxes.rs"]
+mod default_mailboxes;
