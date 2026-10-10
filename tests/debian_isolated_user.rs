@@ -286,3 +286,6 @@ mod data_layout;
 
 #[path = "debian/sysctl.rs"]
 mod sysctl;
+
+#[path = "debian/stubs.rs"]
+mod stubs;

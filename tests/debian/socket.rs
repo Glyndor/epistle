@@ -1,5 +1,4 @@
-use super::read;
-use std::os::unix::fs::PermissionsExt;
+use super::{read, stubs::write_stub};
 use std::process::Command;
 
 #[test]
@@ -30,9 +29,7 @@ fn postinst_enables_the_service_socket_with_runtime_environment_and_tolerates_fa
 						format!("printf '%s\\n' \"$@\" > \"$ARGV_LOG\"\nexit {exit_code}"),
 					),
 				] {
-					let path = bin.join(name);
-					std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-					std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+					write_stub(&bin.join(name), &body);
 				}
 				let mut script = read("debian/epistle.postinst");
 				for (from, to) in [

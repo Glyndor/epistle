@@ -1,4 +1,4 @@
-use super::read;
+use super::{read, stubs::write_stub};
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
@@ -20,12 +20,10 @@ fn postinst_applies_only_its_own_sysctl_when_the_setting_is_writable() {
 			let bin = dir.path().join("bin");
 			std::fs::create_dir(&bin).unwrap();
 			let sysctl = bin.join("sysctl");
-			std::fs::write(
+			write_stub(
 				&sysctl,
-				format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SYSCTL_LOG\"\nexit {exit_code}\n"),
-			)
-			.unwrap();
-			std::fs::set_permissions(&sysctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+				&format!("printf '%s\\n' \"$@\" > \"$SYSCTL_LOG\"\nexit {exit_code}"),
+			);
 			let script = read("debian/epistle.postinst");
 			let block = script
 				.lines()
