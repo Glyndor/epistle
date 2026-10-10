@@ -305,19 +305,6 @@ impl Session {
 		matches!(self.saved_search, Some(ref s) if s.are_uids == uid_kind)
 	}
 
-	/// Resolve the SEARCHRES `$` placeholder against this session's saved set.
-	/// Returns `None` when `$` is not in use, `Some(values)` when it is — the
-	/// caller already knows whether a `$` was used (because it parsed the
-	/// SequenceSet), so `None` here means "no saved set to read". The caller
-	/// should reject the command with NO before doing any matching when
-	/// `saved_search_ok` is false.
-	fn saved_seqnos_for(&self, uid_kind: bool) -> Vec<u32> {
-		match &self.saved_search {
-			Some(saved) if saved.are_uids == uid_kind => saved.values.clone(),
-			_ => Vec::new(),
-		}
-	}
-
 	fn mailbox_op(
 		&mut self,
 		tag: &str,

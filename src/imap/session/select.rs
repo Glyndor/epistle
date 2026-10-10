@@ -42,6 +42,7 @@ impl Session {
 			// carries [CLOSED] when a mailbox was selected beforehand, so a
 			// client that races a SELECT sees the boundary between the two.
 			let closed = deselect_for_failed_select(&mut self.state);
+			self.saved_search = None;
 			return Output::text(format!(
 				"{tag} NO {}no such mailbox\r\n",
 				if closed { "[CLOSED] " } else { "" }
@@ -54,6 +55,7 @@ impl Session {
 				// that cannot be opened is not the selected mailbox, and the
 				// session moves back to authenticated.
 				let closed = deselect_for_failed_select(&mut self.state);
+				self.saved_search = None;
 				return Output::text(format!(
 					"{tag} NO {}cannot open mailbox\r\n",
 					if closed { "[CLOSED] " } else { "" }
@@ -140,6 +142,10 @@ impl Session {
 			snapshot,
 			read_only,
 		};
+		// RFC 5182 §2.1: a successful SELECT resets the search result
+		// variable to the empty sequence. Per #976 we also clear on
+		// CLOSE and UNSELECT, both of which leave the selected state.
+		self.saved_search = None;
 		Output::text(response)
 	}
 
@@ -160,6 +166,7 @@ impl Session {
 				}
 				let prev = std::mem::take(account);
 				self.state = State::Authenticated { account: prev };
+				self.saved_search = None;
 				Output::text(format!("{tag} OK CLOSE completed\r\n"))
 			}
 			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),
@@ -173,6 +180,7 @@ impl Session {
 				self.state = State::Authenticated {
 					account: account.clone(),
 				};
+				self.saved_search = None;
 				Output::text(format!("{tag} OK UNSELECT completed\r\n"))
 			}
 			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),
