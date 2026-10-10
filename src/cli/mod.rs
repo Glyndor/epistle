@@ -53,6 +53,8 @@ use clap::{Parser, Subcommand};
 
 use crate::directory_store::removal::QueuePolicy;
 
+const DEFAULT_CONFIG: &str = "/etc/epistle/mail.toml";
+
 /// Headless mail server: SMTP, IMAP and modern email security through an
 /// API and CLI.
 #[derive(Debug, Parser)]
@@ -88,13 +90,13 @@ pub enum Command {
 	/// Run the mail server.
 	Serve {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Validate a configuration file and report problems.
 	ConfigCheck {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Generate a DKIM key and print the DNS record value.
@@ -124,7 +126,7 @@ pub enum Command {
 	/// a Maildir tree with `--maildir`.
 	Export {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account name to export.
 		#[arg(long, value_name = "NAME")]
@@ -137,7 +139,7 @@ pub enum Command {
 	/// Maildir tree with `--maildir`.
 	Import {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account name to import into.
 		#[arg(long, value_name = "NAME")]
@@ -151,34 +153,34 @@ pub enum Command {
 	/// mail store plus a pg_dump when a database is configured.
 	Backup {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Check published DNS records against what epistle expects and report
 	/// drift (read-only; queries DNS, changes nothing).
 	VerifyDns {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Print the DNS records this deployment should publish (SPF, DKIM, DMARC,
 	/// MTA-STS, MX and a DANE TLSA record when a certificate is present).
 	DnsRecords {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Print an Apple `.mobileconfig` profile for an account (for the user to
 	/// install on iOS/macOS to auto-configure Mail).
 	Mobileconfig {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account name.
 		#[arg(long, value_name = "NAME")]
@@ -187,14 +189,14 @@ pub enum Command {
 	/// Print the RFC 6186 service-discovery SRV records to publish in DNS.
 	SrvRecords {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Print the Thunderbird autoconfig XML for a domain (host it at
 	/// `autoconfig.<domain>/mail/config-v1.1.xml`).
 	Autoconfig {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The domain (defaults to the first configured domain).
 		#[arg(long, value_name = "DOMAIN")]
@@ -204,7 +206,7 @@ pub enum Command {
 	/// `autodiscover.<domain>/autodiscover/autodiscover.xml`).
 	Autodiscover {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The domain (defaults to the first configured domain).
 		#[arg(long, value_name = "DOMAIN")]
@@ -214,7 +216,7 @@ pub enum Command {
 	/// remove one with `--remove`.
 	Suppression {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// Remove this address from the suppression list instead of listing.
 		#[arg(long, value_name = "ADDRESS")]
@@ -227,19 +229,19 @@ pub enum Command {
 	/// report (send it to the offending sender's abuse address).
 	ReportAbuse {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// List the configured mail accounts.
 	Accounts {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Create a mail account, reading the password from stdin (one line).
 	AccountAdd {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account name.
 		#[arg(long, value_name = "NAME")]
@@ -256,7 +258,7 @@ pub enum Command {
 	/// dropping mail silently is the worse default.
 	AccountRemove {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account name.
 		#[arg(long, value_name = "NAME")]
@@ -269,7 +271,7 @@ pub enum Command {
 	/// List the outbound delivery queue.
 	Queue {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Hash a bearer token for use in `[api] token_hash`.
@@ -281,7 +283,7 @@ pub enum Command {
 	/// The generated secret is printed once and never stored.
 	AppPasswordCreate {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account the app password belongs to.
 		#[arg(long, value_name = "NAME")]
@@ -299,13 +301,13 @@ pub enum Command {
 	/// List every account's app passwords (never the secret).
 	AppPasswords {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Revoke an account's app password by label.
 	AppPasswordRevoke {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account the app password belongs to.
 		#[arg(long, value_name = "NAME")]
@@ -318,7 +320,7 @@ pub enum Command {
 	/// stored.
 	ApiKeyCreate {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(long, value_name = "LABEL")]
@@ -348,13 +350,13 @@ pub enum Command {
 	/// List the management API keys (never the key).
 	ApiKeys {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Revoke a management API key by label.
 	ApiKeyRevoke {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The label of the API key to revoke.
 		#[arg(long, value_name = "LABEL")]
@@ -373,7 +375,7 @@ pub enum Command {
 	/// JSONL store under `data_dir/reports/`; never writes to it.
 	Reports {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// Number of past days to include. Defaults to 7; the retention
 		/// ceiling lives in `crate::reports::RETENTION_DAYS`.
@@ -422,9 +424,9 @@ pub enum Command {
 			long,
 			value_name = "FILE",
 			global = true,
-			default_value = "/etc/epistle/mail.toml"
+			default_value = DEFAULT_CONFIG
 		)]
-		config: Option<PathBuf>,
+		config: PathBuf,
 		/// The stack sub-action.
 		#[command(subcommand)]
 		action: stack::StackCli,
@@ -461,3 +463,7 @@ mod mta_sts_serve_tests;
 #[cfg(test)]
 #[path = "command_cases.rs"]
 mod command_cases;
+
+#[cfg(test)]
+#[path = "cli_tests_config_defaults.rs"]
+mod tests_config_defaults;

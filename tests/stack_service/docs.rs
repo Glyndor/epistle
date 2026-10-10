@@ -29,3 +29,18 @@ fn operator_docs_show_the_packaged_service_sequence() {
 		);
 	}
 }
+
+#[test]
+fn operator_docs_use_the_packaged_config_default_and_show_an_override() {
+	let cli = read("docs/cli.md");
+	for example in [
+		"defaults to `/etc/epistle/mail.toml`",
+		"epistle backup > backup.tar.gz",
+		"epistle accounts --config /path/to/mail.toml",
+	] {
+		assert!(
+			cli.contains(example),
+			"CLI docs must use the packaged config default and retain an override example"
+		);
+	}
+}

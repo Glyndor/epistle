@@ -130,7 +130,7 @@ Both the failing default and the working mapping were checked on this
 host: a host directory with a `0600` file owned by the operator, mounted
 into the image with no userns flag, returned `Permission denied (os
 error 13)`. The same mount with `--userns=keep-id:uid=65532,gid=65532`
-let `config-check --config /etc/epistle/mail.toml` print
+let `config-check` print
 `configuration is valid` and exit 0.
 
 ## Bringing up the stack

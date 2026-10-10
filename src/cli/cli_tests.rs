@@ -24,8 +24,8 @@ fn parses_config_check_command() {
 }
 
 #[test]
-fn rejects_missing_config_argument() {
-	assert!(Cli::try_parse_from(["epistle", "serve"]).is_err());
+fn rejects_missing_config_value() {
+	assert!(Cli::try_parse_from(["epistle", "serve", "--config"]).is_err());
 }
 
 #[test]

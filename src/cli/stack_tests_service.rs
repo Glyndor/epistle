@@ -9,7 +9,7 @@ fn stack_defaults_to_the_packaged_config_path() {
 		panic!("expected stack command");
 	};
 	assert_eq!(
-		config.as_deref(),
+		Some(config.as_path()),
 		Some(Path::new("/etc/epistle/mail.toml")),
 		"stack must default to the configuration written by packaged init"
 	);

@@ -321,18 +321,10 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
-			Command::Stack { config, action } => match config {
-				Some(path) => match Config::load(&path) {
-					Ok(config) => stack::run(&config, action.into()),
-					Err(error) => {
-						style::error(error);
-						ExitCode::FAILURE
-					}
-				},
-				None => {
-					style::error(
-						"`epistle stack` requires `--config FILE`; pass the path to the configuration file",
-					);
+			Command::Stack { config, action } => match Config::load(&config) {
+				Ok(config) => stack::run(&config, action.into()),
+				Err(error) => {
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},

@@ -1,8 +1,9 @@
 # CLI reference
 
 All administration is done through the `epistle` command. Every command that needs
-configuration takes `--config <FILE>`. Run `epistle <command> --help` for the exact
-flags.
+configuration defaults to `/etc/epistle/mail.toml`. Use `--config <FILE>` to
+select another file, for example `epistle accounts --config /path/to/mail.toml`.
+Run `epistle <command> --help` for the exact flags.
 
 ## Output
 
@@ -23,8 +24,8 @@ an escape sequence or spinner frame were ever written there, so they are pinned 
 
 | Command | stdout payload |
 |---|---|
-| `epistle backup --config F` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). |
-| `epistle export --config F --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
+| `epistle backup` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). |
+| `epistle export --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
 | `epistle storage-keygen` | A single base64 32-byte at-rest key. |
 | `epistle oauth-keygen` | A PKCS#8 ES256 private key plus the matching public point. |
 
@@ -39,10 +40,10 @@ force a specific look in a script:
 
 ```sh
 # Coloured status, plain stdout data:
-epistle backup --config /etc/mail.toml > backup.tar.gz
+epistle backup > backup.tar.gz
 
 # Plain everywhere, for a log file:
-NO_COLOR=1 epistle backup --config /etc/mail.toml > backup.tar.gz
+NO_COLOR=1 epistle backup > backup.tar.gz
 ```
 
 Progress is a single line on stderr (one tick per message for `import`, one tick
@@ -54,10 +55,10 @@ printed once at the end.
 
 | Command | What it does |
 |---|---|
-| `epistle serve --config F` | Bind the configured listeners and run. |
+| `epistle serve` | Bind the configured listeners and run. |
 | `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
-| `epistle config-check --config F` | Validate the configuration and exit. |
-| `epistle verify --config F` | Check on-disk data integrity (run before an upgrade). |
+| `epistle config-check` | Validate the configuration and exit. |
+| `epistle verify` | Check on-disk data integrity (run before an upgrade). |
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
 
@@ -299,26 +300,26 @@ scope here):
 
 | Command | What it does |
 |---|---|
-| `epistle accounts --config F` | List configured accounts. |
-| `epistle account-add --config F --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
-| `epistle account-remove --config F --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
-| `epistle app-password-create --config F --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
-| `epistle app-passwords --config F [--account N]` | List app passwords (label, expiry, IP restriction). |
-| `epistle app-password-revoke --config F --account N --label L` | Revoke an app password. |
-| `epistle api-key-create --config F --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
-| `epistle api-keys --config F` | List API keys (label, expiry, IP restriction). |
-| `epistle api-key-revoke --config F --label L` | Revoke an API key. |
+| `epistle accounts` | List configured accounts. |
+| `epistle account-add --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
+| `epistle account-remove --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
+| `epistle app-password-create --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
+| `epistle app-passwords [--account N]` | List app passwords (label, expiry, IP restriction). |
+| `epistle app-password-revoke --account N --label L` | Revoke an app password. |
+| `epistle api-key-create --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
+| `epistle api-keys` | List API keys (label, expiry, IP restriction). |
+| `epistle api-key-revoke --label L` | Revoke an API key. |
 
 ## Mail in and out
 
 | Command | What it does |
 |---|---|
-| `epistle export --config F --account N` | Export an account's mailboxes as an mbox stream on stdout. |
-| `epistle import --config F --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
-| `epistle queue --config F` | List the outbound delivery queue. |
-| `epistle suppression --config F [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
-| `epistle report-abuse --config F` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
-| `epistle reports --config F [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+| `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
+| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
+| `epistle queue` | List the outbound delivery queue. |
+| `epistle suppression [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
+| `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
+| `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
 ## Expunged-message archive
 
@@ -330,9 +331,9 @@ configured window.
 
 | Command | What it does |
 |---|---|
-| `epistle archive list --config F <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
-| `epistle archive restore --config F <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
-| `epistle archive purge --config F <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
+| `epistle archive list <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
+| `epistle archive restore <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
+| `epistle archive purge <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
 
 ## Client autodiscovery
 
@@ -344,10 +345,10 @@ the [configuration reference](configuration.md)) and pointing the
 
 | Command | What it does |
 |---|---|
-| `epistle srv-records --config F` | Print the RFC 6186 SRV records to publish in DNS. |
-| `epistle autoconfig --config F [--domain D]` | Thunderbird autoconfig XML — host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
-| `epistle autodiscover --config F [--domain D]` | Microsoft Autodiscover v1 XML — host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
-| `epistle mobileconfig --config F --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |
+| `epistle srv-records` | Print the RFC 6186 SRV records to publish in DNS. |
+| `epistle autoconfig [--domain D]` | Thunderbird autoconfig XML, host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
+| `epistle autodiscover [--domain D]` | Microsoft Autodiscover v1 XML, host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
+| `epistle mobileconfig --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |
 
 ## Outbound retry policy
 
