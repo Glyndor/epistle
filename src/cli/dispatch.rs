@@ -359,6 +359,7 @@ impl Command {
 			| Command::Export { .. }
 			| Command::Import { .. }
 			| Command::Backup { .. }
+			| Command::Restore { .. }
 			| Command::Verify { .. }
 			| Command::VerifyDns { .. }
 			| Command::DnsRecords { .. }

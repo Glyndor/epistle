@@ -162,7 +162,7 @@ pub enum Command {
 	/// loaded is a restore error, not a silent skip.
 	Restore {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
