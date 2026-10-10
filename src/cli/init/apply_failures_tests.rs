@@ -45,6 +45,7 @@ pub(super) fn apply_error_name(error: &ApplyError) -> &'static str {
 		ApplyError::Rng(_) => "Rng",
 		ApplyError::ExistingSecretUnreadable(..) => "ExistingSecretUnreadable",
 		ApplyError::DatabaseVolume(_) => "DatabaseVolume",
+		ApplyError::HostBinaryInvalid(_) => "HostBinaryInvalid",
 	}
 }
 
@@ -59,7 +60,7 @@ pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 		config_path: config_path.to_path_buf(),
 		dns: None,
 		services: Services::default(),
-		image: None,
+		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 	}
 }

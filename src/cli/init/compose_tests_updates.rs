@@ -1,23 +1,25 @@
-use super::{default_image, render, stack_answers};
-
-#[test]
-fn default_image_pins_the_full_cli_release() {
-	assert_eq!(
-		default_image(),
-		format!("ghcr.io/glyndor/epistle:{}", env!("CARGO_PKG_VERSION")),
-		"default mail image must use the full CLI release"
-	);
-}
+use super::{render, stack_answers};
 
 #[test]
 fn compose_records_whether_the_answers_set_an_operator_image() {
+	// `x-epistle-managed-image` carries the two-mode distinction
+	// `stack update` reads on the next upgrade: the host-binary
+	// default shape has `true`, the operator-image override has
+	// `false`. The marker must reflect what the answers said so a
+	// re-rendered compose file goes through the same update path
+	// the original would have.
 	for image in [None, Some("ghcr.io/glyndor/epistle:0.7.1".to_owned())] {
 		let mut answers = stack_answers();
 		answers.image = image;
+		let rendered = render(&answers, true);
+		// When the answers leave `image` unset, the rendered
+		// compose is the distroless-base + host-binary shape and
+		// the marker is `true`. When the answers set an image,
+		// the operator owns the image and the marker is `false`.
+		let expected = answers.image.is_none();
 		assert_eq!(
-			render(&answers, true)["x-epistle-managed-image"],
-			answers.image.is_none(),
-			"compose must preserve image ownership from the answers for later upgrades"
+			rendered["x-epistle-managed-image"], expected,
+			"compose must reflect whether the answers set an operator image"
 		);
 	}
 }

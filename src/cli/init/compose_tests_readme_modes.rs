@@ -68,6 +68,9 @@ fn compose_readme_is_pinned_to_mode_0644() {
 	let mut answers = minimal_answers();
 	answers.data_dir = data_dir.clone();
 	answers.config_path = config_path.clone();
+	// Custom image mode skips the host-binary check the test
+	// environment cannot satisfy (no `/usr/bin/epistle`).
+	answers.image = Some("localhost/epistle:dev".to_string());
 	let outcome = apply::apply(&answers);
 	// Restore the umask before any assertion that could
 	// panic, so a failing test still leaves the process
@@ -125,6 +128,9 @@ fn compose_readme_mode_is_pinned_on_a_reused_readme() {
 	let mut answers = minimal_answers();
 	answers.data_dir = data_dir.clone();
 	answers.config_path = config_path.clone();
+	// Custom image mode skips the host-binary check the test
+	// environment cannot satisfy (no `/usr/bin/epistle`).
+	answers.image = Some("localhost/epistle:dev".to_string());
 	let outcome = apply::apply(&answers);
 	assert!(outcome.error.is_none(), "apply: {:?}", outcome.error);
 	assert!(

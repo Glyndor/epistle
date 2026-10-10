@@ -23,27 +23,19 @@ fn image_validation_rejects_empty_and_whitespace() {
 	assert!(answers.validate().is_ok());
 }
 
-/// The default image pins the full CLI release. Explicit image overrides keep
-/// their tag or digest verbatim.
+/// The default image is the digest-pinned distroless base
+/// the Containerfile uses; explicit image overrides keep their
+/// tag or digest verbatim. The default is the same shape
+/// regardless of the CLI version: the host carries the binary
+/// (the .deb install), the image is just a runtime base.
 #[test]
 fn image_default_and_override_resolve_to_the_expected_references() {
-	let version = env!("CARGO_PKG_VERSION");
-	let expected_default = format!("ghcr.io/glyndor/epistle:{version}");
-	let default = super::default_image();
-	assert_eq!(
-		default, expected_default,
-		"the default image must pin the full CARGO_PKG_VERSION"
-	);
-	assert!(
-		!default.contains("latest") && default.contains(':'),
-		"the default must carry a tag that is not 'latest'; got {default}"
-	);
-	assert!(
-		!default.contains('@'),
-		"the default uses a tag, not a digest; got {default}"
-	);
 	let from_none = super::resolve_image(None);
-	assert_eq!(from_none, default);
+	assert_eq!(
+		from_none,
+		super::DISTROLESS_BASE_IMAGE,
+		"the default image must be the digest-pinned distroless base"
+	);
 	let image = super::resolve_image(Some("localhost/epistle:dev"));
 	assert_eq!(image, "localhost/epistle:dev");
 	let pinned = super::resolve_image(Some(

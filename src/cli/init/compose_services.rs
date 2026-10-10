@@ -1,5 +1,5 @@
 //! Service definitions for the generated container stack.
-use super::{Answers, DATABASE_SECRET_MODE, POSTGRES_18_IMAGE};
+use super::{Answers, DATABASE_SECRET_MODE, HOST_EPSTLE_PATH, POSTGRES_18_IMAGE};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,9 +40,16 @@ pub(super) struct ComposeService {
 }
 
 impl ComposeService {
-	/// Build the `mail` service. `image` is either the operator's
-	/// override or the build-time default. `config_path` is
-	/// bind-mounted read-only; the parent of `config_path` (the
+	/// Build the `mail` service. The default mode (answers
+	/// leave `image` unset) mounts the host's `/usr/bin/epistle`
+	/// bind-mounted read-only into the digest-pinned
+	/// `gcr.io/distroless/static-debian12:nonroot` base and
+	/// overrides the entrypoint to `/usr/bin/epistle`; the custom
+	/// mode keeps the old shape (the operator's image as
+	/// provided, no binary mount, image's own entrypoint/CMD).
+	/// `image` is the resolved image reference (either the
+	/// distroless base or the operator's override). `config_path`
+	/// is bind-mounted read-only; the parent of `config_path` (the
 	/// operator's `mail.toml` directory) is the mount source so the
 	/// container sees the same file the host wrote.
 	pub(super) fn new_mail(
@@ -73,9 +80,30 @@ impl ComposeService {
 				volumes.push(VolumeMount::bind(path, path, true));
 			}
 		}
+		// The host-binary default: bind-mount the system-supplied
+		// `/usr/bin/epistle` read-only into the digest-pinned
+		// distroless base, then override the entrypoint to run
+		// that path. The bind mount is the long syntax (so
+		// `read_only` is honoured) and carries NO `Z` (SELinux
+		// relabel) option: the path is a system file owned by
+		// root after the .deb install and relabelling it would
+		// silently change its on-disk label. Custom image mode
+		// does not mount the binary; the image carries its own
+		// entrypoint and a release image can also carry the
+		// `serve --config` default.
+		if answers.image.is_none() {
+			volumes.push(VolumeMount::bind_system_binary(
+				Path::new(HOST_EPSTLE_PATH),
+				Path::new(HOST_EPSTLE_PATH),
+			));
+		}
 		Self {
 			image: image.to_string(),
-			entrypoint: None,
+			entrypoint: if answers.image.is_none() {
+				Some(vec![HOST_EPSTLE_PATH.to_string()])
+			} else {
+				None
+			},
 			command: Some(vec![
 				"serve".to_string(),
 				"--config".to_string(),
@@ -287,6 +315,15 @@ impl ComposeService {
 enum VolumeMount {
 	Named(String),
 	Bind(BindMount),
+	/// System binary bind mount: same shape as [`Bind`] but
+	/// carries NO `bind.propagation` or `bind.selinux` option
+	/// at all. Used for the host `/usr/bin/epistle`, which is a
+	/// root-owned system file that must NOT carry the SELinux
+	/// `Z` relabel hint the other bind mounts use: relabelling
+	/// a system file would silently change its on-disk label
+	/// and break out-of-band tooling that reads the file
+	/// through the original label.
+	BindSystemBinary(SystemBindMount),
 }
 
 #[derive(Debug, Serialize)]
@@ -299,9 +336,26 @@ struct BindMount {
 	bind: BindOptions,
 }
 
+/// The `Z` private SELinux relabel hint the apply phase
+/// attaches to operator bind mounts. The shell knob in
+/// podup 5.10.11+ recognises it as "relabel the source with
+/// the container's private label, then unlabel it on
+/// teardown"; podup writes its absence as no relabel.
 #[derive(Debug, Serialize)]
 struct BindOptions {
 	selinux: &'static str,
+}
+
+/// Bind shape for system binaries: long syntax (`type`/`source`/
+/// `target`/`read_only`) and no relabel hint. podup treats
+/// the missing `bind` block as "no relabel".
+#[derive(Debug, Serialize)]
+struct SystemBindMount {
+	#[serde(rename = "type")]
+	kind: &'static str,
+	source: String,
+	target: String,
+	read_only: bool,
 }
 
 impl VolumeMount {
@@ -312,6 +366,20 @@ impl VolumeMount {
 			target: target.display().to_string(),
 			read_only,
 			bind: BindOptions { selinux: "Z" },
+		})
+	}
+
+	/// Bind shape for a system binary: read-only, no SELinux
+	/// relabel hint. Used for `/usr/bin/epistle` in the default
+	/// compose shape. `read_only: true` is set explicitly so a
+	/// podup-side default that ever flipped to writable would
+	/// not silently widen this mount.
+	fn bind_system_binary(source: &Path, target: &Path) -> Self {
+		Self::BindSystemBinary(SystemBindMount {
+			kind: "bind",
+			source: source.display().to_string(),
+			target: target.display().to_string(),
+			read_only: true,
 		})
 	}
 }

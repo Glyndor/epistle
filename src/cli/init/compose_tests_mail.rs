@@ -143,12 +143,19 @@ fn every_image_is_pinned() {
 
 #[test]
 fn mail_image_uses_cargo_pkg_version_by_default() {
+	// The default compose file uses the digest-pinned distroless
+	// base as the mail image. The runner is the host binary
+	// bind-mounted at the same path; the image is just a base
+	// image and does not change with the CLI version.
 	let value = render(&minimal_answers(), false);
 	let image = value["services"]["mail"]["image"]
 		.as_str()
 		.expect("image is a string");
-	let expected = default_image();
-	assert_eq!(image, expected);
+	assert_eq!(
+		image,
+		super::DISTROLESS_BASE_IMAGE,
+		"the default mail image must be the digest-pinned distroless base; got {image:?}"
+	);
 }
 
 #[test]

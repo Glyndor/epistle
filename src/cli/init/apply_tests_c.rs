@@ -26,7 +26,7 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
-		image: None,
+		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 	}
 }
@@ -188,7 +188,7 @@ fn apply_fails_when_config_path_has_no_parent() {
 		config_path: std::path::PathBuf::from("/"),
 		dns: None,
 		services: Services::default(),
-		image: None,
+		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 	};
 	let outcome = apply(&answers);
@@ -232,7 +232,7 @@ fn answers_with_dns_and_extra_services() -> Answers {
 			api: false,
 			database: false,
 		},
-		image: None,
+		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 	}
 }
