@@ -39,8 +39,12 @@ impl Session {
 		unchanged_since: Option<u64>,
 	) -> Output {
 		let uidonly = self.uidonly;
-		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`.
-		let saved = self.saved_seqnos_for(uid);
+		// Capture the SEARCHRES `$` set before the mutable borrow of
+		// `self.state`. The set is keyed by UID (§5182 §2.1); the resolver
+		// turns it into the kind of values the loop expects (UIDs for UID
+		// commands, current seqnos for non-UID commands), and the snapshot
+		// it works against is the one this command will act on.
+		let saved_search = self.saved_search.clone();
 		// Cloned before `self.state` is borrowed mutably below.
 		let training = self.training.clone();
 		let State::Selected {
@@ -56,6 +60,25 @@ impl Session {
 		if *read_only {
 			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
 		}
+		// Resolve the SEARCHRES `$` placeholder against this snapshot. The
+		// saved set is always keyed by UID; for UID commands the UIDs are
+		// matched directly, for non-UID commands they are mapped through
+		// the snapshot to current sequence numbers (expunged messages
+		// drop out automatically per RFC 5182 §2.1).
+		let saved = match saved_search.as_ref() {
+			Some(saved) if saved.are_uids == uid => {
+				if uid {
+					saved.uids.clone()
+				} else {
+					saved
+						.uids
+						.iter()
+						.filter_map(|u| snapshot.sequence_of_uid(*u))
+						.collect()
+				}
+			}
+			_ => Vec::new(),
+		};
 
 		let mut flags = Vec::with_capacity(flag_tokens.len());
 		for token in flag_tokens {
@@ -74,7 +97,8 @@ impl Session {
 			));
 		}
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		// +FLAGS overshoots only through what a message already carries,
 		// so every selected message is checked first: either all of them
 		// take the new keywords or none is changed.
@@ -84,7 +108,7 @@ impl Session {
 					continue;
 				};
 				let selector = if uid { message.uid } else { sequence_number };
-				if sequence.contains(selector, total, &saved)
+				if sequence.contains(selector, maximum, &saved)
 					&& super::mailbox::count_keywords(&next_flags(mode, &message.flags, &flags))
 						.is_none()
 				{
@@ -102,7 +126,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total, &saved) {
+			if !sequence.contains(selector, maximum, &saved) {
 				continue;
 			}
 			// CONDSTORE UNCHANGEDSINCE: a concurrently-changed message is not
@@ -179,13 +203,32 @@ impl Session {
 		vanished: bool,
 	) -> Output {
 		let uidonly = self.uidonly;
-		// Capture the SEARCHRES `$` set before the immutable borrow of `self.state`.
-		let saved = self.saved_seqnos_for(uid);
+		// Capture the SEARCHRES `$` set before the immutable borrow of
+		// `self.state`. The set is keyed by UID; the resolver maps through
+		// the snapshot to current seqnos (non-UID) or returns UIDs directly
+		// (UID commands). Expunged messages drop out automatically per
+		// RFC 5182 §2.1.
+		let saved_search = self.saved_search.clone();
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
+		let saved = match saved_search.as_ref() {
+			Some(saved) if saved.are_uids == uid => {
+				if uid {
+					saved.uids.clone()
+				} else {
+					saved
+						.uids
+						.iter()
+						.filter_map(|u| snapshot.sequence_of_uid(*u))
+						.collect()
+				}
+			}
+			_ => Vec::new(),
+		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		let mut bytes = Vec::new();
 		// QRESYNC VANISHED: report UIDs expunged since CHANGEDSINCE before FETCHes.
 		if let (true, Some(since)) = (vanished, changed_since) {
@@ -200,7 +243,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total, &saved) {
+			if !sequence.contains(selector, maximum, &saved) {
 				continue;
 			}
 			// CONDSTORE CHANGEDSINCE: skip messages not changed since `n`.

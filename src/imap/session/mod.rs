@@ -120,9 +120,16 @@ impl Session {
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
 			Command::Check => self.check(&tag),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
-			Command::Namespace => Output::text(format!(
-				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
-			)),
+			// NAMESPACE is post-auth (RFC 9051 §6.3.5); before authentication it
+			// must refuse the command without leaking the namespace layout.
+			Command::Namespace => {
+				if self.account().is_none() {
+					return Output::text(format!("{tag} NO not authenticated\r\n"));
+				}
+				Output::text(format!(
+					"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
+				))
+			}
 			Command::Id => Output::text(format!(
 				"* ID (\"name\" \"Glyndor\" \"version\" \"{}\")\r\n{tag} OK ID completed\r\n",
 				env!("CARGO_PKG_VERSION"),
@@ -296,19 +303,6 @@ impl Session {
 	/// missing save — the caller answers `NO` to the client.
 	fn saved_search_ok(&self, uid_kind: bool) -> bool {
 		matches!(self.saved_search, Some(ref s) if s.are_uids == uid_kind)
-	}
-
-	/// Resolve the SEARCHRES `$` placeholder against this session's saved set.
-	/// Returns `None` when `$` is not in use, `Some(values)` when it is — the
-	/// caller already knows whether a `$` was used (because it parsed the
-	/// SequenceSet), so `None` here means "no saved set to read". The caller
-	/// should reject the command with NO before doing any matching when
-	/// `saved_search_ok` is false.
-	fn saved_seqnos_for(&self, uid_kind: bool) -> Vec<u32> {
-		match &self.saved_search {
-			Some(saved) if saved.are_uids == uid_kind => saved.values.clone(),
-			_ => Vec::new(),
-		}
 	}
 
 	fn mailbox_op(

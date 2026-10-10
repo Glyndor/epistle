@@ -162,11 +162,15 @@ pub struct Session {
 /// A SEARCHRES-saved result set (RFC 5182).
 #[derive(Debug, Clone)]
 pub struct SavedSearch {
-	/// `true` if the saved values are UIDs (UID SEARCH); `false` for sequence
-	/// numbers from a plain SEARCH.
+	/// `true` if the SAVING SEARCH was a UID SEARCH; `false` for a plain
+	/// SEARCH. The flag exists so the consuming command can reject a
+	/// kind-mismatched $ reference (see `Session::saved_search_ok`); the
+	/// stored values are always UIDs regardless, so the saved entries
+	/// continue to reference the same messages across expunges (§2.1).
 	pub are_uids: bool,
-	/// The matched identifiers (sequence numbers or UIDs).
-	pub values: Vec<u32>,
+	/// UIDs of the messages that matched the SAVING SEARCH, sorted by UID.
+	/// Expunged messages disappear automatically; new messages do not.
+	pub uids: Vec<u32>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).

@@ -1,7 +1,6 @@
 //! IMAP NOTIFY (RFC 5465).
 
 use super::super::command::{NotifyEvent, NotifyRequest};
-use super::state::State;
 use super::{Output, Session};
 
 impl Session {
@@ -19,34 +18,13 @@ impl Session {
 		Output::text(format!("{tag} OK NOTIFY completed\r\n"))
 	}
 
-	/// Poll for mailbox changes for a NOTIFY-enabled session, mirroring
-	/// [`Self::check_idle`] but gated on active NOTIFY `selected` events rather
-	/// than IDLE. Returns an unsolicited `* <n> EXISTS` when the selected mailbox
-	/// gained or lost messages and the client asked for
-	/// MessageNew/MessageExpunge.
+	/// Poll for selected-mailbox changes when NOTIFY message events are active.
+	/// Reports removals before arrivals, mirroring [`Self::check_idle`].
 	pub fn check_notify(&mut self) -> Option<Output> {
 		if !self.notify_active() {
 			return None;
 		}
-		// Names are cloned so the mutable borrow of `self.state` ends before
-		// `open_snapshot` takes `&self`.
-		let (account, mailbox) = match &self.state {
-			State::Selected {
-				account, mailbox, ..
-			} => (account.clone(), mailbox.clone()),
-			_ => return None,
-		};
-		let fresh = self.open_snapshot(&account, &mailbox).ok()?;
-		let State::Selected { snapshot, .. } = &mut self.state else {
-			return None;
-		};
-		if fresh.uid_validity() != snapshot.uid_validity() || fresh.len() != snapshot.len() {
-			let exists = fresh.len();
-			*snapshot = fresh;
-			Some(Output::text(format!("* {exists} EXISTS\r\n")))
-		} else {
-			None
-		}
+		self.poll_selected_messages()
 	}
 
 	/// Whether this session has NOTIFY enabled with selected-mailbox message

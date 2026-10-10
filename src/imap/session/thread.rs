@@ -10,7 +10,8 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maxima = (total, snapshot.max_identifier(true));
 		// (base subject, arrival secs, output id) for each matching message.
 		let mut matched: Vec<(String, u64, u32)> = Vec::new();
 		for seqno in 1..=total {
@@ -18,9 +19,9 @@ impl Session {
 				continue;
 			};
 			let mut content: Option<String> = None;
-			let is_match = criteria
-				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
+			let is_match = criteria.iter().all(|key| {
+				search_matches(key, message, seqno, maxima, snapshot, &mut content, &[])
+			});
 			if !is_match {
 				continue;
 			}
