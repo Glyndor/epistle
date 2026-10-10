@@ -256,31 +256,42 @@ where
 		// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
 		let literal = match command::trailing_literal(&line) {
 			Some(literal) if literal.len > max_literal => {
-				// The size limit is a server-side choice, not a syntax
-				// problem; the literal stays the client's choice of
-				// bytes. Drain them so a non-synchronizing literal
-				// (the `{N+}` form, where the client has already sent
-				// the bytes) does not arrive as the next command line.
-				if !literal.synchronizing {
-					let mut drained = decoder.take_buffered(literal.len);
-					while drained.len() < literal.len {
-						let read = stream.read(&mut buffer).await?;
-						if read == 0 {
-							return Ok(());
-						}
-						let needed = literal.len - drained.len();
-						if read <= needed {
-							drained.extend_from_slice(&buffer[..read]);
-						} else {
-							drained.extend_from_slice(&buffer[..needed]);
-							decoder.feed(&buffer[needed..read]);
-						}
-					}
-				}
-				write(&mut stream, &Response::No(Some("Script too large.".into()))).await?;
-				continue;
+				write(&mut stream, &Response::Bye("literal too large".into())).await?;
+				return Ok(());
 			}
 			Some(literal) => {
+				// Reject commands whose failure is known before the script arrives.
+				// Only a non-synchronizing literal has bytes to discard on rejection.
+				let rejection = match command::parse(&line, None) {
+					Err(command::ParseError::MissingLiteral) if !session.account_is_some() => {
+						Some("Authenticate first.")
+					}
+					Err(command::ParseError::MissingLiteral) => None,
+					Err(_) => Some("Bad command."),
+					Ok(_) => None,
+				};
+				if let Some(message) = rejection {
+					write(&mut stream, &Response::No(Some(message.into()))).await?;
+					if !literal.synchronizing {
+						match discard::literal(
+							&mut *stream,
+							&mut decoder,
+							literal.len,
+							read_deadline,
+						)
+						.await
+						{
+							Ok(drained) if drained.complete => {}
+							Ok(_) => return Ok(()),
+							Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+								write(&mut stream, &Response::Bye("read timeout".into())).await?;
+								return Ok(());
+							}
+							Err(error) => return Err(error),
+						}
+					}
+					continue;
+				}
 				match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
 					Some(bytes) => Some(bytes),
 					None => {
@@ -391,3 +402,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
 #[cfg(test)]
 #[path = "server_tests_literals.rs"]
 mod tests_literals;
+
+#[path = "server_discard.rs"]
+mod discard;
+
+#[cfg(test)]
+#[path = "server_tests_discard.rs"]
+mod tests_discard;

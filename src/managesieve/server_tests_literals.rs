@@ -40,54 +40,32 @@ async fn read_chunk(client: &mut tokio::io::DuplexStream) -> String {
 	String::from_utf8_lossy(&chunk[..read]).to_string()
 }
 
-/// RFC 5804 echoes RFC 7888's framing rule: when the server rejects a
-/// non-synchronizing literal (the `{N+}` form), the payload bytes the
-/// client already sent must not arrive as the next command line. With a
-/// server whose max-literal cap is below the payload size, the rejection
-/// fires before the literal is read, leaving the bytes in the stream
-/// buffer where they would otherwise look like a tagged command.
+/// A rejected literal under the cap must not execute its embedded LOGOUT.
 #[tokio::test]
 async fn rejected_putscript_literal_is_discarded() {
-	let (mut client, task, dir) = small_max_literal_server(8);
+	let (mut client, task, _dir) = small_max_literal_server(16);
 	let _ = read_chunk(&mut client).await;
-
-	// 10-byte payload that is a valid command ("LOGOUT\r\n" plus padding
-	// for the CRLF) — the most damning shape, because the bug would
-	// close the connection here.
 	let inner: &[u8] = b"LOGOUT\r\nX";
 	let header = format!("PUTSCRIPT \"a\" {{{}+}}\r\n", inner.len());
 	client.write_all(header.as_bytes()).await.expect("header");
 	client.write_all(inner).await.expect("payload");
 
-	// Drain whatever the server sends and assert the rejection. With the
-	// bug the literal leaks and the server answers BYE (because LOGOUT
-	// closes the connection) before closing the socket. With the fix the
-	// server only emits the NO rejection, the literal is discarded, and
-	// the connection stays usable.
 	let reply = read_chunk(&mut client).await;
-	assert!(
-		reply.contains("NO"),
-		"PUTSCRIPT over the cap must produce a NO: {reply}"
+	assert_eq!(
+		reply, "NO \"Authenticate first.\"\r\n",
+		"rejected PUTSCRIPT must receive only the authentication rejection"
 	);
-	assert!(
-		!reply.contains("BYE"),
-		"rejected PUTSCRIPT must not see the literal as LOGOUT: {reply}"
-	);
-
-	// The literal bytes must not be parsed as a command: NOOP is
-	// answered with OK and the session keeps going.
 	client.write_all(b"NOOP\r\n").await.expect("noop");
 	let reply = read_chunk(&mut client).await;
-	assert!(
-		reply.starts_with("OK"),
-		"NOOP must be answered with OK, not the leaked payload: {reply}"
+	assert_eq!(
+		reply, "OK\r\n",
+		"NOOP must be answered with OK after the rejected literal"
 	);
 
 	client.write_all(b"LOGOUT\r\n").await.expect("logout");
 	let _ = read_chunk(&mut client).await;
 	drop(client);
-	let _ = task.await;
-	let _ = dir;
+	task.await.expect("server task").expect("server result");
 }
 
 /// When the connection closes before the announced literal size arrives,
