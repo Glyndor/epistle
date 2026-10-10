@@ -277,3 +277,6 @@ fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
 
 #[path = "stack_service/docs.rs"]
 mod stack_service_docs;
+
+#[path = "debian/socket.rs"]
+mod socket;

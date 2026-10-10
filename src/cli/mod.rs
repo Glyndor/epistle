@@ -26,6 +26,7 @@ mod serve_tasks;
 mod serve_tls;
 mod srv;
 mod stack;
+mod stack_socket;
 mod stack_update;
 mod style;
 mod suppression;

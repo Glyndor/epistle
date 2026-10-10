@@ -168,6 +168,7 @@ fn missing_podup_binary_is_named_in_the_error() {
 	// missing-binary assertion would observe the wrong exit
 	// and the wrong stderr.
 	let mut cmd = Command::new(binary());
+	cmd.env("XDG_RUNTIME_DIR", helpers::fake_podman_runtime(dir.path()));
 	cmd.args(["stack", "--config", cfg.to_str().unwrap(), "up"]);
 	cmd.env("PATH", &empty_path);
 	cmd.current_dir(&empty_path);
@@ -243,6 +244,7 @@ fn missing_podup_does_not_search_the_current_directory() {
 	let data_dir = data_dir_with_compose(dir.path());
 	let cfg = write_config(&data_dir);
 	let mut cmd = Command::new(binary());
+	cmd.env("XDG_RUNTIME_DIR", helpers::fake_podman_runtime(dir.path()));
 	cmd.args(["stack", "--config", cfg.to_str().unwrap(), "up"]);
 	cmd.env("PATH", &empty_path);
 	// CWD holds the sibling podup. PATH points at a

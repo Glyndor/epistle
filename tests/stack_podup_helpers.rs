@@ -104,6 +104,7 @@ pub(crate) fn run_with_podup(args: &[&str], shim_dir: &Path) -> std::process::Ou
 	let mut cmd = Command::new(binary());
 	cmd.args(args);
 	cmd.env("PATH", path_with_shim_first(shim_dir));
+	cmd.env("XDG_RUNTIME_DIR", fake_podman_runtime(shim_dir));
 	cmd.env_remove("CLICOLOR_FORCE");
 	cmd.env("NO_COLOR", "1");
 	cmd.stdin(Stdio::null())
@@ -236,4 +237,13 @@ pub(crate) fn data_dir_with_compose(parent: &Path) -> PathBuf {
 	std::fs::create_dir_all(compose.parent().unwrap()).expect("mkdir compose");
 	std::fs::write(&compose, b"# empty compose fixture for stack tests\n").expect("write compose");
 	data_dir
+}
+
+/// The presence check needs no live socket in podup-only fixtures.
+#[allow(dead_code)]
+pub(crate) fn fake_podman_runtime(parent: &Path) -> PathBuf {
+	let runtime = parent.join("runtime");
+	std::fs::create_dir_all(runtime.join("podman")).expect("create runtime fixture");
+	std::fs::write(runtime.join("podman/podman.sock"), b"").expect("write socket marker");
+	runtime
 }

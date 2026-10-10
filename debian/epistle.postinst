@@ -56,6 +56,22 @@ configure)
 		echo "epistle: systemd is not running, so linger was not enabled for glyndor-epistle; epistle init will check it" >&2
 	fi
 
+	# podup speaks the libpod API rather than invoking the Podman CLI.
+	if [ -d /run/systemd/system ]; then
+		(
+			service_uid=$(id -u glyndor-epistle) || exit 0
+			service_runtime=/run/user/$service_uid
+			if [ -d "$service_runtime" ]; then
+				if ! runuser -u glyndor-epistle -- env \
+					XDG_RUNTIME_DIR="$service_runtime" \
+					DBUS_SESSION_BUS_ADDRESS="unix:path=$service_runtime/bus" \
+					systemctl --user enable --now podman.socket; then
+					echo "epistle: could not enable the Podman API socket; run systemctl --user enable --now podman.socket as glyndor-epistle" >&2
+				fi
+			fi
+		)
+	fi
+
 	# 4. Prepare the rootless Podman runtime for the new ranges. Podman arrives
 	# through podup, a Depends, so it is only absent under --force-depends.
 	if [ "$ranges_added" = true ] && [ -z "${2:-}" ] && command -v podman >/dev/null 2>&1; then

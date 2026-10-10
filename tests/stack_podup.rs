@@ -378,6 +378,7 @@ fn ps_table_write_failure_makes_epistle_exit_nonzero() {
 	let data_dir = data_dir_with_compose(dir.path());
 	let cfg = write_config(&data_dir);
 	let mut cmd = std::process::Command::new(binary());
+	cmd.env("XDG_RUNTIME_DIR", helpers::fake_podman_runtime(dir.path()));
 	cmd.args(["stack", "--config", cfg.to_str().unwrap(), "ps"]);
 	cmd.env("PATH", path_with_shim_first(&shim_dir));
 	cmd.env_remove("CLICOLOR_FORCE");
@@ -409,6 +410,7 @@ fn ps_json_write_failure_makes_epistle_exit_nonzero() {
 	let data_dir = data_dir_with_compose(dir.path());
 	let cfg = write_config(&data_dir);
 	let mut cmd = std::process::Command::new(binary());
+	cmd.env("XDG_RUNTIME_DIR", helpers::fake_podman_runtime(dir.path()));
 	cmd.args(["stack", "--config", cfg.to_str().unwrap(), "ps", "--json"]);
 	cmd.env("PATH", path_with_shim_first(&shim_dir));
 	cmd.env_remove("CLICOLOR_FORCE");
@@ -432,3 +434,7 @@ mod service;
 #[cfg(unix)]
 #[path = "stack_service/update.rs"]
 mod update;
+
+#[cfg(unix)]
+#[path = "stack_service/socket.rs"]
+mod socket;

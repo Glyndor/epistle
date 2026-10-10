@@ -138,6 +138,10 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	}
+	if let Err(error) = super::stack_socket::ensure() {
+		super::style::error(error);
+		return ExitCode::FAILURE;
+	}
 	let podup = match ensure_podup_floor() {
 		Ok(()) => "podup",
 		Err(code) => return code,
