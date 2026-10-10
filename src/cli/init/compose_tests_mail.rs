@@ -59,20 +59,11 @@ fn mail_command_uses_serve_and_config_path() {
 }
 
 #[test]
-fn mail_volumes_have_identical_paths_on_both_sides_of_the_colon() {
+fn mail_bind_volumes_have_identical_source_and_target_paths() {
 	let value = render(&minimal_answers(), false);
-	let volumes = value["services"]["mail"]["volumes"]
-		.as_array()
-		.expect("volumes is an array");
-	for entry in volumes {
-		let s = entry.as_str().expect("volume is a string");
-		if s.starts_with('/') {
-			let (host, rest) = s.split_once(':').expect("colon present");
-			let container = rest.split(':').next().unwrap_or(rest);
-			assert_eq!(
-				host, container,
-				"host and container paths must be identical for non-named volumes, got {s:?}"
-			);
+	for mount in value["services"]["mail"]["volumes"].as_array().unwrap() {
+		if mount["type"] == "bind" {
+			assert_eq!(mount["source"], mount["target"]);
 		}
 	}
 }

@@ -19,7 +19,7 @@ pub(super) struct ComposeService {
 	user: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	userns_mode: Option<String>,
-	volumes: Vec<String>,
+	volumes: Vec<VolumeMount>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	ports: Option<Vec<String>>,
 	environment: BTreeMap<String, String>,
@@ -54,16 +54,14 @@ impl ComposeService {
 	) -> Self {
 		let config_dir = config_path.parent().unwrap_or_else(|| Path::new("/"));
 		let mut volumes = Vec::new();
-		volumes.push(format!(
-			"{}:{}:ro,Z",
-			config_dir.display(),
-			config_dir.display()
-		));
-		volumes.push(format!("{}:{}:Z", data_dir.display(), data_dir.display()));
+		volumes.push(VolumeMount::bind(config_dir, config_dir, true));
+		volumes.push(VolumeMount::bind(data_dir, data_dir, false));
 		if database {
-			volumes.push("epistle-pgsock:/run/postgresql".to_string());
+			volumes.push(VolumeMount::Named(
+				"epistle-pgsock:/run/postgresql".to_string(),
+			));
 		}
-		volumes.push("clamd-socket:/run/clamav".to_string());
+		volumes.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
 		let mut environment = BTreeMap::new();
 		environment.insert("TZ".to_string(), "UTC".to_string());
 		Self {
@@ -156,8 +154,8 @@ impl ComposeService {
 			user: None,
 			userns_mode: None,
 			volumes: vec![
-				"epistle-pgdata:/var/lib/postgresql".to_string(),
-				"epistle-pgsock:/var/run/postgresql".to_string(),
+				VolumeMount::Named("epistle-pgdata:/var/lib/postgresql".to_string()),
+				VolumeMount::Named("epistle-pgsock:/var/run/postgresql".to_string()),
 			],
 			ports: None,
 			environment,
@@ -222,7 +220,7 @@ impl ComposeService {
 			network_mode: Some(if freshclam { "pasta" } else { "none" }.to_string()),
 			user: None,
 			userns_mode: None,
-			volumes: vec!["clamav-db:/var/lib/clamav".to_string()],
+			volumes: vec![VolumeMount::Named("clamav-db:/var/lib/clamav".to_string())],
 			ports: None,
 			environment: BTreeMap::new(),
 			restart: "unless-stopped".to_string(),
@@ -244,10 +242,13 @@ impl ComposeService {
 			"true".to_string(),
 		);
 		if !freshclam {
-			service.volumes.push("clamd-socket:/run/clamav".to_string());
-			service.volumes.push(format!(
-				"{}:/etc/clamav/epistle-clamd.conf:ro,Z",
-				answers.data_dir.join("compose/clamd.conf").display()
+			service
+				.volumes
+				.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
+			service.volumes.push(VolumeMount::bind(
+				&answers.data_dir.join("compose/clamd.conf"),
+				Path::new("/etc/clamav/epistle-clamd.conf"),
+				true,
 			));
 			// Bypass the image's config rewriting and enforce a traversable socket directory.
 			service.entrypoint = Some(vec!["/bin/sh".to_string(), "-c".to_string(), "chown clamav:clamav /run/clamav && chmod 755 /run/clamav && exec clamd --config-file=/etc/clamav/epistle-clamd.conf".to_string()]);
@@ -266,5 +267,39 @@ impl ComposeService {
 			});
 		}
 		service
+	}
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum VolumeMount {
+	Named(String),
+	Bind(BindMount),
+}
+
+#[derive(Debug, Serialize)]
+struct BindMount {
+	#[serde(rename = "type")]
+	kind: &'static str,
+	source: String,
+	target: String,
+	read_only: bool,
+	bind: BindOptions,
+}
+
+#[derive(Debug, Serialize)]
+struct BindOptions {
+	selinux: &'static str,
+}
+
+impl VolumeMount {
+	fn bind(source: &Path, target: &Path, read_only: bool) -> Self {
+		Self::Bind(BindMount {
+			kind: "bind",
+			source: source.display().to_string(),
+			target: target.display().to_string(),
+			read_only,
+			bind: BindOptions { selinux: "Z" },
+		})
 	}
 }

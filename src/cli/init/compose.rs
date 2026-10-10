@@ -617,3 +617,7 @@ mod tests_db_startup;
 #[cfg(test)]
 #[path = "compose_password_tests_volume.rs"]
 mod tests_password_volume;
+
+#[cfg(test)]
+#[path = "compose_tests_bind_paths.rs"]
+mod tests_bind_paths;
