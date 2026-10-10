@@ -28,7 +28,7 @@ const MAX_CONNECTIONS: usize = 500;
 
 /// Idle read timeout. RFC 9051 §5.4 recommends the server close the connection
 /// after 30 minutes of inactivity; we enforce it to kill Slowloris sessions.
-const READ_TIMEOUT: Duration = Duration::from_secs(1800);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// How often to poll for new messages during IDLE.
 const IDLE_POLL: Duration = Duration::from_secs(30);
@@ -60,6 +60,10 @@ pub struct Server {
 	max_connections: usize,
 	/// At-rest crypto for stored message bodies, shared by every session.
 	crypto: crate::storage::MessageCrypto,
+	/// Idle / command read timeout: how long a single read (including the
+	/// literal read for APPEND/REPLACE) may stall before the connection is
+	/// dropped. Configurable so tests can drive a short deadline.
+	read_timeout: Duration,
 	/// Days to keep expunged messages in `<account>/.archive/` before the
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
@@ -96,6 +100,7 @@ impl Server {
 			cbind_data: None,
 			max_connections: MAX_CONNECTIONS,
 			crypto: crate::storage::MessageCrypto::disabled(),
+			read_timeout: DEFAULT_READ_TIMEOUT,
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
@@ -132,6 +137,15 @@ impl Server {
 	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
 	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
 		self.oauth = Some(verifier);
+		self
+	}
+
+	/// Cap the idle / literal-read deadline. The default is 30 minutes
+/// (RFC 9051 §5.4); production callers leave it alone, but the test
+/// suite tightens it so a stalled APPEND/REPLACE literal does not stall
+/// a test for half an hour.
+	pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
+		self.read_timeout = timeout;
 		self
 	}
 
@@ -242,19 +256,19 @@ impl Server {
 				Ok(None) => {
 					// With NOTIFY active (RFC 5465), poll the selected mailbox at
 					// IDLE_POLL intervals while waiting for the next command and
-					// push unsolicited EXISTS/EXPUNGE, bounded by READ_TIMEOUT.
+					// push unsolicited EXISTS/EXPUNGE, bounded by self.read_timeout.
 					let wait_start = tokio::time::Instant::now();
 					let read = loop {
 						let poll = if session.notify_active() {
-							IDLE_POLL.min(READ_TIMEOUT)
+							IDLE_POLL.min(self.read_timeout)
 						} else {
-							READ_TIMEOUT
+							self.read_timeout
 						};
 						match tokio::time::timeout(poll, stream.read(&mut buffer)).await {
 							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
-								if !session.notify_active() || wait_start.elapsed() >= READ_TIMEOUT
+								if !session.notify_active() || wait_start.elapsed() >= self.read_timeout
 								{
 									tracing::debug!("IMAP idle timeout, closing connection");
 									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
@@ -345,10 +359,27 @@ impl Server {
 				if let Some(size) = output.collect_literal {
 					// Read exactly `size` literal bytes (plus trailing CRLF
 					// which the line decoder will consume as an empty line).
+					// The literal read is bounded by the same idle/command
+					// deadline as any other read: a client that announces
+					// a large payload and then stalls would otherwise hold
+					// the connection forever (RFC 9051 §5.4 spirit).
 					let mut literal = decoder.take_buffered(size);
 					let mut chunk = [0u8; 4096];
 					while literal.len() < size {
-						let read = stream.read(&mut chunk).await?;
+						let read = match tokio::time::timeout(
+							self.read_timeout,
+							stream.read(&mut chunk),
+						)
+						.await
+						{
+							Ok(Ok(n)) => n,
+							Ok(Err(e)) => return Err(e),
+							Err(_) => {
+								tracing::debug!("IMAP literal read timeout, closing");
+								let _ = stream.write_all(b"* BYE read timeout\r\n").await;
+								return Ok(());
+							}
+						};
 						if read == 0 {
 							return Ok(());
 						}
@@ -370,7 +401,7 @@ impl Server {
 							Ok(Some(line)) => break line,
 							Ok(None) => {
 								let read = match tokio::time::timeout(
-									READ_TIMEOUT,
+									self.read_timeout,
 									stream.read(&mut buffer),
 								)
 								.await
@@ -423,7 +454,7 @@ impl Server {
 					break;
 				}
 				if output.idle {
-					// Poll for new messages at IDLE_POLL intervals; close after READ_TIMEOUT.
+					// Poll for new messages at IDLE_POLL intervals; close after self.read_timeout.
 					let idle_start = tokio::time::Instant::now();
 					loop {
 						match decoder.next_line() {
@@ -434,7 +465,7 @@ impl Server {
 								// Anything else during IDLE is ignored.
 							}
 							Ok(None) => {
-								if idle_start.elapsed() >= READ_TIMEOUT {
+								if idle_start.elapsed() >= self.read_timeout {
 									tracing::debug!("IMAP idle timeout during IDLE, closing");
 									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
 									return Ok(());
