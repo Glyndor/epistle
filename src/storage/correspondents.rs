@@ -37,14 +37,9 @@ fn digest_name(value: &str) -> String {
 
 /// Filesystem-backed per-account correspondent set.
 ///
-/// The store is **not** thread-safe at the directory level: callers
-/// serialise their checks against the same account through the SMTP
-/// session's MAIL-FROM/RCPT-TO/DATA cadence or the API handler's
-/// await chain. Two simultaneous `record` calls on the same account
-/// are safe because each writes to a distinct address path; the only
-/// racy operation is `new_in_last_day`, which reads a stat per marker
-/// and tolerates a fresh write appearing between the directory walk
-/// and the per-file stat.
+/// Cap checks and marker creation share an account-specific file lock.
+/// Cloned and independently opened stores therefore reserve against the
+/// same baseline, including submissions handled by different protocols.
 #[derive(Debug, Clone)]
 pub struct CorrespondentStore {
 	dir: PathBuf,
@@ -63,13 +58,11 @@ pub struct Recorded {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapOutcome {
 	/// No cap is configured (or the store is unset), so the message is
-	/// always allowed through. The caller records every recipient so a
-	/// later submission sees them as known.
+	/// always allowed through. Recipients are recorded before returning.
 	Uncapped,
-	/// The message fits inside the cap. The caller records every
-	/// recipient so a later submission sees them as known.
+	/// The message fits inside the cap and its recipients are reserved.
 	Allowed {
-		/// Number of fresh markers the call would create right now.
+		/// Number of fresh markers created by the reservation.
 		new: u32,
 	},
 	/// The message would exceed the cap. The caller rejects without
@@ -103,6 +96,21 @@ impl CorrespondentStore {
 		self.account_dir(account).join(digest_name(address))
 	}
 
+	// Keep lock files outside marker directories so they never count toward
+	// the cap. Retain them during account removal: replacing a lock file
+	// while another caller holds it would split the critical section.
+	fn lock_account(&self, account: &str) -> std::io::Result<fs::File> {
+		let path = self.dir.join(format!("{}.lock", digest_name(account)));
+		let lock = fs::OpenOptions::new()
+			.read(true)
+			.write(true)
+			.create(true)
+			.truncate(false)
+			.open(path)?;
+		lock.lock()?;
+		Ok(lock)
+	}
+
 	/// Whether `account` has previously written to `address`. Lookup is
 	/// case-insensitive (the digest is over the lowercased value).
 	pub fn knows(&self, account: &str, address: &str) -> bool {
@@ -122,6 +130,11 @@ impl CorrespondentStore {
 		if account.is_empty() || recipients.is_empty() {
 			return Ok(Recorded { new: 0, known: 0 });
 		}
+		let _lock = self.lock_account(account)?;
+		self.record_locked(account, recipients)
+	}
+
+	fn record_locked(&self, account: &str, recipients: &[&str]) -> std::io::Result<Recorded> {
 		let dir = self.account_dir(account);
 		fs::create_dir_all(&dir)?;
 		let mut recorded = Recorded { new: 0, known: 0 };
@@ -183,60 +196,41 @@ impl CorrespondentStore {
 		Ok(count)
 	}
 
-	/// Count the recipients in `recipients` that the account has not
-	/// previously written to, against the rolling 24h cap on first-time
-	/// recipients. Pure read: no marker is created here; the caller
-	/// calls `record` only after the cap accepts the submission, so a
-	/// refused submission leaves the baseline untouched.
-	///
-	/// An empty `account` or empty recipient list is `Uncapped`; a
-	/// `None` `limit` is `Uncapped`; a missing account directory
-	/// contributes zero already-seen recipients.
-	///
-	/// `limit = 0` is the "no recipients allowed" degenerate cap:
-	/// any non-empty submission is `Limited`. Operators do not
-	/// configure this; the validator at config-load time is a
-	/// separate concern.
+	/// Check the rolling 24h cap and reserve allowed recipients under one
+	/// per-account critical section. Refused submissions create no markers.
+	/// Uncapped submissions also record recipients for first-contact checks.
+	/// Empty accounts and recipient lists are no-ops returning `Uncapped`.
 	pub fn enforce_new_recipient_cap(
 		&self,
 		account: &str,
 		recipients: &[&str],
 		limit: Option<u32>,
 	) -> std::io::Result<CapOutcome> {
-		let Some(limit) = limit else {
-			return Ok(CapOutcome::Uncapped);
-		};
 		if account.is_empty() || recipients.is_empty() {
 			return Ok(CapOutcome::Uncapped);
 		}
-		let mut new = 0u32;
-		for address in recipients {
-			if !self.marker(account, address).exists() {
-				new += 1;
-			}
-		}
+		let _lock = self.lock_account(account)?;
+		let Some(limit) = limit else {
+			self.record_locked(account, recipients)?;
+			return Ok(CapOutcome::Uncapped);
+		};
+		let dir = self.account_dir(account);
+		let new = recipients
+			.iter()
+			.map(|address| digest_name(address))
+			.collect::<std::collections::HashSet<_>>()
+			.iter()
+			.filter(|name| !dir.join(name).exists())
+			.count() as u32;
 		let already = self.new_in_last_day(account)?;
-		// `already` counts every marker in the last 24h, including
-		// the ones this submission would create. Subtract `new`
-		// (count of fresh ones in this message) so the check
-		// models `already_other + new <= limit`, not
-		// `already_total + new <= limit`. Without this, every
-		// submission against a near-cap account would refuse on
-		// the second message to the same set of recipients,
-		// even when those recipients are all already known.
-		let already_other = already.saturating_sub(new);
-		if new == 0 {
-			// Every recipient is already known: nothing in the
-			// window moves and the limit is moot.
-			return Ok(CapOutcome::Allowed { new: 0 });
-		}
-		if already_other.saturating_add(new) > limit {
+		if new > 0 && already.saturating_add(new) > limit {
 			return Ok(CapOutcome::Limited {
 				new,
-				already: already_other,
+				already,
 				limit,
 			});
 		}
+		self.record_locked(account, recipients)?;
 		Ok(CapOutcome::Allowed { new })
 	}
 
@@ -248,6 +242,7 @@ impl CorrespondentStore {
 	/// (otherwise a re-created account would inherit yesterday's
 	/// recipient list and slip the daily cap).
 	pub fn remove_all_for(&self, account: &str) -> std::io::Result<u32> {
+		let _lock = self.lock_account(account)?;
 		let dir = self.account_dir(account);
 		let entries = match fs::read_dir(&dir) {
 			Ok(entries) => entries,
@@ -274,3 +269,7 @@ impl CorrespondentStore {
 #[cfg(test)]
 #[path = "correspondents_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "correspondents_tests_cap.rs"]
+mod tests_cap;

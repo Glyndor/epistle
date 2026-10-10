@@ -29,8 +29,8 @@ thread_local! {
 /// is decoded back to `=` so URLs hidden inside HTML mail come through; base64
 /// bodies are not decoded and are ignored here.
 ///
-/// The returned strings are A-label form (the on-the-wire encoding); any
-/// `xn--` IDN already in the source is preserved verbatim.
+/// The returned strings are normalized A-label form (the DNS encoding);
+/// Unicode and percent-encoded host spellings share the same lookup.
 pub fn extract_hosts(body: &[u8], cap: usize) -> Vec<String> {
 	let mut out = Vec::new();
 	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -113,7 +113,7 @@ fn scan_hosts(
 		// position; the old `find_subslice(rest, b"http://")` call was
 		// O(rest) and made the whole scan quadratic when the body held
 		// many URLs.
-		if i + 7 <= bytes.len() && &bytes[i..i + 7] == b"http://" {
+		if i + 7 <= bytes.len() && bytes[i..i + 7].eq_ignore_ascii_case(b"http://") {
 			let host_start = i + 7;
 			let (host, consumed) = read_host(&bytes[host_start..]);
 			i = host_start + consumed;
@@ -123,7 +123,7 @@ fn scan_hosts(
 			}
 			continue;
 		}
-		if i + 8 <= bytes.len() && &bytes[i..i + 8] == b"https://" {
+		if i + 8 <= bytes.len() && bytes[i..i + 8].eq_ignore_ascii_case(b"https://") {
 			let host_start = i + 8;
 			let (host, consumed) = read_host(&bytes[host_start..]);
 			i = host_start + consumed;
@@ -151,23 +151,25 @@ fn push_unique(
 	}
 }
 
-/// Read a host starting at `input[0]`. Returns the host and the number of
-/// bytes consumed (so the caller can advance past the whole token even when
-/// the host is rejected by the validator).
+/// Read the authority after a scheme and normalize its host with the URL
+/// parser. Userinfo and ports are excluded; percent escapes and IDNA are
+/// resolved before validation and deduplication.
 fn read_host(input: &[u8]) -> (Option<String>, usize) {
-	let mut end = 0;
-	while end < input.len() && is_host_byte(input[end]) {
-		end += 1;
-	}
-	if end == 0 {
-		return (None, 0);
-	}
-	let host = normalize_host(&input[..end]);
+	let end = input
+		.iter()
+		.position(|b| b.is_ascii_whitespace() || b"/\\?#<>\"".contains(b))
+		.unwrap_or(input.len());
+	let host = std::str::from_utf8(&input[..end])
+		.ok()
+		.and_then(|authority| {
+			let authority = authority.trim_end_matches(['\'', ')', '}', ',', ';', '.']);
+			let url = url::Url::parse(&format!("http://{authority}/")).ok()?;
+			match url.host()? {
+				url::Host::Domain(host) => normalize_host(host.as_bytes()),
+				_ => None,
+			}
+		});
 	(host, end)
-}
-
-fn is_host_byte(b: u8) -> bool {
-	matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.')
 }
 
 #[cfg(test)]
@@ -225,3 +227,7 @@ fn reset_scan_steps() -> u64 {
 #[cfg(test)]
 #[path = "urls_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "urls_tests_authority.rs"]
+mod tests_authority;
