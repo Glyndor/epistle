@@ -19,7 +19,7 @@ fn write_minimal_compose(data_dir: &std::path::Path) -> PathBuf {
 }
 
 fn dump_shell() -> &'static str {
-	r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"#
+	r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --clean --if-exists --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"#
 }
 
 fn restore_shell() -> &'static str {
