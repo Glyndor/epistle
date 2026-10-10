@@ -619,3 +619,7 @@ mod tests_bind_paths;
 #[cfg(test)]
 #[path = "compose_tests_dns_credentials.rs"]
 mod tests_dns_credentials;
+
+#[cfg(test)]
+#[path = "compose_tests_override.rs"]
+mod tests_override;

@@ -386,6 +386,10 @@ fn exit_code_from_status(status: &std::process::ExitStatus) -> ExitCode {
 fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
 	let mut command = Command::new(podup);
 	command.arg("-f").arg(compose);
+	let override_path = compose.with_file_name("compose.override.yaml");
+	if override_path.exists() {
+		command.arg("-f").arg(override_path);
+	}
 	for piece in extra {
 		command.arg(piece);
 	}
@@ -505,3 +509,7 @@ mod tests;
 #[cfg(test)]
 #[path = "stack_tests_service.rs"]
 mod tests_service;
+
+#[cfg(test)]
+#[path = "stack_tests_override.rs"]
+mod tests_override;
