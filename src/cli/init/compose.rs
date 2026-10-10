@@ -669,6 +669,26 @@ impl ComposeFile {
 mod tests;
 
 #[cfg(test)]
+#[path = "compose_tests_mail.rs"]
+mod tests_mail;
+
+#[cfg(test)]
+#[path = "compose_tests_mail_ports.rs"]
+mod tests_mail_ports;
+
+#[cfg(test)]
+#[path = "compose_tests_db.rs"]
+mod tests_db;
+
+#[cfg(test)]
+#[path = "compose_tests_image_validator.rs"]
+mod tests_image_validator;
+
+#[cfg(test)]
+#[path = "compose_tests_readme_modes.rs"]
+mod tests_readme_modes;
+
+#[cfg(test)]
 #[path = "compose_password_tests.rs"]
 mod tests_password;
 
@@ -713,4 +733,16 @@ pub(super) fn local_image_answers() -> crate::cli::init::Answers {
 	let mut answers = stack_answers();
 	answers.image = Some("localhost/epistle:dev".to_string());
 	answers
+}
+
+/// Render the compose file the apply phase would write for `answers`
+/// and `database`, parsing the produced JSON into a `serde_json::Value`
+/// so the tests can read the same fields podup reads. Lifted out of
+/// the topic-split `compose_tests_*` siblings: every test in those
+/// files reaches for it, and lifting it next to `render_for` keeps
+/// the helper next to the code path it exercises.
+#[cfg(test)]
+pub(super) fn render(answers: &crate::cli::init::Answers, database: bool) -> serde_json::Value {
+	let bytes = render_for(answers, database).expect("render");
+	serde_json::from_str(&bytes).expect("parse")
 }

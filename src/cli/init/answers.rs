@@ -414,8 +414,32 @@ impl Answers {
 mod tests;
 
 #[cfg(test)]
-#[path = "answers_tests_b.rs"]
-mod tests_b;
+#[path = "answers_tests_validate.rs"]
+mod tests_validate;
+
+#[cfg(test)]
+#[path = "answers_tests_deserialise.rs"]
+mod tests_deserialise;
+
+#[cfg(test)]
+#[path = "answers_tests_messages.rs"]
+mod tests_messages;
+
+#[cfg(test)]
+#[path = "answers_tests_dns.rs"]
+mod tests_dns;
+
+#[cfg(test)]
+#[path = "answers_tests_config_path.rs"]
+mod tests_config_path;
+
+#[cfg(test)]
+#[path = "answers_tests_paths_overlap.rs"]
+mod tests_paths_overlap;
+
+#[cfg(test)]
+#[path = "answers_tests_services.rs"]
+mod tests_services;
 
 #[path = "answers_validate.rs"]
 mod answers_validate;
