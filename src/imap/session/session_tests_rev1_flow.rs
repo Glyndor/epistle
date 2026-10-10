@@ -62,7 +62,7 @@ fn rev1_imaplib_style_flow_and_rev2_equivalent() {
 			};
 			assert_eq!(text(&session.command_line("q SEARCH ALL")), expected);
 			let expected = format!(
-				"* 1 FETCH (UID 1 BODY[] {{{}}}\r\n{})\r\nf OK FETCH completed\r\n",
+				"* 1 FETCH (UID 1 BODY[] {{{}}}\r\n{} FLAGS (\\Seen))\r\nf OK FETCH completed\r\n",
 				BODY.len(),
 				String::from_utf8_lossy(BODY)
 			);
@@ -103,7 +103,7 @@ fn rev1_lsub_and_fetch_move_unselect_extensions_remain_available() {
 		session.command_line("s SELECT INBOX");
 		assert!(
 			text(&session.command_line("b FETCH 1 (BINARY[] BINARY.SIZE[])"))
-				== "* 1 FETCH (BINARY[] {3}\r\none BINARY.SIZE[] 3)\r\nb OK FETCH completed\r\n",
+				== "* 1 FETCH (BINARY[] {3}\r\none BINARY.SIZE[] 3 FLAGS (\\Seen))\r\nb OK FETCH completed\r\n",
 			"BINARY must preserve decoded bytes and size in both revisions"
 		);
 		let moved = text(&session.command_line("m UID MOVE 1 Sent"));
@@ -126,7 +126,7 @@ fn rev1_lsub_and_fetch_move_unselect_extensions_remain_available() {
 		session.command_line("s SELECT Sent");
 		assert_eq!(
 			text(&session.command_line("f UID FETCH 1 (FLAGS)")),
-			"* 1 FETCH (FLAGS () UID 1)\r\nf OK FETCH completed\r\n"
+			"* 1 FETCH (FLAGS (\\Seen) UID 1)\r\nf OK FETCH completed\r\n"
 		);
 	}
 }

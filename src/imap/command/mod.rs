@@ -509,34 +509,10 @@ pub enum StoreMode {
 	Remove,
 }
 
-/// What FETCH must return per message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchItem {
-	/// `FLAGS`: the message's flag list.
-	Flags,
-	/// `RFC822.SIZE`: the RFC 5322 size in octets.
-	Rfc822Size,
-	/// `UID`: the message's UID.
-	Uid,
-	/// `BODY[]` / `RFC822`: the full raw message.
-	Body,
-	/// `BINARY[]`: the body decoded per its Content-Transfer-Encoding (RFC 3516).
-	Binary,
-	/// `BINARY.SIZE[]`: the decoded body's size in octets (RFC 3516).
-	BinarySize,
-	/// `INTERNALDATE`: the message's internal date.
-	InternalDate,
-	/// `MODSEQ`: the message's mod-sequence (CONDSTORE, RFC 7162).
-	ModSeq,
-	/// `EMAILID`: the message's stable object id (RFC 8474).
-	EmailId,
-	/// `THREADID`: the message's thread id (RFC 8474); singleton == EMAILID.
-	ThreadId,
-	/// `SAVEDATE`: when the message was saved to the mailbox (RFC 8514).
-	SaveDate,
-	/// `PREVIEW`: a short text snippet of the message (RFC 8970).
-	Preview,
-}
+mod fetch;
+pub use fetch::FetchItem;
+mod fetch_section;
+pub use fetch_section::{FetchSection, SectionKind};
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges), or
 /// the SEARCHRES `$` placeholder for the most recent saved result set

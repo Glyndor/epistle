@@ -1,3 +1,4 @@
+use super::fetch::parse_fetch;
 use super::*;
 
 /// Maximum literal size accepted for APPEND (matches the SMTP cap).
@@ -223,108 +224,6 @@ fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {
 		return Err(bad());
 	}
 	Ok(mailbox)
-}
-
-fn parse_fetch(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	let (sequence_text, items_text) = args.split_once(' ').ok_or_else(bad)?;
-	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
-
-	let items_text = items_text.trim();
-	let (items_group, modifier) = if items_text.starts_with('(') {
-		let close = items_text.find(')').ok_or_else(bad)?;
-		(&items_text[..=close], items_text[close + 1..].trim())
-	} else {
-		(items_text, "")
-	};
-	let (changed_since, vanished) = parse_fetch_modifier(modifier, tag)?;
-	// VANISHED is only valid on UID FETCH with CHANGEDSINCE (RFC 7162 §3.1.4.1).
-	if vanished && (!uid || changed_since.is_none()) {
-		return Err(bad());
-	}
-	let inner = items_group
-		.strip_prefix('(')
-		.and_then(|t| t.strip_suffix(')'))
-		.unwrap_or(items_group);
-	let mut items = Vec::new();
-	for word in inner.split_whitespace() {
-		match word.to_ascii_uppercase().as_str() {
-			"FLAGS" => items.push(FetchItem::Flags),
-			"RFC822.SIZE" => items.push(FetchItem::Rfc822Size),
-			"UID" => items.push(FetchItem::Uid),
-			"INTERNALDATE" => items.push(FetchItem::InternalDate),
-			"MODSEQ" => items.push(FetchItem::ModSeq),
-			"EMAILID" => items.push(FetchItem::EmailId),
-			"THREADID" => items.push(FetchItem::ThreadId),
-			"SAVEDATE" => items.push(FetchItem::SaveDate),
-			"PREVIEW" => items.push(FetchItem::Preview),
-			"BODY[]" | "BODY.PEEK[]" | "RFC822" => items.push(FetchItem::Body),
-			"BINARY[]" | "BINARY.PEEK[]" => items.push(FetchItem::Binary),
-			"BINARY.SIZE[]" => items.push(FetchItem::BinarySize),
-			"ALL" => {
-				items.extend([
-					FetchItem::Flags,
-					FetchItem::InternalDate,
-					FetchItem::Rfc822Size,
-				]);
-			}
-			"FAST" => {
-				items.extend([
-					FetchItem::Flags,
-					FetchItem::InternalDate,
-					FetchItem::Rfc822Size,
-				]);
-			}
-			_ => return Err(bad()),
-		}
-	}
-	if items.is_empty() {
-		return Err(bad());
-	}
-	// UID FETCH must always report the UID (RFC 9051).
-	if uid && !items.contains(&FetchItem::Uid) {
-		items.push(FetchItem::Uid);
-	}
-	if changed_since.is_some() && !items.contains(&FetchItem::ModSeq) {
-		items.push(FetchItem::ModSeq);
-	}
-	Ok(Command::Fetch {
-		sequence,
-		items,
-		uid,
-		changed_since,
-		vanished,
-	})
-}
-
-/// Parse an optional `(CHANGEDSINCE n [VANISHED])` FETCH modifier, returning the
-/// mod-sequence and whether VANISHED was requested (RFC 7162).
-fn parse_fetch_modifier(modifier: &str, tag: &str) -> Result<(Option<u64>, bool), ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	if modifier.is_empty() {
-		return Ok((None, false));
-	}
-	let inner = modifier
-		.strip_prefix('(')
-		.and_then(|t| t.strip_suffix(')'))
-		.ok_or_else(bad)?;
-	let mut parts = inner.split_whitespace();
-	let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
-		return Err(bad());
-	};
-	if !key.eq_ignore_ascii_case("CHANGEDSINCE") {
-		return Err(bad());
-	}
-	let changed_since = Some(value.parse().map_err(|_| bad())?);
-	let vanished = match parts.next() {
-		None => false,
-		Some(tok) if tok.eq_ignore_ascii_case("VANISHED") => true,
-		Some(_) => return Err(bad()),
-	};
-	if parts.next().is_some() {
-		return Err(bad());
-	}
-	Ok((changed_since, vanished))
 }
 
 fn parse_copy(
