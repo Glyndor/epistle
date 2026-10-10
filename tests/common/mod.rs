@@ -19,10 +19,13 @@ pub fn binary() -> &'static Path {
 	Path::new(env!("CARGO_BIN_EXE_epistle"))
 }
 
-/// Linux prints this exact string for `EADDRINUSE`. The same text
+/// glibc prints this string for `EADDRINUSE`. The same text
 /// surfaces in the child's stderr when a bind races; the retry loop
 /// uses it to decide "try a different port" vs "real regression".
 pub const EADDRINUSE_TEXT: &str = "Address already in use";
+
+/// musl (the static build the .deb ships) prints this one instead.
+pub const EADDRINUSE_TEXT_MUSL: &str = "Address in use";
 
 /// Maximum time the harness waits for the `epistle local` child to
 /// bind every listener before failing the attempt. The bind check
@@ -285,5 +288,5 @@ pub fn pick_port_base() -> u16 {
 /// child's stderr. Any other failure is a real regression and
 /// surfaces with the phase and redacted stderr attached.
 pub fn is_eaddrinuse(message: &str) -> bool {
-	message.contains(EADDRINUSE_TEXT)
+	message.contains(EADDRINUSE_TEXT) || message.contains(EADDRINUSE_TEXT_MUSL)
 }
