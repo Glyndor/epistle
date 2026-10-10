@@ -63,8 +63,24 @@ impl Session {
 				keyword_tokens.join(" ")
 			)
 		};
+		// The store does not assign recent-message ownership to sessions.
+		// RFC 3501 permits reporting no recent messages to any client.
+		let mut legacy = String::new();
+		if !self.imap4rev2 {
+			legacy.push_str("* 0 RECENT\r\n");
+			if let Some(first) = snapshot
+				.messages()
+				.position(|m| !m.flags.contains(&mailbox::Flag::Seen))
+			{
+				legacy.push_str(&format!(
+					"* OK [UNSEEN {}] first unseen message\r\n",
+					first + 1
+				));
+			}
+		}
 		let response = format!(
 			"* {count} EXISTS\r\n\
+			 {legacy}\
 			 * OK [UIDVALIDITY {validity}] UIDs valid\r\n\
 			 * OK [UIDNEXT {next}] predicted next UID\r\n\
 			 * OK [MAILBOXID (M{validity})] mailbox object id\r\n\

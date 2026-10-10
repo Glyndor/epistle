@@ -58,6 +58,9 @@ impl Session {
 
 	fn apply(&mut self, tagged: Tagged) -> Output {
 		let tag = tagged.tag;
+		if self.imap4rev2 && helpers::recent_command(&tagged.command) {
+			return Output::text(format!("{tag} BAD invalid arguments\r\n"));
+		}
 		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
 		if self.uidonly
 			&& let Some(verb) = helpers::sequence_command(&tagged.command)

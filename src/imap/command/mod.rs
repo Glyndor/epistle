@@ -419,6 +419,8 @@ pub enum SortKey {
 /// A single SEARCH criterion; multiple keys AND together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchKey {
+	/// Legacy `RECENT`: always false under the zero-recent policy.
+	Recent,
 	/// `ALL`: match every message in the mailbox.
 	All,
 	/// Flag present (true) or absent (false).

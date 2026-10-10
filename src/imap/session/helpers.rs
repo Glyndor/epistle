@@ -85,6 +85,7 @@ pub(super) fn search_matches(
 ) -> bool {
 	match key {
 		SearchKey::All => true,
+		SearchKey::Recent => false,
 		SearchKey::FlagIs(flag, wanted) => {
 			let has = if flag.is_keyword() {
 				super::mailbox::flag_set_contains(&message.flags, flag)
@@ -239,6 +240,28 @@ pub(super) fn special_use_attribute(name: &str) -> &'static str {
 		"trash" | "deleted" => "\\Trash",
 		"archive" => "\\Archive",
 		_ => "",
+	}
+}
+
+/// Legacy recent keys remain unavailable after revision 2 is enabled.
+pub(super) fn recent_command(command: &Command) -> bool {
+	let criteria = match command {
+		Command::Search { criteria, .. }
+		| Command::Sort { criteria, .. }
+		| Command::Thread { criteria, .. }
+		| Command::Esearch { criteria, .. } => criteria,
+		_ => return false,
+	};
+	criteria.iter().any(uses_recent)
+}
+
+fn uses_recent(key: &SearchKey) -> bool {
+	match key {
+		SearchKey::Recent => true,
+		SearchKey::Not(key) => uses_recent(key),
+		SearchKey::Or(a, b) => uses_recent(a) || uses_recent(b),
+		SearchKey::And(keys) => keys.iter().any(uses_recent),
+		_ => false,
 	}
 }
 
