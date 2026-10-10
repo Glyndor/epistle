@@ -120,9 +120,16 @@ impl Session {
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
 			Command::Check => self.check(&tag),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
-			Command::Namespace => Output::text(format!(
-				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
-			)),
+			// NAMESPACE is post-auth (RFC 9051 §6.3.5); before authentication it
+			// must refuse the command without leaking the namespace layout.
+			Command::Namespace => {
+				if self.account().is_none() {
+					return Output::text(format!("{tag} NO not authenticated\r\n"));
+				}
+				Output::text(format!(
+					"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
+				))
+			}
 			Command::Id => Output::text(format!(
 				"* ID (\"name\" \"Glyndor\" \"version\" \"{}\")\r\n{tag} OK ID completed\r\n",
 				env!("CARGO_PKG_VERSION"),

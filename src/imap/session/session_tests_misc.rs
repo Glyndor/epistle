@@ -32,9 +32,25 @@ fn plaintext_session_disables_login_until_starttls() {
 }
 
 #[test]
-fn namespace_returns_personal_namespace() {
+fn namespace_before_auth_returns_bad_with_no_listing() {
+	// RFC 2342 / RFC 9051 §6.3.5: NAMESPACE is post-auth. Pre-auth it must
+	// fail with BAD/NO and not publish any untagged NAMESPACE response, so
+	// a peeking client cannot probe the server's namespace layout before
+	// logging in.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	let output = session.command_line("a1 NAMESPACE");
+	let response = text(&output);
+	assert_eq!(
+		response, "a1 NO not authenticated\r\n",
+		"pre-auth NAMESPACE must NOT list anything and MUST refuse the command"
+	);
+}
+
+#[test]
+fn namespace_after_auth_lists_personal_namespace() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
 	let output = session.command_line("a1 NAMESPACE");
 	let response = text(&output);
 	assert!(
