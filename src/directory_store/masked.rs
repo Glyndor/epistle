@@ -46,9 +46,9 @@ pub struct MaskedAddress {
 /// The on-disk JSON document: every masked address keyed by lowercased
 /// address (so lookups are case-insensitive and idempotent).
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct MaskedFile {
+pub(crate) struct MaskedFile {
 	#[serde(default)]
-	addresses: HashMap<String, MaskedAddress>,
+	pub(crate) addresses: HashMap<String, MaskedAddress>,
 }
 
 /// Filesystem-backed store of masked email addresses.
@@ -309,6 +309,16 @@ impl MaskedAddressStore {
 			.map_err(|error| StoreError::Invalid(error.to_string()))?;
 		crate::storage::write_secret(&self.path, text.as_bytes())?;
 		Ok(())
+	}
+
+	/// Replace the entries map wholesale. Used by the file watcher to
+	/// reload state from disk: the on-disk JSON is parsed and the
+	/// resulting map takes the place of the in-memory one in a single
+	/// operation. The path and `max_per_account` are preserved so a
+	/// later `persist()` still writes to the same place and the
+	/// per-account cap is unaffected by a reload.
+	pub(crate) fn replace_entries(&mut self, new: HashMap<String, MaskedAddress>) {
+		self.entries = new;
 	}
 }
 

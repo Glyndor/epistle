@@ -30,9 +30,9 @@ use super::{AccountStore, StoreError};
 /// lowercased. A missing file is an empty disabled set, which is the
 /// default the config starts in.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct DisabledAliasesFile {
+pub(crate) struct DisabledAliasesFile {
 	#[serde(default)]
-	addresses: Vec<String>,
+	pub(crate) addresses: Vec<String>,
 }
 
 /// Filesystem-backed overlay that tracks which multi-target aliases are
@@ -75,6 +75,15 @@ impl AliasStore {
 	/// directory builder's filter step.
 	pub fn disabled_addresses(&self) -> impl Iterator<Item = &str> {
 		self.disabled.iter().map(String::as_str)
+	}
+
+	/// Replace the disabled set wholesale. Used by the file watcher to
+	/// reload state from disk without round-tripping through `set_enabled`
+	/// (which only flips one flag and persists each time). The path is
+	/// preserved so a subsequent `persist()` writes to the same place;
+	/// no other field mutates.
+	pub(crate) fn replace_disabled(&mut self, new: HashSet<String>) {
+		self.disabled = new;
 	}
 
 	/// Toggle the disabled flag for `address`. Returns the previous state
