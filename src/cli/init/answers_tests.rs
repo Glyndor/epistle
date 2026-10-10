@@ -28,5 +28,6 @@ pub(super) fn minimal(mode: Mode) -> Answers {
 		dns: None,
 		services: Services::default(),
 		image: None,
+		acme: None,
 	}
 }

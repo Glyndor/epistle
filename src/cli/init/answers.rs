@@ -45,6 +45,33 @@ pub struct DnsAnswers {
 	pub token_env: Option<String>,
 }
 
+/// ACME (automatic certificate issuance) overrides. When the
+/// section is absent, init falls back to its heuristic: a public
+/// hostname gets Let's Encrypt production; a loopback or
+/// reserved-TLD hostname gets nothing. Setting `enabled = true`
+/// forces ACME on for whatever the hostname is (init will refuse
+/// to write a `[acme]` block for a non-public hostname because the
+/// HTTP-01 challenge would never resolve, but the boolean is still
+/// the operator's explicit opt-in). Setting `enabled = false`
+/// forces it off even on a public hostname, which is what an
+/// operator with their own certificate uses. `contact` overrides
+/// the default `mailto:postmaster@<first domain>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcmeAnswers {
+	/// Force ACME on (`true`) or off (`false`). Absent lets the
+	/// public-hostname heuristic decide.
+	#[serde(default)]
+	pub enabled: Option<bool>,
+	/// Contact URI the certificate authority uses to reach the
+	/// operator (let's encrypt sends a verification email when an
+	/// account is created and a heads-up before a certificate
+	/// expires). Absent defaults to `mailto:postmaster@<first
+	/// configured domain>`.
+	#[serde(default)]
+	pub contact: Option<String>,
+}
+
 /// The set of services the operator wants to expose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -143,6 +170,13 @@ pub struct Answers {
 	/// splits across two array entries.
 	#[serde(default)]
 	pub image: Option<String>,
+	/// ACME overrides. Absent lets init decide based on the
+	/// hostname (a public hostname gets Let's Encrypt production;
+	/// loopback or reserved-TLD hostnames get nothing). The
+	/// `[acme]` block init writes into the config follows this
+	/// flag plus `contact`.
+	#[serde(default)]
+	pub acme: Option<AcmeAnswers>,
 }
 
 /// A non-fatal problem the operator should see before the file is
@@ -358,6 +392,19 @@ impl Answers {
 		answers_validate::validate(self)
 	}
 
+	/// True when the hostname resolves in the public DNS: not
+	/// loopback, not an IP literal, not a name under a reserved
+	/// TLD (`.local`, `.internal`, `.test`, `.example`). Init uses
+	/// this to decide whether ACME auto-enables: the Let's Encrypt
+	/// HTTP-01 challenge connects to the host on port 80, so a
+	/// loopback or reserved-TLD hostname would never resolve.
+	/// The list of reserved TLDs is the RFC 6762 / RFC 2606 set
+	/// plus `.internal`, the name an internal split-horizon DNS
+	/// server hands out, and `.example`, the documentation TLD.
+	pub fn hostname_is_public(&self) -> bool {
+		is_public_hostname(&self.hostname)
+	}
+
 	/// Replace every Unicode (U-label) hostname or domain in the
 	/// answers with its ASCII A-label form. The validator and the
 	/// apply phase both already pass U-labels through
@@ -397,6 +444,9 @@ impl Answers {
 		 # provider = \"cloudflare\"          # cloudflare, route53, dnsimple, ...\n\
 		 # zone = \"example.org\"\n\
 		 # token_file = \"/run/secrets/epistle-dns\"  # or token_env = \"NAME\"; token = \"...\" is accepted with one warning\n\n\
+		 [acme]                             # optional; init enables ACME on its own for a public hostname\n\
+		 # enabled = true                    # set false to skip Let's Encrypt even on a public hostname (you supply your own cert)\n\
+		 # contact = \"mailto:postmaster@example.org\"  # optional override; defaults to postmaster@<first configured domain>\n\n\
 		 [services]                        # required; each true | false; defaults: imap, submission true; the rest false\n\
 		 imap = true\n\
 		 submission = true\n\
@@ -407,6 +457,56 @@ impl Answers {
 		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n"
 			.to_string()
 	}
+}
+
+/// TLDs that are not delegated in the public DNS. Init refuses
+/// to enable ACME for a name under one of these: the HTTP-01
+/// challenge would never reach the responder, and the resulting
+/// renewal loop would log failures every 12 hours forever. The
+/// list is the RFC 6762 multicast DNS name, the RFC 2606 test and
+/// example TLDs, and `.internal`, the name a private split-horizon
+/// DNS server hands out for hosts that should never appear on the
+/// public internet.
+const RESERVED_TLDS: &[&str] = &["local", "internal", "test", "example"];
+
+/// True when `hostname` is one init would auto-enable ACME for:
+/// a real DNS name (no IP literal), not under a reserved TLD,
+/// not a loopback name. The check is deliberately conservative: a
+/// false positive would write an `[acme]` block that cannot
+/// succeed; a false negative only means the operator has to set
+/// `acme.enabled = true` themselves.
+pub fn is_public_hostname(hostname: &str) -> bool {
+	if hostname.is_empty() {
+		return false;
+	}
+	// IP literal (v4 or v6) -> not public. `IpAddr::from_str`
+	// covers the canonical forms (`127.0.0.1`, `::1`,
+	// `[::1]`); the surrounding brackets are the URL form, not
+	// what an FQDN would carry.
+	if hostname.parse::<std::net::IpAddr>().is_ok() {
+		return false;
+	}
+	// Loopback name (`localhost` or a name that resolves to it).
+	// The set is small on purpose: `.localhost` is the RFC 6762
+	// form, `localhost` is the host file shortcut, and the
+	// bracketed forms are rejected up front (they parse as IPs).
+	if hostname.eq_ignore_ascii_case("localhost")
+		|| hostname.eq_ignore_ascii_case("localhost.localdomain")
+	{
+		return false;
+	}
+	// Walk the labels, top down, to find the TLD. A name with no
+	// labels (impossible after the empty-string check above, but
+	// belt and braces) is treated as private.
+	let tld = match hostname.rsplit('.').next() {
+		Some(label) if !label.is_empty() => label,
+		_ => return false,
+	};
+	let tld_lc = tld.to_ascii_lowercase();
+	if RESERVED_TLDS.iter().any(|reserved| *reserved == tld_lc) {
+		return false;
+	}
+	true
 }
 
 #[cfg(test)]

@@ -163,11 +163,23 @@ impl Config {
 				"[acme] requires at least one domain".into(),
 			));
 		}
-		let configured: HashSet<String> = self
+		// The cert's SAN list must cover names this server is
+		// responsible for. `self.domains` is the set of names the
+		// server accepts mail for (the delivery target); the cert
+		// also has to cover `self.hostname` because that is the
+		// FQDN clients connect to over SMTP/IMAP/POP3 and verify
+		// against the cert during the TLS handshake. A cert that
+		// does not cover the hostname is unusable for the
+		// very connections the server exposes, so excluding it
+		// here would reject every config that names a separate
+		// `hostname` and `domains` (the documented shape).
+		let mut configured: HashSet<String> = self
 			.domains
 			.iter()
 			.map(|d| d.to_ascii_lowercase())
 			.collect();
+		validate_dns_name("hostname", &self.hostname)?;
+		configured.insert(self.hostname.to_ascii_lowercase());
 		for domain in &acme.domains {
 			validate_dns_name("acme domain", domain)?;
 			if !configured.contains(&domain.to_ascii_lowercase()) {

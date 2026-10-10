@@ -60,6 +60,7 @@ pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 		dns: None,
 		services: Services::default(),
 		image: None,
+		acme: None,
 	}
 }
 

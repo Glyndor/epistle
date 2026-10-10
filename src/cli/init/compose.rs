@@ -546,6 +546,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 		public_ipv6: None,
 		data_dir: std::path::PathBuf::from("/var/lib/epistle"),
 		config_path: std::path::PathBuf::from("/etc/epistle/mail.toml"),
+		acme: None,
 		dns: None,
 		services: crate::cli::init::answers::Services {
 			imap: true,

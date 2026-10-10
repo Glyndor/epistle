@@ -27,6 +27,7 @@ fn answers_minimal() -> Answers {
 		dns: None,
 		services: Services::default(),
 		image: None,
+		acme: None,
 	}
 }
 
@@ -188,6 +189,7 @@ fn apply_fails_when_config_path_has_no_parent() {
 		dns: None,
 		services: Services::default(),
 		image: None,
+		acme: None,
 	};
 	let outcome = apply(&answers);
 	let err = outcome
@@ -231,6 +233,7 @@ fn answers_with_dns_and_extra_services() -> Answers {
 			database: false,
 		},
 		image: None,
+		acme: None,
 	}
 }
 
