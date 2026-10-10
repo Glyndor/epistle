@@ -22,7 +22,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
+use super::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+};
 
 /// DNSimple's API root. The account id goes in the path (`/v2/{id}/...`), so
 /// the base stops at `/v2` and we append `<account_id>` per request.
@@ -165,17 +167,29 @@ impl DnsimpleProvider {
 	}
 
 	/// Find the id of an existing record with matching relative name and kind,
-	/// if any.
+	/// if any. When `value` is `Some`, the match is by content too: a
+	/// `same_txt_purpose` comparison for TXT (so the existing tagged
+	/// record is updated in place) or exact-match for the first record
+	/// otherwise. A `None` value keeps the first-by-(name, kind)
+	/// selection.
 	async fn find_id(
 		&self,
 		zone: &str,
 		relative_name: &str,
 		kind: &str,
+		value: Option<&str>,
 	) -> Result<Option<u64>, ProviderError> {
 		let records = self.list_page(zone).await?;
 		Ok(records
 			.into_iter()
-			.find(|r| r.name == relative_name && r.kind.eq_ignore_ascii_case(kind))
+			.find(|r| {
+				r.name == relative_name
+					&& r.kind.eq_ignore_ascii_case(kind)
+					&& match value {
+						Some(v) => same_txt_purpose(&r.content, v),
+						None => true,
+					}
+			})
 			.map(|r| r.id))
 	}
 
@@ -249,7 +263,17 @@ impl DnsimpleProvider {
 			.to_string()
 		};
 		let url = self.url(&format!("/zones/{}/records", zone));
-		let existing = self.find_id(zone, &relative, kind).await?;
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: an upsert replaces the TXT with the same
+		// purpose (version tag) at that name and leaves every
+		// other TXT at the name alone. `same_txt_purpose` carries
+		// the contract; for non-TXT kinds the matching is just
+		// (name, kind) and the first match is fine.
+		let lookup_value = match record.kind {
+			RecordKind::Txt => Some(record.value.as_str()),
+			_ => None,
+		};
+		let existing = self.find_id(zone, &relative, kind, lookup_value).await?;
 		let request = if let Some(id) = existing {
 			self.client.patch(format!("{url}/{id}"))
 		} else {
@@ -269,13 +293,42 @@ impl DnsimpleProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let relative = self.relative_name(&record.name);
-		let Some(id) = self.find_id(zone, &relative, kind).await? else {
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose content matches the value (a sibling ACME challenge
+		// at the same owner survives), an empty-value delete drops
+		// every record at the owner (the DKIM rotator's retire
+		// path). Other record kinds fall through to the
+		// first-by-(name, kind) selection, which is the existing
+		// whole-set semantics.
+		if record.kind == RecordKind::Txt && record.value.is_empty() {
+			let pages = self.list_page(zone).await?;
+			let to_delete: Vec<u64> = pages
+				.into_iter()
+				.filter(|r| r.name == relative && r.kind.eq_ignore_ascii_case(kind))
+				.map(|r| r.id)
+				.collect();
+			for id in to_delete {
+				let url = self.url(&format!("/zones/{}/records/{id}", zone));
+				self.delete_by_id(&url).await?;
+			}
+			return Ok(());
+		}
+		let lookup_value = match record.kind {
+			RecordKind::Txt => Some(record.value.as_str()),
+			_ => None,
+		};
+		let Some(id) = self.find_id(zone, &relative, kind, lookup_value).await? else {
 			return Ok(()); // already absent: idempotent.
 		};
 		let url = self.url(&format!("/zones/{}/records/{id}", zone));
+		self.delete_by_id(&url).await
+	}
+
+	async fn delete_by_id(&self, url: &str) -> Result<(), ProviderError> {
 		let response = self
 			.client
-			.delete(&url)
+			.delete(url)
 			.bearer_auth(self.secret.token())
 			.send()
 			.await

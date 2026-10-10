@@ -381,6 +381,48 @@ impl GcloudProvider {
 		else {
 			return Ok(());
 		};
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the rdata
+		// whose value matches (a sibling ACME challenge at the same
+		// owner survives), an empty-value delete drops every rdata
+		// at the rrset (the DKIM rotator's retire path). Other
+		// record kinds fall through to the rrset-delete path, which
+		// is the existing whole-set semantics. Google Cloud DNS
+		// treats an rrset as the unit of change, so the
+		// value-bearing case reads the rrdatas, drops the matching
+		// one, and replaces the rrset with the remainder (a
+		// wholesale delete only when the rrset is fully gone).
+		if record.kind == RecordKind::Txt && !record.value.is_empty() {
+			let needle = format!(
+				"\"{}\"",
+				record.value.replace('\\', "\\\\").replace('"', "\\\"")
+			);
+			let remainder: Vec<String> = target
+				.rrdatas
+				.iter()
+				.filter(|r| r.as_str() != needle.as_str())
+				.cloned()
+				.collect();
+			if remainder.len() == target.rrdatas.len() {
+				// No rdata matched: idempotent, nothing to do.
+				return Ok(());
+			}
+			if remainder.is_empty() {
+				return self.post_change(&managed_zone, &[], &[target]).await;
+			}
+			let target_name = target.name.clone();
+			let target_kind = target.kind.clone();
+			let target_ttl = target.ttl;
+			let replacement = Rrset {
+				name: target_name,
+				kind: target_kind,
+				ttl: target_ttl,
+				rrdatas: remainder,
+			};
+			return self
+				.post_change(&managed_zone, &[replacement], &[target])
+				.await;
+		}
 		self.post_change(&managed_zone, &[], &[target]).await
 	}
 

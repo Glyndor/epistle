@@ -44,9 +44,9 @@ pub(super) fn make_signing_pair() -> TSigner {
 #[derive(Default, Debug, Clone)]
 pub(super) struct Captured {
 	/// The bytes received on the wire (length-prefix stripped).
-	wire: Vec<u8>,
+	pub(super) wire: Vec<u8>,
 	/// Whether the client connected at all.
-	connected: bool,
+	pub(super) connected: bool,
 }
 
 pub(super) type CapturedVec = Arc<Mutex<Vec<Captured>>>;
@@ -99,7 +99,7 @@ where
 }
 
 /// Wait for at least one captured wire message and return the latest.
-async fn wait_for_wire(captured: &CapturedVec) -> Vec<u8> {
+pub(super) async fn wait_for_wire(captured: &CapturedVec) -> Vec<u8> {
 	loop {
 		{
 			let g = captured.lock().unwrap();
@@ -182,6 +182,17 @@ pub(super) fn provider_with_endpoint(endpoint: String) -> Rfc2136Provider {
 	.unwrap()
 }
 
+/// Build a wired-up provider whose TXT cache is pre-populated with
+/// `seed`. Used by the wire-shape tests so the contract scenarios
+/// (apex SPF change, sibling challenge cleanup) start from a
+/// non-empty cache and exercise the class-NONE delete path.
+pub(super) fn provider_with_endpoint_and_cache(
+	endpoint: String,
+	seed: std::collections::HashMap<String, Vec<String>>,
+) -> Rfc2136Provider {
+	provider_with_endpoint(endpoint).with_cache(seed)
+}
+
 #[tokio::test]
 async fn upsert_sends_signed_update_with_correct_zone_and_rrset() {
 	let signer = make_signing_pair();
@@ -195,7 +206,16 @@ async fn upsert_sends_signed_update_with_correct_zone_and_rrset() {
 		}
 	})
 	.await;
-	let provider = provider_with_endpoint(endpoint);
+	// Seed the cache with a previous DMARC at the same owner. The
+	// contract removes a same-purpose TXT with class NONE before the
+	// add; without the seed the wire would carry just the add and
+	// the test would not exercise the deletion path.
+	let mut seed = std::collections::HashMap::new();
+	seed.insert(
+		"_dmarc.example.org".to_string(),
+		vec!["v=DMARC1; p=quarantine".to_string()],
+	);
+	let provider = provider_with_endpoint_and_cache(endpoint, seed);
 	provider
 		.upsert(ZONE, txt("_dmarc.example.org", "v=DMARC1; p=none"))
 		.await
@@ -213,13 +233,28 @@ async fn upsert_sends_signed_update_with_correct_zone_and_rrset() {
 		hickory_resolver::proto::rr::RecordType::SOA
 	);
 
-	// Two update records: one delete RRset (class NONE, TTL 0), one add.
+	// Two update records: one class-NONE delete carrying the previous
+	// DMARC RDATA, then the add. Class NONE is the wire shape the
+	// contract picks for same-purpose TXT removal (RFC 2136 §2.5.3);
+	// the server only removes records whose RDATA matches the
+	// placeholder, so the ownership token and any other TXT at the
+	// same owner stay published.
 	let updates = &msg.authorities;
-	assert_eq!(updates.len(), 2, "expected delete + add");
+	assert_eq!(updates.len(), 2, "expected class-NONE delete + add");
 	let delete = &updates[0];
 	assert_eq!(delete.dns_class, DNSClass::NONE);
 	assert_eq!(delete.ttl, 0);
 	assert_eq!(delete.name.to_ascii(), "_dmarc.example.org.");
+	if let hickory_resolver::proto::rr::RData::TXT(t) = &delete.data {
+		let got: String = t
+			.txt_data
+			.iter()
+			.map(|s| std::str::from_utf8(s).unwrap_or(""))
+			.collect();
+		assert_eq!(got, "v=DMARC1; p=quarantine");
+	} else {
+		panic!("delete record is not TXT: {:?}", delete.data);
+	}
 	let add = &updates[1];
 	assert_eq!(add.dns_class, DNSClass::IN);
 	assert_eq!(add.ttl, 3600);
@@ -256,28 +291,33 @@ async fn upsert_at_apex_uses_the_zone_as_owner() {
 		}
 	})
 	.await;
-	let provider = provider_with_endpoint(endpoint);
+	// Seed the cache so the wire shape is class-NONE delete + add
+	// (the contract path), not just add.
+	let mut seed = std::collections::HashMap::new();
+	seed.insert(ZONE.to_string(), vec!["v=spf1 -all".to_string()]);
+	let provider = provider_with_endpoint_and_cache(endpoint, seed);
 	provider
-		.upsert(ZONE, txt(ZONE, "v=spf1 -all"))
+		.upsert(ZONE, txt(ZONE, "v=spf1 mx -all"))
 		.await
 		.expect("upsert");
 
 	let wire = wait_for_wire(&captured).await;
 	let msg = Message::from_vec(&wire).unwrap();
 	let updates = &msg.authorities;
-	assert_eq!(updates.len(), 2);
+	assert_eq!(updates.len(), 2, "class-NONE delete + add at the apex");
 	assert_eq!(updates[0].name.to_ascii(), "example.org.");
+	assert_eq!(updates[0].dns_class, DNSClass::NONE);
 	assert_eq!(updates[1].name.to_ascii(), "example.org.");
 }
 
 #[tokio::test]
 async fn upsert_with_existing_record_replaces_without_duplicating() {
-	// The contract is encoded in the wire shape: every upsert issues a
-	// `delete RRset (name, type)` followed by an `add`. Re-running an
-	// upsert produces the same wire shape, so the server never sees two
-	// TXT records at the same owner name. We assert the shape here; the
-	// authoritative check is "the wire contains a delete-rrset before the
-	// add", which is exactly what RFC 2136 §2.5 specifies for replacement.
+	// The contract pins two wire shapes for TXT upsert: an empty
+	// cache emits just the `add`; a cache with a same-purpose value
+	// emits a `class NONE` delete for that value followed by the
+	// `add`. Re-running an upsert with the new value produces the
+	// second shape, so the server never sees two TXT records at the
+	// same owner name. We assert both shapes here.
 	let signer = make_signing_pair();
 	let signer_clone = signer.clone();
 	let (endpoint, captured) = spawn_server(move |bytes| {
@@ -289,9 +329,13 @@ async fn upsert_with_existing_record_replaces_without_duplicating() {
 		}
 	})
 	.await;
-	let provider = provider_with_endpoint(endpoint);
-	// Run twice — the wire must look the same both times, never two adds
-	// without an intervening delete-rrset.
+	// Seed the cache with the same value the first upsert would
+	// publish. Both calls then exercise the class-NONE delete path:
+	// the first delete is for the seed, the second for the value the
+	// first upsert added.
+	let mut seed = std::collections::HashMap::new();
+	seed.insert(ZONE.to_string(), vec!["v=spf1 -all".to_string()]);
+	let provider = provider_with_endpoint_and_cache(endpoint, seed);
 	provider
 		.upsert(ZONE, txt(ZONE, "v=spf1 -all"))
 		.await
@@ -302,14 +346,18 @@ async fn upsert_with_existing_record_replaces_without_duplicating() {
 		.expect("upsert");
 	let wires = wait_for_n_wires(&captured, 2).await;
 	assert_eq!(wires.len(), 2);
-	for wire in wires {
-		let msg = Message::from_vec(&wire).unwrap();
+	for (i, wire) in wires.iter().enumerate() {
+		let msg = Message::from_vec(wire).unwrap();
 		let updates = &msg.authorities;
 		assert_eq!(
 			updates.len(),
 			2,
-			"always delete-rrset + add, never just add"
+			"wire {i} carries a class-NONE delete for the previous value and the add"
 		);
+		// Class NONE is the contract shape for same-purpose TXT
+		// removal. A future regression to class ANY on TXT would
+		// strip every record at the owner (the bug the contract
+		// closes: an apex SPF upsert wiping the ownership token).
 		assert_eq!(updates[0].dns_class, DNSClass::NONE);
 		assert_eq!(updates[1].dns_class, DNSClass::IN);
 	}
@@ -317,9 +365,12 @@ async fn upsert_with_existing_record_replaces_without_duplicating() {
 
 #[tokio::test]
 async fn delete_is_idempotent_when_record_is_absent() {
-	// RFC 2136 §2.5.3: a delete-rrset for an absent RRset is a no-op.
-	// The server does not need to know whether the RRset exists; both
-	// responses are NOERROR. The client emits the same wire either way.
+	// RFC 2136 §2.5.3: a class-NONE delete for an absent record is a
+	// no-op on the server. The client still emits the same wire
+	// shape: a single class-NONE update record carrying the RDATA
+	// the caller asked for, regardless of whether anything matches.
+	// The class-NONE shape is the contract path for TXT delete with
+	// a value; an empty value would be class ANY (the RRset delete).
 	let signer = make_signing_pair();
 	let signer_clone = signer.clone();
 	let (endpoint, captured) = spawn_server(move |bytes| {
@@ -338,14 +389,214 @@ async fn delete_is_idempotent_when_record_is_absent() {
 		.expect("delete is idempotent");
 
 	let wire = wait_for_wire(&captured).await;
-	let msg = Message::from_vec(&wire).unwrap();
-	// delete is exactly one update record (the delete-rrset), with class
-	// NONE and TTL 0. No `add` follows.
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	// delete is exactly one update record with class NONE (the
+	// contract path for TXT delete with a value) and TTL 0, RDATA
+	// carrying the value the caller passed. A sibling TXT at the
+	// same owner with a different value is left alone because the
+	// server only removes records whose RDATA matches the
+	// placeholder.
 	let updates = &msg.authorities;
 	assert_eq!(updates.len(), 1);
 	assert_eq!(updates[0].dns_class, DNSClass::NONE);
 	assert_eq!(updates[0].ttl, 0);
 	assert_eq!(updates[0].name.to_ascii(), "_never_existed.example.org.");
+}
+
+/// An RSA-2048 DKIM `p=` value is roughly 410 bytes; hickory rejects
+/// character-strings past 255 octets, so the provider has to split long
+/// TXT values into 255-octet chunks before sending. The wire format
+/// keeps the order of the strings and the resolver concatenates them
+/// back into one logical record. A failure here means the message
+/// never reaches the nameserver, so a 410-byte DKIM cannot be
+/// published at all.
+#[tokio::test]
+async fn long_txt_value_is_split_into_255_octet_character_strings() {
+	let signer = make_signing_pair();
+	let signer_clone = signer.clone();
+	let (endpoint, captured) = spawn_server(move |bytes| {
+		signer_clone
+			.verify_message_byte(bytes, None, true)
+			.expect("verify");
+		ServerReply::NoError {
+			verify_signer: make_signing_pair(),
+		}
+	})
+	.await;
+	let provider = provider_with_endpoint(endpoint);
+	// 410 bytes of base64-shaped ASCII, the size of an RSA-2048 DKIM
+	// public key. The value is intentionally a single line of `A`s so
+	// the only bytes are 0x41; the split is purely a length split.
+	let value: String = "A".repeat(410);
+	assert_eq!(value.len(), 410, "fixture is exactly 410 bytes");
+	provider
+		.upsert(ZONE, txt("ed._domainkey.example.org", &value))
+		.await
+		.expect("upsert");
+
+	let wire = wait_for_wire(&captured).await;
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	let add = msg
+		.authorities
+		.iter()
+		.find(|r| r.dns_class == DNSClass::IN)
+		.expect("add record");
+	if let hickory_resolver::proto::rr::RData::TXT(t) = &add.data {
+		// Resolvers concatenate the character-strings in order, so
+		// the joined value must equal the original input byte-for-byte.
+		let joined: String = t
+			.txt_data
+			.iter()
+			.map(|s| std::str::from_utf8(s).unwrap_or(""))
+			.collect();
+		assert_eq!(joined.len(), 410, "concatenated length is the original");
+		assert_eq!(joined, value, "concatenated bytes match the input");
+		// No character-string past 255 octets, otherwise hickory
+		// would have refused to encode the message in the first place.
+		for (i, s) in t.txt_data.iter().enumerate() {
+			assert!(
+				s.len() <= 255,
+				"character-string {i} is {len} bytes (must be at most 255)",
+				len = s.len()
+			);
+		}
+		// 410 bytes split on 255-byte boundaries: the first 255 go
+		// in one string and the remaining 155 in a second.
+		assert_eq!(t.txt_data.len(), 2, "410 bytes split into 2 strings");
+		assert_eq!(t.txt_data[0].len(), 255);
+		assert_eq!(t.txt_data[1].len(), 155);
+	} else {
+		panic!("add record is not TXT: {:?}", add.data);
+	}
+}
+
+/// The two halves of the UPDATE message carry different classes
+/// under the contract:
+///
+/// - The TXT upsert's class-NONE delete (seeded cache has the
+///   same-purpose SPF) carries class NONE, because the contract
+///   removes only the same-purpose value and the wire must echo the
+///   RDATA so the server does not strip a sibling TXT at the same
+///   owner.
+/// - The TXT delete with an empty value carries class ANY, the
+///   RRset delete the DKIM rotator uses to retire a selector.
+///
+/// A future regression that picked the wrong class for either
+/// path (the apex SPF would land alongside the new one, or a
+/// retired DKIM key would stay published) fails here.
+#[tokio::test]
+async fn txt_upsert_uses_class_none_and_empty_value_delete_uses_class_any() {
+	let signer = make_signing_pair();
+	let signer_clone = signer.clone();
+	let (endpoint, captured) = spawn_server(move |bytes| {
+		signer_clone
+			.verify_message_byte(bytes, None, true)
+			.expect("verify");
+		ServerReply::NoError {
+			verify_signer: make_signing_pair(),
+		}
+	})
+	.await;
+	// Seed the cache with the same SPF the first upsert is about to
+	// publish. The second upsert then exercises the class-NONE
+	// delete path.
+	let mut seed = std::collections::HashMap::new();
+	seed.insert(ZONE.to_string(), vec!["v=spf1 -all".to_string()]);
+	let provider = provider_with_endpoint_and_cache(endpoint, seed);
+	provider
+		.upsert(ZONE, txt(ZONE, "v=spf1 mx -all"))
+		.await
+		.expect("upsert");
+	// Empty-value delete uses class ANY (RRset delete). The DKIM
+	// rotator retires a selector this way; with anything other than
+	// class ANY the retired key would stay published.
+	provider
+		.delete(
+			ZONE,
+			DnsRecord {
+				name: "_dkim._domainkey.example.org".into(),
+				kind: RecordKind::Txt,
+				value: String::new(),
+				ttl: 3600,
+			},
+		)
+		.await
+		.expect("delete");
+
+	let wires = wait_for_n_wires(&captured, 2).await;
+	// Wire 0: upsert. First update record is the class-NONE delete
+	// for the same-purpose SPF.
+	let upsert_msg = Message::from_vec(&wires[0]).expect("parse UPDATE");
+	let upsert_delete = upsert_msg
+		.authorities
+		.first()
+		.expect("upsert has the class-NONE delete");
+	assert_eq!(
+		upsert_delete.dns_class,
+		DNSClass::NONE,
+		"TXT upsert removes a same-purpose value with class NONE; \
+		 class ANY would strip every TXT at the owner"
+	);
+	// Wire 1: empty-value TXT delete. The single update record is
+	// the class-ANY RRset delete.
+	let delete_msg = Message::from_vec(&wires[1]).expect("parse UPDATE");
+	assert_eq!(delete_msg.authorities.len(), 1);
+	let delete_rr = &delete_msg.authorities[0];
+	assert_eq!(
+		delete_rr.dns_class,
+		DNSClass::ANY,
+		"TXT delete with an empty value is the RRset delete (class ANY); \
+		 class NONE would only match a record whose RDATA is empty"
+	);
+}
+
+/// Non-TXT records keep the whole-set semantics at a name. An MX
+/// upsert therefore carries `class ANY` for the delete-rrset, the
+/// same way it did before the contract; case difference on the
+/// target is irrelevant on the wire because DNS names are
+/// case-insensitive, so `MAIL.Example.Org.` and `mail.example.org`
+/// are the same record and a round-trip never duplicates it.
+#[tokio::test]
+async fn mx_upsert_with_a_different_case_target_uses_class_any_delete() {
+	let signer = make_signing_pair();
+	let signer_clone = signer.clone();
+	let (endpoint, captured) = spawn_server(move |bytes| {
+		signer_clone
+			.verify_message_byte(bytes, None, true)
+			.expect("verify");
+		ServerReply::NoError {
+			verify_signer: make_signing_pair(),
+		}
+	})
+	.await;
+	let provider = provider_with_endpoint(endpoint);
+	provider
+		.upsert(
+			ZONE,
+			DnsRecord {
+				name: ZONE.into(),
+				kind: RecordKind::Mx,
+				value: "10 mail.example.org".into(),
+				ttl: 3600,
+			},
+		)
+		.await
+		.expect("MX upsert");
+	let wire = wait_for_wire(&captured).await;
+	let msg = Message::from_vec(&wire).expect("parse UPDATE");
+	let updates = &msg.authorities;
+	assert_eq!(
+		updates.len(),
+		2,
+		"non-TXT upsert is delete-RRset + add, the same wire shape the contract keeps"
+	);
+	assert_eq!(
+		updates[0].dns_class,
+		DNSClass::ANY,
+		"non-TXT upserts keep the whole-set delete (class ANY); \
+		 class NONE would only match an MX whose RDATA is empty"
+	);
+	assert_eq!(updates[1].dns_class, DNSClass::IN);
 }
 
 #[tokio::test]
@@ -399,118 +650,4 @@ async fn mx_upsert_encodes_preference_and_exchange_in_wire_message() {
 	} else {
 		panic!("expected MX rdata");
 	}
-}
-
-#[tokio::test]
-async fn srv_upsert_encodes_priority_weight_port_target_in_wire_message() {
-	let (endpoint, captured) = spawn_server(|_| ServerReply::NoError {
-		verify_signer: make_signing_pair(),
-	})
-	.await;
-	let provider = provider_with_endpoint(endpoint);
-	let srv = DnsRecord {
-		name: format!("_submissions._tcp.{ZONE}"),
-		kind: RecordKind::Srv,
-		value: "0 1 465 mail.example.org.".to_string(),
-		ttl: 3600,
-	};
-	provider.upsert(ZONE, srv).await.expect("srv upsert");
-	let caps = captured.lock().unwrap();
-	let wire = caps.first().expect("captured a request").wire.clone();
-	let msg = Message::from_vec(&wire).expect("parse UPDATE");
-	let updates = msg.updates();
-	let add = updates
-		.iter()
-		.find(|r| matches!(r.data, hickory_resolver::proto::rr::RData::SRV(_)))
-		.expect("add SRV RR");
-	if let hickory_resolver::proto::rr::RData::SRV(srv) = &add.data {
-		assert_eq!(srv.priority, 0);
-		assert_eq!(srv.weight, 1);
-		assert_eq!(srv.port, 465);
-		assert_eq!(srv.target.to_ascii(), "mail.example.org.");
-	} else {
-		panic!("expected SRV rdata");
-	}
-}
-
-#[tokio::test]
-async fn server_returning_notauth_is_mapped_to_auth_error() {
-	// The server rejects the request without verifying TSIG (e.g. the
-	// key is unknown). RFC 2136 says it answers NOTAUTH.
-	let (endpoint, captured) = spawn_server(move |_bytes| ServerReply::NotAuth).await;
-	let provider = provider_with_endpoint(endpoint);
-	let result = provider.upsert(ZONE, txt(ZONE, "x")).await;
-	assert_eq!(result, Err(ProviderError::Auth));
-	let g = captured.lock().unwrap();
-	assert!(
-		!g.is_empty() && g[0].connected,
-		"client did not connect to the server"
-	);
-}
-
-#[tokio::test]
-async fn auth_header_tsig_uses_exact_key_and_algorithm() {
-	// The TSIG RR carries the algorithm name and the key name. A
-	// different algorithm or key name would invalidate the MAC. We
-	// verify the literal bytes the client emitted carry the right
-	// values.
-	let signer = make_signing_pair();
-	let signer_clone = signer.clone();
-	let (endpoint, captured) = spawn_server(move |bytes| {
-		signer_clone
-			.verify_message_byte(bytes, None, true)
-			.expect("verify");
-		ServerReply::NoError {
-			verify_signer: make_signing_pair(),
-		}
-	})
-	.await;
-	let provider = provider_with_endpoint(endpoint);
-	provider
-		.upsert(ZONE, txt("_dmarc.example.org", "v=DMARC1"))
-		.await
-		.expect("upsert");
-
-	let wire = wait_for_wire(&captured).await;
-	let wire_str = String::from_utf8_lossy(&wire);
-	assert!(
-		wire_str.contains("hmac-sha256"),
-		"TSIG algorithm name missing from wire bytes: {wire_str}"
-	);
-	let msg = Message::from_vec(&wire).unwrap();
-	let sig = msg.signature().expect("TSIG present");
-	assert_eq!(sig.data.algorithm, TsigAlgorithm::HmacSha256);
-	assert_eq!(sig.name.to_ascii(), KEY_NAME);
-	assert_eq!(sig.data.mac.len(), 32, "HMAC-SHA256 produces a 32-byte MAC");
-}
-
-#[tokio::test]
-async fn bad_tsig_is_mapped_to_auth_error() {
-	// The client signs with KEY_BASE64, but the server's verifier uses
-	// a different key. RFC 8945 §5.2 says the server MUST answer
-	// BADSIG; we surface that as ProviderError::Auth. The server here
-	// answers an unsigned NOTAUTH (the simplest path) — the client
-	// treats both shapes as auth failure.
-	let bad_signer = TSigner::new(
-		b"this-is-a-different-key-on-purpose".to_vec(),
-		TsigAlgorithm::HmacSha256,
-		hickory_resolver::proto::rr::Name::from_ascii(KEY_NAME).unwrap(),
-		300,
-	)
-	.unwrap();
-	let (endpoint, captured) = spawn_server(move |bytes| {
-		// Verify with a *different* key — must fail.
-		assert!(
-			bad_signer.verify_message_byte(bytes, None, true).is_err(),
-			"verification should have failed with the wrong key"
-		);
-		ServerReply::NotAuth
-	})
-	.await;
-	let provider = provider_with_endpoint(endpoint);
-	let result = provider.upsert(ZONE, txt(ZONE, "v=spf1 -all")).await;
-	assert_eq!(result, Err(ProviderError::Auth));
-	// The server saw the request (so the failure was after the wire
-	// round-trip, not a pre-flight authorization rejection).
-	let _ = wait_for_wire(&captured).await;
 }

@@ -100,15 +100,53 @@ async fn apex_record_uses_empty_subname() {
 	assert!(body.contains("\"subname\":\"\""), "{body}");
 }
 
+/// An empty-value delete is the DKIM rotator's retire path and must
+/// drop the whole rrset, whether it had values or not. With no rrset
+/// present, deSEC still gets a PUT with `"records":[]` because that
+/// is the wholesale delete the contract asks for.
 #[tokio::test]
-async fn delete_puts_empty_records() {
+async fn empty_value_delete_puts_empty_records() {
 	let (provider, state) = mock(serde_json::json!([])).await;
 	provider
-		.delete("example.org", txt("_dmarc.example.org", "x"))
+		.delete("example.org", txt("_dmarc.example.org", ""))
 		.await
 		.expect("delete");
 	let body = state.lock().unwrap().puts[0].clone();
 	assert!(body.contains("\"records\":[]"), "{body}");
+}
+
+/// A TXT delete with a value must remove only the matching record
+/// and keep siblings at the same owner. Two ACME DNS-01 challenges
+/// at the same owner is the canonical case: cleaning up one
+/// certificate order's challenge must not wipe the second order's
+/// challenge. deSEC's bulk PUT replaces the rrset, so the fix is
+/// to read the live rrset, drop the matching value, and PUT the
+/// rest (an empty `records` array only when the rrset is fully
+/// gone).
+#[tokio::test]
+async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
+	let rrsets = serde_json::json!([
+		{
+			"subname": "_acme-challenge",
+			"type": "TXT",
+			"ttl": 60,
+			"records": ["\"token-aaaa\"", "\"token-bbbb\""],
+		},
+	]);
+	let (provider, state) = mock(rrsets).await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let body = state.lock().unwrap().puts[0].clone();
+	assert!(
+		!body.contains("token-aaaa"),
+		"matching value still in body: {body}"
+	);
+	assert!(body.contains("token-bbbb"), "sibling value dropped: {body}");
 }
 
 #[tokio::test]

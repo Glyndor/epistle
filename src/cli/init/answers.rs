@@ -192,6 +192,10 @@ pub enum Invalid {
 	DnsZoneMalformed { value: String, reason: String },
 	/// `dns.provider` is missing or empty.
 	DnsProviderMissing,
+	/// `dns.provider` is not one of the supported provider names. Carries
+	/// the bad value and a comma-separated list of supported names so the
+	/// operator sees what they could have written.
+	DnsProviderUnsupported { value: String, supported: String },
 	/// A domain does not fall inside `dns.zone`.
 	DnsZoneScope { domain: String, zone: String },
 	/// `[dns]` declared more than one of `token`/`token_file`/`token_env`.
@@ -294,6 +298,10 @@ impl std::fmt::Display for Invalid {
 				write!(f, "dns.zone {value:?} {reason}")
 			}
 			Invalid::DnsProviderMissing => f.write_str("dns.provider must be set"),
+			Invalid::DnsProviderUnsupported { value, supported } => write!(
+				f,
+				"dns.provider {value:?} is not a supported provider; supported: {supported}"
+			),
 			Invalid::DnsZoneScope { domain, zone } => {
 				write!(f, "domains: {domain:?} is not inside dns.zone {zone:?}")
 			}

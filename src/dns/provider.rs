@@ -6,6 +6,35 @@
 //! exercised with an in-memory fake. [`ManualProvider`] is the always-available
 //! default that needs no credentials. [`ScopedSecret`] holds a provider token
 //! restricted to a single zone (least privilege) and never logs it.
+//!
+//! ## Upsert / delete contract
+//!
+//! Every provider that publishes records honours the same contract on the
+//! name/type/value triple. The contract is what the upper layers can rely on
+//! without knowing which provider is wired in.
+//!
+//! TXT records have a purpose given by their version tag (`v=spf1`,
+//! `v=DMARC1`, `v=DKIM1`, `v=STSv1`, `v=TLSRPTv1`). epistle is the only
+//! publisher of those tags, so two records with the same tag at the same
+//! name are a configuration mistake and the contract treats them as one.
+//!
+//! - `upsert` replaces the TXT with the same tag at that name and leaves
+//!   every other TXT at the name alone.
+//! - A TXT without a known tag (an ACME DNS-01 challenge, a domain
+//!   verification token) matches only an identical value.
+//! - `delete` with a value removes only the matching record by the same
+//!   rule.
+//! - `delete` with an empty value removes the whole TXT set at that name
+//!   (the DKIM rotator retires a selector this way, and selector names
+//!   belong to epistle).
+//! - Other record types (A, AAAA, MX, SRV, CNAME, TLSA, CAA) keep
+//!   whole-set semantics at a name: epistle owns the name and a write
+//!   replaces the whole set.
+//!
+//! The helper [`txt_purpose`] extracts the version tag from a TXT value
+//! (lowercase, tolerant to surrounding whitespace and the optional
+//! wire-form quotes); [`same_txt_purpose`] decides whether two values
+//! match under the contract above.
 
 use std::path::Path;
 use std::pin::Pin;
@@ -103,15 +132,92 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+/// The TXT version tag at the start of `value`, or `None` when the
+/// value is empty or its first token is not a tag epistle recognises.
+/// The tag is the substring before the first whitespace or `;`; the
+/// comparison is case-insensitive on the way in and the function
+/// returns the canonical spec form (`v=spf1`, `v=DMARC1`, `v=DKIM1`,
+/// `v=STSv1`, `v=TLSRPTv1`). Leading and trailing whitespace and the
+/// optional pair of surrounding double quotes (the wire form some
+/// providers use) are tolerated; an empty or whitespace-only value
+/// returns `None`.
+pub fn txt_purpose(value: &str) -> Option<&'static str> {
+	let trimmed = value.trim();
+	let stripped = trimmed
+		.strip_prefix('"')
+		.and_then(|s| s.strip_suffix('"'))
+		.unwrap_or(trimmed);
+	if stripped.is_empty() {
+		return None;
+	}
+	let head: String = stripped
+		.chars()
+		.take_while(|c| !c.is_whitespace() && *c != ';')
+		.collect();
+	match head.to_ascii_lowercase().as_str() {
+		"v=spf1" => Some("v=spf1"),
+		"v=dmarc1" => Some("v=DMARC1"),
+		"v=dkim1" => Some("v=DKIM1"),
+		"v=stsv1" => Some("v=STSv1"),
+		"v=tlsrptv1" => Some("v=TLSRPTv1"),
+		_ => None,
+	}
+}
+
+/// Whether two TXT values match under the upsert/delete contract
+/// (see the module doc). Two tagged values match when their tag is
+/// the same; an untagged value matches only an identical value (after
+/// the same leading/trailing whitespace and surrounding-quote
+/// stripping); a tagged value never matches an untagged one.
+pub fn same_txt_purpose(a: &str, b: &str) -> bool {
+	match (txt_purpose(a), txt_purpose(b)) {
+		(Some(x), Some(y)) => x == y,
+		(Some(_), None) | (None, Some(_)) => false,
+		(None, None) => normalised_txt(a) == normalised_txt(b),
+	}
+}
+
+/// Trim surrounding whitespace and one pair of wire-form quotes, the
+/// way [`txt_purpose`] does, so two untagged values compare on the
+/// same bytes.
+fn normalised_txt(value: &str) -> String {
+	let trimmed = value.trim();
+	trimmed
+		.strip_prefix('"')
+		.and_then(|s| s.strip_suffix('"'))
+		.unwrap_or(trimmed)
+		.to_string()
+}
+
 type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
 type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
 
 /// A DNS provider that can publish and remove records in a zone. Object-safe
 /// and test-injectable (mirrors the [`crate::spf::DnsLookup`] pattern).
 pub trait DnsProvider: Send + Sync {
-	/// Create or replace `record` in `zone`.
+	/// Create or replace `record` in `zone`. The contract on matching is
+	/// spelled out at the top of the module:
+	///
+	/// - For TXT, `upsert` replaces the TXT with the same purpose (version
+	///   tag) at that name and leaves every other TXT at the name alone. A
+	///   TXT without a known tag matches only an identical value.
+	/// - For every other record kind, `upsert` replaces the whole
+	///   `(name, type)` set with the one record in `record`. epistle owns
+	///   those names; nothing else is supposed to be writing them.
+	///
+	/// Implementations are free to issue the minimum number of API calls
+	/// that satisfies the contract (e.g. GoDaddy reads the current set,
+	/// swaps the matching element, and PUTs the result).
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_>;
-	/// Remove `record` from `zone` (idempotent).
+	/// Remove `record` from `zone`. Idempotent. The matching rule is the
+	/// same as [`DnsProvider::upsert`]:
+	///
+	/// - For TXT, `delete` with a value removes only the matching record
+	///   (same purpose for tagged values, identical value otherwise). An
+	///   empty value removes the whole TXT set at the name, the way the
+	///   DKIM rotator retires a selector.
+	/// - For every other record kind, `delete` removes the whole
+	///   `(name, type)` set.
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_>;
 	/// List the records epistle manages in `zone`.
 	fn list(&self, zone: &str) -> ListOp<'_>;

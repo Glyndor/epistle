@@ -113,16 +113,34 @@ async fn delete_records(
 	record_call(&state, axum::http::Method::DELETE, &headers, &zone, &query);
 	let mut s = state.lock().unwrap();
 	s.bodies.push(body.clone());
-	// Each entry is a `(type, name)` we should remove. TXT delete items
-	// may also carry `value`, which we ignore for matching (we key by
-	// `type|name`).
+	// Each entry carries (type, name) and optionally a value.
+	// When `value` is present, the deletion matches by (type, name,
+	// value); when absent, every record at (type, name) is dropped
+	// (the wholesale retire path).
 	if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
 		for item in items {
-			if let (Some(k), Some(n)) = (
-				item.get("type").and_then(|v| v.as_str()),
-				item.get("name").and_then(|v| v.as_str()),
-			) {
-				s.records.remove(&format!("{k}|{n}"));
+			let Some(item_type) = item.get("type").and_then(|v| v.as_str()) else {
+				continue;
+			};
+			let Some(item_name) = item.get("name").and_then(|v| v.as_str()) else {
+				continue;
+			};
+			match item.get("value").and_then(|v| v.as_str()) {
+				Some(v) => {
+					s.records.remove(&format!("{item_type}|{item_name}|{v}"));
+				}
+				None => {
+					let prefix = format!("{item_type}|{item_name}|");
+					let keys: Vec<String> = s
+						.records
+						.keys()
+						.filter(|k| k.starts_with(&prefix))
+						.cloned()
+						.collect();
+					for key in keys {
+						s.records.remove(&key);
+					}
+				}
 			}
 		}
 	}
@@ -133,9 +151,10 @@ pub(super) async fn mock(records: Vec<serde_json::Value>) -> (SpaceshipProvider,
 	let mut map = std::collections::HashMap::new();
 	for r in records {
 		let key = format!(
-			"{}|{}",
+			"{}|{}|{}",
 			r.get("type").and_then(|v| v.as_str()).unwrap_or(""),
 			r.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+			r.get("value").and_then(|v| v.as_str()).unwrap_or(""),
 		);
 		map.insert(key, r);
 	}
@@ -290,6 +309,44 @@ async fn delete_is_idempotent_when_record_absent() {
 		!s.calls.iter().any(|c| c.starts_with("PUT")),
 		"calls: {:?}",
 		s.calls
+	);
+}
+
+/// A TXT delete with an empty value is the DKIM rotator's retire
+/// path: it must drop every TXT at the owner. Spaceship's
+/// `DELETE /dns/records/{zone}` matches by (type, name, value) when
+/// the body item carries a `value` field, so an empty value would
+/// no-op (no record has an empty value). The fix is to send the
+/// delete item without a `value` field when the caller asked to
+/// retire the whole rrset, which tells Spaceship to drop every
+/// matching record at (type, name).
+#[tokio::test]
+async fn txt_delete_with_empty_value_drops_every_record_at_the_owner() {
+	let records = vec![serde_json::json!({
+		"type": "TXT",
+		"name": "ed._domainkey",
+		"value": "v=DKIM1; k=rsa; p=AAA",
+		"ttl": 3600,
+	})];
+	let (provider, state) = mock(records).await;
+	provider
+		.delete("example.org", txt("ed._domainkey.example.org", ""))
+		.await
+		.expect("wholesale delete is Ok");
+	// The wholesale path sends a DELETE without a `value` field,
+	// so the mock's (type, name) key matcher removes the seed
+	// record. A value-bearing delete would have left the record
+	// in place (Spaceship's API matches by value, and "" matches
+	// nothing).
+	let s = state.lock().unwrap();
+	let still_there = s
+		.records
+		.iter()
+		.any(|(_, v)| v.get("name").and_then(|n| n.as_str()) == Some("ed._domainkey"));
+	assert!(
+		!still_there,
+		"the wholesale empty-value delete removed the seed: {:?}",
+		s.records
 	);
 }
 

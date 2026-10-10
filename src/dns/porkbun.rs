@@ -294,8 +294,29 @@ impl PorkbunProvider {
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
-		// No match: already absent, so nothing to do (idempotent).
-		for id in self.matching_ids(&record.name, kind).await? {
+		// Porkbun addresses every record by numeric id, so a delete is
+		// a read-then-delete loop. The TXT matching rule from
+		// `src/dns/provider.rs` is the contract: a value-bearing delete
+		// drops only the row whose content matches the value (sibling
+		// ACME challenges at the same owner survive), an empty-value
+		// delete drops every row at the owner (the DKIM rotator's
+		// retire path). Other record kinds fall through to the
+		// name+kind match, which is already whole-set semantics.
+		let name = record.name.trim_end_matches('.');
+		let targets = self
+			.retrieve()
+			.await?
+			.into_iter()
+			.filter(|r| {
+				r.kind.eq_ignore_ascii_case(kind)
+					&& r.name.trim_end_matches('.').eq_ignore_ascii_case(name)
+					&& (record.kind != RecordKind::Txt
+						|| record.value.is_empty()
+						|| r.content == record.value)
+			})
+			.map(|r| r.id)
+			.collect::<Vec<_>>();
+		for id in targets {
 			self.delete_id(&id).await?;
 		}
 		Ok(())

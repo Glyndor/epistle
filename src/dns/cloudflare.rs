@@ -8,7 +8,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
+use super::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+};
 
 /// Cloudflare's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.cloudflare.com/client/v4";
@@ -244,13 +246,30 @@ impl CloudflareProvider {
 		zone_id: &str,
 		name: &str,
 		kind: &str,
+		value: Option<&str>,
 	) -> Result<Option<String>, ProviderError> {
 		let url = format!(
 			"{}/zones/{zone_id}/dns_records?type={kind}&name={name}",
 			self.base
 		);
 		let records: ListRecords = self.get_json(&url).await?;
-		Ok(records.result.into_iter().next().map(|r| r.id))
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose content matches the value, and an upsert that
+		// targets the same purpose finds the existing record by
+		// the same rule. `same_txt_purpose` carries the contract:
+		// two tagged values match when their tag is the same
+		// (case-insensitive), two untagged values match only when
+		// identical. A `None` value (the wholesale path) keeps
+		// the first-by-(type, name) selection.
+		Ok(records
+			.result
+			.into_iter()
+			.find(|r| match value {
+				Some(v) => same_txt_purpose(&r.content, v),
+				None => true,
+			})
+			.map(|r| r.id))
 	}
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
@@ -258,7 +277,9 @@ impl CloudflareProvider {
 		let kind = Self::api_kind(record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_body(kind, &record)?;
-		let existing = self.find_record(&zone_id, &record.name, kind).await?;
+		let existing = self
+			.find_record(&zone_id, &record.name, kind, Some(&record.value))
+			.await?;
 		let request = match &existing {
 			Some(id) => self
 				.client
@@ -281,7 +302,27 @@ impl CloudflareProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
-		let Some(id) = self.find_record(&zone_id, &record.name, kind).await? else {
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose content matches the value (a sibling ACME challenge
+		// at the same owner survives), an empty-value delete drops
+		// every record at the owner (the DKIM rotator's retire
+		// path). Other record kinds fall through to the
+		// first-by-(type, name) selection, which is the existing
+		// whole-set semantics.
+		let needle = if record.kind == RecordKind::Txt {
+			if record.value.is_empty() {
+				None
+			} else {
+				Some(record.value.as_str())
+			}
+		} else {
+			None
+		};
+		let Some(id) = self
+			.find_record(&zone_id, &record.name, kind, needle)
+			.await?
+		else {
 			return Ok(()); // already absent: idempotent.
 		};
 		let response = self

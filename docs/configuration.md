@@ -634,8 +634,10 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `digitalocean` | Personal access token; bearer auth; v2 REST API; see specifics below. |
 | `gcloud` | Google Cloud DNS service-account JSON; RS256 JWT bearer; supports TLSA. |
 | `dnsimple` | DNSimple API token + account id; bearer auth; record-id granularity. |
+| `godaddy` | GoDaddy API key + secret; `sso-key` header; v1 REST API; production API access gated by account eligibility; see specifics below. |
 | `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
 | `ovh` | Application key + secret + consumer key; signed with `$1$`+SHA1; see specifics below. |
+| `porkbun` | Porkbun API key + secret; v3 JSON API; credentials in the request body, not a header; see specifics below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
 | `rfc2136` | TSIG-authenticated DNS UPDATE to a local nameserver (`host:port`); A/AAAA/TXT/CNAME/TLSA. |
 | `spaceship` | API key + secret; `X-API-Key`/`X-API-Secret` headers; see specifics below. |
@@ -712,6 +714,70 @@ token = "your_api_token"        # or token_file / token_env
   returns `provider does not support writes` for these.
 - **API base:** `https://api.dnsimple.com/v2` — overridable through the
   provider's `with_base` for tests.
+#### `[dns]`: GoDaddy specifics
+
+```toml
+[dns]
+provider = "godaddy"
+zone = "example.org"
+access_key = "your_api_key"          # the public half; prefer env for production
+secret_key_env = "EPISTLE_GODADDY_SECRET"   # or secret_key inline
+```
+
+- Generate the API key pair at <https://developer.godaddy.com/keys/>. The
+  two halves travel in a single `Authorization: sso-key <key>:<secret>`
+  header on every call. The key comes first, the secret second, a
+  wrong order is a `401`, the same path the other providers treat as a
+  missing token.
+- **Production API access is gated.** GoDaddy does not enable the
+  production DNS API on every account by default; an `HTTP 403` from
+  the API is most often the verdict, not a bad key. The error message
+  names the eligibility check so the operator knows the fix is at
+  <https://developer.godaddy.com/getstarted>, not in the credentials.
+- **API URL:** production is `https://api.godaddy.com/v1`. The
+  provider's `with_base` constructor swaps to an alternate base for
+  tests; no config knob for it yet.
+- **Upsert replaces the whole record set.** `PUT
+  /domains/{zone}/records/{type}/{name}` is called with a one-element
+  JSON array body carrying `data` and `ttl` (A/AAAA/TXT/CNAME);
+  MX adds `priority`, SRV adds `priority`/`weight`/`port`/`service`/
+  `host`. The array shape is the contract, a single `DnsRecord` from
+  the trait produces a one-element array, matching the way the other
+  providers encode one record at a time.
+- **TLSA is not supported.** The v1 endpoints' allowed-type set excludes
+  TLSA
+  (https://developer.godaddy.com/en/docs/references/rest/domains/v1/record-replace-type-name),
+  so a TLSA publish would round-trip a 4xx instead of a clean "this
+  provider does not support TLSA" verdict. `RecordKind::Tlsa` returns
+  `provider does not support writes` and epistle skips publishing it.
+  Publish TLSA at a different provider (or split the zone) if you need
+  DANE.
+- **Concurrent writers to the same name can lose an update.** GoDaddy's
+  API is read-modify-write without conditional writes: an upsert
+  `GET`s the live set, merges the new value in, and `PUT`s the result.
+  Two writers that observe the same starting set and PUT different
+  values both succeed, and the loser's update silently disappears.
+  The same race applies to `delete` (a concurrent add between the
+  `GET` and the `DELETE` is removed by the follow-up `DELETE`).
+  This is a limitation of the API, not the implementation: there is
+  no `If-Match` header and no ETag on the per-name endpoints. The
+  single-process epistle daemon does not hit it today, but two
+  epistle processes (a primary and a hot standby) writing to the
+  same zone can. Avoid that topology or accept that the second
+  writer to commit wins.
+- **Minimum TTL 600.** A TTL below 600 is raised to the floor before
+  the request goes out, so a low-TTL DKIM or SPF never hits the wire.
+- **Apex is the literal `@`.** The relative name GoDaddy expects is
+  the label minus the zone suffix, or `@` for the apex (e.g. the
+  path for an A record at the zone is `/records/A/@`).
+- **MX and SRV are emitted** with the extra fields GoDaddy requires.
+  The presentation form (`<prio> <target>` for MX, `<prio> <weight>
+  <port> <target>` for SRV) is split out on write and reassembled on
+  read.
+- **No in-place update and no pagination** on the zone list. `list`
+  reads the full set in one `GET /domains/{zone}/records` call and
+  walks what the API returns.
+
 #### `[dns]` — OVH specifics
 
 ```toml
@@ -750,6 +816,47 @@ endpoint = "ovh-eu"                          # ovh-eu (default) | ovh-ca | ovh-u
   TLSA tuple, so `RecordKind::Tlsa` returns `provider does not support
   writes` and epistle skips publishing it. Publish TLSA at a different
   provider (or split the zone) if you need DANE.
+
+#### `[dns]`: Porkbun specifics
+
+```toml
+[dns]
+provider = "porkbun"
+zone = "example.org"
+access_key = "pk1_xxxxxxxxxxxxxxxxxxxxxxxx"   # the public API key
+secret_key_env = "EPISTLE_PORKBUN_SECRET"     # the secret API key, prefer env
+```
+
+- Generate the key pair at <https://porkbun.com/apiKeys>. The two
+  halves are `apikey` and `secretapikey`; Porkbun takes them in the
+  request **body** of every call rather than an `Authorization`
+  header, so the wire shape has no auth header at all.
+- **API URL:** production is `https://api.porkbun.com/api/json/v3`. The
+  provider's `with_base` constructor swaps to an alternate base for
+  tests; no config knob for it yet.
+- **Records are id-addressed.** `POST /dns/retrieve/{zone}` returns
+  every record in the zone (Porkbun stores them by numeric id, not by
+  name+type). The upsert path matches by `(name, type)`, then either
+  `POST /dns/create/{zone}` or `POST /dns/edit/{zone}/{id}` publishes
+  the change; any duplicates at the same `(name, type)` are dropped
+  so an upsert never widens the record set.
+- **`status` is the source of truth.** Porkbun answers `200 OK` with
+  `{"status":"ERROR", …}` for application-level failures as readily
+  as it answers `400`, so every reply is decoded and the `status`
+  field is checked; a non-`SUCCESS` status is an error regardless of
+  the HTTP code, and the auth-flavoured `code` values map to
+  `provider authentication failed`.
+- **Apex is the blank name.** The relative name Porkbun expects is
+  the label minus the zone suffix, or the empty string for the apex
+  (Porkbun's "blank for root").
+- **Minimum TTL 600.** A TTL below 600 is raised to the floor; the
+  API also treats `0` as "use the account minimum".
+- **MX/SRV/CAA/TLSA** are all emitted with the kind-specific fields
+  Porkbun expects (Porkbun packs SRV's priority and weight into a
+  single `prio` integer; the rest of the fields travel in `content`).
+- **TXT values pass through verbatim**, the provider does not strip
+  or add quotes. A zone imported with literal quotes around a TXT
+  value keeps them on read.
 
 #### `[dns]` — Namecheap specifics
 

@@ -467,5 +467,78 @@ domains = ["example.org"]
 	assert!(matches!(result, Err(ConfigError::Invalid(_))));
 }
 
+/// A `dns.provider` that is not in `SUPPORTED_PROVIDERS` must be
+/// rejected at validate time with the list in the error message, so
+/// the operator sees the typo before the server starts rather than
+/// silently dropping into manual mode (the old behaviour, where
+/// `Dns::build` returned `None` and nothing was published).
+#[test]
+fn rejects_unknown_dns_provider() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[dns]
+provider = "cloudfare"
+zone = "example.org"
+token = "x"
+"#,
+	);
+	let err = match result {
+		Err(e) => e,
+		Ok(_) => panic!("unknown provider must error"),
+	};
+	let rendered = format!("{err}");
+	assert!(rendered.contains("cloudfare"), "{rendered}");
+	assert!(rendered.contains("cloudflare"), "{rendered}");
+	assert!(rendered.contains("manual"), "{rendered}");
+}
+
+/// The supported list is matched case-insensitively: `Cloudflare`
+/// (capitalised) and `cloudflare` reach the same arm in `Dns::build`,
+/// and the loader must accept both.
+#[test]
+fn accepts_capitalised_dns_provider() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[dns]
+provider = "Cloudflare"
+zone = "example.org"
+token = "x"
+"#,
+	);
+	assert!(
+		result.is_ok(),
+		"capitalised provider must validate, got {result:?}"
+	);
+}
+
+/// `provider = "manual"` is in the supported list and must validate
+/// even without any token, the provider is the always-available no-op.
+#[test]
+fn accepts_manual_dns_provider_without_credentials() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[dns]
+provider = "manual"
+zone = "example.org"
+"#,
+	);
+	assert!(
+		result.is_ok(),
+		"manual provider must validate, got {result:?}"
+	);
+}
+
 #[path = "validate_privileges_tests.rs"]
 mod privileges;

@@ -127,6 +127,54 @@ impl DesecProvider {
 			.map_err(|e| ProviderError::Remote(e.to_string()))?;
 		check(response)
 	}
+
+	/// `GET /domains/{zone}/rrsets/` filtered to the rrset at
+	/// `(name, kind)`. Returns the live wire form (records are
+	/// quoted for TXT) so the value-bearing delete path can compare
+	/// against the caller-supplied value after the same
+	/// quote-stripping the upsert path uses.
+	async fn fetch_rrset(&self, name: &str, kind: &str) -> Result<Option<Rrset>, ProviderError> {
+		self.authorize_for(name)?;
+		let url = format!("{}/domains/{}/rrsets/", self.base, self.secret.zone());
+		let response = self
+			.client
+			.get(url)
+			.header(
+				reqwest::header::AUTHORIZATION,
+				format!("Token {}", self.secret.token()),
+			)
+			.send()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let status = response.status();
+		if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+			return Err(ProviderError::Auth);
+		}
+		if !status.is_success() {
+			return Err(ProviderError::Remote(format!("HTTP {status}")));
+		}
+		let text = response
+			.text()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let rrsets: Vec<Rrset> =
+			serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let sub = self.subname(name);
+		Ok(rrsets
+			.into_iter()
+			.find(|r| r.subname == sub && r.kind.eq_ignore_ascii_case(kind)))
+	}
+
+	/// Reject a name the secret is not scoped for, before any
+	/// network call. The existing `authorize` takes a `&DnsRecord`;
+	/// `fetch_rrset` only has the FQDN, so it uses this thin shim.
+	fn authorize_for(&self, name: &str) -> Result<(), ProviderError> {
+		if self.secret.authorizes(name) {
+			Ok(())
+		} else {
+			Err(ProviderError::Auth)
+		}
+	}
 }
 
 impl DnsProvider for DesecProvider {
@@ -137,7 +185,32 @@ impl DnsProvider for DesecProvider {
 		})
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.put_rrset(&record, Vec::new()).await })
+		let record_value = record.value.clone();
+		Box::pin(async move {
+			self.authorize(&record)?;
+			let kind = Self::rrset_kind(record.kind)?;
+			// The TXT matching rule from `src/dns/provider.rs` is
+			// the contract: a value-bearing delete drops only the
+			// record whose content matches the value (a sibling ACME
+			// challenge at the same owner survives), an empty-value
+			// delete drops every record at the owner (the DKIM
+			// rotator's retire path). Other record kinds fall
+			// through to the wholesale path. deSEC's bulk PUT
+			// replaces the rrset, so the value-bearing case reads
+			// the live rrset, removes the matching record, and
+			// PUTs the remainder (or an empty list when the rrset
+			// is fully gone).
+			if record.kind == RecordKind::Txt && !record_value.is_empty() {
+				let target = Self::record_content(RecordKind::Txt, &record_value);
+				let remainder: Vec<String> = match self.fetch_rrset(&record.name, kind).await? {
+					Some(rrset) => rrset.records.into_iter().filter(|r| r != &target).collect(),
+					None => return Ok(()),
+				};
+				self.put_rrset(&record, remainder).await
+			} else {
+				self.put_rrset(&record, Vec::new()).await
+			}
+		})
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async move {
