@@ -316,6 +316,32 @@ impl Server {
 				if output.close {
 					return Ok(());
 				}
+				if let Some(size) = output.discard_literal {
+					// RFC 7888 §4: a non-synchronizing literal whose command
+					// was rejected still has its payload on the wire. Drain
+					// exactly `size` bytes (the trailing CRLF, if any, goes
+					// back into the line decoder as an empty line) so the
+					// bytes never arrive as the next command. The
+					// rejection has already been written; nothing more
+					// follows, so return to the command loop instead of
+					// rewriting the same response.
+					let mut discarded = decoder.take_buffered(size);
+					let mut chunk = [0u8; 4096];
+					while discarded.len() < size {
+						let read = stream.read(&mut chunk).await?;
+						if read == 0 {
+							return Ok(());
+						}
+						let needed = size - discarded.len();
+						if read <= needed {
+							discarded.extend_from_slice(&chunk[..read]);
+						} else {
+							discarded.extend_from_slice(&chunk[..needed]);
+							decoder.feed(&chunk[needed..read]);
+						}
+					}
+					break;
+				}
 				if let Some(size) = output.collect_literal {
 					// Read exactly `size` literal bytes (plus trailing CRLF
 					// which the line decoder will consume as an empty line).
@@ -458,3 +484,7 @@ mod tests;
 #[cfg(test)]
 #[path = "server_tests_compress.rs"]
 mod tests_compress;
+
+#[cfg(test)]
+#[path = "server_tests_literals.rs"]
+mod tests_literals;

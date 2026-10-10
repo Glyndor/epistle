@@ -24,6 +24,20 @@ pub enum ListAttribute {
 	SpecialUse,
 }
 
+/// The `{n}` / `{n+}` literal count at the end of an APPEND or REPLACE
+/// command line. The synchronizing flag distinguishes the classic
+/// `{n}` form (client waits for `+` before sending bytes) from the
+/// non-synchronizing `{n+}` form (RFC 7888), where the client already
+/// sends the payload and the server must consume or discard it on
+/// rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralAnnouncement {
+	/// Literal size in octets.
+	pub size: usize,
+	/// `true` for `{n}` (synchronizing), `false` for `{n+}`.
+	pub synchronizing: bool,
+}
+
 /// An IMAP command, parsed from a single client line. Variants correspond
 /// one-to-one with the commands RFC 9051 and its extensions (CONDSTORE,
 /// QRESYNC, LIST-EXTENDED, ACL, METADATA, NOTIFY, etc.) accept.
@@ -150,6 +164,10 @@ pub enum Command {
 		flags: Vec<String>,
 		/// Size of the literal body in octets.
 		size: usize,
+		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
+		/// the client already sent the bytes; the server must consume or
+		/// discard them when it rejects the command.
+		synchronizing: bool,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected
@@ -167,6 +185,10 @@ pub enum Command {
 		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a
 		/// sequence number.
 		uid: bool,
+		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
+		/// the client already sent the bytes; the server must consume or
+		/// discard them when it rejects the command.
+		synchronizing: bool,
 	},
 	/// `FETCH <sequence> (<items>...)`: return data for messages in the set.
 	Fetch {
@@ -638,12 +660,14 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 
 mod acl;
 mod list;
-mod literal;
+pub(super) mod literal;
 mod metadata;
 mod notify;
 mod parse;
 mod search;
 mod select_params;
+
+pub(super) use literal::literal_announcement_in_line;
 
 pub use parse::parse;
 

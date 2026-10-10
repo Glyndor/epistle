@@ -6,6 +6,17 @@ use super::mailbox::{self, Flag};
 use super::state::State;
 use super::{Output, PendingLiteral, Session};
 
+/// Build the rejection `Output` for a literal-bearing command. When the
+/// command used the non-synchronizing `{n+}` form, the client already sent
+/// the payload, so the network layer must consume those bytes (RFC 7888 §4).
+fn reject_literal(tag: &str, synchronizing: bool, size: usize, response: &str) -> Output {
+	let mut output = Output::text(format!("{tag} {response}"));
+	if !synchronizing {
+		output.discard_literal = Some(size);
+	}
+	output
+}
+
 impl Session {
 	pub(super) fn append_begin(
 		&mut self,
@@ -13,34 +24,49 @@ impl Session {
 		mailbox: &str,
 		flag_tokens: &[String],
 		size: usize,
+		synchronizing: bool,
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return reject_literal(tag, synchronizing, size, "NO not authenticated\r\n");
 		};
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
+			return reject_literal(
+				tag,
+				synchronizing,
+				size,
+				"NO [TRYCREATE] no such mailbox\r\n",
+			);
 		}
 		// Quota enforcement (RFC 9208): refuse before reading the literal.
 		let projected =
 			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
 		if projected > self.effective_quota() {
-			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
+			return reject_literal(
+				tag,
+				synchronizing,
+				size,
+				"NO [OVERQUOTA] storage quota exceeded\r\n",
+			);
 		}
 		let mut flags = Vec::with_capacity(flag_tokens.len());
 		for token in flag_tokens {
 			match Flag::parse(token) {
 				Some(flag) => flags.push(flag),
-				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
+				None => {
+					return reject_literal(tag, synchronizing, size, "BAD unsupported flag\r\n");
+				}
 			}
 		}
 		// A literal-bearing APPEND can only fail the keyword cap on Set
 		// semantics (REPLACE has the same check via the replaced message);
 		// refuse here so the client never sends the literal.
 		if super::mailbox::count_keywords(&flags).is_none() {
-			return Output::text(format!(
-				"{tag} BAD too many keywords (max {})\r\n",
-				super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
-			));
+			return reject_literal(
+				tag,
+				synchronizing,
+				size,
+				"BAD too many keywords (max {})\r\n",
+			);
 		}
 		self.pending_append = Some(PendingLiteral {
 			tag: tag.to_string(),
@@ -63,6 +89,7 @@ impl Session {
 		flag_tokens: &[String],
 		size: usize,
 		uid: bool,
+		synchronizing: bool,
 	) -> Output {
 		let resolved = {
 			let State::Selected {
@@ -72,10 +99,10 @@ impl Session {
 				account,
 			} = &self.state
 			else {
-				return Output::text(format!("{tag} NO no mailbox selected\r\n"));
+				return reject_literal(tag, synchronizing, size, "NO no mailbox selected\r\n");
 			};
 			if *read_only {
-				return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+				return reject_literal(tag, synchronizing, size, "NO mailbox is read-only\r\n");
 			}
 			let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
 			let seq = if uid {
@@ -83,37 +110,51 @@ impl Session {
 					.find(|n| snapshot.by_sequence(*n).map(|m| m.uid) == Some(sequence))
 				{
 					Some(seq) => seq,
-					None => return Output::text(format!("{tag} NO no such message\r\n")),
+					None => return reject_literal(tag, synchronizing, size, "NO no such message\r\n"),
 				}
 			} else if sequence >= 1 && sequence <= total {
 				sequence
 			} else {
-				return Output::text(format!("{tag} NO no such message\r\n"));
+				return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
 			};
 			(account.clone(), selected.clone(), seq)
 		};
 		let (account, selected, seq) = resolved;
 
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
+			return reject_literal(
+				tag,
+				synchronizing,
+				size,
+				"NO [TRYCREATE] no such mailbox\r\n",
+			);
 		}
 		let projected =
 			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
 		if projected > self.effective_quota() {
-			return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
+			return reject_literal(
+				tag,
+				synchronizing,
+				size,
+				"NO [OVERQUOTA] storage quota exceeded\r\n",
+			);
 		}
 		let mut flags = Vec::with_capacity(flag_tokens.len());
 		for token in flag_tokens {
 			match Flag::parse(token) {
 				Some(flag) => flags.push(flag),
-				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
+				None => {
+					return reject_literal(tag, synchronizing, size, "BAD unsupported flag\r\n");
+				}
 			}
 		}
 		if super::mailbox::count_keywords(&flags).is_none() {
-			return Output::text(format!(
-				"{tag} BAD too many keywords (max {})\r\n",
-				super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
-			));
+			return reject_literal(
+				tag,
+				synchronizing,
+				size,
+				"BAD too many keywords (max {})\r\n",
+			);
 		}
 		self.pending_append = Some(PendingLiteral {
 			tag: tag.to_string(),

@@ -20,6 +20,13 @@ pub struct Output {
 	/// `APPEND`/`REPLACE`; `None` otherwise). When set, the network layer
 	/// reads exactly that many bytes before invoking the session again.
 	pub collect_literal: Option<usize>,
+	/// Size of a non-synchronizing literal whose bytes were sent by the
+	/// client even though the server is rejecting the command (RFC 7888
+	/// §4). The network layer reads and discards this many bytes so the
+	/// payload does not arrive as the next command line. Mutually
+	/// exclusive with `collect_literal`: a command either accepts the
+	/// literal and stores it, or rejects it and discards it.
+	pub discard_literal: Option<usize>,
 	/// Whether the session is now in the IDLE state; the network layer
 	/// expects `DONE` or a 29-minute timeout before resuming the pump.
 	pub idle: bool,
@@ -40,6 +47,7 @@ impl Output {
 			bytes: text.into_bytes(),
 			close: false,
 			collect_literal: None,
+			discard_literal: None,
 			idle: false,
 			upgrade_tls: false,
 			compress: false,
