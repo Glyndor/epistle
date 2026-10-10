@@ -40,7 +40,14 @@ fn parses_basic_credentials() {
 	let map = header(&format!("Basic {encoded}"));
 	let (login, password) = basic_credentials(&map).expect("creds");
 	assert_eq!(login, "alice");
-	assert_eq!(password, "secret");
+	// `assert_eq!` on `password` would Debug-print the actual
+	// password on a mismatch, dumping the credential into the
+	// CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		password == "secret",
+		"the Basic password must round-trip the header"
+	);
 }
 
 #[test]
@@ -49,7 +56,14 @@ fn password_may_contain_colon() {
 	let map = header(&format!("Basic {encoded}"));
 	let (login, password) = basic_credentials(&map).expect("creds");
 	assert_eq!(login, "alice");
-	assert_eq!(password, "a:b:c");
+	// `assert_eq!` on `password` would Debug-print the actual
+	// password on a mismatch, dumping the credential into the
+	// CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		password == "a:b:c",
+		"the Basic password must round-trip colons verbatim"
+	);
 }
 
 #[test]

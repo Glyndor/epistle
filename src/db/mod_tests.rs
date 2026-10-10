@@ -6,12 +6,42 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
+/// The variant name of a `DbError`, for the assertion messages that
+/// must not print the full Debug. The `PasswordFile` variant carries a
+/// path and a `PasswordFileError`, neither of which is a credential
+/// itself, but the panic message has to be a CI log; printing the
+/// full Debug would make the line wider and noisier than the
+/// diagnosis needs. The match is exhaustive on purpose: a new
+/// variant added to `DbError` breaks this file at compile time, so
+/// the next caller cannot fall through and print the whole struct.
+fn error_name(error: &DbError) -> &'static str {
+	match error {
+		DbError::Connect(_) => "Connect",
+		DbError::Migrate(_) => "Migrate",
+		DbError::InvalidUrl(_) => "InvalidUrl",
+		DbError::ServerTooOld { .. } => "ServerTooOld",
+		DbError::BadServerVersion(_) => "BadServerVersion",
+		DbError::PasswordFile { .. } => "PasswordFile",
+	}
+}
+
+/// "Ok(<N>)" or "<error variant>", for the `Ok(N)` fall-through cases
+/// of the floor tests: the result carries the decoded major in the
+/// `Ok` arm, the error variant in the `Err` arm. The match is
+/// exhaustive on purpose for the same reason `error_name` is.
+fn result_name(result: &Result<u32, DbError>) -> String {
+	match result {
+		Ok(major) => format!("Ok({major})"),
+		Err(error) => error_name(error).to_string(),
+	}
+}
+
 /// A `server_version_num` at the floor decodes to the floor and passes.
 #[test]
 fn major_at_the_floor_passes() {
 	match major_meets_floor(140_012, MIN_SERVER_VERSION) {
 		Ok(14) => {}
-		other => panic!("expected Ok(14), got {other:?}"),
+		other => panic!("expected Ok(14), got {}", result_name(&other)),
 	}
 }
 
@@ -21,7 +51,7 @@ fn major_at_the_floor_passes() {
 fn major_above_the_floor_passes() {
 	match major_meets_floor(180_001, MIN_SERVER_VERSION) {
 		Ok(18) => {}
-		other => panic!("expected Ok(18), got {other:?}"),
+		other => panic!("expected Ok(18), got {}", result_name(&other)),
 	}
 }
 
@@ -34,7 +64,10 @@ fn major_below_the_floor_is_refused() {
 			found: 13,
 			required: 14,
 		}) => {}
-		other => panic!("expected ServerTooOld {{ found: 13, required: 14 }}, got {other:?}"),
+		other => panic!(
+			"expected ServerTooOld {{ found: 13, required: 14 }}, got {}",
+			result_name(&other)
+		),
 	}
 }
 
@@ -76,24 +109,36 @@ fn the_floor_constant_is_the_one_ci_tests() {
 fn password_file_strips_one_line_ending() {
 	let dir = tempdir().expect("tempdir");
 	let path = dir.path().join("pw");
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\n")).expect("pw\\n"),
-		"pw",
+	// `read_password_file` returns the secret string; an `assert_eq!`
+	// would Debug-print the value on mismatch, dumping the file
+	// content into the CI log. The fixture is a literal here, but
+	// the function's return type is secret-shaped, so the same
+	// shape the other round settled for is applied. The `expect`
+	// messages describe the trailing bytes only, never the password
+	// itself; on an unexpected `Err` the panic would otherwise
+	// carry the file content the test wrote.
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\n"))
+			.expect("read password file with one trailing newline")
+			== "pw",
 		"`\\n` is one line ending and must be stripped"
 	);
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\r\n")).expect("pw\\r\\n"),
-		"pw",
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\r\n"))
+			.expect("read password file with trailing CRLF")
+			== "pw",
 		"`\\r\\n` is one line ending and must be stripped"
 	);
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\r")).expect("pw\\r"),
-		"pw\r",
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\r"))
+			.expect("read password file with bare trailing CR")
+			== "pw\r",
 		"a bare `\\r` is not a line ending; the password keeps it"
 	);
-	assert_eq!(
-		read_password_file(&write_bytes(&path, b"pw\n\n")).expect("pw\\n\\n"),
-		"pw\n",
+	assert!(
+		read_password_file(&write_bytes(&path, b"pw\n\n"))
+			.expect("read password file with two trailing newlines")
+			== "pw\n",
 		"only one line ending is stripped; an inner `\\n` stays"
 	);
 }
@@ -124,12 +169,20 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> std::path::PathBuf {
 fn password_file_refuses_an_empty_secret_after_stripping() {
 	let dir = tempdir().expect("tempdir");
 	let path = dir.path().join("pw");
-	match read_password_file(&write_bytes(&path, b"\n")).expect_err("\\n alone must error") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&write_bytes(&path, b"\n")) {
+		Ok(_) => panic!("\\n alone must error, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::Empty,
 			..
-		} => {}
-		other => panic!("expected PasswordFile {{ Empty, .. }}, got {other:?}"),
+		}) => {}
+		Err(other) => panic!(
+			"expected PasswordFile {{ Empty, .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -144,10 +197,13 @@ fn password_file_refuses_an_empty_secret_after_stripping() {
 fn password_file_reads_a_0600_file() {
 	let dir = tempdir().expect("tempdir");
 	let path = dir.path().join("pw_0600");
-	assert_eq!(
+	// `read_password_file` returns the secret string; an `assert_eq!`
+	// would Debug-print the value on mismatch, dumping the file
+	// content into the CI log.
+	assert!(
 		read_password_file(&write_bytes(&path, b"correct horse battery staple\n"))
-			.expect("0600 reads"),
-		"correct horse battery staple",
+			.expect("0600 reads")
+			== "correct horse battery staple",
 		"a 0600 file with a trailing newline is read and trimmed"
 	);
 }
@@ -167,15 +223,23 @@ fn password_file_refuses_a_group_readable_file() {
 	let path = dir.path().join("pw_0644");
 	write_bytes(&path, b"pw\n");
 	fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod 0644");
-	match read_password_file(&path).expect_err("0644 must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&path) {
+		Ok(_) => panic!("0644 must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::InsecureMode { mode },
 			..
-		} => assert_eq!(
-			mode, 0o644,
+		}) => assert!(
+			mode == 0o644,
 			"the observed mode must round-trip through the variant"
 		),
-		other => panic!("expected InsecureMode {{ mode: 0o644, .. }}, got {other:?}"),
+		Err(other) => panic!(
+			"expected InsecureMode {{ mode: 0o644, .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -193,16 +257,23 @@ fn password_file_refuses_a_symlink() {
 	write_bytes(&target, b"pw\n");
 	let link = dir.path().join("pw_link");
 	std::os::unix::fs::symlink(&target, &link).expect("symlink");
-	match read_password_file(&link).expect_err("symlink must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&link) {
+		Ok(_) => panic!("symlink must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::Io(source),
 			..
-		} => assert_eq!(
-			source.raw_os_error(),
-			Some(libc::ELOOP),
-			"O_NOFOLLOW on a symlink returns ELOOP, got {source:?}"
+		}) => assert!(
+			source.raw_os_error() == Some(libc::ELOOP),
+			"O_NOFOLLOW on a symlink returns ELOOP"
 		),
-		other => panic!("expected PasswordFile {{ Io(ELOOP), .. }}, got {other:?}"),
+		Err(other) => panic!(
+			"expected PasswordFile {{ Io(ELOOP), .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -231,16 +302,24 @@ fn password_file_refuses_a_fifo_without_blocking() {
 	// being a FIFO).
 	let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
 	assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-	match read_password_file(&path).expect_err("FIFO must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&path) {
+		Ok(_) => panic!("FIFO must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::NotRegularFile,
 			..
-		} => {}
-		DbError::PasswordFile {
+		}) => {}
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::Io(_),
 			..
-		} => {}
-		other => panic!("expected PasswordFile with NotRegularFile or Io, got {other:?}"),
+		}) => {}
+		Err(other) => panic!(
+			"expected PasswordFile with NotRegularFile or Io, got {}",
+			error_name(&other)
+		),
 	}
 }
 
@@ -268,11 +347,19 @@ fn password_file_refuses_a_fifo_with_a_writer() {
 		.write(true)
 		.open(&path)
 		.expect("open fifo rdwr");
-	match read_password_file(&path).expect_err("FIFO with a writer must be refused") {
-		DbError::PasswordFile {
+	// `read_password_file` returns the secret string on `Ok`; an
+	// `expect_err` on the unexpected success would Debug-print the
+	// password into the CI log. Use a match that names the outcome
+	// without ever carrying the value.
+	match read_password_file(&path) {
+		Ok(_) => panic!("FIFO with a writer must be refused, got Ok"),
+		Err(DbError::PasswordFile {
 			kind: PasswordFileError::NotRegularFile,
 			..
-		} => {}
-		other => panic!("expected PasswordFile {{ NotRegularFile, .. }}, got {other:?}"),
+		}) => {}
+		Err(other) => panic!(
+			"expected PasswordFile {{ NotRegularFile, .. }}, got {}",
+			error_name(&other)
+		),
 	}
 }

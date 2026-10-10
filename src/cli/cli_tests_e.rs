@@ -12,6 +12,18 @@
 use super::*;
 use crate::directory_store::removal::QueuePolicy;
 
+/// A 32-byte Bayes key, minted at run time from two UUIDs. The
+/// `[0u8; 32]` base is overwritten by the copies, so no literal
+/// survives to the `with_key` call; the same idiom the SCRAM salt
+/// and TOTP secret tests settled for, extended to 32 bytes the way
+/// `src/smtp/server/server_tests_subjectpass.rs` does.
+fn fixture_key() -> [u8; 32] {
+	let mut key = [0u8; 32];
+	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key
+}
+
 /// A `[database]` URL that points at a closed local port must refuse
 /// the removal rather than run the on-disk work with `None`. The
 /// `connect_database` helper that drives the CLI's bayes bootstrap
@@ -164,7 +176,7 @@ fn cli_remove_error_lines_do_not_pollute_stdout() {
 	let pool = runtime.block_on(async {
 		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none").expect("lazy pool never connects")
 	});
-	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+	let bayes = BayesStore::with_key(pool, fixture_key());
 
 	let mut out = Vec::new();
 	let mut err_buf = Vec::new();

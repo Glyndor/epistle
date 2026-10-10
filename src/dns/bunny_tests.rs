@@ -187,7 +187,14 @@ async fn upsert_subname_uses_access_key_and_relative_name() {
 	assert!(body.contains("\"Name\":\"_dmarc\""), "{body}");
 	assert!(body.contains("\"Value\":\"v=DMARC1; p=none\""), "{body}");
 	assert!(body.contains("\"Ttl\":3600"), "{body}");
-	assert_eq!(s.auth.as_deref(), Some("tok"));
+	// `assert_eq!` on `s.auth` would Debug-print the actual
+	// API token on a mismatch, dumping the credential into
+	// the CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		s.auth.as_deref() == Some("tok"),
+		"the Bunny request must carry the fixture API token"
+	);
 }
 
 #[tokio::test]

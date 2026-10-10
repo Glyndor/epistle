@@ -9,6 +9,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
+use super::tests_failures::apply_error_name;
 use super::*;
 use crate::cli::init::answers::{Mode, Services};
 
@@ -113,17 +114,23 @@ fn apply_rewrites_managed_keys_and_preserves_unknown_ones() {
 	let outcome = apply(&answers);
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
 	let merged = std::fs::read_to_string(&config_path).expect("read merged");
+	// The merged config carries the inline `srs_secret` fixture.
+	// The contract assertions must not echo the full file: if
+	// the rewrite drops the dkim or tls block, the panic would
+	// dump the SRS secret into the CI log alongside the
+	// diagnosis. The booleans capture the check; the messages
+	// name the missing block only.
+	let has_srs = merged.contains("srs_secret");
+	let has_dkim = merged.contains("dkim");
+	let has_tls = merged.contains("tls");
+	assert!(has_srs, "unknown top-level key must survive the rewrite");
 	assert!(
-		merged.contains("srs_secret"),
-		"unknown top-level key must survive the rewrite: {merged}"
+		has_dkim,
+		"managed dkim block must be written into the existing config"
 	);
 	assert!(
-		merged.contains("dkim"),
-		"managed dkim block must be written into the existing config: {merged}"
-	);
-	assert!(
-		merged.contains("tls"),
-		"managed tls block must be written into the existing config: {merged}"
+		has_tls,
+		"managed tls block must be written into the existing config"
 	);
 	assert!(
 		outcome
@@ -156,7 +163,8 @@ fn plan_fails_when_existing_config_is_not_valid_toml() {
 	let err = plan(&answers).expect_err("plan must surface the parse failure");
 	assert!(
 		matches!(err, ApplyError::ConfigRead(_, _)),
-		"expected ConfigRead, got {err:?}"
+		"expected ConfigRead, got {}",
+		apply_error_name(&err)
 	);
 	assert!(
 		format!("{err}").contains("read"),

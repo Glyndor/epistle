@@ -368,16 +368,32 @@ pub(super) fn print_banner(
 mod test_support;
 
 #[cfg(test)]
-#[path = "layout_tests.rs"]
-mod layout_tests;
+#[path = "layout_key_tests.rs"]
+mod layout_key_tests;
+
+#[cfg(test)]
+#[path = "layout_recovery_tests.rs"]
+mod layout_recovery_tests;
+
+#[cfg(test)]
+#[path = "layout_storage_tests.rs"]
+mod layout_storage_tests;
 
 #[cfg(test)]
 #[path = "layout_replace_tests.rs"]
 mod layout_replace_tests;
 
 #[cfg(test)]
-#[path = "config_tests.rs"]
-mod config_tests;
+#[path = "config_accounts_tests.rs"]
+mod config_accounts_tests;
+
+#[cfg(test)]
+#[path = "config_listener_tests.rs"]
+mod config_listener_tests;
+
+#[cfg(test)]
+#[path = "config_mail_tests.rs"]
+mod config_mail_tests;
 
 #[cfg(test)]
 #[path = "local_tests.rs"]

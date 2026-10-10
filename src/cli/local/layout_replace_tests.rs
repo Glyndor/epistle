@@ -2,7 +2,7 @@
 //! `layout_tests.rs` so the main layout test file stays under the
 //! 500-line cap and the seam-driven tests live next to each other.
 
-use super::test_support::fresh_dir;
+use super::test_support::{fresh_dir, local_error_name};
 use super::{LocalError, layout};
 
 /// Pin: `write_with_replace` recovers from a stale sibling temp left
@@ -123,7 +123,10 @@ fn replace_gives_up_after_the_retry_budget() {
 			std::io::ErrorKind::AlreadyExists,
 			"the surfaced error must name AlreadyExists, got {io:?}"
 		),
-		other => panic!("expected LocalError::Io(AlreadyExists), got {other:?}"),
+		other => panic!(
+			"expected LocalError::Io(AlreadyExists), got {}",
+			local_error_name(&other)
+		),
 	}
 	assert_eq!(
 		calls,

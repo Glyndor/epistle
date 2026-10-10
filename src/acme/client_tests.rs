@@ -233,7 +233,14 @@ async fn challenge_finalize_and_certificate_flow() {
 		.await
 		.expect("authz");
 	let challenge = authz.challenge("http-01").expect("http-01");
-	assert_eq!(challenge.token, "tok");
+	// `assert_eq!` on `challenge.token` would Debug-print
+	// the actual ACME challenge token on a mismatch, dumping
+	// the credential into the CI log. The boolean form names
+	// the contract without echoing the payload.
+	assert!(
+		challenge.token == "tok",
+		"the http-01 challenge must carry the fixture token"
+	);
 
 	client
 		.respond_challenge(&challenge.url)

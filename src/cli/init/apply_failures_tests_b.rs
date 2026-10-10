@@ -14,6 +14,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::tests_failures::answers_minimal;
+use super::tests_failures::apply_error_name;
 use super::*;
 
 /// Non-UTF-8 bytes in the surviving oauth private key must surface
@@ -33,7 +34,10 @@ fn plan_refuses_oauth_private_key_that_is_not_utf8() {
 	let plan = apply_plan::plan(&answers_minimal(&data_dir, &config_path));
 	let err = plan.expect_err("plan must refuse non-utf-8 oauth private");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("not valid utf-8"),
@@ -62,7 +66,10 @@ fn plan_refuses_oauth_public_key_that_is_not_utf8() {
 	let plan = apply_plan::plan(&answers_minimal(&data_dir, &config_path));
 	let err = plan.expect_err("plan must refuse non-utf-8 oauth public");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("not valid utf-8"),
@@ -87,7 +94,10 @@ fn plan_refuses_oauth_private_key_that_is_not_a_pkcs8_es256_document() {
 	let plan = apply_plan::plan(&answers_minimal(&data_dir, &config_path));
 	let err = plan.expect_err("plan must refuse a non-PKCS#8 oauth private");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("PKCS#8"),
@@ -117,7 +127,7 @@ fn plan_refuses_a_mismatched_oauth_pair_with_both_keys_valid_utf8() {
 	let plan = apply_plan::plan(&answers_minimal(&data_dir, &config_path));
 	let err = plan.expect_err("plan must refuse a mismatched oauth pair");
 	let ApplyError::OAuthPairMismatch = &err else {
-		panic!("expected OAuthPairMismatch, got {err:?}");
+		panic!("expected OAuthPairMismatch, got {}", apply_error_name(&err));
 	};
 }
 
@@ -142,7 +152,10 @@ fn apply_refuses_oauth_private_key_that_is_not_utf8() {
 		.error
 		.expect("apply must refuse non-utf-8 oauth private");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("not valid utf-8"),
@@ -171,7 +184,10 @@ fn apply_refuses_oauth_public_key_that_is_not_utf8() {
 		.error
 		.expect("apply must refuse non-utf-8 oauth public");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("not valid utf-8"),
@@ -197,7 +213,10 @@ fn apply_refuses_oauth_private_key_that_is_not_a_pkcs8_es256_document() {
 		.error
 		.expect("apply must refuse non-PKCS#8 oauth private");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("PKCS#8"),
@@ -230,7 +249,7 @@ fn apply_refuses_when_existing_config_has_an_unknown_top_level_key() {
 		.error
 		.expect("apply must refuse an invalid existing config");
 	let ApplyError::ConfigInvalid(message) = &err else {
-		panic!("expected ConfigInvalid, got {err:?}");
+		panic!("expected ConfigInvalid, got {}", apply_error_name(&err));
 	};
 	assert!(
 		message.contains("operator_note"),
@@ -267,7 +286,10 @@ fn apply_refuses_a_surviving_private_key_that_is_not_a_pem_document() {
 		.error
 		.expect("apply must refuse a non-PEM surviving private key");
 	let ApplyError::CertPairIncomplete(message) = &err else {
-		panic!("expected CertPairIncomplete, got {err:?}");
+		panic!(
+			"expected CertPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("key.pem"),
@@ -299,7 +321,10 @@ fn apply_refuses_a_surviving_private_key_that_is_not_utf8() {
 		.error
 		.expect("apply must refuse a non-utf-8 surviving private key");
 	let ApplyError::CertPairIncomplete(message) = &err else {
-		panic!("expected CertPairIncomplete, got {err:?}");
+		panic!(
+			"expected CertPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("utf-8"),
@@ -333,7 +358,7 @@ fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
 		.error
 		.expect("apply must refuse an unreadable surviving oauth private key");
 	let ApplyError::KeyWrite(path, _io) = &err else {
-		panic!("expected KeyWrite, got {err:?}");
+		panic!("expected KeyWrite, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		path, &oauth_private,
@@ -364,7 +389,7 @@ fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
 		.error
 		.expect("apply must refuse an unreadable surviving oauth public key");
 	let ApplyError::KeyWrite(path, _io) = &err else {
-		panic!("expected KeyWrite, got {err:?}");
+		panic!("expected KeyWrite, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		path, &oauth_public,

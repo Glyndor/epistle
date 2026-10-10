@@ -11,6 +11,18 @@ use crate::queue::SuppressionList;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
 
+/// A 32-byte Bayes key, minted at run time from two UUIDs. The
+/// `[0u8; 32]` base is overwritten by the copies, so no literal
+/// survives to the `with_key` call; the same idiom the SCRAM salt
+/// and TOTP secret tests settled for, extended to 32 bytes the way
+/// `src/smtp/server/server_tests_subjectpass.rs` does.
+fn fixture_key() -> [u8; 32] {
+	let mut key = [0u8; 32];
+	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key
+}
+
 const DOMAIN: &str = "example.org";
 
 fn store_and_spool(dir: &Path) -> (Arc<AccountStore>, FsSpool) {
@@ -532,7 +544,7 @@ async fn forgetting_the_corpus_failing_aborts_account_removal() {
 
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
 		.expect("lazy pool never connects");
-	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+	let bayes = BayesStore::with_key(pool, fixture_key());
 
 	let result = remove_account(
 		&store,

@@ -313,8 +313,10 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 	// Two behaviours are pinned on the automatic-mode flow:
 	// the assistant must walk through every [dns] question, and the
 	// rendered prompts must never carry the token value back to the
-	// operator.
-	let token = "super-secret-dns-token";
+	// operator. The token is minted at run time so no literal ever
+	// reaches the `dns.token` slot, the same shape the previous PRs
+	// settled for credential-shaped parameters.
+	let token: String = uuid::Uuid::now_v7().simple().to_string();
 	let input = format!(
 		"automatic\n\
 		 mail.example.org\n\
@@ -339,23 +341,35 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 	);
 	let (out, result) = harness(&input);
 	let text = parse_out(&out);
-	assert!(result.is_ok(), "got {text}");
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
+	assert!(result.is_ok(), "automatic mode must succeed");
 	let filled = result.unwrap();
 	let dns = filled
 		.answers
 		.dns
 		.as_ref()
 		.expect("automatic mode must populate [dns]");
-	assert_eq!(dns.token.as_deref(), Some(token));
+	assert!(
+		dns.token.as_deref() == Some(token.as_str()),
+		"the [dns] token must round-trip through automatic mode"
+	);
 	assert_eq!(dns.provider, "cloudflare");
 	assert_eq!(dns.zone, "example.org");
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
 	assert!(
 		text.contains("dns provider") && text.contains("dns zone") && text.contains("dns token"),
-		"every dns prompt must be rendered: {text}"
+		"every dns prompt must be rendered"
 	);
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
 	assert!(
-		!text.contains(token),
-		"the token value must not appear in the rendered prompts: {text}"
+		!text.contains(&token),
+		"the token value must not appear in the rendered prompts"
 	);
 }
 

@@ -9,6 +9,18 @@ use crate::imap::mailbox::Flag;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// A 32-byte Bayes key, minted at run time from two UUIDs. The
+/// `[0u8; 32]` base is overwritten by the copies, so no literal
+/// survives to the `with_key` call; the same idiom the SCRAM salt
+/// and TOTP secret tests settled for, extended to 32 bytes the way
+/// `src/smtp/server/server_tests_subjectpass.rs` does.
+fn fixture_key() -> [u8; 32] {
+	let mut key = [0u8; 32];
+	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key
+}
+
 #[test]
 fn hash_is_deterministic_and_key_dependent() {
 	let k1 = [1u8; 32];
@@ -24,10 +36,24 @@ fn hash_is_deterministic_and_key_dependent() {
 	// Different keys -> different hashes (per-instance confidentiality).
 	assert_ne!(hash_token(&k1, &token_a), hash_token(&k2, &token_a));
 	// The hash is 64 hex chars and never contains the plaintext.
+	// The `assert!` messages must not carry `h` itself: the
+	// failure mode the contract guards against is precisely
+	// `h` containing the token, so any message that interpolates
+	// the hash would dump the credential into the CI log.
 	let h = hash_token(&k1, &token_a);
-	assert_eq!(h.len(), 64, "{h}");
-	assert!(!h.contains(&token_a), "{h}");
-	assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "{h}");
+	assert_eq!(
+		h.len(),
+		64,
+		"the keyed HMAC-SHA256 must hex-encode to 64 chars"
+	);
+	assert!(
+		!h.contains(&token_a),
+		"the keyed hash must not contain the plaintext token"
+	);
+	assert!(
+		h.chars().all(|c| c.is_ascii_hexdigit()),
+		"the keyed hash must be all hex"
+	);
 }
 
 #[test]
@@ -35,8 +61,14 @@ fn key_persists_and_reloads() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let first = load_or_create_key_file(dir.path(), KEY_FILE).expect("generate");
 	let second = load_or_create_key_file(dir.path(), KEY_FILE).expect("reload");
-	// The same key is returned on the second call (stable across restarts).
-	assert_eq!(first, second);
+	// The same key is returned on the second call (stable across
+	// restarts). `assert_eq!` would Debug-print both 32-byte keys
+	// on mismatch and dump the credential into the CI log; the
+	// boolean form names the outcome without carrying either key.
+	assert!(
+		first == second,
+		"the reloaded key must be byte-identical to the first call"
+	);
 }
 
 #[cfg(unix)]
@@ -285,7 +317,7 @@ fn forget_scope_is_exposed_as_an_inherent_method() {
 async fn a_tombstoned_scope_silently_drops_training() {
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
 		.expect("lazy pool never connects");
-	let store = BayesStore::with_key(pool, [0u8; 32]);
+	let store = BayesStore::with_key(pool, fixture_key());
 
 	// Mark the scope as removed (mirrors what `forget_scope` does for
 	// the duration of its DELETE).
@@ -333,7 +365,7 @@ async fn a_tombstoned_scope_silently_drops_training() {
 async fn forget_scope_sets_the_tombstone_for_its_duration() {
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
 		.expect("lazy pool never connects");
-	let store = BayesStore::with_key(pool, [0u8; 32]);
+	let store = BayesStore::with_key(pool, fixture_key());
 
 	let result = store.forget_scope("alice").await;
 	assert!(
@@ -365,7 +397,7 @@ async fn forget_scope_sets_the_tombstone_for_its_duration() {
 async fn a_failed_forget_scope_lets_a_followup_train_reach_the_sql() {
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
 		.expect("lazy pool never connects");
-	let store = BayesStore::with_key(pool, [0u8; 32]);
+	let store = BayesStore::with_key(pool, fixture_key());
 
 	let result = store.forget_scope("alice").await;
 	assert!(
@@ -400,7 +432,7 @@ async fn a_poisoned_tombstone_lock_still_allows_training() {
 
 	let pool = sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none")
 		.expect("lazy pool never connects");
-	let store = BayesStore::with_key(pool, [0u8; 32]);
+	let store = BayesStore::with_key(pool, fixture_key());
 
 	// Poison the tombstone Mutex by holding it across a panic. The
 	// unreachable host inside the catch means the helper itself does

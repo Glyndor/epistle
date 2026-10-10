@@ -11,6 +11,18 @@
 use epistle::config::DatabaseTls;
 use std::sync::LazyLock;
 
+/// A 32-byte Bayes key, minted at run time from two UUIDs. The
+/// `[0u8; 32]` base is overwritten by the copies, so no literal
+/// survives to the `with_key` call; the same idiom the SCRAM salt
+/// and TOTP secret tests settled for, extended to 32 bytes the way
+/// `src/smtp/server/server_tests_subjectpass.rs` does.
+fn fixture_key() -> [u8; 32] {
+	let mut key = [0u8; 32];
+	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key
+}
+
 /// The connection URL, or `None` when no database is configured for this run.
 fn database_url() -> Option<String> {
 	std::env::var("DATABASE_URL").ok().filter(|u| !u.is_empty())
@@ -172,7 +184,7 @@ async fn bayes_corpus_trains_and_scores() {
 		.await
 		.expect("connect and migrate");
 
-	let store = corpus::BayesStore::with_key(pool.clone(), [7u8; 32]);
+	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
 
 	// Train: several spam messages with a marker token, several ham without.
 	for _ in 0..6 {
@@ -295,7 +307,7 @@ async fn bayes_per_account_corpora_are_isolated() {
 		.await
 		.expect("connect and migrate");
 
-	let store = corpus::BayesStore::with_key(pool.clone(), [9u8; 32]);
+	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
 
 	// Alice trains a distinctive marker token as spam.
 	for _ in 0..6 {
@@ -366,7 +378,7 @@ async fn score_falls_back_to_shared_below_the_threshold() {
 
 	// A unique account so reruns stay isolated.
 	let account = format!("fallback-{}", uuid::Uuid::now_v7());
-	let store = corpus::BayesStore::with_key(pool.clone(), [11u8; 32]);
+	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
 
 	// Train the shared scope with a marker so it has a real signal.
 	for _ in 0..30 {
@@ -435,7 +447,7 @@ async fn score_uses_the_account_scope_at_the_threshold() {
 		.expect("connect and migrate");
 
 	let account = format!("trained-{}", uuid::Uuid::now_v7());
-	let store = corpus::BayesStore::with_key(pool.clone(), [12u8; 32]);
+	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
 
 	// A unique marker that only this account's corpus has seen, so
 	// the per-account scope is the only one that recognises it. The
@@ -509,7 +521,7 @@ async fn forget_scope_removes_only_that_scope() {
 		.await
 		.expect("connect and migrate");
 
-	let store = corpus::BayesStore::with_key(pool.clone(), [13u8; 32]);
+	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
 	let victim = format!("victim-{}", uuid::Uuid::now_v7());
 	let bystander = format!("bystander-{}", uuid::Uuid::now_v7());
 

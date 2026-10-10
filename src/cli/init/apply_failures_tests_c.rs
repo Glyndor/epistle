@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use super::tests_failures::{answers_minimal, render_report_to_string};
+use super::tests_failures::{answers_minimal, apply_error_name, render_report_to_string};
 use super::*;
 
 /// When `openssl` is on `PATH` but the actual `genpkey` call
@@ -233,7 +233,7 @@ fn write_validated_config_refuses_a_path_with_no_parent() {
 	let err = apply_config::write_validated_config(Path::new("/"), "data")
 		.expect_err("a root config path must be refused");
 	let ApplyError::ConfigInvalid(message) = &err else {
-		panic!("expected ConfigInvalid, got {err:?}");
+		panic!("expected ConfigInvalid, got {}", apply_error_name(&err));
 	};
 	assert!(
 		message.contains("no parent directory"),
@@ -253,7 +253,7 @@ fn write_validated_config_refuses_a_path_with_no_file_name() {
 	let err = apply_config::write_validated_config(Path::new("."), "data")
 		.expect_err("a config path with no file name must be refused");
 	let ApplyError::ConfigInvalid(message) = &err else {
-		panic!("expected ConfigInvalid, got {err:?}");
+		panic!("expected ConfigInvalid, got {}", apply_error_name(&err));
 	};
 	assert!(
 		message.contains("no usable file name"),
@@ -283,7 +283,7 @@ fn write_validated_config_refuses_a_path_under_a_non_traversable_parent() {
 	let result = apply_config::write_validated_config(&config_path, "data");
 	let err = result.expect_err("a non-traversable parent must be refused");
 	let ApplyError::ConfigRead(path, _io) = &err else {
-		panic!("expected ConfigRead, got {err:?}");
+		panic!("expected ConfigRead, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		path, &config_path,
@@ -311,7 +311,7 @@ fn write_validated_config_refuses_a_symlinked_config_path() {
 	let err = apply_config::write_validated_config(&config_path, "body")
 		.expect_err("a symlinked config path must be refused");
 	let ApplyError::ConfigSymlink(path) = &err else {
-		panic!("expected ConfigSymlink, got {err:?}");
+		panic!("expected ConfigSymlink, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		path, &config_path,
@@ -353,7 +353,7 @@ fn plan_refuses_a_symlinked_config_path() {
 	let err = apply_plan::plan(&answers_minimal(&data_dir, &config_path))
 		.expect_err("plan must refuse a symlinked config_path");
 	let ApplyError::ConfigSymlink(path) = &err else {
-		panic!("expected ConfigSymlink, got {err:?}");
+		panic!("expected ConfigSymlink, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		path, &config_path,
@@ -377,7 +377,7 @@ fn plan_refuses_a_config_path_that_is_an_existing_directory() {
 	let err = apply_plan::plan(&answers_minimal(&data_dir, &etc))
 		.expect_err("plan must refuse a config_path that is a directory");
 	let ApplyError::ConfigNotAFile(path) = &err else {
-		panic!("expected ConfigNotAFile, got {err:?}");
+		panic!("expected ConfigNotAFile, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		path, &etc,

@@ -181,7 +181,14 @@ async fn upsert_txt_under_subdomain_uses_relative_name_and_bearer_token() {
 		s.calls
 	);
 	// Bearer auth, exactly as DigitalOcean documents.
-	assert_eq!(s.auth.as_deref(), Some("Bearer tok"));
+	// `assert_eq!` on `s.auth` would Debug-print the actual
+	// API token on a mismatch, dumping the credential into
+	// the CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		s.auth.as_deref() == Some("Bearer tok"),
+		"the DigitalOcean request must carry the fixture API token"
+	);
 	let body = s.bodies.last().expect("body");
 	assert!(body.contains("\"type\":\"TXT\""), "{body}");
 	assert!(body.contains("\"name\":\"_dmarc\""), "{body}");

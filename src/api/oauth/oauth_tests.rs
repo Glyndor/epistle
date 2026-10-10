@@ -376,7 +376,14 @@ fn parse_fields_decodes_form_escapes_and_json() {
 	let form = Bytes::from_static(b"login=a%40b.com&password=p+w%25&bare&bad=%zz");
 	let fields = super::parse_fields(&HeaderMap::new(), &form);
 	assert_eq!(fields.get("login").map(String::as_str), Some("a@b.com"));
-	assert_eq!(fields.get("password").map(String::as_str), Some("p w%"));
+	// `assert_eq!` on the parsed password would Debug-print
+	// the value on a mismatch, dumping the credential into
+	// the CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		fields.get("password").map(String::as_str) == Some("p w%"),
+		"form percent-escapes and plus-as-space must round-trip the password"
+	);
 	assert_eq!(fields.get("bare").map(String::as_str), Some(""));
 	assert_eq!(fields.get("bad").map(String::as_str), Some("%zz"));
 	// JSON body with the JSON content-type; non-string values are dropped.
@@ -385,7 +392,12 @@ fn parse_fields_decodes_form_escapes_and_json() {
 	let json = Bytes::from_static(br#"{"login":"x@y.z","password":"s","n":1}"#);
 	let fields = super::parse_fields(&headers, &json);
 	assert_eq!(fields.get("login").map(String::as_str), Some("x@y.z"));
-	assert_eq!(fields.get("password").map(String::as_str), Some("s"));
+	// Same reasoning: the parsed password must not surface
+	// in a panic. The boolean form names the contract only.
+	assert!(
+		fields.get("password").map(String::as_str) == Some("s"),
+		"JSON string fields must round-trip the password"
+	);
 	assert!(!fields.contains_key("n"));
 }
 

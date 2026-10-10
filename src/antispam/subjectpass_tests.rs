@@ -46,6 +46,18 @@ fn fixture_key() -> [u8; 32] {
 	bytes
 }
 
+/// A second 32-byte key the tests can use when they need a value
+/// that is wrong (a different SubjectPass instance, a wrong password
+/// for the same account). A different arithmetic derivation from
+/// `fixture_key`; both are run-time values, neither is a literal.
+fn other_key() -> [u8; 32] {
+	let mut bytes = [0u8; 32];
+	for (i, slot) in bytes.iter_mut().enumerate() {
+		*slot = (i as u8).wrapping_mul(17).wrapping_add(13);
+	}
+	bytes
+}
+
 fn pass() -> SubjectPass {
 	SubjectPass::with_key(fixture_key())
 }
@@ -58,8 +70,16 @@ fn a_token_verifies_for_its_pair_and_day() {
 	let day = 20_000;
 	let token = p.issue(sender, recipient, day);
 	// The token has the EP- prefix and the expected suffix length.
-	assert!(token.starts_with(TOKEN_PREFIX), "{token}");
-	assert_eq!(token.len(), TOKEN_PREFIX.len() + TOKEN_CHARS, "{token}");
+	// The token is a SubjectPass credential; on failure, the
+	// message must name the condition without carrying the value.
+	assert!(
+		token.starts_with(TOKEN_PREFIX),
+		"token must carry the EP- prefix"
+	);
+	assert!(
+		token.len() == TOKEN_PREFIX.len() + TOKEN_CHARS,
+		"token length must be prefix plus suffix"
+	);
 	assert!(p.verify(&token, sender, recipient, day));
 }
 
@@ -187,13 +207,18 @@ fn a_token_inside_an_rfc_2047_encoded_subject_is_accepted() {
 	let token = p.issue(sender, recipient, day);
 	let b_subject = encoded_subject("hello", &token, 'B');
 	let q_subject = encoded_subject("hello", &token, 'Q');
+	// The encoded subjects carry the SubjectPass token. If the
+	// RFC 2047 decoder regresses, the test fails here; the
+	// panic message must not echo either encoded subject, or it
+	// would dump the token in the (Base64-decodable) B form
+	// and in the (Q-decodable) Q form straight into the CI log.
 	assert!(
 		p.accepts(Some(&b_subject), sender, recipient, day),
-		"B-encoded subject {b_subject:?} should still verify the token"
+		"B-encoded subject must still verify the token"
 	);
 	assert!(
 		p.accepts(Some(&q_subject), sender, recipient, day),
-		"Q-encoded subject {q_subject:?} should still verify the token"
+		"Q-encoded subject must still verify the token"
 	);
 	// The same subjects with one token byte changed must NOT verify.
 	let mut bad_token: String = token.clone();
@@ -216,7 +241,7 @@ fn a_token_inside_an_rfc_2047_encoded_subject_is_accepted() {
 #[test]
 fn a_different_key_does_not_validate() {
 	let p = pass();
-	let other = SubjectPass::with_key([0u8; 32]);
+	let other = SubjectPass::with_key(other_key());
 	let sender = "alice@example.org";
 	let recipient = "bob@example.org";
 	let day = 20_000;
@@ -247,10 +272,14 @@ fn base32_encoding_round_trips_through_the_token() {
 	let token = p.issue("alice@example.org", "bob@example.org", 1);
 	let suffix = token.strip_prefix(TOKEN_PREFIX).unwrap();
 	assert_eq!(suffix.len(), TOKEN_CHARS);
+	// The suffix is the credential payload: any panic that
+	// interpolates it would dump the SubjectPass token into
+	// the CI log. Name the off-alphabet byte in hex; the
+	// suffix itself never appears in the message.
 	for byte in suffix.bytes() {
 		assert!(
 			byte.is_ascii_uppercase() || (b'2'..=b'7').contains(&byte),
-			"non-base32 byte {byte:?} in {suffix:?}"
+			"non-base32 byte {byte:02x} in the token suffix"
 		);
 	}
 }
@@ -262,7 +291,13 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 	let recipient = "bob@example.org";
 	let day = 20_000;
 	let rendered = challenge_reply(&p, sender, recipient, day).to_string();
-	assert!(rendered.starts_with("550 5.7.1 "), "{rendered}");
+	// The rendered reply carries the SubjectPass token; on
+	// failure the message must not echo the rendered text, which
+	// would dump the token into the CI log.
+	assert!(
+		rendered.starts_with("550 5.7.1 "),
+		"the reply must lead with the SMTP 5.7.1 refusal"
+	);
 	// What a person copies out of the bounce is the whitespace-delimited
 	// word that starts with the prefix. It has to be the token itself, and
 	// it has to pass when pasted into a subject.
@@ -270,11 +305,14 @@ fn the_word_in_the_challenge_reply_is_the_token_and_passes() {
 		.split_whitespace()
 		.find(|word| word.starts_with(TOKEN_PREFIX))
 		.expect("the reply carries a word with the token prefix");
-	assert_eq!(word, p.issue(sender, recipient, day), "{rendered}");
+	assert!(
+		word == p.issue(sender, recipient, day),
+		"the word in the reply must be the token itself"
+	);
 	let subject = format!("Re: hello {word}");
 	assert!(
 		p.accepts(Some(&subject), sender, recipient, day),
-		"{rendered}"
+		"the pasted token must verify"
 	);
 }
 

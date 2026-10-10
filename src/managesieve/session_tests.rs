@@ -259,6 +259,7 @@ fn logout_is_final() {
 async fn managesieve_failures_now_reach_the_directory() {
 	use crate::antispam::bans::BanPolicy;
 	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::smtp::auth::tests::{fixture_password, wrong_password};
 	use std::collections::HashMap;
 
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -270,7 +271,7 @@ async fn managesieve_failures_now_reach_the_directory() {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixture_password()),
 		)]))
 		.with_ban_store(ban_store.clone()),
 	);
@@ -282,7 +283,7 @@ async fn managesieve_failures_now_reach_the_directory() {
 	let mut session = Session::new(backend, true);
 	let peer: std::net::IpAddr = "203.0.113.30".parse().expect("peer");
 	session.set_peer_ip(Some(peer));
-	let bad = sasl_plain_initial("alice@example.org", "wrong");
+	let bad = sasl_plain_initial("alice@example.org", wrong_password());
 	let response = session.handle(Command::Authenticate {
 		mechanism: "PLAIN".to_string(),
 		initial: Some(bad),
