@@ -74,13 +74,13 @@ pub fn resolve(root: &Path, uri_path: &str) -> Option<PathBuf> {
 /// or delete: the canonical form of `target` (following every symlink) must
 /// fall under the canonical form of `root`, and no component between `root`
 /// and `target` may itself be a symlink. The final component must not be a
-/// symlink either — a symlink at the leaf could resolve outside the account
+/// symlink either, a symlink at the leaf could resolve outside the account
 /// even when `canonicalize` claimed it stayed inside.
 ///
 /// Returns `true` when the target exists and is safely under the root,
 /// `false` when a symlink at any position would let the request escape, or
 /// when the path components fail their lexical checks. A missing target
-/// returns `true` too — there is nothing to follow, so there is no escape
+/// returns `true` too, there is nothing to follow, so there is no escape
 /// possible; the caller turns a missing-target GET into `404`.
 pub fn confine_existing(target: &Path, root: &Path) -> bool {
 	let Ok(canonical_root) = root.canonicalize() else {
@@ -116,13 +116,13 @@ pub fn confine_existing(target: &Path, root: &Path) -> bool {
 }
 
 /// Confine a not-yet-existing `target` (a PUT or MKCOL) under `root`: when the
-/// parent directory exists, it must be a real directory — no component between
+/// parent directory exists, it must be a real directory, no component between
 /// `root` and `parent` may be a symlink, and the canonical form of the parent
 /// must fall under the canonical form of `root`. A missing parent is allowed:
 /// the handler will surface it as `409 Conflict`; there is no symlink to
 /// follow there. The final segment is allowed to be absent (the request
 /// creates it); if it exists, it must be the right kind (regular file for
-/// PUT, absent for MKCOL — caller's job).
+/// PUT, absent for MKCOL, caller's job).
 ///
 /// Returns `true` on a safe write-create path, `false` only when an existing
 /// parent lies under a symlink at some intermediate position, or escapes the
@@ -135,7 +135,7 @@ pub fn confine_parent_for_write(target: &Path, root: &Path) -> bool {
 		return false;
 	};
 	// A parent that does not exist on disk is not a symlink we can follow;
-	// the handler will produce `409 Conflict` (RFC 4918 §9.7.1 — a PUT to a
+	// the handler will produce `409 Conflict` (RFC 4918 §9.7.1, a PUT to a
 	// non-existent collection is a conflict). Allow it.
 	let Ok(canonical_parent) = parent.canonicalize() else {
 		return true;

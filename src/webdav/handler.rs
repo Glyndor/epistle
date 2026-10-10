@@ -26,7 +26,7 @@ const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, P
 
 /// Maximum size of an XML body the server is willing to fully buffer
 /// before refusing with `413 Payload Too Large`. The cap covers PROPFIND,
-/// REPORT, PROPPATCH, MKCOL and the scheduling Outbox `POST` — all of
+/// REPORT, PROPPATCH, MKCOL and the scheduling Outbox `POST`, all of
 /// them are XML-ish bodies that a misbehaving or malicious client could
 /// try to blow up to gigabytes. 1 MiB is comfortably larger than any
 /// real property listing a CardDAV or CalDAV client will ever produce,
@@ -135,7 +135,7 @@ async fn dispatch_extension(
 /// `limit` bytes, so an oversize body is rejected without the rest of the
 /// stream being drained into memory.
 ///
-/// The error is boxed to keep the `Result` small — a full `Response`
+/// The error is boxed to keep the `Result` small, a full `Response`
 /// carries the body bytes in a few code paths and would blow up the
 /// stack frame of every caller.
 async fn read_body_capped(
@@ -275,7 +275,7 @@ fn content_type(target: &Path) -> &'static str {
 /// the new resource's `ETag` so a CardDAV client can track the card.
 ///
 /// If the target is an existing symlink (escape planted in the user's tree)
-/// the request is refused with `403` — `tokio::fs::write` would otherwise
+/// the request is refused with `403`, `tokio::fs::write` would otherwise
 /// follow the link and rewrite the file it points at.
 async fn put(target: &Path, request: Request) -> Response {
 	if target.is_dir() {
@@ -577,7 +577,7 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
-	// RFC 4918 §9.8.5 / §9.9.4 — copying or moving a collection into itself
+	// RFC 4918 §9.8.5 / §9.9.4, copying or moving a collection into itself
 	// (or onto itself) would lose data: the existing implementation removes
 	// the destination before the source is read. Detect any overlap before
 	// any I/O and refuse with `403 Forbidden` (a copy or move into a
@@ -713,7 +713,7 @@ fn strip_to_path(raw: &str) -> &str {
 /// Whether two paths occupy the same place or one sits inside the other.
 /// A `MOVE /a /a` is an exact match; a `MOVE /a /a/b` or `MOVE /a/b /a` is
 /// an ancestor/descendant relationship. The check is the same for files and
-/// directories — the per-method handler does not need to know the kind.
+/// directories, the per-method handler does not need to know the kind.
 /// Comparing lexical paths is sufficient here: both names were resolved
 /// through the same per-account `path::resolve` so a path that does not
 /// share a prefix with the other could not have been conflated.

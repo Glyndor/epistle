@@ -153,7 +153,7 @@ async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
 /// Append every `.vcf` directly inside the `collection` directory to `entries`.
 /// The child href is the collection path plus the file name. A non-directory
 /// target yields nothing. Children that are themselves symlinks (planted
-/// escapes) are skipped — their target may live outside the per-account root.
+/// escapes) are skipped, their target may live outside the per-account root.
 async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -271,7 +271,7 @@ fn find_open(body: &str, local: &str) -> Option<usize> {
 		if local_len == needle.len() && &bytes[local_start..name_end] == needle {
 			return Some(i);
 		}
-		// Skip past the whole tag name in one jump — at minimum one byte
+		// Skip past the whole tag name in one jump, at minimum one byte
 		// (`<x>` has no payload), the worst case is the name itself.
 		i = name_end.max(i + 1);
 	}

@@ -1,4 +1,4 @@
-//! WebDAV request-bound regression tests — added by `fix/dav-jmap-bounds`.
+//! WebDAV request-bound regression tests.
 
 use std::os::unix::fs::symlink;
 
@@ -239,7 +239,7 @@ async fn move_into_descendant_is_refused_and_data_intact() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
 	seed_overlap_fixture(&app).await;
-	// MOVE /a to /a/b/ — `dest` is a descendant of `source`. Without the
+	// MOVE /a to /a/b/, `dest` is a descendant of `source`. Without the
 	// fix, the destination is removed first and then the source is moved,
 	// destroying everything under /a/.
 	let (status, _) = send(
@@ -287,7 +287,7 @@ async fn copy_onto_self_is_refused_and_data_intact() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
 	seed_overlap_fixture(&app).await;
-	// COPY /a to /a with Overwrite:T — destination is identical to the
+	// COPY /a to /a with Overwrite:T, destination is identical to the
 	// source. The wrong behaviour is to delete the directory and try to
 	// copy from it.
 	let (status, _) = send(

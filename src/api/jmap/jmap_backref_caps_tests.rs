@@ -1,8 +1,8 @@
 //! Integration tests for the JMAP request-cap on result back-references.
 //!
 //! These tests exercise `dispatch_request` end-to-end. They require the
-//! `Resolver` type and its `MAX_REQUEST_LIMITS` constant — the new code
-//! that bounds the cumulative cost of a back-reference chain — so the
+//! `Resolver` type and its `MAX_REQUEST_LIMITS` constant, the new code
+//! that bounds the cumulative cost of a back-reference chain, so the
 //! test file only compiles once the cap is in place.
 
 use super::*;
@@ -77,8 +77,8 @@ fn element_count(value: &Value) -> u64 {
 /// test below feeds a doubling chain through it and asserts the
 /// first over-cap call gets `requestTooLarge` and the cumulative
 /// materialised cost stays under the cap. The unfixed resolver
-/// (no bound) would have materialised the whole chain — far past
-/// the cap — and the test would fail with the assertion below.
+/// (no bound) would have materialised the whole chain, far past
+/// the cap, and the test would fail with the assertion below.
 #[test]
 fn doubling_chain_first_over_cap_call_is_request_too_large() {
 	let calls = doubling_chain_requests(15);
@@ -191,7 +191,7 @@ fn small_chain_within_cap_resolves() {
 		resolver.record_result(&response);
 		responses.push(response);
 	}
-	// The chain produced two normal echoes — no errors.
+	// The chain produced two normal echoes, no errors.
 	assert_eq!(responses.len(), 2);
 	// The last response is the `c1` echo of `{"x": {"k0": ["seed"]}}`.
 	assert_eq!(responses[1][1]["x"]["k0"], json!(["seed"]));

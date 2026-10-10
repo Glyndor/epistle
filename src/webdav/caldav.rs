@@ -211,7 +211,7 @@ type Period = (i64, i64);
 /// Scan every `.ics` in each calendar in `calendars`, expand each `VEVENT`'s
 /// recurrence over `[start, end)`, and return the busy periods (clamped to the
 /// window). Each occurrence contributes `[occurrence, occurrence + duration)`.
-/// Children that are themselves symlinks are skipped — they may have been
+/// Children that are themselves symlinks are skipped, they may have been
 /// planted in the user's tree, and following them would read events that
 /// belong to no account.
 async fn busy_periods(calendars: &[std::path::PathBuf], start: i64, end: i64) -> Vec<Period> {
@@ -464,7 +464,7 @@ async fn push_event(entries: &mut Vec<Event>, href: &str, disk: &Path) {
 }
 
 /// Append every `.ics` directly inside the `collection` directory to
-/// `entries`. Children that are themselves symlinks are skipped — they may
+/// `entries`. Children that are themselves symlinks are skipped, they may
 /// have been planted in the user's tree, and following them would read
 /// events that belong to no account.
 async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {

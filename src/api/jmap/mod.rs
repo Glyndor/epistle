@@ -159,7 +159,7 @@ pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) 
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
 		// responses. The resolver bounds the cumulative cost of a chain
-		// — a request where each call's argument is a `#ResultOf`
+		// a request where each call's argument is a `#ResultOf`
 		// reference to the previous result would, without the bound,
 		// double the materialised data every step and reach hundreds
 		// of MB on a 25-call chain. The first call that crosses the
@@ -333,7 +333,7 @@ fn byte_size(value: &Value) -> u64 {
 /// this, a request of N `Core/echo` calls each carrying two
 /// references to the previous result would double the materialised
 /// data N times, so 25 calls could push a few KB into hundreds of MB
-/// — the request would be processed and the answer would be huge.
+/// the request would be processed and the answer would be huge.
 /// The resolver instead refuses the first call that crosses either
 /// bound with `requestTooLarge` (RFC 8620 §3.7.2 / §3.6.2).
 pub(crate) struct Resolver {
