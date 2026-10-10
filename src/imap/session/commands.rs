@@ -129,6 +129,7 @@ impl Session {
 
 		let body = match return_opts {
 			Some(opts) => esearch_line(tag, uid, &hits, opts),
+			None if self.imap4rev2 => esearch_line(tag, uid, &hits, &[ReturnOpt::All]),
 			None => {
 				let mut line = String::from("* SEARCH");
 				for hit in &hits {
