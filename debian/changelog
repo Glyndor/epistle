@@ -1,3 +1,14 @@
+epistle (0.9.1) unstable; urgency=medium
+
+  * The stack's mail container runs the epistle binary this package
+    installs, read-only on a minimal public base image, so an install
+    no longer pulls an epistle image from a registry. An apt upgrade
+    replaces the binary and restarts mail. `image` in the init answers
+    still selects a custom image.
+  * The release publishes the multi-arch image manifest.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 10 Oct 2026 18:00:00 +0000
+
 epistle (0.9.0) unstable; urgency=medium
 
   * epistle runs as a container stack. `sudo epistle init` writes the

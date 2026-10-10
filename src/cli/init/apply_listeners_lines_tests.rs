@@ -27,7 +27,7 @@ fn answers_with_services(services: Services) -> Answers {
 		config_path: std::path::PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services,
-		image: None,
+		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 	}
 }

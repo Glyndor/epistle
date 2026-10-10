@@ -42,7 +42,8 @@ fn init_refuses_api_service_in_answers_before_writing_keys() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 imap = true\n\
 		 submission = true\n\
@@ -84,7 +85,8 @@ fn dry_run_refuses_api_service_in_answers() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 imap = true\n\
 		 submission = true\n\
@@ -135,7 +137,7 @@ fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -191,7 +193,7 @@ fn init_refuses_when_only_oauth_public_survives() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -244,7 +246,7 @@ fn init_derives_missing_oauth_public_from_existing_private() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -296,7 +298,7 @@ fn init_rebuilds_cert_from_existing_key_when_only_key_survives() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -348,7 +350,7 @@ fn init_refuses_when_only_self_signed_cert_survives() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

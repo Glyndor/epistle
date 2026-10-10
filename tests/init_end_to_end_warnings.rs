@@ -135,7 +135,8 @@ fn init_warns_about_an_existing_data_dir_with_loose_permissions() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
@@ -190,7 +191,8 @@ fn init_mentions_openssl_when_it_is_not_on_path() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),

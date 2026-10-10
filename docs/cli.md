@@ -97,7 +97,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
-| `sudo epistle stack update` | Refreshes the default mail image, runs `podup pull`, then `podup up -d` to recreate changed services while retaining data. |
+| `sudo epistle stack update` | Restarts the `mail` service in default mode (a new .deb replaces the host binary the compose file bind-mounts) and runs `podup pull` followed by `podup up -d` in custom image mode to recreate changed services while retaining data. |
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
@@ -106,14 +106,13 @@ permissions. Every stack invocation passes `-f compose.yaml`, then
 Init regenerates the base file on reruns. Run stack up again after adding or
 removing an override so the autostart unit records the current file list.
 
-The default mail image is `ghcr.io/glyndor/epistle:<full CLI version>`.
-An explicit `image` in the init answers remains operator-owned during
-updates; an image in the compose override also remains effective.
-The generated base records image ownership in `x-epistle-managed-image`.
-Legacy base files without that marker migrate the official floating
-`major.minor` image to the current exact pin. If an older answers file
-explicitly selected that same floating tag, rerun init with those answers
-before upgrading to record that choice.
+The default compose file runs the host's `/usr/bin/epistle`
+(provided by the `.deb`, a statically linked musl binary) bind-mounted
+read-only into the digest-pinned `gcr.io/distroless/static-debian12:nonroot`
+base. An explicit `image` in the init answers lets the operator select a
+custom mail image instead (the host binary is then not mounted). The
+generated base records which mode the file is in via `x-epistle-managed-image`:
+true for the default host-binary shape, false for a custom image.
 
 Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave

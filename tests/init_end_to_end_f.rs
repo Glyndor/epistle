@@ -44,7 +44,8 @@ fn init_refuses_a_config_path_that_is_an_existing_directory() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
@@ -90,7 +91,8 @@ fn init_succeeds_when_config_path_is_a_file_in_the_directory() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
@@ -120,7 +122,8 @@ fn init_refuses_a_config_path_inside_data_dir_keys() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),

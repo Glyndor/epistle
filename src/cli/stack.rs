@@ -148,11 +148,22 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 	};
 	match action {
 		StackAction::Update => {
-			if let Err(error) = super::stack_update::rewrite_default_image(&compose) {
-				super::style::error(format_args!("cannot update {}: {error}", compose.display()));
-				return ExitCode::FAILURE;
-			}
-			run_sequence(podup, &compose, &[&["pull"], &["up", "-d"]])
+			let steps = match super::stack_update::stack_update_steps(&compose) {
+				Ok(steps) => steps,
+				Err(error) => {
+					super::style::error(format_args!(
+						"cannot update {}: {error}",
+						compose.display()
+					));
+					return ExitCode::FAILURE;
+				}
+			};
+			let argv_refs: Vec<Vec<&str>> = steps
+				.iter()
+				.map(|step| step.0.iter().map(String::as_str).collect())
+				.collect();
+			let borrowed: Vec<&[&str]> = argv_refs.iter().map(Vec::as_slice).collect();
+			run_sequence(podup, &compose, &borrowed)
 		}
 		StackAction::Up => {
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])

@@ -31,6 +31,14 @@ use super::answers::Answers;
 use super::apply::{ApplyError, Report, ReportStep, listeners_to_write};
 use crate::config::Listener;
 
+#[path = "host_binary.rs"]
+mod host_binary;
+
+#[cfg(not(test))]
+pub(super) use host_binary::validate_host_binary_for;
+#[cfg(test)]
+pub(super) use host_binary::{ElfLinkKind, classify_elf_link, validate_host_binary_for};
+
 /// The digest-pinned `postgres:18` image. The CI workflow
 /// `.github/workflows/db.yml` carries the same digest; if either
 /// side moves, the other has to follow.
@@ -55,14 +63,30 @@ pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_passwor
 /// refusal at `podup up` time.
 const DATABASE_SECRET_MODE: u32 = 400;
 
-/// The default mail image pins the full CLI release so server and CLI versions match.
-pub(super) fn default_image() -> String {
-	format!("ghcr.io/glyndor/epistle:{}", env!("CARGO_PKG_VERSION"))
-}
+/// The digest-pinned `gcr.io/distroless/static-debian12:nonroot`
+/// runtime the default compose file uses. Pinned to the same digest
+/// the Containerfile's runtime `FROM` declares. The default mail
+/// service mounts the host binary on top of this image instead of
+/// pulling a fresh image per release, so the digest only matters on
+/// day one (when the .deb is installed) and at every base-image
+/// audit.
+pub(super) const DISTROLESS_BASE_IMAGE: &str = "gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d";
 
-/// Resolve the mail image, preferring an explicit image in the answers.
+/// The host path the .deb installs `epistle` at. The default compose
+/// shape bind-mounts this file into the distroless base read-only and
+/// runs it as the container's entrypoint. A source build linked
+/// against glibc uses a different path and is rejected by the host
+/// binary validator below.
+pub(super) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
+
+/// Resolve the mail image the compose file will render. The
+/// default is the digest-pinned distroless base; an explicit
+/// `image` in the answers replaces it with the operator's
+/// reference (validated by the answers validator).
 pub(super) fn resolve_image(image: Option<&str>) -> String {
-	image.map(str::to_string).unwrap_or_else(default_image)
+	image
+		.map(str::to_string)
+		.unwrap_or_else(|| DISTROLESS_BASE_IMAGE.to_string())
 }
 
 /// The directory `init` keeps the database password in, under
@@ -287,8 +311,33 @@ pub(super) fn db_password_reused(data_dir: &Path) -> bool {
 /// passed the answers file through `ensure_db_password`; this
 /// derives the published ports from the listeners init will
 /// write into the config (after the keep-existing-listeners
-/// merge) and writes the compose file plus the README.
+/// merge) and writes the compose file plus the README. Validates
+/// the host `/usr/bin/epistle` first when the answers leave
+/// `image` unset (default host-binary mode): the compose file
+/// references the path and binds it read-only into the
+/// distroless base, so a missing or dynamically linked binary
+/// would produce a `podup up` that fails to start the mail
+/// service. The refusal here is the operator-facing message
+/// that names the .deb install path the operator needs to
+/// run.
 pub(super) fn write_compose_step(answers: &Answers, report: &mut Report) -> Result<(), ApplyError> {
+	write_compose_step_with_host_binary(answers, report, std::path::Path::new(HOST_EPISTLE_PATH))
+}
+
+/// Same as [`write_compose_step`] but with the host-binary
+/// path injected. Tests point this at a synthetic file under
+/// a tempdir; the production caller uses
+/// [`HOST_EPISTLE_PATH`].
+pub(super) fn write_compose_step_with_host_binary(
+	answers: &Answers,
+	report: &mut Report,
+	host_binary_path: &Path,
+) -> Result<(), ApplyError> {
+	if answers.image.is_none()
+		&& let Some(message) = validate_host_binary_for(host_binary_path)
+	{
+		return Err(ApplyError::HostBinaryInvalid(message));
+	}
 	ensure_compose_file(answers, answers.services.database, report)?;
 	Ok(())
 }
@@ -364,6 +413,27 @@ pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, Ap
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	bytes.push('\n');
 	Ok(bytes)
+}
+
+/// Render the desired compose file after validating the host
+/// binary. Same as [`render_for`] but performs the static-ELF
+/// check against `host_binary_path` first when the answers
+/// leave `image` unset. Used by the apply-phase tests so a
+/// fixture without `image` set exercises the same code path
+/// the production apply phase runs without having to install
+/// the .deb on the test machine.
+#[cfg(test)]
+pub(super) fn render_for_with_host_binary(
+	answers: &Answers,
+	database: bool,
+	host_binary_path: &Path,
+) -> Result<String, ApplyError> {
+	if answers.image.is_none()
+		&& let Some(message) = validate_host_binary_for(host_binary_path)
+	{
+		return Err(ApplyError::HostBinaryInvalid(message));
+	}
+	render_for(answers, database)
 }
 
 fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
@@ -624,3 +694,15 @@ mod tests_override;
 #[cfg(test)]
 #[path = "compose_tests_updates.rs"]
 mod tests_updates;
+
+#[cfg(test)]
+#[path = "compose_tests_host_binary.rs"]
+mod tests_host_binary;
+
+#[cfg(test)]
+#[path = "host_binary_tests.rs"]
+mod host_binary_tests;
+
+#[cfg(test)]
+#[path = "apply_host_binary_tests.rs"]
+mod apply_host_binary_tests;

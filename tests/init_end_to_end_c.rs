@@ -46,7 +46,8 @@ fn init_keeps_existing_listeners_across_a_service_toggle() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 imap = true\n\
 		 submission = true\n\
@@ -72,7 +73,8 @@ fn init_keeps_existing_listeners_across_a_service_toggle() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 imap = false\n\
 		 submission = false\n\
@@ -116,7 +118,8 @@ fn init_clears_dns_section_when_switching_to_manual_mode() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\n\
 		 [dns]\n\
 		 provider = \"cloudflare\"\n\
 		 zone = \"example.org\"\n\
@@ -141,7 +144,7 @@ fn init_clears_dns_section_when_switching_to_manual_mode() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -175,7 +178,7 @@ fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"8.8.8.8\"\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -196,7 +199,7 @@ fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -230,7 +233,8 @@ fn init_preserves_unknown_top_level_keys_across_a_managed_rewrite() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 imap = true\n\
 		 submission = true\n\
@@ -325,7 +329,7 @@ fn init_does_not_delete_an_unrelated_sibling_with_the_staging_basename() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -363,7 +367,7 @@ fn init_refuses_a_symlinked_config_path() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -427,7 +431,8 @@ fn init_staging_config_is_owner_only_from_the_start() {
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"8.8.8.8\"\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\n\
 		 [dns]\n\
 		 provider = \"cloudflare\"\n\
 		 zone = \"example.org\"\n\
@@ -499,7 +504,7 @@ fn init_omits_rsa_dkim_keys_when_openssl_is_absent() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -551,7 +556,7 @@ fn init_plan_says_update_when_openssl_returns_for_an_existing_config() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

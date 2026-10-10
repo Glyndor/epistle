@@ -62,7 +62,7 @@ fn init_exits_one_when_openssl_genpkey_fails_and_carries_no_rsa_selector() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -192,7 +192,7 @@ fn init_succeeds_and_writes_rsa_selector_when_openssl_shim_succeeds() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

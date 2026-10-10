@@ -14,6 +14,11 @@ on:
         description: Existing tag to (re-)release, e.g. v0.2.0
         required: true
         type: string
+      images-only:
+        description: Skip the .deb and the GitHub release (already published) and only build and publish the container image
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -98,6 +103,7 @@ jobs:
   build-deb:
     name: Build Debian package (${{ matrix.arch }})
     needs: verify
+    if: ${{ !inputs.images-only }}
     runs-on: ${{ matrix.runner }}
     # The image, not dpkg, provides the toolchain: this is upstream 1.98, the
     # same version ci.yml pins, so the .deb users install is built by the
@@ -199,6 +205,7 @@ jobs:
   build:
     name: Build and publish
     needs: [verify, build-deb]
+    if: ${{ !inputs.images-only }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -300,7 +307,9 @@ jobs:
   # release publishes the image next to the .deb.
   image-build:
     name: Build and push image (${{ matrix.arch }})
-    needs: build
+    needs: [verify, build]
+    # An images-only dispatch skips build; the image still needs verify.
+    if: ${{ always() && needs.verify.result == 'success' && (needs.build.result == 'success' || inputs.images-only) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -369,6 +378,7 @@ jobs:
   image-manifest:
     name: Publish multi-arch image manifest
     needs: image-build
+    if: ${{ always() && needs.image-build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -402,12 +412,18 @@ jobs:
             --password-stdin \
             --compat-auth-file "$HOME/.docker/config.json"
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.VERSION }}
+          persist-credentials: false
+
       - name: Build and push the multi-arch manifest list
         id: tags
         env:
           CRATE_VERSION: ${{ env.VERSION }}
         run: |
           set -euo pipefail
+          crate_version="${CRATE_VERSION#v}"
           # `.github/scripts/image_tags.py` is the gate that decides
           # which tags a given version publishes. Prereleases like
           # `1.0.0-rc.1` publish the exact tag only; plain versions
