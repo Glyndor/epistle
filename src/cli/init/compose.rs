@@ -48,27 +48,12 @@ pub(super) const POSTGRES_18_IMAGE: &str = "docker.io/library/postgres:18@sha256
 /// refusal at `podup up` time.
 const DATABASE_SECRET_MODE: u32 = 400;
 
-/// The default image for the `mail` service when the operator did
-/// not set `image` in the answers file. The tag is the
-/// `<MAJOR.MINOR>` prefix of `CARGO_PKG_VERSION`, never `latest`
-/// and never the full `X.Y.Z` patch: a release of `0.9.0` pins
-/// the image to `ghcr.io/glyndor/epistle:0.9` so a 0.9.1 patch
-/// keeps reusing the same base image until the operator
-/// re-tags. Patch releases that need a new image should ship
-/// a new tag (a manual `0.9.X` build), not rely on this
-/// default.
+/// The default mail image pins the full CLI release so server and CLI versions match.
 pub(super) fn default_image() -> String {
-	let version = env!("CARGO_PKG_VERSION");
-	let mut parts = version.split('.');
-	let major = parts.next().unwrap_or("0");
-	let minor = parts.next().unwrap_or("0");
-	format!("ghcr.io/glyndor/epistle:{}.{}", major, minor)
+	format!("ghcr.io/glyndor/epistle:{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// Resolve the image for the `mail` service. The answers file
-/// Resolve the image for the `mail` service. The answers file
-/// wins when the operator set `image`; otherwise the
-/// build-time default from [`default_image`] applies.
+/// Resolve the mail image, preferring an explicit image in the answers.
 pub(super) fn resolve_image(image: Option<&str>) -> String {
 	image.map(str::to_string).unwrap_or_else(default_image)
 }
@@ -92,11 +77,9 @@ pub(super) fn compose_file_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("compose").join("compose.yaml")
 }
 
-/// A README the operator reads after the run. Three short lines:
-/// how to start the stack with podup, that `init` regenerates this
-/// file, and that stable changes belong in the answers file.
-const COMPOSE_README: &str = "Bring up the stack with `podup -f compose.yaml up -d`. \
-init regenerates this file from the answers; stable changes belong in the answers file.\n";
+/// Explain how to start the stack and keep customizations across init reruns.
+const COMPOSE_README: &str = "Bring up the stack with `sudo epistle stack up` (runs podup). \
+init regenerates compose.yaml; keep image choices in the answers and customizations in compose.override.yaml.\n";
 
 /// Mint a fresh 32-character alphanumeric password from the system
 /// CSPRNG. The alphabet excludes look-alikes (no `0`/`O`/`1`/`l`)
@@ -471,6 +454,8 @@ struct TopLevelVolume {}
 #[derive(Debug, Serialize)]
 pub(super) struct ComposeFile {
 	name: String,
+	#[serde(rename = "x-epistle-managed-image")]
+	managed_image: bool,
 	services: BTreeMap<String, ComposeService>,
 	secrets: BTreeMap<String, TopLevelSecret>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -510,6 +495,7 @@ impl ComposeFile {
 		}
 		Self {
 			name: "epistle".to_string(),
+			managed_image: answers.image.is_none(),
 			services,
 			secrets,
 			volumes,
@@ -619,3 +605,11 @@ mod tests_bind_paths;
 #[cfg(test)]
 #[path = "compose_tests_dns_credentials.rs"]
 mod tests_dns_credentials;
+
+#[cfg(test)]
+#[path = "compose_tests_override.rs"]
+mod tests_override;
+
+#[cfg(test)]
+#[path = "compose_tests_updates.rs"]
+mod tests_updates;

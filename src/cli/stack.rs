@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 /// The `podup` version this build requires at minimum. Mirrors the
-/// `podup (>= 5.10.10)` dependency in `debian/control`; a test reads
+/// `podup (>= 5.10.13)` dependency in `debian/control`; a test reads
 /// the control file and asserts the two are equal so the floor cannot
 /// drift away from the package relationship.
-const PODUP_FLOOR: &str = "5.10.10";
+const PODUP_FLOOR: &str = "5.10.13";
 
 /// Path of the compose file `epistle init` writes, relative to
 /// `data_dir`. Kept in one place so the operator-facing error names
@@ -36,6 +36,8 @@ const COMPOSE_FILE: &str = "compose.yaml";
 /// separate so the tests can build the action without clap).
 #[derive(Debug, Subcommand)]
 pub enum StackCli {
+	/// Pull images and recreate changed services, updating the default mail image.
+	Update,
 	/// Start the stack in the background.
 	Up,
 	/// Stop the stack. The compose volumes are not removed: the
@@ -68,6 +70,7 @@ pub enum StackCli {
 impl From<StackCli> for StackAction {
 	fn from(value: StackCli) -> Self {
 		match value {
+			StackCli::Update => StackAction::Update,
 			StackCli::Up => StackAction::Up,
 			StackCli::Down => StackAction::Down,
 			StackCli::Ps { json } => StackAction::Ps { as_json: json },
@@ -83,6 +86,8 @@ impl From<StackCli> for StackAction {
 /// arguments verbatim.
 #[derive(Debug)]
 pub(super) enum StackAction {
+	/// Refresh the default mail image, pull images, and recreate changed services.
+	Update,
 	/// `podup -f <compose> up -d`, start the stack in the background.
 	Up,
 	/// `podup -f <compose> down`, stop the stack. Volumes are never
@@ -133,13 +138,28 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	}
+	if let Err(error) = super::stack_socket::ensure() {
+		super::style::error(error);
+		return ExitCode::FAILURE;
+	}
 	let podup = match ensure_podup_floor() {
 		Ok(()) => "podup",
 		Err(code) => return code,
 	};
 	match action {
-		StackAction::Up => run_inherited(podup, &compose, &["up", "-d"]),
-		StackAction::Down => run_inherited(podup, &compose, &["down"]),
+		StackAction::Update => {
+			if let Err(error) = super::stack_update::rewrite_default_image(&compose) {
+				super::style::error(format_args!("cannot update {}: {error}", compose.display()));
+				return ExitCode::FAILURE;
+			}
+			run_sequence(podup, &compose, &[&["pull"], &["up", "-d"]])
+		}
+		StackAction::Up => {
+			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
+		}
+		StackAction::Down => {
+			run_sequence(podup, &compose, &[&["autostart", "uninstall"], &["down"]])
+		}
 		StackAction::Ps { as_json } => {
 			let json = match capture_podup(podup, &compose, &["ps", "--format", "json"]) {
 				Ok(out) => out,
@@ -297,6 +317,16 @@ fn parse_version(input: &str) -> Result<Vec<u64>, std::num::ParseIntError> {
 /// shell would have shown, and propagate the exit code. The one-line
 /// error names the exact argv, so a `podup` failure points at the
 /// command that produced it.
+fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> ExitCode {
+	for step in steps {
+		let code = run_inherited(podup, compose, step);
+		if code != ExitCode::SUCCESS {
+			return code;
+		}
+	}
+	ExitCode::SUCCESS
+}
+
 fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 	let status = match build_command(podup, compose, extra)
 		.stdin(Stdio::inherit())
@@ -372,6 +402,10 @@ fn exit_code_from_status(status: &std::process::ExitStatus) -> ExitCode {
 fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
 	let mut command = Command::new(podup);
 	command.arg("-f").arg(compose);
+	let override_path = compose.with_file_name("compose.override.yaml");
+	if override_path.exists() {
+		command.arg("-f").arg(override_path);
+	}
 	for piece in extra {
 		command.arg(piece);
 	}
@@ -487,3 +521,11 @@ fn format_ports(publishers: &[Publisher]) -> String {
 #[cfg(test)]
 #[path = "stack_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stack_tests_service.rs"]
+mod tests_service;
+
+#[cfg(test)]
+#[path = "stack_tests_override.rs"]
+mod tests_override;

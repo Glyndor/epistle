@@ -18,6 +18,16 @@ use crate::config::Config;
 impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
+		if self.command.requires_service_user() {
+			match super::rootless::reexecute() {
+				Ok(Some(code)) => return code,
+				Ok(None) => {}
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			}
+		}
 		match self.command {
 			Command::MtaStsServe {
 				policy_dir,
@@ -311,21 +321,59 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
-			Command::Stack { config, action } => match config {
-				Some(path) => match Config::load(&path) {
-					Ok(config) => stack::run(&config, action.into()),
-					Err(error) => {
-						style::error(error);
-						ExitCode::FAILURE
-					}
-				},
-				None => {
-					style::error(
-						"`epistle stack` requires `--config FILE`; pass the path to the configuration file",
-					);
+			Command::Stack { config, action } => match Config::load(&config) {
+				Ok(config) => stack::run(&config, action.into()),
+				Err(error) => {
+					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 		}
 	}
 }
+
+impl Command {
+	fn requires_service_user(&self) -> bool {
+		// Explicit arms keep new stateful commands from silently running as root.
+		match self {
+			Command::Init { .. }
+			| Command::Stack { .. }
+			| Command::ConfigCheck { .. }
+			| Command::Export { .. }
+			| Command::Import { .. }
+			| Command::Backup { .. }
+			| Command::Verify { .. }
+			| Command::VerifyDns { .. }
+			| Command::DnsRecords { .. }
+			| Command::Mobileconfig { .. }
+			| Command::SrvRecords { .. }
+			| Command::Autoconfig { .. }
+			| Command::Autodiscover { .. }
+			| Command::Suppression { .. }
+			| Command::ReportAbuse { .. }
+			| Command::Accounts { .. }
+			| Command::AccountAdd { .. }
+			| Command::AccountRemove { .. }
+			| Command::Queue { .. }
+			| Command::AppPasswordCreate { .. }
+			| Command::AppPasswords { .. }
+			| Command::AppPasswordRevoke { .. }
+			| Command::ApiKeyCreate { .. }
+			| Command::ApiKeys { .. }
+			| Command::ApiKeyRevoke { .. }
+			| Command::Archive { .. }
+			| Command::Reports { .. } => true,
+			Command::Serve { .. }
+			| Command::MtaStsServe { .. }
+			| Command::DkimKeygen { .. }
+			| Command::StorageKeygen
+			| Command::OauthKeygen
+			| Command::TokenHash
+			| Command::Local { .. } => false,
+		}
+	}
+}
+
+#[cfg(test)]
+#[path = "dispatch_tests_delegation.rs"]
+mod tests_delegation;

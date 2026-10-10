@@ -31,7 +31,7 @@ fn podup_exiting_nonzero_makes_epistle_exit_nonzero_with_the_command_named() {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.10.12\\n\\n'\n\
+		 \tprintf '\\npodup version v5.10.13\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 exit 3\n",
@@ -63,7 +63,7 @@ fn podup_version_below_the_floor_is_refused_with_both_versions_named() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let shim_dir = dir.path().join("bin");
 	let argv_log = dir.path().join("argv.log");
-	// The shim claims to be 5.9.0; the floor is 5.10.10. The
+	// The shim claims to be 5.9.0; the floor is 5.10.13. The
 	// `epistle stack` exit code is non-zero and the message
 	// names both versions so the operator can tell which one
 	// is wrong.
@@ -92,8 +92,8 @@ fn podup_version_below_the_floor_is_refused_with_both_versions_named() {
 	);
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(
-		stderr.contains("5.9.0") && stderr.contains("5.10.10"),
-		"the refused-version error must name both the found version (5.9.0) and the required floor (5.10.10); got: {stderr}"
+		stderr.contains("5.9.0") && stderr.contains("5.10.13"),
+		"the refused-version error must name both the found version (5.9.0) and the required floor (5.10.13); got: {stderr}"
 	);
 	// The shim's argv log only has `--version`: `up` must never
 	// reach podup when the floor refuses the binary.
@@ -168,6 +168,7 @@ fn missing_podup_binary_is_named_in_the_error() {
 	// missing-binary assertion would observe the wrong exit
 	// and the wrong stderr.
 	let mut cmd = Command::new(binary());
+	cmd.env("XDG_RUNTIME_DIR", helpers::fake_podman_runtime(dir.path()));
 	cmd.args(["stack", "--config", cfg.to_str().unwrap(), "up"]);
 	cmd.env("PATH", &empty_path);
 	cmd.current_dir(&empty_path);
@@ -226,7 +227,7 @@ fn missing_podup_does_not_search_the_current_directory() {
 		 printf '\\npodup version v{PODUP_FLOOR}\\n\\n'\n\
 		 exit 0\n",
 		argv_log = argv_log.display(),
-		PODUP_FLOOR = "5.10.10"
+		PODUP_FLOOR = "5.10.13"
 	);
 	// The sibling podup lives in CWD, not in the directory
 	// PATH points at. If PATH is reverted to "" and the CWD
@@ -243,6 +244,7 @@ fn missing_podup_does_not_search_the_current_directory() {
 	let data_dir = data_dir_with_compose(dir.path());
 	let cfg = write_config(&data_dir);
 	let mut cmd = Command::new(binary());
+	cmd.env("XDG_RUNTIME_DIR", helpers::fake_podman_runtime(dir.path()));
 	cmd.args(["stack", "--config", cfg.to_str().unwrap(), "up"]);
 	cmd.env("PATH", &empty_path);
 	// CWD holds the sibling podup. PATH points at a

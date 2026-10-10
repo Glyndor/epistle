@@ -22,7 +22,7 @@ pub enum Subcommand {
 	/// List every archived message for an account (id, mailbox, unix time).
 	List {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account whose archive to list.
 		#[arg(value_name = "ACCOUNT")]
@@ -34,7 +34,7 @@ pub enum Subcommand {
 	/// archive.
 	Restore {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account the archived message belongs to.
 		#[arg(value_name = "ACCOUNT")]
@@ -47,7 +47,7 @@ pub enum Subcommand {
 	/// entry for the account is purged.
 	Purge {
 		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE")]
+		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account whose archive to purge.
 		#[arg(value_name = "ACCOUNT")]

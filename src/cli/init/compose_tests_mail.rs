@@ -5,7 +5,7 @@
 //! behaviour tied to `services.database`, the top-level
 //! `services.mail` invariants (`networks` key absent, no
 //! `x-podman-pod`), the image pinning for both the default
-//! `ghcr.io/glyndor/epistle:<MAJOR.MINOR>` and an operator
+//! `ghcr.io/glyndor/epistle:<CARGO_PKG_VERSION>` and an operator
 //! override.
 
 use super::render;
