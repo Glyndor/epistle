@@ -1,4 +1,4 @@
-use super::read;
+use super::{read, stubs::write_stub};
 
 #[test]
 fn postinst_creates_only_a_missing_private_data_directory() {
@@ -26,8 +26,10 @@ fn postinst_preserves_existing_data_and_installs_missing_data_privately() {
 		let bin = dir.path().join("bin");
 		std::fs::create_dir(&bin).unwrap();
 		let install = bin.join("install");
-		std::fs::write(&install, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$INSTALL_LOG\"\nfor arg do last=$arg; done\nexec /usr/bin/install -d -m 0700 \"$last\"\n").unwrap();
-		std::fs::set_permissions(&install, std::fs::Permissions::from_mode(0o755)).unwrap();
+		write_stub(
+			&install,
+			"printf '%s\\n' \"$@\" > \"$INSTALL_LOG\"\nfor arg do last=$arg; done\nexec /usr/bin/install -d -m 0700 \"$last\"",
+		);
 		let postinst = read("debian/epistle.postinst");
 		let block: String = postinst
 			.lines()
