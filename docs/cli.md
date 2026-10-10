@@ -63,23 +63,56 @@ printed once at the end.
 
 ## Stack (`epistle stack`)
 
-A thin wrapper around `podup` that drives the compose file `epistle
-init` writes at `<data_dir>/compose/compose.yaml`. Every subcommand
-takes the same `--config F` every other data command takes; the
-compose file's path is read from `data_dir`, never set on the
-command line. `podup --version` runs first and refuses anything
-below the `5.10.10` floor `debian/control` declares. `stack` exits
-non-zero when `podup` does, with a one-line stderr error that names
-the failed `podup` command.
+Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).
+With the repository configured, the production sequence is:
+
+```sh
+sudo apt install epistle
+sudo epistle init
+sudo epistle stack up
+sudo epistle stack ps
+```
+
+Init writes `/etc/epistle/mail.toml` and
+`<data_dir>/compose/compose.yaml`. Stack defaults to that config path;
+`--config F` selects another file and works before or after the subcommand.
+When invoked as root, init and every stack command run as `glyndor-epistle`,
+using its home directory and rootless Podman environment. If its user runtime
+is absent, run `sudo loginctl enable-linger glyndor-epistle` and retry.
+Use absolute paths for an `--answers` file when invoking init with sudo.
+
+Stack requires podup 5.10.13 or newer. A failed podup command stops the
+sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
 |---|---|
-| `epistle stack up --config F` | Start the stack in the background: `podup -f <compose> up -d`. |
-| `epistle stack down --config F` | Stop the stack: `podup -f <compose> down`. The volumes are never removed: the database lives in one. |
-| `epistle stack ps --config F` | List the running services as a four-column table (service, state, health, published ports). |
-| `epistle stack ps --config F --json` | Same data, re-serialised as JSON in the stable shape `epistle` owns (the podup JSON, minus fields `epistle` does not render). |
-| `epistle stack logs --config F [--follow] [<service>]` | Stream the service logs. With `--follow`, do not return until interrupted. |
-| `epistle stack restart --config F [<service>]` | Restart the whole stack, or one service. |
+| `sudo epistle stack up` | Runs `podup up -d`, then `podup autostart install` to enable and start the project's user service. It returns after starting; the service brings the stack back after reboot. |
+| `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`. Database volumes and bind-mounted data are kept. |
+| `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
+| `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
+| `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack update` | Refreshes the default mail image, runs `podup pull`, then `podup up -d` to recreate changed services while retaining data. |
+
+Keep container customizations in
+`<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
+permissions. Every stack invocation passes `-f compose.yaml`, then
+`-f compose.override.yaml` when it exists; later values override the base.
+Init regenerates the base file on reruns. Run stack up again after adding or
+removing an override so the autostart unit records the current file list.
+
+The default mail image is `ghcr.io/glyndor/epistle:<full CLI version>`.
+An explicit `image` in the init answers remains operator-owned during
+updates; an image in the compose override also remains effective.
+The generated base records image ownership in `x-epistle-managed-image`.
+Legacy base files without that marker migrate the official floating
+`major.minor` image to the current exact pin. If an older answers file
+explicitly selected that same floating tag, rerun init with those answers
+before upgrading to record that choice.
+
+Apt upgrades refresh the stack only when `podup-epistle.service` exists
+and is enabled for `glyndor-epistle`. Failures print a warning and leave
+the package installed; retry with `sudo epistle stack update`. Stacks
+disabled with `stack down` stay disabled until `stack up`.
 
 ## `epistle mta-sts-serve`
 

@@ -77,11 +77,9 @@ pub(super) fn compose_file_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("compose").join("compose.yaml")
 }
 
-/// A README the operator reads after the run. Three short lines:
-/// how to start the stack with podup, that `init` regenerates this
-/// file, and that stable changes belong in the answers file.
-const COMPOSE_README: &str = "Bring up the stack with `podup -f compose.yaml up -d`. \
-init regenerates this file from the answers; stable changes belong in the answers file.\n";
+/// Explain how to start the stack and keep customizations across init reruns.
+const COMPOSE_README: &str = "Bring up the stack with `sudo epistle stack up` (runs podup). \
+init regenerates compose.yaml; keep image choices in the answers and customizations in compose.override.yaml.\n";
 
 /// Mint a fresh 32-character alphanumeric password from the system
 /// CSPRNG. The alphabet excludes look-alikes (no `0`/`O`/`1`/`l`)
