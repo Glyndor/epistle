@@ -112,7 +112,7 @@ fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWa
 		if part
 			.content_type
 			.as_deref()
-			.is_some_and(|ct| ct.starts_with("multipart/"))
+			.is_some_and(|ct| ct.to_ascii_lowercase().starts_with("multipart/"))
 			&& let Some(inner_boundary) = part.boundary.as_deref()
 			&& depth < MAX_NESTING_DEPTH
 		{
@@ -303,9 +303,13 @@ fn split_with_boundary(body: &[u8], boundary: &str) -> Result<Vec<ParsedPart>, W
 			// message was truncated or crafted. Either way we refuse.
 			return Err(WalkError::Malformed("missing closing boundary"));
 		};
-		let after = abs + needle_bytes.len();
+		let mut after = abs + needle_bytes.len();
 		if body.get(after..after + 2) == Some(b"--") {
 			break; // closing boundary
+		}
+		// RFC 2046 permits transport padding after a delimiter.
+		while matches!(body.get(after), Some(b' ' | b'\t')) {
+			after += 1;
 		}
 		// Skip the CRLF (or LF) right after the boundary marker.
 		let body_start = if body.get(after..after + 2) == Some(b"\r\n") {
@@ -337,8 +341,8 @@ fn split_with_boundary(body: &[u8], boundary: &str) -> Result<Vec<ParsedPart>, W
 }
 
 /// Walk `body` from `start` and return the byte offset of the next line
-/// whose contents start with `needle`. The scan advances one line at a
-/// time and the per-line comparison counts the byte compares through
+/// whose contents form a complete delimiter for `needle`. The scan advances
+/// one line at a time and the per-line comparison counts byte compares through
 /// `line_starts_with`, so the total work is `O(body.len() *
 /// needle.len())` with `needle.len() <= MAX_BOUNDARY_LEN`.
 fn find_next_boundary_line(body: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
@@ -349,7 +353,8 @@ fn find_next_boundary_line(body: &[u8], start: usize, needle: &[u8]) -> Option<u
 		while line_end < body.len() && body[line_end] != b'\n' {
 			line_end += 1;
 		}
-		if line_starts_with(&body[line_start..line_end], needle) {
+		let line = &body[line_start..line_end];
+		if line_starts_with(line, needle) && boundary_suffix(line, needle.len()) {
 			return Some(line_start);
 		}
 		if line_end >= body.len() {
@@ -359,6 +364,13 @@ fn find_next_boundary_line(body: &[u8], start: usize, needle: &[u8]) -> Option<u
 		line_start = line_end + 1;
 	}
 	None
+}
+
+fn boundary_suffix(line: &[u8], prefix_len: usize) -> bool {
+	let suffix = &line[prefix_len..];
+	let suffix = suffix.strip_prefix(b"--").unwrap_or(suffix);
+	let suffix = suffix.strip_suffix(b"\r").unwrap_or(suffix);
+	suffix.iter().all(|byte| matches!(byte, b' ' | b'\t'))
 }
 
 /// Byte-by-byte prefix comparison that counts the comparisons through
@@ -408,9 +420,11 @@ fn parse_part(part_bytes: &[u8]) -> Result<ParsedPart, WalkError> {
 fn content_disposition_filename(headers: &[u8]) -> Option<String> {
 	let raw = header_value(headers, "content-disposition")?;
 	for segment in raw.split(';') {
-		let segment = segment.trim();
-		if let Some(rest) = segment.strip_prefix("filename=") {
-			let value = rest.trim_matches('"').trim();
+		let Some((name, rest)) = segment.trim().split_once('=') else {
+			continue;
+		};
+		if name.trim().eq_ignore_ascii_case("filename") {
+			let value = rest.trim().trim_matches('"');
 			if !value.is_empty() {
 				return Some(value.to_string());
 			}
@@ -426,9 +440,11 @@ fn content_disposition_filename(headers: &[u8]) -> Option<String> {
 /// Returns the bare boundary token.
 fn parse_boundary_param(content_type: &str) -> Option<String> {
 	for segment in content_type.split(';').skip(1) {
-		let segment = segment.trim();
-		if let Some(rest) = segment.strip_prefix("boundary=") {
-			let value = rest.trim_matches('"').trim();
+		let Some((name, rest)) = segment.trim().split_once('=') else {
+			continue;
+		};
+		if name.trim().eq_ignore_ascii_case("boundary") {
+			let value = rest.trim().trim_matches('"');
 			if !value.is_empty() {
 				return Some(value.to_string());
 			}
@@ -505,3 +521,11 @@ mod tests;
 #[cfg(test)]
 #[path = "mime_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "mime_tests_casing.rs"]
+mod tests_casing;
+
+#[cfg(test)]
+#[path = "mime_tests_delimiters.rs"]
+mod tests_delimiters;
