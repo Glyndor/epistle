@@ -241,3 +241,15 @@ fn postinst_provisions_config_directory_without_changing_existing_directory() {
 		"postinst must create only a missing /etc/epistle with service ownership and mode 0750"
 	);
 }
+
+#[test]
+fn postinst_migrates_only_after_adding_missing_ranges() {
+	let postinst = read("debian/epistle.postinst");
+	assert!(
+		postinst.contains("ranges_added=false")
+			&& postinst.contains("|| ! grep -q '^glyndor-epistle:' /etc/subgid")
+			&& postinst.contains("else\n\t\t\tranges_added=true")
+			&& postinst.contains("if [ \"$ranges_added\" = true ] && [ -z \"${2:-}\" ] && command -v podman"),
+		"postinst must migrate only when it successfully added missing subuid or subgid ranges"
+	);
+}

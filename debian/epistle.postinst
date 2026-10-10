@@ -37,9 +37,12 @@ configure)
 
 	# 2. The subordinate id ranges rootless Podman maps into its containers.
 	# Without them `podman` refuses to start a container as this user.
-	if ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null; then
+	ranges_added=false
+	if ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null || ! grep -q '^glyndor-epistle:' /etc/subgid 2>/dev/null; then
 		if ! usermod --add-subuids 100000-165535 --add-subgids 100000-165535 glyndor-epistle; then
 			echo "epistle: could not add the subuid/subgid ranges for glyndor-epistle; rootless Podman will not start until they exist" >&2
+		else
+			ranges_added=true
 		fi
 	fi
 
@@ -55,7 +58,7 @@ configure)
 
 	# 4. Prepare the rootless Podman runtime for the new ranges. Podman arrives
 	# through podup, a Depends, so it is only absent under --force-depends.
-	if command -v podman >/dev/null 2>&1; then
+	if [ "$ranges_added" = true ] && [ -z "${2:-}" ] && command -v podman >/dev/null 2>&1; then
 		if ! runuser -u glyndor-epistle -- podman system migrate; then
 			echo "epistle: podman system migrate failed for glyndor-epistle; epistle init will check the rootless runtime" >&2
 		fi
