@@ -71,20 +71,18 @@ impl Cap {
 		self
 	}
 
-	/// Whether the cap is enabled (both the store and the limit are
-	/// configured). The end-of-DATA check uses this as a fast-path
-	/// guard.
+	/// Whether both the store and a daily limit are configured.
 	pub fn enabled(&self) -> bool {
 		self.correspondents.is_some() && self.daily_new_recipients.is_some()
 	}
 }
 
 /// Outcome of [`enforce`], telling the caller what reply (if any) to
-/// emit and whether to record the recipients before delivery.
+/// emit after recipients have been reserved before delivery.
 pub enum Outcome {
 	/// The cap is unset, the store is not wired in, the account is
-	/// unknown, or the recipients fit inside the cap. The caller must
-	/// record the recipients so a later submission sees them as known.
+	/// unknown, or the recipients fit inside the cap. Configured stores
+	/// have already recorded the authenticated account's recipients.
 	Accept,
 	/// The submission would exceed the cap. The caller must emit a
 	/// `450 4.7.1 too many new recipients today; retry tomorrow` reply
@@ -93,8 +91,8 @@ pub enum Outcome {
 	Limited,
 }
 
-/// Run the cap check against `account` (the authenticated account
-/// name; `None` for an unauthenticated submission, which the SMTP path
+/// Check the cap and reserve recipients against the authenticated `account`
+/// name (`None` for an unauthenticated submission, which the SMTP path
 /// skips entirely). The audit event carries the running total
 /// (`new + already`).
 pub fn enforce(
@@ -106,12 +104,11 @@ pub fn enforce(
 	let Some(account) = account else {
 		return Outcome::Accept;
 	};
-	let (Some(store), Some(limit)) = (cap.correspondents.as_deref(), cap.daily_new_recipients)
-	else {
+	let Some(store) = cap.correspondents.as_deref() else {
 		return Outcome::Accept;
 	};
 	let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
-	match store.enforce_new_recipient_cap(account, &recipient_refs, Some(limit)) {
+	match store.enforce_new_recipient_cap(account, &recipient_refs, cap.daily_new_recipients) {
 		Ok(CapOutcome::Limited {
 			new,
 			already,
@@ -128,18 +125,6 @@ pub fn enforce(
 			tracing::warn!(account = %account, %error, "correspondent store error; accepting");
 			Outcome::Accept
 		}
-	}
-}
-
-/// Record the recipients for `account` after the cap accepted the
-/// submission. Best-effort: an I/O error is logged and swallowed.
-pub fn record(account: &str, recipients: &[String], cap: &Cap) {
-	let Some(store) = cap.correspondents.as_deref() else {
-		return;
-	};
-	let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
-	if let Err(error) = store.record(account, &recipient_refs) {
-		tracing::warn!(account = %account, %error, "correspondent store error; not recording");
 	}
 }
 
@@ -162,11 +147,6 @@ pub fn check_or_reply(
 ) -> Option<crate::smtp::reply::Reply> {
 	match enforce(account, &message.recipients, cap, peer_ip) {
 		Outcome::Limited => Some(limited_reply()),
-		Outcome::Accept => {
-			if let Some(account) = account {
-				record(account, &message.recipients, cap);
-			}
-			None
-		}
+		Outcome::Accept => None,
 	}
 }

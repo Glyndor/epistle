@@ -113,14 +113,17 @@ impl Server {
 		};
 
 		let subject = crate::antispam::subjectpass::header_value(&message.data, "subject");
-		let recipient = message.recipients.first().map(String::as_str).unwrap_or("");
 		let day = unix_day_now();
-
-		// Token in the subject: accept the message as ham and skip the band.
-		if pass.accepts(subject.as_deref(), &message.reverse_path, recipient, day) {
+		// Every envelope recipient needs its own authorization. Challenge
+		// the first uncovered recipient so a retry can add the missing token.
+		let recipient = message.recipients.iter().find(|recipient| {
+			!pass.accepts(subject.as_deref(), &message.reverse_path, recipient, day)
+		});
+		if !message.recipients.is_empty() && recipient.is_none() {
 			self.metrics.subjectpass_passed();
 			return Ok(BandOutcome::Continue);
 		}
+		let recipient = recipient.map(String::as_str).unwrap_or("");
 
 		// No valid token: try the LLM hook if one is configured. A
 		// `Failed` outcome falls through to the challenge.

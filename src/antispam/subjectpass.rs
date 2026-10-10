@@ -113,7 +113,7 @@ impl SubjectPass {
 	}
 
 	/// Mint a token for `sender` (envelope MAIL FROM) addressing
-	/// `recipient` (the first RCPT TO of the message) on `day` (UNIX
+	/// `recipient` (the address being challenged) on `day` (UNIX
 	/// seconds / 86400). Returns `EP-<12 chars>`; `lowercase sender|lowercase
 	/// recipient|day-stamp` is the HMAC payload.
 	pub fn issue(&self, sender: &str, recipient: &str, day: u64) -> String {
