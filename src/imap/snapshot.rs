@@ -243,6 +243,30 @@ impl Snapshot {
 		self.expunge_where(|uid| uids.contains(&uid))
 	}
 
+	/// Remove the messages whose UID is in `uids`, regardless of the
+	/// `\Deleted` flag. Used by REPLACE (RFC 8508), which must take
+	/// ownership of a specific message by UID; the client has not had
+	/// a chance to set `\Deleted` on the replacement target. Returns
+	/// the sequence numbers that were removed, in increasing order.
+	pub fn remove_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
+		let mut removed_seqs = Vec::new();
+		let mut index = 0;
+		while index < self.messages.len() {
+			let message = &self.messages[index];
+			if uids.contains(&message.uid) {
+				self.remove_files(message.id);
+				self.messages.remove(index);
+				removed_seqs.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
+			} else {
+				index += 1;
+			}
+		}
+		if !removed_seqs.is_empty() {
+			super::vanished::record_advancing(&self.account_dir, uids);
+		}
+		Ok(removed_seqs)
+	}
+
 	/// Expunge every `\Deleted` message whose UID passes `keep`, logging the
 	/// vanished UIDs for QRESYNC.
 	fn expunge_where(&mut self, keep: impl Fn(u32) -> bool) -> std::io::Result<Vec<u32>> {

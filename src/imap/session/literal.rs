@@ -105,21 +105,29 @@ impl Session {
 				return reject_literal(tag, synchronizing, size, "NO mailbox is read-only\r\n");
 			}
 			let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
-			let seq = if uid {
+			let target_uid = if uid {
 				match (1..=total)
 					.find(|n| snapshot.by_sequence(*n).map(|m| m.uid) == Some(sequence))
 				{
-					Some(seq) => seq,
-					None => return reject_literal(tag, synchronizing, size, "NO no such message\r\n"),
+					Some(seq) => snapshot.by_sequence(seq).map(|m| m.uid).unwrap_or(0),
+					None => {
+						return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
+					}
 				}
 			} else if sequence >= 1 && sequence <= total {
-				sequence
+				snapshot
+					.by_sequence(sequence)
+					.map(|m| m.uid)
+					.unwrap_or(0)
 			} else {
 				return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
 			};
-			(account.clone(), selected.clone(), seq)
+			if target_uid == 0 {
+				return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
+			}
+			(account.clone(), selected.clone(), target_uid)
 		};
-		let (account, selected, seq) = resolved;
+		let (account, selected, target_uid) = resolved;
 
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return reject_literal(
@@ -160,7 +168,12 @@ impl Session {
 			tag: tag.to_string(),
 			mailbox: mailbox.to_string(),
 			flags,
-			replace: Some((selected, seq)),
+			// Resolve the sequence to a UID at command start: a
+			// concurrent session that expunges this message (or any
+			// other change to the mailbox) between this point and
+			// the literal read must not move the REPLACE target to
+			// a different message.
+			replace: Some((selected, target_uid)),
 		});
 		let mut output = Output::text("+ ready for literal data\r\n".to_string());
 		output.collect_literal = Some(size);
@@ -215,14 +228,30 @@ impl Session {
 		tag: &str,
 		account: &str,
 		selected: &str,
-		seq: u32,
+		uid: u32,
 		code: &str,
 	) -> Output {
 		let mut snapshot = match self.open_snapshot(account, selected) {
 			Ok(snapshot) => snapshot,
 			Err(_) => return Output::text(format!("{tag} NO REPLACE failed\r\n")),
 		};
-		if snapshot.remove_at(seq).is_err() {
+		// Compute the sequence number the target occupies in the current
+		// snapshot before we remove it. When the target is no longer
+		// there (a concurrent session already expunged it) the result
+		// is `None` and we skip the EXPUNGE line.
+		let removed_seq = snapshot
+			.messages()
+			.position(|m| m.uid == uid)
+			.map(|p| u32::try_from(p + 1).unwrap_or(u32::MAX));
+		// Remove by UID, not by sequence: a concurrent expunge in
+		// another session could have removed the message that was at
+		// this UID's slot, but no other UID ever takes the same value.
+		// Removing by sequence here would silently delete whichever
+		// message now occupies the slot. REPLACE also does not require
+		// the client to have set \Deleted on the target, so the
+		// generic expunge path (which only removes \Deleted messages)
+		// would not work.
+		if snapshot.remove_uids(&[uid]).is_err() {
 			return Output::text(format!("{tag} NO REPLACE failed\r\n"));
 		}
 		// Keep the live selected snapshot consistent with the expunge.
@@ -235,8 +264,16 @@ impl Session {
 		{
 			*live_snapshot = snapshot;
 		}
+		// Report the expunged sequence number: the slot the target
+		// occupied before the removal. With the original message
+		// already gone (reordered by a concurrent expunge) this is
+		// `None` and we skip the EXPUNGE line; the UID-based
+		// deletion above keeps the target correct regardless.
+		let expunge_line = removed_seq
+			.map(|s| format!("* {s} EXPUNGE\r\n"))
+			.unwrap_or_default();
 		Output::text(format!(
-			"* {seq} EXPUNGE\r\n{tag} OK {code}REPLACE completed\r\n"
+			"{expunge_line}{tag} OK {code}REPLACE completed\r\n"
 		))
 	}
 
