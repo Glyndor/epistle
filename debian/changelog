@@ -1,3 +1,12 @@
+epistle (0.9.2) unstable; urgency=medium
+
+  * A TXT value longer than 255 bytes, such as an RSA DKIM key, is
+    published as one record of 255-byte strings on Route 53, Google
+    Cloud DNS and deSEC, where it used to be sent as one string the
+    provider rejected.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 10 Oct 2026 21:30:00 +0000
+
 epistle (0.9.1) unstable; urgency=medium
 
   * The stack's mail container runs the epistle binary this package

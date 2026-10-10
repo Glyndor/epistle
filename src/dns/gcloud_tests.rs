@@ -277,7 +277,6 @@ async fn srv_upsert_passes_value_through_in_rrdatas() {
 	);
 }
 
-/// PEM round-trip: a valid PKCS#8 PEM decodes to a non-empty DER blob.
 #[test]
 fn pem_decoder_round_trips_a_pkcs8_block() {
 	let key = test_key();

@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::records::txt_strings;
 
 const TOKEN_AUDIENCE: &str = "https://oauth2.googleapis.com/token";
 const DNS_SCOPE: &str = "https://www.googleapis.com/auth/ndev.clouddns.readwrite";
@@ -176,13 +177,31 @@ impl GcloudProvider {
 		}
 	}
 
-	/// TXT values travel quoted in `rrdatas`; everything else is verbatim.
+	/// TXT values travel quoted in `rrdatas`, one element per character
+	/// string (RFC 1035 §3.3.14). A long value (an RSA-2048 DKIM `p=`
+	/// runs ~410 bytes, an RSA-4096 ~755) has to be split into
+	/// ≤255-octet character strings; Cloud DNS rejects any single
+	/// element past 255. But several entries in `rrdatas` would be
+	/// several TXT records, a single rrset only stitches the
+	/// character-strings into one logical value when they all belong
+	/// to a single rdata entry. The wire form is one entry carrying
+	/// the quoted pieces separated by single spaces. The per-piece
+	/// backslash and quote escaping is applied to the chunk, not to
+	/// the joined value, so a `\"` mid-chunk does not bleed across the
+	/// boundary. Resolvers concatenate the pieces back into one
+	/// logical value on read. Every other kind carries one verbatim
+	/// rdata.
 	fn rrdatas(&self, record: &DnsRecord) -> Vec<String> {
 		if record.kind == RecordKind::Txt {
-			vec![format!(
-				"\"{}\"",
-				record.value.replace('\\', "\\\\").replace('"', "\\\"")
-			)]
+			let joined = txt_strings(&record.value)
+				.into_iter()
+				.map(|piece| {
+					let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
+					format!("\"{escaped}\"")
+				})
+				.collect::<Vec<_>>()
+				.join(" ");
+			vec![joined]
 		} else {
 			vec![record.value.clone()]
 		}
@@ -392,11 +411,18 @@ impl GcloudProvider {
 		// value-bearing case reads the rrdatas, drops the matching
 		// one, and replaces the rrset with the remainder (a
 		// wholesale delete only when the rrset is fully gone).
+		//
+		// Long TXT values are stored as one rrdatas entry with the
+		// joined character-strings form, so the needle is the same
+		// joined form on both the upsert and the listing. The
+		// matching compares the joined value verbatim against the
+		// rrdatas Cloud DNS lists back.
 		if record.kind == RecordKind::Txt && !record.value.is_empty() {
-			let needle = format!(
-				"\"{}\"",
-				record.value.replace('\\', "\\\\").replace('"', "\\\"")
-			);
+			let needle = self
+				.rrdatas(&record)
+				.into_iter()
+				.next()
+				.expect("TXT always produces one joined rrdatas");
 			let remainder: Vec<String> = target
 				.rrdatas
 				.iter()
@@ -543,3 +569,6 @@ mod test_support;
 #[cfg(test)]
 #[path = "gcloud_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "gcloud_tests_txt.rs"]
+mod tests_txt;

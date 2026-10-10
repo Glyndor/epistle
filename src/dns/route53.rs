@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
+use super::records::txt_strings;
 
 /// Route 53 is a global service signed in `us-east-1`.
 const REGION: &str = "us-east-1";
@@ -47,14 +48,36 @@ impl Route53Provider {
 	/// Submit a ChangeResourceRecordSets request with the given action.
 	async fn change(&self, action: &str, record: &DnsRecord) -> Result<(), ProviderError> {
 		let kind = record_type(record.kind)?;
-		let value = if record.kind == RecordKind::Txt {
-			// Route 53 stores TXT values quoted.
+		// A TXT record is a sequence of character strings, each at most
+		// 255 octets (RFC 1035 §3.3.14). Route 53 enforces the cap and
+		// rejects any rdata past it, so a long value (the RSA-2048 DKIM
+		// `p=` runs ~410 bytes, an RSA-4096 ~755) has to be split into
+		// one character string per piece. But several `<ResourceRecord>`
+		// entries in one RRset are several TXT records, the pieces are
+		// concatenated back into one logical value only when they all
+		// belong to a single `<ResourceRecord>`. The wire form is one
+		// `<ResourceRecord>` carrying the quoted pieces separated by single
+		// spaces. The per-piece backslash and quote escaping is applied to
+		// the chunk, not to the joined value, so a `\"` mid-chunk does not
+		// bleed into the boundary.
+		let value_xml: String = if record.kind == RecordKind::Txt {
+			let joined = txt_strings(&record.value)
+				.into_iter()
+				.map(|piece| {
+					let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
+					format!("\"{escaped}\"")
+				})
+				.collect::<Vec<_>>()
+				.join(" ");
 			format!(
-				"\"{}\"",
-				record.value.replace('\\', "\\\\").replace('"', "\\\"")
+				"<ResourceRecord><Value>{}</Value></ResourceRecord>",
+				xml_escape(&joined)
 			)
 		} else {
-			record.value.clone()
+			format!(
+				"<ResourceRecord><Value>{}</Value></ResourceRecord>",
+				xml_escape(&record.value)
+			)
 		};
 		let body = format!(
 			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
@@ -63,12 +86,11 @@ impl Route53Provider {
 <Action>{action}</Action>\
 <ResourceRecordSet>\
 <Name>{}</Name><Type>{kind}</Type><TTL>{}</TTL>\
-<ResourceRecords><ResourceRecord><Value>{}</Value></ResourceRecord></ResourceRecords>\
+<ResourceRecords>{value_xml}</ResourceRecords>\
 </ResourceRecordSet></Change></Changes></ChangeBatch>\
 </ChangeResourceRecordSetsRequest>",
 			xml_escape(&record.name),
 			record.ttl,
-			xml_escape(&value),
 		);
 
 		let path = format!("/{API_VERSION}/hostedzone/{}/rrset", self.hosted_zone_id);
@@ -325,11 +347,14 @@ impl DnsProvider for Route53Provider {
 			// rrset, drops the matching rdata, and UPSERTs the
 			// remainder (a wholesale DELETE only when the rrset
 			// is fully gone).
+			//
+			// Long TXT values are stored as one `<ResourceRecord>`
+			// with the joined character-strings form, so the needle
+			// is the same joined form for both the upsert and the
+			// provider's listing. The matching compares the joined
+			// value verbatim against the rdata the LIST returned.
 			if record.kind == RecordKind::Txt && !record.value.is_empty() {
-				let needle = format!(
-					"\"{}\"",
-					record.value.replace('\\', "\\\\").replace('"', "\\\"")
-				);
+				let needle = txt_joined_form(&record.value);
 				if let Some(rrset) = self.fetch_txt_rrset(&record.name).await? {
 					let remainder: Vec<String> = rrset
 						.values
@@ -376,6 +401,24 @@ fn record_type(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		| RecordKind::Mx
 		| RecordKind::Caa => Ok(kind.as_str()),
 	}
+}
+
+/// The wire form of a TXT value the provider writes and reads back:
+/// one string with each ≤255-octet character-string quoted and the
+/// per-piece backslash/quote escapes applied, joined with a single
+/// space. Used both by `change` (the value we write) and by the
+/// value-bearing `delete` (the needle we match against the LIST
+/// response). The same shape goes in and comes back, so a delete of
+/// the same value matches even when the value spans several pieces.
+fn txt_joined_form(value: &str) -> String {
+	txt_strings(value)
+		.into_iter()
+		.map(|piece| {
+			let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
+			format!("\"{escaped}\"")
+		})
+		.collect::<Vec<_>>()
+		.join(" ")
 }
 
 /// `(YYYYMMDDTHHMMSSZ, YYYYMMDD)` for `epoch` seconds, UTC.
@@ -448,3 +491,7 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 #[path = "route53_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "route53_tests_txt.rs"]
+mod tests_txt;
