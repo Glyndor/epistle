@@ -3,6 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+use super::super::directory::bans::BanOutcome;
 use super::super::reply::Reply;
 use super::super::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 use super::{Action, Session};
@@ -18,6 +19,15 @@ pub(super) enum PendingScram {
 		server: Box<ScramServer>,
 		credentials: Box<ScramCredentials>,
 		account: String,
+		/// `true` when the server-first was a ban-refusal fake: a real
+		/// ban was in force at client-first, so the proof must be
+		/// refused at client-final even if the ban has since
+		/// expired. A banned subject who completes the exchange
+		/// against a stale ban row must not be able to clear the
+		/// row with a valid proof (the credentials are fake) and
+		/// must not be able to extend the row with a bad one
+		/// (the refusal path records no strike).
+		ban_refusal: bool,
 	},
 }
 
@@ -56,19 +66,63 @@ impl Session {
 	/// credentials and answer with the server-first challenge.
 	pub(super) fn scram_client_first(&mut self, encoded: &str, binding: ChannelBinding) -> Action {
 		let Some(client_first) = decode(encoded) else {
+			// A malformed client-first (invalid base64) is a failure, but
+			// the IP ban is consulted first so a banned peer cannot extend
+			// its own ban by sending garbage: refused attempts never record
+			// a strike. With no username there is no account row to check,
+			// so the ban is the IP ban only.
+			if self.is_ip_banned() {
+				return self.scram_failure();
+			}
+			self.record_scram_outcome("", None, false);
 			return self.scram_failure();
 		};
 		let Some(username) = username_of(&client_first) else {
+			// A well-formed base64 client-first without a username tag is
+			// still a malformed client-first. The same IP-ban-first rule
+			// applies: a banned peer must not be able to extend its own
+			// ban by sending repeated tag-less garbage.
+			if self.is_ip_banned() {
+				return self.scram_failure();
+			}
+			self.record_scram_outcome("", None, false);
 			return self.scram_failure();
 		};
+		// Ban check before any credential lookup: an active ban on the
+		// client IP or on the account short-circuits the exchange with the
+		// same wire outcome as a wrong SCRAM proof (a 334 with a fake
+		// server-first, then 535 at client-final), and the SCRAM
+		// credential lookup never happens. A ban refusal is distinct from
+		// a credential failure: the strike count and ban expiry do not
+		// move, so the ban keeps ending when it was going to end. The
+		// fake server-first keeps the refusal indistinguishable from a
+		// normal exchange on the wire; the fake credentials make every
+		// client proof fail the same way a wrong password would.
+		let resolved = match self
+			.directory
+			.check_ban(&username, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => {
+				return self.scram_ban_refusal(&client_first, binding, &username);
+			}
+			BanOutcome::Clear { account } => account,
+		};
+		// From here on, any failure records a strike against the IP and
+		// against the account the credential check resolved. The account
+		// starts as whatever the ban check saw and is replaced once
+		// `scram_credentials` confirms it.
+		let mut account_for_record = resolved;
 		// Resolve credentials and the canonical account name (no oracle: a
 		// missing user fails exactly like a bad password later).
 		let Some(credentials) = self.directory.scram_credentials(&username) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
 		let Some((account, _)) = self.directory.credentials(&username) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
+		account_for_record = Some(account.clone());
 		// SCRAM reaches the directory through scram_credentials(), not
 		// authenticate_with_ip — the per-account `allowed_protocols` check
 		// has to be issued here too. A restricted account fails closed
@@ -77,21 +131,64 @@ impl Session {
 			.directory
 			.is_protocol_allowed(&account, self.auth_protocol)
 		{
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		}
 
 		let Some(nonce) = self.fresh_nonce() else {
 			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
 		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
 		let Ok((_user, server_first)) = server.first(&client_first, &credentials) else {
+			self.record_scram_outcome(&username, account_for_record.as_deref(), false);
 			return self.scram_failure();
 		};
 		self.pending_scram = Some(PendingScram::ClientFinal {
 			server: Box::new(server),
 			credentials: Box::new(credentials),
 			account,
+			ban_refusal: false,
+		});
+		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
+	}
+
+	/// A ban refusal at client-first: build a server-first from fake
+	/// SCRAM credentials so the wire reply is the same `334` a normal
+	/// exchange produces, then stash the fake server and credentials in
+	/// `pending_scram` so the client-final handler will see the proof
+	/// fail exactly like a wrong password. The strike count and ban
+	/// expiry stay where they were: a ban refusal is distinct from a
+	/// credential failure, and no `record_ban_outcome` call follows.
+	/// The username from the client-first is stashed as the account so
+	/// the client-final ban recheck can resolve and consult the same
+	/// account ban the client-first check saw.
+	fn scram_ban_refusal(
+		&mut self,
+		client_first: &str,
+		binding: ChannelBinding,
+		username: &str,
+	) -> Action {
+		let Some(nonce) = self.fresh_nonce() else {
+			// CSPRNG failure while building the fake server-first: the
+			// no-oracle fallback is the immediate 535 a malformed
+			// exchange would produce. A banned subject still cannot
+			// authenticate, the ban is unchanged, and the refusal
+			// remains indistinguishable from a wrong-password 535.
+			return self.scram_failure();
+		};
+		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
+		let Ok((_user, server_first)) =
+			server.first(client_first, &fake_scram_credentials_for(username))
+		else {
+			return self.scram_failure();
+		};
+		self.pending_scram = Some(PendingScram::ClientFinal {
+			server: Box::new(server),
+			credentials: Box::new(fake_scram_credentials_for(username)),
+			account: username.to_string(),
+			ban_refusal: true,
 		});
 		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
 	}
@@ -104,19 +201,46 @@ impl Session {
 		mut server: ScramServer,
 		credentials: ScramCredentials,
 		account: &str,
+		ban_refusal: bool,
 	) -> Action {
+		// A ban-refusal exchange stays refused at client-final even if
+		// the ban has since expired: a banned subject who started the
+		// SCRAM exchange during a real ban must not be able to clear
+		// the row with a valid proof (the credentials here are fake)
+		// or extend the row with a bad one (no strike is recorded).
+		// The recheck below catches the case where the ban fires
+		// after the client-first, and the flag catches the case
+		// where it expires between the two.
+		if ban_refusal
+			|| matches!(
+				self.directory
+					.check_ban(account, self.peer_ip, self.auth_protocol),
+				BanOutcome::Banned
+			) {
+			return self.scram_failure();
+		}
 		let Some(client_final) = decode(encoded) else {
+			self.record_scram_outcome(account, Some(account), false);
 			return self.scram_failure();
 		};
 		match server.finish(&client_final, &credentials) {
 			Ok(server_final) => {
+				// Clear the ban store for both subjects on a successful
+				// proof; the ban check at client-first already consulted
+				// the same store with the same keys, so the success here
+				// undoes any in-flight strikes the same way the PLAIN path
+				// does.
+				self.record_scram_outcome(account, Some(account), true);
 				self.authenticated = Some(account.to_string());
 				Action::Continue(Reply::single(
 					235,
 					&format!("2.7.0 {}", BASE64.encode(server_final)),
 				))
 			}
-			Err(_) => self.scram_failure(),
+			Err(_) => {
+				self.record_scram_outcome(account, Some(account), false);
+				self.scram_failure()
+			}
 		}
 	}
 
@@ -137,6 +261,37 @@ impl Session {
 		}
 	}
 
+	/// Write the outcome of a SCRAM authentication attempt back to the
+	/// shared ban store, keyed exactly as the PLAIN path keys it
+	/// (`ip:<peer>` and the account the credential check resolved). A
+	/// success clears both subjects; a failure records a strike against
+	/// both. The ban check at the start of the exchange already decided
+	/// whether to refuse the attempt; a ban refusal never reaches this
+	/// helper, so the strike count and ban expiry stay where they were.
+	fn record_scram_outcome(&self, login: &str, account: Option<&str>, success: bool) {
+		self.directory.record_ban_outcome(
+			login,
+			account,
+			success,
+			self.peer_ip,
+			self.auth_protocol,
+		);
+	}
+
+	/// Whether the peer IP is currently banned. Used by the malformed
+	/// client-first branches, which never see a username and so cannot
+	/// consult the account ban: only the IP ban can refuse them. A
+	/// banned IP must not be able to extend its own ban by sending
+	/// garbage, so the branches short-circuit here before recording a
+	/// strike.
+	fn is_ip_banned(&self) -> bool {
+		matches!(
+			self.directory
+				.check_ban("", self.peer_ip, self.auth_protocol),
+			BanOutcome::Banned
+		)
+	}
+
 	/// The SCRAM server nonce: the injected one in tests, else fresh randomness.
 	/// `None` if the CSPRNG fails (fail closed).
 	fn fresh_nonce(&self) -> Option<String> {
@@ -152,4 +307,25 @@ impl Session {
 
 fn decode(encoded: &str) -> Option<String> {
 	String::from_utf8(BASE64.decode(encoded).ok()?).ok()
+}
+
+/// SCRAM credentials used only to build a server-first message the
+/// client can echo back. The `StoredKey` and `ServerKey` are all
+/// zeros, so any client proof that comes back will fail the verifier
+/// exactly like a wrong password, which is the point: the ban
+/// refusal looks like a wrong password on the wire. The salt is
+/// derived from the username (SHA-256, first 16 bytes) so the
+/// server-first does not carry the tell-tale all-zero salt a banned
+/// subject could use to distinguish a refusal from a real exchange.
+fn fake_scram_credentials_for(username: &str) -> super::super::scram::ScramCredentials {
+	use ring::digest;
+	let mut salt = [0u8; 16];
+	let hash = digest::digest(&digest::SHA256, username.as_bytes());
+	salt.copy_from_slice(&hash.as_ref()[..16]);
+	super::super::scram::ScramCredentials {
+		salt: salt.to_vec(),
+		iterations: 4096,
+		stored_key: [0u8; 32],
+		server_key: [0u8; 32],
+	}
 }

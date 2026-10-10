@@ -135,6 +135,12 @@ pub struct Directory {
 	/// `[database]`; those fall back to the per-connection three-strikes
 	/// counters that the listeners already maintain.
 	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
+	/// Test-only SCRAM credential-lookup counter. The ban tests inject
+	/// a fresh `Arc<AtomicUsize>` per test via
+	/// `with_scram_lookup_counter` so the delta they assert is
+	/// isolated from any other test in the same `cargo test` process.
+	#[cfg(test)]
+	scram_lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl Directory {
@@ -172,6 +178,8 @@ impl Directory {
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
+			#[cfg(test)]
+			scram_lookup_counter: None,
 		}
 	}
 
@@ -531,33 +539,6 @@ impl Directory {
 		crate::totp::verify(&secret_bytes, code, now).then_some(pass)
 	}
 
-	/// Attach SCRAM credentials (account name → stored credentials).
-	pub fn with_scram(
-		mut self,
-		scram: impl IntoIterator<Item = (String, super::scram::ScramStored)>,
-	) -> Self {
-		self.scram = scram
-			.into_iter()
-			.map(|(name, stored)| (name.to_ascii_lowercase(), stored))
-			.collect();
-		self
-	}
-
-	/// Resolve a login to its SCRAM credentials, or `None` when the identity is
-	/// unknown or has no SCRAM credentials.
-	pub fn scram_credentials(&self, login: &str) -> Option<super::scram::ScramCredentials> {
-		let account = if login.contains('@') {
-			let address = Address::parse(login).ok()?;
-			match self.resolve(&address) {
-				Resolution::Account(account) => account,
-				_ => return None,
-			}
-		} else {
-			login.to_ascii_lowercase()
-		};
-		self.scram.get(&account)?.to_credentials()
-	}
-
 	/// Attach domain aliases (alias domain → target domain). Both sides are
 	/// lowercased to match resolution.
 	pub fn with_domain_aliases(
@@ -711,8 +692,11 @@ impl Directory {
 	}
 }
 
+#[path = "directory_scram.rs"]
+mod scram;
+
 #[path = "directory_bans.rs"]
-mod bans;
+pub mod bans;
 
 #[cfg(test)]
 #[path = "directory_tests.rs"]

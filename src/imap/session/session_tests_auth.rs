@@ -4,7 +4,7 @@ use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
-fn unauth(dir: &std::path::Path) -> Session {
+pub(super) fn unauth(dir: &std::path::Path) -> Session {
 	Session::new("mail.example.org", dir.to_path_buf(), directory())
 }
 
@@ -13,7 +13,7 @@ fn unauth(dir: &std::path::Path) -> Session {
 /// IMAP session routes the LOGIN attempt through
 /// [`crate::smtp::directory::Directory::authenticate_with_ip`] with the
 /// peer IP the network layer recorded.
-fn directory_with_ban_store(
+pub(super) fn directory_with_ban_store(
 	ban_store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
 ) -> Arc<Directory> {
 	Arc::new(
@@ -72,6 +72,10 @@ fn authenticate_login_rejects_bad_base64_username() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut session = unauth(tmp.path());
 	session.command_line("a AUTHENTICATE LOGIN");
+	// Bytes that are not valid base64 at all. The IMAP layer decodes
+	// the SASL continuation line as base64 before the AUTH=LOGIN
+	// handler ever sees the username, so the failure is on the
+	// decode step (not on a SCRAM-style username-tag parse).
 	let out = text(&session.auth_response("!!!not-base64"));
 	assert!(out.contains("a NO"), "{out}");
 }
@@ -235,45 +239,4 @@ fn authenticate_external_rejects_mismatched_authzid() {
 	let authzid = B64.encode("bob@example.org");
 	let out = text(&session.command_line(&format!("b AUTHENTICATE EXTERNAL {authzid}")));
 	assert!(out.contains("b NO"), "{out}");
-}
-
-/// An IMAP LOGIN attempt routes through the directory's
-/// `authenticate_with_ip` with the peer IP the network layer recorded
-/// on `set_peer_ip`. The test sets up a [`FakeBanStore`], drives LOGIN
-/// with a wrong password, and asserts the fake recorded a
-/// `record_failure` call keyed on `ip:<peer>`; the subject the
-/// directory builds for the peer IP. The directory is the only place
-/// that builds `ip:<peer>` strings, so a count of one on the right
-/// subject is the proof the peer IP reached the ban path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn imap_login_records_the_peer_ip() {
-	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
-
-	let tmp = tempfile::tempdir().expect("tempdir");
-	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let peer: std::net::IpAddr = "203.0.113.20".parse().expect("peer");
-	let mut session = Session::new(
-		"mail.example.org",
-		tmp.path().to_path_buf(),
-		directory_with_ban_store(ban_store.clone()),
-	);
-	// The network layer sets the peer IP before the command loop runs.
-	session.set_peer_ip(Some(peer));
-	let out = text(&session.command_line("a LOGIN alice wrong"));
-	assert!(out.contains("a NO"), "{out}");
-
-	assert!(
-		ban_store.call_count("record_failure") >= 2,
-		"ban store recorded {} failure(s); expected at least two (IP and account)",
-		ban_store.call_count("record_failure")
-	);
-	assert!(
-		ban_store.failure_count("ip:203.0.113.20", 0) >= 1,
-		"ban store did not record a failure for ip:203.0.113.20"
-	);
-	assert!(
-		ban_store.failure_count("account:alice", 0) >= 1,
-		"ban store did not record a failure for account:alice"
-	);
 }
