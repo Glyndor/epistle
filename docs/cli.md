@@ -24,7 +24,8 @@ an escape sequence or spinner frame were ever written there, so they are pinned 
 
 | Command | stdout payload |
 |---|---|
-| `epistle backup` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). |
+| `epistle backup` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). The `pg_dump` is taken inside the `db` service with `podup exec -T db pg_dump` when `<data_dir>/compose/compose.yaml` exists, and through the host `pg_dump` otherwise. |
+| `epistle restore` | Replay a backup tar.gz (read from stdin) over `data_dir` and, when a database is configured, into the database. Reads the archive from stdin; a configured database that cannot be loaded is a hard error. |
 | `epistle export --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
 | `epistle storage-keygen` | A single base64 32-byte at-rest key. |
 | `epistle oauth-keygen` | A PKCS#8 ES256 private key plus the matching public point. |
@@ -118,6 +119,40 @@ Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks
 disabled with `stack down` stay disabled until `stack up`.
+
+## Backup and restore
+
+`epistle backup --config F` writes a gzip-compressed tar to stdout
+(the same archive the `Backup` table at the top of this document
+describes) and `epistle restore --config F` replays one back onto
+the data directory. Both detect the container stack by looking for
+`<data_dir>/compose/compose.yaml` and route the database work
+through `podup exec -T db` in that case, so the same command line
+works on the host and inside the container deployment:
+
+- **host** (no compose file): the host `pg_dump`/`psql` is invoked
+  directly. The password reaches the child through the `PGPASSWORD`
+  environment variable (read from `[database] url` or `[database]
+  password_file`), never through argv, so the secret is never visible
+  through `/proc/<pid>/cmdline`. A missing or empty `password_file`,
+  a non-zero exit, or empty output is a hard error: the run exits
+  non-zero with a one-line stderr message that names the cause.
+- **container** (compose file present): the dump runs through
+  `podup -f <compose> exec -T db sh -c <script>`. Restore copies the SQL
+  with `podup cp <host> db:/tmp/epistle-restore.sql`, then runs `psql`
+  through the same container shell with `-v ON_ERROR_STOP=1 -1 -X -f
+  /tmp/epistle-restore.sql`. Each script reads
+  `/run/secrets/epistle_db_password` into `PGPASSWORD` inside `db`
+  before executing the client. `POSTGRES_PASSWORD_FILE` is read by
+  the image entrypoint during initialization, not by libpq. The host
+  argv contains the shell script and secret path, never the password
+  value, and the host process does not load the password. Restore
+  stops at the first SQL error and rolls back the single transaction.
+
+`podup exec` does not forward stdin (measured against `podup 5.10.13`),
+which is why the restore path uses `podup cp` to land the SQL file
+inside the `db` container rather than `psql < archive.sql`. The temp
+file on the host is created in `$TMPDIR` and removed after the copy.
 
 ## `epistle mta-sts-serve`
 

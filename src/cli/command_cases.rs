@@ -21,6 +21,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["export", "--account", "alice"], true),
 	(&["import", "--account", "alice"], true),
 	(&["backup"], true),
+	(&["restore"], true),
 	(&["verify"], true),
 	(&["verify-dns"], true),
 	(&["dns-records"], true),

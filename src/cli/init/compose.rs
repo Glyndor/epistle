@@ -36,6 +36,13 @@ use crate::config::Listener;
 /// side moves, the other has to follow.
 pub(super) const POSTGRES_18_IMAGE: &str = "docker.io/library/postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941";
 
+/// The fixed role created by the database image entrypoint.
+pub(crate) const DATABASE_USER: &str = "epistle";
+/// The fixed database created by the database image entrypoint.
+pub(crate) const DATABASE_NAME: &str = "epistle";
+/// The database password secret mounted inside the db service.
+pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_password";
+
 /// The mode of the database secret. podup reads a JSON number as
 /// the octal mode, so the byte written here must be the decimal
 /// value whose octal representation is the desired mode. `0o400`
@@ -72,8 +79,11 @@ pub(super) fn db_password_path(data_dir: &Path) -> PathBuf {
 	compose_secrets_dir(data_dir).join("epistle_db_password")
 }
 
-/// The path the compose file lives at.
-pub(super) fn compose_file_path(data_dir: &Path) -> PathBuf {
+/// The path the compose file lives at. `pub` so the sibling `backup`
+/// module can ask "is the container stack present?" without reaching
+/// into `init`'s private surface; the rest of the helpers stay
+/// module-private.
+pub fn compose_file_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("compose").join("compose.yaml")
 }
 
