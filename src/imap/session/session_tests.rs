@@ -125,3 +125,6 @@ mod fetch_aliases;
 
 #[path = "session_tests_fetch_edges.rs"]
 mod fetch_edges;
+
+#[path = "session_tests_fetch_depth.rs"]
+mod fetch_depth;

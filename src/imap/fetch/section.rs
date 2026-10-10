@@ -16,14 +16,26 @@ pub(in crate::imap) fn render_label(
 	section: &FetchSection,
 	label: &str,
 ) -> Result<Vec<u8>, ()> {
-	let Some((mut owner, mut part)) = select(message, &section.path) else {
-		return Ok(format!("{label} NIL").into_bytes());
+	if section.path.len() > super::MAX_DEPTH {
+		return Ok(empty(section, label));
+	}
+	let Selected {
+		mut owner,
+		mut part,
+		depth,
+	} = match select(message, &section.path) {
+		Ok(selected) => selected,
+		Err(SelectError::TooDeep) => return Ok(empty(section, label)),
+		Err(SelectError::Missing) => return Ok(format!("{label} NIL").into_bytes()),
 	};
 	if !section.path.is_empty()
 		&& matches!(
 			section.kind,
 			SectionKind::Header | SectionKind::Text | SectionKind::Fields { .. }
 		) {
+		if depth >= super::MAX_DEPTH {
+			return Ok(empty(section, label));
+		}
 		let PartType::Message(nested) = &part.body else {
 			return Ok(format!("{label} NIL").into_bytes());
 		};
@@ -102,27 +114,60 @@ pub(super) fn decoded(message: &Message<'_>, part: &MessagePart<'_>) -> Result<V
 	}
 }
 
-fn select<'a>(
-	message: &'a Message<'a>,
-	path: &[u32],
-) -> Option<(&'a Message<'a>, &'a MessagePart<'a>)> {
+fn empty(section: &FetchSection, label: &str) -> Vec<u8> {
+	if section.size {
+		format!("{label} 0").into_bytes()
+	} else {
+		format!("{label} {{0}}\r\n").into_bytes()
+	}
+}
+
+struct Selected<'a> {
+	owner: &'a Message<'a>,
+	part: &'a MessagePart<'a>,
+	depth: usize,
+}
+
+enum SelectError {
+	Missing,
+	TooDeep,
+}
+
+fn select<'a>(message: &'a Message<'a>, path: &[u32]) -> Result<Selected<'a>, SelectError> {
 	let mut owner = message;
-	let mut part = owner.parts.first()?;
+	let mut part = owner.parts.first().ok_or(SelectError::Missing)?;
+	let mut mime_depth = 0;
 	for (depth, number) in path.iter().enumerate() {
 		let mut entered_message = false;
 		if depth > 0
 			&& let PartType::Message(nested) = &part.body
 		{
+			mime_depth += 1;
+			if mime_depth > super::MAX_DEPTH {
+				return Err(SelectError::TooDeep);
+			}
 			owner = nested;
-			part = owner.parts.first()?;
+			part = owner.parts.first().ok_or(SelectError::Missing)?;
 			entered_message = true;
 		}
 		if let PartType::Multipart(children) = &part.body {
-			let id = children.get(usize::try_from(*number).ok()?.checked_sub(1)?)?;
-			part = owner.parts.get(*id as usize)?;
+			mime_depth += 1;
+			if mime_depth > super::MAX_DEPTH {
+				return Err(SelectError::TooDeep);
+			}
+			let index = usize::try_from(*number)
+				.ok()
+				.and_then(|number| number.checked_sub(1))
+				.ok_or(SelectError::Missing)?;
+			let id = children.get(index).ok_or(SelectError::Missing)?;
+			part = owner.parts.get(*id as usize).ok_or(SelectError::Missing)?;
 		} else if *number != 1 || (depth != 0 && !entered_message) {
-			return None;
+			return Err(SelectError::Missing);
 		}
 	}
-	Some((owner, part))
+	Ok(Selected {
+		owner,
+		part,
+		depth: mime_depth,
+	})
 }

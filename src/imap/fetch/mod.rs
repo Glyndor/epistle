@@ -6,8 +6,36 @@ pub(super) mod section;
 
 use mail_parser::{HeaderName, Message, MessageParser, MessagePart};
 
-pub(super) fn parse(raw: &[u8]) -> Message<'_> {
-	MessageParser::default()
+// Count MIME edges from the root, including encapsulated message roots.
+pub(super) const MAX_DEPTH: usize = 64;
+
+pub(super) struct ParsedMessage<'a> {
+	message: Message<'a>,
+}
+
+impl<'a> std::ops::Deref for ParsedMessage<'a> {
+	type Target = Message<'a>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.message
+	}
+}
+
+impl Drop for ParsedMessage<'_> {
+	fn drop(&mut self) {
+		// mail-parser builds unbounded unencoded message trees. Detach children
+		// before dropping parents so cleanup cannot overflow the IMAP stack.
+		let mut pending = std::mem::take(&mut self.message.parts);
+		while let Some(part) = pending.pop() {
+			if let mail_parser::PartType::Message(mut nested) = part.body {
+				pending.append(&mut nested.parts);
+			}
+		}
+	}
+}
+
+pub(super) fn parse(raw: &[u8]) -> ParsedMessage<'_> {
+	let message = MessageParser::default()
 		.parse(raw)
 		.unwrap_or_else(|| Message {
 			raw_message: raw.into(),
@@ -17,7 +45,8 @@ pub(super) fn parse(raw: &[u8]) -> Message<'_> {
 				..Default::default()
 			}],
 			..Default::default()
-		})
+		});
+	ParsedMessage { message }
 }
 
 pub(super) fn raw_header<'a>(
