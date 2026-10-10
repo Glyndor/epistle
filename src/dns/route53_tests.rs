@@ -42,18 +42,18 @@ fn timestamps_format_utc() {
 }
 
 #[derive(Default)]
-struct MockState {
-	bodies: Vec<String>,
-	auth: Option<String>,
+pub(super) struct MockState {
+	pub(super) bodies: Vec<String>,
+	pub(super) auth: Option<String>,
 	/// Preloaded response for the LIST endpoint; when `None`, the
 	/// mock returns an empty resource record set list.
-	list_response: Option<String>,
+	pub(super) list_response: Option<String>,
 }
 
-type Shared = Arc<Mutex<MockState>>;
+pub(super) type Shared = Arc<Mutex<MockState>>;
 
-const TOKEN_A: &str = "token-aaaa";
-const TOKEN_B: &str = "token-bbbb";
+pub(super) const TOKEN_A: &str = "token-aaaa";
+pub(super) const TOKEN_B: &str = "token-bbbb";
 
 async fn change(
 	State(state): State<Shared>,
@@ -88,7 +88,7 @@ async fn list_rrsets(
 		.expect("build list response")
 }
 
-async fn mock() -> (Route53Provider, Shared) {
+pub(super) async fn mock() -> (Route53Provider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState::default()));
 	let app = Router::new()
 		.route(

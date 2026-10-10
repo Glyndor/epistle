@@ -8,6 +8,7 @@ use std::pin::Pin;
 use serde::Deserialize;
 
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::records::txt_strings;
 
 /// deSEC's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://desec.io/api/v1";
@@ -79,12 +80,31 @@ impl DesecProvider {
 			.to_string()
 	}
 
-	/// deSEC stores TXT content quoted; other kinds use the value verbatim.
-	fn record_content(kind: RecordKind, value: &str) -> String {
+	/// deSEC stores TXT content as an array of quoted character strings
+	/// (RFC 1035 §3.3.14), each at most 255 octets; other kinds use the
+	/// value verbatim. A long value (an RSA-2048 DKIM `p=` runs ~410
+	/// bytes, an RSA-4096 ~755) has to be split into ≤255-octet
+	/// character-strings. But several entries would be several TXT
+	/// records — a single rrset only stitches the character-strings
+	/// into one logical value when they all belong to a single
+	/// records entry. The wire form is one entry carrying the quoted
+	/// pieces separated by single spaces. The per-piece backslash
+	/// and quote escaping is applied to the chunk so a mid-chunk
+	/// `\"` does not bleed across the boundary. Resolvers concatenate
+	/// the pieces back into one logical value on read.
+	fn record_content(kind: RecordKind, value: &str) -> Vec<String> {
 		if kind == RecordKind::Txt {
-			format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+			let joined = txt_strings(value)
+				.into_iter()
+				.map(|piece| {
+					let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
+					format!("\"{escaped}\"")
+				})
+				.collect::<Vec<_>>()
+				.join(" ");
+			vec![joined]
 		} else {
-			value.to_string()
+			vec![value.to_string()]
 		}
 	}
 
@@ -181,7 +201,7 @@ impl DnsProvider for DesecProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(async move {
 			let content = Self::record_content(record.kind, &record.value);
-			self.put_rrset(&record, vec![content]).await
+			self.put_rrset(&record, content).await
 		})
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
@@ -200,8 +220,17 @@ impl DnsProvider for DesecProvider {
 			// the live rrset, removes the matching record, and
 			// PUTs the remainder (or an empty list when the rrset
 			// is fully gone).
+			//
+			// Long TXT values are stored as one records entry with
+			// the joined character-strings form, so the needle is
+			// the same joined form on both the upsert and the
+			// listing. The matching compares the joined value
+			// verbatim against the records deSEC lists back.
 			if record.kind == RecordKind::Txt && !record_value.is_empty() {
-				let target = Self::record_content(RecordKind::Txt, &record_value);
+				let target = Self::record_content(RecordKind::Txt, &record_value)
+					.into_iter()
+					.next()
+					.expect("TXT always produces one joined record");
 				let remainder: Vec<String> = match self.fetch_rrset(&record.name, kind).await? {
 					Some(rrset) => rrset.records.into_iter().filter(|r| r != &target).collect(),
 					None => return Ok(()),
