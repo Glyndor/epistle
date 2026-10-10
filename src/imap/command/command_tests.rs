@@ -43,6 +43,7 @@ fn parses_list_and_select() {
 			pattern: "*".into(),
 			return_status: Vec::new(),
 			select_subscribed: false,
+			select_special_use: false,
 			return_attributes: Vec::new(),
 		}
 	);

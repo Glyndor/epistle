@@ -92,6 +92,8 @@ pub enum Command {
 		return_status: Vec<StatusItem>,
 		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
 		select_subscribed: bool,
+		/// `(SPECIAL-USE)` selection: list only mailboxes with a role (RFC 6154).
+		select_special_use: bool,
 		/// Mailbox attributes explicitly requested by selection or RETURN.
 		return_attributes: Vec<ListAttribute>,
 	},

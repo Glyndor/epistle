@@ -7,6 +7,7 @@ pub(super) fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let mut return_attributes = Vec::new();
 	let mut select_subscribed = false;
+	let mut select_special_use = false;
 	let args = args.trim_start();
 	let args = if let Some(after) = args.strip_prefix('(') {
 		let close = after.find(')').ok_or_else(bad)?;
@@ -17,6 +18,10 @@ pub(super) fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 					return_attributes.push(ListAttribute::Subscribed);
 				}
 				"CHILDREN" => return_attributes.push(ListAttribute::Children),
+				"SPECIAL-USE" => {
+					select_special_use = true;
+					return_attributes.push(ListAttribute::SpecialUse);
+				}
 				_ => return Err(bad()),
 			}
 		}
@@ -39,6 +44,7 @@ pub(super) fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
 		pattern,
 		return_status,
 		select_subscribed,
+		select_special_use,
 		return_attributes,
 	})
 }
