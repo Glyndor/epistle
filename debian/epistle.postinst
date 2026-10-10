@@ -31,6 +31,11 @@ configure)
 			/var/lib/glyndor/epistle
 	fi
 
+	if [ ! -e /var/lib/glyndor/epistle/data ] && [ ! -L /var/lib/glyndor/epistle/data ]; then
+		install -d -m 0700 -o glyndor-epistle -g glyndor-epistle \
+			/var/lib/glyndor/epistle/data
+	fi
+
 	if [ ! -e /etc/epistle ]; then
 		install -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle
 	fi
@@ -81,9 +86,9 @@ configure)
 	fi
 
 	# 5. The port floor shipped in /usr/lib/sysctl.d/30-glyndor-epistle.conf.
-	if [ -w /proc/sys ] && command -v sysctl >/dev/null 2>&1; then
-		if ! sysctl --system >/dev/null; then
-			echo "epistle: sysctl --system failed, so the unprivileged port floor may still be above 25; epistle init will check it" >&2
+	if [ -w /proc/sys/net/ipv4/ip_unprivileged_port_start ] && command -v sysctl >/dev/null 2>&1; then
+		if ! sysctl -p /usr/lib/sysctl.d/30-glyndor-epistle.conf >/dev/null; then
+			echo "epistle: sysctl -p /usr/lib/sysctl.d/30-glyndor-epistle.conf failed, so the unprivileged port floor may still be above 25; epistle init will check it" >&2
 		fi
 	else
 		echo "epistle: could not apply /usr/lib/sysctl.d/30-glyndor-epistle.conf; epistle init will check the unprivileged port floor" >&2

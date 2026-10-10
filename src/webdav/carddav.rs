@@ -160,6 +160,12 @@ async fn collect_cards(root: &Path, collection: &Path, entries: &mut Vec<Card>) 
 		return;
 	};
 	while let Ok(Some(child)) = dir.next_entry().await {
+		let Ok(kind) = child.file_type().await else {
+			continue;
+		};
+		if !crate::util::fs_walk::allowed(&child.path(), kind) {
+			continue;
+		}
 		let name = child.file_name();
 		let name = name.to_string_lossy();
 		if !is_vcard_path(&name) {

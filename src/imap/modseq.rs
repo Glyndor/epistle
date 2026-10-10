@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 /// A message's stored mod-sequence, or 1 when none has been recorded.
 pub(super) fn read_message(account_dir: &Path, id: Uuid) -> u64 {
-	std::fs::read_to_string(account_dir.join(format!("{id}.modseq")))
+	crate::util::fs_walk::read_to_string(account_dir.join(format!("{id}.modseq")))
 		.ok()
 		.and_then(|s| s.trim().parse().ok())
 		.unwrap_or(1)
@@ -24,7 +24,7 @@ pub(super) fn write_message(account_dir: &Path, id: Uuid, modseq: u64) -> std::i
 
 /// The mailbox mod-sequence counter (`.modseqctr`), 1 when absent.
 pub(super) fn read_counter(account_dir: &Path) -> u64 {
-	std::fs::read_to_string(account_dir.join(".modseqctr"))
+	crate::util::fs_walk::read_to_string(account_dir.join(".modseqctr"))
 		.ok()
 		.and_then(|s| s.trim().parse().ok())
 		.unwrap_or(1)

@@ -502,13 +502,13 @@ async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
 		let mut dir = tokio::fs::read_dir(&from).await?;
 		while let Some(child) = dir.next_entry().await? {
 			let file_type = child.file_type().await?;
-			if file_type.is_symlink() {
+			if !crate::util::fs_walk::allowed(&child.path(), file_type) {
 				continue;
 			}
 			let child_to = to.join(child.file_name());
 			if file_type.is_dir() {
 				stack.push((child.path(), child_to));
-			} else {
+			} else if file_type.is_file() {
 				tokio::fs::copy(child.path(), &child_to).await?;
 			}
 		}

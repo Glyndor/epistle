@@ -17,6 +17,7 @@ pub(super) fn run(
 	crypto: &MessageCrypto,
 	out: &mut impl Write,
 ) -> ExitCode {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut count = 0u64;
 	for name in mailbox::list(data_dir, account) {
 		let Ok(snapshot) = Snapshot::open(data_dir, account, &name, crypto) else {
@@ -50,6 +51,7 @@ pub(super) fn run_maildir(
 	crypto: &MessageCrypto,
 	dir: &Path,
 ) -> ExitCode {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut count = 0u64;
 	for name in mailbox::list(data_dir, account) {
 		let folder = if name.eq_ignore_ascii_case("INBOX") {

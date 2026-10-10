@@ -135,7 +135,7 @@ pub(crate) fn walk(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 /// is refused even when its name fits, because what it points at is not
 /// something this module wrote either.
 fn shards_in(dir: &Path) -> Vec<Shard> {
-	let Ok(entries) = std::fs::read_dir(dir) else {
+	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
 		return Vec::new();
 	};
 	let mut present = [false; 256];
@@ -163,7 +163,7 @@ fn shards_in(dir: &Path) -> Vec<Shard> {
 /// not written by us. The path returned is `dir` joined with that
 /// rendering, not the entry's own path.
 fn collect(dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
-	let Ok(entries) = std::fs::read_dir(dir) else {
+	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
 		return;
 	};
 	for entry in entries.flatten() {

@@ -23,10 +23,13 @@ pub(super) fn scan_mailbox(
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Vec<MessageRef>> {
 	let mut ids: Vec<Uuid> = Vec::new();
-	match std::fs::read_dir(account_dir) {
+	match crate::util::fs_walk::read_dir(account_dir) {
 		Ok(entries) => {
 			for entry in entries {
 				let entry = entry?;
+				if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+					continue;
+				}
 				let name = entry.file_name();
 				let Some(name) = name.to_str() else { continue };
 				if let Some(stem) = name.strip_suffix(".eml")

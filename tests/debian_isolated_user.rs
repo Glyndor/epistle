@@ -280,3 +280,9 @@ mod stack_service_docs;
 
 #[path = "debian/socket.rs"]
 mod socket;
+
+#[path = "debian/data_layout.rs"]
+mod data_layout;
+
+#[path = "debian/sysctl.rs"]
+mod sysctl;

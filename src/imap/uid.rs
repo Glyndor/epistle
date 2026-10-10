@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 /// The UID persisted for `id`, or `None` if it has not been assigned yet.
 pub(super) fn read_message(account_dir: &Path, id: Uuid) -> Option<u32> {
-	std::fs::read_to_string(account_dir.join(format!("{id}.uid")))
+	crate::util::fs_walk::read_to_string(account_dir.join(format!("{id}.uid")))
 		.ok()
 		.and_then(|text| text.trim().parse().ok())
 }
@@ -24,7 +24,7 @@ pub(super) fn write_message(account_dir: &Path, id: Uuid, uid: u32) -> std::io::
 
 /// The mailbox UID counter (`.uidnext`), 0 when absent (no UID assigned yet).
 pub(super) fn read_counter(account_dir: &Path) -> u32 {
-	std::fs::read_to_string(account_dir.join(".uidnext"))
+	crate::util::fs_walk::read_to_string(account_dir.join(".uidnext"))
 		.ok()
 		.and_then(|text| text.trim().parse().ok())
 		.unwrap_or(0)
