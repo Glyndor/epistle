@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
@@ -25,8 +25,9 @@ use super::store::ScriptStore;
 const READ_BUFFER: usize = 4096;
 /// Idle timeout before the connection is dropped (30 minutes).
 const TIMEOUT: Duration = Duration::from_secs(1800);
-/// The largest script literal accepted, guarding against memory exhaustion.
-const MAX_LITERAL: usize = 1 << 20;
+/// Default maximum script literal size (1 MiB). Configurable per server
+/// so the test suite can drive a small bound.
+const DEFAULT_MAX_LITERAL: usize = 1 << 20;
 /// Default max concurrent connections for a ManageSieve listener.
 const MAX_CONNECTIONS: usize = 100;
 
@@ -66,6 +67,7 @@ pub struct Server {
 	accounts_root: PathBuf,
 	tls: TlsAcceptor,
 	max_connections: usize,
+	max_literal: usize,
 }
 
 impl Server {
@@ -76,6 +78,7 @@ impl Server {
 			accounts_root: data_dir.join("accounts"),
 			tls,
 			max_connections: MAX_CONNECTIONS,
+			max_literal: DEFAULT_MAX_LITERAL,
 		}
 	}
 
@@ -83,6 +86,16 @@ impl Server {
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {
 			self.max_connections = max;
+		}
+		self
+	}
+
+	/// Set the maximum script literal size accepted by this server.
+	/// `0` keeps the default of 1 MiB; tests use a small bound so they
+	/// can drive a "too large" rejection without sending megabytes.
+	pub fn with_max_literal(mut self, max: usize) -> Self {
+		if max > 0 {
+			self.max_literal = max;
 		}
 		self
 	}
@@ -111,7 +124,32 @@ impl Server {
 		}
 	}
 
-	async fn handle(&self, stream: TcpStream, peer_ip: std::net::IpAddr) -> std::io::Result<()> {
+async fn handle(
+		&self,
+		stream: tokio::net::TcpStream,
+		peer_ip: std::net::IpAddr,
+	) -> std::io::Result<()> {
+		self.handle_inner(stream, peer_ip).await
+	}
+
+	/// Drive one connection from the command loop, given any bidirectional
+	/// stream. Public so the test suite can drive it with an in-memory
+	/// `tokio::io::duplex` pair without going through a real listener.
+	pub async fn handle_stream<S>(&self, stream: S) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
+		self.handle_inner(
+			stream,
+			std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+		)
+		.await
+	}
+
+	async fn handle_inner<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
 		let backend = DirectoryBackend {
 			directory: self.directory.clone(),
 			accounts_root: self.accounts_root.clone(),
@@ -143,7 +181,28 @@ impl Server {
 
 			// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
 			let literal = match command::trailing_literal(&line) {
-				Some(literal) if literal.len > MAX_LITERAL => {
+				Some(literal) if literal.len > self.max_literal => {
+					// The size limit is a server-side choice, not a syntax
+					// problem; the literal stays the client's choice of
+					// bytes. Drain them so a non-synchronizing literal
+					// (the `{N+}` form, where the client has already sent
+					// the bytes) does not arrive as the next command line.
+					if !literal.synchronizing {
+						let mut drained = decoder.take_buffered(literal.len);
+						while drained.len() < literal.len {
+							let read = stream.read(&mut buffer).await?;
+							if read == 0 {
+								return Ok(());
+							}
+							let needed = literal.len - drained.len();
+							if read <= needed {
+								drained.extend_from_slice(&buffer[..read]);
+							} else {
+								drained.extend_from_slice(&buffer[..needed]);
+								decoder.feed(&buffer[needed..read]);
+							}
+						}
+					}
 					write(&mut stream, &Response::No(Some("Script too large.".into()))).await?;
 					continue;
 				}
@@ -234,3 +293,7 @@ async fn write(stream: &mut Box<dyn Connection>, response: &Response) -> std::io
 /// A boxable bidirectional stream (plain or TLS).
 trait Connection: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
+
+#[cfg(test)]
+#[path = "server_tests_literals.rs"]
+mod tests_literals;
