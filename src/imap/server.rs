@@ -314,6 +314,19 @@ impl Server {
 				continue;
 			};
 
+			let announcement = line.split_once(' ').and_then(|(_, command)| {
+				let command = match command.split_once(' ') {
+					Some((verb, rest)) if verb.eq_ignore_ascii_case("UID") => rest,
+					_ => command,
+				};
+				super::command::literal_announcement_in_line(command)
+			});
+			if announcement.is_some_and(|literal| literal.size > super::command::MAX_APPEND_SIZE) {
+				stream.write_all(b"* BYE literal too large\r\n").await?;
+				stream.flush().await?;
+				return Ok(());
+			}
+
 			let mut output = session.command_line(&line);
 			// Abuse guard: drop a client that only produces BAD responses.
 			if is_bad_response(&output.bytes) {
@@ -340,20 +353,17 @@ impl Server {
 					// rejection has already been written; nothing more
 					// follows, so return to the command loop instead of
 					// rewriting the same response.
-					let mut discarded = decoder.take_buffered(size);
-					let mut chunk = [0u8; 4096];
-					while discarded.len() < size {
-						let read = stream.read(&mut chunk).await?;
-						if read == 0 {
+					match discard::literal(&mut *stream, &mut decoder, size, self.read_timeout)
+						.await
+					{
+						Ok(drained) if drained.complete => {}
+						Ok(_) => return Ok(()),
+						Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+							stream.write_all(b"* BYE read timeout\r\n").await?;
+							stream.flush().await?;
 							return Ok(());
 						}
-						let needed = size - discarded.len();
-						if read <= needed {
-							discarded.extend_from_slice(&chunk[..read]);
-						} else {
-							discarded.extend_from_slice(&chunk[..needed]);
-							decoder.feed(&chunk[needed..read]);
-						}
+						Err(error) => return Err(error),
 					}
 					break;
 				}
@@ -555,3 +565,10 @@ mod tests_compress;
 #[cfg(test)]
 #[path = "server_tests_literals.rs"]
 mod tests_literals;
+
+#[path = "server_discard.rs"]
+mod discard;
+
+#[cfg(test)]
+#[path = "server_tests_discard.rs"]
+mod tests_discard;

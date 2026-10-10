@@ -669,6 +669,7 @@ mod select_params;
 
 pub(super) use literal::literal_announcement_in_line;
 
+pub(super) use parse::MAX_APPEND_SIZE;
 pub use parse::parse;
 
 #[cfg(test)]
