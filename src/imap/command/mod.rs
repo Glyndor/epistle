@@ -13,6 +13,17 @@ pub struct Tagged {
 	pub command: Command,
 }
 
+/// An optional mailbox attribute requested through LIST-EXTENDED.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListAttribute {
+	/// Subscription state (RFC 5258).
+	Subscribed,
+	/// Child state (RFC 3348).
+	Children,
+	/// Special-use role (RFC 6154).
+	SpecialUse,
+}
+
 /// An IMAP command, parsed from a single client line. Variants correspond
 /// one-to-one with the commands RFC 9051 and its extensions (CONDSTORE,
 /// QRESYNC, LIST-EXTENDED, ACL, METADATA, NOTIFY, etc.) accept.
@@ -67,6 +78,8 @@ pub enum Command {
 		return_status: Vec<StatusItem>,
 		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
 		select_subscribed: bool,
+		/// Mailbox attributes explicitly requested by selection or RETURN.
+		return_attributes: Vec<ListAttribute>,
 	},
 	/// `SELECT <mailbox>`: open the mailbox read-write. `(QRESYNC (...))`
 	/// resyncs from a previous session (RFC 7162).
@@ -624,6 +637,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 }
 
 mod acl;
+mod list;
 mod literal;
 mod metadata;
 mod notify;

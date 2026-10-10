@@ -126,8 +126,15 @@ impl Session {
 				pattern,
 				return_status,
 				select_subscribed,
+				return_attributes,
 				..
-			} => self.list(&tag, &pattern, &return_status, select_subscribed),
+			} => self.list(
+				&tag,
+				&pattern,
+				&return_status,
+				select_subscribed,
+				&return_attributes,
+			),
 			Command::Select { mailbox, qresync } => self.select(&tag, &mailbox, false, qresync),
 			Command::Examine { mailbox, qresync } => self.select(&tag, &mailbox, true, qresync),
 			Command::Close => self.close(&tag),
