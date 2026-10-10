@@ -4,5 +4,5 @@ mod dns;
 mod evaluator;
 mod record;
 
-pub use dns::{DnsFailure, DnsLookup, SystemDns};
+pub use dns::{DnsFailure, DnsLookup, SystemDns, system_resolver};
 pub use evaluator::{SpfOutcome, check_host};
