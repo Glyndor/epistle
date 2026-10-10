@@ -201,7 +201,7 @@ pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) 
 				Err(_) => jmap_scope_error(&call_id),
 			},
 			"Email/copy" => match state.require_scope(auth, Scope::Write) {
-				Ok(()) => email::email_copy(state, &args, &call_id),
+				Ok(()) => email::email_copy(state, auth, &args, &call_id),
 				Err(_) => jmap_scope_error(&call_id),
 			},
 			"EmailSubmission/set" => match state.require_scope(auth, Scope::Send) {

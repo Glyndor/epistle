@@ -391,7 +391,7 @@ async fn jmap_email_copy_duplicates_to_mailbox() {
 	let req = serde_json::json!({
 		"methodCalls": [["Email/copy", {
 			"accountId": "alice", "fromAccountId": "alice",
-			"create": { "k": {"emailId": id.to_string(), "mailboxIds": {"Saved": true}} },
+			"create": { "k": {"id": id.to_string(), "mailboxIds": {"Saved": true}} },
 		}, "c1"]],
 	});
 	let (status, body) =
