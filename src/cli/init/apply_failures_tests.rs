@@ -43,6 +43,7 @@ pub(super) fn apply_error_name(error: &ApplyError) -> &'static str {
 		ApplyError::ConfigNotAFile(_) => "ConfigNotAFile",
 		ApplyError::RsaKeygen(_) => "RsaKeygen",
 		ApplyError::Rng(_) => "Rng",
+		ApplyError::ExistingSecretUnreadable(..) => "ExistingSecretUnreadable",
 	}
 }
 
