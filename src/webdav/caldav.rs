@@ -123,7 +123,9 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 		ReportKind::Multiget => {
 			let mut entries = Vec::new();
 			for href in hrefs(&text) {
-				if let Some(resolved) = path::resolve(root, &href) {
+				if let Some(resolved) = path::resolve(root, &href)
+					&& path::confine_existing(&resolved, root)
+				{
 					push_event(&mut entries, &href, &resolved).await;
 				}
 			}
@@ -180,7 +182,8 @@ pub async fn outbox_post(account_root: &Path, body: &[u8]) -> Response {
 /// Collect every calendar collection directory beneath `root` (one level of
 /// nesting is enough for the conventional `/home/<calendar>/` layout, but we
 /// also include `root` itself if it is a calendar). The Outbox free-busy lookup
-/// scans them all so it reflects the account's whole schedule.
+/// scans them all so it reflects the account's whole schedule. Children that
+/// are themselves symlinks (planted escapes) are skipped.
 async fn calendar_dirs(root: &Path) -> Vec<std::path::PathBuf> {
 	let mut out = Vec::new();
 	if is_calendar(root) {
@@ -189,6 +192,11 @@ async fn calendar_dirs(root: &Path) -> Vec<std::path::PathBuf> {
 	if let Ok(mut dir) = tokio::fs::read_dir(root).await {
 		while let Ok(Some(child)) = dir.next_entry().await {
 			let path = child.path();
+			if let Ok(meta) = std::fs::symlink_metadata(&path)
+				&& meta.file_type().is_symlink()
+			{
+				continue;
+			}
 			if is_calendar(&path) {
 				out.push(path);
 			}
@@ -203,6 +211,9 @@ type Period = (i64, i64);
 /// Scan every `.ics` in each calendar in `calendars`, expand each `VEVENT`'s
 /// recurrence over `[start, end)`, and return the busy periods (clamped to the
 /// window). Each occurrence contributes `[occurrence, occurrence + duration)`.
+/// Children that are themselves symlinks are skipped — they may have been
+/// planted in the user's tree, and following them would read events that
+/// belong to no account.
 async fn busy_periods(calendars: &[std::path::PathBuf], start: i64, end: i64) -> Vec<Period> {
 	let mut periods = Vec::new();
 	for calendar in calendars {
@@ -212,6 +223,11 @@ async fn busy_periods(calendars: &[std::path::PathBuf], start: i64, end: i64) ->
 		while let Ok(Some(child)) = dir.next_entry().await {
 			let name = child.file_name();
 			if !is_ics_path(&name.to_string_lossy()) {
+				continue;
+			}
+			if let Ok(sym) = std::fs::symlink_metadata(child.path())
+				&& sym.file_type().is_symlink()
+			{
 				continue;
 			}
 			if let Ok(data) = tokio::fs::read(child.path()).await {
@@ -447,7 +463,10 @@ async fn push_event(entries: &mut Vec<Event>, href: &str, disk: &Path) {
 	}
 }
 
-/// Append every `.ics` directly inside the `collection` directory to `entries`.
+/// Append every `.ics` directly inside the `collection` directory to
+/// `entries`. Children that are themselves symlinks are skipped — they may
+/// have been planted in the user's tree, and following them would read
+/// events that belong to no account.
 async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -456,6 +475,11 @@ async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {
 		let name = child.file_name();
 		let name = name.to_string_lossy();
 		if !is_ics_path(&name) {
+			continue;
+		}
+		if let Ok(sym) = std::fs::symlink_metadata(child.path())
+			&& sym.file_type().is_symlink()
+		{
 			continue;
 		}
 		let Ok(metadata) = child.metadata().await else {

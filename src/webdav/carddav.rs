@@ -109,7 +109,9 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	match kind {
 		ReportKind::Multiget => {
 			for href in hrefs(&text) {
-				if let Some(resolved) = path::resolve(root, &href) {
+				if let Some(resolved) = path::resolve(root, &href)
+					&& path::confine_existing(&resolved, root)
+				{
 					push_card(&mut entries, &href, &resolved).await;
 				}
 			}
@@ -150,7 +152,8 @@ async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
 
 /// Append every `.vcf` directly inside the `collection` directory to `entries`.
 /// The child href is the collection path plus the file name. A non-directory
-/// target yields nothing.
+/// target yields nothing. Children that are themselves symlinks (planted
+/// escapes) are skipped — their target may live outside the per-account root.
 async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -159,6 +162,11 @@ async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
 		let name = child.file_name();
 		let name = name.to_string_lossy();
 		if !is_vcard_path(&name) {
+			continue;
+		}
+		if let Ok(sym) = std::fs::symlink_metadata(child.path())
+			&& sym.file_type().is_symlink()
+		{
 			continue;
 		}
 		let Ok(metadata) = child.metadata().await else {

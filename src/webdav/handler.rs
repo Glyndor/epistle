@@ -42,6 +42,15 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	let Some(target) = path::resolve(&root, &uri_path) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	// A symlink anywhere along the path is an escape attempt: refuse before
+	// any I/O. Methods that read or operate on an existing target require
+	// the target's canonical form to fall under the canonical root, with no
+	// symlink in between; write-create methods require the parent's
+	// canonical form to be a real, symlink-free directory under the
+	// canonical root.
+	if !symlink_check_ok(&target, &root, request.method().as_str()) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 
 	match request.method().clone() {
 		Method::OPTIONS => options(),
@@ -51,6 +60,34 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 		Method::PUT => put(&target, request).await,
 		Method::DELETE => delete(&target).await,
 		method => dispatch_extension(method.as_str(), &root, &target, &uri_path, request).await,
+	}
+}
+
+/// Symlink refusal for the dispatch boundary. `GET`/`HEAD`/`DELETE`/
+/// `PROPFIND`/`REPORT`/`COPY` (source)/`MOVE` (source) all touch an
+/// existing target, so the canonical form must lie under the canonical root
+/// with no symlink in between. `PUT`/`MKCOL` create a target, so the
+/// parent must be a real, symlink-free directory under the canonical root.
+/// `POST` hits a virtual path (the Outbox, which may not exist on disk) so
+/// it uses the write-creating rule. `OPTIONS` answers from headers and never
+/// touches the filesystem; the lexical [`path::resolve`] it has already
+/// passed through covers the rest. Unknown methods (which become a `405`
+/// reply) do not need any filesystem access.
+///
+/// A missing target for a read method (e.g. `GET /missing.txt`) passes
+/// confinement as well: there is nothing to follow, so no escape to refuse.
+/// The handler still turns that into a `404` for the client.
+fn symlink_check_ok(target: &Path, root: &Path, method: &str) -> bool {
+	match method {
+		"PUT" | "MKCOL" | "POST" => path::confine_parent_for_write(target, root),
+		"OPTIONS" => true,
+		// Methods handled outside this enum ("PROPFIND", "MKCOL", "REPORT",
+		// "COPY", "MOVE") all touch an existing target. Anything else is a
+		// `405` reply without filesystem access, so skip the check.
+		"PROPFIND" | "REPORT" | "COPY" | "MOVE" | "GET" | "HEAD" | "DELETE" => {
+			path::confine_existing(target, root)
+		}
+		_ => true,
 	}
 }
 
@@ -187,6 +224,10 @@ fn content_type(target: &Path) -> &'static str {
 /// §9.7.1 — a `PUT` to a non-existent collection is `409 Conflict`). Returns
 /// `201` when the file is new, `204` when it replaced an existing one, each with
 /// the new resource's `ETag` so a CardDAV client can track the card.
+///
+/// If the target is an existing symlink (escape planted in the user's tree)
+/// the request is refused with `403` — `tokio::fs::write` would otherwise
+/// follow the link and rewrite the file it points at.
 async fn put(target: &Path, request: Request) -> Response {
 	if target.is_dir() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -196,6 +237,11 @@ async fn put(target: &Path, request: Request) -> Response {
 	};
 	if !parent.is_dir() {
 		return StatusCode::CONFLICT.into_response();
+	}
+	if let Ok(meta) = tokio::fs::symlink_metadata(target).await
+		&& meta.file_type().is_symlink()
+	{
+		return StatusCode::FORBIDDEN.into_response();
 	}
 	let existed = target.is_file();
 	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
@@ -251,7 +297,13 @@ async fn delete(target: &Path) -> Response {
 /// it). `addressbook` takes precedence if a body somehow names both. Success is
 /// `201`.
 async fn mkcol(target: &Path, request: Request) -> Response {
-	if target.exists() {
+	// Use `symlink_metadata` so a target that already exists as a symlink
+	// is detected without following the link; refusing here closes a
+	// symlink-to-outside edge the dispatch guard (write-creating method)
+	// does not check.
+	if let Some(meta) = tokio::fs::symlink_metadata(target).await.ok()
+		&& (meta.file_type().is_symlink() || meta.is_dir() || meta.is_file())
+	{
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
 	}
 	let Some(parent) = target.parent() else {
@@ -320,6 +372,18 @@ async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
 			let name = name.to_string_lossy();
 			// Hide the addressbook/calendar markers from listings — internal flags.
 			if name == carddav::MARKER || name == caldav::MARKER {
+				continue;
+			}
+			// Defence in depth: skip a child that is itself a symlink. The
+			// dispatch guard already refused a request whose path walked
+			// through a symlink, but a symlink at a directory entry (planted
+			// directly in the account tree) would still appear in the
+			// listing if we did not filter it here. `child.metadata()`
+			// follows the symlink, so we also check `symlink_metadata`.
+			let Ok(child_sym) = tokio::fs::symlink_metadata(child.path()).await else {
+				continue;
+			};
+			if child_sym.file_type().is_symlink() {
 				continue;
 			}
 			let Ok(child_meta) = child.metadata().await else {
@@ -407,32 +471,52 @@ fn display_name(uri_path: &str) -> String {
 /// destination crossing the account root is impossible — it is resolved through
 /// the same confinement as every other path.
 async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool) -> Response {
-	if !source.exists() {
-		return StatusCode::NOT_FOUND.into_response();
+	// Use `symlink_metadata` everywhere so the final-component symlink is not
+	// followed here; the dispatch-level guard above already confined the
+	// source path under `root` and refused any intermediate symlink.
+	let source_meta = match tokio::fs::symlink_metadata(source).await {
+		Ok(meta) => meta,
+		Err(_) => return StatusCode::NOT_FOUND.into_response(),
+	};
+	if source_meta.file_type().is_symlink() {
+		return StatusCode::FORBIDDEN.into_response();
 	}
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	// Confine the destination with the write-create rule (parent chain is
+	// symlink-free and under canonical root). If the destination exists
+	// already it has to be confined as well, both because the recursion may
+	// replace it and because it could itself be a symlink to outside.
+	if !path::confine_parent_for_write(&dest_path, root) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 	let overwrite = headers
 		.get("Overwrite")
 		.and_then(|value| value.to_str().ok())
 		.map(|value| !value.eq_ignore_ascii_case("F"))
 		.unwrap_or(true);
-	let existed = dest_path.exists();
-	if existed && !overwrite {
+	let dest_meta = tokio::fs::symlink_metadata(&dest_path).await.ok();
+	if dest_meta.is_some() && !overwrite {
 		return StatusCode::PRECONDITION_FAILED.into_response();
 	}
 	let Some(parent) = dest_path.parent() else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
-	if !parent.is_dir() {
+	let parent_meta = match tokio::fs::symlink_metadata(parent).await {
+		Ok(meta) => meta,
+		Err(_) => return StatusCode::CONFLICT.into_response(),
+	};
+	if parent_meta.file_type().is_symlink() || !parent_meta.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
-	if let Err(response) = perform_copy(source, &dest_path, existed).await {
+	let dest_was_dir = dest_meta.as_ref().map(|meta| meta.is_dir());
+	let dest_existed = dest_meta.is_some();
+	if let Err(response) = perform_copy(source, &dest_path, dest_was_dir).await {
 		return *response;
 	}
 	if remove {
-		let removal = if source.is_dir() {
+		let removal = if source_meta.is_dir() {
 			tokio::fs::remove_dir_all(source).await
 		} else {
 			tokio::fs::remove_file(source).await
@@ -441,7 +525,7 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 			return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 		}
 	}
-	if existed {
+	if dest_existed {
 		StatusCode::NO_CONTENT.into_response()
 	} else {
 		StatusCode::CREATED.into_response()
@@ -449,11 +533,20 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 }
 
 /// Copy `source` onto `dest`, replacing an existing destination first. A
-/// directory source is copied recursively. On error returns the response to
-/// send.
-async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), Box<Response>> {
-	if existed {
-		let removal = if dest.is_dir() {
+/// directory source is copied recursively; any child that is itself a
+/// symlink is skipped (we do not follow external links into the destination
+/// tree). On error returns the response to send.
+async fn perform_copy(
+	source: &Path,
+	dest: &Path,
+	dest_was_dir: Option<bool>,
+) -> Result<(), Box<Response>> {
+	if let Some(is_dir) = dest_was_dir {
+		// Remove the destination without ever following a symlink: we
+		// already know the destination's existence and kind from the
+		// `symlink_metadata` gathered by the caller, which never resolves
+		// the link.
+		let removal = if is_dir {
 			tokio::fs::remove_dir_all(dest).await
 		} else {
 			tokio::fs::remove_file(dest).await
@@ -471,14 +564,20 @@ async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), B
 }
 
 /// Recursively copy a directory tree (an iterative walk; no async recursion).
+/// Any child that is itself a symlink is skipped: we never follow the link
+/// into the destination tree.
 async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
 	let mut stack = vec![(source.to_path_buf(), dest.to_path_buf())];
 	while let Some((from, to)) = stack.pop() {
 		tokio::fs::create_dir_all(&to).await?;
 		let mut dir = tokio::fs::read_dir(&from).await?;
 		while let Some(child) = dir.next_entry().await? {
+			let file_type = child.file_type().await?;
+			if file_type.is_symlink() {
+				continue;
+			}
 			let child_to = to.join(child.file_name());
-			if child.file_type().await?.is_dir() {
+			if file_type.is_dir() {
 				stack.push((child.path(), child_to));
 			} else {
 				tokio::fs::copy(child.path(), &child_to).await?;
