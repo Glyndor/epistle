@@ -31,6 +31,10 @@ configure)
 			/var/lib/glyndor/epistle
 	fi
 
+	if [ ! -e /etc/epistle ]; then
+		install -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle
+	fi
+
 	# 2. The subordinate id ranges rootless Podman maps into its containers.
 	# Without them `podman` refuses to start a container as this user.
 	if ! grep -q '^glyndor-epistle:' /etc/subuid 2>/dev/null; then

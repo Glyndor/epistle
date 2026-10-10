@@ -232,3 +232,12 @@ fn control_depends_on_adduser_for_the_maintainer_scripts() {
 		 minbase container does not carry it; got: {depends}"
 	);
 }
+
+#[test]
+fn postinst_provisions_config_directory_without_changing_existing_directory() {
+	let postinst = read("debian/epistle.postinst");
+	assert!(
+		postinst.contains("if [ ! -e /etc/epistle ]; then\n\t\tinstall -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle\n\tfi"),
+		"postinst must create only a missing /etc/epistle with service ownership and mode 0750"
+	);
+}
