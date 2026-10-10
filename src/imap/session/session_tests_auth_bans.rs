@@ -75,57 +75,8 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 /// client-firsts (rebuilding the session each time because the
 /// per-connection three-strikes limit closes the socket), and
 /// asserts the ban expiry has not moved and no new failure landed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn imap_scram_malformed_client_first_while_banned_does_not_extend_ban() {
-	use crate::antispam::bans::tests::FakeBanStore;
-	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
-
-	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let original_until: u64 = 1_900_000_000;
-	ban_store.arm_ban(
-		"ip:203.0.113.60",
-		BanInfo {
-			until_secs: original_until,
-			reason: "5 failed authentications in 900 seconds".to_string(),
-		},
-	);
-	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
-
-	for _ in 0..3 {
-		let tmp = tempfile::tempdir().expect("tempdir");
-		let mut session = Session::new(
-			"mail.example.org",
-			tmp.path().to_path_buf(),
-			directory.clone(),
-		)
-		.with_scram_nonce("SN");
-		session.set_peer_ip(Some("203.0.113.60".parse().expect("peer")));
-		// Invalid base64: bypasses the SCRAM username parse, the
-		// credential lookup, and any ban check that runs after the
-		// record_failure call.
-		let out = text(&session.command_line("a AUTHENTICATE SCRAM-SHA-256 !!!not-base64"));
-		assert!(out.contains("a NO"), "{out}");
-	}
-
-	assert_eq!(
-		ban_store.call_count("record_failure"),
-		0,
-		"a banned IP sending garbage must not record a failure: got {} record_failure calls",
-		ban_store.call_count("record_failure")
-	);
-	let now = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or(0);
-	let info = tokio::task::block_in_place(|| {
-		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.60", now))
-	})
-	.expect("ban still in force");
-	assert_eq!(
-		info.until_secs, original_until,
-		"the ban's until_secs must not have moved"
-	);
-}
+/// Lives in `session_tests_auth_ban_lifecycle.rs` to keep the
+/// per-file code-line budget under control.
 
 /// An IMAP LOGIN attempt routes through the directory's
 /// `authenticate_with_ip` with the peer IP the network layer recorded
@@ -174,7 +125,7 @@ async fn imap_login_records_the_peer_ip() {
 /// inject a fresh atomic here so they can assert the lookup never
 /// happened without racing other tests in the same process on a
 /// shared counter.
-fn scram_directory_with_ban_store(
+pub(super) fn scram_directory_with_ban_store(
 	ban_store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
 	lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> Arc<Directory> {
@@ -468,7 +419,7 @@ async fn imap_scram_client_final_rechecks_ban() {
 /// Strip the `+ <base64>\r\n` envelope from a SCRAM continuation
 /// reply and decode the base64 payload, so the test can feed the
 /// server-first into the SCRAM proof computation.
-fn decode_server_first(reply: &str) -> String {
+pub(super) fn decode_server_first(reply: &str) -> String {
 	use base64::Engine;
 	let trimmed = reply.trim_start_matches("+ ").trim_end_matches("\r\n");
 	let raw = base64::engine::general_purpose::STANDARD
@@ -483,7 +434,7 @@ fn decode_server_first(reply: &str) -> String {
 /// message (everything after the GS2 header), e.g. `n=alice,r=CN`,
 /// because the SCRAM `auth_message` is the bare part, not the full
 /// client-first with its `n,,` prefix.
-fn valid_client_final(client_first: &str, server_first: &str, password: &str) -> String {
+pub(super) fn valid_client_final(client_first: &str, server_first: &str, password: &str) -> String {
 	use base64::Engine;
 	use ring::{digest, hmac, pbkdf2};
 	use std::num::NonZeroU32;
@@ -682,79 +633,5 @@ async fn imap_scram_success_clears_ban_store() {
 	assert!(
 		account_info.is_none(),
 		"the account ban row must be cleared after a successful SCRAM exchange"
-	);
-}
-
-/// A SCRAM exchange started while a real ban was in force stays
-/// refused at client-final even if the ban expires in between. A
-/// banned subject who begins the exchange (and gets the
-/// server-first with the fake ban-refusal credentials) must not be
-/// able to clear or extend the ban row by completing the proof
-/// after the ban has been removed: the proof would either succeed
-/// against the fake credentials (which never happens because the
-/// stored key is all zeros) or fail and re-record a fresh strike
-/// (which would re-arm the row, defeating the original ban).
-///
-/// The test arms an IP ban, drives the client-first, then expires
-/// the ban in the store before submitting a valid client-final.
-/// The recheck at client-final returns clear (the ban is gone), so
-/// a regression that omits the `ban_refusal` flag would let the
-/// proof fail and re-record a strike, re-banning the subject.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn imap_scram_ban_refusal_stays_refused_after_ban_expires() {
-	use crate::antispam::bans::tests::FakeBanStore;
-	use crate::antispam::bans::{BanInfo, BanPolicy};
-
-	let tmp = tempfile::tempdir().expect("tempdir");
-	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
-	let original_until: u64 = 1_900_000_000;
-	ban_store.arm_ban(
-		"ip:203.0.113.61",
-		BanInfo {
-			until_secs: original_until,
-			reason: "5 failed authentications in 900 seconds".to_string(),
-		},
-	);
-	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
-
-	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
-		.with_scram_nonce("SN");
-	session.set_peer_ip(Some("203.0.113.61".parse().expect("peer")));
-
-	// Start the SCRAM exchange while the ban is in force: the
-	// client-first triggers a ban refusal and stashes the fake
-	// server in pending_auth with the ban_refusal flag.
-	let challenge = session.command_line(&format!(
-		"a AUTHENTICATE SCRAM-SHA-256 {}",
-		B64.encode("n,,n=alice,r=CN")
-	));
-	assert!(challenge.collect_auth, "expected a continuation");
-	let server_first = decode_server_first(&text(&challenge));
-	// The ban expires before the client-final is sent. A
-	// regression that drops the ban_refusal flag would let the
-	// recheck see the ban as cleared, let the verifier reject the
-	// proof (the fake stored key is all zeros), and record a
-	// fresh strike against the IP and the account.
-	ban_store.arm_ban(
-		"ip:203.0.113.61",
-		BanInfo {
-			until_secs: 0,
-			reason: "5 failed authentications in 900 seconds".to_string(),
-		},
-	);
-	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
-	let out = text(&session.auth_response(&B64.encode(&client_final)));
-	assert!(out.contains("a NO"), "{out}");
-	assert_eq!(
-		ban_store.call_count("record_failure"),
-		0,
-		"a ban-refusal exchange that outlives its ban must not record a failure: got {} record_failure calls",
-		ban_store.call_count("record_failure")
-	);
-	assert_eq!(
-		ban_store.call_count("clear_success"),
-		0,
-		"a ban-refusal exchange that outlives its ban must not clear_success: got {} clear_success calls",
-		ban_store.call_count("clear_success")
 	);
 }
