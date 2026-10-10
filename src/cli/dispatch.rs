@@ -18,6 +18,16 @@ use crate::config::Config;
 impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
+		if matches!(&self.command, Command::Init { .. } | Command::Stack { .. }) {
+			match super::rootless::reexecute() {
+				Ok(Some(code)) => return code,
+				Ok(None) => {}
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			}
+		}
 		match self.command {
 			Command::MtaStsServe {
 				policy_dir,

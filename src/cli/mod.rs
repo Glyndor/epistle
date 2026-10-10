@@ -431,6 +431,7 @@ pub enum Command {
 }
 
 mod dispatch;
+mod rootless;
 
 #[cfg(test)]
 #[path = "cli_tests.rs"]
