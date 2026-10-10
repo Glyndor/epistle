@@ -160,6 +160,28 @@ pub(super) fn ensure_db_password(
 	data_dir: &Path,
 	report: &mut Report,
 ) -> Result<PathBuf, ApplyError> {
+	ensure_db_password_with_probe(data_dir, report, podman_volume_exists)
+}
+
+pub(super) fn podman_volume_exists(volume: &str) -> std::io::Result<bool> {
+	let output = std::process::Command::new("podman")
+		.args(["volume", "exists", volume])
+		.output()?;
+	match output.status.code() {
+		Some(0) => Ok(true),
+		Some(1) => Ok(false),
+		_ => Err(std::io::Error::other(format!(
+			"podman volume exists {volume} failed with status {}; verify Podman is available and rerun init",
+			output.status
+		))),
+	}
+}
+
+pub(super) fn ensure_db_password_with_probe(
+	data_dir: &Path,
+	report: &mut Report,
+	probe: impl FnOnce(&str) -> std::io::Result<bool>,
+) -> Result<PathBuf, ApplyError> {
 	let dir = compose_secrets_dir(data_dir);
 	fs::create_dir_all(&dir).map_err(|error| ApplyError::KeyWrite(dir.clone(), error))?;
 	#[cfg(unix)]
@@ -171,10 +193,18 @@ pub(super) fn ensure_db_password(
 	let path = db_password_path(data_dir);
 	match fs::symlink_metadata(&path) {
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-			// The path is absent (the common case on a fresh
-			// install, and the documented recovery path: the
-			// operator deleted the file by hand to force a
-			// fresh password). Mint one and write it.
+			// The existing database retains its original password even if the host file is lost.
+			let volume = "epistle_epistle-pgdata";
+			if probe(volume).map_err(|error| {
+				ApplyError::DatabaseVolume(format!(
+					"cannot check database volume {volume}: {error}"
+				))
+			})? {
+				return Err(ApplyError::DatabaseVolume(format!(
+					"database volume {volume} already exists but password file {} is missing; restore the password file from backup or remove the volume with `podman volume rm {volume}` and rerun init",
+					path.display()
+				)));
+			}
 			write_fresh_password(&path, report)
 		}
 		Err(error) => {
@@ -218,7 +248,7 @@ pub(super) fn ensure_db_password(
 				Ok(_) => Err(ApplyError::ExistingSecretUnreadable(
 					path,
 					std::io::Error::other(
-						"file is empty; remove it and rerun init to mint a fresh password",
+						"file is empty; restore the password file from backup, or remove both the database volume and file before rerunning init",
 					),
 				)),
 				Err(error) => Err(ApplyError::ExistingSecretUnreadable(path, error)),
@@ -583,3 +613,7 @@ mod tests_clamav;
 #[cfg(test)]
 #[path = "compose_tests_db_startup.rs"]
 mod tests_db_startup;
+
+#[cfg(test)]
+#[path = "compose_password_tests_volume.rs"]
+mod tests_password_volume;

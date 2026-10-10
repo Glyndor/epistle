@@ -211,6 +211,12 @@ fn apply_preserves_operator_keys_inside_the_database_table() {
 	answers.data_dir = data_dir.clone();
 	answers.config_path = config_path.clone();
 	answers.services.database = true;
+	crate::cli::init::compose::ensure_db_password_with_probe(
+		&data_dir,
+		&mut Report::default(),
+		|_| Ok(false),
+	)
+	.unwrap();
 	let outcome = apply(&answers);
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
 	let merged = std::fs::read_to_string(&config_path).expect("read merged");

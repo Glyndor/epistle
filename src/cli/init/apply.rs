@@ -94,6 +94,8 @@ impl Report {
 /// constant string into a key sink).
 #[derive(Debug)]
 pub enum ApplyError {
+	/// The database volume exists without credentials, or its state cannot be checked.
+	DatabaseVolume(String),
 	/// The data directory could not be created or its `keys/` child
 	/// could not be created with mode `0700`.
 	KeysDir(PathBuf, std::io::Error),
@@ -172,6 +174,7 @@ pub enum ApplyError {
 impl std::fmt::Display for ApplyError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
+			ApplyError::DatabaseVolume(message) => f.write_str(message),
 			ApplyError::KeysDir(path, error) => write!(
 				f,
 				"cannot create keys directory {}: {error}",

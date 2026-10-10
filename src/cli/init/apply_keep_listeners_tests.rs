@@ -379,6 +379,12 @@ fn existing_operators_listeners_survives_a_stale_password_file() {
 	answers.data_dir = data_dir.clone();
 	answers.config_path = config_path.clone();
 	answers.services.database = true;
+	crate::cli::init::compose::ensure_db_password_with_probe(
+		&data_dir,
+		&mut Report::default(),
+		|_| Ok(false),
+	)
+	.unwrap();
 	let outcome = apply(&answers);
 	assert!(
 		outcome.error.is_none(),
