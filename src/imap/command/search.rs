@@ -188,6 +188,15 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 
 	let (key, rest) = match upper.as_str() {
 		"ALL" => (SearchKey::All, after),
+		"RECENT" => (SearchKey::Recent, after),
+		"OLD" => (SearchKey::Not(Box::new(SearchKey::Recent)), after),
+		"NEW" => (
+			SearchKey::And(vec![
+				SearchKey::Recent,
+				SearchKey::FlagIs(Flag::Seen, false),
+			]),
+			after,
+		),
 		"SEEN" => (SearchKey::FlagIs(Flag::Seen, true), after),
 		"UNSEEN" => (SearchKey::FlagIs(Flag::Seen, false), after),
 		"DELETED" => (SearchKey::FlagIs(Flag::Deleted, true), after),

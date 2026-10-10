@@ -428,6 +428,7 @@ fn subscribe_and_lsub_flow() {
 fn list_extended_subscribed_selection_and_attribute() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
+	session.command_line("rev ENABLE IMAP4rev2");
 	session.command_line("a2 CREATE Sent");
 	session.command_line("a3 SUBSCRIBE Sent");
 
@@ -457,6 +458,7 @@ fn list_advertises_has_no_children() {
 	// for every mailbox.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
+	session.command_line("rev ENABLE IMAP4rev2");
 	session.command_line("a2 CREATE Sent");
 	session.command_line("a3 CREATE Work");
 

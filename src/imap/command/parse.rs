@@ -27,6 +27,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 	let command = match verb.to_ascii_uppercase().as_str() {
 		"CAPABILITY" => no_args(&tag, args, Command::Capability)?,
 		"NOOP" => no_args(&tag, args, Command::Noop)?,
+		"CHECK" => no_args(&tag, args, Command::Check)?,
 		"NAMESPACE" => no_args(&tag, args, Command::Namespace)?,
 		"ID" => Command::Id,
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
@@ -55,7 +56,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 				initial: parts.next().map(str::to_string),
 			}
 		}
-		"LIST" => parse_list(&tag, args)?,
+		"LIST" => super::list::parse_list(&tag, args)?,
 		"SELECT" => Command::Select {
 			mailbox: parse_mailbox(&tag, select_params::strip_select_params(args))?,
 			qresync: select_params::parse_qresync(args),
@@ -213,62 +214,6 @@ fn parse_login(tag: &str, args: &str) -> Result<Command, ParseError> {
 		return Err(bad());
 	}
 	Ok(Command::Login { username, password })
-}
-
-fn parse_list(tag: &str, args: &str) -> Result<Command, ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	// Optional leading `(SUBSCRIBED)` / `(CHILDREN)` selection group
-	// (LIST-EXTENDED, RFC 5258; CHILDREN, RFC 3348). The latter is accepted
-	// but treated as a no-op since epistle stores mailboxes flat: every
-	// mailbox is a leaf, so child expansion produces no extra rows.
-	let args = args.trim_start();
-	let (select_subscribed, args) = if let Some(after) = args.strip_prefix('(') {
-		let close = after.find(')').ok_or_else(bad)?;
-		let selection = after[..close].to_ascii_uppercase();
-		for option in after[..close].split_whitespace() {
-			if !option.eq_ignore_ascii_case("SUBSCRIBED")
-				&& !option.eq_ignore_ascii_case("CHILDREN")
-			{
-				return Err(bad());
-			}
-		}
-		(
-			selection.contains("SUBSCRIBED"),
-			after[close + 1..].trim_start(),
-		)
-	} else {
-		(false, args)
-	};
-	let (reference, rest) = parse_astring(args).ok_or_else(bad)?;
-	let (pattern, rest) = parse_astring(rest).ok_or_else(bad)?;
-	let rest = rest.trim();
-	let return_status = if rest.is_empty() {
-		Vec::new()
-	} else {
-		parse_list_return(rest).ok_or_else(bad)?
-	};
-	Ok(Command::List {
-		reference,
-		pattern,
-		return_status,
-		select_subscribed,
-	})
-}
-
-/// Parse a `RETURN (STATUS (items...))` LIST modifier (RFC 5819). Only the
-/// STATUS return option is supported; an empty STATUS list yields no items.
-fn parse_list_return(rest: &str) -> Option<Vec<StatusItem>> {
-	let after = rest
-		.strip_prefix("RETURN")
-		.or_else(|| rest.strip_prefix("return"))?;
-	let group = after.trim().strip_prefix('(')?.strip_suffix(')')?.trim();
-	let inner = group
-		.strip_prefix("STATUS")
-		.or_else(|| group.strip_prefix("status"))?
-		.trim()
-		.strip_prefix('(')?
-		.strip_suffix(')')?;
-	parse_status_items(inner)
 }
 
 fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {
@@ -471,7 +416,7 @@ fn parse_status(tag: &str, args: &str) -> Result<Command, ParseError> {
 }
 
 /// Parse a non-empty space-separated STATUS item list (without parentheses).
-fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
+pub(super) fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
 	let mut items = Vec::new();
 	for word in inner.split_whitespace() {
 		items.push(match word.to_ascii_uppercase().as_str() {

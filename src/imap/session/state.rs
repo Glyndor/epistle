@@ -103,6 +103,8 @@ pub struct Session {
 	/// UIDONLY (RFC 9586) enabled: sequence-number commands are refused and
 	/// responses use UID forms (UIDFETCH, VANISHED).
 	pub(super) uidonly: bool,
+	/// Revision negotiated for the lifetime of this connection (RFC 9051 Appendix A).
+	pub(super) imap4rev2: bool,
 	pub(super) idle_tag: Option<String>,
 	/// NOTIFY (RFC 5465) events requested for the selected mailbox. `None` means
 	/// NOTIFY is not active; an empty set means notifications are explicitly off.
@@ -206,6 +208,7 @@ impl Session {
 			state: State::NotAuthenticated { login_failures: 0 },
 			pending_append: None,
 			uidonly: false,
+			imap4rev2: false,
 			idle_tag: None,
 			notify_selected: None,
 			tls_active: true,

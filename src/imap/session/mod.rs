@@ -25,6 +25,11 @@ mod thread;
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
 impl Session {
+	#[cfg(test)]
+	fn rev2_enabled(&self) -> bool {
+		self.imap4rev2
+	}
+
 	/// The greeting sent when the connection opens.
 	pub fn greeting(&self) -> Output {
 		Output::text(format!(
@@ -53,6 +58,9 @@ impl Session {
 
 	fn apply(&mut self, tagged: Tagged) -> Output {
 		let tag = tagged.tag;
+		if self.imap4rev2 && helpers::recent_command(&tagged.command) {
+			return Output::text(format!("{tag} BAD invalid arguments\r\n"));
+		}
 		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
 		if self.uidonly
 			&& let Some(verb) = helpers::sequence_command(&tagged.command)
@@ -100,6 +108,7 @@ impl Session {
 				output
 			}
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
+			Command::Check => self.check(&tag),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
 			Command::Namespace => Output::text(format!(
 				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
@@ -117,8 +126,15 @@ impl Session {
 				pattern,
 				return_status,
 				select_subscribed,
+				return_attributes,
 				..
-			} => self.list(&tag, &pattern, &return_status, select_subscribed),
+			} => self.list(
+				&tag,
+				&pattern,
+				&return_status,
+				select_subscribed,
+				&return_attributes,
+			),
 			Command::Select { mailbox, qresync } => self.select(&tag, &mailbox, false, qresync),
 			Command::Examine { mailbox, qresync } => self.select(&tag, &mailbox, true, qresync),
 			Command::Close => self.close(&tag),
@@ -314,7 +330,10 @@ impl Session {
 		let enabled: Vec<&str> = capabilities
 			.iter()
 			.filter_map(|cap| match cap.to_ascii_uppercase().as_str() {
-				"IMAP4REV2" => Some("IMAP4rev2"),
+				"IMAP4REV2" => {
+					self.imap4rev2 = true;
+					Some("IMAP4rev2")
+				}
 				"CONDSTORE" => Some("CONDSTORE"),
 				"QRESYNC" => Some("QRESYNC"),
 				"UIDONLY" => {

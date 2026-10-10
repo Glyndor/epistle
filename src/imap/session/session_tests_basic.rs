@@ -36,6 +36,7 @@ fn unauthenticated_select_is_refused() {
 fn list_shows_inbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
+	session.command_line("rev ENABLE IMAP4rev2");
 	let output = session.command_line(r#"a2 LIST "" "*""#);
 	// CHILDREN (RFC 3348): every leaf mailbox gets \HasNoChildren. epistle
 	// stores mailboxes flat (no hierarchy separator in names), so the answer
