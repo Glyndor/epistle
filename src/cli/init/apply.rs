@@ -169,6 +169,15 @@ pub enum ApplyError {
 	/// underlying cause so the operator can repair the file's
 	/// mode (or remove it by hand) and rerun.
 	ExistingSecretUnreadable(PathBuf, std::io::Error),
+	/// The answers leave the mail image unset (the default
+	/// host-binary shape), but the host binary the compose
+	/// file bind-mounts is missing or is not a statically linked
+	/// 64-bit LE ELF. The apply phase refuses rather than emit
+	/// a compose file the runtime cannot serve: a broken mail
+	/// service is worse than a refused `init`. The message names
+	/// the failing reason and what the operator needs to do
+	/// (install the .deb, or set `image` in the answers).
+	HostBinaryInvalid(String),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -229,6 +238,7 @@ impl std::fmt::Display for ApplyError {
 				 restore read access (or remove the file by hand) and rerun init",
 				path.display()
 			),
+			ApplyError::HostBinaryInvalid(message) => f.write_str(message),
 		}
 	}
 }

@@ -1,9 +1,13 @@
 # Container
 
 The supported production shape for `epistle` is a rootless Podman or Docker
-container driven by `podup`. The image is built from the same source as the
-`.deb`, with the same musl target and the same pinned toolchain; the .deb and
-the image always agree on what is running.
+container driven by `podup`. The compose file `init` writes runs the host's
+`/usr/bin/epistle` (the statically linked musl binary the `.deb` ships)
+bind-mounted read-only into the digest-pinned
+`gcr.io/distroless/static-debian12:nonroot` base. A `ghcr.io/glyndor/epistle`
+image is still built and published on every release (see "Tags" below); it
+matches the `.deb` byte-for-byte and stays as the choice of an operator who
+sets `image` in the answers or pulls it directly.
 
 ## What the image contains
 

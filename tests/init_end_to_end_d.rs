@@ -40,7 +40,7 @@ fn manual_answers(_dir: &Path, data_dir: &Path, config_path: &Path, hostname: &s
 		 hostname = \"{hostname}\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	)
@@ -249,7 +249,7 @@ fn init_carries_the_a_label_of_a_unicode_domain_into_the_config() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"bücher.example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -315,7 +315,7 @@ fn assistant_reprompts_on_a_semantically_invalid_public_ipv4() {
 		n\n\
 		n\n\
 		n\n\
-		\n\
+		localhost/epistle:dev\n\
 		y\n";
 	let input = input
 		.replace("{dd}", &data_dir.display().to_string())

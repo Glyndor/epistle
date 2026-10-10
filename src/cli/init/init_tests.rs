@@ -40,12 +40,16 @@ fn dry_run_writes_nothing() {
 	let data_dir = dir.path().join("data");
 	let etc_dir = dir.path().join("etc");
 	let config_path = etc_dir.join("mail.toml");
+	// `image = "..."` puts the apply phase in custom-image mode
+	// so it skips the host-binary check the test environment
+	// cannot satisfy (no `/usr/bin/epistle`).
 	let input = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
@@ -104,7 +108,8 @@ fn run_exits_2_when_plan_fails_and_nothing_was_touched() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
@@ -146,7 +151,8 @@ fn run_exits_1_when_apply_partially_fails() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),

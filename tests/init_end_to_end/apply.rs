@@ -138,7 +138,8 @@ fn second_apply_with_database_leaves_compose_and_password_files_untouched() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = true\n",
 		data_dir.display(),

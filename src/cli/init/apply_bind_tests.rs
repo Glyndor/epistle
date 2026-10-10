@@ -26,7 +26,7 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
-		image: None,
+		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 	}
 }

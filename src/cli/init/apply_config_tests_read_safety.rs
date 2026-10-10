@@ -9,6 +9,9 @@ fn config_symlink_swapped_after_preflight_is_refused_before_read() {
 	let mut answers = crate::cli::init::compose::minimal_answers();
 	answers.config_path = path.clone();
 	answers.data_dir = dir.path().join("data");
+	// Custom image mode skips the host-binary check the test
+	// environment cannot satisfy (no `/usr/bin/epistle`).
+	answers.image = Some("localhost/epistle:dev".to_string());
 	assert!(
 		super::super::plan(&answers).is_ok(),
 		"regular config must pass preflight"
