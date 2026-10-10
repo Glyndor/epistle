@@ -29,7 +29,8 @@ fn invalid_answers_reports_every_problem_and_creates_nothing() {
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"10.0.0.1\"\n\
 		 data_dir = \"relative/path\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		config_path.display(),
@@ -92,7 +93,8 @@ fn init_exits_two_when_plan_fails_on_an_unparseable_existing_config() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
@@ -140,7 +142,8 @@ fn init_skips_the_rsa_dkim_step_when_openssl_is_absent() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),

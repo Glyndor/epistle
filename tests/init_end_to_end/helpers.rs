@@ -18,13 +18,20 @@ pub fn write_answers(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 pub fn make_answers_body(data_dir: &Path, config_path: &Path) -> String {
+	// `image = "localhost/epistle:dev"` puts the init flow in
+	// custom-image mode so the host-binary validation does not
+	// run against the test runner's `/usr/bin/epistle`; the
+	// integration tests do not exercise the host-binary shape
+	// itself (the in-tree `host_binary_tests.rs` covers that),
+	// they exercise the rest of the apply pipeline.
 	format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"8.8.8.8\"\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n\n\
+		 config_path = \"{}\"\n\
+		 image = \"localhost/epistle:dev\"\n\n\
 		 [services]\n\
 		 database = false\n",
 		data_dir.display(),
