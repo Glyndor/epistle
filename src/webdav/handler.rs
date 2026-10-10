@@ -469,7 +469,10 @@ fn display_name(uri_path: &str) -> String {
 /// `COPY`/`MOVE`: resolve the `Destination` header into the same account tree,
 /// honour `Overwrite`, then copy (and, for `MOVE`, remove the source). The
 /// destination crossing the account root is impossible — it is resolved through
-/// the same confinement as every other path.
+/// the same confinement as every other path. An overlap (destination equal to
+/// or inside the source, or vice versa) is also refused up front: removing
+/// the destination first would otherwise destroy data the copy itself needs
+/// (RFC 4918 §9.8.5 / §9.9.4).
 async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool) -> Response {
 	// Use `symlink_metadata` everywhere so the final-component symlink is not
 	// followed here; the dispatch-level guard above already confined the
@@ -484,6 +487,14 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	// RFC 4918 §9.8.5 / §9.9.4 — copying or moving a collection into itself
+	// (or onto itself) would lose data: the existing implementation removes
+	// the destination before the source is read. Detect any overlap before
+	// any I/O and refuse with `403 Forbidden` (a copy or move into a
+	// sub-tree of itself is forbidden by RFC 4918).
+	if paths_overlap(source, &dest_path) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 	// Confine the destination with the write-create rule (parent chain is
 	// symlink-free and under canonical root). If the destination exists
 	// already it has to be confined as well, both because the recursion may
@@ -609,6 +620,28 @@ fn strip_to_path(raw: &str) -> &str {
 	}
 }
 
+/// Whether two paths occupy the same place or one sits inside the other.
+/// A `MOVE /a /a` is an exact match; a `MOVE /a /a/b` or `MOVE /a/b /a` is
+/// an ancestor/descendant relationship. The check is the same for files and
+/// directories — the per-method handler does not need to know the kind.
+/// Comparing lexical paths is sufficient here: both names were resolved
+/// through the same per-account `path::resolve` so a path that does not
+/// share a prefix with the other could not have been conflated.
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+	if a == b {
+		return true;
+	}
+	// Path components give a robust boundary match: `/a/b` and `/a/b/c`
+	// share the first two components, while `/a/bc` does not share a third.
+	let a_comps: Vec<_> = a.components().collect();
+	let b_comps: Vec<_> = b.components().collect();
+	b_comps.starts_with(&a_comps) || a_comps.starts_with(&b_comps)
+}
+
 #[cfg(test)]
 #[path = "handler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "handler_bounds_tests.rs"]
+mod bounds_tests;

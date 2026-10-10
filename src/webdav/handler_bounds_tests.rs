@@ -140,3 +140,84 @@ async fn put_through_symlink_does_not_modify_outside_file() {
 	assert_eq!(bytes, b"OUTSIDE_SECRET", "outside file was modified via symlink");
 }
 
+/// Populate `/a/file1` and `/a/file2` with known bytes and create `/a/b`
+/// (the destination for the overlap test). The files are pre-created via
+/// direct disk writes because the rest of the suite uses the dispatcher,
+/// which would refuse to PUT through `/a` if a previous overlap test had
+/// destroyed the directory.
+async fn seed_overlap_fixture(app: &Router) {
+	send(&app, "MKCOL", "/a", Some(ALICE), &[], b"").await;
+	send(&app, "PUT", "/a/file1", Some(ALICE), &[], b"one").await;
+	send(&app, "PUT", "/a/file2", Some(ALICE), &[], b"two").await;
+	send(&app, "MKCOL", "/a/b", Some(ALICE), &[], b"").await;
+	send(&app, "PUT", "/a/b/before", Some(ALICE), &[], b"before").await;
+}
+
+#[tokio::test]
+async fn move_into_descendant_is_refused_and_data_intact() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	seed_overlap_fixture(&app).await;
+	// MOVE /a to /a/b/ — `dest` is a descendant of `source`. Without the
+	// fix, the destination is removed first and then the source is moved,
+	// destroying everything under /a/.
+	let (status, _) = send(
+		&app,
+		"MOVE",
+		"/a",
+		Some(ALICE),
+		&[
+			("Destination", "/a/b/".to_string()),
+			("Overwrite", "T".to_string()),
+		],
+		b"",
+	)
+	.await;
+	assert!(
+		status == StatusCode::FORBIDDEN || status == StatusCode::CONFLICT,
+		"expected 403 or 409, got {status}"
+	);
+	// /a/file1, /a/file2, /a/b/before must still exist with the same bytes.
+	let (status1, body1) = send(&app, "GET", "/a/file1", Some(ALICE), &[], b"").await;
+	assert_eq!(status1, StatusCode::OK, "/a/file1 vanished after refused MOVE");
+	assert_eq!(body1, b"one");
+	let (status2, body2) = send(&app, "GET", "/a/file2", Some(ALICE), &[], b"").await;
+	assert_eq!(status2, StatusCode::OK, "/a/file2 vanished after refused MOVE");
+	assert_eq!(body2, b"two");
+	let (statusb, bodyb) = send(&app, "GET", "/a/b/before", Some(ALICE), &[], b"").await;
+	assert_eq!(statusb, StatusCode::OK, "/a/b/before vanished after refused MOVE");
+	assert_eq!(bodyb, b"before");
+}
+
+#[tokio::test]
+async fn copy_onto_self_is_refused_and_data_intact() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	seed_overlap_fixture(&app).await;
+	// COPY /a to /a with Overwrite:T — destination is identical to the
+	// source. The wrong behaviour is to delete the directory and try to
+	// copy from it.
+	let (status, _) = send(
+		&app,
+		"COPY",
+		"/a",
+		Some(ALICE),
+		&[
+			("Destination", "/a".to_string()),
+			("Overwrite", "T".to_string()),
+		],
+		b"",
+	)
+	.await;
+	assert!(
+		status == StatusCode::FORBIDDEN || status == StatusCode::CONFLICT,
+		"expected 403 or 409, got {status}"
+	);
+	let (status1, body1) = send(&app, "GET", "/a/file1", Some(ALICE), &[], b"").await;
+	assert_eq!(status1, StatusCode::OK, "/a/file1 vanished after refused COPY");
+	assert_eq!(body1, b"one");
+	let (status2, body2) = send(&app, "GET", "/a/file2", Some(ALICE), &[], b"").await;
+	assert_eq!(status2, StatusCode::OK, "/a/file2 vanished after refused COPY");
+	assert_eq!(body2, b"two");
+}
+
