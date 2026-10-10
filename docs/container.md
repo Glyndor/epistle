@@ -283,6 +283,5 @@ is what podup's update path uses.
 exercised on every pull request that touches `Containerfile`, `.containerignore`,
 `Cargo.toml`, `Cargo.lock`, `src/**`, `.sqlx/**` or the workflow file
 itself, by `.github/workflows/container.yml`. The release-time publish is
-appended to `.github/workflows/release.yml`; it is gated on the repository
-variable `EPISTLE_PUBLISH_IMAGE == 'true'` and does nothing until the owner
-turns the switch on, so a tag still cuts even if the image never ships.
+appended to `.github/workflows/release.yml` and runs on every release,
+because `epistle stack` pulls the image of the installed version.

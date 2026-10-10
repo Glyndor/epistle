@@ -296,18 +296,11 @@ jobs:
             --verify-tag \
             dist/*
 
-  # Off by default. The variable `EPISTLE_PUBLISH_IMAGE` is the
-  # single switch; the workflow file lives in the repo, so the job
-  # exists and is reviewable, but it does nothing until the owner
-  # creates the ghcr.io/glyndor/epistle package and turns the
-  # variable on. The existing `build` job (which signs, attests and
-  # creates the GitHub release) runs regardless, so a cut tag still
-  # reaches the .deb and the tarball even if the image never
-  # ships.
+  # The container stack pulls ghcr.io/glyndor/epistle:<version>, so every
+  # release publishes the image next to the .deb.
   image-build:
     name: Build and push image (${{ matrix.arch }})
     needs: build
-    if: vars.EPISTLE_PUBLISH_IMAGE == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -376,7 +369,6 @@ jobs:
   image-manifest:
     name: Publish multi-arch image manifest
     needs: image-build
-    if: vars.EPISTLE_PUBLISH_IMAGE == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
