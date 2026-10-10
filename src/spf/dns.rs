@@ -3,7 +3,7 @@
 use std::net::IpAddr;
 use std::pin::Pin;
 
-use hickory_resolver::config::{NameServerConfig, ProtocolConfig, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{ProtocolConfig, ResolverConfig, ResolverOpts};
 
 use crate::dane::tlsa::TlsaRecord;
 
@@ -12,11 +12,15 @@ use crate::dane::tlsa::TlsaRecord;
 mod dns_tests;
 
 /// Build a `ResolverConfig` from the system configuration (`/etc/resolv.conf`
-/// on Unix, the registry on Windows). Caller in the future asks for TCP only.
+/// on Unix, the registry on Windows) keeping only the TCP connection of each
+/// name server. The UDP connection is dropped because, behind
+/// systemd-resolved's stub, a DNSSEC-validating reply can come back truncated
+/// to the EDNS UDP size and hickory decodes the whole UDP message before
+/// noticing the TC bit, so the lookup fails without ever retrying over TCP.
 pub(crate) fn system_resolver_config() -> std::io::Result<ResolverConfig> {
 	let (config, _opts) =
 		hickory_resolver::system_conf::read_system_conf().map_err(std::io::Error::other)?;
-	Ok(config)
+	Ok(keep_only_tcp(config))
 }
 
 /// Build the resolver options the system resolver uses: defaults from
@@ -28,7 +32,7 @@ pub(crate) fn system_resolver_options() -> ResolverOpts {
 	opts
 }
 
-fn _keep_only_tcp_unused(mut config: ResolverConfig) -> ResolverConfig {
+fn keep_only_tcp(mut config: ResolverConfig) -> ResolverConfig {
 	for server in &mut config.name_servers {
 		server.connections = server
 			.connections
@@ -45,7 +49,7 @@ fn _keep_only_tcp_unused(mut config: ResolverConfig) -> ResolverConfig {
 /// from the host (`SystemDns` for SPF, `MxConnector` for the queue) goes
 /// through this so the systemd-resolved truncation workaround stays in one
 /// place.
-pub(crate) fn system_resolver() -> std::io::Result<hickory_resolver::TokioResolver> {
+pub fn system_resolver() -> std::io::Result<hickory_resolver::TokioResolver> {
 	let config = system_resolver_config()?;
 	let opts = system_resolver_options();
 	let mut builder = hickory_resolver::TokioResolver::builder_with_config(
@@ -55,8 +59,6 @@ pub(crate) fn system_resolver() -> std::io::Result<hickory_resolver::TokioResolv
 	*builder.options_mut() = opts;
 	builder.build().map_err(std::io::Error::other)
 }
-
-fn _force_nameserver_type_imported(_server: &NameServerConfig) {}
 
 /// A DNS query failure as SPF distinguishes them (RFC 7208 section 2.6.6/7).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +108,8 @@ pub struct SystemDns {
 }
 
 impl SystemDns {
-	/// Build from the system DNS configuration, with DNSSEC validation enabled.
+	/// Build from the system DNS configuration. Goes through the shared
+	/// `system_resolver` so the TCP-only + DNSSEC contract stays in one place.
 	///
 	/// Validation is required so DANE can trust TLSA records (RFC 7672 §2.1):
 	/// the resolver authenticates responses against the IANA root trust anchor
@@ -115,12 +118,7 @@ impl SystemDns {
 	/// against a non-validating-aware path, answers come back unauthenticated
 	/// and TLSA lookups yield nothing, so DANE simply does not engage.
 	pub fn from_system() -> std::io::Result<Self> {
-		let mut builder =
-			hickory_resolver::TokioResolver::builder_tokio().map_err(std::io::Error::other)?;
-		builder.options_mut().validate = true;
-		Ok(SystemDns {
-			resolver: builder.build().map_err(std::io::Error::other)?,
-		})
+		Ok(SystemDns { resolver: system_resolver()? })
 	}
 
 	async fn lookup(

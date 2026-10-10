@@ -33,13 +33,11 @@ pub struct MxConnector {
 }
 
 impl MxConnector {
-	/// Build a connector using the system DNS configuration.
+	/// Build a connector using the system DNS configuration. Goes through the
+	/// shared `system_resolver` so the TCP-only + DNSSEC contract stays in
+	/// one place (see `crate::spf::system_resolver` for the rationale).
 	pub fn from_system() -> std::io::Result<Self> {
-		let builder =
-			hickory_resolver::TokioResolver::builder_tokio().map_err(std::io::Error::other)?;
-		Ok(MxConnector {
-			resolver: builder.build().map_err(std::io::Error::other)?,
-		})
+		Ok(MxConnector { resolver: crate::spf::system_resolver()? })
 	}
 
 	/// MX hostnames in preference order; implicit MX (the domain itself,
