@@ -1,5 +1,5 @@
 //! Service definitions for the generated container stack.
-use super::{Answers, DATABASE_SECRET_MODE, HOST_EPSTLE_PATH, POSTGRES_18_IMAGE};
+use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH, POSTGRES_18_IMAGE};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -93,14 +93,14 @@ impl ComposeService {
 		// `serve --config` default.
 		if answers.image.is_none() {
 			volumes.push(VolumeMount::bind_system_binary(
-				Path::new(HOST_EPSTLE_PATH),
-				Path::new(HOST_EPSTLE_PATH),
+				Path::new(HOST_EPISTLE_PATH),
+				Path::new(HOST_EPISTLE_PATH),
 			));
 		}
 		Self {
 			image: image.to_string(),
 			entrypoint: if answers.image.is_none() {
-				Some(vec![HOST_EPSTLE_PATH.to_string()])
+				Some(vec![HOST_EPISTLE_PATH.to_string()])
 			} else {
 				None
 			},

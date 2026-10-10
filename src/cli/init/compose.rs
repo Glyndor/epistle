@@ -77,7 +77,7 @@ pub(super) const DISTROLESS_BASE_IMAGE: &str = "gcr.io/distroless/static-debian1
 /// runs it as the container's entrypoint. A source build linked
 /// against glibc uses a different path and is rejected by the host
 /// binary validator below.
-pub(super) const HOST_EPSTLE_PATH: &str = "/usr/bin/epistle";
+pub(super) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
 
 /// Resolve the mail image the compose file will render. The
 /// default is the digest-pinned distroless base; an explicit
@@ -321,13 +321,13 @@ pub(super) fn db_password_reused(data_dir: &Path) -> bool {
 /// that names the .deb install path the operator needs to
 /// run.
 pub(super) fn write_compose_step(answers: &Answers, report: &mut Report) -> Result<(), ApplyError> {
-	write_compose_step_with_host_binary(answers, report, std::path::Path::new(HOST_EPSTLE_PATH))
+	write_compose_step_with_host_binary(answers, report, std::path::Path::new(HOST_EPISTLE_PATH))
 }
 
 /// Same as [`write_compose_step`] but with the host-binary
 /// path injected. Tests point this at a synthetic file under
 /// a tempdir; the production caller uses
-/// [`HOST_EPSTLE_PATH`].
+/// [`HOST_EPISTLE_PATH`].
 pub(super) fn write_compose_step_with_host_binary(
 	answers: &Answers,
 	report: &mut Report,

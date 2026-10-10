@@ -109,7 +109,7 @@ pub fn classify_elf_link(bytes: &[u8]) -> ElfLinkKind {
 /// static ELF. `None` means the binary is acceptable. The
 /// `path` argument is taken explicitly so tests can point the
 /// validator at a fixture; production callers pass
-/// `super::HOST_EPSTLE_PATH`.
+/// `super::HOST_EPISTLE_PATH`.
 pub fn validate_host_binary_for(path: &Path) -> Option<String> {
 	let bytes = match std::fs::read(path) {
 		Ok(bytes) => bytes,
