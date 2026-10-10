@@ -99,7 +99,7 @@ fn pg_dump_argv_carries_no_pgpwd_arg_and_uses_no_password_flag() {
 	let db = database_with_url_and_password_file("postgres://epistle@localhost/epistle", &pw_path);
 	let spec = host_pg_dump_spec(&db).expect("spec");
 	// `psql` accepts --password / -W to force the prompt and --no-password
-	// to suppress it. The host path must use neither — the password
+	// to suppress it. The host path must use neither, the password
 	// arrives through the env, not through argv. A regression that
 	// adds one of these flags means the password could be surfaced
 	// through `/proc/<pid>/cmdline` if a future change forgets to set
