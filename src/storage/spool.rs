@@ -105,20 +105,24 @@ impl FsSpool {
 
 	/// Load one spooled entry by id.
 	pub fn load(&self, id: Uuid) -> std::io::Result<SpoolEntry> {
-		let envelope_bytes = fs::read(self.root.join("new").join(format!("{id}.json")))?;
+		let envelope_bytes =
+			crate::util::fs_walk::read(self.root.join("new").join(format!("{id}.json")))?;
 		let envelope: Envelope =
 			serde_json::from_slice(&envelope_bytes).map_err(std::io::Error::other)?;
-		let data = self
-			.crypto
-			.decode(&fs::read(self.root.join("new").join(format!("{id}.eml")))?)?;
+		let data = self.crypto.decode(&crate::util::fs_walk::read(
+			self.root.join("new").join(format!("{id}.eml")),
+		)?)?;
 		Ok(SpoolEntry { envelope, data })
 	}
 
 	/// List ids of all complete spooled messages, oldest first.
 	pub fn list(&self) -> std::io::Result<Vec<Uuid>> {
 		let mut ids = Vec::new();
-		for entry in fs::read_dir(self.root.join("new"))? {
+		for entry in crate::util::fs_walk::read_dir(self.root.join("new"))? {
 			let entry = entry?;
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			let name = entry.file_name();
 			let Some(name) = name.to_str() else {
 				continue;

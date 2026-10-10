@@ -263,10 +263,11 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 /// permission bits the operator set, including the 0o600 they relied on for
 /// DKIM/ACME/TLS private keys.
 fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut out = Vec::new();
 	let mut stack = vec![root.to_path_buf()];
 	while let Some(dir) = stack.pop() {
-		let entries = match std::fs::read_dir(&dir) {
+		let entries = match crate::util::fs_walk::read_dir(&dir) {
 			Ok(entries) => entries,
 			// A missing data dir yields an empty backup, not an error.
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -274,13 +275,15 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 		};
 		for entry in entries.flatten() {
 			let path = entry.path();
-			if path.is_dir() {
+			if entry.file_type()?.is_dir() {
 				stack.push(path);
-			} else if let Ok(relative) = path.strip_prefix(root) {
+			} else if entry.file_type()?.is_file()
+				&& let Ok(relative) = path.strip_prefix(root)
+			{
 				let name = format!("data/{}", relative.to_string_lossy());
-				let metadata = std::fs::metadata(&path)?;
+				let metadata = entry.metadata()?;
 				let mode = metadata.permissions().mode();
-				out.push((name, mode, std::fs::read(&path)?));
+				out.push((name, mode, crate::util::fs_walk::read(&path)?));
 			}
 		}
 	}

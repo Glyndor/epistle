@@ -330,7 +330,7 @@ fn check_absolute_paths(data_dir: &Path, config_path: &Path, errors: &mut Vec<In
 /// `ParentDir`, ignores `CurDir`, and resets the stack on
 /// `RootDir` / `Prefix` so a Windows drive letter followed by
 /// `..` does not consume the drive.
-fn lexically_normalised(path: &Path) -> Result<PathBuf, ()> {
+pub(super) fn lexically_normalised(path: &Path) -> Result<PathBuf, ()> {
 	let mut stack: Vec<std::path::Component<'_>> = Vec::new();
 	for component in path.components() {
 		match component {
@@ -553,6 +553,9 @@ pub(crate) fn validate(answers: &Answers) -> Result<Vec<Warning>, Vec<Invalid>> 
 		&mut warnings,
 	);
 	check_absolute_paths(&answers.data_dir, &answers.config_path, &mut errors);
+	if let Err(error) = super::data_dir::check(&answers.data_dir) {
+		errors.push(error);
+	}
 	check_services(&answers.services, &mut errors, &mut warnings);
 	check_image(answers.image.as_deref(), &mut errors);
 

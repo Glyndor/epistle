@@ -10,7 +10,7 @@ use std::path::Path;
 /// seconds-since-epoch forced odd (never 0) and persisted in `.uidvalidity`.
 pub(super) fn read_or_init(account_dir: &Path) -> u32 {
 	let path = account_dir.join(".uidvalidity");
-	if let Ok(text) = std::fs::read_to_string(&path)
+	if let Ok(text) = crate::util::fs_walk::read_to_string(&path)
 		&& let Ok(value) = text.trim().parse::<u32>()
 		&& value > 0
 	{

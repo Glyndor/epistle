@@ -1137,7 +1137,8 @@ mail from other servers is not modified.
 
 ```toml
 hostname = "mail.example.org"
-data_dir = "/var/lib/glyndor/epistle"
+# Keep mail below the service home; never mount the home itself.
+data_dir = "/var/lib/glyndor/epistle/data"
 domains  = ["example.org"]
 
 queue_give_up_secs = 432000   # 5 days (the default)

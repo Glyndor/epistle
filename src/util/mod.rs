@@ -3,3 +3,5 @@
 pub mod constant_time;
 pub mod encoded_word;
 pub mod header;
+
+pub(crate) mod fs_walk;

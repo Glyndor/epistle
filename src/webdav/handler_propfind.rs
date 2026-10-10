@@ -53,6 +53,12 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 	{
 		let base = uri_path.trim_end_matches('/');
 		while let Ok(Some(child)) = dir.next_entry().await {
+			let Ok(kind) = child.file_type().await else {
+				continue;
+			};
+			if !crate::util::fs_walk::allowed(&child.path(), kind) {
+				continue;
+			}
 			let name = child.file_name();
 			let name = name.to_string_lossy();
 			// Hide the addressbook/calendar markers from listings , internal flags.

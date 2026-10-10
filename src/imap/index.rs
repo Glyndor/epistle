@@ -80,9 +80,10 @@ fn index_path(account_dir: &Path) -> PathBuf {
 /// A mismatch on either field versus the stored stamp means the index is stale.
 pub(super) fn current_generation(account_dir: &Path) -> (u64, usize) {
 	let modseq = super::modseq::read_counter(account_dir).max(1);
-	let count = match std::fs::read_dir(account_dir) {
+	let count = match crate::util::fs_walk::read_dir(account_dir) {
 		Ok(entries) => entries
 			.flatten()
+			.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
 			.filter(|entry| {
 				entry
 					.file_name()
@@ -99,7 +100,7 @@ pub(super) fn current_generation(account_dir: &Path) -> (u64, usize) {
 /// stamp matches `generation`. Any deviation returns `None` so the caller falls
 /// back to the authoritative filesystem scan (fail closed).
 pub(super) fn load(account_dir: &Path, generation: (u64, usize)) -> Option<Vec<MessageRef>> {
-	let text = std::fs::read_to_string(index_path(account_dir)).ok()?;
+	let text = crate::util::fs_walk::read_to_string(index_path(account_dir)).ok()?;
 	let mut lines = text.lines();
 
 	// Header: magic + version.

@@ -192,6 +192,12 @@ async fn calendar_dirs(root: &Path) -> Vec<std::path::PathBuf> {
 	}
 	if let Ok(mut dir) = tokio::fs::read_dir(root).await {
 		while let Ok(Some(child)) = dir.next_entry().await {
+			let Ok(kind) = child.file_type().await else {
+				continue;
+			};
+			if !crate::util::fs_walk::allowed(&child.path(), kind) {
+				continue;
+			}
 			let path = child.path();
 			if let Ok(meta) = std::fs::symlink_metadata(&path)
 				&& meta.file_type().is_symlink()
@@ -222,6 +228,12 @@ async fn busy_periods(calendars: &[std::path::PathBuf], start: i64, end: i64) ->
 			continue;
 		};
 		while let Ok(Some(child)) = dir.next_entry().await {
+			let Ok(kind) = child.file_type().await else {
+				continue;
+			};
+			if !crate::util::fs_walk::allowed(&child.path(), kind) {
+				continue;
+			}
 			let name = child.file_name();
 			if !is_ics_path(&name.to_string_lossy()) {
 				continue;
@@ -473,6 +485,12 @@ async fn collect_events(root: &Path, collection: &Path, entries: &mut Vec<Event>
 		return;
 	};
 	while let Ok(Some(child)) = dir.next_entry().await {
+		let Ok(kind) = child.file_type().await else {
+			continue;
+		};
+		if !crate::util::fs_walk::allowed(&child.path(), kind) {
+			continue;
+		}
 		let name = child.file_name();
 		let name = name.to_string_lossy();
 		if !is_ics_path(&name) {

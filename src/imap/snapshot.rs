@@ -37,8 +37,10 @@ impl Snapshot {
 		retention_days: u64,
 		now: u64,
 	) -> std::io::Result<Snapshot> {
+		let _warnings = crate::util::fs_walk::warning_scope();
 		let account_dir = super::mailbox::mailbox_dir(data_dir, account, mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
+		crate::util::fs_walk::check_directories(&account_dir)?;
 		let account_root = data_dir.join("accounts").join(account);
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
@@ -186,7 +188,8 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored = std::fs::read(self.account_dir.join(format!("{}.eml", message.id())))?;
+		let stored =
+			crate::util::fs_walk::read(self.account_dir.join(format!("{}.eml", message.id())))?;
 		self.crypto.decode(&stored)
 	}
 

@@ -148,8 +148,11 @@ fn remove_marker(path: &Path) -> std::io::Result<()> {
 /// `accounts/` subdirectory is skipped because it is not a regular file.
 fn read_addresses(dir: &Path) -> Vec<String> {
 	let mut addresses = Vec::new();
-	if let Ok(entries) = fs::read_dir(dir) {
+	if let Ok(entries) = crate::util::fs_walk::read_dir(dir) {
 		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			if let Ok(address) = fs::read_to_string(entry.path()) {
 				let address = address.trim().to_string();
 				if !address.is_empty() {

@@ -175,9 +175,9 @@ pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::
 pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let mut names = vec!["INBOX".to_string()];
 	let folders = data_dir.join("accounts").join(account).join("folders");
-	if let Ok(entries) = std::fs::read_dir(folders) {
+	if let Ok(entries) = crate::util::fs_walk::read_dir(folders) {
 		for entry in entries.flatten() {
-			if entry.path().is_dir()
+			if entry.file_type().is_ok_and(|kind| kind.is_dir())
 				&& let Some(name) = entry.file_name().to_str()
 				&& valid_name(name)
 			{
@@ -232,19 +232,21 @@ pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Opt
 /// whether the store is encrypted. Archived messages count toward the quota:
 /// they are still messages stored on behalf of the account.
 pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> u64 {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut total = 0u64;
 	for mailbox in list(data_dir, account) {
 		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
 			continue;
 		};
-		let Ok(entries) = std::fs::read_dir(&dir) else {
+		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
 			continue;
 		};
 		for entry in entries.flatten() {
-			if entry
-				.file_name()
-				.to_str()
-				.is_some_and(|name| name.ends_with(".eml"))
+			if entry.file_type().is_ok_and(|kind| kind.is_file())
+				&& entry
+					.file_name()
+					.to_str()
+					.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
 				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
@@ -252,12 +254,13 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 		}
 	}
 	let account_root = data_dir.join("accounts").join(account);
-	if let Ok(entries) = std::fs::read_dir(account_root.join(".archive")) {
+	if let Ok(entries) = crate::util::fs_walk::read_dir(account_root.join(".archive")) {
 		for entry in entries.flatten() {
-			if entry
-				.file_name()
-				.to_str()
-				.is_some_and(|name| name.ends_with(".eml"))
+			if entry.file_type().is_ok_and(|kind| kind.is_file())
+				&& entry
+					.file_name()
+					.to_str()
+					.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
 				total += crypto.stored_plaintext_len(&entry.path(), meta.len());

@@ -60,9 +60,10 @@ impl Backend for MailboxBackend {
 		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
 			return Vec::new();
 		};
-		let mut stems: Vec<String> = match std::fs::read_dir(&dir) {
+		let mut stems: Vec<String> = match crate::util::fs_walk::read_dir(&dir) {
 			Ok(entries) => entries
 				.flatten()
+				.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
 				.filter_map(|entry| {
 					entry
 						.file_name()
@@ -78,7 +79,7 @@ impl Backend for MailboxBackend {
 		stems
 			.into_iter()
 			.filter_map(|stem| {
-				let stored = std::fs::read(dir.join(format!("{stem}.eml"))).ok()?;
+				let stored = crate::util::fs_walk::read(dir.join(format!("{stem}.eml"))).ok()?;
 				// Fail closed: drop a message that cannot be decrypted rather than
 				// serving ciphertext as if it were the message.
 				let data = self.crypto.decode(&stored).ok()?;

@@ -238,6 +238,10 @@ pub enum Invalid {
 	DnsTokenMissing,
 	/// `data_dir` is not absolute.
 	DataDirNotAbsolute,
+	/// The data mount would expose the user home or host runtime directories.
+	DataDirUnsafe { suggested: String },
+	/// The current account home could not be resolved safely.
+	DataDirHomeUnavailable(String),
 	/// `config_path` is not absolute.
 	ConfigPathNotAbsolute,
 	/// `config_path` has no usable file-name component (e.g. `/` or
@@ -343,6 +347,9 @@ impl std::fmt::Display for Invalid {
 				f.write_str("dns: set exactly one of token, token_file, token_env")
 			}
 			Invalid::DnsTokenMissing => f.write_str("dns: set one of token, token_file, token_env"),
+			Invalid::DataDirUnsafe { suggested } => write!(f,
+                "data_dir: must exclude the user home, Podman storage and systemd units; a writable container mount would expose host services and backups would include container storage; use {suggested}"),
+            Invalid::DataDirHomeUnavailable(reason) => write!(f, "data_dir: cannot determine the current user home: {reason}"),
 			Invalid::DataDirNotAbsolute => f.write_str("data_dir: must be an absolute path"),
 			Invalid::ConfigPathNotAbsolute => f.write_str("config_path: must be an absolute path"),
 			Invalid::ConfigPathNoFileName => f.write_str(
@@ -445,7 +452,7 @@ impl Answers {
 		 domains = [\"example.org\"]         # at least one; not equal to hostname\n\
 		 # public_ipv4 = \"203.0.113.10\"    # optional; must be a global unicast address\n\
 		 # public_ipv6 = \"2001:db8::10\"    # optional; must be a global unicast address\n\
-		 data_dir = \"/var/lib/glyndor/epistle\"\n\
+		 data_dir = \"/var/lib/glyndor/epistle/data\"\n\
 		 config_path = \"/etc/epistle/mail.toml\"\n\
 		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\n\
 		 # [dns]                             # only with mode = \"automatic\"\n\
@@ -551,3 +558,6 @@ mod tests_services;
 
 #[path = "answers_validate.rs"]
 mod answers_validate;
+
+#[path = "answers_data_dir.rs"]
+mod data_dir;

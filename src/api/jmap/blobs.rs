@@ -213,7 +213,7 @@ pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) 
 				stats.errors = stats.errors.saturating_add(1);
 				continue;
 			};
-			let entries = match std::fs::read_dir(&dir) {
+			let entries = match crate::util::fs_walk::read_dir(&dir) {
 				Ok(entries) => entries,
 				Err(_) => {
 					stats.errors = stats.errors.saturating_add(1);
@@ -228,6 +228,9 @@ pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) 
 						continue;
 					}
 				};
+				if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+					continue;
+				}
 				let name = match entry.file_name().to_str() {
 					Some(name) => name.to_string(),
 					None => continue,

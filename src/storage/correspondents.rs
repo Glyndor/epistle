@@ -170,7 +170,7 @@ impl CorrespondentStore {
 	/// a marker created milliseconds ago counts.
 	pub fn new_in_last_day(&self, account: &str) -> std::io::Result<u32> {
 		let dir = self.account_dir(account);
-		let entries = match fs::read_dir(&dir) {
+		let entries = match crate::util::fs_walk::read_dir(&dir) {
 			Ok(entries) => entries,
 			Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
 			Err(error) => return Err(error),
@@ -181,6 +181,9 @@ impl CorrespondentStore {
 			.unwrap_or(now);
 		let mut count = 0u32;
 		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			let meta = match entry.metadata() {
 				Ok(meta) => meta,
 				Err(_) => continue,

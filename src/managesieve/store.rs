@@ -88,12 +88,15 @@ impl ScriptStore {
 	pub fn list(&self) -> Result<Vec<ScriptInfo>, StoreError> {
 		let active = self.active_name();
 		let mut scripts = Vec::new();
-		let entries = match fs::read_dir(&self.sieve_dir) {
+		let entries = match crate::util::fs_walk::read_dir(&self.sieve_dir) {
 			Ok(entries) => entries,
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scripts),
 			Err(_) => return Err(StoreError::Io),
 		};
 		for entry in entries.flatten() {
+			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			let file_name = entry.file_name();
 			let name = file_name.to_string_lossy();
 			if let Some(stripped) = name.strip_suffix(".sieve") {

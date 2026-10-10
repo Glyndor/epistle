@@ -16,8 +16,9 @@ pub(super) fn run(
 	crypto: &MessageCrypto,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let accounts_dir = data_dir.join("accounts");
-	let Ok(entries) = std::fs::read_dir(&accounts_dir) else {
+	let Ok(entries) = crate::util::fs_walk::read_dir(&accounts_dir) else {
 		let _ = writeln!(out, "no accounts directory at {}", accounts_dir.display());
 		return ExitCode::SUCCESS;
 	};
@@ -28,7 +29,7 @@ pub(super) fn run(
 
 	let mut account_names: Vec<String> = entries
 		.flatten()
-		.filter(|entry| entry.path().is_dir())
+		.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
 		.filter_map(|entry| entry.file_name().into_string().ok())
 		.collect();
 	account_names.sort();
@@ -75,12 +76,15 @@ fn check_mailbox(
 	messages: &mut u64,
 	problems: &mut Vec<String>,
 ) {
-	let Ok(entries) = std::fs::read_dir(dir) else {
+	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
 		return;
 	};
 	let mut ids = std::collections::HashSet::new();
 	let mut flag_files = Vec::new();
 	for entry in entries.flatten() {
+		if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+			continue;
+		}
 		let path = entry.path();
 		let name = entry.file_name().to_string_lossy().into_owned();
 		let here = format!("{account}/{mailbox}/{name}");
@@ -91,7 +95,7 @@ fn check_mailbox(
 			}
 			ids.insert(stem.to_string());
 			*messages += 1;
-			match std::fs::read(&path).and_then(|stored| crypto.decode(&stored)) {
+			match crate::util::fs_walk::read(&path).and_then(|stored| crypto.decode(&stored)) {
 				Ok(data) if data.is_empty() => problems.push(format!("{here}: empty message")),
 				Ok(data) if !has_header_separator(&data) => {
 					problems.push(format!("{here}: no header/body separator"));
@@ -109,7 +113,7 @@ fn check_mailbox(
 			problems.push(format!("{here}: orphaned flags (no matching message)"));
 			continue;
 		}
-		match std::fs::read(&path) {
+		match crate::util::fs_walk::read(&path) {
 			Ok(bytes) => {
 				if serde_json::from_slice::<Vec<Flag>>(&bytes).is_err() {
 					problems.push(format!("{here}: malformed flags file"));
