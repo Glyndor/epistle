@@ -10,12 +10,12 @@ fn postinst_applies_only_its_own_sysctl_when_the_setting_is_writable() {
 			let proc_sys = dir.path().join("proc/sys");
 			let setting = proc_sys.join("net/ipv4/ip_unprivileged_port_start");
 			std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
-			std::fs::write(&setting, "1024\n").unwrap();
-			std::fs::set_permissions(
-				&setting,
-				std::fs::Permissions::from_mode(if writable { 0o600 } else { 0o400 }),
-			)
-			.unwrap();
+			// A missing file is not writable for anyone, root included;
+			// a mode bit alone would not stop root, which runs this test
+			// in the package build.
+			if writable {
+				std::fs::write(&setting, "1024\n").unwrap();
+			}
 			std::fs::set_permissions(&proc_sys, std::fs::Permissions::from_mode(0o555)).unwrap();
 			let bin = dir.path().join("bin");
 			std::fs::create_dir(&bin).unwrap();
