@@ -111,13 +111,14 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 			for href in hrefs(&text) {
 				if let Some(resolved) = path::resolve(root, &href)
 					&& path::confine_existing(&resolved, root)
+					&& let Some(href) = super::href::resource(root, &resolved)
 				{
 					push_card(&mut entries, &href, &resolved).await;
 				}
 			}
 		}
 		ReportKind::Query => {
-			collect_cards(target, &mut entries).await;
+			collect_cards(root, target, &mut entries).await;
 		}
 	}
 	multistatus(&entries).into_response()
@@ -154,7 +155,7 @@ async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
 /// The child href is the collection path plus the file name. A non-directory
 /// target yields nothing. Children that are themselves symlinks (planted
 /// escapes) are skipped, their target may live outside the per-account root.
-async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
+async fn collect_cards(root: &Path, collection: &Path, entries: &mut Vec<Card>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
 	};
@@ -177,7 +178,10 @@ async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
 		}
 		if let Ok(data) = tokio::fs::read(child.path()).await {
 			entries.push(Card {
-				href: name.to_string(),
+				href: match super::href::resource(root, &child.path()) {
+					Some(href) => href,
+					None => continue,
+				},
 				data,
 				etag: etag(&metadata),
 			});

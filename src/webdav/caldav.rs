@@ -125,6 +125,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 			for href in hrefs(&text) {
 				if let Some(resolved) = path::resolve(root, &href)
 					&& path::confine_existing(&resolved, root)
+					&& let Some(href) = super::href::resource(root, &resolved)
 				{
 					push_event(&mut entries, &href, &resolved).await;
 				}
@@ -133,7 +134,7 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 		}
 		ReportKind::Query => {
 			let mut entries = Vec::new();
-			collect_events(target, &mut entries).await;
+			collect_events(root, target, &mut entries).await;
 			multistatus(&entries).into_response()
 		}
 		ReportKind::FreeBusy => free_busy_report(target, &text).await,
@@ -467,7 +468,7 @@ async fn push_event(entries: &mut Vec<Event>, href: &str, disk: &Path) {
 /// `entries`. Children that are themselves symlinks are skipped, they may
 /// have been planted in the user's tree, and following them would read
 /// events that belong to no account.
-async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {
+async fn collect_events(root: &Path, collection: &Path, entries: &mut Vec<Event>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
 	};
@@ -490,7 +491,10 @@ async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {
 		}
 		if let Ok(data) = tokio::fs::read(child.path()).await {
 			entries.push(Event {
-				href: name.to_string(),
+				href: match super::href::resource(root, &child.path()) {
+					Some(href) => href,
+					None => continue,
+				},
 				data,
 				etag: super::carddav::etag(&metadata),
 			});

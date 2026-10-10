@@ -321,3 +321,37 @@ async fn copy_onto_self_is_refused_and_data_intact() {
 	);
 	assert_eq!(body2, b"two");
 }
+
+#[tokio::test]
+async fn propfind_malformed_depth_returns_400_wire() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	for depth in ["2", "-1", "bogus", ""] {
+		let (status, body) = send(
+			&app,
+			"PROPFIND",
+			"/",
+			Some(ALICE),
+			&[("Depth", depth.into())],
+			b"",
+		)
+		.await;
+		assert!(
+			status == StatusCode::BAD_REQUEST && body.is_empty(),
+			"malformed PROPFIND Depth must return 400 with an empty body"
+		);
+	}
+	for headers in [vec![], vec![("Depth", "infinity".into())]] {
+		let (status, body) = send(&app, "PROPFIND", "/", Some(ALICE), &headers, b"").await;
+		let expected = concat!(
+			"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
+			"<D:error xmlns:D=\"DAV:\">\n",
+			"  <D:propfind-finite-depth/>\n",
+			"</D:error>\n"
+		);
+		assert!(
+			status == StatusCode::FORBIDDEN && body == expected.as_bytes(),
+			"infinite PROPFIND Depth must return the exact finite-depth precondition"
+		);
+	}
+}
