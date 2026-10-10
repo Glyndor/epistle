@@ -8,6 +8,9 @@
 //! stays small.
 
 mod db_dump;
+mod restore_files;
+
+use restore_files::lay_files;
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -285,26 +288,6 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 	Ok(out)
 }
 
-/// Lay the archive entries down under `data_dir`, stripping the `data/`
-/// prefix the archive adds. The mode is restored so a private key the
-/// operator wrote 0o600 stays 0o600.
-fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> std::io::Result<()> {
-	for (name, mode, content) in entries {
-		let stripped = name.strip_prefix("data/").unwrap_or(name);
-		let dest = data_dir.join(stripped);
-		if let Some(parent) = dest.parent() {
-			std::fs::create_dir_all(parent)?;
-		}
-		std::fs::write(&dest, content)?;
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::PermissionsExt;
-			std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(*mode))?;
-		}
-	}
-	Ok(())
-}
-
 /// Build a gzip-compressed USTAR archive from named byte entries.
 fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
 	let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -484,3 +467,7 @@ mod tests_container;
 #[cfg(test)]
 #[path = "../backup_restore_run_tests.rs"]
 mod tests_restore_run;
+
+#[cfg(test)]
+#[path = "../backup_tests_paths.rs"]
+mod tests_paths;
