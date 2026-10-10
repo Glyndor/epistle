@@ -89,6 +89,59 @@ async fn send(
 
 const ALICE: &str = "alice:pw-a";
 
+/// A PROPFIND on a collection with no `Depth` header must come back
+/// `403 Forbidden` carrying the `propfind-finite-depth` precondition
+/// (RFC 4918 §9.1: missing Depth means infinity; servers may refuse
+/// infinity). The same request with an explicit `Depth: 1` still
+/// lists the children.
+#[tokio::test]
+async fn propfind_without_depth_is_403_with_precondition() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
+	let (status, body) = send(
+		&app,
+		"PROPFIND",
+		"/d",
+		Some(ALICE),
+		&[],
+		b"",
+	)
+	.await;
+	assert_eq!(status, StatusCode::FORBIDDEN);
+	let text = String::from_utf8(body).unwrap();
+	assert!(
+		text.contains("propfind-finite-depth"),
+		"403 body must contain propfind-finite-depth precondition, got {text:?}"
+	);
+}
+
+/// `Depth: 1` must still list the children, even with the new
+/// `propfind-finite-depth` refusal in place. The refusal is only
+/// for missing or `infinity` Depth; finite values are honoured.
+#[tokio::test]
+async fn propfind_depth_one_still_lists_children() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
+	let (status, body) = send(
+		&app,
+		"PROPFIND",
+		"/d",
+		Some(ALICE),
+		&[("Depth", "1".to_string())],
+		b"",
+	)
+	.await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+	let text = String::from_utf8(body).unwrap();
+	// The collection itself plus its single child.
+	assert_eq!(text.matches("<D:response>").count(), 2);
+	assert!(text.contains("a.txt"));
+}
+
 /// Place a symlink inside alice's DAV tree that points outside it. The link
 /// target is a regular file under the temp data dir but outside
 /// `accounts/alice/dav`.

@@ -372,20 +372,42 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 }
 
 /// `PROPFIND`: a `207` multi-status of the target (and, at `Depth: 1`, its
-/// children). `Depth: infinity` is treated as `1` (we do not recurse fully).
+/// children). The spec says a missing `Depth` header means "infinity"
+/// (RFC 4918 §9.1) and an infinite walk on an arbitrary per-user
+/// tree would be a denial-of-service trap. We refuse any `Depth` of
+/// `infinity` (or missing) with `403 Forbidden` carrying the
+/// `propfind-finite-depth` precondition; the client can retry with
+/// `Depth: 0` or `Depth: 1`.
 ///
 /// A body asking for the CardDAV discovery props
 /// (`current-user-principal`/`addressbook-home-set`/`principal-URL`) is answered
 /// with the discovery document instead — pointing the client at the account
 /// home as its addressbook home.
 async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
+	// A missing `Depth` header is `infinity` per RFC 4918 §9.1; we
+	// refuse it the same as an explicit `Depth: infinity`. The
+	// precondition is named in the RFC (it is the standardised
+	// text clients look for); anything else is left to a future
+	// minor revision.
 	let depth = request
 		.headers()
 		.get("Depth")
 		.and_then(|value| value.to_str().ok())
-		.map(str::trim)
-		.unwrap_or("0")
-		.to_string();
+		.map(str::trim);
+	let depth = match depth {
+		Some(value) if value.eq_ignore_ascii_case("infinity") => {
+			return propfind_finite_depth_precondition();
+		}
+		Some(value) if value == "0" || value == "1" => value.to_string(),
+		Some(value) if value.eq_ignore_ascii_case("0") || value.eq_ignore_ascii_case("1") => {
+			value.to_ascii_lowercase()
+		}
+		// A malformed Depth is treated like a missing one: `infinity`,
+		// refused with the precondition. The spec's `propfind-finite-depth`
+		// is the only signal a client can use to discover the
+		// restriction, so we always emit it on every rejected Depth.
+		_ => return propfind_finite_depth_precondition(),
+	};
 	let body_bytes = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
 		Err(response) => return response,
@@ -440,6 +462,24 @@ async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
 		}
 	}
 	xml_multistatus(propfind::multistatus(&entries))
+}
+
+/// Answer a `PROPFIND` whose `Depth` is missing or `infinity` with
+/// `403 Forbidden` and the `propfind-finite-depth` precondition
+/// (RFC 4918 §9.1). A client that sees this can retry with a finite
+/// `Depth`.
+fn propfind_finite_depth_precondition() -> Response {
+	(
+		StatusCode::FORBIDDEN,
+		[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
+		concat!(
+			"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
+			"<D:error xmlns:D=\"DAV:\">\n",
+			"  <D:propfind-finite-depth/>\n",
+			"</D:error>\n",
+		),
+	)
+		.into_response()
 }
 
 /// Wrap an already-built multi-status XML body in the `207` response.
