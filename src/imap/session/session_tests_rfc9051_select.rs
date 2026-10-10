@@ -70,7 +70,7 @@ fn failed_examine_deselects_with_closed_just_like_select() {
 #[test]
 fn close_on_read_write_silently_expunges_deleted() {
 	// RFC 9051 §6.4.1: CLOSE on a read-write selection permanently
-	// removes every \Deleted message and returns silently — no untagged
+	// removes every \Deleted message and returns silently, no untagged
 	// EXPUNGE responses, just the tagged OK.
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver(dir.path(), b"Subject: keeps\r\n\r\nkeep\r\n");
