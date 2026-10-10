@@ -10,6 +10,38 @@ fn parse_str(script: &str) -> Result<Vec<Command>, ParseError> {
 }
 
 #[test]
+fn rejects_deeply_nested_block_with_nesting_error() {
+	// 10 000 nested `if true {` openings without a closing brace.
+	// The lexer is happy (no token surprises); the parser must reject
+	// with a NestingDepth (or similar) error before overflowing the
+	// stack.
+	let mut script = String::new();
+	for _ in 0..10_000 {
+		script.push_str("if true {");
+	}
+	let err = parse_str(&script).expect_err("deep nesting must be rejected");
+	let rendered = format!("{err:?}");
+	assert!(
+		rendered.contains("NestingDepth") || rendered.contains("nesting"),
+		"the error must mention nesting, got: {rendered}"
+	);
+}
+
+#[test]
+fn modest_nesting_still_parses() {
+	// 32 nested `if true {` blocks is well below the limit; the parser
+	// must accept it.
+	let mut script = String::new();
+	for _ in 0..32 {
+		script.push_str("if true {");
+	}
+	for _ in 0..32 {
+		script.push_str("}");
+	}
+	parse_str(&script).expect("32-deep nesting must parse");
+}
+
+#[test]
 fn parses_require_and_actions() {
 	let commands = parse_str("require [\"fileinto\"];\nfileinto \"Junk\";\nkeep;").expect("ok");
 	assert_eq!(commands.len(), 3);
