@@ -133,6 +133,56 @@ error 13)`. The same mount with `--userns=keep-id:uid=65532,gid=65532`
 let `config-check --config /etc/epistle/mail.toml` print
 `configuration is valid` and exit 0.
 
+## Bringing up the stack
+
+`epistle init` lays down the operator-facing half of the stack: the
+config file, the DKIM and storage keys, the self-signed cert pair,
+and, when `services.database = true`, the database password and the
+podup compose file. Bringing the stack up is a single command:
+
+```sh
+podup -f /var/lib/glyndor/epistle/compose/compose.yaml up -d
+```
+
+The compose file is JSON (the repository has no YAML crate). The
+`mail` service uses `network_mode: "pasta"` so an SMTP client on the
+host network reaches the listener with its real address; rootless
+Podman would otherwise funnel every connection through `rootlessport`
+and the listener would see one internal IP for every client. The
+`db` service uses `network_mode: "none"`: it does not need network
+because the two services talk over a Unix-domain socket on a named
+volume (`epistle-pgsock:/var/run/postgresql`), which avoids the
+TCP/TLS path entirely. The `db` healthcheck queries the real database
+through that socket with `psql ... -Atc 'select 1'`, so a healthy
+state means the user, the role and the password file all line up;
+`mail` waits on it with `depends_on: {db: {condition: service_healthy}}`.
+
+The data directory (`<data_dir>`) and the directory holding
+`mail.toml` (`<config_dir>`, the parent of the `config_path` answer)
+are bind-mounted at the same path on both sides of the keep-id
+mapping. A path the operator sees on the host
+(`/var/lib/glyndor/epistle/keys/s1.pem`) is the same path inside
+the container, so every entry `init` wrote into `mail.toml` resolves
+the same way during a host `config-check` and during the in-container
+`serve`. A different path on each side would force the operator to
+keep two parallel sets of values in `mail.toml`, one for the host
+and one for the container, and would silently break the moment
+either side drifted.
+
+The management API listener is not configured by `init`: the
+assistant refuses `services.api = true` because there is no
+credential the operator can hand the stack without editing the
+generated config by hand. An operator who enables the API in
+the generated config binds it on `::` inside the container
+(the same dual-stack bind the mail listeners use); a loopback
+listener is not reachable through the pasta mapping, so the
+host-side reach is the operator's responsibility, not the
+init stack's. Init keeps publishing a listener when the
+operator's keep-existing-listeners merge leaves it on a
+non-loopback address; a `127.0.0.1:<p>:<p>` publish on the
+compose side is the operator's own addition to the generated
+file (or a follow-up edit after `init` runs).
+
 ## Tags
 
 The release job pushes per-arch images plus a multi-arch manifest list with

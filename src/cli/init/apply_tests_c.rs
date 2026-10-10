@@ -25,6 +25,7 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
+		image: None,
 	}
 }
 
@@ -185,6 +186,7 @@ fn apply_fails_when_config_path_has_no_parent() {
 		config_path: std::path::PathBuf::from("/"),
 		dns: None,
 		services: Services::default(),
+		image: None,
 	};
 	let outcome = apply(&answers);
 	let err = outcome
@@ -224,7 +226,9 @@ fn answers_with_dns_and_extra_services() -> Answers {
 			managesieve: true,
 			webdav: true,
 			api: false,
+			database: false,
 		},
+		image: None,
 	}
 }
 
@@ -340,6 +344,7 @@ fn build_config_includes_the_api_listener_when_services_request_it() {
 		managesieve: false,
 		webdav: false,
 		api: true,
+		database: false,
 	};
 	let cert = std::path::PathBuf::from("/var/lib/epistle/keys/cert.pem");
 	let key = std::path::PathBuf::from("/var/lib/epistle/keys/key.pem");

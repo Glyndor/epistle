@@ -35,7 +35,8 @@ fn run_init(answers: &Path) -> std::process::Output {
 #[test]
 fn init_refuses_a_config_path_that_is_an_existing_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let data_dir = dir.path().join("data");
+	let data_root = tempfile::tempdir().expect("tempdir");
+	let data_dir = data_root.path().join("data");
 	let config_dir = dir.path().join("etc");
 	std::fs::create_dir(&config_dir).expect("mkdir config dir");
 	let body = format!(
@@ -43,7 +44,9 @@ fn init_refuses_a_config_path_that_is_an_existing_directory() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_dir.display(),
 	);
@@ -78,7 +81,8 @@ fn init_refuses_a_config_path_that_is_an_existing_directory() {
 #[test]
 fn init_succeeds_when_config_path_is_a_file_in_the_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let data_dir = dir.path().join("data");
+	let data_root = tempfile::tempdir().expect("tempdir");
+	let data_dir = data_root.path().join("data");
 	let config_path = dir.path().join("etc").join("mail.toml");
 	std::fs::create_dir(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
@@ -86,7 +90,9 @@ fn init_succeeds_when_config_path_is_a_file_in_the_directory() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -106,14 +112,17 @@ fn init_succeeds_when_config_path_is_a_file_in_the_directory() {
 #[test]
 fn init_refuses_a_config_path_inside_data_dir_keys() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let data_dir = dir.path().join("data");
+	let data_root = tempfile::tempdir().expect("tempdir");
+	let data_dir = data_root.path().join("data");
 	let config_path = data_dir.join("keys").join("s1.pem");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

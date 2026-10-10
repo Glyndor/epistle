@@ -269,6 +269,22 @@ pub fn run<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<Filled, (
 		managesieve: ask_bool(reader, "enable ManageSieve", false, out)?,
 		webdav: ask_bool(reader, "enable WebDAV", false, out)?,
 		api: ask_bool(reader, "enable management API", false, out)?,
+		database: ask_bool(
+			reader,
+			"enable PostgreSQL database (reputation, Bayes)",
+			false,
+			out,
+		)?,
+	};
+	let image_line = ask_line(
+		reader,
+		"mail image (empty for the build-time default)> ",
+		out,
+	)?;
+	let image = if image_line.is_empty() {
+		None
+	} else {
+		Some(image_line)
 	};
 	let answers = Answers {
 		mode,
@@ -280,6 +296,7 @@ pub fn run<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<Filled, (
 		config_path: PathBuf::from(config_path),
 		dns,
 		services,
+		image,
 	};
 	match answers.validate() {
 		Ok(_) => Ok(Filled { answers }),

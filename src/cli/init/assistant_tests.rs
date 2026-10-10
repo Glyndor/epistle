@@ -34,7 +34,9 @@ fn assistant_rejects_invalid_hostname_with_the_same_text_as_the_file_path() {
 	             n\n\
 	             n\n\
 	             n\n\
-	             n\n";
+	             n\n\
+	             \n\
+	             y\n";
 	let (out, result) = harness(input);
 	assert!(result.is_ok(), "ok with retries, got {:?}", parse_out(&out));
 	let text = parse_out(&out);
@@ -56,6 +58,9 @@ fn assistant_eof_before_confirmation_is_an_error() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	assert!(
@@ -80,6 +85,8 @@ fn assistant_invalid_domain_text_is_shown() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	assert!(result.is_ok(), "got {:?}", parse_out(&out));
@@ -107,6 +114,9 @@ fn assistant_accepts_automatic_with_minimal_inputs() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -130,6 +140,8 @@ fn assistant_defaults_services_to_imap_and_submission() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -154,6 +166,8 @@ fn assistant_collects_multiple_validation_errors_at_the_end() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	assert!(result.is_err());
@@ -183,6 +197,8 @@ fn assistant_prints_every_validation_error_before_returning() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -210,6 +226,8 @@ fn assistant_keeps_the_good_value_after_a_bad_answer() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -241,7 +259,10 @@ fn assistant_services_questions_set_the_flags() {
 	             y\n\
 	             y\n\
 	             y\n\
-	             \n";
+	             n\n\
+	             n\n\
+	             \n\
+	             y\n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
 	assert!(result.is_ok(), "got {text}");
@@ -272,7 +293,9 @@ fn assistant_rejects_api_service_at_final_validation() {
 	             n\n\
 	             n\n\
 	             n\n\
-	             y\n";
+	             y\n\
+	             n\n\
+	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
 	assert!(
@@ -310,6 +333,8 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 		 \n\
 		 \n\
 		 \n\
+		 \n\
+\n\
 		 \n",
 	);
 	let (out, result) = harness(&input);
@@ -352,6 +377,8 @@ fn assistant_empty_line_on_first_domain_is_rejected_with_a_hint() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -382,6 +409,8 @@ fn assistant_invalid_bool_answer_is_echoed_as_a_hint() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -410,6 +439,8 @@ fn assistant_invalid_ipv4_answer_is_echoed_as_a_hint() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -438,6 +469,8 @@ fn assistant_ipv6_answer_in_ipv4_question_is_rejected() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -469,6 +502,8 @@ fn assistant_ipv4_answer_in_ipv6_question_is_rejected() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);

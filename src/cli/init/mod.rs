@@ -8,6 +8,7 @@
 mod answers;
 mod apply;
 mod assistant;
+mod compose;
 mod plan;
 
 pub use answers::Answers;

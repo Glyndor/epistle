@@ -26,6 +26,7 @@ pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 		config_path: config_path.to_path_buf(),
 		dns: None,
 		services: Services::default(),
+		image: None,
 	}
 }
 
