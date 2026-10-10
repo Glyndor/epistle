@@ -103,3 +103,6 @@ mod rfc5182_searchres;
 
 #[path = "session_tests_rfc9051_uid_star.rs"]
 mod rfc9051_uid_star;
+
+#[path = "session_tests_rfc9051_poll.rs"]
+mod rfc9051_poll;
