@@ -3,7 +3,60 @@
 use std::net::IpAddr;
 use std::pin::Pin;
 
+use hickory_resolver::config::{NameServerConfig, ProtocolConfig, ResolverConfig, ResolverOpts};
+
 use crate::dane::tlsa::TlsaRecord;
+
+#[path = "dns_tests.rs"]
+#[cfg(test)]
+mod dns_tests;
+
+/// Build a `ResolverConfig` from the system configuration (`/etc/resolv.conf`
+/// on Unix, the registry on Windows). Caller in the future asks for TCP only.
+pub(crate) fn system_resolver_config() -> std::io::Result<ResolverConfig> {
+	let (config, _opts) =
+		hickory_resolver::system_conf::read_system_conf().map_err(std::io::Error::other)?;
+	Ok(config)
+}
+
+/// Build the resolver options the system resolver uses: defaults from
+/// `/etc/resolv.conf`, DNSSEC validation enabled.
+pub(crate) fn system_resolver_options() -> ResolverOpts {
+	let (_config, mut opts) =
+		hickory_resolver::system_conf::read_system_conf().map_err(std::io::Error::other).unwrap();
+	opts.validate = true;
+	opts
+}
+
+fn _keep_only_tcp_unused(mut config: ResolverConfig) -> ResolverConfig {
+	for server in &mut config.name_servers {
+		server.connections = server
+			.connections
+			.iter()
+			.filter(|connection| matches!(connection.protocol, ProtocolConfig::Tcp))
+			.cloned()
+			.collect();
+	}
+	config
+}
+
+/// Build a `TokioResolver` from the system configuration, TCP-only, with
+/// DNSSEC validation enabled. Every hickory resolver that resolves names
+/// from the host (`SystemDns` for SPF, `MxConnector` for the queue) goes
+/// through this so the systemd-resolved truncation workaround stays in one
+/// place.
+pub(crate) fn system_resolver() -> std::io::Result<hickory_resolver::TokioResolver> {
+	let config = system_resolver_config()?;
+	let opts = system_resolver_options();
+	let mut builder = hickory_resolver::TokioResolver::builder_with_config(
+		config,
+		hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+	);
+	*builder.options_mut() = opts;
+	builder.build().map_err(std::io::Error::other)
+}
+
+fn _force_nameserver_type_imported(_server: &NameServerConfig) {}
 
 /// A DNS query failure as SPF distinguishes them (RFC 7208 section 2.6.6/7).
 #[derive(Debug, Clone, PartialEq, Eq)]
