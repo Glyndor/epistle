@@ -57,31 +57,12 @@ pub(crate) fn which_openssl_for_tests() -> bool {
 /// is no host probe: `init` runs only inside containers, where `::`
 /// binds regardless of the host's network namespace.
 pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
-	// A symlinked `config_path` is a fact about the disk that costs
-	// one `symlink_metadata` call and needs no effects at all: the
-	// apply phase already refuses to follow a symlink, but by then
-	// every key file and the self-signed cert pair are already on
-	// disk. The plan is a preflight, not a lock: the path can still
-	// become a symlink between plan and apply, and `write_validated_config`
-	// keeps its own check as a safety net. Other read failures
-	// (a non-traversable parent, a permissions refusal) are left for
-	// the apply phase to surface with exit 1 so the operator sees
-	// the partial report of the keys that did land.
-	#[cfg(unix)]
-	if let Ok(meta) = std::fs::symlink_metadata(&answers.config_path) {
-		if meta.file_type().is_symlink() {
-			return Err(ApplyError::ConfigSymlink(answers.config_path.clone()));
-		}
-		// A directory, fifo, device, or socket at `config_path` is a
-		// fact about the disk the operator can see with `ls`. Without
-		// this check the apply phase would land every key, then the
-		// staging step would try to `open(O_EXCL)` against the
-		// directory and fail with `Is a directory` after every key
-		// already landed. The plan catches it before any effect.
-		if !meta.file_type().is_file() {
-			return Err(ApplyError::ConfigNotAFile(answers.config_path.clone()));
-		}
-	}
+	let existing = match apply_config::read_config(&answers.config_path) {
+		Ok(existing) => existing,
+		// Preserve the plan's treatment of I/O failures as an unknown file state.
+		Err(ApplyError::ConfigRead(_, _)) => None,
+		Err(error) => return Err(error),
+	};
 	let keys_dir = answers.data_dir.join("keys");
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
@@ -162,15 +143,8 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		reused: cert_exists && key_exists,
 		key_reused: key_exists,
 	});
-	// When the config on disk already has a non-empty `listeners`
-	// array the operator put there on purpose, `init` does not
-	// overwrite it. The plan step renders the kept listeners so the
-	// operator still sees the bind addresses `serve` will expose,
-	// and the apply phase reads the same flag from the disk so the
-	// two agree. The check is read-only: `apply_config::merge_with_existing`
-	// does its own read and tolerates the operator editing the file
-	// between the plan prompt and the apply run.
-	let existing_listeners = apply_config::existing_operators_listeners(&answers.config_path)?;
+	let existing_listeners =
+		apply_config::listeners_from_existing(&answers.config_path, existing.as_ref())?;
 	steps.push(PlanStep::Listeners {
 		entries: if let Some(existing) = &existing_listeners {
 			existing
@@ -193,7 +167,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		&s2,
 		&cert_path,
 		&key_path,
-		&answers.config_path,
+		existing.as_ref(),
 	)?;
 	let file_exists = answers.config_path.exists();
 	let count = managed_key_count(answers);
@@ -440,18 +414,13 @@ fn config_is_identical_to_desired(
 	dkim_rsa: &std::path::Path,
 	cert_file: &std::path::Path,
 	key_file: &std::path::Path,
-	config_path: &std::path::Path,
+	existing: Option<&apply_config::ExistingConfig>,
 ) -> Result<bool, ApplyError> {
-	// A read failure here only means "we cannot tell whether the
-	// existing file matches the desired one". The apply phase will
-	// surface the same read failure with its own error variant; the
-	// plan, which only describes what the operator is about to see,
-	// can safely say "we will write a fresh config" and let the
-	// apply phase handle the failure.
-	let existing = match std::fs::read_to_string(config_path) {
-		Ok(text) => text,
-		Err(_) => return Ok(false),
+	let Some(opened) = existing else {
+		return Ok(false);
 	};
+	let existing = &opened.text;
+	let config_path = &answers.config_path;
 	// The apply phase will land `dkim_rsa` if openssl is on PATH or
 	// if the file already exists. The plan reads the same signals so
 	// the desired config it builds matches the one apply will write
@@ -474,14 +443,14 @@ fn config_is_identical_to_desired(
 		toml::to_string(&desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	let desired_value: toml::Value = toml::from_str(&desired_bytes)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-	let existing_value: toml::Value = toml::from_str(&existing).map_err(|error| {
+	let existing_value: toml::Value = toml::from_str(existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),
 			std::io::Error::other(error.to_string()),
 		)
 	})?;
 	let merged = apply_config::reconcile(existing_value, desired_value, false);
-	let existing_parsed = toml::from_str(&existing).map_err(|error| {
+	let existing_parsed = toml::from_str(existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),
 			std::io::Error::other(error.to_string()),
@@ -492,7 +461,7 @@ fn config_is_identical_to_desired(
 		// `Config::load` rejects the on-disk file. Mirror that check
 		// here so the plan cannot say `identical, not touched` for a
 		// config `config-check` and `serve` would refuse.
-		if let Err(error) = crate::config::Config::load(config_path) {
+		if let Err(error) = opened.validate(config_path) {
 			return Err(ApplyError::ConfigInvalid(format!(
 				"existing config at {} would be left untouched but is invalid: {}",
 				config_path.display(),
