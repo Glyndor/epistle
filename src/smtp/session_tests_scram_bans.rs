@@ -86,20 +86,8 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 	);
 }
 
-/// A malformed client-first sent from an already-banned IP does not
-/// extend the ban and does not add a strike. The previous behaviour
-/// recorded a failure first and only then checked the ban, so an
-/// unbanned peer could trip the threshold with bad-base64 requests
-/// and then keep extending the ban by reconnecting after the
-/// per-connection three-strikes limit closed the socket. The fix
-/// consults the IP ban before recording the failure, so a banned
-/// peer's garbage requests stay a no-op against the shared store.
-/// The test arms an active IP ban, drives three malformed
-/// client-firsts (rebuilding the session each time because the
-/// per-connection three-strikes limit closes the socket), and
-/// asserts the ban expiry has not moved and no new failure landed.
-/// Lives in `session_tests_scram_ban_lifecycle.rs` to keep the
-/// per-file code-line budget under control.
+// Ban lifecycle tests live in `session_tests_scram_ban_lifecycle.rs`.
+// Keep them separate to stay within the per-file code-line budget.
 
 /// A SCRAM success drives the credential lookup, so the per-test
 /// counter is bumped. This is the property that catches a regression
