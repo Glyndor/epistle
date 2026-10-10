@@ -297,6 +297,7 @@ pub fn run<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<Filled, (
 		dns,
 		services,
 		image,
+		acme: None,
 	};
 	match answers.validate() {
 		Ok(_) => Ok(Filled { answers }),

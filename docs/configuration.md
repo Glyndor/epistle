@@ -131,6 +131,23 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 
 Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent. Operators exposing any of these externally should either configure `[tls]` itself or front the listener with a TLS proxy.
 
+### Public-install firewall
+
+A public install has to let inbound TCP through the host firewall (or fronting load balancer) on every port a real client has to reach. The defaults `init` ships on a public hostname:
+
+| Port | Protocol | Required for |
+|---|---|---|
+| 25 | SMTP | Inbound mail from other servers. |
+| 80 | HTTP | Certificate issuance: the Let's Encrypt HTTP-01 challenge responder (`acme` listener). Open to the public internet — the CA connects from outside. |
+| 143 | IMAP+STARTTLS | Mail clients that negotiate TLS on connect. |
+| 465 | Submissions | Mail clients that use implicit TLS for submission. |
+| 587 | Submission+STARTTLS | Mail clients that submit with STARTTLS. |
+| 993 | IMAPS | Mail clients that use implicit TLS for IMAP. |
+
+Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`, `8091` (autoconfig) when the operator wants Thunderbird/Outlook autodiscovery.
+
+Port 80 has to be open even when no certificate renewal is in flight: the ACME HTTP-01 challenge is the only mechanism Let's Encrypt uses for a fresh install, and the renewal loop runs against the same responder. Closing port 80 means the first certificate never lands.
+
 ## Sections
 
 ### `[mta_sts]`

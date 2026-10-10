@@ -27,6 +27,7 @@ fn answers_minimal() -> Answers {
 		dns: None,
 		services: Services::default(),
 		image: None,
+		acme: None,
 	}
 }
 
@@ -42,8 +43,14 @@ fn cert_key_ed() -> (PathBuf, PathBuf, PathBuf) {
 fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off() {
 	// The management API is also off here. The desired config must
 	// carry only smtp; the listener that the rest of the internet
-	// talks to.
+	// talks to. The hostname is `.local` so the ACME auto-enable
+	// stays off (`.local` is a reserved TLD and a fresh install
+	// under it has no public A record) and the listener count is
+	// exactly one. A test that used a public hostname would also
+	// carry the `acme` listener on port 80, which is the right
+	// shape for a real install but not what this assertion pins.
 	let mut answers = answers_minimal();
+	answers.hostname = "mail.example.local".to_string();
 	answers.services = Services {
 		imap: false,
 		submission: false,

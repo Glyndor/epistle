@@ -8,6 +8,7 @@
 use super::Answers;
 use super::ApplyError;
 use super::apply_config;
+use super::apply_config_acme;
 use crate::cli::init::compose;
 use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
@@ -181,7 +182,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 				})
 				.collect()
 		} else {
-			listener_entries(&answers.services)
+			listener_entries(&answers.services, answers)
 		},
 		kept: existing_listeners.is_some(),
 	});
@@ -254,8 +255,12 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 /// `apply_listeners_lines_tests.rs` is what catches a
 /// `listener_entries` that hardcoded the old number alongside a
 /// `ListenerKind` that switched.
-fn listener_entries(services: &crate::cli::init::answers::Services) -> Vec<ListenerEntry> {
+fn listener_entries(
+	services: &crate::cli::init::answers::Services,
+	answers: &crate::cli::init::Answers,
+) -> Vec<ListenerEntry> {
 	let mail_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+	let acme_enabled = apply_config_acme::should_enable_acme(answers);
 	let mut entries = Vec::new();
 	entries.push(ListenerEntry {
 		kind: "smtp".to_string(),
@@ -268,12 +273,28 @@ fn listener_entries(services: &crate::cli::init::answers::Services) -> Vec<Liste
 			addr: mail_addr,
 			port: crate::config::ListenerKind::Imap.default_port(),
 		});
+		// IMAPS (993): the implicit-TLS sibling of STARTTLS IMAP
+		// (143). Most clients default to the implicit port; the
+		// plan has to show both so the operator can match what
+		// `serve` will bind against the publish map.
+		entries.push(ListenerEntry {
+			kind: "imaps".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Imaps.default_port(),
+		});
 	}
 	if services.submission {
 		entries.push(ListenerEntry {
 			kind: "submission".to_string(),
 			addr: mail_addr,
 			port: crate::config::ListenerKind::Submission.default_port(),
+		});
+		// Submissions (465): the implicit-TLS sibling of STARTTLS
+		// submission (587). Same reasoning as IMAPS.
+		entries.push(ListenerEntry {
+			kind: "submissions".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Submissions.default_port(),
 		});
 	}
 	if services.pop3 {
@@ -302,6 +323,13 @@ fn listener_entries(services: &crate::cli::init::answers::Services) -> Vec<Liste
 			kind: "api".to_string(),
 			addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
 			port: crate::config::ListenerKind::Api.default_port(),
+		});
+	}
+	if acme_enabled {
+		entries.push(ListenerEntry {
+			kind: "acme".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Acme.default_port(),
 		});
 	}
 	entries

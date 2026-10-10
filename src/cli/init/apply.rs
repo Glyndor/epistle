@@ -363,6 +363,56 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 				};
 			}
 		};
+	// When ACME is on, the [tls] section points at
+	// `<data_dir>/acme/cert.pem` (the renewal loop's target) but
+	// the self-signed bootstrap cert is generated next to the
+	// other keys in `keys/`. Copy both halves into the ACME path
+	// so the server can load them at startup; ACME renewal will
+	// overwrite the files in place. Without this step, a fresh
+	// install with ACME on would fail to start because the cert
+	// the server is told to load is not on disk yet.
+	if apply_config_acme::should_enable_acme(answers) {
+		let acme_dir = answers.data_dir.join("acme");
+		if let Err(error) = fs::create_dir_all(&acme_dir) {
+			return ApplyOutcome {
+				report,
+				error: Some(ApplyError::KeyWrite(acme_dir.clone(), error)),
+			};
+		}
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt;
+			if let Err(error) =
+				fs::set_permissions(&acme_dir, std::fs::Permissions::from_mode(0o700))
+			{
+				return ApplyOutcome {
+					report,
+					error: Some(ApplyError::KeyWrite(acme_dir.clone(), error)),
+				};
+			}
+		}
+		let acme_cert = acme_dir.join("cert.pem");
+		let acme_key = acme_dir.join("key.pem");
+		for (src, dst) in [(&cert_path, &acme_cert), (&key_path, &acme_key)] {
+			match fs::read(src) {
+				Ok(bytes) => {
+					if let Err(error) = crate::storage::write_secret(dst, &bytes) {
+						return ApplyOutcome {
+							report,
+							error: Some(ApplyError::KeyWrite(dst.clone(), error)),
+						};
+					}
+					report.steps.push(ReportStep::Wrote(dst.clone()));
+				}
+				Err(error) => {
+					return ApplyOutcome {
+						report,
+						error: Some(ApplyError::KeyWrite(src.clone(), error)),
+					};
+				}
+			}
+		}
+	}
 	if let Err(error) = ensure_config_parent_dir(&answers.config_path, &mut report) {
 		return ApplyOutcome {
 			report,
@@ -403,18 +453,17 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// the file once here so the apply path agrees with what the
 	// plan promised, even when the operator edited the file between
 	// the plan prompt and the apply run.
-	let keep_existing_listeners =
-		match apply_config::existing_operators_listeners(&answers.config_path) {
-			Ok(Some(_)) => true,
-			Ok(None) => false,
-			Err(error) => {
-				return ApplyOutcome {
-					report,
-					error: Some(error),
-				};
-			}
-		};
-	match apply_config::merge_with_existing(
+	let keep_existing_listeners = match existing_operators_listeners(&answers.config_path) {
+		Ok(Some(_)) => true,
+		Ok(None) => false,
+		Err(error) => {
+			return ApplyOutcome {
+				report,
+				error: Some(error),
+			};
+		}
+	};
+	match merge_with_existing(
 		&answers.config_path,
 		&desired_bytes,
 		keep_existing_listeners,
@@ -453,6 +502,10 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 
 #[path = "apply_config.rs"]
 mod apply_config;
+#[path = "apply_config_acme.rs"]
+mod apply_config_acme;
+#[path = "apply_config_merge.rs"]
+mod apply_config_merge;
 
 #[path = "apply_plan.rs"]
 mod apply_plan;
@@ -468,6 +521,7 @@ pub use apply_plan::plan;
 /// the config-write step wrote, without taking a second pass
 /// at the apply-internal `apply_config` module.
 pub(crate) use apply_config::listeners_to_write;
+pub(crate) use apply_config_merge::{existing_operators_listeners, merge_with_existing};
 
 /// Re-export so the apply tests can call into the keys module
 /// without the rest of the crate going through `apply::apply_keys`.
@@ -478,6 +532,9 @@ pub(crate) use apply_keys::openssl_available;
 #[cfg(test)]
 #[path = "apply_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "apply_tests_acme.rs"]
+mod tests_acme;
 #[cfg(test)]
 #[path = "apply_tests_b.rs"]
 mod tests_b;
@@ -502,6 +559,9 @@ mod tests_failures_c;
 #[cfg(test)]
 #[path = "apply_failures_tests_d.rs"]
 mod tests_failures_d;
+#[cfg(test)]
+#[path = "apply_tests_implicit_tls.rs"]
+mod tests_implicit_tls;
 #[cfg(test)]
 #[path = "apply_keep_listeners_tests.rs"]
 mod tests_keep_listeners;

@@ -25,6 +25,7 @@ fn answers_minimal() -> Answers {
 		dns: None,
 		services: Services::default(),
 		image: None,
+		acme: None,
 	}
 }
 

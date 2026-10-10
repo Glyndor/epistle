@@ -17,21 +17,17 @@ use super::*;
 
 #[test]
 fn mail_published_ports_match_the_listeners_the_config_will_bind() {
-	// The previous shape published `993:993` and `465:465`
-	// because the IMAPS and Submissions kinds are not written
-	// into the config from the answers (`imap` is
-	// plaintext-with-STARTTLS, `submission` is STARTTLS), so a
-	// compose file that publishes 993 or 465 would forward
-	// traffic to a port nothing listens on. With
-	// `imap = true` and `submission = true`, the desired
-	// config binds smtp(25), imap(143), submission(587) on the
-	// dual-stack `::`. Those are exactly the ports the
-	// rendered `ports:` array must publish, no more, no less.
-	// The test derives the expected list from the listeners
-	// init would write (round-tripped through the `Listener`
-	// deserialiser) so a future change to the listener set
-	// is matched by the publish map without the test having
-	// to be edited.
+	// With `imap = true` and `submission = true`, the desired
+	// config binds smtp(25), imap(143), imaps(993), submission(587),
+	// submissions(465) on the dual-stack `::`. The implicit-TLS
+	// siblings (993, 465) ship alongside the STARTTLS listeners
+	// because real-world clients default to the implicit ports
+	// first. Those are exactly the ports the rendered `ports:`
+	// array must publish, no more, no less. The test derives the
+	// expected list from the listeners init would write
+	// (round-tripped through the `Listener` deserialiser) so a
+	// future change to the listener set is matched by the publish
+	// map without the test having to be edited.
 	let value = render(&minimal_answers(), false);
 	let ports: Vec<String> = value["services"]["mail"]["ports"]
 		.as_array()
@@ -40,12 +36,21 @@ fn mail_published_ports_match_the_listeners_the_config_will_bind() {
 		.map(|p| p.as_str().expect("port is a string").to_string())
 		.collect();
 	// `render` skips the disk; the desired listeners for the
-	// minimal answers are smtp, imap, submission (all `::`, no
-	// loopback) and the schema defaults are 25, 143, 587.
+	// minimal answers are smtp, imap, imaps, submission,
+	// submissions, acme (all `::`, no loopback) and the schema
+	// defaults are 25, 143, 993, 587, 465, 80. The implicit-TLS
+	// siblings ship alongside the STARTTLS listeners because
+	// real-world clients default to 993 and 465 first; the
+	// `acme` listener ships because the default `minimal_answers`
+	// carry a public hostname (`mail.example.org`) and init's
+	// public-hostname heuristic enables ACME automatically.
 	let expected: Vec<String> = vec![
 		"25:25".to_string(),
 		"143:143".to_string(),
+		"993:993".to_string(),
 		"587:587".to_string(),
+		"465:465".to_string(),
+		"80:80".to_string(),
 	];
 	let mut expected_sorted = expected.clone();
 	expected_sorted.sort();
