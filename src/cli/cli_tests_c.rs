@@ -135,6 +135,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 			data: b"Subject: from-alice\r\n\r\nbody\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		})
 		.expect("store");

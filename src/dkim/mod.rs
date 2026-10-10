@@ -17,3 +17,5 @@ pub use verify::{DkimOutcome, DkimResult, verify_message};
 // canonicalization, and public-key record format).
 pub(crate) use signature::{Algorithm, Canon};
 pub(crate) use verify::parse_key;
+
+pub(crate) use verify::verify_tlsrpt;

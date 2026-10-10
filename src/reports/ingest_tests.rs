@@ -19,6 +19,7 @@ fn truncated_zip_mime_is_counted_as_dropped() {
 		data,
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	let dir = tempfile::tempdir().expect("tempdir");

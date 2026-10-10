@@ -47,6 +47,7 @@ fn enqueue(spool: &FsSpool, reverse_path: &str, body: &str) {
 			data: format!("Subject: {body}\r\n\r\n{body}\r\n").into_bytes(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		})
 		.expect("store");

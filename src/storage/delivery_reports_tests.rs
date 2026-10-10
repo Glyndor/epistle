@@ -29,6 +29,7 @@ fn message(recipients: &[&str], data: &[u8]) -> AcceptedMessage {
 		data: data.to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	}
 }
@@ -235,9 +236,10 @@ fn tlsrpt_address_ingests_a_tlsrpt_report() {
 		"BOUND",
 		&[("application/tlsrpt+gzip".into(), "base64".into(), b64(&gz))],
 	);
-	delivery
-		.deliver(message(&["tlsrpt@example.org"], &payload))
-		.expect("deliver");
+	let mut verified = message(&["tlsrpt@example.org"], &payload);
+	// The SMTP verifier supplies authorization separately from the raw headers.
+	verified.tlsrpt_verified = true;
+	delivery.deliver(verified).expect("deliver");
 	let snap = metrics.snapshot();
 	assert_eq!(snap.get("tlsrpt_reports_ingested"), Some(&1));
 	let root = dir.path().join("reports/tlsrpt");
@@ -287,4 +289,34 @@ fn a_report_still_persists_when_metrics_is_none() {
 		}
 	}
 	assert!(found, "no DMARC JSONL persisted under {reports_root:?}");
+}
+
+#[test]
+fn unsigned_tlsrpt_still_reaches_mailbox_without_ingest() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+	let delivery = LocalDelivery::new(dir.path(), directory())
+		.expect("delivery")
+		.with_metrics(metrics.clone());
+	let payload = b"Content-Type: application/tlsrpt+json\r\n\r\n{\"organization-name\":\"org\",\"date-range\":{\"start-datetime\":\"0\",\"end-datetime\":\"1\"},\"report-id\":\"r\",\"policies\":[]}";
+	delivery
+		.deliver(message(&["tlsrpt@example.org"], payload))
+		.expect("mailbox delivery");
+	let copies = std::fs::read_dir(dir.path().join("accounts/tlsrpt/new"))
+		.expect("mailbox")
+		.count();
+	let snapshot = metrics.snapshot();
+	assert_eq!(
+		(
+			copies,
+			snapshot.get("reports_dropped").copied().unwrap_or(0),
+			snapshot
+				.get("tlsrpt_reports_ingested")
+				.copied()
+				.unwrap_or(0),
+			dir.path().join("reports/tlsrpt").exists()
+		),
+		(1, 1, 0, false),
+		"unsigned TLS-RPT must reach the mailbox once without ingest or persistence"
+	);
 }

@@ -223,6 +223,7 @@ fn build_email(
 		data,
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	})
 }

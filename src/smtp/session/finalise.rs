@@ -61,6 +61,7 @@ pub fn finalise_from_state(session: &mut Session) -> Action {
 		data: body,
 		require_tls,
 		mailbox: None,
+		tlsrpt_verified: false,
 	};
 	finalise(session, message, size)
 }

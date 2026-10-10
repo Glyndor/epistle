@@ -46,6 +46,9 @@ pub struct AcceptedMessage {
 	/// mailbox (e.g. `Rejects`) instead of INBOX. `None` leaves routing to
 	/// the delivery rules.
 	pub mailbox: Option<String>,
+	/// Trusted SMTP verification: a reporting-domain DKIM signature without
+	/// `l=` covers the complete TLS-RPT body. Never derived from mail headers.
+	pub tlsrpt_verified: bool,
 	/// Recipients that asked to suppress failure DSNs (`NOTIFY=NEVER`, or a
 	/// `NOTIFY` without `FAILURE`, RFC 3461): no bounce is generated for them.
 	pub no_dsn: Vec<String>,

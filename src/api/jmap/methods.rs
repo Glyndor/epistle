@@ -148,6 +148,7 @@ fn submit_email(
 		data: stamped,
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	state

@@ -19,6 +19,7 @@ fn message_from(sender: &str, data: &[u8]) -> AcceptedMessage {
 		data: data.to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	}
 }
@@ -144,6 +145,7 @@ fn multi_target_alias_delivers_to_every_member() {
 		data: BODY.to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	delivery.deliver(message).expect("deliver to alias");
@@ -177,6 +179,7 @@ fn mailing_list_prepends_list_headers() {
 		data: BODY.to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	delivery.deliver(message).expect("deliver to list");

@@ -173,6 +173,7 @@ Content-Type: message/rfc822-headers\r\n\
 		data: body.into_bytes(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	})
 }
