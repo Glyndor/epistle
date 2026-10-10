@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
 # from sqlx 0.9's own `rust-version` (1.94), so it is a derived floor rather

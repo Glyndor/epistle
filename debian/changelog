@@ -1,3 +1,50 @@
+epistle (0.9.0) unstable; urgency=medium
+
+  * epistle runs as a container stack. `sudo epistle init` writes the
+    configuration and a compose file for podup, and `sudo epistle stack
+    up` brings up mail (on pasta, so the real client address reaches
+    the SPF and rate-limit checks), PostgreSQL and ClamAV, the last two
+    without any network and reached over Unix sockets. Both commands
+    run as the glyndor-epistle account even when started with sudo. The
+    stack comes back after a reboot, and apt upgrades refresh the
+    server image. podup (>= 5.10.13) is now a dependency.
+  * A public hostname gets a certificate from Let's Encrypt by default,
+    and IMAPS (993) and submissions (465) are listened on next to the
+    STARTTLS ports.
+  * Mail data defaults to /var/lib/glyndor/epistle/data, outside the
+    service account's home, which holds Podman's storage and the
+    account's systemd units.
+  * DNS lookups go over TCP. Behind the systemd-resolved stub, the
+    UDP replies to DNSSEC queries arrived cut in the middle of a
+    record, and every SPF, MX and TLSA lookup failed.
+  * IMAP works with ordinary mail clients. FETCH returns ENVELOPE,
+    BODYSTRUCTURE, body sections and partial ranges, read from the real
+    MIME tree; the server advertises IMAP4rev1 next to IMAP4rev2; new
+    accounts get Sent, Drafts, Trash and Archive. A failed SELECT
+    deselects, CLOSE expunges, saved searches follow messages, `*` in a
+    UID set is the highest UID, and IDLE reports another session's
+    expunges.
+  * JMAP Email objects carry the real MIME structure, body values and
+    downloadable attachments instead of one text/plain part.
+  * Accounts and app passwords changed with the CLI take effect within
+    a few seconds, without a restart.
+  * `epistle backup` dumps the stack's database inside its container
+    and fails when the dump can't be taken, instead of writing an
+    archive without it. `epistle restore` is new.
+  * Hardening in the protocol readers: rejected literals are discarded
+    instead of being read as commands, request bodies, JMAP
+    back-references, Sieve nesting and four parsers of untrusted input
+    are bounded, WebDAV refuses paths through symlinks, and SCRAM goes
+    through the shared ban table.
+  * DNS providers: porkbun, digitalocean, rfc2136 and the new GoDaddy
+    provider can be selected, an unknown provider name is refused, and
+    every provider follows one rule for replacing and deleting TXT
+    records.
+  * Report ingest, antispam and conformance fixes in POP3, ManageSieve,
+    WebDAV and JMAP.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 10 Oct 2026 12:00:00 +0000
+
 epistle (0.8.0) unstable; urgency=medium
 
   * Uploaded blobs can live somewhere other than the local disk. A
