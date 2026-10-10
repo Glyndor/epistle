@@ -36,25 +36,21 @@ flowchart LR
 
 ```sh
 curl -fsSL https://apt.glyndor.net/install/epistle | sudo sh
+sudo epistle init
+sudo epistle stack up
+sudo epistle stack ps
 ```
 
-That is the whole install. It adds the signed Glyndor apt repository, installs
-`epistle` from it, and sets the machine up to receive security fixes on its own.
-Podman and podup come along with it — they are what run the mail stack.
+The installer adds the signed Glyndor apt repository and runs
+`sudo apt install epistle`, including Podman and podup. Init configures the
+server; stack up enables its service to start after reboot. Upgrades arrive
+through apt, including the server image for an enabled stack. See
+[the operator CLI guide](docs/cli.md#stack-epistle-stack) for configuration,
+customizations and recovery.
 
-Root is needed because it installs packages. It leaves nothing of its own behind:
-the download is removed, and so is anything it had to install just to check the
-archive key.
-
-**Upgrades are apt's job from then on.** `apt upgrade` pulls new versions, and
-the archive's signing key renews through the same channel, because it ships as a
-package apt owns. If the machine had no automatic-upgrade setup, the installer
-adds a conservative one: security updates apply on their own, and the server
-never reboots itself. If it already had one, that configuration is left exactly
-as it was.
-
-epistle runs on Linux and ships as a `.deb`, so apt is the supported install. On
-a system without apt, build from source below.
+epistle runs on Linux and ships as a `.deb`. It needs Podman 5 or newer,
+which means Debian 13, Ubuntu 25.04 or later. On a system without apt,
+build from source below.
 
 ## 🚀 Quick start (from source)
 
@@ -63,7 +59,7 @@ cargo build --release
 
 cat > mail.toml <<'EOF'
 hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
+data_dir = "/var/lib/glyndor/epistle/data"
 domains = ["example.org"]
 
 [[accounts]]
@@ -109,7 +105,7 @@ group = "glyndor-epistle"  # optional; defaults to the user's primary group
 
 The drop fails closed: if the user/group cannot be resolved, the process is not root, or the drop cannot be verified (including that root can no longer be regained), the server refuses to start. Omit the section to run as whoever launched the process (for example under a systemd `User=`).
 
-The `.deb` creates `glyndor-epistle` for you, with `/var/lib/glyndor/epistle` at mode `0700`, the subuid/subgid ranges rootless Podman needs, and systemd linger so the account's services come back after a reboot. It also installs `/usr/lib/sysctl.d/30-glyndor-epistle.conf`, which sets `net.ipv4.ip_unprivileged_port_start = 25` so that the account can bind the SMTP port without root at all, which is what a rootless container needs. That floor is machine-wide rather than per-user: once it is applied, any local unprivileged user can bind ports from 25 up. On a dedicated mail host that is the trade worth making; on a shared host, read [Port 25 without root](docs/security.md#port-25-without-root) first and override the value in `/etc/sysctl.d` if you would rather not take it. The package attempts each step and warns on stderr when one does not take, never failing the install; `epistle init` is what verifies the result and refuses to continue when something is missing.
+The `.deb` creates `glyndor-epistle` for you, with home `/var/lib/glyndor/epistle` and mail directory `/var/lib/glyndor/epistle/data` at mode `0700`, the subuid/subgid ranges rootless Podman needs, and systemd linger so the account's services come back after a reboot. It also installs `/usr/lib/sysctl.d/30-glyndor-epistle.conf`, which sets `net.ipv4.ip_unprivileged_port_start = 25` so that the account can bind the SMTP port without root at all, which is what a rootless container needs. That floor is machine-wide rather than per-user: once it is applied, any local unprivileged user can bind ports from 25 up. On a dedicated mail host that is the trade worth making; on a shared host, read [Port 25 without root](docs/security.md#port-25-without-root) first and override the value in `/etc/sysctl.d` if you would rather not take it. The package attempts each step and warns on stderr when one does not take, never failing the install; `epistle init` is what verifies the result and refuses to continue when something is missing.
 
 ## ✨ Features
 

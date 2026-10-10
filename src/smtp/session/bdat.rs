@@ -74,6 +74,7 @@ impl Session {
 			data: body.clone(),
 			require_tls: *require_tls,
 			mailbox: None,
+			tlsrpt_verified: false,
 		};
 		super::finalise::finalise(self, message, *size)
 	}

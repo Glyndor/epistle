@@ -19,9 +19,12 @@ impl Session {
 		let uidonly = self.uidonly;
 		let data_dir = self.data_dir.clone();
 		let crypto = self.crypto.clone();
-		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`,
-		// since `saved_seqnos_for` reads `self` immutably.
-		let saved = self.saved_seqnos_for(uid);
+		// Capture the SEARCHRES `$` set before the mutable borrow of
+		// `self.state`. The saved set is always keyed by UID; for UID
+		// commands the values are matched directly, and for non-UID
+		// commands they are resolved through the snapshot to current
+		// sequence numbers (expunged entries drop out, per RFC 5182 §2.1).
+		let saved_search = self.saved_search.clone();
 		let State::Selected {
 			account,
 			snapshot,
@@ -38,8 +41,27 @@ impl Session {
 		if !mailbox::exists(&data_dir, &account, target) {
 			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
 		}
+		// Resolve the SEARCHRES `$` placeholder against this snapshot. The
+		// saved set is always keyed by UID; mapping through the snapshot
+		// drops expunged entries and produces the kind of values the loop
+		// expects (UIDs for UID commands, seqnos for non-UID commands).
+		let saved = match saved_search.as_ref() {
+			Some(saved) if saved.are_uids == uid => {
+				if uid {
+					saved.uids.clone()
+				} else {
+					saved
+						.uids
+						.iter()
+						.filter_map(|u| snapshot.sequence_of_uid(*u))
+						.collect()
+				}
+			}
+			_ => Vec::new(),
+		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		let mut matched = Vec::new();
 		let mut source_uids = Vec::new();
 		for sequence_number in 1..=total {
@@ -47,7 +69,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if sequence.contains(selector, total, &saved) {
+			if sequence.contains(selector, maximum, &saved) {
 				matched.push(sequence_number);
 				source_uids.push(message.uid);
 			}
@@ -109,26 +131,35 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maxima = (total, snapshot.max_identifier(true));
 		// SEARCH criteria never carry SEARCHRES `$` placeholders — only the
 		// consuming commands (FETCH/STORE/COPY/UID EXPUNGE) do — so the saved
 		// set is irrelevant here.
 		let mut hits = Vec::new();
+		// The SEARCHRES-saved set is always keyed by UID (RFC 5182 §2.1):
+		// the saved entries must reference the same messages across
+		// expunges, not the snapshot positions at SAVE time. Track UIDs
+		// alongside the response-shaped `hits` (which is seqnos or UIDs
+		// depending on `uid`) so the protocol reply and the resolver agree.
+		let mut saved_uids = Vec::new();
 		for seqno in 1..=total {
 			let Some(message) = snapshot.by_sequence(seqno) else {
 				continue;
 			};
 			let mut content: Option<String> = None;
-			let matches = criteria
-				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
+			let matches = criteria.iter().all(|key| {
+				search_matches(key, message, seqno, maxima, snapshot, &mut content, &[])
+			});
 			if matches {
 				hits.push(if uid { message.uid } else { seqno });
+				saved_uids.push(message.uid);
 			}
 		}
 
 		let body = match return_opts {
 			Some(opts) => esearch_line(tag, uid, &hits, opts),
+			None if self.imap4rev2 => esearch_line(tag, uid, &hits, &[ReturnOpt::All]),
 			None => {
 				let mut line = String::from("* SEARCH");
 				for hit in &hits {
@@ -141,13 +172,16 @@ impl Session {
 		// SEARCHRES (RFC 5182): the `SAVE` return option stores the result
 		// set so subsequent commands can reference it via `$`. We replace the
 		// reservation on every successful SEARCH with SAVE, never merge. A
-		// failing SEARCH MUST NOT touch the saved set.
+		// failing SEARCH MUST NOT touch the saved set. The stored values are
+		// always UIDs; `are_uids` flags the kind of SAVE that produced them
+		// so FETCH/STORE/COPY can still distinguish UID SEARCH from plain
+		// SEARCH at the protocol boundary.
 		if let Some(opts) = return_opts
 			&& opts.contains(&ReturnOpt::Save)
 		{
 			self.saved_search = Some(super::SavedSearch {
 				are_uids: uid,
-				values: hits.clone(),
+				uids: saved_uids,
 			});
 		}
 		Output::text(format!("{body}{tag} OK SEARCH completed\r\n"))
@@ -223,7 +257,8 @@ impl Session {
 
 /// UIDs of every message in `snapshot` matching all search keys.
 fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
-	let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+	let total = snapshot.max_identifier(false);
+	let maxima = (total, snapshot.max_identifier(true));
 	let mut hits = Vec::new();
 	for seqno in 1..=total {
 		let Some(message) = snapshot.by_sequence(seqno) else {
@@ -232,7 +267,7 @@ fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
 		let mut content: Option<String> = None;
 		if criteria
 			.iter()
-			.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]))
+			.all(|key| search_matches(key, message, seqno, maxima, snapshot, &mut content, &[]))
 		{
 			hits.push(message.uid);
 		}

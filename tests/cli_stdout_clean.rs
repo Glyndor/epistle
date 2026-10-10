@@ -305,3 +305,6 @@ fn reports_missing_file_stderr_carries_color() {
 		String::from_utf8_lossy(&stderr)
 	);
 }
+
+#[path = "data_walkers/mod.rs"]
+mod data_walkers;

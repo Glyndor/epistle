@@ -11,13 +11,23 @@ use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, tok
 use super::{
 	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
 	dns_records, export, import, init, local, mobileconfig, queue, report_abuse, reports, serve,
-	srv, style, suppression, verify, verify_dns,
+	srv, stack, style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
 impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
+		if self.command.requires_service_user() {
+			match super::rootless::reexecute() {
+				Ok(Some(code)) => return code,
+				Ok(None) => {}
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			}
+		}
 		match self.command {
 			Command::MtaStsServe {
 				policy_dir,
@@ -84,6 +94,23 @@ impl Cli {
 			Command::Backup { config } => match Config::load(&config) {
 				Ok(config) => {
 					backup::run(&config, &mut std::io::stdout().lock(), &mut style::stderr())
+				}
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Restore { config } => match Config::load(&config) {
+				Ok(config) => {
+					let mut input = Vec::new();
+					if let Err(error) =
+						std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut input)
+					{
+						style::error(format_args!("reading archive from stdin: {error}"));
+						ExitCode::FAILURE
+					} else {
+						backup::run_restore(&config, &input, &mut std::io::stdout().lock())
+					}
 				}
 				Err(error) => {
 					style::error(error);
@@ -311,6 +338,60 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
+			Command::Stack { config, action } => match Config::load(&config) {
+				Ok(config) => stack::run(&config, action.into()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
 		}
 	}
 }
+
+impl Command {
+	fn requires_service_user(&self) -> bool {
+		// Explicit arms keep new stateful commands from silently running as root.
+		match self {
+			Command::Init { .. }
+			| Command::Stack { .. }
+			| Command::ConfigCheck { .. }
+			| Command::Export { .. }
+			| Command::Import { .. }
+			| Command::Backup { .. }
+			| Command::Restore { .. }
+			| Command::Verify { .. }
+			| Command::VerifyDns { .. }
+			| Command::DnsRecords { .. }
+			| Command::Mobileconfig { .. }
+			| Command::SrvRecords { .. }
+			| Command::Autoconfig { .. }
+			| Command::Autodiscover { .. }
+			| Command::Suppression { .. }
+			| Command::ReportAbuse { .. }
+			| Command::Accounts { .. }
+			| Command::AccountAdd { .. }
+			| Command::AccountRemove { .. }
+			| Command::Queue { .. }
+			| Command::AppPasswordCreate { .. }
+			| Command::AppPasswords { .. }
+			| Command::AppPasswordRevoke { .. }
+			| Command::ApiKeyCreate { .. }
+			| Command::ApiKeys { .. }
+			| Command::ApiKeyRevoke { .. }
+			| Command::Archive { .. }
+			| Command::Reports { .. } => true,
+			Command::Serve { .. }
+			| Command::MtaStsServe { .. }
+			| Command::DkimKeygen { .. }
+			| Command::StorageKeygen
+			| Command::OauthKeygen
+			| Command::TokenHash
+			| Command::Local { .. } => false,
+		}
+	}
+}
+
+#[cfg(test)]
+#[path = "dispatch_tests_delegation.rs"]
+mod tests_delegation;

@@ -13,6 +13,31 @@ pub struct Tagged {
 	pub command: Command,
 }
 
+/// An optional mailbox attribute requested through LIST-EXTENDED.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListAttribute {
+	/// Subscription state (RFC 5258).
+	Subscribed,
+	/// Child state (RFC 3348).
+	Children,
+	/// Special-use role (RFC 6154).
+	SpecialUse,
+}
+
+/// The `{n}` / `{n+}` literal count at the end of an APPEND or REPLACE
+/// command line. The synchronizing flag distinguishes the classic
+/// `{n}` form (client waits for `+` before sending bytes) from the
+/// non-synchronizing `{n+}` form (RFC 7888), where the client already
+/// sends the payload and the server must consume or discard it on
+/// rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralAnnouncement {
+	/// Literal size in octets.
+	pub size: usize,
+	/// `true` for `{n}` (synchronizing), `false` for `{n+}`.
+	pub synchronizing: bool,
+}
+
 /// An IMAP command, parsed from a single client line. Variants correspond
 /// one-to-one with the commands RFC 9051 and its extensions (CONDSTORE,
 /// QRESYNC, LIST-EXTENDED, ACL, METADATA, NOTIFY, etc.) accept.
@@ -22,6 +47,8 @@ pub enum Command {
 	Capability,
 	/// `NOOP`: a no-op the server answers with any pending updates.
 	Noop,
+	/// `CHECK`: selected-state checkpoint, currently a no-op.
+	Check,
 	/// `LOGOUT`: graceful shutdown of the connection.
 	Logout,
 	/// `NAMESPACE` (RFC 2342).
@@ -65,6 +92,10 @@ pub enum Command {
 		return_status: Vec<StatusItem>,
 		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
 		select_subscribed: bool,
+		/// `(SPECIAL-USE)` selection: list only mailboxes with a role (RFC 6154).
+		select_special_use: bool,
+		/// Mailbox attributes explicitly requested by selection or RETURN.
+		return_attributes: Vec<ListAttribute>,
 	},
 	/// `SELECT <mailbox>`: open the mailbox read-write. `(QRESYNC (...))`
 	/// resyncs from a previous session (RFC 7162).
@@ -135,6 +166,10 @@ pub enum Command {
 		flags: Vec<String>,
 		/// Size of the literal body in octets.
 		size: usize,
+		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
+		/// the client already sent the bytes; the server must consume or
+		/// discard them when it rejects the command.
+		synchronizing: bool,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected
@@ -152,6 +187,10 @@ pub enum Command {
 		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a
 		/// sequence number.
 		uid: bool,
+		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
+		/// the client already sent the bytes; the server must consume or
+		/// discard them when it rejects the command.
+		synchronizing: bool,
 	},
 	/// `FETCH <sequence> (<items>...)`: return data for messages in the set.
 	Fetch {
@@ -419,6 +458,8 @@ pub enum SortKey {
 /// A single SEARCH criterion; multiple keys AND together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchKey {
+	/// Legacy `RECENT`: always false under the zero-recent policy.
+	Recent,
 	/// `ALL`: match every message in the mailbox.
 	All,
 	/// Flag present (true) or absent (false).
@@ -468,34 +509,10 @@ pub enum StoreMode {
 	Remove,
 }
 
-/// What FETCH must return per message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchItem {
-	/// `FLAGS`: the message's flag list.
-	Flags,
-	/// `RFC822.SIZE`: the RFC 5322 size in octets.
-	Rfc822Size,
-	/// `UID`: the message's UID.
-	Uid,
-	/// `BODY[]` / `RFC822`: the full raw message.
-	Body,
-	/// `BINARY[]`: the body decoded per its Content-Transfer-Encoding (RFC 3516).
-	Binary,
-	/// `BINARY.SIZE[]`: the decoded body's size in octets (RFC 3516).
-	BinarySize,
-	/// `INTERNALDATE`: the message's internal date.
-	InternalDate,
-	/// `MODSEQ`: the message's mod-sequence (CONDSTORE, RFC 7162).
-	ModSeq,
-	/// `EMAILID`: the message's stable object id (RFC 8474).
-	EmailId,
-	/// `THREADID`: the message's thread id (RFC 8474); singleton == EMAILID.
-	ThreadId,
-	/// `SAVEDATE`: when the message was saved to the mailbox (RFC 8514).
-	SaveDate,
-	/// `PREVIEW`: a short text snippet of the message (RFC 8970).
-	Preview,
-}
+mod fetch;
+pub use fetch::FetchItem;
+mod fetch_section;
+pub use fetch_section::{FetchSection, SectionKind};
 
 /// A `1`, `1:5`, `1:*`, `*` style sequence set (comma-separated ranges), or
 /// the SEARCHRES `$` placeholder for the most recent saved result set
@@ -530,11 +547,13 @@ impl SequenceSet {
 		self.ranges.iter().any(|(start, end)| {
 			let start = *start;
 			let end = end.unwrap_or(start);
-			let (low, high) = if start == 0 {
-				(max, end.min(max).max(max))
-			} else if end == 0 {
-				(start.min(max), max)
-			} else if start <= end {
+			// `*` is encoded as 0 in the parser; resolve it to `max` on
+			// whichever end it appears, then normalize the range so a
+			// range written in descending order (e.g. `*:1`) is treated
+			// the same as its ascending form (1:*).
+			let start = if start == 0 { max } else { start };
+			let end = if end == 0 { max } else { end };
+			let (low, high) = if start <= end {
 				(start, end)
 			} else {
 				(end, start)
@@ -620,15 +639,23 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 }
 
 mod acl;
-mod literal;
+mod list;
+pub(super) mod literal;
 mod metadata;
 mod notify;
 mod parse;
 mod search;
 mod select_params;
 
+pub(super) use literal::literal_announcement_in_line;
+
+pub(super) use parse::MAX_APPEND_SIZE;
 pub use parse::parse;
 
 #[cfg(test)]
 #[path = "command_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "command_tests_rfc9051_sequence.rs"]
+mod tests_rfc9051_sequence;

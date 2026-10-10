@@ -40,7 +40,7 @@ fn manual_answers(_dir: &Path, data_dir: &Path, config_path: &Path, hostname: &s
 		 hostname = \"{hostname}\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	)
@@ -58,7 +58,8 @@ fn init_refuses_when_existing_config_has_insecure_permissions() {
 	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = manual_answers(dir.path(), &data_dir, &config_path, "mail.example.org");
 	let answers = write_answers(dir.path(), "answers.toml", &body);
 	let first = {
@@ -131,7 +132,8 @@ fn init_refuses_when_existing_config_has_an_unknown_top_level_key() {
 	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = manual_answers(dir.path(), &data_dir, &config_path, "mail.example.org");
 	let answers = write_answers(dir.path(), "answers.toml", &body);
 	let first = {
@@ -198,7 +200,8 @@ fn init_refuses_when_existing_config_has_an_unknown_top_level_key() {
 fn init_carries_the_a_label_of_a_unicode_hostname_into_the_config() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = manual_answers(
 		dir.path(),
 		&data_dir,
@@ -239,13 +242,14 @@ fn init_carries_the_a_label_of_a_unicode_hostname_into_the_config() {
 fn init_carries_the_a_label_of_a_unicode_domain_into_the_config() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"bücher.example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -286,7 +290,8 @@ fn assistant_reprompts_on_a_semantically_invalid_public_ipv4() {
 	use std::io::Write;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	// The interactive assistant walks the questions in order:
 	// mode, hostname, domains (terminated by blank), public IPv4,
 	// public IPv6, data dir, config path, then the six
@@ -309,6 +314,8 @@ fn assistant_reprompts_on_a_semantically_invalid_public_ipv4() {
 		n\n\
 		n\n\
 		n\n\
+		n\n\
+		\n\
 		y\n";
 	let input = input
 		.replace("{dd}", &data_dir.display().to_string())

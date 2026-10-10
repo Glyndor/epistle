@@ -48,3 +48,24 @@ pub(super) fn open_store_for_test(
 		Vec::new(),
 	)
 }
+
+/// The variant name of a `LocalError`, for the assertion messages
+/// that must not print the full Debug. The `DkimKey` and
+/// `Certificate` variants carry reason strings, not the secrets
+/// themselves, but the panic message has to be a CI log, and
+/// printing the full Debug makes the line wider than the
+/// diagnosis needs. The match is exhaustive on purpose: a new
+/// variant added to `LocalError` breaks this file at compile time,
+/// so the next caller cannot fall through and print the whole
+/// struct.
+pub(super) fn local_error_name(error: &super::LocalError) -> &'static str {
+	match error {
+		super::LocalError::PortOutOfRange(_) => "PortOutOfRange",
+		super::LocalError::CsprngUnavailable => "CsprngUnavailable",
+		super::LocalError::DkimKey(_) => "DkimKey",
+		super::LocalError::Certificate(_) => "Certificate",
+		super::LocalError::Account(_) => "Account",
+		super::LocalError::NotEmpty(_) => "NotEmpty",
+		super::LocalError::Io(_) => "Io",
+	}
+}

@@ -417,13 +417,59 @@ async fn delete_present_record_calls_delete_then_refresh() {
 	}];
 	let (provider, state) = mock_with(existing).await;
 	provider
-		.delete("example.org", txt("_dmarc.example.org", "x"))
+		.delete("example.org", txt("_dmarc.example.org", "v=DMARC1"))
 		.await
 		.expect("delete");
 	let s = state.lock().unwrap();
 	assert!(s.records.is_empty(), "delete removed the record");
 	assert_eq!(s.write_method, "DELETE");
 	assert_eq!(s.write_path, "/domain/zone/example.org/record/7");
+	assert!(s.refresh_called, "POST /refresh must follow the delete");
+}
+
+/// A TXT delete with a value must drop only the matching record
+/// and leave siblings at the same owner. Two ACME DNS-01 challenges
+/// at the same owner is the canonical case: cleaning up one
+/// certificate order's challenge must not wipe the second order's.
+/// OVH's record store is per-id, so the fix is to find the id
+/// whose target matches the value (not the first by (kind, sub))
+/// and delete only that one. The records below intentionally put
+/// the sibling first, so a regression that returns the first
+/// record by (kind, sub) deletes the wrong id. OVH stores the
+/// target quoted for TXT.
+#[tokio::test]
+async fn txt_delete_with_a_value_drops_only_the_matching_challenge() {
+	let existing = vec![
+		StoredRecord {
+			id: 22,
+			field_type: "TXT".into(),
+			sub_domain: "_acme-challenge".into(),
+			target: "\"token-bbbb\"".into(),
+			ttl: 60,
+		},
+		StoredRecord {
+			id: 21,
+			field_type: "TXT".into(),
+			sub_domain: "_acme-challenge".into(),
+			target: "\"token-aaaa\"".into(),
+			ttl: 60,
+		},
+	];
+	let (provider, state) = mock_with(existing).await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let s = state.lock().unwrap();
+	assert_eq!(s.write_method, "DELETE");
+	assert_eq!(
+		s.write_path, "/domain/zone/example.org/record/21",
+		"the matching id is deleted, not the sibling: path={}",
+		s.write_path
+	);
 	assert!(s.refresh_called, "POST /refresh must follow the delete");
 }
 

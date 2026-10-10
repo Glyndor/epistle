@@ -4,8 +4,6 @@
 //! `directory.rs` can pull the same function in without duplicating it.
 //! `#[cfg(test)]` gates the file so it never reaches the production build.
 
-use super::Resolution;
-
 /// The variant name of a `Resolution`, for assertion messages that must not
 /// print what the variant carries. `Account(String)` carries an account
 /// name and `Alias(Vec<String>)` carries member lists, and printing those
@@ -17,7 +15,8 @@ use super::Resolution;
 /// The match is exhaustive on purpose: a new variant added to
 /// `Resolution` breaks this file at compile time, so the next caller cannot
 /// accidentally fall through and print the variant's contents.
-pub(super) fn variant_name(resolution: &Resolution) -> &'static str {
+pub(super) fn variant_name(resolution: &super::Resolution) -> &'static str {
+	use super::Resolution;
 	match resolution {
 		Resolution::NotLocal => "NotLocal",
 		Resolution::UnknownUser => "UnknownUser",

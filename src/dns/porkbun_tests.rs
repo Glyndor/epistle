@@ -142,8 +142,19 @@ async fn upsert_creates_txt_with_the_relative_name_and_body_credentials() {
 	assert_eq!(body["content"], "v=DMARC1; p=none");
 	assert_eq!(body["ttl"], 3600);
 	// Porkbun authenticates from the body, not a header.
-	assert_eq!(body["apikey"], "pk1_apikey");
-	assert_eq!(body["secretapikey"], "sk1_secret");
+	// `assert_eq!` on `body["apikey"]` / `body["secretapikey"]`
+	// would Debug-print the JSON value on a mismatch, dumping
+	// the API key and the API secret into the CI log. The
+	// boolean form names the contract without echoing the
+	// credential payload.
+	assert!(
+		body["apikey"] == "pk1_apikey",
+		"porkbun POST body must carry the API key"
+	);
+	assert!(
+		body["secretapikey"] == "sk1_secret",
+		"porkbun POST body must carry the API secret"
+	);
 	for header in ["authorization", "x-api-key", "x-secret-api-key"] {
 		assert!(!s.headers.contains(&header.to_string()), "{header} sent");
 	}
@@ -239,8 +250,60 @@ async fn delete_removes_the_matching_record_by_id() {
 		]
 	);
 	let body = s.body("/dns/delete/example.org/106926652");
-	assert_eq!(body["apikey"], "pk1_apikey");
-	assert_eq!(body["secretapikey"], "sk1_secret");
+	// `assert_eq!` on the API key / secret JSON value would
+	// Debug-print the value on a mismatch, dumping the
+	// credential into the CI log. The boolean form names
+	// the contract without echoing the payload.
+	assert!(
+		body["apikey"] == "pk1_apikey",
+		"porkbun POST body must carry the API key"
+	);
+	assert!(
+		body["secretapikey"] == "sk1_secret",
+		"porkbun POST body must carry the API secret"
+	);
+}
+
+/// A TXT delete with a value must remove only the matching record and
+/// leave siblings at the same owner alone. Two ACME DNS-01 challenges
+/// at the same owner is the canonical case: cleaning up one certificate
+/// order's challenge must not wipe the second order's challenge.
+/// Porkbun addresses each record by numeric id, so the fix is to read
+/// the live set, drop the rows whose content matches the value, and
+/// delete only those ids.
+#[tokio::test]
+async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
+	let (provider, state) = mock(serde_json::json!([
+		stored(
+			"106926652",
+			"_acme-challenge.example.org",
+			"TXT",
+			"token-aaaa"
+		),
+		stored(
+			"106926653",
+			"_acme-challenge.example.org",
+			"TXT",
+			"token-bbbb"
+		),
+	]))
+	.await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let s = state.lock().unwrap();
+	assert_eq!(
+		s.paths(),
+		vec![
+			"/dns/retrieve/example.org",
+			"/dns/delete/example.org/106926652"
+		],
+		"only the matching value's id is deleted, the sibling survives"
+	);
 }
 
 #[tokio::test]

@@ -30,6 +30,7 @@ pub mod auth;
 pub mod caldav;
 pub mod carddav;
 pub mod handler;
+mod href;
 pub mod path;
 pub mod propfind;
 pub mod rrule;
@@ -57,3 +58,6 @@ pub fn router(directory: DirectoryHandle, data_dir: PathBuf) -> Router {
 		.fallback(any(handler::dispatch))
 		.with_state(state)
 }
+
+#[cfg(test)]
+mod href_tests;

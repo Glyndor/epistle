@@ -561,3 +561,9 @@ mod tests_ratelimit;
 #[cfg(test)]
 #[path = "../session_tests_scram.rs"]
 mod tests_scram;
+#[cfg(test)]
+#[path = "../session_tests_scram_ban_lifecycle.rs"]
+mod tests_scram_ban_lifecycle;
+#[cfg(test)]
+#[path = "../session_tests_scram_bans.rs"]
+mod tests_scram_bans;

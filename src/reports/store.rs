@@ -89,7 +89,7 @@ fn set_owner_only_dir(_path: &Path) -> std::io::Result<()> {
 pub fn prune(data_dir: &Path, today: &str, days: u32) {
 	for bucket in ["dmarc", "tlsrpt"] {
 		let root = data_dir.join("reports").join(bucket);
-		let Ok(entries) = std::fs::read_dir(&root) else {
+		let Ok(entries) = crate::util::fs_walk::read_dir(&root) else {
 			continue;
 		};
 		for entry in entries.flatten() {

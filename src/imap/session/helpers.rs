@@ -78,13 +78,14 @@ pub(super) fn search_matches(
 	key: &SearchKey,
 	message: &mailbox::MessageRef,
 	seqno: u32,
-	total: u32,
+	maxima: (u32, u32),
 	snapshot: &Snapshot,
 	content: &mut Option<String>,
 	saved: &[u32],
 ) -> bool {
 	match key {
 		SearchKey::All => true,
+		SearchKey::Recent => false,
 		SearchKey::FlagIs(flag, wanted) => {
 			let has = if flag.is_keyword() {
 				super::mailbox::flag_set_contains(&message.flags, flag)
@@ -93,21 +94,22 @@ pub(super) fn search_matches(
 			};
 			has == *wanted
 		}
-		SearchKey::Sequence(set) => set.contains(seqno, total, saved),
-		SearchKey::UidSet(set) => set.contains(message.uid, total, saved),
+		// UID criteria use the highest UID even in a non-UID search command.
+		SearchKey::Sequence(set) => set.contains(seqno, maxima.0, saved),
+		SearchKey::UidSet(set) => set.contains(message.uid, maxima.1, saved),
 		SearchKey::Header(name, needle) => header_matches(name, needle, snapshot, message, content),
 		SearchKey::Text(needle) => {
 			let text = content.get_or_insert_with(|| load_content(snapshot, message));
 			text.contains(needle.as_str())
 		}
 		SearchKey::Or(a, b) => {
-			search_matches(a, message, seqno, total, snapshot, content, saved)
-				|| search_matches(b, message, seqno, total, snapshot, content, saved)
+			search_matches(a, message, seqno, maxima, snapshot, content, saved)
+				|| search_matches(b, message, seqno, maxima, snapshot, content, saved)
 		}
-		SearchKey::Not(k) => !search_matches(k, message, seqno, total, snapshot, content, saved),
+		SearchKey::Not(k) => !search_matches(k, message, seqno, maxima, snapshot, content, saved),
 		SearchKey::And(keys) => keys
 			.iter()
-			.all(|k| search_matches(k, message, seqno, total, snapshot, content, saved)),
+			.all(|k| search_matches(k, message, seqno, maxima, snapshot, content, saved)),
 		SearchKey::Before(y, m, d) => {
 			systemtime_to_epoch_day(message.internal_date) < date_to_epoch_day(*y, *m, *d)
 		}
@@ -239,6 +241,28 @@ pub(super) fn special_use_attribute(name: &str) -> &'static str {
 		"trash" | "deleted" => "\\Trash",
 		"archive" => "\\Archive",
 		_ => "",
+	}
+}
+
+/// Legacy recent keys remain unavailable after revision 2 is enabled.
+pub(super) fn recent_command(command: &Command) -> bool {
+	let criteria = match command {
+		Command::Search { criteria, .. }
+		| Command::Sort { criteria, .. }
+		| Command::Thread { criteria, .. }
+		| Command::Esearch { criteria, .. } => criteria,
+		_ => return false,
+	};
+	criteria.iter().any(uses_recent)
+}
+
+fn uses_recent(key: &SearchKey) -> bool {
+	match key {
+		SearchKey::Recent => true,
+		SearchKey::Not(key) => uses_recent(key),
+		SearchKey::Or(a, b) => uses_recent(a) || uses_recent(b),
+		SearchKey::And(keys) => keys.iter().any(uses_recent),
+		_ => false,
 	}
 }
 

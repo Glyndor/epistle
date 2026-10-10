@@ -181,7 +181,14 @@ async fn upsert_txt_under_subdomain_uses_relative_name_and_bearer_token() {
 		s.calls
 	);
 	// Bearer auth, exactly as DigitalOcean documents.
-	assert_eq!(s.auth.as_deref(), Some("Bearer tok"));
+	// `assert_eq!` on `s.auth` would Debug-print the actual
+	// API token on a mismatch, dumping the credential into
+	// the CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		s.auth.as_deref() == Some("Bearer tok"),
+		"the DigitalOcean request must carry the fixture API token"
+	);
 	let body = s.bodies.last().expect("body");
 	assert!(body.contains("\"type\":\"TXT\""), "{body}");
 	assert!(body.contains("\"name\":\"_dmarc\""), "{body}");
@@ -252,6 +259,60 @@ async fn delete_is_idempotent_when_record_absent() {
 	assert!(
 		!s.calls.iter().any(|c| c.starts_with("DELETE")),
 		"calls: {:?}",
+		s.calls
+	);
+}
+
+/// A TXT delete with a value must drop only the matching record and
+/// leave siblings at the same owner. Two ACME DNS-01 challenges
+/// at the same owner is the canonical case: cleaning up one
+/// certificate order's challenge must not wipe the second order's.
+/// DigitalOcean addresses every record by id, so the fix is to
+/// find the id whose data matches the value (not the first by
+/// (type, name)) and delete that one alone. The records below
+/// intentionally put the sibling first, so a regression that
+/// returns the first record by type+name deletes the wrong id.
+#[tokio::test]
+async fn txt_delete_with_a_value_drops_only_the_matching_challenge() {
+	let existing = vec![
+		serde_json::json!({
+			"id": 1002,
+			"type": "TXT",
+			"name": "_acme-challenge",
+			"data": "token-bbbb",
+			"ttl": 60,
+			"priority": null, "port": null, "weight": null, "flags": null, "tag": null,
+		}),
+		serde_json::json!({
+			"id": 1001,
+			"type": "TXT",
+			"name": "_acme-challenge",
+			"data": "token-aaaa",
+			"ttl": 60,
+			"priority": null, "port": null, "weight": null, "flags": null, "tag": null,
+		}),
+	];
+	let (provider, state) = mock(existing, false).await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let s = state.lock().unwrap();
+	assert!(
+		s.calls
+			.iter()
+			.any(|c| c == "DELETE /v2/domains/example.org/records/1001"),
+		"calls: {:?}",
+		s.calls
+	);
+	assert!(
+		!s.calls
+			.iter()
+			.any(|c| c == "DELETE /v2/domains/example.org/records/1002"),
+		"sibling id must not be deleted: {:?}",
 		s.calls
 	);
 }

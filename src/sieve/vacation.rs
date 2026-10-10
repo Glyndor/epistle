@@ -65,6 +65,7 @@ Auto-Submitted: auto-replied (vacation)\r\n",
 		data: body.into_bytes(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	}
 }

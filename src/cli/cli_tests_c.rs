@@ -12,6 +12,18 @@ use crate::cli::Command;
 use crate::cli::tests_b::config_at;
 use crate::directory_store::removal::QueuePolicy;
 
+/// A 32-byte Bayes key, minted at run time from two UUIDs. The
+/// `[0u8; 32]` base is overwritten by the copies, so no literal
+/// survives to the `with_key` call; the same idiom the SCRAM salt
+/// and TOTP secret tests settled for, extended to 32 bytes the way
+/// `src/smtp/server/server_tests_subjectpass.rs` does.
+fn fixture_key() -> [u8; 32] {
+	let mut key = [0u8; 32];
+	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key[16..].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
+	key
+}
+
 /// `epistle account-remove --config F --name N --queue discard|drain`
 /// parses cleanly. The required `--queue` flag exists, the policy enum
 /// is wired, and an unknown policy is rejected at the parser layer so
@@ -123,6 +135,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 			data: b"Subject: from-alice\r\n\r\nbody\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		})
 		.expect("store");
@@ -225,7 +238,7 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 	let pool = runtime.block_on(async {
 		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none").expect("lazy pool never connects")
 	});
-	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+	let bayes = BayesStore::with_key(pool, fixture_key());
 
 	let mut out = Vec::new();
 	let mut err_buf = Vec::new();
@@ -347,7 +360,7 @@ fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
 	let pool = runtime.block_on(async {
 		sqlx::PgPool::connect_lazy("postgres://127.0.0.1:1/none").expect("lazy pool never connects")
 	});
-	let bayes = BayesStore::with_key(pool, [0u8; 32]);
+	let bayes = BayesStore::with_key(pool, fixture_key());
 
 	let mut out = Vec::new();
 	let mut err_buf = Vec::new();

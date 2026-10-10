@@ -15,6 +15,39 @@ use std::os::unix::fs::PermissionsExt;
 use super::*;
 use crate::cli::init::answers::Services;
 
+/// The variant name of an `ApplyError`, for the assertion messages
+/// that must not print the full Debug. The `KeyWrite` and
+/// `OAuthPair*` variants carry path and reason strings; the
+/// `ConfigEncode`, `ConfigInvalid`, `RsaKeygen` and `Rng` variants
+/// carry user-facing messages. None of those are credentials, but
+/// the panic message has to be a CI log, and printing the full
+/// Debug makes the line wider than the diagnosis needs. The match
+/// is exhaustive on purpose: a new variant added to `ApplyError`
+/// breaks this file at compile time, so the next caller cannot
+/// fall through and print the whole struct. Exposed to the sibling
+/// `apply_failures_tests_b.rs` / `_c.rs` / `_d.rs` modules the same
+/// way `answers_minimal` and `render_report_to_string` are.
+pub(super) fn apply_error_name(error: &ApplyError) -> &'static str {
+	match error {
+		ApplyError::KeysDir(..) => "KeysDir",
+		ApplyError::KeyWrite(..) => "KeyWrite",
+		ApplyError::OAuthPairIncomplete(_) => "OAuthPairIncomplete",
+		ApplyError::OAuthPairMismatch => "OAuthPairMismatch",
+		ApplyError::CertPairIncomplete(_) => "CertPairIncomplete",
+		ApplyError::ConfigEncode(_) => "ConfigEncode",
+		ApplyError::ConfigInvalid(_) => "ConfigInvalid",
+		ApplyError::ConfigRead(..) => "ConfigRead",
+		ApplyError::ConfigWrite(..) => "ConfigWrite",
+		ApplyError::ConfigDir(..) => "ConfigDir",
+		ApplyError::ConfigSymlink(_) => "ConfigSymlink",
+		ApplyError::ConfigNotAFile(_) => "ConfigNotAFile",
+		ApplyError::RsaKeygen(_) => "RsaKeygen",
+		ApplyError::Rng(_) => "Rng",
+		ApplyError::ExistingSecretUnreadable(..) => "ExistingSecretUnreadable",
+		ApplyError::DatabaseVolume(_) => "DatabaseVolume",
+	}
+}
+
 pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 	Answers {
 		mode: crate::cli::init::answers::Mode::Manual,
@@ -26,6 +59,8 @@ pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 		config_path: config_path.to_path_buf(),
 		dns: None,
 		services: Services::default(),
+		image: None,
+		acme: None,
 	}
 }
 
@@ -68,7 +103,8 @@ fn apply_fails_when_keys_dir_cannot_be_created() {
 		.expect("apply must fail when keys dir cannot be created");
 	assert!(
 		matches!(err, ApplyError::KeysDir(_, _)),
-		"expected KeysDir, got {err:?}"
+		"expected KeysDir, got {}",
+		apply_error_name(&err)
 	);
 	// No step ran before the failure: data_dir could not be created.
 	assert!(
@@ -101,7 +137,8 @@ fn apply_fails_when_candidate_config_does_not_validate() {
 		.expect("apply must surface ConfigInvalid when the candidate fails Config::load");
 	assert!(
 		matches!(err, ApplyError::ConfigInvalid(_)),
-		"expected ConfigInvalid, got {err:?}"
+		"expected ConfigInvalid, got {}",
+		apply_error_name(&err)
 	);
 	let s1 = data_dir.join("keys").join("s1.pem");
 	assert!(
@@ -135,7 +172,8 @@ fn apply_fails_when_config_path_parent_is_a_regular_file() {
 			err,
 			ApplyError::ConfigRead(_, _) | ApplyError::ConfigWrite(_, _)
 		),
-		"expected ConfigRead or ConfigWrite, got {err:?}"
+		"expected ConfigRead or ConfigWrite, got {}",
+		apply_error_name(&err)
 	);
 	let rendered = render_report_to_string(&outcome.report);
 	// Every step that ran before the failure must show up in the
@@ -185,7 +223,7 @@ fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes()
 		.error
 		.expect("apply must surface a KeyWrite error after the obstruction");
 	let ApplyError::KeyWrite(path, _io) = &err else {
-		panic!("expected KeyWrite, got {err:?}");
+		panic!("expected KeyWrite, got {}", apply_error_name(&err));
 	};
 	assert!(
 		path.ends_with("storage.key"),
@@ -274,12 +312,16 @@ fn apply_derives_missing_oauth_public_from_existing_private() {
 	assert!(outcome2.error.is_none(), "second run: {:?}", outcome2.error);
 	let private_after = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
-	assert_eq!(
-		private_first, private_after,
+	// Comparing PKCS#8 / SPKI byte arrays with `assert_eq!` would
+	// Debug-print the full private key on mismatch, dumping it into
+	// the CI log. A boolean assertion pins the same invariant
+	// without carrying the bytes.
+	assert!(
+		private_first == private_after,
 		"the private key must not be regenerated when only the public is missing"
 	);
-	assert_eq!(
-		public, public_after,
+	assert!(
+		public == public_after,
 		"the derived public key must match the one the first run wrote"
 	);
 }
@@ -305,7 +347,10 @@ fn apply_refuses_when_only_oauth_public_survives() {
 		.error
 		.expect("apply must refuse when only the public key survives");
 	let ApplyError::OAuthPairIncomplete(message) = &err else {
-		panic!("expected OAuthPairIncomplete, got {err:?}");
+		panic!(
+			"expected OAuthPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("oauth_signing.key"),
@@ -314,7 +359,10 @@ fn apply_refuses_when_only_oauth_public_survives() {
 	// Public key bytes must be unchanged: refusing the run is not
 	// an excuse to overwrite the surviving material.
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
-	assert_eq!(public_before, public_after);
+	// Comparing SPKI byte arrays with `assert_eq!` would
+	// Debug-print the full public key on mismatch. A boolean
+	// assertion pins the same invariant without carrying the bytes.
+	assert!(public_before == public_after);
 	assert!(
 		!keys_dir.join("oauth_signing.key").exists(),
 		"a fresh private key must NOT have been written when only the public survived"
@@ -348,13 +396,20 @@ fn apply_refuses_when_oauth_pair_does_not_correspond() {
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	let err = outcome.error.expect("apply must refuse a mismatched pair");
 	let ApplyError::OAuthPairMismatch = &err else {
-		panic!("expected OAuthPairMismatch, got {err:?}");
+		panic!("expected OAuthPairMismatch, got {}", apply_error_name(&err));
 	};
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
 	let private_after = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
-	assert_eq!(public_after, public_b, "public key bytes must be untouched");
-	assert_eq!(
-		private_after, private_a,
+	// Comparing the byte arrays with `assert_eq!` would Debug-print
+	// the full PKCS#8 / SPKI on mismatch, dumping the private key
+	// (or its modified form) into the CI log. A boolean assertion
+	// pins the same invariant without carrying the bytes.
+	assert!(
+		public_after == public_b,
+		"public key bytes must be untouched"
+	);
+	assert!(
+		private_after == private_a,
 		"private key bytes must be untouched"
 	);
 }
@@ -384,8 +439,12 @@ fn apply_regenerates_cert_from_existing_key_when_only_key_survives() {
 		second.error
 	);
 	let key_after = std::fs::read(&key_path).expect("read key");
-	assert_eq!(
-		key_before, key_after,
+	// Comparing PEM byte arrays with `assert_eq!` would Debug-print
+	// the full private key on mismatch, dumping it into the CI log.
+	// A boolean assertion pins the same invariant without carrying
+	// the bytes.
+	assert!(
+		key_before == key_after,
 		"the existing private key must not be regenerated when only the cert is missing"
 	);
 	assert!(
@@ -420,15 +479,21 @@ fn apply_refuses_when_only_cert_survives() {
 		.error
 		.expect("apply must refuse when only the cert survives");
 	let ApplyError::CertPairIncomplete(message) = &err else {
-		panic!("expected CertPairIncomplete, got {err:?}");
+		panic!(
+			"expected CertPairIncomplete, got {}",
+			apply_error_name(&err)
+		);
 	};
 	assert!(
 		message.contains("key.pem"),
 		"the diagnostic must name the missing key: {message}"
 	);
 	let cert_after = std::fs::read(&cert_path).expect("read cert");
-	assert_eq!(
-		cert_before, cert_after,
+	// Comparing PEM byte arrays with `assert_eq!` would Debug-print
+	// the full certificate on mismatch. A boolean assertion pins
+	// the same invariant without carrying the bytes.
+	assert!(
+		cert_before == cert_after,
 		"the surviving certificate must NOT be overwritten"
 	);
 	assert!(

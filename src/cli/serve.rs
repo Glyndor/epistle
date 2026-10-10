@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use crate::config::{Config, ListenerKind};
+use crate::directory_store::FileWatcher;
 use crate::smtp::server::{Server, TlsMode};
 use crate::smtp::sink::MessageSink;
 
@@ -173,6 +174,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Optional LDAP directory backend: load the resolution set and refresh it.
 	super::serve_tasks::spawn_ldap_directory(&config, Arc::clone(&account_store)).await?;
+
+	// Pick up CLI edits to the dynamic account files (accounts.toml,
+	// app_passwords.toml, masked.json, aliases.json) while the server
+	// is running. Each tick stats the four files and asks the store
+	// to swap the matching in-memory mirror on a fingerprint change;
+	// the polling interval sits well inside the 5 s deadline the
+	// operators see on the CLI.
+	let _watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
+		.spawn(std::time::Duration::from_secs(2));
 
 	// The queue worker drains the outbound spool in the background.
 	let connector = Arc::new(crate::queue::MxConnector::from_system()?);

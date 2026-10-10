@@ -111,13 +111,16 @@ pub fn list(account_root: &Path) -> std::io::Result<Vec<ArchivedMessage>> {
 /// behind by a half-finished archive is reclaimed by nothing else.
 fn sidecars(account_root: &Path) -> std::io::Result<Vec<(ArchivedMessage, bool)>> {
 	let archive = archive_dir(account_root);
-	let entries = match std::fs::read_dir(&archive) {
+	let entries = match crate::util::fs_walk::read_dir(&archive) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
 		Err(error) => return Err(error),
 	};
 	let mut out = Vec::new();
 	for entry in entries.flatten() {
+		if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+			continue;
+		}
 		let name = match entry.file_name().to_str() {
 			Some(name) => name.to_string(),
 			None => continue,
@@ -128,7 +131,7 @@ fn sidecars(account_root: &Path) -> std::io::Result<Vec<(ArchivedMessage, bool)>
 		let Ok(id) = Uuid::parse_str(stem) else {
 			continue;
 		};
-		let Ok(raw) = std::fs::read_to_string(entry.path()) else {
+		let Ok(raw) = crate::util::fs_walk::read_to_string(entry.path()) else {
 			continue;
 		};
 		let mut lines = raw.lines();
@@ -164,7 +167,7 @@ fn read_archived(
 ) -> std::io::Result<(String, Vec<u8>)> {
 	let archive = archive_dir(account_root);
 	let sidecar = archive.join(format!("{id}.deleted"));
-	let raw = std::fs::read_to_string(&sidecar)
+	let raw = crate::util::fs_walk::read_to_string(&sidecar)
 		.map_err(|error| std::io::Error::other(format!("no such archived message: {error}")))?;
 	let mut lines = raw.lines();
 	let _ts = lines
@@ -173,7 +176,7 @@ fn read_archived(
 	let mailbox = lines
 		.next()
 		.ok_or_else(|| std::io::Error::other("archived message sidecar missing mailbox"))?;
-	let stored = std::fs::read(archive.join(format!("{id}.eml")))?;
+	let stored = crate::util::fs_walk::read(archive.join(format!("{id}.eml")))?;
 	let plaintext = crypto.decode(&stored)?;
 	Ok((mailbox.to_string(), plaintext))
 }
@@ -242,7 +245,7 @@ pub fn sweep(data_dir: &Path, retention_days: u64, now: u64) -> std::io::Result<
 		return Ok(0);
 	}
 	let accounts_root = data_dir.join("accounts");
-	let entries = match std::fs::read_dir(&accounts_root) {
+	let entries = match crate::util::fs_walk::read_dir(&accounts_root) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
 		Err(error) => return Err(error),

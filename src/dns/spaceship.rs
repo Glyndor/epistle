@@ -196,15 +196,22 @@ impl SpaceshipProvider {
 		check(response)
 	}
 
-	/// `DELETE /dns/records/{zone}` — remove the matching item(s). The body is
-	/// an array of `{type, name, [value]}` records; TXT deletes require
-	/// `value` per the schema. Replies 204 whether or not anything matched
-	/// (idempotent by definition).
+	/// `DELETE /dns/records/{zone}`, remove the matching item(s). The body
+	/// is an array of `{type, name, [value]}` records. The contract from
+	/// `src/dns/provider.rs` says a TXT delete with a value drops only
+	/// the record whose value matches, and an empty-value delete drops
+	/// every record at the owner (the DKIM rotator's retire path).
+	/// Spaceship's API matches by `value` when the field is present,
+	/// so the empty-value case omits the field to mean "wholesale";
+	/// the value-bearing case includes it. Replies 204 whether or not
+	/// anything matched (idempotent by definition).
 	async fn remove(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
 		let path = format!("/dns/records/{}", self.zone);
 		let mut item = serde_json::json!({"type": kind, "name": rel});
-		// TXT deletes need the value to disambiguate same-name records.
-		if record.kind == RecordKind::Txt {
+		// TXT value-bearing deletes need the value to disambiguate
+		// same-name records; the wholesale empty-value case leaves
+		// the field off.
+		if record.kind == RecordKind::Txt && !record.value.is_empty() {
 			item["value"] = serde_json::Value::String(record.value.clone());
 		}
 		let response = self

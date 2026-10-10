@@ -450,3 +450,63 @@ async fn a_banned_ip_is_refused_before_hashing() {
 		"login_succeeded counter must stay at zero; verify_password was never called",
 	);
 }
+
+/// A ban refusal is distinct from a credential failure: a banned IP
+/// that presents the right password is refused, but the strike count
+/// and the ban expiry do not move. The test arms a ban with a known
+/// `until_secs`, drives `authenticate_with_ip` with the correct
+/// password, and asserts the result is `None` (refused), the ban store
+/// received no `record_failure` call, and the ban's `until_secs` is
+/// unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ban_refusal_does_not_add_a_strike_and_does_not_extend_the_ban() {
+	use crate::antispam::bans::BanStore;
+
+	let ban_store = FakeBanStore::new(BanPolicy::default());
+	let original_until: u64 = 1_900_000_000;
+	ban_store.arm_ban(
+		"ip:203.0.113.50",
+		BanInfo {
+			until_secs: original_until,
+			reason: "5 failed authentications in 900 seconds".to_string(),
+		},
+	);
+	let directory = directory_with_alice(fixture_password())
+		.with_ban_store(std::sync::Arc::new(ban_store.clone()));
+
+	let peer: std::net::IpAddr = "203.0.113.50".parse().expect("peer");
+	for _ in 0..3 {
+		// The right password would normally resolve to `Some("alice")`;
+		// the ban short-circuits the lookup, so the result is `None`.
+		assert!(
+			directory
+				.authenticate_with_ip(
+					"alice",
+					fixture_password(),
+					Some(peer),
+					crate::config::Protocol::Api,
+				)
+				.is_none(),
+			"a banned IP must be refused even with the right password"
+		);
+	}
+
+	assert_eq!(
+		ban_store.call_count("record_failure"),
+		0,
+		"ban refusal must not record a failure: got {} record_failure calls",
+		ban_store.call_count("record_failure")
+	);
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let info = tokio::task::block_in_place(|| {
+		tokio::runtime::Handle::current().block_on(ban_store.is_banned("ip:203.0.113.50", now))
+	})
+	.expect("ban still in force");
+	assert_eq!(
+		info.until_secs, original_until,
+		"the ban's until_secs must not have moved"
+	);
+}

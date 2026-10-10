@@ -109,13 +109,16 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	match kind {
 		ReportKind::Multiget => {
 			for href in hrefs(&text) {
-				if let Some(resolved) = path::resolve(root, &href) {
+				if let Some(resolved) = path::resolve(root, &href)
+					&& path::confine_existing(&resolved, root)
+					&& let Some(href) = super::href::resource(root, &resolved)
+				{
 					push_card(&mut entries, &href, &resolved).await;
 				}
 			}
 		}
 		ReportKind::Query => {
-			collect_cards(target, &mut entries).await;
+			collect_cards(root, target, &mut entries).await;
 		}
 	}
 	multistatus(&entries).into_response()
@@ -150,15 +153,27 @@ async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
 
 /// Append every `.vcf` directly inside the `collection` directory to `entries`.
 /// The child href is the collection path plus the file name. A non-directory
-/// target yields nothing.
-async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
+/// target yields nothing. Children that are themselves symlinks (planted
+/// escapes) are skipped, their target may live outside the per-account root.
+async fn collect_cards(root: &Path, collection: &Path, entries: &mut Vec<Card>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
 	};
 	while let Ok(Some(child)) = dir.next_entry().await {
+		let Ok(kind) = child.file_type().await else {
+			continue;
+		};
+		if !crate::util::fs_walk::allowed(&child.path(), kind) {
+			continue;
+		}
 		let name = child.file_name();
 		let name = name.to_string_lossy();
 		if !is_vcard_path(&name) {
+			continue;
+		}
+		if let Ok(sym) = std::fs::symlink_metadata(child.path())
+			&& sym.file_type().is_symlink()
+		{
 			continue;
 		}
 		let Ok(metadata) = child.metadata().await else {
@@ -169,7 +184,10 @@ async fn collect_cards(collection: &Path, entries: &mut Vec<Card>) {
 		}
 		if let Ok(data) = tokio::fs::read(child.path()).await {
 			entries.push(Card {
-				href: name.to_string(),
+				href: match super::href::resource(root, &child.path()) {
+					Some(href) => href,
+					None => continue,
+				},
 				data,
 				etag: etag(&metadata),
 			});
@@ -204,22 +222,76 @@ fn hrefs(body: &str) -> Vec<String> {
 
 /// Find the byte index of an opening tag whose local name is `local`, allowing
 /// an optional `prefix:` (e.g. `<D:href>` or `<href>`) — the index of the `<`.
-/// The local name is the tag name (up to the first `>`, space or `/`) with any
-/// `prefix:` stripped.
+/// The local name is the tag name (up to the first `>`, space, `/` or the
+/// next `<`) with any `prefix:` stripped.
+///
+/// The implementation walks the body once, byte by byte. The previous
+/// quadratic version restarted the search from the cursor after every
+/// non-match, and `tag.split(['>', ' ', '/']).next()` returned the whole
+/// remaining tail as one piece when the tag was unclosed, so a body of
+/// N unclosed tags cost O(N²) bytes touched. The linear scan advances
+/// past the tag name in one jump and bounds the name by the next `<`
+/// when no closing delimiter is found, so the total stays O(N) bytes
+/// touched. The byte counter [`SCAN_STEPS`] is exposed for tests that
+/// want to assert the bound.
 fn find_open(body: &str, local: &str) -> Option<usize> {
-	let mut from = 0;
-	while let Some(rel) = body[from..].find('<') {
-		let lt = from + rel;
-		let tag = &body[lt + 1..];
-		let name = tag.split(['>', ' ', '/']).next().unwrap_or("");
-		let candidate = name.rsplit(':').next().unwrap_or("");
-		if candidate == local {
-			return Some(lt);
+	let bytes = body.as_bytes();
+	let needle = local.as_bytes();
+	let mut i = 0;
+	while i < bytes.len() {
+		#[cfg(test)]
+		{
+			SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 		}
-		from = lt + 1;
+		if bytes[i] != b'<' {
+			i += 1;
+			continue;
+		}
+		// Parse the tag name: characters up to the first '>', ' ', '/',
+		// or the next '<' (an unclosed tag). The previous version only
+		// looked for '>', ' ', '/'; an unclosed tag made the rest of
+		// the body count as the tag name, which is what produced the
+		// quadratic behaviour. Treating the next '<' as a delimiter
+		// bounds the per-tag scan to the distance to the next tag.
+		let name_start = i + 1;
+		let mut name_end = name_start;
+		while name_end < bytes.len() {
+			#[cfg(test)]
+			{
+				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			}
+			let c = bytes[name_end];
+			if c == b'>' || c == b' ' || c == b'/' || c == b'<' {
+				break;
+			}
+			name_end += 1;
+		}
+		// Find the local name (after the last `:` if any).
+		let mut local_start = name_start;
+		for (k, b) in bytes[name_start..name_end].iter().enumerate() {
+			#[cfg(test)]
+			{
+				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			}
+			if *b == b':' {
+				local_start = name_start + k + 1;
+			}
+		}
+		let local_len = name_end - local_start;
+		if local_len == needle.len() && &bytes[local_start..name_end] == needle {
+			return Some(i);
+		}
+		// Skip past the whole tag name in one jump, at minimum one byte
+		// (`<x>` has no payload), the worst case is the name itself.
+		i = name_end.max(i + 1);
 	}
 	None
 }
+
+/// Per-process counter of how many bytes the report scanner compared.
+/// Read in tests to assert the body scan is linear, not quadratic.
+#[cfg(test)]
+static SCAN_STEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Build the `address-data` `207 Multi-Status` for the collected cards.
 fn multistatus(entries: &[Card]) -> Response {
@@ -250,3 +322,7 @@ fn multistatus(entries: &[Card]) -> Response {
 #[cfg(test)]
 #[path = "carddav_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "carddav_scan_tests.rs"]
+mod scan_tests;

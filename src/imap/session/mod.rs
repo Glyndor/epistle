@@ -7,7 +7,9 @@ mod acl;
 mod auth;
 mod codes;
 mod commands;
+mod defaults;
 mod expunge;
+mod fetch;
 mod fetchstore;
 mod helpers;
 mod idle;
@@ -25,6 +27,11 @@ mod thread;
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
 impl Session {
+	#[cfg(test)]
+	fn rev2_enabled(&self) -> bool {
+		self.imap4rev2
+	}
+
 	/// The greeting sent when the connection opens.
 	pub fn greeting(&self) -> Output {
 		Output::text(format!(
@@ -45,7 +52,17 @@ impl Session {
 				return Output::text(format!("{tag} BAD unknown command\r\n"));
 			}
 			Err(ParseError::BadArguments(tag)) => {
-				return Output::text(format!("{tag} BAD invalid arguments\r\n"));
+				// RFC 7888 §4: when an APPEND/REPLACE command fails to parse
+				// but the line announced a non-synchronizing literal, the
+				// payload is already on the wire and must be discarded so it
+				// does not arrive as the next command.
+				let mut output = Output::text(format!("{tag} BAD invalid arguments\r\n"));
+				if let Some(announcement) = super::command::literal_announcement_in_line(line)
+					&& !announcement.synchronizing
+				{
+					output.discard_literal = Some(announcement.size);
+				}
+				return output;
 			}
 		};
 		self.apply(tagged)
@@ -53,6 +70,9 @@ impl Session {
 
 	fn apply(&mut self, tagged: Tagged) -> Output {
 		let tag = tagged.tag;
+		if self.imap4rev2 && helpers::recent_command(&tagged.command) {
+			return Output::text(format!("{tag} BAD invalid arguments\r\n"));
+		}
 		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
 		if self.uidonly
 			&& let Some(verb) = helpers::sequence_command(&tagged.command)
@@ -100,10 +120,18 @@ impl Session {
 				output
 			}
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
+			Command::Check => self.check(&tag),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
-			Command::Namespace => Output::text(format!(
-				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
-			)),
+			// NAMESPACE is post-auth (RFC 9051 §6.3.5); before authentication it
+			// must refuse the command without leaking the namespace layout.
+			Command::Namespace => {
+				if self.account().is_none() {
+					return Output::text(format!("{tag} NO not authenticated\r\n"));
+				}
+				Output::text(format!(
+					"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
+				))
+			}
 			Command::Id => Output::text(format!(
 				"* ID (\"name\" \"Glyndor\" \"version\" \"{}\")\r\n{tag} OK ID completed\r\n",
 				env!("CARGO_PKG_VERSION"),
@@ -117,8 +145,17 @@ impl Session {
 				pattern,
 				return_status,
 				select_subscribed,
+				select_special_use,
+				return_attributes,
 				..
-			} => self.list(&tag, &pattern, &return_status, select_subscribed),
+			} => self.list(
+				&tag,
+				&pattern,
+				&return_status,
+				select_subscribed,
+				select_special_use,
+				&return_attributes,
+			),
 			Command::Select { mailbox, qresync } => self.select(&tag, &mailbox, false, qresync),
 			Command::Examine { mailbox, qresync } => self.select(&tag, &mailbox, true, qresync),
 			Command::Close => self.close(&tag),
@@ -156,14 +193,16 @@ impl Session {
 				mailbox,
 				flags,
 				size,
-			} => self.append_begin(&tag, &mailbox, &flags, size),
+				synchronizing,
+			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing),
 			Command::Replace {
 				sequence,
 				mailbox,
 				flags,
 				size,
 				uid,
-			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid),
+				synchronizing,
+			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid, synchronizing),
 			Command::Fetch {
 				sequence,
 				items,
@@ -240,10 +279,7 @@ impl Session {
 			self.auth_protocol,
 		);
 		match verified {
-			Some(account) => {
-				self.state = State::Authenticated { account };
-				Output::text(format!("{tag} OK LOGIN completed\r\n"))
-			}
+			Some(account) => self.auth_success(tag, account, "LOGIN completed"),
 			None => {
 				*login_failures += 1;
 				let response = format!("{tag} NO LOGIN failed\r\n");
@@ -268,19 +304,6 @@ impl Session {
 	/// missing save — the caller answers `NO` to the client.
 	fn saved_search_ok(&self, uid_kind: bool) -> bool {
 		matches!(self.saved_search, Some(ref s) if s.are_uids == uid_kind)
-	}
-
-	/// Resolve the SEARCHRES `$` placeholder against this session's saved set.
-	/// Returns `None` when `$` is not in use, `Some(values)` when it is — the
-	/// caller already knows whether a `$` was used (because it parsed the
-	/// SequenceSet), so `None` here means "no saved set to read". The caller
-	/// should reject the command with NO before doing any matching when
-	/// `saved_search_ok` is false.
-	fn saved_seqnos_for(&self, uid_kind: bool) -> Vec<u32> {
-		match &self.saved_search {
-			Some(saved) if saved.are_uids == uid_kind => saved.values.clone(),
-			_ => Vec::new(),
-		}
 	}
 
 	fn mailbox_op(
@@ -314,7 +337,10 @@ impl Session {
 		let enabled: Vec<&str> = capabilities
 			.iter()
 			.filter_map(|cap| match cap.to_ascii_uppercase().as_str() {
-				"IMAP4REV2" => Some("IMAP4rev2"),
+				"IMAP4REV2" => {
+					self.imap4rev2 = true;
+					Some("IMAP4rev2")
+				}
 				"CONDSTORE" => Some("CONDSTORE"),
 				"QRESYNC" => Some("QRESYNC"),
 				"UIDONLY" => {

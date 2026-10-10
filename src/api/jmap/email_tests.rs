@@ -9,13 +9,17 @@ use serde_json::json;
 use super::*;
 use crate::antispam::trainer::RecordingTrainer;
 use crate::imap::mailbox;
+use crate::smtp::auth::tests::fixture_password;
 use crate::storage::MessageCrypto;
 
 /// Build an [`ApiState`] whose `training()` returns a queue backed by
 /// a [`RecordingTrainer`]. Two state-builders already exist
 /// (`api_tests::test_state`) but neither wires a training queue, so
 /// the JMAP-side tests roll their own here rather than overload the
-/// generic one.
+/// generic one. The test never authenticates against this state, so
+/// the password hash and the SMTP credential are both derived from
+/// [`fixture_password`] (minted at run time) so no literal ever
+/// reaches a credential-shaped parameter.
 fn state_with_recording_training(dir: &std::path::Path) -> (ApiState, Arc<RecordingTrainer>) {
 	let trainer = Arc::new(RecordingTrainer::new());
 	let metrics = Arc::new(crate::metrics::Metrics::new());
@@ -28,7 +32,7 @@ fn state_with_recording_training(dir: &std::path::Path) -> (ApiState, Arc<Record
 	let accounts = vec![crate::config::Account {
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
-		password_hash: Some("$argon2id$placeholder".to_string()),
+		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -45,7 +49,7 @@ fn state_with_recording_training(dir: &std::path::Path) -> (ApiState, Arc<Record
 		.expect("open store"),
 	);
 	let state = ApiState::new(
-		&crate::smtp::auth::tests::hash("dummy"),
+		&crate::smtp::auth::tests::hash(fixture_password()),
 		dir.to_path_buf(),
 		vec!["example.org".to_string()],
 		store,

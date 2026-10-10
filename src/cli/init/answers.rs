@@ -45,8 +45,35 @@ pub struct DnsAnswers {
 	pub token_env: Option<String>,
 }
 
+/// ACME (automatic certificate issuance) overrides. When the
+/// section is absent, init falls back to its heuristic: a public
+/// hostname gets Let's Encrypt production; a loopback or
+/// reserved-TLD hostname gets nothing. Setting `enabled = true`
+/// forces ACME on for whatever the hostname is (init will refuse
+/// to write a `[acme]` block for a non-public hostname because the
+/// HTTP-01 challenge would never resolve, but the boolean is still
+/// the operator's explicit opt-in). Setting `enabled = false`
+/// forces it off even on a public hostname, which is what an
+/// operator with their own certificate uses. `contact` overrides
+/// the default `mailto:postmaster@<first domain>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcmeAnswers {
+	/// Force ACME on (`true`) or off (`false`). Absent lets the
+	/// public-hostname heuristic decide.
+	#[serde(default)]
+	pub enabled: Option<bool>,
+	/// Contact URI the certificate authority uses to reach the
+	/// operator (let's encrypt sends a verification email when an
+	/// account is created and a heads-up before a certificate
+	/// expires). Absent defaults to `mailto:postmaster@<first
+	/// configured domain>`.
+	#[serde(default)]
+	pub contact: Option<String>,
+}
+
 /// The set of services the operator wants to expose.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Services {
 	/// IMAP listener (defaults to `true`).
@@ -67,6 +94,13 @@ pub struct Services {
 	/// Management API listener (defaults to `false`).
 	#[serde(default)]
 	pub api: bool,
+	/// Bring up the stack's PostgreSQL (directory, bans, antispam).
+	/// When `true`, `init` writes a `[database]` section to the config,
+	/// mints the database password, and adds the postgres service to
+	/// the compose file. No default: a missing field is an error that
+	/// names `services.database` so the operator has to make the
+	/// choice explicitly.
+	pub database: bool,
 }
 
 const fn default_true() -> bool {
@@ -75,6 +109,13 @@ const fn default_true() -> bool {
 
 impl Default for Services {
 	fn default() -> Self {
+		// `database` is the only field without a `serde(default)` and
+		// without an opinion here. The file path requires the
+		// operator to state the choice, so the `Default` impl mirrors
+		// what a hand-written `Services` with the same listener
+		// defaults would look like for a test that does not care
+		// about the database. Tests that do care pass `database`
+		// explicitly.
 		Self {
 			imap: true,
 			submission: true,
@@ -82,6 +123,7 @@ impl Default for Services {
 			managesieve: false,
 			webdav: false,
 			api: false,
+			database: false,
 		}
 	}
 }
@@ -112,9 +154,29 @@ pub struct Answers {
 	/// manual mode.
 	#[serde(default)]
 	pub dns: Option<DnsAnswers>,
-	/// Which services to expose.
-	#[serde(default)]
+	/// Which services to expose. The whole `[services]` table is
+	/// required: a missing table must not silently default to
+	/// `database = false` and let a hand-typed answers file skip the
+	/// explicit choice. Tests pin this with
+	/// `services_table_is_required`.
 	pub services: Services,
+	/// Optional override for the `mail` service image. The default is
+	/// `ghcr.io/glyndor/epistle:<CARGO_PKG_VERSION>` resolved at build
+	/// time, which is what a release-pinned install uses. Tests and
+	/// local builds pass a different image (e.g.
+	/// `localhost/epistle:dev`). `None` lets the default apply.
+	/// Validated non-empty and whitespace-free when set so the compose
+	/// writer cannot produce a bare `image:` key or a value that
+	/// splits across two array entries.
+	#[serde(default)]
+	pub image: Option<String>,
+	/// ACME overrides. Absent lets init decide based on the
+	/// hostname (a public hostname gets Let's Encrypt production;
+	/// loopback or reserved-TLD hostnames get nothing). The
+	/// `[acme]` block init writes into the config follows this
+	/// flag plus `contact`.
+	#[serde(default)]
+	pub acme: Option<AcmeAnswers>,
 }
 
 /// A non-fatal problem the operator should see before the file is
@@ -164,6 +226,10 @@ pub enum Invalid {
 	DnsZoneMalformed { value: String, reason: String },
 	/// `dns.provider` is missing or empty.
 	DnsProviderMissing,
+	/// `dns.provider` is not one of the supported provider names. Carries
+	/// the bad value and a comma-separated list of supported names so the
+	/// operator sees what they could have written.
+	DnsProviderUnsupported { value: String, supported: String },
 	/// A domain does not fall inside `dns.zone`.
 	DnsZoneScope { domain: String, zone: String },
 	/// `[dns]` declared more than one of `token`/`token_file`/`token_env`.
@@ -172,6 +238,10 @@ pub enum Invalid {
 	DnsTokenMissing,
 	/// `data_dir` is not absolute.
 	DataDirNotAbsolute,
+	/// The data mount would expose the user home or host runtime directories.
+	DataDirUnsafe { suggested: String },
+	/// The current account home could not be resolved safely.
+	DataDirHomeUnavailable(String),
 	/// `config_path` is not absolute.
 	ConfigPathNotAbsolute,
 	/// `config_path` has no usable file-name component (e.g. `/` or
@@ -188,11 +258,60 @@ pub enum Invalid {
 	/// `config_path` is inside `<data_dir>/keys`. `init` owns that
 	/// directory and would race the staging step against itself.
 	ConfigPathInsideKeysDir,
+	/// `config_path`'s directory and `data_dir` overlap, so the
+	/// compose file would mount the same path twice (once for
+	/// the data directory, once for the config directory) and
+	/// podman would refuse the container. The config mount is
+	/// read-only, so a single shared mount cannot satisfy both
+	/// roles. Either direction is caught: a `config_path` whose
+	/// parent equals or sits inside `data_dir`, and a `data_dir`
+	/// that equals or sits inside `config_path`'s parent. The
+	/// comparison normalises `.` and `..` lexically and
+	/// canonicalises both paths when they exist on disk, so
+	/// `data_dir = "/srv/epistle/data"` and
+	/// `config_path = "/srv/epistle/spare/../data/mail.toml"`
+	/// are caught here even though the textual paths look
+	/// disjoint.
+	ConfigMountsOverlap {
+		data_dir: String,
+		config_dir: String,
+	},
+	/// `data_dir` or `config_path` contains a `..` component that
+	/// cannot be resolved lexically (e.g. `data_dir = "/../foo"`).
+	/// The path is absolute but tries to escape its root before
+	/// any directory is named, so the lexical normalisation that
+	/// the overlap check relies on has nothing to compare. The
+	/// validator refuses the input before any effect rather than
+	/// silently normalising to a path the operator did not write.
+	PathParentEscapesRoot { field: String, value: String },
+	/// `data_dir` or `config_path` contains a `$` that compose
+	/// would interpolate at `podup config` time. The compose
+	/// file mounts the two paths verbatim on both sides of the
+	/// colon; a `$VAR` in the source path resolves to the empty
+	/// string (or a value `podup` reads from the host
+	/// environment) while the rendered `mail.toml` keeps the
+	/// literal `$VAR` in its `data` and key paths, and the
+	/// container cannot find the keys the host generated. The
+	/// validator catches the `$` before any effect, and the
+	/// operator has to write the resolved path directly.
+	PathInterpolated { field: String, value: String },
 	/// `services.api = true`: init cannot mint a management API
 	/// credential, so the operator must enable the api service by
 	/// editing the `[api]` section of the generated config after
 	/// `init` returns.
 	ApiUnsupported,
+	/// `image` is set but empty or contains whitespace. The
+	/// compose file pins the image as a single string, so an empty
+	/// value would resolve to a bare `image:` key and whitespace
+	/// inside would split it across two values.
+	ImageMalformed(String),
+	/// `image` has no tag or digest. The compose writer needs a
+	/// pinned reference; an untagged image (e.g. `ghcr.io/.../epistle`)
+	/// would default to `:latest` and break reproducible
+	/// installs, which is exactly what the operator avoided by
+	/// using `init` instead of `podup run`. The same check rejects
+	/// an explicit `:latest` tag, which is no better.
+	ImageUntagged(String),
 }
 
 impl std::fmt::Display for Invalid {
@@ -217,6 +336,10 @@ impl std::fmt::Display for Invalid {
 				write!(f, "dns.zone {value:?} {reason}")
 			}
 			Invalid::DnsProviderMissing => f.write_str("dns.provider must be set"),
+			Invalid::DnsProviderUnsupported { value, supported } => write!(
+				f,
+				"dns.provider {value:?} is not a supported provider; supported: {supported}"
+			),
 			Invalid::DnsZoneScope { domain, zone } => {
 				write!(f, "domains: {domain:?} is not inside dns.zone {zone:?}")
 			}
@@ -224,6 +347,9 @@ impl std::fmt::Display for Invalid {
 				f.write_str("dns: set exactly one of token, token_file, token_env")
 			}
 			Invalid::DnsTokenMissing => f.write_str("dns: set one of token, token_file, token_env"),
+			Invalid::DataDirUnsafe { suggested } => write!(f,
+                "data_dir: must exclude the user home, Podman storage and systemd units; a writable container mount would expose host services and backups would include container storage; use {suggested}"),
+            Invalid::DataDirHomeUnavailable(reason) => write!(f, "data_dir: cannot determine the current user home: {reason}"),
 			Invalid::DataDirNotAbsolute => f.write_str("data_dir: must be an absolute path"),
 			Invalid::ConfigPathNotAbsolute => f.write_str("config_path: must be an absolute path"),
 			Invalid::ConfigPathNoFileName => f.write_str(
@@ -235,8 +361,36 @@ impl std::fmt::Display for Invalid {
 			Invalid::ConfigPathInsideKeysDir => f.write_str(
 				"config_path: must not be inside data_dir/keys",
 			),
+			Invalid::ConfigMountsOverlap {
+				data_dir,
+				config_dir,
+			} => write!(
+				f,
+				"data_dir {data_dir:?} and config_path's directory {config_dir:?} must not overlap; \
+				 the compose file mounts both, and podman refuses duplicate mount destinations"
+			),
+			Invalid::PathParentEscapesRoot { field, value } => write!(
+				f,
+				"{field} {value:?}: contains `..` that escapes the path root; \
+				 write the path without `..` components"
+			),
+			Invalid::PathInterpolated { field, value } => write!(
+				f,
+				"{field} {value:?}: must not contain a `$`; compose would interpolate it \
+				 and the rendered mail.toml would still carry the literal `$VAR` in its \
+				 data and key paths, so the container could not find the generated keys. \
+				 Write the resolved path directly."
+			),
 			Invalid::ApiUnsupported => f.write_str(
 				"services.api: enable the management API by editing the [api] section of the generated config after init; init does not generate an api credential",
+			),
+			Invalid::ImageMalformed(value) => write!(
+				f,
+				"image {value:?}: must be non-empty and contain no whitespace"
+			),
+			Invalid::ImageUntagged(value) => write!(
+				f,
+				"image {value:?}: must include a tag that is not 'latest' or a @sha256: digest"
 			),
 		}
 	}
@@ -251,6 +405,19 @@ impl Answers {
 	/// (e.g. an inline API token) are non-fatal but always surfaced.
 	pub fn validate(&self) -> Result<Vec<Warning>, Vec<Invalid>> {
 		answers_validate::validate(self)
+	}
+
+	/// True when the hostname resolves in the public DNS: not
+	/// loopback, not an IP literal, not a name under a reserved
+	/// TLD (`.local`, `.internal`, `.test`, `.example`). Init uses
+	/// this to decide whether ACME auto-enables: the Let's Encrypt
+	/// HTTP-01 challenge connects to the host on port 80, so a
+	/// loopback or reserved-TLD hostname would never resolve.
+	/// The list of reserved TLDs is the RFC 6762 / RFC 2606 set
+	/// plus `.internal`, the name an internal split-horizon DNS
+	/// server hands out, and `.example`, the documentation TLD.
+	pub fn hostname_is_public(&self) -> bool {
+		is_public_hostname(&self.hostname)
 	}
 
 	/// Replace every Unicode (U-label) hostname or domain in the
@@ -285,21 +452,76 @@ impl Answers {
 		 domains = [\"example.org\"]         # at least one; not equal to hostname\n\
 		 # public_ipv4 = \"203.0.113.10\"    # optional; must be a global unicast address\n\
 		 # public_ipv6 = \"2001:db8::10\"    # optional; must be a global unicast address\n\
-		 data_dir = \"/var/lib/glyndor/epistle\"\n\
-		 config_path = \"/etc/epistle/mail.toml\"\n\n\
+		 data_dir = \"/var/lib/glyndor/epistle/data\"\n\
+		 config_path = \"/etc/epistle/mail.toml\"\n\
+		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\n\
 		 # [dns]                             # only with mode = \"automatic\"\n\
 		 # provider = \"cloudflare\"          # cloudflare, route53, dnsimple, ...\n\
 		 # zone = \"example.org\"\n\
 		 # token_file = \"/run/secrets/epistle-dns\"  # or token_env = \"NAME\"; token = \"...\" is accepted with one warning\n\n\
-		 [services]                        # each true | false; defaults: imap, submission true; the rest false\n\
+		 [acme]                             # optional; init enables ACME on its own for a public hostname\n\
+		 # enabled = true                    # set false to skip Let's Encrypt even on a public hostname (you supply your own cert)\n\
+		 # contact = \"mailto:postmaster@example.org\"  # optional override; defaults to postmaster@<first configured domain>\n\n\
+		 [services]                        # required; each true | false; defaults: imap, submission true; the rest false\n\
 		 imap = true\n\
 		 submission = true\n\
 		 # pop3 = false\n\
 		 # managesieve = false\n\
 		 # webdav = false\n\
-		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n"
+		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n\
+		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n"
 			.to_string()
 	}
+}
+
+/// TLDs that are not delegated in the public DNS. Init refuses
+/// to enable ACME for a name under one of these: the HTTP-01
+/// challenge would never reach the responder, and the resulting
+/// renewal loop would log failures every 12 hours forever. The
+/// list is the RFC 6762 multicast DNS name, the RFC 2606 test and
+/// example TLDs, and `.internal`, the name a private split-horizon
+/// DNS server hands out for hosts that should never appear on the
+/// public internet.
+const RESERVED_TLDS: &[&str] = &["local", "internal", "test", "example"];
+
+/// True when `hostname` is one init would auto-enable ACME for:
+/// a real DNS name (no IP literal), not under a reserved TLD,
+/// not a loopback name. The check is deliberately conservative: a
+/// false positive would write an `[acme]` block that cannot
+/// succeed; a false negative only means the operator has to set
+/// `acme.enabled = true` themselves.
+pub fn is_public_hostname(hostname: &str) -> bool {
+	if hostname.is_empty() {
+		return false;
+	}
+	// IP literal (v4 or v6) -> not public. `IpAddr::from_str`
+	// covers the canonical forms (`127.0.0.1`, `::1`,
+	// `[::1]`); the surrounding brackets are the URL form, not
+	// what an FQDN would carry.
+	if hostname.parse::<std::net::IpAddr>().is_ok() {
+		return false;
+	}
+	// Loopback name (`localhost` or a name that resolves to it).
+	// The set is small on purpose: `.localhost` is the RFC 6762
+	// form, `localhost` is the host file shortcut, and the
+	// bracketed forms are rejected up front (they parse as IPs).
+	if hostname.eq_ignore_ascii_case("localhost")
+		|| hostname.eq_ignore_ascii_case("localhost.localdomain")
+	{
+		return false;
+	}
+	// Walk the labels, top down, to find the TLD. A name with no
+	// labels (impossible after the empty-string check above, but
+	// belt and braces) is treated as private.
+	let tld = match hostname.rsplit('.').next() {
+		Some(label) if !label.is_empty() => label,
+		_ => return false,
+	};
+	let tld_lc = tld.to_ascii_lowercase();
+	if RESERVED_TLDS.iter().any(|reserved| *reserved == tld_lc) {
+		return false;
+	}
+	true
 }
 
 #[cfg(test)]
@@ -307,8 +529,35 @@ impl Answers {
 mod tests;
 
 #[cfg(test)]
-#[path = "answers_tests_b.rs"]
-mod tests_b;
+#[path = "answers_tests_validate.rs"]
+mod tests_validate;
+
+#[cfg(test)]
+#[path = "answers_tests_deserialise.rs"]
+mod tests_deserialise;
+
+#[cfg(test)]
+#[path = "answers_tests_messages.rs"]
+mod tests_messages;
+
+#[cfg(test)]
+#[path = "answers_tests_dns.rs"]
+mod tests_dns;
+
+#[cfg(test)]
+#[path = "answers_tests_config_path.rs"]
+mod tests_config_path;
+
+#[cfg(test)]
+#[path = "answers_tests_paths_overlap.rs"]
+mod tests_paths_overlap;
+
+#[cfg(test)]
+#[path = "answers_tests_services.rs"]
+mod tests_services;
 
 #[path = "answers_validate.rs"]
 mod answers_validate;
+
+#[path = "answers_data_dir.rs"]
+mod data_dir;

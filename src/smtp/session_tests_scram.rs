@@ -1,6 +1,6 @@
 use super::*;
 
-fn reply_code(action: &Action) -> u16 {
+pub(super) fn reply_code(action: &Action) -> u16 {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -40,12 +40,12 @@ fn scram_session(inject_nonce: bool) -> Session {
 	session
 }
 
-fn b64(s: &str) -> String {
+pub(super) fn b64(s: &str) -> String {
 	use base64::Engine;
 	base64::engine::general_purpose::STANDARD.encode(s)
 }
 
-fn b64_bytes(bytes: &[u8]) -> String {
+pub(super) fn b64_bytes(bytes: &[u8]) -> String {
 	use base64::Engine;
 	base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -63,7 +63,7 @@ fn scram_plus_session() -> Session {
 		.tap_ehlo()
 }
 
-trait TapEhlo {
+pub(super) trait TapEhlo {
 	fn tap_ehlo(self) -> Self;
 }
 impl TapEhlo for Session {

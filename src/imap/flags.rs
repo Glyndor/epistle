@@ -19,7 +19,7 @@ use crate::imap::mailbox::Flag;
 /// malformed sidecar is also treated as empty rather than crashing the
 /// snapshot open.
 pub(super) fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {
-	std::fs::read(account_dir.join(format!("{id}.flags")))
+	crate::util::fs_walk::read(account_dir.join(format!("{id}.flags")))
 		.ok()
 		.and_then(|bytes| serde_json::from_slice(&bytes).ok())
 		.unwrap_or_default()

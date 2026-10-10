@@ -119,6 +119,193 @@ impl Route53Provider {
 			self.access_key
 		)
 	}
+
+	/// SigV4 authorization for a GET (the same shape; the canonical
+	/// request swaps `POST` for `GET`).
+	fn authorization_get(&self, path: &str, body: &str, amz_date: &str, date: &str) -> String {
+		let payload_hash = sha256_hex(body.as_bytes());
+		let canonical_headers = format!("host:{HOST}\nx-amz-date:{amz_date}\n");
+		let signed_headers = "host;x-amz-date";
+		let canonical_request =
+			format!("GET\n{path}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+		let scope = format!("{date}/{REGION}/{SERVICE}/aws4_request");
+		let string_to_sign = format!(
+			"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+			sha256_hex(canonical_request.as_bytes())
+		);
+		let sig = signature(&self.secret_key, date, REGION, SERVICE, &string_to_sign);
+		format!(
+			"AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={sig}",
+			self.access_key
+		)
+	}
+
+	/// `GET /2013-04-01/hostedzone/{id}/rrset` and return the first
+	/// TXT rrset whose `<Name>` matches `name` (case-insensitive on
+	/// the wire, AWS folds). The XML the API returns is parsed with
+	/// a small hand-rolled reader because pulling in a full XML
+	/// parser for one path is overkill; the response is well-formed
+	/// by API contract.
+	async fn fetch_txt_rrset(&self, name: &str) -> Result<Option<TxtRrset>, ProviderError> {
+		let path = format!("/{API_VERSION}/hostedzone/{}/rrset", self.hosted_zone_id);
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap_or_default();
+		let (amz_date, date) = timestamps(now.as_secs());
+		let auth = self.authorization_get(&path, "", &amz_date, &date);
+		let response = self
+			.client
+			.get(format!("{}{path}", self.base))
+			.header("x-amz-date", &amz_date)
+			.header(reqwest::header::HOST, HOST)
+			.header(reqwest::header::AUTHORIZATION, auth)
+			.send()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let status = response.status();
+		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
+			return Err(ProviderError::Auth);
+		}
+		if !status.is_success() {
+			return Err(ProviderError::Remote(format!("HTTP {status}")));
+		}
+		let text = response
+			.text()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		Ok(parse_txt_rrset(&text, name))
+	}
+
+	/// UPSERT one rrset carrying the given values verbatim. Used by
+	/// the value-bearing TXT delete to drop a single rdata and keep
+	/// the siblings.
+	async fn upsert_rrset(
+		&self,
+		name: &str,
+		kind: &str,
+		ttl: u32,
+		values: &[String],
+	) -> Result<(), ProviderError> {
+		let path = format!("/{API_VERSION}/hostedzone/{}/rrset", self.hosted_zone_id);
+		let value_xml: String = values
+			.iter()
+			.map(|v| {
+				format!(
+					"<ResourceRecord><Value>{}</Value></ResourceRecord>",
+					xml_escape(v)
+				)
+			})
+			.collect();
+		let body = format!(
+			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+<ChangeResourceRecordSetsRequest xmlns=\"https://route53.amazonaws.com/doc/{API_VERSION}/\">\
+<ChangeBatch><Changes><Change>\
+<Action>UPSERT</Action>\
+<ResourceRecordSet>\
+<Name>{}</Name><Type>{kind}</Type><TTL>{ttl}</TTL>\
+<ResourceRecords>{value_xml}</ResourceRecords>\
+</ResourceRecordSet></Change></Changes></ChangeBatch>\
+</ChangeResourceRecordSetsRequest>",
+			xml_escape(name),
+		);
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap_or_default();
+		let (amz_date, date) = timestamps(now.as_secs());
+		let auth = self.authorization(&path, &body, &amz_date, &date);
+		let response = self
+			.client
+			.post(format!("{}{path}", self.base))
+			.header("x-amz-date", &amz_date)
+			.header(reqwest::header::HOST, HOST)
+			.header(reqwest::header::AUTHORIZATION, auth)
+			.header(reqwest::header::CONTENT_TYPE, "application/xml")
+			.body(body)
+			.send()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
+		let status = response.status();
+		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
+			return Err(ProviderError::Auth);
+		}
+		if status.is_success() {
+			Ok(())
+		} else {
+			Err(ProviderError::Remote(format!("HTTP {status}")))
+		}
+	}
+}
+
+/// A TXT rrset as the API returns it. `name` is the FQDN with the
+/// trailing dot AWS always uses; `values` is the per-rdata wire
+/// form (already quoted, no further wrapping needed).
+#[derive(Debug)]
+struct TxtRrset {
+	name: String,
+	kind: String,
+	ttl: u32,
+	values: Vec<String>,
+}
+
+/// Walk `LISTResourceRecordSetsResult` for the first `<ResourceRecordSet>`
+/// whose `<Name>` matches `target` and whose `<Type>` is `TXT`. The
+/// reader uses a lowercased view to find tag boundaries (the wire
+/// form is case-insensitive) and slices the original `xml` to keep
+/// the byte case of the values. The response is well-formed by API
+/// contract.
+fn parse_txt_rrset(xml: &str, target: &str) -> Option<TxtRrset> {
+	let lower = xml.to_ascii_lowercase();
+	let mut cursor = 0;
+	loop {
+		let rel_start = lower[cursor..].find("<resourcerecordset>")?;
+		let abs = cursor + rel_start;
+		let rel_end = lower[abs..].find("</resourcerecordset>")?;
+		let end = abs + rel_end;
+		let block_lower = &lower[abs..end];
+		let name = extract_tag_lower(block_lower, "name")?;
+		let kind = extract_tag_lower(block_lower, "type")?;
+		let mut values: Vec<String> = Vec::new();
+		let mut value_cursor = 0;
+		while let Some(rel_value) = block_lower[value_cursor..].find("<value>") {
+			let vstart = value_cursor + rel_value + "<value>".len();
+			let rel_close = block_lower[vstart..].find("</value>")?;
+			let vend = vstart + rel_close;
+			// Slice the original XML (the lowercased view kept the
+			// byte positions, but the bytes themselves are the
+			// lowercased ones, slice the original instead).
+			let abs_start = abs + vstart;
+			let abs_end = abs + vend;
+			values.push(xml[abs_start..abs_end].to_string());
+			value_cursor = vend;
+		}
+		if kind.eq_ignore_ascii_case("TXT")
+			&& name
+				.trim_end_matches('.')
+				.eq_ignore_ascii_case(target.trim_end_matches('.'))
+		{
+			let ttl: u32 = extract_tag_lower(block_lower, "ttl")
+				.and_then(|s| s.parse().ok())
+				.unwrap_or(300);
+			return Some(TxtRrset {
+				name,
+				kind: "TXT".to_string(),
+				ttl,
+				values,
+			});
+		}
+		cursor = end + "</resourcerecordset>".len();
+	}
+}
+
+/// The text content of the first `<tag>...</tag>` in `block_lower`,
+/// with both halves already lowercased. The caller picks the original
+/// bytes from `xml` if it needs case preserved.
+fn extract_tag_lower(block_lower: &str, tag: &str) -> Option<String> {
+	let open = format!("<{tag}>");
+	let close = format!("</{tag}>");
+	let start = block_lower.find(&open)? + open.len();
+	let end = block_lower[start..].find(&close)? + start;
+	Some(block_lower[start..end].to_string())
 }
 
 impl DnsProvider for Route53Provider {
@@ -126,7 +313,48 @@ impl DnsProvider for Route53Provider {
 		Box::pin(async move { self.change("UPSERT", &record).await })
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.change("DELETE", &record).await })
+		Box::pin(async move {
+			// The TXT matching rule from `src/dns/provider.rs` is
+			// the contract: a value-bearing delete drops only the
+			// rdata whose value matches (a sibling ACME challenge
+			// at the same owner survives), an empty-value delete
+			// drops every rdata at the rrset (the DKIM rotator's
+			// retire path). Other record kinds fall through to the
+			// wholesale DELETE. Route 53's `DELETE` matches on
+			// Name+Type only, so the value-bearing case LISTs the
+			// rrset, drops the matching rdata, and UPSERTs the
+			// remainder (a wholesale DELETE only when the rrset
+			// is fully gone).
+			if record.kind == RecordKind::Txt && !record.value.is_empty() {
+				let needle = format!(
+					"\"{}\"",
+					record.value.replace('\\', "\\\\").replace('"', "\\\"")
+				);
+				if let Some(rrset) = self.fetch_txt_rrset(&record.name).await? {
+					let remainder: Vec<String> = rrset
+						.values
+						.iter()
+						.filter(|v| v.as_str() != needle.as_str())
+						.cloned()
+						.collect();
+					if remainder.len() != rrset.values.len() {
+						if remainder.is_empty() {
+							self.change("DELETE", &record).await
+						} else {
+							self.upsert_rrset(&rrset.name, &rrset.kind, rrset.ttl, &remainder)
+								.await
+						}
+					} else {
+						// No rdata matched: idempotent, nothing to do.
+						Ok(())
+					}
+				} else {
+					Ok(())
+				}
+			} else {
+				self.change("DELETE", &record).await
+			}
+		})
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		// Route 53 lists records as XML, which this provider does not parse.

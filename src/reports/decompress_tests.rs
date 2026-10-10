@@ -44,126 +44,26 @@ fn gzip_round_trip() {
 
 #[test]
 fn zip_stored_and_deflate_single_entry() {
-	use std::io::Write;
-	// Build a minimal zip with a single stored (method=0) entry by hand.
-	fn build_zip(name: &str, payload: &[u8], method: u16) -> Vec<u8> {
-		use flate2::write::DeflateEncoder;
-		let compressed = if method == METHOD_DEFLATE {
-			let mut enc = DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-			enc.write_all(payload).expect("write");
-			enc.finish().expect("finish")
-		} else {
-			payload.to_vec()
-		};
-		let crc = crc32(payload);
-		let mut out = Vec::new();
-		out.extend_from_slice(&LOCAL_FILE_HEADER_SIG);
-		out.extend_from_slice(&20u16.to_le_bytes()); // version needed
-		out.extend_from_slice(&0u16.to_le_bytes()); // flags
-		out.extend_from_slice(&method.to_le_bytes());
-		out.extend_from_slice(&0u16.to_le_bytes()); // mtime
-		out.extend_from_slice(&0u16.to_le_bytes()); // mdate
-		out.extend_from_slice(&crc.to_le_bytes());
-		out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-		out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-		out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-		out.extend_from_slice(&0u16.to_le_bytes()); // extra len
-		out.extend_from_slice(name.as_bytes());
-		out.extend_from_slice(&compressed);
-		out
+	for method in [METHOD_STORED, METHOD_DEFLATE] {
+		let bytes = super::tests_single_entry::archive(1, false, method);
+		let out = inflate_attachment(&bytes, Encoding::Zip).expect("single entry decompresses");
+		assert!(
+			out.as_slice() == b"<feedback/>",
+			"stored and deflate ZIP must preserve payload"
+		);
 	}
-
-	let payload = b"<?xml version=\"1.0\"?><feedback/>";
-
-	// Stored (method 0).
-	let stored = build_zip("report.xml", payload, METHOD_STORED);
-	let out = inflate_attachment(&stored, Encoding::Zip).expect("stored entry decompresses");
-	assert_eq!(out, payload);
-
-	// Deflate (method 8).
-	let deflated = build_zip("report.xml", payload, METHOD_DEFLATE);
-	let out = inflate_attachment(&deflated, Encoding::Zip).expect("deflate entry decompresses");
-	assert_eq!(out, payload);
 }
 
-/// General-purpose bit 3 (data descriptor) means the local file header
-/// carries zeros for the sizes; the minimal reader follows the
-/// end-of-central-directory pointer back to the central directory to
-/// recover them.
 #[test]
 fn zip_with_data_descriptor_stored_and_deflate() {
-	use flate2::write::DeflateEncoder;
-	use std::io::Write;
-	fn build_zip(name: &str, payload: &[u8], method: u16) -> Vec<u8> {
-		let compressed = if method == METHOD_DEFLATE {
-			let mut enc = DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-			enc.write_all(payload).expect("write");
-			enc.finish().expect("finish")
-		} else {
-			payload.to_vec()
-		};
-		let crc = crc32(payload);
-		// Local file header: sizes are zero, bit 3 set.
-		let mut local = Vec::new();
-		local.extend_from_slice(&LOCAL_FILE_HEADER_SIG);
-		local.extend_from_slice(&20u16.to_le_bytes()); // version needed
-		local.extend_from_slice(&FLAG_DATA_DESCRIPTOR.to_le_bytes());
-		local.extend_from_slice(&method.to_le_bytes());
-		local.extend_from_slice(&0u16.to_le_bytes());
-		local.extend_from_slice(&0u16.to_le_bytes());
-		local.extend_from_slice(&crc.to_le_bytes());
-		local.extend_from_slice(&0u32.to_le_bytes()); // compressed size = 0
-		local.extend_from_slice(&0u32.to_le_bytes()); // uncompressed size = 0
-		local.extend_from_slice(&(name.len() as u16).to_le_bytes());
-		local.extend_from_slice(&0u16.to_le_bytes());
-		local.extend_from_slice(name.as_bytes());
-		local.extend_from_slice(&compressed);
-		// Central directory header: real sizes.
-		let central_offset = 0usize;
-		let mut central = Vec::new();
-		central.extend_from_slice(&CENTRAL_DIR_HEADER_SIG);
-		central.extend_from_slice(&20u16.to_le_bytes()); // version made by
-		central.extend_from_slice(&20u16.to_le_bytes()); // version needed
-		central.extend_from_slice(&FLAG_DATA_DESCRIPTOR.to_le_bytes());
-		central.extend_from_slice(&method.to_le_bytes());
-		central.extend_from_slice(&0u16.to_le_bytes()); // mtime
-		central.extend_from_slice(&0u16.to_le_bytes()); // mdate
-		central.extend_from_slice(&crc.to_le_bytes());
-		central.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-		central.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-		central.extend_from_slice(&(name.len() as u16).to_le_bytes());
-		central.extend_from_slice(&0u16.to_le_bytes()); // extra len
-		central.extend_from_slice(&0u16.to_le_bytes()); // comment len
-		central.extend_from_slice(&0u16.to_le_bytes()); // disk start
-		central.extend_from_slice(&0u16.to_le_bytes()); // int attrs
-		central.extend_from_slice(&0u32.to_le_bytes()); // ext attrs
-		central.extend_from_slice(&0u32.to_le_bytes()); // local header offset
-		central.extend_from_slice(name.as_bytes());
-		// End-of-central-directory record.
-		let eocd_offset = local.len() + central.len();
-		let mut eocd = Vec::new();
-		eocd.extend_from_slice(&EOCD_SIG);
-		eocd.extend_from_slice(&0u16.to_le_bytes()); // disk number
-		eocd.extend_from_slice(&0u16.to_le_bytes()); // disk with cd
-		eocd.extend_from_slice(&1u16.to_le_bytes()); // entries on this disk
-		eocd.extend_from_slice(&1u16.to_le_bytes()); // total entries
-		eocd.extend_from_slice(&(central.len() as u32).to_le_bytes()); // cd size
-		eocd.extend_from_slice(&((central_offset + local.len()) as u32).to_le_bytes()); // cd offset
-		eocd.extend_from_slice(&0u16.to_le_bytes()); // comment len
-		let _ = eocd_offset;
-		let mut out = local;
-		out.extend_from_slice(&central);
-		out.extend_from_slice(&eocd);
-		out
+	for method in [METHOD_STORED, METHOD_DEFLATE] {
+		let bytes = super::tests_single_entry::archive(1, true, method);
+		let out = inflate_attachment(&bytes, Encoding::Zip).expect("streaming entry decompresses");
+		assert!(
+			out.as_slice() == b"<feedback/>",
+			"streaming ZIP must preserve payload"
+		);
 	}
-
-	let payload = b"<feedback/>";
-	let stored = build_zip("report.xml", payload, METHOD_STORED);
-	let out = inflate_attachment(&stored, Encoding::Zip).expect("stored bit-3");
-	assert_eq!(out, payload);
-	let deflated = build_zip("report.xml", payload, METHOD_DEFLATE);
-	let out = inflate_attachment(&deflated, Encoding::Zip).expect("deflate bit-3");
-	assert_eq!(out, payload);
 }
 
 /// An archive with a second local file header after the first entry is a
@@ -294,7 +194,7 @@ fn central_size_larger_than_the_buffer_is_refused() {
 		out.extend_from_slice(&0u16.to_le_bytes());
 		out.extend_from_slice(&1u16.to_le_bytes());
 		out.extend_from_slice(&1u16.to_le_bytes());
-		out.extend_from_slice(&((out.len() - central_offset - 22) as u32).to_le_bytes());
+		out.extend_from_slice(&51u32.to_le_bytes());
 		out.extend_from_slice(&(central_offset as u32).to_le_bytes());
 		out.extend_from_slice(&0u16.to_le_bytes());
 		out
@@ -358,7 +258,7 @@ fn central_size_above_max_compressed_is_refused() {
 		out.extend_from_slice(&0u16.to_le_bytes());
 		out.extend_from_slice(&1u16.to_le_bytes());
 		out.extend_from_slice(&1u16.to_le_bytes());
-		out.extend_from_slice(&1u32.to_le_bytes());
+		out.extend_from_slice(&51u32.to_le_bytes());
 		out.extend_from_slice(&((claimed as usize + 30 + 5) as u32).to_le_bytes());
 		out.extend_from_slice(&0u16.to_le_bytes());
 		out

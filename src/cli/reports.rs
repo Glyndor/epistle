@@ -46,6 +46,7 @@ const TOP_N: usize = 20;
 /// One CLI summary kind: pick between DMARC and TLS-RPT and walk the
 /// matching bucket under `data_dir/reports/`.
 pub(super) fn run(config: &Config, days: u32, out: &mut impl std::io::Write) -> ExitCode {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let today = today_unix_days();
 	let mut errors = 0;
 	for kind in [Kind::Dmarc, Kind::TlsRpt] {
@@ -69,7 +70,7 @@ fn summarise(
 	out: &mut impl std::io::Write,
 ) -> std::io::Result<()> {
 	let bucket = data_dir.join("reports").join(dir_name(kind));
-	let entries = match std::fs::read_dir(&bucket) {
+	let entries = match crate::util::fs_walk::read_dir(&bucket) {
 		Ok(entries) => entries,
 		// Missing bucket = no reports yet; the section header still
 		// prints so the operator knows nothing was found, not that
@@ -93,16 +94,19 @@ fn summarise(
 		if today.saturating_sub(day_num) > days {
 			continue;
 		}
-		for org_entry in std::fs::read_dir(entry.path())
+		for org_entry in crate::util::fs_walk::read_dir(entry.path())
 			.into_iter()
 			.flatten()
 			.flatten()
 		{
+			if !org_entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			let path = org_entry.path();
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			total_lines += std::fs::read_to_string(&path)
+			total_lines += crate::util::fs_walk::read_to_string(&path)
 				.map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
 				.unwrap_or(0);
 		}
@@ -193,7 +197,7 @@ fn is_dmarc_failing(row: &crate::reports::dmarc::Row) -> bool {
 /// directories. Lines that fail to deserialize are counted but skipped.
 fn read_aggregates(bucket: &Path, today: u32, days: u32) -> std::io::Result<Vec<Aggregate>> {
 	let mut out: Vec<Aggregate> = Vec::new();
-	let Ok(entries) = std::fs::read_dir(bucket) else {
+	let Ok(entries) = crate::util::fs_walk::read_dir(bucket) else {
 		return Ok(out);
 	};
 	for day_entry in entries.flatten() {
@@ -208,16 +212,19 @@ fn read_aggregates(bucket: &Path, today: u32, days: u32) -> std::io::Result<Vec<
 		if today.saturating_sub(day_num) > days {
 			continue;
 		}
-		for org_entry in std::fs::read_dir(day_entry.path())
+		for org_entry in crate::util::fs_walk::read_dir(day_entry.path())
 			.into_iter()
 			.flatten()
 			.flatten()
 		{
+			if !org_entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			let path = org_entry.path();
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			let text = match std::fs::read_to_string(&path) {
+			let text = match crate::util::fs_walk::read_to_string(&path) {
 				Ok(s) => s,
 				Err(_) => continue,
 			};

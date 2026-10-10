@@ -7,6 +7,7 @@
 //! the suffix source and the write step so a controlled collision
 //! sequence and a forced write failure can be exercised.
 
+use super::tests_failures::apply_error_name;
 use super::*;
 
 #[cfg(unix)]
@@ -87,7 +88,7 @@ fn retry_gives_up_after_sixteen_collisions() {
 	);
 	let err = result.expect_err("sixteen collisions must surface as ConfigWrite");
 	let ApplyError::ConfigWrite(_path, io) = &err else {
-		panic!("expected ConfigWrite, got {err:?}");
+		panic!("expected ConfigWrite, got {}", apply_error_name(&err));
 	};
 	assert_eq!(
 		counter, 16,
@@ -121,7 +122,7 @@ fn staging_file_is_removed_when_the_write_fails() {
 	);
 	let err = result.expect_err("a write failure must surface as ConfigWrite");
 	let ApplyError::ConfigWrite(_path, io) = &err else {
-		panic!("expected ConfigWrite, got {err:?}");
+		panic!("expected ConfigWrite, got {}", apply_error_name(&err));
 	};
 	assert!(
 		io.to_string().contains("injected"),

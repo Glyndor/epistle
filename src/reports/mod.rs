@@ -76,7 +76,12 @@ impl Parsed {
 /// the counters are skipped (the operator's terminal still sees the log
 /// line).
 pub fn ingest(data_dir: &Path, kind: Kind, message: &AcceptedMessage, metrics: Option<&Metrics>) {
-	let report = match ingest_inner(kind, &message.data) {
+	let parsed = if kind == Kind::TlsRpt && !message.tlsrpt_verified {
+		Err("TLS-RPT requires a verified reporting-domain DKIM signature without l=".into())
+	} else {
+		ingest_inner(kind, &message.data)
+	};
+	let report = match parsed {
 		Ok(report) => report,
 		Err(reason) => {
 			if let Some(metrics) = metrics {
@@ -158,3 +163,7 @@ pub use crate::metrics::Metrics;
 #[cfg(test)]
 #[path = "ingest_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ingest_tests_auth.rs"]
+mod tests_auth;

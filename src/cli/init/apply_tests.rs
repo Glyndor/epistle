@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use super::tests_failures::apply_error_name;
 use super::*;
 use crate::cli::init::answers::Services;
 
@@ -35,6 +36,8 @@ fn answers_minimal() -> Answers {
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services: Services::default(),
+		image: None,
+		acme: None,
 	}
 }
 
@@ -158,6 +161,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	};
 	answers.mode = crate::cli::init::answers::Mode::Manual;
 	let outcome = apply(&answers);
@@ -241,7 +245,7 @@ fn apply_does_not_validate_a_bad_candidate_config() {
 		let after = std::fs::read(&config_path).expect("read config");
 		assert_eq!(before, after);
 	} else {
-		panic!("expected ConfigInvalid, got {err:?}");
+		panic!("expected ConfigInvalid, got {}", apply_error_name(&err));
 	}
 }
 
@@ -277,9 +281,14 @@ fn apply_preserves_unknown_top_level_keys() {
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
 	drop(outcome);
 	let merged = std::fs::read_to_string(&config_path).expect("read merged");
+	// The merged file carries the inline `srs_secret = "keep-me"`
+	// fixture. A panic that interpolated the full file would
+	// dump the SRS secret into the CI log; a boolean captures
+	// the contract without echoing the file.
+	let has_srs = merged.contains("srs_secret");
 	assert!(
-		merged.contains("srs_secret"),
-		"unknown top-level key srs_secret must be preserved: {merged}"
+		has_srs,
+		"unknown top-level key srs_secret must be preserved"
 	);
 }
 

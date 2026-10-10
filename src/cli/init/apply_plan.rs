@@ -8,6 +8,8 @@
 use super::Answers;
 use super::ApplyError;
 use super::apply_config;
+use super::apply_config_acme;
+use crate::cli::init::compose;
 use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
 /// True when `openssl` is on `PATH` and the RSA DKIM key step can be
@@ -55,31 +57,12 @@ pub(crate) fn which_openssl_for_tests() -> bool {
 /// is no host probe: `init` runs only inside containers, where `::`
 /// binds regardless of the host's network namespace.
 pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
-	// A symlinked `config_path` is a fact about the disk that costs
-	// one `symlink_metadata` call and needs no effects at all: the
-	// apply phase already refuses to follow a symlink, but by then
-	// every key file and the self-signed cert pair are already on
-	// disk. The plan is a preflight, not a lock: the path can still
-	// become a symlink between plan and apply, and `write_validated_config`
-	// keeps its own check as a safety net. Other read failures
-	// (a non-traversable parent, a permissions refusal) are left for
-	// the apply phase to surface with exit 1 so the operator sees
-	// the partial report of the keys that did land.
-	#[cfg(unix)]
-	if let Ok(meta) = std::fs::symlink_metadata(&answers.config_path) {
-		if meta.file_type().is_symlink() {
-			return Err(ApplyError::ConfigSymlink(answers.config_path.clone()));
-		}
-		// A directory, fifo, device, or socket at `config_path` is a
-		// fact about the disk the operator can see with `ls`. Without
-		// this check the apply phase would land every key, then the
-		// staging step would try to `open(O_EXCL)` against the
-		// directory and fail with `Is a directory` after every key
-		// already landed. The plan catches it before any effect.
-		if !meta.file_type().is_file() {
-			return Err(ApplyError::ConfigNotAFile(answers.config_path.clone()));
-		}
-	}
+	let existing = match apply_config::read_config(&answers.config_path) {
+		Ok(existing) => existing,
+		// Preserve the plan's treatment of I/O failures as an unknown file state.
+		Err(ApplyError::ConfigRead(_, _)) => None,
+		Err(error) => return Err(error),
+	};
 	let keys_dir = answers.data_dir.join("keys");
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
@@ -160,15 +143,8 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		reused: cert_exists && key_exists,
 		key_reused: key_exists,
 	});
-	// When the config on disk already has a non-empty `listeners`
-	// array the operator put there on purpose, `init` does not
-	// overwrite it. The plan step renders the kept listeners so the
-	// operator still sees the bind addresses `serve` will expose,
-	// and the apply phase reads the same flag from the disk so the
-	// two agree. The check is read-only: `apply_config::merge_with_existing`
-	// does its own read and tolerates the operator editing the file
-	// between the plan prompt and the apply run.
-	let existing_listeners = apply_config::existing_operators_listeners(&answers.config_path)?;
+	let existing_listeners =
+		apply_config::listeners_from_existing(&answers.config_path, existing.as_ref())?;
 	steps.push(PlanStep::Listeners {
 		entries: if let Some(existing) = &existing_listeners {
 			existing
@@ -180,7 +156,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 				})
 				.collect()
 		} else {
-			listener_entries(answers.services)
+			listener_entries(&answers.services, answers)
 		},
 		kept: existing_listeners.is_some(),
 	});
@@ -191,16 +167,47 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		&s2,
 		&cert_path,
 		&key_path,
-		&answers.config_path,
+		existing.as_ref(),
 	)?;
 	let file_exists = answers.config_path.exists();
 	let count = managed_key_count(answers);
+	// The database password step goes in the plan before the
+	// config step: the config's `[database]` section points at the
+	// password file, and `Config::load` opens it during validation.
+	// The plan mirrors the apply order so the operator sees the
+	// same shape they will see in the report.
+	if answers.services.database {
+		let path = crate::cli::init::compose::db_password_path(&answers.data_dir);
+		// The plan says `reused: true` only when the apply
+		// phase will actually reuse the file: it exists, is
+		// non-empty, and can be read. A directory at the path
+		// or a `mode 0o000` file would fail the apply phase
+		// with `ExistingSecretUnreadable`; the plan surfaces
+		// the same shape by reading the bytes here and only
+		// saying `reuse` when the read returned non-empty
+		// content. A non-existent or empty file is reported
+		// as `reused: false` (the apply will mint a new one).
+		let reused = crate::cli::init::compose::db_password_reused(&answers.data_dir);
+		steps.push(PlanStep::DbPassword { path, reused });
+	}
 	steps.push(PlanStep::Config {
 		path: answers.config_path.clone(),
 		identical,
 		file_exists,
 		count,
 		preserves_comments: false,
+	});
+	// The compose file is the last step. It is regenerated when
+	// the answers change, byte-for-byte otherwise. The plan tells
+	// the operator whether the file already matches the desired
+	// version, will be written, or will be updated.
+	let compose_path = crate::cli::init::compose::compose_file_path(&answers.data_dir);
+	let compose_identical = compose_is_identical_to_desired(answers)?;
+	let compose_file_exists = compose_path.exists();
+	steps.push(PlanStep::ComposeFile {
+		path: compose_path,
+		identical: compose_identical,
+		file_exists: compose_file_exists,
 	});
 	if let Some(dns) = &answers.dns {
 		steps.push(PlanStep::Dns {
@@ -222,8 +229,12 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 /// `apply_listeners_lines_tests.rs` is what catches a
 /// `listener_entries` that hardcoded the old number alongside a
 /// `ListenerKind` that switched.
-fn listener_entries(services: crate::cli::init::answers::Services) -> Vec<ListenerEntry> {
+fn listener_entries(
+	services: &crate::cli::init::answers::Services,
+	answers: &crate::cli::init::Answers,
+) -> Vec<ListenerEntry> {
 	let mail_addr = std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+	let acme_enabled = apply_config_acme::should_enable_acme(answers);
 	let mut entries = Vec::new();
 	entries.push(ListenerEntry {
 		kind: "smtp".to_string(),
@@ -236,12 +247,28 @@ fn listener_entries(services: crate::cli::init::answers::Services) -> Vec<Listen
 			addr: mail_addr,
 			port: crate::config::ListenerKind::Imap.default_port(),
 		});
+		// IMAPS (993): the implicit-TLS sibling of STARTTLS IMAP
+		// (143). Most clients default to the implicit port; the
+		// plan has to show both so the operator can match what
+		// `serve` will bind against the publish map.
+		entries.push(ListenerEntry {
+			kind: "imaps".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Imaps.default_port(),
+		});
 	}
 	if services.submission {
 		entries.push(ListenerEntry {
 			kind: "submission".to_string(),
 			addr: mail_addr,
 			port: crate::config::ListenerKind::Submission.default_port(),
+		});
+		// Submissions (465): the implicit-TLS sibling of STARTTLS
+		// submission (587). Same reasoning as IMAPS.
+		entries.push(ListenerEntry {
+			kind: "submissions".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Submissions.default_port(),
 		});
 	}
 	if services.pop3 {
@@ -270,6 +297,13 @@ fn listener_entries(services: crate::cli::init::answers::Services) -> Vec<Listen
 			kind: "api".to_string(),
 			addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
 			port: crate::config::ListenerKind::Api.default_port(),
+		});
+	}
+	if acme_enabled {
+		entries.push(ListenerEntry {
+			kind: "acme".to_string(),
+			addr: mail_addr,
+			port: crate::config::ListenerKind::Acme.default_port(),
 		});
 	}
 	entries
@@ -380,18 +414,13 @@ fn config_is_identical_to_desired(
 	dkim_rsa: &std::path::Path,
 	cert_file: &std::path::Path,
 	key_file: &std::path::Path,
-	config_path: &std::path::Path,
+	existing: Option<&apply_config::ExistingConfig>,
 ) -> Result<bool, ApplyError> {
-	// A read failure here only means "we cannot tell whether the
-	// existing file matches the desired one". The apply phase will
-	// surface the same read failure with its own error variant; the
-	// plan, which only describes what the operator is about to see,
-	// can safely say "we will write a fresh config" and let the
-	// apply phase handle the failure.
-	let existing = match std::fs::read_to_string(config_path) {
-		Ok(text) => text,
-		Err(_) => return Ok(false),
+	let Some(opened) = existing else {
+		return Ok(false);
 	};
+	let existing = &opened.text;
+	let config_path = &answers.config_path;
 	// The apply phase will land `dkim_rsa` if openssl is on PATH or
 	// if the file already exists. The plan reads the same signals so
 	// the desired config it builds matches the one apply will write
@@ -414,14 +443,14 @@ fn config_is_identical_to_desired(
 		toml::to_string(&desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	let desired_value: toml::Value = toml::from_str(&desired_bytes)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-	let existing_value: toml::Value = toml::from_str(&existing).map_err(|error| {
+	let existing_value: toml::Value = toml::from_str(existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),
 			std::io::Error::other(error.to_string()),
 		)
 	})?;
 	let merged = apply_config::reconcile(existing_value, desired_value, false);
-	let existing_parsed = toml::from_str(&existing).map_err(|error| {
+	let existing_parsed = toml::from_str(existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),
 			std::io::Error::other(error.to_string()),
@@ -432,7 +461,7 @@ fn config_is_identical_to_desired(
 		// `Config::load` rejects the on-disk file. Mirror that check
 		// here so the plan cannot say `identical, not touched` for a
 		// config `config-check` and `serve` would refuse.
-		if let Err(error) = crate::config::Config::load(config_path) {
+		if let Err(error) = opened.validate(config_path) {
 			return Err(ApplyError::ConfigInvalid(format!(
 				"existing config at {} would be left untouched but is invalid: {}",
 				config_path.display(),
@@ -449,7 +478,10 @@ fn config_is_identical_to_desired(
 /// config. Used by the plan to tell the operator how much a rewrite
 /// will touch. Six keys are always written (`hostname`, `data_dir`,
 /// `domains`, `listeners`, `dkim`, `tls`); `public_ipv4`, `public_ipv6`,
-/// and `dns` are added when the operator supplied them.
+/// `dns`, and `database` are added when the operator supplied them.
+/// `database` is special: only `url` and `password_file` are managed
+/// inside the table; the rest (`directory`, `max_connections`, `tls`)
+/// are the operator's to keep.
 fn managed_key_count(answers: &Answers) -> usize {
 	let mut count = 6;
 	if answers.public_ipv4.is_some() {
@@ -461,5 +493,25 @@ fn managed_key_count(answers: &Answers) -> usize {
 	if answers.dns.is_some() {
 		count += 1;
 	}
+	if answers.services.database {
+		count += 1;
+	}
 	count
+}
+
+/// `true` when the compose file on disk is already byte-for-byte
+/// the bytes the apply phase would write. Used by the plan to
+/// decide whether the compose file step says `identical, not
+/// touched` or `update` / `write`. A read failure here only
+/// means "we cannot tell"; the apply phase re-renders the file
+/// and writes it, which is the right behaviour when the disk
+/// state is unknown.
+fn compose_is_identical_to_desired(answers: &Answers) -> Result<bool, ApplyError> {
+	let path = compose::compose_file_path(&answers.data_dir);
+	let existing = match std::fs::read_to_string(&path) {
+		Ok(text) => text,
+		Err(_) => return Ok(false),
+	};
+	let desired = compose::render_for(answers, answers.services.database)?;
+	Ok(existing == desired)
 }

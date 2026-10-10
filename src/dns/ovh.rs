@@ -10,7 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use super::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+};
 
 /// OVH endpoint URLs by region alias; the alias is the value the operator
 /// puts in `endpoint` (default `ovh-eu`).
@@ -199,19 +201,39 @@ impl OvhProvider {
 
 	/// Find the first record at `sub_domain` of `kind`. Returns `None` if
 	/// there are none — used to decide between POST and PUT on upsert, and
-	/// to detect "already gone" on delete.
+	/// to detect "already gone" on delete. When `value` is `Some`, the
+	/// match is `same_txt_purpose`-based for TXT (so the existing tagged
+	/// record is updated in place) and exact-match for the first record
+	/// otherwise. A `None` value keeps the first-by-(kind, sub) selection.
 	async fn find_record_id(
 		&self,
 		zone: &str,
 		sub_domain: &str,
 		kind: &str,
+		value: Option<&str>,
 	) -> Result<Option<u64>, ProviderError> {
 		let url = format!(
 			"{}/domain/zone/{}/record?fieldType={}&subDomain={}",
 			self.base, zone, kind, sub_domain
 		);
 		let ids: Vec<u64> = self.send_json(reqwest::Method::GET, &url, "").await?;
-		Ok(ids.into_iter().next())
+		let Some(target_value) = value else {
+			return Ok(ids.into_iter().next());
+		};
+		// OVH's list endpoint only returns ids, so the value-bearing
+		// path fans out one detail GET per id to read the target and
+		// match it. The number of records at a single (kind, sub) is
+		// expected to be small (one or two ACME challenges at most), so
+		// the fanout stays bounded.
+		for id in ids {
+			let Some(rec) = self.get_record(zone, id).await? else {
+				continue;
+			};
+			if same_txt_purpose(&rec.target, target_value) {
+				return Ok(Some(id));
+			}
+		}
+		Ok(None)
 	}
 
 	/// Fetch one record by id; returns `None` if OVH says 404 (the record
@@ -270,7 +292,17 @@ impl OvhProvider {
 			"ttl": record.ttl,
 		})
 		.to_string();
-		if let Some(id) = self.find_record_id(zone, &sub, kind).await? {
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: an upsert replaces the TXT with the same
+		// purpose (version tag) at that name and leaves every
+		// other TXT at the name alone. `same_txt_purpose` carries
+		// the contract; for non-TXT kinds the matching is just
+		// (kind, sub) and the first match is fine.
+		let lookup_value = match record.kind {
+			RecordKind::Txt => Some(record.value.as_str()),
+			_ => None,
+		};
+		if let Some(id) = self.find_record_id(zone, &sub, kind, lookup_value).await? {
 			let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);
 			self.send_unit(reqwest::Method::PUT, &url, &body).await?;
 		} else {
@@ -286,7 +318,40 @@ impl OvhProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
-		let Some(id) = self.find_record_id(zone, &sub, kind).await? else {
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose target matches the value (a sibling ACME challenge
+		// at the same owner survives), an empty-value delete drops
+		// every record at the owner (the DKIM rotator's retire
+		// path). Other record kinds fall through to the
+		// first-by-(kind, sub) selection, which is the existing
+		// whole-set semantics.
+		if record.kind == RecordKind::Txt && record.value.is_empty() {
+			let ids: Vec<u64> = self
+				.send_json(
+					reqwest::Method::GET,
+					&format!(
+						"{}/domain/zone/{}/record?fieldType={}&subDomain={}",
+						self.base, zone, kind, sub
+					),
+					"",
+				)
+				.await?;
+			let deleted_any = !ids.is_empty();
+			for id in &ids {
+				let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);
+				self.send_unit(reqwest::Method::DELETE, &url, "").await?;
+			}
+			if deleted_any {
+				self.refresh_zone(zone).await?;
+			}
+			return Ok(());
+		}
+		let lookup_value = match record.kind {
+			RecordKind::Txt => Some(record.value.as_str()),
+			_ => None,
+		};
+		let Some(id) = self.find_record_id(zone, &sub, kind, lookup_value).await? else {
 			return Ok(());
 		};
 		let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);

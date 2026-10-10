@@ -39,7 +39,8 @@ fn run_init(answers: &Path) -> std::process::Output {
 fn init_keeps_existing_listeners_across_a_service_toggle() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let all_on = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -50,7 +51,7 @@ fn init_keeps_existing_listeners_across_a_service_toggle() {
 		 imap = true\n\
 		 submission = true\n\
 		 pop3 = true\n\
-		 managesieve = true\n",
+		 managesieve = true\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -76,7 +77,7 @@ fn init_keeps_existing_listeners_across_a_service_toggle() {
 		 imap = false\n\
 		 submission = false\n\
 		 pop3 = false\n\
-		 managesieve = false\n",
+		 managesieve = false\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -108,7 +109,8 @@ fn init_keeps_existing_listeners_across_a_service_toggle() {
 fn init_clears_dns_section_when_switching_to_manual_mode() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let auto = format!(
 		"mode = \"automatic\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -118,7 +120,7 @@ fn init_clears_dns_section_when_switching_to_manual_mode() {
 		 [dns]\n\
 		 provider = \"cloudflare\"\n\
 		 zone = \"example.org\"\n\
-		 token = \"inline-token-value\"\n",
+		 token = \"inline-token-value\"\n\n\t\t [services]\n\t\t database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -139,7 +141,7 @@ fn init_clears_dns_section_when_switching_to_manual_mode() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -165,14 +167,15 @@ fn init_clears_dns_section_when_switching_to_manual_mode() {
 fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let with_ip = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 public_ipv4 = \"8.8.8.8\"\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -193,7 +196,7 @@ fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -220,7 +223,8 @@ fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 fn init_preserves_unknown_top_level_keys_across_a_managed_rewrite() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let on_body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -231,7 +235,7 @@ fn init_preserves_unknown_top_level_keys_across_a_managed_rewrite() {
 		 imap = true\n\
 		 submission = true\n\
 		 pop3 = true\n\
-		 managesieve = true\n",
+		 managesieve = true\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -254,21 +258,66 @@ fn init_preserves_unknown_top_level_keys_across_a_managed_rewrite() {
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let after = std::fs::read_to_string(&config_path).expect("read config");
+	// The merged file carries the inline `srs_secret` fixture.
+	// A panic that interpolated the full file would dump the
+	// SRS secret into the CI log; a boolean captures the
+	// contract without echoing the file.
+	let has_kept_srs = after.contains("srs_secret = \"kept by the operator\"");
 	assert!(
-		after.contains("srs_secret = \"kept by the operator\""),
-		"the operator-added unknown key must survive the rewrite: {after}"
+		has_kept_srs,
+		"the operator-added unknown key must survive the rewrite"
 	);
 }
 
 /// Finding 7: an unrelated pre-existing sibling at the staging
 /// basename must NOT be deleted by the apply phase. The staging
-/// file lives under a name that cannot collide with `config_path`.
+/// step lands in `config_path.parent()` (the directory holding
+/// the config the apply phase is about to rename), under a
+/// basename the production code derives from `config_path`'s
+/// file name plus `.config.tmp.<random>`. A pre-existing
+/// sibling at that same basename (with no random suffix, the
+/// deterministic shape a regression would land on if the
+/// suffix source were removed) would be unlinked by a
+/// destructive staging step that does `unlink` + `create`
+/// before the `O_EXCL` open. The test puts the fixture at
+/// `config_path.parent() / "mail.toml.config.tmp"` (no random
+/// suffix, matching the deterministic basename a destructive
+/// regression would emit) and asserts the file is byte-for-byte
+/// preserved after a successful first run.
+///
+/// The previous shape of this test put the sibling at the temp
+/// root with the name `mail.config.tmp`. The apply phase's
+/// staging step lands in the directory that holds
+/// `config_path` (the `etc/` directory), not at the temp root,
+/// and uses `mail.toml.config.tmp.<random>` (the `mail.toml`
+/// prefix matches `config_path`'s file name), not
+/// `mail.config.tmp`. The fixture at the temp root was never a
+/// candidate the staging step could land on, and a destructive
+/// staging step would have left the test green. The new shape
+/// puts the sibling at the staging step's actual landing
+/// directory with the deterministic basename a regression
+/// would emit, so the staging step's basename
+/// (`mail.toml.config.tmp.<random>`) sees the file as a
+/// candidate to skip (via `O_EXCL` + `AlreadyExists`) while a
+/// destructive regression that drops the random suffix and
+/// lands at `mail.toml.config.tmp` directly unlinks the
+/// operator's file.
 #[test]
 fn init_does_not_delete_an_unrelated_sibling_with_the_staging_basename() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
-	let sibling = dir.path().join("mail.config.tmp");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
+	// The sibling lives in the same directory as `config_path`
+	// and carries the deterministic staging basename
+	// `mail.toml.config.tmp` (no random suffix). The production
+	// code's staging step uses `mail.toml.config.tmp.<random>`
+	// (with a 12-hex-char random suffix) and the suffix is
+	// never `mail.toml.config.tmp` exactly, so the production
+	// code's staging step never targets this exact name; a
+	// regression that drops the random suffix and lands at
+	// `mail.toml.config.tmp` would unlink the file.
+	let sibling = config_path.parent().unwrap().join("mail.toml.config.tmp");
 	let sibling_contents = "operator data: keep this file\n";
 	std::fs::write(&sibling, sibling_contents).expect("write sibling");
 	let body = format!(
@@ -276,7 +325,7 @@ fn init_does_not_delete_an_unrelated_sibling_with_the_staging_basename() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -306,14 +355,15 @@ fn init_does_not_delete_an_unrelated_sibling_with_the_staging_basename() {
 fn init_refuses_a_symlinked_config_path() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let target = dir.path().join("managed.toml");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -369,7 +419,8 @@ fn init_staging_config_is_owner_only_from_the_start() {
 	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"automatic\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -380,7 +431,7 @@ fn init_staging_config_is_owner_only_from_the_start() {
 		 [dns]\n\
 		 provider = \"cloudflare\"\n\
 		 zone = \"example.org\"\n\
-		 token = \"inline-dns-token-xyz\"\n",
+		 token = \"inline-dns-token-xyz\"\n\n\t\t [services]\n\t\t database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -441,13 +492,14 @@ fn init_omits_rsa_dkim_keys_when_openssl_is_absent() {
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -492,13 +544,14 @@ fn init_plan_says_update_when_openssl_returns_for_an_existing_config() {
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

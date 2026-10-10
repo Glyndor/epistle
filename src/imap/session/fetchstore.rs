@@ -2,10 +2,9 @@
 //! operations (RFC 7162).
 
 use super::super::command::SequenceSet;
-use super::helpers::format_internaldate;
 use super::mailbox::{Flag, render_flags};
 use super::state::State;
-use super::{FetchItem, Output, Session, StoreMode};
+use super::{Output, Session, StoreMode};
 
 /// The flag set a STORE in `mode` with `flags` leaves on a message that
 /// carries `current`. Keywords match without regard to case, and the
@@ -39,8 +38,12 @@ impl Session {
 		unchanged_since: Option<u64>,
 	) -> Output {
 		let uidonly = self.uidonly;
-		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`.
-		let saved = self.saved_seqnos_for(uid);
+		// Capture the SEARCHRES `$` set before the mutable borrow of
+		// `self.state`. The set is keyed by UID (§5182 §2.1); the resolver
+		// turns it into the kind of values the loop expects (UIDs for UID
+		// commands, current seqnos for non-UID commands), and the snapshot
+		// it works against is the one this command will act on.
+		let saved_search = self.saved_search.clone();
 		// Cloned before `self.state` is borrowed mutably below.
 		let training = self.training.clone();
 		let State::Selected {
@@ -56,6 +59,25 @@ impl Session {
 		if *read_only {
 			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
 		}
+		// Resolve the SEARCHRES `$` placeholder against this snapshot. The
+		// saved set is always keyed by UID; for UID commands the UIDs are
+		// matched directly, for non-UID commands they are mapped through
+		// the snapshot to current sequence numbers (expunged messages
+		// drop out automatically per RFC 5182 §2.1).
+		let saved = match saved_search.as_ref() {
+			Some(saved) if saved.are_uids == uid => {
+				if uid {
+					saved.uids.clone()
+				} else {
+					saved
+						.uids
+						.iter()
+						.filter_map(|u| snapshot.sequence_of_uid(*u))
+						.collect()
+				}
+			}
+			_ => Vec::new(),
+		};
 
 		let mut flags = Vec::with_capacity(flag_tokens.len());
 		for token in flag_tokens {
@@ -74,7 +96,8 @@ impl Session {
 			));
 		}
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		// +FLAGS overshoots only through what a message already carries,
 		// so every selected message is checked first: either all of them
 		// take the new keywords or none is changed.
@@ -84,7 +107,7 @@ impl Session {
 					continue;
 				};
 				let selector = if uid { message.uid } else { sequence_number };
-				if sequence.contains(selector, total, &saved)
+				if sequence.contains(selector, maximum, &saved)
 					&& super::mailbox::count_keywords(&next_flags(mode, &message.flags, &flags))
 						.is_none()
 				{
@@ -102,7 +125,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total, &saved) {
+			if !sequence.contains(selector, maximum, &saved) {
 				continue;
 			}
 			// CONDSTORE UNCHANGEDSINCE: a concurrently-changed message is not
@@ -168,235 +191,4 @@ impl Session {
 		response.push_str(&format!("{tag} OK {code}STORE completed\r\n"));
 		Output::text(response)
 	}
-
-	pub(super) fn fetch(
-		&mut self,
-		tag: &str,
-		sequence: &SequenceSet,
-		items: &[FetchItem],
-		uid: bool,
-		changed_since: Option<u64>,
-		vanished: bool,
-	) -> Output {
-		let uidonly = self.uidonly;
-		// Capture the SEARCHRES `$` set before the immutable borrow of `self.state`.
-		let saved = self.saved_seqnos_for(uid);
-		let State::Selected { snapshot, .. } = &self.state else {
-			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
-		};
-
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
-		let mut bytes = Vec::new();
-		// QRESYNC VANISHED: report UIDs expunged since CHANGEDSINCE before FETCHes.
-		if let (true, Some(since)) = (vanished, changed_since) {
-			let uids = snapshot.vanished_since(since);
-			if !uids.is_empty() {
-				let line = format!("* VANISHED (EARLIER) {}\r\n", super::codes::uid_set(&uids));
-				bytes.extend_from_slice(line.as_bytes());
-			}
-		}
-		for sequence_number in 1..=total {
-			let Some(message) = snapshot.by_sequence(sequence_number) else {
-				continue;
-			};
-			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total, &saved) {
-				continue;
-			}
-			// CONDSTORE CHANGEDSINCE: skip messages not changed since `n`.
-			if changed_since.is_some_and(|since| message.modseq <= since) {
-				continue;
-			}
-
-			let mut parts: Vec<Vec<u8>> = Vec::new();
-			for item in items {
-				match item {
-					// UIDONLY: the UID leads the UIDFETCH response, so the
-					// redundant UID data item is omitted (RFC 9586).
-					FetchItem::Uid if uidonly => {}
-					FetchItem::Flags => {
-						parts.push(format!("FLAGS {}", render_flags(&message.flags)).into_bytes());
-					}
-					FetchItem::Uid => {
-						parts.push(format!("UID {}", message.uid).into_bytes());
-					}
-					FetchItem::Rfc822Size => {
-						parts.push(format!("RFC822.SIZE {}", message.size).into_bytes());
-					}
-					FetchItem::InternalDate => {
-						let dt = format_internaldate(message.internal_date);
-						parts.push(format!("INTERNALDATE \"{dt}\"").into_bytes());
-					}
-					FetchItem::ModSeq => {
-						parts.push(format!("MODSEQ ({})", message.modseq).into_bytes());
-					}
-					// OBJECTID (RFC 8474): the stable message UUID; each message is
-					// its own singleton thread, so THREADID equals EMAILID.
-					FetchItem::EmailId => {
-						parts.push(format!("EMAILID ({})", message.id()).into_bytes());
-					}
-					FetchItem::ThreadId => {
-						parts.push(format!("THREADID ({})", message.id()).into_bytes());
-					}
-					// SAVEDATE (RFC 8514): mailbox save time (the file mtime).
-					FetchItem::SaveDate => {
-						let dt = format_internaldate(message.internal_date);
-						parts.push(format!("SAVEDATE \"{dt}\"").into_bytes());
-					}
-					FetchItem::Preview => match snapshot.read(message) {
-						Ok(data) => {
-							let preview = preview_text(&data);
-							parts.push(format!("PREVIEW \"{preview}\"").into_bytes());
-						}
-						Err(_) => {
-							return Output::text(format!("{tag} NO message unavailable\r\n"));
-						}
-					},
-					FetchItem::Body => match snapshot.read(message) {
-						Ok(data) => {
-							let mut part = format!("BODY[] {{{}}}\r\n", data.len()).into_bytes();
-							part.extend_from_slice(&data);
-							parts.push(part);
-						}
-						Err(_) => {
-							return Output::text(format!("{tag} NO message unavailable\r\n"));
-						}
-					},
-					FetchItem::Binary => match snapshot.read(message) {
-						Ok(data) => {
-							let decoded = decode_binary(&data);
-							let mut part =
-								format!("BINARY[] {{{}}}\r\n", decoded.len()).into_bytes();
-							part.extend_from_slice(&decoded);
-							parts.push(part);
-						}
-						Err(_) => {
-							return Output::text(format!("{tag} NO message unavailable\r\n"));
-						}
-					},
-					FetchItem::BinarySize => match snapshot.read(message) {
-						Ok(data) => {
-							let size = decode_binary(&data).len();
-							parts.push(format!("BINARY.SIZE[] {size}").into_bytes());
-						}
-						Err(_) => {
-							return Output::text(format!("{tag} NO message unavailable\r\n"));
-						}
-					},
-				}
-			}
-
-			let header = if uidonly {
-				format!("* UIDFETCH {} (", message.uid)
-			} else {
-				format!("* {sequence_number} FETCH (")
-			};
-			bytes.extend_from_slice(header.as_bytes());
-			for (index, part) in parts.iter().enumerate() {
-				if index > 0 {
-					bytes.push(b' ');
-				}
-				bytes.extend_from_slice(part);
-			}
-			bytes.extend_from_slice(b")\r\n");
-		}
-		bytes.extend_from_slice(format!("{tag} OK FETCH completed\r\n").as_bytes());
-		Output {
-			bytes,
-			close: false,
-			collect_literal: None,
-			idle: false,
-			upgrade_tls: false,
-			compress: false,
-			collect_auth: false,
-		}
-	}
-}
-
-/// Decode a message body per its top-level Content-Transfer-Encoding (RFC 3516
-/// `BINARY[]`). Unknown or identity encodings return the body unchanged; a
-/// malformed base64/quoted-printable body falls back to the raw bytes.
-fn decode_binary(raw: &[u8]) -> Vec<u8> {
-	let text = String::from_utf8_lossy(raw);
-	let (headers, body) = text.split_once("\r\n\r\n").unwrap_or(("", &text));
-	let encoding = headers.lines().find_map(|line| {
-		let lower = line.to_ascii_lowercase();
-		lower
-			.strip_prefix("content-transfer-encoding:")
-			.map(|value| value.trim().to_string())
-	});
-	match encoding.as_deref() {
-		Some("base64") => {
-			use base64::Engine;
-			let stripped: String = body.split_whitespace().collect();
-			base64::engine::general_purpose::STANDARD
-				.decode(stripped.as_bytes())
-				.unwrap_or_else(|_| body.as_bytes().to_vec())
-		}
-		Some("quoted-printable") => decode_quoted_printable(body),
-		_ => body.as_bytes().to_vec(),
-	}
-}
-
-/// Decode a quoted-printable body (RFC 2045 §6.7): `=XX` hex escapes and `=`
-/// soft line breaks.
-fn decode_quoted_printable(body: &str) -> Vec<u8> {
-	let bytes = body.as_bytes();
-	let mut out = Vec::with_capacity(bytes.len());
-	let mut i = 0;
-	while i < bytes.len() {
-		if bytes[i] == b'=' && i + 2 < bytes.len() {
-			if bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
-				i += 3; // soft line break
-				continue;
-			}
-			let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-			if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-				out.push(byte);
-				i += 3;
-				continue;
-			}
-		}
-		out.push(bytes[i]);
-		i += 1;
-	}
-	out
-}
-
-/// Maximum characters in a PREVIEW snippet (RFC 8970 recommends ~200).
-const PREVIEW_LEN: usize = 200;
-
-/// Build a short PREVIEW snippet (RFC 8970) from a raw message: take the body
-/// after the header block, collapse whitespace, and truncate. Quotes and
-/// backslashes are escaped so the result is a valid IMAP quoted string.
-fn preview_text(raw: &[u8]) -> String {
-	let text = String::from_utf8_lossy(raw);
-	// The body starts after the first blank line (CRLF or LF).
-	let body = text
-		.split_once("\r\n\r\n")
-		.or_else(|| text.split_once("\n\n"))
-		.map(|(_, body)| body)
-		.unwrap_or(&text);
-
-	let mut preview = String::with_capacity(PREVIEW_LEN);
-	let mut last_was_space = false;
-	for ch in body.chars() {
-		if preview.chars().count() >= PREVIEW_LEN {
-			break;
-		}
-		if ch.is_whitespace() {
-			if !last_was_space && !preview.is_empty() {
-				preview.push(' ');
-				last_was_space = true;
-			}
-		} else if ch == '"' || ch == '\\' {
-			preview.push('\\');
-			preview.push(ch);
-			last_was_space = false;
-		} else if !ch.is_control() {
-			preview.push(ch);
-			last_was_space = false;
-		}
-	}
-	preview.trim_end().to_string()
 }

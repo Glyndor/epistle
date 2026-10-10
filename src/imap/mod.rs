@@ -4,6 +4,7 @@ pub mod acl;
 pub mod archive;
 pub mod command;
 mod compress;
+mod fetch;
 mod flags;
 mod index;
 pub mod junk_trainer;

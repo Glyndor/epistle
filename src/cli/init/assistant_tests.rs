@@ -34,7 +34,9 @@ fn assistant_rejects_invalid_hostname_with_the_same_text_as_the_file_path() {
 	             n\n\
 	             n\n\
 	             n\n\
-	             n\n";
+	             n\n\
+	             \n\
+	             y\n";
 	let (out, result) = harness(input);
 	assert!(result.is_ok(), "ok with retries, got {:?}", parse_out(&out));
 	let text = parse_out(&out);
@@ -56,6 +58,9 @@ fn assistant_eof_before_confirmation_is_an_error() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	assert!(
@@ -80,6 +85,8 @@ fn assistant_invalid_domain_text_is_shown() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	assert!(result.is_ok(), "got {:?}", parse_out(&out));
@@ -107,6 +114,9 @@ fn assistant_accepts_automatic_with_minimal_inputs() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -130,6 +140,8 @@ fn assistant_defaults_services_to_imap_and_submission() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -154,6 +166,8 @@ fn assistant_collects_multiple_validation_errors_at_the_end() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	assert!(result.is_err());
@@ -183,6 +197,8 @@ fn assistant_prints_every_validation_error_before_returning() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -210,6 +226,8 @@ fn assistant_keeps_the_good_value_after_a_bad_answer() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -241,7 +259,10 @@ fn assistant_services_questions_set_the_flags() {
 	             y\n\
 	             y\n\
 	             y\n\
-	             \n";
+	             n\n\
+	             n\n\
+	             \n\
+	             y\n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
 	assert!(result.is_ok(), "got {text}");
@@ -272,7 +293,9 @@ fn assistant_rejects_api_service_at_final_validation() {
 	             n\n\
 	             n\n\
 	             n\n\
-	             y\n";
+	             y\n\
+	             n\n\
+	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
 	assert!(
@@ -290,8 +313,10 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 	// Two behaviours are pinned on the automatic-mode flow:
 	// the assistant must walk through every [dns] question, and the
 	// rendered prompts must never carry the token value back to the
-	// operator.
-	let token = "super-secret-dns-token";
+	// operator. The token is minted at run time so no literal ever
+	// reaches the `dns.token` slot, the same shape the previous PRs
+	// settled for credential-shaped parameters.
+	let token: String = uuid::Uuid::now_v7().simple().to_string();
 	let input = format!(
 		"automatic\n\
 		 mail.example.org\n\
@@ -310,27 +335,41 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 		 \n\
 		 \n\
 		 \n\
+		 \n\
+\n\
 		 \n",
 	);
 	let (out, result) = harness(&input);
 	let text = parse_out(&out);
-	assert!(result.is_ok(), "got {text}");
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
+	assert!(result.is_ok(), "automatic mode must succeed");
 	let filled = result.unwrap();
 	let dns = filled
 		.answers
 		.dns
 		.as_ref()
 		.expect("automatic mode must populate [dns]");
-	assert_eq!(dns.token.as_deref(), Some(token));
+	assert!(
+		dns.token.as_deref() == Some(token.as_str()),
+		"the [dns] token must round-trip through automatic mode"
+	);
 	assert_eq!(dns.provider, "cloudflare");
 	assert_eq!(dns.zone, "example.org");
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
 	assert!(
 		text.contains("dns provider") && text.contains("dns zone") && text.contains("dns token"),
-		"every dns prompt must be rendered: {text}"
+		"every dns prompt must be rendered"
 	);
+	// The captured `text` is operator-visible prompts; if the test
+	// fails it carries the token, so the message must name the
+	// condition without echoing the prompts.
 	assert!(
-		!text.contains(token),
-		"the token value must not appear in the rendered prompts: {text}"
+		!text.contains(&token),
+		"the token value must not appear in the rendered prompts"
 	);
 }
 
@@ -352,6 +391,8 @@ fn assistant_empty_line_on_first_domain_is_rejected_with_a_hint() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -382,6 +423,8 @@ fn assistant_invalid_bool_answer_is_echoed_as_a_hint() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -410,6 +453,8 @@ fn assistant_invalid_ipv4_answer_is_echoed_as_a_hint() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -438,6 +483,8 @@ fn assistant_ipv6_answer_in_ipv4_question_is_rejected() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
@@ -469,6 +516,8 @@ fn assistant_ipv4_answer_in_ipv6_question_is_rejected() {
 	             \n\
 	             \n\
 	             \n\
+	             \n\
+\n\
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);

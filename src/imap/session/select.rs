@@ -3,7 +3,30 @@
 use super::state::State;
 use super::{Output, Session, codes, mailbox};
 
+/// Move a Selected state to Authenticated on a failed SELECT/EXAMINE, keeping
+/// the authenticated account binding intact. Returns `true` when a mailbox
+/// was selected and the caller must include `[CLOSED]` in its tagged NO
+/// response (RFC 9051 §6.3.2 / §7.1).
+fn deselect_for_failed_select(state: &mut State) -> bool {
+	match state {
+		State::Selected { account, .. } => {
+			let prior = std::mem::take(account);
+			*state = State::Authenticated { account: prior };
+			true
+		}
+		_ => false,
+	}
+}
+
 impl Session {
+	pub(super) fn check(&self, tag: &str) -> Output {
+		if matches!(self.state, State::Selected { .. }) {
+			Output::text(format!("{tag} OK CHECK completed\r\n"))
+		} else {
+			Output::text(format!("{tag} BAD no mailbox selected\r\n"))
+		}
+	}
+
 	pub(super) fn select(
 		&mut self,
 		tag: &str,
@@ -15,11 +38,29 @@ impl Session {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
+			// RFC 9051 §6.3.2: a failed SELECT deselects. The NO response
+			// carries [CLOSED] when a mailbox was selected beforehand, so a
+			// client that races a SELECT sees the boundary between the two.
+			let closed = deselect_for_failed_select(&mut self.state);
+			self.saved_search = None;
+			return Output::text(format!(
+				"{tag} NO {}no such mailbox\r\n",
+				if closed { "[CLOSED] " } else { "" }
+			));
 		}
 		let snapshot = match self.open_snapshot(&account, mailbox) {
 			Ok(snapshot) => snapshot,
-			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
+			Err(_) => {
+				// Same deselection discipline as a missing mailbox: a snapshot
+				// that cannot be opened is not the selected mailbox, and the
+				// session moves back to authenticated.
+				let closed = deselect_for_failed_select(&mut self.state);
+				self.saved_search = None;
+				return Output::text(format!(
+					"{tag} NO {}cannot open mailbox\r\n",
+					if closed { "[CLOSED] " } else { "" }
+				));
+			}
 		};
 		// QRESYNC: report vanished UIDs, but only if UIDVALIDITY still matches.
 		let vanished = match qresync {
@@ -63,8 +104,24 @@ impl Session {
 				keyword_tokens.join(" ")
 			)
 		};
+		// The store does not assign recent-message ownership to sessions.
+		// RFC 3501 permits reporting no recent messages to any client.
+		let mut legacy = String::new();
+		if !self.imap4rev2 {
+			legacy.push_str("* 0 RECENT\r\n");
+			if let Some(first) = snapshot
+				.messages()
+				.position(|m| !m.flags.contains(&mailbox::Flag::Seen))
+			{
+				legacy.push_str(&format!(
+					"* OK [UNSEEN {}] first unseen message\r\n",
+					first + 1
+				));
+			}
+		}
 		let response = format!(
 			"* {count} EXISTS\r\n\
+			 {legacy}\
 			 * OK [UIDVALIDITY {validity}] UIDs valid\r\n\
 			 * OK [UIDNEXT {next}] predicted next UID\r\n\
 			 * OK [MAILBOXID (M{validity})] mailbox object id\r\n\
@@ -85,15 +142,31 @@ impl Session {
 			snapshot,
 			read_only,
 		};
+		// RFC 5182 §2.1: a successful SELECT resets the search result
+		// variable to the empty sequence. Per #976 we also clear on
+		// CLOSE and UNSELECT, both of which leave the selected state.
+		self.saved_search = None;
 		Output::text(response)
 	}
 
 	pub(super) fn close(&mut self, tag: &str) -> Output {
-		match &self.state {
-			State::Selected { account, .. } => {
-				self.state = State::Authenticated {
-					account: account.clone(),
-				};
+		match &mut self.state {
+			State::Selected {
+				snapshot,
+				read_only,
+				account,
+				..
+			} => {
+				// RFC 9051 §6.4.1: CLOSE on a read-write selection silently
+				// expunges every \Deleted message; on EXAMINE (read-only) it
+				// expunges nothing. Either way no untagged EXPUNGE responses
+				// are sent, the session returns to authenticated.
+				if !*read_only {
+					let _ = snapshot.expunge();
+				}
+				let prev = std::mem::take(account);
+				self.state = State::Authenticated { account: prev };
+				self.saved_search = None;
 				Output::text(format!("{tag} OK CLOSE completed\r\n"))
 			}
 			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),
@@ -107,6 +180,7 @@ impl Session {
 				self.state = State::Authenticated {
 					account: account.clone(),
 				};
+				self.saved_search = None;
 				Output::text(format!("{tag} OK UNSELECT completed\r\n"))
 			}
 			_ => Output::text(format!("{tag} BAD no mailbox selected\r\n")),

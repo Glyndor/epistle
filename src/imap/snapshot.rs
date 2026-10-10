@@ -37,8 +37,10 @@ impl Snapshot {
 		retention_days: u64,
 		now: u64,
 	) -> std::io::Result<Snapshot> {
+		let _warnings = crate::util::fs_walk::warning_scope();
 		let account_dir = super::mailbox::mailbox_dir(data_dir, account, mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
+		crate::util::fs_walk::check_directories(&account_dir)?;
 		let account_root = data_dir.join("accounts").join(account);
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
@@ -115,6 +117,16 @@ impl Snapshot {
 		self.messages.len()
 	}
 
+	/// Maximum used to resolve `*`: highest UID for UID sets, message count
+	/// for sequence sets. Empty mailboxes have no matching identifier.
+	pub fn max_identifier(&self, uid: bool) -> u32 {
+		if uid {
+			self.messages().map(|m| m.uid).max().unwrap_or(0)
+		} else {
+			u32::try_from(self.len()).unwrap_or(u32::MAX)
+		}
+	}
+
 	/// Whether the snapshot has no messages.
 	pub fn is_empty(&self) -> bool {
 		self.messages.is_empty()
@@ -176,7 +188,8 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored = std::fs::read(self.account_dir.join(format!("{}.eml", message.id())))?;
+		let stored =
+			crate::util::fs_walk::read(self.account_dir.join(format!("{}.eml", message.id())))?;
 		self.crypto.decode(&stored)
 	}
 
@@ -241,6 +254,30 @@ impl Snapshot {
 	/// RFC 4315).
 	pub fn expunge_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
 		self.expunge_where(|uid| uids.contains(&uid))
+	}
+
+	/// Remove the messages whose UID is in `uids`, regardless of the
+	/// `\Deleted` flag. Used by REPLACE (RFC 8508), which must take
+	/// ownership of a specific message by UID; the client has not had
+	/// a chance to set `\Deleted` on the replacement target. Returns
+	/// the sequence numbers that were removed, in increasing order.
+	pub fn remove_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
+		let mut removed_seqs = Vec::new();
+		let mut index = 0;
+		while index < self.messages.len() {
+			let message = &self.messages[index];
+			if uids.contains(&message.uid) {
+				self.remove_files(message.id);
+				self.messages.remove(index);
+				removed_seqs.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
+			} else {
+				index += 1;
+			}
+		}
+		if !removed_seqs.is_empty() {
+			super::vanished::record_advancing(&self.account_dir, uids);
+		}
+		Ok(removed_seqs)
 	}
 
 	/// Expunge every `\Deleted` message whose UID passes `keep`, logging the

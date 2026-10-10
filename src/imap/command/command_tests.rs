@@ -43,6 +43,8 @@ fn parses_list_and_select() {
 			pattern: "*".into(),
 			return_status: Vec::new(),
 			select_subscribed: false,
+			select_special_use: false,
+			return_attributes: Vec::new(),
 		}
 	);
 	assert_eq!(
@@ -393,12 +395,14 @@ fn parses_replace_command() {
 			flags,
 			size,
 			uid,
+			synchronizing,
 		} => {
 			assert_eq!(sequence, 3);
 			assert_eq!(mailbox, "Archive");
 			assert_eq!(flags, vec!["\\Seen".to_string()]);
 			assert_eq!(size, 10);
 			assert!(!uid);
+			assert!(synchronizing);
 		}
 		other => panic!("expected Replace, got {other:?}"),
 	}

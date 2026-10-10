@@ -152,12 +152,9 @@ pub(super) fn write_with_mode(
 /// error is forwarded so the operator sees the real reason the rename
 /// never happened.
 ///
-/// The trailing `set_mode` is kept so a target that pre-existed with a
-/// wider mode (e.g. an older `epistle local` that wrote 0644, or a
-/// hand-edited 0644 file) is narrowed on the next replace. With the
-/// fix above the target inherits the temporary's 0600 on rename, so
-/// the call is a defensive no-op on every fresh write and only fires
-/// on a directory that already drifted.
+/// Set the final mode through the temporary descriptor before publishing it.
+/// Rename preserves that mode; touching the destination pathname afterwards
+/// could chmod an unrelated file if another writer swaps in a symlink.
 ///
 /// The counter source is an injected `FnMut` so a test can drive a
 /// deterministic sequence without sharing the process-wide atomic
@@ -179,6 +176,18 @@ pub(super) fn write_with_replace_using(
 	mode: u32,
 	next: &mut dyn FnMut() -> u64,
 ) -> Result<(), super::LocalError> {
+	write_with_replace_using_rename(path, contents, mode, next, &mut |from, to| {
+		std::fs::rename(from, to)
+	})
+}
+
+fn write_with_replace_using_rename(
+	path: &Path,
+	contents: &[u8],
+	mode: u32,
+	next: &mut dyn FnMut() -> u64,
+	rename: &mut dyn FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), super::LocalError> {
 	let file_name = path.file_name().ok_or_else(|| {
 		super::LocalError::Io(std::io::Error::new(
 			std::io::ErrorKind::InvalidInput,
@@ -197,6 +206,15 @@ pub(super) fn write_with_replace_using(
 		let n = next();
 		match open_replace_temp_with_counter(parent, file_name, n, mode) {
 			Ok((mut file, temp_path)) => {
+				#[cfg(unix)]
+				{
+					use std::os::unix::fs::PermissionsExt;
+					if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(mode))
+					{
+						let _ = std::fs::remove_file(&temp_path);
+						return Err(super::LocalError::Io(error));
+					}
+				}
 				if let Err(error) = std::io::Write::write_all(&mut file, contents) {
 					// The temp is open with `create_new`; remove it so
 					// the next run does not have to retry past a slot
@@ -209,14 +227,13 @@ pub(super) fn write_with_replace_using(
 					return Err(super::LocalError::Io(error));
 				}
 				drop(file);
-				if let Err(error) = std::fs::rename(&temp_path, path) {
+				if let Err(error) = rename(&temp_path, path) {
 					// A successful rename would have unlinked the temp;
 					// a failed one leaves it on disk. Remove it now so a
 					// stale slot cannot trap the next run's create_new.
 					let _ = std::fs::remove_file(&temp_path);
 					return Err(super::LocalError::Io(error));
 				}
-				set_mode(path, mode)?;
 				return Ok(());
 			}
 			Err(super::LocalError::Io(error))
@@ -450,3 +467,7 @@ impl Drop for FaultAfterMarkerGuard {
 		FAULT_AFTER_MARKER.with(|cell| cell.set(false));
 	}
 }
+
+#[cfg(all(test, unix))]
+#[path = "layout_tests_permissions.rs"]
+mod tests_permissions;

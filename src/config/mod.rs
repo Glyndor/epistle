@@ -41,6 +41,7 @@ pub use arc::Arc;
 pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
+pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
 pub use mta_sts::{MtaSts, MtaStsMode};
@@ -442,13 +443,7 @@ impl Config {
 			source,
 			kind: "config file",
 		})?;
-		let expanded = expand_env(&raw)?;
-		let config: Config = toml::from_str(&expanded).map_err(|source| ConfigError::Parse {
-			path: path.to_path_buf(),
-			source: Box::new(source),
-		})?;
-		config.validate()?;
-		Ok(config)
+		Self::parse_text(&raw, path)
 	}
 
 	/// The loopback address listeners bind to unless explicitly configured.
@@ -716,3 +711,5 @@ max_connections_per_listener = 2048
 		);
 	}
 }
+
+mod parse;

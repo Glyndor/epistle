@@ -2,15 +2,16 @@
 //! whatever the operator already has on disk. The types live in a
 //! sibling so `apply.rs` keeps under the per-file line limit.
 
-use std::fs;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 
 use serde::Serialize;
 
 use crate::cli::init::answers::{Answers, Services};
 use crate::cli::init::apply::ApplyError;
-use crate::config::Config;
+use crate::config::{Listener, ListenerKind};
+
+pub(super) const STACK_DATABASE_URL: &str = "postgres://epistle@%2Frun%2Fpostgresql/epistle";
 
 /// Build the desired `Config` value from the answers. Each listener
 /// line carries its kind and an explicit `addr`; the operator-visible
@@ -31,6 +32,36 @@ pub(super) struct DesiredConfig {
 	pub(super) tls: DesiredTls,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) dns: Option<DesiredDns>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(super) database: Option<DesiredDatabase>,
+	/// The `[acme]` block init writes when ACME is on. Absent on
+	/// disk is the "ACME off" shape; a present block carries the
+	/// directory URL, contact list, and domains the renewal loop
+	/// should request certificates for.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(super) acme: Option<DesiredAcme>,
+	pub(super) antispam: DesiredAntispam,
+}
+
+/// The `[acme]` section `init` writes when the answers (or the
+/// public-hostname heuristic) say ACME should be on. `directory_url`
+/// is the CA's ACME directory endpoint (Let's Encrypt production
+/// today); `contacts` is the list of URIs the CA uses to reach the
+/// operator; `domains` is the list of names a certificate should
+/// cover; `renew_before_days` matches the schema default (30) so
+/// the field appears explicitly and a future change to the schema
+/// default flows through `init` as well.
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredAcme {
+	pub(super) directory_url: String,
+	pub(super) contacts: Vec<String>,
+	pub(super) domains: Vec<String>,
+	pub(super) renew_before_days: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredAntispam {
+	clamd_socket: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,12 +102,26 @@ pub(super) struct DesiredDns {
 	pub(super) token_env: Option<String>,
 }
 
+/// The `[database]` section `init` writes when the operator asks
+/// for the database service. The URL is the percent-encoded socket
+/// form (`postgres://epistle@%2Frun%2Fpostgresql/epistle`) so the
+/// same connection string works on the host (where `init` and
+/// `config-check` run) and inside the `mail` container (where
+/// `serve` runs). The password file points at the secret the
+/// compose file mounts; the `mail` container reads it through the
+/// data-directory bind mount at the same path.
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredDatabase {
+	pub(super) url: String,
+	pub(super) password_file: String,
+}
+
 /// The outcome of trying to merge the desired config with whatever is
 /// on disk. `Identical` means the file is already byte-for-byte what we
 /// want and stays untouched; `Wrote` means the file did not exist or
 /// was rewritten; `Updated` means an existing file was overwritten with
 /// a different value.
-pub(super) enum ConfigWrite {
+pub(crate) enum ConfigWrite {
 	Identical,
 	Wrote,
 	Updated,
@@ -99,8 +144,35 @@ pub(super) fn build_config(
 	cert_file: &Path,
 	key_file: &Path,
 ) -> Result<DesiredConfig, ApplyError> {
+	// ACME: the operator opt-out (`acme.enabled = false`) wins; the
+	// public-hostname heuristic decides when the opt-out is
+	// absent. Loopback and reserved-TLD hostnames fall through to
+	// `false` so the resulting config has no `[acme]` block and no
+	// `acme` listener; port 80 stays closed. The presence of the
+	// block is the same flag the listener array reads below, so
+	// the two stay in sync.
+	let acme_block = super::apply_config_acme::build_acme_block(answers);
+	// When ACME is on, the `[tls]` section has to point at the
+	// ACME cert / key paths (the renewal loop in
+	// `crate::acme::renew` writes to `<data_dir>/acme/cert.pem`
+	// and `<data_dir>/acme/key.pem`, then hot-reloads the SMTP
+	// acceptor). Pointing at `keys/cert.pem` would mean the
+	// renewal loop writes a different file the server never
+	// reads; the issued cert would land on disk and never reach
+	// a listener. The keys/ path stays the bootstrap target
+	// when ACME is off.
+	let tls_cert = if acme_block.is_some() {
+		answers.data_dir.join("acme").join("cert.pem")
+	} else {
+		cert_file.to_path_buf()
+	};
+	let tls_key = if acme_block.is_some() {
+		answers.data_dir.join("acme").join("key.pem")
+	} else {
+		key_file.to_path_buf()
+	};
 	let mut listeners = Vec::new();
-	let services: Services = answers.services;
+	let services: &Services = &answers.services;
 	// SMTP (port 25, inbound mail) is always written. It is the
 	// listener the rest of the internet talks to, and a fresh install
 	// that does not bind it receives no mail. The kind is unconditional
@@ -115,10 +187,30 @@ pub(super) fn build_config(
 			kind: "imap".to_string(),
 			addr: mail_addr,
 		});
+		// The implicit-TLS sibling ships whenever STARTTLS IMAP does:
+		// most mail clients default to port 993 first and only fall
+		// back to STARTTLS on 143 if the implicit handshake fails.
+		// Without the implicit listener, the server is reachable only
+		// by clients that have been told to use STARTTLS, which is
+		// not the default for Apple Mail, Outlook, Thunderbird, or
+		// any other client I know of.
+		listeners.push(DesiredListener {
+			kind: "imaps".to_string(),
+			addr: mail_addr,
+		});
 	}
 	if services.submission {
 		listeners.push(DesiredListener {
 			kind: "submission".to_string(),
+			addr: mail_addr,
+		});
+		// Submissions (465) ships alongside submission (587): modern
+		// clients open 465 first and only try STARTTLS on 587 if the
+		// implicit handshake fails. Without the implicit listener, the
+		// server accepts submissions only from clients that have been
+		// told to use STARTTLS, which is no longer the default.
+		listeners.push(DesiredListener {
+			kind: "submissions".to_string(),
 			addr: mail_addr,
 		});
 	}
@@ -144,6 +236,20 @@ pub(super) fn build_config(
 		listeners.push(DesiredListener {
 			kind: "api".to_string(),
 			addr: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+		});
+	}
+	// ACME: when on, init writes the `acme` listener on port 80 so
+	// the HTTP-01 challenge responder is reachable from the public
+	// internet. The listener is on the same mail bind address as
+	// every other mail-facing listener; the responder never
+	// authenticates, but it still has to bind the same dual-stack
+	// `::` to answer both v4 and v6 challengers. The decision
+	// reads off the block the helper computed above, so the
+	// listener and the config block cannot drift.
+	if acme_block.is_some() {
+		listeners.push(DesiredListener {
+			kind: "acme".to_string(),
+			addr: mail_addr,
 		});
 	}
 
@@ -182,6 +288,24 @@ pub(super) fn build_config(
 		token_env: d.token_env.clone(),
 	});
 
+	// The `[database]` section is written only when the operator
+	// opted into the database service. The URL is the percent-encoded
+	// socket form; the password file is the secret the compose
+	// file mounts into the `mail` container. Both the host (where
+	// `init` and `config-check` run) and the container (where
+	// `serve` runs) see the same path because the data directory
+	// is bind-mounted at the same path on both sides.
+	let database = if answers.services.database {
+		Some(DesiredDatabase {
+			url: STACK_DATABASE_URL.to_string(),
+			password_file: crate::cli::init::compose::db_password_path(&answers.data_dir)
+				.display()
+				.to_string(),
+		})
+	} else {
+		None
+	};
+
 	Ok(DesiredConfig {
 		hostname: answers.hostname.clone(),
 		public_ipv4: answers.public_ipv4.map(|a| a.to_string()),
@@ -191,10 +315,15 @@ pub(super) fn build_config(
 		listeners,
 		dkim,
 		tls: DesiredTls {
-			cert_file: cert_file.display().to_string(),
-			key_file: key_file.display().to_string(),
+			cert_file: tls_cert.display().to_string(),
+			key_file: tls_key.display().to_string(),
 		},
 		dns,
+		database,
+		acme: acme_block,
+		antispam: DesiredAntispam {
+			clamd_socket: "/run/clamav/clamd.sock".to_string(),
+		},
 	})
 }
 
@@ -204,7 +333,11 @@ pub(super) fn build_config(
 /// the `[dns]` section, or every listener actually clears the entry
 /// from the file instead of leaving it preserved as an "operator
 /// setting" the operator never asked for.
-const INIT_MANAGED_KEYS: &[&str] = &[
+///
+/// `[database]` is merged per key when enabled. When disabled, only
+/// the section identifying the generated stack socket is removed;
+/// an operator's different database URL remains untouched.
+pub(super) const INIT_MANAGED_KEYS: &[&str] = &[
 	"hostname",
 	"public_ipv4",
 	"public_ipv6",
@@ -216,378 +349,158 @@ const INIT_MANAGED_KEYS: &[&str] = &[
 	"dns",
 ];
 
-/// Merge the desired config with the file on disk. Three outcomes:
-/// - no file on disk: write the desired one (Wrote);
-/// - file on disk with the same `toml::Value` shape and content: skip
-///   (Identical), but only when the on-disk file also passes
-///   `Config::load`. An operator-edited file that the rest of the
-///   CLI (`config-check`, `serve`) would reject must not be
-///   reported as identical: `init` would leave a non-starting
-///   configuration behind a green run;
-/// - file on disk with the same shape but different values: rewrite
-///   (Updated), with unknown top-level keys preserved.
+/// The dual-stack IPv6 any address every mail listener binds when
+/// `init` writes the config. The `apply` phase uses the same
+/// constant so the plan and the apply path agree on what address
+/// the listener will reach the wire with. A loopback-only mail
+/// listener would receive no mail.
+const MAIL_BIND_ADDR: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
+
+/// The loopback address the management API listener binds when
+/// `init` writes the config. The API is closed to the network by
+/// design; the operator reaches it through the host's pasta
+/// mapping once the stack is up.
+const API_BIND_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+/// Return the listeners `init` will write into the config: either
+/// the operator's existing array (when the keep-existing-listeners
+/// path applies) or the array derived from the answers. The compose
+/// step uses this to derive the `ports:` list so a published port
+/// always matches a listener init just wrote.
 ///
-/// When `keep_existing_listeners` is `true`, the existing `listeners`
-/// array on disk is preserved verbatim and the desired `listeners`
-/// array is dropped: the operator already put a `metrics` listener,
-/// or pinned `imap` to a sidecar port, and `init` does not silently
-/// overwrite their work. The desired config still carries every
-/// other managed key.
-///
-/// Comments are not preserved: the merge goes through `toml::Value` and
-/// the resulting document is re-serialised. The plan step mentions this
-/// so the operator knows what to expect.
-pub(super) fn merge_with_existing(
-	path: &Path,
-	desired: &str,
-	keep_existing_listeners: bool,
-) -> Result<ConfigWrite, ApplyError> {
-	let desired_value: toml::Value =
-		toml::from_str(desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-	match fs::read_to_string(path) {
-		Ok(existing) => {
-			let existing_value: toml::Value = parsed(&existing).map_err(|e| {
-				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
-			})?;
-			let merged = reconcile(existing_value, desired_value, keep_existing_listeners);
-			if merged == parsed(&existing)? {
-				if let Err(error) = Config::load(path) {
-					return Err(ApplyError::ConfigInvalid(format!(
-						"existing config at {} would be left untouched but is invalid: {}",
-						path.display(),
-						error
-					)));
-				}
-				Ok(ConfigWrite::Identical)
-			} else {
-				let serialized = toml::to_string(&merged)
-					.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-				write_validated_config(path, &serialized)?;
-				Ok(ConfigWrite::Updated)
-			}
-		}
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-			write_validated_config(path, desired)?;
-			Ok(ConfigWrite::Wrote)
-		}
-		Err(error) => Err(ApplyError::ConfigRead(path.to_path_buf(), error)),
+/// Use the same verified reader as the merge so a non-empty operator listener
+/// array is preserved as-is.
+pub(crate) fn listeners_to_write(answers: &Answers) -> Result<Vec<Listener>, ApplyError> {
+	if let Some(existing) = existing_operators_listeners(&answers.config_path)? {
+		return Ok(existing);
 	}
+	// ACME: same gate the config writer uses. The two listeners
+	// the config block and the typed listener vec see must agree,
+	// because the compose writer derives the published-port list
+	// from this typed vec (not from the config block) and a
+	// missing `acme` listener here would keep port 80 out of the
+	// publish map even when the config says ACME is on.
+	let acme_enabled = super::apply_config_acme::should_enable_acme(answers);
+	Ok(desired_listeners(&answers.services, acme_enabled))
 }
 
-/// Reconcile a desired TOML value with an existing one. Every key
-/// listed in `INIT_MANAGED_KEYS` is removed from the root table of
-/// the existing value (so the desired config can drop a previously
-/// managed entry that the operator no longer wants) and replaced
-/// from the desired value when present there. Keys not in that list
-/// are preserved as the operator added them. The removal applies
-/// at the root only: a nested operator table that happens to carry
-/// a key whose name matches a managed key is preserved verbatim,
-/// because `init` does not own the contents of nested tables.
-///
-/// When `keep_existing_listeners` is `true`, the `listeners` key is
-/// skipped on both sides: the existing array survives untouched and
-/// the desired one is dropped. The flag is set only when the
-/// existing config already carries a non-empty `listeners` array on
-/// disk.
-///
-/// Tables are reconciled recursively for keys the operator and
-/// `init` both write; arrays are replaced wholesale because listeners
-/// and the dns section are managed as a whole by `init`.
-pub(crate) fn reconcile(
-	existing: toml::Value,
-	desired: toml::Value,
-	keep_existing_listeners: bool,
-) -> toml::Value {
-	use toml::Value;
-	match (existing, desired) {
-		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
-			for key in INIT_MANAGED_KEYS {
-				if *key == "listeners" && keep_existing_listeners {
-					continue;
-				}
-				existing_table.remove(*key);
-			}
-			for (key, value) in desired_table {
-				if key == "listeners" && keep_existing_listeners {
-					continue;
-				}
-				let new = match existing_table.remove(&key) {
-					Some(existing_inner) => reconcile_inner(existing_inner, value),
-					None => value,
-				};
-				existing_table.insert(key, new);
-			}
-			Value::Table(existing_table)
-		}
-		(_, desired) => desired,
+/// Build the listener array `init` would write from the answers.
+/// `smtp` is always present; the rest follow the `Services` flags.
+/// Mail listeners bind the dual-stack IPv6 any (`::`); the API
+/// listener binds loopback (`127.0.0.1`) and is closed to the
+/// network by design. Port is left as `None` so the schema default
+/// is what `serve` binds; the published-ports helper resolves it
+/// from the kind.
+fn desired_listeners(services: &Services, acme_enabled: bool) -> Vec<Listener> {
+	let mut listeners = Vec::new();
+	listeners.push(Listener {
+		kind: ListenerKind::Smtp,
+		addr: MAIL_BIND_ADDR,
+		port: None,
+	});
+	if services.imap {
+		listeners.push(Listener {
+			kind: ListenerKind::Imap,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+		// IMAPS (993): the implicit-TLS sibling of the STARTTLS IMAP
+		// listener above. Most mail clients default to 993; the
+		// listener entries mirror the typed/serialised split
+		// `build_config` uses so the plan, the apply write, and the
+		// compose publish list all agree on which ports init binds.
+		listeners.push(Listener {
+			kind: ListenerKind::Imaps,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
 	}
+	if services.submission {
+		listeners.push(Listener {
+			kind: ListenerKind::Submission,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+		// Submissions (465): the implicit-TLS sibling of the
+		// STARTTLS submission listener above. Modern clients
+		// negotiate the implicit port first.
+		listeners.push(Listener {
+			kind: ListenerKind::Submissions,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.pop3 {
+		listeners.push(Listener {
+			kind: ListenerKind::Pop3s,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.managesieve {
+		listeners.push(Listener {
+			kind: ListenerKind::ManageSieve,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.webdav {
+		listeners.push(Listener {
+			kind: ListenerKind::WebDav,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	if services.api {
+		listeners.push(Listener {
+			kind: ListenerKind::Api,
+			addr: API_BIND_ADDR,
+			port: None,
+		});
+	}
+	if acme_enabled {
+		listeners.push(Listener {
+			kind: ListenerKind::Acme,
+			addr: MAIL_BIND_ADDR,
+			port: None,
+		});
+	}
+	listeners
 }
 
-/// Recurse into a nested table without applying the managed-key
-/// removal. The root table is the only place `init` owns keys by
-/// name, so a nested operator table keeps every key it had.
-fn reconcile_inner(existing: toml::Value, desired: toml::Value) -> toml::Value {
-	use toml::Value;
-	match (existing, desired) {
-		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
-			for (key, value) in desired_table {
-				let new = match existing_table.remove(&key) {
-					Some(existing_inner) => reconcile_inner(existing_inner, value),
-					None => value,
-				};
-				existing_table.insert(key, new);
-			}
-			Value::Table(existing_table)
-		}
-		(_, desired) => desired,
-	}
-}
+// Re-export the merge / staging helpers that `apply_config_merge`
+// owns. Callers that reach for `apply_config::existing_operators_listeners`,
+// `apply_config::merge_with_existing`, `apply_config::reconcile`,
+// or `apply_config::write_validated_config` (the plan, the apply
+// path, and several tests) keep working without an import
+// rewrite every time a helper moves. The actual implementations
+// live in the sibling so this file stays under the per-file line
+// limit.
+//
+// The `unused_imports` lint fires inside this module because the
+// re-export is consumed by callers, not here. The lint is
+// suppressed on the line so the helper still works as a re-export.
+#[allow(unused_imports)]
+pub(super) use super::apply_config_merge::{
+	create_unique_staging_with, existing_operators_listeners, listeners_from_existing,
+	merge_with_read_config, reconcile, write_validated_config,
+};
 
-fn parsed(text: &str) -> Result<toml::Value, ApplyError> {
-	toml::from_str(text).map_err(|error| ApplyError::ConfigEncode(error.to_string()))
-}
+#[cfg(test)]
+#[path = "apply_config_tests_clamav.rs"]
+mod tests_clamav;
 
-/// Read the config at `path` and return every listener the operator
-/// already has on disk, when the file exists and the `listeners`
-/// array is non-empty. `Ok(None)` covers four cases the caller
-/// treats the same: no file on disk, an I/O failure reading it
-/// (e.g. the parent is a regular file rather than a directory; the
-/// apply phase surfaces those with its own error), the file exists
-/// but has no `listeners` key, and the `listeners` array is present
-/// but empty. In all four cases `init` writes its own array.
-///
-/// `Ok(Some(_))` carries one `Listener` per existing entry, with the
-/// listener's kind, the explicit bind address the operator wrote (or
-/// the schema default when omitted), and the explicit port (or the
-/// schema default for the kind). The plan uses these to render what
-/// `serve` will actually expose; the apply phase uses the same
-/// signal to decide whether the merge preserves the `listeners`
-/// array verbatim or replaces it with its own.
-///
-/// A file the rest of the CLI would reject (the `Config::load` path
-/// the plan mirrors) surfaces as a hard error here so the apply
-/// phase cannot "succeed" against a config `serve` would refuse to
-/// start with.
-pub(crate) fn existing_operators_listeners(
-	path: &Path,
-) -> Result<Option<Vec<crate::config::Listener>>, ApplyError> {
-	let text = match fs::read_to_string(path) {
-		Ok(text) => text,
-		// An unreadable file is a precondition the apply phase will
-		// surface with its own error variant; the plan here only
-		// decides what listeners to render, and "no existing
-		// listeners" is the safe choice when the disk cannot be read.
-		// The apply phase re-reads the file and reports the failure
-		// with its own error message.
-		Err(_) => return Ok(None),
-	};
-	let value: toml::Value = match toml::from_str(&text) {
-		Ok(value) => value,
-		Err(_) => return Ok(None),
-	};
-	let Some(arr) = value.get("listeners").and_then(|v| v.as_array()) else {
-		return Ok(None);
-	};
-	if arr.is_empty() {
-		return Ok(None);
-	}
-	let mut out = Vec::with_capacity(arr.len());
-	for entry in arr {
-		let listener: crate::config::Listener = entry.clone().try_into().map_err(|error| {
-			ApplyError::ConfigInvalid(format!(
-				"existing listener in {} does not parse: {error}",
-				path.display()
-			))
-		})?;
-		out.push(listener);
-	}
-	if let Err(error) = Config::load(path) {
-		return Err(ApplyError::ConfigInvalid(format!(
-			"existing config at {} has listeners but does not load: {error}",
-			path.display()
-		)));
-	}
-	Ok(Some(out))
-}
+#[cfg(test)]
+#[path = "apply_config_tests_database_off.rs"]
+mod tests_database_off;
 
-/// Write `bytes` to `path` after staging them on a sibling file with
-/// a random suffix, validating the candidate through `Config::load`,
-/// and atomically renaming onto `path`. The staging filename cannot
-/// collide with `config_path` (it always carries a random hex suffix)
-/// and the staging file is created with `O_EXCL` at mode `0600` from
-/// the very first byte, so it never has a wider-mode lifetime. The
-/// destination is never touched when the candidate does not validate.
-/// A `config_path` that resolves through a symlink is refused with an
-/// actionable message; symlinks can be silently replaced in ways the
-/// operator does not see, so the run stops before any effect rather
-/// than guessing what the operator wanted.
-pub(super) fn write_validated_config(path: &Path, bytes: &str) -> Result<(), ApplyError> {
-	#[cfg(unix)]
-	{
-		match fs::symlink_metadata(path) {
-			Ok(meta) if meta.file_type().is_symlink() => {
-				return Err(ApplyError::ConfigSymlink(path.to_path_buf()));
-			}
-			Ok(_) => {}
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-			Err(error) => return Err(ApplyError::ConfigRead(path.to_path_buf(), error)),
-		}
-	}
-	let parent = path.parent().ok_or_else(|| {
-		ApplyError::ConfigInvalid(format!(
-			"config_path {} has no parent directory",
-			path.display()
-		))
-	})?;
-	let file_name = path.file_name().and_then(|s| s.to_str()).ok_or_else(|| {
-		ApplyError::ConfigInvalid(format!(
-			"config_path {} has no usable file name",
-			path.display()
-		))
-	})?;
-	let (created, staging) = create_unique_staging(parent, file_name, bytes)?;
-	match Config::load(&staging) {
-		Ok(_) => {}
-		Err(error) => {
-			if created {
-				let _ = fs::remove_file(&staging);
-			}
-			return Err(ApplyError::ConfigInvalid(error.to_string()));
-		}
-	}
-	if let Err(error) = fs::rename(&staging, path) {
-		if created {
-			let _ = fs::remove_file(&staging);
-		}
-		return Err(ApplyError::ConfigWrite(path.to_path_buf(), error));
-	}
-	Ok(())
-}
+#[cfg(all(test, unix))]
+#[path = "apply_config_tests_read_safety.rs"]
+mod tests_read_safety;
 
-/// Create a unique staging file under `parent` derived from
-/// `file_name` plus a random hex suffix. The file is opened with
-/// `O_EXCL` at mode `0600` from the start: a pre-existing file at
-/// the chosen name fails creation, so the operator can never lose a
-/// sibling at a deterministic staging basename. Returns whether
-/// this call created the file (so the caller knows it is safe to
-/// clean up on a later error).
-fn create_unique_staging(
-	parent: &Path,
-	file_name: &str,
-	bytes: &str,
-) -> Result<(bool, PathBuf), ApplyError> {
-	create_unique_staging_with(
-		parent,
-		file_name,
-		bytes,
-		&mut random_hex_suffix,
-		write_and_sync,
-	)
-}
+#[cfg(test)]
+pub(super) use super::apply_config_merge::merge_with_existing;
 
-/// Same as `create_unique_staging` but the suffix source and the
-/// byte-write step are injected so the test can drive a controlled
-/// collision sequence and a forced write failure. Production code
-/// uses `create_unique_staging` and gets the real CSPRNG and the
-/// `write_all` + `sync_all` step.
-pub(super) fn create_unique_staging_with(
-	parent: &Path,
-	file_name: &str,
-	bytes: &str,
-	next_suffix: &mut dyn FnMut() -> String,
-	write: fn(&mut fs::File, &[u8]) -> std::io::Result<()>,
-) -> Result<(bool, PathBuf), ApplyError> {
-	let mut opts = fs::OpenOptions::new();
-	opts.write(true).create_new(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::OpenOptionsExt;
-		opts.mode(0o600);
-	}
-	// The random suffix must be drawn inside the loop: the previous
-	// shape held the suffix constant across all sixteen attempts and
-	// the `AlreadyExists` arm could never fire on a different
-	// candidate, so the retry loop was inert and a pre-existing
-	// sibling at the first candidate name stopped the call.
-	for _attempt in 0..16u32 {
-		let suffix = next_suffix();
-		let staging = parent.join(format!("{file_name}.config.tmp.{suffix}"));
-		match opts.open(&staging) {
-			Ok(mut file) => {
-				// A guard that unlinks the staging file on every
-				// error path: a write_all or sync_all failure must
-				// not leave the partial file behind, because the
-				// file can hold an inline DNS token and the next
-				// run would block on its `O_EXCL` blocker. The
-				// guard is disarmed just before the success return
-				// so the caller's rename can move the staging
-				// file onto the destination.
-				let guard = StagingGuard {
-					path: staging.clone(),
-					armed: true,
-				};
-				if let Err(error) = write(&mut file, bytes.as_bytes()) {
-					return Err(ApplyError::ConfigWrite(staging, error));
-				}
-				guard.disarm();
-				return Ok((true, staging));
-			}
-			Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-			Err(error) => return Err(ApplyError::ConfigWrite(staging, error)),
-		}
-	}
-	Err(ApplyError::ConfigWrite(
-		parent.join(format!("{file_name}.config.tmp")),
-		std::io::Error::other("could not allocate a unique staging filename after 16 attempts"),
-	))
-}
-
-fn write_and_sync(file: &mut fs::File, bytes: &[u8]) -> std::io::Result<()> {
-	use std::io::Write;
-	file.write_all(bytes)?;
-	file.sync_all()
-}
-
-/// RAII handle that removes the staging file on drop unless
-/// `disarm` is called. The `O_EXCL` create and the early write_all
-/// errors return paths the caller wants surfaced; if any of those
-/// arms fires before the rename, the partial file is unlinked
-/// instead of left behind as a `0600` token in the operator's
-/// directory.
-struct StagingGuard {
-	path: PathBuf,
-	armed: bool,
-}
-
-impl StagingGuard {
-	fn disarm(mut self) {
-		self.armed = false;
-	}
-}
-
-impl Drop for StagingGuard {
-	fn drop(&mut self) {
-		if self.armed {
-			let _ = fs::remove_file(&self.path);
-		}
-	}
-}
-
-/// Twelve hex digits drawn from the system CSPRNG. The CSPRNG cannot
-/// fail on a well-formed host, but `init` only ever needs a unique
-/// suffix; if it ever did, the fallback returns the constant
-/// `424242424242` on every call, so the retry loop never finds a
-/// free candidate and surfaces an `ApplyError::ConfigWrite` after
-/// sixteen attempts.
-fn random_hex_suffix() -> String {
-	use ring::rand::SecureRandom;
-	let mut bytes = [0u8; 6];
-	if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
-		bytes = [0x42; 6];
-	}
-	let mut out = String::with_capacity(12);
-	for byte in bytes {
-		out.push_str(&format!("{byte:02x}"));
-	}
-	out
-}
+#[path = "apply_config_read.rs"]
+mod read;
+pub(super) use read::{ExistingConfig, read_config};

@@ -37,8 +37,16 @@ impl Session {
 
 	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
 		let uidonly = self.uidonly;
-		// Capture the SEARCHRES `$` set before the mutable borrow of `self.state`.
-		let saved = self.saved_seqnos_for(true);
+		// Capture the SEARCHRES `$` set before the mutable borrow of
+		// `self.state`. UID EXPUNGE always matches against UIDs, so the
+		// resolved saved set is the stored UIDs verbatim (expunged entries
+		// are filtered out below when matching the requested set).
+		let saved = self
+			.saved_search
+			.as_ref()
+			.filter(|s| s.are_uids)
+			.map(|s| s.uids.clone())
+			.unwrap_or_default();
 		let State::Selected {
 			snapshot,
 			read_only,

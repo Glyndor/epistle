@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use super::super::command::StatusItem;
+use super::super::command::{ListAttribute, StatusItem};
 use super::{Output, Session, helpers, mailbox};
 
 impl Session {
@@ -12,6 +12,8 @@ impl Session {
 		pattern: &str,
 		return_status: &[StatusItem],
 		select_subscribed: bool,
+		select_special_use: bool,
+		return_attributes: &[ListAttribute],
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
@@ -22,25 +24,35 @@ impl Session {
 		let mut response = String::new();
 		for name in mailbox::list(&self.data_dir, &account) {
 			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
+			let special_use = helpers::special_use_attribute(&name);
 			// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists only subscribed boxes.
-			if !matches || (select_subscribed && !subscribed.contains(&name)) {
+			if !matches
+				|| (select_subscribed && !subscribed.contains(&name))
+				|| (select_special_use && special_use.is_empty())
+			{
 				continue;
 			}
-			let mut attributes = helpers::special_use_attribute(&name).to_string();
-			if subscribed.contains(&name) {
+			let mut attributes =
+				if self.imap4rev2 || return_attributes.contains(&ListAttribute::SpecialUse) {
+					special_use.to_string()
+				} else {
+					String::new()
+				};
+			if subscribed.contains(&name)
+				&& (self.imap4rev2 || return_attributes.contains(&ListAttribute::Subscribed))
+			{
 				if !attributes.is_empty() {
 					attributes.push(' ');
 				}
 				attributes.push_str("\\Subscribed");
 			}
-			// CHILDREN (RFC 3348): every LIST line carries a child attribute.
-			// epistle stores mailboxes flat (the hierarchy separator is `/`,
-			// and mailbox names cannot contain it), so every mailbox is a leaf
-			// — \HasNoChildren is the truthful answer for each.
-			if !attributes.is_empty() {
-				attributes.push(' ');
+			// The store is flat, so an explicitly requested child state is a leaf.
+			if self.imap4rev2 || return_attributes.contains(&ListAttribute::Children) {
+				if !attributes.is_empty() {
+					attributes.push(' ');
+				}
+				attributes.push_str("\\HasNoChildren");
 			}
-			attributes.push_str("\\HasNoChildren");
 			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n"));
 			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
 			if !return_status.is_empty()
@@ -114,3 +126,7 @@ impl Session {
 		Some(parts)
 	}
 }
+
+#[cfg(test)]
+#[path = "list_status_tests_special_use.rs"]
+mod special_use_selection;

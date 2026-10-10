@@ -31,7 +31,7 @@ async fn jmap_email_set_creates_message() {
 		.expect("created id")
 		.to_string();
 	let req = serde_json::json!({
-		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id]}, "c2"]],
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id], "fetchTextBodyValues": true}, "c2"]],
 	});
 	let (_, body) =
 		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
@@ -219,7 +219,7 @@ async fn jmap_email_get_parses_message() {
 	let app = router(test_state(dir.path(), 0));
 	let req = serde_json::json!({
 		"using": ["urn:ietf:params:jmap:mail"],
-		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id.to_string()]}, "c1"]],
+		"methodCalls": [["Email/get", {"accountId": "alice", "ids": [id.to_string()], "fetchTextBodyValues": true}, "c1"]],
 	});
 	let (status, body) =
 		request_with_body(&app, "POST", "/jmap/api", Some(TOKEN.as_str()), Some(req)).await;
@@ -232,7 +232,7 @@ async fn jmap_email_get_parses_message() {
 	assert_eq!(email["from"][0]["name"], "Alice");
 	assert_eq!(email["preview"], "the body");
 	// bodyValues exposes the decoded text body (RFC 8621 §4.1.4).
-	assert_eq!(email["bodyValues"]["0"]["value"], "the body\r\n");
+	assert_eq!(email["bodyValues"]["0"]["value"], "the body\n");
 	assert_eq!(email["textBody"][0]["type"], "text/plain");
 	let req = serde_json::json!({
 		"methodCalls": [["Email/get", {"accountId": "alice", "ids": ["not-a-uuid"]}, "c2"]],

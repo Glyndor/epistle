@@ -24,8 +24,8 @@ fn parses_config_check_command() {
 }
 
 #[test]
-fn rejects_missing_config_argument() {
-	assert!(Cli::try_parse_from(["epistle", "serve"]).is_err());
+fn rejects_missing_config_value() {
+	assert!(Cli::try_parse_from(["epistle", "serve", "--config"]).is_err());
 }
 
 #[test]
@@ -343,6 +343,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 			data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		})
 		.expect("store");
@@ -354,6 +355,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 			data: b"x\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		})
 		.expect("store");

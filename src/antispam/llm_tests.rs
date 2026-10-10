@@ -172,7 +172,14 @@ async fn high_confidence_spam_quarantines() {
 	let s = state.lock().unwrap();
 	assert_eq!(s.requests, 1);
 	// Outbound Authorization must be the API key we configured.
-	assert_eq!(s.auth.as_deref(), Some("Bearer sk-test"));
+	// `assert_eq!` on `s.auth` would Debug-print the actual
+	// bearer token on a mismatch, dumping the API key into
+	// the CI log. The boolean form names the contract without
+	// echoing the payload.
+	assert!(
+		s.auth.as_deref() == Some("Bearer sk-test"),
+		"the LLM request must carry the configured bearer token"
+	);
 	// None of the inbound sensitive headers may appear in the prompt.
 	assert!(!s.leaked_sensitive, "leaked sensitive headers");
 }

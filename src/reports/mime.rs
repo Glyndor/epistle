@@ -35,6 +35,28 @@ const MAX_PARTS: usize = 64;
 /// we refuse to walk further.
 const MAX_NESTING_DEPTH: u8 = 2;
 
+/// RFC 2046 §5.1 caps a Content-Type boundary parameter at 70 octets.
+/// Boundaries longer than that are invalid and would force the
+/// delimiter search to walk a long common prefix on every candidate
+/// position; refuse them up front.
+const MAX_BOUNDARY_LEN: usize = 70;
+
+// Test-only step counter incremented once per byte comparison the
+// delimiter search performs. Lets a regression test assert the
+// per-call work stays bounded when the body holds a long run of
+// characters that share a prefix with the boundary. The counter is
+// per-thread so parallel tests do not observe each other's
+// increments.
+#[cfg(test)]
+thread_local! {
+	static SCAN_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_scan_steps() -> u64 {
+	SCAN_STEPS.with(|c| c.replace(0))
+}
+
 /// What we found after walking the message.
 #[derive(Debug)]
 pub struct FoundPart {
@@ -90,7 +112,7 @@ fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWa
 		if part
 			.content_type
 			.as_deref()
-			.is_some_and(|ct| ct.starts_with("multipart/"))
+			.is_some_and(|ct| ct.to_ascii_lowercase().starts_with("multipart/"))
 			&& let Some(inner_boundary) = part.boundary.as_deref()
 			&& depth < MAX_NESTING_DEPTH
 		{
@@ -257,50 +279,124 @@ fn split_top_level(raw: &[u8]) -> Result<Vec<ParsedPart>, WalkError> {
 	Ok(parts)
 }
 
-fn split_with_boundary(body: &[u8], bouxtary: &str) -> Result<Vec<ParsedPart>, WalkError> {
-	let needle = format!("--{bouxtary}");
-	let haystack = body;
+fn split_with_boundary(body: &[u8], boundary: &str) -> Result<Vec<ParsedPart>, WalkError> {
+	if boundary.len() > MAX_BOUNDARY_LEN {
+		// RFC 2046 §5.1: the boundary parameter is at most 70 octets.
+		// Longer values are invalid and would force the search to walk
+		// a long common prefix on every candidate position before
+		// realising the line is not a boundary. Refuse them outright.
+		return Err(WalkError::Malformed("boundary too long"));
+	}
+	let needle = format!("--{boundary}");
+	let needle_bytes = needle.as_bytes();
 	let mut parts = Vec::new();
 	let mut cursor = 0usize;
 	loop {
-		let Some(rel) = find_subslice(&haystack[cursor..], needle.as_bytes()) else {
+		// Walk the body one line at a time and check each line for the
+		// boundary prefix. The line scan is O(N) in the body length and
+		// the per-line comparison is O(needle.len()), which the cap
+		// above keeps at 70 octets, so the total work is linear in the
+		// body size.
+		let Some(abs) = find_next_boundary_line(body, cursor, needle_bytes) else {
 			// Buffer ended without ever seeing the closing boundary.
-			// Real senders always include it; missing means the message
-			// was truncated or hostile. Either way we refuse.
+			// Real senders always include it; missing means the
+			// message was truncated or crafted. Either way we refuse.
 			return Err(WalkError::Malformed("missing closing boundary"));
 		};
-		let abs = cursor + rel;
-		let after = abs + needle.len();
-		if haystack.get(after..after + 2) == Some(b"--") {
+		let mut after = abs + needle_bytes.len();
+		if body.get(after..after + 2) == Some(b"--") {
 			break; // closing boundary
 		}
+		// RFC 2046 permits transport padding after a delimiter.
+		while matches!(body.get(after), Some(b' ' | b'\t')) {
+			after += 1;
+		}
 		// Skip the CRLF (or LF) right after the boundary marker.
-		let body_start = if haystack.get(after..after + 2) == Some(b"\r\n") {
+		let body_start = if body.get(after..after + 2) == Some(b"\r\n") {
 			after + 2
-		} else if haystack.get(after..after + 1) == Some(b"\n") {
+		} else if body.get(after..after + 1) == Some(b"\n") {
 			after + 1
 		} else {
 			return Err(WalkError::Malformed("boundary not followed by line break"));
 		};
-		// Find the next boundary marker.
-		let next_rel = find_subslice(&haystack[body_start..], needle.as_bytes())
+		// Find the next boundary line; the part body sits between the
+		// two.
+		let next_abs = find_next_boundary_line(body, body_start, needle_bytes)
 			.ok_or(WalkError::Malformed("missing closing boundary"))?;
-		let body_end_rel = next_rel;
+		let mut body_end = next_abs;
 		// Trim the CRLF before the next boundary.
-		let mut body_end = body_start + body_end_rel;
-		if body_end - body_start >= 2 && &haystack[body_end - 2..body_end] == b"\r\n" {
+		if body_end - body_start >= 2 && &body[body_end - 2..body_end] == b"\r\n" {
 			body_end -= 2;
-		} else if body_end > body_start && &haystack[body_end - 1..body_end] == b"\n" {
+		} else if body_end > body_start && &body[body_end - 1..body_end] == b"\n" {
 			body_end -= 1;
 		}
-		let part_bytes = &haystack[body_start..body_end];
+		let part_bytes = &body[body_start..body_end];
 		parts.push(parse_part(part_bytes)?);
 		if parts.len() > MAX_PARTS {
 			return Err(WalkError::Malformed("too many parts"));
 		}
-		cursor = body_start + body_end_rel;
+		cursor = next_abs;
 	}
 	Ok(parts)
+}
+
+/// Walk `body` from `start` and return the byte offset of the next line
+/// whose contents form a complete delimiter for `needle`. The scan advances
+/// one line at a time and the per-line comparison counts byte compares through
+/// `line_starts_with`, so the total work is `O(body.len() *
+/// needle.len())` with `needle.len() <= MAX_BOUNDARY_LEN`.
+fn find_next_boundary_line(body: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+	let mut line_start = start;
+	while line_start <= body.len() {
+		// Find the end of the current line (the LF, or the body end).
+		let mut line_end = line_start;
+		while line_end < body.len() && body[line_end] != b'\n' {
+			line_end += 1;
+		}
+		let line = &body[line_start..line_end];
+		if line_starts_with(line, needle) && boundary_suffix(line, needle.len()) {
+			return Some(line_start);
+		}
+		if line_end >= body.len() {
+			return None;
+		}
+		// Step past the LF and start the next line.
+		line_start = line_end + 1;
+	}
+	None
+}
+
+fn boundary_suffix(line: &[u8], prefix_len: usize) -> bool {
+	let suffix = &line[prefix_len..];
+	let suffix = suffix.strip_prefix(b"--").unwrap_or(suffix);
+	let suffix = suffix.strip_suffix(b"\r").unwrap_or(suffix);
+	suffix.iter().all(|byte| matches!(byte, b' ' | b'\t'))
+}
+
+/// Byte-by-byte prefix comparison that counts the comparisons through
+/// the test-only step counter. The historical `find_subslice` walked
+/// the whole body and compared `needle.len()` bytes at every position,
+/// which turned the search quadratic when the body shared a long
+/// prefix with the boundary.
+fn line_starts_with(line: &[u8], needle: &[u8]) -> bool {
+	if needle.is_empty() {
+		return true;
+	}
+	if line.len() < needle.len() {
+		#[cfg(test)]
+		SCAN_STEPS.with(|c| c.set(c.get() + line.len() as u64));
+		return false;
+	}
+	for i in 0..needle.len() {
+		#[cfg(test)]
+		SCAN_STEPS.with(|c| c.set(c.get() + 1));
+		if line[i] != needle[i] {
+			#[cfg(test)]
+			SCAN_STEPS.with(|c| c.set(c.get() + (needle.len() - 1 - i) as u64));
+			return false;
+		}
+	}
+	true
 }
 
 fn parse_part(part_bytes: &[u8]) -> Result<ParsedPart, WalkError> {
@@ -324,9 +420,11 @@ fn parse_part(part_bytes: &[u8]) -> Result<ParsedPart, WalkError> {
 fn content_disposition_filename(headers: &[u8]) -> Option<String> {
 	let raw = header_value(headers, "content-disposition")?;
 	for segment in raw.split(';') {
-		let segment = segment.trim();
-		if let Some(rest) = segment.strip_prefix("filename=") {
-			let value = rest.trim_matches('"').trim();
+		let Some((name, rest)) = segment.trim().split_once('=') else {
+			continue;
+		};
+		if name.trim().eq_ignore_ascii_case("filename") {
+			let value = rest.trim().trim_matches('"');
 			if !value.is_empty() {
 				return Some(value.to_string());
 			}
@@ -342,9 +440,11 @@ fn content_disposition_filename(headers: &[u8]) -> Option<String> {
 /// Returns the bare boundary token.
 fn parse_boundary_param(content_type: &str) -> Option<String> {
 	for segment in content_type.split(';').skip(1) {
-		let segment = segment.trim();
-		if let Some(rest) = segment.strip_prefix("boundary=") {
-			let value = rest.trim_matches('"').trim();
+		let Some((name, rest)) = segment.trim().split_once('=') else {
+			continue;
+		};
+		if name.trim().eq_ignore_ascii_case("boundary") {
+			let value = rest.trim().trim_matches('"');
 			if !value.is_empty() {
 				return Some(value.to_string());
 			}
@@ -396,6 +496,15 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 		return None;
 	}
 	for i in 0..=(haystack.len() - needle.len()) {
+		#[cfg(test)]
+		{
+			// Count the byte comparisons the historical delimiter search
+			// performs. The linear scan above touches each line at most
+			// once; this helper walks every position, so the counter
+			// blows up when the body shares a long prefix with the
+			// boundary.
+			SCAN_STEPS.with(|c| c.set(c.get() + needle.len() as u64));
+		}
 		if &haystack[i..i + needle.len()] == needle {
 			return Some(i);
 		}
@@ -412,3 +521,11 @@ mod tests;
 #[cfg(test)]
 #[path = "mime_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "mime_tests_casing.rs"]
+mod tests_casing;
+
+#[cfg(test)]
+#[path = "mime_tests_delimiters.rs"]
+mod tests_delimiters;

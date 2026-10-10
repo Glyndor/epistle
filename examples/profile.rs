@@ -107,6 +107,7 @@ fn message(raw: &[u8]) -> AcceptedMessage {
 		data: raw.to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	}
 }

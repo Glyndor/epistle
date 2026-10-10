@@ -27,6 +27,8 @@ fn answers_with_services(services: Services) -> Answers {
 		config_path: std::path::PathBuf::from("/etc/epistle/mail.toml"),
 		dns: None,
 		services,
+		image: None,
+		acme: None,
 	}
 }
 
@@ -45,6 +47,7 @@ fn plan_listeners_render_one_per_line_with_padded_kind() {
 		managesieve: false,
 		webdav: false,
 		api: false,
+		database: false,
 	});
 	let plan = plan(&answers).expect("plan");
 	let mut rendered = String::new();
@@ -170,6 +173,7 @@ fn plan_listeners_step_has_one_line_per_listener() {
 		managesieve: true,
 		webdav: true,
 		api: true,
+		database: false,
 	});
 	let plan = plan(&answers).expect("plan");
 	let mut rendered = String::new();
@@ -181,11 +185,14 @@ fn plan_listeners_step_has_one_line_per_listener() {
 			[
 				"smtp",
 				"imap",
+				"imaps",
 				"submission",
+				"submissions",
 				"pop3s",
 				"manage-sieve",
 				"web-dav",
 				"api",
+				"acme",
 			]
 			.iter()
 			.any(|kind| trimmed.starts_with(kind) && trimmed.contains(':'))
@@ -193,7 +200,7 @@ fn plan_listeners_step_has_one_line_per_listener() {
 		.collect();
 	assert_eq!(
 		listener_lines.len(),
-		7,
+		10,
 		"every listener must be on its own line; got {} lines:\n{rendered}",
 		listener_lines.len()
 	);
@@ -246,6 +253,7 @@ fn listener_entries_match_schema_default_ports() {
 		managesieve: true,
 		webdav: true,
 		api: true,
+		database: false,
 	}))
 	.expect("plan");
 	let entries: Vec<&ListenerEntry> = plan
@@ -258,11 +266,19 @@ fn listener_entries_match_schema_default_ports() {
 		.expect("listeners step");
 	// Belt and braces on the count too: a future kind added to the
 	// answers set without a matching plan entry shows up here as a
-	// shorter `entries` vector, not as a wrong port.
+	// shorter `entries` vector, not as a wrong port. The expected
+	// count is ten: smtp + imap + imaps (the implicit-TLS sibling
+	// of imap) + submission + submissions (the implicit-TLS sibling
+	// of submission) + pop3s + manage-sieve + web-dav + api +
+	// acme. Init binds the implicit-TLS ports (993, 465) whenever
+	// it binds their STARTTLS siblings, because real-world clients
+	// default to the implicit ports first; the `acme` listener on
+	// port 80 ships alongside because the test answers carry a
+	// public hostname and the auto-enable heuristic turns ACME on.
 	assert_eq!(
 		entries.len(),
-		7,
-		"expected seven entries (smtp + imap + submission + pop3s + manage-sieve + web-dav + api), \
+		10,
+		"expected ten entries (smtp + imap + imaps + submission + submissions + pop3s + manage-sieve + web-dav + api + acme), \
 		 got {entries:?}"
 	);
 	for entry in &entries {

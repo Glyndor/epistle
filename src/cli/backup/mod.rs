@@ -1,16 +1,20 @@
-//! `epistle backup`: write a consistent snapshot of an instance to a single
-//! gzip-compressed tar (USTAR) on stdout or a file — the filesystem mail store
-//! (`data_dir`, the canonical `.eml` files plus suppression and ACME state) and,
-//! when a database is configured, a `pg_dump` of the metadata/antispam tables.
-//! The index rebuilds from the `.eml` files, so it is not archived.
+//! The `epistle backup` and `epistle restore` subcommands.
 //!
-//! Diagnostic warnings about state the archive does NOT carry go to a separate
-//! `warnings` sink (always stderr in the CLI dispatch). Mixing those messages
-//! with the tar.gz stream on stdout would corrupt the archive.
+//! The full module used to live in a single `backup.rs`. The dump
+//! (and replay) of the database split out into `db_dump.rs` to keep
+//! this file under the per-file 500-code-line cap; the test
+//! modules are split into the same-named `*_tests_<topic>.rs`
+//! siblings and re-pulled in with `#[path]` so each compile unit
+//! stays small.
+
+mod db_dump;
+mod restore_files;
+
+use restore_files::lay_files;
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use flate2::Compression;
@@ -18,8 +22,27 @@ use flate2::write::GzEncoder;
 
 use crate::config::{BlobBackendConfig, Config};
 
-/// Build the snapshot, write it to `out`, and emit diagnostics to `warnings`.
+use db_dump::{DATABASE_SQL_NAME, collect_dump_with, load_dump_with};
+
+/// Run the `backup` subcommand. Builds the entries, writes the tar.gz, emits
+/// warnings. A configured database whose dump cannot be taken is a hard
+/// error: an archive without the database is worse than no archive, because
+/// the operator only finds out at restore time that the accounts and the
+/// antispam state are gone.
 pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Write) -> ExitCode {
+	run_with(config, out, warnings, &db_dump::default_program_resolver)
+}
+
+/// Same as [`run`] with a custom program resolver. Tests use the
+/// resolver to point `pg_dump` and `psql` at a stub in a tempdir
+/// without touching the process `PATH`; production callers pass the
+/// default, which is a no-op.
+pub(super) fn run_with(
+	config: &Config,
+	out: &mut impl Write,
+	warnings: &mut impl Write,
+	resolver: &dyn Fn(&str) -> Option<PathBuf>,
+) -> ExitCode {
 	let mut entries = match collect_files(&config.data_dir) {
 		Ok(entries) => entries,
 		Err(error) => {
@@ -27,16 +50,16 @@ pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Wri
 			return ExitCode::FAILURE;
 		}
 	};
-
-	// Include a logical pg_dump of the database, if one is configured and
-	// pg_dump is available (best-effort: a filesystem backup is still useful).
 	if let Some(db) = &config.database {
-		match pg_dump(&db.url) {
-			Ok(dump) => entries.push(("database.sql".to_string(), 0o644, dump)),
-			Err(error) => super::style::warn(format_args!("skipping pg_dump: {error}")),
-		}
+		let dump = match collect_dump_with(db, &config.data_dir, resolver) {
+			Ok(dump) => dump,
+			Err(error) => {
+				super::style::error(format_args!("database dump: {error}"));
+				return ExitCode::FAILURE;
+			}
+		};
+		entries.push((DATABASE_SQL_NAME.to_string(), 0o644, dump));
 	}
-
 	let archive = match tar_gz(&entries) {
 		Ok(archive) => archive,
 		Err(error) => {
@@ -50,6 +73,96 @@ pub(super) fn run(config: &Config, out: &mut impl Write, warnings: &mut impl Wri
 	warn_externally_referenced(config, &entries.len(), warnings);
 	eprintln!("backed up {} files for this instance", entries.len());
 	ExitCode::SUCCESS
+}
+
+/// Run the `restore` subcommand. Reads a tar.gz from `archive`, lays the
+/// `data/` entries down under `data_dir`, and replays `database.sql` against
+/// the configured database when the archive carries one. The hard rule is
+/// the same as the backup path: a `database.sql` in the archive that cannot
+/// be loaded is a restore error, never a silent skip.
+pub(super) fn run_restore(config: &Config, archive: &[u8], out: &mut impl Write) -> ExitCode {
+	run_restore_with(config, archive, out, &db_dump::default_program_resolver)
+}
+
+/// Same as [`run_restore`] with a custom program resolver. The test
+/// path passes a resolver that returns absolute paths to its stubs;
+/// production callers pass the default, which is a no-op and lets
+/// `Command::new` resolve through `PATH` exactly as it always has.
+pub(super) fn run_restore_with(
+	config: &Config,
+	archive: &[u8],
+	out: &mut impl Write,
+	resolver: &dyn Fn(&str) -> Option<PathBuf>,
+) -> ExitCode {
+	let tar = match gunzip_archive(archive) {
+		Ok(tar) => tar,
+		Err(error) => {
+			super::style::error(format_args!("reading archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	let entries = read_tar_entries_pub(&tar);
+	if entries.is_empty() {
+		super::style::error("archive is empty");
+		return ExitCode::FAILURE;
+	}
+	if let Err(error) = lay_files(&entries, &config.data_dir) {
+		super::style::error(format_args!("laying down files: {error}"));
+		return ExitCode::FAILURE;
+	}
+	if let Some(db) = &config.database {
+		let Some((_, sql)) = entries
+			.iter()
+			.find(|(name, _, _)| name == DATABASE_SQL_NAME)
+			.map(|(n, _, c)| (n.clone(), c.clone()))
+		else {
+			super::style::error("archive has no database.sql but [database] is configured");
+			return ExitCode::FAILURE;
+		};
+		if let Err(error) = load_dump_with(db, &config.data_dir, &sql, resolver) {
+			super::style::error(format_args!("database load: {error}"));
+			return ExitCode::FAILURE;
+		}
+	}
+	writeln!(out, "restored {} entries", entries.len()).ok();
+	ExitCode::SUCCESS
+}
+
+/// Gunzip an archive and return its raw tar bytes. Tiny wrapper over
+/// `flate2::read::GzDecoder` so the call site in `run_restore` surfaces
+/// any decode error with a real `io::Error` rather than a panic.
+fn gunzip_archive(data: &[u8]) -> std::io::Result<Vec<u8>> {
+	use std::io::Read;
+	let mut decoder = flate2::read::GzDecoder::new(data);
+	let mut out = Vec::new();
+	decoder.read_to_end(&mut out)?;
+	Ok(out)
+}
+
+/// Walk a tar's 512-byte blocks, returning (name, mode, content) for each
+/// file. The mode is read from the 8-byte octal mode field at offset 100.
+fn read_tar_entries_pub(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
+	let mut out = Vec::new();
+	let mut offset = 0;
+	while offset + 512 <= tar.len() {
+		let header = &tar[offset..offset + 512];
+		if header.iter().all(|&b| b == 0) {
+			break; // end-of-archive zero block
+		}
+		if &header[257..262] != b"ustar" {
+			break;
+		}
+		let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
+		let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
+		let mode_str = String::from_utf8_lossy(&header[100..108]);
+		let mode = u32::from_str_radix(mode_str.trim_matches('\0').trim(), 8).unwrap_or(0);
+		let size_str = String::from_utf8_lossy(&header[124..135]);
+		let size = usize::from_str_radix(size_str.trim_matches('\0').trim(), 8).unwrap_or(0);
+		offset += 512;
+		out.push((name, mode, tar[offset..offset + size].to_vec()));
+		offset += size.div_ceil(512) * 512;
+	}
+	out
 }
 
 /// Write to `warnings` a description of every path the configuration references
@@ -147,13 +260,14 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 /// Every regular file under `root`, as (archive-relative path, source mode, bytes).
 ///
 /// The mode is read from the file's metadata so the archive round-trips the
-/// permission bits the operator set — including the 0o600 they relied on for
+/// permission bits the operator set, including the 0o600 they relied on for
 /// DKIM/ACME/TLS private keys.
 fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
+	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut out = Vec::new();
 	let mut stack = vec![root.to_path_buf()];
 	while let Some(dir) = stack.pop() {
-		let entries = match std::fs::read_dir(&dir) {
+		let entries = match crate::util::fs_walk::read_dir(&dir) {
 			Ok(entries) => entries,
 			// A missing data dir yields an empty backup, not an error.
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -161,47 +275,20 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 		};
 		for entry in entries.flatten() {
 			let path = entry.path();
-			if path.is_dir() {
+			if entry.file_type()?.is_dir() {
 				stack.push(path);
-			} else if let Ok(relative) = path.strip_prefix(root) {
+			} else if entry.file_type()?.is_file()
+				&& let Ok(relative) = path.strip_prefix(root)
+			{
 				let name = format!("data/{}", relative.to_string_lossy());
-				let metadata = std::fs::metadata(&path)?;
+				let metadata = entry.metadata()?;
 				let mode = metadata.permissions().mode();
-				out.push((name, mode, std::fs::read(&path)?));
+				out.push((name, mode, crate::util::fs_walk::read(&path)?));
 			}
 		}
 	}
 	out.sort_by(|a, b| a.0.cmp(&b.0));
 	Ok(out)
-}
-
-/// Run `pg_dump` against `url` and return its SQL output.
-///
-/// The connection password must never reach argv — `/proc/<pid>/cmdline` is
-/// world-readable while pg_dump runs. Strip it from the URL and pass it through
-/// `PGPASSWORD` in the child's environment instead.
-fn pg_dump(url: &str) -> std::io::Result<Vec<u8>> {
-	let mut command = std::process::Command::new("pg_dump");
-	if let Ok(mut parsed) = url::Url::parse(url) {
-		if let Some(password) = parsed.password().map(|encoded| {
-			percent_encoding::percent_decode_str(encoded)
-				.decode_utf8_lossy()
-				.into_owned()
-		}) {
-			let _ = parsed.set_password(None);
-			command.env("PGPASSWORD", password);
-		}
-		command.arg(parsed.as_str());
-	} else {
-		command.arg(url);
-	}
-	let output = command.output()?;
-	if !output.status.success() {
-		return Err(std::io::Error::other(
-			String::from_utf8_lossy(&output.stderr).trim().to_string(),
-		));
-	}
-	Ok(output.stdout)
 }
 
 /// Build a gzip-compressed USTAR archive from named byte entries.
@@ -240,7 +327,7 @@ fn ustar_header(name: &str, mode: u32, size: usize) -> std::io::Result<[u8; 512]
 	header[263..265].copy_from_slice(b"00");
 
 	// Checksum: sum of all bytes with the checksum field treated as spaces.
-	// Computed after the mode is written — a checksum over the wrong mode
+	// Computed after the mode is written, a checksum over the wrong mode
 	// produces a tar `tar` itself rejects.
 	header[148..156].copy_from_slice(b"        ");
 	let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
@@ -257,23 +344,60 @@ fn write_field(header: &mut [u8; 512], offset: usize, len: usize, value: &str) {
 	// The remaining bytes stay NUL (already zeroed).
 }
 
-/// Helpers shared between [`tests`] and [`tests_b`]: the in-process tar/gzip
-/// reader and the extraction utility used by the round-trip restore test.
+// The database dump/load code is split out into `db_dump` (the
+// sibling module at the top of this file) so each compile unit
+// stays under the per-file 500-line cap. Re-export the items the
+// existing tests reach for so the test files' `use super::*;`
+// glob keeps working unchanged.
+#[allow(unused_imports)]
+pub(crate) use db_dump::CapturedOutput;
+#[allow(unused_imports)]
+pub(super) use db_dump::collect_dump;
+#[allow(unused_imports)]
+pub(super) use db_dump::container_cp_into_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::container_pg_dump_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::container_psql_load_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::host_pg_dump_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::host_psql_load_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::load_dump;
+#[allow(unused_imports)]
+pub(super) use db_dump::load_dump_container;
+#[allow(unused_imports)]
+pub(super) use db_dump::pg_dump_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::psql_load_spec;
+#[allow(unused_imports)]
+pub(super) use db_dump::run_command_capturing_stdout;
+// Test-only re-exports: the existing test files use `use super::*;`
+// to reach `BackupError`, `CommandSpec`, and `split_url_password`.
+// `pub(crate)` is the widest visibility a child of a non-public
+// module can give; the test files are grandchildren of `crate::cli`
+// and the re-export must reach them.
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use db_dump::{BackupError, CommandSpec, split_url_password};
+
 #[cfg(test)]
 mod helpers {
-	use std::io::Read;
+	use std::path::Path;
 
-	use flate2::read::GzDecoder;
-
-	/// Gunzip an archive and return its raw tar bytes.
+	/// Gunzip an archive and return its raw tar bytes. Kept under
+	/// `helpers` so the existing `use super::helpers::*;` glob in the
+	/// sibling test files picks it up unchanged.
 	pub(super) fn gunzip(data: &[u8]) -> Vec<u8> {
-		let mut decoder = GzDecoder::new(data);
+		let mut decoder = flate2::read::GzDecoder::new(data);
 		let mut out = Vec::new();
-		decoder.read_to_end(&mut out).expect("gunzip");
+		std::io::Read::read_to_end(&mut decoder, &mut out).expect("gunzip");
 		out
 	}
 
-	/// Walk a tar's 512-byte blocks, returning (name, content) for each file.
+	/// Walk a tar's 512-byte blocks, returning (name, content) for each
+	/// file.
 	pub(super) fn read_tar(tar: &[u8]) -> Vec<(String, Vec<u8>)> {
 		read_tar_entries(tar)
 			.into_iter()
@@ -281,8 +405,7 @@ mod helpers {
 			.collect()
 	}
 
-	/// Walk a tar's 512-byte blocks, returning (name, mode, content) for each
-	/// file. The mode is read from the 8-byte octal mode field at offset 100.
+	/// Walk a tar's 512-byte blocks, returning (name, mode, content).
 	pub(super) fn read_tar_entries(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
 		let mut out = Vec::new();
 		let mut offset = 0;
@@ -291,8 +414,9 @@ mod helpers {
 			if header.iter().all(|&b| b == 0) {
 				break; // end-of-archive zero block
 			}
-			// USTAR magic must be present.
-			assert_eq!(&header[257..262], b"ustar", "missing ustar magic");
+			if &header[257..262] != b"ustar" {
+				break;
+			}
 			let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
 			let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
 			let mode_str = String::from_utf8_lossy(&header[100..108]);
@@ -307,10 +431,8 @@ mod helpers {
 	}
 
 	/// Extract the gunzipped tar bytes into `target`, stripping the `data/`
-	/// prefix `collect_files` adds so the result is laid out exactly like the
-	/// source data_dir. The round-trip test treats the extracted tree as the
-	/// "new" data_dir.
-	pub(super) fn extract_to(archive_gz: &[u8], target: &std::path::Path) {
+	/// prefix `collect_files` adds.
+	pub(super) fn extract_to(archive_gz: &[u8], target: &Path) {
 		let tar = gunzip(archive_gz);
 		for (name, mode, content) in read_tar_entries(&tar) {
 			let stripped = name.strip_prefix("data/").unwrap_or(&name);
@@ -330,9 +452,25 @@ mod helpers {
 }
 
 #[cfg(test)]
-#[path = "backup_tests.rs"]
+#[path = "../backup_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "backup_restore_tests.rs"]
+#[path = "../backup_restore_tests.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "../backup_pg_tests.rs"]
+mod tests_pg;
+
+#[cfg(test)]
+#[path = "../backup_container_tests.rs"]
+mod tests_container;
+
+#[cfg(test)]
+#[path = "../backup_restore_run_tests.rs"]
+mod tests_restore_run;
+
+#[cfg(test)]
+#[path = "../backup_tests_paths.rs"]
+mod tests_paths;

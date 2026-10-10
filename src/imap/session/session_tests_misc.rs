@@ -32,9 +32,25 @@ fn plaintext_session_disables_login_until_starttls() {
 }
 
 #[test]
-fn namespace_returns_personal_namespace() {
+fn namespace_before_auth_returns_bad_with_no_listing() {
+	// RFC 2342 / RFC 9051 §6.3.5: NAMESPACE is post-auth. Pre-auth it must
+	// fail with BAD/NO and not publish any untagged NAMESPACE response, so
+	// a peeking client cannot probe the server's namespace layout before
+	// logging in.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
+	let output = session.command_line("a1 NAMESPACE");
+	let response = text(&output);
+	assert_eq!(
+		response, "a1 NO not authenticated\r\n",
+		"pre-auth NAMESPACE must NOT list anything and MUST refuse the command"
+	);
+}
+
+#[test]
+fn namespace_after_auth_lists_personal_namespace() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
 	let output = session.command_line("a1 NAMESPACE");
 	let response = text(&output);
 	assert!(
@@ -329,7 +345,7 @@ fn examine_is_read_only() {
 fn unknown_mailbox_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
-	let output = session.command_line("a2 SELECT Archive");
+	let output = session.command_line("a2 SELECT Missing");
 	assert!(text(&output).contains("a2 NO"));
 }
 
@@ -396,7 +412,7 @@ fn status_requires_authentication_and_existing_mailbox() {
 	assert!(text(&output).contains("a1 NO"), "{}", text(&output));
 
 	let mut session = logged_in(dir.path());
-	let output = session.command_line("a2 STATUS Archive (MESSAGES)");
+	let output = session.command_line("a2 STATUS Missing (MESSAGES)");
 	assert!(text(&output).contains("a2 NO"), "{}", text(&output));
 }
 
@@ -428,6 +444,7 @@ fn subscribe_and_lsub_flow() {
 fn list_extended_subscribed_selection_and_attribute() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
+	session.command_line("rev ENABLE IMAP4rev2");
 	session.command_line("a2 CREATE Sent");
 	session.command_line("a3 SUBSCRIBE Sent");
 
@@ -457,6 +474,7 @@ fn list_advertises_has_no_children() {
 	// for every mailbox.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
+	session.command_line("rev ENABLE IMAP4rev2");
 	session.command_line("a2 CREATE Sent");
 	session.command_line("a3 CREATE Work");
 

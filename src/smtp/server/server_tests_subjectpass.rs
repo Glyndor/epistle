@@ -478,3 +478,6 @@ async fn a_scanner_quarantine_with_subjectpass_does_not_challenge_again() {
 		"only the scanner's spam training call must happen"
 	);
 }
+
+#[path = "server_tests_subjectpass_recipients.rs"]
+mod recipients;

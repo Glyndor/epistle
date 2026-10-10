@@ -9,6 +9,8 @@ pub mod command;
 #[cfg(test)]
 mod command_tests;
 pub mod directory;
+#[cfg(test)]
+pub mod directory_scram_test_counter;
 pub mod diskspace;
 pub mod line;
 pub mod ratelimit;

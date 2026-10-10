@@ -141,6 +141,36 @@ pub enum PlanStep {
 		/// addresses that survive.
 		kept: bool,
 	},
+	/// The database password file. Only listed when
+	/// `services.database` is `true`. Reused on a re-run when the
+	/// file is already there and non-empty; rotated by hand
+	/// (delete the file, rerun `init`) when the operator wants a
+	/// fresh value.
+	DbPassword {
+		/// Path the password file will live at.
+		path: PathBuf,
+		/// `true` when the file already exists and is non-empty
+		/// and `init` will not touch it.
+		reused: bool,
+	},
+	/// The compose file `podup` brings up. Always listed; the
+	/// compose file is written whether or not the database
+	/// service is on, because the `mail` service is the same in
+	/// both cases. The plan tells the operator whether the file
+	/// will be written from scratch, updated to a new value, or
+	/// left identical.
+	ComposeFile {
+		/// Path the compose file will live at.
+		path: PathBuf,
+		/// `true` when the existing compose file matches the
+		/// desired one byte for byte and `init` will not touch
+		/// it. The plan says `identical, not touched`.
+		identical: bool,
+		/// `true` when the file already exists on disk and the
+		/// apply phase will overwrite it (the operator sees
+		/// `update` instead of `write`).
+		file_exists: bool,
+	},
 }
 
 /// One line in the `Listeners` plan step. Carries the kind, the
@@ -287,6 +317,26 @@ impl fmt::Display for PlanStep {
 						)?;
 					}
 					Ok(())
+				}
+			}
+			PlanStep::DbPassword { path, reused } => {
+				let verb = if *reused { "reuse" } else { "generate" };
+				write!(f, "database password: {verb} {}", path.display())
+			}
+			PlanStep::ComposeFile {
+				path,
+				identical,
+				file_exists,
+			} => {
+				if *identical {
+					write!(
+						f,
+						"compose file: identical, not touched ({})",
+						path.display()
+					)
+				} else {
+					let verb = if *file_exists { "update" } else { "write" };
+					write!(f, "compose file: {verb} {}", path.display())
 				}
 			}
 		}

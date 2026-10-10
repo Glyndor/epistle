@@ -1,8 +1,9 @@
 # CLI reference
 
 All administration is done through the `epistle` command. Every command that needs
-configuration takes `--config <FILE>`. Run `epistle <command> --help` for the exact
-flags.
+configuration defaults to `/etc/epistle/mail.toml`. Use `--config <FILE>` to
+select another file, for example `epistle accounts --config /path/to/mail.toml`.
+Run `epistle <command> --help` for the exact flags.
 
 ## Output
 
@@ -23,8 +24,9 @@ an escape sequence or spinner frame were ever written there, so they are pinned 
 
 | Command | stdout payload |
 |---|---|
-| `epistle backup --config F` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). |
-| `epistle export --config F --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
+| `epistle backup` | A gzip-compressed tar of `data_dir` (and a `pg_dump` when configured). The `pg_dump` is taken inside the `db` service with `podup exec -T db pg_dump` when `<data_dir>/compose/compose.yaml` exists, and through the host `pg_dump` otherwise. |
+| `epistle restore` | Replay a backup tar.gz (read from stdin) over `data_dir` and, when a database is configured, into the database. Reads the archive from stdin; a configured database that cannot be loaded is a hard error. |
+| `epistle export --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
 | `epistle storage-keygen` | A single base64 32-byte at-rest key. |
 | `epistle oauth-keygen` | A PKCS#8 ES256 private key plus the matching public point. |
 
@@ -39,10 +41,10 @@ force a specific look in a script:
 
 ```sh
 # Coloured status, plain stdout data:
-epistle backup --config /etc/mail.toml > backup.tar.gz
+epistle backup > backup.tar.gz
 
 # Plain everywhere, for a log file:
-NO_COLOR=1 epistle backup --config /etc/mail.toml > backup.tar.gz
+NO_COLOR=1 epistle backup > backup.tar.gz
 ```
 
 Progress is a single line on stderr (one tick per message for `import`, one tick
@@ -54,12 +56,103 @@ printed once at the end.
 
 | Command | What it does |
 |---|---|
-| `epistle serve --config F` | Bind the configured listeners and run. |
+| `epistle serve` | Bind the configured listeners and run. |
 | `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
-| `epistle config-check --config F` | Validate the configuration and exit. |
-| `epistle verify --config F` | Check on-disk data integrity (run before an upgrade). |
+| `epistle config-check` | Validate the configuration and exit. |
+| `epistle verify` | Check on-disk data integrity (run before an upgrade). |
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
+
+## Stack (`epistle stack`)
+
+Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).
+With the repository configured, the production sequence is:
+
+```sh
+sudo apt install epistle
+sudo epistle init
+sudo epistle stack up
+sudo epistle stack ps
+```
+
+Init writes `/etc/epistle/mail.toml` and
+`<data_dir>/compose/compose.yaml`. Stack defaults to that config path;
+`--config F` selects another file and works before or after the subcommand.
+When invoked as root, init and every administration command that takes
+`--config` run as `glyndor-epistle`, using its home directory and rootless
+Podman environment. This includes account, password, API key, backup,
+archive, and configuration-reading commands. The service manager runs
+`serve` and `mta-sts-serve` directly; key generation, token hashing, help,
+version, and the local test harness use the invoking user. If its user runtime
+is absent, run `sudo loginctl enable-linger glyndor-epistle` and retry.
+Use absolute paths for file arguments when invoking administration commands with sudo.
+
+Stack requires podup 5.10.13 or newer. A failed podup command stops the
+sequence and its exit code becomes epistle's exit code.
+
+| Command | What it does |
+|---|---|
+| `sudo epistle stack up` | Runs `podup up -d`, then `podup autostart install` to enable and start the project's user service. It returns after starting; the service brings the stack back after reboot. |
+| `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`. Database volumes and bind-mounted data are kept. |
+| `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
+| `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
+| `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack update` | Refreshes the default mail image, runs `podup pull`, then `podup up -d` to recreate changed services while retaining data. |
+
+Keep container customizations in
+`<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
+permissions. Every stack invocation passes `-f compose.yaml`, then
+`-f compose.override.yaml` when it exists; later values override the base.
+Init regenerates the base file on reruns. Run stack up again after adding or
+removing an override so the autostart unit records the current file list.
+
+The default mail image is `ghcr.io/glyndor/epistle:<full CLI version>`.
+An explicit `image` in the init answers remains operator-owned during
+updates; an image in the compose override also remains effective.
+The generated base records image ownership in `x-epistle-managed-image`.
+Legacy base files without that marker migrate the official floating
+`major.minor` image to the current exact pin. If an older answers file
+explicitly selected that same floating tag, rerun init with those answers
+before upgrading to record that choice.
+
+Apt upgrades refresh the stack only when `podup-epistle.service` exists
+and is enabled for `glyndor-epistle`. Failures print a warning and leave
+the package installed; retry with `sudo epistle stack update`. Stacks
+disabled with `stack down` stay disabled until `stack up`.
+
+## Backup and restore
+
+`epistle backup --config F` writes a gzip-compressed tar to stdout
+(the same archive the `Backup` table at the top of this document
+describes) and `epistle restore --config F` replays one back onto
+the data directory. Both detect the container stack by looking for
+`<data_dir>/compose/compose.yaml` and route the database work
+through `podup exec -T db` in that case, so the same command line
+works on the host and inside the container deployment:
+
+- **host** (no compose file): the host `pg_dump`/`psql` is invoked
+  directly. The password reaches the child through the `PGPASSWORD`
+  environment variable (read from `[database] url` or `[database]
+  password_file`), never through argv, so the secret is never visible
+  through `/proc/<pid>/cmdline`. A missing or empty `password_file`,
+  a non-zero exit, or empty output is a hard error: the run exits
+  non-zero with a one-line stderr message that names the cause.
+- **container** (compose file present): the dump runs through
+  `podup -f <compose> exec -T db sh -c <script>`. Restore copies the SQL
+  with `podup cp <host> db:/tmp/epistle-restore.sql`, then runs `psql`
+  through the same container shell with `-v ON_ERROR_STOP=1 -1 -X -f
+  /tmp/epistle-restore.sql`. Each script reads
+  `/run/secrets/epistle_db_password` into `PGPASSWORD` inside `db`
+  before executing the client. `POSTGRES_PASSWORD_FILE` is read by
+  the image entrypoint during initialization, not by libpq. The host
+  argv contains the shell script and secret path, never the password
+  value, and the host process does not load the password. Restore
+  stops at the first SQL error and rolls back the single transaction.
+
+`podup exec` does not forward stdin (measured against `podup 5.10.13`),
+which is why the restore path uses `podup cp` to land the SQL file
+inside the `db` container rather than `psql < archive.sql`. The temp
+file on the host is created in `$TMPDIR` and removed after the copy.
 
 ## `epistle mta-sts-serve`
 
@@ -242,26 +335,26 @@ scope here):
 
 | Command | What it does |
 |---|---|
-| `epistle accounts --config F` | List configured accounts. |
-| `epistle account-add --config F --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
-| `epistle account-remove --config F --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
-| `epistle app-password-create --config F --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
-| `epistle app-passwords --config F [--account N]` | List app passwords (label, expiry, IP restriction). |
-| `epistle app-password-revoke --config F --account N --label L` | Revoke an app password. |
-| `epistle api-key-create --config F --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
-| `epistle api-keys --config F` | List API keys (label, expiry, IP restriction). |
-| `epistle api-key-revoke --config F --label L` | Revoke an API key. |
+| `epistle accounts` | List configured accounts. |
+| `epistle account-add --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
+| `epistle account-remove --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
+| `epistle app-password-create --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
+| `epistle app-passwords [--account N]` | List app passwords (label, expiry, IP restriction). |
+| `epistle app-password-revoke --account N --label L` | Revoke an app password. |
+| `epistle api-key-create --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
+| `epistle api-keys` | List API keys (label, expiry, IP restriction). |
+| `epistle api-key-revoke --label L` | Revoke an API key. |
 
 ## Mail in and out
 
 | Command | What it does |
 |---|---|
-| `epistle export --config F --account N` | Export an account's mailboxes as an mbox stream on stdout. |
-| `epistle import --config F --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
-| `epistle queue --config F` | List the outbound delivery queue. |
-| `epistle suppression --config F [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
-| `epistle report-abuse --config F` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
-| `epistle reports --config F [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+| `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
+| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
+| `epistle queue` | List the outbound delivery queue. |
+| `epistle suppression [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
+| `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
+| `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
 ## Expunged-message archive
 
@@ -273,9 +366,9 @@ configured window.
 
 | Command | What it does |
 |---|---|
-| `epistle archive list --config F <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
-| `epistle archive restore --config F <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
-| `epistle archive purge --config F <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
+| `epistle archive list <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
+| `epistle archive restore <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
+| `epistle archive purge <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
 
 ## Client autodiscovery
 
@@ -287,10 +380,10 @@ the [configuration reference](configuration.md)) and pointing the
 
 | Command | What it does |
 |---|---|
-| `epistle srv-records --config F` | Print the RFC 6186 SRV records to publish in DNS. |
-| `epistle autoconfig --config F [--domain D]` | Thunderbird autoconfig XML — host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
-| `epistle autodiscover --config F [--domain D]` | Microsoft Autodiscover v1 XML — host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
-| `epistle mobileconfig --config F --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |
+| `epistle srv-records` | Print the RFC 6186 SRV records to publish in DNS. |
+| `epistle autoconfig [--domain D]` | Thunderbird autoconfig XML, host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
+| `epistle autodiscover [--domain D]` | Microsoft Autodiscover v1 XML, host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
+| `epistle mobileconfig --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |
 
 ## Outbound retry policy
 

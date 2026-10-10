@@ -60,16 +60,16 @@ impl AppPassword {
 
 /// The TOML document: account name → its app passwords.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct AppPasswordFile {
+pub(crate) struct AppPasswordFile {
 	/// `[accounts.<name>]` tables, each a list under `passwords`.
 	#[serde(default)]
-	accounts: HashMap<String, AccountEntry>,
+	pub(crate) accounts: HashMap<String, AccountEntry>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct AccountEntry {
+pub(crate) struct AccountEntry {
 	#[serde(default)]
-	passwords: Vec<AppPassword>,
+	pub(crate) passwords: Vec<AppPassword>,
 }
 
 /// Filesystem-backed store of per-account app passwords.

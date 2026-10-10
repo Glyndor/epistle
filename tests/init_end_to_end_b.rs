@@ -35,7 +35,8 @@ fn run_init(answers: &Path) -> std::process::Output {
 fn init_refuses_api_service_in_answers_before_writing_keys() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -45,7 +46,7 @@ fn init_refuses_api_service_in_answers_before_writing_keys() {
 		 [services]\n\
 		 imap = true\n\
 		 submission = true\n\
-		 api = true\n",
+		 api = true\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -76,7 +77,8 @@ fn init_refuses_api_service_in_answers_before_writing_keys() {
 fn dry_run_refuses_api_service_in_answers() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -86,7 +88,7 @@ fn dry_run_refuses_api_service_in_answers() {
 		 [services]\n\
 		 imap = true\n\
 		 submission = true\n\
-		 api = true\n",
+		 api = true\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -120,7 +122,8 @@ fn dry_run_refuses_api_service_in_answers() {
 fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let keys_dir = data_dir.join("keys");
 	// `storage::write_secret` stages to a sibling `.secret.tmp`; a
 	// directory at that exact path makes the storage-key write fail
@@ -132,7 +135,7 @@ fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -181,13 +184,14 @@ fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
 fn init_refuses_when_only_oauth_public_survives() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -233,13 +237,14 @@ fn init_refuses_when_only_oauth_public_survives() {
 fn init_derives_missing_oauth_public_from_existing_private() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -284,13 +289,14 @@ fn init_derives_missing_oauth_public_from_existing_private() {
 fn init_rebuilds_cert_from_existing_key_when_only_key_survives() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -335,13 +341,14 @@ fn init_rebuilds_cert_from_existing_key_when_only_key_survives() {
 fn init_refuses_when_only_self_signed_cert_survives() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

@@ -58,6 +58,10 @@ pub fn scram_directory() -> Arc<Directory> {
 mod acl;
 #[path = "session_tests_auth.rs"]
 mod auth;
+#[path = "session_tests_auth_ban_lifecycle.rs"]
+mod auth_ban_lifecycle;
+#[path = "session_tests_auth_bans.rs"]
+mod auth_bans;
 #[path = "session_tests_basic.rs"]
 mod basic;
 #[path = "session_tests_commands.rs"]
@@ -72,3 +76,55 @@ mod metadata;
 mod misc;
 #[path = "session_tests_search.rs"]
 mod search;
+
+#[path = "session_tests_rev1.rs"]
+mod rev1;
+
+#[path = "session_tests_rev1_recent.rs"]
+mod rev1_recent;
+
+#[path = "session_tests_rev1_search.rs"]
+mod rev1_search;
+
+#[path = "session_tests_rev1_check.rs"]
+mod rev1_check;
+
+#[path = "session_tests_rev1_list.rs"]
+mod rev1_list;
+
+#[path = "session_tests_rev1_flow.rs"]
+mod rev1_flow;
+
+#[path = "session_tests_rfc9051_select.rs"]
+mod rfc9051_select;
+
+#[path = "session_tests_rfc5182_searchres.rs"]
+mod rfc5182_searchres;
+
+#[path = "session_tests_rfc9051_uid_star.rs"]
+mod rfc9051_uid_star;
+
+#[path = "session_tests_rfc9051_poll.rs"]
+mod rfc9051_poll;
+
+#[cfg(test)]
+#[path = "session_tests_default_mailboxes.rs"]
+mod default_mailboxes;
+
+#[path = "session_tests_fetch_envelope.rs"]
+mod fetch_envelope;
+
+#[path = "session_tests_fetch_structure.rs"]
+mod fetch_structure;
+
+#[path = "session_tests_fetch_sections.rs"]
+mod fetch_sections;
+
+#[path = "session_tests_fetch_aliases.rs"]
+mod fetch_aliases;
+
+#[path = "session_tests_fetch_edges.rs"]
+mod fetch_edges;
+
+#[path = "session_tests_fetch_depth.rs"]
+mod fetch_depth;

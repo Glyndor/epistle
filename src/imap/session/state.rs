@@ -20,6 +20,13 @@ pub struct Output {
 	/// `APPEND`/`REPLACE`; `None` otherwise). When set, the network layer
 	/// reads exactly that many bytes before invoking the session again.
 	pub collect_literal: Option<usize>,
+	/// Size of a non-synchronizing literal whose bytes were sent by the
+	/// client even though the server is rejecting the command (RFC 7888
+	/// §4). The network layer reads and discards this many bytes so the
+	/// payload does not arrive as the next command line. Mutually
+	/// exclusive with `collect_literal`: a command either accepts the
+	/// literal and stores it, or rejects it and discards it.
+	pub discard_literal: Option<usize>,
 	/// Whether the session is now in the IDLE state; the network layer
 	/// expects `DONE` or a 29-minute timeout before resuming the pump.
 	pub idle: bool,
@@ -40,6 +47,7 @@ impl Output {
 			bytes: text.into_bytes(),
 			close: false,
 			collect_literal: None,
+			discard_literal: None,
 			idle: false,
 			upgrade_tls: false,
 			compress: false,
@@ -103,6 +111,8 @@ pub struct Session {
 	/// UIDONLY (RFC 9586) enabled: sequence-number commands are refused and
 	/// responses use UID forms (UIDFETCH, VANISHED).
 	pub(super) uidonly: bool,
+	/// Revision negotiated for the lifetime of this connection (RFC 9051 Appendix A).
+	pub(super) imap4rev2: bool,
 	pub(super) idle_tag: Option<String>,
 	/// NOTIFY (RFC 5465) events requested for the selected mailbox. `None` means
 	/// NOTIFY is not active; an empty set means notifications are explicitly off.
@@ -152,11 +162,15 @@ pub struct Session {
 /// A SEARCHRES-saved result set (RFC 5182).
 #[derive(Debug, Clone)]
 pub struct SavedSearch {
-	/// `true` if the saved values are UIDs (UID SEARCH); `false` for sequence
-	/// numbers from a plain SEARCH.
+	/// `true` if the SAVING SEARCH was a UID SEARCH; `false` for a plain
+	/// SEARCH. The flag exists so the consuming command can reject a
+	/// kind-mismatched $ reference (see `Session::saved_search_ok`); the
+	/// stored values are always UIDs regardless, so the saved entries
+	/// continue to reference the same messages across expunges (§2.1).
 	pub are_uids: bool,
-	/// The matched identifiers (sequence numbers or UIDs).
-	pub values: Vec<u32>,
+	/// UIDs of the messages that matched the SAVING SEARCH, sorted by UID.
+	/// Expunged messages disappear automatically; new messages do not.
+	pub uids: Vec<u32>,
 }
 
 /// Default per-account storage quota in bytes (5 GiB).
@@ -206,6 +220,7 @@ impl Session {
 			state: State::NotAuthenticated { login_failures: 0 },
 			pending_append: None,
 			uidonly: false,
+			imap4rev2: false,
 			idle_tag: None,
 			notify_selected: None,
 			tls_active: true,

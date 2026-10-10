@@ -92,14 +92,15 @@ pub async fn send(
 		}
 	};
 
-	// Rolling 24h cap on first-time recipients (plan 4.10). Same
-	// helper as the SMTP session uses, so the three submission paths
-	// compute the same number. Only when both the cap and the store
-	// are configured does the check fire; an unset pair short-circuits
-	// to "no cap" rather than failing closed.
+	// Reserve correspondents under the same account lock as SMTP and JMAP.
+	// Recording also runs without a cap so inbound replies remain known.
 	let recipient_refs: Vec<&str> = request.to.iter().map(String::as_str).collect();
-	if let (Some(store), Some(limit)) = (state.correspondents(), state.new_recipients_per_day()) {
-		match store.enforce_new_recipient_cap(&account, &recipient_refs, Some(limit)) {
+	if let Some(store) = state.correspondents() {
+		match store.enforce_new_recipient_cap(
+			&account,
+			&recipient_refs,
+			state.new_recipients_per_day(),
+		) {
 			Ok(CapOutcome::Limited {
 				new,
 				already,
@@ -110,9 +111,7 @@ pub async fn send(
 					NEW_RECIPIENT_LIMIT_MESSAGE,
 				));
 			}
-			Ok(CapOutcome::Allowed { .. } | CapOutcome::Uncapped) => {
-				let _ = store.record(&account, &recipient_refs);
-			}
+			Ok(CapOutcome::Allowed { .. } | CapOutcome::Uncapped) => {}
 			Err(error) => {
 				tracing::warn!(account = %account, %error, "correspondent store error; accepting");
 			}
@@ -143,6 +142,7 @@ pub async fn send(
 		data,
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	let id = state

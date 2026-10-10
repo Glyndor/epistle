@@ -195,7 +195,7 @@ fn append_requires_authentication_and_known_mailbox() {
 	assert_eq!(output.collect_literal, None);
 
 	let mut session = logged_in(dir.path());
-	let output = session.command_line("a2 APPEND Archive {5}");
+	let output = session.command_line("a2 APPEND Missing {5}");
 	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
 }
 
@@ -371,25 +371,25 @@ fn mailbox_lifecycle() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 
-	let output = session.command_line("a2 CREATE Sent");
+	let output = session.command_line("a2 CREATE Work");
 	assert!(text(&output).contains("a2 OK"), "{}", text(&output));
 
 	// APPEND into the new mailbox works now.
-	let output = session.command_line("a3 APPEND Sent {10}");
+	let output = session.command_line("a3 APPEND Work {10}");
 	assert_eq!(output.collect_literal, Some(10));
 	let output = session.literal_done(b"sent body\n");
 	assert!(text(&output).contains("a3 OK"), "{}", text(&output));
 
-	let output = session.command_line("a4 SELECT Sent");
+	let output = session.command_line("a4 SELECT Work");
 	assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
 	session.command_line("a5 CLOSE");
 
 	let output = session.command_line(r#"a6 LIST "" "*""#);
 	let response = text(&output);
 	assert!(response.contains("\"INBOX\""), "{response}");
-	assert!(response.contains("\"Sent\""), "{response}");
+	assert!(response.contains("\"Work\""), "{response}");
 
-	let output = session.command_line("a7 RENAME Sent Outbox");
+	let output = session.command_line("a7 RENAME Work Outbox");
 	assert!(text(&output).contains("a7 OK"), "{}", text(&output));
 	let output = session.command_line("a8 SELECT Outbox");
 	assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
@@ -492,6 +492,75 @@ fn replace_rejects_unknown_source_and_no_selection() {
 		text(&output)
 	);
 	assert_eq!(output.collect_literal, None);
+}
+
+/// REPLACE (RFC 8508) must resolve the target to a UID at command
+/// start: a concurrent expunge that reorders the snapshot between
+/// `REPLACE` and its literal would otherwise let the trailing
+/// `remove_at(seq)` silently delete a different message. The test
+/// simulates the race by appending a new message and expunging the
+/// original target between `REPLACE 1` and `literal_done`, then
+/// asserts the survivor (m2) is still on disk.
+#[test]
+fn replace_with_concurrent_expunge_keeps_its_target() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), b"Subject: one\r\n\r\nfirst\r\n");
+	deliver(dir.path(), b"Subject: two\r\n\r\nsecond\r\n");
+	let mut session = logged_in(dir.path());
+	session.command_line("a2 SELECT INBOX");
+
+	// REPLACE message 1 (uid=1, "one"). The session resolves
+	// `sequence=1` to a UID but does not start the literal read
+	// until the test returns to the event loop.
+	let output = session.command_line("a3 REPLACE 1 INBOX {23}");
+	assert_eq!(output.collect_literal, Some(23));
+
+	// Simulate a concurrent session expunging the target. We do
+	// this on disk (deliver a new message then ask the IMAP
+	// session to expunge it) so the next snapshot the server reads
+	// reorders the surviving messages.
+	deliver(dir.path(), b"Subject: three\r\n\r\nthird\r\n");
+	session.command_line("a4 STORE 1 +FLAGS (\\Deleted)");
+	session.command_line("a5 EXPUNGE");
+	// The mailbox now has: two (uid=2), three (uid=3) at seq=1,2.
+	// With the bug, REPLACE 1's stored seq=1 would now mean
+	// "two" and delete it.
+
+	let output = session.literal_done(b"Subject: new\r\n\r\nfresh\r\n");
+	let response = text(&output);
+	assert!(
+		response.contains("REPLACE completed"),
+		"REPLACE should still complete when the target is already gone: {response}"
+	);
+
+	// The survivor ("two") must still be on disk; the new
+	// message ("new") is the replacement; "three" survives. The
+	// file system check is the real assertion: "two" is the message
+	// REPLACE would have wrongly deleted.
+	let inbox = dir.path().join("accounts/alice/new");
+	let subjects: Vec<String> = std::fs::read_dir(&inbox)
+		.unwrap()
+		.filter_map(|e| e.ok())
+		.filter_map(|e| std::fs::read_to_string(e.path()).ok())
+		.map(|body| {
+			body.lines()
+				.find(|l| l.starts_with("Subject: "))
+				.unwrap_or("")
+				.to_string()
+		})
+		.collect();
+	assert!(
+		subjects.iter().any(|s| s == "Subject: two"),
+		"survivor Subject: two must NOT have been deleted; saw: {subjects:?}"
+	);
+	assert!(
+		subjects.iter().any(|s| s == "Subject: new"),
+		"the new replacement must be present; saw: {subjects:?}"
+	);
+	assert!(
+		!subjects.iter().any(|s| s == "Subject: one"),
+		"the original target Subject: one was already expunged: {subjects:?}"
+	);
 }
 
 #[test]

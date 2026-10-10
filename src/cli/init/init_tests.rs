@@ -8,7 +8,11 @@ fn template_deserialises_into_answers() {
 		hostname = \"mail.example.org\"\n\
 		domains = [\"example.org\"]\n\
 		data_dir = \"/var/lib/epistle\"\n\
-		config_path = \"/etc/epistle/mail.toml\"\n"
+		config_path = \"/etc/epistle/mail.toml\"\n\n\
+		[services]\n\
+		imap = true\n\
+		submission = true\n\
+		database = false\n"
 		.to_string();
 	let parsed: Answers = toml::from_str(&toml_text).expect("deserialise");
 	assert!(parsed.validate().is_ok());
@@ -29,14 +33,21 @@ fn print_answers_returns_the_template() {
 fn dry_run_writes_nothing() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let answers_file = dir.path().join("answers.toml");
+	// `data_dir` and the parent of `config_path` must be
+	// siblings so the compose file would not mount the same
+	// destination twice; the layout here is the production
+	// split (`/var/lib/epistle` next to `/etc/epistle`).
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let etc_dir = dir.path().join("etc");
+	let config_path = etc_dir.join("mail.toml");
 	let input = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -76,7 +87,9 @@ fn run_exits_2_when_plan_fails_and_nothing_was_touched() {
 	// stay absent.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
-	let config_path = dir.path().join("mail.toml");
+	let etc_dir = dir.path().join("etc");
+	std::fs::create_dir_all(&etc_dir).expect("mkdir etc");
+	let config_path = etc_dir.join("mail.toml");
 	std::fs::write(&config_path, "this is not = valid TOML\tbroken\n")
 		.expect("write unparseable config");
 	#[cfg(unix)]
@@ -91,7 +104,9 @@ fn run_exits_2_when_plan_fails_and_nothing_was_touched() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);
@@ -121,9 +136,9 @@ fn run_exits_1_when_apply_partially_fails() {
 	// and the self-signed cert, and then fails at the config step. The
 	// operator must see exit code 1.
 	let dir = tempfile::tempdir().expect("tempdir");
-	let blocker = dir.path().join("etc");
-	std::fs::write(&blocker, b"not a directory").expect("blocker");
-	let config_path = blocker.join("mail.toml");
+	let etc_dir = dir.path().join("etc");
+	std::fs::write(&etc_dir, b"not a directory").expect("blocker");
+	let config_path = etc_dir.join("mail.toml");
 	let data_dir = dir.path().join("data");
 	let answers_file = dir.path().join("answers.toml");
 	let body = format!(
@@ -131,7 +146,9 @@ fn run_exits_1_when_apply_partially_fails() {
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
 		 data_dir = \"{}\"\n\
-		 config_path = \"{}\"\n",
+		 config_path = \"{}\"\n\n\
+		 [services]\n\
+		 database = false\n",
 		data_dir.display(),
 		config_path.display(),
 	);

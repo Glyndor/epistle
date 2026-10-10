@@ -53,7 +53,7 @@ pub async fn flush_pending(
 	dns: &dyn crate::spf::DnsLookup,
 ) -> Vec<AcceptedMessage> {
 	let reports_root = data_dir.join("dmarc-reports");
-	let Ok(entries) = std::fs::read_dir(&reports_root) else {
+	let Ok(entries) = crate::util::fs_walk::read_dir(&reports_root) else {
 		return Vec::new();
 	};
 
@@ -66,13 +66,16 @@ pub async fn flush_pending(
 		};
 
 		let day_dir = entry.path();
-		let Ok(domain_files) = std::fs::read_dir(&day_dir) else {
+		let Ok(domain_files) = crate::util::fs_walk::read_dir(&day_dir) else {
 			continue;
 		};
 
 		let mut to_remove: Vec<PathBuf> = Vec::new();
 
 		for domain_entry in domain_files.flatten() {
+			if !domain_entry.file_type().is_ok_and(|kind| kind.is_file()) {
+				continue;
+			}
 			let path = domain_entry.path();
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
@@ -129,6 +132,7 @@ pub async fn flush_pending(
 					data: email_bytes,
 					require_tls: false,
 					mailbox: None,
+					tlsrpt_verified: false,
 					no_dsn: Vec::new(),
 				});
 			}

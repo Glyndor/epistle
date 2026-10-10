@@ -36,6 +36,8 @@ pub trait Backend {
 /// What the session wants written back; [`Response::encode`] renders the bytes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Response {
+	/// Empty SASL challenge, awaiting a client response.
+	Continuation,
 	/// `OK`, optionally with a human message.
 	Ok(Option<String>),
 	/// `NO`, optionally with a human message.
@@ -62,6 +64,7 @@ impl Response {
 	/// Encode to the exact bytes sent on the wire.
 	pub fn encode(&self) -> Vec<u8> {
 		match self {
+			Response::Continuation => b"\"\"\r\n".to_vec(),
 			Response::Ok(msg) => line("OK", msg.as_deref()),
 			Response::No(msg) => line("NO", msg.as_deref()),
 			Response::NoCode(code, msg) => format!("NO ({code}) {}\r\n", quoted(msg)).into_bytes(),
@@ -103,6 +106,7 @@ const MAX_AUTH_FAILURES: u8 = 3;
 /// One ManageSieve connection's protocol state.
 pub struct Session<B: Backend> {
 	backend: B,
+	pending_plain: bool,
 	tls: bool,
 	account: Option<String>,
 	/// Failed `AUTHENTICATE` attempts on this connection.
@@ -119,6 +123,7 @@ impl<B: Backend> Session<B> {
 	pub fn new(backend: B, tls: bool) -> Self {
 		Self {
 			backend,
+			pending_plain: false,
 			tls,
 			account: None,
 			auth_failures: 0,
@@ -131,10 +136,28 @@ impl<B: Backend> Session<B> {
 		self.tls = true;
 	}
 
+	/// Adopt `account` as the authenticated account without going through
+	/// `AUTHENTICATE`. The session must already be over TLS (`set_tls`).
+	/// Test-only: lets the test suite exercise an authenticated session
+	/// without a STARTTLS handshake.
+	#[cfg(test)]
+	pub fn adopt_account_for_test(&mut self, account: &str) {
+		self.account = Some(account.to_string());
+	}
+
 	/// Set the client peer IP for ban-store enforcement. Called by the
 	/// network layer after `accept()`; `None` for in-memory tests.
 	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
 		self.peer_ip = ip;
+	}
+
+	/// Whether an account has been adopted via `AUTHENTICATE` (or the
+	/// test-only `adopt_account_for_test`). The command loop uses this
+	/// to pick the right read deadline, short pre-auth, longer
+	/// post-auth, so a slow client cannot exhaust the listener's
+	/// connection slots.
+	pub fn account_is_some(&self) -> bool {
+		self.account.is_some()
 	}
 
 	/// The capability banner sent on connect and after STARTTLS.
@@ -142,6 +165,27 @@ impl<B: Backend> Session<B> {
 		Response::Lines {
 			lines: self.capabilities(),
 			ok: "ManageSieve ready.".to_string(),
+		}
+	}
+
+	/// Consume a client line and its optional literal.
+	pub fn handle_line(&mut self, line: &str, literal: Option<Vec<u8>>) -> Response {
+		if std::mem::take(&mut self.pending_plain) {
+			let response = literal
+				.and_then(|bytes| String::from_utf8(bytes).ok())
+				.or_else(|| {
+					line.strip_prefix('"')?
+						.strip_suffix('"')
+						.map(str::to_string)
+				});
+			if line == "*" || response.as_deref() == Some("*") {
+				return Response::No(Some("Authentication cancelled.".into()));
+			}
+			return self.authenticate("PLAIN", Some(response.unwrap_or_default()));
+		}
+		match super::command::parse(line, literal) {
+			Ok(command) => self.handle(command),
+			Err(_) => Response::No(Some("Bad command.".into())),
 		}
 	}
 
@@ -217,8 +261,13 @@ impl<B: Backend> Session<B> {
 		if !mechanism.eq_ignore_ascii_case("PLAIN") {
 			return Response::No(Some("Only SASL PLAIN is supported.".to_string()));
 		}
-		let account = initial
-			.and_then(|encoded| crate::smtp::auth::parse_plain(&encoded).ok())
+		let Some(initial) = initial else {
+			self.pending_plain = true;
+			return Response::Continuation;
+		};
+		self.pending_plain = false;
+		let account = crate::smtp::auth::parse_plain(&initial)
+			.ok()
 			.and_then(|creds| {
 				self.backend
 					.verify(&creds.authcid, &creds.password, self.peer_ip)
@@ -300,3 +349,7 @@ fn quoted(value: &str) -> String {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_tests_continuation.rs"]
+mod continuation_tests;
