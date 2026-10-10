@@ -153,6 +153,47 @@ async fn seed_overlap_fixture(app: &Router) {
 	send(&app, "PUT", "/a/b/before", Some(ALICE), &[], b"before").await;
 }
 
+/// PROPFIND with a 2 MiB body must come back `413 Payload Too Large`. A
+/// normal PROPFIND with a small body must still answer the discovery props
+/// the way the unauthenticated control-flow expects. The 2 MiB choice is
+/// one body-cap plus a margin so the test cannot accidentally pass when
+/// the cap is small.
+#[tokio::test]
+async fn oversize_propfind_is_413() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	let big: Vec<u8> = vec![b'x'; 2 * 1024 * 1024];
+	let (status, _) = send(
+		&app,
+		"PROPFIND",
+		"/",
+		Some(ALICE),
+		&[("Depth", "0".to_string())],
+		&big,
+	)
+	.await;
+	assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// A normal PROPFIND with an empty body still answers `207 Multi-Status`.
+/// This is the regression side of the body cap: the cap must reject
+/// oversize bodies without breaking small ones.
+#[tokio::test]
+async fn normal_propfind_still_works() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	let (status, _) = send(
+		&app,
+		"PROPFIND",
+		"/",
+		Some(ALICE),
+		&[("Depth", "0".to_string())],
+		b"",
+	)
+	.await;
+	assert_eq!(status, StatusCode::MULTI_STATUS);
+}
+
 #[tokio::test]
 async fn move_into_descendant_is_refused_and_data_intact() {
 	let dir = tempfile::tempdir().expect("tempdir");

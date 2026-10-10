@@ -24,6 +24,25 @@ use super::propfind::{self, Entry};
 /// The `Allow` header listing every method this server implements.
 const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
 
+/// Maximum size of an XML body the server is willing to fully buffer
+/// before refusing with `413 Payload Too Large`. The cap covers PROPFIND,
+/// REPORT, PROPPATCH, MKCOL and the scheduling Outbox `POST` — all of
+/// them are XML-ish bodies that a misbehaving or malicious client could
+/// try to blow up to gigabytes. 1 MiB is comfortably larger than any
+/// real property listing a CardDAV or CalDAV client will ever produce,
+/// and small enough that a request can be rejected without buffering the
+/// whole thing.
+const XML_BODY_LIMIT: usize = 1 * 1024 * 1024;
+
+/// Maximum size of a single `PUT` body. No project-level upload cap was
+/// already wired into the WebDAV path, so this constant is the per-file
+/// limit. The value mirrors JMAP's advertised `maxSizeUpload` (see
+/// [`crate::api::jmap::MAX_UPLOAD_SIZE`]) so the two protocols agree on
+/// the per-resource size an authenticated client can write. A per-account
+/// storage quota (the `quota_bytes` field in the account config) still
+/// applies on top of this for cumulative usage; this is the per-file cap.
+const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;
+
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
 /// method into the account's confined tree. Unknown methods are `405`.
 pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Response {
@@ -110,15 +129,36 @@ async fn dispatch_extension(
 	}
 }
 
+/// Read a request body with an explicit byte cap. Returns `413 Payload Too
+/// Large` once the cap is exceeded (a body at exactly the cap is accepted,
+/// one byte over is not). `axum::body::to_bytes` already stops reading at
+/// `limit` bytes, so an oversize body is rejected without the rest of the
+/// stream being drained into memory.
+async fn read_body_capped(body: axum::body::Body, limit: usize) -> Result<axum::body::Bytes, Response> {
+	match axum::body::to_bytes(body, limit + 1).await {
+		Ok(bytes) if bytes.len() > limit => Err(StatusCode::PAYLOAD_TOO_LARGE.into_response()),
+		Ok(bytes) => Ok(bytes),
+		// `axum::body::to_bytes` returns an error on stream-level failures
+		// including the `LengthLimitError` from `http_body_util` (the body
+		// exceeded the cap and the inner stream refused more data) and
+		// genuine transport failures. Both are reported as `413`: a
+		// transport failure on an oversize body looks the same to the
+		// client (the body could not be buffered). Other transport errors
+		// are also `413` because the request is otherwise unprocessable
+		// without a body.
+		Err(_) => Err(StatusCode::PAYLOAD_TOO_LARGE.into_response()),
+	}
+}
+
 /// `REPORT` (RFC 6352 / RFC 4791): read the body and hand it to the right
 /// report dispatcher. The choice is made by peeking the body's root element: a
 /// body naming a CalDAV report (`calendar-multiget`/`calendar-query`/
 /// `free-busy-query`) goes to the CalDAV handler, everything else to CardDAV.
 /// Both enforce the same per-account confinement on every href they return.
 async fn report(root: &Path, target: &Path, request: Request) -> Response {
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return response,
 	};
 	if caldav::is_caldav_report(&String::from_utf8_lossy(&body)) {
 		caldav::report(root, target, &body).await
@@ -147,9 +187,9 @@ async fn post(root: &Path, uri_path: &str, request: Request) -> Response {
 	if first != caldav::OUTBOX && second != caldav::OUTBOX {
 		return method_not_allowed();
 	}
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return response,
 	};
 	caldav::outbox_post(root, &body).await
 }
@@ -244,9 +284,9 @@ async fn put(target: &Path, request: Request) -> Response {
 		return StatusCode::FORBIDDEN.into_response();
 	}
 	let existed = target.is_file();
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), PUT_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return response,
 	};
 	match tokio::fs::write(target, &body).await {
 		Ok(()) => put_success(target, existed).await,
@@ -312,9 +352,9 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 	if !parent.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return response,
 	};
 	let text = String::from_utf8_lossy(&body);
 	let as_addressbook = text.contains("addressbook");
@@ -346,9 +386,10 @@ async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
 		.map(str::trim)
 		.unwrap_or("0")
 		.to_string();
-	let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
-		.await
-		.unwrap_or_default();
+	let body_bytes = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
+		Ok(bytes) => bytes,
+		Err(response) => return response,
+	};
 	if propfind::wants_discovery(&String::from_utf8_lossy(&body_bytes)) {
 		return xml_multistatus(propfind::discovery(uri_path, &account_home(uri_path)));
 	}
