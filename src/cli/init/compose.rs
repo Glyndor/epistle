@@ -579,3 +579,7 @@ pub(super) fn render(answers: &crate::cli::init::Answers, database: bool) -> ser
 #[cfg(test)]
 #[path = "compose_tests_clamav.rs"]
 mod tests_clamav;
+
+#[cfg(test)]
+#[path = "compose_tests_db_startup.rs"]
+mod tests_db_startup;

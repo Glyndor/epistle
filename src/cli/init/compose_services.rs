@@ -141,7 +141,7 @@ impl ComposeService {
 			"--auth-local=scram-sha-256 --auth-host=reject".to_string(),
 		);
 		environment.insert("TZ".to_string(), "UTC".to_string());
-		let healthcheck_test = "PGPASSWORD=\"$(cat /run/secrets/epistle_db_password)\" \
+		let healthcheck_test = "[ \"$(cat /proc/1/comm)\" = postgres ] && PGPASSWORD=\"$(cat /run/secrets/epistle_db_password)\" \
 			psql -h /var/run/postgresql -U epistle -d epistle -Atc 'select 1' >/dev/null"
 			.to_string();
 		Self {
