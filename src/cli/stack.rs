@@ -36,6 +36,8 @@ const COMPOSE_FILE: &str = "compose.yaml";
 /// separate so the tests can build the action without clap).
 #[derive(Debug, Subcommand)]
 pub enum StackCli {
+	/// Pull images and recreate changed services, updating the default mail image.
+	Update,
 	/// Start the stack in the background.
 	Up,
 	/// Stop the stack. The compose volumes are not removed: the
@@ -68,6 +70,7 @@ pub enum StackCli {
 impl From<StackCli> for StackAction {
 	fn from(value: StackCli) -> Self {
 		match value {
+			StackCli::Update => StackAction::Update,
 			StackCli::Up => StackAction::Up,
 			StackCli::Down => StackAction::Down,
 			StackCli::Ps { json } => StackAction::Ps { as_json: json },
@@ -83,6 +86,8 @@ impl From<StackCli> for StackAction {
 /// arguments verbatim.
 #[derive(Debug)]
 pub(super) enum StackAction {
+	/// Refresh the default mail image, pull images, and recreate changed services.
+	Update,
 	/// `podup -f <compose> up -d`, start the stack in the background.
 	Up,
 	/// `podup -f <compose> down`, stop the stack. Volumes are never
@@ -138,6 +143,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Err(code) => return code,
 	};
 	match action {
+		StackAction::Update => {
+			if let Err(error) = super::stack_update::rewrite_default_image(&compose) {
+				super::style::error(format_args!("cannot update {}: {error}", compose.display()));
+				return ExitCode::FAILURE;
+			}
+			run_sequence(podup, &compose, &[&["pull"], &["up", "-d"]])
+		}
 		StackAction::Up => {
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
 		}

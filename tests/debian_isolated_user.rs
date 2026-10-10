@@ -249,7 +249,29 @@ fn postinst_migrates_only_after_adding_missing_ranges() {
 		postinst.contains("ranges_added=false")
 			&& postinst.contains("|| ! grep -q '^glyndor-epistle:' /etc/subgid")
 			&& postinst.contains("else\n\t\t\tranges_added=true")
-			&& postinst.contains("if [ \"$ranges_added\" = true ] && [ -z \"${2:-}\" ] && command -v podman"),
+			&& postinst.contains(
+				"if [ \"$ranges_added\" = true ] && [ -z \"${2:-}\" ] && command -v podman"
+			),
 		"postinst must migrate only when it successfully added missing subuid or subgid ranges"
 	);
 }
+
+#[test]
+fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
+	let postinst = read("debian/epistle.postinst");
+	assert!(
+		postinst.contains("if [ -n \"${2:-}\" ] && [ -f /var/lib/glyndor/epistle/.config/systemd/user/podup-epistle.service ]; then")
+			&& postinst.contains("export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS")
+			&& postinst.contains("if runuser -u glyndor-epistle -- systemctl --user is-enabled --quiet podup-epistle.service; then")
+			&& postinst.contains("if ! runuser -u glyndor-epistle -- epistle stack update; then")
+			&& postinst.contains("echo \"epistle: stack update failed; run sudo epistle stack update to retry\" >&2"),
+		"postinst must update only an enabled stack on upgrade and warn without failing apt"
+	);
+	let enabled = line_of(&postinst, "is-enabled --quiet").unwrap();
+	let update = line_of(&postinst, "-- epistle stack update").unwrap();
+	assert!(
+		enabled < update,
+		"postinst must check autostart before updating the stack"
+	);
+}
+

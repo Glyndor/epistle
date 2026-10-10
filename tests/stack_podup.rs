@@ -428,3 +428,7 @@ fn ps_json_write_failure_makes_epistle_exit_nonzero() {
 #[cfg(unix)]
 #[path = "stack_service/lifecycle.rs"]
 mod service;
+
+#[cfg(unix)]
+#[path = "stack_service/update.rs"]
+mod update;

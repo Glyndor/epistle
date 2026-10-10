@@ -26,6 +26,7 @@ mod serve_tasks;
 mod serve_tls;
 mod srv;
 mod stack;
+mod stack_update;
 mod style;
 mod suppression;
 #[cfg(test)]
@@ -411,7 +412,7 @@ pub enum Command {
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.
 	/// Subcommands: `up`, `down`, `ps [--json]`, `logs [--follow] [<service>]`,
-	/// `restart [<service>]`. Runs `podup` underneath; never replaces
+	/// `restart [<service>]`, `update`. Runs `podup` underneath; never replaces
 	/// it.
 	Stack {
 		/// Configuration file, defaults to the path written by packaged init.

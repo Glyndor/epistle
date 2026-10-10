@@ -13,6 +13,10 @@ mod plan;
 
 pub use answers::Answers;
 
+pub(super) fn default_image() -> String {
+	compose::default_image()
+}
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;

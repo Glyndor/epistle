@@ -23,24 +23,16 @@ fn image_validation_rejects_empty_and_whitespace() {
 	assert!(answers.validate().is_ok());
 }
 
-/// The default `image` resolved when the operator does not set one
-/// pins the `<MAJOR.MINOR>` prefix of `CARGO_PKG_VERSION` (not
-/// the full `X.Y.Z` patch, not `latest`, and not an untagged
-/// reference). The override path uses whatever the operator
-/// typed verbatim, as long as the override itself carries a
-/// tag that is not `latest` or a `@sha256:` digest.
+/// The default image pins the full CLI release. Explicit image overrides keep
+/// their tag or digest verbatim.
 #[test]
 fn image_default_and_override_resolve_to_the_expected_references() {
 	let version = env!("CARGO_PKG_VERSION");
-	let mut parts = version.split('.');
-	let major = parts.next().expect("major");
-	let minor = parts.next().expect("minor");
-	let expected_default = format!("ghcr.io/glyndor/epistle:{}.{}", major, minor);
+	let expected_default = format!("ghcr.io/glyndor/epistle:{version}");
 	let default = super::default_image();
 	assert_eq!(
 		default, expected_default,
-		"the default image must pin the MAJOR.MINOR of CARGO_PKG_VERSION; \
-		 a release of 0.9.0 must produce ghcr.io/glyndor/epistle:0.9"
+		"the default image must pin the full CARGO_PKG_VERSION"
 	);
 	assert!(
 		!default.contains("latest") && default.contains(':'),

@@ -48,27 +48,12 @@ pub(super) const POSTGRES_18_IMAGE: &str = "docker.io/library/postgres:18@sha256
 /// refusal at `podup up` time.
 const DATABASE_SECRET_MODE: u32 = 400;
 
-/// The default image for the `mail` service when the operator did
-/// not set `image` in the answers file. The tag is the
-/// `<MAJOR.MINOR>` prefix of `CARGO_PKG_VERSION`, never `latest`
-/// and never the full `X.Y.Z` patch: a release of `0.9.0` pins
-/// the image to `ghcr.io/glyndor/epistle:0.9` so a 0.9.1 patch
-/// keeps reusing the same base image until the operator
-/// re-tags. Patch releases that need a new image should ship
-/// a new tag (a manual `0.9.X` build), not rely on this
-/// default.
+/// The default mail image pins the full CLI release so server and CLI versions match.
 pub(super) fn default_image() -> String {
-	let version = env!("CARGO_PKG_VERSION");
-	let mut parts = version.split('.');
-	let major = parts.next().unwrap_or("0");
-	let minor = parts.next().unwrap_or("0");
-	format!("ghcr.io/glyndor/epistle:{}.{}", major, minor)
+	format!("ghcr.io/glyndor/epistle:{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// Resolve the image for the `mail` service. The answers file
-/// Resolve the image for the `mail` service. The answers file
-/// wins when the operator set `image`; otherwise the
-/// build-time default from [`default_image`] applies.
+/// Resolve the mail image, preferring an explicit image in the answers.
 pub(super) fn resolve_image(image: Option<&str>) -> String {
 	image.map(str::to_string).unwrap_or_else(default_image)
 }
@@ -471,6 +456,8 @@ struct TopLevelVolume {}
 #[derive(Debug, Serialize)]
 pub(super) struct ComposeFile {
 	name: String,
+	#[serde(rename = "x-epistle-managed-image")]
+	managed_image: bool,
 	services: BTreeMap<String, ComposeService>,
 	secrets: BTreeMap<String, TopLevelSecret>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -510,6 +497,7 @@ impl ComposeFile {
 		}
 		Self {
 			name: "epistle".to_string(),
+			managed_image: answers.image.is_none(),
 			services,
 			secrets,
 			volumes,
@@ -623,3 +611,7 @@ mod tests_dns_credentials;
 #[cfg(test)]
 #[path = "compose_tests_override.rs"]
 mod tests_override;
+
+#[cfg(test)]
+#[path = "compose_tests_updates.rs"]
+mod tests_updates;
