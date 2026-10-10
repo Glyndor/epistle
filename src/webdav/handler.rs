@@ -24,6 +24,25 @@ use super::propfind::{self, Entry};
 /// The `Allow` header listing every method this server implements.
 const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
 
+/// Maximum size of an XML body the server is willing to fully buffer
+/// before refusing with `413 Payload Too Large`. The cap covers PROPFIND,
+/// REPORT, PROPPATCH, MKCOL and the scheduling Outbox `POST`, all of
+/// them are XML-ish bodies that a misbehaving or malicious client could
+/// try to blow up to gigabytes. 1 MiB is comfortably larger than any
+/// real property listing a CardDAV or CalDAV client will ever produce,
+/// and small enough that a request can be rejected without buffering the
+/// whole thing.
+const XML_BODY_LIMIT: usize = 1024 * 1024;
+
+/// Maximum size of a single `PUT` body. No project-level upload cap was
+/// already wired into the WebDAV path, so this constant is the per-file
+/// limit. The value mirrors JMAP's advertised `maxSizeUpload` (see
+/// [`crate::api::jmap::MAX_UPLOAD_SIZE`]) so the two protocols agree on
+/// the per-resource size an authenticated client can write. A per-account
+/// storage quota (the `quota_bytes` field in the account config) still
+/// applies on top of this for cumulative usage; this is the per-file cap.
+const PUT_BODY_LIMIT: usize = 50 * 1024 * 1024;
+
 /// Entry point for every WebDAV request. Authenticates, then dispatches on the
 /// method into the account's confined tree. Unknown methods are `405`.
 pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Response {
@@ -42,6 +61,15 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	let Some(target) = path::resolve(&root, &uri_path) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	// A symlink anywhere along the path is an escape attempt: refuse before
+	// any I/O. Methods that read or operate on an existing target require
+	// the target's canonical form to fall under the canonical root, with no
+	// symlink in between; write-create methods require the parent's
+	// canonical form to be a real, symlink-free directory under the
+	// canonical root.
+	if !symlink_check_ok(&target, &root, request.method().as_str()) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 
 	match request.method().clone() {
 		Method::OPTIONS => options(),
@@ -51,6 +79,34 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 		Method::PUT => put(&target, request).await,
 		Method::DELETE => delete(&target).await,
 		method => dispatch_extension(method.as_str(), &root, &target, &uri_path, request).await,
+	}
+}
+
+/// Symlink refusal for the dispatch boundary. `GET`/`HEAD`/`DELETE`/
+/// `PROPFIND`/`REPORT`/`COPY` (source)/`MOVE` (source) all touch an
+/// existing target, so the canonical form must lie under the canonical root
+/// with no symlink in between. `PUT`/`MKCOL` create a target, so the
+/// parent must be a real, symlink-free directory under the canonical root.
+/// `POST` hits a virtual path (the Outbox, which may not exist on disk) so
+/// it uses the write-creating rule. `OPTIONS` answers from headers and never
+/// touches the filesystem; the lexical [`path::resolve`] it has already
+/// passed through covers the rest. Unknown methods (which become a `405`
+/// reply) do not need any filesystem access.
+///
+/// A missing target for a read method (e.g. `GET /missing.txt`) passes
+/// confinement as well: there is nothing to follow, so no escape to refuse.
+/// The handler still turns that into a `404` for the client.
+fn symlink_check_ok(target: &Path, root: &Path, method: &str) -> bool {
+	match method {
+		"PUT" | "MKCOL" | "POST" => path::confine_parent_for_write(target, root),
+		"OPTIONS" => true,
+		// Methods handled outside this enum ("PROPFIND", "MKCOL", "REPORT",
+		// "COPY", "MOVE") all touch an existing target. Anything else is a
+		// `405` reply without filesystem access, so skip the check.
+		"PROPFIND" | "REPORT" | "COPY" | "MOVE" | "GET" | "HEAD" | "DELETE" => {
+			path::confine_existing(target, root)
+		}
+		_ => true,
 	}
 }
 
@@ -73,15 +129,45 @@ async fn dispatch_extension(
 	}
 }
 
+/// Read a request body with an explicit byte cap. Returns `413 Payload Too
+/// Large` once the cap is exceeded (a body at exactly the cap is accepted,
+/// one byte over is not). `axum::body::to_bytes` already stops reading at
+/// `limit` bytes, so an oversize body is rejected without the rest of the
+/// stream being drained into memory.
+///
+/// The error is boxed to keep the `Result` small, a full `Response`
+/// carries the body bytes in a few code paths and would blow up the
+/// stack frame of every caller.
+async fn read_body_capped(
+	body: axum::body::Body,
+	limit: usize,
+) -> Result<axum::body::Bytes, Box<Response>> {
+	match axum::body::to_bytes(body, limit + 1).await {
+		Ok(bytes) if bytes.len() > limit => {
+			Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response()))
+		}
+		Ok(bytes) => Ok(bytes),
+		// `axum::body::to_bytes` returns an error on stream-level failures
+		// including the `LengthLimitError` from `http_body_util` (the body
+		// exceeded the cap and the inner stream refused more data) and
+		// genuine transport failures. Both are reported as `413`: a
+		// transport failure on an oversize body looks the same to the
+		// client (the body could not be buffered). Other transport errors
+		// are also `413` because the request is otherwise unprocessable
+		// without a body.
+		Err(_) => Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())),
+	}
+}
+
 /// `REPORT` (RFC 6352 / RFC 4791): read the body and hand it to the right
 /// report dispatcher. The choice is made by peeking the body's root element: a
 /// body naming a CalDAV report (`calendar-multiget`/`calendar-query`/
 /// `free-busy-query`) goes to the CalDAV handler, everything else to CardDAV.
 /// Both enforce the same per-account confinement on every href they return.
 async fn report(root: &Path, target: &Path, request: Request) -> Response {
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return *response,
 	};
 	if caldav::is_caldav_report(&String::from_utf8_lossy(&body)) {
 		caldav::report(root, target, &body).await
@@ -110,9 +196,9 @@ async fn post(root: &Path, uri_path: &str, request: Request) -> Response {
 	if first != caldav::OUTBOX && second != caldav::OUTBOX {
 		return method_not_allowed();
 	}
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return *response,
 	};
 	caldav::outbox_post(root, &body).await
 }
@@ -187,6 +273,10 @@ fn content_type(target: &Path) -> &'static str {
 /// §9.7.1 — a `PUT` to a non-existent collection is `409 Conflict`). Returns
 /// `201` when the file is new, `204` when it replaced an existing one, each with
 /// the new resource's `ETag` so a CardDAV client can track the card.
+///
+/// If the target is an existing symlink (escape planted in the user's tree)
+/// the request is refused with `403`, `tokio::fs::write` would otherwise
+/// follow the link and rewrite the file it points at.
 async fn put(target: &Path, request: Request) -> Response {
 	if target.is_dir() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -197,10 +287,15 @@ async fn put(target: &Path, request: Request) -> Response {
 	if !parent.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
+	if let Ok(meta) = tokio::fs::symlink_metadata(target).await
+		&& meta.file_type().is_symlink()
+	{
+		return StatusCode::FORBIDDEN.into_response();
+	}
 	let existed = target.is_file();
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), PUT_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return *response,
 	};
 	match tokio::fs::write(target, &body).await {
 		Ok(()) => put_success(target, existed).await,
@@ -251,7 +346,13 @@ async fn delete(target: &Path) -> Response {
 /// it). `addressbook` takes precedence if a body somehow names both. Success is
 /// `201`.
 async fn mkcol(target: &Path, request: Request) -> Response {
-	if target.exists() {
+	// Use `symlink_metadata` so a target that already exists as a symlink
+	// is detected without following the link; refusing here closes a
+	// symlink-to-outside edge the dispatch guard (write-creating method)
+	// does not check.
+	if let Some(meta) = tokio::fs::symlink_metadata(target).await.ok()
+		&& (meta.file_type().is_symlink() || meta.is_dir() || meta.is_file())
+	{
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
 	}
 	let Some(parent) = target.parent() else {
@@ -260,9 +361,9 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 	if !parent.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
-	let body = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
-		Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+		Err(response) => return *response,
 	};
 	let text = String::from_utf8_lossy(&body);
 	let as_addressbook = text.contains("addressbook");
@@ -280,23 +381,46 @@ async fn mkcol(target: &Path, request: Request) -> Response {
 }
 
 /// `PROPFIND`: a `207` multi-status of the target (and, at `Depth: 1`, its
-/// children). `Depth: infinity` is treated as `1` (we do not recurse fully).
+/// children). The spec says a missing `Depth` header means "infinity"
+/// (RFC 4918 §9.1) and an infinite walk on an arbitrary per-user
+/// tree would be a denial-of-service trap. We refuse any `Depth` of
+/// `infinity` (or missing) with `403 Forbidden` carrying the
+/// `propfind-finite-depth` precondition; the client can retry with
+/// `Depth: 0` or `Depth: 1`.
 ///
 /// A body asking for the CardDAV discovery props
 /// (`current-user-principal`/`addressbook-home-set`/`principal-URL`) is answered
 /// with the discovery document instead — pointing the client at the account
 /// home as its addressbook home.
 async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
+	// A missing `Depth` header is `infinity` per RFC 4918 §9.1; we
+	// refuse it the same as an explicit `Depth: infinity`. The
+	// precondition is named in the RFC (it is the standardised
+	// text clients look for); anything else is left to a future
+	// minor revision.
 	let depth = request
 		.headers()
 		.get("Depth")
 		.and_then(|value| value.to_str().ok())
-		.map(str::trim)
-		.unwrap_or("0")
-		.to_string();
-	let body_bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
-		.await
-		.unwrap_or_default();
+		.map(str::trim);
+	let depth = match depth {
+		Some(value) if value.eq_ignore_ascii_case("infinity") => {
+			return propfind_finite_depth_precondition();
+		}
+		Some(value) if value == "0" || value == "1" => value.to_string(),
+		Some(value) if value.eq_ignore_ascii_case("0") || value.eq_ignore_ascii_case("1") => {
+			value.to_ascii_lowercase()
+		}
+		// A malformed Depth is treated like a missing one: `infinity`,
+		// refused with the precondition. The spec's `propfind-finite-depth`
+		// is the only signal a client can use to discover the
+		// restriction, so we always emit it on every rejected Depth.
+		_ => return propfind_finite_depth_precondition(),
+	};
+	let body_bytes = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
+		Ok(bytes) => bytes,
+		Err(response) => return *response,
+	};
 	if propfind::wants_discovery(&String::from_utf8_lossy(&body_bytes)) {
 		return xml_multistatus(propfind::discovery(uri_path, &account_home(uri_path)));
 	}
@@ -322,6 +446,18 @@ async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
 			if name == carddav::MARKER || name == caldav::MARKER {
 				continue;
 			}
+			// Defence in depth: skip a child that is itself a symlink. The
+			// dispatch guard already refused a request whose path walked
+			// through a symlink, but a symlink at a directory entry (planted
+			// directly in the account tree) would still appear in the
+			// listing if we did not filter it here. `child.metadata()`
+			// follows the symlink, so we also check `symlink_metadata`.
+			let Ok(child_sym) = tokio::fs::symlink_metadata(child.path()).await else {
+				continue;
+			};
+			if child_sym.file_type().is_symlink() {
+				continue;
+			}
 			let Ok(child_meta) = child.metadata().await else {
 				continue;
 			};
@@ -335,6 +471,24 @@ async fn propfind(target: &Path, uri_path: &str, request: Request) -> Response {
 		}
 	}
 	xml_multistatus(propfind::multistatus(&entries))
+}
+
+/// Answer a `PROPFIND` whose `Depth` is missing or `infinity` with
+/// `403 Forbidden` and the `propfind-finite-depth` precondition
+/// (RFC 4918 §9.1). A client that sees this can retry with a finite
+/// `Depth`.
+fn propfind_finite_depth_precondition() -> Response {
+	(
+		StatusCode::FORBIDDEN,
+		[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
+		concat!(
+			"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
+			"<D:error xmlns:D=\"DAV:\">\n",
+			"  <D:propfind-finite-depth/>\n",
+			"</D:error>\n",
+		),
+	)
+		.into_response()
 }
 
 /// Wrap an already-built multi-status XML body in the `207` response.
@@ -405,34 +559,65 @@ fn display_name(uri_path: &str) -> String {
 /// `COPY`/`MOVE`: resolve the `Destination` header into the same account tree,
 /// honour `Overwrite`, then copy (and, for `MOVE`, remove the source). The
 /// destination crossing the account root is impossible — it is resolved through
-/// the same confinement as every other path.
+/// the same confinement as every other path. An overlap (destination equal to
+/// or inside the source, or vice versa) is also refused up front: removing
+/// the destination first would otherwise destroy data the copy itself needs
+/// (RFC 4918 §9.8.5 / §9.9.4).
 async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool) -> Response {
-	if !source.exists() {
-		return StatusCode::NOT_FOUND.into_response();
+	// Use `symlink_metadata` everywhere so the final-component symlink is not
+	// followed here; the dispatch-level guard above already confined the
+	// source path under `root` and refused any intermediate symlink.
+	let source_meta = match tokio::fs::symlink_metadata(source).await {
+		Ok(meta) => meta,
+		Err(_) => return StatusCode::NOT_FOUND.into_response(),
+	};
+	if source_meta.file_type().is_symlink() {
+		return StatusCode::FORBIDDEN.into_response();
 	}
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	// RFC 4918 §9.8.5 / §9.9.4, copying or moving a collection into itself
+	// (or onto itself) would lose data: the existing implementation removes
+	// the destination before the source is read. Detect any overlap before
+	// any I/O and refuse with `403 Forbidden` (a copy or move into a
+	// sub-tree of itself is forbidden by RFC 4918).
+	if paths_overlap(source, &dest_path) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
+	// Confine the destination with the write-create rule (parent chain is
+	// symlink-free and under canonical root). If the destination exists
+	// already it has to be confined as well, both because the recursion may
+	// replace it and because it could itself be a symlink to outside.
+	if !path::confine_parent_for_write(&dest_path, root) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 	let overwrite = headers
 		.get("Overwrite")
 		.and_then(|value| value.to_str().ok())
 		.map(|value| !value.eq_ignore_ascii_case("F"))
 		.unwrap_or(true);
-	let existed = dest_path.exists();
-	if existed && !overwrite {
+	let dest_meta = tokio::fs::symlink_metadata(&dest_path).await.ok();
+	if dest_meta.is_some() && !overwrite {
 		return StatusCode::PRECONDITION_FAILED.into_response();
 	}
 	let Some(parent) = dest_path.parent() else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
-	if !parent.is_dir() {
+	let parent_meta = match tokio::fs::symlink_metadata(parent).await {
+		Ok(meta) => meta,
+		Err(_) => return StatusCode::CONFLICT.into_response(),
+	};
+	if parent_meta.file_type().is_symlink() || !parent_meta.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
-	if let Err(response) = perform_copy(source, &dest_path, existed).await {
+	let dest_was_dir = dest_meta.as_ref().map(|meta| meta.is_dir());
+	let dest_existed = dest_meta.is_some();
+	if let Err(response) = perform_copy(source, &dest_path, dest_was_dir).await {
 		return *response;
 	}
 	if remove {
-		let removal = if source.is_dir() {
+		let removal = if source_meta.is_dir() {
 			tokio::fs::remove_dir_all(source).await
 		} else {
 			tokio::fs::remove_file(source).await
@@ -441,7 +626,7 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 			return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 		}
 	}
-	if existed {
+	if dest_existed {
 		StatusCode::NO_CONTENT.into_response()
 	} else {
 		StatusCode::CREATED.into_response()
@@ -449,11 +634,20 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 }
 
 /// Copy `source` onto `dest`, replacing an existing destination first. A
-/// directory source is copied recursively. On error returns the response to
-/// send.
-async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), Box<Response>> {
-	if existed {
-		let removal = if dest.is_dir() {
+/// directory source is copied recursively; any child that is itself a
+/// symlink is skipped (we do not follow external links into the destination
+/// tree). On error returns the response to send.
+async fn perform_copy(
+	source: &Path,
+	dest: &Path,
+	dest_was_dir: Option<bool>,
+) -> Result<(), Box<Response>> {
+	if let Some(is_dir) = dest_was_dir {
+		// Remove the destination without ever following a symlink: we
+		// already know the destination's existence and kind from the
+		// `symlink_metadata` gathered by the caller, which never resolves
+		// the link.
+		let removal = if is_dir {
 			tokio::fs::remove_dir_all(dest).await
 		} else {
 			tokio::fs::remove_file(dest).await
@@ -471,14 +665,20 @@ async fn perform_copy(source: &Path, dest: &Path, existed: bool) -> Result<(), B
 }
 
 /// Recursively copy a directory tree (an iterative walk; no async recursion).
+/// Any child that is itself a symlink is skipped: we never follow the link
+/// into the destination tree.
 async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
 	let mut stack = vec![(source.to_path_buf(), dest.to_path_buf())];
 	while let Some((from, to)) = stack.pop() {
 		tokio::fs::create_dir_all(&to).await?;
 		let mut dir = tokio::fs::read_dir(&from).await?;
 		while let Some(child) = dir.next_entry().await? {
+			let file_type = child.file_type().await?;
+			if file_type.is_symlink() {
+				continue;
+			}
 			let child_to = to.join(child.file_name());
-			if child.file_type().await?.is_dir() {
+			if file_type.is_dir() {
 				stack.push((child.path(), child_to));
 			} else {
 				tokio::fs::copy(child.path(), &child_to).await?;
@@ -510,6 +710,28 @@ fn strip_to_path(raw: &str) -> &str {
 	}
 }
 
+/// Whether two paths occupy the same place or one sits inside the other.
+/// A `MOVE /a /a` is an exact match; a `MOVE /a /a/b` or `MOVE /a/b /a` is
+/// an ancestor/descendant relationship. The check is the same for files and
+/// directories, the per-method handler does not need to know the kind.
+/// Comparing lexical paths is sufficient here: both names were resolved
+/// through the same per-account `path::resolve` so a path that does not
+/// share a prefix with the other could not have been conflated.
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+	if a == b {
+		return true;
+	}
+	// Path components give a robust boundary match: `/a/b` and `/a/b/c`
+	// share the first two components, while `/a/bc` does not share a third.
+	let a_comps: Vec<_> = a.components().collect();
+	let b_comps: Vec<_> = b.components().collect();
+	b_comps.starts_with(&a_comps) || a_comps.starts_with(&b_comps)
+}
+
 #[cfg(test)]
 #[path = "handler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "handler_bounds_tests.rs"]
+mod bounds_tests;

@@ -123,7 +123,9 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 		ReportKind::Multiget => {
 			let mut entries = Vec::new();
 			for href in hrefs(&text) {
-				if let Some(resolved) = path::resolve(root, &href) {
+				if let Some(resolved) = path::resolve(root, &href)
+					&& path::confine_existing(&resolved, root)
+				{
 					push_event(&mut entries, &href, &resolved).await;
 				}
 			}
@@ -180,7 +182,8 @@ pub async fn outbox_post(account_root: &Path, body: &[u8]) -> Response {
 /// Collect every calendar collection directory beneath `root` (one level of
 /// nesting is enough for the conventional `/home/<calendar>/` layout, but we
 /// also include `root` itself if it is a calendar). The Outbox free-busy lookup
-/// scans them all so it reflects the account's whole schedule.
+/// scans them all so it reflects the account's whole schedule. Children that
+/// are themselves symlinks (planted escapes) are skipped.
 async fn calendar_dirs(root: &Path) -> Vec<std::path::PathBuf> {
 	let mut out = Vec::new();
 	if is_calendar(root) {
@@ -189,6 +192,11 @@ async fn calendar_dirs(root: &Path) -> Vec<std::path::PathBuf> {
 	if let Ok(mut dir) = tokio::fs::read_dir(root).await {
 		while let Ok(Some(child)) = dir.next_entry().await {
 			let path = child.path();
+			if let Ok(meta) = std::fs::symlink_metadata(&path)
+				&& meta.file_type().is_symlink()
+			{
+				continue;
+			}
 			if is_calendar(&path) {
 				out.push(path);
 			}
@@ -203,6 +211,9 @@ type Period = (i64, i64);
 /// Scan every `.ics` in each calendar in `calendars`, expand each `VEVENT`'s
 /// recurrence over `[start, end)`, and return the busy periods (clamped to the
 /// window). Each occurrence contributes `[occurrence, occurrence + duration)`.
+/// Children that are themselves symlinks are skipped, they may have been
+/// planted in the user's tree, and following them would read events that
+/// belong to no account.
 async fn busy_periods(calendars: &[std::path::PathBuf], start: i64, end: i64) -> Vec<Period> {
 	let mut periods = Vec::new();
 	for calendar in calendars {
@@ -212,6 +223,11 @@ async fn busy_periods(calendars: &[std::path::PathBuf], start: i64, end: i64) ->
 		while let Ok(Some(child)) = dir.next_entry().await {
 			let name = child.file_name();
 			if !is_ics_path(&name.to_string_lossy()) {
+				continue;
+			}
+			if let Ok(sym) = std::fs::symlink_metadata(child.path())
+				&& sym.file_type().is_symlink()
+			{
 				continue;
 			}
 			if let Ok(data) = tokio::fs::read(child.path()).await {
@@ -447,7 +463,10 @@ async fn push_event(entries: &mut Vec<Event>, href: &str, disk: &Path) {
 	}
 }
 
-/// Append every `.ics` directly inside the `collection` directory to `entries`.
+/// Append every `.ics` directly inside the `collection` directory to
+/// `entries`. Children that are themselves symlinks are skipped, they may
+/// have been planted in the user's tree, and following them would read
+/// events that belong to no account.
 async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
@@ -456,6 +475,11 @@ async fn collect_events(collection: &Path, entries: &mut Vec<Event>) {
 		let name = child.file_name();
 		let name = name.to_string_lossy();
 		if !is_ics_path(&name) {
+			continue;
+		}
+		if let Ok(sym) = std::fs::symlink_metadata(child.path())
+			&& sym.file_type().is_symlink()
+		{
 			continue;
 		}
 		let Ok(metadata) = child.metadata().await else {
@@ -499,20 +523,65 @@ fn hrefs(body: &str) -> Vec<String> {
 
 /// Find the byte index of an opening tag whose local name is `local`, allowing
 /// an optional `prefix:`.
+///
+/// The implementation walks the body once, byte by byte. The previous
+/// quadratic version restarted the search from the cursor after every
+/// non-match, and `tag.split(['>', ' ', '/']).next()` returned the whole
+/// remaining tail as one piece when the tag was unclosed, so a body of
+/// N unclosed tags cost O(N²) bytes touched. The linear scan advances
+/// past the tag name in one jump and bounds the name by the next `<`
+/// when no closing delimiter is found, so the total stays O(N) bytes
+/// touched. The byte counter [`SCAN_STEPS`] is exposed for tests that
+/// want to assert the bound.
 fn find_open(body: &str, local: &str) -> Option<usize> {
-	let mut from = 0;
-	while let Some(rel) = body[from..].find('<') {
-		let lt = from + rel;
-		let tag = &body[lt + 1..];
-		let name = tag.split(['>', ' ', '/']).next().unwrap_or("");
-		let candidate = name.rsplit(':').next().unwrap_or("");
-		if candidate == local {
-			return Some(lt);
+	let bytes = body.as_bytes();
+	let needle = local.as_bytes();
+	let mut i = 0;
+	while i < bytes.len() {
+		#[cfg(test)]
+		{
+			SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 		}
-		from = lt + 1;
+		if bytes[i] != b'<' {
+			i += 1;
+			continue;
+		}
+		let name_start = i + 1;
+		let mut name_end = name_start;
+		while name_end < bytes.len() {
+			#[cfg(test)]
+			{
+				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			}
+			let c = bytes[name_end];
+			if c == b'>' || c == b' ' || c == b'/' || c == b'<' {
+				break;
+			}
+			name_end += 1;
+		}
+		let mut local_start = name_start;
+		for (k, b) in bytes[name_start..name_end].iter().enumerate() {
+			#[cfg(test)]
+			{
+				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			}
+			if *b == b':' {
+				local_start = name_start + k + 1;
+			}
+		}
+		let local_len = name_end - local_start;
+		if local_len == needle.len() && &bytes[local_start..name_end] == needle {
+			return Some(i);
+		}
+		i = name_end.max(i + 1);
 	}
 	None
 }
+
+/// Per-process counter of how many bytes the report scanner compared.
+/// Read in tests to assert the body scan is linear, not quadratic.
+#[cfg(test)]
+static SCAN_STEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Build the `calendar-data` `207 Multi-Status` for the collected events.
 fn multistatus(entries: &[Event]) -> Response {
@@ -543,3 +612,7 @@ fn multistatus(entries: &[Event]) -> Response {
 #[cfg(test)]
 #[path = "caldav_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "caldav_scan_tests.rs"]
+mod scan_tests;
