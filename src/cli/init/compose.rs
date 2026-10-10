@@ -160,6 +160,28 @@ pub(super) fn ensure_db_password(
 	data_dir: &Path,
 	report: &mut Report,
 ) -> Result<PathBuf, ApplyError> {
+	ensure_db_password_with_probe(data_dir, report, podman_volume_exists)
+}
+
+pub(super) fn podman_volume_exists(volume: &str) -> std::io::Result<bool> {
+	let output = std::process::Command::new("podman")
+		.args(["volume", "exists", volume])
+		.output()?;
+	match output.status.code() {
+		Some(0) => Ok(true),
+		Some(1) => Ok(false),
+		_ => Err(std::io::Error::other(format!(
+			"podman volume exists {volume} failed with status {}; verify Podman is available and rerun init",
+			output.status
+		))),
+	}
+}
+
+pub(super) fn ensure_db_password_with_probe(
+	data_dir: &Path,
+	report: &mut Report,
+	probe: impl FnOnce(&str) -> std::io::Result<bool>,
+) -> Result<PathBuf, ApplyError> {
 	let dir = compose_secrets_dir(data_dir);
 	fs::create_dir_all(&dir).map_err(|error| ApplyError::KeyWrite(dir.clone(), error))?;
 	#[cfg(unix)]
@@ -171,10 +193,18 @@ pub(super) fn ensure_db_password(
 	let path = db_password_path(data_dir);
 	match fs::symlink_metadata(&path) {
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-			// The path is absent (the common case on a fresh
-			// install, and the documented recovery path: the
-			// operator deleted the file by hand to force a
-			// fresh password). Mint one and write it.
+			// The existing database retains its original password even if the host file is lost.
+			let volume = "epistle_epistle-pgdata";
+			if probe(volume).map_err(|error| {
+				ApplyError::DatabaseVolume(format!(
+					"cannot check database volume {volume}: {error}"
+				))
+			})? {
+				return Err(ApplyError::DatabaseVolume(format!(
+					"database volume {volume} already exists but password file {} is missing; restore the password file from backup or remove the volume with `podman volume rm {volume}` and rerun init",
+					path.display()
+				)));
+			}
 			write_fresh_password(&path, report)
 		}
 		Err(error) => {
@@ -218,7 +248,7 @@ pub(super) fn ensure_db_password(
 				Ok(_) => Err(ApplyError::ExistingSecretUnreadable(
 					path,
 					std::io::Error::other(
-						"file is empty; remove it and rerun init to mint a fresh password",
+						"file is empty; restore the password file from backup, or remove both the database volume and file before rerunning init",
 					),
 				)),
 				Err(error) => Err(ApplyError::ExistingSecretUnreadable(path, error)),
@@ -311,6 +341,14 @@ pub(super) fn ensure_compose_file(
 				.map_err(|error| ApplyError::ConfigWrite(path.clone(), error))?;
 			report.steps.push(ReportStep::Wrote(path.clone()));
 		}
+	}
+	let clamd_config = dir.join("clamd.conf");
+	let content = "LocalSocket /run/clamav/clamd.sock\nLocalSocketMode 666\nFixStaleSocket yes\nDatabaseDirectory /var/lib/clamav\nUser clamav\nForeground yes\n";
+	// Socket mode permits mail uid 65532 across distinct rootless user namespaces.
+	if fs::read_to_string(&clamd_config).ok().as_deref() != Some(content) {
+		crate::storage::write_secret(&clamd_config, content.as_bytes())
+			.map_err(|error| ApplyError::ConfigWrite(clamd_config.clone(), error))?;
+		report.steps.push(ReportStep::Wrote(clamd_config));
 	}
 	write_readme(&dir, report)?;
 	Ok(path)
@@ -415,198 +453,9 @@ pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<Strin
 	ports
 }
 
-// ---- internal JSON shape -----------------------------------------------
-
-#[derive(Debug, Serialize)]
-pub(super) struct ComposeService {
-	image: String,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	command: Option<Vec<String>>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	network_mode: Option<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	user: Option<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	userns_mode: Option<String>,
-	volumes: Vec<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	ports: Option<Vec<String>>,
-	environment: BTreeMap<String, String>,
-	restart: String,
-	security_opt: Vec<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	read_only: Option<bool>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	tmpfs: Option<Vec<String>>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	sysctls: Option<BTreeMap<String, String>>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	secrets: Option<Vec<SecretMount>>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	depends_on: Option<BTreeMap<String, DependsOn>>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	healthcheck: Option<Healthcheck>,
-}
-
-impl ComposeService {
-	/// Build the `mail` service. `image` is either the operator's
-	/// override or the build-time default. `config_path` is
-	/// bind-mounted read-only; the parent of `config_path` (the
-	/// operator's `mail.toml` directory) is the mount source so the
-	/// container sees the same file the host wrote.
-	fn new_mail(
-		image: &str,
-		config_path: &Path,
-		data_dir: &Path,
-		database: bool,
-		published_ports: Vec<String>,
-	) -> Self {
-		let config_dir = config_path.parent().unwrap_or_else(|| Path::new("/"));
-		let mut volumes = Vec::new();
-		volumes.push(format!(
-			"{}:{}:ro,Z",
-			config_dir.display(),
-			config_dir.display()
-		));
-		volumes.push(format!("{}:{}:Z", data_dir.display(), data_dir.display()));
-		if database {
-			volumes.push("epistle-pgsock:/run/postgresql".to_string());
-		}
-		let mut environment = BTreeMap::new();
-		environment.insert("TZ".to_string(), "UTC".to_string());
-		Self {
-			image: image.to_string(),
-			command: Some(vec![
-				"serve".to_string(),
-				"--config".to_string(),
-				config_path.display().to_string(),
-			]),
-			network_mode: Some("pasta".to_string()),
-			user: Some("65532:65532".to_string()),
-			userns_mode: Some("keep-id:uid=65532,gid=65532".to_string()),
-			volumes,
-			ports: Some(published_ports),
-			environment,
-			restart: "unless-stopped".to_string(),
-			security_opt: vec!["no-new-privileges".to_string()],
-			read_only: None,
-			tmpfs: None,
-			// Lower the unprivileged port start inside the
-			// container's network namespace so the mail user
-			// (uid 65532) can bind SMTP (25) and the rest of
-			// the listeners that ship below 1024. The setting
-			// is namespaced to the container's netns and does
-			// not touch the host.
-			sysctls: Some({
-				let mut map = BTreeMap::new();
-				map.insert(
-					"net.ipv4.ip_unprivileged_port_start".to_string(),
-					"0".to_string(),
-				);
-				map
-			}),
-			secrets: None,
-			depends_on: database.then(|| {
-				let mut map = BTreeMap::new();
-				map.insert(
-					"db".to_string(),
-					DependsOn {
-						condition: "service_healthy".to_string(),
-					},
-				);
-				map
-			}),
-			healthcheck: None,
-		}
-	}
-
-	/// Build the `db` service. The image is the pinned digest; the
-	/// `command` overrides the default `postgres` invocation to
-	/// refuse TCP; the `secrets` mount uses the long syntax with
-	/// `uid`/`gid`/`mode` so the entrypoint (uid 999) can read the
-	/// file. The healthcheck connects over the Unix-domain socket
-	/// on the `epistle-pgsock` volume and selects `1` to prove the
-	/// authentication round-trip works.
-	fn new_db() -> Self {
-		let mut environment = BTreeMap::new();
-		environment.insert("POSTGRES_USER".to_string(), "epistle".to_string());
-		environment.insert("POSTGRES_DB".to_string(), "epistle".to_string());
-		environment.insert(
-			"POSTGRES_PASSWORD_FILE".to_string(),
-			"/run/secrets/epistle_db_password".to_string(),
-		);
-		environment.insert(
-			"POSTGRES_INITDB_ARGS".to_string(),
-			"--auth-local=scram-sha-256 --auth-host=reject".to_string(),
-		);
-		environment.insert("TZ".to_string(), "UTC".to_string());
-		let healthcheck_test = "PGPASSWORD=\"$(cat /run/secrets/epistle_db_password)\" \
-			psql -h /var/run/postgresql -U epistle -d epistle -Atc 'select 1' >/dev/null"
-			.to_string();
-		Self {
-			image: POSTGRES_18_IMAGE.to_string(),
-			command: Some(vec![
-				"postgres".to_string(),
-				"-c".to_string(),
-				"listen_addresses=".to_string(),
-			]),
-			network_mode: Some("none".to_string()),
-			user: None,
-			userns_mode: None,
-			volumes: vec![
-				"epistle-pgdata:/var/lib/postgresql".to_string(),
-				"epistle-pgsock:/var/run/postgresql".to_string(),
-			],
-			ports: None,
-			environment,
-			restart: "unless-stopped".to_string(),
-			security_opt: vec!["no-new-privileges".to_string()],
-			read_only: Some(true),
-			tmpfs: Some(vec!["/tmp".to_string()]),
-			sysctls: None,
-			secrets: Some(vec![SecretMount {
-				source: "epistle_db_password".to_string(),
-				target: "epistle_db_password".to_string(),
-				uid: "999".to_string(),
-				gid: "999".to_string(),
-				mode: DATABASE_SECRET_MODE,
-			}]),
-			depends_on: None,
-			healthcheck: Some(Healthcheck {
-				test: vec!["CMD-SHELL".to_string(), healthcheck_test],
-				interval: "5s".to_string(),
-				timeout: "5s".to_string(),
-				retries: 30,
-			}),
-		}
-	}
-}
-
-#[derive(Debug, Serialize)]
-struct SecretMount {
-	source: String,
-	target: String,
-	uid: String,
-	gid: String,
-	/// Mode as a JSON number. 0o400 == 256 decimal; the rendered
-	/// file carries the same byte, and podup reads it as the octal
-	/// mode. The string form is rejected by podup's mode parser as
-	/// decimal, so the number is the only safe shape.
-	mode: u32,
-}
-
-#[derive(Debug, Serialize)]
-struct DependsOn {
-	condition: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Healthcheck {
-	test: Vec<String>,
-	interval: String,
-	timeout: String,
-	retries: u32,
-}
+#[path = "compose_services.rs"]
+mod services;
+use services::ComposeService;
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {
@@ -634,16 +483,20 @@ impl ComposeFile {
 		let mut services = BTreeMap::new();
 		services.insert(
 			"mail".to_string(),
-			ComposeService::new_mail(
-				&image,
-				&answers.config_path,
-				&answers.data_dir,
-				database,
-				published_ports,
-			),
+			ComposeService::new_mail(&image, answers, database, published_ports),
+		);
+		services.insert(
+			"clamav".to_string(),
+			ComposeService::new_clamav(answers, false),
+		);
+		services.insert(
+			"freshclam".to_string(),
+			ComposeService::new_clamav(answers, true),
 		);
 		let mut secrets = BTreeMap::new();
 		let mut volumes = BTreeMap::new();
+		volumes.insert("clamd-socket".to_string(), TopLevelVolume {});
+		volumes.insert("clamav-db".to_string(), TopLevelVolume {});
 		if database {
 			services.insert("db".to_string(), ComposeService::new_db());
 			secrets.insert(
@@ -746,3 +599,23 @@ pub(super) fn render(answers: &crate::cli::init::Answers, database: bool) -> ser
 	let bytes = render_for(answers, database).expect("render");
 	serde_json::from_str(&bytes).expect("parse")
 }
+
+#[cfg(test)]
+#[path = "compose_tests_clamav.rs"]
+mod tests_clamav;
+
+#[cfg(test)]
+#[path = "compose_tests_db_startup.rs"]
+mod tests_db_startup;
+
+#[cfg(test)]
+#[path = "compose_password_tests_volume.rs"]
+mod tests_password_volume;
+
+#[cfg(test)]
+#[path = "compose_tests_bind_paths.rs"]
+mod tests_bind_paths;
+
+#[cfg(test)]
+#[path = "compose_tests_dns_credentials.rs"]
+mod tests_dns_credentials;

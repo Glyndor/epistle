@@ -44,6 +44,7 @@ pub(super) fn apply_error_name(error: &ApplyError) -> &'static str {
 		ApplyError::RsaKeygen(_) => "RsaKeygen",
 		ApplyError::Rng(_) => "Rng",
 		ApplyError::ExistingSecretUnreadable(..) => "ExistingSecretUnreadable",
+		ApplyError::DatabaseVolume(_) => "DatabaseVolume",
 	}
 }
 

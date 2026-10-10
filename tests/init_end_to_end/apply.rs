@@ -116,6 +116,21 @@ fn second_apply_with_database_leaves_compose_and_password_files_untouched() {
 	// either of them would re-write a file the plan
 	// said was identical.
 	let dir = tempfile::tempdir().expect("tempdir");
+	let probe_dir = dir.path().join("bin");
+	std::fs::create_dir(&probe_dir).unwrap();
+	let probe = probe_dir.join("podman");
+	std::fs::write(
+		&probe,
+		"#!/bin/sh\n[ \"$*\" = 'volume exists epistle_epistle-pgdata' ] || exit 2\nexit 1\n",
+	)
+	.unwrap();
+	use std::os::unix::fs::PermissionsExt;
+	std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+	let probe_path = format!(
+		"{}:{}",
+		probe_dir.display(),
+		std::env::var("PATH").unwrap_or_default()
+	);
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("etc").join("mail.toml");
 	let body = format!(
@@ -131,6 +146,7 @@ fn second_apply_with_database_leaves_compose_and_password_files_untouched() {
 	);
 	let answers = write_answers(dir.path(), "answers.toml", &body);
 	let mut cmd = Command::new(binary());
+	cmd.env("PATH", &probe_path);
 	cmd.args(["init", "--answers", answers.to_str().unwrap()]);
 	cmd.stdin(Stdio::null())
 		.stdout(Stdio::piped())
@@ -155,6 +171,7 @@ fn second_apply_with_database_leaves_compose_and_password_files_untouched() {
 	let compose_mtime = mtime(&compose_path);
 
 	let mut cmd = Command::new(binary());
+	cmd.env("PATH", &probe_path);
 	cmd.args(["init", "--answers", answers.to_str().unwrap()]);
 	cmd.stdin(Stdio::null())
 		.stdout(Stdio::piped())

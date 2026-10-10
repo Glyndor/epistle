@@ -59,20 +59,11 @@ fn mail_command_uses_serve_and_config_path() {
 }
 
 #[test]
-fn mail_volumes_have_identical_paths_on_both_sides_of_the_colon() {
+fn mail_bind_volumes_have_identical_source_and_target_paths() {
 	let value = render(&minimal_answers(), false);
-	let volumes = value["services"]["mail"]["volumes"]
-		.as_array()
-		.expect("volumes is an array");
-	for entry in volumes {
-		let s = entry.as_str().expect("volume is a string");
-		if s.contains(':') && !s.contains("epistle-pg") {
-			let (host, rest) = s.split_once(':').expect("colon present");
-			let container = rest.split(':').next().unwrap_or(rest);
-			assert_eq!(
-				host, container,
-				"host and container paths must be identical for non-named volumes, got {s:?}"
-			);
+	for mount in value["services"]["mail"]["volumes"].as_array().unwrap() {
+		if mount["type"] == "bind" {
+			assert_eq!(mount["source"], mount["target"]);
 		}
 	}
 }
@@ -86,9 +77,13 @@ fn mail_depends_on_db_when_database_is_on() {
 }
 
 #[test]
-fn mail_has_no_depends_on_when_database_is_off() {
+fn mail_depends_only_on_clamav_when_database_is_off() {
 	let value = render(&minimal_answers(), false);
-	assert!(value["services"]["mail"].get("depends_on").is_none());
+	assert_eq!(
+		value["services"]["mail"]["depends_on"]["clamav"]["condition"],
+		"service_healthy"
+	);
+	assert!(value["services"]["mail"]["depends_on"].get("db").is_none());
 }
 
 #[test]

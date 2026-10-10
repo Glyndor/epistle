@@ -18,7 +18,14 @@
 
 use std::fs;
 
-use super::{db_password_path, ensure_compose_file, ensure_db_password, stack_answers};
+use super::{db_password_path, ensure_compose_file, ensure_db_password_with_probe, stack_answers};
+
+fn ensure_db_password(
+	data_dir: &std::path::Path,
+	report: &mut crate::cli::init::apply::Report,
+) -> Result<std::path::PathBuf, crate::cli::init::apply::ApplyError> {
+	ensure_db_password_with_probe(data_dir, report, |_| Ok(false))
+}
 
 #[test]
 fn db_password_is_32_alphanumeric_chars() {

@@ -211,6 +211,12 @@ fn apply_preserves_operator_keys_inside_the_database_table() {
 	answers.data_dir = data_dir.clone();
 	answers.config_path = config_path.clone();
 	answers.services.database = true;
+	crate::cli::init::compose::ensure_db_password_with_probe(
+		&data_dir,
+		&mut Report::default(),
+		|_| Ok(false),
+	)
+	.unwrap();
 	let outcome = apply(&answers);
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
 	let merged = std::fs::read_to_string(&config_path).expect("read merged");
@@ -231,18 +237,8 @@ fn apply_preserves_operator_keys_inside_the_database_table() {
 	);
 }
 
-/// Re-running with `services.database = false` against a config
-/// that carries an operator-curated `[database]` table must leave
-/// the table untouched: the operator may run their own
-/// PostgreSQL outside the stack and the apply phase has no
-/// reason to wipe the section. The previous shape listed
-/// `[database]` in `DROP_WHEN_NOT_IN_DESIRED` and silently
-/// removed the whole table on every `database = false` re-run,
-/// losing `directory`, `max_connections`, and any future field
-/// the operator added. The new shape keeps the table verbatim:
-/// the desired config has no `[database]` key, so the
-/// reconciliation passes through and the existing table
-/// survives.
+/// The operator's database uses a different socket from the generated
+/// stack and must retain its URL and tuning when the stack database is off.
 #[test]
 fn apply_keeps_the_database_table_when_services_database_is_false() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -254,7 +250,7 @@ fn apply_keeps_the_database_table_when_services_database_is_false() {
 		 data_dir = \"{}\"\n\
 		 domains = [\"example.org\"]\n\n\
 		 [database]\n\
-		 url = \"postgres://epistle@%2Frun%2Fpostgresql/epistle\"\n\
+		 url = \"postgres://epistle@%2Frun%2Foperator-postgresql/epistle\"\n\
 		 directory = true\n\
 		 max_connections = 32\n",
 		data_dir.display(),

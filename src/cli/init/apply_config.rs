@@ -12,6 +12,8 @@ use crate::cli::init::answers::{Answers, Services};
 use crate::cli::init::apply::ApplyError;
 use crate::config::{Config, Listener, ListenerKind};
 
+const STACK_DATABASE_URL: &str = "postgres://epistle@%2Frun%2Fpostgresql/epistle";
+
 /// Build the desired `Config` value from the answers. Each listener
 /// line carries its kind and an explicit `addr`; the operator-visible
 /// default of `127.0.0.1` is no longer the answer for any listener
@@ -33,6 +35,12 @@ pub(super) struct DesiredConfig {
 	pub(super) dns: Option<DesiredDns>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) database: Option<DesiredDatabase>,
+	pub(super) antispam: DesiredAntispam,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DesiredAntispam {
+	clamd_socket: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,7 +215,7 @@ pub(super) fn build_config(
 	// is bind-mounted at the same path on both sides.
 	let database = if answers.services.database {
 		Some(DesiredDatabase {
-			url: "postgres://epistle@%2Frun%2Fpostgresql/epistle".to_string(),
+			url: STACK_DATABASE_URL.to_string(),
 			password_file: crate::cli::init::compose::db_password_path(&answers.data_dir)
 				.display()
 				.to_string(),
@@ -230,6 +238,9 @@ pub(super) fn build_config(
 		},
 		dns,
 		database,
+		antispam: DesiredAntispam {
+			clamd_socket: "/run/clamav/clamd.sock".to_string(),
+		},
 	})
 }
 
@@ -240,21 +251,9 @@ pub(super) fn build_config(
 /// from the file instead of leaving it preserved as an "operator
 /// setting" the operator never asked for.
 ///
-/// `[database]` is intentionally absent from both this list and
-/// from `DROP_WHEN_NOT_IN_DESIRED`. The apply phase only manages
-/// the table when `services.database = true`: the desired config
-/// carries `url` and `password_file`, and the merge replaces those
-/// two keys while preserving every other key the operator added
-/// (`directory`, `max_connections`, future fields). When
-/// `services.database = false`, the table is left untouched: an
-/// operator who runs their own PostgreSQL outside the stack has
-/// the table in the config the apply phase should not touch, and
-/// wiping the whole table on a re-run would silently drop their
-/// setup. The previous shape listed `database` in
-/// `DROP_WHEN_NOT_IN_DESIRED` and removed the whole table on
-/// `database = false`; a re-run with the database service off
-/// and a `[database]` table the operator wanted to keep lost the
-/// table every time.
+/// `[database]` is merged per key when enabled. When disabled, only
+/// the section identifying the generated stack socket is removed;
+/// an operator's different database URL remains untouched.
 const INIT_MANAGED_KEYS: &[&str] = &[
 	"hostname",
 	"public_ipv4",
@@ -448,15 +447,15 @@ pub(crate) fn reconcile(
 				}
 				existing_table.remove(*key);
 			}
-			// `[database]` is not in `INIT_MANAGED_KEYS` and is never
-			// in `DROP_WHEN_NOT_IN_DESIRED`: the apply phase only
-			// touches the table when the desired config carries it
-			// (i.e. `services.database = true`), and the per-key
-			// merge below replaces `url` and `password_file` while
-			// preserving the operator's other fields. A re-run with
-			// `services.database = false` leaves the table untouched,
-			// so an operator who runs their own PostgreSQL keeps
-			// their setup across `init` invocations.
+			if !desired_table.contains_key("database")
+				&& existing_table
+					.get("database")
+					.and_then(|db| db.get("url"))
+					.and_then(Value::as_str)
+					== Some(STACK_DATABASE_URL)
+			{
+				existing_table.remove("database");
+			}
 			for (key, value) in desired_table {
 				if key == "listeners" && keep_existing_listeners {
 					continue;
@@ -739,3 +738,11 @@ fn random_hex_suffix() -> String {
 	}
 	out
 }
+
+#[cfg(test)]
+#[path = "apply_config_tests_clamav.rs"]
+mod tests_clamav;
+
+#[cfg(test)]
+#[path = "apply_config_tests_database_off.rs"]
+mod tests_database_off;
