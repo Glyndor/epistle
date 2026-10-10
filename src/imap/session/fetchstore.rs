@@ -97,7 +97,8 @@ impl Session {
 			));
 		}
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		// +FLAGS overshoots only through what a message already carries,
 		// so every selected message is checked first: either all of them
 		// take the new keywords or none is changed.
@@ -107,7 +108,7 @@ impl Session {
 					continue;
 				};
 				let selector = if uid { message.uid } else { sequence_number };
-				if sequence.contains(selector, total, &saved)
+				if sequence.contains(selector, maximum, &saved)
 					&& super::mailbox::count_keywords(&next_flags(mode, &message.flags, &flags))
 						.is_none()
 				{
@@ -125,7 +126,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total, &saved) {
+			if !sequence.contains(selector, maximum, &saved) {
 				continue;
 			}
 			// CONDSTORE UNCHANGEDSINCE: a concurrently-changed message is not
@@ -226,7 +227,8 @@ impl Session {
 			_ => Vec::new(),
 		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		let mut bytes = Vec::new();
 		// QRESYNC VANISHED: report UIDs expunged since CHANGEDSINCE before FETCHes.
 		if let (true, Some(since)) = (vanished, changed_since) {
@@ -241,7 +243,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if !sequence.contains(selector, total, &saved) {
+			if !sequence.contains(selector, maximum, &saved) {
 				continue;
 			}
 			// CONDSTORE CHANGEDSINCE: skip messages not changed since `n`.

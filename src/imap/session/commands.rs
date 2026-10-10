@@ -60,7 +60,8 @@ impl Session {
 			_ => Vec::new(),
 		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maximum = snapshot.max_identifier(uid);
 		let mut matched = Vec::new();
 		let mut source_uids = Vec::new();
 		for sequence_number in 1..=total {
@@ -68,7 +69,7 @@ impl Session {
 				continue;
 			};
 			let selector = if uid { message.uid } else { sequence_number };
-			if sequence.contains(selector, total, &saved) {
+			if sequence.contains(selector, maximum, &saved) {
 				matched.push(sequence_number);
 				source_uids.push(message.uid);
 			}
@@ -130,7 +131,8 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maxima = (total, snapshot.max_identifier(true));
 		// SEARCH criteria never carry SEARCHRES `$` placeholders — only the
 		// consuming commands (FETCH/STORE/COPY/UID EXPUNGE) do — so the saved
 		// set is irrelevant here.
@@ -146,9 +148,9 @@ impl Session {
 				continue;
 			};
 			let mut content: Option<String> = None;
-			let matches = criteria
-				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
+			let matches = criteria.iter().all(|key| {
+				search_matches(key, message, seqno, maxima, snapshot, &mut content, &[])
+			});
 			if matches {
 				hits.push(if uid { message.uid } else { seqno });
 				saved_uids.push(message.uid);
@@ -255,7 +257,8 @@ impl Session {
 
 /// UIDs of every message in `snapshot` matching all search keys.
 fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
-	let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+	let total = snapshot.max_identifier(false);
+	let maxima = (total, snapshot.max_identifier(true));
 	let mut hits = Vec::new();
 	for seqno in 1..=total {
 		let Some(message) = snapshot.by_sequence(seqno) else {
@@ -264,7 +267,7 @@ fn matching_uids(snapshot: &Snapshot, criteria: &[SearchKey]) -> Vec<u32> {
 		let mut content: Option<String> = None;
 		if criteria
 			.iter()
-			.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]))
+			.all(|key| search_matches(key, message, seqno, maxima, snapshot, &mut content, &[]))
 		{
 			hits.push(message.uid);
 		}

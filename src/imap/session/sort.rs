@@ -83,7 +83,8 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 
-		let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
+		let total = snapshot.max_identifier(false);
+		let maxima = (total, snapshot.max_identifier(true));
 		let needs_text = keys
 			.iter()
 			.any(|(_, key)| matches!(key, SortKey::From | SortKey::To | SortKey::Cc));
@@ -95,9 +96,9 @@ impl Session {
 				continue;
 			};
 			let mut content: Option<String> = None;
-			let matches = criteria
-				.iter()
-				.all(|key| search_matches(key, message, seqno, total, snapshot, &mut content, &[]));
+			let matches = criteria.iter().all(|key| {
+				search_matches(key, message, seqno, maxima, snapshot, &mut content, &[])
+			});
 			if !matches {
 				continue;
 			}

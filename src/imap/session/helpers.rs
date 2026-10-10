@@ -78,7 +78,7 @@ pub(super) fn search_matches(
 	key: &SearchKey,
 	message: &mailbox::MessageRef,
 	seqno: u32,
-	total: u32,
+	maxima: (u32, u32),
 	snapshot: &Snapshot,
 	content: &mut Option<String>,
 	saved: &[u32],
@@ -94,21 +94,22 @@ pub(super) fn search_matches(
 			};
 			has == *wanted
 		}
-		SearchKey::Sequence(set) => set.contains(seqno, total, saved),
-		SearchKey::UidSet(set) => set.contains(message.uid, total, saved),
+		// UID criteria use the highest UID even in a non-UID search command.
+		SearchKey::Sequence(set) => set.contains(seqno, maxima.0, saved),
+		SearchKey::UidSet(set) => set.contains(message.uid, maxima.1, saved),
 		SearchKey::Header(name, needle) => header_matches(name, needle, snapshot, message, content),
 		SearchKey::Text(needle) => {
 			let text = content.get_or_insert_with(|| load_content(snapshot, message));
 			text.contains(needle.as_str())
 		}
 		SearchKey::Or(a, b) => {
-			search_matches(a, message, seqno, total, snapshot, content, saved)
-				|| search_matches(b, message, seqno, total, snapshot, content, saved)
+			search_matches(a, message, seqno, maxima, snapshot, content, saved)
+				|| search_matches(b, message, seqno, maxima, snapshot, content, saved)
 		}
-		SearchKey::Not(k) => !search_matches(k, message, seqno, total, snapshot, content, saved),
+		SearchKey::Not(k) => !search_matches(k, message, seqno, maxima, snapshot, content, saved),
 		SearchKey::And(keys) => keys
 			.iter()
-			.all(|k| search_matches(k, message, seqno, total, snapshot, content, saved)),
+			.all(|k| search_matches(k, message, seqno, maxima, snapshot, content, saved)),
 		SearchKey::Before(y, m, d) => {
 			systemtime_to_epoch_day(message.internal_date) < date_to_epoch_day(*y, *m, *d)
 		}

@@ -575,7 +575,11 @@ impl SequenceSet {
 			// the same as its ascending form (1:*).
 			let start = if start == 0 { max } else { start };
 			let end = if end == 0 { max } else { end };
-			let (low, high) = if start <= end { (start, end) } else { (end, start) };
+			let (low, high) = if start <= end {
+				(start, end)
+			} else {
+				(end, start)
+			};
 			value >= low && value <= high
 		})
 	}

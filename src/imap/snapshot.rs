@@ -115,6 +115,16 @@ impl Snapshot {
 		self.messages.len()
 	}
 
+	/// Maximum used to resolve `*`: highest UID for UID sets, message count
+	/// for sequence sets. Empty mailboxes have no matching identifier.
+	pub fn max_identifier(&self, uid: bool) -> u32 {
+		if uid {
+			self.messages().map(|m| m.uid).max().unwrap_or(0)
+		} else {
+			u32::try_from(self.len()).unwrap_or(u32::MAX)
+		}
+	}
+
 	/// Whether the snapshot has no messages.
 	pub fn is_empty(&self) -> bool {
 		self.messages.is_empty()
