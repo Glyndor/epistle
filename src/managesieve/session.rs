@@ -148,8 +148,8 @@ impl<B: Backend> Session<B> {
 
 	/// Whether an account has been adopted via `AUTHENTICATE` (or the
 	/// test-only `adopt_account_for_test`). The command loop uses this
-	/// to pick the right read deadline — short pre-auth, longer
-	/// post-auth — so a slow client cannot exhaust the listener's
+	/// to pick the right read deadline, short pre-auth, longer
+	/// post-auth, so a slow client cannot exhaust the listener's
 	/// connection slots.
 	pub fn account_is_some(&self) -> bool {
 		self.account.is_some()

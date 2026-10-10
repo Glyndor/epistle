@@ -86,7 +86,7 @@ async fn truncated_literal_at_eof_is_not_stored() {
 	let _ = read_chunk(&mut client).await;
 
 	// Announce a 100-byte script and send a short valid-prefix payload
-	// ("require \"x\";" — 13 bytes) then close. With the bug the parser
+	// ("require \"x\";", 13 bytes) then close. With the bug the parser
 	// accepts the prefix as a complete script (it has a balanced
 	// require + semicolon and an identifier), so 13 bytes are stored
 	// under "a.sieve". With the fix the server detects truncation and
