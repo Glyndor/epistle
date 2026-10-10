@@ -112,16 +112,13 @@ pub struct Failure {
 }
 
 impl TlsReport {
-	/// Sum of `failed-session-count` across every policy and every
-	/// failure-detail. This is the number the metrics counter
+	/// Sum of policy summary failure session counts. A session may appear
+	/// under several failure types, so details cannot be summed. The counter
 	/// `tlsrpt_failed_sessions` increments by.
 	pub fn failing_count(&self) -> u64 {
-		self.policies
-			.iter()
-			.flat_map(|p| p.failure_details.iter())
-			.fold(0u64, |total, f| {
-				total.saturating_add(f.failed_session_count)
-			})
+		self.policies.iter().fold(0u64, |total, policy| {
+			total.saturating_add(policy.summary.total_failure_session_count)
+		})
 	}
 
 	/// File-name component derived from `organization-name`. The mapping
@@ -242,3 +239,7 @@ fn capped_failures<'de, D: serde::Deserializer<'de>>(
 #[cfg(test)]
 #[path = "tlsrpt_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tlsrpt_tests_summary.rs"]
+mod tests_summary;

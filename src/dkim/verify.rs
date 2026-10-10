@@ -80,6 +80,32 @@ pub async fn verify_message(dns: &dyn DnsLookup, raw: &[u8]) -> Vec<DkimResult> 
 	results
 }
 
+/// RFC 8460 requires a reporting-domain signature without a body length tag.
+pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
+	let Some(from_domain) = crate::dmarc::from_domain(raw) else {
+		return false;
+	};
+	let Some(message) = Message::split(raw) else {
+		return false;
+	};
+	for (index, header) in message.headers.iter().enumerate() {
+		if !header.name.eq_ignore_ascii_case("DKIM-Signature") {
+			continue;
+		}
+		let Ok(signature) = super::signature::parse(header.value) else {
+			continue;
+		};
+		if signature.body_length.is_none()
+			&& signature.domain.eq_ignore_ascii_case(&from_domain)
+			&& signature.signed_headers.iter().any(|name| name == "from")
+			&& verify_one(dns, &message, index, header.value).await.outcome == DkimOutcome::Pass
+		{
+			return true;
+		}
+	}
+	false
+}
+
 async fn verify_one(
 	dns: &dyn DnsLookup,
 	message: &Message<'_>,

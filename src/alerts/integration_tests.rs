@@ -174,6 +174,7 @@ async fn runner_queues_alert_email_to_spool() {
 		data: entry.data.clone(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	let _ = message;

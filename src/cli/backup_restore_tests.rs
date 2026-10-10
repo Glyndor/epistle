@@ -282,6 +282,7 @@ VGhpcyBpcyB0aGUgYXR0YWNobWVudC4=\r\n\
 		data: b"Subject: queued\r\n\r\npending outbound body\r\n".to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	let spool_id = spool.store(&accepted).expect("spool store");

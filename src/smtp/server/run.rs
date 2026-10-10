@@ -377,6 +377,15 @@ impl Server {
 							}
 						}
 					}
+					if let Some(dns) = &self.spf
+						&& message.recipients.iter().any(|recipient| {
+							recipient
+								.split_once('@')
+								.is_some_and(|(local, _)| local.eq_ignore_ascii_case("tlsrpt"))
+						}) {
+						message.tlsrpt_verified =
+							crate::dkim::verify_tlsrpt(dns.as_ref(), &message.data).await;
+					}
 					let header = received_header(
 						session.helo_domain(),
 						peer,

@@ -194,6 +194,7 @@ mod tests {
 			data: b"Subject: hi\r\n\r\nhello\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		}
 	}

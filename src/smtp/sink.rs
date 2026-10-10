@@ -61,6 +61,7 @@ mod tests {
 			data: b"hello\r\n".to_vec(),
 			require_tls: false,
 			mailbox: None,
+			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
 		};
 		sink.deliver(message.clone()).expect("delivery succeeds");

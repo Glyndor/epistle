@@ -28,6 +28,7 @@ fn message() -> AcceptedMessage {
 		data: BODY.to_vec(),
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	}
 }

@@ -35,6 +35,7 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 				data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
 				require_tls: false,
 				mailbox: None,
+				tlsrpt_verified: false,
 				no_dsn: Vec::new(),
 			})
 			.expect("store");

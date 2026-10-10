@@ -142,6 +142,7 @@ pub async fn send(
 		data,
 		require_tls: false,
 		mailbox: None,
+		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
 	let id = state
