@@ -43,7 +43,11 @@ fn truncated_dnssec_reply_fails_to_decode() {
 	// nobody quietly switches the resolver back to UDP thinking the decode
 	// error is harmless.
 	let bytes: &[u8] = include_bytes!("../../tests/fixtures/dns/ds_tc_pasta.bin");
-	assert_eq!(bytes.len(), 512, "saved reply must be exactly 512 bytes (the stub's truncation cap)");
+	assert_eq!(
+		bytes.len(),
+		512,
+		"saved reply must be exactly 512 bytes (the stub's truncation cap)"
+	);
 	let error = match hickory_resolver::proto::op::Message::from_vec(bytes) {
 		Ok(_) => panic!(
 			"the saved 512-byte reply is truncated; hickory must NOT accept it as a valid message \
