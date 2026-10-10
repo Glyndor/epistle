@@ -25,6 +25,10 @@ use super::store::ScriptStore;
 const READ_BUFFER: usize = 4096;
 /// Idle timeout before the connection is dropped (30 minutes).
 const TIMEOUT: Duration = Duration::from_secs(1800);
+/// Pre-authentication read deadline. An unauthenticated client must
+/// not be able to hold a connection slot forever, so the deadline is
+/// much shorter than the post-auth one.
+const DEFAULT_PREAUTH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default maximum script literal size (1 MiB). Configurable per server
 /// so the test suite can drive a small bound.
 const DEFAULT_MAX_LITERAL: usize = 1 << 20;
@@ -68,6 +72,7 @@ pub struct Server {
 	tls: TlsAcceptor,
 	max_connections: usize,
 	max_literal: usize,
+	preauth_timeout: Duration,
 }
 
 impl Server {
@@ -79,6 +84,7 @@ impl Server {
 			tls,
 			max_connections: MAX_CONNECTIONS,
 			max_literal: DEFAULT_MAX_LITERAL,
+			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
 		}
 	}
 
@@ -97,6 +103,15 @@ impl Server {
 		if max > 0 {
 			self.max_literal = max;
 		}
+		self
+	}
+
+	/// Set the pre-authentication read deadline. The default is 60
+	/// seconds, short enough that an idle attacker cannot exhaust the
+	/// listener's connection slots. Tests use a 2-second bound so a
+	/// regression is caught in seconds, not minutes.
+	pub fn with_preauth_timeout(mut self, timeout: Duration) -> Self {
+		self.preauth_timeout = timeout;
 		self
 	}
 
@@ -164,7 +179,7 @@ async fn handle(
 		};
 		let mut session = Session::new(backend, true);
 		session.adopt_account_for_test(account);
-		run_command_loop(stream, session, self.max_literal, None).await
+		run_command_loop(stream, session, self.max_literal, self.preauth_timeout, None).await
 	}
 
 	async fn handle_inner<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
@@ -177,7 +192,14 @@ async fn handle(
 		};
 		let mut session = Session::new(backend, false);
 		session.set_peer_ip(Some(peer_ip));
-		run_command_loop(stream, session, self.max_literal, Some(&self.tls)).await
+		run_command_loop(
+			stream,
+			session,
+			self.max_literal,
+			self.preauth_timeout,
+			Some(&self.tls),
+		)
+		.await
 	}
 }
 
@@ -188,6 +210,7 @@ async fn run_command_loop<S, B>(
 	stream: S,
 	mut session: Session<B>,
 	max_literal: usize,
+	preauth_timeout: Duration,
 	tls_acceptor: Option<&tokio_rustls::TlsAcceptor>,
 ) -> std::io::Result<()>
 where
@@ -201,7 +224,19 @@ where
 	let mut decoder = LineDecoder::new();
 	let mut buffer = [0u8; READ_BUFFER];
 	loop {
-		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer).await? else {
+		let read_deadline = if session.account_is_some() {
+			TIMEOUT
+		} else {
+			preauth_timeout
+		};
+		let Some(line) =
+			read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
+		else {
+			write(
+				&mut stream,
+				&Response::Bye("Pre-authentication timeout.".into()),
+			)
+			.await?;
 			return Ok(());
 		};
 		let Ok(line) = String::from_utf8(line) else {
@@ -284,11 +319,15 @@ let response = match command::parse(&line, literal) {
 	}
 }
 
-/// Read one command line, or `None` on clean EOF/timeout.
+/// Read one command line, or `None` on clean EOF/timeout. `deadline`
+/// is the per-read timeout the caller wants to enforce; the post-auth
+/// deadline is generous (30 minutes), the pre-auth deadline is tight
+/// so an idle attacker cannot exhaust the listener's connection slots.
 async fn read_line(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
+	deadline: Duration,
 ) -> std::io::Result<Option<Vec<u8>>> {
 	loop {
 		match decoder.next_line() {
@@ -296,7 +335,7 @@ async fn read_line(
 			Ok(None) => {}
 			Err(_) => return Ok(None),
 		}
-		let read = match tokio::time::timeout(TIMEOUT, stream.read(buffer)).await {
+		let read = match tokio::time::timeout(deadline, stream.read(buffer)).await {
 			Ok(Ok(n)) => n,
 			Ok(Err(error)) => return Err(error),
 			Err(_) => return Ok(None),

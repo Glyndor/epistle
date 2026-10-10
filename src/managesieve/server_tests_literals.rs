@@ -135,3 +135,43 @@ async fn truncated_literal_at_eof_is_not_stored() {
 		"truncated literal at EOF must not create a script; saw: {stored:?}"
 	);
 }
+
+/// An unauthenticated client must not be able to hold a connection slot
+/// forever. The server enforces a pre-auth read deadline that fires
+/// without any traffic on the socket.
+#[tokio::test(start_paused = true)]
+async fn preauth_read_timeout_drops_connection() {
+	use std::time::Duration;
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let (acceptor, _cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(dir.path().to_path_buf(), directory(), acceptor)
+		.with_preauth_timeout(Duration::from_secs(2));
+	let (mut client, server_stream) = tokio::io::duplex(256 * 1024);
+	let task = tokio::spawn(async move { server.handle_stream(server_stream).await });
+
+	// Drain the greeting.
+	let _ = read_chunk(&mut client).await;
+
+	// Send nothing. Tokio's paused clock advances once the test is
+	// otherwise idle, so the 2-second pre-auth deadline fires without
+	// waiting on wall-clock time.
+	let mut seen = String::new();
+	loop {
+		let mut chunk = [0u8; 4096];
+		match tokio::time::timeout(Duration::from_secs(5), client.read(&mut chunk)).await {
+			Ok(Ok(0)) => break,
+			Ok(Ok(n)) => seen.push_str(&String::from_utf8_lossy(&chunk[..n])),
+			Ok(Err(_)) => break,
+			Err(_) => panic!(
+				"server did not close within 5s; partial reply: {seen}"
+			),
+		}
+	}
+	assert!(
+		seen.contains("BYE") && seen.contains("timeout"),
+		"expected a BYE timeout response, saw: {seen}"
+	);
+	let _ = task.await;
+}
