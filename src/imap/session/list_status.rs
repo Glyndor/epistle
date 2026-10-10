@@ -12,6 +12,7 @@ impl Session {
 		pattern: &str,
 		return_status: &[StatusItem],
 		select_subscribed: bool,
+		select_special_use: bool,
 		return_attributes: &[ListAttribute],
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
@@ -23,13 +24,17 @@ impl Session {
 		let mut response = String::new();
 		for name in mailbox::list(&self.data_dir, &account) {
 			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
+			let special_use = helpers::special_use_attribute(&name);
 			// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists only subscribed boxes.
-			if !matches || (select_subscribed && !subscribed.contains(&name)) {
+			if !matches
+				|| (select_subscribed && !subscribed.contains(&name))
+				|| (select_special_use && special_use.is_empty())
+			{
 				continue;
 			}
 			let mut attributes =
 				if self.imap4rev2 || return_attributes.contains(&ListAttribute::SpecialUse) {
-					helpers::special_use_attribute(&name).to_string()
+					special_use.to_string()
 				} else {
 					String::new()
 				};
@@ -121,3 +126,7 @@ impl Session {
 		Some(parts)
 	}
 }
+
+#[cfg(test)]
+#[path = "list_status_tests_special_use.rs"]
+mod special_use_selection;

@@ -7,6 +7,7 @@ mod acl;
 mod auth;
 mod codes;
 mod commands;
+mod defaults;
 mod expunge;
 mod fetchstore;
 mod helpers;
@@ -143,6 +144,7 @@ impl Session {
 				pattern,
 				return_status,
 				select_subscribed,
+				select_special_use,
 				return_attributes,
 				..
 			} => self.list(
@@ -150,6 +152,7 @@ impl Session {
 				&pattern,
 				&return_status,
 				select_subscribed,
+				select_special_use,
 				&return_attributes,
 			),
 			Command::Select { mailbox, qresync } => self.select(&tag, &mailbox, false, qresync),
@@ -275,10 +278,7 @@ impl Session {
 			self.auth_protocol,
 		);
 		match verified {
-			Some(account) => {
-				self.state = State::Authenticated { account };
-				Output::text(format!("{tag} OK LOGIN completed\r\n"))
-			}
+			Some(account) => self.auth_success(tag, account, "LOGIN completed"),
 			None => {
 				*login_failures += 1;
 				let response = format!("{tag} NO LOGIN failed\r\n");

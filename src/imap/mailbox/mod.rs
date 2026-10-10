@@ -7,7 +7,10 @@
 //! callers reach the type through the `crate::imap::mailbox` path
 //! the rest of the crate already uses.
 
+mod defaults;
 mod flag;
+
+pub(crate) use defaults::ensure_defaults;
 
 pub use flag::{
 	Flag, count_keywords, dedup_flags, flag_key, flag_set_contains, keywords_in, render_flags,

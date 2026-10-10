@@ -106,3 +106,7 @@ mod rfc9051_uid_star;
 
 #[path = "session_tests_rfc9051_poll.rs"]
 mod rfc9051_poll;
+
+#[cfg(test)]
+#[path = "session_tests_default_mailboxes.rs"]
+mod default_mailboxes;

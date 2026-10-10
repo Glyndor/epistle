@@ -195,7 +195,7 @@ fn append_requires_authentication_and_known_mailbox() {
 	assert_eq!(output.collect_literal, None);
 
 	let mut session = logged_in(dir.path());
-	let output = session.command_line("a2 APPEND Archive {5}");
+	let output = session.command_line("a2 APPEND Missing {5}");
 	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
 }
 
@@ -371,25 +371,25 @@ fn mailbox_lifecycle() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 
-	let output = session.command_line("a2 CREATE Sent");
+	let output = session.command_line("a2 CREATE Work");
 	assert!(text(&output).contains("a2 OK"), "{}", text(&output));
 
 	// APPEND into the new mailbox works now.
-	let output = session.command_line("a3 APPEND Sent {10}");
+	let output = session.command_line("a3 APPEND Work {10}");
 	assert_eq!(output.collect_literal, Some(10));
 	let output = session.literal_done(b"sent body\n");
 	assert!(text(&output).contains("a3 OK"), "{}", text(&output));
 
-	let output = session.command_line("a4 SELECT Sent");
+	let output = session.command_line("a4 SELECT Work");
 	assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
 	session.command_line("a5 CLOSE");
 
 	let output = session.command_line(r#"a6 LIST "" "*""#);
 	let response = text(&output);
 	assert!(response.contains("\"INBOX\""), "{response}");
-	assert!(response.contains("\"Sent\""), "{response}");
+	assert!(response.contains("\"Work\""), "{response}");
 
-	let output = session.command_line("a7 RENAME Sent Outbox");
+	let output = session.command_line("a7 RENAME Work Outbox");
 	assert!(text(&output).contains("a7 OK"), "{}", text(&output));
 	let output = session.command_line("a8 SELECT Outbox");
 	assert!(text(&output).contains("* 1 EXISTS"), "{}", text(&output));
