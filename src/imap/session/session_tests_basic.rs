@@ -81,7 +81,7 @@ fn fetch_returns_flags_size_and_body() {
 
 	let output = session.command_line("a3 FETCH 1 (FLAGS RFC822.SIZE UID BODY[])");
 	let response = text(&output);
-	assert!(response.contains("* 1 FETCH (FLAGS ()"), "{response}");
+	assert!(response.contains(r"* 1 FETCH (FLAGS (\Seen)"), "{response}");
 	assert!(
 		response.contains(&format!("RFC822.SIZE {}", body.len())),
 		"{response}"
