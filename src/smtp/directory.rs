@@ -539,53 +539,6 @@ impl Directory {
 		crate::totp::verify(&secret_bytes, code, now).then_some(pass)
 	}
 
-	/// Attach SCRAM credentials (account name → stored credentials).
-	pub fn with_scram(
-		mut self,
-		scram: impl IntoIterator<Item = (String, super::scram::ScramStored)>,
-	) -> Self {
-		self.scram = scram
-			.into_iter()
-			.map(|(name, stored)| (name.to_ascii_lowercase(), stored))
-			.collect();
-		self
-	}
-
-	/// Test-only: attach a per-directory SCRAM credential-lookup
-	/// counter.
-	#[cfg(test)]
-	pub fn with_scram_lookup_counter(
-		mut self,
-		counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-	) -> Self {
-		self.scram_lookup_counter = Some(counter);
-		self
-	}
-
-	/// Resolve a login to its SCRAM credentials, or `None` when the identity is
-	/// unknown or has no SCRAM credentials.
-	pub fn scram_credentials(&self, login: &str) -> Option<super::scram::ScramCredentials> {
-		// Test-only: bump the per-directory lookup counter so the ban
-		// tests can assert the SCRAM credential lookup never happens
-		// when a ban short-circuits the exchange. The counter is
-		// per-Directory (set via `with_scram_lookup_counter`) so parallel
-		// tests in the same process do not race on a shared atomic.
-		#[cfg(test)]
-		if let Some(counter) = self.scram_lookup_counter.as_ref() {
-			counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		}
-		let account = if login.contains('@') {
-			let address = Address::parse(login).ok()?;
-			match self.resolve(&address) {
-				Resolution::Account(account) => account,
-				_ => return None,
-			}
-		} else {
-			login.to_ascii_lowercase()
-		};
-		self.scram.get(&account)?.to_credentials()
-	}
-
 	/// Attach domain aliases (alias domain → target domain). Both sides are
 	/// lowercased to match resolution.
 	pub fn with_domain_aliases(
@@ -738,6 +691,9 @@ impl Directory {
 		Some(format!("{}@{}", &local[..cut], domain).to_ascii_lowercase())
 	}
 }
+
+#[path = "directory_scram.rs"]
+mod scram;
 
 #[path = "directory_bans.rs"]
 pub mod bans;
