@@ -73,18 +73,18 @@ impl Parser<'_> {
 	}
 
 	/// Enter a new nesting level (block body or test list). Returns the
-/// current depth after the bump so the caller can pass it to the
-/// matching `leave`.
-fn enter(&mut self) -> Result<usize, ParseError> {
-	self.depth += 1;
-	if self.depth > MAX_NESTING_DEPTH {
-		return Err(ParseError::NestingDepth {
-			depth: self.depth,
-			max: MAX_NESTING_DEPTH,
-		});
+	/// current depth after the bump so the caller can pass it to the
+	/// matching `leave`.
+	fn enter(&mut self) -> Result<usize, ParseError> {
+		self.depth += 1;
+		if self.depth > MAX_NESTING_DEPTH {
+			return Err(ParseError::NestingDepth {
+				depth: self.depth,
+				max: MAX_NESTING_DEPTH,
+			});
+		}
+		Ok(self.depth)
 	}
-	Ok(self.depth)
-}
 
 	/// Leave a nesting level. Called from `commands` and `test_list` on
 	/// every exit; safe to call even if `enter` failed because the depth

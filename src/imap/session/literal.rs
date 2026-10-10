@@ -115,10 +115,7 @@ impl Session {
 					}
 				}
 			} else if sequence >= 1 && sequence <= total {
-				snapshot
-					.by_sequence(sequence)
-					.map(|m| m.uid)
-					.unwrap_or(0)
+				snapshot.by_sequence(sequence).map(|m| m.uid).unwrap_or(0)
 			} else {
 				return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
 			};

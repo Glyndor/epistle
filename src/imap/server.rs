@@ -141,9 +141,9 @@ impl Server {
 	}
 
 	/// Cap the idle / literal-read deadline. The default is 30 minutes
-/// (RFC 9051 §5.4); production callers leave it alone, but the test
-/// suite tightens it so a stalled APPEND/REPLACE literal does not stall
-/// a test for half an hour.
+	/// (RFC 9051 §5.4); production callers leave it alone, but the test
+	/// suite tightens it so a stalled APPEND/REPLACE literal does not stall
+	/// a test for half an hour.
 	pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
 		self.read_timeout = timeout;
 		self
@@ -268,7 +268,8 @@ impl Server {
 							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
-								if !session.notify_active() || wait_start.elapsed() >= self.read_timeout
+								if !session.notify_active()
+									|| wait_start.elapsed() >= self.read_timeout
 								{
 									tracing::debug!("IMAP idle timeout, closing connection");
 									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
@@ -368,20 +369,18 @@ impl Server {
 					let mut literal = decoder.take_buffered(size);
 					let mut chunk = [0u8; 4096];
 					while literal.len() < size {
-						let read = match tokio::time::timeout(
-							self.read_timeout,
-							stream.read(&mut chunk),
-						)
-						.await
-						{
-							Ok(Ok(n)) => n,
-							Ok(Err(e)) => return Err(e),
-							Err(_) => {
-								tracing::debug!("IMAP literal read timeout, closing");
-								let _ = stream.write_all(b"* BYE read timeout\r\n").await;
-								return Ok(());
-							}
-						};
+						let read =
+							match tokio::time::timeout(self.read_timeout, stream.read(&mut chunk))
+								.await
+							{
+								Ok(Ok(n)) => n,
+								Ok(Err(e)) => return Err(e),
+								Err(_) => {
+									tracing::debug!("IMAP literal read timeout, closing");
+									let _ = stream.write_all(b"* BYE read timeout\r\n").await;
+									return Ok(());
+								}
+							};
 						if read == 0 {
 							return Ok(());
 						}
@@ -397,20 +396,18 @@ impl Server {
 					// decoder keeps any surplus for the next command line.
 					let mut trailer = decoder.take_buffered(2);
 					while trailer.len() < 2 {
-						let read = match tokio::time::timeout(
-							self.read_timeout,
-							stream.read(&mut chunk),
-						)
-						.await
-						{
-							Ok(Ok(n)) => n,
-							Ok(Err(e)) => return Err(e),
-							Err(_) => {
-								tracing::debug!("IMAP literal trailer timeout, closing");
-								let _ = stream.write_all(b"* BYE read timeout\r\n").await;
-								return Ok(());
-							}
-						};
+						let read =
+							match tokio::time::timeout(self.read_timeout, stream.read(&mut chunk))
+								.await
+							{
+								Ok(Ok(n)) => n,
+								Ok(Err(e)) => return Err(e),
+								Err(_) => {
+									tracing::debug!("IMAP literal trailer timeout, closing");
+									let _ = stream.write_all(b"* BYE read timeout\r\n").await;
+									return Ok(());
+								}
+							};
 						if read == 0 {
 							return Ok(());
 						}

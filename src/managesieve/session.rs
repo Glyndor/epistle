@@ -140,8 +140,8 @@ impl<B: Backend> Session<B> {
 		self.account = Some(account.to_string());
 	}
 
-/// Set the client peer IP for ban-store enforcement. Called by the
-/// network layer after `accept()`; `None` for in-memory tests.
+	/// Set the client peer IP for ban-store enforcement. Called by the
+	/// network layer after `accept()`; `None` for in-memory tests.
 	pub fn set_peer_ip(&mut self, ip: Option<std::net::IpAddr>) {
 		self.peer_ip = ip;
 	}

@@ -17,7 +17,9 @@ fn directory() -> DirectoryHandle {
 
 /// Server whose max-literal cap is small enough to drive a rejection
 /// from a tiny payload in the test, without sending megabytes.
-fn small_max_literal_server(max_literal: usize) -> (
+fn small_max_literal_server(
+	max_literal: usize,
+) -> (
 	tokio::io::DuplexStream,
 	tokio::task::JoinHandle<std::io::Result<()>>,
 	tempfile::TempDir,
@@ -25,8 +27,8 @@ fn small_max_literal_server(max_literal: usize) -> (
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
 	let (acceptor, _cert) = crate::tls::test_support::acceptor_and_cert();
-	let server = Server::new(dir.path().to_path_buf(), directory(), acceptor)
-		.with_max_literal(max_literal);
+	let server =
+		Server::new(dir.path().to_path_buf(), directory(), acceptor).with_max_literal(max_literal);
 	let (client, server_stream) = tokio::io::duplex(256 * 1024);
 	let task = tokio::spawn(async move { server.handle_stream(server_stream).await });
 	(client, task, dir)
@@ -99,22 +101,24 @@ async fn truncated_literal_at_eof_is_not_stored() {
 	let (acceptor, _cert) = crate::tls::test_support::acceptor_and_cert();
 	let server = Server::new(dir.path().to_path_buf(), directory(), acceptor);
 	let (mut client, server_stream) = tokio::io::duplex(256 * 1024);
-	let task = tokio::spawn(async move {
-		server.handle_preauth_for_test(server_stream, "alice").await
-	});
+	let task =
+		tokio::spawn(async move { server.handle_preauth_for_test(server_stream, "alice").await });
 
 	// Drain the greeting; the test session starts over TLS by construction.
 	let _ = read_chunk(&mut client).await;
 
 	// Announce a 100-byte script and send a short valid-prefix payload
-// ("require \"x\";" — 13 bytes) then close. With the bug the parser
-// accepts the prefix as a complete script (it has a balanced
-// require + semicolon and an identifier), so 13 bytes are stored
-// under "a.sieve". With the fix the server detects truncation and
-// drops the partial literal without calling session.handle.
+	// ("require \"x\";" — 13 bytes) then close. With the bug the parser
+	// accepts the prefix as a complete script (it has a balanced
+	// require + semicolon and an identifier), so 13 bytes are stored
+	// under "a.sieve". With the fix the server detects truncation and
+	// drops the partial literal without calling session.handle.
 	let header = b"PUTSCRIPT \"a\" {100+}\r\n";
 	client.write_all(header).await.expect("header");
-	client.write_all(b"require \"x\";").await.expect("partial payload");
+	client
+		.write_all(b"require \"x\";")
+		.await
+		.expect("partial payload");
 	drop(client);
 
 	// Give the server a chance to drain and tear down.
@@ -164,9 +168,7 @@ async fn preauth_read_timeout_drops_connection() {
 			Ok(Ok(0)) => break,
 			Ok(Ok(n)) => seen.push_str(&String::from_utf8_lossy(&chunk[..n])),
 			Ok(Err(_)) => break,
-			Err(_) => panic!(
-				"server did not close within 5s; partial reply: {seen}"
-			),
+			Err(_) => panic!("server did not close within 5s; partial reply: {seen}"),
 		}
 	}
 	assert!(

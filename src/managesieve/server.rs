@@ -139,7 +139,7 @@ impl Server {
 		}
 	}
 
-async fn handle(
+	async fn handle(
 		&self,
 		stream: tokio::net::TcpStream,
 		peer_ip: std::net::IpAddr,
@@ -165,11 +165,7 @@ async fn handle(
 	/// session for `account`. Avoids a STARTTLS handshake so the test
 	/// can use an in-memory `tokio::io::duplex` pair directly.
 	#[cfg(test)]
-	pub async fn handle_preauth_for_test<S>(
-		&self,
-		stream: S,
-		account: &str,
-	) -> std::io::Result<()>
+	pub async fn handle_preauth_for_test<S>(&self, stream: S, account: &str) -> std::io::Result<()>
 	where
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 	{
@@ -179,7 +175,14 @@ async fn handle(
 		};
 		let mut session = Session::new(backend, true);
 		session.adopt_account_for_test(account);
-		run_command_loop(stream, session, self.max_literal, self.preauth_timeout, None).await
+		run_command_loop(
+			stream,
+			session,
+			self.max_literal,
+			self.preauth_timeout,
+			None,
+		)
+		.await
 	}
 
 	async fn handle_inner<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
@@ -229,8 +232,7 @@ where
 		} else {
 			preauth_timeout
 		};
-		let Some(line) =
-			read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
+		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer, read_deadline).await?
 		else {
 			write(
 				&mut stream,
@@ -251,34 +253,35 @@ where
 			continue;
 		}
 
-// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
-			let literal = match command::trailing_literal(&line) {
-				Some(literal) if literal.len > max_literal => {
-					// The size limit is a server-side choice, not a syntax
-					// problem; the literal stays the client's choice of
-					// bytes. Drain them so a non-synchronizing literal
-					// (the `{N+}` form, where the client has already sent
-					// the bytes) does not arrive as the next command line.
-					if !literal.synchronizing {
-						let mut drained = decoder.take_buffered(literal.len);
-						while drained.len() < literal.len {
-							let read = stream.read(&mut buffer).await?;
-							if read == 0 {
-								return Ok(());
-							}
-							let needed = literal.len - drained.len();
-							if read <= needed {
-								drained.extend_from_slice(&buffer[..read]);
-							} else {
-								drained.extend_from_slice(&buffer[..needed]);
-								decoder.feed(&buffer[needed..read]);
-							}
+		// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
+		let literal = match command::trailing_literal(&line) {
+			Some(literal) if literal.len > max_literal => {
+				// The size limit is a server-side choice, not a syntax
+				// problem; the literal stays the client's choice of
+				// bytes. Drain them so a non-synchronizing literal
+				// (the `{N+}` form, where the client has already sent
+				// the bytes) does not arrive as the next command line.
+				if !literal.synchronizing {
+					let mut drained = decoder.take_buffered(literal.len);
+					while drained.len() < literal.len {
+						let read = stream.read(&mut buffer).await?;
+						if read == 0 {
+							return Ok(());
+						}
+						let needed = literal.len - drained.len();
+						if read <= needed {
+							drained.extend_from_slice(&buffer[..read]);
+						} else {
+							drained.extend_from_slice(&buffer[..needed]);
+							decoder.feed(&buffer[needed..read]);
 						}
 					}
-					write(&mut stream, &Response::No(Some("Script too large.".into()))).await?;
-					continue;
 				}
-				Some(literal) => match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
+				write(&mut stream, &Response::No(Some("Script too large.".into()))).await?;
+				continue;
+			}
+			Some(literal) => {
+				match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
 					Some(bytes) => Some(bytes),
 					None => {
 						// The connection closed before the announced
@@ -291,14 +294,15 @@ where
 						.await?;
 						continue;
 					}
-				},
-				None => None,
-			};
+				}
+			}
+			None => None,
+		};
 
-let response = match command::parse(&line, literal) {
-				Ok(command) => session.handle(command),
-				Err(_) => Response::No(Some("Bad command.".into())),
-			};
+		let response = match command::parse(&line, literal) {
+			Ok(command) => session.handle(command),
+			Err(_) => Response::No(Some("Bad command.".into())),
+		};
 		let upgrade = response.starts_tls();
 		let close = response.is_final();
 		write(&mut stream, &response).await?;

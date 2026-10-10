@@ -223,7 +223,9 @@ async fn append_literal_read_timeout_drops_connection() {
 		.await
 		.expect("append header");
 	let _ = read_until(&mut tls, "+").await;
-	tls.write_all(b"only-a-few-by").await.expect("partial literal");
+	tls.write_all(b"only-a-few-by")
+		.await
+		.expect("partial literal");
 
 	// The literal read is bounded by 2s. Tokio's paused clock advances
 	// when nothing else is pending, so the timeout fires deterministically.
