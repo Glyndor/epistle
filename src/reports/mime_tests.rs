@@ -287,48 +287,96 @@ fn boundary_over_70_octets_is_refused_with_bounded_work() {
 	);
 }
 
-fn build_multipart_with_hyphen_body(boundary: &str, body_len: usize) -> Vec<u8> {
+fn gzip_b64_of(payload: &[u8]) -> Vec<u8> {
+	use flate2::write::GzEncoder;
+	use std::io::Write;
+	let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+	enc.write_all(payload).expect("write");
+	let gz = enc.finish().expect("finish");
+	b64(&gz).into_bytes()
+}
+
+/// Two parts: the first is a text/plain body of `body_len` characters
+/// that cannot match a `--<boundary>` prefix, the second is the gzip
+/// DMARC report at the tail of the multipart. The first part is
+/// non-matching so the walker has to walk the entire body to reach
+/// the report at the end. The earlier fixture used a body of hyphens
+/// which matched the boundary at its very start, so a quadratic
+/// `find_subslice` could exit at the first occurrence and the test
+/// never proved the closing boundary was reached; using `x` removes
+/// that escape route.
+fn build_multipart_with_clean_body(boundary: &str, body_len: usize) -> Vec<u8> {
 	let mut raw = Vec::new();
 	raw.extend_from_slice(
 		format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n").as_bytes(),
 	);
 	raw.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+	raw.extend_from_slice(b"Content-Type: text/plain\r\n\r\n");
+	raw.extend(std::iter::repeat_n(b'x', body_len));
+	raw.extend_from_slice(b"\r\n");
+	raw.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
 	raw.extend_from_slice(b"Content-Type: application/gzip\r\n");
 	raw.extend_from_slice(b"Content-Transfer-Encoding: base64\r\n\r\n");
-	let gz = {
-		use flate2::write::GzEncoder;
-		use std::io::Write;
-		let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
-		enc.write_all(b"<feedback/>").expect("write");
-		enc.finish().expect("finish")
-	};
-	raw.extend_from_slice(b64(&gz).as_bytes());
+	raw.extend(gzip_b64_of(b"<feedback/>"));
 	raw.extend_from_slice(b"\r\n");
-	raw.extend(std::iter::repeat_n(b'-', body_len));
-	raw.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+	raw.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 	raw
 }
 
-/// A boundary at the 70-octet cap and a body of hyphens: the linear scan
-/// must walk the body once and only check each line's prefix against
-/// the boundary. Doubling the body must at most roughly double the
-/// step counter, with a fixed slack for the per-call overhead.
+/// A boundary at the 70-octet cap and a body of `x` characters
+/// (non-matching) followed by the gzip report at the tail: the linear
+/// scan must walk the body once and only check each line's prefix
+/// against the boundary. Doubling the body must at most roughly double
+/// the step counter, with a fixed slack for the per-call overhead.
+/// The test additionally asserts the decoded report's bytes and
+/// encoding, which proves the parser walked all the way to the last
+/// part instead of stopping at a false early match in the body.
 #[test]
 fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
 	let boundary: String = "-".repeat(MAX_BOUNDARY_LEN);
-	let small = build_multipart_with_hyphen_body(&boundary, 1 << 19);
-	let large = build_multipart_with_hyphen_body(&boundary, 1 << 20);
+	let small_body = 1 << 19;
+	let large_body = 1 << 20;
+	let small = build_multipart_with_clean_body(&boundary, small_body);
+	let large = build_multipart_with_clean_body(&boundary, large_body);
 	reset_scan_steps();
-	find_report_part(&small, Kind::Dmarc).expect("small parses");
+	let small_found = find_report_part(&small, Kind::Dmarc).expect("small parses");
 	let small_steps = reset_scan_steps();
 	reset_scan_steps();
-	find_report_part(&large, Kind::Dmarc).expect("large parses");
+	let large_found = find_report_part(&large, Kind::Dmarc).expect("large parses");
 	let large_steps = reset_scan_steps();
 	// linear: count(2N) <= 2 * count(N) + slack
 	assert!(
 		large_steps as u128 <= small_steps as u128 * 2 + 4096,
 		"step count grew superlinearly: small={small_steps}, large={large_steps}"
 	);
+	// Absolute bound. The historical per-position `find_subslice` was
+	// O(body * needle) — for a 1 MiB body and the 72-octet boundary
+	// prefix it would charge ~72 million comparisons, well above the
+	// few-million linear-scan cost. The two-piece fixture means there
+	// is no early false match in the body to escape through, so the
+	// linear scan must walk the long `x` line and the per-line work
+	// is bounded.
+	assert!(
+		large_steps < 10_000_000,
+		"step count blew past the linear scan bound: {large_steps} for {large_body} bytes"
+	);
+	let expected_gz = {
+		use flate2::write::GzEncoder;
+		use std::io::Write;
+		let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+		enc.write_all(b"<feedback/>").expect("write");
+		enc.finish().expect("finish")
+	};
+	assert_eq!(
+		small_found.bytes, expected_gz,
+		"closing-delimiter reached decodes the full report (small)"
+	);
+	assert_eq!(
+		large_found.bytes, expected_gz,
+		"closing-delimiter reached decodes the full report (large)"
+	);
+	assert_eq!(small_found.encoding, Encoding::Gzip);
+	assert_eq!(large_found.encoding, Encoding::Gzip);
 }
 
 /// Build a multipart whose body between the opening and closing
