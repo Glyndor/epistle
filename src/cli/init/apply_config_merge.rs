@@ -14,28 +14,41 @@ use std::path::{Path, PathBuf};
 use crate::cli::init::apply::ApplyError;
 use crate::config::Config;
 
-use super::apply_config::INIT_MANAGED_KEYS;
+use super::apply_config::{ExistingConfig, INIT_MANAGED_KEYS, read_config};
 
 /// Merge the desired TOML with whatever is already on disk at
 /// `path`. Three outcomes: no file on disk (write the desired one);
 /// same shape and content (skip and re-validate, in case the
 /// on-disk file would not pass `Config::load`); same shape with
 /// different values (rewrite through the staging path).
+#[cfg(test)]
 pub(crate) fn merge_with_existing(
 	path: &Path,
 	desired: &str,
 	keep_existing_listeners: bool,
 ) -> Result<super::apply_config::ConfigWrite, ApplyError> {
+	let existing = read_config(path)?;
+	merge_with_read_config(path, desired, keep_existing_listeners, existing.as_ref())
+}
+
+/// Merge and validate the bytes captured from the verified descriptor.
+pub(crate) fn merge_with_read_config(
+	path: &Path,
+	desired: &str,
+	keep_existing_listeners: bool,
+	existing: Option<&ExistingConfig>,
+) -> Result<super::apply_config::ConfigWrite, ApplyError> {
 	let desired_value: toml::Value =
 		toml::from_str(desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-	match fs::read_to_string(path) {
-		Ok(existing) => {
-			let existing_value: toml::Value = parsed(&existing).map_err(|e| {
+	match existing {
+		Some(opened) => {
+			let existing = &opened.text;
+			let existing_value: toml::Value = parsed(existing).map_err(|e| {
 				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
 			})?;
 			let merged = reconcile(existing_value, desired_value, keep_existing_listeners);
-			if merged == parsed(&existing)? {
-				if let Err(error) = Config::load(path) {
+			if merged == parsed(existing)? {
+				if let Err(error) = opened.validate(path) {
 					return Err(ApplyError::ConfigInvalid(format!(
 						"existing config at {} would be left untouched but is invalid: {}",
 						path.display(),
@@ -50,11 +63,10 @@ pub(crate) fn merge_with_existing(
 				Ok(super::apply_config::ConfigWrite::Updated)
 			}
 		}
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+		None => {
 			write_validated_config(path, desired)?;
 			Ok(super::apply_config::ConfigWrite::Wrote)
 		}
-		Err(error) => Err(ApplyError::ConfigRead(path.to_path_buf(), error)),
 	}
 }
 
@@ -140,45 +152,24 @@ fn parsed(text: &str) -> Result<toml::Value, ApplyError> {
 	toml::from_str(text).map_err(|error| ApplyError::ConfigEncode(error.to_string()))
 }
 
-/// Read the config at `path` and return every listener the operator
-/// already has on disk, when the file exists and the `listeners`
-/// array is non-empty. `Ok(None)` covers four cases the caller
-/// treats the same: no file on disk, an I/O failure reading it
-/// (e.g. the parent is a regular file rather than a directory; the
-/// apply phase surfaces those with its own error), the file exists
-/// but has no `listeners` key, and the `listeners` array is present
-/// but empty. In all four cases `init` writes its own array.
-///
-/// `Ok(Some(_))` carries one `Listener` per existing entry, with the
-/// listener's kind, the explicit bind address the operator wrote (or
-/// the schema default when omitted), and the explicit port (or the
-/// schema default for the kind). The plan uses these to render what
-/// `serve` will actually expose; the apply phase uses the same
-/// signal to decide whether the merge preserves the `listeners`
-/// array verbatim or replaces it with its own.
-///
-/// The helper deliberately does not run `Config::load` on the
-/// on-disk file. The rest of the apply path validates the merged
-/// config before it lands, so a stale `[database].password_file` (or
-/// any other unrelated section the operator left in a shape
-/// `serve` would later refuse) cannot block listener discovery. A
-/// reconciliation that re-points the password file at the data-dir
-/// secret on this same run needs the helper to return the existing
-/// listeners first.
+/// Discover listeners without validating unrelated settings that the merge
+/// may replace, such as an obsolete database password path.
 pub(crate) fn existing_operators_listeners(
 	path: &Path,
 ) -> Result<Option<Vec<crate::config::Listener>>, ApplyError> {
-	let text = match fs::read_to_string(path) {
-		Ok(text) => text,
-		// An unreadable file is a precondition the apply phase will
-		// surface with its own error variant; the plan here only
-		// decides what listeners to render, and "no existing
-		// listeners" is the safe choice when the disk cannot be read.
-		// The apply phase re-reads the file and reports the failure
-		// with its own error message.
-		Err(_) => return Ok(None),
+	let existing = read_config(path)?;
+	listeners_from_existing(path, existing.as_ref())
+}
+
+pub(crate) fn listeners_from_existing(
+	path: &Path,
+	existing: Option<&ExistingConfig>,
+) -> Result<Option<Vec<crate::config::Listener>>, ApplyError> {
+	let Some(existing) = existing else {
+		return Ok(None);
 	};
-	let value: toml::Value = match toml::from_str(&text) {
+	let text = &existing.text;
+	let value: toml::Value = match toml::from_str(text) {
 		Ok(value) => value,
 		Err(_) => return Ok(None),
 	};

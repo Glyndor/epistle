@@ -89,7 +89,7 @@ pub(super) fn write_mail_toml_replace(
 		.collect();
 	let body = format!(
 		"hostname = \"{HOSTNAME}\"\n\
-         data_dir = \"{}\"\n\
+         data_dir = {}\n\
          domains = [\"{DOMAIN}\"]\n\
          greylist_delay_secs = 0\n\
          dnsbl_zones = []\n\
@@ -99,22 +99,27 @@ pub(super) fn write_mail_toml_replace(
          masked_addresses_max = 0\n\
          {}\n\
          [tls]\n\
-         cert_file = \"{}\"\n\
-         key_file = \"{}\"\n\
+         cert_file = {}\n\
+         key_file = {}\n\
          [dkim]\n\
          selector = \"epistle-local\"\n\
-         key_file = \"{}\"\n\
+         key_file = {}\n\
          [api]\n\
          token_hash = \"{}\"\n\
          admins = [\"{ACCOUNT_NAME}\"]\n",
-		dir.join("data").display(),
+		toml_path(&dir.join("data")),
 		listeners.join("\n"),
-		cert_file.display(),
-		key_file.display(),
-		dkim_file.display(),
+		toml_path(cert_file),
+		toml_path(key_file),
+		toml_path(dkim_file),
 		api_token_hash,
 	);
 	super::layout::write_with_replace(&dir.join("mail.toml"), body.as_bytes(), 0o600)
+}
+
+// TOML string values escape quotes, backslashes and control characters in paths.
+fn toml_path(path: &Path) -> toml::Value {
+	toml::Value::String(path.to_string_lossy().into_owned())
 }
 
 /// The kebab-case spelling of a listener kind for the config file.
@@ -385,3 +390,7 @@ fn unusable_accounts_diagnostic(data_dir: &Path, cause: &str) -> String {
 	let dir = data_dir.display().to_string();
 	format!("{dir}: {cause}. Fix it, or remove {dir} to start over with fresh credentials.")
 }
+
+#[cfg(test)]
+#[path = "config_tests_paths.rs"]
+mod tests_paths;

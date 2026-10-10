@@ -368,11 +368,8 @@ const API_BIND_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 /// step uses this to derive the `ports:` list so a published port
 /// always matches a listener init just wrote.
 ///
-/// Mirrors the keep-existing-listeners decision `merge_with_existing`
-/// makes: a non-empty `listeners` array on disk is preserved as-is,
-/// and `init` does not write its own. The same flag is read off
-/// disk twice (here and in `merge_with_existing`); a hand-edited
-/// file between the two reads would already be racy by design.
+/// Use the same verified reader as the merge so a non-empty operator listener
+/// array is preserved as-is.
 pub(crate) fn listeners_to_write(answers: &Answers) -> Result<Vec<Listener>, ApplyError> {
 	if let Some(existing) = existing_operators_listeners(&answers.config_path)? {
 		return Ok(existing);
@@ -485,8 +482,8 @@ fn desired_listeners(services: &Services, acme_enabled: bool) -> Vec<Listener> {
 // suppressed on the line so the helper still works as a re-export.
 #[allow(unused_imports)]
 pub(super) use super::apply_config_merge::{
-	create_unique_staging_with, existing_operators_listeners, merge_with_existing, reconcile,
-	write_validated_config,
+	create_unique_staging_with, existing_operators_listeners, listeners_from_existing,
+	merge_with_read_config, reconcile, write_validated_config,
 };
 
 #[cfg(test)]
@@ -496,3 +493,14 @@ mod tests_clamav;
 #[cfg(test)]
 #[path = "apply_config_tests_database_off.rs"]
 mod tests_database_off;
+
+#[cfg(all(test, unix))]
+#[path = "apply_config_tests_read_safety.rs"]
+mod tests_read_safety;
+
+#[cfg(test)]
+pub(super) use super::apply_config_merge::merge_with_existing;
+
+#[path = "apply_config_read.rs"]
+mod read;
+pub(super) use read::{ExistingConfig, read_config};

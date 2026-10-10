@@ -447,15 +447,8 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// way it would is if a future field required custom serialisation
 	// that returned an error, which is currently impossible.
 	let desired_bytes = toml::to_string(&desired).expect("DesiredConfig serialises without errors");
-	// `init` keeps the operator's listeners when the existing config
-	// already carries a non-empty `listeners` array. The plan phase
-	// computes the same flag from the disk state; `apply` re-reads
-	// the file once here so the apply path agrees with what the
-	// plan promised, even when the operator edited the file between
-	// the plan prompt and the apply run.
-	let keep_existing_listeners = match existing_operators_listeners(&answers.config_path) {
-		Ok(Some(_)) => true,
-		Ok(None) => false,
+	let existing = match apply_config::read_config(&answers.config_path) {
+		Ok(existing) => existing,
 		Err(error) => {
 			return ApplyOutcome {
 				report,
@@ -463,10 +456,21 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			};
 		}
 	};
-	match merge_with_existing(
+	let keep_existing_listeners =
+		match apply_config::listeners_from_existing(&answers.config_path, existing.as_ref()) {
+			Ok(listeners) => listeners.is_some(),
+			Err(error) => {
+				return ApplyOutcome {
+					report,
+					error: Some(error),
+				};
+			}
+		};
+	match apply_config::merge_with_read_config(
 		&answers.config_path,
 		&desired_bytes,
 		keep_existing_listeners,
+		existing.as_ref(),
 	) {
 		Ok(apply_config::ConfigWrite::Identical) => report
 			.steps
@@ -521,7 +525,6 @@ pub use apply_plan::plan;
 /// the config-write step wrote, without taking a second pass
 /// at the apply-internal `apply_config` module.
 pub(crate) use apply_config::listeners_to_write;
-pub(crate) use apply_config_merge::{existing_operators_listeners, merge_with_existing};
 
 /// Re-export so the apply tests can call into the keys module
 /// without the rest of the crate going through `apply::apply_keys`.
