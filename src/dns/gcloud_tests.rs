@@ -115,7 +115,7 @@ async fn delete_is_idempotent_when_rrset_is_absent() {
 		name: "_dmarc.example.org.".into(),
 		kind: "TXT".into(),
 		ttl: 300,
-		rrdatas: vec!["\"old\"".into()],
+		rrdatas: vec!["\"x\"".into()],
 	}];
 	{
 		let mut s = state.lock().unwrap();
@@ -128,6 +128,44 @@ async fn delete_is_idempotent_when_rrset_is_absent() {
 	let body = state.lock().unwrap().changes.last().unwrap().clone();
 	assert!(body.contains("\"deletions\":[{"), "{body}");
 	assert!(body.contains("\"additions\":[]"), "{body}");
+}
+
+/// A TXT delete with a value must drop only the matching rdata and
+/// preserve sibling rrdatas at the same rrset. Two ACME DNS-01
+/// challenges at the same owner is the canonical case: cleaning up
+/// one certificate order's challenge must not wipe the second
+/// order's. Google Cloud DNS stores the rrdatas as one rrset, so
+/// the fix is to read the live rrset, delete the rrset, and
+/// re-add it with the remaining rrdatas.
+#[tokio::test]
+async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
+	let initial = vec![Rrset {
+		name: "_acme-challenge.example.org.".into(),
+		kind: "TXT".into(),
+		ttl: 60,
+		rrdatas: vec!["\"token-aaaa\"".into(), "\"token-bbbb\"".into()],
+	}];
+	let (base, state) = start_mock(initial).await;
+	let provider = provider_for(&base);
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let body = state.lock().unwrap().changes.last().unwrap().clone();
+	// The change replaces the rrset with the sibling: a deletion
+	// (the whole rrset, the only way Google can drop a single
+	// rdata) plus an addition carrying the surviving rdata.
+	assert!(body.contains("\"additions\":["), "{body}");
+	let s = state.lock().unwrap();
+	let surviving = s
+		.live_rrsets
+		.iter()
+		.find(|r| r.name == "_acme-challenge.example.org." && r.kind == "TXT")
+		.expect("the sibling rrset is still in the zone");
+	assert_eq!(surviving.rrdatas, vec!["\"token-bbbb\"".to_string()]);
 }
 
 #[tokio::test]

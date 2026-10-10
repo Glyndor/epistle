@@ -10,6 +10,7 @@ pub mod detect;
 pub mod digitalocean;
 pub mod dnsimple;
 pub mod gcloud;
+pub mod godaddy;
 pub mod namecheap;
 pub mod ovh;
 pub mod porkbun;

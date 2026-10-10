@@ -104,6 +104,11 @@ fn check_dns(
 		(Mode::Automatic, Some(dns)) => {
 			if dns.provider.trim().is_empty() {
 				errors.push(Invalid::DnsProviderMissing);
+			} else if !crate::config::is_supported_provider(&dns.provider) {
+				errors.push(Invalid::DnsProviderUnsupported {
+					value: dns.provider.clone(),
+					supported: crate::config::SUPPORTED_PROVIDERS.join(", "),
+				});
 			}
 			if dns.zone.trim().is_empty() {
 				errors.push(Invalid::DnsZoneMissing);

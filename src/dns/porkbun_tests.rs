@@ -264,6 +264,48 @@ async fn delete_removes_the_matching_record_by_id() {
 	);
 }
 
+/// A TXT delete with a value must remove only the matching record and
+/// leave siblings at the same owner alone. Two ACME DNS-01 challenges
+/// at the same owner is the canonical case: cleaning up one certificate
+/// order's challenge must not wipe the second order's challenge.
+/// Porkbun addresses each record by numeric id, so the fix is to read
+/// the live set, drop the rows whose content matches the value, and
+/// delete only those ids.
+#[tokio::test]
+async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
+	let (provider, state) = mock(serde_json::json!([
+		stored(
+			"106926652",
+			"_acme-challenge.example.org",
+			"TXT",
+			"token-aaaa"
+		),
+		stored(
+			"106926653",
+			"_acme-challenge.example.org",
+			"TXT",
+			"token-bbbb"
+		),
+	]))
+	.await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let s = state.lock().unwrap();
+	assert_eq!(
+		s.paths(),
+		vec![
+			"/dns/retrieve/example.org",
+			"/dns/delete/example.org/106926652"
+		],
+		"only the matching value's id is deleted, the sibling survives"
+	);
+}
+
 #[tokio::test]
 async fn list_returns_fqdn_names_and_unquoted_values() {
 	// Porkbun echoes the stored content verbatim, so a zone imported with

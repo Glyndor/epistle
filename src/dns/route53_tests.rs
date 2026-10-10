@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::State;
-use axum::routing::post;
+use axum::routing::{get, post};
 
 #[test]
 fn sigv4_signature_matches_aws_example() {
@@ -45,9 +45,15 @@ fn timestamps_format_utc() {
 struct MockState {
 	bodies: Vec<String>,
 	auth: Option<String>,
+	/// Preloaded response for the LIST endpoint; when `None`, the
+	/// mock returns an empty resource record set list.
+	list_response: Option<String>,
 }
 
 type Shared = Arc<Mutex<MockState>>;
+
+const TOKEN_A: &str = "token-aaaa";
+const TOKEN_B: &str = "token-bbbb";
 
 async fn change(
 	State(state): State<Shared>,
@@ -63,11 +69,35 @@ async fn change(
 	"<ChangeResourceRecordSetsResponse/>"
 }
 
+async fn list_rrsets(
+	State(state): State<Shared>,
+	headers: axum::http::HeaderMap,
+) -> axum::http::Response<String> {
+	let mut s = state.lock().unwrap();
+	s.auth = headers
+		.get("authorization")
+		.and_then(|v| v.to_str().ok())
+		.map(str::to_string);
+	let body = s.list_response.clone().unwrap_or_else(|| {
+		r#"<?xml version="1.0" encoding="UTF-8"?><ListResourceRecordSetsResult><ResourceRecordSets/></ListResourceRecordSetsResult>"#.to_string()
+	});
+	axum::http::Response::builder()
+		.status(200)
+		.header("content-type", "text/xml")
+		.body(body)
+		.expect("build list response")
+}
+
 async fn mock() -> (Route53Provider, Shared) {
 	let state: Shared = Arc::new(Mutex::new(MockState::default()));
 	let app = Router::new()
-		.route("/2013-04-01/hostedzone/{id}/rrset", post(change))
+		.route(
+			"/2013-04-01/hostedzone/{id}/rrset",
+			post(change).get(list_rrsets),
+		)
 		.with_state(state.clone());
+	#[allow(unused_imports)]
+	use {get, post};
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let addr = listener.local_addr().unwrap();
 	tokio::spawn(async move {
@@ -109,6 +139,26 @@ async fn upsert_sends_signed_change_request() {
 #[tokio::test]
 async fn delete_uses_delete_action() {
 	let (provider, state) = mock().await;
+	// Seed the LIST mock with a TXT rrset at the matching name so
+	// the value-bearing delete path takes the wholesale DELETE
+	// branch (the rrset's only rdata is the value being removed).
+	{
+		let mut s = state.lock().unwrap();
+		s.list_response = Some(
+			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+<ListResourceRecordSetsResult>\
+<ResourceRecordSets>\
+<ResourceRecordSet>\
+<Name>_dmarc.example.org.</Name><Type>TXT</Type><TTL>3600</TTL>\
+<ResourceRecords>\
+<ResourceRecord><Value>\"v=DMARC1; p=none\"</Value></ResourceRecord>\
+</ResourceRecords>\
+</ResourceRecordSet>\
+</ResourceRecordSets>\
+</ListResourceRecordSetsResult>"
+				.to_string(),
+		);
+	}
 	let record = DnsRecord {
 		name: "_dmarc.example.org".into(),
 		kind: RecordKind::Txt,
@@ -119,7 +169,64 @@ async fn delete_uses_delete_action() {
 		.delete("example.org", record)
 		.await
 		.expect("delete");
-	assert!(state.lock().unwrap().bodies[0].contains("<Action>DELETE</Action>"));
+	let s = state.lock().unwrap();
+	// The value-bearing path LISTs (GET, not captured) then DELETEs
+	// (POST, captured); the only body the mock sees is the DELETE.
+	assert_eq!(s.bodies.len(), 1);
+	assert!(s.bodies[0].contains("<Action>DELETE</Action>"));
+}
+
+/// A TXT delete with a value must drop only the matching rdata and
+/// keep sibling TXT records at the same owner. Two ACME DNS-01
+/// challenges at the same owner is the canonical case. Route 53
+/// DELETE on an RRset is wholesale (it matches Name+Type only), so
+/// the value-bearing case LISTs the RRset, drops the matching
+/// rdata, and UPSERTs the remainder. The empty-value retire path
+/// keeps the existing wholesale DELETE.
+#[tokio::test]
+async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
+	let (provider, state) = mock().await;
+	// Preload the LIST mock with a TXT rrset at _acme-challenge
+	// carrying two distinct rrdatas.
+	{
+		let mut s = state.lock().unwrap();
+		s.list_response = Some(format!(
+			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+<ListResourceRecordSetsResult>\
+<ResourceRecordSets>\
+<ResourceRecordSet>\
+<Name>_acme-challenge.example.org.</Name><Type>TXT</Type><TTL>60</TTL>\
+<ResourceRecords>\
+<ResourceRecord><Value>\"{TOKEN_A}\"</Value></ResourceRecord>\
+<ResourceRecord><Value>\"{TOKEN_B}\"</Value></ResourceRecord>\
+</ResourceRecords>\
+</ResourceRecordSet>\
+</ResourceRecordSets>\
+</ListResourceRecordSetsResult>"
+		));
+	}
+	provider
+		.delete(
+			"example.org",
+			DnsRecord {
+				name: "_acme-challenge.example.org".into(),
+				kind: RecordKind::Txt,
+				value: "token-aaaa".into(),
+				ttl: 60,
+			},
+		)
+		.await
+		.expect("delete one of two challenges");
+	let s = state.lock().unwrap();
+	let body = &s.bodies[s.bodies.len() - 1];
+	// The change is an UPSERT (not a wholesale DELETE) that
+	// replaces the RRset with the surviving rdata only.
+	assert!(body.contains("<Action>UPSERT</Action>"), "{body}");
+	assert!(body.contains(TOKEN_B), "sibling rdata missing: {body}");
+	assert!(
+		!body.contains(TOKEN_A),
+		"matching rdata leaked into the UPSERT: {body}"
+	);
 }
 
 #[tokio::test]

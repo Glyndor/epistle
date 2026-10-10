@@ -13,7 +13,9 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
+use super::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+};
 
 /// Bunny's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.bunny.net";
@@ -234,14 +236,45 @@ impl BunnyProvider {
 		let zone_id = self.zone_id().await?;
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
-		let Some(rec) = detail
-			.records
-			.into_iter()
-			.find(|r| r.rtype == rtype && r.name.as_deref() == Some(name.as_str()))
-		else {
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose value matches the value (a sibling ACME challenge at
+		// the same owner survives), an empty-value delete drops
+		// every record at the owner (the DKIM rotator's retire
+		// path). Other record kinds fall through to the
+		// first-by-(type, name) selection, which is the existing
+		// whole-set semantics.
+		if record.kind == RecordKind::Txt && record.value.is_empty() {
+			let recs: Vec<_> = detail
+				.records
+				.into_iter()
+				.filter(|r| r.rtype == rtype && r.name.as_deref() == Some(name.as_str()))
+				.collect();
+			let count = recs.len();
+			for rec in recs {
+				self.delete_by_id(zone_id, rec.id).await?;
+			}
+			// Match the existing "already gone" no-op: if there
+			// was nothing to remove, no network call should have
+			// happened. We've already issued deletes; the test
+			// assertions on the wholesale path still see them.
+			let _ = count;
+			return Ok(());
+		}
+		let Some(rec) = detail.records.into_iter().find(|r| {
+			r.rtype == rtype
+				&& r.name.as_deref() == Some(name.as_str())
+				&& (record.kind != RecordKind::Txt
+					|| record.value.is_empty()
+					|| same_txt_purpose(r.value.as_deref().unwrap_or(""), &record.value))
+		}) else {
 			return Ok(()); // idempotent: nothing to remove.
 		};
-		let url = format!("{}/dnszone/{zone_id}/records/{}", self.base, rec.id);
+		self.delete_by_id(zone_id, rec.id).await
+	}
+
+	async fn delete_by_id(&self, zone_id: i64, id: i64) -> Result<(), ProviderError> {
+		let url = format!("{}/dnszone/{zone_id}/records/{id}", self.base);
 		let response = self
 			.client
 			.delete(&url)

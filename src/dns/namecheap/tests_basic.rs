@@ -73,6 +73,32 @@ async fn delete_removes_record() {
 	assert!(!body.contains("<host"), "record still in body: {body}");
 }
 
+/// A TXT delete with a value must remove only the matching record
+/// and keep sibling TXT records at the same owner. Two ACME DNS-01
+/// challenges at the same owner is the canonical case: cleaning up
+/// one certificate order's challenge must not wipe the second
+/// order's challenge. Namecheap's `setHosts` replaces the whole
+/// zone, so the fix is to read the live set, drop the host whose
+/// value matches, and PUT the rest.
+#[tokio::test]
+async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
+	let existing = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="aa" Name="_acme-challenge" Type="TXT" Address="&quot;token-aaaa&quot;" TTL="60"/><host HostId="bb" Name="_acme-challenge" Type="TXT" Address="&quot;token-bbbb&quot;" TTL="60"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
+	let (provider, state) = mock(existing, None).await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let body = state.lock().unwrap().set_hosts_bodies[0].clone();
+	assert!(
+		!body.contains("token-aaaa"),
+		"matching value still in body: {body}"
+	);
+	assert!(body.contains("token-bbbb"), "sibling value dropped: {body}");
+}
+
 #[tokio::test]
 async fn tlsa_returns_unsupported_without_network() {
 	let (provider, state) = mock("", None).await;

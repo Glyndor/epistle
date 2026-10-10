@@ -9,7 +9,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
+use super::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+};
 
 /// DigitalOcean's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.digitalocean.com";
@@ -335,10 +337,18 @@ impl DigitaloceanProvider {
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
 		let body = Self::record_body(kind, &rel, &record)?;
-		match existing
-			.into_iter()
-			.find(|r| r.kind == kind && r.name == rel)
-		{
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: an upsert replaces the TXT with the same
+		// purpose (version tag) at that name and leaves every
+		// other TXT at the name alone. `same_txt_purpose` carries
+		// the contract; for non-TXT kinds the matching is just
+		// (type, name) and the first match is fine.
+		let match_by_value = |r: &DomainRecord| -> bool {
+			r.kind == kind
+				&& r.name == rel
+				&& (record.kind != RecordKind::Txt || same_txt_purpose(&r.data, &record.value))
+		};
+		match existing.into_iter().find(&match_by_value) {
 			Some(prev) => self.update(zone, prev.id, body).await,
 			None => {
 				self.create(zone, body).await?;
@@ -352,10 +362,25 @@ impl DigitaloceanProvider {
 		let kind = Self::api_kind(record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
-		match existing
-			.into_iter()
-			.find(|r| r.kind == kind && r.name == rel)
-		{
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose data matches the value (a sibling ACME challenge at
+		// the same owner survives), an empty-value delete drops
+		// every record at the owner (the DKIM rotator's retire
+		// path). Other record kinds fall through to the
+		// first-by-(type, name) selection, which is the existing
+		// whole-set semantics.
+		if record.kind == RecordKind::Txt && record.value.is_empty() {
+			for prev in existing {
+				self.delete_record(zone, prev.id).await?;
+			}
+			return Ok(());
+		}
+		match existing.into_iter().find(|r| {
+			r.kind == kind
+				&& r.name == rel
+				&& (record.kind != RecordKind::Txt || r.data == record.value)
+		}) {
 			Some(prev) => self.delete_record(zone, prev.id).await,
 			None => Ok(()), // already absent: idempotent.
 		}

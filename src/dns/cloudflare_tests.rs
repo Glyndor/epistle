@@ -48,12 +48,13 @@ async fn records_collection(
 async fn record_item(
 	State(state): State<Shared>,
 	method: axum::http::Method,
+	uri: axum::http::Uri,
 ) -> axum::Json<serde_json::Value> {
 	state
 		.lock()
 		.unwrap()
 		.calls
-		.push(format!("{method} /record"));
+		.push(format!("{method} {}", uri.path()));
 	axum::Json(serde_json::json!({ "success": true }))
 }
 
@@ -115,7 +116,7 @@ async fn upsert_creates_when_absent() {
 async fn upsert_updates_when_present() {
 	let existing = vec![serde_json::json!({
 		"id": "rec1", "type": "TXT", "name": "_dmarc.example.org",
-		"content": "old", "ttl": 3600
+		"content": "v=DMARC1; p=none", "ttl": 3600
 	})];
 	let (provider, state) = mock(existing).await;
 	provider
@@ -126,7 +127,12 @@ async fn upsert_updates_when_present() {
 		.await
 		.expect("upsert");
 	let calls = state.lock().unwrap().calls.clone();
-	assert!(calls.contains(&"PUT /record".to_string()), "{calls:?}");
+	assert!(
+		calls
+			.iter()
+			.any(|c| c == "PUT /zones/zone123/dns_records/rec1"),
+		"{calls:?}"
+	);
 }
 
 #[tokio::test]
@@ -151,6 +157,59 @@ async fn delete_absent_is_idempotent_without_delete_call() {
 		.expect("delete");
 	let calls = state.lock().unwrap().calls.clone();
 	assert!(!calls.iter().any(|c| c.starts_with("DELETE")), "{calls:?}");
+}
+
+/// A TXT delete with a value must remove only the matching record
+/// and leave sibling TXT records at the same owner. Two ACME DNS-01
+/// challenges at the same owner is the canonical case: cleaning up
+/// one certificate order's challenge must not wipe the second
+/// order's. Cloudflare addresses every record by id, so the fix is
+/// to find the id whose content matches the value (not the first
+/// by type+name) and delete that one alone. The records below
+/// intentionally put the sibling first, so a regression that
+/// returns the first record by type+name deletes the wrong id.
+#[tokio::test]
+async fn txt_delete_with_a_value_drops_only_the_matching_challenge() {
+	let existing = vec![
+		serde_json::json!({
+			"id": "rec-bbbb",
+			"type": "TXT",
+			"name": "_acme-challenge.example.org",
+			"content": "token-bbbb",
+			"ttl": 60,
+		}),
+		serde_json::json!({
+			"id": "rec-aaaa",
+			"type": "TXT",
+			"name": "_acme-challenge.example.org",
+			"content": "token-aaaa",
+			"ttl": 60,
+		}),
+	];
+	let (provider, state) = mock(existing).await;
+	provider
+		.delete(
+			"example.org",
+			txt("_acme-challenge.example.org", "token-aaaa"),
+		)
+		.await
+		.expect("delete one of two challenges");
+	let calls = state.lock().unwrap().calls.clone();
+	// The provider looked the records up, found the matching id,
+	// and deleted only that one. The sibling record's id never
+	// appears in a DELETE.
+	assert!(
+		calls
+			.iter()
+			.any(|c| c == "DELETE /zones/zone123/dns_records/rec-aaaa"),
+		"the matching id is deleted: {calls:?}"
+	);
+	assert!(
+		!calls
+			.iter()
+			.any(|c| c.starts_with("DELETE /zones/zone123/dns_records/rec-bbbb")),
+		"sibling id must not be deleted: {calls:?}"
+	);
 }
 
 #[tokio::test]

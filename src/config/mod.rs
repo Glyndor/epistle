@@ -41,6 +41,7 @@ pub use arc::Arc;
 pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
+pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
 pub use mta_sts::{MtaSts, MtaStsMode};

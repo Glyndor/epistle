@@ -183,11 +183,30 @@ impl NamecheapProvider {
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		Self::api_kind(record.kind)?;
-		let mut hosts = self.get_hosts(zone).await?;
+		let hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the host whose
+		// address matches the value (a sibling ACME challenge at the
+		// same owner survives), an empty-value delete drops every host
+		// at the label (the DKIM rotator's retire path). Other
+		// record kinds fall through to the label-only match, which
+		// is the existing whole-set semantics.
 		let before = hosts.len();
-		hosts.retain(|h| !(h.name == label && h.kind == kind_str));
+		let hosts: Vec<Host> = hosts
+			.into_iter()
+			.filter(|h| {
+				if !(h.name == label && h.kind == kind_str) {
+					return true;
+				}
+				if record.kind == RecordKind::Txt && !record.value.is_empty() {
+					h.address.trim_matches('"') != record.value
+				} else {
+					false
+				}
+			})
+			.collect();
 		if hosts.len() == before {
 			// Already absent: idempotent, no need to rewrite the zone.
 			return Ok(());

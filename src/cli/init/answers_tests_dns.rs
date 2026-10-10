@@ -273,3 +273,76 @@ fn confusable_dns_zone_in_answers_file_fails_validation() {
 		"confusable zone must surface as DnsZoneMalformed with the confusable reason: {errors:?}"
 	);
 }
+
+/// `provider = "cloudfare"` (typo, missing the second `l`) is not in
+/// the supported list. Without the validation, the build falls through
+/// `Dns::build` to the manual-mode arm and the operator's automation
+/// silently never runs. The answers validator must surface the bad
+/// value up front with the supported names so the operator sees what
+/// to fix without reading the validator's source.
+#[test]
+fn unknown_dns_provider_is_rejected_with_the_list_in_the_message() {
+	let mut answers = minimal(Automatic);
+	answers.dns = Some(DnsAnswers {
+		provider: "cloudfare".to_string(),
+		zone: "example.org".to_string(),
+		token: Some("x".to_string()),
+		token_file: None,
+		token_env: None,
+	});
+	let errors = answers.validate().expect_err("unknown provider must error");
+	let bad = errors
+		.iter()
+		.find_map(|e| match e {
+			Invalid::DnsProviderUnsupported { value, supported } => {
+				Some((value.clone(), supported.clone()))
+			}
+			_ => None,
+		})
+		.expect("expected DnsProviderUnsupported");
+	assert_eq!(bad.0, "cloudfare");
+	// Every supported name appears in the error message so the operator
+	// can see the list at a glance.
+	let supported = bad.1.clone();
+	for name in [
+		"cloudflare",
+		"desec",
+		"digitalocean",
+		"porkbun",
+		"rfc2136",
+		"godaddy",
+		"manual",
+	] {
+		assert!(
+			supported.contains(name),
+			"supported list must name {name}: {supported}"
+		);
+	}
+	// The display rendering carries the same fields.
+	let rendered = errors
+		.iter()
+		.map(|e| format!("{e}"))
+		.collect::<Vec<_>>()
+		.join("; ");
+	assert!(rendered.contains("cloudfare"), "{rendered}");
+	assert!(rendered.contains("cloudflare"), "{rendered}");
+}
+
+/// The supported list is matched case-insensitively: an operator who
+/// types `Cloudflare` (capitalised) must not be told it is unsupported.
+#[test]
+fn capitalised_dns_provider_name_is_accepted() {
+	let mut answers = minimal(Automatic);
+	answers.dns = Some(DnsAnswers {
+		provider: "Cloudflare".to_string(),
+		zone: "example.org".to_string(),
+		token: Some("x".to_string()),
+		token_file: None,
+		token_env: None,
+	});
+	let result = answers.validate();
+	assert!(
+		result.is_ok(),
+		"capitalised provider must validate, got {result:?}"
+	);
+}
