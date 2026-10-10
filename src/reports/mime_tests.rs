@@ -350,7 +350,7 @@ fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
 		"step count grew superlinearly: small={small_steps}, large={large_steps}"
 	);
 	// Absolute bound. The historical per-position `find_subslice` was
-	// O(body * needle) — for a 1 MiB body and the 72-octet boundary
+	// O(body * needle): for a 1 MiB body and the 72-octet boundary
 	// prefix it would charge ~72 million comparisons, well above the
 	// few-million linear-scan cost. The two-piece fixture means there
 	// is no early false match in the body to escape through, so the
