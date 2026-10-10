@@ -43,9 +43,13 @@ fn up_passes_the_compose_flag_and_dash_d_to_podup() {
 			"-f",
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"up",
-			"-d"
+			"-d",
+			"-f",
+			data_dir.join("compose/compose.yaml").to_str().unwrap(),
+			"autostart",
+			"install"
 		],
-		"up must call `podup --version` and then `podup -f <compose> up -d`"
+		"up must start the stack then install autostart"
 	);
 }
 
@@ -74,9 +78,13 @@ fn down_passes_only_down_to_podup_never_volumes() {
 			"--version",
 			"-f",
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
+			"autostart",
+			"uninstall",
+			"-f",
+			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"down"
 		],
-		"down must call `podup --version` and then `podup -f <compose> down`"
+		"down must uninstall autostart then stop the stack"
 	);
 	for token in &argv {
 		assert_ne!(
@@ -416,3 +424,7 @@ fn ps_json_write_failure_makes_epistle_exit_nonzero() {
 		String::from_utf8_lossy(&output.stderr)
 	);
 }
+
+#[cfg(unix)]
+#[path = "stack_service/lifecycle.rs"]
+mod service;

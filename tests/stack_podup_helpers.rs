@@ -136,7 +136,7 @@ pub(crate) fn ps_shim(argv_log: &Path, canned_path: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.10.12\\n\\n'\n\
+		 \tprintf '\\npodup version v5.10.13\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 for arg in \"$@\"; do\n\
@@ -195,7 +195,7 @@ pub(crate) fn write_ps_fixture(dir: &Path) -> PathBuf {
 }
 
 /// A podup shim that only records argv, prints the canonical
-/// `v5.10.12` banner, and exits 0 for every other command. Used
+/// `v5.10.13` banner, and exits 0 for every other command. Used
 /// by the streaming subcommand tests (`up`, `down`, `logs`,
 /// `restart`).
 #[allow(dead_code)]
@@ -204,7 +204,7 @@ pub(crate) fn recorder_shim(argv_log: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.10.12\\n\\n'\n\
+		 \tprintf '\\npodup version v5.10.13\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 exit 0\n",

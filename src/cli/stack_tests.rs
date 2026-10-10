@@ -24,7 +24,7 @@ fn version_at_least_is_numeric_per_component_not_lexicographic() {
 	let rows: &[(&str, bool)] = &[
 		("5.9.0", false),
 		("5.10.9", false),
-		("5.10.10", true),
+		("5.10.10", false),
 		("5.10.13", true),
 		("5.11.0", true),
 		("6.0", true),

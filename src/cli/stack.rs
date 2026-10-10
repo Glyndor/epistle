@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 /// The `podup` version this build requires at minimum. Mirrors the
-/// `podup (>= 5.10.10)` dependency in `debian/control`; a test reads
+/// `podup (>= 5.10.13)` dependency in `debian/control`; a test reads
 /// the control file and asserts the two are equal so the floor cannot
 /// drift away from the package relationship.
-const PODUP_FLOOR: &str = "5.10.10";
+const PODUP_FLOOR: &str = "5.10.13";
 
 /// Path of the compose file `epistle init` writes, relative to
 /// `data_dir`. Kept in one place so the operator-facing error names
@@ -138,8 +138,12 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Err(code) => return code,
 	};
 	match action {
-		StackAction::Up => run_inherited(podup, &compose, &["up", "-d"]),
-		StackAction::Down => run_inherited(podup, &compose, &["down"]),
+		StackAction::Up => {
+			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
+		}
+		StackAction::Down => {
+			run_sequence(podup, &compose, &[&["autostart", "uninstall"], &["down"]])
+		}
 		StackAction::Ps { as_json } => {
 			let json = match capture_podup(podup, &compose, &["ps", "--format", "json"]) {
 				Ok(out) => out,
@@ -297,6 +301,16 @@ fn parse_version(input: &str) -> Result<Vec<u64>, std::num::ParseIntError> {
 /// shell would have shown, and propagate the exit code. The one-line
 /// error names the exact argv, so a `podup` failure points at the
 /// command that produced it.
+fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> ExitCode {
+	for step in steps {
+		let code = run_inherited(podup, compose, step);
+		if code != ExitCode::SUCCESS {
+			return code;
+		}
+	}
+	ExitCode::SUCCESS
+}
+
 fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 	let status = match build_command(podup, compose, extra)
 		.stdin(Stdio::inherit())
@@ -487,3 +501,7 @@ fn format_ports(publishers: &[Publisher]) -> String {
 #[cfg(test)]
 #[path = "stack_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stack_tests_service.rs"]
+mod tests_service;

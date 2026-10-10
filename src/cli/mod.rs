@@ -414,15 +414,14 @@ pub enum Command {
 	/// `restart [<service>]`. Runs `podup` underneath; never replaces
 	/// it.
 	Stack {
-		/// Path to the configuration file. Marked global so clap
-		/// accepts it either before or after the stack
-		/// subcommand (`epistle stack --config F ps` and
-		/// `epistle stack ps --config F` both parse), which is
-		/// the shape every other `epistle` subcommand's docs
-		/// assume. clap rejects `global = true` on a required
-		/// argument, so the field is `Option` and the dispatcher
-		/// refuses `None` with a one-line error.
-		#[arg(long, value_name = "FILE", global = true)]
+		/// Configuration file, defaults to the path written by packaged init.
+		/// Global so it can appear before or after the stack subcommand.
+		#[arg(
+			long,
+			value_name = "FILE",
+			global = true,
+			default_value = "/etc/epistle/mail.toml"
+		)]
 		config: Option<PathBuf>,
 		/// The stack sub-action.
 		#[command(subcommand)]
