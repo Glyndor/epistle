@@ -118,7 +118,17 @@ pub fn run(args: Args) -> ExitCode {
 fn read_answers(path: &PathBuf) -> Result<Answers, ApplyError> {
 	let raw = std::fs::read_to_string(path)
 		.map_err(|error| ApplyError::ConfigRead(path.clone(), error))?;
-	toml::from_str(&raw).map_err(|error| ApplyError::ConfigEncode(error.to_string()))
+	toml::from_str(&raw).map_err(|error| {
+		// Parser messages and source excerpts can both include credential values.
+		let mut diagnostic = "invalid answers TOML".to_string();
+		if let Some(span) = error.span() {
+			let prefix = &raw[..span.start];
+			let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+			let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+			diagnostic.push_str(&format!(" at line {line}, column {column}"));
+		}
+		ApplyError::ConfigEncode(diagnostic)
+	})
 }
 
 fn read_interactive() -> Result<assistant::Filled, ()> {
@@ -177,3 +187,7 @@ mod tests;
 #[cfg(test)]
 #[path = "init_answers_errors_tests.rs"]
 mod tests_answers_errors;
+
+#[cfg(test)]
+#[path = "init_tests_parse_privacy.rs"]
+mod tests_parse_privacy;
