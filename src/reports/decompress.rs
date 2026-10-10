@@ -170,8 +170,8 @@ fn inflate_zip(bytes: &[u8]) -> Result<Vec<u8>, ReportError> {
 	let _mod_time = read_u16(bytes, 10)?;
 	let _mod_date = read_u16(bytes, 12)?;
 	let _crc32 = read_u32(bytes, 14)?;
-	let mut compressed_size = read_u32(bytes, 18)? as usize;
-	let mut uncompressed_size = read_u32(bytes, 22)? as usize;
+	let compressed_size = read_u32(bytes, 18)? as usize;
+	let uncompressed_size = read_u32(bytes, 22)? as usize;
 	let filename_len = read_u16(bytes, 26)? as usize;
 	let extra_len = read_u16(bytes, 28)? as usize;
 	let data_offset = 30_usize
@@ -181,16 +181,13 @@ fn inflate_zip(bytes: &[u8]) -> Result<Vec<u8>, ReportError> {
 	if data_offset > bytes.len() {
 		return Err(ReportError::Malformed("zip header overruns buffer"));
 	}
-	// Bit 3 set in the general-purpose flags means the local header
-	// stores zero in compressed / uncompressed size; the real sizes live
-	// in the matching central directory entry. Walk back to the
-	// end-of-central-directory record within the bounded window, then
-	// read the first central header.
-	if flags & FLAG_DATA_DESCRIPTOR != 0 {
-		let (central_size, central_uncompressed) = read_central_sizes(bytes, data_offset)?;
-		compressed_size = central_size;
-		uncompressed_size = central_uncompressed;
-	}
+	// Streaming entries carry sizes in the directory; its entry count also
+	// catches another local header hidden behind a data descriptor.
+	let (compressed_size, uncompressed_size) = if flags & FLAG_DATA_DESCRIPTOR != 0 {
+		read_central_sizes(bytes, data_offset)?
+	} else {
+		(compressed_size, uncompressed_size)
+	};
 	if compressed_size > MAX_COMPRESSED {
 		return Err(ReportError::TooLarge);
 	}
@@ -205,6 +202,12 @@ fn inflate_zip(bytes: &[u8]) -> Result<Vec<u8>, ReportError> {
 	// sender cannot park a second payload we would silently ignore.
 	if data_end + 4 <= bytes.len() && bytes[data_end..data_end + 4] == LOCAL_FILE_HEADER_SIG {
 		return Err(ReportError::Malformed("zip multi-entry"));
+	}
+	if flags & FLAG_DATA_DESCRIPTOR == 0 {
+		let central_sizes = read_central_sizes(bytes, data_offset)?;
+		if central_sizes != (compressed_size, uncompressed_size) {
+			return Err(ReportError::Malformed("zip size mismatch"));
+		}
 	}
 	let entry = &bytes[data_offset..data_end];
 	let payload = match method {
@@ -243,9 +246,9 @@ fn inflate_deflate(entry: &[u8]) -> Result<Vec<u8>, ReportError> {
 
 /// Walk back from the end of `bytes` to find the end-of-central-directory
 /// record, then read the first central directory entry and return the
-/// `(compressed_size, uncompressed_size)` pair it carries. Used when the
-/// local file header declares general-purpose bit 3.
-fn read_central_sizes(bytes: &[u8], data_end: usize) -> Result<(usize, usize), ReportError> {
+/// `(compressed_size, uncompressed_size)` pair it carries. Require a single
+/// directory record pointing to the local entry at offset zero.
+fn read_central_sizes(bytes: &[u8], data_offset: usize) -> Result<(usize, usize), ReportError> {
 	let eocd_offset = find_eocd(bytes).ok_or(ReportError::Malformed("zip eocd missing"))?;
 	let comment_len = read_u16(bytes, eocd_offset + 20)? as usize;
 	let eocd_total = EOCD_FIXED_LEN
@@ -254,8 +257,14 @@ fn read_central_sizes(bytes: &[u8], data_end: usize) -> Result<(usize, usize), R
 	let eocd_end = eocd_offset
 		.checked_add(eocd_total)
 		.ok_or(ReportError::Malformed("zip eocd overruns buffer"))?;
-	if eocd_end > bytes.len() {
+	if eocd_end != bytes.len() {
 		return Err(ReportError::Malformed("zip eocd overruns buffer"));
+	}
+	if read_u16(bytes, eocd_offset + 4)? != 0 || read_u16(bytes, eocd_offset + 6)? != 0 {
+		return Err(ReportError::Malformed("zip multi-disk"));
+	}
+	if read_u16(bytes, eocd_offset + 8)? != 1 || read_u16(bytes, eocd_offset + 10)? != 1 {
+		return Err(ReportError::Malformed("zip multi-entry"));
 	}
 	let central_offset = read_u32(bytes, eocd_offset + 16)? as usize;
 	if central_offset == 0 {
@@ -278,9 +287,22 @@ fn read_central_sizes(bytes: &[u8], data_end: usize) -> Result<(usize, usize), R
 	if central_compressed > MAX_COMPRESSED {
 		return Err(ReportError::TooLarge);
 	}
-	// The central directory header is at `central_offset` and the entry's
-	// data is at `data_end`; together they must fit inside the buffer.
-	let _ = data_end;
+	let record_len = 46usize
+		+ read_u16(bytes, central_offset + 28)? as usize
+		+ read_u16(bytes, central_offset + 30)? as usize
+		+ read_u16(bytes, central_offset + 32)? as usize;
+	let directory_len = read_u32(bytes, eocd_offset + 12)? as usize;
+	if record_len != directory_len || central_offset.checked_add(record_len) != Some(eocd_offset) {
+		return Err(ReportError::Malformed("zip multi-entry"));
+	}
+	if read_u16(bytes, central_offset + 34)? != 0
+		|| read_u32(bytes, central_offset + 42)? != 0
+		|| data_offset
+			.checked_add(central_compressed)
+			.is_none_or(|end| end > central_offset)
+	{
+		return Err(ReportError::Malformed("zip central entry mismatch"));
+	}
 	Ok((central_compressed, central_uncompressed))
 }
 
@@ -328,3 +350,7 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ReportError> {
 #[cfg(test)]
 #[path = "decompress_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "decompress_tests_single_entry.rs"]
+mod tests_single_entry;
