@@ -107,11 +107,10 @@ mod rfc9051_uid_star;
 #[path = "session_tests_rfc9051_poll.rs"]
 mod rfc9051_poll;
 
-<<<<<<< HEAD
 #[cfg(test)]
 #[path = "session_tests_default_mailboxes.rs"]
 mod default_mailboxes;
-=======
+
 #[path = "session_tests_fetch_envelope.rs"]
 mod fetch_envelope;
 
@@ -126,4 +125,3 @@ mod fetch_aliases;
 
 #[path = "session_tests_fetch_edges.rs"]
 mod fetch_edges;
->>>>>>> 769247bb (feat(imap): ENVELOPE, BODYSTRUCTURE, body sections and partial fetch)
