@@ -22,6 +22,8 @@ pub enum Command {
 	Capability,
 	/// `NOOP`: a no-op the server answers with any pending updates.
 	Noop,
+	/// `CHECK`: selected-state checkpoint, currently a no-op.
+	Check,
 	/// `LOGOUT`: graceful shutdown of the connection.
 	Logout,
 	/// `NAMESPACE` (RFC 2342).

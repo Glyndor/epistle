@@ -4,6 +4,14 @@ use super::state::State;
 use super::{Output, Session, codes, mailbox};
 
 impl Session {
+	pub(super) fn check(&self, tag: &str) -> Output {
+		if matches!(self.state, State::Selected { .. }) {
+			Output::text(format!("{tag} OK CHECK completed\r\n"))
+		} else {
+			Output::text(format!("{tag} BAD no mailbox selected\r\n"))
+		}
+	}
+
 	pub(super) fn select(
 		&mut self,
 		tag: &str,

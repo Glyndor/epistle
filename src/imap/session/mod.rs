@@ -108,6 +108,7 @@ impl Session {
 				output
 			}
 			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
+			Command::Check => self.check(&tag),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
 			Command::Namespace => Output::text(format!(
 				"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"

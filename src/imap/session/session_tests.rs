@@ -81,3 +81,6 @@ mod rev1_recent;
 
 #[path = "session_tests_rev1_search.rs"]
 mod rev1_search;
+
+#[path = "session_tests_rev1_check.rs"]
+mod rev1_check;

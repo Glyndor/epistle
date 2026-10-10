@@ -27,6 +27,7 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 	let command = match verb.to_ascii_uppercase().as_str() {
 		"CAPABILITY" => no_args(&tag, args, Command::Capability)?,
 		"NOOP" => no_args(&tag, args, Command::Noop)?,
+		"CHECK" => no_args(&tag, args, Command::Check)?,
 		"NAMESPACE" => no_args(&tag, args, Command::Namespace)?,
 		"ID" => Command::Id,
 		"LOGOUT" => no_args(&tag, args, Command::Logout)?,
