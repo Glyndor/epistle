@@ -3,24 +3,45 @@
 
 use serde_json::{Value, json};
 
-use super::super::state::ApiState;
+use super::super::state::{ApiState, MatchedAuth};
 use super::objects;
+use crate::api::api_keys::Scope;
 
-/// `Email/copy` (RFC 8621 §4.7): copy stored messages into another mailbox of
-/// the same account, leaving the source intact. Each `create` entry references
-/// an `emailId` and a target `mailboxIds`.
-pub(super) fn email_copy(state: &ApiState, args: &Value, call_id: &str) -> Value {
+/// `Email/copy` (RFC 8620 section 5.4): copy messages from an accessible
+/// source account into the destination account, leaving the source intact.
+pub(super) fn email_copy(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let scope = state.domain_scope(auth);
+	let accounts = state.accounts();
+	let destination_allowed = accounts
+		.iter()
+		.find(|a| a.name == account)
+		.is_some_and(|a| scope.admits_account(a.addresses.iter().map(String::as_str)));
+	if !destination_allowed {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
+	let Some(source) = args.get("fromAccountId").and_then(Value::as_str) else {
+		return json!(["error", { "type": "invalidArguments" }, call_id]);
+	};
+	let source_allowed = accounts
+		.iter()
+		.find(|a| a.name == source)
+		.is_some_and(|a| scope.admits_account(a.addresses.iter().map(String::as_str)));
+	if !source_allowed || state.require_scope(auth, Scope::Read).is_err() {
+		return json!(["error", { "type": "fromAccountNotFound" }, call_id]);
 	}
 	let mut created = serde_json::Map::new();
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (cid, spec) in create {
-			match copy_email(state.data_dir(), account, spec, state.crypto()) {
+			match copy_email(state.data_dir(), source, account, spec, state.crypto()) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
@@ -32,30 +53,28 @@ pub(super) fn email_copy(state: &ApiState, args: &Value, call_id: &str) -> Value
 	}
 	json!([
 		"Email/copy",
-		{ "fromAccountId": account, "accountId": account,
+		{ "fromAccountId": source, "accountId": account,
 		  "created": created, "notCreated": not_created },
 		call_id,
 	])
 }
 
-/// Copy one message (by `emailId`) into the target mailbox, keeping the source.
+/// Copy one message (by `id`) into the target account, keeping the source.
 fn copy_email(
 	data_dir: &std::path::Path,
+	source: &str,
 	account: &str,
 	spec: &Value,
 	crypto: &crate::storage::MessageCrypto,
 ) -> Result<Value, &'static str> {
-	let id = spec
-		.get("emailId")
-		.and_then(Value::as_str)
-		.ok_or("notFound")?;
+	let id = spec.get("id").and_then(Value::as_str).ok_or("notFound")?;
 	let target = spec
 		.get("mailboxIds")
 		.and_then(Value::as_object)
 		.and_then(|m| m.iter().find(|(_, v)| v.as_bool() == Some(true)))
 		.map(|(name, _)| name.clone())
 		.unwrap_or_else(|| "INBOX".to_string());
-	let raw = objects::find_email_raw(data_dir, account, id, crypto).ok_or("notFound")?;
+	let raw = objects::find_email_raw(data_dir, source, id, crypto).ok_or("notFound")?;
 	let new_id = crate::imap::mailbox::append(data_dir, account, &target, &[], &raw, crypto)
 		.map_err(|_| "serverFail")?;
 	Ok(json!({
@@ -318,3 +337,7 @@ fn keyword_to_flag(keyword: &str) -> Result<crate::imap::mailbox::Flag, &'static
 #[cfg(test)]
 #[path = "email_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "copy_tests.rs"]
+mod copy_tests;

@@ -310,10 +310,7 @@ where
 			None => None,
 		};
 
-		let response = match command::parse(&line, literal) {
-			Ok(command) => session.handle(command),
-			Err(_) => Response::No(Some("Bad command.".into())),
-		};
+		let response = session.handle_line(&line, literal);
 		let upgrade = response.starts_tls();
 		let close = response.is_final();
 		write(&mut stream, &response).await?;
