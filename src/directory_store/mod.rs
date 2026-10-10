@@ -23,6 +23,7 @@ mod names;
 use names::{validate_name, with_safe_names};
 mod app_passwords_api;
 mod masked_api;
+mod reload_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
 
 pub mod removal;
@@ -35,6 +36,11 @@ pub mod ldap;
 pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
 
 mod build;
+
+/// Watcher that reloads the dynamic stores when a sibling process
+/// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
+pub mod file_watcher;
+pub use file_watcher::FileWatcher;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
