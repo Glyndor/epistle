@@ -29,7 +29,9 @@ const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 mod address_tokenizer;
 pub(crate) mod blob_path;
 mod blobs;
+mod download;
 mod email;
+pub use download::download;
 mod methods;
 mod objects;
 pub mod websocket;
@@ -516,36 +518,6 @@ mod backref_tests;
 #[cfg(test)]
 #[path = "jmap_backref_caps_tests.rs"]
 mod backref_caps_tests;
-
-/// `GET /jmap/download/{accountId}/{blobId}/{name}` (RFC 8620 §6.2): return the
-/// raw bytes of a stored message or an uploaded blob, by id.
-pub async fn download(
-	State(state): State<ApiState>,
-	Path((account, blob_id, _name)): Path<(String, String, String)>,
-) -> impl IntoResponse {
-	if !state.accounts().iter().any(|a| a.name == account) {
-		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
-	}
-	let stored_message =
-		objects::find_email_raw(state.data_dir(), &account, &blob_id, state.crypto());
-	let uploaded = if stored_message.is_some() {
-		None
-	} else {
-		blobs::read_blob(state.blob_backend(), &account, &blob_id, state.crypto()).await
-	};
-	let bytes = stored_message.or(uploaded);
-	match bytes {
-		Some(bytes) => {
-			// Serve the media type recorded at upload time; stored messages and
-			// legacy blobs without a sidecar fall back to octet-stream.
-			let content_type = blobs::read_blob_type(state.blob_backend(), &blob_id)
-				.await
-				.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_string());
-			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
-		}
-		None => jmap_error(StatusCode::NOT_FOUND, "notFound", "blob not found"),
-	}
-}
 
 /// `POST /jmap/upload/{accountId}` (RFC 8620 §6.1): store an uploaded blob and
 /// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.

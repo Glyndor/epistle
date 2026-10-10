@@ -328,7 +328,9 @@ pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value
 	let mut not_found = Vec::new();
 	if let Some(ids) = args.get("ids").and_then(Value::as_array) {
 		for id in ids.iter().filter_map(Value::as_str) {
-			if objects::find_email(state.data_dir(), account, id, state.crypto()).is_some() {
+			if objects::find_email(state.data_dir(), account, id, state.crypto(), &Value::Null)
+				.is_some()
+			{
 				list.push(json!({ "id": id, "emailIds": [id] }));
 			} else {
 				not_found.push(Value::String(id.to_string()));
@@ -423,7 +425,7 @@ pub(super) fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	let mut list = Vec::new();
 	let mut not_found = Vec::new();
 	for id in requested {
-		match objects::find_email(state.data_dir(), account, &id, state.crypto()) {
+		match objects::find_email(state.data_dir(), account, &id, state.crypto(), args) {
 			Some(email) => list.push(email),
 			None => not_found.push(Value::String(id)),
 		}
