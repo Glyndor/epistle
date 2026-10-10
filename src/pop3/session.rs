@@ -26,6 +26,8 @@ pub trait Backend {
 /// terminating line) is handled by [`Response::encode`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
+	/// Empty SASL challenge, awaiting a client response.
+	Continuation,
 	/// `+OK <text>`
 	Ok(String),
 	/// `-ERR <text>`
@@ -47,6 +49,7 @@ impl Response {
 	/// the body and the terminating `.` line for multiline responses.
 	pub fn encode(&self) -> Vec<u8> {
 		match self {
+			Response::Continuation => b"+ \r\n".to_vec(),
 			Response::Ok(text) | Response::Bye(text) => format!("+OK {text}\r\n").into_bytes(),
 			Response::Err(text) => format!("-ERR {text}\r\n").into_bytes(),
 			Response::Multiline { status, body } => {
@@ -81,6 +84,12 @@ fn dot_stuff(body: &[u8]) -> Vec<u8> {
 		at_line_start = byte == b'\n';
 		prev = byte;
 	}
+	if !body.is_empty() && !out.ends_with(b"\r\n") {
+		if !out.ends_with(b"\r") {
+			out.push(b'\r');
+		}
+		out.push(b'\n');
+	}
 	out
 }
 
@@ -99,6 +108,7 @@ struct Message {
 /// One POP3 connection's protocol state.
 pub struct Session<B: Backend> {
 	backend: B,
+	pending_plain: bool,
 	state: State,
 	user: Option<String>,
 	account: Option<String>,
@@ -114,6 +124,7 @@ impl<B: Backend> Session<B> {
 	pub fn new(backend: B) -> Self {
 		Self {
 			backend,
+			pending_plain: false,
 			state: State::Authorization,
 			user: None,
 			account: None,
@@ -131,6 +142,20 @@ impl<B: Backend> Session<B> {
 	/// The greeting sent on connect.
 	pub fn greeting(&self) -> Response {
 		Response::Ok("POP3 ready".to_string())
+	}
+
+	/// Consume a client line and return its wire response.
+	pub fn handle_line(&mut self, line: &str) -> Response {
+		if std::mem::take(&mut self.pending_plain) {
+			if line == "*" {
+				return Response::Err("authentication cancelled".into());
+			}
+			return self.auth(Some("PLAIN".into()), Some(line.to_string()));
+		}
+		match super::command::parse(line) {
+			Ok(command) => self.handle(command),
+			Err(_) => Response::Err("invalid command".into()),
+		}
 	}
 
 	/// Drive the session with one parsed command.
@@ -225,8 +250,7 @@ impl<B: Backend> Session<B> {
 		}
 	}
 
-	/// SASL AUTH (RFC 5034): list mechanisms, or verify `AUTH PLAIN <initial>`
-	/// (`\0authcid\0password`). Only the initial-response form is supported.
+	/// SASL AUTH (RFC 5034): list mechanisms or start a PLAIN exchange.
 	fn auth(&mut self, mechanism: Option<String>, initial: Option<String>) -> Response {
 		let Some(mechanism) = mechanism else {
 			return Response::Multiline {
@@ -237,8 +261,13 @@ impl<B: Backend> Session<B> {
 		if mechanism != "PLAIN" {
 			return Response::Err("unsupported SASL mechanism".to_string());
 		}
-		let account = initial
-			.and_then(|encoded| crate::smtp::auth::parse_plain(&encoded).ok())
+		let Some(initial) = initial else {
+			self.pending_plain = true;
+			return Response::Continuation;
+		};
+		self.pending_plain = false;
+		let account = crate::smtp::auth::parse_plain(&initial)
+			.ok()
 			.and_then(|creds| {
 				self.backend
 					.verify(&creds.authcid, &creds.password, self.peer_ip)
@@ -353,3 +382,7 @@ fn find_header_end(data: &[u8]) -> usize {
 	}
 	data.len()
 }
+
+#[cfg(test)]
+#[path = "session_tests_continuation.rs"]
+mod continuation_tests;

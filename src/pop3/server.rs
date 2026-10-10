@@ -18,7 +18,6 @@ use crate::directory_store::DirectoryHandle;
 use crate::smtp::line::LineDecoder;
 
 use super::backend::MailboxBackend;
-use super::command::parse;
 use super::session::{Response, Session};
 
 const READ_BUFFER: usize = 4096;
@@ -141,10 +140,7 @@ where
 		};
 
 		let response = match String::from_utf8(line) {
-			Ok(text) => match parse(text.trim_end_matches(['\r', '\n'])) {
-				Ok(command) => session.handle(command),
-				Err(_) => Response::Err("invalid command".to_string()),
-			},
+			Ok(text) => session.handle_line(text.trim_end_matches(['\r', '\n'])),
 			Err(_) => Response::Err("non-ASCII command".to_string()),
 		};
 
@@ -274,3 +270,7 @@ mod tests {
 		assert!(task.await.expect("join").is_ok());
 	}
 }
+
+#[cfg(test)]
+#[path = "server_tests_continuation.rs"]
+mod continuation_tests;
