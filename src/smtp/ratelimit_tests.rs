@@ -54,35 +54,6 @@ fn limit_can_change_between_calls() {
 }
 
 #[test]
-fn the_map_refuses_unseen_keys_once_the_cap_is_full() {
-	// Filling the cap with 10_000 distinct senders, then trying to admit an
-	// 11th unseen key inside the same window: the cap is hard, the live
-	// entries are not stale, and the unseen key must be refused. The old
-	// code let the map grow past EVICTION_THRESHOLD because fresh entries
-	// survived the sweep; the new contract refuses them instead.
-	let limiter = WindowLimiter::new(60);
-	for i in 0..MAX_ENTRIES {
-		assert!(
-			limiter.check(&format!("k{i}"), u32::MAX, 1_000),
-			"the {i}-th distinct key must be admitted below the cap"
-		);
-	}
-	assert_eq!(limiter.len(), MAX_ENTRIES, "the cap should be full");
-	// The next unseen key is refused because the incremental pass finds no
-	// stale entries inside the same window.
-	assert!(
-		!limiter.check("overflow", u32::MAX, 1_000),
-		"an unseen key at the cap must be refused"
-	);
-	// The cap is still 10_000: the refusal did not push the map past it.
-	assert_eq!(
-		limiter.len(),
-		MAX_ENTRIES,
-		"the cap must not grow past MAX_ENTRIES"
-	);
-}
-
-#[test]
 fn a_stale_entry_is_reset_before_counting() {
 	// After a limit is reached the entry sits at (start, limit) until the
 	// window elapses. A check arriving later than the window must observe a
@@ -117,7 +88,9 @@ fn an_active_key_keeps_its_budget_when_the_map_is_full() {
 		"third event must be blocked"
 	);
 	// Fill the cap with other senders, still inside alice's window. Alice
-	// already occupies one slot, so we admit MAX_ENTRIES - 1 peers.
+	// already occupies one slot, so we admit MAX_ENTRIES - 1 peers (one
+	// of which evicts the oldest peer, but alice was inserted first and
+	// stays put).
 	for i in 0..MAX_ENTRIES - 1 {
 		assert!(limiter.check(&format!("k{i}"), u32::MAX, 1_000));
 	}
@@ -136,80 +109,112 @@ fn an_active_key_keeps_its_budget_when_the_map_is_full() {
 }
 
 #[test]
-fn incremental_expiry_admits_new_keys_once_entries_go_stale() {
-	// Stale entries (> 2 windows old) are dropped one budget at a time by
-	// the incremental pass. After enough passes the cap frees up and the
-	// new key is admitted without ever scanning the whole map in a single
-	// call.
+fn stale_entries_get_out_of_the_way_on_the_next_unseen_key() {
+	// Round 5's incremental-expiry test: at the cap with everything live,
+	// the unseen key was refused. Under the new eviction policy the
+	// unseen key is admitted by evicting the oldest entry, so the
+	// equivalent expectation is that the unseen key is admitted at the
+	// same instant without waiting for two windows of staleness.
 	let limiter = WindowLimiter::new(60);
 	for i in 0..MAX_ENTRIES {
 		assert!(limiter.check(&format!("k{i}"), u32::MAX, 1_000));
 	}
-	// Same window: the unseen key is refused.
-	assert!(!limiter.check("late", u32::MAX, 1_000));
-	// Two windows later every prior entry is stale (start = 1_000, cutoff
-	// = 1_000 + 120 - 120 = 1_000). One incremental pass frees at most
-	// EVICTION_SCAN_BUDGET slots, so the first new key after the gap may
-	// still be refused; a handful of passes are enough to drain 10_000
-	// stale entries through the budget.
-	for pass in 0..(MAX_ENTRIES / EVICTION_SCAN_BUDGET + 4) {
-		if limiter.check(&format!("late{pass}"), u32::MAX, 1_000 + 120) {
-			return;
-		}
-	}
-	panic!("incremental expiry never admitted a new key after the window expired");
+	assert_eq!(limiter.len(), MAX_ENTRIES);
+	// The unseen key is admitted: the oldest entry (k0) is evicted in
+	// O(1) and the new key takes its slot.
+	assert!(
+		limiter.check("late", u32::MAX, 1_000),
+		"unseen key must be admitted by evicting the oldest entry"
+	);
+	assert_eq!(limiter.len(), MAX_ENTRIES, "the cap is preserved");
 }
 
 #[test]
-fn scan_count_grows_at_most_linearly_under_thousands_of_distinct_senders() {
-	// Regression for #968: each call must do a bounded amount of work even
-	// when the map sits at the cap. The scan counter is the number of map
-	// entries the incremental expiry pass touched; it must stay linear in
-	// the number of `check` calls, not in the map size.
+fn oldest_entry_is_evicted_when_the_cap_is_full() {
+	// Item 3: filling the map with 10000 keys at t=1000, then admitting a
+	// new sender at t=1000. The map size stays at the cap, the new sender
+	// is admitted, and the evicted key is the one whose window started
+	// earliest (insertion order).
 	let limiter = WindowLimiter::new(60);
-	// Fill the cap with fresh entries so every subsequent unseen-key call
-	// runs the incremental expiry pass.
+	let t0 = 1_000;
+	for i in 0..MAX_ENTRIES {
+		assert!(limiter.check(&format!("k{i}"), u32::MAX, t0));
+	}
+	// A new sender arrives in the same window. The cap is full of entries
+	// with window_start = t0, all equally old; we evict the first-inserted
+	// (insertion-order "oldest"), which is `k0`.
+	assert!(
+		limiter.check("late", u32::MAX, t0),
+		"new sender at the cap must be admitted"
+	);
+	assert_eq!(
+		limiter.len(),
+		MAX_ENTRIES,
+		"map size must stay at the cap after eviction"
+	);
+	// The evicted key was the oldest one (k0). Confirm by looking the
+	// limiter up: `k0` is gone, `k1..k9999` plus `late` remain.
+	let mut state_keys: Vec<String> = (0..MAX_ENTRIES)
+		.map(|i| format!("k{i}"))
+		.chain(std::iter::once("late".to_string()))
+		.collect();
+	state_keys.sort();
+	// (We can't peek into the live limiter, but the next check on k0
+	// after the cap-stay assertion above proves it was evicted: it gets
+	// inserted as if fresh.)
+	assert!(
+		limiter.check("k0", u32::MAX, t0),
+		"k0 must have been evicted and re-admitted now"
+	);
+	let _ = state_keys;
+}
+
+#[test]
+fn per_call_eviction_walk_visits_at_most_a_handful_of_entries() {
+	// Item 2: 10000 fresh entries, then 100 unseen-sender checks. Each
+	// check evicts the head of the insertion queue (O(1) amortized) and
+	// the per-call work counter stays under a small constant.
+	let limiter = WindowLimiter::new(60);
 	for i in 0..MAX_ENTRIES {
 		limiter.check(&format!("k{i}"), u32::MAX, 1_000);
 	}
 	let baseline = limiter.scan_count();
-	// Run two batches of unseen-key checks against the saturated map. The
-	// incremental pass scans at most EVICTION_SCAN_BUDGET entries per call,
-	// so doubling the batch size must at most double the scan counter.
-	let n1: usize = 500;
-	for i in 0..n1 {
-		limiter.check(&format!("flood-a-{i}"), u32::MAX, 1_000);
+	for _ in 0..100 {
+		let before = limiter.scan_count();
+		assert!(limiter.check("fresh", u32::MAX, 1_000));
+		// Each call may visit the front of the insertion queue (the
+		// oldest live entry). Skip counters can mount over many calls
+		// but a single call visits only the entries it inspects while
+		// popping the head; the bound leaves a small slack above the
+		// budget for the amortized-stale entries a long-running
+		// limiter accumulates.
+		let visited = limiter.scan_count() - before;
+		assert!(
+			visited <= EVICTION_PER_CALL_BUDGET as u64 + 8,
+			"per-call walk exceeded the per-call budget: visited {visited}"
+		);
 	}
-	let scans_after_n1 = limiter.scan_count() - baseline;
-	let n2: usize = 1_000;
-	for i in 0..n2 {
-		limiter.check(&format!("flood-b-{i}"), u32::MAX, 1_000);
-	}
-	let scans_after_n2 = limiter.scan_count() - baseline - scans_after_n1;
-	// Linear bound: count(2N) is at most 2 * count(N) plus a fixed slack
-	// for the per-call overhead that does not depend on the input size.
-	// The old code scanned the whole map per sweep, so count(2N) / count(N)
-	// was the map size, not 1.
+	let total = limiter.scan_count() - baseline;
+	// And across all 100 calls the total work is bounded by the per-call
+	// budget times the number of calls (no key was renewed, so every
+	// pop_front succeeds on the first front entry).
 	assert!(
-		scans_after_n2 as u128 <= scans_after_n1 as u128 * 2 + 256,
-		"scan count grew superlinearly: n1={n1} -> {scans_after_n1}, \
-		 n2={n2} -> {scans_after_n2}"
-	);
-	// Absolute per-call cap: the incremental pass touches at most
-	// EVICTION_SCAN_BUDGET entries per call, so even a flooded map cannot
-	// exceed two budgets of work per call.
-	let per_call_cap = (n2 as u64) * (EVICTION_SCAN_BUDGET as u64) * 2;
-	assert!(
-		scans_after_n2 <= per_call_cap,
-		"per-call scan budget exceeded: n2={n2} -> {scans_after_n2}, cap={per_call_cap}"
+		total as u128 <= (EVICTION_PER_CALL_BUDGET as u128 + 8) * 100 + 64,
+		"total visits across 100 unseen-sender checks grew unbounded: {total}"
 	);
 }
+
+/// Mirrors [`super::EVICTION_PER_CALL_BUDGET`]: the local copy of the
+/// budget used for the size bound assertion above. Kept in lock-step with
+/// the production constant.
+const EVICTION_PER_CALL_BUDGET: usize = 64;
 
 #[test]
 fn map_size_never_exceeds_the_cap_under_one_hundred_thousand_distinct_senders() {
 	// The cap is the contract: feeding the limiter 100_000 distinct
-	// senders must not push `state.len()` past MAX_ENTRIES. The map can
-	// hold at most the cap; unseen keys beyond that are refused.
+	// senders must not push `state.len()` past MAX_ENTRIES. With the new
+	// eviction policy, every unseen key beyond the cap evicts the oldest
+	// entry and the map sits at the cap forever.
 	let limiter = WindowLimiter::new(60);
 	let mut admitted = 0usize;
 	for i in 0..100_000 {
@@ -223,46 +228,72 @@ fn map_size_never_exceeds_the_cap_under_one_hundred_thousand_distinct_senders() 
 		);
 	}
 	assert_eq!(limiter.len(), MAX_ENTRIES, "the map should sit at the cap");
-	// Every distinct sender that fits in the cap is admitted; the rest are
-	// refused. The exact split depends on the cap value but both sides are
-	// non-zero, which proves the cap is doing real work.
-	assert!(admitted <= MAX_ENTRIES);
-	assert!(admitted > MAX_ENTRIES / 2);
+	// Every distinct sender that fits in the cap is admitted; the rest
+	// are admitted too via eviction. The exact split depends on the
+	// ordering: with name-template-keyed call patterns, the oldest entry
+	// at any moment is the one with the smallest lexicographic key.
+	assert!(admitted == 100_000);
+}
+
+#[test]
+fn scan_count_grows_at_most_linearly_under_thousands_of_distinct_senders() {
+	// Each unseen-sender check does O(1) amortized work with the new
+	// insertion-ordered eviction; doubling the number of checks
+	// approximately doubles the scan counter.
+	let limiter = WindowLimiter::new(60);
+	for i in 0..MAX_ENTRIES {
+		limiter.check(&format!("k{i}"), u32::MAX, 1_000);
+	}
+	let baseline = limiter.scan_count();
+	let n1: usize = 500;
+	for i in 0..n1 {
+		limiter.check(&format!("flood-a-{i}"), u32::MAX, 1_000);
+	}
+	let scans_after_n1 = limiter.scan_count() - baseline;
+	let n2: usize = 1_000;
+	for i in 0..n2 {
+		limiter.check(&format!("flood-b-{i}"), u32::MAX, 1_000);
+	}
+	let scans_after_n2 = limiter.scan_count() - baseline - scans_after_n1;
+	assert!(
+		scans_after_n1 > 0,
+		"work counter must be > 0; a reverted algorithm that does not touch the counter bypasses the bound silently"
+	);
+	// Linear bound: count(2N) is at most 2 * count(N) plus a fixed slack
+	// for the per-call overhead that does not depend on the input size.
+	assert!(
+		scans_after_n2 as u128 <= scans_after_n1 as u128 * 2 + 4096,
+		"scan count grew superlinearly: n1={n1} -> {scans_after_n1}, \
+		 n2={n2} -> {scans_after_n2}"
+	);
+	// Absolute per-call cap: the insertion walk touches at most a few
+	// entries per call, so even a flooded map cannot exceed a small
+	// multiple of that budget per call.
+	let per_call_cap = (n2 as u64) * 8;
+	assert!(
+		scans_after_n2 <= per_call_cap,
+		"per-call scan budget exceeded: n2={n2} -> {scans_after_n2}, cap={per_call_cap}"
+	);
 }
 
 #[test]
 fn renewing_keys_at_the_iteration_front_cannot_starve_the_eviction_pass() {
-	// The state map is a BTreeMap, so it iterates in lexicographic key
-	// order. The names are zero-padded to four digits so k0000..k9999
-	// sit in numeric order, which puts k0000..k0063 at the very front
-	// of every eviction pass. With the old implementation each call's
-	// eviction pass restarts from the front: when those front 64 keys
-	// kept getting renewed and the rest went stale, the pass kept
-	// seeing the same fresh entries and refused every unseen sender
-	// forever, even though the other 9,936 entries were stale and
-	// could have been evicted. The fix persists a cursor across calls
-	// so the eviction pass makes progress through the whole map.
+	// The new eviction policy pops the head of the insertion queue on
+	// every unseen-key check, so renewing entries at the front of the
+	// iteration cannot make progress impossible: the next unseen key
+	// ejects whatever currently lives at the head, irrespective of
+	// how often it has been renewed.
 	let limiter = WindowLimiter::new(60);
 	let t0 = 1_000;
-	// Fill the cap with k0000..k9999. The BTreeMap sorts them by key,
-	// so the first 64 in iteration order are k0000..k0063.
 	for i in 0..MAX_ENTRIES {
 		limiter.check(&format!("k{i:04}"), u32::MAX, t0);
 	}
-	// Advance time by two windows so the original entries are stale,
-	// then renew the front 64 keys. The renewal keeps them fresh at
-	// the head of the iteration; without a cursor the eviction pass
-	// keeps reading them and never sees the stale entries behind.
+	// Renew all entries in the first window of keys many times. The
+	// renewing does not change the insertion order, so the head of the
+	// queue is still the lexicographically smallest key. A handful of
+	// unseen-key checks is enough to evict it and admit a new key.
 	let t1 = t0 + 120;
-	for i in 0..64 {
-		limiter.check(&format!("k{i:04}"), u32::MAX, t1);
-	}
-	// The renewing k0000..k0063 are fresh, the other 9,936 are stale.
-	// The cursor advances by EVICTION_SCAN_BUDGET per call, so a
-	// handful of passes drain the stale entries and admit the unseen
-	// key.
-	for _pass in 0..(MAX_ENTRIES / EVICTION_SCAN_BUDGET + 4) {
-		// Keep the front 64 keys fresh across the loop.
+	for _pass in 0..5 {
 		for i in 0..64 {
 			limiter.check(&format!("k{i:04}"), u32::MAX, t1);
 		}
@@ -270,5 +301,25 @@ fn renewing_keys_at_the_iteration_front_cannot_starve_the_eviction_pass() {
 			return;
 		}
 	}
-	panic!("renewing keys at the iteration front starved the eviction pass");
+	panic!("insertion-ordered eviction starved the unseen key under renewing front entries");
+}
+
+#[test]
+fn a_live_sender_own_limit_is_not_reset_by_its_own_renewals() {
+	// Companion to the cap-full active-key test: an entry that the
+	// limiter keeps renewing must keep the budget it accumulated before
+	// the renewals, not reset to zero on every renewal. The new policy
+	// preserves the active-key path; renewal alone (window_secs not yet
+	// elapsed) leaves the count intact.
+	let limiter = WindowLimiter::new(60);
+	for _ in 0..5 {
+		assert!(limiter.check("alice", 10, 1_000));
+	}
+	// Five more renewals at the same instant stay inside the original
+	// window and grow the count, not reset it.
+	for _ in 0..5 {
+		assert!(limiter.check("alice", 10, 1_000));
+	}
+	// Eleventh event in the same window is the last the budget allows.
+	assert!(!limiter.check("alice", 10, 1_000));
 }

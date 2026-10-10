@@ -7,37 +7,30 @@
 //! caller supplies the cap (`limit`) per call so one limiter can back several
 //! policies (per-account, per-IP, per-sender, per-tenant).
 //!
-//! ## Bounded memory
+//! ## Bounded memory and constant per-call work
 //!
 //! The `state` map is capped at [`MAX_ENTRIES`] entries. A key already in
 //! the map is handled in place (its window is reset if stale and its count
 //! is incremented) so an active sender keeps its budget while the map sits
-//! at the cap. A key that is not in the map is admitted only when there is
-//! room; when the cap is reached the check performs an incremental expiry
-//! pass that scans at most `EVICTION_SCAN_BUDGET` entries and removes the
-//! stale ones, then admits the new key if the eviction freed a slot. If the
-//! map is still full after the pass, the unseen key is refused: returning
-//! `false` blocks the message without ever dropping a live entry.
+//! at the cap. A key that is not in the map is admitted by evicting the
+//! oldest entry when the cap is full: an `insertion`-ordered [`VecDeque`]
+//! tracks the order in which keys first appeared in the map, and the
+//! head is lazily popped (skipping keys that have already been removed or
+//! never existed) to evict the entry whose window started earliest.
+//! O(1) amortized.
 //!
 //! `limit == 0` is treated as "no limit" (always allowed): the policy layer
 //! is expected to skip the call when the resolved limit is `None`, so a
 //! literal zero only appears when an operator deliberately configured it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 /// Hard cap on the `state` map. Once [`MAX_ENTRIES`] distinct keys are
-/// tracked, an unseen key is refused unless the incremental expiry pass
-/// makes room first.
+/// tracked, an unseen key evicts the oldest entry (insertion order) and
+/// is admitted; a live sender keeps its budget through every call that
+/// hits a full map.
 pub const MAX_ENTRIES: usize = 10_000;
-
-/// Maximum number of map entries the incremental expiry pass scans per
-/// `check` call. Each scan entry is one O(log n) lookup on the [`BTreeMap`]
-/// plus a window-start comparison, so a single `check` does at most this
-/// many lookups of stale `window_start` values beyond the active-key
-/// lookup. Bounded so a fully-saturated limiter cannot do O(map_size)
-/// work per call.
-const EVICTION_SCAN_BUDGET: usize = 64;
 
 /// A shared, fixed-window rate limiter keyed by an arbitrary string.
 ///
@@ -48,23 +41,29 @@ const EVICTION_SCAN_BUDGET: usize = 64;
 pub struct WindowLimiter {
 	/// Window length in seconds.
 	window_secs: u64,
+	/// The shared mutable map plus the insertion-order queue. Both are
+	/// guarded by a single mutex so `check` cannot deadlock with itself
+	/// across the two structures.
+	state: Mutex<StateInner>,
+}
+
+/// Internal state of [`WindowLimiter`] held under one mutex.
+#[derive(Debug, Default)]
+struct StateInner {
 	/// Per-key `(window_start_epoch, count_in_window)`. A [`BTreeMap`] is
-	/// used so the incremental expiry pass has a deterministic iteration
-	/// order; the cursor below advances across calls and a renewing entry
-	/// at the front of the iteration cannot starve the entries behind it.
-	state: Mutex<BTreeMap<String, (u64, u32)>>,
-	/// Last key the incremental expiry pass examined. The next pass scans
-	/// the keys strictly greater than this one and wraps around to the
-	/// smallest key when the end is reached. Without a persistent cursor
-	/// every call would restart from the smallest key and a renewing
-	/// entry at the front of the iteration would lock the rest of the
-	/// map out of the eviction pass forever.
-	cursor: Mutex<Option<String>>,
-	/// Test-only counter of map entries the incremental expiry pass has
-	/// scanned. Lets a regression test assert that the per-call work stays
-	/// bounded when the map sits at the cap.
+	/// used so the in-place active-key path and the membership test
+	/// during eviction are O(log n).
+	entries: BTreeMap<String, (u64, u32)>,
+	/// Insertion order of the keys currently in `entries` (plus any
+	/// stale entries that have already been removed from `entries`,
+	/// which the eviction walk skips). The head holds the entry whose
+	/// window started earliest; popping the head is the eviction.
+	insertion: VecDeque<String>,
+	/// Test-only counter of how many entries the eviction walk visited
+	/// across every `check` call so a regression test can assert the
+	/// per-call work stays bounded when the map sits at the cap.
 	#[cfg(test)]
-	scan_count: Mutex<u64>,
+	scan_count: u64,
 }
 
 /// Backwards-compatible alias. Kept so existing call sites (per-account
@@ -91,10 +90,7 @@ impl WindowLimiter {
 	pub fn new(window_secs: u64) -> Self {
 		WindowLimiter {
 			window_secs: window_secs.max(1),
-			state: Mutex::new(BTreeMap::new()),
-			cursor: Mutex::new(None),
-			#[cfg(test)]
-			scan_count: Mutex::new(0),
+			state: Mutex::new(StateInner::default()),
 		}
 	}
 
@@ -108,19 +104,23 @@ impl WindowLimiter {
 	/// window gets a fresh budget. The window is the fixed-window kind: a
 	/// continuous burst for `window_secs` then a hard reset.
 	///
-	/// The map size is capped at [`MAX_ENTRIES`]. When a brand-new key
-	/// would push the map past the cap, the call performs a bounded
-	/// incremental expiry pass and admits the key only if a slot was
-	/// freed. The active-key path (the entry is already present) never
-	/// evicts; an existing sender keeps its budget through every call
-	/// that hits a full map.
+	/// The map size is capped at [`MAX_ENTRIES`]. A new key always fits,
+	/// because an unseen key at the cap evicts the oldest entry in
+	/// insertion order to make room: the head of `insertion` is popped
+	/// (skipping keys that no longer live in `entries`) and the matching
+	/// entry is removed, then the new key is inserted. The active-key
+	/// path never evicts; an existing sender keeps its budget through
+	/// every call that hits a full map.
 	pub fn check(&self, key: &str, limit: u32, now: u64) -> bool {
 		if limit == 0 {
 			return true;
 		}
 		let key_lc = key.to_ascii_lowercase();
 		let mut state = self.state.lock().expect("send limiter");
-		if let Some(entry) = state.get_mut(&key_lc) {
+		// Active-key path: the entry is already present. Its window may
+		// have elapsed, in which case the count resets to 0; we never
+		// evict here, so a live budget survives a saturated map.
+		if let Some(entry) = state.entries.get_mut(&key_lc) {
 			if now.saturating_sub(entry.0) >= self.window_secs {
 				*entry = (now, 0);
 			}
@@ -130,66 +130,35 @@ impl WindowLimiter {
 			entry.1 += 1;
 			return true;
 		}
-		if state.len() >= MAX_ENTRIES {
-			// Unseen key at the cap: do an incremental expiry pass that
-			// scans at most EVICTION_SCAN_BUDGET entries, drop the ones
-			// whose window started more than two window-lengths ago, and
-			// admit the new key only if a slot was freed. The active-key
-			// path above never reaches this branch, so live budgets are
-			// preserved even when the map is saturated. The cursor below
-			// makes the pass advance across calls: a renewing entry at
-			// the front of the iteration cannot starve the entries behind
-			// it because the next call resumes strictly after the last
-			// entry this one examined, then wraps back to the smallest
-			// key once the end is reached.
-			let cutoff = now.saturating_sub(self.window_secs.saturating_mul(2));
-			let cursor = self.cursor.lock().expect("cursor").clone();
-			let keys: Vec<String> = state.keys().cloned().collect();
-			let keys_len = keys.len();
-			let start_idx = match cursor.as_ref() {
-				Some(c) => keys.iter().position(|k| k > c).unwrap_or(0),
-				None => 0,
-			};
-			let mut stale: Vec<String> = Vec::new();
-			let mut last_key: Option<String> = None;
-			#[cfg(test)]
-			let mut scanned: u64 = 0;
-			if keys_len > 0 {
-				for offset in 0..EVICTION_SCAN_BUDGET {
-					let idx = (start_idx + offset) % keys_len;
-					let key = &keys[idx];
-					let (start, _) = state.get(key).expect("key present in state");
-					if *start <= cutoff {
-						stale.push(key.clone());
-					}
-					#[cfg(test)]
-					{
-						scanned += 1;
-					}
-					last_key = Some(key.clone());
+		// Unseen key. If the cap is full, evict the oldest entry to make
+		// room. The head of `insertion` is the oldest live entry; stale
+		// entries (whose key was already removed) are skipped lazily.
+		// Every visit, including skips of stale entries and the chosen
+		// eviction, increments the test-only scan counter so the bound
+		// regression can observe the per-call work.
+		if state.entries.len() >= MAX_ENTRIES {
+			loop {
+				let Some(front) = state.insertion.front().cloned() else {
+					// The queue is empty but the map is full: an entry
+					// escaped removal. Treat the inconsistency as a
+					// refusal rather than panicking; the next call that
+					// touches the same key recovers.
+					return false;
+				};
+				#[cfg(test)]
+				{
+					state.scan_count += 1;
 				}
-			}
-			// Update the cursor so the next call resumes after the last
-			// entry examined. The advance is what defeats the starvation
-			// case: a renewing entry at the front of the iteration is
-			// left behind on the next call.
-			if let Some(last) = last_key {
-				*self.cursor.lock().expect("cursor") = Some(last);
-			} else {
-				*self.cursor.lock().expect("cursor") = None;
-			}
-			for k in &stale {
-				state.remove(k);
-			}
-			#[cfg(test)]
-			{
-				*self.scan_count.lock().expect("scan count") += scanned;
-			}
-			if state.len() >= MAX_ENTRIES {
-				return false;
+				if state.entries.contains_key(&front) {
+					state.entries.remove(&front);
+					state.insertion.pop_front();
+					break;
+				}
+				state.insertion.pop_front();
 			}
 		}
-		state.insert(key_lc, (now, 1));
+		state.entries.insert(key_lc.clone(), (now, 1));
+		state.insertion.push_back(key_lc);
 		true
 	}
 
@@ -198,15 +167,17 @@ impl WindowLimiter {
 	/// bounded.
 	#[cfg(test)]
 	fn len(&self) -> usize {
-		self.state.lock().expect("send limiter").len()
+		self.state.lock().expect("send limiter").entries.len()
 	}
 
-	/// Total number of map entries the incremental expiry pass has scanned
-	/// across every `check` call so far. Test-only counter used to assert
-	/// the per-call work stays bounded.
+	/// Total number of entries the eviction walk has visited across every
+	/// `check` call. Test-only counter used to assert the per-call work
+	/// stays bounded. With the insertion-ordered eviction, each call does
+	/// O(1) amortized work (a single pop_front, or a few when stale entries
+	/// have accumulated) so the bound holds trivially.
 	#[cfg(test)]
 	fn scan_count(&self) -> u64 {
-		*self.scan_count.lock().expect("scan count")
+		self.state.lock().expect("send limiter").scan_count
 	}
 }
 
