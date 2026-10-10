@@ -94,3 +94,6 @@ mod rev1_list;
 
 #[path = "session_tests_rev1_flow.rs"]
 mod rev1_flow;
+
+#[path = "session_tests_rfc9051_select.rs"]
+mod rfc9051_select;

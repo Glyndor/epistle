@@ -3,6 +3,21 @@
 use super::state::State;
 use super::{Output, Session, codes, mailbox};
 
+/// Move a Selected state to Authenticated on a failed SELECT/EXAMINE, keeping
+/// the authenticated account binding intact. Returns `true` when a mailbox
+/// was selected and the caller must include `[CLOSED]` in its tagged NO
+/// response (RFC 9051 §6.3.2 / §7.1).
+fn deselect_for_failed_select(state: &mut State) -> bool {
+	match state {
+		State::Selected { account, .. } => {
+			let prior = std::mem::take(account);
+			*state = State::Authenticated { account: prior };
+			true
+		}
+		_ => false,
+	}
+}
+
 impl Session {
 	pub(super) fn check(&self, tag: &str) -> Output {
 		if matches!(self.state, State::Selected { .. }) {
@@ -23,11 +38,27 @@ impl Session {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
+			// RFC 9051 §6.3.2: a failed SELECT deselects. The NO response
+			// carries [CLOSED] when a mailbox was selected beforehand, so a
+			// client that races a SELECT sees the boundary between the two.
+			let closed = deselect_for_failed_select(&mut self.state);
+			return Output::text(format!(
+				"{tag} NO {}no such mailbox\r\n",
+				if closed { "[CLOSED] " } else { "" }
+			));
 		}
 		let snapshot = match self.open_snapshot(&account, mailbox) {
 			Ok(snapshot) => snapshot,
-			Err(_) => return Output::text(format!("{tag} NO cannot open mailbox\r\n")),
+			Err(_) => {
+				// Same deselection discipline as a missing mailbox: a snapshot
+				// that cannot be opened is not the selected mailbox, and the
+				// session moves back to authenticated.
+				let closed = deselect_for_failed_select(&mut self.state);
+				return Output::text(format!(
+					"{tag} NO {}cannot open mailbox\r\n",
+					if closed { "[CLOSED] " } else { "" }
+				));
+			}
 		};
 		// QRESYNC: report vanished UIDs, but only if UIDVALIDITY still matches.
 		let vanished = match qresync {
