@@ -87,3 +87,51 @@ async fn rejected_putscript_literal_is_discarded() {
 	let _ = task.await;
 	let _ = dir;
 }
+
+/// When the connection closes before the announced literal size arrives,
+/// the partial payload must not be stored as a script: it is discarded
+/// and a `NO` is returned. Otherwise a malicious or buggy client could
+/// plant a truncated Sieve script on the server.
+#[tokio::test]
+async fn truncated_literal_at_eof_is_not_stored() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let (acceptor, _cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(dir.path().to_path_buf(), directory(), acceptor);
+	let (mut client, server_stream) = tokio::io::duplex(256 * 1024);
+	let task = tokio::spawn(async move {
+		server.handle_preauth_for_test(server_stream, "alice").await
+	});
+
+	// Drain the greeting; the test session starts over TLS by construction.
+	let _ = read_chunk(&mut client).await;
+
+	// Announce a 100-byte script and send a short valid-prefix payload
+// ("require \"x\";" — 13 bytes) then close. With the bug the parser
+// accepts the prefix as a complete script (it has a balanced
+// require + semicolon and an identifier), so 13 bytes are stored
+// under "a.sieve". With the fix the server detects truncation and
+// drops the partial literal without calling session.handle.
+	let header = b"PUTSCRIPT \"a\" {100+}\r\n";
+	client.write_all(header).await.expect("header");
+	client.write_all(b"require \"x\";").await.expect("partial payload");
+	drop(client);
+
+	// Give the server a chance to drain and tear down.
+	let _ = task.await;
+
+	// The filesystem must not contain a script named "a.sieve".
+	let sieve_dir = dir.path().join("accounts/alice/sieve");
+	let stored = std::fs::read_dir(&sieve_dir)
+		.map(|entries| {
+			entries
+				.filter_map(|e| e.ok())
+				.map(|e| e.file_name().to_string_lossy().into_owned())
+				.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
+	assert!(
+		!stored.iter().any(|name| name == "a.sieve"),
+		"truncated literal at EOF must not create a script; saw: {stored:?}"
+	);
+}

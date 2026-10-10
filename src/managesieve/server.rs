@@ -146,6 +146,27 @@ async fn handle(
 		.await
 	}
 
+	/// Test-only: drive the command loop with a pre-authenticated
+	/// session for `account`. Avoids a STARTTLS handshake so the test
+	/// can use an in-memory `tokio::io::duplex` pair directly.
+	#[cfg(test)]
+	pub async fn handle_preauth_for_test<S>(
+		&self,
+		stream: S,
+		account: &str,
+	) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
+		let backend = DirectoryBackend {
+			directory: self.directory.clone(),
+			accounts_root: self.accounts_root.clone(),
+		};
+		let mut session = Session::new(backend, true);
+		session.adopt_account_for_test(account);
+		run_command_loop(stream, session, self.max_literal, None).await
+	}
+
 	async fn handle_inner<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
 	where
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -156,32 +177,48 @@ async fn handle(
 		};
 		let mut session = Session::new(backend, false);
 		session.set_peer_ip(Some(peer_ip));
-		let mut stream: Box<dyn Connection> = Box::new(stream);
+		run_command_loop(stream, session, self.max_literal, Some(&self.tls)).await
+	}
+}
 
-		stream.write_all(&session.greeting().encode()).await?;
-		stream.flush().await?;
+/// Drive the command loop with the given pre-built session. Both the
+/// real connection path and the test-only pre-authenticated path share
+/// this body so the literal-framing rules cannot diverge.
+async fn run_command_loop<S, B>(
+	stream: S,
+	mut session: Session<B>,
+	max_literal: usize,
+	tls_acceptor: Option<&tokio_rustls::TlsAcceptor>,
+) -> std::io::Result<()>
+where
+	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	B: Backend,
+{
+	let mut stream: Box<dyn Connection> = Box::new(stream);
+	stream.write_all(&session.greeting().encode()).await?;
+	stream.flush().await?;
 
-		let mut decoder = LineDecoder::new();
-		let mut buffer = [0u8; READ_BUFFER];
-		loop {
-			let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer).await? else {
-				return Ok(());
-			};
-			let Ok(line) = String::from_utf8(line) else {
-				write(
-					&mut stream,
-					&Response::No(Some("Non-UTF-8 command.".into())),
-				)
-				.await?;
-				continue;
-			};
-			if line.trim().is_empty() {
-				continue;
-			}
+	let mut decoder = LineDecoder::new();
+	let mut buffer = [0u8; READ_BUFFER];
+	loop {
+		let Some(line) = read_line(&mut stream, &mut decoder, &mut buffer).await? else {
+			return Ok(());
+		};
+		let Ok(line) = String::from_utf8(line) else {
+			write(
+				&mut stream,
+				&Response::No(Some("Non-UTF-8 command.".into())),
+			)
+			.await?;
+			continue;
+		};
+		if line.trim().is_empty() {
+			continue;
+		}
 
-			// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
+// PUTSCRIPT/CHECKSCRIPT carry a trailing literal with the script.
 			let literal = match command::trailing_literal(&line) {
-				Some(literal) if literal.len > self.max_literal => {
+				Some(literal) if literal.len > max_literal => {
 					// The size limit is a server-side choice, not a syntax
 					// problem; the literal stays the client's choice of
 					// bytes. Drain them so a non-synchronizing literal
@@ -206,31 +243,43 @@ async fn handle(
 					write(&mut stream, &Response::No(Some("Script too large.".into()))).await?;
 					continue;
 				}
-				Some(literal) => {
-					Some(read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await?)
-				}
+				Some(literal) => match read_literal(&mut stream, &mut decoder, &mut buffer, literal.len).await? {
+					Some(bytes) => Some(bytes),
+					None => {
+						// The connection closed before the announced
+						// literal size arrived: drop the partial payload
+						// instead of parsing it as a complete script.
+						write(
+							&mut stream,
+							&Response::No(Some("Literal truncated by connection close.".into())),
+						)
+						.await?;
+						continue;
+					}
+				},
 				None => None,
 			};
 
-			let response = match command::parse(&line, literal) {
+let response = match command::parse(&line, literal) {
 				Ok(command) => session.handle(command),
 				Err(_) => Response::No(Some("Bad command.".into())),
 			};
-			let upgrade = response.starts_tls();
-			let close = response.is_final();
-			write(&mut stream, &response).await?;
-			if close {
+		let upgrade = response.starts_tls();
+		let close = response.is_final();
+		write(&mut stream, &response).await?;
+		if close {
+			return Ok(());
+		}
+		if upgrade {
+			let Some(tls) = tls_acceptor else {
 				return Ok(());
-			}
-			if upgrade {
-				let upgraded = self.tls.accept(stream).await?;
-				stream = Box::new(upgraded);
-				session.set_tls();
-				decoder = LineDecoder::new();
-				// RFC 5804 §2.2: re-issue capabilities after the TLS handshake.
-				stream.write_all(&session.greeting().encode()).await?;
-				stream.flush().await?;
-			}
+			};
+			let upgraded = tls.accept(stream).await?;
+			stream = Box::new(upgraded);
+			session.set_tls();
+			decoder = LineDecoder::new();
+			stream.write_all(&session.greeting().encode()).await?;
+			stream.flush().await?;
 		}
 	}
 }
@@ -259,19 +308,21 @@ async fn read_line(
 	}
 }
 
-/// Read exactly `size` literal octets. The trailing CRLF after the literal is
-/// left for the next `read_line`, which skips it as a blank line.
+/// Read exactly `size` literal octets, or detect a truncated connection
+/// and return `None` so the caller can reject the command. The trailing
+/// CRLF after the literal is left for the next `read_line`, which skips
+/// it as a blank line.
 async fn read_literal(
 	stream: &mut Box<dyn Connection>,
 	decoder: &mut LineDecoder,
 	buffer: &mut [u8],
 	size: usize,
-) -> std::io::Result<Vec<u8>> {
+) -> std::io::Result<Option<Vec<u8>>> {
 	let mut literal = decoder.take_buffered(size);
 	while literal.len() < size {
 		let read = stream.read(buffer).await?;
 		if read == 0 {
-			break;
+			return Ok(None);
 		}
 		let needed = size - literal.len();
 		if read <= needed {
@@ -281,7 +332,7 @@ async fn read_literal(
 			decoder.feed(&buffer[needed..read]);
 		}
 	}
-	Ok(literal)
+	Ok(Some(literal))
 }
 
 /// Write a response and flush.
