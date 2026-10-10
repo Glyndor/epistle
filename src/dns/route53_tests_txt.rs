@@ -9,7 +9,7 @@ use super::*;
 /// A TXT record longer than 255 bytes is one record made of several
 /// character-strings (RFC 1035 §3.3.14). The wire form is one
 /// `<ResourceRecord>` carrying the quoted pieces joined with a single
-/// space — resolvers concatenate the pieces back into one logical
+/// space, resolvers concatenate the pieces back into one logical
 /// value on read. Several records in an RRset would be several TXT
 /// records, which is what the previous attempt produced and what
 /// every DKIM verifier rejects. The test uses a 400-byte value
@@ -43,7 +43,7 @@ async fn txt_upsert_emits_long_value_as_one_record_with_joined_pieces() {
 	assert_eq!(value_open, 1, "expected exactly 1 <Value>, body: {body}");
 	// The joined shape: two quoted pieces, 255 + 145 bytes, with
 	// a single space between them. The shape, not the bytes, is
-	// what is asserted here — the full key value stays out of the
+	// what is asserted here, the full key value stays out of the
 	// assertion message.
 	let value = extract_first_value(&body).expect("<Value> present");
 	let piece_lengths = piece_lengths(&value);
@@ -106,7 +106,7 @@ async fn txt_upsert_keeps_short_value_in_one_chunk() {
 /// piece, not to the joined value, so a value with `\"` and `\\`
 /// mid-piece round-trips. The body must be one `<ResourceRecord>`
 /// with two quoted pieces; the assembled value must equal what was
-/// sent. The exact bytes are not echoed in the assertion message —
+/// sent. The exact bytes are not echoed in the assertion message,
 /// only the piece count, the per-piece ≤255 cap, and the round-trip
 /// length.
 #[tokio::test]

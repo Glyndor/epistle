@@ -85,7 +85,7 @@ impl DesecProvider {
 	/// value verbatim. A long value (an RSA-2048 DKIM `p=` runs ~410
 	/// bytes, an RSA-4096 ~755) has to be split into ≤255-octet
 	/// character-strings. But several entries would be several TXT
-	/// records — a single rrset only stitches the character-strings
+	/// records, a single rrset only stitches the character-strings
 	/// into one logical value when they all belong to a single
 	/// records entry. The wire form is one entry carrying the quoted
 	/// pieces separated by single spaces. The per-piece backslash

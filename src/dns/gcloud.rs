@@ -182,7 +182,7 @@ impl GcloudProvider {
 	/// runs ~410 bytes, an RSA-4096 ~755) has to be split into
 	/// ≤255-octet character strings; Cloud DNS rejects any single
 	/// element past 255. But several entries in `rrdatas` would be
-	/// several TXT records — a single rrset only stitches the
+	/// several TXT records, a single rrset only stitches the
 	/// character-strings into one logical value when they all belong
 	/// to a single rdata entry. The wire form is one entry carrying
 	/// the quoted pieces separated by single spaces. The per-piece

@@ -53,7 +53,7 @@ impl Route53Provider {
 		// rejects any rdata past it, so a long value (the RSA-2048 DKIM
 		// `p=` runs ~410 bytes, an RSA-4096 ~755) has to be split into
 		// one character string per piece. But several `<ResourceRecord>`
-		// entries in one RRset are several TXT records — the pieces are
+		// entries in one RRset are several TXT records, the pieces are
 		// concatenated back into one logical value only when they all
 		// belong to a single `<ResourceRecord>`. The wire form is one
 		// `<ResourceRecord>` carrying the quoted pieces separated by single

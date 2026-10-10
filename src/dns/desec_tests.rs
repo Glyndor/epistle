@@ -178,7 +178,7 @@ async fn txt_upsert_emits_long_value_as_one_record_with_joined_pieces() {
 	);
 	// The joined shape: two quoted pieces, 255 + 145 bytes, with
 	// a single space between them. The shape, not the bytes, is
-	// what is asserted here — the full key value stays out of the
+	// what is asserted here, the full key value stays out of the
 	// assertion message.
 	let piece_lengths = record_piece_lengths(&records[0]);
 	assert_eq!(
@@ -225,7 +225,7 @@ async fn txt_upsert_keeps_short_value_in_one_record() {
 /// piece, not to the joined value, so a value with `\"` and `\\`
 /// mid-piece round-trips. The body must be one `records` entry with
 /// two quoted pieces; the assembled value must equal what was sent.
-/// The exact bytes are not echoed in the assertion message — only
+/// The exact bytes are not echoed in the assertion message, only
 /// the piece count, the per-piece ≤255 cap, and the round-trip length.
 #[tokio::test]
 async fn txt_upsert_long_value_escapes_per_piece() {
