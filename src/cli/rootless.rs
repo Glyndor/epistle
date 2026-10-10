@@ -1,4 +1,4 @@
-//! Re-execute packaged stack commands under the persistent rootless account.
+//! Re-execute packaged administration commands under the persistent service account.
 
 use std::ffi::OsString;
 use std::io;

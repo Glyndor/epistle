@@ -457,3 +457,7 @@ mod tests_e;
 #[cfg(test)]
 #[path = "mta_sts_serve_tests.rs"]
 mod mta_sts_serve_tests;
+
+#[cfg(test)]
+#[path = "command_cases.rs"]
+mod command_cases;

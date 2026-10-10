@@ -76,10 +76,14 @@ sudo epistle stack ps
 Init writes `/etc/epistle/mail.toml` and
 `<data_dir>/compose/compose.yaml`. Stack defaults to that config path;
 `--config F` selects another file and works before or after the subcommand.
-When invoked as root, init and every stack command run as `glyndor-epistle`,
-using its home directory and rootless Podman environment. If its user runtime
+When invoked as root, init and every administration command that takes
+`--config` run as `glyndor-epistle`, using its home directory and rootless
+Podman environment. This includes account, password, API key, backup,
+archive, and configuration-reading commands. The service manager runs
+`serve` and `mta-sts-serve` directly; key generation, token hashing, help,
+version, and the local test harness use the invoking user. If its user runtime
 is absent, run `sudo loginctl enable-linger glyndor-epistle` and retry.
-Use absolute paths for an `--answers` file when invoking init with sudo.
+Use absolute paths for file arguments when invoking administration commands with sudo.
 
 Stack requires podup 5.10.13 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.

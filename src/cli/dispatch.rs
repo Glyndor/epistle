@@ -18,7 +18,7 @@ use crate::config::Config;
 impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
-		if matches!(&self.command, Command::Init { .. } | Command::Stack { .. }) {
+		if self.command.requires_service_user() {
 			match super::rootless::reexecute() {
 				Ok(Some(code)) => return code,
 				Ok(None) => {}
@@ -339,3 +339,49 @@ impl Cli {
 		}
 	}
 }
+
+impl Command {
+	fn requires_service_user(&self) -> bool {
+		// Explicit arms keep new stateful commands from silently running as root.
+		match self {
+			Command::Init { .. }
+			| Command::Stack { .. }
+			| Command::ConfigCheck { .. }
+			| Command::Export { .. }
+			| Command::Import { .. }
+			| Command::Backup { .. }
+			| Command::Verify { .. }
+			| Command::VerifyDns { .. }
+			| Command::DnsRecords { .. }
+			| Command::Mobileconfig { .. }
+			| Command::SrvRecords { .. }
+			| Command::Autoconfig { .. }
+			| Command::Autodiscover { .. }
+			| Command::Suppression { .. }
+			| Command::ReportAbuse { .. }
+			| Command::Accounts { .. }
+			| Command::AccountAdd { .. }
+			| Command::AccountRemove { .. }
+			| Command::Queue { .. }
+			| Command::AppPasswordCreate { .. }
+			| Command::AppPasswords { .. }
+			| Command::AppPasswordRevoke { .. }
+			| Command::ApiKeyCreate { .. }
+			| Command::ApiKeys { .. }
+			| Command::ApiKeyRevoke { .. }
+			| Command::Archive { .. }
+			| Command::Reports { .. } => true,
+			Command::Serve { .. }
+			| Command::MtaStsServe { .. }
+			| Command::DkimKeygen { .. }
+			| Command::StorageKeygen
+			| Command::OauthKeygen
+			| Command::TokenHash
+			| Command::Local { .. } => false,
+		}
+	}
+}
+
+#[cfg(test)]
+#[path = "dispatch_tests_delegation.rs"]
+mod tests_delegation;
