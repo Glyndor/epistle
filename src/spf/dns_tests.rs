@@ -42,19 +42,20 @@ fn truncated_dnssec_reply_fails_to_decode() {
 	// and never retries over TCP. This regression test pins that behavior so
 	// nobody quietly switches the resolver back to UDP thinking the decode
 	// error is harmless.
-	let bytes = include_bytes!("../../tests/fixtures/dns/ds_tc_pasta.bin");
-	let result = hickory_resolver::proto::op::Message::from_vec(bytes);
-	let message = match result {
+	let bytes: &[u8] = include_bytes!("../../tests/fixtures/dns/ds_tc_pasta.bin");
+	assert_eq!(bytes.len(), 512, "saved reply must be exactly 512 bytes (the stub's truncation cap)");
+	let error = match hickory_resolver::proto::op::Message::from_vec(bytes) {
 		Ok(_) => panic!(
 			"the saved 512-byte reply is truncated; hickory must NOT accept it as a valid message \
 			 (got {:?} bytes)",
 			bytes.len()
 		),
-		Err(error) => format!("{error}"),
+		Err(error) => error,
 	};
+	let message = format!("{error}");
 	assert!(
-		message.contains("incorrect rdata length") || message.contains("rdata length"),
-		"expected the rdata-length decode error documented in the systemd-resolved \
+		message.contains("incorrect rdata length read: 43 expected: 87"),
+		"expected the exact rdata-length mismatch from the systemd-resolved \
 		 truncation incident, got: {message}",
 	);
 }
