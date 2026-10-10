@@ -83,9 +83,8 @@ fn parses_a_tlsrpt_json() {
 	assert_eq!(report.policies[1].failure_details.len(), 0);
 }
 
-/// `failed-session-count` summed across every failure-detail block is
-/// what the metrics counter increments by. A report with two policies,
-/// each with one failure-detail, contributes `2 + 3 = 5`.
+/// Policy summaries count sessions independently of the detail rows.
+/// The two policy summaries contribute `5 + 3 = 8`.
 #[test]
 fn failing_count_sums_across_policies() {
 	let json = r#"{
@@ -114,7 +113,7 @@ fn failing_count_sums_across_policies() {
 }
 "#;
 	let report = parse(json.as_bytes()).expect("parses");
-	assert_eq!(report.failing_count(), 5);
+	assert_eq!(report.failing_count(), 8);
 }
 
 /// Unknown top-level fields are dropped, not fatal. RFC 8460 §4.4
@@ -235,8 +234,6 @@ fn a_hostile_organisation_name_stays_inside_the_day_directory() {
 #[test]
 fn a_failing_count_near_the_integer_limit_saturates() {
 	let mut report = parse(SAMPLE.as_bytes()).expect("parses");
-	let mut extra = report.policies[0].failure_details[0].clone();
-	extra.failed_session_count = u64::MAX;
-	report.policies[0].failure_details.push(extra);
+	report.policies[1].summary.total_failure_session_count = u64::MAX;
 	assert_eq!(report.failing_count(), u64::MAX);
 }
