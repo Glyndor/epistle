@@ -48,7 +48,8 @@ through apt, including the server image for an enabled stack. See
 [the operator CLI guide](docs/cli.md#stack-epistle-stack) for configuration,
 customizations and recovery.
 
-epistle runs on Linux and ships as a `.deb`. On a system without apt,
+epistle runs on Linux and ships as a `.deb`. It needs Podman 5 or newer,
+which means Debian 13, Ubuntu 25.04 or later. On a system without apt,
 build from source below.
 
 ## 🚀 Quick start (from source)
