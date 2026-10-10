@@ -9,6 +9,13 @@ use crate::util::encoded_word;
 pub(super) use crate::util::header::header_value;
 use crate::util::header::sanitize_header_value;
 
+#[path = "mime.rs"]
+pub(super) mod mime;
+
+#[cfg(test)]
+#[path = "mime_tests_structure.rs"]
+mod mime_tests_structure;
+
 /// Serialize a JMAP Email submission object into an RFC 5322 message (Email/set
 /// create). Only the common header set and a single text body are emitted.
 ///
@@ -138,6 +145,7 @@ pub(super) fn find_email(
 	account: &str,
 	id: &str,
 	crypto: &crate::storage::MessageCrypto,
+	args: &Value,
 ) -> Option<Value> {
 	let uuid = uuid::Uuid::parse_str(id).ok()?;
 	for mailbox in crate::imap::mailbox::list(data_dir, account) {
@@ -148,7 +156,7 @@ pub(super) fn find_email(
 			};
 		if let Some(message) = snapshot.messages().find(|m| m.id() == uuid) {
 			let raw = snapshot.read(message).unwrap_or_default();
-			return Some(email_object(id, &mailbox, message, &raw));
+			return Some(email_object(id, &mailbox, message, &raw, args));
 		}
 	}
 	None
@@ -160,15 +168,11 @@ pub(super) fn email_object(
 	mailbox: &str,
 	message: &crate::imap::mailbox::MessageRef,
 	raw: &[u8],
+	args: &Value,
 ) -> Value {
 	let headers = String::from_utf8_lossy(raw);
 	let header = |name: &str| header_value(&headers, name);
-	let body_start = headers
-		.find("\r\n\r\n")
-		.map(|p| p + 4)
-		.unwrap_or(headers.len());
-	let body = &headers[body_start..];
-	let preview: String = body.chars().take(256).collect();
+	let mime = mime::email_body(id, raw, args);
 
 	let mut keywords = serde_json::Map::new();
 	for flag in &message.flags {
@@ -176,10 +180,8 @@ pub(super) fn email_object(
 			keywords.insert(keyword, Value::Bool(true));
 		}
 	}
-	// One text/plain body part (no MIME structure parsing yet); the body text
-	// is exposed in bodyValues under part id "0".
-	let part = json!({ "partId": "0", "blobId": id, "size": body.len(), "type": "text/plain" });
-	json!({
+
+	let mut email = json!({
 		"id": id,
 		"blobId": id,
 		"threadId": id,
@@ -191,12 +193,12 @@ pub(super) fn email_object(
 		"from": address_list(header("from").as_deref()),
 		"to": address_list(header("to").as_deref()),
 		"messageId": header("message-id").map(|m| vec![m]),
-		"preview": preview.trim(),
-		"bodyStructure": part,
-		"textBody": [part],
-		"htmlBody": [part],
-		"bodyValues": { "0": { "value": body, "isEncodingProblem": false, "isTruncated": false } },
-	})
+	});
+	// Move the bounded MIME tree without recursively serializing it again.
+	if let (Some(email), Value::Object(mime)) = (email.as_object_mut(), mime) {
+		email.extend(mime);
+	}
+	email
 }
 
 /// Decode the `Subject:` for a JMAP `Email/subject` value. `Subject:` is a
@@ -390,6 +392,22 @@ pub(super) fn mailbox_role(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 #[path = "objects_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mime_tests_body.rs"]
+mod mime_tests_body;
+
+#[cfg(test)]
+#[path = "mime_tests_values.rs"]
+mod mime_tests_values;
+
+#[cfg(test)]
+#[path = "mime_tests_download.rs"]
+mod mime_tests_download;
+
+#[cfg(test)]
+#[path = "mime_tests_depth.rs"]
+mod mime_tests_depth;
 
 #[cfg(test)]
 #[path = "objects_tests_default_mailboxes.rs"]
