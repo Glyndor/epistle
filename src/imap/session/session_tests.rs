@@ -87,3 +87,6 @@ mod rev1_check;
 
 #[path = "session_tests_rev1_list.rs"]
 mod rev1_list;
+
+#[path = "session_tests_rev1_flow.rs"]
+mod rev1_flow;
