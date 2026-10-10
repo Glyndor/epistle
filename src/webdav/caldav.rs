@@ -560,13 +560,13 @@ fn find_open(body: &str, local: &str) -> Option<usize> {
 			name_end += 1;
 		}
 		let mut local_start = name_start;
-		for k in name_start..name_end {
+		for (k, b) in bytes[name_start..name_end].iter().enumerate() {
 			#[cfg(test)]
 			{
 				SCAN_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 			}
-			if bytes[k] == b':' {
-				local_start = k + 1;
+			if *b == b':' {
+				local_start = name_start + k + 1;
 			}
 		}
 		let local_len = name_end - local_start;

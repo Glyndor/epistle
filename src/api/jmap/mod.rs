@@ -247,6 +247,7 @@ fn jmap_scope_error(call_id: &str) -> Value {
 /// from an earlier method's result, per RFC 8620 §3.7. The unbounded
 /// version kept for unit tests; the production dispatcher goes through
 /// `Resolver::resolve` instead so it can bound the cumulative cost.
+#[cfg(test)]
 fn resolve_references(mut args: Value, prior: &[Value]) -> Result<Value, ()> {
 	let Some(object) = args.as_object_mut() else {
 		return Ok(args);
@@ -322,7 +323,9 @@ fn element_count(value: &Value) -> u64 {
 /// `maxSizeRequest`. `serde_json::to_vec` is the canonical answer; we
 /// use it to keep the accounting honest with what the wire would see.
 fn byte_size(value: &Value) -> u64 {
-	serde_json::to_vec(value).map(|v| v.len() as u64).unwrap_or(0)
+	serde_json::to_vec(value)
+		.map(|v| v.len() as u64)
+		.unwrap_or(0)
 }
 
 /// A request-scoped counter that bounds the cumulative work the
@@ -354,6 +357,7 @@ impl Resolver {
 
 	/// Bytes and elements materialised so far. Read by the dispatcher
 	/// when it needs to attribute work to a particular call.
+	#[cfg(test)]
 	pub fn materialised(&self) -> (u64, u64) {
 		(self.resolved_bytes, self.resolved_elements)
 	}
@@ -363,12 +367,8 @@ impl Resolver {
 	/// includes the new bytes.
 	pub fn record_result(&mut self, response: &Value) {
 		if let Some(args) = response.get(1) {
-			self.resolved_bytes = self
-				.resolved_bytes
-				.saturating_add(byte_size(args));
-			self.resolved_elements = self
-				.resolved_elements
-				.saturating_add(element_count(args));
+			self.resolved_bytes = self.resolved_bytes.saturating_add(byte_size(args));
+			self.resolved_elements = self.resolved_elements.saturating_add(element_count(args));
 		}
 	}
 
@@ -380,11 +380,7 @@ impl Resolver {
 	/// `Err(ResolveError::Unresolvable)` when a reference points to a
 	/// missing call. The dispatcher turns each into the matching
 	/// JMAP error type.
-	pub fn resolve(
-		&mut self,
-		args: &Value,
-		prior: &[Value],
-	) -> Result<Value, ResolveError> {
+	pub fn resolve(&mut self, args: &Value, prior: &[Value]) -> Result<Value, ResolveError> {
 		let mut args = args.clone();
 		// Walk the whole argument tree for `#`-prefixed keys. JMAP
 		// `ResultReference` values can appear at any depth; a chain
@@ -401,14 +397,8 @@ impl Resolver {
 		// value is the cap-relevant quantity.
 		let total_bytes: u64 = additions.iter().map(|(_, _, b, _)| *b).sum();
 		let total_elements: u64 = additions.iter().map(|(_, _, _, e)| *e).sum();
-		if self
-			.resolved_bytes
-			.saturating_add(total_bytes)
-			> self.limits.max_size_request
-			|| self
-				.resolved_elements
-				.saturating_add(total_elements)
-				> self.limits.max_objects_total
+		if self.resolved_bytes.saturating_add(total_bytes) > self.limits.max_size_request
+			|| self.resolved_elements.saturating_add(total_elements) > self.limits.max_objects_total
 		{
 			return Err(ResolveError::TooLarge);
 		}

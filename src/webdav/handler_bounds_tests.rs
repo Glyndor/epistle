@@ -100,15 +100,7 @@ async fn propfind_without_depth_is_403_with_precondition() {
 	let app = test_app(dir.path());
 	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
 	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
-	let (status, body) = send(
-		&app,
-		"PROPFIND",
-		"/d",
-		Some(ALICE),
-		&[],
-		b"",
-	)
-	.await;
+	let (status, body) = send(&app, "PROPFIND", "/d", Some(ALICE), &[], b"").await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 	let text = String::from_utf8(body).unwrap();
 	assert!(
@@ -176,21 +168,16 @@ async fn put_through_symlink_does_not_modify_outside_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let outside = install_symlink_escape(dir.path());
 	let app = test_app(dir.path());
-	let (status, _) = send(
-		&app,
-		"PUT",
-		"/escape.txt",
-		Some(ALICE),
-		&[],
-		b"INJECTED",
-	)
-	.await;
+	let (status, _) = send(&app, "PUT", "/escape.txt", Some(ALICE), &[], b"INJECTED").await;
 	assert!(
 		status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
 		"expected 403 or 404, got {status}"
 	);
 	let bytes = std::fs::read(&outside).expect("outside readable");
-	assert_eq!(bytes, b"OUTSIDE_SECRET", "outside file was modified via symlink");
+	assert_eq!(
+		bytes, b"OUTSIDE_SECRET",
+		"outside file was modified via symlink"
+	);
 }
 
 /// Populate `/a/file1` and `/a/file2` with known bytes and create `/a/b`
@@ -199,11 +186,11 @@ async fn put_through_symlink_does_not_modify_outside_file() {
 /// which would refuse to PUT through `/a` if a previous overlap test had
 /// destroyed the directory.
 async fn seed_overlap_fixture(app: &Router) {
-	send(&app, "MKCOL", "/a", Some(ALICE), &[], b"").await;
-	send(&app, "PUT", "/a/file1", Some(ALICE), &[], b"one").await;
-	send(&app, "PUT", "/a/file2", Some(ALICE), &[], b"two").await;
-	send(&app, "MKCOL", "/a/b", Some(ALICE), &[], b"").await;
-	send(&app, "PUT", "/a/b/before", Some(ALICE), &[], b"before").await;
+	send(app, "MKCOL", "/a", Some(ALICE), &[], b"").await;
+	send(app, "PUT", "/a/file1", Some(ALICE), &[], b"one").await;
+	send(app, "PUT", "/a/file2", Some(ALICE), &[], b"two").await;
+	send(app, "MKCOL", "/a/b", Some(ALICE), &[], b"").await;
+	send(app, "PUT", "/a/b/before", Some(ALICE), &[], b"before").await;
 }
 
 /// PROPFIND with a 2 MiB body must come back `413 Payload Too Large`. A
@@ -273,13 +260,25 @@ async fn move_into_descendant_is_refused_and_data_intact() {
 	);
 	// /a/file1, /a/file2, /a/b/before must still exist with the same bytes.
 	let (status1, body1) = send(&app, "GET", "/a/file1", Some(ALICE), &[], b"").await;
-	assert_eq!(status1, StatusCode::OK, "/a/file1 vanished after refused MOVE");
+	assert_eq!(
+		status1,
+		StatusCode::OK,
+		"/a/file1 vanished after refused MOVE"
+	);
 	assert_eq!(body1, b"one");
 	let (status2, body2) = send(&app, "GET", "/a/file2", Some(ALICE), &[], b"").await;
-	assert_eq!(status2, StatusCode::OK, "/a/file2 vanished after refused MOVE");
+	assert_eq!(
+		status2,
+		StatusCode::OK,
+		"/a/file2 vanished after refused MOVE"
+	);
 	assert_eq!(body2, b"two");
 	let (statusb, bodyb) = send(&app, "GET", "/a/b/before", Some(ALICE), &[], b"").await;
-	assert_eq!(statusb, StatusCode::OK, "/a/b/before vanished after refused MOVE");
+	assert_eq!(
+		statusb,
+		StatusCode::OK,
+		"/a/b/before vanished after refused MOVE"
+	);
 	assert_eq!(bodyb, b"before");
 }
 
@@ -308,10 +307,17 @@ async fn copy_onto_self_is_refused_and_data_intact() {
 		"expected 403 or 409, got {status}"
 	);
 	let (status1, body1) = send(&app, "GET", "/a/file1", Some(ALICE), &[], b"").await;
-	assert_eq!(status1, StatusCode::OK, "/a/file1 vanished after refused COPY");
+	assert_eq!(
+		status1,
+		StatusCode::OK,
+		"/a/file1 vanished after refused COPY"
+	);
 	assert_eq!(body1, b"one");
 	let (status2, body2) = send(&app, "GET", "/a/file2", Some(ALICE), &[], b"").await;
-	assert_eq!(status2, StatusCode::OK, "/a/file2 vanished after refused COPY");
+	assert_eq!(
+		status2,
+		StatusCode::OK,
+		"/a/file2 vanished after refused COPY"
+	);
 	assert_eq!(body2, b"two");
 }
-

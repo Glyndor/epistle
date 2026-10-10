@@ -114,9 +114,7 @@ fn doubling_chain_first_over_cap_call_is_request_too_large() {
 		.iter()
 		.position(|r| {
 			r.get(0).and_then(Value::as_str) == Some("error")
-				&& r.get(1)
-					.and_then(|v| v.get("type"))
-					.and_then(Value::as_str)
+				&& r.get(1).and_then(|v| v.get("type")).and_then(Value::as_str)
 					== Some("requestTooLarge")
 		})
 		.expect("doubling chain must trip requestTooLarge well before 15 calls");
@@ -260,9 +258,7 @@ fn dispatch_request_refuses_doubling_chain() {
 		.iter()
 		.filter(|r| {
 			r.get(0).and_then(Value::as_str) == Some("error")
-				&& r.get(1)
-					.and_then(|v| v.get("type"))
-					.and_then(Value::as_str)
+				&& r.get(1).and_then(|v| v.get("type")).and_then(Value::as_str)
 					== Some("requestTooLarge")
 		})
 		.count();
