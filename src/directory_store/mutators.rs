@@ -26,9 +26,9 @@ impl AccountStore {
 	/// then the server default, the same chain `quota_bytes = None` takes on
 	/// a static account. Rebuilds the directory so the next IMAP
 	/// `GETQUOTAROOT` and the next delivery quota check see the new
-	/// value. Returns the previous value so the CLI can report
-	/// "<prior> -> <new>" without re-reading the file. `NotFound` for
-	/// static and unknown accounts.
+	/// value. Returns the previous value so the CLI can report the
+	/// prior value and the new value without re-reading the file.
+	/// `NotFound` for static and unknown accounts.
 	pub fn set_quota_bytes(
 		&self,
 		name: &str,
