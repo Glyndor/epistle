@@ -6,6 +6,7 @@ mod edits;
 mod elements;
 mod file;
 mod restart;
+mod rules;
 
 pub use restart::after_change;
 pub(in crate::cli) use restart::after_change_with;
@@ -82,3 +83,5 @@ mod tests_file;
 mod tests_helpers;
 #[cfg(test)]
 mod tests_restart;
+#[cfg(test)]
+mod tests_rules;
