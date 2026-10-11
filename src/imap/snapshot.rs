@@ -288,18 +288,20 @@ impl Snapshot {
 		&mut self,
 		mut doomed: impl FnMut(&super::mailbox::MessageRef) -> bool,
 	) -> Vec<(u32, u32)> {
-		let mut kept = Vec::with_capacity(self.messages.len());
+		let mut messages = std::mem::take(&mut self.messages);
 		let mut taken = Vec::new();
-		for (position, message) in std::mem::take(&mut self.messages).into_iter().enumerate() {
-			if doomed(&message) {
+		let mut position = 0usize;
+		messages.retain(|message| {
+			let hit = doomed(message);
+			if hit {
 				self.remove_files(message.id);
 				let sequence = u32::try_from(position + 1 - taken.len()).unwrap_or(u32::MAX);
 				taken.push((sequence, message.uid));
-			} else {
-				kept.push(message);
 			}
-		}
-		self.messages = kept;
+			position += 1;
+			!hit
+		});
+		self.messages = messages;
 		taken
 	}
 
