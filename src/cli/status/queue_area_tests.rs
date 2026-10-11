@@ -26,6 +26,9 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		require_tls: false,
 		no_dsn: Vec::new(),
 		delay_warned: false,
+		held: None,
+		held_secs: 0,
+		last_error: None,
 	};
 	std::fs::write(
 		new.join(format!("{id}.json")),
@@ -119,4 +122,20 @@ fn the_envelope_is_read_without_the_message_body() {
 		"{report:?}"
 	);
 	assert_eq!(report.status, Level::Ok);
+}
+
+/// A message the operator put on hold is deliberate: it is counted as held
+/// and its age does not turn the check red.
+#[test]
+fn a_held_message_is_counted_and_does_not_decide_the_age() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let held = enqueue(dir.path(), 3 * 24 * 3600, 2, 0);
+	enqueue(dir.path(), 60, 0, 0);
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
+	spool
+		.update_envelope(held, |envelope| envelope.hold(1))
+		.expect("hold");
+	let report = evaluate(dir.path(), NOW);
+	assert_eq!(report.status, Level::Ok, "{report:?}");
+	assert!(report.detail.contains("1 held"), "{report:?}");
 }
