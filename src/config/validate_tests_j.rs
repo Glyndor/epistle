@@ -177,7 +177,7 @@ fn rejects_password_file_with_world_writable_mode() {
 	));
 	assert!(
 		matches!(result, Err(super::ConfigError::InsecurePermissions { .. })),
-		"world-writable password_file must be rejected as InsecurePermissions, got {result:?}"
+		"world-writable password_file must be rejected as InsecurePermissions"
 	);
 }
 

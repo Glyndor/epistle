@@ -1,6 +1,7 @@
 //! IMAP server tests for literal-bearing command framing.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ fn directory() -> DirectoryHandle {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)])),
 	)
 }
@@ -61,7 +62,7 @@ async fn rejected_non_sync_literal_is_discarded() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;
@@ -128,7 +129,7 @@ async fn append_literal_with_bad_trailer_does_not_store() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;
@@ -212,7 +213,7 @@ async fn append_literal_read_timeout_drops_connection() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;

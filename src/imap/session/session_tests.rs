@@ -1,5 +1,6 @@
 use super::helpers::format_internaldate;
 use super::*;
+use crate::test_fixtures as fixtures;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ pub fn directory() -> Arc<Directory> {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)])),
 	)
 }
@@ -27,7 +28,7 @@ pub fn deliver(dir: &std::path::Path, body: &[u8]) {
 
 pub fn logged_in(dir: &std::path::Path) -> Session {
 	let mut session = Session::new("mail.example.org", dir.to_path_buf(), directory());
-	let output = session.command_line("a1 LOGIN alice secret");
+	let output = session.command_line(&format!("a1 LOGIN alice {}", fixtures::password()));
 	assert!(text(&output).contains("a1 OK"), "{}", text(&output));
 	session
 }
@@ -39,8 +40,11 @@ pub fn text(output: &Output) -> String {
 /// A directory whose `alice` account has SCRAM-SHA-256 credentials.
 pub fn scram_directory() -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
-	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
+		fixtures::password(),
+		fixtures::salt(),
+		4096,
+	));
 	Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -48,7 +52,7 @@ pub fn scram_directory() -> Arc<Directory> {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	)
@@ -74,6 +78,8 @@ mod keyword_search;
 mod metadata;
 #[path = "session_tests_misc.rs"]
 mod misc;
+#[path = "session_tests_paths.rs"]
+mod paths;
 #[path = "session_tests_search.rs"]
 mod search;
 

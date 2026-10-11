@@ -62,6 +62,7 @@ fn add_account(store: &AccountStore, name: &str, address: &str) {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add");
@@ -449,6 +450,7 @@ fn add_account_with_primary_hash(
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add");
@@ -596,7 +598,7 @@ async fn forgetting_the_corpus_failing_aborts_account_removal() {
 	.expect("retry without a bayes store must succeed");
 	assert_eq!(
 		retry.mailbox_files, 0,
-		"the retry must not error on the absent mailbox: {retry:?}"
+		"the retry must not error on the absent mailbox"
 	);
 	assert_eq!(retry.masked_addresses, 0);
 	assert_eq!(retry.app_passwords, 0);

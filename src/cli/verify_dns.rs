@@ -36,7 +36,13 @@ pub(super) fn run_with_writers(
 			return ExitCode::FAILURE;
 		}
 	};
-	let selectors = dkim_selectors(config);
+	let selectors = match dkim_selectors(config) {
+		Ok(selectors) => selectors,
+		Err(error) => {
+			super::style::error(format_args!("{error}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	let progress = crate::cli::style::Progress::start("checking");
 	runtime.block_on(report(
 		&config.domains,
@@ -62,16 +68,23 @@ pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std:
 }
 
 /// The DKIM selectors epistle publishes (the Ed25519 selector plus an optional
-/// RSA selector), used to locate the `_domainkey` records.
-fn dkim_selectors(config: &Config) -> Vec<String> {
+/// RSA selector), used to locate the `_domainkey` records. The Ed25519
+/// selector is the one the rotator currently has in service when the
+/// rotation state file exists, falling back to the configured selector at
+/// startup before the first tick has run. The RSA selector is always the
+/// one in the config (RSA key material is rotated manually with
+/// `epistle dkim-keygen --rsa`).
+pub(super) fn dkim_selectors(
+	config: &Config,
+) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
 	let Some(dkim) = &config.dkim else {
-		return Vec::new();
+		return Ok(Vec::new());
 	};
-	let mut selectors = vec![dkim.selector.clone()];
+	let mut selectors = vec![crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)?.selector];
 	if let Some(rsa) = &dkim.rsa_selector {
 		selectors.push(rsa.clone());
 	}
-	selectors
+	Ok(selectors)
 }
 
 /// Check the hostname's addresses and their reverse DNS first, then every

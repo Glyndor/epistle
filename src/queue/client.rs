@@ -576,3 +576,7 @@ mod tests {
 #[cfg(test)]
 #[path = "client_tls_tests.rs"]
 mod tls_tests;
+
+#[path = "client_probe.rs"]
+mod probe;
+pub use probe::probe;

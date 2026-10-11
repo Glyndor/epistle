@@ -11,6 +11,7 @@
 use super::auth_bans::{decode_server_first, scram_directory_with_ban_store, valid_client_final};
 use super::text;
 use super::*;
+use crate::test_fixtures as fixtures;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
@@ -49,7 +50,7 @@ async fn imap_scram_malformed_client_first_while_banned_does_not_extend_ban() {
 			tmp.path().to_path_buf(),
 			directory.clone(),
 		)
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 		session.set_peer_ip(Some("203.0.113.60".parse().expect("peer")));
 		// Invalid base64: bypasses the SCRAM username parse, the
 		// credential lookup, and any ban check that runs after the
@@ -111,7 +112,7 @@ async fn imap_scram_ban_refusal_stays_refused_after_ban_expires() {
 	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 
 	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.61".parse().expect("peer")));
 
 	// Start the SCRAM exchange while the ban is in force: the
@@ -135,7 +136,7 @@ async fn imap_scram_ban_refusal_stays_refused_after_ban_expires() {
 			reason: "5 failed authentications in 900 seconds".to_string(),
 		},
 	);
-	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
 	assert_eq!(

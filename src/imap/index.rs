@@ -55,12 +55,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::util::path_component::{StateFile, state_file, state_tmp_file};
 use uuid::Uuid;
 
 use super::mailbox::{Flag, MessageRef};
-
-/// Index file name inside a mailbox `new/` directory.
-const FILE_NAME: &str = ".index";
 
 /// Magic header identifying the file and its line format.
 const MAGIC: &str = "EPISTLE-MAILBOX-INDEX";
@@ -69,8 +67,8 @@ const MAGIC: &str = "EPISTLE-MAILBOX-INDEX";
 const VERSION: u32 = 2;
 
 /// The path of a mailbox's index file.
-fn index_path(account_dir: &Path) -> PathBuf {
-	account_dir.join(FILE_NAME)
+fn index_path(account_dir: &Path) -> std::io::Result<PathBuf> {
+	state_file(account_dir, StateFile::Index)
 }
 
 /// The current mailbox generation: its highest mod-sequence and `.eml` count.
@@ -100,7 +98,9 @@ pub(super) fn current_generation(account_dir: &Path) -> (u64, usize) {
 /// stamp matches `generation`. Any deviation returns `None` so the caller falls
 /// back to the authoritative filesystem scan (fail closed).
 pub(super) fn load(account_dir: &Path, generation: (u64, usize)) -> Option<Vec<MessageRef>> {
-	let text = crate::util::fs_walk::read_to_string(index_path(account_dir)).ok()?;
+	let text = index_path(account_dir)
+		.and_then(crate::util::fs_walk::read_to_string)
+		.ok()?;
 	let mut lines = text.lines();
 
 	// Header: magic + version.
@@ -224,9 +224,9 @@ pub(super) fn write(
 		write_record(&mut out, message);
 	}
 
-	let tmp = account_dir.join(format!("{FILE_NAME}.tmp"));
+	let tmp = state_tmp_file(account_dir, StateFile::Index)?;
 	std::fs::write(&tmp, out.as_bytes())?;
-	std::fs::rename(&tmp, index_path(account_dir))
+	std::fs::rename(&tmp, index_path(account_dir)?)
 }
 
 /// Append one record line to `out`, mirroring [`parse_record`].

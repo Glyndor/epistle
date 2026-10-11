@@ -9,6 +9,7 @@ use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
 
+use super::super::command::Secret;
 use super::state::State;
 use super::{Output, Session};
 
@@ -144,7 +145,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 
 	/// Begin AUTHENTICATE. AUTHENTICATE requires TLS and the unauthenticated
 	/// state, like LOGIN.
-	pub(super) fn auth(&mut self, tag: &str, mechanism: &str, initial: Option<String>) -> Output {
+	pub(super) fn auth(&mut self, tag: &str, mechanism: &str, initial: Option<Secret>) -> Output {
 		if !self.tls_active {
 			return Output::text(format!("{tag} NO [PRIVACYREQUIRED] STARTTLS first\r\n"));
 		}
@@ -166,6 +167,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			return unsupported();
 		}
 		use crate::sasl::Mechanism;
+		let initial = initial.as_ref().map(|secret| secret.expose().to_string());
 		match parsed {
 			Mechanism::External => match initial {
 				Some(response) => self.auth_external(tag, &response),

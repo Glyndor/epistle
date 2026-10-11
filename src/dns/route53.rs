@@ -6,6 +6,8 @@
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::net::HttpsUrl;
+
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 use super::records::txt_strings;
 
@@ -24,7 +26,7 @@ pub struct Route53Provider {
 	access_key: String,
 	secret_key: String,
 	hosted_zone_id: String,
-	base: String,
+	base: HttpsUrl,
 }
 
 impl Route53Provider {
@@ -35,14 +37,26 @@ impl Route53Provider {
 			access_key,
 			secret_key,
 			hosted_zone_id,
-			base: format!("https://{HOST}"),
+			base: HttpsUrl::from_static("https://route53.amazonaws.com"),
 		}
 	}
 
 	/// Point at an alternate endpoint (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
+	}
+
+	/// `{base}/2013-04-01/hostedzone/{id}/rrset`, with the hosted zone id
+	/// escaped as one path segment. Real ids are alphanumeric, so the path
+	/// the request is signed over is the path that is sent.
+	fn rrset_url(&self) -> Result<HttpsUrl, ProviderError> {
+		Ok(self.base.with_segments([
+			API_VERSION,
+			"hostedzone",
+			self.hosted_zone_id.as_str(),
+			"rrset",
+		])?)
 	}
 
 	/// Submit a ChangeResourceRecordSets request with the given action.
@@ -93,7 +107,8 @@ impl Route53Provider {
 			record.ttl,
 		);
 
-		let path = format!("/{API_VERSION}/hostedzone/{}/rrset", self.hosted_zone_id);
+		let url = self.rrset_url()?;
+		let path = url.as_url().path().to_string();
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default();
@@ -102,7 +117,7 @@ impl Route53Provider {
 
 		let response = self
 			.client
-			.post(format!("{}{path}", self.base))
+			.post(url.into_url())
 			.header("x-amz-date", &amz_date)
 			.header(reqwest::header::HOST, HOST)
 			.header(reqwest::header::AUTHORIZATION, auth)
@@ -169,7 +184,8 @@ impl Route53Provider {
 	/// parser for one path is overkill; the response is well-formed
 	/// by API contract.
 	async fn fetch_txt_rrset(&self, name: &str) -> Result<Option<TxtRrset>, ProviderError> {
-		let path = format!("/{API_VERSION}/hostedzone/{}/rrset", self.hosted_zone_id);
+		let url = self.rrset_url()?;
+		let path = url.as_url().path().to_string();
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default();
@@ -177,7 +193,7 @@ impl Route53Provider {
 		let auth = self.authorization_get(&path, "", &amz_date, &date);
 		let response = self
 			.client
-			.get(format!("{}{path}", self.base))
+			.get(url.into_url())
 			.header("x-amz-date", &amz_date)
 			.header(reqwest::header::HOST, HOST)
 			.header(reqwest::header::AUTHORIZATION, auth)
@@ -208,7 +224,8 @@ impl Route53Provider {
 		ttl: u32,
 		values: &[String],
 	) -> Result<(), ProviderError> {
-		let path = format!("/{API_VERSION}/hostedzone/{}/rrset", self.hosted_zone_id);
+		let url = self.rrset_url()?;
+		let path = url.as_url().path().to_string();
 		let value_xml: String = values
 			.iter()
 			.map(|v| {
@@ -237,7 +254,7 @@ impl Route53Provider {
 		let auth = self.authorization(&path, &body, &amz_date, &date);
 		let response = self
 			.client
-			.post(format!("{}{path}", self.base))
+			.post(url.into_url())
 			.header("x-amz-date", &amz_date)
 			.header(reqwest::header::HOST, HOST)
 			.header(reqwest::header::AUTHORIZATION, auth)
@@ -495,3 +512,7 @@ mod tests;
 #[cfg(test)]
 #[path = "route53_tests_txt.rs"]
 mod tests_txt;
+
+#[cfg(test)]
+#[path = "route53_tests_path.rs"]
+mod path_tests;

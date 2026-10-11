@@ -32,3 +32,6 @@ NOTICES.html
 
 # Python bytecode from .github/scripts tests
 __pycache__/
+
+# Test runtime artifacts that should not be committed
+/aliases.json

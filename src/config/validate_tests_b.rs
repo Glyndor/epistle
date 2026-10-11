@@ -240,7 +240,7 @@ mod plaintext_listener_tls_warning {
 	fn no_warning_on_webdav_bound_loopback_without_tls() {
 		let events = run_with_capture(|| {
 			let result = parse(&format!("{BASE}[[listeners]]\nkind = \"web-dav\"\n"));
-			assert!(result.is_ok(), "web-dav loopback: {result:?}");
+			assert!(result.is_ok(), "web-dav loopback must validate");
 		});
 		assert!(
 			!events.iter().any(|e| e.level == Level::WARN),

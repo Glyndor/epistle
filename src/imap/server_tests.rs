@@ -1,6 +1,7 @@
 //! IMAP server connection-loop tests.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 use std::collections::HashMap;
 
 use tokio_rustls::TlsConnector;
@@ -15,7 +16,7 @@ fn directory() -> DirectoryHandle {
 		)
 		.with_password_hashes(HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)])),
 	)
 }
@@ -80,7 +81,7 @@ async fn starttls_upgrade_then_login() {
 	let name = ServerName::try_from("mail.example.org").expect("name");
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
-	tls.write_all(b"a2 LOGIN alice secret\r\n")
+	tls.write_all(format!("a2 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	let read = tls.read(&mut chunk).await.expect("response");
@@ -128,7 +129,7 @@ async fn full_read_session_over_tls() {
 	let greeting = read_until(&mut tls, "IMAP4rev2 ready").await;
 	assert!(greeting.starts_with("* OK"), "{greeting}");
 
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;
@@ -249,7 +250,7 @@ async fn append_with_literal_stores_a_message() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;
@@ -312,7 +313,7 @@ async fn authenticate_login_over_tls_drives_continuation() {
 		.await
 		.expect("user");
 	read_until(&mut tls, "+").await;
-	tls.write_all(format!("{}\r\n", B64.encode("secret")).as_bytes())
+	tls.write_all(format!("{}\r\n", B64.encode(fixtures::password())).as_bytes())
 		.await
 		.expect("pass");
 	read_until(&mut tls, "a1 OK").await;
@@ -351,7 +352,7 @@ async fn idle_then_done_resumes_command_mode() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;
@@ -399,7 +400,7 @@ async fn idle_poll_pushes_exists_on_new_mail() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;
@@ -469,7 +470,7 @@ async fn idle_times_out_during_idle() {
 	let mut tls = connector.connect(name, client).await.expect("handshake");
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	tls.write_all(b"a1 LOGIN alice secret\r\n")
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
 		.await
 		.expect("login");
 	read_until(&mut tls, "a1 OK").await;

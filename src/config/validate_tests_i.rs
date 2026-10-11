@@ -61,10 +61,7 @@ url = "postgres://user:pass@db/mail?sslmode=verify-full"
 kind = "smtp"
 "#,
 	);
-	assert!(
-		result.is_ok(),
-		"subjectpass with a database must validate, got {result:?}"
-	);
+	assert!(result.is_ok(), "subjectpass with a database must validate");
 }
 
 #[test]
@@ -84,6 +81,6 @@ kind = "smtp"
 	);
 	assert!(
 		result.is_ok(),
-		"subjectpass off must not require a database, got {result:?}"
+		"subjectpass off must not require a database"
 	);
 }

@@ -8,6 +8,7 @@
 
 use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
 use super::*;
+use crate::test_fixtures as fixtures;
 use base64::Engine;
 
 /// Build a directory that has SCRAM credentials for `alice` AND has a
@@ -23,15 +24,18 @@ pub(super) fn scram_directory_with_ban_store(
 	lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
-	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
+		fixtures::password(),
+		fixtures::salt(),
+		4096,
+	));
 	let mut directory = Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash("secret"),
+		crate::smtp::auth::tests::hash(fixtures::password()),
 	)])
 	.with_scram([("alice".to_string(), stored)])
 	.with_ban_store(ban_store);
@@ -59,7 +63,7 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.46".parse().expect("peer")));
 
@@ -111,7 +115,7 @@ async fn smtp_scram_lookup_counter_is_per_test() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory)
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.47".parse().expect("peer")));
 
@@ -154,7 +158,7 @@ async fn smtp_scram_client_final_rechecks_ban() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.45".parse().expect("peer")));
 
@@ -172,7 +176,7 @@ async fn smtp_scram_client_final_rechecks_ban() {
 
 	// A valid client-final: the proof matches the real credentials, but
 	// the ban recheck at client-final must refuse it.
-	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
 	assert_eq!(
 		ban_store.call_count("clear_success"),
@@ -274,6 +278,7 @@ pub(super) fn valid_client_final(client_first: &str, server_first: &str, passwor
 /// could use to distinguish a refusal from a real exchange.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
@@ -291,7 +296,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory)
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
@@ -327,7 +332,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	// fake stored key is all zeros. The wire reply is the same 535 a
 	// wrong password would produce.
 	let bad_proof = b64_bytes(&[0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
 	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
 
@@ -358,6 +363,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 /// path uses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_failure_adds_one_strike() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::BanPolicy;
 	use crate::antispam::bans::tests::FakeBanStore;
 
@@ -367,7 +373,7 @@ async fn smtp_scram_failure_adds_one_strike() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.43".parse().expect("peer")));
 
@@ -382,7 +388,7 @@ async fn smtp_scram_failure_adds_one_strike() {
 	// it. The exact shape of the failure is irrelevant: the point is
 	// that the ban store records one strike.
 	let bad_proof = b64_bytes(&[0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
 
 	assert_eq!(
@@ -410,6 +416,7 @@ async fn smtp_scram_failure_adds_one_strike() {
 /// distinguish its refusal from a wrong password.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
@@ -427,7 +434,7 @@ async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory.clone())
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.44".parse().expect("peer")));
 
@@ -437,7 +444,7 @@ async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 	// verifier rejects it because the stored key behind the fake
 	// server-first is all zeros.
 	let bad_proof = b64_bytes(&[0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	for _ in 0..3 {
 		let action =
 			session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
@@ -484,6 +491,7 @@ async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 /// SCRAM proof produces.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
@@ -502,7 +510,7 @@ async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory)
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	// A fresh IP, not banned at the IP level, so a missing account
 	// check would let the exchange reach the credential lookup.
@@ -516,7 +524,7 @@ async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 		"a banned account must challenge with a 334, like a normal exchange"
 	);
 	let bad_proof = b64_bytes(&[0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
 	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
 
@@ -595,7 +603,7 @@ async fn smtp_scram_success_clears_ban_store() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory)
 		.with_tls_active()
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo();
 	session.set_peer_ip(Some("203.0.113.51".parse().expect("peer")));
 
@@ -605,7 +613,7 @@ async fn smtp_scram_success_clears_ban_store() {
 	let challenge = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
 	assert_eq!(reply_code(&challenge), 334);
 	let server_first = decode_server_first(&scram_challenge_text(&challenge));
-	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 235);
 
 	assert_eq!(

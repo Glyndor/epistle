@@ -118,6 +118,7 @@ The `.deb` creates `glyndor-epistle` for you, with home `/var/lib/glyndor/epistl
 ## 📚 Documentation
 
 - [Configuration reference](docs/configuration.md) — the TOML file, every section and key, listener kinds, and a full example.
+- [Common tasks](docs/cli.md#common-tasks): what you want to do, and the command that does it.
 - [CLI reference](docs/cli.md) — every `epistle` command, plus the outbound retry/suppression policy.
 - [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
 - [Security](docs/security.md) — the transport, authentication, anti-abuse and at-rest controls, and how to report a vulnerability.

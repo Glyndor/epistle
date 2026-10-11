@@ -1,4 +1,5 @@
 use super::{ReportKind, is_calendar, report_kind, unfold};
+use crate::test_fixtures as fixtures;
 use crate::webdav::router;
 use axum::Router;
 use axum::body::Body;
@@ -33,7 +34,7 @@ fn base64_encode(input: &[u8]) -> String {
 	out
 }
 
-/// Build a router backed by a temp data dir with `alice`/`pw-a` and `bob`/`pw-b`.
+/// Build a router backed by a temp data dir with `alice` and `bob`.
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
 		name: name.to_string(),
@@ -49,7 +50,10 @@ fn test_app(dir: &std::path::Path) -> Router {
 		dir,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
-		vec![account("alice", "pw-a"), account("bob", "pw-b")],
+		vec![
+			account("alice", fixtures::password()),
+			account("bob", fixtures::second_password()),
+		],
 	)
 	.expect("store");
 	router(store.handle(), dir.to_path_buf())
@@ -85,8 +89,12 @@ async fn send(
 	(status, bytes.to_vec(), resp_headers)
 }
 
-const ALICE: &str = "alice:pw-a";
-const BOB: &str = "bob:pw-b";
+fn alice() -> String {
+	format!("alice:{}", fixtures::password())
+}
+fn bob() -> String {
+	format!("bob:{}", fixtures::second_password())
+}
 
 const MKCOL_CALENDAR: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
 <D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
@@ -137,13 +145,13 @@ async fn marker_flags_calendar() {
 async fn calendar_mkcol_then_propfind_resourcetype() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
+	let (status, _, _) = send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
 	assert_eq!(status, StatusCode::CREATED);
 	let (status, body, _) = send(
 		&app,
 		"PROPFIND",
 		"/cal",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		b"",
 	)
@@ -158,11 +166,13 @@ async fn calendar_mkcol_then_propfind_resourcetype() {
 async fn ics_put_get_roundtrips_with_type_and_etag() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
-	let (status, _, put_headers) = send(&app, "PUT", "/cal/e1.ics", Some(ALICE), &[], EVENT).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
+	let (status, _, put_headers) =
+		send(&app, "PUT", "/cal/e1.ics", Some(&alice()), &[], EVENT).await;
 	assert_eq!(status, StatusCode::CREATED);
 	assert!(put_headers.get(header::ETAG).is_some());
-	let (status, body, get_headers) = send(&app, "GET", "/cal/e1.ics", Some(ALICE), &[], b"").await;
+	let (status, body, get_headers) =
+		send(&app, "GET", "/cal/e1.ics", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	// VALARM is stored and returned verbatim.
 	assert_eq!(body, EVENT);
@@ -177,7 +187,7 @@ async fn ics_put_get_roundtrips_with_type_and_etag() {
 async fn options_advertises_calendar_access() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(ALICE), &[], b"").await;
+	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	let dav = resp_headers.get("DAV").unwrap().to_str().unwrap();
 	assert!(dav.contains("calendar-access"));
@@ -190,15 +200,15 @@ async fn options_advertises_calendar_access() {
 async fn multiget_returns_requested_events() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
-	send(&app, "PUT", "/cal/e1.ics", Some(ALICE), &[], EVENT).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
+	send(&app, "PUT", "/cal/e1.ics", Some(&alice()), &[], EVENT).await;
 	let report = "<C:calendar-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
 		<D:href>/cal/e1.ics</D:href></C:calendar-multiget>";
 	let (status, body, _) = send(
 		&app,
 		"REPORT",
 		"/cal",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		report.as_bytes(),
 	)
@@ -215,16 +225,16 @@ async fn multiget_returns_requested_events() {
 async fn query_returns_all_events() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
-	send(&app, "PUT", "/cal/e1.ics", Some(ALICE), &[], EVENT).await;
-	send(&app, "PUT", "/cal/r1.ics", Some(ALICE), &[], RECURRING).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
+	send(&app, "PUT", "/cal/e1.ics", Some(&alice()), &[], EVENT).await;
+	send(&app, "PUT", "/cal/r1.ics", Some(&alice()), &[], RECURRING).await;
 	let report = "<C:calendar-query xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
 		<D:prop><D:getetag/><C:calendar-data/></D:prop></C:calendar-query>";
 	let (status, body, _) = send(
 		&app,
 		"REPORT",
 		"/cal",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		report.as_bytes(),
 	)
@@ -238,12 +248,19 @@ async fn query_returns_all_events() {
 async fn free_busy_query_covers_recurring_instances() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
-	send(&app, "PUT", "/cal/r1.ics", Some(ALICE), &[], RECURRING).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
+	send(&app, "PUT", "/cal/r1.ics", Some(&alice()), &[], RECURRING).await;
 	let report = "<C:free-busy-query xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
 		<C:time-range start=\"20260101T000000Z\" end=\"20260201T000000Z\"/></C:free-busy-query>";
-	let (status, body, headers) =
-		send(&app, "REPORT", "/cal", Some(ALICE), &[], report.as_bytes()).await;
+	let (status, body, headers) = send(
+		&app,
+		"REPORT",
+		"/cal",
+		Some(&alice()),
+		&[],
+		report.as_bytes(),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "text/calendar");
 	let text = String::from_utf8(body).unwrap();
@@ -258,9 +275,17 @@ async fn free_busy_query_covers_recurring_instances() {
 async fn free_busy_query_without_range_is_bad_request() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
 	let report = "<C:free-busy-query xmlns:C=\"urn:ietf:params:xml:ns:caldav\"/>";
-	let (status, _, _) = send(&app, "REPORT", "/cal", Some(ALICE), &[], report.as_bytes()).await;
+	let (status, _, _) = send(
+		&app,
+		"REPORT",
+		"/cal",
+		Some(&alice()),
+		&[],
+		report.as_bytes(),
+	)
+	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -268,12 +293,12 @@ async fn free_busy_query_without_range_is_bad_request() {
 async fn report_bad_body_is_bad_request() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
 	let (status, _, _) = send(
 		&app,
 		"REPORT",
 		"/cal",
-		Some(ALICE),
+		Some(&alice()),
 		&[],
 		b"<D:sync-collection xmlns:D=\"DAV:\"/>",
 	)
@@ -285,12 +310,20 @@ async fn report_bad_body_is_bad_request() {
 async fn multiget_traversal_href_is_not_served() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
-	send(&app, "PUT", "/cal/e1.ics", Some(ALICE), &[], EVENT).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
+	send(&app, "PUT", "/cal/e1.ics", Some(&alice()), &[], EVENT).await;
 	let report = "<C:calendar-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
 		<D:href>/../../bob/dav/secret.ics</D:href>\
 		<D:href>/cal/../../../bob/dav/secret.ics</D:href></C:calendar-multiget>";
-	let (status, body, _) = send(&app, "REPORT", "/cal", Some(ALICE), &[], report.as_bytes()).await;
+	let (status, body, _) = send(
+		&app,
+		"REPORT",
+		"/cal",
+		Some(&alice()),
+		&[],
+		report.as_bytes(),
+	)
+	.await;
 	assert_eq!(status, StatusCode::MULTI_STATUS);
 	let text = String::from_utf8(body).unwrap();
 	assert_eq!(text.matches("<D:response>").count(), 0);
@@ -300,12 +333,20 @@ async fn multiget_traversal_href_is_not_served() {
 async fn report_account_isolation_holds() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(BOB), &[], MKCOL_CALENDAR).await;
-	send(&app, "PUT", "/cal/secret.ics", Some(BOB), &[], EVENT).await;
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
+	send(&app, "MKCOL", "/cal", Some(&bob()), &[], MKCOL_CALENDAR).await;
+	send(&app, "PUT", "/cal/secret.ics", Some(&bob()), &[], EVENT).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
 	let report = "<C:calendar-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
 		<D:href>/cal/secret.ics</D:href></C:calendar-multiget>";
-	let (status, body, _) = send(&app, "REPORT", "/cal", Some(ALICE), &[], report.as_bytes()).await;
+	let (status, body, _) = send(
+		&app,
+		"REPORT",
+		"/cal",
+		Some(&alice()),
+		&[],
+		report.as_bytes(),
+	)
+	.await;
 	assert_eq!(status, StatusCode::MULTI_STATUS);
 	let text = String::from_utf8(body).unwrap();
 	assert_eq!(text.matches("<D:response>").count(), 0);
@@ -338,7 +379,7 @@ async fn propfind_discovery_returns_calendar_home_and_scheduling() {
 		&app,
 		"PROPFIND",
 		"/alice/",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		body.as_bytes(),
 	)
@@ -356,16 +397,16 @@ async fn propfind_discovery_returns_calendar_home_and_scheduling() {
 async fn outbox_post_returns_account_busy_periods() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/cal", Some(ALICE), &[], MKCOL_CALENDAR).await;
-	send(&app, "PUT", "/cal/e1.ics", Some(ALICE), &[], EVENT).await;
-	send(&app, "PUT", "/cal/r1.ics", Some(ALICE), &[], RECURRING).await;
+	send(&app, "MKCOL", "/cal", Some(&alice()), &[], MKCOL_CALENDAR).await;
+	send(&app, "PUT", "/cal/e1.ics", Some(&alice()), &[], EVENT).await;
+	send(&app, "PUT", "/cal/r1.ics", Some(&alice()), &[], RECURRING).await;
 	let request = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VFREEBUSY\r\n\
 		DTSTART:20260101T000000Z\r\nDTEND:20260201T000000Z\r\nEND:VFREEBUSY\r\nEND:VCALENDAR\r\n";
 	let (status, body, headers) = send(
 		&app,
 		"POST",
 		"/outbox/",
-		Some(ALICE),
+		Some(&alice()),
 		&[],
 		request.as_bytes(),
 	)
@@ -387,7 +428,7 @@ async fn outbox_post_without_range_is_bad_request() {
 		&app,
 		"POST",
 		"/outbox/",
-		Some(ALICE),
+		Some(&alice()),
 		&[],
 		request.as_bytes(),
 	)
@@ -399,7 +440,7 @@ async fn outbox_post_without_range_is_bad_request() {
 async fn post_outside_outbox_is_method_not_allowed() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "POST", "/notbox/", Some(ALICE), &[], b"x").await;
+	let (status, _, _) = send(&app, "POST", "/notbox/", Some(&alice()), &[], b"x").await;
 	assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 

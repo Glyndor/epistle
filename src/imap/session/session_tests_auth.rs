@@ -1,6 +1,7 @@
 //! IMAP AUTHENTICATE (SASL) tests.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
@@ -23,7 +24,7 @@ pub(super) fn directory_with_ban_store(
 		)
 		.with_password_hashes(std::collections::HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)]))
 		.with_ban_store(ban_store),
 	)
@@ -33,7 +34,7 @@ pub(super) fn directory_with_ban_store(
 fn authenticate_plain_initial_response() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut session = unauth(tmp.path());
-	let ir = B64.encode("\0alice\0secret");
+	let ir = B64.encode(format!("\0alice\0{}", fixtures::password()));
 	let out = text(&session.command_line(&format!("a AUTHENTICATE PLAIN {ir}")));
 	assert!(out.contains("a OK"), "{out}");
 }
@@ -63,7 +64,7 @@ fn authenticate_login_flow() {
 		out.contains("UGFzc3dvcmQ6"),
 		"expected Password: prompt, {out}"
 	);
-	let out = text(&session.auth_response(&B64.encode("secret")));
+	let out = text(&session.auth_response(&B64.encode(fixtures::password())));
 	assert!(out.contains("a OK"), "{out}");
 }
 
@@ -111,7 +112,7 @@ fn authenticate_when_already_authenticated_is_bad() {
 	let mut session = unauth(tmp.path());
 	session.command_line(&format!(
 		"a AUTHENTICATE PLAIN {}",
-		B64.encode("\0alice\0secret")
+		B64.encode(format!("\0alice\0{}", fixtures::password()))
 	));
 	let out = text(&session.command_line("b AUTHENTICATE PLAIN"));
 	assert!(out.contains("b BAD"), "{out}");
@@ -122,6 +123,7 @@ const CERT_HASH: &[u8] = b"0123456789abcdef0123456789abcdef";
 
 #[test]
 fn authenticate_scram_plus_succeeds() {
+	let nonce = fixtures::nonce();
 	use ring::{digest, hmac, pbkdf2};
 	use std::num::NonZeroU32;
 
@@ -131,7 +133,7 @@ fn authenticate_scram_plus_succeeds() {
 		dir.path().to_path_buf(),
 		scram_directory(),
 	)
-	.with_scram_nonce("SN")
+	.with_scram_nonce(fixtures::nonce())
 	.with_channel_binding(CERT_HASH.to_vec());
 
 	let header = "p=tls-server-end-point,,";
@@ -144,16 +146,16 @@ fn authenticate_scram_plus_succeeds() {
 	// c = base64(gs2-header || tls-server-end-point).
 	let mut cbind = header.as_bytes().to_vec();
 	cbind.extend_from_slice(CERT_HASH);
-	let without_proof = format!("c={},r=CNSN", B64.encode(&cbind));
-	let salt = b"saltsalt";
-	let server_first = format!("r=CNSN,s={},i=4096", B64.encode(salt));
+	let without_proof = format!("c={},r=CN{nonce}", B64.encode(&cbind));
+	let salt = fixtures::salt();
+	let server_first = format!("r=CN{nonce},s={},i=4096", B64.encode(salt));
 	let auth_message = format!("n=alice,r=CN,{server_first},{without_proof}");
 	let mut salted = [0u8; 32];
 	pbkdf2::derive(
 		pbkdf2::PBKDF2_HMAC_SHA256,
 		NonZeroU32::new(4096).unwrap(),
 		salt,
-		b"secret",
+		fixtures::password().as_bytes(),
 		&mut salted,
 	);
 	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");
@@ -197,7 +199,7 @@ fn authenticate_scram_rejects_downgrade_when_bound() {
 		dir.path().to_path_buf(),
 		scram_directory(),
 	)
-	.with_scram_nonce("SN")
+	.with_scram_nonce(fixtures::nonce())
 	.with_channel_binding(CERT_HASH.to_vec());
 	// Plain SCRAM with `y,,` on a link that offers -PLUS is a downgrade.
 	let response = text(&session.command_line(&format!(

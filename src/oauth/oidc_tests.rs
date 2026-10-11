@@ -138,18 +138,21 @@ fn converted_ec_key_verifies_a_signed_token() {
 	assert!(crate::jwt::validate(&token, Algorithm::Es256, &keys[0].key, &validation).is_ok());
 }
 
-#[tokio::test]
-async fn fetch_keys_rejects_non_https() {
-	let client = reqwest::Client::new();
+#[test]
+fn endpoints_must_be_https() {
 	assert_eq!(
-		fetch_keys(
-			&client,
-			"http://idp.example/.well-known/openid-configuration",
-			Algorithm::Rs256
-		)
-		.await,
+		parse_endpoint("http://idp.example/.well-known/openid-configuration"),
 		Err(OidcError::InsecureUrl)
 	);
+	assert_eq!(
+		parse_endpoint("https://idp.example/.well-known/openid-configuration")
+			.map(|url| url.to_string()),
+		Ok("https://idp.example/.well-known/openid-configuration".to_string())
+	);
+	assert!(matches!(
+		parse_endpoint("idp.example/jwks"),
+		Err(OidcError::Network(_))
+	));
 }
 
 /// The `is_internal` predicate is the gatekeeper for the jwks-scope rule. Each

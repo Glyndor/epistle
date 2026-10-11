@@ -9,9 +9,10 @@ use std::process::ExitCode;
 
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
-	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
-	dns_records, export, import, init, local, mobileconfig, queue, report_abuse, reports, serve,
-	srv, stack, style, suppression, verify, verify_dns,
+	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
+	autodiscover, backup, ban, dkim_cli, dns_records, domain, export, import, init, local, masked,
+	mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status, style,
+	suppression, tls_cli, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -26,6 +27,14 @@ impl Cli {
 					style::error(error);
 					return ExitCode::FAILURE;
 				}
+			}
+		}
+		match super::container_db::reexecute(&self.command) {
+			Ok(Some(code)) => return code,
+			Ok(None) => {}
+			Err(error) => {
+				style::error(error);
+				return ExitCode::FAILURE;
 			}
 		}
 		match self.command {
@@ -168,15 +177,26 @@ impl Cli {
 			},
 			Command::Suppression {
 				config,
+				action,
 				remove,
 				account,
 			} => match Config::load(&config) {
-				Ok(config) => suppression::run(
-					&config,
-					remove.as_deref(),
-					account.as_deref(),
-					&mut std::io::stdout().lock(),
-				),
+				Ok(config) => match action {
+					Some(suppression::SuppressionCli::Add { address, account }) => {
+						suppression::add(
+							&config,
+							&address,
+							account.as_deref(),
+							&mut std::io::stdout().lock(),
+						)
+					}
+					None => suppression::run(
+						&config,
+						remove.as_deref(),
+						account.as_deref(),
+						&mut std::io::stdout().lock(),
+					),
+				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -233,8 +253,49 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Queue { config } => match Config::load(&config) {
-				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
+			Command::Account { config, action } => {
+				let mut out = std::io::stdout().lock();
+				match Config::load(&config) {
+					Ok(_) => account::run(&config, action, &mut out),
+					Err(error) => {
+						style::error(error);
+						ExitCode::FAILURE
+					}
+				}
+			}
+			Command::Queue { config, action } => match Config::load(&config) {
+				Ok(config) => queue::run(
+					&config.data_dir,
+					action,
+					queue::now_epoch(),
+					&mut std::io::stdout().lock(),
+				),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Ban { config, action } => match Config::load(&config) {
+				Ok(config) => ban::run(
+					&config,
+					action,
+					ban::now_epoch(),
+					&mut std::io::stdout().lock(),
+					&mut style::stderr(),
+				),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Masked { config, action } => match Config::load(&config) {
+				Ok(config) => masked::run(
+					&config,
+					action,
+					ban::now_epoch(),
+					&mut std::io::stdout().lock(),
+					&mut style::stderr(),
+				),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -242,7 +303,7 @@ impl Cli {
 			},
 			Command::DkimKeygen { out, rsa, bits } => dkim_keygen(&out, rsa, bits),
 			Command::StorageKeygen => storage_keygen(),
-			Command::OauthKeygen => oauth_keygen(),
+			Command::OauthKeygen { out } => oauth_keygen(&out),
 			Command::TokenHash => token_hash(),
 			Command::AppPasswordCreate {
 				config,
@@ -338,8 +399,92 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
+			Command::Service {
+				config,
+				action,
+				dry_run,
+			} => super::service::run(&config, action, dry_run),
+			Command::Dns {
+				config,
+				action,
+				dry_run,
+			} => super::dns_provider::run(&config, action, dry_run),
+			Command::Storage {
+				config,
+				action,
+				dry_run,
+			} => super::storage_blobs::run(&config, action, dry_run),
+			Command::Webhook {
+				config,
+				action,
+				dry_run,
+			} => super::webhook_admin::run(&config, action, dry_run),
+			Command::Alert {
+				config,
+				action,
+				dry_run,
+			} => super::alert::run(&config, action, dry_run),
+			Command::Relay {
+				config,
+				action,
+				dry_run,
+			} => super::relay::run(&config, action, dry_run),
+			Command::Limits {
+				config,
+				action,
+				dry_run,
+			} => super::limits::run(&config, action, dry_run, &mut std::io::stdout().lock()),
+			Command::Status { config, json } => status::run_status(&config, json),
+			Command::Check { config, area, json } => status::run_check(&config, area, json),
+			Command::Antispam {
+				config,
+				action,
+				dry_run,
+			} => antispam::run(&config, action, dry_run),
+			Command::Alias {
+				config,
+				action,
+				dry_run,
+			} => alias::run(&config, action, dry_run),
+			Command::Domain {
+				config,
+				action,
+				dry_run: _,
+			} => domain::run(&config, action),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Dkim { config, action } => match Config::load(&config) {
+				Ok(config) => dkim_cli::run(&config, action, &mut std::io::stdout().lock()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Tls { config, action } => match Config::load(&config) {
+				Ok(config) => tls_cli::run(&config, action, &mut std::io::stdout().lock()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKey { config, action } => match Config::load(&config) {
+				Ok(config) => match action {
+					api_keys::ApiKeyCli::Rotate { label } => {
+						api_keys::rotate(&config, &label, &mut std::io::stdout().lock())
+					}
+				},
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Probe { config, json } => match Config::load(&config) {
+				Ok(config) => probe::run(&config, json),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -349,49 +494,14 @@ impl Cli {
 	}
 }
 
-impl Command {
-	fn requires_service_user(&self) -> bool {
-		// Explicit arms keep new stateful commands from silently running as root.
-		match self {
-			Command::Init { .. }
-			| Command::Stack { .. }
-			| Command::ConfigCheck { .. }
-			| Command::Export { .. }
-			| Command::Import { .. }
-			| Command::Backup { .. }
-			| Command::Restore { .. }
-			| Command::Verify { .. }
-			| Command::VerifyDns { .. }
-			| Command::DnsRecords { .. }
-			| Command::Mobileconfig { .. }
-			| Command::SrvRecords { .. }
-			| Command::Autoconfig { .. }
-			| Command::Autodiscover { .. }
-			| Command::Suppression { .. }
-			| Command::ReportAbuse { .. }
-			| Command::Accounts { .. }
-			| Command::AccountAdd { .. }
-			| Command::AccountRemove { .. }
-			| Command::Queue { .. }
-			| Command::AppPasswordCreate { .. }
-			| Command::AppPasswords { .. }
-			| Command::AppPasswordRevoke { .. }
-			| Command::ApiKeyCreate { .. }
-			| Command::ApiKeys { .. }
-			| Command::ApiKeyRevoke { .. }
-			| Command::Archive { .. }
-			| Command::Reports { .. } => true,
-			Command::Serve { .. }
-			| Command::MtaStsServe { .. }
-			| Command::DkimKeygen { .. }
-			| Command::StorageKeygen
-			| Command::OauthKeygen
-			| Command::TokenHash
-			| Command::Local { .. } => false,
-		}
-	}
-}
-
 #[cfg(test)]
 #[path = "dispatch_tests_delegation.rs"]
 mod tests_delegation;
+
+#[cfg(test)]
+#[path = "cli_tests_service.rs"]
+mod tests_service;
+
+#[cfg(test)]
+#[path = "dispatch_tests_limits.rs"]
+mod tests_limits;

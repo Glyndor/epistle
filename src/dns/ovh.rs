@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use crate::net::{HttpsUrl, HttpsUrlError};
+
 use super::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
@@ -32,7 +34,7 @@ pub struct OvhProvider {
 	application_key: String,
 	application_secret: String,
 	consumer_secret: ScopedSecret,
-	base: String,
+	base: HttpsUrl,
 }
 
 /// A record as the OVH API returns it from `GET /domain/zone/{z}/record/{id}`.
@@ -62,14 +64,14 @@ impl OvhProvider {
 			application_key,
 			application_secret,
 			consumer_secret,
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests, or a regional
 	/// override via the `endpoint` config key).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -90,6 +92,23 @@ impl OvhProvider {
 		let digest =
 			ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, to_sign.as_bytes());
 		format!("$1${}", hex_lower(digest.as_ref()))
+	}
+
+	/// `{base}/domain/zone/{zone}/<tail...>`, with the zone and every tail
+	/// segment escaped as one path segment.
+	fn zone_url(&self, zone: &str, tail: &[&str]) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec!["domain", "zone", zone];
+		segments.extend_from_slice(tail);
+		Ok(self.base.with_segments(segments)?)
+	}
+
+	/// `{base}/domain/zone/{zone}/record` filtered by `fieldType` and
+	/// `subDomain`.
+	fn find_url(&self, zone: &str, kind: &str, sub: &str) -> Result<HttpsUrl, ProviderError> {
+		Ok(self
+			.zone_url(zone, &["record"])?
+			.with_query("fieldType", kind)
+			.with_query("subDomain", sub))
 	}
 
 	/// The OVH fieldType token for a kind we publish.
@@ -132,7 +151,7 @@ impl OvhProvider {
 	async fn send_json<T: serde::de::DeserializeOwned>(
 		&self,
 		method: reqwest::Method,
-		url: &str,
+		url: &HttpsUrl,
 		body: &str,
 	) -> Result<T, ProviderError> {
 		let text = self.send(method, url, body).await?;
@@ -144,17 +163,17 @@ impl OvhProvider {
 	async fn send(
 		&self,
 		method: reqwest::Method,
-		url: &str,
+		url: &HttpsUrl,
 		body: &str,
 	) -> Result<String, ProviderError> {
 		let ts = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_secs();
-		let sig = self.sign(method.as_str(), url, body, ts);
+		let sig = self.sign(method.as_str(), url.as_str(), body, ts);
 		let response = self
 			.client
-			.request(method, url)
+			.request(method, url.as_url().clone())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.header("X-Ovh-Application", &self.application_key)
 			.header("X-Ovh-Consumer", self.consumer_secret.token())
@@ -175,17 +194,17 @@ impl OvhProvider {
 	async fn send_unit(
 		&self,
 		method: reqwest::Method,
-		url: &str,
+		url: &HttpsUrl,
 		body: &str,
 	) -> Result<(), ProviderError> {
 		let ts = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_secs();
-		let sig = self.sign(method.as_str(), url, body, ts);
+		let sig = self.sign(method.as_str(), url.as_str(), body, ts);
 		let response = self
 			.client
-			.request(method, url)
+			.request(method, url.as_url().clone())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.header("X-Ovh-Application", &self.application_key)
 			.header("X-Ovh-Consumer", self.consumer_secret.token())
@@ -212,10 +231,7 @@ impl OvhProvider {
 		kind: &str,
 		value: Option<&str>,
 	) -> Result<Option<u64>, ProviderError> {
-		let url = format!(
-			"{}/domain/zone/{}/record?fieldType={}&subDomain={}",
-			self.base, zone, kind, sub_domain
-		);
+		let url = self.find_url(zone, kind, sub_domain)?;
 		let ids: Vec<u64> = self.send_json(reqwest::Method::GET, &url, "").await?;
 		let Some(target_value) = value else {
 			return Ok(ids.into_iter().next());
@@ -239,15 +255,15 @@ impl OvhProvider {
 	/// Fetch one record by id; returns `None` if OVH says 404 (the record
 	/// was removed out from under us between the list and the fetch).
 	async fn get_record(&self, zone: &str, id: u64) -> Result<Option<OvhRecord>, ProviderError> {
-		let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);
+		let url = self.zone_url(zone, &["record", &id.to_string()])?;
 		let ts = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_secs();
-		let sig = self.sign("GET", &url, "", ts);
+		let sig = self.sign("GET", url.as_str(), "", ts);
 		let response = self
 			.client
-			.get(&url)
+			.get(url.into_url())
 			.header("X-Ovh-Application", &self.application_key)
 			.header("X-Ovh-Consumer", self.consumer_secret.token())
 			.header("X-Ovh-Timestamp", ts.to_string())
@@ -277,7 +293,7 @@ impl OvhProvider {
 	/// POST `/domain/zone/{z}/refresh` after every write so the change
 	/// reaches OVH's authoritative nameservers.
 	async fn refresh_zone(&self, zone: &str) -> Result<(), ProviderError> {
-		let url = format!("{}/domain/zone/{}/refresh", self.base, zone);
+		let url = self.zone_url(zone, &["refresh"])?;
 		self.send_unit(reqwest::Method::POST, &url, "").await
 	}
 
@@ -303,10 +319,10 @@ impl OvhProvider {
 			_ => None,
 		};
 		if let Some(id) = self.find_record_id(zone, &sub, kind, lookup_value).await? {
-			let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);
+			let url = self.zone_url(zone, &["record", &id.to_string()])?;
 			self.send_unit(reqwest::Method::PUT, &url, &body).await?;
 		} else {
-			let url = format!("{}/domain/zone/{}/record", self.base, zone);
+			let url = self.zone_url(zone, &["record"])?;
 			self.send_unit(reqwest::Method::POST, &url, &body).await?;
 		}
 		self.refresh_zone(zone).await
@@ -328,18 +344,11 @@ impl OvhProvider {
 		// whole-set semantics.
 		if record.kind == RecordKind::Txt && record.value.is_empty() {
 			let ids: Vec<u64> = self
-				.send_json(
-					reqwest::Method::GET,
-					&format!(
-						"{}/domain/zone/{}/record?fieldType={}&subDomain={}",
-						self.base, zone, kind, sub
-					),
-					"",
-				)
+				.send_json(reqwest::Method::GET, &self.find_url(zone, kind, &sub)?, "")
 				.await?;
 			let deleted_any = !ids.is_empty();
 			for id in &ids {
-				let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);
+				let url = self.zone_url(zone, &["record", &id.to_string()])?;
 				self.send_unit(reqwest::Method::DELETE, &url, "").await?;
 			}
 			if deleted_any {
@@ -354,7 +363,7 @@ impl OvhProvider {
 		let Some(id) = self.find_record_id(zone, &sub, kind, lookup_value).await? else {
 			return Ok(());
 		};
-		let url = format!("{}/domain/zone/{}/record/{}", self.base, zone, id);
+		let url = self.zone_url(zone, &["record", &id.to_string()])?;
 		self.send_unit(reqwest::Method::DELETE, &url, "").await?;
 		self.refresh_zone(zone).await
 	}
@@ -362,7 +371,7 @@ impl OvhProvider {
 	/// Fetch every record under the zone. The OVH list endpoint only
 	/// returns ids, so we fan out one detail GET per id.
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
-		let url = format!("{}/domain/zone/{}/record", self.base, zone);
+		let url = self.zone_url(zone, &["record"])?;
 		let ids: Vec<u64> = self.send_json(reqwest::Method::GET, &url, "").await?;
 		let mut records = Vec::with_capacity(ids.len());
 		for id in ids {
@@ -422,19 +431,21 @@ fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 /// Resolve an endpoint alias (or full URL) to a concrete API base. Unknown
 /// aliases fall back to the European endpoint, OVH's default. Used by
 /// `config::dns` to map `endpoint = "ovh-ca"` to the URL the provider is
-/// pointed at.
-pub fn resolve_base(endpoint: Option<&str>) -> String {
+/// pointed at. A full URL must be `https`: the application key, the consumer
+/// key and the request signature travel with every call, so a cleartext
+/// endpoint is refused instead of used.
+pub fn resolve_base(endpoint: Option<&str>) -> Result<HttpsUrl, HttpsUrlError> {
 	let Some(endpoint) = endpoint else {
-		return DEFAULT_BASE.to_string();
+		return Ok(HttpsUrl::from_static(DEFAULT_BASE));
 	};
 	if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-		return endpoint.to_string();
+		return HttpsUrl::parse(endpoint);
 	}
-	ENDPOINTS
+	let url = ENDPOINTS
 		.iter()
 		.find(|(alias, _)| *alias == endpoint)
-		.map(|(_, url)| (*url).to_string())
-		.unwrap_or_else(|| DEFAULT_BASE.to_string())
+		.map_or(DEFAULT_BASE, |(_, url)| url);
+	HttpsUrl::parse(url)
 }
 
 /// Map a response status to success / typed error. Returns `Ok(())` when the
@@ -467,3 +478,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ovh_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "ovh_tests_path.rs"]
+mod path_tests;

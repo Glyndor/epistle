@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::imap::archive::{self, ArchivedMessage};
+use crate::util::path_component::AccountName;
 
 use super::util::message_crypto;
 
@@ -109,8 +110,11 @@ fn list(
 	_crypto: &crate::storage::MessageCrypto,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	let account_root = data_dir.join("accounts").join(account);
-	match archive::list(&account_root) {
+	let Ok(account) = AccountName::new(account) else {
+		super::style::error(format_args!("listing archive: invalid account name"));
+		return ExitCode::FAILURE;
+	};
+	match account.root(data_dir).and_then(|root| archive::list(&root)) {
 		Ok(entries) => {
 			render_entries(&entries, out);
 			ExitCode::SUCCESS
@@ -154,7 +158,17 @@ fn purge(
 	older_than_days: Option<u64>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	let account_root = data_dir.join("accounts").join(account);
+	let Ok(account) = AccountName::new(account) else {
+		super::style::error(format_args!("purging archive: invalid account name"));
+		return ExitCode::FAILURE;
+	};
+	let account_root = match account.root(data_dir) {
+		Ok(root) => root,
+		Err(error) => {
+			super::style::error(format_args!("purging archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	let older_than_secs = older_than_days
 		.map(|days| days.saturating_mul(86_400))
 		.unwrap_or(0);

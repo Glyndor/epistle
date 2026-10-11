@@ -1,5 +1,6 @@
 use super::*;
 use crate::smtp::auth::tests::{fixture_password, wrong_password};
+use crate::test_fixtures as fixtures;
 
 pub(super) fn reply_code(action: &Action) -> u16 {
 	match action {
@@ -93,16 +94,14 @@ pub(super) fn auth_login_authenticates() {
 
 #[test]
 fn scram_sha256_authenticates() {
+	let nonce = fixtures::nonce();
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 	use ring::{digest, hmac, pbkdf2};
 	use std::num::NonZeroU32;
 
-	// Salt minted per call so no literal reaches `ScramCredentials::derive`'s
-	// `salt` parameter; a v7 UUID is sixteen bytes with random low bits, which
-	// is all a test salt needs.
-	let salt: [u8; 16] = uuid::Uuid::now_v7().into_bytes();
+	let salt = fixtures::bytes::<16>();
 	let stored =
 		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), &salt, 4096));
 	let directory = Arc::new(
@@ -119,7 +118,7 @@ fn scram_sha256_authenticates() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory)
 		.with_tls_active()
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 	session.command_line("EHLO client.example.org");
 
 	// AUTH SCRAM-SHA-256 with the client-first as the initial response.
@@ -130,8 +129,8 @@ fn scram_sha256_authenticates() {
 	assert_eq!(reply_code(&action), 334);
 
 	// The server-first is deterministic given the fixed nonce and salt.
-	let server_first = format!("r=CNSN,s={},i=4096", B64.encode(salt));
-	let without_proof = "c=biws,r=CNSN";
+	let server_first = format!("r=CN{nonce},s={},i=4096", B64.encode(salt));
+	let without_proof = format!("c=biws,r=CN{nonce}");
 	let auth_message = format!("n=alice,r=CN,{server_first},{without_proof}");
 
 	// Client computes its proof from the password.
@@ -164,6 +163,7 @@ fn scram_sha256_authenticates() {
 
 #[test]
 fn scram_sha256_wrong_password_fails() {
+	let nonce = fixtures::nonce();
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
@@ -171,7 +171,7 @@ fn scram_sha256_wrong_password_fails() {
 	// Salt minted per call so no literal reaches `ScramCredentials::derive`'s
 	// `salt` parameter; a v7 UUID is sixteen bytes with random low bits, which
 	// is all a test salt needs.
-	let salt: [u8; 16] = uuid::Uuid::now_v7().into_bytes();
+	let salt = fixtures::bytes::<16>();
 	let stored =
 		ScramStored::from_credentials(&ScramCredentials::derive(fixture_password(), &salt, 4096));
 	let directory = Arc::new(
@@ -188,14 +188,14 @@ fn scram_sha256_wrong_password_fails() {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(directory)
 		.with_tls_active()
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 	session.command_line("EHLO client.example.org");
 	session.command_line(&format!(
 		"AUTH SCRAM-SHA-256 {}",
 		B64.encode("n,,n=alice,r=CN")
 	));
 	// A bogus (well-formed but wrong) proof of 32 zero bytes fails.
-	let bad = format!("c=biws,r=CNSN,p={}", B64.encode([0u8; 32]));
+	let bad = format!("c=biws,r=CN{nonce},p={}", B64.encode([0u8; 32]));
 	let action = session.auth_line(&B64.encode(&bad));
 	assert_eq!(reply_code(&action), 535);
 	assert_eq!(session.authenticated(), None);
@@ -226,7 +226,7 @@ pub(super) fn ehlo_advertises_auth_only_inside_tls() {
 	};
 	assert!(
 		reply.to_string().contains("AUTH SCRAM-SHA-256 PLAIN"),
-		"{reply}"
+		"EHLO inside TLS must offer the SCRAM and PLAIN mechanisms"
 	);
 }
 
@@ -236,13 +236,19 @@ pub(super) fn ehlo_advertises_requiretls_only_inside_tls() {
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(!reply.to_string().contains("REQUIRETLS"), "{reply}");
+	assert!(
+		!reply.to_string().contains("REQUIRETLS"),
+		"EHLO outside TLS must not offer REQUIRETLS"
+	);
 
 	let mut tls = tls_session();
 	let Action::Continue(reply) = tls.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(reply.to_string().contains("REQUIRETLS"), "{reply}");
+	assert!(
+		reply.to_string().contains("REQUIRETLS"),
+		"EHLO inside TLS must offer REQUIRETLS"
+	);
 }
 
 #[test]

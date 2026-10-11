@@ -4,8 +4,8 @@ use super::*;
 /// Maximum literal size accepted for APPEND (matches the SMTP cap).
 pub const MAX_APPEND_SIZE: usize = 25 * 1024 * 1024;
 
-/// Parse one command line.
-pub fn parse(line: &str) -> Result<Tagged, ParseError> {
+/// Split a line into its validated tag, verb and argument text.
+pub(super) fn split_line(line: &str) -> Result<(String, &str, &str), ParseError> {
 	if line.len() > MAX_COMMAND_LINE || line.chars().any(|c| c.is_ascii_control()) {
 		return Err(ParseError::Malformed);
 	}
@@ -18,12 +18,18 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 	if !valid_tag {
 		return Err(ParseError::Malformed);
 	}
-	let tag = tag.to_string();
-
 	let (verb, args) = match rest.split_once(' ') {
 		Some((verb, args)) => (verb, args),
 		None => (rest, ""),
 	};
+	Ok((tag.to_string(), verb, args))
+}
+
+/// Parse one command line. LOGIN and AUTHENTICATE carry credentials and are
+/// refused here as unknown: they parse through [`super::parse_line`] into
+/// their own types, so a `Command` never holds a secret.
+pub fn parse(line: &str) -> Result<Tagged, ParseError> {
+	let (tag, verb, args) = split_line(line)?;
 
 	let command = match verb.to_ascii_uppercase().as_str() {
 		"CAPABILITY" => no_args(&tag, args, Command::Capability)?,
@@ -43,18 +49,6 @@ pub fn parse(line: &str) -> Result<Tagged, ParseError> {
 			}
 			Command::Compress {
 				algorithm: algorithm.to_ascii_uppercase(),
-			}
-		}
-		"LOGIN" => parse_login(&tag, args)?,
-		"AUTHENTICATE" => {
-			let mut parts = args.split_whitespace();
-			let mechanism = parts
-				.next()
-				.ok_or_else(|| ParseError::BadArguments(tag.clone()))?
-				.to_ascii_uppercase();
-			Command::Authenticate {
-				mechanism,
-				initial: parts.next().map(str::to_string),
 			}
 		}
 		"LIST" => super::list::parse_list(&tag, args)?,
@@ -205,16 +199,6 @@ pub(super) fn parse_astring(input: &str) -> Option<(String, &str)> {
 		}
 		Some((input[..end].to_string(), &input[end..]))
 	}
-}
-
-fn parse_login(tag: &str, args: &str) -> Result<Command, ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	let (username, rest) = parse_astring(args).ok_or_else(bad)?;
-	let (password, rest) = parse_astring(rest).ok_or_else(bad)?;
-	if !rest.trim().is_empty() || username.is_empty() || password.is_empty() {
-		return Err(bad());
-	}
-	Ok(Command::Login { username, password })
 }
 
 fn parse_mailbox(tag: &str, args: &str) -> Result<String, ParseError> {

@@ -62,6 +62,34 @@ impl Cidr {
 	}
 }
 
+impl Cidr {
+	/// The network base address (host bits zeroed).
+	pub fn network(&self) -> IpAddr {
+		self.base
+	}
+
+	/// The prefix length in bits.
+	pub fn prefix(&self) -> u8 {
+		self.prefix
+	}
+
+	/// Whether the block is a single address (`/32` IPv4, `/128` IPv6).
+	pub fn is_host(&self) -> bool {
+		match self.base {
+			IpAddr::V4(_) => self.prefix == 32,
+			IpAddr::V6(_) => self.prefix == 128,
+		}
+	}
+}
+
+/// The canonical `network/prefix` form, with host bits zeroed, so two spellings
+/// of the same block store and compare equal.
+impl std::fmt::Display for Cidr {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "{}/{}", self.base, self.prefix)
+	}
+}
+
 /// Zero every bit of `addr` below the top `prefix` bits.
 fn mask(addr: IpAddr, prefix: u8) -> IpAddr {
 	match addr {

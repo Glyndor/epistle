@@ -5,8 +5,9 @@ use crate::api::tests::{TOKEN, request};
 use crate::imap::archive;
 use crate::imap::mailbox::{self, Flag, Snapshot};
 use crate::storage::MessageCrypto;
+use crate::util::path_component::AccountName;
 
-async fn archive_test_state() -> (tempfile::TempDir, ApiState) {
+pub(super) async fn archive_test_state() -> (tempfile::TempDir, ApiState) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("open spool");
 	let accounts = vec![crate::config::Account {
@@ -122,7 +123,13 @@ async fn archive_restore_round_trips_message_to_mailbox() {
 	assert_eq!(body["restored_to"], "INBOX");
 
 	// The archive no longer holds the entry.
-	let entries = archive::list(&dir.path().join("accounts/alice")).expect("list");
+	let entries = archive::list(
+		&AccountName::new("alice")
+			.expect("account")
+			.root(dir.path())
+			.expect("root"),
+	)
+	.expect("list");
 	assert!(entries.is_empty());
 	// The mailbox has the restored message.
 	let snapshot = Snapshot::open_at(

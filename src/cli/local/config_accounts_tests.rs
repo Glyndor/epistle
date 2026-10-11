@@ -185,33 +185,16 @@ fn accounts_path_stat_error_is_unusable_not_missing() {
 		super::config::AccountsOutcome::Unusable(diagnostic) => {
 			assert!(
 				diagnostic.contains(&data_dir.display().to_string()),
-				"unusable diagnostic must name the data directory, got: {diagnostic}"
+				"unusable diagnostic must name the data directory"
 			);
 			assert!(
 				diagnostic.contains("Fix it"),
-				"unusable diagnostic must carry the standard remedy, got: {diagnostic}"
+				"unusable diagnostic must carry the standard remedy"
 			);
 		}
-		other => panic!(
-			"accounts path stat error must be Unusable, got {}",
-			accounts_outcome_name(&other)
-		),
-	}
-}
-
-/// The variant name of an `AccountsOutcome`, for the assertion
-/// message that must not print the full Debug. The `Unusable`
-/// variant carries a diagnostic string the operator reads in the
-/// log; the panic message has to be a CI log too, and printing the
-/// full Debug makes the line wider than the diagnosis needs. The
-/// match is exhaustive on purpose: a new variant added to
-/// `AccountsOutcome` breaks this file at compile time, so the
-/// next caller cannot fall through and print the whole struct.
-fn accounts_outcome_name(outcome: &super::config::AccountsOutcome) -> &'static str {
-	match outcome {
-		super::config::AccountsOutcome::Missing => "Missing",
-		super::config::AccountsOutcome::Loaded => "Loaded",
-		super::config::AccountsOutcome::Unusable(_) => "Unusable",
+		super::config::AccountsOutcome::Missing | super::config::AccountsOutcome::Loaded => {
+			panic!("accounts path stat error must be Unusable")
+		}
 	}
 }
 
@@ -238,6 +221,6 @@ fn missing_mail_toml_with_valid_accounts_regenerates() {
 		.collect();
 	assert!(
 		accounts.contains(&format!("{ACCOUNT_NAME}@{DOMAIN}")),
-		"rewritten accounts.toml must contain the default account {ACCOUNT_NAME}, got addresses {accounts:?}"
+		"rewritten accounts.toml must contain the default account"
 	);
 }

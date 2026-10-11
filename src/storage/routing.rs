@@ -385,3 +385,7 @@ fn header_of(data: &[u8], field: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "routing_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "routing_tests_dkim_rotation.rs"]
+mod tests_dkim_rotation;

@@ -138,7 +138,7 @@ fn submit_email(
 			) => {}
 			Err(error) => {
 				tracing::warn!(
-					account = %account,
+					account = %crate::log_id::account(account),
 					%error,
 					"correspondent store error; accepting"
 				);

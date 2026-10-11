@@ -7,6 +7,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 	match command {
 		Command::Serve { config }
 		| Command::ConfigCheck { config }
+		| Command::Probe { config, .. }
 		| Command::Export { config, .. }
 		| Command::Import { config, .. }
 		| Command::Backup { config }
@@ -23,7 +24,10 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Accounts { config }
 		| Command::AccountAdd { config, .. }
 		| Command::AccountRemove { config, .. }
-		| Command::Queue { config }
+		| Command::Account { config, .. }
+		| Command::Queue { config, .. }
+		| Command::Ban { config, .. }
+		| Command::Masked { config, .. }
 		| Command::AppPasswordCreate { config, .. }
 		| Command::AppPasswords { config }
 		| Command::AppPasswordRevoke { config, .. }
@@ -31,7 +35,22 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::ApiKeys { config }
 		| Command::ApiKeyRevoke { config, .. }
 		| Command::Reports { config, .. } => Some(config),
-		Command::Stack { config, .. } => Some(config),
+		Command::Stack { config, .. }
+		| Command::Service { config, .. }
+		| Command::Limits { config, .. }
+		| Command::Status { config, .. }
+		| Command::Check { config, .. }
+		| Command::Relay { config, .. }
+		| Command::Dns { config, .. }
+		| Command::Storage { config, .. }
+		| Command::Webhook { config, .. }
+		| Command::Alert { config, .. }
+		| Command::Antispam { config, .. }
+		| Command::Alias { config, .. }
+		| Command::Domain { config, .. }
+		| Command::Dkim { config, .. }
+		| Command::Tls { config, .. }
+		| Command::ApiKey { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }
@@ -40,7 +59,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		Command::MtaStsServe { .. }
 		| Command::DkimKeygen { .. }
 		| Command::StorageKeygen
-		| Command::OauthKeygen
+		| Command::OauthKeygen { .. }
 		| Command::TokenHash
 		| Command::Local { .. }
 		| Command::Init { .. } => None,

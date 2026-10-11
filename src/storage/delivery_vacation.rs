@@ -8,6 +8,8 @@ use std::fs;
 use crate::smtp::session::AcceptedMessage;
 
 use super::LocalDelivery;
+use crate::util::path_component::AccountName;
+use crate::util::path_containment::contained_child;
 
 impl LocalDelivery {
 	/// Build a vacation autoresponse, applying RFC 5230 suppression (null
@@ -71,8 +73,18 @@ impl LocalDelivery {
 			let _ = write!(acc, "{byte:02x}");
 			acc
 		});
-		let dir = self.accounts_root.join(account).join(".vacation");
-		let marker = dir.join(name);
+		let Ok(account) = AccountName::new(account) else {
+			return false;
+		};
+		let Ok(root) = account.root(&self.data_dir) else {
+			return false;
+		};
+		let Ok(dir) = root.file(".vacation") else {
+			return false;
+		};
+		let Ok(marker) = contained_child(&dir, &name) else {
+			return false;
+		};
 		if let Ok(meta) = fs::metadata(&marker)
 			&& let Ok(modified) = meta.modified()
 			&& modified
@@ -183,5 +195,21 @@ mod tests {
 		// First reply is sent; an immediate second is suppressed by dedup.
 		assert!(d.vacation_reply("alice", &msg, &request()).is_some());
 		assert!(d.vacation_reply("alice", &msg, &request()).is_none());
+	}
+
+	#[test]
+	fn a_traversing_account_gets_no_marker() {
+		let outer = tempfile::tempdir().expect("tempdir");
+		let data = outer.path().join("data");
+		std::fs::create_dir_all(&data).expect("data dir");
+		let d = delivery(&data);
+		assert!(!d.vacation_should_reply("../evil", "bob@example.net", 7));
+		let msg = message("bob@example.net", "Subject: hi");
+		assert!(d.vacation_reply("../evil", &msg, &request()).is_none());
+		assert!(
+			!data.join("evil").exists(),
+			"nothing was written outside accounts/"
+		);
+		assert!(!data.join("accounts/../evil").exists());
 	}
 }

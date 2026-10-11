@@ -15,7 +15,7 @@ mod state;
 pub mod tenant_limits;
 pub mod v1;
 
-pub use api_keys::{ApiKey, ApiKeyStore};
+pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
@@ -41,7 +41,12 @@ pub fn router(state: ApiState) -> Router {
 		// `.well-known/jmap` is the standard autodiscovery path (§2.2).
 		.route("/.well-known/jmap", get(jmap::session))
 		.route("/jmap/session", get(jmap::session))
-		.route("/jmap/api", post(jmap::api))
+		// The body limit is the `maxSizeRequest` the Session advertises, not
+		// axum's 2 MiB default.
+		.route(
+			"/jmap/api",
+			post(jmap::api).layer(DefaultBodyLimit::max(jmap::MAX_SIZE_REQUEST)),
+		)
 		// JMAP over WebSocket (RFC 8887): the upgrade endpoint, under the same
 		// bearer auth as the rest of the authenticated router.
 		.route("/jmap/ws", get(jmap::websocket::ws_upgrade))
@@ -140,6 +145,10 @@ mod jmap_tests_f;
 mod jmap_tests_g;
 
 #[cfg(test)]
+#[path = "jmap_tests_limits.rs"]
+mod jmap_tests_limits;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 
@@ -150,3 +159,11 @@ mod tenant_limits_tests_e2e;
 #[cfg(test)]
 #[path = "cidr_dual_stack_tests.rs"]
 mod cidr_dual_stack_tests;
+
+#[cfg(test)]
+#[path = "api_key_reload_tests.rs"]
+mod api_key_reload_tests;
+
+#[cfg(test)]
+#[path = "secret_diagnostics_tests.rs"]
+mod secret_diagnostics_tests;

@@ -58,6 +58,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add bob");

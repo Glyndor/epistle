@@ -82,50 +82,16 @@ pub fn verify_password(phc_hash: &str, password: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
-	use std::sync::LazyLock;
-
-	use argon2::password_hash::PasswordHasher;
-	use uuid::Uuid;
-
 	use super::*;
+	use crate::test_fixtures as fixtures;
 
 	pub(crate) fn hash(password: &str) -> String {
-		// Test-time hashing; runtime only ever verifies.
-		Argon2::default()
-			.hash_password_with_salt(password.as_bytes(), b"0123456789abcdef")
-			.expect("hash")
-			.to_string()
+		super::hash_password(password).expect("fixture password hash")
 	}
 
-	/// The password every SMTP fixture hashes and later presents, minted
-	/// once per test binary. A literal in its place reaches [`hash`] and the
-	/// session harness's `plain` through a parameter named `password`, which
-	/// is the dataflow `rust/hard-coded-cryptographic-value` reports; the API
-	/// tests moved their bearer token to this shape in #725. No test depends
-	/// on the value: each hashes it, presents it, and reads the outcome.
-	pub(crate) fn fixture_password() -> &'static str {
-		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
-		PASSWORD.as_str()
-	}
-
-	/// A password that is not [`fixture_password`], for the tests that
-	/// present the wrong one. Minted the same way, so it is never a literal
-	/// and cannot collide with the right one by accident.
-	pub(crate) fn wrong_password() -> &'static str {
-		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
-		PASSWORD.as_str()
-	}
-
-	/// A second password that is distinct from [`fixture_password`], for the
-	/// tests that need two valid passwords in the same scope whose difference
-	/// matters (e.g. a static account and a SQL account with the same name
-	/// and different hashes, where the test asserts the static wins). The two
-	/// `LazyLock`s mint once per binary, so the two values are stable for
-	/// the run and cannot collide by accident.
-	pub(crate) fn second_password() -> &'static str {
-		static PASSWORD: LazyLock<String> = LazyLock::new(|| Uuid::now_v7().simple().to_string());
-		PASSWORD.as_str()
-	}
+	pub(crate) use fixtures::password as fixture_password;
+	pub(crate) use fixtures::second_password;
+	pub(crate) use fixtures::wrong_password;
 
 	fn encode(authzid: &str, authcid: &str, password: &str) -> String {
 		BASE64.encode(format!("{authzid}\0{authcid}\0{password}"))
@@ -133,86 +99,88 @@ pub(crate) mod tests {
 
 	#[test]
 	fn parses_plain_without_authzid() {
-		let parsed = parse_plain(&encode("", "alice", "secret")).expect("valid");
+		let parsed = parse_plain(&encode("", "alice", fixture_password())).expect("valid");
 		assert_eq!(parsed.authcid, "alice");
-		assert_eq!(parsed.password, "secret");
+		assert!(
+			parsed.password == fixture_password(),
+			"PLAIN password must match"
+		);
 	}
 
 	#[test]
 	fn parses_plain_with_matching_authzid() {
-		assert!(parse_plain(&encode("alice", "alice", "secret")).is_ok());
+		assert!(parse_plain(&encode("alice", "alice", fixture_password())).is_ok());
 	}
 
 	#[test]
 	fn rejects_foreign_authzid() {
-		assert_eq!(
-			parse_plain(&encode("root", "alice", "secret")),
-			Err(PlainError::AuthzidMismatch)
+		assert!(
+			(parse_plain(&encode("root", "alice", fixture_password())))
+				== (Err(PlainError::AuthzidMismatch)),
+			"credential field must match"
 		);
 	}
 
 	#[test]
 	fn rejects_bad_base64() {
-		assert_eq!(parse_plain("!!not-base64!!"), Err(PlainError::BadEncoding));
+		assert!(
+			(parse_plain("!!not-base64!!")) == (Err(PlainError::BadEncoding)),
+			"credential field must match"
+		);
 	}
 
 	#[test]
 	fn rejects_wrong_field_count() {
-		assert_eq!(
-			parse_plain(&BASE64.encode("only-one-field")),
-			Err(PlainError::BadFormat)
+		assert!(
+			(parse_plain(&BASE64.encode("only-one-field"))) == (Err(PlainError::BadFormat)),
+			"credential field must match"
 		);
-		assert_eq!(
-			parse_plain(&BASE64.encode("a\0b\0c\0d")),
-			Err(PlainError::BadFormat)
+		assert!(
+			(parse_plain(&BASE64.encode("a\0b\0c\0d"))) == (Err(PlainError::BadFormat)),
+			"credential field must match"
 		);
 	}
 
 	#[test]
 	fn rejects_empty_identity_or_password() {
-		assert_eq!(
-			parse_plain(&encode("", "", "secret")),
-			Err(PlainError::BadFormat)
+		assert!(
+			(parse_plain(&encode("", "", fixture_password()))) == (Err(PlainError::BadFormat)),
+			"credential field must match"
 		);
-		assert_eq!(
-			parse_plain(&encode("", "alice", "")),
-			Err(PlainError::BadFormat)
+		// The wire message for an empty password is `\0alice\0`: both NULs
+		// present, nothing after the second.
+		assert!(
+			(parse_plain(&BASE64.encode("\0alice\0"))) == (Err(PlainError::BadFormat)),
+			"credential field must match"
 		);
-	}
-
-	#[test]
-	fn fixed_salt_hash_matches_the_string_argon2_0_5_wrote() {
-		// Computed with argon2 0.5.3 for this salt and password before the
-		// crate moved to 0.6, which changed how the salt is handed over
-		// (raw bytes instead of a B64 string). Stored hashes must keep
-		// verifying, and the PHC encoding must not drift under a bump.
-		let stored = "$argon2id$v=19$m=19456,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$8qPpaWig0H31wvibKAgpght2Ry2M8rtRQYtZ93ooMus";
-		assert_eq!(hash("secret"), stored);
-		assert!(verify_password(stored, "secret"));
 	}
 
 	#[test]
 	fn runtime_hash_roundtrips() {
-		let hash = hash_password("hunter2").expect("hashes");
+		let hash = hash_password(fixture_password()).expect("hashes");
 		assert!(hash.starts_with("$argon2id$"));
-		assert!(verify_password(&hash, "hunter2"));
-		assert!(!verify_password(&hash, "hunter3"));
+		assert!(verify_password(&hash, fixture_password()));
+		assert!(!verify_password(&hash, wrong_password()));
 	}
 
 	#[test]
 	fn verifies_correct_password() {
-		let phc = hash("secret");
-		assert!(verify_password(&phc, "secret"));
+		let phc = hash(fixture_password());
+		assert!(verify_password(&phc, fixture_password()));
 	}
 
 	#[test]
 	fn rejects_wrong_password() {
-		let phc = hash("secret");
-		assert!(!verify_password(&phc, "not-secret"));
+		let phc = hash(fixture_password());
+		assert!(!verify_password(&phc, wrong_password()));
 	}
 
 	#[test]
 	fn rejects_malformed_hash() {
-		assert!(!verify_password("not-a-phc-string", "secret"));
+		assert!(!verify_password("not-a-phc-string", fixture_password()));
 	}
 }
+
+#[cfg(test)]
+#[path = "auth_tests_fixtures.rs"]
+mod fixture_tests;

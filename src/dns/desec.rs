@@ -7,6 +7,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
 use super::records::txt_strings;
 
@@ -20,7 +22,7 @@ type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderErr
 pub struct DesecProvider {
 	client: reqwest::Client,
 	secret: ScopedSecret,
-	base: String,
+	base: HttpsUrl,
 }
 
 #[derive(Deserialize)]
@@ -41,14 +43,21 @@ impl DesecProvider {
 		DesecProvider {
 			client: reqwest::Client::new(),
 			secret,
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
+	}
+
+	/// `{base}/domains/{zone}/rrsets/`, with the zone escaped as one segment.
+	fn rrsets_url(&self) -> Result<HttpsUrl, ProviderError> {
+		Ok(self
+			.base
+			.with_segments(["domains", self.secret.zone(), "rrsets", ""])?)
 	}
 
 	/// The record type token for a kind we can publish (deSEC handles each as
@@ -132,10 +141,10 @@ impl DesecProvider {
 			"records": records,
 		}])
 		.to_string();
-		let url = format!("{}/domains/{}/rrsets/", self.base, self.secret.zone());
+		let url = self.rrsets_url()?;
 		let response = self
 			.client
-			.put(url)
+			.put(url.into_url())
 			.header(
 				reqwest::header::AUTHORIZATION,
 				format!("Token {}", self.secret.token()),
@@ -155,10 +164,10 @@ impl DesecProvider {
 	/// quote-stripping the upsert path uses.
 	async fn fetch_rrset(&self, name: &str, kind: &str) -> Result<Option<Rrset>, ProviderError> {
 		self.authorize_for(name)?;
-		let url = format!("{}/domains/{}/rrsets/", self.base, self.secret.zone());
+		let url = self.rrsets_url()?;
 		let response = self
 			.client
-			.get(url)
+			.get(url.into_url())
 			.header(
 				reqwest::header::AUTHORIZATION,
 				format!("Token {}", self.secret.token()),
@@ -243,10 +252,10 @@ impl DnsProvider for DesecProvider {
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async move {
-			let url = format!("{}/domains/{}/rrsets/", self.base, self.secret.zone());
+			let url = self.rrsets_url()?;
 			let response = self
 				.client
-				.get(url)
+				.get(url.into_url())
 				.header(
 					reqwest::header::AUTHORIZATION,
 					format!("Token {}", self.secret.token()),
@@ -318,3 +327,7 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "desec_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "desec_tests_path.rs"]
+mod path_tests;

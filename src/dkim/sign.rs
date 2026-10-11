@@ -1,5 +1,7 @@
 //! DKIM signing (RFC 6376 section 5) for outbound mail.
 
+use std::sync::Arc;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::rand::SystemRandom;
@@ -15,7 +17,7 @@ const SIGNED_HEADERS: [&str; 6] = ["from", "to", "cc", "subject", "date", "messa
 pub struct Signer {
 	selector: String,
 	key: Ed25519KeyPair,
-	rsa: Option<RsaSigner>,
+	rsa: Option<Arc<RsaSigner>>,
 }
 
 /// An additional RSA-SHA256 signing key with its own selector.
@@ -61,11 +63,27 @@ impl Signer {
 		selector: &str,
 		key_file: &std::path::Path,
 	) -> Result<Self, SignerError> {
-		self.rsa = Some(RsaSigner {
+		self.rsa = Some(Arc::new(RsaSigner {
 			selector: selector.to_string(),
 			key: load_rsa_key(key_file)?,
-		});
+		}));
 		Ok(self)
+	}
+
+	/// Replace only the ed25519 signing material, retaining the loaded RSA key.
+	pub(crate) fn with_rotated_key(
+		&self,
+		selector: &str,
+		key_file: &std::path::Path,
+	) -> Result<Self, SignerError> {
+		let mut signer = Self::load(selector, key_file)?;
+		signer.rsa = self.rsa.clone();
+		Ok(signer)
+	}
+
+	/// The selector of the ed25519 key this signer signs with.
+	pub fn selector(&self) -> &str {
+		&self.selector
 	}
 
 	/// The DNS TXT record value publishing this signer's public key.

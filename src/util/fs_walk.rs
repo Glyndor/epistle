@@ -43,11 +43,20 @@ pub(crate) fn warn_skipped(path: &Path) {
 	if repeated {
 		return;
 	}
+	let notice = skipped_notice(path);
 	if tracing::enabled!(tracing::Level::WARN) {
-		tracing::warn!("skipping non-regular data path {}", path.display());
+		tracing::warn!("{notice}");
 	} else {
-		eprintln!("warning: skipping non-regular data path {}", path.display());
+		eprintln!("warning: {notice}");
 	}
+}
+
+/// The warning text for a skipped path.
+fn skipped_notice(path: &Path) -> String {
+	format!(
+		"skipping non-regular data path {}",
+		crate::log_id::path(path)
+	)
 }
 
 pub(crate) fn allowed(path: &Path, kind: FileType) -> bool {
@@ -144,3 +153,7 @@ pub(crate) fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
 	String::from_utf8(read(path)?)
 		.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
+
+#[cfg(test)]
+#[path = "fs_walk_tests.rs"]
+mod tests;

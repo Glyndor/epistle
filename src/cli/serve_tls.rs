@@ -9,16 +9,14 @@ use crate::acme::http01::ChallengeStore;
 use crate::config::Config;
 use crate::tls::{ReloadableAcceptor, tls_server_end_point};
 
-/// Everything `serve` needs from the TLS/ACME side of startup: the static
-/// acceptor (used by IMAP, POP3S and ManageSieve), the hot-reloadable
-/// acceptor (used by SMTP, so renewed certificates apply without a
-/// restart), and the SCRAM channel-binding hash. The ACME renewal task is
+/// TLS/ACME startup state: listener acceptors share one reloadable certificate
+/// source, plus the SCRAM channel-binding hash. The ACME renewal task is
 /// spawned inside the helper and not returned.
 pub(super) struct TlsStack {
-	/// The static TLS acceptor, cloned into every listener that holds one
-	/// for the lifetime of the server.
+	/// The shared TLS acceptor, whose certificate resolver observes renewal
+	/// even when a listener retains its clone for the lifetime of the server.
 	pub tls_acceptor: Option<TlsAcceptor>,
-	/// The hot-reloadable TLS acceptor, swapped in by the ACME renew task.
+	/// The certificate reload handle used by the ACME renewal task.
 	pub reloadable_tls: Option<ReloadableAcceptor>,
 	/// SCRAM-SHA-256-PLUS channel binding hash; `None` when ACME is set
 	/// (the certificate rotates under us and a fixed hash would go stale).
@@ -34,13 +32,15 @@ pub(super) fn build_tls(
 	challenge_store: ChallengeStore,
 ) -> std::io::Result<TlsStack> {
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
-	let tls_acceptor = match &config.tls {
-		Some(tls_config) => Some(crate::tls::acceptor(tls_config).map_err(std::io::Error::other)?),
+	// The certificate comes from the shared resolver: after a restart the
+	// persisted ACME pair must win over the bootstrap one.
+	let tls_acceptor = match crate::tls::served_tls(config) {
+		Some(served) => Some(crate::tls::acceptor(&served.tls).map_err(std::io::Error::other)?),
 		None => None,
 	};
-	// SMTP listeners use a hot-reloadable acceptor so renewed certificates
-	// apply without a restart; IMAP keeps the static acceptor for now.
-	let reloadable_tls = tls_acceptor.clone().map(ReloadableAcceptor::new);
+	// Every listener clone must retain the same certificate resolver.
+	let reloadable_tls = tls_acceptor.map(ReloadableAcceptor::new);
+	let tls_acceptor = reloadable_tls.as_ref().map(ReloadableAcceptor::current);
 
 	// SCRAM-SHA-256-PLUS channel binding (tls-server-end-point). Offered only
 	// with a static [tls] certificate: under ACME the certificate is reloaded at
@@ -51,8 +51,8 @@ pub(super) fn build_tls(
 		_ => None,
 	};
 
-	// ACME automatic renewal: obtain/renew certificates and hot-reload the SMTP
-	// acceptor. Requires a [tls] bootstrap certificate to reload into.
+	// ACME automatic renewal: publish the certificate to every TLS listener.
+	// Requires a [tls] bootstrap certificate to reload into.
 	if let Some(acme) = &config.acme {
 		match &reloadable_tls {
 			Some(reloadable) => {
@@ -84,3 +84,11 @@ pub(super) fn build_tls(
 		channel_binding,
 	})
 }
+
+#[cfg(test)]
+#[path = "serve_tls_tests_reload.rs"]
+mod tests_reload;
+
+#[cfg(test)]
+#[path = "serve_tls_tests_restart.rs"]
+mod tests_restart;

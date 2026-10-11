@@ -57,9 +57,7 @@ pub(crate) fn merge_with_read_config(
 				}
 				Ok(super::apply_config::ConfigWrite::Identical)
 			} else {
-				let serialized = toml::to_string(&merged)
-					.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-				write_validated_config(path, &serialized)?;
+				write_config_value(path, &merged)?;
 				Ok(super::apply_config::ConfigWrite::Updated)
 			}
 		}
@@ -371,4 +369,10 @@ fn random_hex_suffix() -> String {
 		out.push_str(&format!("{byte:02x}"));
 	}
 	out
+}
+
+fn write_config_value(path: &Path, value: &toml::Value) -> Result<(), ApplyError> {
+	let serialized =
+		toml::to_string(value).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
+	write_validated_config(path, &serialized)
 }

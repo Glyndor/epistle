@@ -65,12 +65,64 @@ pub struct Previous {
 pub struct RotationState {
 	/// The active selector.
 	pub selector: String,
-	/// The active key file (PKCS#8 PEM), relative to the data directory.
+	/// The active key file (PKCS#8 PEM), absolute or relative to the data directory.
 	pub key_file: PathBuf,
 	/// When the active key was put into service (epoch seconds).
 	pub rotated_at: u64,
 	/// A retired selector still within its overlap window, if any.
 	pub previous: Option<Previous>,
+}
+
+/// File name of the persisted rotation state inside the data directory.
+pub const STATE_FILE: &str = "dkim-rotation.json";
+
+/// The ed25519 key currently in service: its selector and an absolute key path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveKey {
+	/// Selector published at `<selector>._domainkey.<domain>`.
+	pub selector: String,
+	/// Private key file (PKCS#8 PEM), resolved against the data directory.
+	pub key_file: PathBuf,
+}
+
+/// Read `<data_dir>/dkim-rotation.json`. `Ok(None)` only when the file does
+/// not exist; an unreadable or invalid file is an error, because guessing the
+/// configured key would show (or sign with) a selector that is not in service.
+pub fn read_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
+	let path = data_dir.join(STATE_FILE);
+	let bytes = match std::fs::read(&path) {
+		Ok(bytes) => bytes,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(RotateError(format!("read {}: {error}", path.display()))),
+	};
+	let state: RotationState = serde_json::from_slice(&bytes)
+		.map_err(|error| RotateError(format!("parse {}: {error}", path.display())))?;
+	if state.selector.is_empty() {
+		return Err(RotateError(format!(
+			"{} has an empty selector",
+			path.display()
+		)));
+	}
+	Ok(Some(state))
+}
+
+/// The one answer to "which ed25519 key is in service": the rotation state
+/// when it exists, the configured key otherwise. Startup, `dns-records`,
+/// `verify-dns` and `dkim show` all call this, so they cannot disagree.
+pub fn active_ed25519(
+	dkim: &crate::config::Dkim,
+	data_dir: &std::path::Path,
+) -> Result<ActiveKey, RotateError> {
+	Ok(match read_state(data_dir)? {
+		Some(state) => ActiveKey {
+			selector: state.selector,
+			key_file: data_dir.join(state.key_file),
+		},
+		None => ActiveKey {
+			selector: dkim.selector.clone(),
+			key_file: dkim.key_file.clone(),
+		},
+	})
 }
 
 /// The interval between automatic DKIM key rotations, in days.
@@ -130,24 +182,36 @@ pub struct Rotator {
 	signer: ReloadableSigner,
 	provider: Arc<dyn DnsProvider>,
 	zone: String,
-	signing_domain: String,
+	signing_domains: Vec<String>,
 	interval: u64,
 	overlap: u64,
+	/// Earliest epoch second at which a failed operator request is retried.
+	request_retry_at: std::sync::atomic::AtomicU64,
 }
 
 impl Rotator {
 	/// Build a rotator. `zone` is the DNS zone to publish under and
-	/// `signing_domain` the `d=` domain (its `_domainkey` host).
+	/// `signing_domains` the `d=` domains (their `_domainkey` hosts) that the
+	/// relay can sign mail for and that sit inside the zone. The list is
+	/// deduplicated and preserves the caller's order. An empty list is
+	/// permitted: rotation will run, but no DKIM records will be published
+	/// (the caller is expected to have logged a startup warning naming the
+	/// out-of-zone domains that caused the empty result).
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		data_dir: PathBuf,
 		signer: ReloadableSigner,
 		provider: Arc<dyn DnsProvider>,
 		zone: String,
-		signing_domain: String,
+		signing_domains: Vec<String>,
 		interval: u64,
 		overlap: u64,
 	) -> Self {
+		let mut seen = std::collections::HashSet::new();
+		let signing_domains = signing_domains
+			.into_iter()
+			.filter(|d| seen.insert(d.clone()))
+			.collect();
 		let state_path = data_dir.join("dkim-rotation.json");
 		Rotator {
 			state_path,
@@ -155,95 +219,173 @@ impl Rotator {
 			signer,
 			provider,
 			zone,
-			signing_domain,
+			signing_domains,
 			interval,
 			overlap,
+			request_retry_at: std::sync::atomic::AtomicU64::new(0),
 		}
 	}
 
-	/// Load persisted state, or a default (empty) state.
-	fn load_state(&self) -> RotationState {
-		std::fs::read(&self.state_path)
-			.ok()
-			.and_then(|bytes| serde_json::from_slice(&bytes).ok())
-			.unwrap_or_default()
+	/// Whether `name` sits inside `zone` (equals it or is a subdomain of it),
+	/// the way [`crate::dns::provider::ScopedSecret`] authorises a record
+	/// name. Case-insensitive on both sides so uppercase DNS queries still
+	/// match a lowercase zone.
+	pub fn is_in_zone(name: &str, zone: &str) -> bool {
+		let name = name.to_ascii_lowercase();
+		let zone = zone.to_ascii_lowercase();
+		name == zone || name.ends_with(&format!(".{zone}"))
 	}
 
+	/// Load persisted state, or a default (empty) state when no file exists.
+	/// An unreadable or invalid file is an error: treating it as empty would
+	/// bootstrap a second key and orphan the published one.
+	fn load_state(&self) -> Result<RotationState, RotateError> {
+		Ok(read_state(&self.data_dir)?.unwrap_or_default())
+	}
+
+	/// Replace the state file atomically, so a concurrent `dkim show` or a
+	/// restart never reads a half-written file.
 	fn save_state(&self, state: &RotationState) -> std::io::Result<()> {
 		let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
-		std::fs::write(&self.state_path, bytes)
+		let tmp = self.state_path.with_extension("json.tmp");
+		std::fs::write(&tmp, bytes)?;
+		std::fs::rename(&tmp, &self.state_path)
 	}
 
-	/// The DNS record name for a selector's public key.
-	fn record_name(&self, selector: &str) -> String {
-		format!("{selector}._domainkey.{}", self.signing_domain)
+	/// The DNS record name for a selector's public key at `domain`.
+	fn record_name(selector: &str, domain: &str) -> String {
+		format!("{selector}._domainkey.{domain}")
 	}
 
 	/// Run one rotation tick at `now` (epoch seconds), performing at most one
 	/// action. Returns the action taken.
 	pub async fn tick(&self, now: u64) -> Result<Decision, RotateError> {
-		let mut state = self.load_state();
+		let mut state = self.load_state()?;
 		let decision = decide(&state, now, self.interval, self.overlap);
 		match &decision {
 			Decision::Idle => {}
 			Decision::Rotate => {
-				let selector = selector_for(now);
 				// A same-day re-run must not collide with the active selector.
-				if selector == state.selector {
+				if selector_for(now) == state.selector {
 					return Ok(Decision::Idle);
 				}
-				let (pem, txt) = super::generate_key().map_err(|e| RotateError(e.to_string()))?;
-				let key_file = self.data_dir.join(format!("dkim-{selector}.key"));
-				write_key(&key_file, &pem)?;
-				self.provider
-					.upsert(&self.zone, txt_record(&self.record_name(&selector), &txt))
-					.await
-					.map_err(|e| RotateError(e.to_string()))?;
-				let signer =
-					Signer::load(&selector, &key_file).map_err(|e| RotateError(e.to_string()))?;
-				self.signer.reload(Arc::new(signer));
-				// Retire the just-replaced selector after the overlap window.
-				let previous = (!state.selector.is_empty()).then(|| Previous {
-					selector: state.selector.clone(),
-					key_file: state.key_file.clone(),
-					retire_at: now.saturating_add(self.overlap),
-				});
-				state = RotationState {
-					selector,
-					key_file,
-					rotated_at: now,
-					previous,
-				};
-				self.save_state(&state)?;
+				self.rotate(&mut state, now).await?;
 			}
-			Decision::Retire(selector) => {
-				let retired_key_file = state.previous.as_ref().and_then(|p| {
-					(p.selector == *selector && !p.key_file.as_os_str().is_empty())
-						.then(|| p.key_file.clone())
-				});
-				self.provider
-					.delete(&self.zone, txt_record(&self.record_name(selector), ""))
-					.await
-					.map_err(|e| RotateError(e.to_string()))?;
-				state.previous = None;
-				self.save_state(&state)?;
-				// Best-effort: the state and the DNS are already consistent,
-				// the file is the leftover. A failure (typically permissions)
-				// is logged but does not abort the rotation, and `NotFound`
-				// is the idempotent case the operator caused by hand.
-				if let Some(path) = retired_key_file
-					&& let Err(error) = std::fs::remove_file(&path)
-					&& error.kind() != std::io::ErrorKind::NotFound
-				{
-					tracing::warn!(
-						%error,
-						path = %path.display(),
-						"failed to remove retired DKIM key file; DNS and state already cleared",
-					);
-				}
-			}
+			Decision::Retire(selector) => self.retire(&mut state, selector).await?,
 		}
 		Ok(decision)
+	}
+
+	/// Generate a key under `selector_for(now)`, publish it for every signing
+	/// domain, switch the live signer to it and persist the new state. The
+	/// caller has already ruled out a selector collision.
+	async fn rotate(&self, state: &mut RotationState, now: u64) -> Result<(), RotateError> {
+		let selector = selector_for(now);
+		let (pem, txt) = super::generate_key().map_err(|e| RotateError(e.to_string()))?;
+		let key_file = self.data_dir.join(format!("dkim-{selector}.key"));
+		write_key(&key_file, &pem)?;
+		// Publish TXT for every configured in-zone domain BEFORE the
+		// signer switches: a half-published rotation would leave
+		// some domains signing with a key receivers cannot verify.
+		// If one upsert fails, the records already published for
+		// this selector are withdrawn (best effort) and the new key
+		// file is removed, so a failed tick leaves neither orphan
+		// TXT records nor a stray key behind.
+		let mut published: Vec<&String> = Vec::new();
+		for domain in &self.signing_domains {
+			let upsert = self
+				.provider
+				.upsert(
+					&self.zone,
+					txt_record(&Self::record_name(&selector, domain), &txt),
+				)
+				.await;
+			if let Err(error) = upsert {
+				for done in published {
+					let _ = self
+						.provider
+						.delete(
+							&self.zone,
+							txt_record(&Self::record_name(&selector, done), ""),
+						)
+						.await;
+				}
+				let _ = std::fs::remove_file(&key_file);
+				return Err(RotateError(format!(
+					"publish {selector}._domainkey.{domain}: {error}"
+				)));
+			}
+			published.push(domain);
+		}
+		let signer = self
+			.signer
+			.current()
+			.with_rotated_key(&selector, &key_file)
+			.map_err(|e| RotateError(e.to_string()))?;
+		self.signer.reload(Arc::new(signer));
+		// Retire the just-replaced selector after the overlap window.
+		let previous = (!state.selector.is_empty()).then(|| Previous {
+			selector: state.selector.clone(),
+			key_file: state.key_file.clone(),
+			retire_at: now.saturating_add(self.overlap),
+		});
+		*state = RotationState {
+			selector,
+			key_file,
+			rotated_at: now,
+			previous,
+		};
+		self.save_state(state)?;
+		Ok(())
+	}
+
+	/// Take the previous selector's TXT down from every signing domain, drop
+	/// it from the state and remove its key file.
+	async fn retire(&self, state: &mut RotationState, selector: &str) -> Result<(), RotateError> {
+		let retired_key_file = state.previous.as_ref().and_then(|p| {
+			(p.selector == selector && !p.key_file.as_os_str().is_empty())
+				.then(|| p.key_file.clone())
+		});
+		// Remove the retired TXT from every in-zone domain it was
+		// published under. If any delete fails, the state keeps the
+		// previous selector, so the next tick retries every delete
+		// (deleting an absent record is harmless).
+		let mut last_error: Option<String> = None;
+		for domain in &self.signing_domains {
+			if let Err(error) = self
+				.provider
+				.delete(
+					&self.zone,
+					txt_record(&Self::record_name(selector, domain), ""),
+				)
+				.await
+			{
+				last_error = Some(format!(
+					"delete {}.{domain}: {error}",
+					Self::record_name(selector, domain)
+				));
+			}
+		}
+		if let Some(error) = last_error {
+			return Err(RotateError(error));
+		}
+		state.previous = None;
+		self.save_state(state)?;
+		// Best-effort: the state and the DNS are already consistent,
+		// the file is the leftover. A failure (typically permissions)
+		// is logged but does not abort the rotation, and `NotFound`
+		// is the idempotent case the operator caused by hand.
+		if let Some(path) = retired_key_file
+			&& let Err(error) = std::fs::remove_file(&path)
+			&& error.kind() != std::io::ErrorKind::NotFound
+		{
+			tracing::warn!(
+				%error,
+				path = %path.display(),
+				"failed to remove retired DKIM key file; DNS and state already cleared",
+			);
+		}
+		Ok(())
 	}
 }
 
@@ -291,3 +433,26 @@ impl From<std::io::Error> for RotateError {
 #[cfg(test)]
 #[path = "rotate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rotate_tests_signing.rs"]
+mod tests_signing;
+
+#[cfg(test)]
+#[path = "rotate_tests_multidomain.rs"]
+mod tests_multidomain;
+
+#[path = "rotate_request.rs"]
+mod request;
+pub use request::{
+	ERROR_FILE, REQUEST_FILE, RotationRequest, last_error, pending_request, request_rotation,
+	rotated_today,
+};
+
+#[cfg(test)]
+#[path = "rotate_tests_active.rs"]
+mod tests_active;
+
+#[cfg(test)]
+#[path = "rotate_tests_request.rs"]
+mod tests_request;

@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::api::error::ApiError;
 use crate::api::state::ApiState;
 use crate::imap::archive;
+use crate::util::path_component::AccountName;
 
 /// One entry in the archive listing. `mailbox` is the mailbox the message
 /// was in when it was expunged; `deleted_at` is the unix time the archive
@@ -40,8 +41,11 @@ pub async fn list(
 	if !account_known(&state, &name) {
 		return Err(ApiError::not_found("no such account"));
 	}
-	let account_root = state.data_dir().join("accounts").join(&name);
-	let entries = archive::list(&account_root)
+	// A name that is not a plain directory name answers as an unknown account.
+	let account = AccountName::new(&name).map_err(|_| ApiError::not_found("no such account"))?;
+	let entries = account
+		.root(state.data_dir())
+		.and_then(|root| archive::list(&root))
 		.map_err(|error| ApiError::not_found(&format!("archive not available: {error}")))?;
 	let entries = entries
 		.into_iter()
@@ -88,3 +92,7 @@ fn account_known(state: &ApiState, name: &str) -> bool {
 #[cfg(test)]
 #[path = "archive_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "archive_tests_paths.rs"]
+mod tests_paths;

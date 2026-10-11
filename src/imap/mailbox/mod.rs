@@ -21,6 +21,9 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::storage::MessageCrypto;
+use crate::util::path_component::{
+	AccountName, AccountRoot, FixedDir, MailboxName, MessageExt, folders_dir, message_file,
+};
 
 /// A snapshot of one mailbox at SELECT time. Sequence numbers are positions
 /// in `messages` (1-based); UIDs are persistent, assigned in arrival order.
@@ -29,7 +32,7 @@ pub struct Snapshot {
 	pub(super) account_dir: PathBuf,
 	/// The account root (`<data_dir>/accounts/<name>`); used as the parent of
 	/// the per-account `.archive/` directory when retention is enabled.
-	pub(super) account_root: PathBuf,
+	pub(super) account_root: AccountRoot,
 	/// The mailbox this snapshot was opened for, used to stamp the archive
 	/// sidecar so a restored message knows where it came from.
 	pub(super) mailbox: String,
@@ -99,43 +102,34 @@ impl MessageRef {
 	}
 }
 
-/// Whether a client-supplied mailbox name is safe and supported.
+/// Whether a client-supplied mailbox name is a valid folder name. `INBOX` is
+/// not a folder and is refused here.
 pub fn valid_name(name: &str) -> bool {
-	!name.is_empty()
-		&& name.len() <= 128
-		&& !name.eq_ignore_ascii_case("INBOX")
-		&& name
-			.chars()
-			.all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
-		&& !name.starts_with('.')
-		&& !name.ends_with(' ')
+	MailboxName::folder(name).is_ok()
 }
 
-/// The on-disk directory of a mailbox (its `new/` subdirectory).
+/// The on-disk directory of a mailbox (its `new/` subdirectory). `None` when
+/// the account or the mailbox name is not a plain path component.
 pub fn mailbox_dir(data_dir: &Path, account: &str, mailbox: &str) -> Option<PathBuf> {
-	let base = data_dir.join("accounts").join(account);
-	if mailbox.eq_ignore_ascii_case("INBOX") {
-		return Some(base.join("new"));
-	}
-	if !valid_name(mailbox) {
-		return None;
-	}
-	Some(base.join("folders").join(mailbox).join("new"))
+	let account = AccountName::new(account).ok()?;
+	let mailbox = MailboxName::new(mailbox).ok()?;
+	mailbox.messages_dir(&account, data_dir).ok()
 }
 
-/// Whether a mailbox exists. INBOX always exists.
+/// Whether a mailbox exists. INBOX always exists for a valid account.
 pub fn exists(data_dir: &Path, account: &str, mailbox: &str) -> bool {
 	if mailbox.eq_ignore_ascii_case("INBOX") {
-		return true;
+		return AccountName::new(account).is_ok();
 	}
 	mailbox_dir(data_dir, account, mailbox).is_some_and(|dir| dir.is_dir())
 }
 
 /// Create a mailbox. Fails if invalid or already existing.
 pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
-	let dir = mailbox_dir(data_dir, account, mailbox)
-		.filter(|_| !mailbox.eq_ignore_ascii_case("INBOX"))
-		.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
+	let account = AccountName::new(account)?;
+	let dir = MailboxName::folder(mailbox)
+		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
+		.messages_dir(&account, data_dir)?;
 	if dir.is_dir() {
 		return Err(std::io::Error::other("mailbox already exists"));
 	}
@@ -144,14 +138,11 @@ pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 
 /// Delete a mailbox and its messages. INBOX cannot be deleted.
 pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
-	if mailbox.eq_ignore_ascii_case("INBOX") || !valid_name(mailbox) {
-		return Err(std::io::Error::other("cannot delete this mailbox"));
-	}
-	let dir = data_dir
-		.join("accounts")
-		.join(account)
-		.join("folders")
-		.join(mailbox);
+	let account = AccountName::new(account)?;
+	let dir = MailboxName::folder(mailbox)
+		.ok()
+		.and_then(|folder| folder.folder_dir(&account, data_dir).ok().flatten())
+		.ok_or_else(|| std::io::Error::other("cannot delete this mailbox"))?;
 	if !dir.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
 	}
@@ -160,25 +151,37 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 
 /// Rename a mailbox. INBOX cannot be renamed.
 pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::Result<()> {
-	if from.eq_ignore_ascii_case("INBOX")
-		|| !valid_name(from)
-		|| !valid_name(to)
-		|| exists(data_dir, account, to)
-	{
+	let account = AccountName::new(account)?;
+	let (Ok(from), Ok(to)) = (MailboxName::folder(from), MailboxName::folder(to)) else {
+		return Err(std::io::Error::other("cannot rename"));
+	};
+	let Ok(target) = to.messages_dir(&account, data_dir) else {
+		return Err(std::io::Error::other("cannot rename"));
+	};
+	if target.is_dir() {
 		return Err(std::io::Error::other("cannot rename"));
 	}
-	let folders = data_dir.join("accounts").join(account).join("folders");
-	if !folders.join(from).is_dir() {
+	let (Ok(Some(from)), Ok(Some(to))) = (
+		from.folder_dir(&account, data_dir),
+		to.folder_dir(&account, data_dir),
+	) else {
+		return Err(std::io::Error::other("cannot rename"));
+	};
+	if !from.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
 	}
-	std::fs::rename(folders.join(from), folders.join(to))
+	std::fs::rename(from, to)
 }
 
-/// Existing mailbox names: INBOX plus folders, sorted.
+/// Existing mailbox names: INBOX plus folders, sorted. An account that is not
+/// a plain directory name has only INBOX.
 pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let mut names = vec!["INBOX".to_string()];
-	let folders = data_dir.join("accounts").join(account).join("folders");
-	if let Ok(entries) = crate::util::fs_walk::read_dir(folders) {
+	let Ok(account) = AccountName::new(account) else {
+		return names;
+	};
+	let entries = folders_dir(&account, data_dir).and_then(crate::util::fs_walk::read_dir);
+	if let Ok(entries) = entries {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_dir())
 				&& let Some(name) = entry.file_name().to_str()
@@ -203,16 +206,18 @@ pub fn append(
 	data: &[u8],
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
-	let account_dir = mailbox_dir(data_dir, account, mailbox)
-		.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
-	let tmp_dir = data_dir.join("accounts").join(account).join("tmp");
+	let account = AccountName::new(account)?;
+	let account_dir = MailboxName::new(mailbox)
+		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
+		.messages_dir(&account, data_dir)?;
+	let tmp_dir = account.root(data_dir)?.child(FixedDir::Tmp)?;
 	std::fs::create_dir_all(&account_dir)?;
 	std::fs::create_dir_all(&tmp_dir)?;
 
 	let id = Uuid::now_v7();
-	let tmp = tmp_dir.join(format!("{id}.eml"));
+	let tmp = message_file(&tmp_dir, id, MessageExt::Eml)?;
 	std::fs::write(&tmp, &crypto.encode(data)?)?;
-	std::fs::rename(&tmp, account_dir.join(format!("{id}.eml")))?;
+	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
 	}
@@ -235,6 +240,9 @@ pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Opt
 /// whether the store is encrypted. Archived messages count toward the quota:
 /// they are still messages stored on behalf of the account.
 pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> u64 {
+	let Ok(account_name) = AccountName::new(account) else {
+		return 0;
+	};
 	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut total = 0u64;
 	for mailbox in list(data_dir, account) {
@@ -256,8 +264,10 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 			}
 		}
 	}
-	let account_root = data_dir.join("accounts").join(account);
-	if let Ok(entries) = crate::util::fs_walk::read_dir(account_root.join(".archive")) {
+	let archive = account_name
+		.root(data_dir)
+		.and_then(|root| root.child(FixedDir::Archive));
+	if let Ok(entries) = archive.and_then(crate::util::fs_walk::read_dir) {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_file())
 				&& entry
@@ -290,3 +300,11 @@ pub fn list_subscribed(data_dir: &Path, account: &str) -> Vec<String> {
 #[cfg(test)]
 #[path = "../mailbox_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../mailbox_tests_path.rs"]
+mod tests_path;
+
+#[cfg(test)]
+#[path = "../mailbox_tests_remove.rs"]
+mod tests_remove;

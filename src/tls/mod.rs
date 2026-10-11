@@ -3,7 +3,7 @@
 pub(crate) mod https;
 
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -133,6 +133,22 @@ pub fn tls_server_end_point(config: &Tls) -> Option<Vec<u8>> {
 	Some(digest.as_ref().to_vec())
 }
 
+/// The DER bytes of the leaf certificate in `path`, the same bytes the running
+/// `serve` would present on the wire (the apply phase points the `[tls]`
+/// section at this file: `keys/cert.pem` for a static configuration,
+/// `<data_dir>/acme/cert.pem` once ACME renewal takes over). The probe uses
+/// this to pin the verifier: only a server that presents these exact bytes
+/// passes, which catches the case where the file on disk has been renewed
+/// but the listener has not reloaded.
+pub fn leaf_cert_der(path: &Path) -> Result<Vec<u8>, TlsError> {
+	let certs = load_certs(path)?;
+	let leaf = certs
+		.into_iter()
+		.next()
+		.ok_or_else(|| TlsError::NoCertificates(path.display().to_string()))?;
+	Ok(leaf.as_ref().to_vec())
+}
+
 /// Build an acceptor from an in-memory PEM chain and key (e.g. ACME-issued).
 pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor, TlsError> {
 	ensure_crypto_provider();
@@ -151,32 +167,11 @@ pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor,
 	Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
 
-/// A hot-swappable TLS acceptor. Certificate renewal replaces the active
-/// acceptor without dropping the listener, so new handshakes use the fresh
-/// certificate while in-flight connections finish on the old one.
-#[derive(Clone)]
-pub struct ReloadableAcceptor {
-	inner: Arc<RwLock<TlsAcceptor>>,
-}
+mod reload;
+pub use reload::ReloadableAcceptor;
 
-impl ReloadableAcceptor {
-	/// Wrap an initial acceptor.
-	pub fn new(acceptor: TlsAcceptor) -> Self {
-		ReloadableAcceptor {
-			inner: Arc::new(RwLock::new(acceptor)),
-		}
-	}
-
-	/// The current acceptor (cheap clone; shares config via `Arc`).
-	pub fn current(&self) -> TlsAcceptor {
-		self.inner.read().expect("tls acceptor lock").clone()
-	}
-
-	/// Swap in a newly issued acceptor.
-	pub fn reload(&self, acceptor: TlsAcceptor) {
-		*self.inner.write().expect("tls acceptor lock") = acceptor;
-	}
-}
+mod served;
+pub use served::{CertSource, ServedTls, served_tls};
 
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, TlsError> {
 	let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path)

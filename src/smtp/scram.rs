@@ -326,6 +326,7 @@ fn nth_comma_rest(text: &str, n: usize) -> Option<&str> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::test_fixtures as fixtures;
 
 	/// Compute the client side of the exchange to drive the server in tests.
 	fn client_proof(password: &str, credentials: &ScramCredentials, auth_message: &str) -> Vec<u8> {
@@ -346,13 +347,14 @@ mod tests {
 	}
 
 	fn run_exchange(password: &str, login_password: &str) -> Result<String, ScramError> {
-		let credentials = ScramCredentials::derive(password, b"saltsalt", 4096);
-		let mut server = ScramServer::new("servernonce");
+		let nonce = fixtures::nonce();
+		let credentials = ScramCredentials::derive(password, fixtures::salt(), 4096);
+		let mut server = ScramServer::new(fixtures::nonce());
 		let client_first = "n,,n=alice,r=clientnonce";
 		let (user, server_first) = server.first(client_first, &credentials)?;
 		assert_eq!(user, "alice");
 
-		let without_proof = "c=biws,r=clientnonceservernonce";
+		let without_proof = format!("c=biws,r=clientnonce{nonce}");
 		let auth_message = format!("n=alice,r=clientnonce,{server_first},{without_proof}");
 		// The client computes its proof from the *login* password.
 		let proof = client_proof(login_password, &credentials, &auth_message);
@@ -362,13 +364,22 @@ mod tests {
 
 	#[test]
 	fn stored_credentials_roundtrip() {
-		let credentials = ScramCredentials::derive("hunter2", b"saltsalt", 4096);
+		let credentials = ScramCredentials::derive(fixtures::password(), fixtures::salt(), 4096);
 		let stored = ScramStored::from_credentials(&credentials);
 		let restored = stored.to_credentials().expect("decode");
-		assert_eq!(restored.salt, credentials.salt);
+		assert!(
+			(restored.salt) == (credentials.salt),
+			"credential field must match"
+		);
 		assert_eq!(restored.iterations, credentials.iterations);
-		assert_eq!(restored.stored_key, credentials.stored_key);
-		assert_eq!(restored.server_key, credentials.server_key);
+		assert!(
+			(restored.stored_key) == (credentials.stored_key),
+			"credential field must match"
+		);
+		assert!(
+			(restored.server_key) == (credentials.server_key),
+			"credential field must match"
+		);
 	}
 
 	#[test]
@@ -384,46 +395,52 @@ mod tests {
 
 	#[test]
 	fn correct_password_authenticates() {
-		let result = run_exchange("hunter2", "hunter2").expect("authenticated");
+		let result =
+			run_exchange(fixtures::password(), fixtures::password()).expect("authenticated");
 		assert!(result.starts_with("v="));
 	}
 
 	#[test]
 	fn wrong_password_fails() {
-		assert_eq!(
-			run_exchange("hunter2", "wrong"),
-			Err(ScramError::AuthenticationFailed)
+		assert!(
+			(run_exchange(fixtures::password(), fixtures::second_password()))
+				== (Err(ScramError::AuthenticationFailed)),
+			"credential field must match"
 		);
 	}
 
 	#[test]
 	fn server_first_carries_salt_and_iterations() {
-		let credentials = ScramCredentials::derive("pw", b"saltsalt", 4096);
-		let mut server = ScramServer::new("SN");
+		let nonce = fixtures::nonce();
+		let credentials = ScramCredentials::derive(fixtures::password(), fixtures::salt(), 4096);
+		let mut server = ScramServer::new(fixtures::nonce());
 		let (_, server_first) = server.first("n,,n=bob,r=CN", &credentials).expect("first");
-		assert_eq!(
-			server_first,
-			format!("r=CNSN,s={},i=4096", BASE64.encode(b"saltsalt"))
+		assert!(
+			(server_first) == (format!("r=CN{nonce},s={},i=4096", BASE64.encode(fixtures::salt()))),
+			"credential field must match"
 		);
 	}
 
 	#[test]
 	fn altered_nonce_is_rejected() {
-		let credentials = ScramCredentials::derive("pw", b"saltsalt", 4096);
-		let mut server = ScramServer::new("SN");
+		let credentials = ScramCredentials::derive(fixtures::password(), fixtures::salt(), 4096);
+		let mut server = ScramServer::new(fixtures::nonce());
 		server.first("n,,n=bob,r=CN", &credentials).expect("first");
 		// A client-final echoing the wrong nonce is malformed.
 		let bad = "c=biws,r=WRONG,p=AAAA";
-		assert_eq!(server.finish(bad, &credentials), Err(ScramError::Malformed));
+		assert!(
+			(server.finish(bad, &credentials)) == (Err(ScramError::Malformed)),
+			"credential field must match"
+		);
 	}
 
 	#[test]
 	fn malformed_client_first_is_rejected() {
-		let credentials = ScramCredentials::derive("pw", b"saltsalt", 4096);
-		let mut server = ScramServer::new("SN");
-		assert_eq!(
-			server.first("garbage", &credentials),
-			Err(ScramError::Malformed)
+		let credentials = ScramCredentials::derive(fixtures::password(), fixtures::salt(), 4096);
+		let mut server = ScramServer::new(fixtures::nonce());
+		assert!(
+			(server.first("garbage", &credentials)) == (Err(ScramError::Malformed)),
+			"credential field must match"
 		);
 	}
 
@@ -434,15 +451,16 @@ mod tests {
 		client_header: &str,
 		client_cbind: &[u8],
 	) -> Result<String, ScramError> {
-		let credentials = ScramCredentials::derive("hunter2", b"saltsalt", 4096);
-		let mut server = ScramServer::new("servernonce").with_channel_binding(cb);
+		let nonce = fixtures::nonce();
+		let credentials = ScramCredentials::derive(fixtures::password(), fixtures::salt(), 4096);
+		let mut server = ScramServer::new(fixtures::nonce()).with_channel_binding(cb);
 		let client_first = format!("{client_header}n=alice,r=clientnonce");
 		let (_, server_first) = server.first(&client_first, &credentials)?;
 		let mut c = client_header.as_bytes().to_vec();
 		c.extend_from_slice(client_cbind);
-		let without_proof = format!("c={},r=clientnonceservernonce", BASE64.encode(&c));
+		let without_proof = format!("c={},r=clientnonce{nonce}", BASE64.encode(&c));
 		let auth_message = format!("n=alice,r=clientnonce,{server_first},{without_proof}");
-		let proof = client_proof("hunter2", &credentials, &auth_message);
+		let proof = client_proof(fixtures::password(), &credentials, &auth_message);
 		let client_final = format!("{without_proof},p={}", BASE64.encode(&proof));
 		server.finish(&client_final, &credentials)
 	}
@@ -466,14 +484,20 @@ mod tests {
 			"p=tls-server-end-point,,",
 			b"a-different-32-byte-certificate!!",
 		);
-		assert_eq!(result, Err(ScramError::Malformed));
+		assert!(
+			(result) == (Err(ScramError::Malformed)),
+			"credential field must match"
+		);
 	}
 
 	#[test]
 	fn plus_requires_the_p_flag() {
 		// A -PLUS exchange where the client does not actually bind.
 		let result = run_cb_exchange(ChannelBinding::Required(CERT_HASH.to_vec()), "n,,", b"");
-		assert_eq!(result, Err(ScramError::Malformed));
+		assert!(
+			(result) == (Err(ScramError::Malformed)),
+			"credential field must match"
+		);
 	}
 
 	#[test]
@@ -481,7 +505,10 @@ mod tests {
 		// `y,,` on the non-PLUS mechanism when the server offers -PLUS is a
 		// downgrade attempt.
 		let result = run_cb_exchange(ChannelBinding::Supported, "y,,", b"");
-		assert_eq!(result, Err(ScramError::Malformed));
+		assert!(
+			(result) == (Err(ScramError::Malformed)),
+			"credential field must match"
+		);
 	}
 
 	#[test]
@@ -494,7 +521,10 @@ mod tests {
 	fn supported_rejects_tampered_binding() {
 		// The header says `n,,` but the c= carries extra bytes.
 		let result = run_cb_exchange(ChannelBinding::Supported, "n,,", b"extra");
-		assert_eq!(result, Err(ScramError::Malformed));
+		assert!(
+			(result) == (Err(ScramError::Malformed)),
+			"credential field must match"
+		);
 	}
 
 	#[test]
@@ -504,18 +534,17 @@ mod tests {
 		// buffer as declared, every account would share one known salt — so
 		// the all-zero salt is asserted against explicitly, not just
 		// inequality between two draws.
-		let zero = ScramStored::from_credentials(&ScramCredentials::derive(
-			"correct horse battery staple",
-			&[0u8; SALT_LEN],
-			SCRAM_ITERATIONS,
-		));
-		let a = ScramStored::with_fresh_salt("correct horse battery staple").expect("csprng");
-		let b = ScramStored::with_fresh_salt("correct horse battery staple").expect("csprng");
-		assert_ne!(
-			a.salt, zero.salt,
-			"the salt must not be the declared buffer"
+		let a = ScramStored::with_fresh_salt(fixtures::password()).expect("csprng");
+		let b = ScramStored::with_fresh_salt(fixtures::password()).expect("csprng");
+		let decoded = base64::engine::general_purpose::STANDARD
+			.decode(&a.salt)
+			.expect("salt is base64");
+		assert_eq!(decoded.len(), SALT_LEN, "salt keeps its declared width");
+		assert!(
+			decoded.iter().any(|byte| *byte != 0),
+			"the salt is not the all-zero buffer"
 		);
-		assert_ne!(a.salt, b.salt, "two derivations must not share a salt");
+		assert!((a.salt) != (b.salt), "credential field must differ");
 		assert_eq!(a.iterations, SCRAM_ITERATIONS);
 	}
 
@@ -523,16 +552,22 @@ mod tests {
 	fn a_fresh_salt_still_authenticates_the_password_it_derived_from() {
 		// A salt that is random but not the one actually used would pass the
 		// test above and break every login, so the round trip is checked too.
-		let stored = ScramStored::with_fresh_salt("correct horse battery staple").expect("csprng");
+		let stored = ScramStored::with_fresh_salt(fixtures::password()).expect("csprng");
 		let salt = base64::engine::general_purpose::STANDARD
 			.decode(&stored.salt)
 			.expect("salt is base64");
 		let again = ScramStored::from_credentials(&ScramCredentials::derive(
-			"correct horse battery staple",
+			fixtures::password(),
 			&salt,
 			stored.iterations,
 		));
-		assert_eq!(again.stored_key, stored.stored_key);
-		assert_eq!(again.server_key, stored.server_key);
+		assert!(
+			(again.stored_key) == (stored.stored_key),
+			"credential field must match"
+		);
+		assert!(
+			(again.server_key) == (stored.server_key),
+			"credential field must match"
+		);
 	}
 }

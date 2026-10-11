@@ -101,6 +101,7 @@ impl Backend for MailboxBackend {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::test_fixtures as fixtures;
 	use std::collections::HashMap;
 
 	fn backend(dir: &std::path::Path) -> MailboxBackend {
@@ -111,7 +112,7 @@ mod tests {
 			)
 			.with_password_hashes(HashMap::from([(
 				"alice".to_string(),
-				crate::smtp::auth::tests::hash("secret"),
+				crate::smtp::auth::tests::hash(fixtures::password()),
 			)])),
 		);
 		MailboxBackend::new(directory, dir.to_path_buf())
@@ -123,15 +124,19 @@ mod tests {
 		let backend = backend(dir.path());
 		assert_eq!(
 			backend
-				.verify("alice@example.org", "secret", None)
+				.verify("alice@example.org", fixtures::password(), None)
 				.as_deref(),
 			Some("alice")
 		);
 		// Wrong password and unknown user both fail the same way.
-		assert!(backend.verify("alice@example.org", "wrong", None).is_none());
 		assert!(
 			backend
-				.verify("ghost@example.org", "secret", None)
+				.verify("alice@example.org", fixtures::second_password(), None)
+				.is_none()
+		);
+		assert!(
+			backend
+				.verify("ghost@example.org", fixtures::password(), None)
 				.is_none()
 		);
 	}

@@ -22,6 +22,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
@@ -42,7 +44,7 @@ pub struct DnsimpleProvider {
 	client: reqwest::Client,
 	secret: ScopedSecret,
 	account_id: String,
-	base: String,
+	base: HttpsUrl,
 }
 
 #[derive(Deserialize)]
@@ -85,21 +87,28 @@ impl DnsimpleProvider {
 			client: reqwest::Client::new(),
 			secret,
 			account_id: account_id.into(),
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API root (tests). The account id is
 	/// still appended per request.
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
-	/// Build a URL under `/v2/{account_id}` for `path` (which must start with
-	/// `/`).
-	fn url(&self, path: &str) -> String {
-		format!("{}/{}{}", self.base, self.account_id, path)
+	/// `{base}/{account_id}/zones/{zone}/records[/{record_id}]`, with the
+	/// account id and the zone each escaped as one path segment.
+	fn records_url(&self, zone: &str, record_id: Option<u64>) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec![
+			self.account_id.clone(),
+			"zones".to_string(),
+			zone.to_string(),
+			"records".to_string(),
+		];
+		segments.extend(record_id.map(|id| id.to_string()));
+		Ok(self.base.with_segments(segments)?)
 	}
 
 	/// The DNSimple record type token for a kind we can publish. TXT/A/AAAA/CNAME
@@ -145,14 +154,13 @@ impl DnsimpleProvider {
 	async fn list_page(&self, zone: &str) -> Result<Vec<Record>, ProviderError> {
 		let mut all = Vec::new();
 		for page in 1.. {
-			let url = format!(
-				"{}/zones/{}/records?per_page={PER_PAGE}&page={page}",
-				self.url(""),
-				zone,
-			);
+			let url = self
+				.records_url(zone, None)?
+				.with_query("per_page", &PER_PAGE.to_string())
+				.with_query("page", &page.to_string());
 			let response = self
 				.client
-				.get(&url)
+				.get(url.into_url())
 				.bearer_auth(self.secret.token())
 				.send()
 				.await
@@ -262,7 +270,7 @@ impl DnsimpleProvider {
 			})
 			.to_string()
 		};
-		let url = self.url(&format!("/zones/{}/records", zone));
+		let url = self.records_url(zone, None)?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
@@ -275,9 +283,10 @@ impl DnsimpleProvider {
 		};
 		let existing = self.find_id(zone, &relative, kind, lookup_value).await?;
 		let request = if let Some(id) = existing {
-			self.client.patch(format!("{url}/{id}"))
+			self.client
+				.patch(self.records_url(zone, Some(id))?.into_url())
 		} else {
-			self.client.post(&url)
+			self.client.post(url.into_url())
 		};
 		let response = request
 			.bearer_auth(self.secret.token())
@@ -309,8 +318,8 @@ impl DnsimpleProvider {
 				.map(|r| r.id)
 				.collect();
 			for id in to_delete {
-				let url = self.url(&format!("/zones/{}/records/{id}", zone));
-				self.delete_by_id(&url).await?;
+				let url = self.records_url(zone, Some(id))?;
+				self.delete_by_id(url).await?;
 			}
 			return Ok(());
 		}
@@ -321,14 +330,14 @@ impl DnsimpleProvider {
 		let Some(id) = self.find_id(zone, &relative, kind, lookup_value).await? else {
 			return Ok(()); // already absent: idempotent.
 		};
-		let url = self.url(&format!("/zones/{}/records/{id}", zone));
-		self.delete_by_id(&url).await
+		let url = self.records_url(zone, Some(id))?;
+		self.delete_by_id(url).await
 	}
 
-	async fn delete_by_id(&self, url: &str) -> Result<(), ProviderError> {
+	async fn delete_by_id(&self, url: HttpsUrl) -> Result<(), ProviderError> {
 		let response = self
 			.client
-			.delete(url)
+			.delete(url.into_url())
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
@@ -440,3 +449,7 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "dnsimple_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dnsimple_tests_path.rs"]
+mod path_tests;

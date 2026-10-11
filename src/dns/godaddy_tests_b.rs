@@ -187,7 +187,7 @@ async fn zone_with_a_trailing_dot_is_normalised_to_a_dotless_path() {
 		"sk_under_test_secret".to_string(),
 		"example.org.".to_string(),
 	)
-	.with_base(base);
+	.with_base(crate::net::HttpsUrl::loopback_http(&base).unwrap());
 	provider
 		.upsert("example.org", txt("example.org", "v=spf1 -all"))
 		.await
@@ -358,7 +358,7 @@ async fn fetch_set_does_not_embed_response_body_in_the_error() {
 		"sk_under_test_secret".to_string(),
 		"example.org".to_string(),
 	)
-	.with_base(base);
+	.with_base(crate::net::HttpsUrl::loopback_http(&base).unwrap());
 	let err = provider
 		.upsert(
 			"example.org",

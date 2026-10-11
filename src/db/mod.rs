@@ -146,6 +146,21 @@ pub async fn connect(
 	max_connections: u32,
 	password_file: Option<&Path>,
 ) -> Result<PgPool, DbError> {
+	let pool = open(url, tls, max_connections, password_file).await?;
+	migrate(&pool).await?;
+	Ok(pool)
+}
+
+/// Everything [`connect`] does except applying migrations: build the pool the
+/// same way (URL, password file, forced TLS), connect, and check the server's
+/// version floor. A read-only health check uses this so that looking at the
+/// database never changes its schema.
+pub async fn open(
+	url: &str,
+	tls: DatabaseTls,
+	max_connections: u32,
+	password_file: Option<&Path>,
+) -> Result<PgPool, DbError> {
 	let mut opts: PgConnectOptions =
 		PgConnectOptions::from_str(url).map_err(DbError::InvalidUrl)?;
 	if let Some(path) = password_file {
@@ -178,7 +193,6 @@ pub async fn connect(
 		major,
 		"connected to PostgreSQL; major version is at or above the floor"
 	);
-	migrate(&pool).await?;
 	Ok(pool)
 }
 

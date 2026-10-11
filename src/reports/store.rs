@@ -21,6 +21,7 @@ use std::io::Write;
 use std::path::Path;
 
 use super::Kind;
+use crate::util::path_containment::{contained, contained_child, contained_subdir};
 
 /// Append `report` as one JSON line to
 /// `{data_dir}/reports/{kind}/{day}/{org}.jsonl`. `org` must come from
@@ -35,12 +36,14 @@ pub fn append(
 	org: &str,
 	report: &impl serde::Serialize,
 ) -> std::io::Result<()> {
-	let dir = data_dir.join("reports").join(kind.dir_name()).join(day);
+	let reports = contained(data_dir, &data_dir.join("reports"))?;
+	let kind_dir = contained_subdir(&reports, kind.dir_name())?;
+	let dir = contained_subdir(&kind_dir, day)?;
 	std::fs::create_dir_all(&dir)?;
 	set_owner_only_dir(&dir)?;
 	set_owner_only_dir(dir.parent().expect("kind dir"))?;
 	set_owner_only_dir(dir.parent().and_then(|p| p.parent()).expect("reports dir"))?;
-	let path = dir.join(format!("{org}.jsonl"));
+	let path = contained_child(&dir, &format!("{org}.jsonl"))?;
 	let mut line = serde_json::to_vec(report)
 		.map_err(|e| std::io::Error::other(format!("serialize report: {e}")))?;
 	line.push(b'\n');
@@ -88,7 +91,9 @@ fn set_owner_only_dir(_path: &Path) -> std::io::Result<()> {
 /// directory is removed when `today - directory > days`.
 pub fn prune(data_dir: &Path, today: &str, days: u32) {
 	for bucket in ["dmarc", "tlsrpt"] {
-		let root = data_dir.join("reports").join(bucket);
+		let Ok(root) = contained(data_dir, &data_dir.join("reports").join(bucket)) else {
+			continue;
+		};
 		let Ok(entries) = crate::util::fs_walk::read_dir(&root) else {
 			continue;
 		};

@@ -3,6 +3,7 @@
 use super::command::Command;
 use super::session::{Backend, Response, Session};
 use crate::smtp::auth::tests::fixture_password;
+use crate::test_fixtures as fixtures;
 use std::cell::RefCell;
 
 /// In-memory backend: one fixed credential, a fixed inbox, and a record of
@@ -119,7 +120,7 @@ fn rejects_commands_before_authentication() {
 fn bad_password_fails_without_oracle() {
 	let mut session = Session::new(FakeBackend::new(inbox()));
 	session.handle(Command::User("alice".into()));
-	let r = session.handle(Command::Pass("wrong".into()));
+	let r = session.handle(Command::Pass(fixtures::second_password().into()));
 	assert_eq!(r, Response::Err("authentication failed".to_string()));
 	// Still in AUTHORIZATION: message commands stay rejected.
 	assert!(matches!(session.handle(Command::Stat), Response::Err(_)));
@@ -224,7 +225,7 @@ fn quit_in_authorization_closes() {
 fn pass_without_user_errors() {
 	let mut session = Session::new(FakeBackend::new(inbox()));
 	assert!(matches!(
-		session.handle(Command::Pass("x".into())),
+		session.handle(Command::Pass(fixtures::password().into())),
 		Response::Err(_)
 	));
 }
@@ -270,7 +271,7 @@ fn noop_and_user_pass_after_login() {
 		Response::Err(_)
 	));
 	assert!(matches!(
-		session.handle(Command::Pass("x".into())),
+		session.handle(Command::Pass(fixtures::password().into())),
 		Response::Err(_)
 	));
 }

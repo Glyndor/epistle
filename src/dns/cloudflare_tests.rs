@@ -82,7 +82,7 @@ async fn mock(records: Vec<serde_json::Value>) -> (CloudflareProvider, Shared) {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = CloudflareProvider::new(ScopedSecret::new("example.org", "tok"))
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 

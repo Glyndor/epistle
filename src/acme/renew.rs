@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -16,21 +17,23 @@ use base64::engine::general_purpose::STANDARD as B64;
 use super::client::{AcmeClient, AcmeError};
 use super::http01::ChallengeStore;
 use super::jws::AccountKey;
+use super::renew_request::{Backoff, Issuer, Outcome, cycle};
 use super::transport::HttpTransport;
 use crate::tls::ReloadableAcceptor;
 
 /// Assumed certificate lifetime (Let's Encrypt issues 90-day certs).
 const LIFETIME_DAYS: u64 = 90;
-/// How often the loop wakes to check for renewal.
-const CHECK_INTERVAL: Duration = Duration::from_secs(12 * 3600);
+/// How often the loop wakes: often enough to serve an operator's renewal
+/// request promptly; scheduled failures back off for much longer.
+const CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 fn account_key_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("account.key")
 }
-fn cert_path(data_dir: &Path) -> PathBuf {
+pub(crate) fn cert_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("cert.pem")
 }
-fn key_path(data_dir: &Path) -> PathBuf {
+pub(crate) fn key_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("key.pem")
 }
 
@@ -81,8 +84,13 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 }
 
 /// Whether a certificate should be (re)issued now: absent, unreadable, or
-/// within `renew_before_days` of its assumed expiry.
+/// within `renew_before_days` of its X.509 expiry. If parsing fails, assume
+/// a 90-day lifetime from the file modification time.
 pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> bool {
+	if let Some(expires) = certificate_expiry(&cert_path(data_dir)) {
+		let window = renew_before_days.saturating_mul(86_400);
+		return now_secs >= expires.saturating_sub(window);
+	}
 	let Ok(meta) = fs::metadata(cert_path(data_dir)) else {
 		return true;
 	};
@@ -93,8 +101,23 @@ pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> 
 		.duration_since(UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	let renew_at = issued + LIFETIME_DAYS.saturating_sub(renew_before_days) * 86_400;
+	let renew_at = issued.saturating_add(
+		LIFETIME_DAYS
+			.saturating_sub(renew_before_days)
+			.saturating_mul(86_400),
+	);
 	now_secs >= renew_at
+}
+
+fn certificate_expiry(path: &Path) -> Option<u64> {
+	use rustls_pki_types::CertificateDer;
+	use rustls_pki_types::pem::PemObject;
+	use x509_parser::prelude::FromDer;
+
+	// The leaf is first in the persisted ACME certificate chain.
+	let der = CertificateDer::from_pem_file(path).ok()?;
+	let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der.as_ref()).ok()?;
+	Some(u64::try_from(cert.validity().not_after.timestamp()).unwrap_or(0))
 }
 
 fn now_secs() -> u64 {
@@ -151,8 +174,34 @@ async fn issue(
 	Ok(())
 }
 
-/// Renewal loop: check on startup and every 12 hours, issuing when due. Errors
-/// are logged and retried at the next tick — a CA outage never crashes serving.
+/// The production [`Issuer`]: one ACME order, then install the result.
+struct AcmeIssuer {
+	directory_url: String,
+	contacts: Vec<String>,
+	domains: Vec<String>,
+	store: ChallengeStore,
+	data_dir: PathBuf,
+	reloadable: ReloadableAcceptor,
+	tlsa: Option<TlsaPublisher>,
+}
+
+impl Issuer for AcmeIssuer {
+	fn issue(&self) -> Pin<Box<dyn Future<Output = Result<(), AcmeError>> + Send + '_>> {
+		Box::pin(issue(
+			&self.directory_url,
+			&self.contacts,
+			&self.domains,
+			&self.store,
+			&self.data_dir,
+			&self.reloadable,
+			self.tlsa.as_ref(),
+		))
+	}
+}
+
+/// Renewal loop: wakes every minute and either serves an operator's request or
+/// issues when the certificate is inside its renewal window. Errors are logged
+/// and retried after a back-off; a CA outage never crashes serving.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
 	directory_url: String,
@@ -164,18 +213,25 @@ pub async fn run(
 	renew_before_days: u64,
 	tlsa: Option<TlsaPublisher>,
 ) {
+	let issuer = AcmeIssuer {
+		directory_url,
+		contacts,
+		domains,
+		store,
+		data_dir: data_dir.clone(),
+		reloadable,
+		tlsa,
+	};
+	let mut backoff = Backoff::default();
 	loop {
-		if needs_renewal(&data_dir, renew_before_days, now_secs())
-			&& let Err(error) = issue(
-				&directory_url,
-				&contacts,
-				&domains,
-				&store,
-				&data_dir,
-				&reloadable,
-				tlsa.as_ref(),
-			)
-			.await
+		if let Outcome::Failed(error) = cycle(
+			&issuer,
+			&data_dir,
+			renew_before_days,
+			now_secs(),
+			&mut backoff,
+		)
+		.await
 		{
 			tracing::warn!(%error, "ACME renewal failed; will retry");
 		}
@@ -263,3 +319,11 @@ mod tests {
 		assert!(!needs_renewal(dir.path(), 30, 0));
 	}
 }
+
+#[cfg(test)]
+#[path = "renew_tests_expiry.rs"]
+mod tests_expiry;
+
+#[cfg(test)]
+#[path = "renew_tests_request.rs"]
+mod tests_request;

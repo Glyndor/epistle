@@ -30,6 +30,7 @@ pub mod dnsbl;
 pub mod domain;
 pub mod imap;
 pub mod jwt;
+pub mod log_id;
 pub mod managesieve;
 pub mod metrics;
 pub mod mtasts;
@@ -52,3 +53,6 @@ pub mod totp;
 pub mod util;
 pub mod webdav;
 pub mod webhook;
+
+#[cfg(test)]
+mod test_fixtures;

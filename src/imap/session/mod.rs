@@ -1,6 +1,6 @@
 //! IMAP session state machine (sans-IO).
 
-use super::command::{Command, FetchItem, ParseError, SearchKey, StoreMode, Tagged};
+use super::command::{Command, FetchItem, Line, ParseError, SearchKey, StoreMode, Tagged};
 use super::mailbox;
 
 mod acl;
@@ -43,8 +43,14 @@ impl Session {
 
 	/// Feed one command line (CRLF stripped).
 	pub fn command_line(&mut self, line: &str) -> Output {
-		let tagged = match super::command::parse(line) {
-			Ok(tagged) => tagged,
+		let tagged = match super::command::parse_line(line) {
+			Ok(Line::Command(tagged)) => tagged,
+			Ok(Line::Login(request)) => {
+				return self.login(&request.tag, request.username(), request.password());
+			}
+			Ok(Line::Authenticate(request)) => {
+				return self.auth(&request.tag, &request.mechanism, request.initial);
+			}
 			Err(ParseError::Malformed) => {
 				return Output::text("* BAD malformed command\r\n".to_string());
 			}
@@ -139,8 +145,6 @@ impl Session {
 			Command::Logout => Output::closing(format!(
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
-			Command::Login { username, password } => self.login(&tag, &username, &password),
-			Command::Authenticate { mechanism, initial } => self.auth(&tag, &mechanism, initial),
 			Command::List {
 				pattern,
 				return_status,

@@ -2,7 +2,15 @@ use super::*;
 use crate::imap::archive;
 use crate::imap::mailbox::{self, Flag, Snapshot};
 use crate::storage::MessageCrypto;
+use crate::util::path_component::{AccountName, AccountRoot};
 use uuid::Uuid;
+
+fn root(data_dir: &Path, account: &str) -> AccountRoot {
+	AccountName::new(account)
+		.expect("valid account")
+		.root(data_dir)
+		.expect("account root")
+}
 
 fn delivered(dir: &Path, account: &str, mailbox: &str, body: &[u8]) -> Uuid {
 	mailbox::append(dir, account, mailbox, &[], body, &MessageCrypto::disabled()).expect("append")
@@ -33,7 +41,7 @@ fn expunge_with_zero_retention_deletes_in_the_act() {
 		"zero retention must not create an archive directory",
 	);
 	assert!(
-		archive::list(&dir.path().join("accounts/alice"))
+		archive::list(&root(dir.path(), "alice"))
 			.expect("list")
 			.is_empty()
 	);
@@ -113,7 +121,7 @@ fn restore_roundtrips_message_back_to_mailbox_with_fresh_uid() {
 	.expect("snapshot");
 	assert_eq!(snapshot.len(), 1);
 	// The archive is empty.
-	let entries = archive::list(&dir.path().join("accounts/alice")).expect("list");
+	let entries = archive::list(&root(dir.path(), "alice")).expect("list");
 	assert!(
 		entries.is_empty(),
 		"restored entry must be gone from archive"
@@ -188,7 +196,7 @@ fn sweep_with_injected_clock_purges_only_old_entries() {
 	let removed = archive::sweep(dir.path(), 30, now).expect("sweep");
 	assert_eq!(removed, 1, "exactly the older entry must be purged");
 
-	let entries = archive::list(&dir.path().join("accounts/alice")).expect("list");
+	let entries = archive::list(&root(dir.path(), "alice")).expect("list");
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0].id, young_id);
 	// The first deletion id is gone from disk.
@@ -216,7 +224,7 @@ fn sweep_with_zero_retention_is_a_noop() {
 	// Retention flipped to 0 — sweep must not touch the existing entry.
 	let removed = archive::sweep(dir.path(), 0, 1_000 + 1_000 * 86_400).expect("sweep");
 	assert_eq!(removed, 0);
-	let entries = archive::list(&dir.path().join("accounts/alice")).expect("list");
+	let entries = archive::list(&root(dir.path(), "alice")).expect("list");
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0].id, id);
 }
@@ -258,7 +266,7 @@ fn archived_bytes_are_identical_to_mailbox_when_encrypted() {
 #[test]
 fn archive_listing_is_empty_when_archive_directory_is_missing() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let entries = archive::list(&dir.path().join("accounts/alice")).expect("list");
+	let entries = archive::list(&root(dir.path(), "alice")).expect("list");
 	assert!(entries.is_empty());
 }
 
@@ -325,7 +333,12 @@ fn expunge_through_a_real_session_archives_rather_than_deletes() {
 		account.join(".archive").join(format!("{id}.eml")).exists(),
 		"the session path must archive, not delete",
 	);
-	assert_eq!(archive::list(&account).expect("list").len(), 1);
+	assert_eq!(
+		archive::list(&root(dir.path(), "alice"))
+			.expect("list")
+			.len(),
+		1
+	);
 }
 
 #[test]
@@ -390,11 +403,13 @@ fn purge_reclaims_a_sidecar_whose_body_never_arrived() {
 	std::fs::write(&sidecar, b"1000\nINBOX\n").expect("sidecar");
 
 	assert!(
-		archive::list(&account).expect("list").is_empty(),
+		archive::list(&root(dir.path(), "alice"))
+			.expect("list")
+			.is_empty(),
 		"a bodiless entry cannot be restored, so it must not be listed",
 	);
 
-	let removed = archive::purge(&account, 86_400, 1_000_000).expect("purge");
+	let removed = archive::purge(&root(dir.path(), "alice"), 86_400, 1_000_000).expect("purge");
 	assert_eq!(removed, 0, "a bodiless entry is not a purged message");
 	assert!(
 		!sidecar.exists(),
@@ -417,7 +432,7 @@ fn the_body_is_the_last_thing_moved_into_the_archive() {
 	let archive = account.join(".archive");
 	std::fs::create_dir_all(archive.join(format!("{id}.eml"))).expect("block body");
 
-	archive::archive_message(&account, &inbox, "INBOX", id, 1_000)
+	archive::archive_message(&root(dir.path(), "alice"), &inbox, "INBOX", id, 1_000)
 		.expect_err("moving the body onto a directory must fail");
 
 	assert!(

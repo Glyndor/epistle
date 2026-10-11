@@ -37,10 +37,13 @@ pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
 
 mod build;
 
+#[path = "mutators.rs"]
+mod mutators;
+
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
-pub use file_watcher::FileWatcher;
+pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -97,6 +100,13 @@ pub struct DynamicAccount {
 	/// to suspend an account without removing its mailbox.
 	#[serde(default)]
 	pub disabled: bool,
+	/// Storage quota (bytes) for this account. `None` (the default, and the
+	/// value on `accounts.toml` files written before the field existed)
+	/// falls back to the domain quota, then the server default, exactly the
+	/// way static `Account::quota_bytes = None` does. IMAP `GETQUOTAROOT` and
+	/// the delivery quota check both read the rebuilt directory's quota map.
+	#[serde(default)]
+	pub quota_bytes: Option<u64>,
 	/// Restrict which authentication protocols this account may sign in
 	/// through. `None` (the default) means every protocol the directory
 	/// knows about — the pre-restriction behaviour. When set, only the
@@ -126,6 +136,7 @@ impl DynamicAccount {
 			scram: Some(scram),
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 	}
@@ -395,23 +406,8 @@ impl AccountStore {
 		if name_taken {
 			return Err(StoreError::Duplicate(account.name.clone()));
 		}
-		let mut known_addresses: Vec<String> = self
-			.static_accounts
-			.iter()
-			.flat_map(|existing| existing.addresses.iter())
-			.chain(
-				dynamic
-					.iter()
-					.flat_map(|existing| existing.addresses.iter()),
-			)
-			.map(|address| address.to_ascii_lowercase())
-			.collect();
-		known_addresses.sort();
 		for raw in &account.addresses {
-			if known_addresses
-				.binary_search(&raw.to_ascii_lowercase())
-				.is_ok()
-			{
+			if self.address_taken(&dynamic, None, raw) {
 				return Err(StoreError::Duplicate(raw.clone()));
 			}
 		}
@@ -597,11 +593,19 @@ impl AccountStore {
 		// work runs. The set rebuilds on every directory swap, mirroring
 		// how totp, scram and quotas are wired.
 		let disabled = build::disabled(&dynamic);
-		let account_quotas = self.static_accounts.iter().filter_map(|account| {
-			account
-				.quota_bytes
-				.map(|bytes| (account.name.clone(), bytes))
-		});
+		// Quotas feed into the directory as (name, bytes) pairs. Static
+		// chains first so a dynamic quota can overwrite a static one when
+		// the names collide (the directory's HashMap keeps the last writer,
+		// mirroring how addresses and password hashes merge).
+		let account_quotas = self
+			.static_accounts
+			.iter()
+			.filter_map(|account| {
+				account
+					.quota_bytes
+					.map(|bytes| (account.name.clone(), bytes))
+			})
+			.chain(build::quota_bytes(&dynamic));
 		let forwards = self
 			.static_accounts
 			.iter()
@@ -669,3 +673,7 @@ impl AccountStore {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "account_mutators_tests.rs"]
+mod account_mutators_tests;

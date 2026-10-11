@@ -112,6 +112,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add alice");
@@ -229,6 +230,7 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add alice");
@@ -303,6 +305,7 @@ fn cli_remove_completes_without_a_bayes_store() {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add alice");

@@ -180,7 +180,7 @@ mod tick_tests {
 			ReloadableSigner::new(signer),
 			provider.clone(),
 			"example.org".to_string(),
-			"example.org".to_string(),
+			vec!["example.org".to_string()],
 			30 * DAY,
 			DAY,
 		);
@@ -269,7 +269,7 @@ mod tick_tests {
 			ReloadableSigner::new(signer),
 			provider.clone(),
 			"example.org".to_string(),
-			"example.org".to_string(),
+			vec!["example.org".to_string()],
 			30 * DAY,
 			DAY,
 		);

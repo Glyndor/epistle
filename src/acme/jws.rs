@@ -121,6 +121,7 @@ impl AccountKey {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::test_fixtures as fixtures;
 	use ring::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey};
 
 	#[test]
@@ -147,7 +148,7 @@ mod tests {
 		let jws_str = key
 			.sign(
 				"https://acme.example/order",
-				"nonce123",
+				fixtures::nonce(),
 				br#"{"x":1}"#,
 				None,
 			)
@@ -201,7 +202,7 @@ mod tests {
 		let jws_str = key
 			.sign(
 				"https://acme.example/order",
-				"n",
+				fixtures::nonce(),
 				b"{}",
 				Some("https://acme.example/acct/1"),
 			)

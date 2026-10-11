@@ -191,7 +191,7 @@ async fn mock(initial: Vec<serde_json::Value>) -> (DnsimpleProvider, Shared) {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = DnsimpleProvider::new(ScopedSecret::new(ZONE, "tok"), ACCOUNT)
-		.with_base(format!("http://{addr}/v2"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}/v2")).unwrap());
 	(provider, state)
 }
 

@@ -32,6 +32,8 @@ mod blobs;
 mod download;
 mod email;
 pub use download::download;
+mod limits;
+pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
 mod methods;
 mod objects;
 pub mod websocket;
@@ -84,9 +86,9 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 			CORE_CAPABILITY: {
 				"maxSizeUpload": 50_000_000u64,
 				"maxConcurrentUpload": 4u32,
-				"maxSizeRequest": 10_000_000u64,
+				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
 				"maxConcurrentRequests": 4u32,
-				"maxCallsInRequest": 16u32,
+				"maxCallsInRequest": MAX_CALLS_IN_REQUEST as u32,
 				"maxObjectsInGet": 500u32,
 				"maxObjectsInSet": 500u32,
 				"collationAlgorithms": [],
@@ -147,16 +149,31 @@ pub async fn api(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<Request>,
-) -> Json<Response> {
-	Json(dispatch_request(&state, &auth, request))
+) -> axum::response::Response {
+	match dispatch_request(&state, &auth, request) {
+		Ok(response) => Json(response).into_response(),
+		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
+	}
 }
 
 /// Dispatch a request envelope's method calls and collect the responses
 /// (RFC 8620 §3.3–§3.7). Shared by the HTTP `POST /jmap/api` handler and the
 /// WebSocket transport (RFC 8887), so the two never diverge. Pure aside from the
 /// data-dir/state mutations the individual methods perform.
-pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) -> Response {
-	let mut method_responses = Vec::with_capacity(request.method_calls.len());
+///
+/// A request over `maxCallsInRequest` is refused here, before anything is
+/// allocated or run, with the RFC 8620 `limit` problem each transport
+/// returns in its own framing.
+pub fn dispatch_request(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	request: Request,
+) -> Result<Response, Value> {
+	let calls = request.method_calls.len();
+	if calls > limits::MAX_CALLS_IN_REQUEST {
+		return Err(limits::too_many_calls());
+	}
+	let mut method_responses = Vec::with_capacity(calls);
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
@@ -235,7 +252,7 @@ pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) 
 		resolver.record_result(&response);
 		method_responses.push(response);
 	}
-	Response { method_responses }
+	Ok(Response { method_responses })
 }
 
 /// The JMAP spec does not define a "forbidden" method error; `forbidden` is
@@ -287,8 +304,8 @@ pub(crate) struct RequestLimits {
 
 /// The default per-request limits, matching the Session resource.
 pub(crate) const MAX_REQUEST_LIMITS: RequestLimits = RequestLimits {
-	// 10 MiB, mirroring the Session's `maxSizeRequest`.
-	max_size_request: 10 * 1024 * 1024,
+	// The Session's `maxSizeRequest`.
+	max_size_request: MAX_SIZE_REQUEST as u64,
 	// maxObjectsInGet (500) + maxObjectsInSet (500). The cap is on
 	// total resolved leaves, not on objects returned by a single
 	// method, so this is the conservative sum.

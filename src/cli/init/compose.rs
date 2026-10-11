@@ -77,7 +77,7 @@ pub(super) const DISTROLESS_BASE_IMAGE: &str = "gcr.io/distroless/static-debian1
 /// runs it as the container's entrypoint. A source build linked
 /// against glibc uses a different path and is rejected by the host
 /// binary validator below.
-pub(super) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
+pub(crate) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
 
 /// Resolve the mail image the compose file will render. The
 /// default is the digest-pinned distroless base; an explicit
@@ -371,9 +371,7 @@ pub(super) fn ensure_compose_file(
 	// the tests pin on: the rendered file carries a trailing
 	// newline, two-space indentation, and the field order of the
 	// struct definition above.
-	let mut bytes = serde_json::to_string_pretty(&composed)
-		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-	bytes.push('\n');
+	let bytes = render_document(&composed)?;
 	match fs::read(&path) {
 		Ok(existing) if existing == bytes.as_bytes() => {
 			report.steps.push(ReportStep::ConfigIdentical(path.clone()));
@@ -409,10 +407,7 @@ pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, Ap
 	let listeners = listeners_to_write(answers)?;
 	let published_ports = published_ports_for_listeners(&listeners);
 	let composed = ComposeFile::build(answers, published_ports, database);
-	let mut bytes = serde_json::to_string_pretty(&composed)
-		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-	bytes.push('\n');
-	Ok(bytes)
+	render_document(&composed)
 }
 
 /// Render the desired compose file after validating the host
@@ -596,6 +591,10 @@ mod tests_mail;
 mod tests_mail_ports;
 
 #[cfg(test)]
+#[path = "compose_tests_mail_probes.rs"]
+mod tests_mail_probes;
+
+#[cfg(test)]
 #[path = "compose_tests_db.rs"]
 mod tests_db;
 
@@ -706,3 +705,46 @@ mod host_binary_tests;
 #[cfg(test)]
 #[path = "apply_host_binary_tests.rs"]
 mod apply_host_binary_tests;
+
+/// Render either a generated compose document or an edited document.
+fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
+	let mut bytes = serde_json::to_string_pretty(document)
+		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
+	bytes.push('\n');
+	Ok(bytes)
+}
+
+/// Update the generated mail port map, returning whether a stack exists.
+pub(crate) fn update_listener_ports(
+	data_dir: &Path,
+	listeners: &[Listener],
+) -> Result<bool, ApplyError> {
+	let path = compose_file_path(data_dir);
+	let existing = match fs::read(&path) {
+		Ok(bytes) => bytes,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+		Err(error) => return Err(ApplyError::ConfigRead(path, error)),
+	};
+	let mut document: serde_json::Value = serde_json::from_slice(&existing)
+		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
+	let mail = document
+		.get_mut("services")
+		.and_then(|services| services.get_mut("mail"))
+		.and_then(serde_json::Value::as_object_mut)
+		.ok_or_else(|| {
+			ApplyError::ConfigEncode("compose services.mail must be an object".into())
+		})?;
+	let ports = serde_json::json!(published_ports_for_listeners(listeners));
+	if mail.get("ports") == Some(&ports) {
+		return Ok(true);
+	}
+	mail.insert("ports".into(), ports);
+	let bytes = render_document(&document)?;
+	crate::storage::write_secret(&path, bytes.as_bytes())
+		.map_err(|error| ApplyError::ConfigWrite(path, error))?;
+	Ok(true)
+}
+
+#[cfg(test)]
+#[path = "compose_tests_service.rs"]
+mod tests_service;

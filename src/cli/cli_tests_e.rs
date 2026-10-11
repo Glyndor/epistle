@@ -82,6 +82,7 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add alice");
@@ -167,6 +168,7 @@ fn cli_remove_error_lines_do_not_pollute_stdout() {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add alice");

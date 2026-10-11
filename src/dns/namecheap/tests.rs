@@ -102,7 +102,9 @@ pub(super) async fn mock(
 	});
 	let provider = NamecheapProvider::new(ScopedSecret::new("example.org", "user:key"))
 		.expect("parse token")
-		.with_api_url(format!("http://{addr}/xml.response"));
+		.with_api_url(
+			crate::net::HttpsUrl::loopback_http(&format!("http://{addr}/xml.response")).unwrap(),
+		);
 	(provider, state)
 }
 

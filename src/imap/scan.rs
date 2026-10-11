@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::imap::mailbox::MessageRef;
 use crate::storage::MessageCrypto;
+use crate::util::path_component::{MessageExt, message_file};
 
 /// Scan `account_dir` and build a `Vec<MessageRef>` in UUID-sorted order.
 ///
@@ -48,7 +49,7 @@ pub(super) fn scan_mailbox(
 	let mut uid_counter = initial_counter;
 	let mut messages = Vec::with_capacity(ids.len());
 	for id in &ids {
-		let path = account_dir.join(format!("{id}.eml"));
+		let path = message_file(account_dir, *id, MessageExt::Eml)?;
 		let meta = std::fs::metadata(&path);
 		// RFC822.SIZE must be the plaintext size a client sees, not the
 		// on-disk envelope size, so subtract the fixed crypto overhead for an

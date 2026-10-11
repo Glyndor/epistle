@@ -39,7 +39,9 @@ fn new_in_last_day_counts_only_recent_markers() {
 	// Backdate the marker two days so it sits outside the 24h window.
 	// `File::set_modified` is stable since Rust 1.75 and is the
 	// path that needs no `filetime` dependency.
-	let marker = store.marker("alice@example.org", "fresh@example.net");
+	let marker = store
+		.marker("alice@example.org", "fresh@example.net")
+		.expect("marker path");
 	let stale = std::time::SystemTime::now() - Duration::from_secs(2 * 86400);
 	std::fs::File::options()
 		.write(true)
@@ -102,5 +104,10 @@ fn remove_all_for_leaves_other_accounts() {
 	// Missing account is `Ok(0)`, not an error.
 	assert_eq!(store.remove_all_for("ghost@example.org").expect("ghost"), 0);
 	// The empty parent dir is gone, so a recreated account starts clean.
-	assert!(!store.account_dir("alice@example.org").exists());
+	assert!(
+		!store
+			.account_dir("alice@example.org")
+			.expect("account dir")
+			.exists()
+	);
 }

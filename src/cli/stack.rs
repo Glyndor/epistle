@@ -116,6 +116,13 @@ pub(super) enum StackAction {
 		/// Optional service name to restart; passed as a positional.
 		service: Option<String>,
 	},
+	/// `podup -f <compose> up -d <service>`, recreate one service from
+	/// the current compose file. A restart keeps the container as it was
+	/// created, so a change to its published ports needs this.
+	Recreate {
+		/// The service to recreate.
+		service: String,
+	},
 }
 
 /// Run the `stack` subcommand. The config is loaded here only to read
@@ -232,6 +239,9 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
 			run_inherited(podup, &compose, &extra_ref)
 		}
+		StackAction::Recreate { service } => {
+			run_inherited(podup, &compose, &["up", "-d", &service])
+		}
 	}
 }
 
@@ -239,7 +249,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 /// carries. The shape is fixed by `epistle init` and the only thing
 /// this build reads from disk, so the helper is the single source of
 /// truth and the test for "missing compose file" can rebuild it.
-fn compose_path(data_dir: &Path) -> PathBuf {
+pub(super) fn compose_path(data_dir: &Path) -> PathBuf {
 	data_dir.join(COMPOSE_SUBDIR).join(COMPOSE_FILE)
 }
 
@@ -410,7 +420,7 @@ fn exit_code_from_status(status: &std::process::ExitStatus) -> ExitCode {
 /// The argv every subcommand starts from. Kept in one place so a
 /// future change to the compose-file flag (today `-f`) is a single
 /// edit, and the tests that pin the argv can rebuild it.
-fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
+pub(super) fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
 	let mut command = Command::new(podup);
 	command.arg("-f").arg(compose);
 	let override_path = compose.with_file_name("compose.override.yaml");

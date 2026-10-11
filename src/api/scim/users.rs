@@ -249,6 +249,7 @@ pub async fn create_user(
 		scram,
 		totp_secret: None,
 		disabled: !active,
+		quota_bytes: None,
 		allowed_protocols: None,
 	};
 	state.store().add(account).map_err(store_to_scim)?;
@@ -329,6 +330,7 @@ pub async fn put_user(
 				scram: existing.scram.clone(),
 				totp_secret: existing.totp_secret.clone(),
 				disabled: !body.active,
+				quota_bytes: None,
 				allowed_protocols: existing.allowed_protocols.clone(),
 			},
 		)

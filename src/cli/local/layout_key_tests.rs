@@ -32,14 +32,10 @@ fn empty_key_pem_is_treated_as_missing_and_regenerated() {
 	let cert_after = std::fs::read(&cert_path).expect("read cert after");
 	// `assert_ne!` would Debug-print both PEM byte arrays on
 	// failure and dump the public key material into the CI log.
-	// The boolean form names the outcome and reports the lengths
-	// only, which is enough to diagnose a stuck cert step.
+	// The boolean form names the outcome and carries no value at all.
 	assert!(
 		cert_before != cert_after,
-		"cert.pem must be regenerated alongside key.pem so the pair is consistent \
-		 (lengths {} and {})",
-		cert_before.len(),
-		cert_after.len(),
+		"cert.pem must be regenerated alongside key.pem so the pair is consistent"
 	);
 	let _ = load_for_test(&dir.path().join("mail.toml")).expect("mail.toml loads");
 }

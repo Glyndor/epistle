@@ -340,8 +340,7 @@ fn apply_creates_missing_config_parent_dir_with_mode_0750() {
 		plan.steps
 			.iter()
 			.any(|s| matches!(s, PlanStep::ConfigDir { path } if path == &etc)),
-		"plan must list the missing parent as a ConfigDir step; plan was {:?}",
-		plan.steps
+		"plan must list the missing parent as a ConfigDir step"
 	);
 	let outcome = apply(&answers);
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);
@@ -484,8 +483,7 @@ fn plan_lists_directory_steps_before_writes() {
 		} else if let Some(last) = last_directory_index {
 			assert!(
 				i > last,
-				"write step at index {i} appears before a directory step: {:?}",
-				plan.steps
+				"write step at index {i} appears before a directory step"
 			);
 		}
 	}

@@ -404,7 +404,7 @@ async fn score_falls_back_to_shared_below_the_threshold() {
 		.expect("score for account");
 	assert!(
 		(account_score - shared_score).abs() < 1e-9,
-		"account {account_score} vs shared {shared_score}"
+		"an untrained account must score like the shared scope"
 	);
 
 	// Cleanup.
@@ -490,9 +490,12 @@ async fn score_uses_the_account_scope_at_the_threshold() {
 		.expect("score shared");
 	assert!(
 		account_score > shared_score,
-		"trained account {account_score} should score its marker higher than the shared scope {shared_score}"
+		"a trained account should score its marker higher than the shared scope"
 	);
-	assert!(account_score > 0.5, "trained account {account_score}");
+	assert!(
+		account_score > 0.5,
+		"a trained account should score its marker as spam"
+	);
 
 	// Cleanup.
 	sqlx::query("DELETE FROM bayes_token WHERE scope = $1")

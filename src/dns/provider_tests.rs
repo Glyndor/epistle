@@ -95,9 +95,18 @@ fn scoped_secret_authorizes_only_its_zone() {
 fn scoped_secret_debug_redacts_token() {
 	let secret = ScopedSecret::new("example.org", "super-secret-token");
 	let rendered = format!("{secret:?}");
-	assert!(rendered.contains("example.org"), "{rendered}");
-	assert!(!rendered.contains("super-secret-token"), "{rendered}");
-	assert!(rendered.contains("***"), "{rendered}");
+	assert!(
+		rendered.contains("example.org"),
+		"the debug form must name the zone"
+	);
+	assert!(
+		!rendered.contains("super-secret-token"),
+		"the debug form must not carry the token"
+	);
+	assert!(
+		rendered.contains("***"),
+		"the debug form must show the redaction marker"
+	);
 }
 
 #[test]

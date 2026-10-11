@@ -98,60 +98,104 @@ pub fn validate(password: &str) -> Result<(), Rejection> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::test_fixtures as fixtures;
 
 	#[test]
 	fn accepts_a_strong_in_range_ascii_password() {
-		// 16 chars, printable ASCII incl. space and punctuation, not breached.
-		assert_eq!(validate("tR9 wq!zP4-mK7vX"), Ok(()));
+		// Runtime credentials must pass the same policy as real account passwords.
+		assert_eq!(validate(fixtures::password()), Ok(()));
 	}
 
 	#[test]
 	fn accepts_the_length_boundaries() {
-		let min = "aB3$".repeat(3); // exactly 12 characters
+		let min = fixtures::printable_ascii(MIN_LENGTH);
 		assert_eq!(min.chars().count(), MIN_LENGTH);
 		assert_eq!(validate(&min), Ok(()));
-		let max = "aB3$".repeat(16); // exactly 64 characters
+		let max = fixtures::printable_ascii(MAX_LENGTH);
 		assert_eq!(max.chars().count(), MAX_LENGTH);
 		assert_eq!(validate(&max), Ok(()));
 	}
 
 	#[test]
-	fn rejects_too_short() {
-		assert_eq!(validate("aB3$aB3$aB3"), Err(Rejection::TooShort)); // 11
-		assert_eq!(validate(""), Err(Rejection::TooShort));
+	fn rejects_one_character_below_the_minimum() {
+		let short = fixtures::printable_ascii(MIN_LENGTH - 1);
+		assert_eq!(short.chars().count(), 11);
+		assert_eq!(validate(&short), Err(Rejection::TooShort));
+		let empty = fixtures::printable_ascii(0);
+		assert!(empty.is_empty(), "shape precondition");
+		assert_eq!(validate(&empty), Err(Rejection::TooShort));
 	}
 
 	#[test]
-	fn rejects_too_long() {
-		let long = "a".repeat(MAX_LENGTH + 1);
+	fn rejects_one_character_above_the_maximum() {
+		let long = fixtures::printable_ascii(MAX_LENGTH + 1);
+		assert_eq!(long.chars().count(), 65);
 		assert_eq!(validate(&long), Err(Rejection::TooLong));
 	}
 
 	#[test]
-	fn rejects_non_ascii_unicode() {
-		// "contraseña" padded to length: the ñ makes it non-ASCII.
-		assert_eq!(validate("contraseña99"), Err(Rejection::IllegalCharacter));
-		assert_eq!(validate("straße straße"), Err(Rejection::IllegalCharacter));
-		// Emoji is well past 12 chars and non-ASCII.
-		assert_eq!(
-			validate("🔒🔒🔒🔒🔒🔒🔒🔒🔒🔒🔒🔒"),
-			Err(Rejection::IllegalCharacter)
-		);
+	fn rejects_a_non_ascii_character_anywhere_in_range() {
+		for len in [MIN_LENGTH, MIN_LENGTH + 1, MAX_LENGTH - 1, MAX_LENGTH] {
+			let text = fixtures::printable_ascii_with(fixtures::non_ascii_char(), len);
+			assert_eq!(text.chars().count(), len, "length precondition");
+			assert!(!text.is_ascii(), "shape precondition");
+			assert_eq!(
+				validate(&text),
+				Err(Rejection::IllegalCharacter),
+				"len {len}"
+			);
+		}
 	}
 
 	#[test]
-	fn rejects_control_characters() {
-		assert_eq!(validate("abcdef\tghijkl"), Err(Rejection::IllegalCharacter));
-		assert_eq!(validate("abcdef\nghijkl"), Err(Rejection::IllegalCharacter));
-		assert_eq!(validate("abcdef\0ghijkl"), Err(Rejection::IllegalCharacter));
+	fn rejects_a_string_made_only_of_non_ascii_characters() {
+		let text: String = (0..MIN_LENGTH)
+			.map(|_| fixtures::non_ascii_char())
+			.collect();
+		assert_eq!(text.chars().count(), MIN_LENGTH);
+		assert!(text.chars().all(|c| !c.is_ascii()), "shape precondition");
+		assert_eq!(validate(&text), Err(Rejection::IllegalCharacter));
 	}
 
 	#[test]
-	fn rejects_a_breached_entry() {
-		// Sample entries that must be present in the bundled list.
-		assert_eq!(validate("password1234"), Err(Rejection::Breached));
-		assert_eq!(validate("123456789012"), Err(Rejection::Breached));
-		assert_eq!(validate("qwertyuiop12"), Err(Rejection::Breached));
+	fn length_is_counted_in_characters_not_bytes() {
+		// MAX_LENGTH multibyte characters are far more than MAX_LENGTH bytes,
+		// yet the length check passes and the character set is what rejects.
+		let text: String = (0..MAX_LENGTH)
+			.map(|_| fixtures::non_ascii_char())
+			.collect();
+		assert_eq!(text.chars().count(), MAX_LENGTH);
+		assert!(text.len() > MAX_LENGTH, "shape precondition");
+		assert_eq!(validate(&text), Err(Rejection::IllegalCharacter));
+	}
+
+	#[test]
+	fn rejects_every_control_character_anywhere_in_range() {
+		let controls = fixtures::control_chars();
+		assert_eq!(controls.len(), 33, "C0 controls plus DEL");
+		for control in controls {
+			let text = fixtures::printable_ascii_with(control, MIN_LENGTH + 1);
+			assert_eq!(text.chars().count(), MIN_LENGTH + 1, "length precondition");
+			assert_eq!(
+				validate(&text),
+				Err(Rejection::IllegalCharacter),
+				"control U+{:04X}",
+				u32::from(control)
+			);
+		}
+	}
+
+	#[test]
+	fn rejects_every_bundled_breached_entry() {
+		assert!(!breached_set().is_empty(), "the bundled list is not empty");
+		for entry in breached_set() {
+			assert_eq!(
+				validate(entry),
+				Err(Rejection::Breached),
+				"bundled entry of {} characters",
+				entry.chars().count()
+			);
+		}
 	}
 
 	#[test]

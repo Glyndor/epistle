@@ -141,7 +141,13 @@ fn handle_request(
 	// actually changed stored mail can be reported (RFC 8887 §5.2).
 	let accounts: Vec<String> = state.accounts().into_iter().map(|a| a.name).collect();
 	let before: Vec<String> = accounts.iter().map(|a| state.account_state(a)).collect();
-	let response = super::dispatch_request(state, auth, request);
+	let response = match super::dispatch_request(state, auth, request) {
+		Ok(response) => response,
+		Err(mut problem) => {
+			problem["@type"] = json!("RequestError");
+			return vec![problem.to_string()];
+		}
+	};
 
 	let mut response_frame = serde_json::Map::new();
 	response_frame.insert("@type".to_string(), json!("Response"));

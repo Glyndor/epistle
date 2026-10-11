@@ -267,3 +267,40 @@ async fn session_advertises_websocket_capability() {
 	assert_eq!(ws["url"], "/jmap/ws", "{body}");
 	assert_eq!(ws["supportsPush"], true, "{body}");
 }
+
+#[test]
+fn request_over_max_calls_in_request_is_refused_before_any_call_runs() {
+	use crate::api::jmap::MAX_CALLS_IN_REQUEST;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = test_state(dir.path(), 0);
+	let mut push = PushState::default();
+	let frame = |count: usize| {
+		let calls: Vec<Value> = (0..count)
+			.map(|i| json!(["Core/echo", {}, format!("c{i}")]))
+			.collect();
+		json!({"@type": "Request", "id": "r1", "methodCalls": calls}).to_string()
+	};
+
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&frame(MAX_CALLS_IN_REQUEST),
+		&mut push,
+	));
+	assert_eq!(reply["@type"], "Response");
+	assert_eq!(
+		reply["methodResponses"].as_array().map(Vec::len),
+		Some(MAX_CALLS_IN_REQUEST)
+	);
+
+	let reply = one(handle_ws_message(
+		&state,
+		&auth_for_test(),
+		&frame(MAX_CALLS_IN_REQUEST + 1),
+		&mut push,
+	));
+	assert_eq!(reply["@type"], "RequestError");
+	assert_eq!(reply["type"], "urn:ietf:params:jmap:error:limit");
+	assert_eq!(reply["limit"], "maxCallsInRequest");
+	assert!(reply.get("methodResponses").is_none(), "{reply}");
+}

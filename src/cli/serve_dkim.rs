@@ -42,7 +42,9 @@ pub(super) fn build_split_with_companions(
 		.with_metrics(metrics.clone());
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	if let Some(dkim) = &config.dkim {
-		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
+		let active = crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
+			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+		let mut signer = crate::dkim::Signer::load(&active.selector, &active.key_file)
 			.map_err(std::io::Error::other)?;
 		if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
 			signer = signer
@@ -79,3 +81,7 @@ pub(super) fn build_split_with_companions(
 		arc_sealer,
 	})
 }
+
+#[cfg(test)]
+#[path = "serve_dkim_tests_restart.rs"]
+mod tests_restart;

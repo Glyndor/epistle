@@ -1,6 +1,7 @@
 //! Tests for the app-password store and per-credential admission.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 
 fn ip(text: &str) -> IpAddr {
 	text.parse().expect("ip")
@@ -17,46 +18,46 @@ fn app_password(label: &str, secret: &str) -> AppPassword {
 
 #[test]
 fn valid_secret_admitted() {
-	let pw = app_password("phone", "correct-secret");
-	assert!(pw.admits("correct-secret", None, 1000));
+	let pw = app_password("phone", fixtures::password());
+	assert!(pw.admits(fixtures::password(), None, 1000));
 }
 
 #[test]
 fn wrong_secret_rejected() {
-	let pw = app_password("phone", "correct-secret");
-	assert!(!pw.admits("wrong-secret", None, 1000));
+	let pw = app_password("phone", fixtures::password());
+	assert!(!pw.admits(fixtures::second_password(), None, 1000));
 }
 
 #[test]
 fn expired_rejected_unexpired_accepted() {
-	let mut pw = app_password("phone", "secret");
+	let mut pw = app_password("phone", fixtures::password());
 	pw.expires_at = Some(2000);
-	assert!(pw.admits("secret", None, 1999));
-	assert!(!pw.admits("secret", None, 2000));
-	assert!(!pw.admits("secret", None, 2001));
+	assert!(pw.admits(fixtures::password(), None, 1999));
+	assert!(!pw.admits(fixtures::password(), None, 2000));
+	assert!(!pw.admits(fixtures::password(), None, 2001));
 }
 
 #[test]
 fn ip_inside_cidr_accepted_outside_rejected() {
-	let mut pw = app_password("phone", "secret");
+	let mut pw = app_password("phone", fixtures::password());
 	pw.ip_cidr = Some("203.0.113.0/24".to_string());
-	assert!(pw.admits("secret", Some(ip("203.0.113.5")), 1000));
-	assert!(!pw.admits("secret", Some(ip("203.0.114.5")), 1000));
+	assert!(pw.admits(fixtures::password(), Some(ip("203.0.113.5")), 1000));
+	assert!(!pw.admits(fixtures::password(), Some(ip("203.0.114.5")), 1000));
 }
 
 #[test]
 fn cidr_with_unknown_ip_rejected() {
-	let mut pw = app_password("phone", "secret");
+	let mut pw = app_password("phone", fixtures::password());
 	pw.ip_cidr = Some("203.0.113.0/24".to_string());
 	// A configured allowlist cannot be satisfied without a client IP.
-	assert!(!pw.admits("secret", None, 1000));
+	assert!(!pw.admits(fixtures::password(), None, 1000));
 }
 
 #[test]
 fn malformed_cidr_rejected() {
-	let mut pw = app_password("phone", "secret");
+	let mut pw = app_password("phone", fixtures::password());
 	pw.ip_cidr = Some("not-a-cidr".to_string());
-	assert!(!pw.admits("secret", Some(ip("203.0.113.5")), 1000));
+	assert!(!pw.admits(fixtures::password(), Some(ip("203.0.113.5")), 1000));
 }
 
 #[test]
@@ -64,10 +65,10 @@ fn store_add_list_remove_roundtrip() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut store = AppPasswordStore::open(dir.path()).expect("open");
 	store
-		.add("alice", app_password("phone", "secret"))
+		.add("alice", app_password("phone", fixtures::password()))
 		.expect("add");
 	store
-		.add("alice", app_password("laptop", "other"))
+		.add("alice", app_password("laptop", fixtures::second_password()))
 		.expect("add");
 
 	let rows = store.list();
@@ -91,13 +92,13 @@ fn add_rejects_duplicate_label_and_bad_cidr() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut store = AppPasswordStore::open(dir.path()).expect("open");
 	store
-		.add("alice", app_password("phone", "secret"))
+		.add("alice", app_password("phone", fixtures::password()))
 		.expect("add");
 	assert!(matches!(
-		store.add("alice", app_password("phone", "again")),
+		store.add("alice", app_password("phone", &fixtures::fresh_secret())),
 		Err(StoreError::Duplicate(_))
 	));
-	let mut bad = app_password("bad", "secret");
+	let mut bad = app_password("bad", fixtures::password());
 	bad.ip_cidr = Some("999.0.0.0/8".to_string());
 	assert!(matches!(
 		store.add("alice", bad),
@@ -110,7 +111,7 @@ fn account_lookup_is_case_insensitive() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut store = AppPasswordStore::open(dir.path()).expect("open");
 	store
-		.add("Alice", app_password("phone", "secret"))
+		.add("Alice", app_password("phone", fixtures::password()))
 		.expect("add");
 	assert_eq!(store.for_account("alice").len(), 1);
 	assert_eq!(store.for_account("ALICE").len(), 1);
@@ -123,14 +124,9 @@ fn account_lookup_is_case_insensitive() {
 fn remove_account_drops_only_the_targets() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut store = AppPasswordStore::open(dir.path()).expect("open");
-	// Each secret is minted per call with a UUIDv7 and bound to a local,
-	// the pattern `directory_app_password_tests::app_password` and
-	// `removal_tests::a_recreated_account_*` already use; no test
-	// asserts on the value, so a literal reaching the hash slot would
-	// only feed `rust/hard-coded-cryptographic-value`.
-	let phone_secret = uuid::Uuid::now_v7().simple().to_string();
-	let laptop_secret = uuid::Uuid::now_v7().simple().to_string();
-	let server_secret = uuid::Uuid::now_v7().simple().to_string();
+	let phone_secret = fixtures::fresh_secret();
+	let laptop_secret = fixtures::fresh_secret();
+	let server_secret = fixtures::fresh_secret();
 	store
 		.add("alice", app_password("phone", &phone_secret))
 		.expect("add");

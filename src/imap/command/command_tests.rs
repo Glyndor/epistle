@@ -11,30 +11,6 @@ fn parses_simple_commands() {
 }
 
 #[test]
-fn parses_login_with_quoted_strings() {
-	let parsed = parse(r#"a1 LOGIN "alice" "p@ss w\"ord""#).expect("parses");
-	assert_eq!(
-		parsed.command,
-		Command::Login {
-			username: "alice".into(),
-			password: "p@ss w\"ord".into()
-		}
-	);
-}
-
-#[test]
-fn parses_login_with_atoms() {
-	let parsed = parse("a1 LOGIN alice@example.org secret").expect("parses");
-	assert_eq!(
-		parsed.command,
-		Command::Login {
-			username: "alice@example.org".into(),
-			password: "secret".into()
-		}
-	);
-}
-
-#[test]
 fn parses_list_and_select() {
 	assert_eq!(
 		parse(r#"a1 LIST "" "*""#).expect("parses").command,
@@ -116,10 +92,6 @@ fn unknown_commands_keep_the_tag() {
 
 #[test]
 fn rejects_bad_arguments() {
-	assert_eq!(
-		parse("a1 LOGIN onlyuser"),
-		Err(ParseError::BadArguments("a1".to_string()))
-	);
 	assert_eq!(
 		parse("a1 FETCH 0 (FLAGS)"),
 		Err(ParseError::BadArguments("a1".to_string()))

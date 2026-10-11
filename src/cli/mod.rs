@@ -1,41 +1,64 @@
 //! Command-line interface: argument parsing and command dispatch.
 
+mod account;
 mod accounts;
+mod alert;
+mod alias;
+mod antispam;
 mod api_keys;
 mod app_passwords;
 mod archive;
 mod autoconfig;
 mod autodiscover;
 mod backup;
+mod ban;
 mod config_check;
+pub mod config_edit;
+mod container_db;
+mod dkim_cli;
+mod dkim_show;
+mod dns_provider;
 mod dns_records;
+mod domain;
 mod export;
 mod import;
 mod init;
+mod limits;
 mod local;
+mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
+mod probe;
 mod queue;
+mod relay;
 mod report_abuse;
 mod reports;
+mod resource;
 mod serve;
 mod serve_dkim;
 mod serve_ratelimit;
 mod serve_smtp_state;
 mod serve_tasks;
 mod serve_tls;
+mod service;
+mod service_edit;
 mod srv;
 mod stack;
 mod stack_socket;
+mod stack_started;
 mod stack_update;
+mod status;
+mod storage_blobs;
 mod style;
 mod suppression;
+mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
 mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+mod webhook_admin;
 
 /// Re-export of the answers structure so integration tests can
 /// deserialise the `epistle init --print-answers` output without
@@ -119,9 +142,14 @@ pub enum Command {
 	/// `[storage]` at it; never written into data_dir.
 	StorageKeygen,
 	/// Generate an ES256 key pair for the built-in OAuth authorization server and
-	/// print it to stdout: the base64 PKCS#8 private key for `[oauth] signing_key`
-	/// and the matching base64 public point for `[oauth] public_key`.
-	OauthKeygen,
+	/// write it to a file only the owner can read: the base64 PKCS#8 private key
+	/// for `[oauth] signing_key` and the matching base64 public point for
+	/// `[oauth] public_key`. The private key is never printed.
+	OauthKeygen {
+		/// Where to write the key pair (mode 0600; an existing file is refused).
+		#[arg(long, value_name = "FILE")]
+		out: PathBuf,
+	},
 	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
 	/// a Maildir tree with `--maildir`.
 	Export {
@@ -221,12 +249,15 @@ pub enum Command {
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
 	},
-	/// List the outbound suppression list (addresses that hard-bounced), or
-	/// remove one with `--remove`.
+	/// List the outbound suppression list (addresses that hard-bounced),
+	/// remove one with `--remove`, or add one with `add`.
 	Suppression {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		/// Path to the configuration file; accepted before or after `add`.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Suppression action; without one the command lists or removes.
+		#[command(subcommand)]
+		action: Option<suppression::SuppressionCli>,
 		/// Remove this address from the suppression list instead of listing.
 		#[arg(long, value_name = "ADDRESS")]
 		remove: Option<String>,
@@ -277,11 +308,56 @@ pub enum Command {
 		#[arg(long = "queue", value_name = "POLICY", value_parser = accounts::parse_queue_policy)]
 		queue: QueuePolicy,
 	},
-	/// List the outbound delivery queue.
-	Queue {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+	/// Operate on a single dynamic account in place: change its password,
+	/// enable or disable authentication, add or remove a delivery address,
+	/// set the storage quota and the protocol allowlist, or print the
+	/// public view. Each subcommand refuses a static account with a hint
+	/// to edit the config file. The legacy top-level `account-add` and
+	/// `account-remove` commands remain available for compatibility.
+	Account {
+		/// Path to the configuration file. Global so it can appear
+		/// before or after the sub-action; the dispatch test passes it
+		/// last, which a positional flag would not parse.
+		#[arg(
+			long,
+			value_name = "FILE",
+			global = true,
+			default_value = DEFAULT_CONFIG
+		)]
 		config: PathBuf,
+		/// The action to run on the account.
+		#[command(subcommand)]
+		action: account::Subcommand,
+	},
+	/// Inspect and steer the outbound delivery queue. Without an action it
+	/// lists the queue, like `queue list`.
+	Queue {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Queue action (`list`, `show`, `retry`, `hold`, `release`, `remove`).
+		#[command(subcommand)]
+		action: Option<queue::QueueCli>,
+	},
+	/// Manage authentication bans and the allow list (needs `[database]`).
+	/// Changes apply to the running server immediately.
+	Ban {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Ban action (`list`, `add`, `remove`, `allow`).
+		#[command(subcommand)]
+		action: ban::BanCli,
+	},
+	/// Manage an account's masked addresses. Changes apply to the running
+	/// server within a couple of seconds, with no restart.
+	Masked {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Masked action (`list`, `add`, `remove`, `enable`, `disable`).
+		#[command(subcommand)]
+		action: masked::MaskedCli,
 	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
@@ -421,6 +497,152 @@ pub enum Command {
 		#[arg(long)]
 		print_answers: bool,
 	},
+	/// Operate on the configured mail domains: list, show, add, remove, or edit
+	/// the `domain_aliases` map.
+	Domain {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Domain administration action.
+		#[command(subcommand)]
+		action: domain::DomainCli,
+	},
+
+	/// Show, set, or unset numeric server and domain limits.
+	Limits {
+		/// Configuration file; accepted before or after the limits action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Limits administration action.
+		#[command(subcommand)]
+		action: limits::Action,
+	},
+
+	/// Manage the DNS provider used for record automation.
+	Dns {
+		/// Configuration file; accepted before or after the dns action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// DNS administration area.
+		#[command(subcommand)]
+		action: dns_provider::DnsCli,
+	},
+	/// Manage where uploaded blobs are stored.
+	Storage {
+		/// Configuration file; accepted before or after the storage action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Storage administration area.
+		#[command(subcommand)]
+		action: storage_blobs::StorageCli,
+	},
+	/// Manage the outbound event webhook.
+	Webhook {
+		/// Configuration file; accepted before or after the webhook action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Webhook administration action.
+		#[command(subcommand)]
+		action: webhook_admin::WebhookCli,
+	},
+	/// Manage metric alert rules.
+	Alert {
+		/// Configuration file; accepted before or after the alert action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Alert administration action.
+		#[command(subcommand)]
+		action: alert::AlertCli,
+	},
+	/// Manage outbound smarthost (relay) rules.
+	Relay {
+		/// Configuration file; accepted before or after the relay action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Relay administration action.
+		#[command(subcommand)]
+		action: relay::RelayCli,
+	},
+	/// List, enable, or disable individual service listeners.
+	Service {
+		/// Configuration file; accepted before or after the service action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Listener administration action.
+		#[command(subcommand)]
+		action: service::ServiceCli,
+	},
+	/// Report whether the mail server is working: one line per area (config,
+	/// ports, tls, dns, db, antivirus, queue, disk). Exits 1 when any area
+	/// fails. Sends no mail and authenticates nothing.
+	Status {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print one JSON object keyed by area instead of a table.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Run one health check and list what it found.
+	Check {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// The area to check.
+		#[arg(value_enum, value_name = "AREA")]
+		area: status::CheckArea,
+		/// Print the result as JSON instead of a table.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Show or edit antispam knobs (DNSBL lists, greylist delay, clamd, LLM).
+	Antispam {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Antispam administration action.
+		#[command(subcommand)]
+		action: antispam::AntispamCli,
+	},
+	/// Show, add, remove or edit multi-target aliases; enable or disable them.
+	Alias {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Alias administration action.
+		#[command(subcommand)]
+		action: alias::AliasCli,
+	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.
 	/// Subcommands: `up`, `down`, `ps [--json]`, `logs [--follow] [<service>]`,
@@ -440,8 +662,61 @@ pub enum Command {
 		#[command(subcommand)]
 		action: stack::StackCli,
 	},
+	/// Show the DKIM signing key in service or force a rotation. Rotation is
+	/// queued for the running server, which stays the only writer of keys and
+	/// DNS records.
+	Dkim {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// DKIM action (`show`, `rotate`).
+		#[command(subcommand)]
+		action: dkim_cli::DkimCli,
+	},
+	/// Show the TLS certificate the server presents or ask it to renew the
+	/// ACME certificate now.
+	Tls {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// TLS action (`show`, `renew`).
+		#[command(subcommand)]
+		action: tls_cli::TlsCli,
+	},
+	/// Operate on one existing management API key (`rotate`).
+	ApiKey {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// API key action.
+		#[command(subcommand)]
+		action: api_keys::ApiKeyCli,
+	},
+	/// Probe each enabled listener and report whether it is answering.
+	///
+	/// Dials every `[[listeners]]` entry on its loopback equivalent
+	/// (`127.0.0.1` for `0.0.0.0`, `::1` for `::`), reads the
+	/// greeting the protocol advertises (SMTP `220`, IMAP `* OK`,
+	/// POP3 `+OK`, ManageSieve `OK`, or HTTP for the API / WebDAV /
+	/// autoconfig / ACME / metrics endpoints), and exits 0 if every
+	/// listener answered. Exits 1 if any listener is down or
+	/// answered with the wrong greeting. Designed for the distroless
+	/// container's healthcheck: no shell, no curl, no credentials,
+	/// no escalation; runs as the same user the listeners bound on.
+	Probe {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print one JSON object per listener instead of the
+		/// human-readable `ok <kind> <addr>` / `fail <kind> <addr>: <reason>`
+		/// lines. Each object carries `kind`, `addr`, `ok`, and an
+		/// `error` field on failure.
+		#[arg(long)]
+		json: bool,
+	},
 }
 
+mod delegation;
 mod dispatch;
 mod rootless;
 
@@ -476,3 +751,23 @@ mod command_cases;
 #[cfg(test)]
 #[path = "cli_tests_config_defaults.rs"]
 mod tests_config_defaults;
+
+#[cfg(test)]
+#[path = "cli_account_subcommand_tests.rs"]
+mod cli_account_subcommand_tests;
+
+#[cfg(test)]
+#[path = "cli_account_subcommand_tests_b.rs"]
+mod cli_account_subcommand_tests_b;
+
+#[cfg(test)]
+#[path = "cli_account_log_id_tests.rs"]
+mod cli_account_log_id_tests;
+
+#[cfg(test)]
+#[path = "cli_confirmation_tests.rs"]
+mod cli_confirmation_tests;
+
+#[cfg(test)]
+#[path = "oauth_keygen_tests.rs"]
+mod oauth_keygen_tests;

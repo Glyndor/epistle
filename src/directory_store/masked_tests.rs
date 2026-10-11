@@ -14,12 +14,18 @@ fn add_returns_a_unique_address_and_persists() {
 		.add("alice", "Shopping", "example.org", 1_700_000_000)
 		.expect("add");
 	assert_eq!(entry.account, "alice");
-	assert!(entry.address.starts_with("shopping."), "{}", entry.address);
-	assert!(entry.address.ends_with("@example.org"), "{}", entry.address);
+	assert!(
+		entry.address.starts_with("shopping."),
+		"the address must start with the label slug"
+	);
+	assert!(
+		entry.address.ends_with("@example.org"),
+		"the address must be on the requested domain"
+	);
 	// 8 lowercase base32 chars in the middle.
 	let local = entry.address.split('@').next().expect("local");
 	let suffix = local.rsplit_once('.').expect("dot").1;
-	assert_eq!(suffix.len(), 8, "suffix {suffix}");
+	assert_eq!(suffix.len(), 8, "the random suffix must be 8 characters");
 	assert!(
 		suffix
 			.chars()
@@ -47,8 +53,7 @@ fn label_slug_collapses_separators_and_lowercases() {
 		.expect("add");
 	assert!(
 		entry.address.starts_with("news-letters."),
-		"{}",
-		entry.address
+		"the label must be slugified into the address"
 	);
 	// The display label preserves the user's spelling (trimmed); the slug is
 	// only for the address local part.

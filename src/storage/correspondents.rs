@@ -22,18 +22,8 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-/// SHA-256 hex of a lowercased value, safe as a filename. Duplicated
-/// locally to keep the storage module free of a queue-internal
-/// dependency; the function is pure and the cost of the duplicate is
-/// one helper.
-fn digest_name(value: &str) -> String {
-	let digest = ring::digest::digest(&ring::digest::SHA256, value.to_ascii_lowercase().as_bytes());
-	digest.as_ref().iter().fold(String::new(), |mut acc, byte| {
-		use std::fmt::Write;
-		let _ = write!(acc, "{byte:02x}");
-		acc
-	})
-}
+use crate::util::path_component::DigestName;
+use crate::util::path_containment::contained;
 
 /// Filesystem-backed per-account correspondent set.
 ///
@@ -81,26 +71,26 @@ pub enum CapOutcome {
 impl CorrespondentStore {
 	/// Open (creating if needed) the correspondent store under `data_dir`.
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
-		let dir = data_dir.join("correspondents");
+		let dir = contained(data_dir, &data_dir.join("correspondents"))?;
 		fs::create_dir_all(&dir)?;
 		Ok(Self { dir })
 	}
 
 	/// The directory holding one account's correspondent markers.
-	fn account_dir(&self, account: &str) -> PathBuf {
-		self.dir.join(digest_name(account))
+	fn account_dir(&self, account: &str) -> std::io::Result<PathBuf> {
+		DigestName::of(account).in_dir(&self.dir)
 	}
 
 	/// The marker path for one address under one account.
-	fn marker(&self, account: &str, address: &str) -> PathBuf {
-		self.account_dir(account).join(digest_name(address))
+	fn marker(&self, account: &str, address: &str) -> std::io::Result<PathBuf> {
+		DigestName::of(address).in_dir(&self.account_dir(account)?)
 	}
 
 	// Keep lock files outside marker directories so they never count toward
 	// the cap. Retain them during account removal: replacing a lock file
 	// while another caller holds it would split the critical section.
 	fn lock_account(&self, account: &str) -> std::io::Result<fs::File> {
-		let path = self.dir.join(format!("{}.lock", digest_name(account)));
+		let path = DigestName::of(account).lock_in_dir(&self.dir)?;
 		let lock = fs::OpenOptions::new()
 			.read(true)
 			.write(true)
@@ -114,7 +104,8 @@ impl CorrespondentStore {
 	/// Whether `account` has previously written to `address`. Lookup is
 	/// case-insensitive (the digest is over the lowercased value).
 	pub fn knows(&self, account: &str, address: &str) -> bool {
-		self.marker(account, address).exists()
+		self.marker(account, address)
+			.is_ok_and(|path| path.exists())
 	}
 
 	/// Mark every address in `recipients` as one `account` has written to.
@@ -135,11 +126,11 @@ impl CorrespondentStore {
 	}
 
 	fn record_locked(&self, account: &str, recipients: &[&str]) -> std::io::Result<Recorded> {
-		let dir = self.account_dir(account);
+		let dir = self.account_dir(account)?;
 		fs::create_dir_all(&dir)?;
 		let mut recorded = Recorded { new: 0, known: 0 };
 		for address in recipients {
-			let path = self.marker(account, address);
+			let path = self.marker(account, address)?;
 			if path.exists() {
 				recorded.known += 1;
 				continue;
@@ -169,7 +160,7 @@ impl CorrespondentStore {
 	/// never-sent account). The mtime of a fresh marker is `now`, so
 	/// a marker created milliseconds ago counts.
 	pub fn new_in_last_day(&self, account: &str) -> std::io::Result<u32> {
-		let dir = self.account_dir(account);
+		let dir = self.account_dir(account)?;
 		let entries = match crate::util::fs_walk::read_dir(&dir) {
 			Ok(entries) => entries,
 			Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
@@ -217,13 +208,13 @@ impl CorrespondentStore {
 			self.record_locked(account, recipients)?;
 			return Ok(CapOutcome::Uncapped);
 		};
-		let dir = self.account_dir(account);
+		let dir = self.account_dir(account)?;
 		let new = recipients
 			.iter()
-			.map(|address| digest_name(address))
+			.map(|address| DigestName::of(address))
 			.collect::<std::collections::HashSet<_>>()
 			.iter()
-			.filter(|name| !dir.join(name).exists())
+			.filter(|name| !name.in_dir(&dir).is_ok_and(|path| path.exists()))
 			.count() as u32;
 		let already = self.new_in_last_day(account)?;
 		if new > 0 && already.saturating_add(new) > limit {
@@ -246,7 +237,7 @@ impl CorrespondentStore {
 	/// recipient list and slip the daily cap).
 	pub fn remove_all_for(&self, account: &str) -> std::io::Result<u32> {
 		let _lock = self.lock_account(account)?;
-		let dir = self.account_dir(account);
+		let dir = self.account_dir(account)?;
 		let entries = match fs::read_dir(&dir) {
 			Ok(entries) => entries,
 			Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
