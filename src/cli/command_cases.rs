@@ -66,6 +66,20 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["ban", "allow", "list"], true),
 	(&["ban", "allow", "add", "203.0.113.0/24"], true),
 	(&["ban", "allow", "remove", "203.0.113.0/24"], true),
+	(&["masked", "list", "alice", "--json"], true),
+	(&["masked", "add", "alice", "--label", "shop"], true),
+	(
+		&["masked", "remove", "alice", "shop.abcd2345@example.org"],
+		true,
+	),
+	(
+		&["masked", "disable", "alice", "shop.abcd2345@example.org"],
+		true,
+	),
+	(
+		&["masked", "enable", "alice", "shop.abcd2345@example.org"],
+		true,
+	),
 	(&["token-hash"], false),
 	(
 		&[

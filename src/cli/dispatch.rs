@@ -10,9 +10,9 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
-	autodiscover, backup, ban, dns_records, domain, export, import, init, local, mobileconfig,
-	probe, queue, report_abuse, reports, serve, srv, stack, status, style, suppression, verify,
-	verify_dns,
+	autodiscover, backup, ban, dns_records, domain, export, import, init, local, masked,
+	mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status, style,
+	suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -269,6 +269,19 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Masked { config, action } => match Config::load(&config) {
+				Ok(config) => masked::run(
+					&config,
+					action,
+					ban::now_epoch(),
+					&mut std::io::stdout().lock(),
+					&mut style::stderr(),
+				),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
 			Command::DkimKeygen { out, rsa, bits } => dkim_keygen(&out, rsa, bits),
 			Command::StorageKeygen => storage_keygen(),
 			Command::OauthKeygen => oauth_keygen(),
@@ -475,6 +488,7 @@ impl Command {
 			| Command::Account { .. }
 			| Command::Queue { .. }
 			| Command::Ban { .. }
+			| Command::Masked { .. }
 			| Command::AppPasswordCreate { .. }
 			| Command::AppPasswords { .. }
 			| Command::AppPasswordRevoke { .. }

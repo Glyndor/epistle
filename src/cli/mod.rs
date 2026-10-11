@@ -22,6 +22,7 @@ mod import;
 mod init;
 mod limits;
 mod local;
+mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
 mod probe;
@@ -335,6 +336,16 @@ pub enum Command {
 		/// Ban action (`list`, `add`, `remove`, `allow`).
 		#[command(subcommand)]
 		action: ban::BanCli,
+	},
+	/// Manage an account's masked addresses. Changes apply to the running
+	/// server within a couple of seconds, with no restart.
+	Masked {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Masked action (`list`, `add`, `remove`, `enable`, `disable`).
+		#[command(subcommand)]
+		action: masked::MaskedCli,
 	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///

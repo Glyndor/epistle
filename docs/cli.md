@@ -737,6 +737,22 @@ give-up window below, so a message parked for a week is not bounced on its first
 attempt after release. A hold that arrives while the worker is already
 delivering that entry takes effect for the next attempt.
 
+## Masked addresses
+
+`epistle masked <action>` manages an account's masked addresses from the shell.
+They are stored in `data_dir/masked.json`; the running server reloads that file
+within a couple of seconds, so no restart is needed. Writes go through the same
+code as the API, so the `masked_addresses_max` cap applies. An account that does
+not exist is refused.
+
+| Command | What it does |
+|---|---|
+| `epistle masked list <account> [--json]` | One line per address (address, label, `enabled` or `disabled`), or a JSON array. |
+| `epistle masked add <account> [--label L] [--domain D]` | Mint a new address and print it. The domain defaults to that of the account's first address; `--domain` must be a configured domain. |
+| `epistle masked remove <account> <address>` | Delete the address. |
+| `epistle masked disable <account> <address>` | Stop delivery to the address (it is refused like an unknown user) without deleting it. |
+| `epistle masked enable <account> <address>` | Deliver to it again. |
+
 ## Authentication bans
 
 `epistle ban <action>` manages the shared authentication ban store: the client
