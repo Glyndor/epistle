@@ -88,7 +88,7 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 /// release.
 ///
 /// When `[dns]` is absent, rotation cannot publish the new selector's TXT
-/// and so is not started — but the inactivity is logged once at startup
+/// and so is not started, but the inactivity is logged once at startup
 /// rather than left silent.
 pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::ReloadableSigner>) {
 	match decide_dkim_rotation(config) {
@@ -147,7 +147,7 @@ pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::Re
 			}
 			// The decision says "Run" because [dns] is present; build the
 			// actual provider now. A missing or wrong [dns] falls through
-			// to the same "silent off" as before — that is a separate
+			// to the same "silent off" as before, that is a separate
 			// misconfiguration the operator must fix anyway (the DNS
 			// provider is also used elsewhere, e.g. ACME TLSA).
 			let Some(signer) = dkim_signer else {
