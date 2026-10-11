@@ -88,7 +88,7 @@ pub fn log_privilege_change(event: AuditEvent, account: &str, client_ip: Option<
 	tracing::info!(
 		target: "epistle::api::audit",
 		event = event.as_str(),
-		account = %account,
+		account = %crate::log_id::account(account),
 		client_ip = %client_ip,
 		"privilege change"
 	);
@@ -111,7 +111,7 @@ pub fn log_send_limited(account: &str, client_ip: Option<IpAddr>, count: u32, li
 	tracing::info!(
 		target: "epistle::api::audit",
 		event = AuditEvent::SendLimited.as_str(),
-		account = %account,
+		account = %crate::log_id::account(account),
 		client_ip = %client_ip,
 		count = count,
 		limit = limit,
@@ -136,7 +136,7 @@ pub fn log_account_removal(
 	tracing::info!(
 		target: "epistle::api::audit",
 		event = AuditEvent::AccountRemoved.as_str(),
-		account = %account,
+		account = %crate::log_id::account(account),
 		client_ip = %client_ip,
 		mailbox_files = counts.mailbox_files,
 		masked_addresses = counts.masked_addresses,
@@ -173,11 +173,11 @@ pub fn log_auth_attempt(
 	let client_ip = client_ip
 		.map(|ip| ip.to_string())
 		.unwrap_or_else(|| "unknown".to_string());
-	let account = account.unwrap_or("unknown");
+	let account = account.map_or_else(|| "unknown".to_string(), crate::log_id::account);
 	tracing::info!(
 		target: "epistle::auth",
 		event = event.as_str(),
-		login = %login,
+		login = %crate::log_id::account(login),
 		account = %account,
 		client_ip = %client_ip,
 		protocol = protocol.as_str(),

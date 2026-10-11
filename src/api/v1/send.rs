@@ -113,7 +113,11 @@ pub async fn send(
 			}
 			Ok(CapOutcome::Allowed { .. } | CapOutcome::Uncapped) => {}
 			Err(error) => {
-				tracing::warn!(account = %account, %error, "correspondent store error; accepting");
+				tracing::warn!(
+					account = %crate::log_id::account(&account),
+					%error,
+					"correspondent store error; accepting"
+				);
 			}
 		}
 	}

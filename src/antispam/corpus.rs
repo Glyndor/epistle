@@ -322,7 +322,11 @@ impl BayesTrainer for BayesStore {
 			}
 			let text = String::from_utf8_lossy(&text);
 			if let Err(error) = BayesStore::train(self, account, &text, spam).await {
-				tracing::warn!(account, %error, "per-account bayes training failed");
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					%error,
+					"per-account bayes training failed"
+				);
 			}
 		})
 	}
@@ -336,7 +340,11 @@ impl BayesTrainer for BayesStore {
 			let trained = match self.is_trained(account).await {
 				Ok(trained) => trained,
 				Err(error) => {
-					tracing::warn!(account, %error, "per-account bayes trained lookup failed");
+					tracing::warn!(
+						account = %crate::log_id::account(account),
+						%error,
+						"per-account bayes trained lookup failed"
+					);
 					return None;
 				}
 			};
@@ -345,7 +353,11 @@ impl BayesTrainer for BayesStore {
 			match self.score(scope, &text).await {
 				Ok(score) => Some(score),
 				Err(error) => {
-					tracing::warn!(account, %error, "per-account bayes score failed");
+					tracing::warn!(
+						account = %crate::log_id::account(account),
+						%error,
+						"per-account bayes score failed"
+					);
 					None
 				}
 			}

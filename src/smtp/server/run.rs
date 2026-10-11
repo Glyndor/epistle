@@ -168,7 +168,7 @@ impl Server {
 					let known_correspondent = self.known_correspondent(&message);
 					if let Some((account, sender)) = known_correspondent.as_ref() {
 						tracing::debug!(
-							account = %account,
+							account = %crate::log_id::account(account),
 							sender = %sender,
 							"trusted reply: skipping greylist and first-time delay"
 						);

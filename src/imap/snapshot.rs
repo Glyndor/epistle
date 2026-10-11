@@ -326,7 +326,7 @@ impl Snapshot {
 				Err(error) => {
 					tracing::error!(
 						%error,
-						account_root = %self.account_root.display(),
+						account_root = %crate::log_id::path(self.account_root.as_path()),
 						mailbox = %self.mailbox,
 						"could not archive an expunged message; leaving it on disk",
 					);

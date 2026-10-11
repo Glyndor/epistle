@@ -214,7 +214,7 @@ async fn totp_enrollment_records_event_and_does_not_leak_secret() {
 	);
 	assert_eq!(
 		audit[0].fields.get("account").map(String::as_str),
-		Some("carol")
+		Some(crate::log_id::account("carol").as_str())
 	);
 	assert_eq!(
 		audit[0].fields.get("client_ip").map(String::as_str),
@@ -268,7 +268,7 @@ async fn totp_disable_records_event() {
 	);
 	assert_eq!(
 		audit[0].fields.get("account").map(String::as_str),
-		Some("dave")
+		Some(crate::log_id::account("dave").as_str())
 	);
 	let blob = audit_blob(&events);
 	assert!(
@@ -312,7 +312,7 @@ async fn password_reset_records_event_and_does_not_leak_credentials() {
 	);
 	assert_eq!(
 		audit[0].fields.get("account").map(String::as_str),
-		Some("erin")
+		Some(crate::log_id::account("erin").as_str())
 	);
 
 	let blob = audit_blob(&events);
@@ -366,12 +366,16 @@ async fn account_removal_records_event() {
 	);
 	assert_eq!(
 		audit[0].fields.get("account").map(String::as_str),
-		Some("frank")
+		Some(crate::log_id::account("frank").as_str())
 	);
 	let blob = audit_blob(&events);
 	assert!(
 		!blob.contains(TOKEN.as_str()),
 		"audit leaked the bearer token: {blob}"
+	);
+	assert!(
+		!blob.contains("frank"),
+		"the removal audit event must identify the account by its pseudonym only"
 	);
 }
 
