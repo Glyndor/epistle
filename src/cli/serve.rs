@@ -181,11 +181,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// fingerprint moves. Built once and shared with the watcher and every
 	// API listener so the bearer middleware and the watcher see the same
 	// `Arc`. A missing or unreadable file at startup leaves the set
-	// empty; the static token still authenticates, and a corrected file
+	// empty with a warning; the static token still authenticates, and a corrected file
 	// is observed on the next poll.
 	let api_keys_set = Arc::new(
 		crate::api::ApiKeySet::open(&config.data_dir)
-			.unwrap_or_else(|_| crate::api::ApiKeySet::empty()),
+			.unwrap_or_else(|error| {
+				tracing::warn!(%error, "api_keys.toml unreadable at startup; no API keys loaded until it is fixed");
+				crate::api::ApiKeySet::empty()
+			}),
 	);
 
 	// Pick up CLI edits to the dynamic account files (accounts.toml,
