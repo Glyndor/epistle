@@ -54,11 +54,11 @@ const READ_CAP: usize = 4096;
 /// element shape for `--json`.
 #[derive(Debug, Serialize)]
 pub(super) struct ProbeLine {
-	kind: &'static str,
-	addr: String,
-	ok: bool,
+	pub(super) kind: &'static str,
+	pub(super) addr: String,
+	pub(super) ok: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	error: Option<String>,
+	pub(super) error: Option<String>,
 }
 
 /// Run the `probe` command. Loads the configuration file, dials each

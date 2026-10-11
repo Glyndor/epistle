@@ -27,7 +27,7 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(12 * 3600);
 fn account_key_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("account.key")
 }
-fn cert_path(data_dir: &Path) -> PathBuf {
+pub(crate) fn cert_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("cert.pem")
 }
 fn key_path(data_dir: &Path) -> PathBuf {

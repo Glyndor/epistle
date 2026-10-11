@@ -34,7 +34,9 @@ mod service_edit;
 mod srv;
 mod stack;
 mod stack_socket;
+mod stack_started;
 mod stack_update;
+mod status;
 mod style;
 mod suppression;
 #[cfg(test)]
@@ -487,6 +489,29 @@ pub enum Command {
 		/// Listener administration action.
 		#[command(subcommand)]
 		action: service::ServiceCli,
+	},
+	/// Report whether the mail server is working: one line per area (config,
+	/// ports, tls, dns, db, antivirus, queue, disk). Exits 1 when any area
+	/// fails. Sends no mail and authenticates nothing.
+	Status {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print one JSON object keyed by area instead of a table.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Run one health check and list what it found.
+	Check {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// The area to check.
+		#[arg(value_enum, value_name = "AREA")]
+		area: status::CheckArea,
+		/// Print the result as JSON instead of a table.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.

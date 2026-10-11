@@ -11,7 +11,7 @@ use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, tok
 use super::{
 	Cli, Command, account, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover,
 	backup, ban, dns_records, export, import, init, local, mobileconfig, probe, queue,
-	report_abuse, reports, serve, srv, stack, style, suppression, verify, verify_dns,
+	report_abuse, reports, serve, srv, stack, status, style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -376,6 +376,8 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::limits::run(&config, action, dry_run, &mut std::io::stdout().lock()),
+			Command::Status { config, json } => status::run_status(&config, json),
+			Command::Check { config, area, json } => status::run_check(&config, area, json),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -402,6 +404,8 @@ impl Command {
 			| Command::Stack { .. }
 			| Command::Service { .. }
 			| Command::Limits { .. }
+			| Command::Status { .. }
+			| Command::Check { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
