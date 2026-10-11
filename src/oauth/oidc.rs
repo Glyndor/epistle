@@ -19,8 +19,8 @@
 
 use std::net::{IpAddr, ToSocketAddrs};
 
+use crate::net::{HttpsUrl, HttpsUrlError};
 use serde::Deserialize;
-use url::Url;
 
 use crate::jwt::Algorithm;
 
@@ -116,16 +116,15 @@ struct RawJwk {
 /// `.text()` and parsed with `serde_json`, matching the other callers.
 pub async fn fetch_keys(
 	client: &reqwest::Client,
-	discovery_url: &str,
+	discovery_url: &HttpsUrl,
 	default_alg: Algorithm,
 ) -> Result<Vec<Jwk>, OidcError> {
-	require_https(discovery_url)?;
 	let body = get_text(client, discovery_url).await?;
 	let discovery: Discovery =
 		serde_json::from_str(&body).map_err(|e| OidcError::BadJson(e.to_string()))?;
-	require_https(&discovery.jwks_uri)?;
-	ensure_jwks_uri_in_scope(discovery_url, &discovery.jwks_uri).await?;
-	let jwks_body = get_text(client, &discovery.jwks_uri).await?;
+	let jwks_uri = parse_endpoint(&discovery.jwks_uri)?;
+	ensure_jwks_uri_in_scope(discovery_url, &jwks_uri).await?;
+	let jwks_body = get_text(client, &jwks_uri).await?;
 	parse_jwks(&jwks_body, default_alg)
 }
 
@@ -139,7 +138,10 @@ pub async fn fetch_keys(
 /// different address (TOCTOU). Closing that window means binding the socket to
 /// the already-resolved IP before connecting, which is a separate piece of work
 /// not done here.
-async fn ensure_jwks_uri_in_scope(discovery_url: &str, jwks_uri: &str) -> Result<(), OidcError> {
+async fn ensure_jwks_uri_in_scope(
+	discovery_url: &HttpsUrl,
+	jwks_uri: &HttpsUrl,
+) -> Result<(), OidcError> {
 	let jwks_ips = collect_ips(jwks_uri).await?;
 	if !jwks_ips.iter().any(|ip| is_internal(*ip)) {
 		return Ok(());
@@ -163,10 +165,8 @@ async fn ensure_jwks_uri_in_scope(discovery_url: &str, jwks_uri: &str) -> Result
 /// host, or every address a DNS lookup of the host name returns. An empty
 /// result (host did not resolve) is reported as a network error so a typo in
 /// the discovery doc does not silently fall through.
-async fn collect_ips(url: &str) -> Result<Vec<IpAddr>, OidcError> {
-	let parsed =
-		Url::parse(url).map_err(|e| OidcError::Network(format!("invalid OIDC URL {url}: {e}")))?;
-	match parsed.host() {
+async fn collect_ips(url: &HttpsUrl) -> Result<Vec<IpAddr>, OidcError> {
+	match url.as_url().host() {
 		Some(url::Host::Ipv4(ip)) => Ok(vec![IpAddr::V4(ip)]),
 		Some(url::Host::Ipv6(ip)) => Ok(vec![IpAddr::V6(ip)]),
 		Some(url::Host::Domain(name)) => resolve_host(name).await,
@@ -232,24 +232,25 @@ fn jwks_ips_allowed(jwks_ips: &[IpAddr], discovery_ips: &[IpAddr]) -> bool {
 	internal.iter().all(|ip| discovery_ips.contains(ip))
 }
 
-/// Reject any endpoint that is not HTTPS (fail closed: keys must arrive over a
-/// confidential, authenticated channel).
-fn require_https(url: &str) -> Result<(), OidcError> {
-	if url.starts_with("https://") {
-		Ok(())
-	} else {
-		Err(OidcError::InsecureUrl)
-	}
+/// Parse a discovery or JWKS endpoint, refusing anything that is not HTTPS
+/// (fail closed: keys must arrive over a confidential, authenticated channel).
+/// The returned [`HttpsUrl`] is the only form [`fetch_keys`] accepts, so the
+/// scheme cannot be skipped by a caller.
+pub fn parse_endpoint(text: &str) -> Result<HttpsUrl, OidcError> {
+	HttpsUrl::parse(text).map_err(|e| match e {
+		HttpsUrlError::NotHttps => OidcError::InsecureUrl,
+		other => OidcError::Network(format!("invalid OIDC URL: {other}")),
+	})
 }
 
-async fn get_text(client: &reqwest::Client, url: &str) -> Result<String, OidcError> {
+async fn get_text(client: &reqwest::Client, url: &HttpsUrl) -> Result<String, OidcError> {
 	// Discovery and JWKS documents are small; read the body in chunks with a
 	// hard cap so a hostile or compromised IdP cannot exhaust memory with a
 	// huge (or endless) response. Paired with the client's no-redirect policy,
 	// this closes the discovery-fetch SSRF/DoS surface.
 	const MAX_BODY: usize = 256 * 1024;
 	let mut response = client
-		.get(url)
+		.get(url.as_url().clone())
 		.send()
 		.await
 		.map_err(|e| OidcError::Network(e.to_string()))?;
