@@ -169,15 +169,20 @@ pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::Re
 				interval,
 				overlap,
 			);
+			// Wake every minute so an operator's `dkim rotate` request is
+			// served promptly; the scheduled tick still runs hourly.
 			tokio::spawn(async move {
-				let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+				let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+				let mut minutes: u64 = 0;
 				loop {
 					ticker.tick().await;
+					let auto_due = minutes.is_multiple_of(60);
+					minutes += 1;
 					let now = std::time::SystemTime::now()
 						.duration_since(std::time::UNIX_EPOCH)
 						.map(|d| d.as_secs())
 						.unwrap_or(0);
-					if let Err(error) = rotator.tick(now).await {
+					if let Err(error) = rotator.cycle(now, auto_due).await {
 						tracing::warn!(%error, "dkim rotation tick failed");
 					}
 				}

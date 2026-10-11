@@ -81,6 +81,11 @@ impl Signer {
 		Ok(signer)
 	}
 
+	/// The selector of the ed25519 key this signer signs with.
+	pub fn selector(&self) -> &str {
+		&self.selector
+	}
+
 	/// The DNS TXT record value publishing this signer's public key.
 	pub fn dns_record_value(&self) -> String {
 		format!(
