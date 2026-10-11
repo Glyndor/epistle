@@ -1,7 +1,7 @@
 use super::{cli::fixture, stack_helpers as helpers};
 
 #[test]
-fn service_cli_compose_updates_ports_and_restarts_only_mail() {
+fn service_cli_compose_updates_ports_and_recreates_only_mail() {
 	let (dir, config) = fixture();
 	let compose = dir.path().join("compose/compose.yaml");
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
@@ -39,10 +39,11 @@ fn service_cli_compose_updates_ports_and_restarts_only_mail() {
 			compose.to_str().unwrap(),
 			"-f",
 			override_path.to_str().unwrap(),
-			"restart",
+			"up",
+			"-d",
 			"mail"
 		],
-		"service edit must use stack restart for only mail"
+		"a port change must recreate only mail"
 	);
 	assert!(std::fs::read(&override_path).unwrap() == override_bytes);
 	let argv_before = std::fs::read(&argv_log).unwrap();

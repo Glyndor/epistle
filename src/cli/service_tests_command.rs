@@ -87,7 +87,10 @@ fn service_command_dry_run_then_change_and_no_op() {
 }
 
 #[test]
-fn service_command_updates_ports_and_restarts_only_mail() {
+/// A published port only changes when the container is recreated: a plain
+/// restart keeps the old port forwarding, so a disabled listener would stay
+/// reachable. The stack is brought up again, which recreates mail.
+fn service_command_updates_ports_and_recreates_mail() {
 	let (_dir, file) = fixture();
 	let config = Config::load(file.path()).unwrap();
 	let compose = super::super::init::compose_file_path(&config.data_dir);
@@ -97,11 +100,24 @@ fn service_command_updates_ports_and_restarts_only_mail() {
 		r#"{"services":{"mail":{"ports":["25:25"],"image":"keep"}}}"#,
 	)
 	.unwrap();
-	let code = execute_with(file.path(), ServiceCli::Enable { name: ServiceName::Webdav }, false, &mut Vec::new(), &mut Vec::new(), |config, action| {
-		assert_eq!(config.listeners.len(), 2);
-		assert!(matches!(action, super::super::stack::StackAction::Restart { service: Some(name) } if name == "mail"));
-		ExitCode::from(7)
-	}).unwrap();
+	let code = execute_with(
+		file.path(),
+		ServiceCli::Enable {
+			name: ServiceName::Webdav,
+		},
+		false,
+		&mut Vec::new(),
+		&mut Vec::new(),
+		|config, action| {
+			assert_eq!(config.listeners.len(), 2);
+			assert!(
+				matches!(&action, super::super::stack::StackAction::Recreate { service } if service == "mail"),
+				"a port change must recreate mail, not restart it: {action:?}"
+			);
+			ExitCode::from(7)
+		},
+	)
+	.unwrap();
 	assert_eq!(
 		code,
 		ExitCode::from(7),
