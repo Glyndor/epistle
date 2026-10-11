@@ -1,5 +1,6 @@
 //! WebDAV request-bound regression tests.
 
+use crate::test_fixtures as fixtures;
 use std::os::unix::fs::symlink;
 
 use crate::webdav::router;
@@ -35,8 +36,8 @@ fn base64_encode(input: &[u8]) -> String {
 	out
 }
 
-/// Build a router backed by a temp data dir with two accounts: `alice`/`pw-a`
-/// and `bob`/`pw-b`. Returns the router and the temp dir (kept alive).
+/// Build a router backed by a temp data dir with two accounts: `alice`
+/// and `bob`. Returns the router and the temp dir (kept alive).
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
 		name: name.to_string(),
@@ -52,7 +53,10 @@ fn test_app(dir: &std::path::Path) -> Router {
 		dir,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
-		vec![account("alice", "pw-a"), account("bob", "pw-b")],
+		vec![
+			account("alice", fixtures::password()),
+			account("bob", fixtures::second_password()),
+		],
 	)
 	.expect("store");
 	router(store.handle(), dir.to_path_buf())
@@ -87,7 +91,9 @@ async fn send(
 	(status, bytes.to_vec())
 }
 
-const ALICE: &str = "alice:pw-a";
+fn alice() -> String {
+	format!("alice:{}", fixtures::password())
+}
 
 /// A PROPFIND on a collection with no `Depth` header must come back
 /// `403 Forbidden` carrying the `propfind-finite-depth` precondition
@@ -98,9 +104,9 @@ const ALICE: &str = "alice:pw-a";
 async fn propfind_without_depth_is_403_with_precondition() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
-	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
-	let (status, body) = send(&app, "PROPFIND", "/d", Some(ALICE), &[], b"").await;
+	send(&app, "MKCOL", "/d", Some(&alice()), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(&alice()), &[], b"a").await;
+	let (status, body) = send(&app, "PROPFIND", "/d", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 	let text = String::from_utf8(body).unwrap();
 	assert!(
@@ -116,13 +122,13 @@ async fn propfind_without_depth_is_403_with_precondition() {
 async fn propfind_depth_one_still_lists_children() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
-	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
+	send(&app, "MKCOL", "/d", Some(&alice()), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(&alice()), &[], b"a").await;
 	let (status, body) = send(
 		&app,
 		"PROPFIND",
 		"/d",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		b"",
 	)
@@ -151,7 +157,7 @@ async fn get_through_symlink_does_not_leak_outside_bytes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let outside = install_symlink_escape(dir.path());
 	let app = test_app(dir.path());
-	let (status, body) = send(&app, "GET", "/escape.txt", Some(ALICE), &[], b"").await;
+	let (status, body) = send(&app, "GET", "/escape.txt", Some(&alice()), &[], b"").await;
 	// The symlink escapes the root; the request must be refused and the outside
 	// file's bytes must never appear in the response.
 	assert!(
@@ -168,7 +174,7 @@ async fn put_through_symlink_does_not_modify_outside_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let outside = install_symlink_escape(dir.path());
 	let app = test_app(dir.path());
-	let (status, _) = send(&app, "PUT", "/escape.txt", Some(ALICE), &[], b"INJECTED").await;
+	let (status, _) = send(&app, "PUT", "/escape.txt", Some(&alice()), &[], b"INJECTED").await;
 	assert!(
 		status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
 		"expected 403 or 404, got {status}"
@@ -186,11 +192,11 @@ async fn put_through_symlink_does_not_modify_outside_file() {
 /// which would refuse to PUT through `/a` if a previous overlap test had
 /// destroyed the directory.
 async fn seed_overlap_fixture(app: &Router) {
-	send(app, "MKCOL", "/a", Some(ALICE), &[], b"").await;
-	send(app, "PUT", "/a/file1", Some(ALICE), &[], b"one").await;
-	send(app, "PUT", "/a/file2", Some(ALICE), &[], b"two").await;
-	send(app, "MKCOL", "/a/b", Some(ALICE), &[], b"").await;
-	send(app, "PUT", "/a/b/before", Some(ALICE), &[], b"before").await;
+	send(app, "MKCOL", "/a", Some(&alice()), &[], b"").await;
+	send(app, "PUT", "/a/file1", Some(&alice()), &[], b"one").await;
+	send(app, "PUT", "/a/file2", Some(&alice()), &[], b"two").await;
+	send(app, "MKCOL", "/a/b", Some(&alice()), &[], b"").await;
+	send(app, "PUT", "/a/b/before", Some(&alice()), &[], b"before").await;
 }
 
 /// PROPFIND with a 2 MiB body must come back `413 Payload Too Large`. A
@@ -207,7 +213,7 @@ async fn oversize_propfind_is_413() {
 		&app,
 		"PROPFIND",
 		"/",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		&big,
 	)
@@ -226,7 +232,7 @@ async fn normal_propfind_still_works() {
 		&app,
 		"PROPFIND",
 		"/",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		b"",
 	)
@@ -246,7 +252,7 @@ async fn move_into_descendant_is_refused_and_data_intact() {
 		&app,
 		"MOVE",
 		"/a",
-		Some(ALICE),
+		Some(&alice()),
 		&[
 			("Destination", "/a/b/".to_string()),
 			("Overwrite", "T".to_string()),
@@ -259,21 +265,21 @@ async fn move_into_descendant_is_refused_and_data_intact() {
 		"expected 403 or 409, got {status}"
 	);
 	// /a/file1, /a/file2, /a/b/before must still exist with the same bytes.
-	let (status1, body1) = send(&app, "GET", "/a/file1", Some(ALICE), &[], b"").await;
+	let (status1, body1) = send(&app, "GET", "/a/file1", Some(&alice()), &[], b"").await;
 	assert_eq!(
 		status1,
 		StatusCode::OK,
 		"/a/file1 vanished after refused MOVE"
 	);
 	assert_eq!(body1, b"one");
-	let (status2, body2) = send(&app, "GET", "/a/file2", Some(ALICE), &[], b"").await;
+	let (status2, body2) = send(&app, "GET", "/a/file2", Some(&alice()), &[], b"").await;
 	assert_eq!(
 		status2,
 		StatusCode::OK,
 		"/a/file2 vanished after refused MOVE"
 	);
 	assert_eq!(body2, b"two");
-	let (statusb, bodyb) = send(&app, "GET", "/a/b/before", Some(ALICE), &[], b"").await;
+	let (statusb, bodyb) = send(&app, "GET", "/a/b/before", Some(&alice()), &[], b"").await;
 	assert_eq!(
 		statusb,
 		StatusCode::OK,
@@ -294,7 +300,7 @@ async fn copy_onto_self_is_refused_and_data_intact() {
 		&app,
 		"COPY",
 		"/a",
-		Some(ALICE),
+		Some(&alice()),
 		&[
 			("Destination", "/a".to_string()),
 			("Overwrite", "T".to_string()),
@@ -306,14 +312,14 @@ async fn copy_onto_self_is_refused_and_data_intact() {
 		status == StatusCode::FORBIDDEN || status == StatusCode::CONFLICT,
 		"expected 403 or 409, got {status}"
 	);
-	let (status1, body1) = send(&app, "GET", "/a/file1", Some(ALICE), &[], b"").await;
+	let (status1, body1) = send(&app, "GET", "/a/file1", Some(&alice()), &[], b"").await;
 	assert_eq!(
 		status1,
 		StatusCode::OK,
 		"/a/file1 vanished after refused COPY"
 	);
 	assert_eq!(body1, b"one");
-	let (status2, body2) = send(&app, "GET", "/a/file2", Some(ALICE), &[], b"").await;
+	let (status2, body2) = send(&app, "GET", "/a/file2", Some(&alice()), &[], b"").await;
 	assert_eq!(
 		status2,
 		StatusCode::OK,
@@ -331,7 +337,7 @@ async fn propfind_malformed_depth_returns_400_wire() {
 			&app,
 			"PROPFIND",
 			"/",
-			Some(ALICE),
+			Some(&alice()),
 			&[("Depth", depth.into())],
 			b"",
 		)
@@ -342,7 +348,7 @@ async fn propfind_malformed_depth_returns_400_wire() {
 		);
 	}
 	for headers in [vec![], vec![("Depth", "infinity".into())]] {
-		let (status, body) = send(&app, "PROPFIND", "/", Some(ALICE), &headers, b"").await;
+		let (status, body) = send(&app, "PROPFIND", "/", Some(&alice()), &headers, b"").await;
 		let expected = concat!(
 			"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
 			"<D:error xmlns:D=\"DAV:\">\n",

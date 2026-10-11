@@ -1,4 +1,6 @@
 use super::*;
+use crate::test_fixtures as fixtures;
+use base64::Engine;
 
 #[test]
 fn rev1_imaplib_style_flow_and_rev2_equivalent() {
@@ -27,12 +29,17 @@ fn rev1_imaplib_style_flow_and_rev2_equivalent() {
 				);
 				assert_eq!(text(&continuation), "+ \r\n");
 				assert_eq!(
-					text(&session.auth_response("AGFsaWNlAHNlY3JldA==")),
+					text(
+						&session.auth_response(
+							&base64::engine::general_purpose::STANDARD
+								.encode(format!("\0alice\0{}", fixtures::password()))
+						)
+					),
 					"a OK AUTHENTICATE completed\r\n"
 				);
 			} else {
 				assert_eq!(
-					text(&session.command_line("a LOGIN alice secret")),
+					text(&session.command_line(&format!("a LOGIN alice {}", fixtures::password()))),
 					"a OK LOGIN completed\r\n"
 				);
 			}

@@ -7,6 +7,7 @@
 
 use crate::api::{ApiState, router};
 use crate::oauth::OauthVerifier;
+use crate::test_fixtures as fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use base64::Engine;
@@ -19,7 +20,6 @@ use tower::ServiceExt;
 const ISSUER: &str = "https://mail.example";
 const AUDIENCE: &str = "mail";
 const LOGIN: &str = "alice@example.org";
-const PASSWORD: &str = "correct horse battery staple";
 
 /// An ES256 key pair: the base64 PKCS#8 private key for the signer and the
 /// base64 public point for the verifier (they are a matching pair).
@@ -46,7 +46,7 @@ fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
 	let accounts = vec![crate::config::Account {
 		name: "alice".to_string(),
 		addresses: vec![LOGIN.to_string()],
-		password_hash: Some(crate::smtp::auth::hash_password(PASSWORD).expect("hash")),
+		password_hash: Some(crate::smtp::auth::hash_password(fixtures::password()).expect("hash")),
 		catch_all: Vec::new(),
 		quota_bytes: None,
 		forward: Vec::new(),
@@ -63,7 +63,7 @@ fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
 		.expect("store"),
 	);
 	let token_hash = {
-		let digest = ring::digest::digest(&ring::digest::SHA256, b"api-token");
+		let digest = ring::digest::digest(&ring::digest::SHA256, fixtures::api_token().as_bytes());
 		let hex = digest.as_ref().iter().fold(String::new(), |mut s, b| {
 			use std::fmt::Write;
 			write!(s, "{b:02x}").ok();
@@ -187,7 +187,7 @@ async fn device_flow_pending_then_approved_issues_verifiable_token() {
 	// 3. Approve with the correct account credentials.
 	let approve = format!(
 		"user_code={user_code}&login={LOGIN}&password={}",
-		urlenc(PASSWORD)
+		urlenc(fixtures::password())
 	);
 	let (status, body) = post_form(&app, "/oauth/device/approve", &approve).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -225,7 +225,7 @@ async fn device_approve_rejects_bad_credentials_and_unknown_code() {
 	// Unknown user_code with good credentials → the same opaque error.
 	let approve = format!(
 		"user_code=ZZZZ-ZZZZ&login={LOGIN}&password={}",
-		urlenc(PASSWORD)
+		urlenc(fixtures::password())
 	);
 	let (status, body) = post_form(&app, "/oauth/device/approve", &approve).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -246,7 +246,7 @@ async fn pkce_round_trip_succeeds_and_rejects_failures() {
 	// authorize → a one-time code bound to alice + the challenge.
 	let auth = format!(
 		"client_id=cli&code_challenge={challenge}&code_challenge_method=S256&login={LOGIN}&password={}&state=xyz",
-		urlenc(PASSWORD)
+		urlenc(fixtures::password())
 	);
 	let (status, body) = post_form(&app, "/oauth/authorize", &auth).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -284,7 +284,7 @@ async fn pkce_rejects_plain_method() {
 	// `plain` (and an absent method) must be rejected: S256 only.
 	let auth = format!(
 		"client_id=cli&code_challenge=abc&code_challenge_method=plain&login={LOGIN}&password={}",
-		urlenc(PASSWORD)
+		urlenc(fixtures::password())
 	);
 	let (status, body) = post_form(&app, "/oauth/authorize", &auth).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -409,7 +409,7 @@ async fn device_approve_accepts_basic_auth() {
 	let (_, body) = post_form(&app, "/oauth/device_authorization", "client_id=cli").await;
 	let user_code = body["user_code"].as_str().expect("user_code").to_string();
 	// Credentials in an HTTP Basic header instead of body fields.
-	let basic = B64.encode(format!("{LOGIN}:{PASSWORD}"));
+	let basic = B64.encode(format!("{LOGIN}:{}", fixtures::password()));
 	let mut request = Request::builder()
 		.method("POST")
 		.uri("/oauth/device/approve")

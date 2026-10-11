@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 
 #[test]
 fn plaintext_session_disables_login_until_starttls() {
@@ -11,7 +12,7 @@ fn plaintext_session_disables_login_until_starttls() {
 	assert!(greeting.contains("LOGINDISABLED"), "{greeting}");
 	assert!(!greeting.contains("AUTH=PLAIN"), "{greeting}");
 
-	let output = session.command_line("a1 LOGIN alice secret");
+	let output = session.command_line(&format!("a1 LOGIN alice {}", fixtures::password()));
 	assert!(
 		text(&output).contains("PRIVACYREQUIRED"),
 		"{}",
@@ -27,7 +28,7 @@ fn plaintext_session_disables_login_until_starttls() {
 	let response = text(&output);
 	assert!(!response.contains("STARTTLS"), "{response}");
 	assert!(response.contains("AUTH=PLAIN"), "{response}");
-	let output = session.command_line("a4 LOGIN alice secret");
+	let output = session.command_line(&format!("a4 LOGIN alice {}", fixtures::password()));
 	assert!(text(&output).contains("a4 OK"), "{}", text(&output));
 }
 
@@ -128,7 +129,7 @@ fn append_over_quota_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory())
 		.with_quota_limit(100);
-	session.command_line("a1 LOGIN alice secret");
+	session.command_line(&format!("a1 LOGIN alice {}", fixtures::password()));
 	// A 200-byte APPEND exceeds the quota and is refused before the literal.
 	let output = session.command_line("a2 APPEND INBOX {200}");
 	let response = text(&output);
@@ -203,7 +204,8 @@ fn authenticate_plain_succeeds() {
 	use base64::Engine;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
-	let response = base64::engine::general_purpose::STANDARD.encode("\0alice\0secret");
+	let response = base64::engine::general_purpose::STANDARD
+		.encode(format!("\0alice\0{}", fixtures::password()));
 	let output = session.command_line(&format!("a1 AUTHENTICATE PLAIN {response}"));
 	assert!(
 		text(&output).contains("a1 OK AUTHENTICATE completed"),
@@ -221,7 +223,7 @@ fn authenticate_login_succeeds() {
 	// AUTHENTICATE LOGIN: username prompt, password prompt, then success.
 	assert!(text(&session.command_line("a1 AUTHENTICATE LOGIN")).starts_with("+ "));
 	assert!(text(&session.auth_response(&B64.encode("alice"))).starts_with("+ "));
-	let ok = text(&session.auth_response(&B64.encode("secret")));
+	let ok = text(&session.auth_response(&B64.encode(fixtures::password())));
 	assert!(ok.contains("a1 OK AUTHENTICATE completed"), "{ok}");
 
 	// A wrong password fails.
@@ -234,6 +236,7 @@ fn authenticate_login_succeeds() {
 
 #[test]
 fn authenticate_scram_sha256_succeeds() {
+	let nonce = fixtures::nonce();
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 	use ring::{digest, hmac, pbkdf2};
@@ -245,23 +248,23 @@ fn authenticate_scram_sha256_succeeds() {
 		dir.path().to_path_buf(),
 		scram_directory(),
 	)
-	.with_scram_nonce("SN");
+	.with_scram_nonce(fixtures::nonce());
 	let output = session.command_line(&format!(
 		"a1 AUTHENTICATE SCRAM-SHA-256 {}",
 		B64.encode("n,,n=alice,r=CN")
 	));
 	assert!(output.collect_auth, "should request a continuation");
 
-	let salt = b"saltsalt";
-	let server_first = format!("r=CNSN,s={},i=4096", B64.encode(salt));
-	let without_proof = "c=biws,r=CNSN";
+	let salt = fixtures::salt();
+	let server_first = format!("r=CN{nonce},s={},i=4096", B64.encode(salt));
+	let without_proof = format!("c=biws,r=CN{nonce}");
 	let auth_message = format!("n=alice,r=CN,{server_first},{without_proof}");
 	let mut salted = [0u8; 32];
 	pbkdf2::derive(
 		pbkdf2::PBKDF2_HMAC_SHA256,
 		NonZeroU32::new(4096).unwrap(),
 		salt,
-		b"secret",
+		fixtures::password().as_bytes(),
 		&mut salted,
 	);
 	let client_key = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &salted), b"Client Key");

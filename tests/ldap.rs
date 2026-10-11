@@ -81,7 +81,7 @@ fn wrong_password_returns_none() {
 	let (user, _) = known_user();
 	let auth = LdapAuthenticator::new(config);
 	assert_eq!(
-		auth.authenticate(&user, "definitely-not-the-password"),
+		auth.authenticate(&user, &fixtures::fresh_secret()),
 		None,
 		"a wrong password fails closed"
 	);
@@ -95,7 +95,7 @@ fn unknown_user_returns_none() {
 	};
 	let auth = LdapAuthenticator::new(config);
 	assert_eq!(
-		auth.authenticate("no-such-user-xyz", "whatever"),
+		auth.authenticate("no-such-user-xyz", &fixtures::fresh_secret()),
 		None,
 		"an unknown user fails closed, indistinguishable from a bad password"
 	);
@@ -120,3 +120,8 @@ fn search_load_produces_the_known_account() {
 		"the loaded account carries at least one address"
 	);
 }
+
+// Each integration crate uses the shared fixture source.
+#[allow(dead_code)]
+#[path = "../src/test_fixtures.rs"]
+mod fixtures;

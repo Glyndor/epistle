@@ -52,3 +52,6 @@ pub mod totp;
 pub mod util;
 pub mod webdav;
 pub mod webhook;
+
+#[cfg(test)]
+mod test_fixtures;

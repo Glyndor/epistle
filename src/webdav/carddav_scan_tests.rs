@@ -1,5 +1,6 @@
 //! Linear-scan regression tests for the REPORT body scan in CardDAV and CalDAV.
 
+use crate::test_fixtures as fixtures;
 use std::sync::atomic::Ordering;
 
 use super::*;
@@ -36,7 +37,7 @@ fn base64_encode(input: &[u8]) -> String {
 	out
 }
 
-/// Build a router backed by a temp data dir with `alice`/`pw-a`.
+/// Build a router backed by a temp data dir with `alice`.
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
 		name: name.to_string(),
@@ -52,7 +53,7 @@ fn test_app(dir: &std::path::Path) -> Router {
 		dir,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
-		vec![account("alice", "pw-a")],
+		vec![account("alice", fixtures::password())],
 	)
 	.expect("store");
 	router(store.handle(), dir.to_path_buf())
@@ -86,7 +87,9 @@ async fn send(
 	(status, bytes.to_vec())
 }
 
-const ALICE: &str = "alice:pw-a";
+fn alice() -> String {
+	format!("alice:{}", fixtures::password())
+}
 
 const MKCOL_ADDRESSBOOK: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
 <D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -158,9 +161,17 @@ fn hrefs_still_extracts_values_after_linear_refactor() {
 async fn multiget_still_returns_requested_cards() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
-	send(&app, "PUT", "/book/a.vcf", Some(ALICE), &[], VCARD).await;
-	send(&app, "PUT", "/book/b.vcf", Some(ALICE), &[], VCARD).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
+	send(&app, "PUT", "/book/a.vcf", Some(&alice()), &[], VCARD).await;
+	send(&app, "PUT", "/book/b.vcf", Some(&alice()), &[], VCARD).await;
 	let body = "<C:addressbook-multiget xmlns:D=\"DAV:\">\
 		<D:href>/book/a.vcf</D:href>\
 		<D:href>/book/b.vcf</D:href>\
@@ -169,7 +180,7 @@ async fn multiget_still_returns_requested_cards() {
 		&app,
 		"REPORT",
 		"/book",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		body.as_bytes(),
 	)

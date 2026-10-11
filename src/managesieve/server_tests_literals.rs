@@ -1,6 +1,7 @@
 //! ManageSieve server connection-loop tests for literal framing.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 
 fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(
@@ -10,7 +11,7 @@ fn directory() -> DirectoryHandle {
 		)
 		.with_password_hashes(std::collections::HashMap::from([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)])),
 	)
 }

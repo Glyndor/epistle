@@ -1,3 +1,4 @@
+use crate::test_fixtures as fixtures;
 use crate::webdav::router;
 use axum::Router;
 use axum::body::Body;
@@ -31,8 +32,8 @@ fn base64_encode(input: &[u8]) -> String {
 	out
 }
 
-/// Build a router backed by a temp data dir with two accounts: `alice`/`pw-a`
-/// and `bob`/`pw-b`. Returns the router and the temp dir (kept alive).
+/// Build a router backed by a temp data dir with two accounts: `alice`
+/// and `bob`. Returns the router and the temp dir (kept alive).
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
 		name: name.to_string(),
@@ -48,7 +49,10 @@ fn test_app(dir: &std::path::Path) -> Router {
 		dir,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
-		vec![account("alice", "pw-a"), account("bob", "pw-b")],
+		vec![
+			account("alice", fixtures::password()),
+			account("bob", fixtures::second_password()),
+		],
 	)
 	.expect("store");
 	router(store.handle(), dir.to_path_buf())
@@ -85,16 +89,20 @@ async fn send(
 	(status, bytes.to_vec(), resp_headers)
 }
 
-const ALICE: &str = "alice:pw-a";
-const BOB: &str = "bob:pw-b";
+fn alice() -> String {
+	format!("alice:{}", fixtures::password())
+}
+fn bob() -> String {
+	format!("bob:{}", fixtures::second_password())
+}
 
 #[tokio::test]
 async fn put_then_get_roundtrips() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "PUT", "/hello.txt", Some(ALICE), &[], b"world").await;
+	let (status, _, _) = send(&app, "PUT", "/hello.txt", Some(&alice()), &[], b"world").await;
 	assert_eq!(status, StatusCode::CREATED);
-	let (status, body, _) = send(&app, "GET", "/hello.txt", Some(ALICE), &[], b"").await;
+	let (status, body, _) = send(&app, "GET", "/hello.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body, b"world");
 }
@@ -103,10 +111,10 @@ async fn put_then_get_roundtrips() {
 async fn put_replace_returns_no_content() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/a.txt", Some(ALICE), &[], b"one").await;
-	let (status, _, _) = send(&app, "PUT", "/a.txt", Some(ALICE), &[], b"two").await;
+	send(&app, "PUT", "/a.txt", Some(&alice()), &[], b"one").await;
+	let (status, _, _) = send(&app, "PUT", "/a.txt", Some(&alice()), &[], b"two").await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
-	let (_, body, _) = send(&app, "GET", "/a.txt", Some(ALICE), &[], b"").await;
+	let (_, body, _) = send(&app, "GET", "/a.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(body, b"two");
 }
 
@@ -114,7 +122,7 @@ async fn put_replace_returns_no_content() {
 async fn put_into_missing_collection_is_conflict() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "PUT", "/nope/a.txt", Some(ALICE), &[], b"x").await;
+	let (status, _, _) = send(&app, "PUT", "/nope/a.txt", Some(&alice()), &[], b"x").await;
 	assert_eq!(status, StatusCode::CONFLICT);
 }
 
@@ -122,7 +130,7 @@ async fn put_into_missing_collection_is_conflict() {
 async fn get_missing_is_not_found() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "GET", "/ghost.txt", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "GET", "/ghost.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -130,8 +138,8 @@ async fn get_missing_is_not_found() {
 async fn head_returns_headers_no_body() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/h.txt", Some(ALICE), &[], b"12345").await;
-	let (status, body, resp_headers) = send(&app, "HEAD", "/h.txt", Some(ALICE), &[], b"").await;
+	send(&app, "PUT", "/h.txt", Some(&alice()), &[], b"12345").await;
+	let (status, body, resp_headers) = send(&app, "HEAD", "/h.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body.is_empty());
 	assert_eq!(resp_headers.get(header::CONTENT_LENGTH).unwrap(), "5");
@@ -141,7 +149,7 @@ async fn head_returns_headers_no_body() {
 async fn options_advertises_dav_and_allow() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(ALICE), &[], b"").await;
+	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	let dav = resp_headers.get("DAV").unwrap().to_str().unwrap();
 	assert!(dav.contains('1'));
@@ -155,10 +163,10 @@ async fn options_advertises_dav_and_allow() {
 async fn mkcol_creates_collection() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "MKCOL", "/docs", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "MKCOL", "/docs", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::CREATED);
 	// A PUT into the new collection now succeeds.
-	let (status, _, _) = send(&app, "PUT", "/docs/a.txt", Some(ALICE), &[], b"x").await;
+	let (status, _, _) = send(&app, "PUT", "/docs/a.txt", Some(&alice()), &[], b"x").await;
 	assert_eq!(status, StatusCode::CREATED);
 }
 
@@ -166,8 +174,8 @@ async fn mkcol_creates_collection() {
 async fn mkcol_existing_is_method_not_allowed() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/docs", Some(ALICE), &[], b"").await;
-	let (status, _, _) = send(&app, "MKCOL", "/docs", Some(ALICE), &[], b"").await;
+	send(&app, "MKCOL", "/docs", Some(&alice()), &[], b"").await;
+	let (status, _, _) = send(&app, "MKCOL", "/docs", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
@@ -175,12 +183,12 @@ async fn mkcol_existing_is_method_not_allowed() {
 async fn propfind_depth_zero_describes_resource() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/f.txt", Some(ALICE), &[], b"abcd").await;
+	send(&app, "PUT", "/f.txt", Some(&alice()), &[], b"abcd").await;
 	let (status, body, _) = send(
 		&app,
 		"PROPFIND",
 		"/f.txt",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		b"",
 	)
@@ -196,14 +204,14 @@ async fn propfind_depth_zero_describes_resource() {
 async fn propfind_depth_one_lists_children() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
-	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
-	send(&app, "PUT", "/d/b.txt", Some(ALICE), &[], b"bb").await;
+	send(&app, "MKCOL", "/d", Some(&alice()), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(&alice()), &[], b"a").await;
+	send(&app, "PUT", "/d/b.txt", Some(&alice()), &[], b"bb").await;
 	let (status, body, _) = send(
 		&app,
 		"PROPFIND",
 		"/d",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		b"",
 	)
@@ -225,7 +233,7 @@ async fn propfind_missing_is_not_found() {
 		&app,
 		"PROPFIND",
 		"/none",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		b"",
 	)
@@ -237,10 +245,10 @@ async fn propfind_missing_is_not_found() {
 async fn delete_removes_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/x.txt", Some(ALICE), &[], b"x").await;
-	let (status, _, _) = send(&app, "DELETE", "/x.txt", Some(ALICE), &[], b"").await;
+	send(&app, "PUT", "/x.txt", Some(&alice()), &[], b"x").await;
+	let (status, _, _) = send(&app, "DELETE", "/x.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
-	let (status, _, _) = send(&app, "GET", "/x.txt", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "GET", "/x.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -248,11 +256,11 @@ async fn delete_removes_file() {
 async fn delete_collection_recursively() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/d", Some(ALICE), &[], b"").await;
-	send(&app, "PUT", "/d/a.txt", Some(ALICE), &[], b"a").await;
-	let (status, _, _) = send(&app, "DELETE", "/d", Some(ALICE), &[], b"").await;
+	send(&app, "MKCOL", "/d", Some(&alice()), &[], b"").await;
+	send(&app, "PUT", "/d/a.txt", Some(&alice()), &[], b"a").await;
+	let (status, _, _) = send(&app, "DELETE", "/d", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
-	let (status, _, _) = send(&app, "GET", "/d/a.txt", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "GET", "/d/a.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -260,7 +268,7 @@ async fn delete_collection_recursively() {
 async fn delete_missing_is_not_found() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "DELETE", "/none", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "DELETE", "/none", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -268,19 +276,19 @@ async fn delete_missing_is_not_found() {
 async fn copy_duplicates_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/src.txt", Some(ALICE), &[], b"data").await;
+	send(&app, "PUT", "/src.txt", Some(&alice()), &[], b"data").await;
 	let (status, _, _) = send(
 		&app,
 		"COPY",
 		"/src.txt",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Destination", "/dst.txt".to_string())],
 		b"",
 	)
 	.await;
 	assert_eq!(status, StatusCode::CREATED);
-	let (_, src, _) = send(&app, "GET", "/src.txt", Some(ALICE), &[], b"").await;
-	let (_, dst, _) = send(&app, "GET", "/dst.txt", Some(ALICE), &[], b"").await;
+	let (_, src, _) = send(&app, "GET", "/src.txt", Some(&alice()), &[], b"").await;
+	let (_, dst, _) = send(&app, "GET", "/dst.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(src, b"data");
 	assert_eq!(dst, b"data");
 }
@@ -289,20 +297,20 @@ async fn copy_duplicates_file() {
 async fn move_relocates_file() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/src.txt", Some(ALICE), &[], b"data").await;
+	send(&app, "PUT", "/src.txt", Some(&alice()), &[], b"data").await;
 	let (status, _, _) = send(
 		&app,
 		"MOVE",
 		"/src.txt",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Destination", "/moved.txt".to_string())],
 		b"",
 	)
 	.await;
 	assert_eq!(status, StatusCode::CREATED);
-	let (status, _, _) = send(&app, "GET", "/src.txt", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "GET", "/src.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
-	let (_, dst, _) = send(&app, "GET", "/moved.txt", Some(ALICE), &[], b"").await;
+	let (_, dst, _) = send(&app, "GET", "/moved.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(dst, b"data");
 }
 
@@ -310,13 +318,13 @@ async fn move_relocates_file() {
 async fn copy_no_overwrite_is_precondition_failed() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/a.txt", Some(ALICE), &[], b"a").await;
-	send(&app, "PUT", "/b.txt", Some(ALICE), &[], b"b").await;
+	send(&app, "PUT", "/a.txt", Some(&alice()), &[], b"a").await;
+	send(&app, "PUT", "/b.txt", Some(&alice()), &[], b"b").await;
 	let (status, _, _) = send(
 		&app,
 		"COPY",
 		"/a.txt",
-		Some(ALICE),
+		Some(&alice()),
 		&[
 			("Destination", "/b.txt".to_string()),
 			("Overwrite", "F".to_string()),
@@ -331,18 +339,18 @@ async fn copy_no_overwrite_is_precondition_failed() {
 async fn copy_with_absolute_url_destination() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/s.txt", Some(ALICE), &[], b"u").await;
+	send(&app, "PUT", "/s.txt", Some(&alice()), &[], b"u").await;
 	let (status, _, _) = send(
 		&app,
 		"COPY",
 		"/s.txt",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Destination", "https://dav.example.org/d.txt".to_string())],
 		b"",
 	)
 	.await;
 	assert_eq!(status, StatusCode::CREATED);
-	let (status, _, _) = send(&app, "GET", "/d.txt", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "GET", "/d.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 }
 
@@ -350,7 +358,7 @@ async fn copy_with_absolute_url_destination() {
 async fn traversal_in_path_is_forbidden() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "PUT", "/%2e%2e/escape.txt", Some(ALICE), &[], b"x").await;
+	let (status, _, _) = send(&app, "PUT", "/%2e%2e/escape.txt", Some(&alice()), &[], b"x").await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
@@ -358,12 +366,12 @@ async fn traversal_in_path_is_forbidden() {
 async fn traversal_in_destination_is_forbidden() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "PUT", "/s.txt", Some(ALICE), &[], b"x").await;
+	send(&app, "PUT", "/s.txt", Some(&alice()), &[], b"x").await;
 	let (status, _, _) = send(
 		&app,
 		"COPY",
 		"/s.txt",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Destination", "/../../bob/dav/stolen.txt".to_string())],
 		b"",
 	)
@@ -400,14 +408,22 @@ async fn account_isolation_is_enforced() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
 	// Alice writes a private file.
-	send(&app, "PUT", "/secret.txt", Some(ALICE), &[], b"alice-only").await;
+	send(
+		&app,
+		"PUT",
+		"/secret.txt",
+		Some(&alice()),
+		&[],
+		b"alice-only",
+	)
+	.await;
 	// Bob requests the same path: he gets his own (empty) tree, never Alice's.
-	let (status, _, _) = send(&app, "GET", "/secret.txt", Some(BOB), &[], b"").await;
+	let (status, _, _) = send(&app, "GET", "/secret.txt", Some(&bob()), &[], b"").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	// Bob writes his own file; Alice's is untouched and distinct.
-	send(&app, "PUT", "/secret.txt", Some(BOB), &[], b"bob-only").await;
-	let (_, alice_body, _) = send(&app, "GET", "/secret.txt", Some(ALICE), &[], b"").await;
-	let (_, bob_body, _) = send(&app, "GET", "/secret.txt", Some(BOB), &[], b"").await;
+	send(&app, "PUT", "/secret.txt", Some(&bob()), &[], b"bob-only").await;
+	let (_, alice_body, _) = send(&app, "GET", "/secret.txt", Some(&alice()), &[], b"").await;
+	let (_, bob_body, _) = send(&app, "GET", "/secret.txt", Some(&bob()), &[], b"").await;
 	assert_eq!(alice_body, b"alice-only");
 	assert_eq!(bob_body, b"bob-only");
 }
@@ -416,6 +432,6 @@ async fn account_isolation_is_enforced() {
 async fn unknown_method_is_method_not_allowed() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "LOCK", "/x.txt", Some(ALICE), &[], b"").await;
+	let (status, _, _) = send(&app, "LOCK", "/x.txt", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }

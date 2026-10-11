@@ -1,4 +1,5 @@
 use super::{ReportKind, etag, hrefs, is_addressbook, report_kind};
+use crate::test_fixtures as fixtures;
 use crate::webdav::router;
 use axum::Router;
 use axum::body::Body;
@@ -33,7 +34,7 @@ fn base64_encode(input: &[u8]) -> String {
 	out
 }
 
-/// Build a router backed by a temp data dir with `alice`/`pw-a` and `bob`/`pw-b`.
+/// Build a router backed by a temp data dir with `alice` and `bob`.
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
 		name: name.to_string(),
@@ -49,7 +50,10 @@ fn test_app(dir: &std::path::Path) -> Router {
 		dir,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
-		vec![account("alice", "pw-a"), account("bob", "pw-b")],
+		vec![
+			account("alice", fixtures::password()),
+			account("bob", fixtures::second_password()),
+		],
 	)
 	.expect("store");
 	router(store.handle(), dir.to_path_buf())
@@ -85,8 +89,12 @@ async fn send(
 	(status, bytes.to_vec(), resp_headers)
 }
 
-const ALICE: &str = "alice:pw-a";
-const BOB: &str = "bob:pw-b";
+fn alice() -> String {
+	format!("alice:{}", fixtures::password())
+}
+fn bob() -> String {
+	format!("bob:{}", fixtures::second_password())
+}
 
 const MKCOL_ADDRESSBOOK: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
 <D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -146,13 +154,21 @@ async fn marker_flags_addressbook() {
 async fn addressbook_mkcol_then_propfind_resourcetype() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, _) = send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
+	let (status, _, _) = send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
 	assert_eq!(status, StatusCode::CREATED);
 	let (status, body, _) = send(
 		&app,
 		"PROPFIND",
 		"/book",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		b"",
 	)
@@ -167,11 +183,21 @@ async fn addressbook_mkcol_then_propfind_resourcetype() {
 async fn vcard_put_get_roundtrips_with_type_and_etag() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
-	let (status, _, put_headers) = send(&app, "PUT", "/book/a.vcf", Some(ALICE), &[], VCARD).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
+	let (status, _, put_headers) =
+		send(&app, "PUT", "/book/a.vcf", Some(&alice()), &[], VCARD).await;
 	assert_eq!(status, StatusCode::CREATED);
 	assert!(put_headers.get(header::ETAG).is_some());
-	let (status, body, get_headers) = send(&app, "GET", "/book/a.vcf", Some(ALICE), &[], b"").await;
+	let (status, body, get_headers) =
+		send(&app, "GET", "/book/a.vcf", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body, VCARD);
 	assert_eq!(get_headers.get(header::CONTENT_TYPE).unwrap(), "text/vcard");
@@ -182,7 +208,7 @@ async fn vcard_put_get_roundtrips_with_type_and_etag() {
 async fn options_advertises_addressbook() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(ALICE), &[], b"").await;
+	let (status, _, resp_headers) = send(&app, "OPTIONS", "/", Some(&alice()), &[], b"").await;
 	assert_eq!(status, StatusCode::OK);
 	let dav = resp_headers.get("DAV").unwrap().to_str().unwrap();
 	assert!(dav.contains("addressbook"));
@@ -194,16 +220,24 @@ async fn options_advertises_addressbook() {
 async fn multiget_returns_requested_cards() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
-	send(&app, "PUT", "/book/a.vcf", Some(ALICE), &[], VCARD).await;
-	send(&app, "PUT", "/book/b.vcf", Some(ALICE), &[], VCARD).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
+	send(&app, "PUT", "/book/a.vcf", Some(&alice()), &[], VCARD).await;
+	send(&app, "PUT", "/book/b.vcf", Some(&alice()), &[], VCARD).await;
 	let report = "<C:addressbook-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\
 		<D:href>/book/a.vcf</D:href></C:addressbook-multiget>";
 	let (status, body, _) = send(
 		&app,
 		"REPORT",
 		"/book",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		report.as_bytes(),
 	)
@@ -221,16 +255,24 @@ async fn multiget_returns_requested_cards() {
 async fn query_returns_all_cards() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
-	send(&app, "PUT", "/book/a.vcf", Some(ALICE), &[], VCARD).await;
-	send(&app, "PUT", "/book/b.vcf", Some(ALICE), &[], VCARD).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
+	send(&app, "PUT", "/book/a.vcf", Some(&alice()), &[], VCARD).await;
+	send(&app, "PUT", "/book/b.vcf", Some(&alice()), &[], VCARD).await;
 	let report = "<C:addressbook-query xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\
 		<D:prop><D:getetag/><C:address-data/></D:prop></C:addressbook-query>";
 	let (status, body, _) = send(
 		&app,
 		"REPORT",
 		"/book",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "1".to_string())],
 		report.as_bytes(),
 	)
@@ -244,12 +286,20 @@ async fn query_returns_all_cards() {
 async fn report_bad_body_is_bad_request() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
 	let (status, _, _) = send(
 		&app,
 		"REPORT",
 		"/book",
-		Some(ALICE),
+		Some(&alice()),
 		&[],
 		b"<D:sync-collection xmlns:D=\"DAV:\"/>",
 	)
@@ -261,13 +311,28 @@ async fn report_bad_body_is_bad_request() {
 async fn multiget_traversal_href_is_not_served() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
-	send(&app, "PUT", "/book/a.vcf", Some(ALICE), &[], VCARD).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
+	send(&app, "PUT", "/book/a.vcf", Some(&alice()), &[], VCARD).await;
 	let report = "<C:addressbook-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\
 		<D:href>/../../bob/dav/secret.vcf</D:href>\
 		<D:href>/book/../../../bob/dav/secret.vcf</D:href></C:addressbook-multiget>";
-	let (status, body, _) =
-		send(&app, "REPORT", "/book", Some(ALICE), &[], report.as_bytes()).await;
+	let (status, body, _) = send(
+		&app,
+		"REPORT",
+		"/book",
+		Some(&alice()),
+		&[],
+		report.as_bytes(),
+	)
+	.await;
 	assert_eq!(status, StatusCode::MULTI_STATUS);
 	let text = String::from_utf8(body).unwrap();
 	// The escaping hrefs resolve to nothing — no card lines in the response.
@@ -279,14 +344,29 @@ async fn report_account_isolation_holds() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
 	// Bob stores a card.
-	send(&app, "MKCOL", "/book", Some(BOB), &[], MKCOL_ADDRESSBOOK).await;
-	send(&app, "PUT", "/book/secret.vcf", Some(BOB), &[], VCARD).await;
+	send(&app, "MKCOL", "/book", Some(&bob()), &[], MKCOL_ADDRESSBOOK).await;
+	send(&app, "PUT", "/book/secret.vcf", Some(&bob()), &[], VCARD).await;
 	// Alice asks for the same path: she gets her own (empty) tree, never Bob's.
-	send(&app, "MKCOL", "/book", Some(ALICE), &[], MKCOL_ADDRESSBOOK).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
 	let report = "<C:addressbook-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">\
 		<D:href>/book/secret.vcf</D:href></C:addressbook-multiget>";
-	let (status, body, _) =
-		send(&app, "REPORT", "/book", Some(ALICE), &[], report.as_bytes()).await;
+	let (status, body, _) = send(
+		&app,
+		"REPORT",
+		"/book",
+		Some(&alice()),
+		&[],
+		report.as_bytes(),
+	)
+	.await;
 	assert_eq!(status, StatusCode::MULTI_STATUS);
 	let text = String::from_utf8(body).unwrap();
 	// Alice's tree has no such card; nothing is returned.
@@ -319,7 +399,7 @@ async fn propfind_discovery_returns_home_set() {
 		&app,
 		"PROPFIND",
 		"/alice/",
-		Some(ALICE),
+		Some(&alice()),
 		&[("Depth", "0".to_string())],
 		body.as_bytes(),
 	)

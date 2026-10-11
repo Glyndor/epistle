@@ -1,6 +1,7 @@
 //! Tests for the ACME client flow.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 use std::collections::HashMap;
 
 /// Transport returning canned responses keyed by URL, recording POSTs.
@@ -15,7 +16,7 @@ impl AcmeTransport for ScriptedTransport {
 		Box::pin(async move { Ok(body) })
 	}
 	fn new_nonce(&self, _url: &str) -> Fut<'_, String> {
-		Box::pin(async { Ok("nonce-0".to_string()) })
+		Box::pin(async { Ok(fixtures::nonce().to_string()) })
 	}
 	fn post(&self, url: &str, _jws: &str) -> Fut<'_, PostResponse> {
 		let resp = self
@@ -45,7 +46,7 @@ async fn register_then_order_threads_account_and_parses_order() {
 	posts.insert(
 		"https://acme.example/new-acct".to_string(),
 		PostResponse {
-			nonce: "nonce-1".to_string(),
+			nonce: fixtures::nonce().to_string(),
 			location: Some("https://acme.example/acct/42".to_string()),
 			status: 201,
 			body: b"{}".to_vec(),
@@ -54,7 +55,7 @@ async fn register_then_order_threads_account_and_parses_order() {
 	posts.insert(
 		"https://acme.example/new-order".to_string(),
 		PostResponse {
-			nonce: "nonce-2".to_string(),
+			nonce: fixtures::nonce().to_string(),
 			location: Some("https://acme.example/order/7".to_string()),
 			status: 201,
 			body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
@@ -96,7 +97,7 @@ impl AcmeTransport for SequencedTransport {
 		Box::pin(async move { Ok(body) })
 	}
 	fn new_nonce(&self, _url: &str) -> Fut<'_, String> {
-		Box::pin(async { Ok("nonce-0".to_string()) })
+		Box::pin(async { Ok(fixtures::nonce().to_string()) })
 	}
 	fn post(&self, url: &str, _jws: &str) -> Fut<'_, PostResponse> {
 		let mut posts = self.posts.lock().expect("posts");
@@ -120,7 +121,7 @@ async fn obtain_certificate_runs_the_full_flow() {
 	q(
 		"https://acme.example/new-acct",
 		vec![PostResponse {
-			nonce: "n".into(),
+			nonce: fixtures::nonce().into(),
 			location: Some("https://acme.example/acct/1".into()),
 			status: 201,
 			body: b"{}".to_vec(),
@@ -129,7 +130,7 @@ async fn obtain_certificate_runs_the_full_flow() {
 	q(
 		"https://acme.example/new-order",
 		vec![PostResponse {
-			nonce: "n".into(),
+			nonce: fixtures::nonce().into(),
 			location: Some("https://acme.example/order/7".into()),
 			status: 201,
 			body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
@@ -138,19 +139,22 @@ async fn obtain_certificate_runs_the_full_flow() {
 	q(
 		"https://acme.example/authz/1",
 		vec![
-			ok_body("n", br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#),
-			ok_body("n", br#"{"status":"valid","challenges":[]}"#),
+			ok_body(fixtures::nonce(), &serde_json::to_vec(&serde_json::json!({"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":fixtures::api_token(),"status":"pending"}]})).expect("challenge JSON")),
+			ok_body(fixtures::nonce(), br#"{"status":"valid","challenges":[]}"#),
 		],
 	);
-	q("https://acme.example/chal/1", vec![ok_body("n", b"{}")]);
+	q(
+		"https://acme.example/chal/1",
+		vec![ok_body(fixtures::nonce(), b"{}")],
+	);
 	q(
 		"https://acme.example/finalize/7",
-		vec![ok_body("n", br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#)],
+		vec![ok_body(fixtures::nonce(), br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#)],
 	);
 	q(
 		"https://acme.example/cert/7",
 		vec![ok_body(
-			"n",
+			fixtures::nonce(),
 			b"-----BEGIN CERTIFICATE-----\nMII\n-----END CERTIFICATE-----\n",
 		)],
 	);
@@ -175,7 +179,7 @@ async fn obtain_certificate_runs_the_full_flow() {
 	assert!(chain.starts_with("-----BEGIN CERTIFICATE-----"));
 	assert!(key_pem.contains("PRIVATE KEY"));
 	// Challenge tokens are cleaned up afterward.
-	assert!(store.get("tok").is_none());
+	assert!(store.get(fixtures::api_token()).is_none());
 }
 
 fn ok_body(nonce: &str, body: &[u8]) -> PostResponse {
@@ -194,29 +198,29 @@ async fn challenge_finalize_and_certificate_flow() {
 	posts.insert(
 		"https://acme.example/authz/1".to_string(),
 		ok_body(
-			"n1",
-			br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#,
+			fixtures::nonce(),
+			&serde_json::to_vec(&serde_json::json!({"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":fixtures::api_token(),"status":"pending"}]})).expect("challenge JSON"),
 		),
 	);
 	posts.insert(
 		"https://acme.example/chal/1".to_string(),
-		ok_body("n2", b"{}"),
+		ok_body(fixtures::nonce(), b"{}"),
 	);
 	posts.insert(
 		"https://acme.example/finalize/7".to_string(),
 		ok_body(
-			"n3",
+			fixtures::nonce(),
 			br#"{"status":"processing","finalize":"https://acme.example/finalize/7"}"#,
 		),
 	);
 	posts.insert(
 		"https://acme.example/order/7".to_string(),
-		ok_body("n4", br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#),
+		ok_body(fixtures::nonce(), br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#),
 	);
 	posts.insert(
 		"https://acme.example/cert/7".to_string(),
 		ok_body(
-			"n5",
+			fixtures::nonce(),
 			b"-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----\n",
 		),
 	);
@@ -238,7 +242,7 @@ async fn challenge_finalize_and_certificate_flow() {
 	// the credential into the CI log. The boolean form names
 	// the contract without echoing the payload.
 	assert!(
-		challenge.token == "tok",
+		challenge.token == fixtures::api_token(),
 		"the http-01 challenge must carry the fixture token"
 	);
 
@@ -270,7 +274,7 @@ fn order_posts(
 	posts.insert(
 		"https://acme.example/new-acct".to_string(),
 		vec![PostResponse {
-			nonce: "n".into(),
+			nonce: fixtures::nonce().into(),
 			location: Some("https://acme.example/acct/1".into()),
 			status: 201,
 			body: b"{}".to_vec(),
@@ -280,7 +284,7 @@ fn order_posts(
 	posts.insert(
 		"https://acme.example/new-order".to_string(),
 		vec![PostResponse {
-			nonce: "n".into(),
+			nonce: fixtures::nonce().into(),
 			location: Some("https://acme.example/order/7".into()),
 			status: 201,
 			body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
@@ -289,7 +293,7 @@ fn order_posts(
 	);
 	posts.insert(
 		"https://acme.example/chal/1".to_string(),
-		vec![ok_body("n", b"{}")].into(),
+		vec![ok_body(fixtures::nonce(), b"{}")].into(),
 	);
 	posts.insert("https://acme.example/authz/1".to_string(), authz.into());
 	posts
@@ -316,8 +320,8 @@ async fn registered_client(
 #[tokio::test]
 async fn obtain_fails_when_authorization_invalid() {
 	let authz = vec![
-		ok_body("n", br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#),
-		ok_body("n", br#"{"status":"invalid","challenges":[]}"#),
+		ok_body(fixtures::nonce(), &serde_json::to_vec(&serde_json::json!({"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":fixtures::api_token(),"status":"pending"}]})).expect("challenge JSON")),
+		ok_body(fixtures::nonce(), br#"{"status":"invalid","challenges":[]}"#),
 	];
 	let client = registered_client(order_posts(authz)).await;
 	let store = crate::acme::http01::ChallengeStore::new();
@@ -330,7 +334,7 @@ async fn obtain_fails_when_authorization_invalid() {
 #[tokio::test]
 async fn obtain_times_out_when_authorization_never_valid() {
 	// Authorization stays pending forever: polling exhausts its budget.
-	let authz = vec![ok_body("n", br#"{"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#)];
+	let authz = vec![ok_body(fixtures::nonce(), &serde_json::to_vec(&serde_json::json!({"status":"pending","challenges":[{"type":"http-01","url":"https://acme.example/chal/1","token":fixtures::api_token(),"status":"pending"}]})).expect("challenge JSON"))];
 	let client = registered_client(order_posts(authz)).await;
 	let store = crate::acme::http01::ChallengeStore::new();
 	let result = client
@@ -395,7 +399,7 @@ async fn obtain_certificate_dns01_publishes_and_cleans_up() {
 	q(
 		"https://acme.example/new-acct",
 		vec![PostResponse {
-			nonce: "n".into(),
+			nonce: fixtures::nonce().into(),
 			location: Some("https://acme.example/acct/1".into()),
 			status: 201,
 			body: b"{}".to_vec(),
@@ -404,7 +408,7 @@ async fn obtain_certificate_dns01_publishes_and_cleans_up() {
 	q(
 		"https://acme.example/new-order",
 		vec![PostResponse {
-			nonce: "n".into(),
+			nonce: fixtures::nonce().into(),
 			location: Some("https://acme.example/order/7".into()),
 			status: 201,
 			body: br#"{"status":"pending","authorizations":["https://acme.example/authz/1"],"finalize":"https://acme.example/finalize/7"}"#.to_vec(),
@@ -413,19 +417,22 @@ async fn obtain_certificate_dns01_publishes_and_cleans_up() {
 	q(
 		"https://acme.example/authz/1",
 		vec![
-			ok_body("n", br#"{"status":"pending","identifier":{"type":"dns","value":"mail.example.org"},"challenges":[{"type":"dns-01","url":"https://acme.example/chal/1","token":"tok","status":"pending"}]}"#),
-			ok_body("n", br#"{"status":"valid","challenges":[]}"#),
+			ok_body(fixtures::nonce(), &serde_json::to_vec(&serde_json::json!({"status":"pending","identifier":{"type":"dns","value":"mail.example.org"},"challenges":[{"type":"dns-01","url":"https://acme.example/chal/1","token":fixtures::api_token(),"status":"pending"}]})).expect("challenge JSON")),
+			ok_body(fixtures::nonce(), br#"{"status":"valid","challenges":[]}"#),
 		],
 	);
-	q("https://acme.example/chal/1", vec![ok_body("n", b"{}")]);
+	q(
+		"https://acme.example/chal/1",
+		vec![ok_body(fixtures::nonce(), b"{}")],
+	);
 	q(
 		"https://acme.example/finalize/7",
-		vec![ok_body("n", br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#)],
+		vec![ok_body(fixtures::nonce(), br#"{"status":"valid","finalize":"https://acme.example/finalize/7","certificate":"https://acme.example/cert/7"}"#)],
 	);
 	q(
 		"https://acme.example/cert/7",
 		vec![ok_body(
-			"n",
+			fixtures::nonce(),
 			b"-----BEGIN CERTIFICATE-----\nMII\n-----END CERTIFICATE-----\n",
 		)],
 	);

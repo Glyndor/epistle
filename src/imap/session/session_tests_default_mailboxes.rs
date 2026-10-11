@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 
 fn expected_list(rev2: bool, special_use: bool) -> String {
 	let mut response = String::new();
@@ -104,7 +105,8 @@ fn default_mailboxes_sasl_plain_login_initializes_the_store() {
 	use base64::Engine;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
-	let credentials = base64::engine::general_purpose::STANDARD.encode(b"\0alice\0secret");
+	let credentials = base64::engine::general_purpose::STANDARD
+		.encode(format!("\0alice\0{}", fixtures::password()));
 	let output = session.command_line(&format!("a AUTHENTICATE PLAIN {credentials}"));
 	assert!(
 		text(&output) == "a OK AUTHENTICATE completed\r\n",

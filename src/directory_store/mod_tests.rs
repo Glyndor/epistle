@@ -3,6 +3,7 @@
 use super::*;
 use crate::smtp::auth::tests::{fixture_password, wrong_password};
 use crate::smtp::directory::Resolution;
+use crate::test_fixtures as fixtures;
 
 fn static_account() -> Account {
 	Account {
@@ -117,14 +118,17 @@ fn password_change_swaps_credentials() {
 	let store = open_store(dir.path());
 	store.add(dynamic("bob", "bob@example.org")).expect("add");
 
-	let real_hash = crate::smtp::auth::tests::hash("secret");
+	let real_hash = crate::smtp::auth::tests::hash(fixtures::password());
 	store
 		.set_password_hash("bob", real_hash, None)
 		.expect("set password");
 	let directory = store.handle().current();
 	let (account, hash) = directory.credentials("bob").expect("credentials");
 	assert_eq!(account, "bob");
-	assert!(crate::smtp::auth::verify_password(hash, "secret"));
+	assert!(crate::smtp::auth::verify_password(
+		hash,
+		fixtures::password()
+	));
 }
 
 #[test]

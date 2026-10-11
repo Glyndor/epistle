@@ -1,6 +1,7 @@
 //! Tests for the ManageSieve session state machine.
 
 use super::*;
+use crate::test_fixtures as fixtures;
 use std::path::PathBuf;
 
 struct TestBackend {
@@ -14,7 +15,8 @@ impl Backend for TestBackend {
 		password: &str,
 		_peer_ip: Option<std::net::IpAddr>,
 	) -> Option<String> {
-		(authcid == "alice@example.org" && password == "secret").then(|| "alice".to_string())
+		(authcid == "alice@example.org" && password == fixtures::password())
+			.then(|| "alice".to_string())
 	}
 	fn store(&self, account: &str) -> ScriptStore {
 		ScriptStore::new(&self.root, account)
@@ -32,7 +34,8 @@ fn session(tls: bool) -> (Session<TestBackend>, tempfile::TempDir) {
 /// SASL PLAIN initial response for alice.
 fn plain() -> String {
 	use base64::Engine;
-	base64::engine::general_purpose::STANDARD.encode("\0alice@example.org\0secret")
+	base64::engine::general_purpose::STANDARD
+		.encode(format!("\0alice@example.org\0{}", fixtures::password()))
 }
 
 fn login(s: &mut Session<TestBackend>) {
