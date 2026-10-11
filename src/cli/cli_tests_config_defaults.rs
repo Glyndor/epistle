@@ -36,7 +36,9 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Reports { config, .. } => Some(config),
 		Command::Stack { config, .. }
 		| Command::Service { config, .. }
-		| Command::Limits { config, .. } => Some(config),
+		| Command::Limits { config, .. }
+		| Command::Status { config, .. }
+		| Command::Check { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }
