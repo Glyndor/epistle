@@ -10,6 +10,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv};
 
 /// Spaceship's API base; overridable for tests.
@@ -27,7 +29,7 @@ pub struct SpaceshipProvider {
 	api_key: String,
 	api_secret: String,
 	zone: String,
-	base: String,
+	base: HttpsUrl,
 }
 
 #[derive(Deserialize)]
@@ -45,13 +47,13 @@ impl SpaceshipProvider {
 			api_key,
 			api_secret,
 			zone,
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -112,10 +114,17 @@ impl SpaceshipProvider {
 		}
 	}
 
+	/// `{base}/dns/records/{zone}`, with the zone escaped as one path segment.
+	fn records_url(&self) -> Result<HttpsUrl, ProviderError> {
+		Ok(self
+			.base
+			.with_segments(["dns", "records", self.zone.as_str()])?)
+	}
+
 	/// Add a fresh request with the Spaceship auth headers attached.
-	fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+	fn request(&self, method: reqwest::Method, url: HttpsUrl) -> reqwest::RequestBuilder {
 		self.client
-			.request(method, format!("{}{path}", self.base))
+			.request(method, url.into_url())
 			.header("X-API-Key", &self.api_key)
 			.header("X-API-Secret", &self.api_secret)
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -126,7 +135,7 @@ impl SpaceshipProvider {
 	/// on success. SRV uses dedicated `priority`/`weight`/`port`/`target`
 	/// fields; everything else uses the kind-specific value field.
 	async fn add(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		let path = format!("/dns/records/{}", self.zone);
+		let url = self.records_url()?;
 		let mut item = serde_json::json!({
 			"type": kind,
 			"name": rel,
@@ -188,7 +197,7 @@ impl SpaceshipProvider {
 		})
 		.to_string();
 		let response = self
-			.request(reqwest::Method::PUT, &path)
+			.request(reqwest::Method::PUT, url)
 			.body(body)
 			.send()
 			.await
@@ -206,7 +215,7 @@ impl SpaceshipProvider {
 	/// the value-bearing case includes it. Replies 204 whether or not
 	/// anything matched (idempotent by definition).
 	async fn remove(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		let path = format!("/dns/records/{}", self.zone);
+		let url = self.records_url()?;
 		let mut item = serde_json::json!({"type": kind, "name": rel});
 		// TXT value-bearing deletes need the value to disambiguate
 		// same-name records; the wholesale empty-value case leaves
@@ -215,7 +224,7 @@ impl SpaceshipProvider {
 			item["value"] = serde_json::Value::String(record.value.clone());
 		}
 		let response = self
-			.request(reqwest::Method::DELETE, &path)
+			.request(reqwest::Method::DELETE, url)
 			.body(serde_json::json!([item]).to_string())
 			.send()
 			.await
@@ -227,13 +236,15 @@ impl SpaceshipProvider {
 	/// caps `take` at 500; we page through `skip` until we have fetched
 	/// `total` records so a large zone is not silently truncated.
 	async fn list_all(&self) -> Result<Vec<serde_json::Value>, ProviderError> {
-		let path = format!("/dns/records/{}", self.zone);
+		let url = self.records_url()?;
 		let mut out = Vec::new();
 		let mut skip: i64 = 0;
 		loop {
-			let url = format!("{}?take={PAGE_MAX}&skip={skip}", path);
+			let page_url = url
+				.with_query("take", &PAGE_MAX.to_string())
+				.with_query("skip", &skip.to_string());
 			let response = self
-				.request(reqwest::Method::GET, &url)
+				.request(reqwest::Method::GET, page_url)
 				.send()
 				.await
 				.map_err(|e| ProviderError::Remote(e.to_string()))?;
@@ -382,3 +393,7 @@ mod tests;
 #[cfg(test)]
 #[path = "spaceship_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "spaceship_tests_path.rs"]
+mod path_tests;
