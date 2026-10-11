@@ -199,8 +199,11 @@ impl Rotator {
 					.upsert(&self.zone, txt_record(&self.record_name(&selector), &txt))
 					.await
 					.map_err(|e| RotateError(e.to_string()))?;
-				let signer =
-					Signer::load(&selector, &key_file).map_err(|e| RotateError(e.to_string()))?;
+				let signer = self
+					.signer
+					.current()
+					.with_rotated_key(&selector, &key_file)
+					.map_err(|e| RotateError(e.to_string()))?;
 				self.signer.reload(Arc::new(signer));
 				// Retire the just-replaced selector after the overlap window.
 				let previous = (!state.selector.is_empty()).then(|| Previous {
@@ -291,3 +294,7 @@ impl From<std::io::Error> for RotateError {
 #[cfg(test)]
 #[path = "rotate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rotate_tests_signing.rs"]
+mod tests_signing;
