@@ -1,7 +1,7 @@
 use super::*;
 use std::fs;
 
-const TEXT: &str = "# deployment\nhostname = '${USER}.example.org'\ndata_dir = '/var/lib/mail'\nquota_bytes = 123 # cap\n";
+const TEXT: &str = "# deployment\nhostname = 'mail.example.org' # ${PATH}\ndata_dir = '/var/lib/mail'\nquota_bytes = 123 # cap\n";
 
 fn fixture() -> tempfile::NamedTempFile {
 	let file = tempfile::NamedTempFile::new_in(".").unwrap();
@@ -79,7 +79,7 @@ fn dry_run_returns_exact_unified_diff_without_writing() {
 	let mut doc = ConfigDocument::open(file.path()).unwrap();
 	doc.set_scalar("quota_bytes", 456_i64).unwrap();
 	let expected = format!(
-		"--- {}\n+++ {}\n@@ -1,4 +1,4 @@\n # deployment\n hostname = '${{USER}}.example.org'\n data_dir = '/var/lib/mail'\n-quota_bytes = 123 # cap\n+quota_bytes = 456 # cap\n",
+		"--- {}\n+++ {}\n@@ -1,4 +1,4 @@\n # deployment\n hostname = 'mail.example.org' # ${{PATH}}\n data_dir = '/var/lib/mail'\n-quota_bytes = 123 # cap\n+quota_bytes = 456 # cap\n",
 		file.path().display(),
 		file.path().display()
 	);

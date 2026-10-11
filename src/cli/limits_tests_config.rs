@@ -7,7 +7,7 @@ pub(super) fn config_file() -> (tempfile::TempDir, tempfile::NamedTempFile) {
 	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
-		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\nlog_format = \"json\"\nsrs_secret = \"${{USER}}\"\n[antispam]\nclamd_timeout_secs = 45",
+		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\nlog_format = \"json\"\nsrs_secret = \"${{PATH}}\"\n[antispam]\nclamd_timeout_secs = 45",
 		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
