@@ -12,6 +12,7 @@ mod ports;
 mod report;
 #[cfg(test)]
 mod test_support;
+mod tls_area;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -38,17 +39,20 @@ pub enum CheckArea {
 	Config,
 	/// Every enabled listener answers with its protocol greeting.
 	Ports,
+	/// The served certificate is valid, not close to expiry, and covers the hostname.
+	Tls,
 }
 
 impl CheckArea {
 	/// Every area, in the order `status` prints them.
-	const ALL: &'static [CheckArea] = &[CheckArea::Config, CheckArea::Ports];
+	const ALL: &'static [CheckArea] = &[CheckArea::Config, CheckArea::Ports, CheckArea::Tls];
 
 	/// The name used on the command line and as the JSON key.
 	pub(super) fn name(self) -> &'static str {
 		match self {
 			CheckArea::Config => "config",
 			CheckArea::Ports => "ports",
+			CheckArea::Tls => "tls",
 		}
 	}
 }
@@ -165,6 +169,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 	match area {
 		CheckArea::Config => config_area::check(ctx).await,
 		CheckArea::Ports => ports::check(ctx).await,
+		CheckArea::Tls => tls_area::check(ctx).await,
 	}
 }
 
