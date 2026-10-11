@@ -67,7 +67,7 @@ fn list_json_emits_an_array_with_alias_edges() {
 	// aliases_from: domains this domain is the source of (empty here).
 	let aliases_from = row["aliases_from"].as_array().expect("array");
 	assert!(aliases_from.is_empty());
-	// aliases_to: domains that point at this one — `alias.example.org`
+	// aliases_to: domains that point at this one, `alias.example.org`
 	// targets `example.org`, so it appears here.
 	let aliases_to = row["aliases_to"].as_array().expect("array");
 	assert!(

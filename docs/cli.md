@@ -400,7 +400,7 @@ epistle antispam add dnsbl-zones zen.spamhaus.org --dry-run
 keys (`dnsbl-zones`, `dnsbl-domain-zones`, `dnsbl-url-zones`) print as
 `<key>\t<comma-separated values>\tconfigured` (or `(empty)\tdefault`).
 The LLM block fields (`llm-endpoint`, `llm-model`, `llm-api-key-env`)
-print as `set`/`unset` only — the values are secrets and never appear
+print as `set`/`unset` only, the values are secrets and never appear
 on stdout.
 
 `set <key> <value>` writes one key. For list keys the value replaces
