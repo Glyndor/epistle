@@ -14,7 +14,7 @@ struct MockState {
 	records: Vec<serde_json::Value>,
 	/// Captured "METHOD /path" of every request, for assertions.
 	calls: Vec<String>,
-	/// Body of the most recent POST to `/dns_records` (assertions check the
+	/// Body of the most recent POST or PUT to `/dns_records` (assertions check the
 	/// kind-specific shape: SRV splits priority/weight/port/target into
 	/// `data`, TLSA splits usage/selector/matching/cert, etc.).
 	last_body: Option<String>,
@@ -49,12 +49,13 @@ async fn record_item(
 	State(state): State<Shared>,
 	method: axum::http::Method,
 	uri: axum::http::Uri,
+	body: String,
 ) -> axum::Json<serde_json::Value> {
-	state
-		.lock()
-		.unwrap()
-		.calls
-		.push(format!("{method} {}", uri.path()));
+	let mut s = state.lock().unwrap();
+	s.calls.push(format!("{method} {}", uri.path()));
+	if method == axum::http::Method::PUT {
+		s.last_body = Some(body);
+	}
 	axum::Json(serde_json::json!({ "success": true }))
 }
 
@@ -337,4 +338,63 @@ async fn caa_upsert_posts_with_flags_tag_value_data() {
 	assert!(body.contains("\"flags\":0"), "{body}");
 	assert!(body.contains("\"tag\":\"issue\""), "{body}");
 	assert!(body.contains("\"value\":\"letsencrypt.org\""), "{body}");
+}
+
+#[tokio::test]
+async fn create_body_carries_the_comment_field() {
+	let (provider, state) = mock(Vec::new()).await;
+	provider
+		.upsert("example.org", txt("_dmarc.example.org", "v=DMARC1; p=none"))
+		.await
+		.expect("upsert");
+	let body: serde_json::Value =
+		serde_json::from_str(state.lock().unwrap().last_body.as_deref().unwrap()).unwrap();
+	assert_eq!(body["comment"], "Managed by epistle");
+}
+
+#[tokio::test]
+async fn update_body_sets_the_comment_field_too() {
+	let existing = vec![serde_json::json!({
+		"id": "rec1", "type": "TXT", "name": "_dmarc.example.org",
+		"content": "v=DMARC1; p=none", "ttl": 3600, "comment": "set by hand"
+	})];
+	let (provider, state) = mock(existing).await;
+	provider
+		.upsert(
+			"example.org",
+			txt("_dmarc.example.org", "v=DMARC1; p=reject"),
+		)
+		.await
+		.expect("upsert");
+	let s = state.lock().unwrap();
+	assert!(
+		s.calls.iter().any(|c| c.starts_with("PUT ")),
+		"{:?}",
+		s.calls
+	);
+	let body: serde_json::Value = serde_json::from_str(s.last_body.as_deref().unwrap()).unwrap();
+	assert_eq!(body["comment"], "Managed by epistle");
+}
+
+#[test]
+fn every_record_kind_body_carries_the_comment() {
+	let rec = |kind, value: &str| DnsRecord {
+		name: "x.example.org".into(),
+		kind,
+		value: value.into(),
+		ttl: 300,
+	};
+	let cases = [
+		(RecordKind::A, "192.0.2.1"),
+		(RecordKind::Mx, "10 mail.example.org."),
+		(RecordKind::Srv, "0 1 443 mail.example.org."),
+		(RecordKind::Tlsa, "3 1 1 abcd"),
+		(RecordKind::Caa, "0 issue \"letsencrypt.org\""),
+	];
+	for (kind, value) in cases {
+		let r = rec(kind, value);
+		let body = CloudflareProvider::record_body(kind.as_str(), &r).unwrap();
+		let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+		assert_eq!(v["comment"], "Managed by epistle", "{}", kind.as_str());
+	}
 }

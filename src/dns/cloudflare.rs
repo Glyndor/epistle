@@ -11,7 +11,8 @@ use serde::Deserialize;
 use crate::net::HttpsUrl;
 
 use super::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+	DnsProvider, DnsRecord, ProviderError, RECORD_DESCRIPTION, RecordKind, ScopedSecret, parse_srv,
+	same_txt_purpose,
 };
 
 /// Cloudflare's API base; overridable for tests.
@@ -92,7 +93,7 @@ impl CloudflareProvider {
 	/// `priority weight port target`), everything else a plain `content`
 	/// string. SRV splits the presentation form on whitespace.
 	fn record_body(kind: &str, record: &DnsRecord) -> Result<String, ProviderError> {
-		let value = if record.kind == RecordKind::Tlsa {
+		let mut value = if record.kind == RecordKind::Tlsa {
 			let mut parts = record.value.split_whitespace();
 			let usage: u8 =
 				parts
@@ -180,6 +181,7 @@ impl CloudflareProvider {
 				"ttl": record.ttl,
 			})
 		};
+		value["comment"] = serde_json::Value::from(RECORD_DESCRIPTION);
 		Ok(value.to_string())
 	}
 
