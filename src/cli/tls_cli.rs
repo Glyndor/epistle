@@ -41,6 +41,7 @@ pub(super) struct TlsView {
 	issuer: String,
 	not_before: i64,
 	not_after: i64,
+	not_after_utc: String,
 	/// Whole days until `not_after`; negative once expired.
 	days_left: i64,
 	renewal_requested_at: Option<u64>,
@@ -92,6 +93,16 @@ pub(super) fn view(config: &Config, now: u64) -> Result<TlsView, String> {
 		})
 		.unwrap_or_default();
 	let not_after = cert.validity().not_after.timestamp();
+	let expiry = cert.validity().not_after.to_datetime();
+	let not_after_utc = format!(
+		"{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+		expiry.year(),
+		u8::from(expiry.month()),
+		expiry.day(),
+		expiry.hour(),
+		expiry.minute(),
+		expiry.second(),
+	);
 	Ok(TlsView {
 		source: served.source.as_str(),
 		cert_file: path,
@@ -100,6 +111,7 @@ pub(super) fn view(config: &Config, now: u64) -> Result<TlsView, String> {
 		issuer: cert.issuer().to_string(),
 		not_before: cert.validity().not_before.timestamp(),
 		not_after,
+		not_after_utc,
 		days_left: (not_after - i64::try_from(now).unwrap_or(i64::MAX)).div_euclid(86_400),
 		renewal_requested_at: crate::acme::renew_request::pending_request(&config.data_dir)
 			.map(|r| r.requested_at),
@@ -147,7 +159,7 @@ fn render_text(view: &TlsView, out: &mut impl std::io::Write) -> std::io::Result
 	writeln!(
 		out,
 		"expires: {} ({} days left)",
-		view.not_after, view.days_left
+		view.not_after_utc, view.days_left
 	)?;
 	if let Some(at) = view.renewal_requested_at {
 		writeln!(out, "renewal requested at {at}, waiting for the server")?;
@@ -197,3 +209,7 @@ pub(super) fn renew(
 #[cfg(test)]
 #[path = "tls_cli_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tls_cli_tests_expiry.rs"]
+mod tests_expiry;
