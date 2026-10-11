@@ -59,6 +59,17 @@ impl HttpsUrl {
 		Self::from_checked(url)
 	}
 
+	/// An `https` URL from a literal in the source. A literal that is not a
+	/// valid `https` URL is a programming error caught the first time the
+	/// code runs, so this panics instead of returning a `Result` nobody can
+	/// act on.
+	pub fn from_static(text: &'static str) -> Self {
+		match Self::parse(text) {
+			Ok(url) => url,
+			Err(err) => panic!("static URL {text:?} is not a usable https URL: {err}"),
+		}
+	}
+
 	/// A plain-`http` URL for the in-process mock servers the provider tests
 	/// start. Only a loopback host is accepted, so even test code cannot point
 	/// a credential at a remote cleartext endpoint.
@@ -123,6 +134,11 @@ impl HttpsUrl {
 		let mut url = self.0.clone();
 		url.query_pairs_mut().append_pair(key, value);
 		HttpsUrl(url)
+	}
+
+	/// The underlying URL by value, for handing to an HTTP client request.
+	pub fn into_url(self) -> Url {
+		self.0
 	}
 
 	/// The URL as text.

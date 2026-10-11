@@ -95,3 +95,15 @@ fn query_pairs_are_percent_encoded() {
 	let url = base.with_query("search", "a&b=c d");
 	assert_eq!(url.as_str(), "https://dns.example/zones?search=a%26b%3Dc+d");
 }
+
+#[test]
+fn from_static_accepts_an_https_literal() {
+	let url = HttpsUrl::from_static("https://desec.io/api/v1");
+	assert_eq!(url.as_str(), "https://desec.io/api/v1");
+}
+
+#[test]
+#[should_panic(expected = "is not a usable https URL: URL must use https://")]
+fn from_static_panics_on_an_http_literal() {
+	let _ = HttpsUrl::from_static("http://desec.io/api/v1");
+}

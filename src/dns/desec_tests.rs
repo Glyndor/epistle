@@ -52,7 +52,7 @@ async fn mock(rrsets_json: serde_json::Value) -> (DesecProvider, Shared) {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = DesecProvider::new(ScopedSecret::new("example.org", "tok"))
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 
