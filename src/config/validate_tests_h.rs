@@ -110,7 +110,7 @@ public_ipv6 = "::ffff:10.0.0.1"
 	);
 	assert!(
 		mapped.is_err(),
-		"IPv4-mapped IPv6 carrying a private address must be rejected, got {mapped:?}"
+		"IPv4-mapped IPv6 carrying a private address must be rejected"
 	);
 }
 

@@ -128,8 +128,7 @@ async fn a_move_with_junk_keyword_queues_a_training_job_on_the_destination() {
 			f,
 			crate::imap::mailbox::Flag::Keyword(k) if k.is_junk()
 		)),
-		"the moved message should carry the $Junk keyword, got flags: {:?}",
-		junk_message.flags
+		"the moved message should carry the $Junk keyword"
 	);
 
 	// The training worker records the calls it sees; one spam

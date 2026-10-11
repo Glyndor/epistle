@@ -59,7 +59,7 @@ fn plan_lists_the_self_signed_cert_step() {
 	write!(&mut rendered, "{cert_step}").expect("render");
 	assert!(
 		rendered.contains("cert.pem") && rendered.contains("key.pem"),
-		"plan step must name both halves of the pair: {rendered}"
+		"plan step must name both halves of the pair"
 	);
 }
 
@@ -215,8 +215,7 @@ fn apply_creates_missing_data_dir_with_mode_0700() {
 		plan.steps
 			.iter()
 			.any(|s| matches!(s, PlanStep::DataDir { path } if path == &data_dir)),
-		"plan must list the missing data_dir as a DataDir step; plan was {:?}",
-		plan.steps
+		"plan must list the missing data_dir as a DataDir step"
 	);
 	let outcome = apply(&answers);
 	assert!(outcome.error.is_none(), "apply failed: {:?}", outcome.error);

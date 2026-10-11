@@ -41,7 +41,7 @@ fn plan_refuses_oauth_private_key_that_is_not_utf8() {
 	};
 	assert!(
 		message.contains("not valid utf-8"),
-		"the diagnostic must name the utf-8 problem: {message}"
+		"the diagnostic must name the utf-8 problem"
 	);
 }
 
@@ -73,7 +73,7 @@ fn plan_refuses_oauth_public_key_that_is_not_utf8() {
 	};
 	assert!(
 		message.contains("not valid utf-8"),
-		"the diagnostic must name the utf-8 problem on the public half: {message}"
+		"the diagnostic must name the utf-8 problem on the public half"
 	);
 }
 
@@ -101,7 +101,7 @@ fn plan_refuses_oauth_private_key_that_is_not_a_pkcs8_es256_document() {
 	};
 	assert!(
 		message.contains("PKCS#8"),
-		"the diagnostic must name the PKCS#8 problem: {message}"
+		"the diagnostic must name the PKCS#8 problem"
 	);
 }
 
@@ -159,7 +159,7 @@ fn apply_refuses_oauth_private_key_that_is_not_utf8() {
 	};
 	assert!(
 		message.contains("not valid utf-8"),
-		"the diagnostic must name the utf-8 problem: {message}"
+		"the diagnostic must name the utf-8 problem"
 	);
 }
 
@@ -191,7 +191,7 @@ fn apply_refuses_oauth_public_key_that_is_not_utf8() {
 	};
 	assert!(
 		message.contains("not valid utf-8"),
-		"the diagnostic must name the utf-8 problem on the public half: {message}"
+		"the diagnostic must name the utf-8 problem on the public half"
 	);
 }
 
@@ -220,7 +220,7 @@ fn apply_refuses_oauth_private_key_that_is_not_a_pkcs8_es256_document() {
 	};
 	assert!(
 		message.contains("PKCS#8"),
-		"the diagnostic must name the PKCS#8 problem: {message}"
+		"the diagnostic must name the PKCS#8 problem"
 	);
 }
 
@@ -328,7 +328,7 @@ fn apply_refuses_a_surviving_private_key_that_is_not_utf8() {
 	};
 	assert!(
 		message.contains("utf-8"),
-		"the diagnostic must name the utf-8 problem: {message}"
+		"the diagnostic must name the utf-8 problem"
 	);
 }
 
