@@ -8,6 +8,10 @@
 
 mod clock;
 mod config_area;
+mod dns_area;
+mod dns_dkim;
+#[cfg(test)]
+mod dns_fake;
 mod ports;
 mod report;
 #[cfg(test)]
@@ -41,11 +45,18 @@ pub enum CheckArea {
 	Ports,
 	/// The served certificate is valid, not close to expiry, and covers the hostname.
 	Tls,
+	/// Published DNS records match what epistle expects, including the DKIM key.
+	Dns,
 }
 
 impl CheckArea {
 	/// Every area, in the order `status` prints them.
-	const ALL: &'static [CheckArea] = &[CheckArea::Config, CheckArea::Ports, CheckArea::Tls];
+	const ALL: &'static [CheckArea] = &[
+		CheckArea::Config,
+		CheckArea::Ports,
+		CheckArea::Tls,
+		CheckArea::Dns,
+	];
 
 	/// The name used on the command line and as the JSON key.
 	pub(super) fn name(self) -> &'static str {
@@ -53,6 +64,7 @@ impl CheckArea {
 			CheckArea::Config => "config",
 			CheckArea::Ports => "ports",
 			CheckArea::Tls => "tls",
+			CheckArea::Dns => "dns",
 		}
 	}
 }
@@ -170,6 +182,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Config => config_area::check(ctx).await,
 		CheckArea::Ports => ports::check(ctx).await,
 		CheckArea::Tls => tls_area::check(ctx).await,
+		CheckArea::Dns => dns_area::check(ctx).await,
 	}
 }
 

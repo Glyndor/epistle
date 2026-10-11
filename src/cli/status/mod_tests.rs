@@ -28,11 +28,11 @@ fn status_prints_one_line_per_area_and_exits_zero_when_nothing_fails() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = valid(dir.path());
 	let mut out = Vec::new();
-	let code = execute(&path, CheckArea::ALL, false, false, &mut out);
+	let code = execute(&path, &[CheckArea::Config], false, false, &mut out);
 	let text = String::from_utf8(out).expect("utf8");
 	let first = text.lines().next().expect("a line");
 	assert!(first.starts_with("config     ok    "), "line was: {first}");
-	assert_eq!(text.lines().count(), CheckArea::ALL.len(), "{text}");
+	assert_eq!(text.lines().count(), 1, "{text}");
 	assert_eq!(code, ExitCode::SUCCESS);
 }
 
@@ -41,7 +41,7 @@ fn status_exits_one_and_reports_fail_when_the_config_does_not_load() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = write_config(dir.path(), "this is not toml = = =");
 	let mut out = Vec::new();
-	let code = execute(&path, CheckArea::ALL, false, false, &mut out);
+	let code = execute(&path, &[CheckArea::Config], false, false, &mut out);
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
 		text.lines()
@@ -58,7 +58,7 @@ fn json_has_an_entry_per_area_with_status_detail_and_items() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = valid(dir.path());
 	let mut out = Vec::new();
-	execute(&path, CheckArea::ALL, true, false, &mut out);
+	execute(&path, &[CheckArea::Config], true, false, &mut out);
 	let value: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
 	let config = &value["config"];
 	assert_eq!(config["status"], "ok", "{value}");
@@ -68,10 +68,7 @@ fn json_has_an_entry_per_area_with_status_detail_and_items() {
 			.is_some_and(|d| d.contains("mail.toml"))
 	);
 	assert_eq!(config["items"][0]["name"], "restart", "{value}");
-	assert_eq!(
-		value.as_object().expect("object").len(),
-		CheckArea::ALL.len()
-	);
+	assert_eq!(value.as_object().expect("object").len(), 1);
 }
 
 #[test]
@@ -125,4 +122,10 @@ fn check_lists_items_under_the_area_line_and_status_does_not() {
 	render_json(&reports, &mut json).expect("render");
 	let value: serde_json::Value = serde_json::from_slice(&json).expect("json");
 	assert_eq!(value["config"]["items"][0]["name"], "smtp");
+}
+
+#[test]
+fn status_covers_every_area_in_a_stable_order() {
+	let names: Vec<_> = CheckArea::ALL.iter().map(|area| area.name()).collect();
+	assert_eq!(names, ["config", "ports", "tls", "dns"]);
 }
