@@ -28,8 +28,9 @@ mod account_actions;
 #[allow(unused_imports)]
 pub(super) use account_actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
-	find_log_id_with_store, handle_error, password_with_store, protocols_with_store,
-	quota_with_store, render, render_protocols, show_with_store,
+	find_log_id_with_store, handle_error, password_with_store, protocols_changed,
+	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
+	show_with_store,
 };
 
 /// Every action the `epistle account` umbrella command understands.

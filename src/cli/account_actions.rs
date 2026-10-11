@@ -87,7 +87,7 @@ pub(crate) fn password_with_store(
 	};
 	match store.set_password_hash(name, hash, Some(scram)) {
 		Ok(()) => {
-			println!("updated password for {name}");
+			println!("password updated");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -98,11 +98,11 @@ pub(crate) fn disable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 	match store.set_disabled(name, true) {
 		Ok(previous) => {
 			let state = if previous {
-				"already disabled"
+				"account already disabled"
 			} else {
-				"disabled"
+				"account disabled"
 			};
-			println!("{state} {name}");
+			println!("{state}");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -113,11 +113,11 @@ pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 	match store.set_disabled(name, false) {
 		Ok(previous) => {
 			let state = if previous {
-				"enabled"
+				"account enabled"
 			} else {
-				"already enabled"
+				"account already enabled"
 			};
-			println!("{state} {name}");
+			println!("{state}");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -127,7 +127,7 @@ pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 pub(crate) fn address_add_with_store(store: &AccountStore, name: &str, address: &str) -> ExitCode {
 	match store.add_address(name, address) {
 		Ok(()) => {
-			println!("added address {address} for {name}");
+			println!("address added");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -141,25 +141,38 @@ pub(crate) fn address_remove_with_store(
 ) -> ExitCode {
 	match store.remove_address(name, address) {
 		Ok(()) => {
-			println!("removed address {address} for {name}");
+			println!("address removed");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
 	}
 }
 
+/// The confirmation after a quota change.
+pub(crate) fn quota_changed(previous: Option<u64>, new: Option<u64>) -> String {
+	let text = |bytes: Option<u64>| match bytes {
+		Some(bytes) => bytes.to_string(),
+		None => "server default".to_string(),
+	};
+	format!("quota changed: {} -> {}", text(previous), text(new))
+}
+
+/// The confirmation after a protocol allowlist change.
+pub(crate) fn protocols_changed(
+	previous: Option<&Vec<Protocol>>,
+	new: Option<&Vec<Protocol>>,
+) -> String {
+	format!(
+		"protocols changed: {} -> {}",
+		render_protocols(previous),
+		render_protocols(new)
+	)
+}
+
 pub(crate) fn quota_with_store(store: &AccountStore, name: &str, size: Option<u64>) -> ExitCode {
 	match store.set_quota_bytes(name, size) {
 		Ok(previous) => {
-			let previous_text = match previous {
-				Some(bytes) => bytes.to_string(),
-				None => "server default".to_string(),
-			};
-			let new_text = match size {
-				Some(bytes) => bytes.to_string(),
-				None => "server default".to_string(),
-			};
-			println!("quota for {name}: {previous_text} -> {new_text}");
+			println!("{}", quota_changed(previous, size));
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -173,9 +186,7 @@ pub(crate) fn protocols_with_store(
 ) -> ExitCode {
 	match store.set_allowed_protocols(name, allowed.clone()) {
 		Ok(previous) => {
-			let previous_text = render_protocols(previous.as_ref());
-			let new_text = render_protocols(allowed.as_ref());
-			println!("protocols for {name}: {previous_text} -> {new_text}");
+			println!("{}", protocols_changed(previous.as_ref(), allowed.as_ref()));
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
