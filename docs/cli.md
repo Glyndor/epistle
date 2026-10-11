@@ -136,6 +136,17 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
 where `items` lists the findings (`name`, `status`, `detail`).
 
+`probe` and `check ports` try `::1` for a listener bound to `::`. If that
+connection is refused or times out, they try `127.0.0.1` on the same port,
+so IPv4 ports published by the container stack work from the host. Output
+reports the address that answered. A `0.0.0.0` bind uses `127.0.0.1`.
+
+When the generated compose file exists and the configured PostgreSQL socket
+directory is absent on the host, `check db` runs inside `mail`, using the config
+path from its compose command, and `status` asks `mail` for its `db` area while
+every other area is checked from the host. If `mail` is stopped, run
+`epistle stack up`.
+
 ## Running the server
 
 | Command | What it does |
@@ -714,7 +725,7 @@ scope here):
 |---|---|
 | `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, RSA selector) and whether the published TXT of each signing domain matches it. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. |
 | `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now. Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. `--dry-run` prints the selector and the TXT names and changes nothing. |
-| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise `[tls]`): subject, names, issuer, expiry, days left, and `acme` or `static` as the source. `serve`, `probe` and this command resolve it the same way. |
+| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise `[tls]`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. `serve`, `probe` and this command resolve it the same way. |
 | `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the certificate is outside its `renew_before_days` window. |
 | `epistle api-key rotate LABEL` | Replace the secret of an API key and print the new one once. Scopes, domains, expiry and CIDR stay; the old secret stops working in the same write, when the running server's file watcher reloads `api_keys.toml`. |
 
@@ -799,6 +810,10 @@ not exist is refused.
 | `epistle masked enable <account> <address>` | Deliver to it again. |
 
 ## Authentication bans
+
+With the container stack, `ban` and `account-remove` also run inside `mail`
+when the configured database socket directory is absent on the host. Credentials
+stay in the mounted config and password file, never in the exec arguments.
 
 `epistle ban <action>` manages the shared authentication ban store: the client
 addresses refused after repeated failed logins, plus a few operator controls.

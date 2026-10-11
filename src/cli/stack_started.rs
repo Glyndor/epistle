@@ -36,6 +36,14 @@ pub(super) fn mail_started_at(data_dir: &Path, podup: &str) -> Result<Option<i64
 }
 
 fn started_at_with(podup: &str, compose: &Path, timeout: Duration) -> Result<i64, String> {
+	parse_started(&ps_json_with(podup, compose, timeout)?)
+}
+
+pub(super) fn ps_json_with(
+	podup: &str,
+	compose: &Path,
+	timeout: Duration,
+) -> Result<String, String> {
 	let mut child = build_command(podup, compose, &["ps", "--format", "json"])
 		.stdin(Stdio::null())
 		.stdout(Stdio::piped())
@@ -65,7 +73,7 @@ fn started_at_with(podup: &str, compose: &Path, timeout: Duration) -> Result<i64
 	if !status.success() {
 		return Err(format!("podup ps exited with {status}"));
 	}
-	parse_started(&String::from_utf8_lossy(&bytes))
+	Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// The `mail` row's `StartedAt`, as an RFC 3339 string or epoch seconds.

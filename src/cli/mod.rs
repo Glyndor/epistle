@@ -14,6 +14,7 @@ mod backup;
 mod ban;
 mod config_check;
 pub mod config_edit;
+mod container_db;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;

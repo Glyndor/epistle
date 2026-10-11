@@ -77,7 +77,7 @@ pub(super) const DISTROLESS_BASE_IMAGE: &str = "gcr.io/distroless/static-debian1
 /// runs it as the container's entrypoint. A source build linked
 /// against glibc uses a different path and is rejected by the host
 /// binary validator below.
-pub(super) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
+pub(crate) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
 
 /// Resolve the mail image the compose file will render. The
 /// default is the digest-pinned distroless base; an explicit

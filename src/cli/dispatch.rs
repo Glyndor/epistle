@@ -29,6 +29,14 @@ impl Cli {
 				}
 			}
 		}
+		match super::container_db::reexecute(&self.command) {
+			Ok(Some(code)) => return code,
+			Ok(None) => {}
+			Err(error) => {
+				style::error(error);
+				return ExitCode::FAILURE;
+			}
+		}
 		match self.command {
 			Command::MtaStsServe {
 				policy_dir,
