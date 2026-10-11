@@ -171,6 +171,124 @@ otherwise a status message asks for a server restart. Restart failures leave
 the saved limit in place and return the stack's exit code. Unchanged values
 leave the file untouched and do not restart the service.
 
+## Smarthost relay (`epistle relay`)
+
+```sh
+epistle relay list [--json]
+epistle relay show [--account NAME | --domain DOMAIN] [--json]
+epistle relay add --host smtp.example.net --starttls --username mailer --password-stdin < pass.txt
+epistle relay add --domain example.net --host relay.example.net --port 2525
+epistle relay remove [--account NAME | --domain DOMAIN]
+epistle relay test [--account NAME | --domain DOMAIN]
+```
+
+Each command edits one `[[transport]]` rule with `kind = "relay"`. Without
+`--account` or `--domain` it addresses the default route. `add` creates the rule or
+updates it in place; the port defaults to 587 with `--starttls` and 25 otherwise.
+`--username` needs `--starttls` (credentials never cross plaintext) and the password
+on stdin as one line; it is stored inline in the 0600 configuration file and
+`show` and `list` print only `set` or `unset`. A re-run without `--password-stdin`
+keeps the stored password when the user is unchanged. A domain or account that
+already has a `fail` or `direct` rule is refused.
+
+`test` connects to the smarthost (through `--socks-proxy` when set), sends EHLO,
+upgrades with STARTTLS and authenticates when configured, then QUITs. It never
+starts a mail transaction and gives up after 10 seconds. All commands accept
+`--dry-run` (print the diff, write nothing) and `--config FILE`.
+
+## DNS provider (`epistle dns provider`)
+
+```sh
+epistle dns provider show [--json]
+epistle dns provider set cloudflare --zone example.org --token-env CF_TOKEN
+epistle dns provider set route53 --zone example.org --access-key AKIA... \
+  --secret-key-env AWS_SECRET --hosted-zone-id Z123
+epistle dns provider set manual --zone example.org
+epistle dns provider unset
+epistle dns provider test
+```
+
+`set` rewrites the whole `[dns]` section, so switching provider never leaves an old
+credential behind. The provider name and the settings it needs are checked the way
+the loader builds the provider; a setting the provider does not use is refused.
+Secrets are never passed on the command line: name an environment variable
+(`--token-env`, `--secret-key-env`, `--consumer-key-env`) or a 0600 file
+(`--token-file`, `--credentials-file`). The variable must be visible to the
+service account that runs the server.
+
+| Provider | Settings |
+|---|---|
+| cloudflare, bunny, desec, digitalocean, namecheap | `--token-env` or `--token-file` |
+| dnsimple | token source, `--account-id` |
+| spaceship, godaddy, porkbun | `--access-key`, `--secret-key-env` |
+| ovh | `--access-key`, `--secret-key-env`, `--consumer-key-env`, optional `--endpoint ovh-eu\|ovh-ca\|ovh-us` |
+| route53 | `--access-key`, `--secret-key-env`, `--hosted-zone-id` |
+| gcloud | token source, `--credentials-file` |
+| rfc2136 | token source (TSIG key), `--key-name`, `--endpoint HOST:PORT`, optional `--algorithm` |
+| manual | none (records are printed for you to publish) |
+
+`show` prints where each secret comes from and `set` for an inline value, never
+the value. `test` lists the zone's records through the provider (a read only call,
+10 second limit) and reports the count. Every mutation accepts `--dry-run` and
+`--config FILE`.
+
+## Blob storage (`epistle storage blobs`)
+
+```sh
+epistle storage blobs show [--json]
+epistle storage blobs set fs
+epistle storage blobs set s3 --endpoint https://s3.us-east-1.amazonaws.com \
+  --bucket mail-blobs --region us-east-1 --access-key-id AKIA... --secret-env S3_SECRET
+```
+
+Chooses where uploaded JMAP blobs live: `fs` (under `<data_dir>/blobs/`, the
+default) or an S3-compatible bucket. The secret access key is referenced with
+`--secret-env VAR` or `--secret-file FILE` (0600), never given inline, and `show`
+prints only where it comes from.
+
+**Switching does not migrate existing blobs.** Blobs stored in the previous backend
+stay there and stop being served, and the command says so every time the backend
+changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
+file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
+never refused. Supports `--dry-run` and `--config FILE`.
+
+## Webhook (`epistle webhook`)
+
+```sh
+epistle webhook show [--json]
+epistle webhook set https://hooks.example/mail --secret-stdin < secret.txt
+epistle webhook unset
+epistle webhook test
+```
+
+Manages the `[webhook]` section. The URL must be `https`, or `http` on a loopback
+address (`127.0.0.1`, `::1`, `localhost`), and cannot carry credentials. The signing
+secret arrives on stdin as one line and is stored inline in the 0600 configuration
+file; `show` prints only `set` or `unset`. `set` without `--secret-stdin` keeps a
+secret that is already configured. `unset` is refused while an alert still posts
+to the webhook.
+
+`test` posts one `test` event (see [configuration](configuration.md)), signed like
+any other, and reports the HTTP status. It fails on a non-2xx answer, a connection
+error, or no answer within 10 seconds. Supports `--dry-run` and `--config FILE`.
+
+## Alerts (`epistle alert`)
+
+```sh
+epistle alert list [--json]
+epistle alert add bounce-storm --metric bounced --op '>=' --threshold 50 \
+  --window 5m --webhook --email ops@example.org --cooldown 1h
+epistle alert remove bounce-storm
+```
+
+Manages the `[[alerts]]` rules. A rule compares how much a counter grew over each
+`--window` against `--op` and `--threshold`, and notifies by webhook, email, or both
+(`--email` can repeat). Quote the operator: `>=`, `>`, `<=`, `<` or `==`. Durations
+take `s`, `m`, `h`, `d` or `w`; the cooldown defaults to `1h`. The metric must be one
+of the counters in [configuration](configuration.md#alerts); an unknown name lists
+the valid ones. `--webhook` needs a configured webhook, names are unique, and `add`
+never overwrites a rule: remove it first. Supports `--dry-run` and `--config FILE`.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

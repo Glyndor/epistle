@@ -1,11 +1,11 @@
 #[derive(Clone, Copy)]
-pub(super) enum Unit {
+pub(in crate::cli) enum Unit {
 	Size,
 	Duration,
 	Count,
 }
 
-pub(super) fn parse_value(input: &str, unit: Unit, max: u64) -> Result<u64, &'static str> {
+pub(in crate::cli) fn parse_value(input: &str, unit: Unit, max: u64) -> Result<u64, &'static str> {
 	const INVALID: &str =
 		"expected a non-negative integer with a supported suffix within the field range";
 	let digit_end = input

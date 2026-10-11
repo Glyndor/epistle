@@ -130,7 +130,7 @@ pub(super) fn set(table: &mut dyn TableLike, key: &str, mut value: Value) -> Res
 	Ok(())
 }
 
-fn table_at<'a>(
+pub(super) fn table_at<'a>(
 	table: &'a mut dyn TableLike,
 	path: &[&str],
 	create: bool,

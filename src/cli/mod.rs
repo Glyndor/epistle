@@ -2,6 +2,7 @@
 
 mod account;
 mod accounts;
+mod alert;
 mod api_keys;
 mod app_passwords;
 mod archive;
@@ -11,6 +12,7 @@ mod backup;
 mod ban;
 mod config_check;
 pub mod config_edit;
+mod dns_provider;
 mod dns_records;
 mod export;
 mod import;
@@ -21,8 +23,10 @@ mod mobileconfig;
 mod mta_sts_serve;
 mod probe;
 mod queue;
+mod relay;
 mod report_abuse;
 mod reports;
+mod resource;
 mod serve;
 mod serve_dkim;
 mod serve_ratelimit;
@@ -37,6 +41,7 @@ mod stack_socket;
 mod stack_started;
 mod stack_update;
 mod status;
+mod storage_blobs;
 mod style;
 mod suppression;
 #[cfg(test)]
@@ -45,6 +50,7 @@ mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+mod webhook_admin;
 
 /// Re-export of the answers structure so integration tests can
 /// deserialise the `epistle init --print-answers` output without
@@ -478,6 +484,66 @@ pub enum Command {
 		action: limits::Action,
 	},
 
+	/// Manage the DNS provider used for record automation.
+	Dns {
+		/// Configuration file; accepted before or after the dns action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// DNS administration area.
+		#[command(subcommand)]
+		action: dns_provider::DnsCli,
+	},
+	/// Manage where uploaded blobs are stored.
+	Storage {
+		/// Configuration file; accepted before or after the storage action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Storage administration area.
+		#[command(subcommand)]
+		action: storage_blobs::StorageCli,
+	},
+	/// Manage the outbound event webhook.
+	Webhook {
+		/// Configuration file; accepted before or after the webhook action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Webhook administration action.
+		#[command(subcommand)]
+		action: webhook_admin::WebhookCli,
+	},
+	/// Manage metric alert rules.
+	Alert {
+		/// Configuration file; accepted before or after the alert action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Alert administration action.
+		#[command(subcommand)]
+		action: alert::AlertCli,
+	},
+	/// Manage outbound smarthost (relay) rules.
+	Relay {
+		/// Configuration file; accepted before or after the relay action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Relay administration action.
+		#[command(subcommand)]
+		action: relay::RelayCli,
+	},
 	/// List, enable, or disable individual service listeners.
 	Service {
 		/// Configuration file; accepted before or after the service action.

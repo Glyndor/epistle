@@ -6,6 +6,7 @@ mod resolver;
 pub mod srs;
 pub mod suppression;
 mod transport;
+pub use transport::relay_connect;
 mod worker;
 
 pub use resolver::{Connector, MxConnector};

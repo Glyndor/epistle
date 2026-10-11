@@ -44,7 +44,17 @@ pub enum WebhookEvent {
 		/// The window length in seconds (the rule's `window_secs`).
 		window_secs: u64,
 	},
+	/// Sent only by `epistle webhook test` to check that the endpoint is
+	/// reachable and verifies signatures. Receivers should acknowledge it and
+	/// otherwise ignore it.
+	Test {
+		/// Fixed text that says this is a connectivity check, not mail activity.
+		message: String,
+	},
 }
+
+/// The `message` carried by the `test` event.
+pub const TEST_MESSAGE: &str = "epistle webhook test: connectivity check, no mail activity";
 
 /// Posts events to a configured endpoint with a bounded timeout.
 pub struct Webhook {
@@ -74,6 +84,18 @@ impl Webhook {
 		self
 	}
 
+	/// The signed POST for a serialized event body.
+	fn request(&self, body: Vec<u8>) -> reqwest::RequestBuilder {
+		let mut request = self
+			.client
+			.post(&self.url)
+			.header(reqwest::header::CONTENT_TYPE, "application/json");
+		if let Some(secret) = &self.secret {
+			request = request.header("X-Webhook-Signature", sign(secret, &body));
+		}
+		request.body(body)
+	}
+
 	/// Deliver `event`. Fails open: transport/serialization errors are logged,
 	/// never propagated.
 	pub async fn notify(&self, event: &WebhookEvent) {
@@ -84,14 +106,7 @@ impl Webhook {
 				return;
 			}
 		};
-		let mut request = self
-			.client
-			.post(&self.url)
-			.header(reqwest::header::CONTENT_TYPE, "application/json");
-		if let Some(secret) = &self.secret {
-			request = request.header("X-Webhook-Signature", sign(secret, &body));
-		}
-		match request.body(body).send().await {
+		match self.request(body).send().await {
 			Ok(_) => {
 				if let Some(metrics) = &self.metrics {
 					metrics.webhook_sent();
@@ -104,6 +119,17 @@ impl Webhook {
 				}
 			}
 		}
+	}
+
+	/// Post the `test` event and report what the endpoint answered. Unlike
+	/// [`Webhook::notify`] this surfaces failures and the HTTP status, and it
+	/// does not touch the delivery metrics.
+	pub async fn send_test(&self) -> Result<reqwest::StatusCode, reqwest::Error> {
+		let event = WebhookEvent::Test {
+			message: TEST_MESSAGE.into(),
+		};
+		let body = serde_json::to_vec(&event).expect("a test event always serializes");
+		Ok(self.request(body).send().await?.status())
 	}
 }
 
