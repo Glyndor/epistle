@@ -76,7 +76,7 @@ fn fixture() -> Fixture {
 		signer.clone(),
 		dns.clone(),
 		"example.org".into(),
-		"example.org".into(),
+		vec!["example.org".into()],
 		30 * DAY,
 		DAY,
 	);

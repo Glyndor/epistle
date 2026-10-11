@@ -48,7 +48,7 @@ async fn check_delivery(rotate: bool) {
 			signer.clone(),
 			Arc::new(NoNetworkDns),
 			"example.org".into(),
-			"example.org".into(),
+			vec!["example.org".into()],
 			90 * 86_400,
 			14 * 86_400,
 		);

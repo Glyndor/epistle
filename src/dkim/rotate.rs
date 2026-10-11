@@ -130,24 +130,34 @@ pub struct Rotator {
 	signer: ReloadableSigner,
 	provider: Arc<dyn DnsProvider>,
 	zone: String,
-	signing_domain: String,
+	signing_domains: Vec<String>,
 	interval: u64,
 	overlap: u64,
 }
 
 impl Rotator {
 	/// Build a rotator. `zone` is the DNS zone to publish under and
-	/// `signing_domain` the `d=` domain (its `_domainkey` host).
+	/// `signing_domains` the `d=` domains (their `_domainkey` hosts) that the
+	/// relay can sign mail for and that sit inside the zone. The list is
+	/// deduplicated and preserves the caller's order. An empty list is
+	/// permitted: rotation will run, but no DKIM records will be published
+	/// (the caller is expected to have logged a startup warning naming the
+	/// out-of-zone domains that caused the empty result).
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		data_dir: PathBuf,
 		signer: ReloadableSigner,
 		provider: Arc<dyn DnsProvider>,
 		zone: String,
-		signing_domain: String,
+		signing_domains: Vec<String>,
 		interval: u64,
 		overlap: u64,
 	) -> Self {
+		let mut seen = std::collections::HashSet::new();
+		let signing_domains = signing_domains
+			.into_iter()
+			.filter(|d| seen.insert(d.clone()))
+			.collect();
 		let state_path = data_dir.join("dkim-rotation.json");
 		Rotator {
 			state_path,
@@ -155,10 +165,20 @@ impl Rotator {
 			signer,
 			provider,
 			zone,
-			signing_domain,
+			signing_domains,
 			interval,
 			overlap,
 		}
+	}
+
+	/// Whether `name` sits inside `zone` (equals it or is a subdomain of it),
+	/// the way [`crate::dns::provider::ScopedSecret`] authorises a record
+	/// name. Case-insensitive on both sides so uppercase DNS queries still
+	/// match a lowercase zone.
+	pub fn is_in_zone(name: &str, zone: &str) -> bool {
+		let name = name.to_ascii_lowercase();
+		let zone = zone.to_ascii_lowercase();
+		name == zone || name.ends_with(&format!(".{zone}"))
 	}
 
 	/// Load persisted state, or a default (empty) state.
@@ -174,9 +194,9 @@ impl Rotator {
 		std::fs::write(&self.state_path, bytes)
 	}
 
-	/// The DNS record name for a selector's public key.
-	fn record_name(&self, selector: &str) -> String {
-		format!("{selector}._domainkey.{}", self.signing_domain)
+	/// The DNS record name for a selector's public key at `domain`.
+	fn record_name(selector: &str, domain: &str) -> String {
+		format!("{selector}._domainkey.{domain}")
 	}
 
 	/// Run one rotation tick at `now` (epoch seconds), performing at most one
@@ -195,10 +215,25 @@ impl Rotator {
 				let (pem, txt) = super::generate_key().map_err(|e| RotateError(e.to_string()))?;
 				let key_file = self.data_dir.join(format!("dkim-{selector}.key"));
 				write_key(&key_file, &pem)?;
-				self.provider
-					.upsert(&self.zone, txt_record(&self.record_name(&selector), &txt))
-					.await
-					.map_err(|e| RotateError(e.to_string()))?;
+				// Publish TXT for every configured in-zone domain BEFORE the
+				// signer switches: a half-published rotation would leave
+				// every domain whose upsert ran first signing with the old
+				// key while the rest sign with one receivers cannot
+				// verify. If any single upsert fails, the rotation aborts
+				// before the signer reloads and the new key file is removed
+				// so no half-state lingers for the next tick.
+				for domain in &self.signing_domains {
+					self.provider
+						.upsert(
+							&self.zone,
+							txt_record(&Self::record_name(&selector, domain), &txt),
+						)
+						.await
+						.map_err(|error| {
+							let _ = std::fs::remove_file(&key_file);
+							RotateError(format!("publish {selector}._domainkey.{domain}: {error}"))
+						})?;
+				}
 				let signer = self
 					.signer
 					.current()
@@ -224,10 +259,31 @@ impl Rotator {
 					(p.selector == *selector && !p.key_file.as_os_str().is_empty())
 						.then(|| p.key_file.clone())
 				});
-				self.provider
-					.delete(&self.zone, txt_record(&self.record_name(selector), ""))
-					.await
-					.map_err(|e| RotateError(e.to_string()))?;
+				// Remove the retired TXT from every in-zone domain the rotator
+				// ever published it under, the same set the next selector
+				// was written to. A delete for one failing domain leaves the
+				// others consistent and the state reflects that the selector
+				// is logically retired; the survivor is removed on the next
+				// tick or by the operator.
+				let mut last_error: Option<String> = None;
+				for domain in &self.signing_domains {
+					if let Err(error) = self
+						.provider
+						.delete(
+							&self.zone,
+							txt_record(&Self::record_name(selector, domain), ""),
+						)
+						.await
+					{
+						last_error = Some(format!(
+							"delete {}.{domain}: {error}",
+							Self::record_name(selector, domain)
+						));
+					}
+				}
+				if let Some(error) = last_error {
+					return Err(RotateError(error));
+				}
 				state.previous = None;
 				self.save_state(&state)?;
 				// Best-effort: the state and the DNS are already consistent,
@@ -298,3 +354,7 @@ mod tests;
 #[cfg(test)]
 #[path = "rotate_tests_signing.rs"]
 mod tests_signing;
+
+#[cfg(test)]
+#[path = "rotate_tests_multidomain.rs"]
+mod tests_multidomain;

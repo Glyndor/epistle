@@ -7,7 +7,8 @@
 use tracing::Level;
 
 use super::super::tracing_capture::run_with_capture;
-use super::{DkimRotationPlan, connect_database, decide_dkim_rotation};
+use super::connect_database;
+use super::dkim_rotation::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;
 
 /// Minimal valid base config — `hostname` + `data_dir` are the only
@@ -45,6 +46,8 @@ token = \"abc\"
 			interval: 90 * 86_400,
 			overlap: 14 * 86_400,
 			deprecated_fields_present: false,
+			signing_domains: Vec::new(),
+			out_of_zone: Vec::new(),
 		}
 	);
 }
@@ -76,6 +79,8 @@ token = \"abc\"
 			interval: 90 * 86_400,
 			overlap: 14 * 86_400,
 			deprecated_fields_present: true,
+			signing_domains: Vec::new(),
+			out_of_zone: Vec::new(),
 		}
 	);
 }
@@ -212,6 +217,142 @@ fn rotation_is_off_when_dkim_section_is_absent() {
 	assert!(
 		events.is_empty(),
 		"absent [dkim] must not log anything (the operator chose it): {events:?}"
+	);
+}
+
+#[test]
+fn rotation_partitions_domains_into_in_zone_and_out_of_zone() {
+	// The decision must compute the set the rotator will publish for and
+	// the set the operator has to fix. Both lists are sorted and deduped
+	// (the helper builds a BTreeSet under the hood) so the assert can
+	// compare exact contents without worrying about iteration order.
+	let config = parse(&format!(
+		"{BASE}
+domains = [\"example.org\", \"mail.example.org\", \"other.example.net\"]
+[domain_aliases]
+\"alias.example.org\" = \"example.org\"
+
+[dkim]
+selector = \"mail\"
+key_file = \"/etc/mail/dkim.pem\"
+
+[dns]
+provider = \"cloudflare\"
+zone = \"example.org\"
+token = \"abc\"
+"
+	));
+	let plan = decide_dkim_rotation(&config);
+	let DkimRotationPlan::Run {
+		signing_domains,
+		out_of_zone,
+		..
+	} = plan
+	else {
+		panic!("expected Run, got {plan:?}");
+	};
+	assert_eq!(
+		signing_domains,
+		vec![
+			"alias.example.org".to_string(),
+			"example.org".to_string(),
+			"mail.example.org".to_string(),
+		],
+		"every domain inside the zone must be marked for publication"
+	);
+	assert_eq!(
+		out_of_zone,
+		vec!["other.example.net".to_string()],
+		"domains outside the zone must be reported separately"
+	);
+}
+
+#[test]
+fn spawn_dkim_rotation_warns_and_skips_when_a_signing_domain_is_out_of_zone() {
+	let config = parse(&format!(
+		"{BASE}
+domains = [\"example.org\", \"other.example.net\"]
+
+[dkim]
+selector = \"mail\"
+key_file = \"/etc/mail/dkim.pem\"
+
+[dns]
+provider = \"cloudflare\"
+zone = \"example.org\"
+token = \"abc\"
+"
+	));
+	let events = run_with_capture(|| {
+		super::spawn_dkim_rotation(&config, &None);
+	});
+	let warning = events
+		.iter()
+		.find(|e| e.level == Level::WARN)
+		.expect("expected an out-of-zone warning");
+	let msg = warning
+		.fields
+		.get("message")
+		.expect("message field")
+		.as_str();
+	assert!(
+		msg.contains("rotation is disabled"),
+		"warning must say rotation is disabled: {msg}"
+	);
+	assert!(
+		msg.contains("[dns] zone"),
+		"warning must point the operator at the [dns] zone field: {msg}"
+	);
+	let out_of_zone = warning
+		.fields
+		.get("out_of_zone")
+		.expect("structured out_of_zone field")
+		.as_str();
+	assert!(
+		out_of_zone.contains("other.example.net"),
+		"structured field must name the offending domain: {out_of_zone}"
+	);
+	assert_eq!(
+		warning.fields.get("zone").map(String::as_str),
+		Some("example.org"),
+		"structured field must echo the [dns] zone for context"
+	);
+}
+
+#[test]
+fn spawn_dkim_rotation_skips_silently_when_no_domains_are_configured() {
+	// Empty [domains] and no aliases: there is nothing to publish, so the
+	// out-of-zone path does not fire either. The startup log stays empty
+	// (rotation runs on an empty set without ceremony).
+	let config = parse(&format!(
+		"{BASE}
+[dkim]
+selector = \"mail\"
+key_file = \"/etc/mail/dkim.pem\"
+
+[dns]
+provider = \"cloudflare\"
+zone = \"example.org\"
+token = \"abc\"
+"
+	));
+	let plan = decide_dkim_rotation(&config);
+	let DkimRotationPlan::Run {
+		signing_domains,
+		out_of_zone,
+		..
+	} = plan
+	else {
+		panic!("expected Run, got {plan:?}");
+	};
+	assert!(signing_domains.is_empty());
+	assert!(out_of_zone.is_empty());
+	let events = run_with_capture(|| {
+		super::spawn_dkim_rotation(&config, &None);
+	});
+	assert!(
+		!events.iter().any(|e| e.level == Level::WARN),
+		"empty domain list must not log an out-of-zone warning: {events:?}"
 	);
 }
 
