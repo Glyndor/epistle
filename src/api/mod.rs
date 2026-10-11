@@ -15,7 +15,7 @@ mod state;
 pub mod tenant_limits;
 pub mod v1;
 
-pub use api_keys::{ApiKey, ApiKeyStore};
+pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
@@ -150,3 +150,7 @@ mod tenant_limits_tests_e2e;
 #[cfg(test)]
 #[path = "cidr_dual_stack_tests.rs"]
 mod cidr_dual_stack_tests;
+
+#[cfg(test)]
+#[path = "api_key_reload_tests.rs"]
+mod api_key_reload_tests;

@@ -40,7 +40,7 @@ mod build;
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
-pub use file_watcher::FileWatcher;
+pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
