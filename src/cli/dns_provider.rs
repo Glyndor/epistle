@@ -52,7 +52,7 @@ pub enum ProviderCli {
 		provider: String,
 		/// The provider settings.
 		#[command(flatten)]
-		args: ProviderArgs,
+		args: Box<ProviderArgs>,
 	},
 	/// Remove the provider and return to manual DNS.
 	Unset,
