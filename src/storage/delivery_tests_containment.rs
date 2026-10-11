@@ -86,3 +86,35 @@ fn the_filter_of_a_traversing_account_is_not_read() {
 	fs::write(data.join("accounts/alice/filter.sieve"), "keep;").expect("filter");
 	assert!(sink.sieve_outcome("alice", &msg).is_some());
 }
+
+#[test]
+fn directory_style_account_names_get_defaults_and_receive_mail() {
+	let outer = tempfile::tempdir().expect("tempdir");
+	let data = outer.path().join("data");
+	fs::create_dir_all(&data).expect("data dir");
+	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		[
+			("john@example.org".to_string(), "john.doe".to_string()),
+			("smith@example.org".to_string(), "J_Smith".to_string()),
+		],
+	));
+	let sink = LocalDelivery::new(&data, directory).expect("delivery");
+	for (address, account) in [
+		("john@example.org", "john.doe"),
+		("smith@example.org", "J_Smith"),
+	] {
+		sink.deliver_routed(&message(&[address]), None)
+			.expect("deliver");
+		let new_dir = data.join("accounts").join(account).join("new");
+		assert_eq!(
+			listing(&new_dir).len(),
+			1,
+			"one message in the inbox of {account}"
+		);
+		assert_eq!(
+			crate::imap::mailbox::list(&data, account),
+			["INBOX", "Archive", "Drafts", "Rejects", "Sent", "Trash"]
+		);
+	}
+}

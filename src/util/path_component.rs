@@ -61,26 +61,20 @@ pub fn is_plain_component(name: &str) -> bool {
 		&& !Path::new(name).is_absolute()
 }
 
-/// Longest account name accepted, the limit every account source enforces.
-const MAX_ACCOUNT_LEN: usize = 64;
-
 /// The name of a mail account, validated as one directory name.
 ///
-/// Accounts are lowercase ASCII letters, digits and `-`, at most 64 bytes,
-/// never starting with `-`: the same rule the configuration, the API and
-/// SCIM already apply when an account is created.
+/// This is a path-safety rule, not the account-creation policy: any name that
+/// is one plain path component is accepted, with its case kept. Directories
+/// such as SQL and LDAP name accounts `john.doe` or `J_Smith`, and those
+/// names map to a directory of the same name. What an operator may create
+/// (lowercase letters, digits and `-`) is enforced where accounts are created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountName<'a>(&'a str);
 
 impl<'a> AccountName<'a> {
 	/// Validate `name` as an account directory name.
 	pub fn new(name: &'a str) -> Result<Self, InvalidComponent> {
-		let allowed = name.len() <= MAX_ACCOUNT_LEN
-			&& name
-				.chars()
-				.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-			&& !name.starts_with('-');
-		if allowed && is_plain_component(name) {
+		if is_plain_component(name) {
 			Ok(Self(name))
 		} else {
 			Err(InvalidComponent)
@@ -259,6 +253,12 @@ pub fn folders_dir(account: &AccountName<'_>, data_dir: &Path) -> std::io::Resul
 pub struct DigestName(String);
 
 impl DigestName {
+	/// A short, stable stand-in for `value` that is safe to log in place of the
+	/// raw text (the first 12 hex digits of its digest).
+	pub fn pseudonym(value: &str) -> String {
+		Self::of(value).0.chars().take(12).collect()
+	}
+
 	/// Digest `value` after lowercasing it (ASCII), so lookups are
 	/// case-insensitive.
 	pub fn of(value: &str) -> Self {

@@ -63,21 +63,7 @@ fn account_name_rejects_dangerous_names() {
 			"account {name:?} must be refused"
 		);
 	}
-	for name in [
-		"Alice",
-		"a.b",
-		"a b",
-		"-lead",
-		"al\u{ef}ce",
-		"user@example.org",
-	] {
-		assert_eq!(
-			AccountName::new(name),
-			Err(InvalidComponent),
-			"account {name:?} is outside the account alphabet"
-		);
-	}
-	let long = "a".repeat(MAX_ACCOUNT_LEN + 1);
+	let long = "a".repeat(MAX_COMPONENT_LEN + 1);
 	assert_eq!(AccountName::new(&long), Err(InvalidComponent));
 }
 
@@ -87,7 +73,7 @@ fn account_name_accepts_what_accounts_use() {
 		let account = AccountName::new(name).expect("valid account");
 		assert_eq!(account.as_str(), name);
 	}
-	let max = "a".repeat(MAX_ACCOUNT_LEN);
+	let max = "a".repeat(MAX_COMPONENT_LEN);
 	assert!(AccountName::new(&max).is_ok());
 }
 
@@ -314,4 +300,33 @@ fn account_root_is_refused_when_the_account_directory_is_a_link_out_of_the_tree(
 	std::os::unix::fs::symlink(&outside, data.join("accounts/alice")).expect("link");
 	let account = AccountName::new("alice").expect("account");
 	assert_outside_root(account.root(&data), "linked account directory");
+}
+
+#[test]
+fn account_name_keeps_the_names_directories_use() {
+	for name in [
+		"john.doe",
+		"J_Smith",
+		"Alice",
+		"a b",
+		"user@example.org",
+		"-lead",
+	] {
+		let account = AccountName::new(name).expect("a safe directory name");
+		assert_eq!(account.as_str(), name, "case is preserved");
+	}
+	let (_guard, data) = data_dir();
+	let root = AccountName::new("John.Doe")
+		.expect("name")
+		.root(&data)
+		.expect("root");
+	assert_eq!(root.as_path(), data.join("accounts/John.Doe"));
+}
+
+#[test]
+fn pseudonym_is_short_stable_and_hides_the_value() {
+	let id = DigestName::pseudonym("john.doe");
+	assert_eq!(id.len(), 12);
+	assert_eq!(id, DigestName::pseudonym("john.doe"));
+	assert!(!id.contains("john"));
 }
