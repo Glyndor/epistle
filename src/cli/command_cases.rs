@@ -231,4 +231,13 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	),
 	(&["alias", "enable", "team@example.org"], true),
 	(&["alias", "disable", "team@example.org"], true),
+	(&["domain", "list"], true),
+	(&["domain", "show", "example.org"], true),
+	(&["domain", "add", "new.example.org"], true),
+	(&["domain", "remove", "old.example.org"], true),
+	(
+		&["domain", "alias", "add", "alias.example.org", "example.org"],
+		true,
+	),
+	(&["domain", "alias", "remove", "alias.example.org"], true),
 ];

@@ -7,17 +7,17 @@ use std::path::Path;
 use super::*;
 use crate::config::Config;
 
-fn fixture(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
 fn load(path: &Path) -> Config {
@@ -26,7 +26,7 @@ fn load(path: &Path) -> Config {
 
 #[test]
 fn llm_summary_marks_every_field_set_when_present() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[antispam_llm]\nendpoint = \"https://api.example/v1/chat/completions\"\napi_key_env = \"EPISTLE_LLM_API_KEY\"\nmodel = \"gpt-4o-mini\"\n",
 	);
 	let config = load(file.path());
@@ -39,7 +39,7 @@ fn llm_summary_marks_every_field_set_when_present() {
 
 #[test]
 fn llm_summary_marks_every_field_unset_when_absent() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let config = load(file.path());
 	assert!(!llm_is_set(&config));
 	let summary = llm_summary(&config);
@@ -50,7 +50,7 @@ fn llm_summary_marks_every_field_unset_when_absent() {
 
 #[test]
 fn show_does_not_leak_the_endpoint_url_or_env_var_name() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[antispam_llm]\nendpoint = \"https://api.example/v1/chat/completions\"\napi_key_env = \"EPISTLE_LLM_API_KEY\"\nmodel = \"gpt-4o-mini\"\n",
 	);
 	let config = load(file.path());

@@ -10,30 +10,30 @@ use super::*;
 use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 
-fn fixture(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
-fn fixture_with_db(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture_with_db(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n[database]\nurl = \"postgres://localhost/epistle\"\ntls = \"insecure\"\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
 fn load(path: &Path) -> Config {
@@ -135,7 +135,7 @@ fn set_writes_every_scalar_key_to_its_mapped_field() {
 		),
 	];
 	for (key, value, assertion) in cases {
-		let file = fixture("");
+		let (_dir, file) = fixture("");
 		let mut document = open(file.path());
 		// The LLM block requires every field present to load. Seed the
 		// block with placeholders before testing a single key, so the
@@ -169,7 +169,7 @@ fn set_writes_every_scalar_key_to_its_mapped_field() {
 
 #[test]
 fn set_subjectpass_on_only_with_db_section() {
-	let file = fixture_with_db("");
+	let (_dir, file) = fixture_with_db("");
 	let mut document = open(file.path());
 	set_scalar_field(&mut document, Key::Subjectpass, "on").expect("set must succeed");
 	let outcome = document.commit().expect("commit must succeed");
@@ -180,7 +180,7 @@ fn set_subjectpass_on_only_with_db_section() {
 
 #[test]
 fn set_subjectpass_on_is_rejected_without_db() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	apply_set(&mut document, Key::Subjectpass, &["on".to_string()])
 		.expect("apply_set writes to the document");
@@ -197,7 +197,7 @@ fn set_subjectpass_on_is_rejected_without_db() {
 
 #[test]
 fn set_dnsbl_zone_replaces_the_whole_list() {
-	let file = fixture("dnsbl_zones = [\"a.example\", \"b.example\"]\n");
+	let (_dir, file) = fixture("dnsbl_zones = [\"a.example\", \"b.example\"]\n");
 	let mut document = open(file.path());
 	set_list_field(
 		&mut document,
@@ -213,7 +213,7 @@ fn set_dnsbl_zone_replaces_the_whole_list() {
 
 #[test]
 fn unset_returns_a_scalar_to_its_default() {
-	let file = fixture("greylist_delay_secs = 200\n[antispam]\nclamd_timeout_secs = 90\n");
+	let (_dir, file) = fixture("greylist_delay_secs = 200\n[antispam]\nclamd_timeout_secs = 90\n");
 	let mut document = open(file.path());
 	let snapshot = load(file.path());
 	assert_eq!(snapshot.greylist_delay_secs, 200);
@@ -227,7 +227,7 @@ fn unset_returns_a_scalar_to_its_default() {
 
 #[test]
 fn show_lists_every_key_and_marks_secrets_as_set_only() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[antispam_llm]\nendpoint = \"https://api.example/v1/chat/completions\"\napi_key_env = \"EPISTLE_LLM_API_KEY\"\nmodel = \"gpt-4o-mini\"\n",
 	);
 	let config = load(file.path());
@@ -265,7 +265,7 @@ fn show_lists_every_key_and_marks_secrets_as_set_only() {
 
 #[test]
 fn idempotent_set_reports_unchanged_outcome() {
-	let file = fixture("greylist_delay_secs = 300");
+	let (_dir, file) = fixture("greylist_delay_secs = 300");
 	let mut document = open(file.path());
 	set_scalar_field(&mut document, Key::GreylistDelay, "5m").expect("set must succeed");
 	let outcome = document.commit().expect("commit must succeed");
@@ -278,7 +278,7 @@ fn idempotent_set_reports_unchanged_outcome() {
 
 #[test]
 fn reject_set_writes_a_specific_rejection_outcome() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	set_scalar_field(&mut document, Key::ClamdOnFound, "reject").expect("set must succeed");
 	document.commit().expect("commit must succeed");
@@ -291,7 +291,7 @@ fn reject_set_writes_a_specific_rejection_outcome() {
 
 #[test]
 fn unloadable_config_is_rejected_before_edit() {
-	let file = fixture("scanner_hook_url = \"http://scanner.example/\"\n");
+	let (_dir, file) = fixture("scanner_hook_url = \"http://scanner.example/\"\n");
 	let mut document = open(file.path());
 	let err = apply_set(
 		&mut document,

@@ -45,7 +45,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Webhook { config, .. }
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }
-		| Command::Alias { config, .. } => Some(config),
+		| Command::Alias { config, .. }
+		| Command::Domain { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

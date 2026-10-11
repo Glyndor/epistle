@@ -9,17 +9,17 @@ use std::process::ExitCode;
 use super::*;
 use crate::cli::config_edit::ConfigDocument;
 
-fn fixture(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
 fn open(path: &Path) -> ConfigDocument {
@@ -28,7 +28,7 @@ fn open(path: &Path) -> ConfigDocument {
 
 #[test]
 fn dry_run_set_prints_a_diff_and_writes_nothing() {
-	let file = fixture("greylist_delay_secs = 100\n");
+	let (_dir, file) = fixture("greylist_delay_secs = 100\n");
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let mut out = Vec::new();
 	let mut status = Vec::new();
@@ -67,7 +67,7 @@ fn dry_run_set_prints_a_diff_and_writes_nothing() {
 
 #[test]
 fn dry_run_add_appends_nothing_to_disk() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let mut out = Vec::new();
 	let mut status = Vec::new();
@@ -92,7 +92,7 @@ fn dry_run_add_appends_nothing_to_disk() {
 
 #[test]
 fn no_op_set_reports_no_change_and_no_restart() {
-	let file = fixture("greylist_delay_secs = 300");
+	let (_dir, file) = fixture("greylist_delay_secs = 300");
 	let mut out = Vec::new();
 	let mut status = Vec::new();
 	let calls = Cell::new(0);

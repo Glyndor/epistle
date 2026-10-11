@@ -8,17 +8,17 @@ use super::*;
 use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 
-fn fixture(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
 fn load(path: &Path) -> Config {
@@ -36,7 +36,7 @@ fn add_appends_a_value_to_each_dnsbl_list() {
 		(Key::DnsblDomainZones, "dnsbl_domain_zones"),
 		(Key::DnsblUrlZones, "dnsbl_url_zones"),
 	] {
-		let file = fixture("");
+		let (_dir, file) = fixture("");
 		let mut document = open(file.path());
 		apply_add(&mut document, key, "zen.spamhaus.org").expect("add must succeed");
 		document.commit().expect("commit must succeed");
@@ -53,7 +53,7 @@ fn add_appends_a_value_to_each_dnsbl_list() {
 
 #[test]
 fn add_is_idempotent_and_reports_no_change() {
-	let file = fixture("dnsbl_zones = [\"zen.spamhaus.org\"]\n");
+	let (_dir, file) = fixture("dnsbl_zones = [\"zen.spamhaus.org\"]\n");
 	let mut document = open(file.path());
 	apply_add(&mut document, Key::DnsblZones, "zen.spamhaus.org").expect("add must succeed");
 	let outcome = document.commit().expect("commit must succeed");
@@ -62,7 +62,7 @@ fn add_is_idempotent_and_reports_no_change() {
 
 #[test]
 fn remove_drops_only_the_matching_value() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"dnsbl_zones = [\"a.example\", \"b.example\", \"c.example\"]\ndnsbl_domain_zones = [\"x.example\"]\n",
 	);
 	let mut document = open(file.path());
@@ -78,7 +78,7 @@ fn remove_drops_only_the_matching_value() {
 
 #[test]
 fn add_refuses_a_scalar_key() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	let err = apply_add(&mut document, Key::GreylistDelay, "10").unwrap_err();
 	assert!(
@@ -89,7 +89,7 @@ fn add_refuses_a_scalar_key() {
 
 #[test]
 fn remove_refuses_a_scalar_key() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	let err = apply_list_remove(&mut document, Key::ClamdOnFound, "reject").unwrap_err();
 	assert!(
@@ -100,7 +100,7 @@ fn remove_refuses_a_scalar_key() {
 
 #[test]
 fn unset_refuses_a_list_key() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	let err = apply_unset(&mut document, Key::DnsblZones).unwrap_err();
 	assert!(

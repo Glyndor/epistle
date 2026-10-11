@@ -6,17 +6,17 @@ use std::path::Path;
 use super::*;
 use crate::config::Config;
 
-fn fixture(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
 fn load(path: &Path) -> Config {
@@ -25,7 +25,7 @@ fn load(path: &Path) -> Config {
 
 #[test]
 fn list_writes_every_alias_with_state_and_visibility() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\", \"bob@example.org\"]\nsenders = [\"ceo@example.org\"]\nlist_id = \"team.example.org\"\nhidden = false\n\n[[alias]]\naddress = \"ops@example.org\"\nmembers = [\"alice@example.org\"]\n",
 	);
 	let config = load(file.path());
@@ -45,7 +45,7 @@ fn list_writes_every_alias_with_state_and_visibility() {
 
 #[test]
 fn list_json_emits_a_parseable_array_with_enabled_field() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut out = Vec::new();
@@ -61,7 +61,7 @@ fn list_json_emits_a_parseable_array_with_enabled_field() {
 
 #[test]
 fn show_writes_every_field_for_one_alias() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\", \"bob@example.org\"]\nsenders = [\"ceo@example.org\"]\nlist_id = \"team.example.org\"\nhidden = false\n",
 	);
 	let config = load(file.path());
@@ -85,7 +85,7 @@ fn show_writes_every_field_for_one_alias() {
 
 #[test]
 fn show_with_no_senders_prints_any_member() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut out = Vec::new();
@@ -99,7 +99,7 @@ fn show_with_no_senders_prints_any_member() {
 
 #[test]
 fn find_alias_matches_case_insensitively() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	assert!(find_alias(&config, "TEAM@example.org").is_some());
@@ -108,7 +108,7 @@ fn find_alias_matches_case_insensitively() {
 
 #[test]
 fn add_writes_a_new_alias_with_optional_fields() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
@@ -145,7 +145,7 @@ fn add_writes_a_new_alias_with_optional_fields() {
 
 #[test]
 fn add_refuses_a_duplicate_alias() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
@@ -162,7 +162,7 @@ fn add_refuses_a_duplicate_alias() {
 
 #[test]
 fn add_refuses_an_alias_address_outside_configured_domains() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
@@ -183,7 +183,7 @@ fn add_refuses_an_alias_address_outside_configured_domains() {
 fn add_refuses_an_address_used_by_a_static_account() {
 	// argon2id PHC string is required by the loader; the test never
 	// authenticates the account, so any well-formed PHC will load.
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\npassword_hash = \"$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000\"\n",
 	);
 	let config = load(file.path());
@@ -204,7 +204,7 @@ fn add_refuses_an_address_used_by_a_static_account() {
 
 #[test]
 fn add_refuses_an_address_used_by_another_alias() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
@@ -221,7 +221,7 @@ fn add_refuses_an_address_used_by_another_alias() {
 
 #[test]
 fn remove_drops_an_existing_alias() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n\n[[alias]]\naddress = \"ops@example.org\"\nmembers = [\"alice@example.org\"]\n",
 	);
 	let config = load(file.path());
@@ -243,7 +243,7 @@ fn remove_drops_an_existing_alias() {
 
 #[test]
 fn remove_refuses_an_unknown_alias() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let err = remove_alias(&config, &mut document, "team@example.org").unwrap_err();
@@ -252,7 +252,7 @@ fn remove_refuses_an_unknown_alias() {
 
 #[test]
 fn member_add_appends_to_the_alias_members_list() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
@@ -285,7 +285,7 @@ fn member_add_appends_to_the_alias_members_list() {
 
 #[test]
 fn member_remove_drops_the_member_and_keeps_one() {
-	let file = fixture(
+	let (_dir, file) = fixture(
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\", \"bob@example.org\"]\n",
 	);
 	let config = load(file.path());
@@ -313,7 +313,7 @@ fn member_remove_drops_the_member_and_keeps_one() {
 
 #[test]
 fn member_remove_refuses_to_leave_an_alias_empty() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
@@ -329,7 +329,7 @@ fn member_remove_refuses_to_leave_an_alias_empty() {
 
 #[test]
 fn sender_add_and_remove_round_trip() {
-	let file =
+	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
@@ -375,7 +375,7 @@ fn sender_add_and_remove_round_trip() {
 
 #[test]
 fn add_alias_address_validates_against_the_store() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let config = load(file.path());
 	let store = open_store(&config).expect("store must open");
 	assert!(validate_alias_address(&config, "alice@example.org", &store).is_ok());
@@ -405,7 +405,7 @@ fn invalid_member_or_sender_address_is_refused() {
 
 #[test]
 fn dry_run_prints_a_diff_and_does_not_write() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let config = load(file.path());
 	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let before = std::fs::read_to_string(file.path()).unwrap();

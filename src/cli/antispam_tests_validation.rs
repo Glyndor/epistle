@@ -7,17 +7,17 @@ use std::path::Path;
 use super::*;
 use crate::cli::config_edit::ConfigDocument;
 
-fn fixture(extra: &str) -> tempfile::NamedTempFile {
-	let mut file = tempfile::NamedTempFile::new().unwrap();
-	let canonical = std::env::current_dir().unwrap();
+fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
+	let dir = tempfile::tempdir().unwrap();
+	let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
 	writeln!(
 		file,
 		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n{extra}\n",
-		canonical.to_string_lossy()
+		dir.path().canonicalize().unwrap().to_string_lossy()
 	)
 	.unwrap();
 	file.flush().unwrap();
-	file
+	(dir, file)
 }
 
 fn open(path: &Path) -> ConfigDocument {
@@ -122,7 +122,7 @@ fn unit_interval_rejects_out_of_range_values() {
 
 #[test]
 fn scanner_conflict_message_is_the_specific_loader_one() {
-	let file = fixture("scanner_hook_url = \"http://scanner.example/\"\n");
+	let (_dir, file) = fixture("scanner_hook_url = \"http://scanner.example/\"\n");
 	let mut document = open(file.path());
 	let err = apply_set(
 		&mut document,
@@ -138,7 +138,7 @@ fn scanner_conflict_message_is_the_specific_loader_one() {
 
 #[test]
 fn scalar_set_rejects_multi_value_lists_for_non_list_keys() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	let err = apply_set(
 		&mut document,
@@ -154,7 +154,7 @@ fn scalar_set_rejects_multi_value_lists_for_non_list_keys() {
 
 #[test]
 fn list_set_rejects_empty_values() {
-	let file = fixture("");
+	let (_dir, file) = fixture("");
 	let mut document = open(file.path());
 	let err = apply_set(&mut document, Key::DnsblZones, &[]).unwrap_err();
 	assert!(
