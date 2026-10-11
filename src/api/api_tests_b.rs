@@ -1,5 +1,6 @@
 use super::tests::{TOKEN, request, request_with_body, test_state};
 use super::*;
+use crate::test_fixtures as fixtures;
 use axum::http::StatusCode;
 
 // --- Scope enforcement on the bearer middleware ---------------------------------
@@ -90,7 +91,7 @@ async fn send_scoped_key_is_rejected_on_write() {
 		Some(serde_json::json!({
 			"name": "bob",
 			"addresses": ["bob@example.org"],
-			"password": "a-long-password"
+			"password": fixtures::password()
 		})),
 	)
 	.await;
@@ -152,11 +153,15 @@ async fn account_create_delete_and_password_flow() {
 		Some(serde_json::json!({
 			"name": "bob",
 			"addresses": ["bob@example.org"],
-			"password": "a-long-password"
+			"password": fixtures::password()
 		})),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"API response must have the expected status or field"
+	);
 	assert_eq!(body["created"], "bob");
 
 	let (_, body) = request(&app, "GET", "/api/v1/accounts", Some(TOKEN.as_str())).await;
@@ -166,26 +171,33 @@ async fn account_create_delete_and_password_flow() {
 		.iter()
 		.map(|account| account["name"].as_str().expect("name"))
 		.collect();
-	assert!(names.contains(&"bob"), "{body}");
+	assert!(
+		names.contains(&"bob"),
+		"API response must have the expected status or field"
+	);
 
 	let (status, _) = request_with_body(
 		&app,
 		"PUT",
 		"/api/v1/accounts/bob/password",
 		Some(TOKEN.as_str()),
-		Some(serde_json::json!({"password": "another-long-password"})),
+		Some(serde_json::json!({"password": fixtures::second_password()})),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	let (status, body) = request(
+	let (status, _) = request(
 		&app,
 		"DELETE",
 		"/api/v1/accounts/bob?queue=drain",
 		Some(TOKEN.as_str()),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"API response must have the expected status or field"
+	);
 
 	// Static accounts cannot be deleted.
 	let (status, _) = request(
@@ -210,7 +222,7 @@ async fn totp_enrollment_stores_a_valid_secret() {
 		"/api/v1/accounts",
 		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
-			"name": "bob", "addresses": ["bob@example.org"], "password": "a-long-password"
+			"name": "bob", "addresses": ["bob@example.org"], "password": fixtures::password()
 		})),
 	)
 	.await;
@@ -222,19 +234,20 @@ async fn totp_enrollment_stores_a_valid_secret() {
 		Some(TOKEN.as_str()),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"API response must have the expected status or field"
+	);
 	let secret = body["secret"].as_str().expect("secret");
 	// A valid base32 TOTP secret that decodes.
-	assert!(
-		crate::totp::decode_base32_secret(secret).is_some(),
-		"{secret}"
-	);
+	super::secret_diagnostics_tests::assert_totp_secret(secret);
 	assert!(
 		body["otpauth_uri"]
 			.as_str()
 			.unwrap_or("")
 			.contains("otpauth://totp/"),
-		"{body}"
+		"API response must have the expected status or field"
 	);
 
 	// Disabling clears it.
@@ -289,7 +302,7 @@ async fn account_creation_validates_input() {
 		"/api/v1/accounts",
 		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
-			"name": "bob", "addresses": ["bob@elsewhere.example"], "password": "a-long-password"
+			"name": "bob", "addresses": ["bob@elsewhere.example"], "password": fixtures::password()
 		})),
 	)
 	.await;
@@ -302,7 +315,7 @@ async fn account_creation_validates_input() {
 		"/api/v1/accounts",
 		Some(TOKEN.as_str()),
 		Some(serde_json::json!({
-			"name": "alice", "addresses": ["alice2@example.org"], "password": "a-long-password"
+			"name": "alice", "addresses": ["alice2@example.org"], "password": fixtures::password()
 		})),
 	)
 	.await;
@@ -317,7 +330,7 @@ async fn delete_without_a_queue_policy_is_rejected() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
 
-	let (status, body) = request_with_body(
+	let (status, _) = request_with_body(
 		&app,
 		"POST",
 		"/api/v1/accounts",
@@ -325,11 +338,15 @@ async fn delete_without_a_queue_policy_is_rejected() {
 		Some(serde_json::json!({
 			"name": "harvey",
 			"addresses": ["harvey@example.org"],
-			"password": "a-long-password"
+			"password": fixtures::password()
 		})),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"API response must have the expected status or field"
+	);
 
 	// Missing parameter.
 	let (status, body) = request(
@@ -339,7 +356,11 @@ async fn delete_without_a_queue_policy_is_rejected() {
 		Some(TOKEN.as_str()),
 	)
 	.await;
-	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::BAD_REQUEST,
+		"API response must have the expected status or field"
+	);
 	assert_eq!(body["error"]["code"], "invalid_input");
 
 	// Unknown parameter value.
@@ -350,7 +371,11 @@ async fn delete_without_a_queue_policy_is_rejected() {
 		Some(TOKEN.as_str()),
 	)
 	.await;
-	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::BAD_REQUEST,
+		"API response must have the expected status or field"
+	);
 	assert_eq!(body["error"]["code"], "invalid_input");
 }
 
@@ -362,7 +387,7 @@ async fn delete_with_discard_reports_the_counts() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
 
-	let (status, body) = request_with_body(
+	let (status, _) = request_with_body(
 		&app,
 		"POST",
 		"/api/v1/accounts",
@@ -370,11 +395,15 @@ async fn delete_with_discard_reports_the_counts() {
 		Some(serde_json::json!({
 			"name": "ivy",
 			"addresses": ["ivy@example.org"],
-			"password": "a-long-password"
+			"password": fixtures::password()
 		})),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"API response must have the expected status or field"
+	);
 
 	// Seed a mailbox message so `mailbox_files` is non-zero.
 	let mailbox = dir.path().join("accounts/ivy/new");
@@ -388,7 +417,11 @@ async fn delete_with_discard_reports_the_counts() {
 		Some(TOKEN.as_str()),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"API response must have the expected status or field"
+	);
 	assert_eq!(body["removed"], "ivy");
 	assert!(
 		body["mailbox_files"].as_u64().unwrap_or(0) >= 1,

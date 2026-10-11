@@ -154,3 +154,7 @@ mod cidr_dual_stack_tests;
 #[cfg(test)]
 #[path = "api_key_reload_tests.rs"]
 mod api_key_reload_tests;
+
+#[cfg(test)]
+#[path = "secret_diagnostics_tests.rs"]
+mod secret_diagnostics_tests;
