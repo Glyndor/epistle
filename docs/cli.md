@@ -100,7 +100,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | Area | `ok` | `warn` | `fail` |
 |---|---|---|---|
 | `config` | file loads | restart pending: `mail.toml` is newer than the `mail` container's start (needs the compose stack; skipped with a note otherwise) | does not load |
-| `ports` | every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, ManageSieve `OK`, HTTP status line; implicit-TLS listeners only accept a TCP connection) | no listeners | a listener refuses, is silent or greets wrongly |
+| `ports` | the same check as `epistle probe`: every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, POP3 `+OK`, ManageSieve `OK`, HTTP status line), and TLS listeners present the configured certificate | no listeners | a listener refuses, is silent, greets wrongly or presents another certificate |
 | `tls` | 21 days or more left, hostname in the certificate | under 21 days | under 7 days, expired, or hostname not in the certificate; unreadable file |
 | `dns` | published records match | a lookup was inconclusive | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |

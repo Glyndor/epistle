@@ -61,7 +61,7 @@ async fn listeners_that_greet_correctly_are_ok() {
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 	assert_eq!(report.detail, "2 of 2 listeners answer");
 	assert_eq!(report.items[0].name, format!("smtp 127.0.0.1:{smtp}"));
-	assert_eq!(report.items[0].detail, "220 mail.example.org ESMTP");
+	assert_eq!(report.items[0].detail, "answers");
 }
 
 #[tokio::test]
@@ -85,7 +85,7 @@ async fn a_closed_port_fails_the_area() {
 	assert_eq!(report.items[0].status, Level::Ok);
 	assert_eq!(report.items[1].status, Level::Fail);
 	assert!(
-		report.items[1].detail.starts_with("cannot connect"),
+		report.items[1].detail.starts_with("connect:"),
 		"{}",
 		report.items[1].detail
 	);
@@ -101,7 +101,13 @@ async fn a_wrong_greeting_fails_that_listener() {
 	);
 	let report = check(&ctx).await;
 	assert_eq!(report.status, Level::Fail);
-	assert_eq!(report.items[0].detail, "unexpected greeting: * BYE go away");
+	assert!(
+		report.items[0]
+			.detail
+			.contains("expected IMAP `* OK` greeting"),
+		"{}",
+		report.items[0].detail
+	);
 }
 
 #[tokio::test]
@@ -115,8 +121,10 @@ async fn a_wildcard_bind_is_probed_on_loopback() {
 	assert_eq!(report.items[0].name, format!("smtp 127.0.0.1:{port}"));
 }
 
+/// Without a configured certificate there is nothing to pin a TLS listener
+/// to, so `status` reports it failed for the same reason `epistle probe` does.
 #[tokio::test]
-async fn a_tls_listener_is_only_connected_to() {
+async fn a_tls_listener_without_a_configured_certificate_fails() {
 	let port = banner(b"").await;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let ctx = with_listeners(
@@ -124,8 +132,7 @@ async fn a_tls_listener_is_only_connected_to() {
 		vec![listener(ListenerKind::Imaps, LOOPBACK, port)],
 	);
 	let report = check(&ctx).await;
-	assert_eq!(report.status, Level::Ok, "{report:?}");
-	assert_eq!(report.items[0].detail, "connected");
+	assert_eq!(report.status, Level::Fail, "{report:?}");
 }
 
 #[tokio::test]
