@@ -32,7 +32,7 @@ fn add_writes_a_new_domain_alias_entry() {
 		.expect("add must succeed");
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	commit_and_restart(
+	super::domain_writers::commit_alias(
 		document,
 		"alias.example.org",
 		"added",
@@ -111,7 +111,7 @@ fn remove_drops_an_existing_alias_entry() {
 	remove_alias_map(&config, &mut document, "alias.example.org").expect("remove must succeed");
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	commit_and_restart(
+	super::domain_writers::commit_alias(
 		document,
 		"alias.example.org",
 		"removed",

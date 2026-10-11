@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 
-use super::config_edit::{ConfigDocument, Outcome};
+use super::config_edit::ConfigDocument;
 use super::style;
 
 /// Domain administration actions.
@@ -129,13 +129,13 @@ fn execute(path: &Path, action: DomainCli) -> Result<ExitCode, String> {
 				let mut document = open(path)?;
 				let owned_alias = alias.clone();
 				add_alias_map(&config, &mut document, &alias, &target)?;
-				commit_and_restart(document, &owned_alias, "added", false, &mut out, &mut err)
+				commit_alias(document, &owned_alias, "added", false, &mut out, &mut err)
 			}
 			DomainAliasSubcommand::Remove { alias } => {
 				let mut document = open(path)?;
 				let owned_alias = alias.clone();
 				remove_alias_map(&config, &mut document, &alias)?;
-				commit_and_restart(document, &owned_alias, "removed", false, &mut out, &mut err)
+				commit_alias(document, &owned_alias, "removed", false, &mut out, &mut err)
 			}
 		},
 	}
@@ -349,94 +349,6 @@ fn add_domain(config: &Config, document: &mut ConfigDocument, domain: &str) -> R
 
 /// Refuse the removal when `domain` is in use. Returns the user-facing
 /// message listing each offender category and the addresses themselves.
-fn removal_blockers(config: &Config, domain: &str) -> Result<(), String> {
-	let mut offenders: Vec<String> = Vec::new();
-	// Static accounts.
-	for account in &config.accounts {
-		for address in &account.addresses {
-			if address_domain_matches(address, domain) {
-				offenders.push(format!("account {} uses {address}", account.name));
-			}
-		}
-	}
-	// Aliases.
-	for alias in &config.alias {
-		if address_domain_matches(&alias.address, domain) {
-			offenders.push(format!("alias {} uses the domain", alias.address));
-		}
-		for member in &alias.members {
-			if address_domain_matches(member, domain) {
-				offenders.push(format!("alias {} has member {member}", alias.address));
-			}
-		}
-		for sender in &alias.senders {
-			if address_domain_matches(sender, domain) {
-				offenders.push(format!("alias {} allows sender {sender}", alias.address));
-			}
-		}
-	}
-	// domain_aliases map.
-	for (alias, target) in &config.domain_aliases {
-		if alias.eq_ignore_ascii_case(domain) {
-			offenders.push(format!("domain_aliases has {alias} -> {target}"));
-		}
-		if target.eq_ignore_ascii_case(domain) {
-			offenders.push(format!("domain_aliases maps {alias} to {domain}"));
-		}
-	}
-	// Masked addresses (on disk).
-	let masked_path = config.data_dir.join("masked.json");
-	if let Ok(text) = std::fs::read_to_string(&masked_path) {
-		if let Ok(file) = serde_json::from_str::<serde_json::Value>(&text) {
-			if let Some(addresses) = file.get("addresses").and_then(|v| v.as_object()) {
-				for (key, value) in addresses {
-					if address_domain_matches(key, domain) {
-						let owner = value.get("account").and_then(|v| v.as_str()).unwrap_or("?");
-						offenders.push(format!("masked address {key} (account {owner})"));
-					}
-				}
-			}
-		}
-	}
-	// Dynamic accounts (data_dir/accounts.toml).
-	let accounts_path = config.data_dir.join("accounts.toml");
-	if let Ok(text) = std::fs::read_to_string(&accounts_path) {
-		if let Ok(file) = toml::from_str::<toml::Value>(&text) {
-			if let Some(accounts) = file.get("accounts").and_then(|v| v.as_array()) {
-				for account in accounts {
-					let name = account.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-					if let Some(addresses) = account.get("addresses").and_then(|v| v.as_array()) {
-						for address in addresses {
-							if let Some(address) = address.as_str() {
-								if address_domain_matches(address, domain) {
-									offenders
-										.push(format!("dynamic account {name} uses {address}"));
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	if offenders.is_empty() {
-		Ok(())
-	} else {
-		offenders.sort();
-		offenders.dedup();
-		Err(format!(
-			"domain {domain} is still in use: {}",
-			offenders.join(", ")
-		))
-	}
-}
-
-fn address_domain_matches(address: &str, domain: &str) -> bool {
-	crate::smtp::address::Address::parse(address)
-		.map(|parsed| parsed.domain().eq_ignore_ascii_case(domain))
-		.unwrap_or(false)
-}
-
 fn remove_domain(
 	config: &Config,
 	document: &mut ConfigDocument,
@@ -515,132 +427,6 @@ fn remove_alias_map(
 	Ok(())
 }
 
-fn commit_and_restart(
-	document: ConfigDocument,
-	alias: &str,
-	verb: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, String> {
-	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	let config = document.config()?;
-	let outcome = document.commit()?;
-	if outcome == Outcome::Unchanged {
-		writeln!(
-			status,
-			"domain alias {alias} already {verb}; nothing changed."
-		)
-		.map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	writeln!(status, "domain alias {alias} {verb}.").map_err(|e| e.to_string())?;
-	super::config_edit::after_change_with(&config, outcome, true, status, super::stack::run)
-}
-
-/// Validate-and-commit for `domain add`: the helper unwraps the new
-/// domain so `add_domain` can return early on a bad name, then the
-/// commit step prints the DNS records the operator must publish.
-fn commit_add(
-	_config: &Config,
-	document: ConfigDocument,
-	domain: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, String> {
-	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	let new_config = document.config()?;
-	let outcome = document.commit()?;
-	if outcome == Outcome::Unchanged {
-		writeln!(
-			status,
-			"domain {domain} already configured; nothing changed."
-		)
-		.map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	writeln!(status, "domain {domain} added.").map_err(|e| e.to_string())?;
-	print_domain_records(&new_config, domain, out).map_err(|e| e.to_string())?;
-	super::config_edit::after_change_with(&new_config, outcome, true, status, super::stack::run)
-}
-
-fn commit_remove(
-	document: ConfigDocument,
-	domain: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, String> {
-	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	let config = document.config()?;
-	let outcome = document.commit()?;
-	if outcome == Outcome::Unchanged {
-		writeln!(status, "domain {domain} already removed; nothing changed.")
-			.map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	writeln!(status, "domain {domain} removed.").map_err(|e| e.to_string())?;
-	let _ = config;
-	super::config_edit::after_change_with(&config, outcome, true, status, super::stack::run)
-}
-
-/// Print the DNS records `dns-records` would emit, restricted to the new
-/// `domain`. Mirrors `crate::cli::dns_records::run` so the operator sees
-/// the same shape they would on a full run.
-fn print_domain_records(
-	config: &Config,
-	domain: &str,
-	out: &mut impl Write,
-) -> std::io::Result<()> {
-	let dkim_owned: Vec<(String, String)> = config
-		.dkim
-		.as_ref()
-		.map(|dkim| {
-			let mut pairs = Vec::new();
-			if let Ok(signer) = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file) {
-				pairs.push((dkim.selector.clone(), signer.dns_record_value()));
-			}
-			pairs
-		})
-		.unwrap_or_default();
-	let tlsa = config
-		.tls
-		.as_ref()
-		.and_then(|tls| std::fs::read_to_string(&tls.cert_file).ok())
-		.and_then(|pem| crate::dns::records::tlsa_full_cert(&pem));
-	let recs = crate::dns::records::build_records(
-		&[domain.to_string()],
-		&config.hostname,
-		&dkim_owned,
-		tlsa.as_deref(),
-		&crate::dns::records::mta_sts_id(config),
-		crate::dns::records::Services::all(),
-		config.acme.as_ref().map(|a| a.directory_url.as_str()),
-		config.public_ipv4,
-		config.public_ipv6,
-	);
-	writeln!(out, "\nDNS records to publish for {domain}:")?;
-	for entry in &recs {
-		let r = &entry.record;
-		let value = match r.kind {
-			crate::dns::provider::RecordKind::Txt => crate::dns::records::txt_zone_form(&r.value),
-			_ => r.value.clone(),
-		};
-		writeln!(out, "{} {} IN {} {}", r.name, r.ttl, r.kind.as_str(), value)?;
-	}
-	Ok(())
-}
-
 #[cfg(test)]
 #[path = "domain_tests.rs"]
 mod tests;
@@ -650,3 +436,11 @@ mod tests_aliases;
 #[cfg(test)]
 #[path = "domain_tests_removal.rs"]
 mod tests_removal;
+
+#[path = "domain_blockers.rs"]
+pub mod domain_blockers;
+pub(super) use domain_blockers::removal_blockers;
+
+#[path = "domain_writers.rs"]
+pub mod domain_writers;
+pub(super) use domain_writers::{commit_add, commit_alias, commit_remove};

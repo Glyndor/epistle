@@ -55,7 +55,7 @@ fn show_does_not_leak_the_endpoint_url_or_env_var_name() {
 	);
 	let config = load(file.path());
 	let mut out = Vec::new();
-	show(&config, &mut out).unwrap();
+	show_keys(&config, &mut out).unwrap();
 	let output = String::from_utf8(out).unwrap();
 	assert!(
 		!output.contains("EPISTLE_LLM_API_KEY"),

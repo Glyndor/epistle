@@ -44,9 +44,11 @@ fn open(path: &Path) -> ConfigDocument {
 	ConfigDocument::open(path).expect("config document must open")
 }
 
+type Case = (Key, &'static str, Box<dyn Fn(&Config) -> bool>);
+
 #[test]
 fn set_writes_every_scalar_key_to_its_mapped_field() {
-	let cases: [(Key, &str, Box<dyn Fn(&Config) -> bool>); 11] = [
+	let cases: [Case; 11] = [
 		(
 			Key::GreylistDelay,
 			"5m",
@@ -232,7 +234,7 @@ fn show_lists_every_key_and_marks_secrets_as_set_only() {
 	);
 	let config = load(file.path());
 	let mut out = Vec::new();
-	show(&config, &mut out).expect("show must succeed");
+	show_keys(&config, &mut out).expect("show must succeed");
 	let output = String::from_utf8(out).unwrap();
 	for needle in [
 		"dnsbl-zones\t(empty)\tdefault",

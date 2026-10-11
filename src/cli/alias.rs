@@ -9,11 +9,19 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Args, Subcommand};
 
-use crate::config::{Alias, Config};
-use crate::directory_store::AccountStore;
+use crate::config::Config;
 
-use super::config_edit::{ConfigDocument, Outcome};
+use super::config_edit::ConfigDocument;
 use super::style;
+
+use alias_helpers::{disabled_set, find_alias, validate_alias_address, validate_member_or_sender};
+use alias_writers::{commit_and_restart, set_enabled, upsert_alias_members, upsert_alias_senders};
+
+#[path = "alias_helpers.rs"]
+mod alias_helpers;
+
+#[path = "alias_writers.rs"]
+mod alias_writers;
 
 /// Multi-target alias administration.
 #[derive(Debug, Subcommand)]
@@ -226,83 +234,14 @@ fn open(path: &Path) -> Result<ConfigDocument, String> {
 
 /// Open the directory store so we can ask it whether an address is already
 /// used by an account, another alias or a masked address.
-fn open_store(config: &Config) -> Result<AccountStore, String> {
-	AccountStore::open(
+fn open_store(config: &Config) -> Result<crate::directory_store::AccountStore, String> {
+	crate::directory_store::AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
 		config.domain_aliases.clone(),
 		config.accounts.clone(),
 	)
 	.map_err(|e| e.to_string())
-}
-
-/// Validate that an alias address lives in a configured domain and is not
-/// already used by another entity the directory resolves. Mirrors the
-/// `address_taken` rule on `AccountStore::add` so the operator gets the same
-/// refusal the dynamic path would.
-fn validate_alias_address(config: &Config, raw: &str, store: &AccountStore) -> Result<(), String> {
-	let parsed = crate::smtp::address::Address::parse(raw)
-		.map_err(|_| format!("alias address {raw} is not a valid email address"))?;
-	if !config
-		.domains
-		.iter()
-		.any(|domain| domain.eq_ignore_ascii_case(parsed.domain()))
-	{
-		return Err(format!("alias address {raw} is not in a configured domain"));
-	}
-	// `address_taken` is `pub(super)` inside `mutators.rs`, so the CLI
-	// re-implements the rule on the visible surface. The check covers the
-	// three places that own a delivery address: static accounts, dynamic
-	// accounts and existing aliases; masked addresses live behind a method
-	// on `MaskedAddressStore` that the public `AccountStore` does not
-	// expose.
-	let used_by_account = config
-		.accounts
-		.iter()
-		.flat_map(|account| account.addresses.iter())
-		.any(|existing| existing.eq_ignore_ascii_case(raw));
-	if used_by_account {
-		return Err(format!("alias address {raw} is already used by an account"));
-	}
-	// dynamic-account rows from the on-disk store
-	for dynamic in store.dynamic_accounts() {
-		if dynamic
-			.addresses
-			.iter()
-			.any(|existing| existing.eq_ignore_ascii_case(raw))
-		{
-			return Err(format!("alias address {raw} is already used by an account"));
-		}
-	}
-	// masked addresses (a JSON-backed store on disk)
-	let masked_path = config.data_dir.join("masked.json");
-	if let Ok(text) = std::fs::read_to_string(&masked_path) {
-		if let Ok(file) = serde_json::from_str::<serde_json::Value>(&text) {
-			if let Some(addresses) = file.get("addresses").and_then(|v| v.as_object()) {
-				for key in addresses.keys() {
-					if key.eq_ignore_ascii_case(raw) {
-						return Err(format!(
-							"alias address {raw} is already used by a masked address"
-						));
-					}
-				}
-			}
-		}
-	}
-	Ok(())
-}
-
-/// Parse every member/sender address: same rules as `validate_alias_address`
-/// but does not check against the store (the alias itself is allowed to
-/// deliver to addresses the directory cannot route to, including external
-/// addresses).
-fn validate_member_or_sender(label: &str, raw: &str) -> Result<(), String> {
-	let parsed = crate::smtp::address::Address::parse(raw)
-		.map_err(|_| format!("{label} address {raw} is not a valid email address"))?;
-	if parsed.local_part().is_empty() || parsed.domain().is_empty() {
-		return Err(format!("{label} address {raw} is empty"));
-	}
-	Ok(())
 }
 
 fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
@@ -332,7 +271,7 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()
 	}
 	writeln!(
 		out,
-		"{:<40} {:<8} {:<8} {}",
+		"{:<40} {:<8} {:<8} {:<20}",
 		"ADDRESS", "STATE", "VISIBLE", "MEMBERS"
 	)?;
 	for alias in &config.alias {
@@ -341,7 +280,7 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()
 		let visible = if alias.hidden { "hidden" } else { "visible" };
 		writeln!(
 			out,
-			"{:<40} {:<8} {:<8} {}",
+			"{:<40} {:<8} {:<8} {:<20}",
 			alias.address,
 			state,
 			visible,
@@ -390,30 +329,6 @@ fn show(config: &Config, address: &str, json: bool, out: &mut impl Write) -> std
 	Ok(())
 }
 
-fn find_alias<'a>(config: &'a Config, address: &str) -> Option<&'a Alias> {
-	config
-		.alias
-		.iter()
-		.find(|alias| alias.address.eq_ignore_ascii_case(address))
-}
-
-/// Read the disabled-overlay file directly when possible, falling back to an
-/// empty set on any I/O or parse error so `list`/`show` never block on a
-/// malformed JSON file.
-fn disabled_set(config: &Config) -> Option<std::collections::HashSet<String>> {
-	let path = config.data_dir.join("aliases.json");
-	let text = std::fs::read_to_string(&path).ok()?;
-	let file: serde_json::Value = serde_json::from_str(&text).ok()?;
-	let addresses = file.get("addresses").and_then(|v| v.as_array())?;
-	Some(
-		addresses
-			.iter()
-			.filter_map(|value| value.as_str())
-			.map(|address| address.to_ascii_lowercase())
-			.collect(),
-	)
-}
-
 fn add_alias(config: &Config, document: &mut ConfigDocument, args: &AddArgs) -> Result<(), String> {
 	if find_alias(config, &args.address).is_some() {
 		return Err(format!("alias {} already exists", args.address));
@@ -428,9 +343,6 @@ fn add_alias(config: &Config, document: &mut ConfigDocument, args: &AddArgs) -> 
 	}
 	for sender in &args.senders {
 		validate_member_or_sender("sender", sender)?;
-	}
-	if find_alias(config, &args.address).is_some() {
-		return Err(format!("alias {} already exists", args.address));
 	}
 	let hidden = !args.visible;
 	let mut members_array = toml_edit::Array::new();
@@ -550,104 +462,6 @@ fn sender_edit(
 			upsert_alias_senders(document, &address, &senders)?;
 			Ok(())
 		}
-	}
-}
-
-/// Rewrite the members list on an alias table, preserving the rest.
-fn upsert_alias_members(
-	document: &mut ConfigDocument,
-	address: &str,
-	members: &[String],
-) -> Result<(), String> {
-	let mut values = toml_edit::Array::new();
-	for member in members {
-		values.push(toml_edit::Value::from(member.clone()));
-	}
-	document.upsert_element(
-		"alias",
-		"address",
-		address,
-		&[("members", toml_edit::Value::Array(values))],
-	)
-}
-
-/// Rewrite the senders list on an alias table.
-fn upsert_alias_senders(
-	document: &mut ConfigDocument,
-	address: &str,
-	senders: &[String],
-) -> Result<(), String> {
-	let mut values = toml_edit::Array::new();
-	for sender in senders {
-		values.push(toml_edit::Value::from(sender.clone()));
-	}
-	document.upsert_element(
-		"alias",
-		"address",
-		address,
-		&[("senders", toml_edit::Value::Array(values))],
-	)
-}
-
-fn commit_and_restart(
-	document: ConfigDocument,
-	address: &str,
-	verb: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, String> {
-	if dry_run {
-		write!(out, "{}", document.dry_run()?).map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	let config = document.config()?;
-	let outcome = document.commit()?;
-	if outcome == Outcome::Unchanged {
-		writeln!(status, "alias {address} already {verb}; nothing changed.")
-			.map_err(|e| e.to_string())?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	writeln!(status, "alias {address} {verb}.").map_err(|e| e.to_string())?;
-	super::config_edit::after_change_with(&config, outcome, true, status, super::stack::run)
-}
-
-/// Toggle the disabled flag on a multi-target alias via the dynamic store.
-/// This does not flow through the config-edit engine: `aliases.json` lives
-/// under `data_dir` and the running server reloads it on the 2 s file
-/// watcher, so no restart is required.
-fn set_enabled(
-	config: &Config,
-	address: &str,
-	enabled: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, String> {
-	let store = open_store(config)?;
-	let alias = find_alias(config, address).ok_or_else(|| format!("alias {address} not found"))?;
-	match store.set_alias_enabled(&alias.address, enabled) {
-		Ok(previous) => {
-			// `previous` is the disabled-state before the call: true means the
-			// alias was already disabled. Calling disable twice in a row leaves
-			// `previous` = true on the second call and is a no-op (no persist).
-			let verb = if enabled { "enabled" } else { "disabled" };
-			let transition = if previous == !enabled {
-				format!("already {verb}")
-			} else {
-				verb.to_string()
-			};
-			writeln!(status, "alias {address} {transition}.").map_err(|e| e.to_string())?;
-			// Confirm the new state on stdout for scripts that parse it.
-			writeln!(
-				out,
-				"{}\t{}",
-				alias.address,
-				if enabled { "enabled" } else { "disabled" }
-			)
-			.map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
-		}
-		Err(error) => Err(format!("cannot update alias {address}: {error}")),
 	}
 }
 

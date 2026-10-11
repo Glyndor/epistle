@@ -60,26 +60,6 @@ pub enum Key {
 }
 
 impl Key {
-	fn all() -> [Self; 15] {
-		[
-			Self::DnsblZones,
-			Self::DnsblDomainZones,
-			Self::DnsblUrlZones,
-			Self::GreylistDelay,
-			Self::FirstTimeSenderDelay,
-			Self::ClamdSocket,
-			Self::ClamdOnFound,
-			Self::ClamdTimeout,
-			Self::ClamdMaxSize,
-			Self::Subjectpass,
-			Self::LlmEndpoint,
-			Self::LlmModel,
-			Self::LlmApiKeyEnv,
-			Self::LlmUncertainLow,
-			Self::LlmUncertainHigh,
-		]
-	}
-
 	fn name(self) -> &'static str {
 		match self {
 			Self::DnsblZones => "dnsbl-zones",
@@ -167,7 +147,7 @@ fn execute(path: &Path, action: AntispamCli, dry_run: bool) -> Result<ExitCode, 
 	match action {
 		AntispamCli::Show => {
 			let config = Config::load(path).map_err(|e| e.to_string())?;
-			show(&config, &mut out).map_err(|e| e.to_string())?;
+			show_keys(&config, &mut out).map_err(|e| e.to_string())?;
 			Ok(ExitCode::SUCCESS)
 		}
 		AntispamCli::Set { key, value } => {
@@ -351,7 +331,7 @@ fn set_scalar_field(document: &mut ConfigDocument, key: Key, raw: &str) -> Resul
 		}
 		Key::ClamdMaxSize => {
 			let value = parse_size_bytes(raw).map_err(|e| format!("clamd-max-size: {e}"))?;
-			document.set_table_key(&["antispam"], "clamd_max_bytes", value as i64)?;
+			document.set_table_key(&["antispam"], "clamd_max_bytes", value)?;
 		}
 		Key::Subjectpass => {
 			let value = parse_on_off(raw).map_err(|e| format!("subjectpass: {e}"))?;
@@ -410,7 +390,7 @@ fn unset_scalar_field(document: &mut ConfigDocument, key: Key) -> Result<(), Str
 	Ok(())
 }
 
-fn commit_and_restart(
+pub(super) fn commit_and_restart(
 	document: ConfigDocument,
 	key: Key,
 	verb: &str,
@@ -437,172 +417,6 @@ fn commit_and_restart(
 	super::config_edit::after_change_with(&config, outcome, true, status, super::stack::run)
 }
 
-/// Print one line per key. Secret fields (LLM credentials) show `set`/`unset`,
-/// never the value.
-pub(super) fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
-	for key in Key::all() {
-		let line = render_row(config, key);
-		writeln!(out, "{line}")?;
-	}
-	Ok(())
-}
-
-fn render_row(config: &Config, key: Key) -> String {
-	match key {
-		Key::DnsblZones => list_row(key.name(), &config.dnsbl_zones),
-		Key::DnsblDomainZones => list_row(key.name(), &config.dnsbl_domain_zones),
-		Key::DnsblUrlZones => list_row(key.name(), &config.dnsbl_url_zones),
-		Key::GreylistDelay => duration_row(key.name(), config.greylist_delay_secs),
-		Key::FirstTimeSenderDelay => duration_row(key.name(), config.first_time_sender_delay_secs),
-		Key::ClamdSocket => optional_row(
-			key.name(),
-			config
-				.antispam
-				.clamd_socket
-				.as_ref()
-				.map(|path| path.display().to_string())
-				.as_deref(),
-		),
-		Key::ClamdOnFound => scalar_row(
-			key.name(),
-			Some(match config.antispam.clamd_on_found {
-				crate::config::ClamdOnFound::Quarantine => "quarantine",
-				crate::config::ClamdOnFound::Reject => "reject",
-			}),
-		),
-		Key::ClamdTimeout => scalar_row(key.name(), Some(config.antispam.clamd_timeout_secs)),
-		Key::ClamdMaxSize => scalar_row(key.name(), Some(config.antispam.clamd_max_bytes)),
-		Key::Subjectpass => scalar_row(
-			key.name(),
-			Some(if config.subjectpass.enabled {
-				"on"
-			} else {
-				"off"
-			}),
-		),
-		Key::LlmEndpoint => optional_row(key.name(), config.antispam_llm.as_ref().map(|_| "set")),
-		Key::LlmModel => optional_row(key.name(), config.antispam_llm.as_ref().map(|_| "set")),
-		Key::LlmApiKeyEnv => optional_row(key.name(), config.antispam_llm.as_ref().map(|_| "set")),
-		Key::LlmUncertainLow => scalar_row(
-			key.name(),
-			config.antispam_llm.as_ref().map(|llm| llm.uncertain_low),
-		),
-		Key::LlmUncertainHigh => scalar_row(
-			key.name(),
-			config.antispam_llm.as_ref().map(|llm| llm.uncertain_high),
-		),
-	}
-}
-
-fn list_row(name: &str, values: &[String]) -> String {
-	if values.is_empty() {
-		format!("{name}\t(empty)\tdefault")
-	} else {
-		format!("{name}\t{}\tconfigured", values.join(","))
-	}
-}
-
-fn duration_row(name: &str, seconds: u64) -> String {
-	if seconds == 0 {
-		format!("{name}\t0 seconds\tdefault")
-	} else {
-		format!("{name}\t{seconds} seconds\tconfigured")
-	}
-}
-
-fn scalar_row<T: std::fmt::Display>(name: &str, value: Option<T>) -> String {
-	match value {
-		Some(value) => format!("{name}\t{value}\tset"),
-		None => format!("{name}\tunset\tdefault"),
-	}
-}
-
-fn optional_row(name: &str, value: Option<&str>) -> String {
-	match value {
-		Some(value) => format!("{name}\t{value}\tset"),
-		None => format!("{name}\tunset\tdefault"),
-	}
-}
-
-fn parse_duration_seconds(input: &str) -> Result<u64, &'static str> {
-	const INVALID: &str = "expected a non-negative integer or a duration suffix (s, m, h, d, w)";
-	let trimmed = input.trim();
-	if trimmed.is_empty() {
-		return Err(INVALID);
-	}
-	let digit_end = trimmed
-		.find(|character: char| !character.is_ascii_digit())
-		.unwrap_or(trimmed.len());
-	let (digits, suffix) = trimmed.split_at(digit_end);
-	if digits.is_empty() {
-		return Err(INVALID);
-	}
-	let multiplier: u64 = match suffix {
-		"" | "s" => 1,
-		"m" => 60,
-		"h" => 3600,
-		"d" => 86400,
-		"w" => 7 * 86400,
-		_ => return Err(INVALID),
-	};
-	digits
-		.parse::<u64>()
-		.ok()
-		.and_then(|value| value.checked_mul(multiplier))
-		.ok_or(INVALID)
-}
-
-fn parse_u64(input: &str) -> Result<u64, &'static str> {
-	const INVALID: &str = "expected a non-negative integer";
-	input.trim().parse::<u64>().map_err(|_| INVALID)
-}
-
-fn parse_size_bytes(input: &str) -> Result<i64, &'static str> {
-	const INVALID: &str = "expected a non-negative byte count or a binary suffix (K, M, G, T)";
-	let trimmed = input.trim();
-	if trimmed.is_empty() {
-		return Err(INVALID);
-	}
-	let digit_end = trimmed
-		.find(|character: char| !character.is_ascii_digit())
-		.unwrap_or(trimmed.len());
-	let (digits, suffix) = trimmed.split_at(digit_end);
-	if digits.is_empty() {
-		return Err(INVALID);
-	}
-	let multiplier: i64 = match suffix {
-		"" => 1,
-		"K" | "k" => 1024,
-		"M" | "m" => 1024 * 1024,
-		"G" | "g" => 1024 * 1024 * 1024,
-		"T" | "t" => 1024_i64.pow(4),
-		_ => return Err(INVALID),
-	};
-	digits
-		.parse::<i64>()
-		.ok()
-		.and_then(|value| value.checked_mul(multiplier))
-		.filter(|value| *value > 0)
-		.ok_or(INVALID)
-}
-
-fn parse_on_off(input: &str) -> Result<bool, &'static str> {
-	match input.trim().to_ascii_lowercase().as_str() {
-		"on" | "true" | "yes" | "1" => Ok(true),
-		"off" | "false" | "no" | "0" => Ok(false),
-		_ => Err("expected on or off"),
-	}
-}
-
-fn parse_unit_interval(input: &str) -> Result<f64, &'static str> {
-	const INVALID: &str = "expected a float in [0.0, 1.0]";
-	let value: f64 = input.trim().parse().map_err(|_| INVALID)?;
-	if !(0.0..=1.0).contains(&value) {
-		return Err(INVALID);
-	}
-	Ok(value)
-}
-
 /// Cover the LLM secret policy: the endpoint, model and API-key env name are
 /// references the loader resolves at runtime; the CLI shows `set` for each,
 /// not the value. Kept as a public accessor for the tests.
@@ -625,6 +439,13 @@ pub(crate) fn llm_summary(
 pub(crate) fn llm_is_set(config: &Config) -> bool {
 	config.antispam_llm.is_some()
 }
+
+#[path = "antispam_show.rs"]
+pub mod antispam_show;
+pub(super) use antispam_show::show as show_keys;
+use antispam_show::{
+	parse_duration_seconds, parse_on_off, parse_size_bytes, parse_u64, parse_unit_interval,
+};
 
 #[cfg(test)]
 #[path = "antispam_tests.rs"]
