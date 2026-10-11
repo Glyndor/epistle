@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+#[path = "bans_admin.rs"]
+mod admin;
+pub use admin::{BanRow, BanTarget, MANUAL_REASON, parse_allow};
+
 /// The PostgreSQL-backed ban store: the production implementation of
 /// [`BanStore`]. One instance per process, shared across listeners.
 pub struct PgBanStore {
@@ -128,6 +132,13 @@ impl BanStore for PgBanStore {
 
 impl PgBanStore {
 	async fn record_failure_inner(&self, subject: &str, protocol: &str, now_secs: u64) {
+		// An allow-listed client is never counted, so it can never reach the
+		// threshold however many times it fails.
+		if let Some(ip) = admin::ip_of_subject(subject)
+			&& self.ip_allowed(ip).await
+		{
+			return;
+		}
 		let id = Uuid::now_v7();
 		let window_start_secs = now_secs.saturating_sub(self.policy.window_secs);
 		let result = async {
@@ -193,7 +204,49 @@ impl PgBanStore {
 		}
 	}
 
+	/// Ban check for a client address: the allow list wins over every ban, and
+	/// a ban on the exact address or on a network containing it applies. One
+	/// query returns both, so the common clean case costs a single round trip.
+	async fn is_ip_banned(&self, ip: IpAddr, now_secs: u64) -> Option<BanInfo> {
+		let rows: Result<Vec<(String, String, i64, String)>, sqlx::Error> = sqlx::query_as(
+			"SELECT 'allow', cidr, 0::BIGINT, '' FROM auth_allow \
+			 UNION ALL \
+			 SELECT 'ban', subject, EXTRACT(EPOCH FROM until)::BIGINT, reason \
+			 FROM auth_ban WHERE (subject = $1 OR subject LIKE 'cidr:%') \
+			 AND until > to_timestamp($2)",
+		)
+		.bind(subject_ip(ip))
+		.bind(now_secs as i64)
+		.fetch_all(&self.pool)
+		.await;
+		let rows = match rows {
+			Ok(rows) => rows,
+			Err(error) => {
+				self.record_db_error(&error).await;
+				return None;
+			}
+		};
+		let allowed: Vec<String> = rows
+			.iter()
+			.filter(|row| row.0 == "allow")
+			.map(|row| row.1.clone())
+			.collect();
+		if admin::is_allowed(ip, &allowed) {
+			return None;
+		}
+		rows.into_iter()
+			.filter(|row| row.0 == "ban" && admin::ban_applies(&row.1, ip))
+			.map(|(_, _, until, reason)| BanInfo {
+				until_secs: until.max(0) as u64,
+				reason,
+			})
+			.max_by_key(|info| info.until_secs)
+	}
+
 	async fn is_banned_inner(&self, subject: &str, now_secs: u64) -> Option<BanInfo> {
+		if let Some(ip) = admin::ip_of_subject(subject) {
+			return self.is_ip_banned(ip, now_secs).await;
+		}
 		let row: Result<Option<(i64, String)>, sqlx::Error> = sqlx::query_as(
 			"SELECT \
 			         EXTRACT(EPOCH FROM until)::BIGINT, \

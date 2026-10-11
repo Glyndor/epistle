@@ -74,3 +74,32 @@ fn bad_cidr_rejected() {
 	assert!(Cidr::parse("203.0.113.256").is_none());
 	assert!(Cidr::parse("203.0.113.0/").is_none());
 }
+
+#[test]
+fn display_is_the_masked_canonical_form() {
+	assert_eq!(
+		Cidr::parse("203.0.113.77/24").expect("cidr").to_string(),
+		"203.0.113.0/24"
+	);
+	assert_eq!(
+		Cidr::parse("2001:DB8::1/32").expect("cidr").to_string(),
+		"2001:db8::/32"
+	);
+	assert_eq!(
+		Cidr::parse("198.51.100.7").expect("cidr").to_string(),
+		"198.51.100.7/32"
+	);
+}
+
+#[test]
+fn host_routes_are_recognised() {
+	assert!(Cidr::parse("198.51.100.7").expect("cidr").is_host());
+	assert!(Cidr::parse("198.51.100.7/32").expect("cidr").is_host());
+	assert!(Cidr::parse("2001:db8::1/128").expect("cidr").is_host());
+	assert!(!Cidr::parse("198.51.100.0/24").expect("cidr").is_host());
+	assert_eq!(Cidr::parse("10.1.2.3/8").expect("cidr").prefix(), 8);
+	assert_eq!(
+		Cidr::parse("10.1.2.3/8").expect("cidr").network(),
+		ip("10.0.0.0")
+	);
+}
