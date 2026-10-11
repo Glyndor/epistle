@@ -22,18 +22,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-/// SHA-256 hex of a lowercased value, safe as a filename. Duplicated
-/// locally to keep the storage module free of a queue-internal
-/// dependency; the function is pure and the cost of the duplicate is
-/// one helper.
-fn digest_name(value: &str) -> String {
-	let digest = ring::digest::digest(&ring::digest::SHA256, value.to_ascii_lowercase().as_bytes());
-	digest.as_ref().iter().fold(String::new(), |mut acc, byte| {
-		use std::fmt::Write;
-		let _ = write!(acc, "{byte:02x}");
-		acc
-	})
-}
+use crate::util::path_component::DigestName;
 
 /// Filesystem-backed per-account correspondent set.
 ///
@@ -88,19 +77,19 @@ impl CorrespondentStore {
 
 	/// The directory holding one account's correspondent markers.
 	fn account_dir(&self, account: &str) -> PathBuf {
-		self.dir.join(digest_name(account))
+		DigestName::of(account).in_dir(&self.dir)
 	}
 
 	/// The marker path for one address under one account.
 	fn marker(&self, account: &str, address: &str) -> PathBuf {
-		self.account_dir(account).join(digest_name(address))
+		DigestName::of(address).in_dir(&self.account_dir(account))
 	}
 
 	// Keep lock files outside marker directories so they never count toward
 	// the cap. Retain them during account removal: replacing a lock file
 	// while another caller holds it would split the critical section.
 	fn lock_account(&self, account: &str) -> std::io::Result<fs::File> {
-		let path = self.dir.join(format!("{}.lock", digest_name(account)));
+		let path = DigestName::of(account).lock_in_dir(&self.dir);
 		let lock = fs::OpenOptions::new()
 			.read(true)
 			.write(true)
@@ -220,10 +209,10 @@ impl CorrespondentStore {
 		let dir = self.account_dir(account);
 		let new = recipients
 			.iter()
-			.map(|address| digest_name(address))
+			.map(|address| DigestName::of(address))
 			.collect::<std::collections::HashSet<_>>()
 			.iter()
-			.filter(|name| !dir.join(name).exists())
+			.filter(|name| !name.in_dir(&dir).exists())
 			.count() as u32;
 		let already = self.new_in_last_day(account)?;
 		if new > 0 && already.saturating_add(new) > limit {

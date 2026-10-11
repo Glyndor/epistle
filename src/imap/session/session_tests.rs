@@ -74,6 +74,8 @@ mod keyword_search;
 mod metadata;
 #[path = "session_tests_misc.rs"]
 mod misc;
+#[path = "session_tests_paths.rs"]
+mod paths;
 #[path = "session_tests_search.rs"]
 mod search;
 

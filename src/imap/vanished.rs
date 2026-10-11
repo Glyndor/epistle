@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use crate::util::path_component::{StateFile, state_file};
+
 /// Record that `uids` vanished at `modseq`.
 pub(super) fn record(account_dir: &Path, uids: &[u32], modseq: u64) -> std::io::Result<()> {
 	if uids.is_empty() {
@@ -15,7 +17,7 @@ pub(super) fn record(account_dir: &Path, uids: &[u32], modseq: u64) -> std::io::
 	let mut file = std::fs::OpenOptions::new()
 		.create(true)
 		.append(true)
-		.open(account_dir.join(".vanished"))?;
+		.open(state_file(account_dir, StateFile::Vanished))?;
 	for uid in uids {
 		writeln!(file, "{uid} {modseq}")?;
 	}
@@ -34,7 +36,7 @@ pub(super) fn record_advancing(account_dir: &Path, uids: &[u32]) {
 
 /// UIDs that vanished after `modseq` (for `VANISHED (EARLIER)`), in log order.
 pub(super) fn since(account_dir: &Path, modseq: u64) -> Vec<u32> {
-	let Ok(text) = std::fs::read_to_string(account_dir.join(".vanished")) else {
+	let Ok(text) = std::fs::read_to_string(state_file(account_dir, StateFile::Vanished)) else {
 		return Vec::new();
 	};
 	text.lines()

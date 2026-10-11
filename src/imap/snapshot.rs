@@ -5,6 +5,7 @@
 //! limit.
 
 use super::mailbox::Snapshot;
+use crate::util::path_component::{AccountName, AccountRoot, MessageExt, message_file};
 
 impl Snapshot {
 	/// Build the snapshot of any existing mailbox, decoding message bodies
@@ -38,10 +39,11 @@ impl Snapshot {
 		now: u64,
 	) -> std::io::Result<Snapshot> {
 		let _warnings = crate::util::fs_walk::warning_scope();
-		let account_dir = super::mailbox::mailbox_dir(data_dir, account, mailbox)
+		let account_name = AccountName::new(account)?;
+		let account_dir = super::mailbox::mailbox_dir(data_dir, account_name.as_str(), mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
 		crate::util::fs_walk::check_directories(&account_dir)?;
-		let account_root = data_dir.join("accounts").join(account);
+		let account_root = account_name.root(data_dir);
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
 		// doubt (missing, stale, corrupt, wrong version) falls through to the
@@ -139,7 +141,7 @@ impl Snapshot {
 	pub fn empty() -> Snapshot {
 		Snapshot {
 			account_dir: std::path::PathBuf::new(),
-			account_root: std::path::PathBuf::new(),
+			account_root: AccountRoot::placeholder(),
 			mailbox: String::new(),
 			messages: Vec::new(),
 			uid_validity: 0,
@@ -188,8 +190,7 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored =
-			crate::util::fs_walk::read(self.account_dir.join(format!("{}.eml", message.id())))?;
+		let stored = crate::util::fs_walk::read(self.message_path(message))?;
 		self.crypto.decode(&stored)
 	}
 
@@ -197,7 +198,7 @@ impl Snapshot {
 	/// rather than copying the bytes at STORE time, so the protocol reply
 	/// never has to wait for the body to be loaded into memory.
 	pub fn message_path(&self, message: &super::mailbox::MessageRef) -> std::path::PathBuf {
-		self.account_dir.join(format!("{}.eml", message.id()))
+		message_file(&self.account_dir, message.id(), MessageExt::Eml)
 	}
 
 	/// Replace the flags of the message at `sequence` (1-based), persisting
@@ -333,8 +334,8 @@ impl Snapshot {
 				}
 			}
 		}
-		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.eml")));
-		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.flags")));
-		let _ = std::fs::remove_file(self.account_dir.join(format!("{id}.uid")));
+		let _ = std::fs::remove_file(message_file(&self.account_dir, id, MessageExt::Eml));
+		let _ = std::fs::remove_file(message_file(&self.account_dir, id, MessageExt::Flags));
+		let _ = std::fs::remove_file(message_file(&self.account_dir, id, MessageExt::Uid));
 	}
 }

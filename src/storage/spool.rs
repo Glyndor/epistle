@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
+use crate::util::path_component::{MessageExt, message_file};
 
 use super::crypto::MessageCrypto;
 
@@ -95,7 +96,30 @@ pub struct FsSpool {
 	crypto: MessageCrypto,
 }
 
+/// The two directories of the spool: `tmp/` while a write is in flight, `new/`
+/// once the entry is complete.
+#[derive(Debug, Clone, Copy)]
+enum SpoolDir {
+	Tmp,
+	New,
+}
+
+impl SpoolDir {
+	fn name(self) -> &'static str {
+		match self {
+			Self::Tmp => "tmp",
+			Self::New => "new",
+		}
+	}
+}
+
 impl FsSpool {
+	/// The path of one spooled file. The id is a [`Uuid`] and the extension a
+	/// closed set, so nothing but a plain file name is ever joined onto the root.
+	fn entry_file(&self, dir: SpoolDir, id: Uuid, ext: MessageExt) -> PathBuf {
+		message_file(&self.root.join(dir.name()), id, ext)
+	}
+
 	/// Open (creating if needed) the spool under `data_dir`, with no at-rest
 	/// encryption. The encrypting variant is [`FsSpool::open_with_crypto`].
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
@@ -106,8 +130,8 @@ impl FsSpool {
 	/// (`.eml`) files through `crypto`. Envelope JSON sidecars are unaffected.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = data_dir.join("spool");
-		fs::create_dir_all(root.join("tmp"))?;
-		fs::create_dir_all(root.join("new"))?;
+		fs::create_dir_all(root.join(SpoolDir::Tmp.name()))?;
+		fs::create_dir_all(root.join(SpoolDir::New.name()))?;
 		Ok(FsSpool { root, crypto })
 	}
 
@@ -132,10 +156,10 @@ impl FsSpool {
 			last_error: None,
 		};
 
-		let tmp_message = self.root.join("tmp").join(format!("{id}.eml"));
-		let tmp_envelope = self.root.join("tmp").join(format!("{id}.json"));
-		let final_message = self.root.join("new").join(format!("{id}.eml"));
-		let final_envelope = self.root.join("new").join(format!("{id}.json"));
+		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml);
+		let tmp_envelope = self.entry_file(SpoolDir::Tmp, id, MessageExt::Json);
+		let final_message = self.entry_file(SpoolDir::New, id, MessageExt::Eml);
+		let final_envelope = self.entry_file(SpoolDir::New, id, MessageExt::Json);
 
 		write_sync(&tmp_message, &self.crypto.encode(&message.data)?)?;
 		let envelope_bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
@@ -149,19 +173,23 @@ impl FsSpool {
 	/// Load one spooled entry by id.
 	pub fn load(&self, id: Uuid) -> std::io::Result<SpoolEntry> {
 		let envelope_bytes =
-			crate::util::fs_walk::read(self.root.join("new").join(format!("{id}.json")))?;
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json))?;
 		let envelope: Envelope =
 			serde_json::from_slice(&envelope_bytes).map_err(std::io::Error::other)?;
-		let data = self.crypto.decode(&crate::util::fs_walk::read(
-			self.root.join("new").join(format!("{id}.eml")),
-		)?)?;
+		let data = self
+			.crypto
+			.decode(&crate::util::fs_walk::read(self.entry_file(
+				SpoolDir::New,
+				id,
+				MessageExt::Eml,
+			))?)?;
 		Ok(SpoolEntry { envelope, data })
 	}
 
 	/// List ids of all complete spooled messages, oldest first.
 	pub fn list(&self) -> std::io::Result<Vec<Uuid>> {
 		let mut ids = Vec::new();
-		for entry in crate::util::fs_walk::read_dir(self.root.join("new"))? {
+		for entry in crate::util::fs_walk::read_dir(self.root.join(SpoolDir::New.name()))? {
 			let entry = entry?;
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;
@@ -184,7 +212,8 @@ impl FsSpool {
 	/// Load only the envelope of an entry, never the message body. This is
 	/// what `queue show` uses, so an operator command cannot print mail.
 	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
-		let bytes = crate::util::fs_walk::read(self.root.join("new").join(format!("{id}.json")))?;
+		let bytes =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json))?;
 		serde_json::from_slice(&bytes).map_err(std::io::Error::other)
 	}
 
@@ -212,7 +241,7 @@ impl FsSpool {
 			.join(format!("{id}.{}.json", Uuid::now_v7()));
 		let bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
 		let written = write_sync(&tmp, &bytes)
-			.and_then(|()| fs::rename(&tmp, self.root.join("new").join(format!("{id}.json"))));
+			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)));
 		if let Err(error) = written {
 			let _ = fs::remove_file(&tmp);
 			return Err(error);
@@ -258,8 +287,8 @@ impl FsSpool {
 	pub fn remove(&self, id: Uuid) -> std::io::Result<()> {
 		let _guard = self.lock()?;
 		// Envelope first: a message file without an envelope is invisible.
-		fs::remove_file(self.root.join("new").join(format!("{id}.json")))?;
-		fs::remove_file(self.root.join("new").join(format!("{id}.eml")))?;
+		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Json))?;
+		fs::remove_file(self.entry_file(SpoolDir::New, id, MessageExt::Eml))?;
 		Ok(())
 	}
 }

@@ -55,12 +55,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::util::path_component::{StateFile, state_file, state_tmp_file};
 use uuid::Uuid;
 
 use super::mailbox::{Flag, MessageRef};
-
-/// Index file name inside a mailbox `new/` directory.
-const FILE_NAME: &str = ".index";
 
 /// Magic header identifying the file and its line format.
 const MAGIC: &str = "EPISTLE-MAILBOX-INDEX";
@@ -70,7 +68,7 @@ const VERSION: u32 = 2;
 
 /// The path of a mailbox's index file.
 fn index_path(account_dir: &Path) -> PathBuf {
-	account_dir.join(FILE_NAME)
+	state_file(account_dir, StateFile::Index)
 }
 
 /// The current mailbox generation: its highest mod-sequence and `.eml` count.
@@ -224,7 +222,7 @@ pub(super) fn write(
 		write_record(&mut out, message);
 	}
 
-	let tmp = account_dir.join(format!("{FILE_NAME}.tmp"));
+	let tmp = state_tmp_file(account_dir, StateFile::Index);
 	std::fs::write(&tmp, out.as_bytes())?;
 	std::fs::rename(&tmp, index_path(account_dir))
 }
