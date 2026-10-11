@@ -9,6 +9,7 @@ mod autoconfig;
 mod autodiscover;
 mod backup;
 mod config_check;
+pub mod config_edit;
 mod dns_records;
 mod export;
 mod import;
