@@ -171,6 +171,31 @@ otherwise a status message asks for a server restart. Restart failures leave
 the saved limit in place and return the stack's exit code. Unchanged values
 leave the file untouched and do not restart the service.
 
+## Smarthost relay (`epistle relay`)
+
+```sh
+epistle relay list [--json]
+epistle relay show [--account NAME | --domain DOMAIN] [--json]
+epistle relay add --host smtp.example.net --starttls --username mailer --password-stdin < pass.txt
+epistle relay add --domain example.net --host relay.example.net --port 2525
+epistle relay remove [--account NAME | --domain DOMAIN]
+epistle relay test [--account NAME | --domain DOMAIN]
+```
+
+Each command edits one `[[transport]]` rule with `kind = "relay"`. Without
+`--account` or `--domain` it addresses the default route. `add` creates the rule or
+updates it in place; the port defaults to 587 with `--starttls` and 25 otherwise.
+`--username` needs `--starttls` (credentials never cross plaintext) and the password
+on stdin as one line; it is stored inline in the 0600 configuration file and
+`show` and `list` print only `set` or `unset`. A re-run without `--password-stdin`
+keeps the stored password when the user is unchanged. A domain or account that
+already has a `fail` or `direct` rule is refused.
+
+`test` connects to the smarthost (through `--socks-proxy` when set), sends EHLO,
+upgrades with STARTTLS and authenticates when configured, then QUITs. It never
+starts a mail transaction and gives up after 10 seconds. All commands accept
+`--dry-run` (print the diff, write nothing) and `--config FILE`.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

@@ -38,7 +38,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Service { config, .. }
 		| Command::Limits { config, .. }
 		| Command::Status { config, .. }
-		| Command::Check { config, .. } => Some(config),
+		| Command::Check { config, .. }
+		| Command::Relay { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

@@ -117,6 +117,14 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["limits", "show"], true),
 	(&["limits", "set", "quota", "5G"], true),
 	(&["limits", "unset", "queue-give-up"], true),
+	(&["relay", "list"], true),
+	(&["relay", "show", "--domain", "example.org"], true),
+	(
+		&["relay", "add", "--host", "smtp.example.net", "--starttls"],
+		true,
+	),
+	(&["relay", "remove", "--account", "alice"], true),
+	(&["relay", "test"], true),
 	(&["service", "enable", "imap"], true),
 	(&["service", "disable", "imaps"], true),
 ];

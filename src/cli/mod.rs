@@ -21,8 +21,10 @@ mod mobileconfig;
 mod mta_sts_serve;
 mod probe;
 mod queue;
+mod relay;
 mod report_abuse;
 mod reports;
+mod resource;
 mod serve;
 mod serve_dkim;
 mod serve_ratelimit;
@@ -478,6 +480,18 @@ pub enum Command {
 		action: limits::Action,
 	},
 
+	/// Manage outbound smarthost (relay) rules.
+	Relay {
+		/// Configuration file; accepted before or after the relay action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Relay administration action.
+		#[command(subcommand)]
+		action: relay::RelayCli,
+	},
 	/// List, enable, or disable individual service listeners.
 	Service {
 		/// Configuration file; accepted before or after the service action.

@@ -371,6 +371,11 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::service::run(&config, action, dry_run),
+			Command::Relay {
+				config,
+				action,
+				dry_run,
+			} => super::relay::run(&config, action, dry_run),
 			Command::Limits {
 				config,
 				action,
@@ -406,6 +411,7 @@ impl Command {
 			| Command::Limits { .. }
 			| Command::Status { .. }
 			| Command::Check { .. }
+			| Command::Relay { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
