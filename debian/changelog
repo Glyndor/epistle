@@ -1,3 +1,33 @@
+epistle (0.10.0) unstable; urgency=medium
+
+  * Operate the server with commands instead of editing files: status and
+    check, service, limits, account, alias, domain, masked, queue, ban,
+    suppression, antispam, relay, dns provider, storage blobs, webhook,
+    alert, dkim, tls and api-key. Changes to mail.toml keep its comments,
+    are validated before they are written, accept --dry-run and restart
+    mail only when needed. See the common tasks table in docs/cli.md.
+  * epistle probe checks every listener and pins TLS listeners to the
+    configured certificate; the generated compose file uses it as the
+    mail container's healthcheck.
+  * DKIM rotation keeps every signing domain valid: the new selector is
+    published for each domain in the managed zone before signing switches,
+    the RSA signature survives a rotation, and a restart signs with the
+    rotated key. Rotation is off, with a warning, when a signing domain
+    is outside the zone.
+  * A renewed certificate reaches IMAP, POP3 and ManageSieve too, renewal
+    is decided from the certificate's notAfter, and a restart presents the
+    ACME certificate.
+  * API keys created or revoked with the CLI take effect without a
+    restart.
+  * Account and mailbox names are validated where they become paths.
+  * A plain-http webhook is accepted only for a real loopback host.
+  * JMAP enforces maxCallsInRequest and the advertised maxSizeRequest.
+  * Commands that need the database (ban, account-remove, check db) work
+    from the host when the database only listens inside the containers,
+    and a listener change recreates mail so its published ports follow.
+
+ -- Glyndor <packages@glyndor.net>  Sun, 11 Oct 2026 14:16:42 +0000
+
 epistle (0.9.2) unstable; urgency=medium
 
   * A TXT value longer than 255 bytes, such as an RSA DKIM key, is
