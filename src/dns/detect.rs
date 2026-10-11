@@ -71,13 +71,13 @@ pub fn local_global_addresses(interfaces: impl Iterator<Item = IpAddr>) -> Local
 	LocalGlobals { ipv4, ipv6, others }
 }
 
-/// Read the host's interfaces through `libc::getifaddrs` and run the
+/// Read the host's interfaces through `getifaddrs` and run the
 /// addresses through `local_global_addresses`. Only the machine's own
 /// interfaces are touched: no DNS, no HTTP, no external service.
 ///
 /// On non-Unix targets this function compiles to a stub that returns
 /// an empty list of addresses. Detection is not available there (no
-/// portable interface-walking call exists in `libc` for Windows), so
+/// portable interface-walking call exists for Windows), so
 /// the `init` flow prompts the operator to type the addresses by hand.
 pub fn detect() -> std::io::Result<(Option<Ipv4Addr>, Option<Ipv6Addr>)> {
 	let LocalGlobals { ipv4, ipv6, .. } =
@@ -163,87 +163,37 @@ impl fmt::Display for PtrReport {
 
 #[cfg(unix)]
 fn read_interface_addresses() -> std::io::Result<Vec<IpAddr>> {
-	use std::io::Error;
-	use std::os::raw::c_int;
+	let interfaces = nix::ifaddrs::getifaddrs().map_err(std::io::Error::from)?;
+	Ok(interfaces
+		.filter_map(|interface| interface.address.as_ref().and_then(socket_ip))
+		.collect())
+}
 
-	// RAII guard: `getifaddrs` returns a heap-allocated linked list that
-	// the caller MUST release with `freeifaddrs` on every exit path, panic
-	// included. Wrapping the head in a drop guard makes that unconditional.
-	struct IfAddrsGuard {
-		head: *mut libc::ifaddrs,
+/// The IP address inside an interface's socket address. Non-IP families
+/// (link-layer addresses) and IPv4-mapped IPv6 addresses yield `None`: the
+/// mapped form duplicates the IPv4 address the same interface already lists.
+#[cfg(unix)]
+fn socket_ip(address: &nix::sys::socket::SockaddrStorage) -> Option<IpAddr> {
+	if let Some(v4) = address.as_sockaddr_in() {
+		return Some(IpAddr::V4(v4.ip()));
 	}
-	impl Drop for IfAddrsGuard {
-		fn drop(&mut self) {
-			// SAFETY: `self.head` was returned by `getifaddrs` on the success
-			// path and has not yet been released.
-			unsafe { libc::freeifaddrs(self.head) };
-		}
-	}
-
-	let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
-	// SAFETY: `head` is a writable out-parameter; `getifaddrs` returns 0 on
-	// success and fills the head pointer with a valid linked list.
-	let rc = unsafe { libc::getifaddrs(&mut head) };
-	if rc != 0 {
-		return Err(Error::last_os_error());
-	}
-	if head.is_null() {
-		// `getifaddrs` returns 0 with a null head on systems with no
-		// interfaces, which the kernel is free to do. Treat that as "no
-		// addresses to walk" rather than an error.
-		return Ok(Vec::new());
-	}
-	let guard = IfAddrsGuard { head };
-	let mut addresses: Vec<IpAddr> = Vec::new();
-
-	let mut cur: *mut libc::ifaddrs = guard.head;
-	while !cur.is_null() {
-		// SAFETY: `cur` is a node in the list returned by `getifaddrs`. The
-		// loop walks `ifa_next` until the list is exhausted; each `cur` is
-		// non-null until the terminal node. No reference into the list
-		// escapes the loop body.
-		unsafe {
-			let ifa: &libc::ifaddrs = &*cur;
-			let sa_ptr = ifa.ifa_addr;
-			if !sa_ptr.is_null() {
-				let family = (*sa_ptr).sa_family as c_int;
-				if family == libc::AF_INET {
-					// SAFETY: `sa_ptr` is the `AF_INET` sockaddr for this
-					// interface, but the kernel does not promise that it
-					// is aligned for `libc::sockaddr_in`. Reading the value
-					// through a reference would require that alignment;
-					// `read_unaligned` does not.
-					let v4_sa: libc::sockaddr_in =
-						std::ptr::read_unaligned(sa_ptr as *const libc::sockaddr_in);
-					let host_order = u32::from_be(v4_sa.sin_addr.s_addr);
-					addresses.push(IpAddr::V4(Ipv4Addr::from(host_order)));
-				} else if family == libc::AF_INET6 {
-					// SAFETY: same alignment caveat as the AF_INET branch.
-					let v6_sa: libc::sockaddr_in6 =
-						std::ptr::read_unaligned(sa_ptr as *const libc::sockaddr_in6);
-					let addr = Ipv6Addr::from(v6_sa.sin6_addr.s6_addr);
-					if addr.to_ipv4_mapped().is_none() {
-						addresses.push(IpAddr::V6(addr));
-					}
-				}
-			}
-			cur = ifa.ifa_next;
-		}
-	}
-
-	drop(guard);
-	Ok(addresses)
+	let v6 = address.as_sockaddr_in6()?.ip();
+	v6.to_ipv4_mapped().is_none().then_some(IpAddr::V6(v6))
 }
 
 #[cfg(not(unix))]
 fn read_interface_addresses() -> std::io::Result<Vec<IpAddr>> {
-	// Detection is not available on this target: `libc` does not expose
-	// `getifaddrs` on Windows, and there is no portable equivalent in
-	// the crate. Returning an empty list keeps the `init` flow compiling
-	// and lets it prompt the operator to type the addresses by hand.
+	// Detection is not available on this target: `getifaddrs` does not exist
+	// on Windows, and there is no portable equivalent in the crate. Returning
+	// an empty list keeps the `init` flow compiling and lets it prompt the
+	// operator to type the addresses by hand.
 	Ok(Vec::new())
 }
 
 #[cfg(test)]
 #[path = "detect_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "detect_tests_ifaddrs.rs"]
+mod ifaddrs_tests;
