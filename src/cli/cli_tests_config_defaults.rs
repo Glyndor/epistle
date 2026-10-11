@@ -31,7 +31,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::ApiKeys { config }
 		| Command::ApiKeyRevoke { config, .. }
 		| Command::Reports { config, .. } => Some(config),
-		Command::Stack { config, .. } => Some(config),
+		Command::Stack { config, .. } | Command::Limits { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

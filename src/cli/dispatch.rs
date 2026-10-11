@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
-	dns_records, export, import, init, local, mobileconfig, queue, report_abuse, reports, serve,
-	srv, stack, style, suppression, verify, verify_dns,
+	dns_records, export, import, init, limits, local, mobileconfig, queue, report_abuse, reports,
+	serve, srv, stack, style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -338,6 +338,9 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
+			Command::Limits { config, action } => {
+				limits::run(&config, action, &mut std::io::stdout().lock())
+			}
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -355,6 +358,7 @@ impl Command {
 		match self {
 			Command::Init { .. }
 			| Command::Stack { .. }
+			| Command::Limits { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
@@ -395,3 +399,7 @@ impl Command {
 #[cfg(test)]
 #[path = "dispatch_tests_delegation.rs"]
 mod tests_delegation;
+
+#[cfg(test)]
+#[path = "dispatch_tests_limits.rs"]
+mod tests_limits;

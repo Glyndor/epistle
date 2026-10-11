@@ -12,6 +12,7 @@ mod compose;
 mod plan;
 
 pub use answers::Answers;
+pub(super) use apply::{merge_key, read_config, write_validated_config};
 pub use compose::compose_file_path;
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER};
 

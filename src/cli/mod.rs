@@ -12,6 +12,7 @@ mod dns_records;
 mod export;
 mod import;
 mod init;
+mod limits;
 mod local;
 mod mobileconfig;
 mod mta_sts_serve;
@@ -420,6 +421,15 @@ pub enum Command {
 		/// Print the answers template to stdout and exit.
 		#[arg(long)]
 		print_answers: bool,
+	},
+	/// Show, set, or reset server-wide numeric limits.
+	Limits {
+		/// Configuration file, accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// The limits operation.
+		#[command(subcommand)]
+		action: limits::Action,
 	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.

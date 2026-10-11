@@ -503,4 +503,4 @@ pub(super) use super::apply_config_merge::merge_with_existing;
 
 #[path = "apply_config_read.rs"]
 mod read;
-pub(super) use read::{ExistingConfig, read_config};
+pub(crate) use read::{ExistingConfig, read_config};

@@ -116,16 +116,26 @@ pub(crate) fn reconcile(
 				if key == "listeners" && keep_existing_listeners {
 					continue;
 				}
-				let new = match existing_table.remove(&key) {
-					Some(existing_inner) => reconcile_inner(existing_inner, value),
-					None => value,
-				};
-				existing_table.insert(key, new);
+				merge_key(&mut existing_table, key, value);
 			}
 			Value::Table(existing_table)
 		}
 		(_, desired) => desired,
 	}
+}
+
+/// Merge one key while preserving all other table entries. Return whether its
+/// value changed so commands can avoid replacing a file or restarting mail
+/// when the requested value is already configured.
+pub(crate) fn merge_key(table: &mut toml::Table, key: String, value: toml::Value) -> bool {
+	let previous = table.remove(&key);
+	let merged = match previous.as_ref() {
+		Some(existing) => reconcile_inner(existing.clone(), value),
+		None => value,
+	};
+	let changed = previous.as_ref() != Some(&merged);
+	table.insert(key, merged);
+	changed
 }
 
 /// Recurse into a nested table without applying the managed-key
@@ -136,11 +146,7 @@ fn reconcile_inner(existing: toml::Value, desired: toml::Value) -> toml::Value {
 	match (existing, desired) {
 		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
 			for (key, value) in desired_table {
-				let new = match existing_table.remove(&key) {
-					Some(existing_inner) => reconcile_inner(existing_inner, value),
-					None => value,
-				};
-				existing_table.insert(key, new);
+				merge_key(&mut existing_table, key, value);
 			}
 			Value::Table(existing_table)
 		}
@@ -203,7 +209,7 @@ pub(crate) fn listeners_from_existing(
 /// actionable message; symlinks can be silently replaced in ways the
 /// operator does not see, so the run stops before any effect rather
 /// than guessing what the operator wanted.
-pub(super) fn write_validated_config(path: &Path, bytes: &str) -> Result<(), ApplyError> {
+pub(crate) fn write_validated_config(path: &Path, bytes: &str) -> Result<(), ApplyError> {
 	#[cfg(unix)]
 	{
 		match fs::symlink_metadata(path) {

@@ -63,6 +63,50 @@ printed once at the end.
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
 
+## Server limits (`epistle limits`)
+
+```sh
+epistle limits show
+epistle limits set quota 5G
+epistle limits set submission-rate 120
+epistle limits set queue-give-up 12h
+epistle limits unset quota
+```
+
+`show` prints each effective value with `default` or `configured`. Disabled
+rate caps and the protocol-specific connection defaults are shown explicitly.
+Values equal to a built-in default are marked `default`, even when configured.
+`unset` removes the field so its built-in default applies again.
+
+| Key | Value |
+|---|---|
+| `quota` | Bytes per account, default 5 GiB. |
+| `submission-rate` | Messages per minute per account, default disabled. |
+| `new-recipients-per-day` | New recipients per account in a rolling 24 hours, default disabled. |
+| `queue-give-up` | Queue age before bouncing, default 5 days. |
+| `inbound-rate-per-ip` | Inbound messages per minute per client IP, default disabled. |
+| `inbound-rate-per-sender` | Inbound messages per minute per envelope sender, default disabled. |
+| `max-connections-per-listener` | Concurrent connections, default depends on the protocol. |
+| `masked-addresses-max` | Masked addresses per account, default 100. |
+| `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
+| `greylist-delay` | Greylist deferral window, default 0 seconds. |
+
+Sizes accept whole bytes or binary suffixes `K`, `M`, `G`, `T` (case insensitive);
+`5G` means 5 GiB. Durations accept whole seconds or `s`, `m`, `h`, `d`, `w`.
+Counts accept whole non-negative integers. Values must fit the configuration
+field and TOML integer range. Zero retains each setting's server semantics:
+it disables sender delays and masked addresses, and selects the built-in
+queue window or connection caps. Use `unset` to disable an optional rate cap.
+
+`--config <FILE>` works before or after the action and defaults to
+`/etc/epistle/mail.toml`. Updates preserve every other TOML key and validate
+before atomic replacement. They use init's TOML serialization, which may
+reformat the file and remove comments. A changed file triggers
+`epistle stack restart mail` when `<data_dir>/compose/compose.yaml` exists;
+otherwise a status message asks for a server restart. Restart failures leave
+the saved limit in place and return the stack's exit code. Unchanged values
+leave the file untouched and do not restart the service.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

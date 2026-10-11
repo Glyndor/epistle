@@ -534,7 +534,8 @@ pub use apply_plan::plan;
 /// derive the published-port list from the same listener set
 /// the config-write step wrote, without taking a second pass
 /// at the apply-internal `apply_config` module.
-pub(crate) use apply_config::listeners_to_write;
+pub(crate) use apply_config::{listeners_to_write, read_config};
+pub(crate) use apply_config_merge::{merge_key, write_validated_config};
 
 /// Re-export so the apply tests can call into the keys module
 /// without the rest of the crate going through `apply::apply_keys`.
