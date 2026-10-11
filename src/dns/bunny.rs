@@ -16,7 +16,8 @@ use serde::Deserialize;
 use crate::net::HttpsUrl;
 
 use super::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
+	same_txt_purpose,
 };
 
 /// Bunny's API base; overridable for tests.
@@ -221,6 +222,7 @@ impl BunnyProvider {
 			"Name": self.subname(&record.name),
 			"Value": value,
 			"Ttl": record.ttl,
+			"Comment": record_description(),
 		})
 		.to_string())
 	}
