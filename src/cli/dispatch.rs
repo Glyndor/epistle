@@ -348,7 +348,16 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
-			Command::Service { config, action } => super::service::run(&config, action),
+			Command::Service {
+				config,
+				action,
+				dry_run,
+			} => super::service::run(&config, action, dry_run),
+			Command::Limits {
+				config,
+				action,
+				dry_run,
+			} => super::limits::run(&config, action, dry_run, &mut std::io::stdout().lock()),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -367,6 +376,7 @@ impl Command {
 			Command::Init { .. }
 			| Command::Stack { .. }
 			| Command::Service { .. }
+			| Command::Limits { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
@@ -412,3 +422,7 @@ mod tests_delegation;
 #[cfg(test)]
 #[path = "cli_tests_service.rs"]
 mod tests_service;
+
+#[cfg(test)]
+#[path = "dispatch_tests_limits.rs"]
+mod tests_limits;

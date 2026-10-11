@@ -1,0 +1,24 @@
+# operator header
+hostname  = 'mail.example.org' # hostname
+data_dir = '/var/lib/mail'
+domains = [ 'example.org', 'remove.org' ] # domains
+quota_bytes  =  123 # quota
+
+# scanner
+[antispam] # hook
+clamd_timeout_secs  =  45 # timeout
+
+# quota map
+[domain_quotas]
+'example.org'  =  123 # domain quota
+'remove.org' = 456
+
+# SMTP
+[[listeners]] # socket
+kind = 'smtp'
+addr  =  '0.0.0.0' # bind
+
+[[listeners]]
+kind = 'imap'
+addr = '0.0.0.0'
+# end

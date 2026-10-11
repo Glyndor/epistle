@@ -9,10 +9,12 @@ mod autoconfig;
 mod autodiscover;
 mod backup;
 mod config_check;
+pub mod config_edit;
 mod dns_records;
 mod export;
 mod import;
 mod init;
+mod limits;
 mod local;
 mod mobileconfig;
 mod mta_sts_serve;
@@ -26,6 +28,7 @@ mod serve_smtp_state;
 mod serve_tasks;
 mod serve_tls;
 mod service;
+mod service_edit;
 mod srv;
 mod stack;
 mod stack_socket;
@@ -444,11 +447,27 @@ pub enum Command {
 		#[arg(long)]
 		print_answers: bool,
 	},
+	/// Show, set, or unset numeric server and domain limits.
+	Limits {
+		/// Configuration file; accepted before or after the limits action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Limits administration action.
+		#[command(subcommand)]
+		action: limits::Action,
+	},
+
 	/// List, enable, or disable individual service listeners.
 	Service {
 		/// Configuration file; accepted before or after the service action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
 		/// Listener administration action.
 		#[command(subcommand)]
 		action: service::ServiceCli,
