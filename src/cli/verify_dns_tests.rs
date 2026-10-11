@@ -258,3 +258,71 @@ rsa_key_file = "/etc/mail/rsa.pem"
 		"both RSA fields set: verify-dns must not emit the warning: {err_text}"
 	);
 }
+
+#[test]
+fn dkim_selectors_prefer_rotation_state_selector_over_configured() {
+	// After the rotator runs, the ed25519 selector actually in service is
+	// the one persisted in `<data_dir>/dkim-rotation.json`, not the one
+	// the operator wrote in the config file. The verifier must check the
+	// live selector or it will report a missing DKIM record that the
+	// operator already published.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = crate::dkim::rotate::RotationState {
+		selector: "ed-rotated".into(),
+		key_file: std::path::PathBuf::from("rotated.key"),
+		rotated_at: 31 * 86_400,
+		previous: None,
+	};
+	std::fs::write(
+		dir.path().join("dkim-rotation.json"),
+		serde_json::to_vec(&state).expect("state JSON"),
+	)
+	.expect("write state");
+	let config: Config = toml::from_str(&format!(
+		r#"
+hostname = "mail.example.org"
+data_dir = "{}"
+domains = ["example.org"]
+
+[dkim]
+selector = "ed-original"
+key_file = "/etc/mail/dkim.pem"
+rsa_selector = "rsa-stable"
+rsa_key_file = "/etc/mail/rsa.pem"
+"#,
+		dir.path().display(),
+	))
+	.expect("config");
+	let selectors = dkim_selectors(&config);
+	assert_eq!(
+		selectors,
+		vec!["ed-rotated".to_string(), "rsa-stable".to_string()],
+		"verify-dns must use the rotated ed25519 selector with the configured RSA selector appended"
+	);
+}
+
+#[test]
+fn dkim_selectors_fall_back_to_configured_when_state_is_absent() {
+	// First start, before the rotator has run: there is no state file, so
+	// the helper must use whatever the operator configured.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config: Config = toml::from_str(&format!(
+		r#"
+hostname = "mail.example.org"
+data_dir = "{}"
+domains = ["example.org"]
+
+[dkim]
+selector = "ed-original"
+key_file = "/etc/mail/dkim.pem"
+"#,
+		dir.path().display(),
+	))
+	.expect("config");
+	let selectors = dkim_selectors(&config);
+	assert_eq!(
+		selectors,
+		vec!["ed-original".to_string()],
+		"absent state file must fall back to the configured selector"
+	);
+}

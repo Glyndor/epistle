@@ -42,8 +42,20 @@ pub(super) fn build_split_with_companions(
 		.with_metrics(metrics.clone());
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	if let Some(dkim) = &config.dkim {
-		let mut signer = crate::dkim::Signer::load(&dkim.selector, &dkim.key_file)
-			.map_err(std::io::Error::other)?;
+		let rotation = match std::fs::read(config.data_dir.join("dkim-rotation.json")) {
+			Ok(bytes) => Some(
+				serde_json::from_slice::<crate::dkim::rotate::RotationState>(&bytes)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+			),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+			Err(error) => return Err(error),
+		};
+		let (selector, key_file) = match &rotation {
+			Some(state) => (&state.selector, config.data_dir.join(&state.key_file)),
+			None => (&dkim.selector, dkim.key_file.clone()),
+		};
+		let mut signer =
+			crate::dkim::Signer::load(selector, &key_file).map_err(std::io::Error::other)?;
 		if let (Some(selector), Some(key_file)) = (&dkim.rsa_selector, &dkim.rsa_key_file) {
 			signer = signer
 				.with_rsa(selector, key_file)
@@ -79,3 +91,7 @@ pub(super) fn build_split_with_companions(
 		arc_sealer,
 	})
 }
+
+#[cfg(test)]
+#[path = "serve_dkim_tests_restart.rs"]
+mod tests_restart;

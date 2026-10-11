@@ -62,12 +62,25 @@ pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std:
 }
 
 /// The DKIM selectors epistle publishes (the Ed25519 selector plus an optional
-/// RSA selector), used to locate the `_domainkey` records.
-fn dkim_selectors(config: &Config) -> Vec<String> {
+/// RSA selector), used to locate the `_domainkey` records. The Ed25519
+/// selector is the one the rotator currently has in service when the
+/// rotation state file exists, falling back to the configured selector at
+/// startup before the first tick has run. The RSA selector is always the
+/// one in the config (RSA key material is rotated manually with
+/// `epistle dkim-keygen --rsa`).
+pub(super) fn dkim_selectors(config: &Config) -> Vec<String> {
 	let Some(dkim) = &config.dkim else {
 		return Vec::new();
 	};
-	let mut selectors = vec![dkim.selector.clone()];
+	let ed = match std::fs::read(config.data_dir.join("dkim-rotation.json")) {
+		Ok(bytes) => serde_json::from_slice::<crate::dkim::rotate::RotationState>(&bytes)
+			.ok()
+			.map(|state| state.selector)
+			.filter(|s| !s.is_empty())
+			.unwrap_or_else(|| dkim.selector.clone()),
+		Err(_) => dkim.selector.clone(),
+	};
+	let mut selectors = vec![ed];
 	if let Some(rsa) = &dkim.rsa_selector {
 		selectors.push(rsa.clone());
 	}

@@ -7,6 +7,9 @@ mod signature;
 mod spki;
 mod verify;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use rotate::{ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator};
 pub(crate) use sign::load_ed25519_key;
 pub use sign::{Signer, SignerError, generate_key};
