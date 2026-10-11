@@ -299,3 +299,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../mailbox_tests_path.rs"]
 mod tests_path;
+
+#[cfg(test)]
+#[path = "../mailbox_tests_remove.rs"]
+mod tests_remove;

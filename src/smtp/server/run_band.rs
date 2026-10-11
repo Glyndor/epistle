@@ -231,10 +231,12 @@ fn scoring_account(directory: &Directory, recipients: &[String]) -> Option<Strin
 		};
 		match directory.resolve(&address) {
 			Resolution::Account(name) => return Some(name),
-			Resolution::Alias(mut targets) if !targets.is_empty() => {
-				return Some(targets.remove(0));
+			Resolution::Alias(targets) => {
+				if let Some(first) = targets.into_iter().next() {
+					return Some(first);
+				}
 			}
-			Resolution::Alias(_) | Resolution::NotLocal | Resolution::UnknownUser => continue,
+			Resolution::NotLocal | Resolution::UnknownUser => {}
 		}
 	}
 	None

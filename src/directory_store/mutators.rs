@@ -158,19 +158,19 @@ impl AccountStore {
 			.iter_mut()
 			.find(|account| account.name == name)
 			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		let position = account
-			.addresses
-			.iter()
-			.position(|existing| existing.eq_ignore_ascii_case(raw))
-			.ok_or_else(|| {
-				StoreError::Invalid(format!("address {raw} is not assigned to {name}"))
-			})?;
-		if account.addresses.len() == 1 {
+		let is_target = |existing: &String| existing.eq_ignore_ascii_case(raw);
+		if !account.addresses.iter().any(is_target) {
+			return Err(StoreError::Invalid(format!(
+				"address {raw} is not assigned to {name}"
+			)));
+		}
+		// An account always keeps at least one delivery address.
+		if account.addresses.iter().all(is_target) {
 			return Err(StoreError::Invalid(
 				"cannot remove the account's last address".to_string(),
 			));
 		}
-		account.addresses.remove(position);
+		account.addresses.retain(|existing| !is_target(existing));
 		self.persist(&dynamic)?;
 		drop(dynamic);
 		self.handle.replace(self.build_directory());
