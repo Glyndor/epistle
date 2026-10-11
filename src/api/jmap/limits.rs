@@ -13,15 +13,13 @@ pub const MAX_SIZE_REQUEST: usize = 10_000_000;
 pub const MAX_CALLS_IN_REQUEST: usize = 16;
 
 /// The request-level error for a request with more than
-/// [`MAX_CALLS_IN_REQUEST`] method calls (RFC 8620 §3.6.1), or `None` when
-/// the count is within the limit. Nothing is run for a refused request.
-pub(super) fn too_many_calls(calls: usize) -> Option<serde_json::Value> {
-	(calls > MAX_CALLS_IN_REQUEST).then(|| {
-		serde_json::json!({
-			"type": "urn:ietf:params:jmap:error:limit",
-			"limit": "maxCallsInRequest",
-			"status": 400,
-			"detail": format!("a request may carry at most {MAX_CALLS_IN_REQUEST} method calls"),
-		})
+/// [`MAX_CALLS_IN_REQUEST`] method calls (RFC 8620 §3.6.1). Nothing is run
+/// for a refused request.
+pub(super) fn too_many_calls() -> serde_json::Value {
+	serde_json::json!({
+		"type": "urn:ietf:params:jmap:error:limit",
+		"limit": "maxCallsInRequest",
+		"status": 400,
+		"detail": format!("a request may carry at most {MAX_CALLS_IN_REQUEST} method calls"),
 	})
 }

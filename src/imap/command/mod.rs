@@ -64,21 +64,6 @@ pub enum Command {
 		/// The requested algorithm, uppercased. Only `DEFLATE` is implemented.
 		algorithm: String,
 	},
-	/// `LOGIN <user> <pass>`: cleartext authentication. Only accepted before
-	/// TLS is negotiated.
-	Login {
-		/// The user (authcid), without the surrounding domain.
-		username: String,
-		/// The password.
-		password: String,
-	},
-	/// `AUTHENTICATE <mechanism> [initial-response]` (RFC 9051).
-	Authenticate {
-		/// SASL mechanism name (e.g. `SCRAM-SHA-256`, `PLAIN`).
-		mechanism: String,
-		/// Optional initial response, base64-encoded per RFC 4959.
-		initial: Option<String>,
-	},
 	/// `LIST <reference> <pattern>`: list mailboxes. `RETURN (STATUS (...))`
 	/// items are returned inline (LIST-STATUS, RFC 5819); `(SUBSCRIBED)`
 	/// narrows the result to subscribed mailboxes (RFC 5258).
@@ -639,6 +624,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 }
 
 mod acl;
+mod credentials;
 mod list;
 pub(super) mod literal;
 mod metadata;
@@ -649,6 +635,7 @@ mod select_params;
 
 pub(super) use literal::literal_announcement_in_line;
 
+pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
 pub(super) use parse::MAX_APPEND_SIZE;
 pub use parse::parse;
 
