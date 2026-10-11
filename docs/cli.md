@@ -713,6 +713,7 @@ scope here):
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle suppression [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
+| `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` (the sending address, as in `suppression --account`) it applies to that sender only. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
@@ -736,6 +737,22 @@ A held entry is not attempted and its time on hold does not count toward the
 give-up window below, so a message parked for a week is not bounced on its first
 attempt after release. A hold that arrives while the worker is already
 delivering that entry takes effect for the next attempt.
+
+## Masked addresses
+
+`epistle masked <action>` manages an account's masked addresses from the shell.
+They are stored in `data_dir/masked.json`; the running server reloads that file
+within a couple of seconds, so no restart is needed. Writes go through the same
+code as the API, so the `masked_addresses_max` cap applies. An account that does
+not exist is refused.
+
+| Command | What it does |
+|---|---|
+| `epistle masked list <account> [--json]` | One line per address (address, label, `enabled` or `disabled`), or a JSON array. |
+| `epistle masked add <account> [--label L] [--domain D]` | Mint a new address and print it. The domain defaults to that of the account's first address; `--domain` must be a configured domain. |
+| `epistle masked remove <account> <address>` | Delete the address. |
+| `epistle masked disable <account> <address>` | Stop delivery to the address (it is refused like an unknown user) without deleting it. |
+| `epistle masked enable <account> <address>` | Deliver to it again. |
 
 ## Authentication bans
 

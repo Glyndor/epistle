@@ -27,6 +27,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Account { config, .. }
 		| Command::Queue { config, .. }
 		| Command::Ban { config, .. }
+		| Command::Masked { config, .. }
 		| Command::AppPasswordCreate { config, .. }
 		| Command::AppPasswords { config }
 		| Command::AppPasswordRevoke { config, .. }

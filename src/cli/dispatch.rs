@@ -10,9 +10,9 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
-	autodiscover, backup, ban, dns_records, domain, export, import, init, local, mobileconfig,
-	probe, queue, report_abuse, reports, serve, srv, stack, status, style, suppression, verify,
-	verify_dns,
+	autodiscover, backup, ban, dns_records, domain, export, import, init, local, masked,
+	mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status, style,
+	suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -169,15 +169,26 @@ impl Cli {
 			},
 			Command::Suppression {
 				config,
+				action,
 				remove,
 				account,
 			} => match Config::load(&config) {
-				Ok(config) => suppression::run(
-					&config,
-					remove.as_deref(),
-					account.as_deref(),
-					&mut std::io::stdout().lock(),
-				),
+				Ok(config) => match action {
+					Some(suppression::SuppressionCli::Add { address, account }) => {
+						suppression::add(
+							&config,
+							&address,
+							account.as_deref(),
+							&mut std::io::stdout().lock(),
+						)
+					}
+					None => suppression::run(
+						&config,
+						remove.as_deref(),
+						account.as_deref(),
+						&mut std::io::stdout().lock(),
+					),
+				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -258,6 +269,19 @@ impl Cli {
 			},
 			Command::Ban { config, action } => match Config::load(&config) {
 				Ok(config) => ban::run(
+					&config,
+					action,
+					ban::now_epoch(),
+					&mut std::io::stdout().lock(),
+					&mut style::stderr(),
+				),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Masked { config, action } => match Config::load(&config) {
+				Ok(config) => masked::run(
 					&config,
 					action,
 					ban::now_epoch(),
@@ -433,64 +457,6 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-		}
-	}
-}
-
-impl Command {
-	fn requires_service_user(&self) -> bool {
-		// Explicit arms keep new stateful commands from silently running as root.
-		match self {
-			Command::Init { .. }
-			| Command::Stack { .. }
-			| Command::Service { .. }
-			| Command::Limits { .. }
-			| Command::Status { .. }
-			| Command::Check { .. }
-			| Command::Relay { .. }
-			| Command::Dns { .. }
-			| Command::Storage { .. }
-			| Command::Webhook { .. }
-			| Command::Alert { .. }
-			| Command::Antispam { .. }
-			| Command::Alias { .. }
-			| Command::Domain { .. }
-			| Command::ConfigCheck { .. }
-			| Command::Export { .. }
-			| Command::Import { .. }
-			| Command::Backup { .. }
-			| Command::Restore { .. }
-			| Command::Verify { .. }
-			| Command::VerifyDns { .. }
-			| Command::DnsRecords { .. }
-			| Command::Mobileconfig { .. }
-			| Command::SrvRecords { .. }
-			| Command::Autoconfig { .. }
-			| Command::Autodiscover { .. }
-			| Command::Suppression { .. }
-			| Command::ReportAbuse { .. }
-			| Command::Accounts { .. }
-			| Command::AccountAdd { .. }
-			| Command::AccountRemove { .. }
-			| Command::Account { .. }
-			| Command::Queue { .. }
-			| Command::Ban { .. }
-			| Command::AppPasswordCreate { .. }
-			| Command::AppPasswords { .. }
-			| Command::AppPasswordRevoke { .. }
-			| Command::ApiKeyCreate { .. }
-			| Command::ApiKeys { .. }
-			| Command::ApiKeyRevoke { .. }
-			| Command::Archive { .. }
-			| Command::Reports { .. } => true,
-			Command::Serve { .. }
-			| Command::MtaStsServe { .. }
-			| Command::DkimKeygen { .. }
-			| Command::StorageKeygen
-			| Command::OauthKeygen
-			| Command::TokenHash
-			| Command::Local { .. }
-			| Command::Probe { .. } => false,
 		}
 	}
 }

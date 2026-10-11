@@ -135,6 +135,10 @@ fn handle_request(
 			return vec![request_error("notRequest", "invalid Request envelope").to_string()];
 		}
 	};
+	if let Some(mut problem) = super::limits::too_many_calls(request.method_calls.len()) {
+		problem["@type"] = json!("RequestError");
+		return vec![problem.to_string()];
+	}
 	let request_id = value.get("id").and_then(Value::as_str).map(str::to_string);
 
 	// Sample account state before and after dispatch so a successful /set that

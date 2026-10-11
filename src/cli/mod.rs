@@ -22,6 +22,7 @@ mod import;
 mod init;
 mod limits;
 mod local;
+mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
 mod probe;
@@ -239,12 +240,15 @@ pub enum Command {
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
 	},
-	/// List the outbound suppression list (addresses that hard-bounced), or
-	/// remove one with `--remove`.
+	/// List the outbound suppression list (addresses that hard-bounced),
+	/// remove one with `--remove`, or add one with `add`.
 	Suppression {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		/// Path to the configuration file; accepted before or after `add`.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Suppression action; without one the command lists or removes.
+		#[command(subcommand)]
+		action: Option<suppression::SuppressionCli>,
 		/// Remove this address from the suppression list instead of listing.
 		#[arg(long, value_name = "ADDRESS")]
 		remove: Option<String>,
@@ -335,6 +339,16 @@ pub enum Command {
 		/// Ban action (`list`, `add`, `remove`, `allow`).
 		#[command(subcommand)]
 		action: ban::BanCli,
+	},
+	/// Manage an account's masked addresses. Changes apply to the running
+	/// server within a couple of seconds, with no restart.
+	Masked {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Masked action (`list`, `add`, `remove`, `enable`, `disable`).
+		#[command(subcommand)]
+		action: masked::MaskedCli,
 	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
@@ -663,6 +677,7 @@ pub enum Command {
 	},
 }
 
+mod delegation;
 mod dispatch;
 mod rootless;
 

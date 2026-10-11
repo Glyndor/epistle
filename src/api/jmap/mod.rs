@@ -32,6 +32,8 @@ mod blobs;
 mod download;
 mod email;
 pub use download::download;
+mod limits;
+pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
 mod methods;
 mod objects;
 pub mod websocket;
@@ -84,9 +86,9 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 			CORE_CAPABILITY: {
 				"maxSizeUpload": 50_000_000u64,
 				"maxConcurrentUpload": 4u32,
-				"maxSizeRequest": 10_000_000u64,
+				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
 				"maxConcurrentRequests": 4u32,
-				"maxCallsInRequest": 16u32,
+				"maxCallsInRequest": MAX_CALLS_IN_REQUEST as u32,
 				"maxObjectsInGet": 500u32,
 				"maxObjectsInSet": 500u32,
 				"collationAlgorithms": [],
@@ -147,8 +149,11 @@ pub async fn api(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<Request>,
-) -> Json<Response> {
-	Json(dispatch_request(&state, &auth, request))
+) -> axum::response::Response {
+	if let Some(problem) = limits::too_many_calls(request.method_calls.len()) {
+		return (StatusCode::BAD_REQUEST, Json(problem)).into_response();
+	}
+	Json(dispatch_request(&state, &auth, request)).into_response()
 }
 
 /// Dispatch a request envelope's method calls and collect the responses
@@ -287,8 +292,8 @@ pub(crate) struct RequestLimits {
 
 /// The default per-request limits, matching the Session resource.
 pub(crate) const MAX_REQUEST_LIMITS: RequestLimits = RequestLimits {
-	// 10 MiB, mirroring the Session's `maxSizeRequest`.
-	max_size_request: 10 * 1024 * 1024,
+	// The Session's `maxSizeRequest`.
+	max_size_request: MAX_SIZE_REQUEST as u64,
 	// maxObjectsInGet (500) + maxObjectsInSet (500). The cap is on
 	// total resolved leaves, not on objects returned by a single
 	// method, so this is the conservative sum.
