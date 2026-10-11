@@ -135,9 +135,9 @@ fn an_account_that_is_not_one_plain_name_has_no_store() {
 	let outer = tempfile::tempdir().expect("tempdir");
 	let root = outer.path().join("accounts");
 	std::fs::create_dir_all(&root).expect("accounts");
-	for account in ["../evil", "..", "a/b", ""] {
+	for (case, account) in ["../evil", "..", "a/b", ""].into_iter().enumerate() {
 		let s = ScriptStore::new(&root, account);
-		assert_eq!(s.put("work", SCRIPT), Err(StoreError::Io), "{account:?}");
+		assert_eq!(s.put("work", SCRIPT), Err(StoreError::Io), "case {case}");
 		assert!(matches!(s.list(), Err(StoreError::Io)));
 		assert_eq!(s.set_active(None), Err(StoreError::Io));
 	}

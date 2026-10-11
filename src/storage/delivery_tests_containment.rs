@@ -24,14 +24,14 @@ fn sink() -> (tempfile::TempDir, std::path::PathBuf, LocalDelivery) {
 #[test]
 fn a_traversing_account_name_delivers_nowhere() {
 	let (outer, data, sink) = sink();
-	for account in ["../evil", "..", "a/b", ""] {
+	for (case, account) in ["../evil", "..", "a/b", ""].into_iter().enumerate() {
 		let error = sink
 			.deliver_to_account(account, None, b"x", &[])
-			.expect_err(account);
+			.expect_err("a hostile account must not receive mail");
 		assert_eq!(
 			error.kind(),
 			std::io::ErrorKind::InvalidInput,
-			"{account:?}"
+			"account case {case}"
 		);
 	}
 	assert_eq!(listing(outer.path()), ["data"]);
