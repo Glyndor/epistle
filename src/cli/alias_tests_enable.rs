@@ -1,7 +1,6 @@
 //! `epistle alias enable|disable`: round-trips through the dynamic
 //! `aliases.json` store, never touches `mail.toml`.
 
-use std::cell::Cell;
 use std::io::Write;
 use std::path::Path;
 
@@ -129,11 +128,49 @@ fn enable_refuses_an_alias_not_in_the_config() {
 	assert!(err.contains("not found"), "unexpected message: {err}");
 }
 
+/// What the running server sees: a store opened on the same data dir, as the
+/// file watcher rebuilds it, stops routing a disabled alias and routes it
+/// again after `enable`, all without touching mail.toml.
 #[test]
-fn store_round_trip_through_set_enabled_does_not_restart_mail() {
-	// The dynamic store path must not trigger a restart. The CLI passes
-	// through to `set_alias_enabled`, which only writes aliases.json and
-	// rebuilds the in-memory directory; the file watcher picks up the
-	// change without any stack interaction.
-	let _ = Cell::new(0);
+fn a_disabled_alias_stops_resolving_for_the_server_and_enable_restores_it() {
+	use crate::smtp::address::Address;
+	use crate::smtp::directory::Resolution;
+	let (_dir, file) = fixture_with_alias("");
+	let config = load(file.path());
+	let resolves_as_alias = || {
+		let store = crate::directory_store::AccountStore::open(
+			&config.data_dir,
+			config.domains.clone(),
+			config.domain_aliases.clone(),
+			config.accounts.clone(),
+		)
+		.expect("open store")
+		.with_aliases(config.alias.clone());
+		matches!(
+			store
+				.handle()
+				.current()
+				.resolve(&Address::parse("team@example.org").expect("address")),
+			Resolution::Alias(_)
+		)
+	};
+	assert!(resolves_as_alias(), "an enabled alias must resolve");
+	set_enabled(
+		&config,
+		"team@example.org",
+		false,
+		&mut Vec::new(),
+		&mut Vec::new(),
+	)
+	.expect("disable");
+	assert!(!resolves_as_alias(), "a disabled alias must not resolve");
+	set_enabled(
+		&config,
+		"team@example.org",
+		true,
+		&mut Vec::new(),
+		&mut Vec::new(),
+	)
+	.expect("enable");
+	assert!(resolves_as_alias(), "enable must restore the alias");
 }
