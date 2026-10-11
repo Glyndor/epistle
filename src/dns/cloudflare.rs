@@ -5,13 +5,16 @@
 //! [`ProviderError::Unsupported`] for now.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
+use super::cloudflare_tags;
 use super::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
+	same_txt_purpose,
 };
 
 /// Cloudflare's API base; overridable for tests.
@@ -25,6 +28,11 @@ pub struct CloudflareProvider {
 	client: reqwest::Client,
 	secret: ScopedSecret,
 	base: HttpsUrl,
+	/// `epistle:<hostname>` tag written on every record, when a hostname is set.
+	host_tag: Option<String>,
+	/// Cleared for the life of the provider once Cloudflare refuses a write
+	/// because of tags (Free plan), so later writes do not try them again.
+	tags_allowed: AtomicBool,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +59,9 @@ struct RecordRef {
 	content: String,
 	#[serde(default)]
 	ttl: u32,
+	/// Tags already on the record, kept (but for epistle's own) on update.
+	#[serde(default)]
+	tags: Vec<String>,
 }
 
 impl CloudflareProvider {
@@ -60,7 +71,17 @@ impl CloudflareProvider {
 			client: reqwest::Client::new(),
 			secret,
 			base: HttpsUrl::from_static(DEFAULT_BASE),
+			host_tag: None,
+			tags_allowed: AtomicBool::new(true),
 		}
+	}
+
+	/// Tag every record with `epistle:<hostname>` so a zone shared by several
+	/// servers shows which one wrote it. Tags need a paid plan; see the
+	/// `cloudflare_tags` module.
+	pub fn with_hostname(mut self, hostname: &str) -> Self {
+		self.host_tag = cloudflare_tags::host_tag(hostname);
+		self
 	}
 
 	/// Point the provider at an alternate API base (tests).
@@ -91,8 +112,14 @@ impl CloudflareProvider {
 	/// structured `data` object (`usage selector matching_type certificate` /
 	/// `priority weight port target`), everything else a plain `content`
 	/// string. SRV splits the presentation form on whitespace.
+	#[cfg(test)]
 	fn record_body(kind: &str, record: &DnsRecord) -> Result<String, ProviderError> {
-		let value = if record.kind == RecordKind::Tlsa {
+		Ok(Self::record_value(kind, record)?.to_string())
+	}
+
+	/// The record body as JSON, before tags are added.
+	fn record_value(kind: &str, record: &DnsRecord) -> Result<serde_json::Value, ProviderError> {
+		let mut value = if record.kind == RecordKind::Tlsa {
 			let mut parts = record.value.split_whitespace();
 			let usage: u8 =
 				parts
@@ -180,7 +207,8 @@ impl CloudflareProvider {
 				"ttl": record.ttl,
 			})
 		};
-		Ok(value.to_string())
+		value["comment"] = serde_json::Value::from(record_description());
+		Ok(value)
 	}
 
 	/// The Cloudflare wire shape for a CAA record body: per
@@ -261,7 +289,7 @@ impl CloudflareProvider {
 		name: &str,
 		kind: &str,
 		value: Option<&str>,
-	) -> Result<Option<String>, ProviderError> {
+	) -> Result<Option<RecordRef>, ProviderError> {
 		let url = self
 			.records_url(zone_id, None)?
 			.with_query("type", kind)
@@ -276,40 +304,83 @@ impl CloudflareProvider {
 		// (case-insensitive), two untagged values match only when
 		// identical. A `None` value (the wholesale path) keeps
 		// the first-by-(type, name) selection.
-		Ok(records
-			.result
-			.into_iter()
-			.find(|r| match value {
-				Some(v) => same_txt_purpose(&r.content, v),
-				None => true,
-			})
-			.map(|r| r.id))
+		Ok(records.result.into_iter().find(|r| match value {
+			Some(v) => same_txt_purpose(&r.content, v),
+			None => true,
+		}))
 	}
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
-		let body = Self::record_body(kind, &record)?;
+		let body = Self::record_value(kind, &record)?;
 		let existing = self
 			.find_record(&zone_id, &record.name, kind, Some(&record.value))
 			.await?;
-		let request = match &existing {
-			Some(id) => self
-				.client
-				.put(self.records_url(&zone_id, Some(id))?.into_url()),
-			None => self
-				.client
-				.post(self.records_url(&zone_id, None)?.into_url()),
+		let operator_tags: Vec<String> = existing
+			.as_ref()
+			.map(|r| r.tags.clone())
+			.unwrap_or_default();
+		let url = self.records_url(&zone_id, existing.as_ref().map(|r| r.id.as_str()))?;
+		let own = self
+			.host_tag
+			.as_deref()
+			.filter(|_| self.tags_allowed.load(Ordering::Relaxed));
+		let response = self
+			.write(
+				&url,
+				existing.is_some(),
+				&body,
+				&cloudflare_tags::merge(&operator_tags, own),
+			)
+			.await?;
+		if own.is_some() && retry_without_tags(response.status()) {
+			let retry = self
+				.write(
+					&url,
+					existing.is_some(),
+					&body,
+					&cloudflare_tags::merge(&operator_tags, None),
+				)
+				.await?;
+			if retry.status().is_success() {
+				self.tags_allowed.store(false, Ordering::Relaxed);
+				tracing::warn!(
+					"Cloudflare refused DNS record tags (they need a paid plan); records are written without them from now on"
+				);
+			}
+			return decode_ok(retry).await;
+		}
+		decode_ok(response).await
+	}
+
+	/// Send one create (POST) or update (PUT) with `tags`; the body is
+	/// `body` plus a `tags` array when there are any.
+	async fn write(
+		&self,
+		url: &HttpsUrl,
+		update: bool,
+		body: &serde_json::Value,
+		tags: &[String],
+	) -> Result<reqwest::Response, ProviderError> {
+		let mut body = body.clone();
+		if !tags.is_empty() {
+			body["tags"] = serde_json::Value::from(tags.to_vec());
+		}
+		let method = if update {
+			reqwest::Method::PUT
+		} else {
+			reqwest::Method::POST
 		};
-		let response = request
+		self.client
+			.request(method, url.clone().into_url())
 			.bearer_auth(self.secret.token())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
-			.body(body)
+			.body(body.to_string())
 			.send()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		decode_ok(response).await
+			.map_err(|e| ProviderError::Remote(e.to_string()))
 	}
 
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
@@ -333,12 +404,13 @@ impl CloudflareProvider {
 		} else {
 			None
 		};
-		let Some(id) = self
+		let Some(found) = self
 			.find_record(&zone_id, &record.name, kind, needle)
 			.await?
 		else {
 			return Ok(()); // already absent: idempotent.
 		};
+		let id = found.id;
 		let response = self
 			.client
 			.delete(self.records_url(&zone_id, Some(&id))?.into_url())
@@ -393,6 +465,13 @@ fn parse_kind(kind: &str) -> RecordKind {
 		"TLSA" => RecordKind::Tlsa,
 		_ => RecordKind::Txt,
 	}
+}
+
+/// Whether a refused write may have been refused over its tags: a client
+/// error that is not an auth failure or a rate limit. Cloudflare documents no
+/// error code for tags on the Free plan, so the retry without tags decides.
+fn retry_without_tags(status: reqwest::StatusCode) -> bool {
+	status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 429)
 }
 
 /// Decode a JSON body, mapping a 401/403 to an auth error.

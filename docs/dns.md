@@ -173,6 +173,30 @@ RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
 
+### Record descriptions
+
+Where a provider's record API has a free-text description, epistle sets it to
+`Epistle v<version>` on every record it creates or updates, so the provider's
+panel shows which records epistle wrote and with which release. The text is a
+label, not an ownership key: records are still matched by type, name and (for
+TXT) value. It is rewritten on each write, so a record touched by a newer
+release shows the newer version.
+
+| Provider | Description | Field | Limit (documented) |
+|---|---|---|---|
+| Cloudflare | yes | `comment` | 100 characters (Free), 500 (paid); no line breaks |
+| Bunny DNS | yes | `Comment` | none documented |
+| Porkbun | yes | `notes` | none documented |
+| deSEC, DigitalOcean, DNSimple, GoDaddy, Google Cloud DNS, Namecheap, OVH, RFC 2136, Route 53, Spaceship | no description field | none | none |
+
+Cloudflare also gets a tag `epistle:<hostname>` (the server's `hostname`), so a
+zone shared by several servers shows which one wrote each record. epistle
+replaces only its own `epistle:` tag and keeps any other tag you set on the
+record. Tags need a paid Cloudflare plan: if a write is refused on a Free zone,
+epistle retries it once without tags, stops sending them until the next
+restart, and logs a single warning. The record `id` is assigned by Cloudflare
+and cannot be set.
+
 ## BIMI (optional)
 
 To show your brand logo in supporting inboxes you need DMARC at enforce
