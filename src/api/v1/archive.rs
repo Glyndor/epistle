@@ -43,7 +43,9 @@ pub async fn list(
 	}
 	// A name that is not a plain directory name answers as an unknown account.
 	let account = AccountName::new(&name).map_err(|_| ApiError::not_found("no such account"))?;
-	let entries = archive::list(&account.root(state.data_dir()))
+	let entries = account
+		.root(state.data_dir())
+		.and_then(|root| archive::list(&root))
 		.map_err(|error| ApiError::not_found(&format!("archive not available: {error}")))?;
 	let entries = entries
 		.into_iter()

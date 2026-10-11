@@ -20,7 +20,8 @@ use crate::util::path_component::{MessageExt, message_file, message_tmp_file};
 /// malformed sidecar is also treated as empty rather than crashing the
 /// snapshot open.
 pub(super) fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {
-	crate::util::fs_walk::read(message_file(account_dir, id, MessageExt::Flags))
+	message_file(account_dir, id, MessageExt::Flags)
+		.and_then(crate::util::fs_walk::read)
 		.ok()
 		.and_then(|bytes| serde_json::from_slice(&bytes).ok())
 		.unwrap_or_default()
@@ -30,9 +31,9 @@ pub(super) fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {
 /// (temp file + rename).
 pub(super) fn write_flags(account_dir: &Path, id: Uuid, flags: &[Flag]) -> std::io::Result<()> {
 	let bytes = serde_json::to_vec(flags).map_err(std::io::Error::other)?;
-	let tmp = message_tmp_file(account_dir, id, MessageExt::Flags);
+	let tmp = message_tmp_file(account_dir, id, MessageExt::Flags)?;
 	std::fs::write(&tmp, &bytes)?;
-	std::fs::rename(&tmp, message_file(account_dir, id, MessageExt::Flags))
+	std::fs::rename(&tmp, message_file(account_dir, id, MessageExt::Flags)?)
 }
 
 /// Whether two flag lists denote the same flag set, independent of order or

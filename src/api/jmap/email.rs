@@ -233,7 +233,10 @@ fn apply_email_update(
 		// body itself when it drains its job.
 		let (current_flags, message_path) = {
 			let message = snapshot.by_sequence(sequence).ok_or("notFound")?;
-			(message.flags.clone(), snapshot.message_path(message))
+			(
+				message.flags.clone(),
+				snapshot.message_path(message).map_err(|_| "serverFail")?,
+			)
 		};
 		// The raw bytes are still needed if the patch is going to APPEND
 		// to another mailbox; the STORE case no longer reads them.

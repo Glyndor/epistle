@@ -139,7 +139,9 @@ impl Session {
 			// The flags before `store_flags` rewrites them, and the file a
 			// training job would name. The message itself is not read here.
 			let previous_flags = message.flags.clone();
-			let message_path = snapshot.message_path(message);
+			let Ok(message_path) = snapshot.message_path(message) else {
+				return Output::text(format!("{tag} NO cannot store flags\r\n"));
+			};
 			let stored = match snapshot.store_flags(sequence_number, updated) {
 				Ok(stored) => stored.to_vec(),
 				Err(_) => {

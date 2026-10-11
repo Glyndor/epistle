@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::imap::mailbox;
 use crate::storage::MessageCrypto;
 use crate::util::path_component::{AccountName, AccountRoot, FixedDir, MessageExt, message_file};
+use crate::util::path_containment::contained;
 
 /// The on-disk archive directory for an account: `<account_root>/.archive/`.
 ///
@@ -30,7 +31,7 @@ use crate::util::path_component::{AccountName, AccountRoot, FixedDir, MessageExt
 /// caller passes the account root explicitly (rather than deriving it from
 /// the mailbox directory, which has a different shape for `INBOX` than for
 /// folders) so the path is unambiguous.
-fn archive_dir(account_root: &AccountRoot) -> PathBuf {
+fn archive_dir(account_root: &AccountRoot) -> std::io::Result<PathBuf> {
 	account_root.child(FixedDir::Archive)
 }
 
@@ -69,18 +70,18 @@ pub fn archive_message(
 	id: Uuid,
 	now: u64,
 ) -> std::io::Result<()> {
-	let archive = archive_dir(account_root);
+	let archive = archive_dir(account_root)?;
 	std::fs::create_dir_all(&archive)?;
 	// The sidecar is written first and the body moved last, because the body
 	// is what `list` keys on: an `.eml` that reached the archive without its
 	// sidecar is invisible to list, restore and purge alike, so it would sit
 	// there against the account quota forever. In this order a failure at any
 	// step leaves the message in its mailbox, which the caller can retry.
-	let sidecar = message_file(&archive, id, MessageExt::Deleted);
+	let sidecar = message_file(&archive, id, MessageExt::Deleted)?;
 	std::fs::write(sidecar, format!("{now}\n{mailbox}\n"))?;
 	for ext in [MessageExt::Flags, MessageExt::Uid, MessageExt::Eml] {
-		let from = message_file(mailbox_dir, id, ext);
-		let to = message_file(&archive, id, ext);
+		let from = message_file(mailbox_dir, id, ext)?;
+		let to = message_file(&archive, id, ext)?;
 		// A missing source file is a no-op (idempotent with concurrent
 		// deletes); anything else is reported so the caller can retry.
 		match std::fs::rename(&from, &to) {
@@ -111,7 +112,7 @@ pub fn list(account_root: &AccountRoot) -> std::io::Result<Vec<ArchivedMessage>>
 /// they cannot be restored, but [`purge`] has to see them: a sidecar left
 /// behind by a half-finished archive is reclaimed by nothing else.
 fn sidecars(account_root: &AccountRoot) -> std::io::Result<Vec<(ArchivedMessage, bool)>> {
-	let archive = archive_dir(account_root);
+	let archive = archive_dir(account_root)?;
 	let entries = match crate::util::fs_walk::read_dir(&archive) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -145,7 +146,7 @@ fn sidecars(account_root: &AccountRoot) -> std::io::Result<Vec<(ArchivedMessage,
 		let Ok(deleted_at) = ts_line.trim().parse::<u64>() else {
 			continue;
 		};
-		let has_body = message_file(&archive, id, MessageExt::Eml).exists();
+		let has_body = message_file(&archive, id, MessageExt::Eml).is_ok_and(|path| path.exists());
 		out.push((
 			ArchivedMessage {
 				id,
@@ -166,8 +167,8 @@ fn read_archived(
 	id: Uuid,
 	crypto: &MessageCrypto,
 ) -> std::io::Result<(String, Vec<u8>)> {
-	let archive = archive_dir(account_root);
-	let sidecar = message_file(&archive, id, MessageExt::Deleted);
+	let archive = archive_dir(account_root)?;
+	let sidecar = message_file(&archive, id, MessageExt::Deleted)?;
 	let raw = crate::util::fs_walk::read_to_string(&sidecar)
 		.map_err(|error| std::io::Error::other(format!("no such archived message: {error}")))?;
 	let mut lines = raw.lines();
@@ -177,7 +178,7 @@ fn read_archived(
 	let mailbox = lines
 		.next()
 		.ok_or_else(|| std::io::Error::other("archived message sidecar missing mailbox"))?;
-	let stored = crate::util::fs_walk::read(message_file(&archive, id, MessageExt::Eml))?;
+	let stored = crate::util::fs_walk::read(message_file(&archive, id, MessageExt::Eml)?)?;
 	let plaintext = crypto.decode(&stored)?;
 	Ok((mailbox.to_string(), plaintext))
 }
@@ -197,7 +198,7 @@ pub fn restore(
 	id: Uuid,
 	crypto: &MessageCrypto,
 ) -> std::io::Result<String> {
-	let account_root = AccountName::new(account)?.root(data_dir);
+	let account_root = AccountName::new(account)?.root(data_dir)?;
 	let (source_mailbox, plaintext) = read_archived(&account_root, id, crypto)?;
 	let target = if mailbox::exists(data_dir, account, &source_mailbox) {
 		source_mailbox.clone()
@@ -205,14 +206,14 @@ pub fn restore(
 		"INBOX".to_string()
 	};
 	mailbox::append(data_dir, account, &target, &[], &plaintext, crypto)?;
-	let archive = archive_dir(&account_root);
+	let archive = archive_dir(&account_root)?;
 	for ext in [
 		MessageExt::Eml,
 		MessageExt::Flags,
 		MessageExt::Uid,
 		MessageExt::Deleted,
 	] {
-		let _ = std::fs::remove_file(message_file(&archive, id, ext));
+		let _ = std::fs::remove_file(message_file(&archive, id, ext)?);
 	}
 	Ok(target)
 }
@@ -222,7 +223,7 @@ pub fn restore(
 /// purged. Entries whose sidecar cannot be parsed are kept (defensive: the
 /// sweeper must not destroy data it cannot reason about).
 pub fn purge(account_root: &AccountRoot, older_than_secs: u64, now: u64) -> std::io::Result<usize> {
-	let archive = archive_dir(account_root);
+	let archive = archive_dir(account_root)?;
 	let mut removed = 0usize;
 	// Walks the sidecars rather than `list` so an entry whose body never made
 	// it into the archive is still reclaimed rather than left forever.
@@ -236,7 +237,7 @@ pub fn purge(account_root: &AccountRoot, older_than_secs: u64, now: u64) -> std:
 			MessageExt::Uid,
 			MessageExt::Deleted,
 		] {
-			let _ = std::fs::remove_file(message_file(&archive, entry.id, ext));
+			let _ = std::fs::remove_file(message_file(&archive, entry.id, ext)?);
 		}
 		if has_body {
 			removed += 1;
@@ -255,7 +256,7 @@ pub fn sweep(data_dir: &Path, retention_days: u64, now: u64) -> std::io::Result<
 	if retention_days == 0 {
 		return Ok(0);
 	}
-	let accounts_root = data_dir.join("accounts");
+	let accounts_root = contained(data_dir, &data_dir.join("accounts"))?;
 	let entries = match crate::util::fs_walk::read_dir(&accounts_root) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -274,7 +275,7 @@ pub fn sweep(data_dir: &Path, retention_days: u64, now: u64) -> std::io::Result<
 		let Ok(account) = AccountName::new(&name) else {
 			continue;
 		};
-		let removed_here = purge(&account.root(data_dir), retention_secs, now)?;
+		let removed_here = purge(&account.root(data_dir)?, retention_secs, now)?;
 		removed = removed.saturating_add(u64::try_from(removed_here).unwrap_or(u64::MAX));
 	}
 	Ok(removed)

@@ -7,7 +7,17 @@
 //! the list is just whatever the on-disk `folders/` directory happens to
 //! contain (see [`super::mailbox::list`]).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::util::path_component::AccountName;
+use crate::util::path_containment::contained;
+
+/// The `.subscriptions` file of `account`, resolved and checked to lie inside
+/// the account's own directory.
+fn subscriptions_file(data_dir: &Path, account: &str) -> std::io::Result<PathBuf> {
+	let root = AccountName::new(account)?.root(data_dir)?;
+	contained(&root, &root.join(".subscriptions"))
+}
 
 /// Subscribe to a mailbox (the mailbox must already exist).
 pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
@@ -38,11 +48,8 @@ pub fn unsubscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Re
 
 /// Subscribed mailboxes; INBOX is always subscribed.
 pub fn list_subscribed(data_dir: &Path, account: &str) -> Vec<String> {
-	let path = data_dir
-		.join("accounts")
-		.join(account)
-		.join(".subscriptions");
-	let mut names: Vec<String> = std::fs::read_to_string(&path)
+	let mut names: Vec<String> = subscriptions_file(data_dir, account)
+		.and_then(std::fs::read_to_string)
 		.unwrap_or_default()
 		.lines()
 		.filter(|l| !l.is_empty())
@@ -55,10 +62,7 @@ pub fn list_subscribed(data_dir: &Path, account: &str) -> Vec<String> {
 }
 
 fn write_subscriptions(data_dir: &Path, account: &str, names: &[String]) -> std::io::Result<()> {
-	let path = data_dir
-		.join("accounts")
-		.join(account)
-		.join(".subscriptions");
+	let path = subscriptions_file(data_dir, account)?;
 	if let Some(parent) = path.parent() {
 		std::fs::create_dir_all(parent)?;
 	}
