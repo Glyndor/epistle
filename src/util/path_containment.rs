@@ -17,6 +17,20 @@
 //!    traversing is allowed there.
 //! 3. The resolved path must start with the resolved root, otherwise the
 //!    call fails and no path is returned.
+//!
+//! # What this guarantees
+//!
+//! It defends against `..` components, validator bugs and symlinks that exist
+//! when the check runs. It is not a defence against a symlink planted between
+//! the check and the later use of the path: that needs write access inside
+//! the data directory, which only the service account has, and that is
+//! outside the threat model. The part of a path that does not exist yet is
+//! never resolved, only restricted to plain names.
+//!
+//! [`contained_child`] is the cheap form for the many files inside a
+//! directory that [`contained`] already vetted: it joins one plain name with
+//! no filesystem access, so listing or scanning a large mailbox does not pay
+//! for a resolution per message.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -113,6 +127,23 @@ pub fn contained(root: &Path, candidate: &Path) -> io::Result<PathBuf> {
 	};
 	if resolved.starts_with(&root) {
 		Ok(resolved)
+	} else {
+		Err(escapes_root())
+	}
+}
+
+/// `dir/name` for a single plain `name`, without touching the filesystem.
+///
+/// `dir` must come from [`contained`] (or from another call of this function).
+/// The name is refused unless it is one non-empty component with no `..`,
+/// separator or NUL, and the result must still start with `dir`.
+pub fn contained_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
+	if name.is_empty() || name.contains("..") || name.contains(['/', '\\', '\0']) {
+		return Err(escapes_root());
+	}
+	let child = dir.join(name);
+	if child.starts_with(dir) && child.parent() == Some(dir) {
+		Ok(child)
 	} else {
 		Err(escapes_root())
 	}

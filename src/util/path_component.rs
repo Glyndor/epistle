@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::path_containment::contained;
+use super::path_containment::{contained, contained_child};
 
 /// Longest account or mailbox name accepted (bytes). Well under the 255 byte
 /// limit of common filesystems, leaving room for suffixes.
@@ -269,12 +269,12 @@ impl DigestName {
 
 	/// `<dir>/<digest>`.
 	pub fn in_dir(&self, dir: &Path) -> std::io::Result<PathBuf> {
-		contained(dir, &dir.join(&self.0))
+		contained_child(dir, &self.0)
 	}
 
 	/// `<dir>/<digest>.lock`.
 	pub fn lock_in_dir(&self, dir: &Path) -> std::io::Result<PathBuf> {
-		contained(dir, &dir.join(format!("{}.lock", self.0)))
+		contained_child(dir, &format!("{}.lock", self.0))
 	}
 }
 
@@ -316,12 +316,12 @@ impl MessageExt {
 
 /// `<dir>/<id><ext>`.
 pub fn message_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Result<PathBuf> {
-	contained(dir, &dir.join(format!("{id}{}", ext.suffix())))
+	contained_child(dir, &format!("{id}{}", ext.suffix()))
 }
 
 /// `<dir>/<id><ext>.tmp`, the staging name used before an atomic rename.
 pub fn message_tmp_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Result<PathBuf> {
-	contained(dir, &dir.join(format!("{id}{}.tmp", ext.suffix())))
+	contained_child(dir, &format!("{id}{}.tmp", ext.suffix()))
 }
 
 /// The fixed per-mailbox bookkeeping files.
@@ -353,12 +353,12 @@ impl StateFile {
 
 /// `<dir>/<state file>`.
 pub fn state_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
-	contained(dir, &dir.join(file.name()))
+	contained_child(dir, file.name())
 }
 
 /// `<dir>/<state file>.tmp`, the staging name used before an atomic rename.
 pub fn state_tmp_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
-	contained(dir, &dir.join(format!("{}.tmp", file.name())))
+	contained_child(dir, &format!("{}.tmp", file.name()))
 }
 
 #[cfg(test)]

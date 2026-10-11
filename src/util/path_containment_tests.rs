@@ -75,3 +75,31 @@ fn root_that_does_not_exist_yet_still_contains_its_children() {
 	let child = contained(&root, &root.join("accounts/alice")).expect("inside a new root");
 	assert_eq!(child, root.join("accounts/alice"));
 }
+
+#[test]
+fn child_of_a_vetted_directory_is_one_plain_name() {
+	let (_guard, root) = data_dir();
+	let dir = contained(&root, &root.join("accounts/alice")).expect("dir");
+	assert_eq!(
+		contained_child(&dir, "a.eml").expect("plain"),
+		dir.join("a.eml")
+	);
+}
+
+#[test]
+fn child_names_that_could_leave_the_directory_are_refused() {
+	let (_guard, root) = data_dir();
+	for name in [
+		"",
+		"..",
+		"a/b",
+		"../x",
+		"a\\b",
+		"a..b",
+		"x\0y",
+		"/etc/passwd",
+	] {
+		let error = contained_child(&root, name).expect_err(name);
+		assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+	}
+}
