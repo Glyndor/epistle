@@ -107,11 +107,7 @@ fn directory_style_account_names_get_defaults_and_receive_mail() {
 		sink.deliver_routed(&message(&[address]), None)
 			.expect("deliver");
 		let new_dir = data.join("accounts").join(account).join("new");
-		assert_eq!(
-			listing(&new_dir).len(),
-			1,
-			"one message in the inbox of {account}"
-		);
+		assert_eq!(listing(&new_dir).len(), 1, "one message in the inbox");
 		assert_eq!(
 			crate::imap::mailbox::list(&data, account),
 			["INBOX", "Archive", "Drafts", "Rejects", "Sent", "Trash"]
