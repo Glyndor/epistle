@@ -11,6 +11,7 @@ mod backup;
 mod ban;
 mod config_check;
 pub mod config_edit;
+mod dns_provider;
 mod dns_records;
 mod export;
 mod import;
@@ -480,6 +481,18 @@ pub enum Command {
 		action: limits::Action,
 	},
 
+	/// Manage the DNS provider used for record automation.
+	Dns {
+		/// Configuration file; accepted before or after the dns action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// DNS administration area.
+		#[command(subcommand)]
+		action: dns_provider::DnsCli,
+	},
 	/// Manage outbound smarthost (relay) rules.
 	Relay {
 		/// Configuration file; accepted before or after the relay action.

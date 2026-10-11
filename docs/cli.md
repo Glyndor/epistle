@@ -196,6 +196,42 @@ upgrades with STARTTLS and authenticates when configured, then QUITs. It never
 starts a mail transaction and gives up after 10 seconds. All commands accept
 `--dry-run` (print the diff, write nothing) and `--config FILE`.
 
+## DNS provider (`epistle dns provider`)
+
+```sh
+epistle dns provider show [--json]
+epistle dns provider set cloudflare --zone example.org --token-env CF_TOKEN
+epistle dns provider set route53 --zone example.org --access-key AKIA... \
+  --secret-key-env AWS_SECRET --hosted-zone-id Z123
+epistle dns provider set manual --zone example.org
+epistle dns provider unset
+epistle dns provider test
+```
+
+`set` rewrites the whole `[dns]` section, so switching provider never leaves an old
+credential behind. The provider name and the settings it needs are checked the way
+the loader builds the provider; a setting the provider does not use is refused.
+Secrets are never passed on the command line: name an environment variable
+(`--token-env`, `--secret-key-env`, `--consumer-key-env`) or a 0600 file
+(`--token-file`, `--credentials-file`). The variable must be visible to the
+service account that runs the server.
+
+| Provider | Settings |
+|---|---|
+| cloudflare, bunny, desec, digitalocean, namecheap | `--token-env` or `--token-file` |
+| dnsimple | token source, `--account-id` |
+| spaceship, godaddy, porkbun | `--access-key`, `--secret-key-env` |
+| ovh | `--access-key`, `--secret-key-env`, `--consumer-key-env`, optional `--endpoint ovh-eu\|ovh-ca\|ovh-us` |
+| route53 | `--access-key`, `--secret-key-env`, `--hosted-zone-id` |
+| gcloud | token source, `--credentials-file` |
+| rfc2136 | token source (TSIG key), `--key-name`, `--endpoint HOST:PORT`, optional `--algorithm` |
+| manual | none (records are printed for you to publish) |
+
+`show` prints where each secret comes from and `set` for an inline value, never
+the value. `test` lists the zone's records through the provider (a read only call,
+10 second limit) and reports the count. Every mutation accepts `--dry-run` and
+`--config FILE`.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

@@ -58,8 +58,7 @@ fn check_target(target: &Target) -> Result<Target, String> {
 		));
 	}
 	if let Some(domain) = &target.domain {
-		crate::config::validate_dns_name("--domain", domain).map_err(|error| error.to_string())?;
-		target.domain = Some(domain.trim().to_ascii_lowercase());
+		target.domain = Some(crate::cli::resource::dns_name("--domain", domain)?);
 	}
 	Ok(target)
 }

@@ -371,6 +371,11 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::service::run(&config, action, dry_run),
+			Command::Dns {
+				config,
+				action,
+				dry_run,
+			} => super::dns_provider::run(&config, action, dry_run),
 			Command::Relay {
 				config,
 				action,
@@ -412,6 +417,7 @@ impl Command {
 			| Command::Status { .. }
 			| Command::Check { .. }
 			| Command::Relay { .. }
+			| Command::Dns { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }

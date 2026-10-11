@@ -63,6 +63,18 @@ pub(super) fn apply_edit(
 	finish(document, dry_run, label, out, status, restart)
 }
 
+/// Validate a DNS name taken from a flag and return it trimmed and lowercase.
+/// The error names the flag and drops the loader's generic prefix.
+pub(super) fn dns_name(flag: &str, value: &str) -> Result<String, String> {
+	crate::config::validate_dns_name(flag, value).map_err(|error| {
+		let text = error.to_string();
+		text.strip_prefix("invalid configuration: ")
+			.unwrap_or(&text)
+			.to_string()
+	})?;
+	Ok(value.trim().to_ascii_lowercase())
+}
+
 /// Read one secret line without its line ending. The value is checked for
 /// things the configuration cannot store safely, and is never echoed.
 pub(super) fn read_secret(input: &mut dyn BufRead, what: &str) -> Result<String, String> {

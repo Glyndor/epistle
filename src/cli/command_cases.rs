@@ -117,6 +117,22 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["limits", "show"], true),
 	(&["limits", "set", "quota", "5G"], true),
 	(&["limits", "unset", "queue-give-up"], true),
+	(&["dns", "provider", "show"], true),
+	(
+		&[
+			"dns",
+			"provider",
+			"set",
+			"cloudflare",
+			"--zone",
+			"example.org",
+			"--token-env",
+			"CF_TOKEN",
+		],
+		true,
+	),
+	(&["dns", "provider", "unset"], true),
+	(&["dns", "provider", "test"], true),
 	(&["relay", "list"], true),
 	(&["relay", "show", "--domain", "example.org"], true),
 	(
