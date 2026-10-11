@@ -92,6 +92,9 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["init"], true),
 	(&["stack", "ps"], true),
 	(&["service", "list"], true),
+	(&["limits", "show"], true),
+	(&["limits", "set", "quota", "5G"], true),
+	(&["limits", "unset", "queue-give-up"], true),
 	(&["service", "enable", "imap"], true),
 	(&["service", "disable", "imaps"], true),
 ];
