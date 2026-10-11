@@ -175,13 +175,29 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// Optional LDAP directory backend: load the resolution set and refresh it.
 	super::serve_tasks::spawn_ldap_directory(&config, Arc::clone(&account_store)).await?;
 
+	// The hot-reloadable key set for the bearer middleware. The CLI is a
+	// sibling process that mutates `api_keys.toml`; the watcher reads it
+	// on the same 2 s loop and calls `reload_from` on the set whenever the
+	// fingerprint moves. Built once and shared with the watcher and every
+	// API listener so the bearer middleware and the watcher see the same
+	// `Arc`. A missing or unreadable file at startup leaves the set
+	// empty; the static token still authenticates, and a corrected file
+	// is observed on the next poll.
+	let api_keys_set = Arc::new(
+		crate::api::ApiKeySet::open(&config.data_dir)
+			.unwrap_or_else(|_| crate::api::ApiKeySet::empty()),
+	);
+
 	// Pick up CLI edits to the dynamic account files (accounts.toml,
 	// app_passwords.toml, masked.json, aliases.json) while the server
 	// is running. Each tick stats the four files and asks the store
 	// to swap the matching in-memory mirror on a fingerprint change;
 	// the polling interval sits well inside the 5 s deadline the
-	// operators see on the CLI.
+	// operators see on the CLI. The same loop watches `api_keys.toml`
+	// and feeds the API-key reloader below.
 	let _watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
+		.with_api_keys(Arc::clone(&api_keys_set)
+			as Arc<dyn crate::directory_store::file_watcher::ApiKeyReloader>)
 		.spawn(std::time::Duration::from_secs(2));
 
 	// The queue worker drains the outbound spool in the background.
@@ -284,6 +300,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
 				.with_quota(config.quota_bytes.unwrap_or(0))
+				.with_api_keys(Arc::clone(&api_keys_set))
 				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone())
 				.with_directory(directory.clone())

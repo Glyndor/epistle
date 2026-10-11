@@ -58,6 +58,21 @@ struct Fingerprint {
 	ino: u64,
 }
 
+/// Hot-reload target for `api_keys.toml`. The file watcher holds one
+/// inside an `Arc<dyn ApiKeyReloader>` so the watcher does not have to
+/// import the concrete `ApiKeySet` type from `crate::api`, which would
+/// cycle back through `crate::api::state` (and through every module
+/// that uses it). The trait lives here, next to the watcher, because
+/// the watcher is the only caller; `ApiKeySet` is the only implementor.
+pub trait ApiKeyReloader: Send + Sync {
+	/// Swap the running key set from `text`, the contents of
+	/// `api_keys.toml`. The watcher calls this on every fingerprint
+	/// change. A parse failure must leave the running set untouched;
+	/// the watcher treats the result the same way it treats the other
+	/// `reload_*_from` failures (one warning per bad version).
+	fn reload_api_keys_from(&self, text: &str) -> std::io::Result<()>;
+}
+
 /// The watched path and the reload step it triggers. One entry per
 /// dynamic-store file. Adding a new on-disk sidecar that the runtime
 /// directory depends on means adding one entry here and one
@@ -68,6 +83,7 @@ enum ReloadKind {
 	AppPasswords,
 	Masked,
 	Aliases,
+	ApiKeys,
 }
 
 impl ReloadKind {
@@ -77,6 +93,7 @@ impl ReloadKind {
 			ReloadKind::AppPasswords => "app_passwords.toml",
 			ReloadKind::Masked => "masked.json",
 			ReloadKind::Aliases => "aliases.json",
+			ReloadKind::ApiKeys => "api_keys.toml",
 		}
 	}
 
@@ -84,12 +101,28 @@ impl ReloadKind {
 	/// `persist` + `replace(build_directory())` pair the in-server
 	/// mutators run, minus the persist step (the bytes already live on
 	/// disk under us).
-	fn apply(self, store: &AccountStore, text: &str) -> Result<(), StoreError> {
+	fn apply(
+		self,
+		store: &AccountStore,
+		api_keys: Option<&dyn ApiKeyReloader>,
+		text: &str,
+	) -> Result<(), StoreError> {
 		match self {
 			ReloadKind::Accounts => store.reload_accounts_from(text),
 			ReloadKind::AppPasswords => store.reload_app_passwords_from(text),
 			ReloadKind::Masked => store.reload_masked_from(text),
 			ReloadKind::Aliases => store.reload_aliases_from(text),
+			ReloadKind::ApiKeys => match api_keys {
+				Some(reloader) => reloader
+					.reload_api_keys_from(text)
+					.map_err(|error| StoreError::Invalid(error.to_string())),
+				None => {
+					// No reloader wired in: nothing to apply, but not
+					// an error — the operator has not configured an API
+					// listener, so the file is just bytes on disk.
+					Ok(())
+				}
+			},
 		}
 	}
 
@@ -98,14 +131,19 @@ impl ReloadKind {
 	/// `Ok(true)` when the store's running directory was rebuilt,
 	/// `Ok(false)` when there was nothing to apply, or the parse error
 	/// the swap was rejected on.
-	fn apply_from_disk(self, store: &AccountStore, path: &Path) -> Result<bool, StoreError> {
+	fn apply_from_disk(
+		self,
+		store: &AccountStore,
+		api_keys: Option<&dyn ApiKeyReloader>,
+		path: &Path,
+	) -> Result<bool, StoreError> {
 		match std::fs::read_to_string(path) {
 			Ok(text) => {
-				self.apply(store, &text)?;
+				self.apply(store, api_keys, &text)?;
 				Ok(true)
 			}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				self.apply(store, "")?;
+				self.apply(store, api_keys, "")?;
 				Ok(true)
 			}
 			Err(error) => Err(StoreError::Io(error)),
@@ -131,6 +169,12 @@ pub struct FileWatcher {
 	/// logs once. Cleared on a successful apply.
 	last_warned: HashMap<PathBuf, Option<Fingerprint>>,
 	store: Arc<AccountStore>,
+	/// Optional hot-reload target for `api_keys.toml`. `None` means the
+	/// operator has not configured an API listener, so the file is
+	/// parsed (or its absence is noted) but the reload callback is not
+	/// invoked. The watcher always polls the file either way, so a
+	/// later `with_api_keys` upgrade keeps the same fingerprint cache.
+	api_keys: Option<Arc<dyn ApiKeyReloader>>,
 }
 
 /// What one `poll` did, for the integration tests' assertions. The
@@ -166,7 +210,7 @@ pub enum PollEvent {
 
 /// Which dynamic-store file a `PollEvent` refers to. Mirrors the
 /// on-disk filenames: `accounts.toml`, `app_passwords.toml`,
-/// `masked.json`, `aliases.json`.
+/// `masked.json`, `aliases.json`, `api_keys.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollTarget {
 	/// The `accounts.toml` sidecar.
@@ -177,6 +221,8 @@ pub enum PollTarget {
 	Masked,
 	/// The `aliases.json` sidecar.
 	Aliases,
+	/// The `api_keys.toml` sidecar.
+	ApiKeys,
 }
 
 impl From<ReloadKind> for PollTarget {
@@ -186,6 +232,7 @@ impl From<ReloadKind> for PollTarget {
 			ReloadKind::AppPasswords => PollTarget::AppPasswords,
 			ReloadKind::Masked => PollTarget::Masked,
 			ReloadKind::Aliases => PollTarget::Aliases,
+			ReloadKind::ApiKeys => PollTarget::ApiKeys,
 		}
 	}
 }
@@ -213,6 +260,10 @@ impl FileWatcher {
 				path: data_dir.join("aliases.json"),
 				kind: ReloadKind::Aliases,
 			},
+			Watch {
+				path: data_dir.join("api_keys.toml"),
+				kind: ReloadKind::ApiKeys,
+			},
 		];
 		let mut last = HashMap::with_capacity(watches.len());
 		let mut last_warned = HashMap::with_capacity(watches.len());
@@ -226,7 +277,19 @@ impl FileWatcher {
 			last,
 			last_warned,
 			store,
+			api_keys: None,
 		}
+	}
+
+	/// Attach a reloader for `api_keys.toml`. Must be called before
+	/// [`spawn`](Self::spawn) (and ideally before any poll) so the
+	/// watcher's first reload of an already-edited file lands on a
+	/// running state. The reloader is held as `Arc<dyn ApiKeyReloader>`
+	/// to keep `directory_store` independent of `crate::api`; the
+	/// concrete type is `crate::api::ApiKeySet` in production.
+	pub fn with_api_keys(mut self, reloader: Arc<dyn ApiKeyReloader>) -> Self {
+		self.api_keys = Some(reloader);
+		self
 	}
 
 	/// Run one poll cycle. Cheap when nothing changed. Returns the
@@ -273,7 +336,10 @@ impl FileWatcher {
 						return PollEvent::BadParse(target);
 					}
 				};
-				match watch.kind.apply(&self.store, &text) {
+				match watch
+					.kind
+					.apply(&self.store, self.api_keys.as_deref(), &text)
+				{
 					Ok(()) => {
 						self.last.insert(watch.path.clone(), Some(now));
 						self.last_warned.insert(watch.path.clone(), None);
@@ -314,7 +380,10 @@ impl FileWatcher {
 					// Still absent: no-op.
 					return PollEvent::Absent(target);
 				}
-				match watch.kind.apply_from_disk(&self.store, &watch.path) {
+				match watch
+					.kind
+					.apply_from_disk(&self.store, self.api_keys.as_deref(), &watch.path)
+				{
 					Ok(_) => {
 						self.last.insert(watch.path.clone(), None);
 						self.last_warned.insert(watch.path.clone(), None);
