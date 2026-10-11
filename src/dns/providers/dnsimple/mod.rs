@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
 
@@ -447,9 +447,9 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "dnsimple_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "dnsimple_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

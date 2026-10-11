@@ -61,7 +61,7 @@ jobs:
       # gate stopped counting test code as covered production code; this is
       # the gate becoming honest, not a relaxed gate. Ratcheted up from here
       # (issue #921).
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+)\\.rs"
+      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs"
   dependabot-freshness:
     uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:

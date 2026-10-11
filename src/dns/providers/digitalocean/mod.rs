@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
 
@@ -466,13 +466,13 @@ async fn decode<T: serde::de::DeserializeOwned>(
 }
 
 #[cfg(test)]
-#[path = "digitalocean_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "digitalocean_tests_b.rs"]
+#[path = "tests_b.rs"]
 mod tests_b;
 
 #[cfg(test)]
-#[path = "digitalocean_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

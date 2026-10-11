@@ -1,9 +1,9 @@
 //! Basic-flow tests for the Namecheap provider: upsert, delete, list, and
 //! URL/auth wiring.
 
-use super::super::provider::{DnsProvider, ProviderError, RecordKind, ScopedSecret};
 use super::NamecheapProvider;
 use super::tests::{mock, txt};
+use crate::dns::provider::{DnsProvider, ProviderError, RecordKind, ScopedSecret};
 
 #[tokio::test]
 async fn upsert_creates_when_absent() {
@@ -102,7 +102,7 @@ async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
 #[tokio::test]
 async fn tlsa_returns_unsupported_without_network() {
 	let (provider, state) = mock("", None).await;
-	let tlsa = super::super::provider::DnsRecord {
+	let tlsa = crate::dns::provider::DnsRecord {
 		name: "_25._tcp.mail.example.org".into(),
 		kind: RecordKind::Tlsa,
 		value: "3 0 1 abcd".into(),
@@ -116,14 +116,14 @@ async fn tlsa_returns_unsupported_without_network() {
 #[tokio::test]
 async fn mx_and_srv_supported() {
 	let (provider, state) = mock("", None).await;
-	let mx = super::super::provider::DnsRecord {
+	let mx = crate::dns::provider::DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10 mail.example.org".into(),
 		ttl: 3600,
 	};
 	provider.upsert("example.org", mx).await.expect("mx upsert");
-	let srv = super::super::provider::DnsRecord {
+	let srv = crate::dns::provider::DnsRecord {
 		name: "_sip._tcp.example.org".into(),
 		kind: RecordKind::Srv,
 		value: "10 5 5060 sip.example.org".into(),

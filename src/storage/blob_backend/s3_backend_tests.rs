@@ -10,7 +10,7 @@
 //!   `lib.rs::tests` because the assertion is about wiring, not about S3
 //!   internals.
 //! - `signature_matches_aws_published_vector` (SigV4 against AWS's own
-//!   `Task 3` reference vector, the same one [`crate::dns::route53::tests`]
+//!   `Task 3` reference vector, the same one [`crate::dns::providers::route53::tests`]
 //!   uses); lives in `sigv4_tests.rs` so the SigV4 surface is testable in
 //!   isolation from HTTP.
 

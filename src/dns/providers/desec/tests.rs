@@ -575,3 +575,23 @@ async fn caa_upsert_passes_value_through_verbatim() {
 		"{body}"
 	);
 }
+
+/// deSEC RRsets have no description field, so the body carries exactly the
+/// documented RRset fields and nothing epistle-specific.
+#[tokio::test]
+async fn upsert_body_has_only_the_documented_rrset_fields() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	provider
+		.upsert("example.org", txt("_dmarc.example.org", "v=DMARC1; p=none"))
+		.await
+		.expect("upsert");
+	let body: serde_json::Value = serde_json::from_str(&state.lock().unwrap().puts[0]).unwrap();
+	let mut keys: Vec<&str> = body.as_array().expect("bulk array")[0]
+		.as_object()
+		.expect("object")
+		.keys()
+		.map(String::as_str)
+		.collect();
+	keys.sort_unstable();
+	assert_eq!(keys, vec!["records", "subname", "ttl", "type"]);
+}

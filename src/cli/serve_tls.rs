@@ -61,7 +61,7 @@ pub(super) fn build_tls(
 				let tlsa = config
 					.dns
 					.as_ref()
-					.and_then(|dns| dns.build())
+					.and_then(|dns| dns.build_for_host(&config.hostname))
 					.map(|provider| (provider, config.hostname.clone()));
 				tokio::spawn(crate::acme::renew::run(
 					acme.directory_url.clone(),

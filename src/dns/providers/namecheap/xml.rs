@@ -4,8 +4,8 @@
 use quick_xml::de::from_str;
 use serde::Deserialize;
 
-use super::super::provider::{DnsRecord, ProviderError, RecordKind};
 use super::MAX_BODY;
+use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
 
 /// One record as Namecheap returns it from `getHosts` (and as we re-emit it
 /// to `setHosts`). `address` carries the kind-specific payload verbatim — for

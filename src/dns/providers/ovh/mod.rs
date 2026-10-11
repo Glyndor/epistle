@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::net::{HttpsUrl, HttpsUrlError};
 
-use super::provider::{
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
 
@@ -472,13 +472,13 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-#[path = "ovh_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "ovh_tests_b.rs"]
+#[path = "tests_b.rs"]
 mod tests_b;
 
 #[cfg(test)]
-#[path = "ovh_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

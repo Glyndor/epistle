@@ -15,8 +15,9 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
+	same_txt_purpose,
 };
 
 /// Bunny's API base; overridable for tests.
@@ -221,6 +222,7 @@ impl BunnyProvider {
 			"Name": self.subname(&record.name),
 			"Value": value,
 			"Ttl": record.ttl,
+			"Comment": record_description(),
 		})
 		.to_string())
 	}
@@ -406,9 +408,9 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "bunny_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "bunny_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

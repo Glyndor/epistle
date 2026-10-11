@@ -2,8 +2,8 @@
 //! `<ApiResponse Status="ERROR">` bodies, oversize response bodies, malformed
 //! XML, and malformed record values.
 
-use super::super::provider::{DnsProvider, ProviderError, RecordKind};
 use super::tests::{mock, txt};
+use crate::dns::provider::{DnsProvider, ProviderError, RecordKind};
 
 #[tokio::test]
 async fn unauthorized_response_401_returns_auth_error() {
@@ -127,7 +127,7 @@ async fn body_read_oversize_caps_at_limit() {
 #[tokio::test]
 async fn mx_with_unparseable_priority_returns_unsupported() {
 	let (provider, _state) = mock("", None).await;
-	let bad = super::super::provider::DnsRecord {
+	let bad = crate::dns::provider::DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "ten mail.example.org".into(),
@@ -142,7 +142,7 @@ async fn mx_with_unparseable_priority_returns_unsupported() {
 #[tokio::test]
 async fn srv_with_wrong_field_count_returns_unsupported() {
 	let (provider, _state) = mock("", None).await;
-	let bad = super::super::provider::DnsRecord {
+	let bad = crate::dns::provider::DnsRecord {
 		name: "_sip._tcp.example.org".into(),
 		kind: RecordKind::Srv,
 		value: "10 5 sip.example.org".into(),
@@ -157,7 +157,7 @@ async fn srv_with_wrong_field_count_returns_unsupported() {
 #[tokio::test]
 async fn mx_with_missing_whitespace_returns_unsupported() {
 	let (provider, _state) = mock("", None).await;
-	let bad = super::super::provider::DnsRecord {
+	let bad = crate::dns::provider::DnsRecord {
 		name: "example.org".into(),
 		kind: RecordKind::Mx,
 		value: "10mail.example.org".into(),

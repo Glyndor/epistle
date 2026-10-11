@@ -39,6 +39,21 @@
 use std::path::Path;
 use std::pin::Pin;
 
+/// Free-text description that epistle attaches to every record it creates or
+/// updates, for providers whose record API has a per-record description field
+/// (Cloudflare `comment`, Bunny `Comment`, Porkbun `notes`). It reads
+/// `Epistle v<version>` with the version of the running binary, and every
+/// create and every update rewrites it, so a record touched again by a newer
+/// release shows the newer version. It is a label for whoever reads the
+/// provider's panel, not an ownership key: record matching still uses only
+/// type, name and, for TXT, the value. Providers without such a field never
+/// receive it. Kept in this one function so the text is easy to extend; it
+/// stays well under the tightest documented limit (100 characters on the
+/// Cloudflare free plan).
+pub fn record_description() -> String {
+	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
+}
+
 /// A DNS record kind epistle publishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordKind {

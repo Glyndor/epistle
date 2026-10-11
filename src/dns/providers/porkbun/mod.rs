@@ -21,7 +21,9 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
+};
 
 /// Porkbun's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.porkbun.com/api/json/v3";
@@ -225,6 +227,8 @@ impl PorkbunProvider {
 			"type": kind,
 			"content": record.value,
 			"ttl": record.ttl.max(MIN_TTL),
+			// Free-text note shown in the Porkbun panel; edit replaces it.
+			"notes": record_description(),
 		});
 		if record.kind == RecordKind::Srv {
 			// Porkbun's SRV payload: the value carries the full presentation
@@ -421,9 +425,9 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "porkbun_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "porkbun_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;
