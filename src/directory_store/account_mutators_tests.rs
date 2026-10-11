@@ -387,3 +387,76 @@ password_hash = "stub"
 		"missing quota_bytes means the server default applies"
 	);
 }
+
+fn team_alias() -> crate::config::Alias {
+	crate::config::Alias {
+		address: "team@example.org".to_string(),
+		members: vec!["alice@example.org".to_string()],
+		senders: Vec::new(),
+		hidden: true,
+		list_id: None,
+	}
+}
+
+fn dynamic_with(address: &str) -> DynamicAccount {
+	DynamicAccount {
+		name: "carol".to_string(),
+		addresses: vec![address.to_string()],
+		password_hash: crate::smtp::auth::tests::hash(fixture_password()),
+		scram: None,
+		totp_secret: None,
+		disabled: false,
+		quota_bytes: None,
+		allowed_protocols: None,
+	}
+}
+
+/// An address a static alias already routes cannot be claimed by an
+/// account, neither at creation nor added later: delivery would have two
+/// owners for one address.
+#[test]
+fn alias_address_cannot_be_given_to_an_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path()).with_aliases(vec![team_alias()]);
+	add_bob(&store);
+	assert!(
+		matches!(
+			store.add(dynamic_with("Team@example.org")),
+			Err(StoreError::Duplicate(_))
+		),
+		"add must refuse an alias address"
+	);
+	assert!(
+		matches!(
+			store.add_address("bob", "team@example.org"),
+			Err(StoreError::Duplicate(_))
+		),
+		"address add must refuse an alias address"
+	);
+}
+
+/// Same rule for a masked address another account owns.
+#[test]
+fn masked_address_cannot_be_given_to_an_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	add_bob(&store);
+	let masked = store
+		.add_masked("alice", "shop", "example.org", 1)
+		.expect("masked address")
+		.address;
+	assert!(
+		matches!(
+			store.add(dynamic_with(&masked)),
+			Err(StoreError::Duplicate(_))
+		),
+		"add must refuse a masked address"
+	);
+	assert!(
+		matches!(
+			store.add_address("bob", &masked.to_ascii_uppercase()),
+			Err(StoreError::Duplicate(_))
+		),
+		"address add must refuse a masked address"
+	);
+}

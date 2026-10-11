@@ -406,23 +406,8 @@ impl AccountStore {
 		if name_taken {
 			return Err(StoreError::Duplicate(account.name.clone()));
 		}
-		let mut known_addresses: Vec<String> = self
-			.static_accounts
-			.iter()
-			.flat_map(|existing| existing.addresses.iter())
-			.chain(
-				dynamic
-					.iter()
-					.flat_map(|existing| existing.addresses.iter()),
-			)
-			.map(|address| address.to_ascii_lowercase())
-			.collect();
-		known_addresses.sort();
 		for raw in &account.addresses {
-			if known_addresses
-				.binary_search(&raw.to_ascii_lowercase())
-				.is_ok()
-			{
+			if self.address_taken(&dynamic, None, raw) {
 				return Err(StoreError::Duplicate(raw.clone()));
 			}
 		}
@@ -432,6 +417,40 @@ impl AccountStore {
 		drop(dynamic);
 		self.handle.replace(self.build_directory());
 		Ok(())
+	}
+
+	/// Whether `raw` already routes somewhere: a static account, a dynamic
+	/// account other than `except`, a static `[[alias]]`, or a masked
+	/// address. Callers hold the dynamic write lock and pass its contents,
+	/// so the check and the following write see the same accounts.
+	pub(super) fn address_taken(
+		&self,
+		dynamic: &[DynamicAccount],
+		except: Option<&str>,
+		raw: &str,
+	) -> bool {
+		let used_by_account = self
+			.static_accounts
+			.iter()
+			.flat_map(|existing| existing.addresses.iter())
+			.chain(
+				dynamic
+					.iter()
+					.filter(|existing| Some(existing.name.as_str()) != except)
+					.flat_map(|existing| existing.addresses.iter()),
+			)
+			.any(|address| address.eq_ignore_ascii_case(raw));
+		let used_by_alias = self
+			.aliases
+			.iter()
+			.any(|alias| alias.address.eq_ignore_ascii_case(raw));
+		let used_by_masked = self
+			.masked
+			.read()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.get(raw)
+			.is_some();
+		used_by_account || used_by_alias || used_by_masked
 	}
 
 	/// Remove a dynamic account. Static accounts cannot be removed here.

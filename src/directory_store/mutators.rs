@@ -74,8 +74,8 @@ impl AccountStore {
 	/// Add an address to a dynamic account. Runs the same domain check
 	/// and conflict check `add` runs on a fresh dynamic account: a
 	/// malformed address, an address outside the configured domains, or
-	/// an address already owned by another account (static or dynamic)
-	/// is rejected. The account must already exist; `NotFound` is the
+	/// an address already routed elsewhere (another account, a static
+	/// alias or a masked address) is rejected. The account must already exist; `NotFound` is the
 	/// answer for static and unknown names. Rebuilds the directory so
 	/// the next delivery attempt resolves the new address.
 	pub fn add_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
@@ -90,10 +90,7 @@ impl AccountStore {
 				"address {raw} is not in a configured domain"
 			)));
 		}
-		// The conflict check walks every other account while we still hold
-		// the read-side of the lock, so the later `iter_mut` does not have
-		// to thread a mutable borrow through the cross-account filter.
-		let dynamic = self.dynamic.read().expect("store lock");
+		let mut dynamic = self.dynamic.write().expect("store lock");
 		let existing_on_self = dynamic
 			.iter()
 			.find(|account| account.name == name)
@@ -101,30 +98,9 @@ impl AccountStore {
 			.addresses
 			.iter()
 			.any(|existing| existing.eq_ignore_ascii_case(raw));
-		if existing_on_self {
+		if existing_on_self || self.address_taken(&dynamic, Some(name), raw) {
 			return Err(StoreError::Duplicate(raw.to_string()));
 		}
-		let mut known_addresses: Vec<String> = self
-			.static_accounts
-			.iter()
-			.flat_map(|existing| existing.addresses.iter())
-			.chain(
-				dynamic
-					.iter()
-					.filter(|existing| existing.name != name)
-					.flat_map(|existing| existing.addresses.iter()),
-			)
-			.map(|address| address.to_ascii_lowercase())
-			.collect();
-		known_addresses.sort();
-		drop(dynamic);
-		if known_addresses
-			.binary_search(&raw.to_ascii_lowercase())
-			.is_ok()
-		{
-			return Err(StoreError::Duplicate(raw.to_string()));
-		}
-		let mut dynamic = self.dynamic.write().expect("store lock");
 		let account = dynamic
 			.iter_mut()
 			.find(|account| account.name == name)
