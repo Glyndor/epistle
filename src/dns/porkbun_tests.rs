@@ -413,3 +413,55 @@ async fn rejected_credentials_map_to_an_auth_error() {
 	}));
 	assert_eq!(provider.list("example.org").await, Err(ProviderError::Auth));
 }
+
+/// The exact string the owner expects in the provider panel.
+fn expected_description() -> String {
+	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
+}
+
+#[tokio::test]
+async fn create_body_carries_the_notes_field() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	provider
+		.upsert("example.org", txt("_dmarc.example.org", "v=DMARC1; p=none"))
+		.await
+		.expect("upsert");
+	let body = state.lock().unwrap().body("/dns/create/example.org");
+	assert_eq!(body["notes"], expected_description());
+}
+
+#[tokio::test]
+async fn edit_body_carries_the_notes_field_too() {
+	let records = serde_json::json!([stored(
+		"106926652",
+		"_dmarc.example.org",
+		"TXT",
+		"v=DMARC1; p=none"
+	)]);
+	let (provider, state) = mock(records).await;
+	provider
+		.upsert(
+			"example.org",
+			txt("_dmarc.example.org", "v=DMARC1; p=reject"),
+		)
+		.await
+		.expect("upsert");
+	let body = state
+		.lock()
+		.unwrap()
+		.body("/dns/edit/example.org/106926652");
+	assert_eq!(body["notes"], expected_description());
+}
+
+#[tokio::test]
+async fn mx_body_carries_the_notes_field() {
+	let (provider, state) = mock(serde_json::json!([])).await;
+	let mut record = txt("example.org", "10 mail.example.org.");
+	record.kind = RecordKind::Mx;
+	provider
+		.upsert("example.org", record)
+		.await
+		.expect("upsert");
+	let body = state.lock().unwrap().body("/dns/create/example.org");
+	assert_eq!(body["notes"], expected_description());
+}
