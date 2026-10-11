@@ -104,7 +104,7 @@ pub(super) async fn mock() -> (Route53Provider, Shared) {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = Route53Provider::new("AKIA".into(), "secret".into(), "Z123".into())
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 
