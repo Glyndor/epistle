@@ -269,12 +269,12 @@ impl DigestName {
 
 	/// `<dir>/<digest>`.
 	pub fn in_dir(&self, dir: &Path) -> std::io::Result<PathBuf> {
-		contained_child(dir, &self.0)
+		contained(dir, &dir.join(&self.0))
 	}
 
 	/// `<dir>/<digest>.lock`.
 	pub fn lock_in_dir(&self, dir: &Path) -> std::io::Result<PathBuf> {
-		contained_child(dir, &format!("{}.lock", self.0))
+		contained(dir, &dir.join(format!("{}.lock", self.0)))
 	}
 }
 
