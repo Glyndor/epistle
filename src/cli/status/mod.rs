@@ -6,6 +6,7 @@
 //! sends mail or authenticates. `status` runs every check; `check <area>`
 //! runs one and lists its findings.
 
+mod av_area;
 mod clock;
 mod config_area;
 mod db_area;
@@ -50,6 +51,8 @@ pub enum CheckArea {
 	Dns,
 	/// The configured database answers `SELECT 1`.
 	Db,
+	/// The configured clamd answers `PING`.
+	Antivirus,
 }
 
 impl CheckArea {
@@ -60,6 +63,7 @@ impl CheckArea {
 		CheckArea::Tls,
 		CheckArea::Dns,
 		CheckArea::Db,
+		CheckArea::Antivirus,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -70,6 +74,7 @@ impl CheckArea {
 			CheckArea::Tls => "tls",
 			CheckArea::Dns => "dns",
 			CheckArea::Db => "db",
+			CheckArea::Antivirus => "antivirus",
 		}
 	}
 }
@@ -189,6 +194,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Tls => tls_area::check(ctx).await,
 		CheckArea::Dns => dns_area::check(ctx).await,
 		CheckArea::Db => db_area::check(ctx).await,
+		CheckArea::Antivirus => av_area::check(ctx).await,
 	}
 }
 
