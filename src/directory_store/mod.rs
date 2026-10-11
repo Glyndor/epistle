@@ -419,40 +419,6 @@ impl AccountStore {
 		Ok(())
 	}
 
-	/// Whether `raw` already routes somewhere: a static account, a dynamic
-	/// account other than `except`, a static `[[alias]]`, or a masked
-	/// address. Callers hold the dynamic write lock and pass its contents,
-	/// so the check and the following write see the same accounts.
-	pub(super) fn address_taken(
-		&self,
-		dynamic: &[DynamicAccount],
-		except: Option<&str>,
-		raw: &str,
-	) -> bool {
-		let used_by_account = self
-			.static_accounts
-			.iter()
-			.flat_map(|existing| existing.addresses.iter())
-			.chain(
-				dynamic
-					.iter()
-					.filter(|existing| Some(existing.name.as_str()) != except)
-					.flat_map(|existing| existing.addresses.iter()),
-			)
-			.any(|address| address.eq_ignore_ascii_case(raw));
-		let used_by_alias = self
-			.aliases
-			.iter()
-			.any(|alias| alias.address.eq_ignore_ascii_case(raw));
-		let used_by_masked = self
-			.masked
-			.read()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
-			.get(raw)
-			.is_some();
-		used_by_account || used_by_alias || used_by_masked
-	}
-
 	/// Remove a dynamic account. Static accounts cannot be removed here.
 	pub fn remove(&self, name: &str) -> Result<(), StoreError> {
 		let mut dynamic = self.dynamic.write().expect("store lock");
