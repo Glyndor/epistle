@@ -1,5 +1,5 @@
 //! The `probe` subcommand: a quick, local healthcheck for the listeners
-//! the running server has bound. One TCP connect per listener with a
+//! the running server has bound. TCP connects to loopback addresses with a
 //! short timeout, the greeting line read back and checked against
 //! the protocol the listener advertises. Exit 0 if every listener
 //! responded with a recognisable greeting, 1 if any failed.
@@ -133,9 +133,16 @@ async fn probe_one(
 	pinned: &Option<Result<Arc<dyn ServerCertVerifier>, String>>,
 ) -> ProbeLine {
 	let socket = listener.socket_addr();
-	let addr = SocketAddr::new(loopback_for(listener.addr), socket.port());
+	let mut addr = SocketAddr::new(loopback_for(listener.addr), socket.port());
 	let kind = listener.kind.as_str();
-	match probe_kind(listener, addr, pinned).await {
+	let result = match connect_listener_with(listener, tcp_connect).await {
+		Ok((stream, answered)) => {
+			addr = answered;
+			probe_kind(listener, stream, pinned).await
+		}
+		Err(error) => Err(format!("connect: {error}")),
+	};
+	match result {
 		Ok(()) => ProbeLine {
 			kind,
 			addr: addr.to_string(),
@@ -164,38 +171,63 @@ fn loopback_for(addr: IpAddr) -> IpAddr {
 	}
 }
 
+async fn connect_listener_with<S, F, Fut>(
+	listener: &Listener,
+	mut connect: F,
+) -> std::io::Result<(S, SocketAddr)>
+where
+	F: FnMut(SocketAddr) -> Fut,
+	Fut: std::future::Future<Output = std::io::Result<S>>,
+{
+	let addr = SocketAddr::new(loopback_for(listener.addr), listener.socket_addr().port());
+	match connect(addr).await {
+		Ok(stream) => Ok((stream, addr)),
+		Err(error)
+			if listener.addr == IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+				&& matches!(
+					error.kind(),
+					std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::TimedOut
+				) =>
+		{
+			// Container port publishing may expose only IPv4 on the host.
+			let ipv4 = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), addr.port());
+			connect(ipv4).await.map(|stream| (stream, ipv4))
+		}
+		Err(error) => Err(error),
+	}
+}
+
 async fn probe_kind(
 	listener: &Listener,
-	addr: SocketAddr,
+	stream: TcpStream,
 	pinned: &Option<Result<Arc<dyn ServerCertVerifier>, String>>,
 ) -> Result<(), String> {
 	match listener.kind {
-		ListenerKind::Smtp => probe_smtp(addr).await,
-		ListenerKind::Submission => probe_smtp(addr).await,
-		ListenerKind::Submissions => probe_submissions(addr, pinned).await,
-		ListenerKind::Imap => probe_imap(addr).await,
-		ListenerKind::Imaps => probe_imaps(addr, pinned).await,
-		ListenerKind::Pop3s => probe_pop3s(addr, pinned).await,
-		ListenerKind::ManageSieve => probe_sieve(addr).await,
+		ListenerKind::Smtp => probe_smtp(stream).await,
+		ListenerKind::Submission => probe_smtp(stream).await,
+		ListenerKind::Submissions => probe_submissions(stream, pinned).await,
+		ListenerKind::Imap => probe_imap(stream).await,
+		ListenerKind::Imaps => probe_imaps(stream, pinned).await,
+		ListenerKind::Pop3s => probe_pop3s(stream, pinned).await,
+		ListenerKind::ManageSieve => probe_sieve(stream).await,
 		ListenerKind::Api
 		| ListenerKind::WebDav
 		| ListenerKind::Acme
 		| ListenerKind::Autoconfig
-		| ListenerKind::Metrics => probe_http(addr).await,
+		| ListenerKind::Metrics => probe_http(stream).await,
 	}
 }
 
-async fn probe_smtp(addr: SocketAddr) -> Result<(), String> {
-	let mut stream = tcp_connect(addr).await?;
+async fn probe_smtp(mut stream: TcpStream) -> Result<(), String> {
 	check_smtp_banner(&mut stream).await
 }
 
 async fn probe_submissions(
-	addr: SocketAddr,
+	stream: TcpStream,
 	pinned: &Option<Result<Arc<dyn ServerCertVerifier>, String>>,
 ) -> Result<(), String> {
 	let verifier = require_verifier(pinned)?;
-	let mut stream = tls_handshake(tcp_connect(addr).await?, verifier).await?;
+	let mut stream = tls_handshake(stream, verifier).await?;
 	check_smtp_banner(&mut stream).await
 }
 
@@ -212,17 +244,16 @@ where
 	}
 }
 
-async fn probe_imap(addr: SocketAddr) -> Result<(), String> {
-	let mut stream = tcp_connect(addr).await?;
+async fn probe_imap(mut stream: TcpStream) -> Result<(), String> {
 	check_imap_greeting(&mut stream).await
 }
 
 async fn probe_imaps(
-	addr: SocketAddr,
+	stream: TcpStream,
 	pinned: &Option<Result<Arc<dyn ServerCertVerifier>, String>>,
 ) -> Result<(), String> {
 	let verifier = require_verifier(pinned)?;
-	let mut stream = tls_handshake(tcp_connect(addr).await?, verifier).await?;
+	let mut stream = tls_handshake(stream, verifier).await?;
 	check_imap_greeting(&mut stream).await
 }
 
@@ -240,11 +271,11 @@ where
 }
 
 async fn probe_pop3s(
-	addr: SocketAddr,
+	stream: TcpStream,
 	pinned: &Option<Result<Arc<dyn ServerCertVerifier>, String>>,
 ) -> Result<(), String> {
 	let verifier = require_verifier(pinned)?;
-	let mut stream = tls_handshake(tcp_connect(addr).await?, verifier).await?;
+	let mut stream = tls_handshake(stream, verifier).await?;
 	let greeting = read_line(&mut stream).await?;
 	let greeting = greeting.trim_end_matches(['\r', '\n']);
 	if greeting.starts_with("+OK") {
@@ -254,8 +285,7 @@ async fn probe_pop3s(
 	}
 }
 
-async fn probe_sieve(addr: SocketAddr) -> Result<(), String> {
-	let mut stream = tcp_connect(addr).await?;
+async fn probe_sieve(mut stream: TcpStream) -> Result<(), String> {
 	let greeting = read_line(&mut stream).await?;
 	let greeting = greeting.trim_end_matches(['\r', '\n']);
 	// ManageSieve greets with an `OK` capability-list line; it does
@@ -269,8 +299,7 @@ async fn probe_sieve(addr: SocketAddr) -> Result<(), String> {
 	}
 }
 
-async fn probe_http(addr: SocketAddr) -> Result<(), String> {
-	let mut stream = tcp_connect(addr).await?;
+async fn probe_http(mut stream: TcpStream) -> Result<(), String> {
 	// `HEAD /` is the cheapest request that elicits a real response
 	// line. `Connection: close` asks the server to fold the socket
 	// after one exchange so the probe does not stall on a keep-alive
@@ -304,11 +333,11 @@ async fn probe_http(addr: SocketAddr) -> Result<(), String> {
 	}
 }
 
-async fn tcp_connect(addr: SocketAddr) -> Result<TcpStream, String> {
+async fn tcp_connect(addr: SocketAddr) -> std::io::Result<TcpStream> {
 	match timeout(PROBE_TIMEOUT, TcpStream::connect(addr)).await {
 		Ok(Ok(stream)) => Ok(stream),
-		Ok(Err(error)) => Err(format!("connect: {error}")),
-		Err(_) => Err("connect: timeout".to_string()),
+		Ok(Err(error)) => Err(error),
+		Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
 	}
 }
 
@@ -547,3 +576,7 @@ mod tests;
 #[cfg(test)]
 #[path = "probe_tests_pinning.rs"]
 mod tests_pinning;
+
+#[cfg(test)]
+#[path = "probe_tests_host.rs"]
+mod tests_host;

@@ -85,3 +85,31 @@ async fn a_reachable_server_answers_select_1() {
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 	assert_eq!(report.detail, "connected, SELECT 1 answered");
 }
+
+/// The verdict printed by `epistle check db --json` inside the container is
+/// the area's verdict on the host.
+#[test]
+fn the_container_verdict_is_read_from_check_json() {
+	let ok = br#"{"db":{"status":"ok","detail":"SELECT 1 answered","items":[]}}"#;
+	let report = super::parse_in_container(ok);
+	assert_eq!(report.status, Level::Ok);
+	assert_eq!(report.detail, "SELECT 1 answered");
+	let failed = br#"{"db":{"status":"fail","detail":"cannot reach PostgreSQL","items":[]}}"#;
+	assert_eq!(super::parse_in_container(failed).status, Level::Fail);
+	assert_eq!(
+		super::parse_in_container(b"podup: no such service").status,
+		Level::Fail
+	);
+}
+
+/// A command that never finishes is killed at the limit instead of hanging
+/// `epistle status`.
+#[test]
+fn a_hung_command_is_killed_at_the_limit() {
+	let mut command = std::process::Command::new("sleep");
+	command.arg("30");
+	let started = std::time::Instant::now();
+	let result = super::run_bounded(command, std::time::Duration::from_millis(300));
+	assert!(result.is_err(), "a hung command must be reported");
+	assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}

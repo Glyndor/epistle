@@ -2,13 +2,13 @@
 
 use std::io::Write;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::CheckArea;
 
 /// Outcome of one check. The ordering is the severity ordering, so the worst
 /// outcome of a set is its `max`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Level {
 	/// Working as expected, or not configured.
@@ -30,7 +30,7 @@ impl Level {
 }
 
 /// One finding inside an area, such as a single listener or domain.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Item {
 	/// What was checked, for example `smtp 127.0.0.1:25`.
 	pub(super) name: String,
@@ -51,7 +51,7 @@ impl Item {
 }
 
 /// The result of one area: a verdict, a short summary and the findings behind it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct AreaReport {
 	/// Worst status among the items, or the single verdict when there are none.
 	pub(super) status: Level,

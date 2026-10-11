@@ -14,7 +14,7 @@ mod plan;
 pub use answers::Answers;
 pub use compose::compose_file_path;
 pub(crate) use compose::update_listener_ports;
-pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER};
+pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, HOST_EPISTLE_PATH};
 
 use std::io::Write;
 use std::path::PathBuf;
