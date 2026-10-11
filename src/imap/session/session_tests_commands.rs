@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 
 #[test]
 fn uid_fetch_changedsince_vanished_reports_expunged() {
@@ -361,7 +362,7 @@ fn capability_advertises_notify_after_auth() {
 	// Pre-auth CAPABILITY must not advertise NOTIFY.
 	let pre = text(&session.command_line("a1 CAPABILITY"));
 	assert!(!pre.contains("NOTIFY"), "{pre}");
-	session.command_line("a2 LOGIN alice secret");
+	session.command_line(&format!("a2 LOGIN alice {}", fixtures::password()));
 	let post = text(&session.command_line("a3 CAPABILITY"));
 	assert!(post.contains("NOTIFY"), "{post}");
 }

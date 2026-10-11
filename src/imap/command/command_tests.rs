@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 
 #[test]
 fn parses_simple_commands() {
@@ -13,24 +14,30 @@ fn parses_simple_commands() {
 #[test]
 fn parses_login_with_quoted_strings() {
 	let parsed = parse(r#"a1 LOGIN "alice" "p@ss w\"ord""#).expect("parses");
-	assert_eq!(
-		parsed.command,
-		Command::Login {
-			username: "alice".into(),
-			password: "p@ss w\"ord".into()
-		}
+	assert!(
+		(parsed.command)
+			== (Command::Login {
+				username: "alice".into(),
+				password: "p@ss w\"ord".into()
+			}),
+		"credential field must match"
 	);
 }
 
 #[test]
 fn parses_login_with_atoms() {
-	let parsed = parse("a1 LOGIN alice@example.org secret").expect("parses");
-	assert_eq!(
-		parsed.command,
-		Command::Login {
-			username: "alice@example.org".into(),
-			password: "secret".into()
-		}
+	let parsed = parse(&format!(
+		"a1 LOGIN alice@example.org {}",
+		fixtures::password()
+	))
+	.expect("parses");
+	assert!(
+		(parsed.command)
+			== (Command::Login {
+				username: "alice@example.org".into(),
+				password: fixtures::password().into()
+			}),
+		"credential field must match"
 	);
 }
 

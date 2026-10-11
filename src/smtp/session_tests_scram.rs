@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 
 pub(super) fn reply_code(action: &Action) -> u16 {
 	match action {
@@ -14,8 +15,11 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 
 fn scram_directory() -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
-	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
+		fixtures::password(),
+		fixtures::salt(),
+		4096,
+	));
 	Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -23,7 +27,7 @@ fn scram_directory() -> Arc<Directory> {
 		)
 		.with_password_hashes([(
 			"alice".to_string(),
-			crate::smtp::auth::tests::hash("secret"),
+			crate::smtp::auth::tests::hash(fixtures::password()),
 		)])
 		.with_scram([("alice".to_string(), stored)]),
 	)
@@ -34,7 +38,7 @@ fn scram_session(inject_nonce: bool) -> Session {
 		.with_directory(scram_directory())
 		.with_tls_active();
 	if inject_nonce {
-		session = session.with_scram_nonce("SN");
+		session = session.with_scram_nonce(fixtures::nonce());
 	}
 	session.command_line("EHLO client.example.org");
 	session
@@ -59,7 +63,7 @@ fn scram_plus_session() -> Session {
 		.with_directory(scram_directory())
 		.with_tls_active()
 		.with_channel_binding(CERT_HASH.to_vec())
-		.with_scram_nonce("SN")
+		.with_scram_nonce(fixtures::nonce())
 		.tap_ehlo()
 }
 
@@ -100,6 +104,7 @@ fn scram_plus_unavailable_without_binding() {
 
 #[test]
 fn scram_plus_wrong_binding_is_rejected() {
+	let nonce = fixtures::nonce();
 	let mut session = scram_plus_session();
 	assert_eq!(
 		reply_code(&session.command_line(&format!(
@@ -110,7 +115,7 @@ fn scram_plus_wrong_binding_is_rejected() {
 	);
 	// client-final whose c= carries the wrong binding data.
 	let wrong = b64_bytes(b"WRONGWRONGWRONGWRONGWRONGWRONG!!");
-	let client_final = format!("c={wrong},r=CNSN,p={}", b64_bytes(&[0u8; 32]));
+	let client_final = format!("c={wrong},r=CN{nonce},p={}", b64_bytes(&[0u8; 32]));
 	assert_eq!(reply_code(&session.auth_line(&b64(&client_final))), 535);
 }
 

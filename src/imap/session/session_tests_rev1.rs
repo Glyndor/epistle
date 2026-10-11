@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 
 #[test]
 fn rev1_capability_advertises_both_revisions() {
@@ -11,7 +12,7 @@ fn rev1_capability_advertises_both_revisions() {
 	);
 	for command in [
 		"c CAPABILITY",
-		"l LOGIN alice secret",
+		&format!("l LOGIN alice {}", fixtures::password()),
 		"c CAPABILITY",
 		"e ENABLE IMAP4rev2",
 		"c CAPABILITY",
@@ -42,7 +43,7 @@ fn rev1_enable_retains_revision_for_connection() {
 		!session.rev2_enabled(),
 		"rejected ENABLE must leave rev1 mode active"
 	);
-	session.command_line("l LOGIN alice secret");
+	session.command_line(&format!("l LOGIN alice {}", fixtures::password()));
 	session.command_line("e ENABLE BOGUS CONDSTORE");
 	assert!(
 		!session.rev2_enabled(),

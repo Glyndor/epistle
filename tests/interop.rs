@@ -115,7 +115,7 @@ where
 /// `tester` account, with a known password, shared by the inbound and IMAP
 /// tests.
 fn directory() -> DirectoryHandle {
-	let hash = epistle::smtp::auth::hash_password("interop-secret").expect("hash password");
+	let hash = epistle::smtp::auth::hash_password(fixtures::password()).expect("hash password");
 	DirectoryHandle::new(
 		Directory::new(
 			["epistle.test".to_string()],
@@ -274,7 +274,11 @@ async fn imap_server_serves_fetch() {
 	let mut tls = tls_client_connect(tcp, "mail.epistle.test", cert_pem.as_bytes()).await;
 
 	read_until(&mut tls, "IMAP4rev2 ready").await;
-	send_line(&mut tls, "a1 LOGIN tester interop-secret").await;
+	send_line(
+		&mut tls,
+		&format!("a1 LOGIN tester {}", fixtures::password()),
+	)
+	.await;
 	read_until(&mut tls, "a1 OK").await;
 	send_line(&mut tls, "a2 SELECT INBOX").await;
 	let select = read_until(&mut tls, "a2 OK").await;
@@ -340,3 +344,8 @@ async fn tls_client_connect(
 		.await
 		.expect("tls handshake")
 }
+
+// Each integration crate uses the shared fixture source.
+#[allow(dead_code)]
+#[path = "../src/test_fixtures.rs"]
+mod fixtures;

@@ -16,6 +16,7 @@
 
 use super::*;
 use crate::smtp::auth::tests::{fixture_password, hash};
+use crate::test_fixtures as fixtures;
 
 fn directory_with_totp(secret: &[u8]) -> Directory {
 	let password = fixture_password().to_string();
@@ -29,7 +30,7 @@ fn directory_with_totp(secret: &[u8]) -> Directory {
 
 #[test]
 fn a_password_ending_in_a_multibyte_character_does_not_panic_with_totp() {
-	let directory = directory_with_totp(&uuid::Uuid::now_v7().into_bytes());
+	let directory = directory_with_totp(&fixtures::bytes::<16>());
 	let fixture = fixture_password().to_string();
 
 	// Illustrative suffixes. The byte-length split happens to
@@ -91,8 +92,8 @@ fn a_valid_code_after_a_multibyte_password_still_authenticates() {
 	// primary password check matches the candidate we present. The
 	// secret is minted per call so no literal reaches the directory's
 	// TOTP slot or the code derivation; the same bytes feed both paths.
-	let secret = uuid::Uuid::now_v7().into_bytes();
-	let multibyte_base = "p\u{00e4}ssw\u{00f6}rd".to_string();
+	let secret = fixtures::bytes::<16>();
+	let multibyte_base = format!("{}äö", fixtures::password());
 	let directory = Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
@@ -122,8 +123,8 @@ fn a_six_digit_tail_that_is_not_all_digits_is_not_a_code() {
 	// `code.parse()` returned `Err` and the call silently failed. The fix
 	// should reject the candidate as a code (return `None`) without parsing
 	// anything, and crucially without panicking on the boundary.
-	let directory = directory_with_totp(&uuid::Uuid::now_v7().into_bytes());
-	let candidate = format!("{}{}", fixture_password(), "secretx12345");
+	let directory = directory_with_totp(&fixtures::bytes::<16>());
+	let candidate = format!("{}x12345", fixture_password());
 	assert!(
 		directory
 			.authenticate("alice", &candidate, crate::config::Protocol::Api)

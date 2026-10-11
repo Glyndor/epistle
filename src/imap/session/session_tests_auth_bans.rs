@@ -7,6 +7,7 @@
 use super::auth::{directory_with_ban_store, unauth};
 use super::text;
 use super::*;
+use crate::test_fixtures as fixtures;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
@@ -31,7 +32,7 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 		tmp.path().to_path_buf(),
 		directory.clone(),
 	)
-	.with_scram_nonce("SN");
+	.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.46".parse().expect("peer")));
 
 	// Invalid base64: the bytes that follow the SASL mechanism
@@ -118,15 +119,18 @@ pub(super) fn scram_directory_with_ban_store(
 	lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
-	let stored =
-		ScramStored::from_credentials(&ScramCredentials::derive("secret", b"saltsalt", 4096));
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
+		fixtures::password(),
+		fixtures::salt(),
+		4096,
+	));
 	let mut directory = Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
 	)
 	.with_password_hashes([(
 		"alice".to_string(),
-		crate::smtp::auth::tests::hash("secret"),
+		crate::smtp::auth::tests::hash(fixtures::password()),
 	)])
 	.with_scram([("alice".to_string(), stored)])
 	.with_ban_store(ban_store);
@@ -148,6 +152,7 @@ pub(super) fn scram_directory_with_ban_store(
 /// could use to distinguish a refusal from a real exchange.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
@@ -163,7 +168,7 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.42".parse().expect("peer")));
 
 	let before = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
@@ -200,7 +205,7 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	// zeros. The wire reply is the same NO a wrong password would
 	// produce.
 	let bad_proof = B64.encode([0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
 	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
@@ -232,6 +237,7 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 /// path uses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_failure_adds_one_strike() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::BanPolicy;
 	use crate::antispam::bans::tests::FakeBanStore;
 
@@ -243,7 +249,7 @@ async fn imap_scram_failure_adds_one_strike() {
 		tmp.path().to_path_buf(),
 		directory.clone(),
 	)
-	.with_scram_nonce("SN");
+	.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.43".parse().expect("peer")));
 
 	let out = text(&session.command_line(&format!(
@@ -256,7 +262,7 @@ async fn imap_scram_failure_adds_one_strike() {
 	// it. The exact shape of the failure is irrelevant: the point is
 	// that the ban store records one strike.
 	let bad_proof = B64.encode([0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
 
@@ -285,6 +291,7 @@ async fn imap_scram_failure_adds_one_strike() {
 /// distinguish its refusal from a wrong password.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_attempts_during_ban_do_not_extend_it() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
@@ -304,7 +311,7 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 		tmp.path().to_path_buf(),
 		directory.clone(),
 	)
-	.with_scram_nonce("SN");
+	.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.44".parse().expect("peer")));
 
 	// A ban refusal at client-first still challenges with a `+` and
@@ -313,7 +320,7 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 	// rejects it because the stored key behind the fake server-first
 	// is all zeros.
 	let bad_proof = B64.encode([0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	for _ in 0..3 {
 		let action = session.command_line(&format!(
 			"a AUTHENTICATE SCRAM-SHA-256 {}",
@@ -368,7 +375,7 @@ async fn imap_scram_client_final_rechecks_ban() {
 		tmp.path().to_path_buf(),
 		directory.clone(),
 	)
-	.with_scram_nonce("SN");
+	.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.45".parse().expect("peer")));
 
 	let challenge = session.command_line(&format!(
@@ -387,7 +394,7 @@ async fn imap_scram_client_final_rechecks_ban() {
 
 	// A valid client-final: the proof matches the real credentials, but
 	// the ban recheck at client-final must refuse it.
-	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
 	assert_eq!(
@@ -473,6 +480,7 @@ pub(super) fn valid_client_final(client_first: &str, server_first: &str, passwor
 /// SCRAM proof produces.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
+	let nonce = fixtures::nonce();
 	use crate::antispam::bans::tests::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
@@ -489,7 +497,7 @@ async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
 	let lookup_counter = crate::smtp::directory_scram_test_counter::fresh();
 	let directory = scram_directory_with_ban_store(ban_store.clone(), Some(lookup_counter.clone()));
 	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 	// A fresh IP, not banned at the IP level, so a missing account
 	// check would let the exchange reach the credential lookup.
 	session.set_peer_ip(Some("203.0.113.50".parse().expect("peer")));
@@ -504,7 +512,7 @@ async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
 		"a banned account must request a continuation, like a normal exchange"
 	);
 	let bad_proof = B64.encode([0u8; 32]);
-	let client_final = format!("c=biws,r=CNSN,p={bad_proof}");
+	let client_final = format!("c=biws,r=CN{nonce},p={bad_proof}");
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a NO"), "{out}");
 	let after = crate::smtp::directory_scram_test_counter::count(&lookup_counter);
@@ -582,7 +590,7 @@ async fn imap_scram_success_clears_ban_store() {
 	);
 	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
 	let mut session = Session::new("mail.example.org", tmp.path().to_path_buf(), directory)
-		.with_scram_nonce("SN");
+		.with_scram_nonce(fixtures::nonce());
 	session.set_peer_ip(Some("203.0.113.51".parse().expect("peer")));
 
 	// Drive a full successful SCRAM exchange: well-formed client-first,
@@ -594,7 +602,7 @@ async fn imap_scram_success_clears_ban_store() {
 	));
 	assert!(challenge.collect_auth, "expected a continuation");
 	let server_first = decode_server_first(&text(&challenge));
-	let client_final = valid_client_final("n=alice,r=CN", &server_first, "secret");
+	let client_final = valid_client_final("n=alice,r=CN", &server_first, fixtures::password());
 	let out = text(&session.auth_response(&B64.encode(&client_final)));
 	assert!(out.contains("a OK"), "{out}");
 

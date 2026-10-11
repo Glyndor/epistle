@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_fixtures as fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt;
@@ -8,9 +9,8 @@ use crate::storage::FsSpool;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-// The bearer token used by every API test is generated fresh at startup. A literal
-// bound to a constant named TOKEN triggered CodeQL `rust/hard-coded-cryptographic-value`.
-pub(super) static TOKEN: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().to_string());
+// Share the runtime bearer token with both sides of each request.
+pub(super) static TOKEN: LazyLock<String> = LazyLock::new(|| fixtures::api_token().to_string());
 
 fn sha256_hash(token: &str) -> String {
 	let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());

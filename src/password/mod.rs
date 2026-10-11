@@ -98,11 +98,12 @@ pub fn validate(password: &str) -> Result<(), Rejection> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::test_fixtures as fixtures;
 
 	#[test]
 	fn accepts_a_strong_in_range_ascii_password() {
-		// 16 chars, printable ASCII incl. space and punctuation, not breached.
-		assert_eq!(validate("tR9 wq!zP4-mK7vX"), Ok(()));
+		// Runtime credentials must pass the same policy as real account passwords.
+		assert_eq!(validate(fixtures::password()), Ok(()));
 	}
 
 	#[test]

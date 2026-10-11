@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
+use crate::test_fixtures as fixtures;
 
 fn ip(text: &str) -> std::net::IpAddr {
 	text.parse().expect("ip")
@@ -46,46 +47,54 @@ fn key(label: &str, secret: &str) -> ApiKey {
 #[test]
 fn configured_token_still_authorizes() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let state = state_with_keys(dir.path(), "the-token", Vec::new());
-	assert!(state.authorizes("the-token", None, &[Scope::Read]));
-	assert!(!state.authorizes("wrong-token", None, &[Scope::Read]));
+	let state = state_with_keys(dir.path(), fixtures::api_token(), Vec::new());
+	assert!(state.authorizes(fixtures::api_token(), None, &[Scope::Read]));
+	assert!(!state.authorizes(&fixtures::fresh_secret(), None, &[Scope::Read]));
 }
 
 #[test]
 fn valid_api_key_authorizes() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let state = state_with_keys(dir.path(), "the-token", vec![key("ci", "key-secret")]);
-	assert!(state.authorizes("key-secret", None, &[Scope::Read]));
+	let state = state_with_keys(
+		dir.path(),
+		fixtures::api_token(),
+		vec![key("ci", fixtures::api_key())],
+	);
+	assert!(state.authorizes(fixtures::api_key(), None, &[Scope::Read]));
 	// The configured token also still works.
-	assert!(state.authorizes("the-token", None, &[Scope::Read]));
+	assert!(state.authorizes(fixtures::api_token(), None, &[Scope::Read]));
 }
 
 #[test]
 fn wrong_api_key_rejected() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let state = state_with_keys(dir.path(), "the-token", vec![key("ci", "key-secret")]);
-	assert!(!state.authorizes("not-the-key", None, &[Scope::Read]));
+	let state = state_with_keys(
+		dir.path(),
+		fixtures::api_token(),
+		vec![key("ci", fixtures::api_key())],
+	);
+	assert!(!state.authorizes(&fixtures::fresh_secret(), None, &[Scope::Read]));
 }
 
 #[test]
 fn expired_api_key_rejected() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let mut expired = key("ci", "key-secret");
+	let mut expired = key("ci", fixtures::api_key());
 	expired.expires_at = Some(1); // long past
-	let state = state_with_keys(dir.path(), "the-token", vec![expired]);
-	assert!(!state.authorizes("key-secret", None, &[Scope::Read]));
+	let state = state_with_keys(dir.path(), fixtures::api_token(), vec![expired]);
+	assert!(!state.authorizes(fixtures::api_key(), None, &[Scope::Read]));
 }
 
 #[test]
 fn ip_restricted_api_key_enforced() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let mut restricted = key("ci", "key-secret");
+	let mut restricted = key("ci", fixtures::api_key());
 	restricted.ip_cidr = Some("10.0.0.0/8".to_string());
-	let state = state_with_keys(dir.path(), "the-token", vec![restricted]);
-	assert!(state.authorizes("key-secret", Some(ip("10.1.2.3")), &[Scope::Read]));
-	assert!(!state.authorizes("key-secret", Some(ip("192.0.2.1")), &[Scope::Read]));
+	let state = state_with_keys(dir.path(), fixtures::api_token(), vec![restricted]);
+	assert!(state.authorizes(fixtures::api_key(), Some(ip("10.1.2.3")), &[Scope::Read]));
+	assert!(!state.authorizes(fixtures::api_key(), Some(ip("192.0.2.1")), &[Scope::Read]));
 	// A restricted key with no known client IP cannot be satisfied.
-	assert!(!state.authorizes("key-secret", None, &[Scope::Read]));
+	assert!(!state.authorizes(fixtures::api_key(), None, &[Scope::Read]));
 }
 
 /// `owns_address` must return `false` when no directory has been attached
@@ -94,7 +103,7 @@ fn ip_restricted_api_key_enforced() {
 #[test]
 fn owns_address_is_fail_closed_without_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let state = state_with_keys(dir.path(), "the-token", Vec::new());
+	let state = state_with_keys(dir.path(), fixtures::api_token(), Vec::new());
 	let address =
 		crate::smtp::address::Address::parse("alice@example.org").expect("address parses");
 	// No directory attached: every owns_address call is `false`, even for an
@@ -131,7 +140,8 @@ fn owns_address_consults_attached_directory() {
 		)
 		.expect("open store"),
 	);
-	let state = state_with_keys(dir.path(), "the-token", Vec::new()).with_directory(store.handle());
+	let state = state_with_keys(dir.path(), fixtures::api_token(), Vec::new())
+		.with_directory(store.handle());
 	let owned = crate::smtp::address::Address::parse("alice@example.org").expect("address parses");
 	let foreign = crate::smtp::address::Address::parse("bob@example.org").expect("address parses");
 	let case_variant =

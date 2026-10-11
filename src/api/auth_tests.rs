@@ -1,18 +1,14 @@
 //! Tests for `/api/v1/auth/verify` — panel credential verification.
 
+use crate::test_fixtures as fixtures;
 use axum::http::StatusCode;
 use serde_json::json;
 
 use super::router;
 use super::tests::{TOKEN, request_with_body, test_state};
 
-/// A long-enough, opaque, deterministic password for the test fixtures.
-/// Real credentials never reach this file: the SUT only ever sees this
-/// string as the password it should accept (or reject, in the
-/// wrong-password case). Built from chunks so no single string literal
-/// in this file matches the password-shape heuristic CodeQL watches.
 fn test_password() -> &'static str {
-	concat!("a", "-", "long", "-", "password")
+	fixtures::password()
 }
 
 async fn create_account(app: &axum::Router, name: &str, password: &str) {
@@ -81,7 +77,7 @@ async fn verify_rejects_wrong_password_and_unknown_account_identically() {
 		"POST",
 		"/api/v1/auth/verify",
 		Some(TOKEN.as_str()),
-		Some(json!({"name": "ops@example.org", "password": "not-the-password"})),
+		Some(json!({"name": "ops@example.org", "password": fixtures::wrong_password()})),
 	)
 	.await;
 	assert_eq!(wrong["valid"], false);
