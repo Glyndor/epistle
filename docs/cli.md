@@ -752,7 +752,8 @@ retires an older previous selector first, since the state holds only one.
 | `epistle account address add N a@b` / `epistle account address remove N a@b` | Add or remove a delivery address for the account. Address validation reuses the checks `account-add` runs (malformed, foreign domain, conflict with another account). Removing the last remaining address is refused. |
 | `epistle account quota N SIZE\|none` | Set the storage quota. The size accepts `K`, `M`, `G`, `T` suffixes (`500M`, `10G`, `1T`); `none` clears the quota back to the server default. Falls through to the domain quota and then the server default when the account's own quota is unset. |
 | `epistle account protocols N LIST\|all` | Restrict which authentication protocols the account may sign in through. `LIST` is a comma-separated list of protocol names (`imap,smtp,api,webdav`); `all` clears the restriction. |
-| `epistle account show N` | Print the public view of the account (name, addresses, disabled, quota, protocols). Never the password hash, SCRAM credentials, or TOTP secret. |
+| `epistle account show N` | Print the public view of the account (name, log id, addresses, disabled, quota, protocols). Never the password hash, SCRAM credentials, or TOTP secret. The log id is the `acct-<12 hex>` pseudonym the server logs use instead of the name. |
+| `epistle account find-log-id acct-…` | Print the account (or accounts) whose log id is the one given, so a pseudonym found in a log line can be traced back. It uses this server's `log-pseudonym.key`, so it also matches a login that was an address. |
 | `epistle app-password-create --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
 | `epistle app-passwords [--account N]` | List app passwords (label, expiry, IP restriction). |
 | `epistle app-password-revoke --account N --label L` | Revoke an app password. |

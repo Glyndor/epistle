@@ -20,6 +20,7 @@ use crate::cli::util::read_line;
 /// deliberately omitted.
 pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 	let _ = writeln!(out, "name: {}", account.name);
+	let _ = writeln!(out, "log_id: {}", crate::log_id::account(&account.name));
 	let _ = writeln!(out, "source: dynamic");
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
 	let _ = writeln!(
@@ -179,6 +180,36 @@ pub(crate) fn protocols_with_store(
 		}
 		Err(error) => handle_error(name, error),
 	}
+}
+
+/// Print the name of every account whose log pseudonym is `id`. A login
+/// that was an address (SMTP and IMAP clients often present one) is
+/// pseudonymised as a whole, so an account also matches when one of its
+/// addresses does. A miss prints nothing and fails.
+pub(crate) fn find_log_id_with_store(
+	store: &AccountStore,
+	id: &str,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let id = id.trim().to_ascii_lowercase();
+	let mut views = store.account_views();
+	views.sort_by(|a, b| a.0.cmp(&b.0));
+	let mut found = false;
+	for (name, addresses, _) in &views {
+		let matches = crate::log_id::account(name) == id
+			|| addresses
+				.iter()
+				.any(|address| crate::log_id::account(address) == id);
+		if matches {
+			found = true;
+			let _ = writeln!(out, "{name}");
+		}
+	}
+	if !found {
+		style::error("no account matches that log id on this server");
+		return ExitCode::FAILURE;
+	}
+	ExitCode::SUCCESS
 }
 
 pub(crate) fn show_with_store(
