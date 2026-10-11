@@ -127,5 +127,5 @@ fn check_lists_items_under_the_area_line_and_status_does_not() {
 #[test]
 fn status_covers_every_area_in_a_stable_order() {
 	let names: Vec<_> = CheckArea::ALL.iter().map(|area| area.name()).collect();
-	assert_eq!(names, ["config", "ports", "tls", "dns"]);
+	assert_eq!(names, ["config", "ports", "tls", "dns", "db"]);
 }

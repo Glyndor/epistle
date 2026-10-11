@@ -8,6 +8,7 @@
 
 mod clock;
 mod config_area;
+mod db_area;
 mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
@@ -47,6 +48,8 @@ pub enum CheckArea {
 	Tls,
 	/// Published DNS records match what epistle expects, including the DKIM key.
 	Dns,
+	/// The configured database answers `SELECT 1`.
+	Db,
 }
 
 impl CheckArea {
@@ -56,6 +59,7 @@ impl CheckArea {
 		CheckArea::Ports,
 		CheckArea::Tls,
 		CheckArea::Dns,
+		CheckArea::Db,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -65,6 +69,7 @@ impl CheckArea {
 			CheckArea::Ports => "ports",
 			CheckArea::Tls => "tls",
 			CheckArea::Dns => "dns",
+			CheckArea::Db => "db",
 		}
 	}
 }
@@ -183,6 +188,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Ports => ports::check(ctx).await,
 		CheckArea::Tls => tls_area::check(ctx).await,
 		CheckArea::Dns => dns_area::check(ctx).await,
+		CheckArea::Db => db_area::check(ctx).await,
 	}
 }
 
