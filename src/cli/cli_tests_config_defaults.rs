@@ -40,7 +40,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Status { config, .. }
 		| Command::Check { config, .. }
 		| Command::Relay { config, .. }
-		| Command::Dns { config, .. } => Some(config),
+		| Command::Dns { config, .. }
+		| Command::Storage { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

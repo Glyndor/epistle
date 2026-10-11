@@ -121,3 +121,13 @@ pub(super) fn test_config(extra: &str) -> (tempfile::TempDir, tempfile::NamedTem
 	.unwrap();
 	(dir, file)
 }
+
+/// The observable result of one command run in a test.
+#[cfg(test)]
+pub(super) struct Run {
+	pub result: Result<ExitCode, String>,
+	pub out: String,
+	pub status: String,
+	pub before: String,
+	pub after: String,
+}

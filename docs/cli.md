@@ -232,6 +232,26 @@ the value. `test` lists the zone's records through the provider (a read only cal
 10 second limit) and reports the count. Every mutation accepts `--dry-run` and
 `--config FILE`.
 
+## Blob storage (`epistle storage blobs`)
+
+```sh
+epistle storage blobs show [--json]
+epistle storage blobs set fs
+epistle storage blobs set s3 --endpoint https://s3.us-east-1.amazonaws.com \
+  --bucket mail-blobs --region us-east-1 --access-key-id AKIA... --secret-env S3_SECRET
+```
+
+Chooses where uploaded JMAP blobs live: `fs` (under `<data_dir>/blobs/`, the
+default) or an S3-compatible bucket. The secret access key is referenced with
+`--secret-env VAR` or `--secret-file FILE` (0600), never given inline, and `show`
+prints only where it comes from.
+
+**Switching does not migrate existing blobs.** Blobs stored in the previous backend
+stay there and stop being served, and the command says so every time the backend
+changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
+file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
+never refused. Supports `--dry-run` and `--config FILE`.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

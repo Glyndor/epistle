@@ -40,6 +40,7 @@ mod stack_socket;
 mod stack_started;
 mod stack_update;
 mod status;
+mod storage_blobs;
 mod style;
 mod suppression;
 #[cfg(test)]
@@ -492,6 +493,18 @@ pub enum Command {
 		/// DNS administration area.
 		#[command(subcommand)]
 		action: dns_provider::DnsCli,
+	},
+	/// Manage where uploaded blobs are stored.
+	Storage {
+		/// Configuration file; accepted before or after the storage action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Storage administration area.
+		#[command(subcommand)]
+		action: storage_blobs::StorageCli,
 	},
 	/// Manage outbound smarthost (relay) rules.
 	Relay {

@@ -376,6 +376,11 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::dns_provider::run(&config, action, dry_run),
+			Command::Storage {
+				config,
+				action,
+				dry_run,
+			} => super::storage_blobs::run(&config, action, dry_run),
 			Command::Relay {
 				config,
 				action,
@@ -418,6 +423,7 @@ impl Command {
 			| Command::Check { .. }
 			| Command::Relay { .. }
 			| Command::Dns { .. }
+			| Command::Storage { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
