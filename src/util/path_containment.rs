@@ -166,10 +166,7 @@ pub fn contained_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
 /// refused because creating through it would write outside `dir`. `dir` must
 /// come from [`contained`] or from this function.
 pub fn contained_subdir(dir: &Path, name: &str) -> io::Result<PathBuf> {
-	let child = match contained_child(dir, name) {
-		Ok(child) => child,
-		Err(error) => return Err(error),
-	};
+	let child = contained_child(dir, name)?;
 	match child.canonicalize() {
 		Ok(real) if real.starts_with(dir) => Ok(real),
 		Ok(_) => Err(escapes_root()),
