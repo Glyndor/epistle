@@ -53,7 +53,7 @@ an escape sequence or spinner frame were ever written there, so they are pinned 
 | `epistle restore` | Replay a backup tar.gz (read from stdin) over `data_dir` and, when a database is configured, into the database. Reads the archive from stdin; a configured database that cannot be loaded is a hard error. |
 | `epistle export --account N` | An mbox stream (`From MAILER-DAEMON@localhost` separators). |
 | `epistle storage-keygen` | A single base64 32-byte at-rest key. |
-| `epistle oauth-keygen` | A PKCS#8 ES256 private key plus the matching public point. |
+| `epistle oauth-keygen --out F` | Write a PKCS#8 ES256 private key plus the matching public point to `F` (mode 0600, an existing file is refused). The private key is never printed. |
 
 `backup`'s `warnings` sink (the externally-referenced paths that are not in the
 archive) is also stderr, by the same rule.

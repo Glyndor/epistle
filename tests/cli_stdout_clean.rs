@@ -83,17 +83,30 @@ fn storage_keygen_stdout_is_clean() {
 	);
 }
 
-/// `oauth-keygen`: four lines on stdout (two `# ...` comment lines plus the
-/// base64 private and public points). All of them must reach the operator's
-/// terminal byte-for-byte; no escape codes anywhere on stdout.
+/// `oauth-keygen --out FILE` writes the pair to the file and prints only a
+/// confirmation: the private key must not appear on stdout, and stdout carries
+/// no escape codes.
 #[test]
-fn oauth_keygen_stdout_is_clean() {
-	let (stdout, _stderr, status) = run_capture(&["oauth-keygen"]);
+fn oauth_keygen_keeps_the_private_key_off_stdout() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let out = dir.path().join("oauth.toml");
+	let out_arg = out.to_str().expect("utf8 path");
+	let (stdout, _stderr, status) = run_capture(&["oauth-keygen", "--out", out_arg]);
 	assert!(status.success(), "oauth-keygen exit code: {status:?}");
 	assert_eq!(
 		escape_offset(&stdout),
 		None,
 		"oauth-keygen stdout carries an ANSI escape sequence at this byte offset"
+	);
+	let file = std::fs::read_to_string(&out).expect("key file");
+	let private = file
+		.lines()
+		.find_map(|line| line.strip_prefix("signing_key = \""))
+		.and_then(|rest| rest.strip_suffix('"'))
+		.expect("signing_key line");
+	assert!(
+		!String::from_utf8_lossy(&stdout).contains(private),
+		"the private key must not be printed on stdout"
 	);
 }
 

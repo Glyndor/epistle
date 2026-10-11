@@ -86,14 +86,46 @@ fn archive_names(bytes: &[u8]) -> Vec<String> {
 	names
 }
 
+/// One warning per skipped path, with the account directory shown as its log
+/// pseudonym (`acct-<12 hex>`) and the account name nowhere in stderr. The
+/// pseudonym key is per process here, so the test matches the shape.
 fn assert_warning_once(output: &Output, path: &Path) {
-	let warning = format!("skipping non-regular data path {}", path.display());
+	let text = path.display().to_string();
+	let Some((head, tail)) = text.split_once("accounts/") else {
+		// Not under an account directory: shown verbatim.
+		let warning = format!("skipping non-regular data path {text}");
+		assert_eq!(
+			String::from_utf8_lossy(&output.stderr)
+				.matches(&warning)
+				.count(),
+			1,
+			"each skipped path must produce exactly one warning"
+		);
+		return;
+	};
+	let (account, rest) = match tail.split_once('/') {
+		Some((account, rest)) => (account, format!("/{rest}")),
+		None => (tail, String::new()),
+	};
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let prefix = format!("skipping non-regular data path {head}accounts/acct-");
+	let matching = stderr
+		.lines()
+		.filter(|line| {
+			line.split_once(prefix.as_str()).is_some_and(|(_, after)| {
+				after.len() == 12 + rest.len()
+					&& after[..12].chars().all(|c| c.is_ascii_hexdigit())
+					&& after.ends_with(rest.as_str())
+			})
+		})
+		.count();
 	assert_eq!(
-		String::from_utf8_lossy(&output.stderr)
-			.matches(&warning)
-			.count(),
-		1,
-		"each skipped path must produce exactly one warning"
+		matching, 1,
+		"each skipped path must produce exactly one warning with the account pseudonymised"
+	);
+	assert!(
+		!stderr.contains(&format!("accounts/{account}")),
+		"the warning must not carry the account name"
 	);
 }
 

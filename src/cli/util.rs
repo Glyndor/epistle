@@ -114,25 +114,34 @@ pub(super) fn storage_keygen() -> ExitCode {
 	}
 }
 
-/// `epistle oauth-keygen`: print a fresh ES256 key pair for the built-in OAuth
-/// authorization server. The base64 PKCS#8 private key goes in `[oauth]
-/// signing_key`; the base64 public point goes in `[oauth] public_key` (they are
-/// a pair, so issued tokens verify with the configured verifier). Mirrors
-/// `dkim-keygen`/`storage-keygen`; never writes into `data_dir`.
-pub(super) fn oauth_keygen() -> ExitCode {
-	match generate_oauth_keypair() {
-		Some((private_b64, public_b64)) => {
-			println!("# [oauth] signing_key (base64 PKCS#8 ES256 private key):");
-			println!("{private_b64}");
-			println!("# [oauth] public_key (base64 ES256 public point), algorithm = \"ES256\":");
-			println!("{public_b64}");
-			ExitCode::SUCCESS
-		}
-		None => {
-			super::style::error("system CSPRNG unavailable");
-			ExitCode::FAILURE
-		}
+/// `epistle oauth-keygen --out FILE`: generate a fresh ES256 key pair for the
+/// built-in OAuth authorization server and write it to `out`, readable by the
+/// owner only. The base64 PKCS#8 private key goes in `[oauth] signing_key`, the
+/// base64 public point in `[oauth] public_key` (a pair, so issued tokens verify
+/// with the configured verifier). The private key is never printed, so it does
+/// not land in a terminal scrollback, a shell pipe or a CI log. An existing
+/// file is refused, like `dkim-keygen`.
+pub(super) fn oauth_keygen(out: &std::path::Path) -> ExitCode {
+	if out.exists() {
+		super::style::error(format_args!(
+			"{} already exists, refusing to overwrite",
+			out.display()
+		));
+		return ExitCode::FAILURE;
 	}
+	let Some((private_b64, public_b64)) = generate_oauth_keypair() else {
+		super::style::error("system CSPRNG unavailable");
+		return ExitCode::FAILURE;
+	};
+	let text = format!(
+		"# Paste into [oauth]. signing_key is secret.\nsigning_key = \"{private_b64}\"\npublic_key = \"{public_b64}\"\nalgorithm = \"ES256\"\n"
+	);
+	if let Err(error) = crate::storage::write_secret(out, text.as_bytes()) {
+		super::style::error(format_args!("writing {}: {error}", out.display()));
+		return ExitCode::FAILURE;
+	}
+	println!("wrote the OAuth key pair to {} (mode 0600)", out.display());
+	ExitCode::SUCCESS
 }
 
 /// Generate a fresh ES256 key pair as `(private_b64, public_b64)`: the base64
