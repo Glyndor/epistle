@@ -25,8 +25,20 @@ epistle (0.10.0) unstable; urgency=medium
   * Commands that need the database (ban, account-remove, check db) work
     from the host when the database only listens inside the containers,
     and a listener change recreates mail so its published ports follow.
+  * Logs name an account by a keyed pseudonym instead of its name;
+    epistle account show prints it and epistle account find-log-id maps
+    it back.
+  * epistle oauth-keygen writes the key pair to the file given with
+    --out (mode 0600) and no longer prints the private key; scripts that
+    read it from standard output must pass --out.
+  * Credentials sent to DNS providers and OIDC endpoints only travel over
+    https, enforced by type; DigitalOcean pagination no longer follows a
+    link to another origin, and Google Cloud DNS request paths are right.
+  * Every path under the data directory is checked to stay inside it.
+  * IMAP LOGIN and AUTHENTICATE credentials never travel through the
+    general command type.
 
- -- Glyndor <packages@glyndor.net>  Sun, 11 Oct 2026 14:16:42 +0000
+ -- Glyndor <packages@glyndor.net>  dom, 11 oct 2026 19:24:44 +0000
 
 epistle (0.9.2) unstable; urgency=medium
 
