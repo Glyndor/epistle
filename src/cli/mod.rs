@@ -27,6 +27,7 @@ mod serve_smtp_state;
 mod serve_tasks;
 mod serve_tls;
 mod service;
+mod service_edit;
 mod srv;
 mod stack;
 mod stack_socket;
@@ -450,6 +451,9 @@ pub enum Command {
 		/// Configuration file; accepted before or after the service action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
 		/// Listener administration action.
 		#[command(subcommand)]
 		action: service::ServiceCli,

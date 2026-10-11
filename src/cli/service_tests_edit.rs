@@ -1,5 +1,7 @@
 use super::*;
+use crate::config::Config;
 use crate::config::ListenerKind;
+use std::fs;
 
 fn fixture(extra: &str) -> tempfile::NamedTempFile {
 	let file = tempfile::NamedTempFile::new().unwrap();
@@ -146,5 +148,42 @@ fn service_listener_invalid_candidate_leaves_file_untouched() {
 	assert!(
 		fs::read(file.path()).unwrap() == original.as_bytes(),
 		"invalid candidate must leave the file untouched"
+	);
+}
+
+#[test]
+fn service_listener_change_preserves_exact_commented_text() {
+	let file = fixture("# operator limits\nquota_bytes  =  123 # storage cap");
+	let original = fs::read_to_string(file.path()).unwrap();
+	set_listener_enabled(file.path(), ListenerKind::Imap, true).unwrap();
+	let expected = format!("{original}\n[[listeners]]\nkind = \"imap\"\naddr = \"0.0.0.0\"\n");
+	assert!(
+		fs::read_to_string(file.path()).unwrap() == expected,
+		"service edits must preserve comments and unrelated formatting byte-for-byte"
+	);
+}
+
+#[test]
+fn service_inline_listener_array_keeps_comments_and_exact_text() {
+	let file = fixture("");
+	let original = "# deployment\nhostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\nlisteners = [{kind = 'smtp', addr = '0.0.0.0'}] # sockets\n";
+	fs::write(file.path(), original).unwrap();
+	assert_eq!(
+		set_listener_enabled(file.path(), ListenerKind::WebDav, true).ok(),
+		Some(true),
+		"inline listener edits must add the requested service"
+	);
+	let expected = original.replace(
+		"}] # sockets",
+		"}, { kind = \"web-dav\", addr = \"0.0.0.0\" }] # sockets",
+	);
+	assert!(
+		fs::read_to_string(file.path()).unwrap() == expected,
+		"inline listener edits must preserve exact comments and unrelated formatting"
+	);
+	assert!(set_listener_enabled(file.path(), ListenerKind::WebDav, false).unwrap());
+	assert!(
+		fs::read_to_string(file.path()).unwrap() == original,
+		"inline listener removal must restore exact original text"
 	);
 }

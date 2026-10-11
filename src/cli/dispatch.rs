@@ -348,7 +348,11 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
-			Command::Service { config, action } => super::service::run(&config, action),
+			Command::Service {
+				config,
+				action,
+				dry_run,
+			} => super::service::run(&config, action, dry_run),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {

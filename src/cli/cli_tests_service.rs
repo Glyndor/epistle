@@ -7,6 +7,7 @@ fn service_commands_parse_and_delegate_with_packaged_config() {
 		vec!["list"],
 		vec!["list", "--json"],
 		vec!["enable", "imap"],
+		vec!["enable", "imap", "--dry-run"],
 		vec!["disable", "imaps"],
 	] {
 		let mut args = vec!["epistle", "service"];
@@ -29,6 +30,7 @@ fn service_commands_require_delegation() {
 	for action in [
 		vec!["list"],
 		vec!["enable", "imap"],
+		vec!["enable", "imap", "--dry-run"],
 		vec!["disable", "imap"],
 	] {
 		let mut args = vec!["epistle", "service"];

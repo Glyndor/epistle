@@ -8,8 +8,7 @@ mod file;
 mod restart;
 
 pub use restart::after_change;
-#[cfg(test)]
-pub(super) use restart::after_change_with;
+pub(in crate::cli) use restart::after_change_with;
 
 use std::path::{Path, PathBuf};
 

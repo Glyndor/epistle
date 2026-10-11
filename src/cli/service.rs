@@ -89,7 +89,7 @@ struct Row {
 	bind: IpAddr,
 }
 
-fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
+pub(super) fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
 	if kind == ListenerKind::Api {
 		IpAddr::V4(Ipv4Addr::LOCALHOST)
 	} else {
@@ -160,8 +160,8 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	Ok(())
 }
 
-pub(super) fn run(path: &Path, action: ServiceCli) -> ExitCode {
-	match execute(path, action) {
+pub(super) fn run(path: &Path, action: ServiceCli, dry_run: bool) -> ExitCode {
+	match execute(path, action, dry_run) {
 		Ok(code) => code,
 		Err(error) => {
 			super::style::error(error);
@@ -170,21 +170,43 @@ pub(super) fn run(path: &Path, action: ServiceCli) -> ExitCode {
 	}
 }
 
-fn execute(path: &Path, action: ServiceCli) -> Result<ExitCode, String> {
+fn execute(path: &Path, action: ServiceCli, dry_run: bool) -> Result<ExitCode, String> {
+	execute_with(
+		path,
+		action,
+		dry_run,
+		&mut std::io::stdout().lock(),
+		&mut super::style::stderr(),
+		super::stack::run,
+	)
+}
+
+fn execute_with(
+	path: &Path,
+	action: ServiceCli,
+	dry_run: bool,
+	out: &mut impl Write,
+	err: &mut impl Write,
+	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
+) -> Result<ExitCode, String> {
 	let (name, enabled) = match action {
 		ServiceCli::List { json } => {
 			let config = Config::load(path).map_err(|e| e.to_string())?;
-			list(&config, json, &mut std::io::stdout().lock())?;
+			list(&config, json, out)?;
 			return Ok(ExitCode::SUCCESS);
 		}
 		ServiceCli::Enable { name } => (name, true),
 		ServiceCli::Disable { name } => (name, false),
 	};
-	let changed =
-		super::init::set_listener_enabled(path, name.kind(), enabled).map_err(|e| e.to_string())?;
+	let document = super::service_edit::listener_document(path, name.kind(), enabled)?;
+	if dry_run {
+		write!(out, "{}", document.dry_run()?).map_err(|error| error.to_string())?;
+		return Ok(ExitCode::SUCCESS);
+	}
+	let config = document.config()?;
+	let outcome = document.commit()?;
 	let state = if enabled { "enabled" } else { "disabled" };
-	let mut err = super::style::stderr();
-	if !changed {
+	if outcome == super::config_edit::Outcome::Unchanged {
 		writeln!(
 			err,
 			"{} is already {state}; nothing changed.",
@@ -194,17 +216,11 @@ fn execute(path: &Path, action: ServiceCli) -> Result<ExitCode, String> {
 		return Ok(ExitCode::SUCCESS);
 	}
 	writeln!(err, "{} {state}.", name.as_str()).map_err(|e| e.to_string())?;
-	let config = Config::load(path).map_err(|e| e.to_string())?;
-	if super::init::update_listener_ports(&config.data_dir, &config.listeners)
-		.map_err(|e| e.to_string())?
-	{
-		return Ok(super::stack::run(
-			&config,
-			super::stack::StackAction::Restart {
-				service: Some("mail".into()),
-			},
-		));
-	}
-	writeln!(err, "The server must be restarted.").map_err(|e| e.to_string())?;
-	Ok(ExitCode::SUCCESS)
+	super::init::update_listener_ports(&config.data_dir, &config.listeners)
+		.map_err(|error| error.to_string())?;
+	super::config_edit::after_change_with(&config, outcome, true, err, restart)
 }
+
+#[cfg(test)]
+#[path = "service_tests_command.rs"]
+mod tests_command;
