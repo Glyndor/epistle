@@ -81,8 +81,13 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 }
 
 /// Whether a certificate should be (re)issued now: absent, unreadable, or
-/// within `renew_before_days` of its assumed expiry.
+/// within `renew_before_days` of its X.509 expiry. If parsing fails, assume
+/// a 90-day lifetime from the file modification time.
 pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> bool {
+	if let Some(expires) = certificate_expiry(&cert_path(data_dir)) {
+		let window = renew_before_days.saturating_mul(86_400);
+		return now_secs >= expires.saturating_sub(window);
+	}
 	let Ok(meta) = fs::metadata(cert_path(data_dir)) else {
 		return true;
 	};
@@ -93,8 +98,23 @@ pub fn needs_renewal(data_dir: &Path, renew_before_days: u64, now_secs: u64) -> 
 		.duration_since(UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	let renew_at = issued + LIFETIME_DAYS.saturating_sub(renew_before_days) * 86_400;
+	let renew_at = issued.saturating_add(
+		LIFETIME_DAYS
+			.saturating_sub(renew_before_days)
+			.saturating_mul(86_400),
+	);
 	now_secs >= renew_at
+}
+
+fn certificate_expiry(path: &Path) -> Option<u64> {
+	use rustls_pki_types::CertificateDer;
+	use rustls_pki_types::pem::PemObject;
+	use x509_parser::prelude::FromDer;
+
+	// The leaf is first in the persisted ACME certificate chain.
+	let der = CertificateDer::from_pem_file(path).ok()?;
+	let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der.as_ref()).ok()?;
+	Some(u64::try_from(cert.validity().not_after.timestamp()).unwrap_or(0))
 }
 
 fn now_secs() -> u64 {
@@ -263,3 +283,7 @@ mod tests {
 		assert!(!needs_renewal(dir.path(), 30, 0));
 	}
 }
+
+#[cfg(test)]
+#[path = "renew_tests_expiry.rs"]
+mod tests_expiry;
