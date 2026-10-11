@@ -830,7 +830,10 @@ endpoint = "ovh-eu"                          # ovh-eu (default) | ovh-ca | ovh-u
 - **Endpoints.** `ovh-eu` resolves to `https://eu.api.ovh.com/1.0`,
   `ovh-ca` to `https://ca.api.ovh.com/1.0`, `ovh-us` to
   `https://api.us.ovhcloud.com/1.0`. A full URL is also accepted as the
-  `endpoint` value (e.g. for a private gateway). Each region has separate
+  `endpoint` value (e.g. for a private gateway), but it must be `https://`:
+  the application key, the consumer key and the signature travel with every
+  call, so a cleartext endpoint builds no provider (the same fail-closed path
+  as a missing credential). Each region has separate
   credentials; do not reuse an EU `consumer_key` against the US API.
 - **Records are id-addressed.** `upsert` lists records of `(fieldType,
   subDomain)` first, then PUTs the existing id (or POSTs a new one). After

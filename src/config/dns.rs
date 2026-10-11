@@ -200,7 +200,9 @@ impl Dns {
 				let application_secret = self.aws_secret()?;
 				let consumer_key = self.consumer_key()?;
 				let secret = ScopedSecret::new(&self.zone, consumer_key);
-				let base = crate::dns::ovh::resolve_base(self.endpoint.as_deref());
+				// A non-https endpoint fails closed like missing credentials:
+				// no provider rather than one that would send its keys in clear.
+				let base = crate::dns::ovh::resolve_base(self.endpoint.as_deref()).ok()?;
 				Some(Arc::new(
 					OvhProvider::new(application_key, application_secret, secret).with_base(base),
 				))

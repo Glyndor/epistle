@@ -8,15 +8,19 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::State;
-use axum::http::{Method, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 
 use crate::net::HttpsUrl;
 
 /// The request lines seen so far, as `"METHOD /path?query"`.
 pub(super) type Seen = Arc<Mutex<Vec<String>>>;
 
+/// The headers of each request, in the same order as [`Seen`].
+pub(super) type Headers = Arc<Mutex<Vec<HeaderMap>>>;
+
 struct Script {
 	seen: Seen,
+	headers: Headers,
 	bodies: Vec<String>,
 }
 
@@ -24,7 +28,9 @@ async fn record(
 	State(script): State<Arc<Script>>,
 	method: Method,
 	uri: Uri,
+	headers: HeaderMap,
 ) -> (StatusCode, String) {
+	script.headers.lock().unwrap().push(headers);
 	let mut seen = script.seen.lock().unwrap();
 	let index = seen.len();
 	seen.push(format!(
@@ -44,9 +50,17 @@ async fn record(
 /// every request after it. Returns the server's loopback base (no path) and the
 /// shared record of requests.
 pub(super) async fn probe(bodies: &[&str]) -> (HttpsUrl, Seen) {
+	let (base, seen, _) = probe_with_headers(bodies).await;
+	(base, seen)
+}
+
+/// Like [`probe`], and also records every request's headers.
+pub(super) async fn probe_with_headers(bodies: &[&str]) -> (HttpsUrl, Seen, Headers) {
 	let seen = Seen::default();
+	let headers = Headers::default();
 	let script = Arc::new(Script {
 		seen: seen.clone(),
+		headers: headers.clone(),
 		bodies: bodies.iter().map(|b| (*b).to_string()).collect(),
 	});
 	let app = Router::new().fallback(record).with_state(script);
@@ -56,7 +70,7 @@ pub(super) async fn probe(bodies: &[&str]) -> (HttpsUrl, Seen) {
 		let _ = axum::serve(listener, app).await;
 	});
 	let base = HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap();
-	(base, seen)
+	(base, seen, headers)
 }
 
 /// `base` with `path` (starting with `/`) appended, for providers whose API
