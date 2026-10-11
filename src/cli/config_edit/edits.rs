@@ -50,6 +50,25 @@ impl ConfigDocument {
 		self.remove_table_key(&[map], key)
 	}
 
+	/// Replace a top-level array wholesale, preserving the existing
+	/// key's decoration when the key is already present.
+	pub fn replace_top_array(&mut self, key: &str, values: toml_edit::Array) -> Result<(), String> {
+		let mut value = toml_edit::Value::Array(values);
+		if let Some(existing) = self.document.get_mut(key) {
+			if !existing.is_array() {
+				return Err(format!("{key} is not a top-level array"));
+			}
+			let old = existing
+				.as_value()
+				.ok_or("expected a top-level array value")?;
+			*value.decor_mut() = old.decor().clone();
+			*existing = toml_edit::Item::Value(value);
+		} else {
+			self.document.insert(key, toml_edit::Item::Value(value));
+		}
+		Ok(())
+	}
+
 	/// Add a string if it is absent from a top-level string array.
 	pub fn add_string(&mut self, key: &str, value: &str) -> Result<(), String> {
 		let item = self

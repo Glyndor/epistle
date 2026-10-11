@@ -3,6 +3,8 @@
 mod account;
 mod accounts;
 mod alert;
+mod alias;
+mod antispam;
 mod api_keys;
 mod app_passwords;
 mod archive;
@@ -14,6 +16,7 @@ mod config_check;
 pub mod config_edit;
 mod dns_provider;
 mod dns_records;
+mod domain;
 mod export;
 mod import;
 mod init;
@@ -471,6 +474,20 @@ pub enum Command {
 		#[arg(long)]
 		print_answers: bool,
 	},
+	/// Operate on the configured mail domains: list, show, add, remove, or edit
+	/// the `domain_aliases` map.
+	Domain {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Domain administration action.
+		#[command(subcommand)]
+		action: domain::DomainCli,
+	},
+
 	/// Show, set, or unset numeric server and domain limits.
 	Limits {
 		/// Configuration file; accepted before or after the limits action.
@@ -578,6 +595,30 @@ pub enum Command {
 		/// Print the result as JSON instead of a table.
 		#[arg(long)]
 		json: bool,
+	},
+	/// Show or edit antispam knobs (DNSBL lists, greylist delay, clamd, LLM).
+	Antispam {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Antispam administration action.
+		#[command(subcommand)]
+		action: antispam::AntispamCli,
+	},
+	/// Show, add, remove or edit multi-target aliases; enable or disable them.
+	Alias {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Alias administration action.
+		#[command(subcommand)]
+		action: alias::AliasCli,
 	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.

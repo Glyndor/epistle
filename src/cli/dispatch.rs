@@ -9,9 +9,10 @@ use std::process::ExitCode;
 
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
-	Cli, Command, account, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover,
-	backup, ban, dns_records, export, import, init, local, mobileconfig, probe, queue,
-	report_abuse, reports, serve, srv, stack, status, style, suppression, verify, verify_dns,
+	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
+	autodiscover, backup, ban, dns_records, domain, export, import, init, local, mobileconfig,
+	probe, queue, report_abuse, reports, serve, srv, stack, status, style, suppression, verify,
+	verify_dns,
 };
 use crate::config::Config;
 
@@ -403,6 +404,21 @@ impl Cli {
 			} => super::limits::run(&config, action, dry_run, &mut std::io::stdout().lock()),
 			Command::Status { config, json } => status::run_status(&config, json),
 			Command::Check { config, area, json } => status::run_check(&config, area, json),
+			Command::Antispam {
+				config,
+				action,
+				dry_run,
+			} => antispam::run(&config, action, dry_run),
+			Command::Alias {
+				config,
+				action,
+				dry_run,
+			} => alias::run(&config, action, dry_run),
+			Command::Domain {
+				config,
+				action,
+				dry_run: _,
+			} => domain::run(&config, action),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -436,6 +452,9 @@ impl Command {
 			| Command::Storage { .. }
 			| Command::Webhook { .. }
 			| Command::Alert { .. }
+			| Command::Antispam { .. }
+			| Command::Alias { .. }
+			| Command::Domain { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }

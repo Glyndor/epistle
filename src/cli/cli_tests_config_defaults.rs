@@ -43,7 +43,10 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Dns { config, .. }
 		| Command::Storage { config, .. }
 		| Command::Webhook { config, .. }
-		| Command::Alert { config, .. } => Some(config),
+		| Command::Alert { config, .. }
+		| Command::Antispam { config, .. }
+		| Command::Alias { config, .. }
+		| Command::Domain { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }
