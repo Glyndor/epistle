@@ -591,6 +591,10 @@ mod tests_mail;
 mod tests_mail_ports;
 
 #[cfg(test)]
+#[path = "compose_tests_mail_probes.rs"]
+mod tests_mail_probes;
+
+#[cfg(test)]
 #[path = "compose_tests_db.rs"]
 mod tests_db;
 

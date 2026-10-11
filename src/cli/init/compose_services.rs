@@ -152,7 +152,39 @@ impl ComposeService {
 				}
 				map
 			}),
-			healthcheck: None,
+			// Healthcheck the running mail listeners from inside the
+			// container. The distroless base image ships neither a
+			// shell nor curl, so the only viable probe is the
+			// `epistle probe` subcommand itself; any container engine
+			// `CMD`/`CMD-SHELL` form that depends on a shell or a
+			// binary the image does not carry will fail closed.
+			// Custom-image mode reuses the same command path
+			// (`/usr/bin/epistle probe ...`) and therefore requires
+			// the operator's image to ship `/usr/bin/epistle`; the
+			// default mode satisfies that by bind-mounting the host
+			// `/usr/bin/epistle` read-only at the same path inside
+			// the container, so the entrypoint and the healthcheck
+			// resolve the binary to the same bytes either way.
+			//
+			// `timeout: 10s` sits comfortably above the probe's own
+			// two-second per-listener budget: a slow first byte from
+			// a freshly started listener surfaces as `connect:
+			// timeout` (a real listener problem) rather than getting
+			// folded into the healthcheck timeout (which the engine
+			// counts as a probe failure with no diagnostic).
+			healthcheck: Some(Healthcheck {
+				test: vec![
+					"CMD".to_string(),
+					HOST_EPISTLE_PATH.to_string(),
+					"probe".to_string(),
+					"--config".to_string(),
+					config_path.display().to_string(),
+				],
+				interval: "30s".to_string(),
+				timeout: "10s".to_string(),
+				retries: 3,
+				start_period: Some("30s".to_string()),
+			}),
 		}
 	}
 

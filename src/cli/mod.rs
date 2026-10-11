@@ -19,6 +19,7 @@ mod limits;
 mod local;
 mod mobileconfig;
 mod mta_sts_serve;
+mod probe;
 mod queue;
 mod report_abuse;
 mod reports;
@@ -505,6 +506,28 @@ pub enum Command {
 		/// The stack sub-action.
 		#[command(subcommand)]
 		action: stack::StackCli,
+	},
+	/// Probe each enabled listener and report whether it is answering.
+	///
+	/// Dials every `[[listeners]]` entry on its loopback equivalent
+	/// (`127.0.0.1` for `0.0.0.0`, `::1` for `::`), reads the
+	/// greeting the protocol advertises (SMTP `220`, IMAP `* OK`,
+	/// POP3 `+OK`, ManageSieve `OK`, or HTTP for the API / WebDAV /
+	/// autoconfig / ACME / metrics endpoints), and exits 0 if every
+	/// listener answered. Exits 1 if any listener is down or
+	/// answered with the wrong greeting. Designed for the distroless
+	/// container's healthcheck: no shell, no curl, no credentials,
+	/// no escalation; runs as the same user the listeners bound on.
+	Probe {
+		/// Path to the configuration file.
+		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print one JSON object per listener instead of the
+		/// human-readable `ok <kind> <addr>` / `fail <kind> <addr>: <reason>`
+		/// lines. Each object carries `kind`, `addr`, `ok`, and an
+		/// `error` field on failure.
+		#[arg(long)]
+		json: bool,
 	},
 }
 

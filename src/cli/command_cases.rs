@@ -109,6 +109,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["local", "--dir", "/tmp/local"], false),
 	(&["init"], true),
 	(&["stack", "ps"], true),
+	(&["probe"], false),
 	(&["service", "list"], true),
 	(&["limits", "show"], true),
 	(&["limits", "set", "quota", "5G"], true),
