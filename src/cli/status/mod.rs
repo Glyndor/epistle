@@ -8,6 +8,7 @@
 
 mod clock;
 mod config_area;
+mod ports;
 mod report;
 #[cfg(test)]
 mod test_support;
@@ -35,16 +36,19 @@ const AREA_DEADLINE: Duration = Duration::from_secs(60);
 pub enum CheckArea {
 	/// The configuration file loads.
 	Config,
+	/// Every enabled listener answers with its protocol greeting.
+	Ports,
 }
 
 impl CheckArea {
 	/// Every area, in the order `status` prints them.
-	const ALL: &'static [CheckArea] = &[CheckArea::Config];
+	const ALL: &'static [CheckArea] = &[CheckArea::Config, CheckArea::Ports];
 
 	/// The name used on the command line and as the JSON key.
 	pub(super) fn name(self) -> &'static str {
 		match self {
 			CheckArea::Config => "config",
+			CheckArea::Ports => "ports",
 		}
 	}
 }
@@ -60,6 +64,14 @@ pub(super) struct Ctx {
 }
 
 impl Ctx {
+	/// The loaded configuration, or the report every area gives when it did
+	/// not load.
+	pub(super) fn loaded(&self) -> Result<&Config, AreaReport> {
+		self.config
+			.as_ref()
+			.map_err(|_| AreaReport::fail("not checked: the configuration did not load"))
+	}
+
 	fn load(path: &Path) -> Self {
 		Ctx {
 			path: path.to_path_buf(),
@@ -147,15 +159,12 @@ async fn run_areas(areas: &[CheckArea], ctx: Arc<Ctx>) -> Vec<(CheckArea, AreaRe
 		.collect()
 }
 
-/// Run one area. Areas other than `config` need a loaded configuration; when
-/// it did not load they report that instead of guessing.
+/// Run one area. Every area except `config` starts from [`Ctx::loaded`], so
+/// an unreadable configuration is reported instead of guessed at.
 async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
-	if area == CheckArea::Config {
-		return config_area::check(ctx).await;
-	}
-	match &ctx.config {
-		Ok(_config) => AreaReport::ok("nothing to check"),
-		Err(_) => AreaReport::fail("not checked: the configuration did not load"),
+	match area {
+		CheckArea::Config => config_area::check(ctx).await,
+		CheckArea::Ports => ports::check(ctx).await,
 	}
 }
 
