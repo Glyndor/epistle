@@ -16,7 +16,10 @@ pub(super) enum Greeting {
 	Smtp,
 	/// IMAP greeting: `* OK`.
 	Imap,
-	/// POP3 greeting: `+OK`.
+	/// POP3 greeting: `+OK`. No plaintext POP3 listener exists today (it is
+	/// implicit TLS only), so only the tests build this; it stays so the
+	/// shared function covers the protocol when a probe needs it.
+	#[cfg_attr(not(test), allow(dead_code))]
 	Pop3,
 	/// ManageSieve capabilities ending in a line that starts with `OK`.
 	ManageSieve,

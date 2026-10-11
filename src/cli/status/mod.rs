@@ -102,7 +102,7 @@ pub(super) struct Ctx {
 impl Ctx {
 	/// The loaded configuration, or the report every area gives when it did
 	/// not load.
-	pub(super) fn loaded(&self) -> Result<&Config, AreaReport> {
+	fn loaded(&self) -> Result<&Config, AreaReport> {
 		self.config
 			.as_ref()
 			.map_err(|_| AreaReport::fail("not checked: the configuration did not load"))

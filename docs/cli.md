@@ -83,6 +83,34 @@ compose override stays untouched. Host installations print that the server must
 be restarted. Status messages go to stderr; listings go to stdout. Running under
 sudo delegates to the service account, like the other administration commands.
 
+## Health (`epistle status`, `epistle check`)
+
+```sh
+epistle status            # one line per area
+epistle status --json
+epistle check tls         # one area, with its findings
+epistle check dns --json
+```
+
+`status` runs every check and exits 1 if any area is `fail` (`warn` does not
+change the exit code). `check <area>` runs one area and lists what it found.
+Nothing sends mail or authenticates, and every network operation gives up
+after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
+
+| Area | `ok` | `warn` | `fail` |
+|---|---|---|---|
+| `config` | file loads | restart pending: `mail.toml` is newer than the `mail` container's start (needs the compose stack; skipped with a note otherwise) | does not load |
+| `ports` | every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, ManageSieve `OK`, HTTP status line; implicit-TLS listeners only accept a TCP connection) | no listeners | a listener refuses, is silent or greets wrongly |
+| `tls` | 21 days or more left, hostname in the certificate | under 21 days | under 7 days, expired, or hostname not in the certificate; unreadable file |
+| `dns` | published records match | a lookup was inconclusive | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
+| `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
+| `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
+| `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
+| `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
+
+`--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
+where `items` lists the findings (`name`, `status`, `detail`).
+
 ## Running the server
 
 | Command | What it does |
