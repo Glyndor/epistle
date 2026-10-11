@@ -186,6 +186,14 @@ impl FsSpool {
 		Ok(SpoolEntry { envelope, data })
 	}
 
+	/// Load only the envelope of one spooled entry, without reading or
+	/// decrypting the message body. For read-only inspection that has no use
+	/// for the body (and no key to decrypt it with).
+	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
+		let bytes = crate::util::fs_walk::read(self.root.join("new").join(format!("{id}.json")))?;
+		serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+	}
+
 	/// List ids of all complete spooled messages, oldest first.
 	pub fn list(&self) -> std::io::Result<Vec<Uuid>> {
 		let mut ids = Vec::new();

@@ -15,6 +15,7 @@ mod dns_dkim;
 #[cfg(test)]
 mod dns_fake;
 mod ports;
+mod queue_area;
 mod report;
 #[cfg(test)]
 mod test_support;
@@ -53,6 +54,8 @@ pub enum CheckArea {
 	Db,
 	/// The configured clamd answers `PING`.
 	Antivirus,
+	/// The outbound queue is draining: count, oldest age, deferred.
+	Queue,
 }
 
 impl CheckArea {
@@ -64,6 +67,7 @@ impl CheckArea {
 		CheckArea::Dns,
 		CheckArea::Db,
 		CheckArea::Antivirus,
+		CheckArea::Queue,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -75,6 +79,7 @@ impl CheckArea {
 			CheckArea::Dns => "dns",
 			CheckArea::Db => "db",
 			CheckArea::Antivirus => "antivirus",
+			CheckArea::Queue => "queue",
 		}
 	}
 }
@@ -195,6 +200,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Dns => dns_area::check(ctx).await,
 		CheckArea::Db => db_area::check(ctx).await,
 		CheckArea::Antivirus => av_area::check(ctx).await,
+		CheckArea::Queue => queue_area::check(ctx).await,
 	}
 }
 
