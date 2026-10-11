@@ -18,7 +18,7 @@ pub type Matcher<'a> = &'a dyn Fn(&dyn TableLike) -> bool;
 /// Set a field to a value, or clear it when the value is `None`.
 pub type FieldChange<'a> = (&'a str, Option<Value>);
 
-fn apply(table: &mut dyn TableLike, fields: &[FieldChange]) -> Result<String, String> {
+pub(super) fn apply(table: &mut dyn TableLike, fields: &[FieldChange]) -> Result<String, String> {
 	let mut comments = String::new();
 	for (key, value) in fields {
 		match value {

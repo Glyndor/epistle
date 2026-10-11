@@ -7,9 +7,11 @@ mod elements;
 mod file;
 mod restart;
 mod rules;
+mod tables;
 
 pub use restart::after_change;
 pub(in crate::cli) use restart::after_change_with;
+pub use rules::FieldChange;
 
 use std::path::{Path, PathBuf};
 
@@ -85,3 +87,5 @@ mod tests_helpers;
 mod tests_restart;
 #[cfg(test)]
 mod tests_rules;
+#[cfg(test)]
+mod tests_tables;
