@@ -17,6 +17,10 @@
 //! (stable since Rust 1.82; the crate's `rust-version` is 1.94) so a
 //! future Rust upgrade cannot silently regress this invariant.
 
+mod https_url;
+
+pub use https_url::{HttpsUrl, HttpsUrlError};
+
 use std::net::SocketAddr;
 
 /// Return the peer address with an IPv4 client represented as a
