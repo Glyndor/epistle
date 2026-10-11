@@ -28,6 +28,8 @@ pub enum HttpsUrlError {
 	NoPath,
 	/// A path segment is `.` or `..` and would rewrite the path.
 	DotSegment,
+	/// A link a server handed back points at another scheme, host or port.
+	OffOrigin,
 }
 
 impl fmt::Display for HttpsUrlError {
@@ -39,6 +41,7 @@ impl fmt::Display for HttpsUrlError {
 			HttpsUrlError::EmbeddedCredentials => "URL must not embed credentials",
 			HttpsUrlError::NoPath => "URL cannot carry a path",
 			HttpsUrlError::DotSegment => "path segment must not be . or ..",
+			HttpsUrlError::OffOrigin => "link leaves the origin of the API base",
 		})
 	}
 }
@@ -127,6 +130,19 @@ impl HttpsUrl {
 			}
 		}
 		Ok(HttpsUrl(url))
+	}
+
+	/// Resolve a link a remote server handed back (a pagination `next`, for
+	/// example) against this URL. The link may be absolute or relative, but
+	/// the result must have this URL's scheme, host and port: the credential
+	/// that travels with the follow-up request must not be steerable to a
+	/// host the operator did not configure by anything in a response body.
+	pub fn follow(&self, link: &str) -> Result<Self, HttpsUrlError> {
+		let target = self.0.join(link).map_err(|_| HttpsUrlError::Invalid)?;
+		if target.origin() != self.0.origin() {
+			return Err(HttpsUrlError::OffOrigin);
+		}
+		Self::from_checked(target)
 	}
 
 	/// This URL with the query pair `key=value` appended (both percent-encoded).

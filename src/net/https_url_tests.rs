@@ -107,3 +107,40 @@ fn from_static_accepts_an_https_literal() {
 fn from_static_panics_on_an_http_literal() {
 	let _ = HttpsUrl::from_static("http://desec.io/api/v1");
 }
+
+#[test]
+fn follow_accepts_same_origin_absolute_and_relative_links() {
+	let base = HttpsUrl::parse("https://api.example/v2/domains").expect("base");
+	assert_eq!(
+		base.follow("https://api.example/v2/domains?page=2")
+			.map(|u| u.to_string()),
+		Ok("https://api.example/v2/domains?page=2".to_string())
+	);
+	assert_eq!(
+		base.follow("/v2/other?page=3").map(|u| u.to_string()),
+		Ok("https://api.example/v2/other?page=3".to_string())
+	);
+}
+
+#[test]
+fn follow_refuses_another_host_scheme_or_port() {
+	let base = HttpsUrl::parse("https://api.example/v2").expect("base");
+	for link in [
+		"https://evil.example/v2",
+		"http://api.example/v2",
+		"https://api.example:8443/v2",
+		"//evil.example/v2",
+		"https://api.example.evil.example/v2",
+	] {
+		assert_eq!(base.follow(link), Err(HttpsUrlError::OffOrigin), "{link}");
+	}
+}
+
+#[test]
+fn follow_refuses_a_link_with_embedded_credentials() {
+	let base = HttpsUrl::parse("https://api.example/v2").expect("base");
+	assert_eq!(
+		base.follow("https://user:pw@api.example/v2"),
+		Err(HttpsUrlError::EmbeddedCredentials)
+	);
+}
