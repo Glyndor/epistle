@@ -531,3 +531,6 @@ async fn direct_kind_still_delivers_via_mx() {
 	assert_eq!(worker.pass().await.expect("pass"), 1);
 	assert_eq!(sink.messages().len(), 1);
 }
+
+#[path = "worker_tests_operator.rs"]
+mod operator;
