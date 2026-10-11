@@ -43,7 +43,7 @@ impl Snapshot {
 		let account_dir = super::mailbox::mailbox_dir(data_dir, account_name.as_str(), mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
 		crate::util::fs_walk::check_directories(&account_dir)?;
-		let account_root = account_name.root(data_dir);
+		let account_root = account_name.root(data_dir)?;
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
 		// doubt (missing, stale, corrupt, wrong version) falls through to the
@@ -190,14 +190,17 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored = crate::util::fs_walk::read(self.message_path(message))?;
+		let stored = crate::util::fs_walk::read(self.message_path(message)?)?;
 		self.crypto.decode(&stored)
 	}
 
 	/// The on-disk path of a message: the worker's read step names this file
 	/// rather than copying the bytes at STORE time, so the protocol reply
 	/// never has to wait for the body to be loaded into memory.
-	pub fn message_path(&self, message: &super::mailbox::MessageRef) -> std::path::PathBuf {
+	pub fn message_path(
+		&self,
+		message: &super::mailbox::MessageRef,
+	) -> std::io::Result<std::path::PathBuf> {
 		message_file(&self.account_dir, message.id(), MessageExt::Eml)
 	}
 
@@ -337,8 +340,10 @@ impl Snapshot {
 				}
 			}
 		}
-		let _ = std::fs::remove_file(message_file(&self.account_dir, id, MessageExt::Eml));
-		let _ = std::fs::remove_file(message_file(&self.account_dir, id, MessageExt::Flags));
-		let _ = std::fs::remove_file(message_file(&self.account_dir, id, MessageExt::Uid));
+		for ext in [MessageExt::Eml, MessageExt::Flags, MessageExt::Uid] {
+			if let Ok(path) = message_file(&self.account_dir, id, ext) {
+				let _ = std::fs::remove_file(path);
+			}
+		}
 	}
 }

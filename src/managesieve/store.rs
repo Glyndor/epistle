@@ -8,6 +8,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::util::path_component::AccountName;
+use crate::util::path_containment::{contained, contained_child, contained_subdir};
+
 /// A ManageSieve operation that failed in a way the protocol must report.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreError {
@@ -35,19 +38,42 @@ pub struct ScriptInfo {
 
 /// Storage for one account's named Sieve scripts.
 pub struct ScriptStore {
+	dirs: Option<Dirs>,
+}
+
+/// The two directories of one account's scripts, both vetted by the
+/// containment check.
+struct Dirs {
 	account_dir: PathBuf,
 	sieve_dir: PathBuf,
 }
 
-impl ScriptStore {
-	/// Open the store for `account` under `accounts_root` (`data_dir/accounts`).
-	pub fn new(accounts_root: &Path, account: &str) -> Self {
-		let account_dir = accounts_root.join(account);
-		let sieve_dir = account_dir.join("sieve");
-		Self {
+impl Dirs {
+	fn open(accounts_root: &Path, account: &str) -> std::io::Result<Self> {
+		let root = contained(accounts_root, accounts_root)?;
+		let account_dir = contained_subdir(&root, AccountName::new(account)?.as_str())?;
+		let sieve_dir = contained_child(&account_dir, "sieve")?;
+		Ok(Self {
 			account_dir,
 			sieve_dir,
+		})
+	}
+}
+
+impl ScriptStore {
+	/// Open the store for `account` under `accounts_root` (`data_dir/accounts`).
+	///
+	/// An account name that is not one plain directory name, or a path that
+	/// leaves `accounts_root`, gives a store whose every operation reports
+	/// [`StoreError::Io`].
+	pub fn new(accounts_root: &Path, account: &str) -> Self {
+		Self {
+			dirs: Dirs::open(accounts_root, account).ok(),
 		}
+	}
+
+	fn dirs(&self) -> Result<&Dirs, StoreError> {
+		self.dirs.as_ref().ok_or(StoreError::Io)
 	}
 
 	/// Validate a script name and map it to its on-disk path. Rejects empty,
@@ -64,7 +90,8 @@ impl ScriptStore {
 		{
 			return Err(StoreError::InvalidName);
 		}
-		Ok(self.sieve_dir.join(format!("{name}.sieve")))
+		contained_child(&self.dirs()?.sieve_dir, &format!("{name}.sieve"))
+			.map_err(|_| StoreError::InvalidName)
 	}
 
 	/// Parse `script` as Sieve, returning a human-readable reason on failure.
@@ -78,7 +105,8 @@ impl ScriptStore {
 
 	/// The active script's name, if any.
 	pub fn active_name(&self) -> Option<String> {
-		fs::read_to_string(self.sieve_dir.join(".active"))
+		let marker = contained_child(&self.dirs.as_ref()?.sieve_dir, ".active").ok()?;
+		fs::read_to_string(marker)
 			.ok()
 			.map(|name| name.trim().to_string())
 			.filter(|name| !name.is_empty())
@@ -88,7 +116,7 @@ impl ScriptStore {
 	pub fn list(&self) -> Result<Vec<ScriptInfo>, StoreError> {
 		let active = self.active_name();
 		let mut scripts = Vec::new();
-		let entries = match crate::util::fs_walk::read_dir(&self.sieve_dir) {
+		let entries = match crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir) {
 			Ok(entries) => entries,
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scripts),
 			Err(_) => return Err(StoreError::Io),
@@ -128,7 +156,7 @@ impl ScriptStore {
 	pub fn put(&self, name: &str, content: &str) -> Result<(), StoreError> {
 		let path = self.script_path(name)?;
 		Self::validate(content)?;
-		fs::create_dir_all(&self.sieve_dir).map_err(|_| StoreError::Io)?;
+		fs::create_dir_all(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
 		fs::write(&path, content).map_err(|_| StoreError::Io)?;
 		if self.active_name().as_deref() == Some(name) {
 			self.write_live(content)?;
@@ -179,7 +207,9 @@ impl ScriptStore {
 				self.set_active_marker(Some(name))
 			}
 			None => {
-				let _ = fs::remove_file(self.account_dir.join("filter.sieve"));
+				if let Ok(live) = self.live_path() {
+					let _ = fs::remove_file(live);
+				}
 				self.set_active_marker(None)
 			}
 		}
@@ -187,16 +217,22 @@ impl ScriptStore {
 
 	/// Write the active script's content to the live `filter.sieve` path.
 	fn write_live(&self, content: &str) -> Result<(), StoreError> {
-		fs::create_dir_all(&self.account_dir).map_err(|_| StoreError::Io)?;
-		fs::write(self.account_dir.join("filter.sieve"), content).map_err(|_| StoreError::Io)
+		fs::create_dir_all(&self.dirs()?.account_dir).map_err(|_| StoreError::Io)?;
+		fs::write(self.live_path()?, content).map_err(|_| StoreError::Io)
+	}
+
+	/// The live `filter.sieve` the delivery pipeline reads.
+	fn live_path(&self) -> Result<PathBuf, StoreError> {
+		contained_child(&self.dirs()?.account_dir, "filter.sieve").map_err(|_| StoreError::Io)
 	}
 
 	/// Record (or clear) the active script name.
 	fn set_active_marker(&self, name: Option<&str>) -> Result<(), StoreError> {
-		let marker = self.sieve_dir.join(".active");
+		let sieve_dir = &self.dirs()?.sieve_dir;
+		let marker = contained_child(sieve_dir, ".active").map_err(|_| StoreError::Io)?;
 		match name {
 			Some(name) => {
-				fs::create_dir_all(&self.sieve_dir).map_err(|_| StoreError::Io)?;
+				fs::create_dir_all(sieve_dir).map_err(|_| StoreError::Io)?;
 				fs::write(&marker, name).map_err(|_| StoreError::Io)
 			}
 			None => {

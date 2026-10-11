@@ -17,7 +17,7 @@ pub(super) fn record(account_dir: &Path, uids: &[u32], modseq: u64) -> std::io::
 	let mut file = std::fs::OpenOptions::new()
 		.create(true)
 		.append(true)
-		.open(state_file(account_dir, StateFile::Vanished))?;
+		.open(state_file(account_dir, StateFile::Vanished)?)?;
 	for uid in uids {
 		writeln!(file, "{uid} {modseq}")?;
 	}
@@ -36,7 +36,8 @@ pub(super) fn record_advancing(account_dir: &Path, uids: &[u32]) {
 
 /// UIDs that vanished after `modseq` (for `VANISHED (EARLIER)`), in log order.
 pub(super) fn since(account_dir: &Path, modseq: u64) -> Vec<u32> {
-	let Ok(text) = std::fs::read_to_string(state_file(account_dir, StateFile::Vanished)) else {
+	let Ok(text) = state_file(account_dir, StateFile::Vanished).and_then(std::fs::read_to_string)
+	else {
 		return Vec::new();
 	};
 	text.lines()

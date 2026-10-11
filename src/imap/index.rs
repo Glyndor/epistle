@@ -67,7 +67,7 @@ const MAGIC: &str = "EPISTLE-MAILBOX-INDEX";
 const VERSION: u32 = 2;
 
 /// The path of a mailbox's index file.
-fn index_path(account_dir: &Path) -> PathBuf {
+fn index_path(account_dir: &Path) -> std::io::Result<PathBuf> {
 	state_file(account_dir, StateFile::Index)
 }
 
@@ -98,7 +98,9 @@ pub(super) fn current_generation(account_dir: &Path) -> (u64, usize) {
 /// stamp matches `generation`. Any deviation returns `None` so the caller falls
 /// back to the authoritative filesystem scan (fail closed).
 pub(super) fn load(account_dir: &Path, generation: (u64, usize)) -> Option<Vec<MessageRef>> {
-	let text = crate::util::fs_walk::read_to_string(index_path(account_dir)).ok()?;
+	let text = index_path(account_dir)
+		.and_then(crate::util::fs_walk::read_to_string)
+		.ok()?;
 	let mut lines = text.lines();
 
 	// Header: magic + version.
@@ -222,9 +224,9 @@ pub(super) fn write(
 		write_record(&mut out, message);
 	}
 
-	let tmp = state_tmp_file(account_dir, StateFile::Index);
+	let tmp = state_tmp_file(account_dir, StateFile::Index)?;
 	std::fs::write(&tmp, out.as_bytes())?;
-	std::fs::rename(&tmp, index_path(account_dir))
+	std::fs::rename(&tmp, index_path(account_dir)?)
 }
 
 /// Append one record line to `out`, mirroring [`parse_record`].

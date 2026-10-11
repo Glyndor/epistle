@@ -114,7 +114,7 @@ fn list(
 		super::style::error(format_args!("listing archive: invalid account name"));
 		return ExitCode::FAILURE;
 	};
-	match archive::list(&account.root(data_dir)) {
+	match account.root(data_dir).and_then(|root| archive::list(&root)) {
 		Ok(entries) => {
 			render_entries(&entries, out);
 			ExitCode::SUCCESS
@@ -162,7 +162,13 @@ fn purge(
 		super::style::error(format_args!("purging archive: invalid account name"));
 		return ExitCode::FAILURE;
 	};
-	let account_root = account.root(data_dir);
+	let account_root = match account.root(data_dir) {
+		Ok(root) => root,
+		Err(error) => {
+			super::style::error(format_args!("purging archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	let older_than_secs = older_than_days
 		.map(|days| days.saturating_mul(86_400))
 		.unwrap_or(0);

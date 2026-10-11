@@ -86,7 +86,7 @@ fn legitimate_names_still_work_through_the_session() {
 
 /// A directory backend can name an account anything; the filesystem layer
 /// must still refuse it.
-fn hostile_account_session(data: &std::path::Path, account: &str) -> Session {
+fn hostile_account_login(data: &std::path::Path, account: &str) -> String {
 	let password = uuid::Uuid::new_v4().to_string();
 	let directory = Directory::new(
 		["example.org".to_string()],
@@ -101,9 +101,7 @@ fn hostile_account_session(data: &std::path::Path, account: &str) -> Session {
 		data.to_path_buf(),
 		std::sync::Arc::new(directory),
 	);
-	let reply = text(&session.command_line(&format!("a1 LOGIN evil@example.org {password}")));
-	assert!(reply.contains("a1 OK"), "login: {reply}");
-	session
+	text(&session.command_line(&format!("a1 LOGIN evil@example.org {password}")))
 }
 
 #[test]
@@ -111,15 +109,12 @@ fn an_account_name_with_a_separator_reaches_no_directory() {
 	let outer = tempfile::tempdir().expect("tempdir");
 	let data = outer.path().join("data");
 	std::fs::create_dir_all(data.join("accounts")).expect("accounts");
-	let mut session = hostile_account_session(&data, "../evil");
-	for (command, expected) in [
-		("d1 CREATE Work", "d1 NO invalid path component\r\n"),
-		("d2 SELECT INBOX", "d2 NO no such mailbox\r\n"),
-		("d3 DELETE Work", "d3 NO invalid path component\r\n"),
-		("d4 RENAME Work Other", "d4 NO invalid path component\r\n"),
-	] {
-		assert_eq!(text(&session.command_line(command)), expected, "{command}");
-	}
+	let reply = hostile_account_login(&data, "../evil");
+	assert_eq!(
+		reply, "a1 NO [SERVERBUG] cannot initialize mailboxes\r\n",
+		"the login is refused instead of creating a directory"
+	);
 	assert_eq!(entries(outer.path()), vec!["data".to_string()]);
+	assert_eq!(entries(&data), vec!["accounts".to_string()]);
 	assert!(entries(&data.join("accounts")).is_empty());
 }

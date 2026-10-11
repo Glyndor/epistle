@@ -7,6 +7,7 @@ use std::fs;
 
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::delivery::{LocalDelivery, MAX_FORWARD_HOPS, received_hops};
+use crate::util::path_component::AccountName;
 
 impl LocalDelivery {
 	/// Admin-configured external forwarding targets for an account, with the
@@ -36,7 +37,11 @@ impl LocalDelivery {
 		account: &str,
 		message: &AcceptedMessage,
 	) -> Option<crate::sieve::interp::Outcome> {
-		let path = self.accounts_root.join(account).join("filter.sieve");
+		let path = AccountName::new(account)
+			.ok()?
+			.root(&self.data_dir)
+			.and_then(|root| root.file("filter.sieve"))
+			.ok()?;
 		let source = fs::read_to_string(path).ok()?;
 		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
 		let commands = crate::sieve::parser::parse(&tokens).ok()?;

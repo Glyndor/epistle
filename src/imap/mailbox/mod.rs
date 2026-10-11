@@ -113,7 +113,7 @@ pub fn valid_name(name: &str) -> bool {
 pub fn mailbox_dir(data_dir: &Path, account: &str, mailbox: &str) -> Option<PathBuf> {
 	let account = AccountName::new(account).ok()?;
 	let mailbox = MailboxName::new(mailbox).ok()?;
-	Some(mailbox.messages_dir(&account, data_dir))
+	mailbox.messages_dir(&account, data_dir).ok()
 }
 
 /// Whether a mailbox exists. INBOX always exists for a valid account.
@@ -129,7 +129,7 @@ pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	let account = AccountName::new(account)?;
 	let dir = MailboxName::folder(mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
-		.messages_dir(&account, data_dir);
+		.messages_dir(&account, data_dir)?;
 	if dir.is_dir() {
 		return Err(std::io::Error::other("mailbox already exists"));
 	}
@@ -141,7 +141,7 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	let account = AccountName::new(account)?;
 	let dir = MailboxName::folder(mailbox)
 		.ok()
-		.and_then(|folder| folder.folder_dir(&account, data_dir))
+		.and_then(|folder| folder.folder_dir(&account, data_dir).ok().flatten())
 		.ok_or_else(|| std::io::Error::other("cannot delete this mailbox"))?;
 	if !dir.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
@@ -155,10 +155,13 @@ pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::
 	let (Ok(from), Ok(to)) = (MailboxName::folder(from), MailboxName::folder(to)) else {
 		return Err(std::io::Error::other("cannot rename"));
 	};
-	if to.messages_dir(&account, data_dir).is_dir() {
+	let Ok(target) = to.messages_dir(&account, data_dir) else {
+		return Err(std::io::Error::other("cannot rename"));
+	};
+	if target.is_dir() {
 		return Err(std::io::Error::other("cannot rename"));
 	}
-	let (Some(from), Some(to)) = (
+	let (Ok(Some(from)), Ok(Some(to))) = (
 		from.folder_dir(&account, data_dir),
 		to.folder_dir(&account, data_dir),
 	) else {
@@ -177,8 +180,8 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let Ok(account) = AccountName::new(account) else {
 		return names;
 	};
-	let folders = folders_dir(&account, data_dir);
-	if let Ok(entries) = crate::util::fs_walk::read_dir(folders) {
+	let entries = folders_dir(&account, data_dir).and_then(crate::util::fs_walk::read_dir);
+	if let Ok(entries) = entries {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_dir())
 				&& let Some(name) = entry.file_name().to_str()
@@ -206,15 +209,15 @@ pub fn append(
 	let account = AccountName::new(account)?;
 	let account_dir = MailboxName::new(mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
-		.messages_dir(&account, data_dir);
-	let tmp_dir = account.root(data_dir).child(FixedDir::Tmp);
+		.messages_dir(&account, data_dir)?;
+	let tmp_dir = account.root(data_dir)?.child(FixedDir::Tmp)?;
 	std::fs::create_dir_all(&account_dir)?;
 	std::fs::create_dir_all(&tmp_dir)?;
 
 	let id = Uuid::now_v7();
-	let tmp = message_file(&tmp_dir, id, MessageExt::Eml);
+	let tmp = message_file(&tmp_dir, id, MessageExt::Eml)?;
 	std::fs::write(&tmp, &crypto.encode(data)?)?;
-	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml))?;
+	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
 	}
@@ -261,8 +264,10 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 			}
 		}
 	}
-	let account_root = account_name.root(data_dir);
-	if let Ok(entries) = crate::util::fs_walk::read_dir(account_root.child(FixedDir::Archive)) {
+	let archive = account_name
+		.root(data_dir)
+		.and_then(|root| root.child(FixedDir::Archive));
+	if let Ok(entries) = archive.and_then(crate::util::fs_walk::read_dir) {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_file())
 				&& entry

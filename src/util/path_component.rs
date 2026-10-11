@@ -12,11 +12,18 @@
 //! * [`DigestName`], [`MessageExt`] and [`StateFile`] cannot carry free text:
 //!   the first is built from a SHA-256 digest, the others are closed sets of
 //!   fixed names, and message ids are typed [`Uuid`]s.
+//!
+//! Validating a component is not the last line of defence. Every path built
+//! here is also passed through [`contained`], which resolves it and refuses
+//! it if it is not inside the directory it was joined onto, so a mistake in
+//! one validator, or a symlink inside the tree, cannot take a join outside.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
+
+use super::path_containment::{contained, contained_child, contained_subdir};
 
 /// Longest account or mailbox name accepted (bytes). Well under the 255 byte
 /// limit of common filesystems, leaving room for suffixes.
@@ -54,26 +61,20 @@ pub fn is_plain_component(name: &str) -> bool {
 		&& !Path::new(name).is_absolute()
 }
 
-/// Longest account name accepted, the limit every account source enforces.
-const MAX_ACCOUNT_LEN: usize = 64;
-
 /// The name of a mail account, validated as one directory name.
 ///
-/// Accounts are lowercase ASCII letters, digits and `-`, at most 64 bytes,
-/// never starting with `-`: the same rule the configuration, the API and
-/// SCIM already apply when an account is created.
+/// This is a path-safety rule, not the account-creation policy: any name that
+/// is one plain path component is accepted, with its case kept. Directories
+/// such as SQL and LDAP name accounts `john.doe` or `J_Smith`, and those
+/// names map to a directory of the same name. What an operator may create
+/// (lowercase letters, digits and `-`) is enforced where accounts are created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountName<'a>(&'a str);
 
 impl<'a> AccountName<'a> {
 	/// Validate `name` as an account directory name.
 	pub fn new(name: &'a str) -> Result<Self, InvalidComponent> {
-		let allowed = name.len() <= MAX_ACCOUNT_LEN
-			&& name
-				.chars()
-				.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-			&& !name.starts_with('-');
-		if allowed && is_plain_component(name) {
+		if is_plain_component(name) {
 			Ok(Self(name))
 		} else {
 			Err(InvalidComponent)
@@ -85,9 +86,18 @@ impl<'a> AccountName<'a> {
 		self.0
 	}
 
-	/// The account's root directory: `<data_dir>/accounts/<name>`.
-	pub fn root(&self, data_dir: &Path) -> AccountRoot {
-		AccountRoot(data_dir.join("accounts").join(self.0))
+	/// The account's root directory: `<data_dir>/accounts/<name>`, resolved
+	/// and checked to lie inside `<data_dir>/accounts`.
+	pub fn root(&self, data_dir: &Path) -> std::io::Result<AccountRoot> {
+		let accounts = contained(data_dir, &data_dir.join("accounts"))?;
+		contained_subdir(&accounts, self.0).map(AccountRoot)
+	}
+
+	/// An account name that skips validation, so tests can show that the
+	/// containment check still refuses a path when a validator is wrong.
+	#[cfg(test)]
+	pub(crate) fn unchecked(name: &'a str) -> Self {
+		Self(name)
 	}
 }
 
@@ -109,10 +119,16 @@ impl AccountRoot {
 		&self.0
 	}
 
+	/// A file or directory directly under the account root, such as
+	/// `filter.sieve` or `.vacation`. `name` must be one plain name.
+	pub fn file(&self, name: &str) -> std::io::Result<PathBuf> {
+		contained_child(&self.0, name)
+	}
+
 	/// The path of a child of the account root with a fixed, program-chosen
 	/// name (`tmp`, `new`, `folders`, `.archive`, ...).
-	pub fn child(&self, fixed: FixedDir) -> PathBuf {
-		self.0.join(fixed.name())
+	pub fn child(&self, fixed: FixedDir) -> std::io::Result<PathBuf> {
+		contained(&self.0, &self.0.join(fixed.name()))
 	}
 }
 
@@ -193,27 +209,41 @@ impl<'a> MailboxName<'a> {
 
 	/// The directory holding the mailbox's messages: `<account_root>/new` for
 	/// the inbox, `<account_root>/folders/<name>/new` for a folder.
-	pub fn messages_dir(&self, account: &AccountName<'_>, data_dir: &Path) -> PathBuf {
-		let root = account.root(data_dir);
+	pub fn messages_dir(
+		&self,
+		account: &AccountName<'_>,
+		data_dir: &Path,
+	) -> std::io::Result<PathBuf> {
+		let root = account.root(data_dir)?;
 		match self {
 			Self::Inbox => root.child(FixedDir::New),
-			Self::Folder(name) => root.child(FixedDir::Folders).join(name).join("new"),
+			Self::Folder(name) => {
+				let folders = root.child(FixedDir::Folders)?;
+				contained_child(&contained_subdir(&folders, name)?, "new")
+			}
 		}
 	}
 
 	/// The folder's own directory (`<account_root>/folders/<name>`), or
 	/// `None` for the inbox, which has no folder directory.
-	pub fn folder_dir(&self, account: &AccountName<'_>, data_dir: &Path) -> Option<PathBuf> {
+	pub fn folder_dir(
+		&self,
+		account: &AccountName<'_>,
+		data_dir: &Path,
+	) -> std::io::Result<Option<PathBuf>> {
 		match self {
-			Self::Inbox => None,
-			Self::Folder(name) => Some(folders_dir(account, data_dir).join(name)),
+			Self::Inbox => Ok(None),
+			Self::Folder(name) => {
+				let folders = folders_dir(account, data_dir)?;
+				contained_subdir(&folders, name).map(Some)
+			}
 		}
 	}
 }
 
 /// The `<account_root>/folders` directory that holds every non-inbox mailbox.
-pub fn folders_dir(account: &AccountName<'_>, data_dir: &Path) -> PathBuf {
-	account.root(data_dir).child(FixedDir::Folders)
+pub fn folders_dir(account: &AccountName<'_>, data_dir: &Path) -> std::io::Result<PathBuf> {
+	account.root(data_dir)?.child(FixedDir::Folders)
 }
 
 /// A file name made only of the lowercase hex of a SHA-256 digest, so it can
@@ -223,6 +253,12 @@ pub fn folders_dir(account: &AccountName<'_>, data_dir: &Path) -> PathBuf {
 pub struct DigestName(String);
 
 impl DigestName {
+	/// A short, stable stand-in for `value` that is safe to log in place of the
+	/// raw text (the first 12 hex digits of its digest).
+	pub fn pseudonym(value: &str) -> String {
+		Self::of(value).0.chars().take(12).collect()
+	}
+
 	/// Digest `value` after lowercasing it (ASCII), so lookups are
 	/// case-insensitive.
 	pub fn of(value: &str) -> Self {
@@ -237,13 +273,13 @@ impl DigestName {
 	}
 
 	/// `<dir>/<digest>`.
-	pub fn in_dir(&self, dir: &Path) -> PathBuf {
-		dir.join(&self.0)
+	pub fn in_dir(&self, dir: &Path) -> std::io::Result<PathBuf> {
+		contained(dir, &dir.join(&self.0))
 	}
 
 	/// `<dir>/<digest>.lock`.
-	pub fn lock_in_dir(&self, dir: &Path) -> PathBuf {
-		dir.join(format!("{}.lock", self.0))
+	pub fn lock_in_dir(&self, dir: &Path) -> std::io::Result<PathBuf> {
+		contained(dir, &dir.join(format!("{}.lock", self.0)))
 	}
 }
 
@@ -284,13 +320,13 @@ impl MessageExt {
 }
 
 /// `<dir>/<id><ext>`.
-pub fn message_file(dir: &Path, id: Uuid, ext: MessageExt) -> PathBuf {
-	dir.join(format!("{id}{}", ext.suffix()))
+pub fn message_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Result<PathBuf> {
+	contained_child(dir, &format!("{id}{}", ext.suffix()))
 }
 
 /// `<dir>/<id><ext>.tmp`, the staging name used before an atomic rename.
-pub fn message_tmp_file(dir: &Path, id: Uuid, ext: MessageExt) -> PathBuf {
-	dir.join(format!("{id}{}.tmp", ext.suffix()))
+pub fn message_tmp_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Result<PathBuf> {
+	contained_child(dir, &format!("{id}{}.tmp", ext.suffix()))
 }
 
 /// The fixed per-mailbox bookkeeping files.
@@ -321,13 +357,13 @@ impl StateFile {
 }
 
 /// `<dir>/<state file>`.
-pub fn state_file(dir: &Path, file: StateFile) -> PathBuf {
-	dir.join(file.name())
+pub fn state_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
+	contained_child(dir, file.name())
 }
 
 /// `<dir>/<state file>.tmp`, the staging name used before an atomic rename.
-pub fn state_tmp_file(dir: &Path, file: StateFile) -> PathBuf {
-	dir.join(format!("{}.tmp", file.name()))
+pub fn state_tmp_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
+	contained_child(dir, &format!("{}.tmp", file.name()))
 }
 
 #[cfg(test)]

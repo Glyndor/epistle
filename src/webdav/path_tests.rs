@@ -2,8 +2,10 @@ use super::*;
 
 #[test]
 fn account_root_builds_under_data_dir() {
-	let root = account_root(Path::new("/data"), "alice").expect("root");
-	assert_eq!(root, Path::new("/data/accounts/alice/dav"));
+	let data = tempfile::tempdir().expect("tempdir");
+	let data = data.path().canonicalize().expect("canonical");
+	let root = account_root(&data, "alice").expect("root");
+	assert_eq!(root, data.join("accounts/alice/dav"));
 }
 
 #[test]
@@ -13,6 +15,8 @@ fn account_root_rejects_traversal_in_name() {
 	assert!(account_root(Path::new("/data"), "a\\b").is_none());
 	assert!(account_root(Path::new("/data"), "a\0b").is_none());
 	assert!(account_root(Path::new("/data"), "").is_none());
+	assert!(account_root(Path::new("/data"), "../evil").is_none());
+	assert!(account_root(Path::new("/data"), "alice/../../x").is_none());
 }
 
 #[test]

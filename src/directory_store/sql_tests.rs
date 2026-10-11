@@ -191,3 +191,69 @@ fn one_bad_sql_row_does_not_take_the_whole_directory_offline() {
 		Resolution::Account(ref name) if name == "good"
 	));
 }
+
+fn resolve_in(store: &AccountStore, address: &str) -> Resolution {
+	store
+		.handle()
+		.current()
+		.resolve(&crate::smtp::address::Address::parse(address).expect("address"))
+}
+
+#[test]
+fn sql_and_ldap_style_names_resolve_while_unsafe_ones_are_dropped() {
+	let store = store_with(Vec::new());
+	store.set_sql_accounts(vec![
+		sql("J_Smith", "smith@example.org", Some("secret")),
+		sql("../evil", "evil@example.org", Some("secret")),
+		sql(".", "dot@example.org", Some("secret")),
+		sql("a/b", "slash@example.org", Some("secret")),
+	]);
+	store.set_ldap_accounts(vec![
+		crate::directory_store::LdapAccount {
+			name: "john.doe".to_string(),
+			addresses: vec!["john@example.org".to_string()],
+		},
+		crate::directory_store::LdapAccount {
+			name: "..".to_string(),
+			addresses: vec!["dots@example.org".to_string()],
+		},
+	]);
+	assert!(
+		matches!(resolve_in(&store, "smith@example.org"), Resolution::Account(ref n) if n == "J_Smith")
+	);
+	assert!(
+		matches!(resolve_in(&store, "john@example.org"), Resolution::Account(ref n) if n == "john.doe")
+	);
+	for address in [
+		"evil@example.org",
+		"dot@example.org",
+		"slash@example.org",
+		"dots@example.org",
+	] {
+		assert!(
+			!matches!(resolve_in(&store, address), Resolution::Account(_)),
+			"{address}"
+		);
+	}
+}
+
+#[test]
+fn creating_an_account_keeps_the_strict_policy() {
+	let store = store_with(Vec::new());
+	for name in ["john.doe", "J_Smith", "Alice"] {
+		let result = store.add(crate::directory_store::DynamicAccount {
+			name: name.to_string(),
+			addresses: vec!["x@example.org".to_string()],
+			password_hash: "$argon2id$stub".to_string(),
+			scram: None,
+			totp_secret: None,
+			disabled: false,
+			quota_bytes: None,
+			allowed_protocols: None,
+		});
+		assert!(
+			matches!(&result, Err(crate::directory_store::StoreError::Invalid(m)) if m.contains("lowercase")),
+			"creating {name} must stay refused by the name policy"
+		);
+	}
+}

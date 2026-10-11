@@ -33,6 +33,7 @@ use super::StoreError;
 use super::names::validate_name;
 use crate::queue::SuppressionList;
 use crate::storage::{CorrespondentStore, FsSpool};
+use crate::util::path_containment::{contained, contained_child};
 
 /// What to do with the account's queued outbound mail when it is removed.
 ///
@@ -88,8 +89,10 @@ pub struct Removed {
 /// The full filesystem path to an account's mailbox root. Centralised so
 /// the same path shape used by [`crate::imap::mailbox::mailbox_dir`] and
 /// [`crate::managesieve::store::ScriptStore`] is used here too.
-fn account_root(data_dir: &Path, name: &str) -> PathBuf {
-	data_dir.join("accounts").join(name)
+fn account_root(data_dir: &Path, name: &str) -> std::io::Result<PathBuf> {
+	// Not resolved: `remove_mailbox_dir` must still see a link at the root.
+	let accounts = contained(data_dir, &data_dir.join("accounts"))?;
+	contained_child(&accounts, name)
 }
 
 /// Remove every file inside an account's mailbox directory. Returns the
@@ -243,7 +246,7 @@ pub async fn remove_account(
 		.remove_all_for(name)
 		.map_err(StoreError::Io)?;
 
-	let mailbox_root = account_root(data_dir, name);
+	let mailbox_root = account_root(data_dir, name).map_err(StoreError::Io)?;
 	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
 
 	// Clear every ban row keyed on this account name so a recreated
@@ -295,3 +298,7 @@ pub async fn remove_account(
 #[cfg(test)]
 #[path = "removal_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "removal_tests_containment.rs"]
+mod containment_tests;

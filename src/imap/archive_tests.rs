@@ -9,6 +9,7 @@ fn root(data_dir: &Path, account: &str) -> AccountRoot {
 	AccountName::new(account)
 		.expect("valid account")
 		.root(data_dir)
+		.expect("account root")
 }
 
 fn delivered(dir: &Path, account: &str, mailbox: &str, body: &[u8]) -> Uuid {

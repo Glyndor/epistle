@@ -9,6 +9,7 @@ use crate::storage::spool::write_sync;
 /// Persist Sieve-assigned flags as the message's IMAP `.flags` sidecar, so
 /// a `setflag`/`addflag` filter is reflected when the mailbox is opened.
 pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_tokens: &[String]) {
+	use crate::util::path_component::{MessageExt, message_file};
 	let flags: Vec<crate::imap::mailbox::Flag> = flag_tokens
 		.iter()
 		.filter_map(|token| crate::imap::mailbox::Flag::parse(token))
@@ -16,8 +17,10 @@ pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_token
 	if flags.is_empty() {
 		return;
 	}
-	if let Ok(bytes) = serde_json::to_vec(&flags) {
-		let _ = write_sync(&new_dir.join(format!("{id}.flags")), &bytes);
+	if let Ok(bytes) = serde_json::to_vec(&flags)
+		&& let Ok(path) = message_file(new_dir, id, MessageExt::Flags)
+	{
+		let _ = write_sync(&path, &bytes);
 	}
 }
 

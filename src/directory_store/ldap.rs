@@ -36,6 +36,7 @@ use std::thread::JoinHandle;
 use ldap3::{Ldap as LdapConnAsyncHandle, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 
 use crate::config::Ldap;
+use crate::util::path_component::{AccountName, DigestName};
 
 /// One authentication request handed to the worker thread: the login to look up,
 /// the password to bind with, and the channel the worker replies on.
@@ -218,9 +219,22 @@ async fn connect(config: &Ldap) -> ldap3::result::Result<LdapConnAsyncHandle> {
 
 /// Map a found entry to its account name: the first value of the configured
 /// account attribute, falling back to the mail attribute, else `None`.
+///
+/// A value that cannot be one directory name is skipped with a warning that
+/// carries a pseudonym of it, never the value, so it never reaches the data
+/// directory.
 fn account_name(config: &Ldap, entry: &SearchEntry) -> Option<String> {
-	first_value(entry, &config.account_attribute)
-		.or_else(|| first_value(entry, &config.mail_attribute))
+	let name = first_value(entry, &config.account_attribute)
+		.or_else(|| first_value(entry, &config.mail_attribute))?;
+	if AccountName::new(&name).is_ok() {
+		Some(name)
+	} else {
+		tracing::warn!(
+			account = %DigestName::pseudonym(&name),
+			"ignoring an LDAP entry whose account name cannot be a directory name",
+		);
+		None
+	}
 }
 
 /// The first value of an attribute on an entry, if present and non-empty.

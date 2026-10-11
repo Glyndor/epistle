@@ -123,8 +123,13 @@ async fn archive_restore_round_trips_message_to_mailbox() {
 	assert_eq!(body["restored_to"], "INBOX");
 
 	// The archive no longer holds the entry.
-	let entries =
-		archive::list(&AccountName::new("alice").expect("account").root(dir.path())).expect("list");
+	let entries = archive::list(
+		&AccountName::new("alice")
+			.expect("account")
+			.root(dir.path())
+			.expect("root"),
+	)
+	.expect("list");
 	assert!(entries.is_empty());
 	// The mailbox has the restored message.
 	let snapshot = Snapshot::open_at(
