@@ -534,14 +534,16 @@ mod tests {
 		// buffer as declared, every account would share one known salt — so
 		// the all-zero salt is asserted against explicitly, not just
 		// inequality between two draws.
-		let zero = ScramStored::from_credentials(&ScramCredentials::derive(
-			fixtures::password(),
-			&[0u8; SALT_LEN],
-			SCRAM_ITERATIONS,
-		));
 		let a = ScramStored::with_fresh_salt(fixtures::password()).expect("csprng");
 		let b = ScramStored::with_fresh_salt(fixtures::password()).expect("csprng");
-		assert!((a.salt) != (zero.salt), "credential field must differ");
+		let decoded = base64::engine::general_purpose::STANDARD
+			.decode(&a.salt)
+			.expect("salt is base64");
+		assert_eq!(decoded.len(), SALT_LEN, "salt keeps its declared width");
+		assert!(
+			decoded.iter().any(|byte| *byte != 0),
+			"the salt is not the all-zero buffer"
+		);
 		assert!((a.salt) != (b.salt), "credential field must differ");
 		assert_eq!(a.iterations, SCRAM_ITERATIONS);
 	}
