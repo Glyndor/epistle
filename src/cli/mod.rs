@@ -3,6 +3,7 @@
 mod account;
 mod accounts;
 mod alert;
+mod alias;
 mod antispam;
 mod api_keys;
 mod app_passwords;
@@ -591,6 +592,18 @@ pub enum Command {
 		/// Antispam administration action.
 		#[command(subcommand)]
 		action: antispam::AntispamCli,
+	},
+	/// Show, add, remove or edit multi-target aliases; enable or disable them.
+	Alias {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Alias administration action.
+		#[command(subcommand)]
+		action: alias::AliasCli,
 	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.

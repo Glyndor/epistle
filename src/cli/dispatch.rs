@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
-	Cli, Command, account, accounts, antispam, api_keys, app_passwords, archive, autoconfig,
+	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
 	autodiscover, backup, ban, dns_records, export, import, init, local, mobileconfig, probe,
 	queue, report_abuse, reports, serve, srv, stack, status, style, suppression, verify,
 	verify_dns,
@@ -409,6 +409,11 @@ impl Cli {
 				action,
 				dry_run,
 			} => antispam::run(&config, action, dry_run),
+			Command::Alias {
+				config,
+				action,
+				dry_run,
+			} => alias::run(&config, action, dry_run),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -443,6 +448,7 @@ impl Command {
 			| Command::Webhook { .. }
 			| Command::Alert { .. }
 			| Command::Antispam { .. }
+			| Command::Alias { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }

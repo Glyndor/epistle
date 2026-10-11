@@ -12,7 +12,6 @@
 //! server reads at startup. The CLI never accepts a literal key and never
 //! prints the configured one back.
 
-use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
@@ -608,8 +607,11 @@ fn parse_unit_interval(input: &str) -> Result<f64, &'static str> {
 /// references the loader resolves at runtime; the CLI shows `set` for each,
 /// not the value. Kept as a public accessor for the tests.
 #[cfg(test)]
-pub(crate) fn llm_summary(config: &Config) -> HashMap<&'static str, &'static str> {
-	let mut out = HashMap::new();
+pub(crate) fn llm_summary(
+	config: &Config,
+) -> std::collections::HashMap<&'static str, &'static str> {
+	let mut out: std::collections::HashMap<&'static str, &'static str> =
+		std::collections::HashMap::new();
 	let llm = config.antispam_llm.as_ref();
 	out.insert("endpoint", if llm.is_some() { "set" } else { "unset" });
 	out.insert("model", if llm.is_some() { "set" } else { "unset" });
