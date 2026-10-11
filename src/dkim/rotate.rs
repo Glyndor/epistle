@@ -217,22 +217,36 @@ impl Rotator {
 				write_key(&key_file, &pem)?;
 				// Publish TXT for every configured in-zone domain BEFORE the
 				// signer switches: a half-published rotation would leave
-				// every domain whose upsert ran first signing with the old
-				// key while the rest sign with one receivers cannot
-				// verify. If any single upsert fails, the rotation aborts
-				// before the signer reloads and the new key file is removed
-				// so no half-state lingers for the next tick.
+				// some domains signing with a key receivers cannot verify.
+				// If one upsert fails, the records already published for
+				// this selector are withdrawn (best effort) and the new key
+				// file is removed, so a failed tick leaves neither orphan
+				// TXT records nor a stray key behind.
+				let mut published: Vec<&String> = Vec::new();
 				for domain in &self.signing_domains {
-					self.provider
+					let upsert = self
+						.provider
 						.upsert(
 							&self.zone,
 							txt_record(&Self::record_name(&selector, domain), &txt),
 						)
-						.await
-						.map_err(|error| {
-							let _ = std::fs::remove_file(&key_file);
-							RotateError(format!("publish {selector}._domainkey.{domain}: {error}"))
-						})?;
+						.await;
+					if let Err(error) = upsert {
+						for done in published {
+							let _ = self
+								.provider
+								.delete(
+									&self.zone,
+									txt_record(&Self::record_name(&selector, done), ""),
+								)
+								.await;
+						}
+						let _ = std::fs::remove_file(&key_file);
+						return Err(RotateError(format!(
+							"publish {selector}._domainkey.{domain}: {error}"
+						)));
+					}
+					published.push(domain);
 				}
 				let signer = self
 					.signer
@@ -259,12 +273,10 @@ impl Rotator {
 					(p.selector == *selector && !p.key_file.as_os_str().is_empty())
 						.then(|| p.key_file.clone())
 				});
-				// Remove the retired TXT from every in-zone domain the rotator
-				// ever published it under, the same set the next selector
-				// was written to. A delete for one failing domain leaves the
-				// others consistent and the state reflects that the selector
-				// is logically retired; the survivor is removed on the next
-				// tick or by the operator.
+				// Remove the retired TXT from every in-zone domain it was
+				// published under. If any delete fails, the state keeps the
+				// previous selector, so the next tick retries every delete
+				// (deleting an absent record is harmless).
 				let mut last_error: Option<String> = None;
 				for domain in &self.signing_domains {
 					if let Err(error) = self

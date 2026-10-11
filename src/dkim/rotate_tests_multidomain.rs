@@ -52,6 +52,7 @@ impl DnsProvider for RecordingDns {
 #[derive(Default)]
 struct FailSecondDomain {
 	upserts: Mutex<Vec<String>>,
+	deletes: Mutex<Vec<String>>,
 }
 
 impl DnsProvider for FailSecondDomain {
@@ -67,7 +68,8 @@ impl DnsProvider for FailSecondDomain {
 		})
 	}
 
-	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		self.deletes.lock().unwrap().push(record.name);
 		Box::pin(async { Ok(()) })
 	}
 
@@ -206,7 +208,8 @@ async fn rotate_keeps_old_selector_when_one_upsert_fails() {
 	std::fs::write(&key_file, pem).expect("write ed25519 key");
 	let signer = Signer::load("ed0", &key_file).expect("load");
 	let signer = ReloadableSigner::new(Arc::new(signer));
-	let dns: Arc<dyn DnsProvider> = Arc::new(FailSecondDomain::default());
+	let failing = Arc::new(FailSecondDomain::default());
+	let dns: Arc<dyn DnsProvider> = failing.clone();
 	let rotator = Rotator::new(
 		root.clone(),
 		signer.clone(),
@@ -248,6 +251,16 @@ async fn rotate_keeps_old_selector_when_one_upsert_fails() {
 	assert_eq!(
 		saved.selector, "ed0",
 		"persisted selector must remain the pre-rotation one"
+	);
+	let published = failing.upserts.lock().unwrap().clone();
+	let withdrawn = failing.deletes.lock().unwrap().clone();
+	let orphan = published
+		.iter()
+		.filter(|name| name.ends_with("._domainkey.example.org"))
+		.find(|name| !withdrawn.contains(name));
+	assert!(
+		orphan.is_none(),
+		"a record published before the failure must be withdrawn: {orphan:?}"
 	);
 }
 
