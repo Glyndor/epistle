@@ -29,7 +29,7 @@
 //!
 //! [`contained_subdir`] and [`contained_child`] are the forms for one
 //! user-influenced name inside a directory that was already vetted. The first
-//! resolves an existing directory, the second touches no filesystem, so
+//! refuses a link at that name, the second touches no filesystem, so
 //! listing or scanning a large mailbox does not pay for a resolution per
 //! message. They refuse exactly `.`, `..`, separators and NUL, so names such
 //! as `a..b` stay valid.
@@ -160,23 +160,16 @@ pub fn contained_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
 
 /// `dir/name` for a single plain `name` that names a directory.
 ///
-/// Like [`contained_child`], but when the directory already exists it is
-/// resolved, and a link that leads out of `dir` is refused. A name that
-/// does not exist yet is returned as the plain child, but a dangling link is
-/// refused because creating through it would write outside `dir`. `dir` must
+/// Like [`contained_child`], but a link at that name is refused, whether it
+/// dangles, points outside `dir` or points at a sibling: creating or reading
+/// through it would reach a directory that is not the one named. `dir` must
 /// come from [`contained`] or from this function.
 pub fn contained_subdir(dir: &Path, name: &str) -> io::Result<PathBuf> {
 	let child = contained_child(dir, name)?;
-	match child.canonicalize() {
-		Ok(real) if real.starts_with(dir) => Ok(real),
-		Ok(_) => Err(escapes_root()),
-		Err(error) if error.kind() == io::ErrorKind::NotFound => {
-			if std::fs::symlink_metadata(&child).is_ok() {
-				Err(escapes_root())
-			} else {
-				Ok(child)
-			}
-		}
+	match std::fs::symlink_metadata(&child) {
+		Ok(meta) if meta.file_type().is_symlink() => Err(escapes_root()),
+		Ok(_) => Ok(child),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(child),
 		Err(error) => Err(unresolvable(&error)),
 	}
 }

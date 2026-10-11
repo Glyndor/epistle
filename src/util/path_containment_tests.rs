@@ -105,7 +105,7 @@ fn child_names_with_dot_dot_inside_are_ordinary() {
 }
 
 #[test]
-fn subdir_resolves_an_existing_directory_and_accepts_a_new_one() {
+fn subdir_accepts_an_existing_directory_and_a_new_one() {
 	let (_guard, root) = data_dir();
 	assert_eq!(
 		contained_subdir(&root, "accounts").expect("existing"),
@@ -134,7 +134,8 @@ fn subdir_refuses_links_that_leave_the_directory() {
 	fs::create_dir_all(&outside).expect("outside");
 	std::os::unix::fs::symlink(&outside, root.join("link")).expect("link");
 	std::os::unix::fs::symlink(outside.join("missing"), root.join("dangling")).expect("link");
-	for name in ["link", "dangling"] {
+	std::os::unix::fs::symlink(root.join("accounts"), root.join("sibling")).expect("link");
+	for name in ["link", "dangling", "sibling"] {
 		let error = contained_subdir(&root, name).expect_err(name);
 		assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name}");
 	}
