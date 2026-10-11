@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::net::HttpsUrl;
 
 use super::provider::{
-	DnsProvider, DnsRecord, ProviderError, RECORD_DESCRIPTION, RecordKind, ScopedSecret, parse_srv,
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
 
@@ -181,7 +181,7 @@ impl CloudflareProvider {
 				"ttl": record.ttl,
 			})
 		};
-		value["comment"] = serde_json::Value::from(RECORD_DESCRIPTION);
+		value["comment"] = serde_json::Value::from(record_description());
 		Ok(value.to_string())
 	}
 

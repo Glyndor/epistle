@@ -349,7 +349,7 @@ async fn create_body_carries_the_comment_field() {
 		.expect("upsert");
 	let body: serde_json::Value =
 		serde_json::from_str(state.lock().unwrap().last_body.as_deref().unwrap()).unwrap();
-	assert_eq!(body["comment"], "Managed by epistle");
+	assert_eq!(body["comment"], expected_description());
 }
 
 #[tokio::test]
@@ -373,7 +373,7 @@ async fn update_body_sets_the_comment_field_too() {
 		s.calls
 	);
 	let body: serde_json::Value = serde_json::from_str(s.last_body.as_deref().unwrap()).unwrap();
-	assert_eq!(body["comment"], "Managed by epistle");
+	assert_eq!(body["comment"], expected_description());
 }
 
 #[test]
@@ -395,6 +395,11 @@ fn every_record_kind_body_carries_the_comment() {
 		let r = rec(kind, value);
 		let body = CloudflareProvider::record_body(kind.as_str(), &r).unwrap();
 		let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-		assert_eq!(v["comment"], "Managed by epistle", "{}", kind.as_str());
+		assert_eq!(v["comment"], expected_description(), "{}", kind.as_str());
 	}
+}
+
+/// The exact string the owner expects in the provider panel.
+fn expected_description() -> String {
+	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
 }
