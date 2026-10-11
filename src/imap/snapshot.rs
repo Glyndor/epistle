@@ -239,8 +239,7 @@ impl Snapshot {
 			.filter(|index| *index < self.messages.len())
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
 		let uid = self.messages[index].uid;
-		self.remove_files(self.messages[index].id);
-		self.messages.remove(index);
+		self.take_where(|message| message.uid == uid);
 		super::vanished::record_advancing(&self.account_dir, &[uid]);
 		Ok(())
 	}
@@ -263,43 +262,47 @@ impl Snapshot {
 	/// a chance to set `\Deleted` on the replacement target. Returns
 	/// the sequence numbers that were removed, in increasing order.
 	pub fn remove_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
-		let mut removed_seqs = Vec::new();
-		let mut index = 0;
-		while index < self.messages.len() {
-			let message = &self.messages[index];
-			if uids.contains(&message.uid) {
-				self.remove_files(message.id);
-				self.messages.remove(index);
-				removed_seqs.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
-			} else {
-				index += 1;
-			}
-		}
-		if !removed_seqs.is_empty() {
+		let removed = self.take_where(|message| uids.contains(&message.uid));
+		if !removed.is_empty() {
 			super::vanished::record_advancing(&self.account_dir, uids);
 		}
-		Ok(removed_seqs)
+		Ok(removed.into_iter().map(|(sequence, _)| sequence).collect())
 	}
 
 	/// Expunge every `\Deleted` message whose UID passes `keep`, logging the
 	/// vanished UIDs for QRESYNC.
 	fn expunge_where(&mut self, keep: impl Fn(u32) -> bool) -> std::io::Result<Vec<u32>> {
-		let mut expunged = Vec::new();
-		let mut vanished = Vec::new();
-		let mut index = 0;
-		while index < self.messages.len() {
-			let message = &self.messages[index];
-			if message.flags.contains(&super::mailbox::Flag::Deleted) && keep(message.uid) {
-				vanished.push(message.uid);
-				self.remove_files(message.id);
-				self.messages.remove(index);
-				expunged.push(u32::try_from(index + 1).unwrap_or(u32::MAX));
-			} else {
-				index += 1;
-			}
-		}
+		let removed = self.take_where(|message| {
+			message.flags.contains(&super::mailbox::Flag::Deleted) && keep(message.uid)
+		});
+		let vanished: Vec<u32> = removed.iter().map(|(_, uid)| *uid).collect();
 		super::vanished::record_advancing(&self.account_dir, &vanished);
-		Ok(expunged)
+		Ok(removed.into_iter().map(|(sequence, _)| sequence).collect())
+	}
+
+	/// Take every message `doomed` selects out of the snapshot in a single
+	/// pass, removing its files, and return `(sequence, uid)` for each. The
+	/// sequence is the one valid when that removal is announced: removing an
+	/// earlier message has already renumbered the ones after it.
+	fn take_where(
+		&mut self,
+		mut doomed: impl FnMut(&super::mailbox::MessageRef) -> bool,
+	) -> Vec<(u32, u32)> {
+		let mut messages = std::mem::take(&mut self.messages);
+		let mut taken = Vec::new();
+		let mut position = 0usize;
+		messages.retain(|message| {
+			let hit = doomed(message);
+			if hit {
+				self.remove_files(message.id);
+				let sequence = u32::try_from(position + 1 - taken.len()).unwrap_or(u32::MAX);
+				taken.push((sequence, message.uid));
+			}
+			position += 1;
+			!hit
+		});
+		self.messages = messages;
+		taken
 	}
 
 	/// Remove a message's `.eml` and its `.flags`/`.uid` sidecars.
@@ -326,7 +329,7 @@ impl Snapshot {
 				Err(error) => {
 					tracing::error!(
 						%error,
-						account_root = %self.account_root.display(),
+						account_root = %crate::log_id::path(self.account_root.as_path()),
 						mailbox = %self.mailbox,
 						"could not archive an expunged message; leaving it on disk",
 					);

@@ -20,6 +20,7 @@ use crate::cli::util::read_line;
 /// deliberately omitted.
 pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 	let _ = writeln!(out, "name: {}", account.name);
+	let _ = writeln!(out, "log_id: {}", crate::log_id::account(&account.name));
 	let _ = writeln!(out, "source: dynamic");
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
 	let _ = writeln!(
@@ -86,7 +87,7 @@ pub(crate) fn password_with_store(
 	};
 	match store.set_password_hash(name, hash, Some(scram)) {
 		Ok(()) => {
-			println!("updated password for {name}");
+			println!("password updated");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -97,11 +98,11 @@ pub(crate) fn disable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 	match store.set_disabled(name, true) {
 		Ok(previous) => {
 			let state = if previous {
-				"already disabled"
+				"account already disabled"
 			} else {
-				"disabled"
+				"account disabled"
 			};
-			println!("{state} {name}");
+			println!("{state}");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -112,11 +113,11 @@ pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 	match store.set_disabled(name, false) {
 		Ok(previous) => {
 			let state = if previous {
-				"enabled"
+				"account enabled"
 			} else {
-				"already enabled"
+				"account already enabled"
 			};
-			println!("{state} {name}");
+			println!("{state}");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -126,7 +127,7 @@ pub(crate) fn enable_with_store(store: &AccountStore, name: &str) -> ExitCode {
 pub(crate) fn address_add_with_store(store: &AccountStore, name: &str, address: &str) -> ExitCode {
 	match store.add_address(name, address) {
 		Ok(()) => {
-			println!("added address {address} for {name}");
+			println!("address added");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -140,25 +141,30 @@ pub(crate) fn address_remove_with_store(
 ) -> ExitCode {
 	match store.remove_address(name, address) {
 		Ok(()) => {
-			println!("removed address {address} for {name}");
+			println!("address removed");
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
 	}
 }
 
+/// The confirmation after a quota change.
+pub(crate) fn quota_changed(new: Option<u64>) -> String {
+	match new {
+		Some(bytes) => format!("quota set to {bytes}"),
+		None => "quota set to server default".to_string(),
+	}
+}
+
+/// The confirmation after a protocol allowlist change.
+pub(crate) fn protocols_changed(new: Option<&Vec<Protocol>>) -> String {
+	format!("protocols set to {}", render_protocols(new))
+}
+
 pub(crate) fn quota_with_store(store: &AccountStore, name: &str, size: Option<u64>) -> ExitCode {
 	match store.set_quota_bytes(name, size) {
-		Ok(previous) => {
-			let previous_text = match previous {
-				Some(bytes) => bytes.to_string(),
-				None => "server default".to_string(),
-			};
-			let new_text = match size {
-				Some(bytes) => bytes.to_string(),
-				None => "server default".to_string(),
-			};
-			println!("quota for {name}: {previous_text} -> {new_text}");
+		Ok(_) => {
+			println!("{}", quota_changed(size));
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -171,14 +177,42 @@ pub(crate) fn protocols_with_store(
 	allowed: Option<Vec<Protocol>>,
 ) -> ExitCode {
 	match store.set_allowed_protocols(name, allowed.clone()) {
-		Ok(previous) => {
-			let previous_text = render_protocols(previous.as_ref());
-			let new_text = render_protocols(allowed.as_ref());
-			println!("protocols for {name}: {previous_text} -> {new_text}");
+		Ok(_) => {
+			println!("{}", protocols_changed(allowed.as_ref()));
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
 	}
+}
+
+/// Print the name of every account whose log pseudonym is `id`. A login
+/// that was an address (SMTP and IMAP clients often present one) is
+/// pseudonymised as a whole, so an account also matches when one of its
+/// addresses does. A miss prints nothing and fails.
+pub(crate) fn find_log_id_with_store(
+	store: &AccountStore,
+	id: &str,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let id = id.trim().to_ascii_lowercase();
+	let mut views = store.account_views();
+	views.sort_by(|a, b| a.0.cmp(&b.0));
+	let mut found = false;
+	for (name, addresses, _) in &views {
+		let matches = crate::log_id::account(name) == id
+			|| addresses
+				.iter()
+				.any(|address| crate::log_id::account(address) == id);
+		if matches {
+			found = true;
+			let _ = writeln!(out, "{name}");
+		}
+	}
+	if !found {
+		style::error("no account matches that log id on this server");
+		return ExitCode::FAILURE;
+	}
+	ExitCode::SUCCESS
 }
 
 pub(crate) fn show_with_store(

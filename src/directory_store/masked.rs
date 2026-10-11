@@ -292,7 +292,7 @@ impl MaskedAddressStore {
 		if let Err(error) = self.persist() {
 			tracing::warn!(
 				target: "epistle::directory_store::masked",
-				%account,
+				account = %crate::log_id::account(&account),
 				%address,
 				%error,
 				"cannot persist masked-address last_used_at update"

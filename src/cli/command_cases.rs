@@ -17,7 +17,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["config-check"], true),
 	(&["dkim-keygen", "--out", "/tmp/dkim.pem"], false),
 	(&["storage-keygen"], false),
-	(&["oauth-keygen"], false),
+	(&["oauth-keygen", "--out", "/tmp/oauth.toml"], false),
 	(&["export", "--account", "alice"], true),
 	(&["import", "--account", "alice"], true),
 	(&["backup"], true),

@@ -28,8 +28,9 @@ mod account_actions;
 #[allow(unused_imports)]
 pub(super) use account_actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
-	handle_error, password_with_store, protocols_with_store, quota_with_store, render,
-	render_protocols, show_with_store,
+	find_log_id_with_store, handle_error, password_with_store, protocols_changed,
+	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
+	show_with_store,
 };
 
 /// Every action the `epistle account` umbrella command understands.
@@ -84,11 +85,18 @@ pub enum Subcommand {
 		list: String,
 	},
 	/// Print the public view of an account (addresses, disabled, quota,
-	/// protocols). Never secrets.
+	/// protocols, log id). Never secrets.
 	Show {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
 		name: String,
+	},
+	/// Map a log pseudonym (`acct-` plus 12 hex characters) back to the
+	/// account it stands for, using this server's pseudonym key.
+	FindLogId {
+		/// The pseudonym as it appears in the server log.
+		#[arg(value_name = "LOG_ID")]
+		log_id: String,
 	},
 }
 
@@ -283,6 +291,19 @@ fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
 	Ok(store)
 }
 
+/// Load the server's log pseudonym key so the pseudonyms this command
+/// prints are the ones the running server writes to its log.
+fn init_log_id(config_path: &Path) -> Result<(), ExitCode> {
+	let config = Config::load(config_path).map_err(|error| {
+		style::error(error);
+		ExitCode::FAILURE
+	})?;
+	crate::log_id::init(&config.data_dir).map_err(|error| {
+		style::error(format_args!("cannot open the log pseudonym key: {error}"));
+		ExitCode::FAILURE
+	})
+}
+
 /// Dispatch every `epistle account …` subcommand. The umbrella exists
 /// so the operator can `tab-complete` from one root and so the
 /// per-action handler signatures stay short.
@@ -362,7 +383,30 @@ pub(super) fn run(
 				Ok(store) => store,
 				Err(code) => return code,
 			};
+			if let Err(code) = init_log_id(config_path) {
+				return code;
+			}
 			show_with_store(&store, &name, out)
+		}
+		Subcommand::FindLogId { log_id } => {
+			let config = match Config::load(config_path) {
+				Ok(config) => config,
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			};
+			if let Err(error) = crate::log_id::init(&config.data_dir) {
+				style::error(format_args!("cannot open the log pseudonym key: {error}"));
+				return ExitCode::FAILURE;
+			}
+			match open_store(&config) {
+				Ok(store) => find_log_id_with_store(&store, &log_id, out),
+				Err(error) => {
+					style::error(format_args!("opening account store: {error}"));
+					ExitCode::FAILURE
+				}
+			}
 		}
 	}
 }

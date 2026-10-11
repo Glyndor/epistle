@@ -63,15 +63,30 @@ fn ehlo_greeting_advertises_extensions() {
 		panic!("expected continue");
 	};
 	let rendered = reply.to_string();
-	assert!(rendered.contains("PIPELINING"), "{rendered}");
-	assert!(rendered.contains("ENHANCEDSTATUSCODES"), "{rendered}");
-	assert!(rendered.contains("8BITMIME"), "{rendered}");
-	assert!(rendered.contains("SMTPUTF8"), "{rendered}");
-	assert!(rendered.contains("SIZE "), "{rendered}");
-	assert!(rendered.contains("STARTTLS"), "{rendered}");
+	assert!(
+		rendered.contains("PIPELINING"),
+		"EHLO must advertise PIPELINING"
+	);
+	assert!(
+		rendered.contains("ENHANCEDSTATUSCODES"),
+		"EHLO must advertise ENHANCEDSTATUSCODES"
+	);
+	assert!(
+		rendered.contains("8BITMIME"),
+		"EHLO must advertise 8BITMIME"
+	);
+	assert!(
+		rendered.contains("SMTPUTF8"),
+		"EHLO must advertise SMTPUTF8"
+	);
+	assert!(rendered.contains("SIZE "), "EHLO must advertise SIZE");
+	assert!(
+		rendered.contains("STARTTLS"),
+		"EHLO must advertise STARTTLS"
+	);
 	assert!(
 		rendered.contains(&format!("LIMITS RCPTMAX={MAX_RECIPIENTS}")),
-		"{rendered}"
+		"EHLO must advertise the recipient limit"
 	);
 	assert!(session.esmtp());
 }

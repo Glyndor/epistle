@@ -460,3 +460,21 @@ fn masked_address_cannot_be_given_to_an_account() {
 		"address add must refuse a masked address"
 	);
 }
+
+/// The address match ignores case, drops only that address, and leaves the
+/// others in the order they were added.
+#[test]
+fn remove_address_ignores_case_and_keeps_the_others_in_order() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	add_bob(&store);
+	store.add_address("bob", "bob2@example.org").expect("add");
+	store.add_address("bob", "bob3@example.org").expect("add");
+
+	store
+		.remove_address("bob", "BOB2@Example.ORG")
+		.expect("remove");
+
+	let remaining = store.dynamic("bob").expect("bob").addresses;
+	assert_eq!(remaining, vec!["bob@example.org", "bob3@example.org"]);
+}

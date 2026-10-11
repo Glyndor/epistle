@@ -598,7 +598,7 @@ async fn forgetting_the_corpus_failing_aborts_account_removal() {
 	.expect("retry without a bayes store must succeed");
 	assert_eq!(
 		retry.mailbox_files, 0,
-		"the retry must not error on the absent mailbox: {retry:?}"
+		"the retry must not error on the absent mailbox"
 	);
 	assert_eq!(retry.masked_addresses, 0);
 	assert_eq!(retry.app_passwords, 0);

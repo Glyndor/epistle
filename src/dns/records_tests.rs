@@ -360,10 +360,16 @@ fn tlsa_full_cert_hashes_the_leaf() {
 	let pem = cert.cert.pem();
 	let assoc = tlsa_full_cert(&pem).expect("association");
 	// DANE-EE, full cert, SHA-256: "3 0 1 " + 64 hex chars.
-	assert!(assoc.starts_with("3 0 1 "), "{assoc}");
+	assert!(
+		assoc.starts_with("3 0 1 "),
+		"the association must be DANE-EE, full cert, SHA-256"
+	);
 	let hex = assoc.strip_prefix("3 0 1 ").unwrap();
-	assert_eq!(hex.len(), 64, "{assoc}");
-	assert!(hex.chars().all(|c| c.is_ascii_hexdigit()), "{assoc}");
+	assert_eq!(hex.len(), 64, "the digest must be 64 hex characters");
+	assert!(
+		hex.chars().all(|c| c.is_ascii_hexdigit()),
+		"the digest must be hexadecimal"
+	);
 }
 
 #[test]

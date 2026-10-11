@@ -75,7 +75,7 @@ pub(super) fn add(
 	};
 	match store.add(account) {
 		Ok(()) => {
-			println!("created account {name}");
+			println!("account created");
 			ExitCode::SUCCESS
 		}
 		Err(error) => {

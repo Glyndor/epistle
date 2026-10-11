@@ -9,6 +9,11 @@ use std::process::ExitCode;
 use crate::imap::mailbox::{self, Flag, Snapshot};
 use crate::storage::MessageCrypto;
 
+/// The line printed once an export finished.
+pub(super) fn exported_summary(count: u64) -> String {
+	format!("exported {count} messages")
+}
+
 /// Write every message in `account`'s mailboxes to `out` as one mbox stream,
 /// decoding any at-rest encryption through `crypto`.
 pub(super) fn run(
@@ -37,7 +42,7 @@ pub(super) fn run(
 	if out.flush().is_err() {
 		return ExitCode::FAILURE;
 	}
-	eprintln!("exported {count} messages for {account}");
+	eprintln!("{}", exported_summary(count));
 	ExitCode::SUCCESS
 }
 
@@ -79,7 +84,7 @@ pub(super) fn run_maildir(
 			count += 1;
 		}
 	}
-	eprintln!("exported {count} messages for {account}");
+	eprintln!("{}", exported_summary(count));
 	ExitCode::SUCCESS
 }
 

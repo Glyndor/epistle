@@ -60,7 +60,7 @@ impl Command {
 			| Command::MtaStsServe { .. }
 			| Command::DkimKeygen { .. }
 			| Command::StorageKeygen
-			| Command::OauthKeygen
+			| Command::OauthKeygen { .. }
 			| Command::TokenHash
 			| Command::Local { .. }
 			| Command::Probe { .. } => false,

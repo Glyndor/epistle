@@ -513,10 +513,7 @@ zone = "example.org"
 token = "x"
 "#,
 	);
-	assert!(
-		result.is_ok(),
-		"capitalised provider must validate, got {result:?}"
-	);
+	assert!(result.is_ok(), "capitalised provider must validate");
 }
 
 /// `provider = "manual"` is in the supported list and must validate
@@ -534,10 +531,7 @@ provider = "manual"
 zone = "example.org"
 "#,
 	);
-	assert!(
-		result.is_ok(),
-		"manual provider must validate, got {result:?}"
-	);
+	assert!(result.is_ok(), "manual provider must validate");
 }
 
 #[path = "validate_privileges_tests.rs"]

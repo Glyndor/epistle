@@ -195,6 +195,20 @@ backup, on its own, yields only ciphertext.
   verbatim, so a backup of an encrypted store remains ciphertext — restore it on
   a host with the same key. Use `epistle export` for a decrypted copy.
 
+## Logs and account names
+
+Server logs never carry an account name. A log line identifies an account by a
+stable pseudonym, `acct-<12 hex>`: an HMAC-SHA256 of the name under a per-server
+key that lives in `<data_dir>/log-pseudonym.key` (created `0600` on first use,
+like the other data-directory keys). The same account always maps to the same
+pseudonym on one server, so its lines can still be followed, but the log alone
+does not reveal who it is about. Paths under an account directory are logged
+with that directory replaced by the pseudonym. The operator, who holds the key,
+maps in either direction with `epistle account show` and
+`epistle account find-log-id` (see [the CLI reference](cli.md#accounts)).
+Test diagnostics follow the same rule: an assertion message names the field,
+never the credential or account data it checked.
+
 ## Reporting a vulnerability
 
 Please report security issues privately via GitHub Security Advisories on this

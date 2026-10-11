@@ -101,10 +101,18 @@ pub async fn run_worker(
 		match window {
 			Ok(Ok(text)) => trainer.train(&job.account, text, job.spam).await,
 			Ok(Err(error)) => {
-				tracing::debug!(account = %job.account, %error, "training skipped: message unreadable");
+				tracing::debug!(
+					account = %crate::log_id::account(&job.account),
+					%error,
+					"training skipped: message unreadable"
+				);
 			}
 			Err(error) => {
-				tracing::warn!(account = %job.account, %error, "training read task failed");
+				tracing::warn!(
+					account = %crate::log_id::account(&job.account),
+					%error,
+					"training read task failed"
+				);
 			}
 		}
 	}

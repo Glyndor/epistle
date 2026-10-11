@@ -154,11 +154,11 @@ fn success_emits_login_succeeded_event_and_bumps_counter() {
 	);
 	assert_eq!(
 		auth[0].fields.get("login").map(String::as_str),
-		Some("alice"),
+		Some(crate::log_id::account("alice").as_str()),
 	);
 	assert_eq!(
 		auth[0].fields.get("account").map(String::as_str),
-		Some("alice"),
+		Some(crate::log_id::account("alice").as_str()),
 	);
 	assert_eq!(
 		auth[0].fields.get("client_ip").map(String::as_str),
@@ -207,7 +207,7 @@ fn wrong_password_emits_login_failed_event_and_bumps_counter() {
 	);
 	assert_eq!(
 		auth[0].fields.get("login").map(String::as_str),
-		Some("alice"),
+		Some(crate::log_id::account("alice").as_str()),
 	);
 	assert_eq!(
 		auth[0].fields.get("account").map(String::as_str),
@@ -260,7 +260,7 @@ fn unknown_login_emits_login_failed_event() {
 	);
 	assert_eq!(
 		auth[0].fields.get("login").map(String::as_str),
-		Some("mallory"),
+		Some(crate::log_id::account("mallory").as_str()),
 	);
 	assert_eq!(
 		auth[0].fields.get("account").map(String::as_str),

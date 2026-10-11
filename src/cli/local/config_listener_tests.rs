@@ -22,9 +22,7 @@ fn loopback_every_listener_is_127_and_six_ports_match() {
 		for listener in &config.listeners {
 			assert!(
 				listener.addr.is_loopback(),
-				"listener {:?} bound to non-loopback {}",
-				listener.kind,
-				listener.addr
+				"a listener is bound to a non-loopback address"
 			);
 			seen.push((
 				listener.addr,
@@ -146,7 +144,7 @@ fn held_outbound_config_is_true_loader_rejects_toml_field_decision_pure() {
 	let bogus = crate::config::Config::load(&bogus_path);
 	assert!(
 		matches!(bogus, Err(crate::config::ConfigError::Parse { .. })),
-		"hold_outbound in TOML must be rejected as an unknown field, got {bogus:?}"
+		"hold_outbound in TOML must be rejected as an unknown field"
 	);
 
 	// Sanity: the marker directory we just built loads cleanly.

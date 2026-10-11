@@ -303,7 +303,7 @@ impl Cli {
 			},
 			Command::DkimKeygen { out, rsa, bits } => dkim_keygen(&out, rsa, bits),
 			Command::StorageKeygen => storage_keygen(),
-			Command::OauthKeygen => oauth_keygen(),
+			Command::OauthKeygen { out } => oauth_keygen(&out),
 			Command::TokenHash => token_hash(),
 			Command::AppPasswordCreate {
 				config,

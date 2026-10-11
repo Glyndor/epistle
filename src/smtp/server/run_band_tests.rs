@@ -151,3 +151,33 @@ async fn imap_training_and_smtp_scoring_agree_on_the_scope() {
 		"IMAP training must use the same scope the SMTP band picked"
 	);
 }
+
+/// An alias none of whose members is a local account has no target to take,
+/// so it is skipped like an unknown user and a later recipient still wins.
+#[test]
+fn an_alias_without_resolvable_members_is_skipped() {
+	let aliases = [(
+		"ghost@example.org".to_string(),
+		AliasSpec {
+			members: vec!["nobody@example.org".to_string()],
+			senders: Vec::new(),
+			hidden: false,
+			list_id: None,
+		},
+	)];
+	let dir = Directory::new(
+		["example.org".to_string()],
+		[("alice@example.org".to_string(), "alice".to_string())],
+	)
+	.with_aliases(aliases);
+	let only_ghost = vec!["ghost@example.org".to_string()];
+	assert_eq!(scoring_account(&dir, &only_ghost), None);
+	let ghost_then_owner = vec![
+		"ghost@example.org".to_string(),
+		"alice@example.org".to_string(),
+	];
+	assert_eq!(
+		scoring_account(&dir, &ghost_then_owner).as_deref(),
+		Some("alice")
+	);
+}

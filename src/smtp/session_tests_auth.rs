@@ -226,7 +226,7 @@ pub(super) fn ehlo_advertises_auth_only_inside_tls() {
 	};
 	assert!(
 		reply.to_string().contains("AUTH SCRAM-SHA-256 PLAIN"),
-		"{reply}"
+		"EHLO inside TLS must offer the SCRAM and PLAIN mechanisms"
 	);
 }
 
@@ -236,13 +236,19 @@ pub(super) fn ehlo_advertises_requiretls_only_inside_tls() {
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(!reply.to_string().contains("REQUIRETLS"), "{reply}");
+	assert!(
+		!reply.to_string().contains("REQUIRETLS"),
+		"EHLO outside TLS must not offer REQUIRETLS"
+	);
 
 	let mut tls = tls_session();
 	let Action::Continue(reply) = tls.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(reply.to_string().contains("REQUIRETLS"), "{reply}");
+	assert!(
+		reply.to_string().contains("REQUIRETLS"),
+		"EHLO inside TLS must offer REQUIRETLS"
+	);
 }
 
 #[test]

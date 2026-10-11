@@ -321,10 +321,8 @@ fn invalid_mail_toml_does_not_regenerate_certificate_or_dkim() {
 	let cert_after = std::fs::read(&cert_path).expect("read cert.pem after");
 	assert!(
 		cert_before == cert_after,
-		"cert.pem must be byte-identical to the first run (lengths {} and {}); \
-		 the credential-pair check ran before the cert step, so the cert step did not run",
-		cert_before.len(),
-		cert_after.len(),
+		"cert.pem must be byte-identical to the first run; \
+		 the credential-pair check ran before the cert step, so the cert step did not run"
 	);
 
 	// `dkim.pem` must be byte-identical for the same reason.

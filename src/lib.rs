@@ -30,6 +30,7 @@ pub mod dnsbl;
 pub mod domain;
 pub mod imap;
 pub mod jwt;
+pub mod log_id;
 pub mod managesieve;
 pub mod metrics;
 pub mod mtasts;

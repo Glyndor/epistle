@@ -142,9 +142,14 @@ pub enum Command {
 	/// `[storage]` at it; never written into data_dir.
 	StorageKeygen,
 	/// Generate an ES256 key pair for the built-in OAuth authorization server and
-	/// print it to stdout: the base64 PKCS#8 private key for `[oauth] signing_key`
-	/// and the matching base64 public point for `[oauth] public_key`.
-	OauthKeygen,
+	/// write it to a file only the owner can read: the base64 PKCS#8 private key
+	/// for `[oauth] signing_key` and the matching base64 public point for
+	/// `[oauth] public_key`. The private key is never printed.
+	OauthKeygen {
+		/// Where to write the key pair (mode 0600; an existing file is refused).
+		#[arg(long, value_name = "FILE")]
+		out: PathBuf,
+	},
 	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
 	/// a Maildir tree with `--maildir`.
 	Export {
@@ -754,3 +759,15 @@ mod cli_account_subcommand_tests;
 #[cfg(test)]
 #[path = "cli_account_subcommand_tests_b.rs"]
 mod cli_account_subcommand_tests_b;
+
+#[cfg(test)]
+#[path = "cli_account_log_id_tests.rs"]
+mod cli_account_log_id_tests;
+
+#[cfg(test)]
+#[path = "cli_confirmation_tests.rs"]
+mod cli_confirmation_tests;
+
+#[cfg(test)]
+#[path = "oauth_keygen_tests.rs"]
+mod oauth_keygen_tests;

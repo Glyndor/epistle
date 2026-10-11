@@ -80,7 +80,10 @@ fn ehlo_without_verifier_hides_oauth_mechanisms() {
 	let Action::Continue(reply) = session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
 	};
-	assert!(!reply.to_string().contains("OAUTHBEARER"), "{reply}");
+	assert!(
+		!reply.to_string().contains("OAUTHBEARER"),
+		"EHLO must not offer OAUTHBEARER here"
+	);
 }
 
 #[test]

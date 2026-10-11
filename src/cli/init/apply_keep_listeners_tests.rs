@@ -113,7 +113,7 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 	assert_eq!(
 		listeners.len(),
 		2,
-		"operator's two listeners must survive the re-run, got: {listeners:?}"
+		"operator's two listeners must survive the re-run"
 	);
 	assert!(
 		listeners.iter().any(|l| {
@@ -121,7 +121,7 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 				&& l.addr == std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
 				&& l.port == Some(1143)
 		}),
-		"the imap listener on 127.0.0.1:1143 must survive byte-for-byte; got: {listeners:?}"
+		"the imap listener on 127.0.0.1:1143 must survive byte-for-byte"
 	);
 	assert!(
 		listeners.iter().any(|l| {
@@ -129,11 +129,11 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 				&& l.addr == std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
 				&& l.port == Some(9090)
 		}),
-		"the metrics listener on 127.0.0.1:9090 must survive byte-for-byte; got: {listeners:?}"
+		"the metrics listener on 127.0.0.1:9090 must survive byte-for-byte"
 	);
 	assert!(
 		!listeners.iter().any(|l| l.kind == ListenerKind::Smtp),
-		"init must not add an smtp listener when the operator already has listeners; got: {listeners:?}"
+		"init must not add an smtp listener when the operator already has listeners"
 	);
 	assert!(
 		!written.contains("kind = \"smtp\""),

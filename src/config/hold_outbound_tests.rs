@@ -55,6 +55,6 @@ fn hold_outbound_in_toml_is_rejected_as_unknown_field() {
 	let result = Config::load(&path);
 	assert!(
 		matches!(result, Err(crate::config::ConfigError::Parse { .. })),
-		"hold_outbound in TOML must be rejected as an unknown field, got {result:?}"
+		"hold_outbound in TOML must be rejected as an unknown field"
 	);
 }

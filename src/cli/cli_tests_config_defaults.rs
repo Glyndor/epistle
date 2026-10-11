@@ -59,7 +59,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		Command::MtaStsServe { .. }
 		| Command::DkimKeygen { .. }
 		| Command::StorageKeygen
-		| Command::OauthKeygen
+		| Command::OauthKeygen { .. }
 		| Command::TokenHash
 		| Command::Local { .. }
 		| Command::Init { .. } => None,
