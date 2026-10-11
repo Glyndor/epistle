@@ -3,7 +3,7 @@
 pub(crate) mod https;
 
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -151,32 +151,8 @@ pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor,
 	Ok(TlsAcceptor::from(Arc::new(server_config)))
 }
 
-/// A hot-swappable TLS acceptor. Certificate renewal replaces the active
-/// acceptor without dropping the listener, so new handshakes use the fresh
-/// certificate while in-flight connections finish on the old one.
-#[derive(Clone)]
-pub struct ReloadableAcceptor {
-	inner: Arc<RwLock<TlsAcceptor>>,
-}
-
-impl ReloadableAcceptor {
-	/// Wrap an initial acceptor.
-	pub fn new(acceptor: TlsAcceptor) -> Self {
-		ReloadableAcceptor {
-			inner: Arc::new(RwLock::new(acceptor)),
-		}
-	}
-
-	/// The current acceptor (cheap clone; shares config via `Arc`).
-	pub fn current(&self) -> TlsAcceptor {
-		self.inner.read().expect("tls acceptor lock").clone()
-	}
-
-	/// Swap in a newly issued acceptor.
-	pub fn reload(&self, acceptor: TlsAcceptor) {
-		*self.inner.write().expect("tls acceptor lock") = acceptor;
-	}
-}
+mod reload;
+pub use reload::ReloadableAcceptor;
 
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, TlsError> {
 	let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path)
