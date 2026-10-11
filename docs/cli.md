@@ -368,6 +368,12 @@ scope here):
 | `epistle accounts` | List configured accounts. |
 | `epistle account-add --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
 | `epistle account-remove --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
+| `epistle account password N` | Update the password for a dynamic account; reads the new password from stdin (one line). Hashes it with argon2id and derives a fresh SCRAM salt, the same way `account-add` does on a fresh account. Refuses a static account with a hint to edit the config file. |
+| `epistle account disable N` / `epistle account enable N` | Toggle the SCIM `active` flag. A disabled account keeps its mailbox but rejects authentication identically to an unknown login until `enable` is run. |
+| `epistle account address add N a@b` / `epistle account address remove N a@b` | Add or remove a delivery address for the account. Address validation reuses the checks `account-add` runs (malformed, foreign domain, conflict with another account). Removing the last remaining address is refused. |
+| `epistle account quota N SIZE\|none` | Set the storage quota. The size accepts `K`, `M`, `G`, `T` suffixes (`500M`, `10G`, `1T`); `none` clears the quota back to the server default. Falls through to the domain quota and then the server default when the account's own quota is unset. |
+| `epistle account protocols N LIST\|all` | Restrict which authentication protocols the account may sign in through. `LIST` is a comma-separated list of protocol names (`imap,smtp,api,webdav`); `all` clears the restriction. |
+| `epistle account show N` | Print the public view of the account (name, addresses, disabled, quota, protocols). Never the password hash, SCRAM credentials, or TOTP secret. |
 | `epistle app-password-create --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
 | `epistle app-passwords [--account N]` | List app passwords (label, expiry, IP restriction). |
 | `epistle app-password-revoke --account N --label L` | Revoke an app password. |
