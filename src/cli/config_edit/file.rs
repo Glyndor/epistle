@@ -12,9 +12,18 @@ pub(super) fn read(path: &Path) -> Result<(String, Metadata), String> {
 		use std::os::unix::fs::OpenOptionsExt;
 		options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
 	}
-	let mut file = options
-		.open(path)
-		.map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+	let mut file = options.open(path).map_err(|error| {
+		// O_NOFOLLOW turns a symlink into ELOOP, whose wording differs
+		// between libcs; name the actual problem instead.
+		#[cfg(unix)]
+		if error.raw_os_error() == Some(libc::ELOOP) {
+			return format!(
+				"{} is a symlink; point --config at the file itself",
+				path.display()
+			);
+		}
+		format!("cannot open {}: {error}", path.display())
+	})?;
 	let metadata = file.metadata().map_err(|error| error.to_string())?;
 	if !metadata.is_file() {
 		return Err("config must be a regular file".into());

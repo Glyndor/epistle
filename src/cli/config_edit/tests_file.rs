@@ -139,7 +139,7 @@ fn verified_open_rejects_insecure_symlink_and_nonregular_files() {
 		ConfigDocument::open(&link)
 			.err()
 			.unwrap()
-			.contains("Too many levels"),
+			.contains("is a symlink"),
 		"open must refuse symlink traversal"
 	);
 	assert_eq!(
