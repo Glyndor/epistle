@@ -9,9 +9,9 @@ use std::process::ExitCode;
 
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
-	Cli, Command, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover, backup,
-	dns_records, export, import, init, local, mobileconfig, queue, report_abuse, reports, serve,
-	srv, stack, style, suppression, verify, verify_dns,
+	Cli, Command, account, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover,
+	backup, dns_records, export, import, init, local, mobileconfig, queue, report_abuse, reports,
+	serve, srv, stack, style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -233,6 +233,16 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Account { config, action } => {
+				let mut out = std::io::stdout().lock();
+				match Config::load(&config) {
+					Ok(_) => account::run(&config, action, &mut out),
+					Err(error) => {
+						style::error(error);
+						ExitCode::FAILURE
+					}
+				}
+			}
 			Command::Queue { config } => match Config::load(&config) {
 				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
 				Err(error) => {
@@ -374,6 +384,7 @@ impl Command {
 			| Command::Accounts { .. }
 			| Command::AccountAdd { .. }
 			| Command::AccountRemove { .. }
+			| Command::Account { .. }
 			| Command::Queue { .. }
 			| Command::AppPasswordCreate { .. }
 			| Command::AppPasswords { .. }

@@ -23,6 +23,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Accounts { config }
 		| Command::AccountAdd { config, .. }
 		| Command::AccountRemove { config, .. }
+		| Command::Account { config, .. }
 		| Command::Queue { config }
 		| Command::AppPasswordCreate { config, .. }
 		| Command::AppPasswords { config }
