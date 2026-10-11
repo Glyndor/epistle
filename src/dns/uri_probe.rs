@@ -72,9 +72,3 @@ pub(super) async fn probe_with_headers(bodies: &[&str]) -> (HttpsUrl, Seen, Head
 	let base = HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap();
 	(base, seen, headers)
 }
-
-/// `base` with `path` (starting with `/`) appended, for providers whose API
-/// root carries a prefix such as `/v2`.
-pub(super) fn under(base: &HttpsUrl, path: &str) -> HttpsUrl {
-	HttpsUrl::loopback_http(&format!("{}{}", base.as_str().trim_end_matches('/'), path)).unwrap()
-}

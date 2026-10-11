@@ -45,5 +45,8 @@ fn host_label_strips_trailing_dot_on_input() {
 
 #[test]
 fn sandbox_url_constant_is_sandbox_subdomain() {
-	assert!(NamecheapProvider::sandbox_url().contains("sandbox"));
+	assert_eq!(
+		NamecheapProvider::sandbox_url().host_str(),
+		Some("api.sandbox.namecheap.com")
+	);
 }

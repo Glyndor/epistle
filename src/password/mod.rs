@@ -121,7 +121,9 @@ mod tests {
 		let short = fixtures::printable_ascii(MIN_LENGTH - 1);
 		assert_eq!(short.chars().count(), 11);
 		assert_eq!(validate(&short), Err(Rejection::TooShort));
-		assert_eq!(validate(&String::new()), Err(Rejection::TooShort));
+		let empty = fixtures::printable_ascii(0);
+		assert!(empty.is_empty(), "shape precondition");
+		assert_eq!(validate(&empty), Err(Rejection::TooShort));
 	}
 
 	#[test]

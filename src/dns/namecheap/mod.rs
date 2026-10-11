@@ -26,6 +26,7 @@ use std::pin::Pin;
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
 use crate::dns::namecheap::render::{host_from_record, host_label, split_sld_tld};
 use crate::dns::namecheap::xml::{Host, extract_hosts, parse_response};
+use crate::net::HttpsUrl;
 
 /// Namecheap's production API endpoint; overridable via
 /// [`NamecheapProvider::with_api_url`] (tests, sandbox).
@@ -53,7 +54,7 @@ pub struct NamecheapProvider {
 	secret: ScopedSecret,
 	api_user: String,
 	api_key: String,
-	base: String,
+	base: HttpsUrl,
 }
 
 impl NamecheapProvider {
@@ -72,19 +73,19 @@ impl NamecheapProvider {
 			secret,
 			api_user: api_user.to_string(),
 			api_key: api_key.to_string(),
-			base: DEFAULT_API_URL.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_API_URL),
 		})
 	}
 
 	/// The Namecheap sandbox URL, for use with [`Self::with_api_url`].
-	pub fn sandbox_url() -> &'static str {
-		SANDBOX_API_URL
+	pub fn sandbox_url() -> HttpsUrl {
+		HttpsUrl::from_static(SANDBOX_API_URL)
 	}
 
 	/// Point the provider at an alternate API endpoint (tests, the
 	/// [`Self::sandbox_url`], or a local mirror).
-	pub fn with_api_url(mut self, url: impl Into<String>) -> Self {
-		self.base = url.into();
+	pub fn with_api_url(mut self, url: HttpsUrl) -> Self {
+		self.base = url;
 		self
 	}
 
@@ -113,18 +114,19 @@ impl NamecheapProvider {
 	}
 
 	/// Build the full request URL with `ApiUser`/`ApiKey`/`UserName`/`Command`
-	/// plus any command-specific extras (`SLD`/`TLD`).
-	fn build_url(&self, command: &str, extra: &[(&str, &str)]) -> String {
-		let mut url = format!(
-			"{}?ApiUser={}&ApiKey={}&UserName={}&Command={}",
-			self.base,
-			url_encode(&self.api_user),
-			url_encode(&self.api_key),
-			url_encode(&self.api_user),
-			url_encode(command),
-		);
-		for (k, v) in extra {
-			url.push_str(&format!("&{k}={}", url_encode(v)));
+	/// plus any command-specific extras (`SLD`/`TLD`). Namecheap takes its
+	/// credentials in the query string, so the URL is an [`HttpsUrl`]: the
+	/// key cannot be put on a cleartext request, and every value is
+	/// percent-encoded as a query pair.
+	fn build_url(&self, command: &str, extra: &[(&str, &str)]) -> HttpsUrl {
+		let mut url = self
+			.base
+			.with_query("ApiUser", &self.api_user)
+			.with_query("ApiKey", &self.api_key)
+			.with_query("UserName", &self.api_user)
+			.with_query("Command", command);
+		for (key, value) in extra {
+			url = url.with_query(key, value);
 		}
 		url
 	}
@@ -139,7 +141,7 @@ impl NamecheapProvider {
 		);
 		let response = self
 			.client
-			.get(&url)
+			.get(url.into_url())
 			.send()
 			.await
 			.map_err(|e| ProviderError::Remote(e.to_string()))?;
@@ -158,7 +160,7 @@ impl NamecheapProvider {
 		let body = build_set_hosts_body(hosts);
 		let response = self
 			.client
-			.post(&url)
+			.post(url.into_url())
 			.header(reqwest::header::CONTENT_TYPE, "application/xml")
 			.body(body)
 			.send()
@@ -272,21 +274,6 @@ fn render_host(host: &Host) -> String {
 	}
 }
 
-/// Percent-encode a single URL component (`%XX`-style for the bytes the
-/// Namecheap API cares about — alnum + a small set stays literal).
-fn url_encode(value: &str) -> String {
-	let mut out = String::with_capacity(value.len());
-	for byte in value.bytes() {
-		match byte {
-			b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-				out.push(byte as char)
-			}
-			_ => out.push_str(&format!("%{byte:02X}")),
-		}
-	}
-	out
-}
-
 /// Escape XML attribute special characters.
 fn xml_attr_escape(value: &str) -> String {
 	let mut out = String::with_capacity(value.len());
@@ -321,3 +308,7 @@ mod tests_errors;
 #[cfg(test)]
 #[path = "tests_render.rs"]
 mod tests_render;
+
+#[cfg(test)]
+#[path = "tests_path.rs"]
+mod tests_path;
