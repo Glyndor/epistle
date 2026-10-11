@@ -436,6 +436,18 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 | `url` | Endpoint to POST events to. |
 | `secret` | Optional HMAC-SHA256 signing secret. |
 
+Each request is a JSON object whose `event` field names the event:
+`message_received`, `delivery_failed`, `metric_alert`, and `test`. When `secret` is
+set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
+
+`test` is sent only by `epistle webhook test`, once, to check reachability and
+signature verification. It has a single fixed field, so receivers can acknowledge
+it and otherwise ignore it:
+
+```json
+{"event":"test","message":"epistle webhook test: connectivity check, no mail activity"}
+```
+
 ### `[antispam.llm]`
 LLM-assisted screening for the **uncertain band** — the slice of mail where the
 local Bayesian classifier is not confident in either direction. Outside the band

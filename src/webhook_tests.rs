@@ -166,3 +166,46 @@ async fn records_delivery_metrics() {
 		metrics.render()
 	);
 }
+
+#[test]
+fn test_event_has_the_documented_shape() {
+	let event = WebhookEvent::Test {
+		message: TEST_MESSAGE.into(),
+	};
+	assert_eq!(
+		serde_json::to_string(&event).expect("serialize"),
+		"{\"event\":\"test\",\"message\":\"epistle webhook test: connectivity check, no mail activity\"}"
+	);
+}
+
+#[tokio::test]
+async fn send_test_posts_a_signed_test_event_and_returns_the_status() {
+	let captured: Captured = Arc::new(Mutex::new(None));
+	let url = mock_server(captured.clone()).await;
+	let webhook = Webhook::new(&url, Some("topsecret".into())).expect("webhook");
+	let status = webhook.send_test().await.expect("reachable endpoint");
+	assert_eq!(status.as_u16(), 200);
+	let (body, sig) = captured.lock().expect("lock").clone().expect("a request");
+	assert_eq!(
+		body,
+		"{\"event\":\"test\",\"message\":\"epistle webhook test: connectivity check, no mail activity\"}"
+	);
+	assert_eq!(
+		sig.as_deref(),
+		Some(sign("topsecret", body.as_bytes()).as_str()),
+		"the test event must be signed like any other"
+	);
+}
+
+#[tokio::test]
+async fn send_test_reports_an_error_status_and_an_unreachable_endpoint() {
+	let captured: Captured = Arc::new(Mutex::new(None));
+	let url = mock_server(captured).await;
+	let missing = Webhook::new(&format!("{url}-missing"), None).expect("webhook");
+	assert_eq!(missing.send_test().await.expect("answered").as_u16(), 404);
+	let down = Webhook::new("http://127.0.0.1:1/hook", None).expect("webhook");
+	assert!(
+		down.send_test().await.is_err(),
+		"a refused connection is an error"
+	);
+}
