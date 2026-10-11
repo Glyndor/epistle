@@ -42,7 +42,7 @@ impl From<InvalidComponent> for std::io::Error {
 
 /// Whether `name` is a single plain path component: not empty, not `.` or
 /// `..`, no separator, no NUL or other control character, not absolute, and
-/// not longer than [`MAX_COMPONENT_LEN`].
+/// not longer than `MAX_COMPONENT_LEN` bytes.
 pub fn is_plain_component(name: &str) -> bool {
 	!name.is_empty()
 		&& name.len() <= MAX_COMPONENT_LEN
