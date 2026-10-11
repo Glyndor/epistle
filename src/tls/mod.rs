@@ -133,6 +133,22 @@ pub fn tls_server_end_point(config: &Tls) -> Option<Vec<u8>> {
 	Some(digest.as_ref().to_vec())
 }
 
+/// The DER bytes of the leaf certificate in `path`, the same bytes the running
+/// `serve` would present on the wire (the apply phase points the `[tls]`
+/// section at this file: `keys/cert.pem` for a static configuration,
+/// `<data_dir>/acme/cert.pem` once ACME renewal takes over). The probe uses
+/// this to pin the verifier: only a server that presents these exact bytes
+/// passes, which catches the case where the file on disk has been renewed
+/// but the listener has not reloaded.
+pub fn leaf_cert_der(path: &Path) -> Result<Vec<u8>, TlsError> {
+	let certs = load_certs(path)?;
+	let leaf = certs
+		.into_iter()
+		.next()
+		.ok_or_else(|| TlsError::NoCertificates(path.display().to_string()))?;
+	Ok(leaf.as_ref().to_vec())
+}
+
 /// Build an acceptor from an in-memory PEM chain and key (e.g. ACME-issued).
 pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor, TlsError> {
 	ensure_crypto_provider();

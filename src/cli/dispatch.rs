@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, accounts, api_keys, app_passwords, archive, autoconfig, autodiscover,
-	backup, ban, dns_records, export, import, init, local, mobileconfig, queue, report_abuse,
-	reports, serve, srv, stack, style, suppression, verify, verify_dns,
+	backup, ban, dns_records, export, import, init, local, mobileconfig, probe, queue,
+	report_abuse, reports, serve, srv, stack, style, suppression, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -383,6 +383,13 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Probe { config, json } => match Config::load(&config) {
+				Ok(config) => probe::run(&config, json),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
 		}
 	}
 }
@@ -429,7 +436,8 @@ impl Command {
 			| Command::StorageKeygen
 			| Command::OauthKeygen
 			| Command::TokenHash
-			| Command::Local { .. } => false,
+			| Command::Local { .. }
+			| Command::Probe { .. } => false,
 		}
 	}
 }
