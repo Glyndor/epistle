@@ -65,7 +65,7 @@ pub struct Previous {
 pub struct RotationState {
 	/// The active selector.
 	pub selector: String,
-	/// The active key file (PKCS#8 PEM), relative to the data directory.
+	/// The active key file (PKCS#8 PEM), absolute or relative to the data directory.
 	pub key_file: PathBuf,
 	/// When the active key was put into service (epoch seconds).
 	pub rotated_at: u64,
