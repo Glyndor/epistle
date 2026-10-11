@@ -218,7 +218,7 @@ fn execute_with(
 	writeln!(err, "{} {state}.", name.as_str()).map_err(|e| e.to_string())?;
 	super::init::update_listener_ports(&config.data_dir, &config.listeners)
 		.map_err(|error| error.to_string())?;
-	super::config_edit::after_change_with(&config, outcome, true, err, restart)
+	super::config_edit::after_ports_change_with(&config, outcome, err, restart)
 }
 
 #[cfg(test)]

@@ -116,6 +116,13 @@ pub(super) enum StackAction {
 		/// Optional service name to restart; passed as a positional.
 		service: Option<String>,
 	},
+	/// `podup -f <compose> up -d <service>`, recreate one service from
+	/// the current compose file. A restart keeps the container as it was
+	/// created, so a change to its published ports needs this.
+	Recreate {
+		/// The service to recreate.
+		service: String,
+	},
 }
 
 /// Run the `stack` subcommand. The config is loaded here only to read
@@ -231,6 +238,9 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			}
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
 			run_inherited(podup, &compose, &extra_ref)
+		}
+		StackAction::Recreate { service } => {
+			run_inherited(podup, &compose, &["up", "-d", &service])
 		}
 	}
 }
