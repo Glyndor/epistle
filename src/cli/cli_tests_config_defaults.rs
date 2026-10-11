@@ -42,7 +42,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Relay { config, .. }
 		| Command::Dns { config, .. }
 		| Command::Storage { config, .. }
-		| Command::Webhook { config, .. } => Some(config),
+		| Command::Webhook { config, .. }
+		| Command::Alert { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

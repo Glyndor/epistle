@@ -2,6 +2,7 @@
 
 mod account;
 mod accounts;
+mod alert;
 mod api_keys;
 mod app_passwords;
 mod archive;
@@ -518,6 +519,18 @@ pub enum Command {
 		/// Webhook administration action.
 		#[command(subcommand)]
 		action: webhook_admin::WebhookCli,
+	},
+	/// Manage metric alert rules.
+	Alert {
+		/// Configuration file; accepted before or after the alert action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Alert administration action.
+		#[command(subcommand)]
+		action: alert::AlertCli,
 	},
 	/// Manage outbound smarthost (relay) rules.
 	Relay {

@@ -1,7 +1,7 @@
 //! Server-wide numeric limits in the configuration file.
 
 #[path = "limits_values.rs"]
-mod values;
+pub(super) mod values;
 
 #[cfg(test)]
 #[path = "limits_tests_values.rs"]

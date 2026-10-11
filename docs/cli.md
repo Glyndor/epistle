@@ -272,6 +272,23 @@ to the webhook.
 any other, and reports the HTTP status. It fails on a non-2xx answer, a connection
 error, or no answer within 10 seconds. Supports `--dry-run` and `--config FILE`.
 
+## Alerts (`epistle alert`)
+
+```sh
+epistle alert list [--json]
+epistle alert add bounce-storm --metric bounced --op '>=' --threshold 50 \
+  --window 5m --webhook --email ops@example.org --cooldown 1h
+epistle alert remove bounce-storm
+```
+
+Manages the `[[alerts]]` rules. A rule compares how much a counter grew over each
+`--window` against `--op` and `--threshold`, and notifies by webhook, email, or both
+(`--email` can repeat). Quote the operator: `>=`, `>`, `<=`, `<` or `==`. Durations
+take `s`, `m`, `h`, `d` or `w`; the cooldown defaults to `1h`. The metric must be one
+of the counters in [configuration](configuration.md#alerts); an unknown name lists
+the valid ones. `--webhook` needs a configured webhook, names are unique, and `add`
+never overwrites a rule: remove it first. Supports `--dry-run` and `--config FILE`.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

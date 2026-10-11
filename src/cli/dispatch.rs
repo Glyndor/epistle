@@ -386,6 +386,11 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::webhook_admin::run(&config, action, dry_run),
+			Command::Alert {
+				config,
+				action,
+				dry_run,
+			} => super::alert::run(&config, action, dry_run),
 			Command::Relay {
 				config,
 				action,
@@ -430,6 +435,7 @@ impl Command {
 			| Command::Dns { .. }
 			| Command::Storage { .. }
 			| Command::Webhook { .. }
+			| Command::Alert { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
