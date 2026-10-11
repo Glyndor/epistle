@@ -64,7 +64,7 @@ struct Inner {
 	/// IP-permitted key authenticates alongside the configured token. Held
 	/// behind an `Arc<ApiKeySet>` so the file watcher can swap the live
 	/// set on a CLI edit without rebuilding `ApiState` and without holding
-	/// a lock across every request — the snapshot guard is taken per
+	/// a lock across every request, the snapshot guard is taken per
 	/// request and dropped before the response goes out.
 	api_keys: std::sync::Arc<super::api_keys::ApiKeySet>,
 	/// Session-scoped PushSubscription objects (RFC 8620 §7.2). Held in memory:

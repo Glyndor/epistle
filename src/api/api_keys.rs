@@ -372,7 +372,7 @@ impl ApiKeySet {
 
 	/// Open (loading if present) the key set under `data_dir`. A missing
 	/// file is an empty set. A file with an unknown scope string fails
-	/// closed — the same rule the store's loader applies on startup.
+	/// closed, the same rule the store's loader applies on startup.
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
 		let path = data_dir.join("api_keys.toml");
 		let file: ApiKeyFile = match std::fs::read_to_string(&path) {

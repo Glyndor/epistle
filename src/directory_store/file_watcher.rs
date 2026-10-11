@@ -118,7 +118,7 @@ impl ReloadKind {
 					.map_err(|error| StoreError::Invalid(error.to_string())),
 				None => {
 					// No reloader wired in: nothing to apply, but not
-					// an error — the operator has not configured an API
+					// an error, the operator has not configured an API
 					// listener, so the file is just bytes on disk.
 					Ok(())
 				}
