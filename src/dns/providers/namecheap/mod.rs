@@ -23,9 +23,9 @@
 
 use std::pin::Pin;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
-use crate::dns::namecheap::render::{host_from_record, host_label, split_sld_tld};
-use crate::dns::namecheap::xml::{Host, extract_hosts, parse_response};
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use crate::dns::providers::namecheap::render::{host_from_record, host_label, split_sld_tld};
+use crate::dns::providers::namecheap::xml::{Host, extract_hosts, parse_response};
 use crate::net::HttpsUrl;
 
 /// Namecheap's production API endpoint; overridable via
@@ -220,7 +220,7 @@ impl NamecheapProvider {
 		let hosts = self.get_hosts(zone).await?;
 		Ok(hosts
 			.into_iter()
-			.filter_map(|h| crate::dns::namecheap::xml::host_to_record(h, zone))
+			.filter_map(|h| crate::dns::providers::namecheap::xml::host_to_record(h, zone))
 			.collect())
 	}
 }

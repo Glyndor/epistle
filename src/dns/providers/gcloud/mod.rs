@@ -36,8 +36,8 @@ use serde_json::{Value, json};
 
 use crate::net::HttpsUrl;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
-use super::records::txt_strings;
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use crate::dns::records::txt_strings;
 
 const TOKEN_AUDIENCE: &str = "https://oauth2.googleapis.com/token";
 const DNS_SCOPE: &str = "https://www.googleapis.com/auth/ndev.clouddns.readwrite";
@@ -568,14 +568,14 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[path = "gcloud_test_support.rs"]
+#[path = "test_support.rs"]
 mod test_support;
 #[cfg(test)]
-#[path = "gcloud_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "gcloud_tests_txt.rs"]
+#[path = "tests_txt.rs"]
 mod tests_txt;
 #[cfg(test)]
-#[path = "gcloud_tests_url.rs"]
+#[path = "tests_url.rs"]
 mod tests_url;

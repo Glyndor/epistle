@@ -11,11 +11,12 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::cloudflare_tags;
-use super::provider::{
+mod tags;
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use tags as cloudflare_tags;
 
 /// Cloudflare's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.cloudflare.com/client/v4";
@@ -503,9 +504,9 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "cloudflare_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "cloudflare_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

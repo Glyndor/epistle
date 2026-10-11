@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::net::HttpsUrl;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
-use super::records::txt_strings;
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
+use crate::dns::records::txt_strings;
 
 /// Route 53 is a global service signed in `us-east-1`.
 const REGION: &str = "us-east-1";
@@ -506,13 +506,13 @@ fn xml_escape(value: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "route53_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "route53_tests_txt.rs"]
+#[path = "tests_txt.rs"]
 mod tests_txt;
 
 #[cfg(test)]
-#[path = "route53_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

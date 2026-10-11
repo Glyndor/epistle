@@ -3,8 +3,8 @@
 //!
 //! [`Host`]: super::xml::Host
 
-use super::super::provider::{DnsRecord, ProviderError, RecordKind};
 use super::xml::Host;
+use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
 
 /// Split a registered domain into (sld, tld) via the Public Suffix List.
 /// Falls back to a two-label split when the PSL has no entry (covers plain

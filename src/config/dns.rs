@@ -6,20 +6,20 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::dns::bunny::BunnyProvider;
-use crate::dns::cloudflare::CloudflareProvider;
-use crate::dns::desec::DesecProvider;
-use crate::dns::digitalocean::DigitaloceanProvider;
-use crate::dns::dnsimple::DnsimpleProvider;
-use crate::dns::gcloud::{GcloudProvider, ServiceAccount};
-use crate::dns::godaddy::GodaddyProvider;
-use crate::dns::namecheap::NamecheapProvider;
-use crate::dns::ovh::OvhProvider;
-use crate::dns::porkbun::PorkbunProvider;
 use crate::dns::provider::{DnsProvider, ScopedSecret};
-use crate::dns::rfc2136::Rfc2136Provider;
-use crate::dns::route53::Route53Provider;
-use crate::dns::spaceship::SpaceshipProvider;
+use crate::dns::providers::bunny::BunnyProvider;
+use crate::dns::providers::cloudflare::CloudflareProvider;
+use crate::dns::providers::desec::DesecProvider;
+use crate::dns::providers::digitalocean::DigitaloceanProvider;
+use crate::dns::providers::dnsimple::DnsimpleProvider;
+use crate::dns::providers::gcloud::{GcloudProvider, ServiceAccount};
+use crate::dns::providers::godaddy::GodaddyProvider;
+use crate::dns::providers::namecheap::NamecheapProvider;
+use crate::dns::providers::ovh::OvhProvider;
+use crate::dns::providers::porkbun::PorkbunProvider;
+use crate::dns::providers::rfc2136::Rfc2136Provider;
+use crate::dns::providers::route53::Route53Provider;
+use crate::dns::providers::spaceship::SpaceshipProvider;
 
 /// DNS provider settings. When present with usable credentials, record
 /// automation is enabled; otherwise epistle stays in manual mode (operator
@@ -218,7 +218,8 @@ impl Dns {
 				let secret = ScopedSecret::new(&self.zone, consumer_key);
 				// A non-https endpoint fails closed like missing credentials:
 				// no provider rather than one that would send its keys in clear.
-				let base = crate::dns::ovh::resolve_base(self.endpoint.as_deref()).ok()?;
+				let base =
+					crate::dns::providers::ovh::resolve_base(self.endpoint.as_deref()).ok()?;
 				Some(Arc::new(
 					OvhProvider::new(application_key, application_secret, secret).with_base(base),
 				))

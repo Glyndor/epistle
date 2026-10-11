@@ -2,24 +2,11 @@
 //! what epistle expects, and report drift. Read-only — it never changes DNS,
 //! so it is safe to run anytime and needs no provider credentials.
 
-pub mod bunny;
 pub mod check_host;
-pub mod cloudflare;
-mod cloudflare_tags;
-pub mod desec;
 pub mod detect;
-pub mod digitalocean;
-pub mod dnsimple;
-pub mod gcloud;
-pub mod godaddy;
-pub mod namecheap;
-pub mod ovh;
-pub mod porkbun;
 pub mod provider;
+pub mod providers;
 pub mod records;
-pub mod rfc2136;
-pub mod route53;
-pub mod spaceship;
 #[cfg(test)]
 mod uri_probe;
 

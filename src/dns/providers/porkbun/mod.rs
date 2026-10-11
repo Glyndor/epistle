@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 };
 
@@ -425,9 +425,9 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "porkbun_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "porkbun_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

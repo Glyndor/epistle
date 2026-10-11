@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
-use super::records::txt_strings;
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use crate::dns::records::txt_strings;
 
 /// deSEC's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://desec.io/api/v1";
@@ -325,9 +325,9 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "desec_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "desec_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;

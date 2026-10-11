@@ -14,7 +14,7 @@
 //! ## Upsert / delete semantics
 //!
 //! The provider follows the contract spelled out at
-//! [`super::provider::DnsProvider`]:
+//! [`crate::dns::provider::DnsProvider`]:
 //!
 //! - For every record kind other than TXT, `upsert` is the pair
 //!   `delete RRset (name,type)` + `add record` in the update section of
@@ -77,10 +77,10 @@ use hickory_resolver::proto::rr::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::provider::{
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
-use super::records::txt_strings;
+use crate::dns::records::txt_strings;
 
 /// Default TSIG fudge (RFC 8945 §5.2 — maximum tolerance between client
 /// and server clocks). Five minutes mirrors what most resolvers accept.
@@ -591,9 +591,9 @@ fn rand_id() -> u16 {
 }
 
 #[cfg(test)]
-#[path = "rfc2136_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "rfc2136_tests_b.rs"]
+#[path = "tests_b.rs"]
 mod tests_b;

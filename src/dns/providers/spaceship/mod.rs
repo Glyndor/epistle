@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv};
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv};
 
 /// Spaceship's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://spaceship.dev/api/v1";
@@ -387,13 +387,13 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "spaceship_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "spaceship_tests_b.rs"]
+#[path = "tests_b.rs"]
 mod tests_b;
 
 #[cfg(test)]
-#[path = "spaceship_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;
