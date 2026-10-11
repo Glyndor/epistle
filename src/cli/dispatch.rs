@@ -338,6 +338,7 @@ impl Cli {
 				dry_run,
 				print_answers,
 			}),
+			Command::Service { config, action } => super::service::run(&config, action),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -355,6 +356,7 @@ impl Command {
 		match self {
 			Command::Init { .. }
 			| Command::Stack { .. }
+			| Command::Service { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
@@ -395,3 +397,7 @@ impl Command {
 #[cfg(test)]
 #[path = "dispatch_tests_delegation.rs"]
 mod tests_delegation;
+
+#[cfg(test)]
+#[path = "cli_tests_service.rs"]
+mod tests_service;
