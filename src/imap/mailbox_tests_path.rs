@@ -73,7 +73,7 @@ fn append_with_bad_account_stores_nothing() {
 			let result = append(&data, account, mailbox, &[], b"x\r\n", &crypto);
 			assert!(
 				result.is_err(),
-				"append for bad account case {case} must fail, got {result:?}"
+				"append for bad account case {case} must fail"
 			);
 		}
 	}
