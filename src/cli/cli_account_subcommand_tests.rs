@@ -116,7 +116,7 @@ fn password_change_makes_old_password_fail_and_new_one_authenticate() {
 		"the new password must authenticate"
 	);
 	// The old password no longer does. We use the fixture as the "old"
-	// here — the test built bob with hash(fixture_password()), so the
+	// here, the test built bob with hash(fixture_password()), so the
 	// fixture was the original password.
 	assert!(
 		directory
