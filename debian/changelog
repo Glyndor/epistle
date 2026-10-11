@@ -1,3 +1,13 @@
+epistle (0.10.1) unstable; urgency=medium
+
+  * DNS records epistle writes carry its version as their description
+    where the provider's API has one: Cloudflare comment, Bunny Comment
+    and Porkbun notes. Cloudflare records also get an epistle:<hostname>
+    tag on plans that allow tags; on the Free plan the record is written
+    with the comment only.
+
+ -- Glyndor <packages@glyndor.net>  Sun, 11 Oct 2026 22:51:28 +0000
+
 epistle (0.10.0) unstable; urgency=medium
 
   * Operate the server with commands instead of editing files: status and
