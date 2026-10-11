@@ -8,6 +8,7 @@ mod archive;
 mod autoconfig;
 mod autodiscover;
 mod backup;
+mod ban;
 mod config_check;
 pub mod config_edit;
 mod dns_records;
@@ -312,6 +313,16 @@ pub enum Command {
 		/// Queue action (`list`, `show`, `retry`, `hold`, `release`, `remove`).
 		#[command(subcommand)]
 		action: Option<queue::QueueCli>,
+	},
+	/// Manage authentication bans and the allow list (needs `[database]`).
+	/// Changes apply to the running server immediately.
+	Ban {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Ban action (`list`, `add`, `remove`, `allow`).
+		#[command(subcommand)]
+		action: ban::BanCli,
 	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
