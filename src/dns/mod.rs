@@ -5,6 +5,7 @@
 pub mod bunny;
 pub mod check_host;
 pub mod cloudflare;
+mod cloudflare_tags;
 pub mod desec;
 pub mod detect;
 pub mod digitalocean;

@@ -156,7 +156,7 @@ pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::Re
 			let Some(dns) = config.dns.as_ref() else {
 				return;
 			};
-			let Some(provider) = dns.build() else {
+			let Some(provider) = dns.build_for_host(&config.hostname) else {
 				return;
 			};
 			let zone = dns.zone.clone();

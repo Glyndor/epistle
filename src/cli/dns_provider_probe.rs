@@ -21,7 +21,7 @@ pub(super) fn run(
 	if dns.provider.eq_ignore_ascii_case("manual") {
 		return Err("the manual provider has no API to test".into());
 	}
-	let provider = dns.build().ok_or(
+	let provider = dns.build_for_host(&config.hostname).ok_or(
 		"the provider credentials could not be resolved: check that the environment variable or file is available to the service account",
 	)?;
 	run_with(&dns.zone, provider.as_ref(), LIMIT, out, status)

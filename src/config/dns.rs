@@ -158,8 +158,24 @@ impl Dns {
 	/// credentials are missing (fail closed: no automation rather than a broken
 	/// provider).
 	pub fn build(&self) -> Option<Arc<dyn DnsProvider>> {
+		self.build_inner(None)
+	}
+
+	/// Like [`Dns::build`], for a server named `hostname`: providers that can
+	/// label records with their origin (Cloudflare tags) use it.
+	pub fn build_for_host(&self, hostname: &str) -> Option<Arc<dyn DnsProvider>> {
+		self.build_inner(Some(hostname))
+	}
+
+	fn build_inner(&self, hostname: Option<&str>) -> Option<Arc<dyn DnsProvider>> {
 		match self.provider.to_ascii_lowercase().as_str() {
-			"cloudflare" => Some(Arc::new(CloudflareProvider::new(self.secret()?))),
+			"cloudflare" => {
+				let provider = CloudflareProvider::new(self.secret()?);
+				Some(Arc::new(match hostname {
+					Some(host) => provider.with_hostname(host),
+					None => provider,
+				}))
+			}
 			"dnsimple" => {
 				let account_id = self.account_id.clone()?;
 				Some(Arc::new(DnsimpleProvider::new(self.secret()?, account_id)))
