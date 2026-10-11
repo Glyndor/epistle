@@ -243,7 +243,9 @@ fn add_address_persists_and_resolves() {
 
 	let handle = store.handle();
 	assert_eq!(
-		handle.current().resolve(&Address::parse("bob2@example.org").expect("a")),
+		handle
+			.current()
+			.resolve(&Address::parse("bob2@example.org").expect("a")),
 		Resolution::Account("bob".to_string())
 	);
 
@@ -321,11 +323,15 @@ fn remove_address_persists_and_unresolves() {
 
 	let handle = store.handle();
 	assert_eq!(
-		handle.current().resolve(&Address::parse("bob2@example.org").expect("a")),
+		handle
+			.current()
+			.resolve(&Address::parse("bob2@example.org").expect("a")),
 		Resolution::UnknownUser
 	);
 	assert_eq!(
-		handle.current().resolve(&Address::parse("bob@example.org").expect("a")),
+		handle
+			.current()
+			.resolve(&Address::parse("bob@example.org").expect("a")),
 		Resolution::Account("bob".to_string()),
 		"the surviving address still resolves"
 	);

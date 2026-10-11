@@ -158,7 +158,9 @@ pub(super) fn quota_bytes(dynamic: &[DynamicAccount]) -> Vec<(String, u64)> {
 	dynamic
 		.iter()
 		.filter_map(|account| {
-			account.quota_bytes.map(|bytes| (account.name.clone(), bytes))
+			account
+				.quota_bytes
+				.map(|bytes| (account.name.clone(), bytes))
 		})
 		.collect()
 }

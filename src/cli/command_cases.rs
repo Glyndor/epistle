@@ -46,6 +46,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		&["account-remove", "--name", "alice", "--queue", "discard"],
 		true,
 	),
+	(&["account", "show", "alice"], true),
 	(&["queue"], true),
 	(&["token-hash"], false),
 	(

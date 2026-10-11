@@ -1,5 +1,6 @@
 //! Command-line interface: argument parsing and command dispatch.
 
+mod account;
 mod accounts;
 mod api_keys;
 mod app_passwords;
@@ -278,6 +279,27 @@ pub enum Command {
 		#[arg(long = "queue", value_name = "POLICY", value_parser = accounts::parse_queue_policy)]
 		queue: QueuePolicy,
 	},
+	/// Operate on a single dynamic account in place: change its password,
+	/// enable or disable authentication, add or remove a delivery address,
+	/// set the storage quota and the protocol allowlist, or print the
+	/// public view. Each subcommand refuses a static account with a hint
+	/// to edit the config file. The legacy top-level `account-add` and
+	/// `account-remove` commands remain available for compatibility.
+	Account {
+		/// Path to the configuration file. Global so it can appear
+		/// before or after the sub-action; the dispatch test passes it
+		/// last, which a positional flag would not parse.
+		#[arg(
+			long,
+			value_name = "FILE",
+			global = true,
+			default_value = DEFAULT_CONFIG
+		)]
+		config: PathBuf,
+		/// The action to run on the account.
+		#[command(subcommand)]
+		action: account::Subcommand,
+	},
 	/// List the outbound delivery queue.
 	Queue {
 		/// Path to the configuration file.
@@ -486,3 +508,11 @@ mod command_cases;
 #[cfg(test)]
 #[path = "cli_tests_config_defaults.rs"]
 mod tests_config_defaults;
+
+#[cfg(test)]
+#[path = "cli_account_subcommand_tests.rs"]
+mod cli_account_subcommand_tests;
+
+#[cfg(test)]
+#[path = "cli_account_subcommand_tests_b.rs"]
+mod cli_account_subcommand_tests_b;

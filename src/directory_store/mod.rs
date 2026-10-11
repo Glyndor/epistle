@@ -511,7 +511,9 @@ impl AccountStore {
 	/// but the CLI wants the distinction so the error text can tell the
 	/// operator where to make the change.
 	pub fn is_static(&self, name: &str) -> bool {
-		self.static_accounts.iter().any(|account| account.name == name)
+		self.static_accounts
+			.iter()
+			.any(|account| account.name == name)
 	}
 
 	/// Set or clear a dynamic account's storage quota (bytes). `None`
