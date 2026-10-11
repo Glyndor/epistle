@@ -243,8 +243,13 @@ impl Cli {
 					}
 				}
 			}
-			Command::Queue { config } => match Config::load(&config) {
-				Ok(config) => queue::list(&config.data_dir, &mut std::io::stdout().lock()),
+			Command::Queue { config, action } => match Config::load(&config) {
+				Ok(config) => queue::run(
+					&config.data_dir,
+					action,
+					queue::now_epoch(),
+					&mut std::io::stdout().lock(),
+				),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

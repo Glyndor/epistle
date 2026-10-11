@@ -48,6 +48,18 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	),
 	(&["account", "show", "alice"], true),
 	(&["queue"], true),
+	(&["queue", "list", "--json"], true),
+	(
+		&["queue", "show", "00000000-0000-0000-0000-000000000000"],
+		true,
+	),
+	(&["queue", "retry", "--all"], true),
+	(&["queue", "hold", "--all"], true),
+	(&["queue", "release", "--all"], true),
+	(
+		&["queue", "remove", "00000000-0000-0000-0000-000000000000"],
+		true,
+	),
 	(&["token-hash"], false),
 	(
 		&[

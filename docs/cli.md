@@ -436,10 +436,31 @@ scope here):
 |---|---|
 | `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
-| `epistle queue` | List the outbound delivery queue. |
+| `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle suppression [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+
+## Outbound queue
+
+`epistle queue <action>` inspects and steers the outbound spool in
+`data_dir/spool`. The running server picks up every change on its next queue
+pass, with no restart: the worker re-reads each entry from disk before it
+decides whether to attempt it.
+
+| Command | What it does |
+|---|---|
+| `epistle queue list [--json]` | One line per message (id, attempts, sender, recipients, `held`), or a JSON array with the envelope and last error. |
+| `epistle queue show <id>` | Envelope, attempts, next attempt, held state and the last delivery error. Never prints the message body. |
+| `epistle queue retry <id>\|--all` | Make the next attempt happen now, skipping the backoff. The attempt count is kept, and a held entry stays held. |
+| `epistle queue hold <id>\|--all` | Never attempt the entry until it is released. |
+| `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
+| `epistle queue remove <id>` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). |
+
+A held entry is not attempted and its time on hold does not count toward the
+give-up window below, so a message parked for a week is not bounced on its first
+attempt after release. A hold that arrives while the worker is already
+delivering that entry takes effect for the next attempt.
 
 ## Expunged-message archive
 

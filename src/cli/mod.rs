@@ -303,11 +303,15 @@ pub enum Command {
 		#[command(subcommand)]
 		action: account::Subcommand,
 	},
-	/// List the outbound delivery queue.
+	/// Inspect and steer the outbound delivery queue. Without an action it
+	/// lists the queue, like `queue list`.
 	Queue {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Queue action (`list`, `show`, `retry`, `hold`, `release`, `remove`).
+		#[command(subcommand)]
+		action: Option<queue::QueueCli>,
 	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
