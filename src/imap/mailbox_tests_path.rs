@@ -213,3 +213,17 @@ fn single_and_double_dot_are_not_folder_names() {
 		assert!(!exists(&data, "alice", name));
 	}
 }
+
+#[test]
+fn ensure_defaults_refuses_bad_accounts() {
+	let (root, data) = nested();
+	for (case, account) in BAD_ACCOUNTS.iter().enumerate() {
+		assert!(
+			ensure_defaults(&data, account).is_err(),
+			"defaults for bad account case {case} must fail"
+		);
+	}
+	assert_eq!(entries(root.path()), vec!["data".to_string()]);
+	assert_eq!(entries(&data), vec!["accounts".to_string()]);
+	assert!(entries(&data.join("accounts")).is_empty());
+}

@@ -21,6 +21,9 @@ use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
+use crate::util::path_component::{AccountName, FixedDir, MailboxName, MessageExt, message_file};
+use crate::util::path_containment::{contained, contained_child};
+
 use super::crypto::MessageCrypto;
 use super::spool::write_sync;
 
@@ -58,7 +61,6 @@ pub struct Delivered {
 /// copy per distinct recipient account.
 #[derive(Debug)]
 pub struct LocalDelivery {
-	accounts_root: PathBuf,
 	data_dir: PathBuf,
 	directory: DirectoryHandle,
 	crypto: MessageCrypto,
@@ -80,10 +82,8 @@ impl LocalDelivery {
 		directory: DirectoryHandle,
 		crypto: MessageCrypto,
 	) -> std::io::Result<Self> {
-		let accounts_root = data_dir.join("accounts");
-		fs::create_dir_all(&accounts_root)?;
+		fs::create_dir_all(contained(data_dir, &data_dir.join("accounts"))?)?;
 		Ok(LocalDelivery {
-			accounts_root,
 			data_dir: data_dir.to_path_buf(),
 			directory,
 			crypto,
@@ -134,23 +134,26 @@ impl LocalDelivery {
 		flags: &[String],
 	) -> std::io::Result<Uuid> {
 		let id = Uuid::now_v7();
-		let account_dir = self.accounts_root.join(account);
-		if !account_dir.join("new").is_dir() {
-			crate::imap::mailbox::ensure_defaults(&self.data_dir, account)?;
+		let account = AccountName::new(account)?;
+		let account_dir = account.root(&self.data_dir)?;
+		if !account_dir.child(FixedDir::New)?.is_dir() {
+			crate::imap::mailbox::ensure_defaults(&self.data_dir, account.as_str())?;
 		}
 		// INBOX is the account root; named mailboxes live under folders/.
 		let base = match mailbox {
-			Some(name) => account_dir.join("folders").join(name),
-			None => account_dir,
+			Some(name) => MailboxName::new(name)?
+				.folder_dir(&account, &self.data_dir)?
+				.unwrap_or_else(|| account_dir.as_path().to_path_buf()),
+			None => account_dir.as_path().to_path_buf(),
 		};
-		let tmp_dir = base.join("tmp");
-		let new_dir = base.join("new");
+		let tmp_dir = contained_child(&base, "tmp")?;
+		let new_dir = contained_child(&base, "new")?;
 		fs::create_dir_all(&tmp_dir)?;
 		fs::create_dir_all(&new_dir)?;
 
-		let tmp_path = tmp_dir.join(format!("{id}.eml"));
+		let tmp_path = message_file(&tmp_dir, id, MessageExt::Eml)?;
 		write_sync(&tmp_path, &self.crypto.encode(data)?)?;
-		fs::rename(&tmp_path, new_dir.join(format!("{id}.eml")))?;
+		fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?)?;
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
 		io::write_flag_sidecar(&new_dir, id, flags);
 		Ok(id)
@@ -495,3 +498,7 @@ mod forward_tests;
 #[cfg(test)]
 #[path = "delivery_tests_default_mailboxes.rs"]
 mod default_mailboxes;
+
+#[cfg(test)]
+#[path = "delivery_tests_containment.rs"]
+mod containment;

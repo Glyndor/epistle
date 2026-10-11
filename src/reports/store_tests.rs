@@ -137,3 +137,30 @@ fn prune_is_safe_when_no_reports_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	prune(dir.path(), "20240110", 90);
 }
+
+#[test]
+fn append_refuses_a_day_or_org_that_leaves_its_directory() {
+	let outer = tempfile::tempdir().expect("tempdir");
+	let data = outer.path().join("data");
+	std::fs::create_dir_all(&data).expect("data");
+	for (day, org) in [
+		("../x", "org"),
+		("..", "org"),
+		("20240101", "../x"),
+		("20240101", "a/b"),
+	] {
+		let error =
+			append(&data, Kind::Dmarc, day, org, &serde_json::json!({"id": 1})).expect_err(day);
+		assert_eq!(
+			error.kind(),
+			std::io::ErrorKind::InvalidInput,
+			"{day} {org}"
+		);
+	}
+	assert_eq!(
+		std::fs::read_dir(outer.path()).expect("read_dir").count(),
+		1
+	);
+	assert!(!data.join("x").exists());
+	assert!(!data.join("reports/x.jsonl").exists());
+}

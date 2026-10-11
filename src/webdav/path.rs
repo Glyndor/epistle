@@ -12,6 +12,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use crate::util::path_component::AccountName;
+
 /// The per-account DAV root: `<data_dir>/accounts/<account>/dav`.
 ///
 /// The account name is taken verbatim from [`crate::smtp::directory`] (the
@@ -27,7 +29,8 @@ pub fn account_root(data_dir: &Path, account: &str) -> Option<PathBuf> {
 	{
 		return None;
 	}
-	Some(data_dir.join("accounts").join(account).join("dav"))
+	let root = AccountName::new(account).ok()?.root(data_dir).ok()?;
+	root.file("dav").ok()
 }
 
 /// Resolve a request URI path (e.g. `/dir/file.txt`) into an absolute on-disk

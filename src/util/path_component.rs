@@ -125,6 +125,12 @@ impl AccountRoot {
 		&self.0
 	}
 
+	/// A file or directory directly under the account root, such as
+	/// `filter.sieve` or `.vacation`. `name` must be one plain name.
+	pub fn file(&self, name: &str) -> std::io::Result<PathBuf> {
+		contained_child(&self.0, name)
+	}
+
 	/// The path of a child of the account root with a fixed, program-chosen
 	/// name (`tmp`, `new`, `folders`, `.archive`, ...).
 	pub fn child(&self, fixed: FixedDir) -> std::io::Result<PathBuf> {

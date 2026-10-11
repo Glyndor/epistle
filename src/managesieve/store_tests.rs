@@ -129,3 +129,22 @@ fn rename_rejects_existing_target_and_missing_source() {
 	assert_eq!(s.rename("a", "b"), Err(StoreError::AlreadyExists));
 	assert_eq!(s.rename("ghost", "c"), Err(StoreError::NoSuchScript));
 }
+
+#[test]
+fn an_account_that_is_not_one_plain_name_has_no_store() {
+	let outer = tempfile::tempdir().expect("tempdir");
+	let root = outer.path().join("accounts");
+	std::fs::create_dir_all(&root).expect("accounts");
+	for account in ["../evil", "..", "a/b", ""] {
+		let s = ScriptStore::new(&root, account);
+		assert_eq!(s.put("work", SCRIPT), Err(StoreError::Io), "{account:?}");
+		assert!(matches!(s.list(), Err(StoreError::Io)));
+		assert_eq!(s.set_active(None), Err(StoreError::Io));
+	}
+	assert_eq!(
+		std::fs::read_dir(outer.path()).expect("read_dir").count(),
+		1,
+		"nothing was created next to accounts/"
+	);
+	assert_eq!(std::fs::read_dir(&root).expect("read_dir").count(), 0);
+}
