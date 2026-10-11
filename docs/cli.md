@@ -5,6 +5,31 @@ configuration defaults to `/etc/epistle/mail.toml`. Use `--config <FILE>` to
 select another file, for example `epistle accounts --config /path/to/mail.toml`.
 Run `epistle <command> --help` for the exact flags.
 
+## Common tasks
+
+Every change is validated before it is written, keeps the comments in
+`mail.toml`, accepts `--dry-run`, and restarts `mail` only when it has to.
+
+| I want to… | Command |
+|---|---|
+| [Is it working?](#health-epistle-status-epistle-check) | `epistle status`, `epistle check <area>` |
+| [Turn IMAP, POP3, 587… on or off](#service-listeners) | `epistle service list\|enable\|disable` |
+| [Accounts: add, password, disable, quota, addresses](#accounts) | `epistle account …` |
+| [Aliases and mailing lists](#aliases-epistle-alias) | `epistle alias …` |
+| [Domains and domain aliases](#domains-epistle-domain) | `epistle domain …` |
+| [Masked addresses](#masked-addresses) | `epistle masked …` |
+| [Limits: quota, send rate, connections](#server-limits-epistle-limits) | `epistle limits show\|set\|unset` |
+| [Bans and the IP allow list](#authentication-bans) | `epistle ban …` |
+| [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
+| [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
+| [Relay through a smarthost](#smarthost-relay-epistle-relay) | `epistle relay …` |
+| [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
+| [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
+| [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
+| [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle tls renew`, `epistle api-key rotate` |
+| [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
+| [Backup and restore](#backup-and-restore) | `epistle backup`, `epistle restore` |
+
 ## Output
 
 Every `epistle` subcommand splits its output into two streams by purpose:
@@ -289,8 +314,6 @@ of the counters in [configuration](configuration.md#alerts); an unknown name lis
 the valid ones. `--webhook` needs a configured webhook, names are unique, and `add`
 never overwrites a rule: remove it first. Supports `--dry-run` and `--config FILE`.
 
-## Stack (`epistle stack`)
-
 ## Domains (`epistle domain`)
 
 ```sh
@@ -418,7 +441,7 @@ live in the config, and the API key is the name of an environment
 variable the server reads at startup). `--dry-run` prints the validated
 unified diff without writing or restarting.
 
-## Stack (`epistle`)
+## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).
 With the repository configured, the production sequence is:
