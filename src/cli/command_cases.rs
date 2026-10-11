@@ -30,6 +30,18 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["autoconfig"], true),
 	(&["autodiscover"], true),
 	(&["suppression"], true),
+	(&["suppression", "--remove", "bob@example.net"], true),
+	(&["suppression", "add", "bob@example.net"], true),
+	(
+		&[
+			"suppression",
+			"add",
+			"bob@example.net",
+			"--account",
+			"alice@example.org",
+		],
+		true,
+	),
 	(&["report-abuse"], true),
 	(&["accounts"], true),
 	(

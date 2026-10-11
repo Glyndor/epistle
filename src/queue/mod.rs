@@ -2,7 +2,7 @@
 
 pub mod bounce;
 pub mod client;
-mod resolver;
+pub(crate) mod resolver;
 pub mod srs;
 pub mod suppression;
 mod transport;

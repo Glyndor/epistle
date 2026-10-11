@@ -169,15 +169,26 @@ impl Cli {
 			},
 			Command::Suppression {
 				config,
+				action,
 				remove,
 				account,
 			} => match Config::load(&config) {
-				Ok(config) => suppression::run(
-					&config,
-					remove.as_deref(),
-					account.as_deref(),
-					&mut std::io::stdout().lock(),
-				),
+				Ok(config) => match action {
+					Some(suppression::SuppressionCli::Add { address, account }) => {
+						suppression::add(
+							&config,
+							&address,
+							account.as_deref(),
+							&mut std::io::stdout().lock(),
+						)
+					}
+					None => suppression::run(
+						&config,
+						remove.as_deref(),
+						account.as_deref(),
+						&mut std::io::stdout().lock(),
+					),
+				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

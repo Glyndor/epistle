@@ -240,12 +240,15 @@ pub enum Command {
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
 	},
-	/// List the outbound suppression list (addresses that hard-bounced), or
-	/// remove one with `--remove`.
+	/// List the outbound suppression list (addresses that hard-bounced),
+	/// remove one with `--remove`, or add one with `add`.
 	Suppression {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
+		/// Path to the configuration file; accepted before or after `add`.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Suppression action; without one the command lists or removes.
+		#[command(subcommand)]
+		action: Option<suppression::SuppressionCli>,
 		/// Remove this address from the suppression list instead of listing.
 		#[arg(long, value_name = "ADDRESS")]
 		remove: Option<String>,
