@@ -173,6 +173,15 @@ impl DiskGuard {
 /// `f_bfree` would over-report space the mail writer cannot actually use.
 #[cfg(unix)]
 fn default_probe(path: &Path) -> Option<u64> {
+	usage(path).map(|(available, _total)| available)
+}
+
+/// Bytes available to an unprivileged writer and the filesystem's total size,
+/// for the filesystem holding `path`. `None` when the syscall fails or on
+/// non-Unix targets. The same measurement the guard polls, exposed so a
+/// health check can report a percentage against it.
+#[cfg(unix)]
+pub fn usage(path: &Path) -> Option<(u64, u64)> {
 	use std::ffi::CString;
 	use std::os::unix::ffi::OsStrExt;
 
@@ -185,9 +194,17 @@ fn default_probe(path: &Path) -> Option<u64> {
 	if rc != 0 {
 		return None;
 	}
-	let bavail = stat.f_bavail as u64;
 	let frsize = stat.f_frsize as u64;
-	Some(bavail.saturating_mul(frsize))
+	let available = (stat.f_bavail as u64).saturating_mul(frsize);
+	let total = (stat.f_blocks as u64).saturating_mul(frsize);
+	Some((available, total))
+}
+
+/// Non-Unix stub for [`usage`]: no probe, so health checks report it as
+/// unavailable.
+#[cfg(not(unix))]
+pub fn usage(_path: &Path) -> Option<(u64, u64)> {
+	None
 }
 
 /// Non-Unix stub: the binary does not run on non-Unix today, but the

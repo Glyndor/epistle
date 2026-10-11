@@ -10,6 +10,7 @@ mod av_area;
 mod clock;
 mod config_area;
 mod db_area;
+mod disk_area;
 mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
@@ -56,6 +57,8 @@ pub enum CheckArea {
 	Antivirus,
 	/// The outbound queue is draining: count, oldest age, deferred.
 	Queue,
+	/// The data filesystem has room.
+	Disk,
 }
 
 impl CheckArea {
@@ -68,6 +71,7 @@ impl CheckArea {
 		CheckArea::Db,
 		CheckArea::Antivirus,
 		CheckArea::Queue,
+		CheckArea::Disk,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -80,6 +84,7 @@ impl CheckArea {
 			CheckArea::Db => "db",
 			CheckArea::Antivirus => "antivirus",
 			CheckArea::Queue => "queue",
+			CheckArea::Disk => "disk",
 		}
 	}
 }
@@ -201,6 +206,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Db => db_area::check(ctx).await,
 		CheckArea::Antivirus => av_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
+		CheckArea::Disk => disk_area::check(ctx).await,
 	}
 }
 

@@ -129,6 +129,15 @@ fn status_covers_every_area_in_a_stable_order() {
 	let names: Vec<_> = CheckArea::ALL.iter().map(|area| area.name()).collect();
 	assert_eq!(
 		names,
-		["config", "ports", "tls", "dns", "db", "antivirus", "queue"]
+		[
+			"config",
+			"ports",
+			"tls",
+			"dns",
+			"db",
+			"antivirus",
+			"queue",
+			"disk"
+		]
 	);
 }
