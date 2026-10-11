@@ -45,21 +45,36 @@ fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
 	};
 	let mut deferred = 0usize;
 	let mut unreadable = 0usize;
+	// An operator hold (`epistle queue hold`) is deliberate: held entries are
+	// counted on their own and never make the queue look stuck.
+	let mut held = 0usize;
+	let mut waiting = Vec::with_capacity(ids.len());
 	for id in &ids {
 		match spool.load_envelope(*id) {
-			Ok(envelope) if envelope.attempts > 0 || envelope.next_attempt as i64 > now => {
-				deferred += 1;
+			Ok(envelope) if envelope.held.is_some() => held += 1,
+			Ok(envelope) => {
+				if envelope.attempts > 0 || envelope.next_attempt as i64 > now {
+					deferred += 1;
+				}
+				waiting.push(*id);
 			}
-			Ok(_) => {}
-			Err(_) => unreadable += 1,
+			Err(_) => {
+				unreadable += 1;
+				waiting.push(*id);
+			}
 		}
 	}
 	// Ids are UUID v7, so the first one carries the oldest enqueue time.
-	let oldest = ids.iter().find_map(|id| enqueued_at(*id));
+	let oldest = waiting.iter().find_map(|id| enqueued_at(*id));
+	let held = if held > 0 {
+		format!(", {held} held")
+	} else {
+		String::new()
+	};
 	let mut items = vec![Item::new(
 		"messages",
 		Level::Ok,
-		format!("{} queued, {deferred} deferred", ids.len()),
+		format!("{} queued, {deferred} deferred{held}", ids.len()),
 	)];
 	if unreadable > 0 {
 		items.push(Item::new(
@@ -73,12 +88,12 @@ fn evaluate(data_dir: &Path, now: i64) -> AreaReport {
 			let age = (now - at).max(0);
 			items.push(age_item(age));
 			format!(
-				"{} queued, oldest {}, {deferred} deferred",
+				"{} queued, oldest {}, {deferred} deferred{held}",
 				ids.len(),
 				human(age)
 			)
 		}
-		None => format!("{} queued, {deferred} deferred", ids.len()),
+		None => format!("{} queued, {deferred} deferred{held}", ids.len()),
 	};
 	AreaReport::from_items(items, summary)
 }
