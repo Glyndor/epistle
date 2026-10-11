@@ -180,7 +180,7 @@ pub(super) async fn mock_with_per_name(
 		"sk_under_test_secret".to_string(),
 		"example.org".to_string(),
 	)
-	.with_base(base);
+	.with_base(crate::net::HttpsUrl::loopback_http(&base).unwrap());
 	(provider, state)
 }
 
@@ -549,7 +549,7 @@ async fn forbidden_response_carries_the_eligibility_message() {
 		"sk".to_string(),
 		"example.org".to_string(),
 	)
-	.with_base(format!("http://{addr}"));
+	.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	let result = provider
 		.upsert("example.org", txt("example.org", "v=spf1 -all"))
 		.await;
@@ -590,7 +590,7 @@ async fn unauthorized_response_maps_to_auth_error() {
 		"sk".to_string(),
 		"example.org".to_string(),
 	)
-	.with_base(format!("http://{addr}"));
+	.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	let result = provider
 		.upsert("example.org", txt("example.org", "v=spf1 -all"))
 		.await;

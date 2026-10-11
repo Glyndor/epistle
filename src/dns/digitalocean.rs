@@ -9,6 +9,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
@@ -23,7 +25,7 @@ type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderErr
 pub struct DigitaloceanProvider {
 	client: reqwest::Client,
 	secret: ScopedSecret,
-	base: String,
+	base: HttpsUrl,
 }
 
 #[derive(Deserialize)]
@@ -73,13 +75,13 @@ impl DigitaloceanProvider {
 		DigitaloceanProvider {
 			client: reqwest::Client::new(),
 			secret,
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -122,54 +124,50 @@ impl DigitaloceanProvider {
 		}
 	}
 
+	/// `{base}/v2/domains/{zone}/records[/{id}]`, with the zone escaped as one
+	/// path segment.
+	fn records_url(&self, zone: &str, id: Option<u64>) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec!["v2".to_string(), "domains".to_string(), zone.to_string()];
+		segments.push("records".to_string());
+		segments.extend(id.map(|id| id.to_string()));
+		Ok(self.base.with_segments(segments)?)
+	}
+
 	/// `GET /v2/domains/{zone}/records?per_page=200&name=&type=` — returns the
-	/// matching records. DigitalOcean paginates via `links.pages.next`; we
-	/// follow it until exhausted so a zone with hundreds of records is not
-	/// silently truncated.
+	/// matching records, following the pagination links.
 	async fn find_records(
 		&self,
 		zone: &str,
 		kind: &str,
 		name: &str,
 	) -> Result<Vec<DomainRecord>, ProviderError> {
-		let mut url = format!(
-			"{}/v2/domains/{}/records?per_page=200&type={kind}&name={}",
-			self.base, zone, name
-		);
-		let mut out = Vec::new();
-		loop {
-			let response = self
-				.client
-				.get(&url)
-				.bearer_auth(self.secret.token())
-				.send()
-				.await
-				.map_err(|e| ProviderError::Remote(e.to_string()))?;
-			let status = response.status();
-			if status == reqwest::StatusCode::UNAUTHORIZED
-				|| status == reqwest::StatusCode::FORBIDDEN
-			{
-				return Err(ProviderError::Auth);
-			}
-			let page: ListResponse = decode(response).await?;
-			out.extend(page.domain_records);
-			match page.links.pages.next {
-				Some(next) if !next.is_empty() => url = next,
-				_ => break,
-			}
-		}
-		Ok(out)
+		let url = self
+			.records_url(zone, None)?
+			.with_query("per_page", "200")
+			.with_query("type", kind)
+			.with_query("name", name);
+		self.fetch_pages(url).await
 	}
 
 	/// `GET /v2/domains/{zone}/records?per_page=200` — every record (for
 	/// [`DnsProvider::list`]).
 	async fn list_all(&self, zone: &str) -> Result<Vec<DomainRecord>, ProviderError> {
-		let mut url = format!("{}/v2/domains/{}/records?per_page=200", self.base, zone);
+		let url = self.records_url(zone, None)?.with_query("per_page", "200");
+		self.fetch_pages(url).await
+	}
+
+	/// GET `first` and every page DigitalOcean links to through
+	/// `links.pages.next` until exhausted, so a zone with hundreds of records
+	/// is not silently truncated. The link comes from the response body, so it
+	/// is resolved against the configured base and refused when it points at a
+	/// different origin: the bearer token must not follow it anywhere else.
+	async fn fetch_pages(&self, first: HttpsUrl) -> Result<Vec<DomainRecord>, ProviderError> {
+		let mut url = first;
 		let mut out = Vec::new();
 		loop {
 			let response = self
 				.client
-				.get(&url)
+				.get(url.clone().into_url())
 				.bearer_auth(self.secret.token())
 				.send()
 				.await
@@ -183,7 +181,7 @@ impl DigitaloceanProvider {
 			let page: ListResponse = decode(response).await?;
 			out.extend(page.domain_records);
 			match page.links.pages.next {
-				Some(next) if !next.is_empty() => url = next,
+				Some(next) if !next.is_empty() => url = self.base.follow(&next)?,
 				_ => break,
 			}
 		}
@@ -193,10 +191,10 @@ impl DigitaloceanProvider {
 	/// `POST /v2/domains/{zone}/records` — create a record; returns the
 	/// server-assigned id.
 	async fn create(&self, zone: &str, body: String) -> Result<u64, ProviderError> {
-		let url = format!("{}/v2/domains/{}/records", self.base, zone);
+		let url = self.records_url(zone, None)?;
 		let response = self
 			.client
-			.post(url)
+			.post(url.into_url())
 			.bearer_auth(self.secret.token())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.body(body)
@@ -216,10 +214,10 @@ impl DigitaloceanProvider {
 
 	/// `PUT /v2/domains/{zone}/records/{id}` — replace a record's data/ttl.
 	async fn update(&self, zone: &str, id: u64, body: String) -> Result<(), ProviderError> {
-		let url = format!("{}/v2/domains/{}/records/{id}", self.base, zone);
+		let url = self.records_url(zone, Some(id))?;
 		let response = self
 			.client
-			.put(url)
+			.put(url.into_url())
 			.bearer_auth(self.secret.token())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.body(body)
@@ -239,10 +237,10 @@ impl DigitaloceanProvider {
 
 	/// `DELETE /v2/domains/{zone}/records/{id}` — DigitalOcean replies 204.
 	async fn delete_record(&self, zone: &str, id: u64) -> Result<(), ProviderError> {
-		let url = format!("{}/v2/domains/{}/records/{id}", self.base, zone);
+		let url = self.records_url(zone, Some(id))?;
 		let response = self
 			.client
-			.delete(url)
+			.delete(url.into_url())
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
@@ -474,3 +472,7 @@ mod tests;
 #[cfg(test)]
 #[path = "digitalocean_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "digitalocean_tests_path.rs"]
+mod path_tests;

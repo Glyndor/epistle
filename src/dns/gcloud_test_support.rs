@@ -335,8 +335,8 @@ pub(super) fn provider_for(base: &str) -> GcloudProvider {
 		project_id: "proj".into(),
 	};
 	GcloudProvider::new(ScopedSecret::new("example.org", ""), account)
-		.with_token_base(base.to_string())
-		.with_dns_base(base.to_string())
+		.with_token_base(crate::net::HttpsUrl::loopback_http(base).unwrap())
+		.with_dns_base(crate::net::HttpsUrl::loopback_http(&format!("{base}/dns/v1")).unwrap())
 }
 
 pub(super) fn txt(name: &str, value: &str) -> DnsRecord {

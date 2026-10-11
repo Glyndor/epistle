@@ -174,7 +174,7 @@ pub(super) async fn mock(records: Vec<serde_json::Value>) -> (SpaceshipProvider,
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = SpaceshipProvider::new("AK".into(), "SK".into(), "example.org".into())
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 

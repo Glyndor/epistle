@@ -67,6 +67,10 @@ zeroize = "=1.9.0"
 mail-parser = { version = "0.11.9", default-features = false }
 toml_edit = "0.25"
 
+# Interface enumeration without unsafe: only the `net` feature (ifaddrs).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["net"] }
+
 [profile.release]
 lto = "thin"
 strip = "symbols"

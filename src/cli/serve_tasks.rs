@@ -116,6 +116,8 @@ pub(super) async fn build_oauth_verifier(
 		.map_err(|e| std::io::Error::other(format!("oauth config: {e:?}")))?,
 		(None, Some(discovery_url)) => {
 			let default_alg = parse_oauth_alg(&oauth.algorithm)?;
+			let discovery_url = crate::oauth::oidc::parse_endpoint(discovery_url)
+				.map_err(|e| std::io::Error::other(format!("oauth config: {e}")))?;
 			// No redirects (a compromised IdP must not 302 the fetch to an
 			// internal address) and a hard timeout (never hang startup on a
 			// stalled IdP). The body itself is size-bounded in `get_text`.
@@ -124,17 +126,12 @@ pub(super) async fn build_oauth_verifier(
 				.redirect(reqwest::redirect::Policy::none())
 				.build()
 				.map_err(|e| std::io::Error::other(format!("oauth http client: {e}")))?;
-			let keys = crate::oauth::oidc::fetch_keys(&client, discovery_url, default_alg)
+			let keys = crate::oauth::oidc::fetch_keys(&client, &discovery_url, default_alg)
 				.await
 				.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
 			let verifier =
 				crate::oauth::OauthVerifier::from_jwks(&oauth.issuer, &oauth.audience, keys);
-			spawn_jwks_refresh(
-				verifier.jwks_cache(),
-				client,
-				discovery_url.clone(),
-				default_alg,
-			);
+			spawn_jwks_refresh(verifier.jwks_cache(), client, discovery_url, default_alg);
 			verifier
 		}
 		(None, None) => unreachable!("validate() rejects the no-source case"),
@@ -168,7 +165,7 @@ fn parse_oauth_alg(algorithm: &str) -> std::io::Result<crate::jwt::Algorithm> {
 fn spawn_jwks_refresh(
 	cache: Option<Arc<std::sync::RwLock<Vec<crate::oauth::Jwk>>>>,
 	client: reqwest::Client,
-	discovery_url: String,
+	discovery_url: crate::net::HttpsUrl,
 	default_alg: crate::jwt::Algorithm,
 ) {
 	let Some(cache) = cache else {

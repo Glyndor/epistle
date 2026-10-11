@@ -201,7 +201,7 @@ pub(super) async fn mock_with(existing: Vec<StoredRecord>) -> (OvhProvider, Shar
 		"secret".into(),
 		ScopedSecret::new("example.org", "CK"),
 	)
-	.with_base(format!("http://{addr}"));
+	.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 
@@ -258,26 +258,35 @@ fn sub_domain_strips_zone_and_uses_empty_for_apex() {
 
 #[test]
 fn endpoint_alias_resolves_to_regional_base() {
-	assert_eq!(resolve_base(None), "https://eu.api.ovh.com/1.0".to_string());
+	let resolved = |endpoint| resolve_base(endpoint).map(|url| url.to_string());
+	assert_eq!(resolved(None), Ok("https://eu.api.ovh.com/1.0".to_string()));
 	assert_eq!(
-		resolve_base(Some("ovh-eu")),
-		"https://eu.api.ovh.com/1.0".to_string()
+		resolved(Some("ovh-eu")),
+		Ok("https://eu.api.ovh.com/1.0".to_string())
 	);
 	assert_eq!(
-		resolve_base(Some("ovh-ca")),
-		"https://ca.api.ovh.com/1.0".to_string()
+		resolved(Some("ovh-ca")),
+		Ok("https://ca.api.ovh.com/1.0".to_string())
 	);
 	assert_eq!(
-		resolve_base(Some("ovh-us")),
-		"https://api.us.ovhcloud.com/1.0".to_string()
+		resolved(Some("ovh-us")),
+		Ok("https://api.us.ovhcloud.com/1.0".to_string())
 	);
 	assert_eq!(
-		resolve_base(Some("https://private.example.com/1.0")),
-		"https://private.example.com/1.0".to_string()
+		resolved(Some("https://private.example.com/1.0")),
+		Ok("https://private.example.com/1.0".to_string())
 	);
 	assert_eq!(
-		resolve_base(Some("not-a-region")),
-		"https://eu.api.ovh.com/1.0".to_string()
+		resolved(Some("not-a-region")),
+		Ok("https://eu.api.ovh.com/1.0".to_string())
+	);
+}
+
+#[test]
+fn a_cleartext_endpoint_is_refused() {
+	assert_eq!(
+		resolve_base(Some("http://private.example.com/1.0")),
+		Err(crate::net::HttpsUrlError::NotHttps)
 	);
 }
 

@@ -8,6 +8,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
@@ -22,7 +24,7 @@ type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderErr
 pub struct CloudflareProvider {
 	client: reqwest::Client,
 	secret: ScopedSecret,
-	base: String,
+	base: HttpsUrl,
 }
 
 #[derive(Deserialize)]
@@ -57,13 +59,13 @@ impl CloudflareProvider {
 		CloudflareProvider {
 			client: reqwest::Client::new(),
 			secret,
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -218,11 +220,11 @@ impl CloudflareProvider {
 
 	async fn get_json<T: serde::de::DeserializeOwned>(
 		&self,
-		url: &str,
+		url: HttpsUrl,
 	) -> Result<T, ProviderError> {
 		let response = self
 			.client
-			.get(url)
+			.get(url.into_url())
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
@@ -230,9 +232,21 @@ impl CloudflareProvider {
 		decode(response).await
 	}
 
+	/// `{base}/zones/{zone_id}/dns_records[/{record_id}]`, each identifier
+	/// escaped as one path segment.
+	fn records_url(
+		&self,
+		zone_id: &str,
+		record_id: Option<&str>,
+	) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec!["zones", zone_id, "dns_records"];
+		segments.extend(record_id);
+		Ok(self.base.with_segments(segments)?)
+	}
+
 	async fn zone_id(&self, zone: &str) -> Result<String, ProviderError> {
-		let url = format!("{}/zones?name={zone}", self.base);
-		let zones: ListZones = self.get_json(&url).await?;
+		let url = self.base.with_segments(["zones"])?.with_query("name", zone);
+		let zones: ListZones = self.get_json(url).await?;
 		zones
 			.result
 			.into_iter()
@@ -248,11 +262,11 @@ impl CloudflareProvider {
 		kind: &str,
 		value: Option<&str>,
 	) -> Result<Option<String>, ProviderError> {
-		let url = format!(
-			"{}/zones/{zone_id}/dns_records?type={kind}&name={name}",
-			self.base
-		);
-		let records: ListRecords = self.get_json(&url).await?;
+		let url = self
+			.records_url(zone_id, None)?
+			.with_query("type", kind)
+			.with_query("name", name);
+		let records: ListRecords = self.get_json(url).await?;
 		// The TXT matching rule from `src/dns/provider.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value, and an upsert that
@@ -283,10 +297,10 @@ impl CloudflareProvider {
 		let request = match &existing {
 			Some(id) => self
 				.client
-				.put(format!("{}/zones/{zone_id}/dns_records/{id}", self.base)),
+				.put(self.records_url(&zone_id, Some(id))?.into_url()),
 			None => self
 				.client
-				.post(format!("{}/zones/{zone_id}/dns_records", self.base)),
+				.post(self.records_url(&zone_id, None)?.into_url()),
 		};
 		let response = request
 			.bearer_auth(self.secret.token())
@@ -327,7 +341,7 @@ impl CloudflareProvider {
 		};
 		let response = self
 			.client
-			.delete(format!("{}/zones/{zone_id}/dns_records/{id}", self.base))
+			.delete(self.records_url(&zone_id, Some(&id))?.into_url())
 			.bearer_auth(self.secret.token())
 			.send()
 			.await
@@ -337,8 +351,8 @@ impl CloudflareProvider {
 
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
 		let zone_id = self.zone_id(zone).await?;
-		let url = format!("{}/zones/{zone_id}/dns_records", self.base);
-		let records: ListRecords = self.get_json(&url).await?;
+		let url = self.records_url(&zone_id, None)?;
+		let records: ListRecords = self.get_json(url).await?;
 		Ok(records
 			.result
 			.into_iter()
@@ -412,3 +426,7 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "cloudflare_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cloudflare_tests_path.rs"]
+mod path_tests;

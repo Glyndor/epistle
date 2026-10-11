@@ -150,8 +150,8 @@ pub(super) async fn mock(
 	tokio::spawn(async move {
 		let _ = axum::serve(listener, app).await;
 	});
-	let provider =
-		DigitaloceanProvider::new(ScopedSecret::new("example.org", "tok")).with_base(base);
+	let provider = DigitaloceanProvider::new(ScopedSecret::new("example.org", "tok"))
+		.with_base(crate::net::HttpsUrl::loopback_http(&base).unwrap());
 	(provider, state)
 }
 

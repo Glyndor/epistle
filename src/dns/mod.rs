@@ -19,6 +19,8 @@ pub mod records;
 pub mod rfc2136;
 pub mod route53;
 pub mod spaceship;
+#[cfg(test)]
+mod uri_probe;
 
 use crate::spf::DnsLookup;
 

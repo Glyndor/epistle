@@ -179,6 +179,21 @@ fn ovh_with_empty_consumer_key_builds_nothing() {
 }
 
 #[test]
+fn ovh_with_a_cleartext_endpoint_builds_nothing() {
+	let toml = |endpoint: &str| {
+		format!(
+			"provider = \"ovh\"\nzone = \"example.org\"\n\
+			 access_key = \"ak\"\nsecret_key = \"sk\"\nconsumer_key = \"ck\"\n\
+			 endpoint = \"{endpoint}\""
+		)
+	};
+	let cleartext: Dns = toml::from_str(&toml("http://ovh.example.net/1.0")).unwrap();
+	assert!(cleartext.build().is_none());
+	let https: Dns = toml::from_str(&toml("https://ovh.example.net/1.0")).unwrap();
+	assert!(https.build().is_some());
+}
+
+#[test]
 fn route53_with_empty_access_key_builds_nothing() {
 	let dns: Dns = toml::from_str(
 		"provider = \"route53\"\nzone = \"example.org\"\n\

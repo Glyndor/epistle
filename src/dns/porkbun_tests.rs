@@ -97,7 +97,7 @@ async fn mock(records: serde_json::Value) -> (PorkbunProvider, Shared) {
 	});
 	let provider =
 		PorkbunProvider::new(ScopedSecret::new("example.org", "sk1_secret"), "pk1_apikey")
-			.with_base(format!("http://{addr}"));
+			.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 

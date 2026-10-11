@@ -132,6 +132,12 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+impl From<crate::net::HttpsUrlError> for ProviderError {
+	fn from(err: crate::net::HttpsUrlError) -> Self {
+		ProviderError::Remote(format!("invalid request URL: {err}"))
+	}
+}
+
 /// The TXT version tag at the start of `value`, or `None` when the
 /// value is empty or its first token is not a tag epistle recognises.
 /// The tag is the substring before the first whitespace or `;`; the

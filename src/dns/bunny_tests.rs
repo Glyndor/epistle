@@ -153,7 +153,7 @@ async fn mock() -> (BunnyProvider, Shared) {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = BunnyProvider::new(ScopedSecret::new("example.org", "tok"))
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
 }
 
@@ -339,7 +339,7 @@ async fn txt_delete_with_a_value_drops_only_the_matching_challenge() {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = BunnyProvider::new(ScopedSecret::new("example.org", "tok"))
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	provider
 		.delete(
 			"example.org",
@@ -396,7 +396,7 @@ async fn list_parses_records_with_fqdn_names() {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = BunnyProvider::new(ScopedSecret::new("example.org", "tok"))
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	let records = provider.list("example.org").await.expect("list");
 	assert_eq!(records.len(), 2);
 	let apex = records
@@ -450,7 +450,7 @@ async fn zone_search_picks_exact_match_among_prefix_overlaps() {
 		let _ = axum::serve(listener, app).await;
 	});
 	let provider = BunnyProvider::new(ScopedSecret::new("example.org", "tok"))
-		.with_base(format!("http://{addr}"));
+		.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	provider
 		.upsert("example.org", txt("example.org", "v=spf1 -all"))
 		.await

@@ -18,6 +18,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
 };
@@ -43,7 +45,7 @@ pub struct GodaddyProvider {
 	api_secret: String,
 	/// The zone every record is scoped to.
 	zone: String,
-	base: String,
+	base: HttpsUrl,
 }
 
 /// One record as `GET /domains/{domain}/records/{type}/{name}` returns it. MX
@@ -138,13 +140,13 @@ impl GodaddyProvider {
 			api_key,
 			api_secret,
 			zone: zone.trim_end_matches('.').to_string(),
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -198,14 +200,24 @@ impl GodaddyProvider {
 		format!("sso-key {}:{}", self.api_key, self.api_secret)
 	}
 
+	/// `{base}/domains/{zone}/records[/{type}/{name}]`, with the zone and the
+	/// record name each escaped as one path segment.
+	fn records_url(&self, set: Option<(&str, &str)>) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec!["domains", self.zone.as_str(), "records"];
+		if let Some((kind, rel)) = set {
+			segments.extend([kind, rel]);
+		}
+		Ok(self.base.with_segments(segments)?)
+	}
+
 	/// `PUT /domains/{domain}/records/{type}/{name}`, replace the entire
 	/// record set at `(type, name)` with `body`. GoDaddy replies 200 on
 	/// success; the body is empty.
 	async fn put_records(&self, kind: &str, rel: &str, body: String) -> Result<(), ProviderError> {
-		let path = format!("/domains/{}/records/{kind}/{rel}", self.zone);
+		let url = self.records_url(Some((kind, rel)))?;
 		let response = self
 			.client
-			.put(format!("{}{path}", self.base))
+			.put(url.into_url())
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.body(body)
@@ -227,10 +239,11 @@ impl GodaddyProvider {
 		kind: &str,
 		rel: &str,
 	) -> Result<Vec<serde_json::Value>, ProviderError> {
-		let path = format!("/domains/{}/records/{kind}/{rel}", self.zone);
+		let url = self.records_url(Some((kind, rel)))?;
+		let path = url.as_url().path().to_string();
 		let response = self
 			.client
-			.get(format!("{}{path}", self.base))
+			.get(url.into_url())
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.send()
 			.await
@@ -267,10 +280,10 @@ impl GodaddyProvider {
 	/// `DELETE /domains/{domain}/records/{type}/{name}`, remove every
 	/// record at that `(type, name)`. GoDaddy replies 204.
 	async fn delete_records(&self, kind: &str, rel: &str) -> Result<(), ProviderError> {
-		let path = format!("/domains/{}/records/{kind}/{rel}", self.zone);
+		let url = self.records_url(Some((kind, rel)))?;
 		let response = self
 			.client
-			.delete(format!("{}{path}", self.base))
+			.delete(url.into_url())
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.send()
 			.await
@@ -397,10 +410,11 @@ impl GodaddyProvider {
 		// GoDaddy does not paginate `GET /domains/{domain}/records`, the
 		// zone-wide endpoint returns the full set. We read the whole
 		// thing and filter to the kinds the provider publishes.
-		let path = format!("/domains/{}/records", self.zone);
+		let url = self.records_url(None)?;
+		let path = url.as_url().path().to_string();
 		let response = self
 			.client
-			.get(format!("{}{path}", self.base))
+			.get(url.into_url())
 			.header(reqwest::header::AUTHORIZATION, self.auth_header())
 			.send()
 			.await
@@ -598,3 +612,7 @@ mod tests;
 #[cfg(test)]
 #[path = "godaddy_tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "godaddy_tests_path.rs"]
+mod path_tests;

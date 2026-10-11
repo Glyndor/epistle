@@ -147,8 +147,10 @@ pub(crate) mod tests {
 			(parse_plain(&encode("", "", fixture_password()))) == (Err(PlainError::BadFormat)),
 			"credential field must match"
 		);
+		// The wire message for an empty password is `\0alice\0`: both NULs
+		// present, nothing after the second.
 		assert!(
-			(parse_plain(&encode("", "alice", ""))) == (Err(PlainError::BadFormat)),
+			(parse_plain(&BASE64.encode("\0alice\0"))) == (Err(PlainError::BadFormat)),
 			"credential field must match"
 		);
 	}

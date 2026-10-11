@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
@@ -27,7 +29,7 @@ type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderErr
 pub struct BunnyProvider {
 	client: reqwest::Client,
 	secret: ScopedSecret,
-	base: String,
+	base: HttpsUrl,
 	/// Cached numeric zone id, looked up on first use. Held in a sync mutex
 	/// only across quick reads/writes; never across an `await`.
 	zone_id: Mutex<Option<i64>>,
@@ -75,14 +77,14 @@ impl BunnyProvider {
 		BunnyProvider {
 			client: reqwest::Client::new(),
 			secret,
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 			zone_id: Mutex::new(None),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -133,8 +135,11 @@ impl BunnyProvider {
 		if let Some(id) = *self.zone_id.lock().unwrap() {
 			return Ok(id);
 		}
-		let url = format!("{}/dnszone?search={}", self.base, self.secret.zone());
-		let resp: ListZones = self.get_json(&url).await?;
+		let url = self
+			.base
+			.with_segments(["dnszone"])?
+			.with_query("search", self.secret.zone());
+		let resp: ListZones = self.get_json(url).await?;
 		let zone = self.secret.zone().to_string();
 		let id = resp
 			.items
@@ -146,20 +151,31 @@ impl BunnyProvider {
 		Ok(id)
 	}
 
+	/// `{base}/dnszone/{zone_id}/records[/{record_id}]`.
+	fn record_url(&self, zone_id: i64, record_id: Option<i64>) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec![
+			"dnszone".to_string(),
+			zone_id.to_string(),
+			"records".to_string(),
+		];
+		segments.extend(record_id.map(|id| id.to_string()));
+		Ok(self.base.with_segments(segments)?)
+	}
+
 	/// Fetch the zone detail (which embeds the records list).
 	async fn zone_detail(&self, zone_id: i64) -> Result<ZoneDetail, ProviderError> {
-		let url = format!("{}/dnszone/{zone_id}", self.base);
-		self.get_json(&url).await
+		let url = self.base.with_segments(["dnszone", &zone_id.to_string()])?;
+		self.get_json(url).await
 	}
 
 	/// GET a JSON body, mapping 401/403 to [`ProviderError::Auth`].
 	async fn get_json<T: serde::de::DeserializeOwned>(
 		&self,
-		url: &str,
+		url: HttpsUrl,
 	) -> Result<T, ProviderError> {
 		let response = self
 			.client
-			.get(url)
+			.get(url.into_url())
 			.header("AccessKey", self.secret.token())
 			.send()
 			.await
@@ -171,11 +187,11 @@ impl BunnyProvider {
 	async fn send_write(
 		&self,
 		method: reqwest::Method,
-		url: &str,
+		url: HttpsUrl,
 		body: String,
 	) -> Result<reqwest::Response, ProviderError> {
 		self.client
-			.request(method, url)
+			.request(method, url.into_url())
 			.header("AccessKey", self.secret.token())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.body(body)
@@ -221,11 +237,11 @@ impl BunnyProvider {
 			.into_iter()
 			.find(|r| r.rtype == rtype && r.name.as_deref() == Some(name.as_str()));
 		let response = if let Some(rec) = existing {
-			let url = format!("{}/dnszone/{zone_id}/records/{}", self.base, rec.id);
-			self.send_write(reqwest::Method::POST, &url, body).await?
+			let url = self.record_url(zone_id, Some(rec.id))?;
+			self.send_write(reqwest::Method::POST, url, body).await?
 		} else {
-			let url = format!("{}/dnszone/{zone_id}/records", self.base);
-			self.send_write(reqwest::Method::PUT, &url, body).await?
+			let url = self.record_url(zone_id, None)?;
+			self.send_write(reqwest::Method::PUT, url, body).await?
 		};
 		check(response)
 	}
@@ -274,10 +290,10 @@ impl BunnyProvider {
 	}
 
 	async fn delete_by_id(&self, zone_id: i64, id: i64) -> Result<(), ProviderError> {
-		let url = format!("{}/dnszone/{zone_id}/records/{id}", self.base);
+		let url = self.record_url(zone_id, Some(id))?;
 		let response = self
 			.client
-			.delete(&url)
+			.delete(url.into_url())
 			.header("AccessKey", self.secret.token())
 			.send()
 			.await
@@ -392,3 +408,7 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 #[cfg(test)]
 #[path = "bunny_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bunny_tests_path.rs"]
+mod path_tests;
