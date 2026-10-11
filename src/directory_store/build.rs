@@ -149,3 +149,16 @@ pub(super) fn totp(dynamic: &[DynamicAccount]) -> Vec<(String, String)> {
 		})
 		.collect()
 }
+
+/// Per-account storage quota (bytes) for every dynamic account that
+/// carries one. `None` is omitted so the rebuilt directory falls back to
+/// the domain quota and the server default, the same chain
+/// `Account::quota_bytes = None` already takes in `Directory::quota_for`.
+pub(super) fn quota_bytes(dynamic: &[DynamicAccount]) -> Vec<(String, u64)> {
+	dynamic
+		.iter()
+		.filter_map(|account| {
+			account.quota_bytes.map(|bytes| (account.name.clone(), bytes))
+		})
+		.collect()
+}
