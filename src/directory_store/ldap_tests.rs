@@ -109,3 +109,21 @@ fn first_value_skips_empty_and_missing() {
 		Some("x@example.org".to_string())
 	);
 }
+
+#[test]
+fn a_directory_style_account_name_is_kept_as_is() {
+	let config = config();
+	for name in ["john.doe", "J_Smith"] {
+		let entry = entry(&[("uid", &[name])]);
+		assert_eq!(account_name(&config, &entry), Some(name.to_string()));
+	}
+}
+
+#[test]
+fn an_account_name_that_cannot_be_a_directory_is_skipped() {
+	let config = config();
+	for name in ["../evil", ".", "..", "a/b", "a\\b"] {
+		let entry = entry(&[("uid", &[name]), ("mail", &["x@example.org"])]);
+		assert_eq!(account_name(&config, &entry), None, "case {}", name.len());
+	}
+}

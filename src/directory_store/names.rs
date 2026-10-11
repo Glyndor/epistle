@@ -2,9 +2,12 @@
 //! breaks the rule.
 //!
 //! The name doubles as a directory under `<data_dir>/accounts/`, so this is
-//! the boundary between a directory backend and the filesystem.
+//! the boundary between a directory backend and the filesystem. External
+//! directories only have to name accounts with a safe path component; the
+//! stricter creation policy applies to accounts made here.
 
 use super::StoreError;
+use crate::util::path_component::{AccountName, DigestName};
 
 /// Drop the accounts an external directory named unsafely, logging each one.
 ///
@@ -27,16 +30,15 @@ pub(super) fn with_safe_names<T>(
 		.into_iter()
 		.filter(|account| {
 			let name = name_of(account);
-			match validate_name(name) {
-				Ok(()) => true,
-				Err(error) => {
-					tracing::warn!(
-						source,
-						%error,
-						"ignoring a directory account whose name cannot be a directory name",
-					);
-					false
-				}
+			if AccountName::new(name).is_ok() {
+				true
+			} else {
+				tracing::warn!(
+					source,
+					account = %DigestName::pseudonym(name),
+					"ignoring a directory account whose name cannot be a directory name",
+				);
+				false
 			}
 		})
 		.collect()
