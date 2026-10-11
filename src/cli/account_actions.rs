@@ -149,30 +149,22 @@ pub(crate) fn address_remove_with_store(
 }
 
 /// The confirmation after a quota change.
-pub(crate) fn quota_changed(previous: Option<u64>, new: Option<u64>) -> String {
-	let text = |bytes: Option<u64>| match bytes {
-		Some(bytes) => bytes.to_string(),
-		None => "server default".to_string(),
-	};
-	format!("quota changed: {} -> {}", text(previous), text(new))
+pub(crate) fn quota_changed(new: Option<u64>) -> String {
+	match new {
+		Some(bytes) => format!("quota set to {bytes}"),
+		None => "quota set to server default".to_string(),
+	}
 }
 
 /// The confirmation after a protocol allowlist change.
-pub(crate) fn protocols_changed(
-	previous: Option<&Vec<Protocol>>,
-	new: Option<&Vec<Protocol>>,
-) -> String {
-	format!(
-		"protocols changed: {} -> {}",
-		render_protocols(previous),
-		render_protocols(new)
-	)
+pub(crate) fn protocols_changed(new: Option<&Vec<Protocol>>) -> String {
+	format!("protocols set to {}", render_protocols(new))
 }
 
 pub(crate) fn quota_with_store(store: &AccountStore, name: &str, size: Option<u64>) -> ExitCode {
 	match store.set_quota_bytes(name, size) {
-		Ok(previous) => {
-			println!("{}", quota_changed(previous, size));
+		Ok(_) => {
+			println!("{}", quota_changed(size));
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),
@@ -185,8 +177,8 @@ pub(crate) fn protocols_with_store(
 	allowed: Option<Vec<Protocol>>,
 ) -> ExitCode {
 	match store.set_allowed_protocols(name, allowed.clone()) {
-		Ok(previous) => {
-			println!("{}", protocols_changed(previous.as_ref(), allowed.as_ref()));
+		Ok(_) => {
+			println!("{}", protocols_changed(allowed.as_ref()));
 			ExitCode::SUCCESS
 		}
 		Err(error) => handle_error(name, error),

@@ -5,32 +5,22 @@ use super::*;
 use crate::config::Protocol;
 
 #[test]
-fn quota_confirmation_names_the_change_only() {
+fn quota_confirmation_states_the_new_value_only() {
 	assert_eq!(
-		account::quota_changed(Some(10 * 1024 * 1024 * 1024), Some(20 * 1024 * 1024 * 1024)),
-		"quota changed: 10737418240 -> 21474836480"
+		account::quota_changed(Some(20 * 1024 * 1024 * 1024)),
+		"quota set to 21474836480"
 	);
-	assert_eq!(
-		account::quota_changed(None, Some(1024)),
-		"quota changed: server default -> 1024"
-	);
-	assert_eq!(
-		account::quota_changed(Some(1024), None),
-		"quota changed: 1024 -> server default"
-	);
+	assert_eq!(account::quota_changed(None), "quota set to server default");
 }
 
 #[test]
-fn protocols_confirmation_names_the_change_only() {
+fn protocols_confirmation_states_the_new_value_only() {
 	let imap_api = vec![Protocol::Imap, Protocol::Api];
 	assert_eq!(
-		account::protocols_changed(None, Some(&imap_api)),
-		"protocols changed: all -> imap,api"
+		account::protocols_changed(Some(&imap_api)),
+		"protocols set to imap,api"
 	);
-	assert_eq!(
-		account::protocols_changed(Some(&imap_api), None),
-		"protocols changed: imap,api -> all"
-	);
+	assert_eq!(account::protocols_changed(None), "protocols set to all");
 }
 
 #[test]
