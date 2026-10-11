@@ -41,7 +41,12 @@ pub fn router(state: ApiState) -> Router {
 		// `.well-known/jmap` is the standard autodiscovery path (§2.2).
 		.route("/.well-known/jmap", get(jmap::session))
 		.route("/jmap/session", get(jmap::session))
-		.route("/jmap/api", post(jmap::api))
+		// The body limit is the `maxSizeRequest` the Session advertises, not
+		// axum's 2 MiB default.
+		.route(
+			"/jmap/api",
+			post(jmap::api).layer(DefaultBodyLimit::max(jmap::MAX_SIZE_REQUEST)),
+		)
 		// JMAP over WebSocket (RFC 8887): the upgrade endpoint, under the same
 		// bearer auth as the rest of the authenticated router.
 		.route("/jmap/ws", get(jmap::websocket::ws_upgrade))
@@ -138,6 +143,10 @@ mod jmap_tests_f;
 #[cfg(test)]
 #[path = "jmap_tests_g.rs"]
 mod jmap_tests_g;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits.rs"]
+mod jmap_tests_limits;
 
 #[cfg(test)]
 #[path = "tenancy_tests.rs"]
