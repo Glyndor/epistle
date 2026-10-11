@@ -169,10 +169,11 @@ pub fn dispatch_request(
 	auth: &MatchedAuth,
 	request: Request,
 ) -> Result<Response, Value> {
-	if let Some(problem) = limits::too_many_calls(request.method_calls.len()) {
-		return Err(problem);
+	let calls = request.method_calls.len();
+	if calls > limits::MAX_CALLS_IN_REQUEST {
+		return Err(limits::too_many_calls());
 	}
-	let mut method_responses = Vec::with_capacity(request.method_calls.len());
+	let mut method_responses = Vec::with_capacity(calls);
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
