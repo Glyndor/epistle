@@ -144,7 +144,7 @@ fn is_single_name(name: &str) -> bool {
 /// `dir/name` for a single plain `name`, without touching the filesystem.
 ///
 /// `dir` must come from [`contained`] or [`contained_subdir`]. The name is
-/// refused unless [`is_single_name`] accepts it, and the result must still be
+/// refused unless it is one non-empty name that is not `.` or `..` and has no separator or NUL, and the result must still be
 /// a direct child of `dir`.
 pub fn contained_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
 	if !is_single_name(name) {
