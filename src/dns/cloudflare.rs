@@ -77,8 +77,8 @@ impl CloudflareProvider {
 	}
 
 	/// Tag every record with `epistle:<hostname>` so a zone shared by several
-	/// servers shows which one wrote it. Tags need a paid plan; see
-	/// [`cloudflare_tags`].
+	/// servers shows which one wrote it. Tags need a paid plan; see the
+	/// `cloudflare_tags` module.
 	pub fn with_hostname(mut self, hostname: &str) -> Self {
 		self.host_tag = cloudflare_tags::host_tag(hostname);
 		self
