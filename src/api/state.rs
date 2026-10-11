@@ -61,8 +61,12 @@ struct Inner {
 	/// Per-account storage quota in bytes; 0 means unlimited.
 	quota_limit: std::sync::atomic::AtomicU64,
 	/// Labeled bearer API keys, loaded from `api_keys.toml`; any non-expired,
-	/// IP-permitted key authenticates alongside the configured token.
-	api_keys: Vec<super::api_keys::ApiKey>,
+	/// IP-permitted key authenticates alongside the configured token. Held
+	/// behind an `Arc<ApiKeySet>` so the file watcher can swap the live
+	/// set on a CLI edit without rebuilding `ApiState` and without holding
+	/// a lock across every request, the snapshot guard is taken per
+	/// request and dropped before the response goes out.
+	api_keys: std::sync::Arc<super::api_keys::ApiKeySet>,
 	/// Session-scoped PushSubscription objects (RFC 8620 §7.2). Held in memory:
 	/// real out-of-band delivery is out of scope, so these only need to round-trip
 	/// through `PushSubscription/get`/`set`. Keyed by subscription id.
@@ -179,9 +183,16 @@ impl ApiState {
 		store: Arc<AccountStore>,
 		spool: FsSpool,
 	) -> Self {
-		let api_keys = super::api_keys::ApiKeyStore::open(&data_dir)
-			.map(|store| store.keys().to_vec())
-			.unwrap_or_default();
+		// `ApiKeySet::open` only fails on a parse error or a read error
+		// other than NotFound. Either way the operator can recover by
+		// editing the file and waiting for the watcher to reload;
+		// binding the listener with an empty set keeps the API surface
+		// up so the static token still authenticates and a corrected
+		// file can be observed on the next poll.
+		let api_keys = std::sync::Arc::new(
+			super::api_keys::ApiKeySet::open(&data_dir)
+				.unwrap_or_else(|_| super::api_keys::ApiKeySet::empty()),
+		);
 		// One-shot backfill before any handler can serve a download. Runs
 		// against every known account; the function itself is bounded by the
 		// number of stored messages and per-message work is constant, so a
@@ -339,6 +350,7 @@ impl ApiState {
 		const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send, Scope::Scim];
 		self.inner
 			.api_keys
+			.snapshot()
 			.iter()
 			.find(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE))
 			.map_or_else(|| DomainScope::Only(Vec::new()), DomainScope::of_key)
@@ -392,6 +404,22 @@ impl ApiState {
 		self.inner
 			.quota_limit
 			.store(bytes, std::sync::atomic::Ordering::Relaxed);
+		self
+	}
+
+	/// Replace the key set the bearer middleware reads. The default
+	/// (set by [`ApiState::new`]) loads `api_keys.toml` once at
+	/// construction and is never updated; the file watcher calls
+	/// [`super::api_keys::ApiKeySet::reload_from`] on `set` whenever
+	/// `api_keys.toml` changes, so a server that needs hot-reloadable
+	/// keys must pass the same `Arc<ApiKeySet>` it gave to the
+	/// watcher. Must be called before the state is shared (the
+	/// builder quietly no-ops when the `Arc` is already taken,
+	/// mirroring `with_authz`).
+	pub fn with_api_keys(mut self, set: std::sync::Arc<super::api_keys::ApiKeySet>) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.api_keys = set;
+		}
 		self
 	}
 
@@ -592,9 +620,8 @@ impl ApiState {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or(0);
-		let matched = self
-			.inner
-			.api_keys
+		let keys = self.inner.api_keys.snapshot();
+		let matched = keys
 			.iter()
 			.find(|key| key.admits_any(token, client_ip, now, acceptable_scopes));
 		if let Some(key) = matched
