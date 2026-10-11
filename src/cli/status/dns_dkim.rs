@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use super::report::{Item, Level};
 use crate::config::Config;
 use crate::dkim::Signer;
-use crate::dkim::rotate::RotationState;
 
 /// A key the server signs with and the public key DNS should publish for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,18 +17,17 @@ pub(super) struct SigningKey {
 	pub(super) file: PathBuf,
 }
 
-/// The keys in use: the Ed25519 key from the rotation state when
-/// `<data_dir>/dkim-rotation.json` names one (a rotation moved signing off the
-/// configured file), otherwise `[dkim] key_file`; plus the RSA key when
-/// configured. Empty without a `[dkim]` section.
+/// The keys in use: the active Ed25519 key as the server resolves it
+/// ([`crate::dkim::rotate::active_ed25519`], an unreadable rotation state is
+/// an error), plus the RSA key when configured. Empty without a `[dkim]`
+/// section.
 pub(super) fn signing_keys(config: &Config) -> Result<Vec<SigningKey>, String> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
 	};
-	let (selector, file) = match rotated(config) {
-		Some(state) => (state.selector, config.data_dir.join(state.key_file)),
-		None => (dkim.selector.clone(), dkim.key_file.clone()),
-	};
+	let active = crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
+		.map_err(|error| error.to_string())?;
+	let (selector, file) = (active.selector, active.key_file);
 	let mut signer = Signer::load(&selector, &file).map_err(|error| error.to_string())?;
 	let mut keys = vec![SigningKey {
 		selector,
@@ -48,13 +46,6 @@ pub(super) fn signing_keys(config: &Config) -> Result<Vec<SigningKey>, String> {
 		});
 	}
 	Ok(keys)
-}
-
-/// The persisted rotation state, when present and naming an active key.
-fn rotated(config: &Config) -> Option<RotationState> {
-	let bytes = std::fs::read(config.data_dir.join("dkim-rotation.json")).ok()?;
-	let state: RotationState = serde_json::from_slice(&bytes).ok()?;
-	(!state.selector.is_empty() && !state.key_file.as_os_str().is_empty()).then_some(state)
 }
 
 /// The `p=` value of a DKIM TXT record, whitespace removed (long values are

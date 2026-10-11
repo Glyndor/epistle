@@ -16,7 +16,8 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		return AreaReport::single(Level::Warn, "no listeners are enabled");
 	}
 	crate::tls::ensure_crypto_provider();
-	let cert = config.tls.as_ref().map(|tls| tls.cert_file.as_path());
+	let served = crate::tls::served_tls(config);
+	let cert = served.as_ref().map(|served| served.tls.cert_file.as_path());
 	let lines = match crate::cli::probe::probe_all(&config.listeners, cert).await {
 		Ok(lines) => lines,
 		Err(error) => return AreaReport::fail(format!("cannot probe the listeners: {error}")),
