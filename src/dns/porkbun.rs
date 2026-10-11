@@ -19,6 +19,8 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::net::HttpsUrl;
+
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv};
 
 /// Porkbun's API base; overridable for tests.
@@ -49,7 +51,7 @@ pub struct PorkbunProvider {
 	secret: ScopedSecret,
 	/// The (non-secret) API key that pairs with it.
 	api_key: String,
-	base: String,
+	base: HttpsUrl,
 }
 
 /// A Porkbun reply. Every endpoint returns `status`; the rest of the fields are
@@ -93,13 +95,13 @@ impl PorkbunProvider {
 			client: reqwest::Client::new(),
 			secret,
 			api_key: api_key.into(),
-			base: DEFAULT_BASE.to_string(),
+			base: HttpsUrl::from_static(DEFAULT_BASE),
 		}
 	}
 
 	/// Point the provider at an alternate API base (tests).
-	pub fn with_base(mut self, base: impl Into<String>) -> Self {
-		self.base = base.into();
+	pub fn with_base(mut self, base: HttpsUrl) -> Self {
+		self.base = base;
 		self
 	}
 
@@ -154,9 +156,15 @@ impl PorkbunProvider {
 		}
 	}
 
-	/// POST `path` with the credentials merged into `fields`, and decode the
+	/// POST to `{base}/<segments...>` (each segment escaped as one path
+	/// segment) with the credentials merged into `fields`, and decode the
 	/// reply. Porkbun takes `apikey`/`secretapikey` in the body on every call.
-	async fn call(&self, path: &str, fields: serde_json::Value) -> Result<Reply, ProviderError> {
+	async fn call(
+		&self,
+		segments: &[&str],
+		fields: serde_json::Value,
+	) -> Result<Reply, ProviderError> {
+		let url = self.base.with_segments(segments)?;
 		let mut body = serde_json::Map::new();
 		body.insert("apikey".to_string(), self.api_key.clone().into());
 		body.insert(
@@ -168,7 +176,7 @@ impl PorkbunProvider {
 		}
 		let response = self
 			.client
-			.post(format!("{}{path}", self.base))
+			.post(url.into_url())
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.body(serde_json::Value::Object(body).to_string())
 			.send()
@@ -179,8 +187,8 @@ impl PorkbunProvider {
 
 	/// Every record in the zone, as Porkbun reports it.
 	async fn retrieve(&self) -> Result<Vec<Record>, ProviderError> {
-		let path = format!("/dns/retrieve/{}", self.secret.zone());
-		Ok(self.call(&path, serde_json::Value::Null).await?.records)
+		let segments = ["dns", "retrieve", self.secret.zone()];
+		Ok(self.call(&segments, serde_json::Value::Null).await?.records)
 	}
 
 	/// The ids of every record with this fully-qualified name and type. More
@@ -203,8 +211,10 @@ impl PorkbunProvider {
 
 	/// Remove the record with `id`.
 	async fn delete_id(&self, id: &str) -> Result<(), ProviderError> {
-		let path = format!("/dns/delete/{}/{id}", self.secret.zone());
-		self.call(&path, serde_json::Value::Null).await.map(drop)
+		let segments = ["dns", "delete", self.secret.zone(), id];
+		self.call(&segments, serde_json::Value::Null)
+			.await
+			.map(drop)
 	}
 
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
@@ -277,16 +287,16 @@ impl PorkbunProvider {
 			// Replace in place, then drop any duplicate left at the same
 			// name/type so an upsert never widens the record set.
 			Some((id, duplicates)) => {
-				let path = format!("/dns/edit/{}/{id}", self.secret.zone());
-				self.call(&path, fields).await?;
+				let segments = ["dns", "edit", self.secret.zone(), id];
+				self.call(&segments, fields).await?;
 				for extra in duplicates {
 					self.delete_id(extra).await?;
 				}
 				Ok(())
 			}
 			None => {
-				let path = format!("/dns/create/{}", self.secret.zone());
-				self.call(&path, fields).await.map(drop)
+				let segments = ["dns", "create", self.secret.zone()];
+				self.call(&segments, fields).await.map(drop)
 			}
 		}
 	}
@@ -413,3 +423,7 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 #[cfg(test)]
 #[path = "porkbun_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "porkbun_tests_path.rs"]
+mod path_tests;
