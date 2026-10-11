@@ -135,17 +135,19 @@ fn handle_request(
 			return vec![request_error("notRequest", "invalid Request envelope").to_string()];
 		}
 	};
-	if let Some(mut problem) = super::limits::too_many_calls(request.method_calls.len()) {
-		problem["@type"] = json!("RequestError");
-		return vec![problem.to_string()];
-	}
 	let request_id = value.get("id").and_then(Value::as_str).map(str::to_string);
 
 	// Sample account state before and after dispatch so a successful /set that
 	// actually changed stored mail can be reported (RFC 8887 §5.2).
 	let accounts: Vec<String> = state.accounts().into_iter().map(|a| a.name).collect();
 	let before: Vec<String> = accounts.iter().map(|a| state.account_state(a)).collect();
-	let response = super::dispatch_request(state, auth, request);
+	let response = match super::dispatch_request(state, auth, request) {
+		Ok(response) => response,
+		Err(mut problem) => {
+			problem["@type"] = json!("RequestError");
+			return vec![problem.to_string()];
+		}
+	};
 
 	let mut response_frame = serde_json::Map::new();
 	response_frame.insert("@type".to_string(), json!("Response"));

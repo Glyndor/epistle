@@ -150,17 +150,28 @@ pub async fn api(
 	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<Request>,
 ) -> axum::response::Response {
-	if let Some(problem) = limits::too_many_calls(request.method_calls.len()) {
-		return (StatusCode::BAD_REQUEST, Json(problem)).into_response();
+	match dispatch_request(&state, &auth, request) {
+		Ok(response) => Json(response).into_response(),
+		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
 	}
-	Json(dispatch_request(&state, &auth, request)).into_response()
 }
 
 /// Dispatch a request envelope's method calls and collect the responses
 /// (RFC 8620 §3.3–§3.7). Shared by the HTTP `POST /jmap/api` handler and the
 /// WebSocket transport (RFC 8887), so the two never diverge. Pure aside from the
 /// data-dir/state mutations the individual methods perform.
-pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) -> Response {
+///
+/// A request over `maxCallsInRequest` is refused here, before anything is
+/// allocated or run, with the RFC 8620 `limit` problem each transport
+/// returns in its own framing.
+pub fn dispatch_request(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	request: Request,
+) -> Result<Response, Value> {
+	if let Some(problem) = limits::too_many_calls(request.method_calls.len()) {
+		return Err(problem);
+	}
 	let mut method_responses = Vec::with_capacity(request.method_calls.len());
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {
@@ -240,7 +251,7 @@ pub fn dispatch_request(state: &ApiState, auth: &MatchedAuth, request: Request) 
 		resolver.record_result(&response);
 		method_responses.push(response);
 	}
-	Response { method_responses }
+	Ok(Response { method_responses })
 }
 
 /// The JMAP spec does not define a "forbidden" method error; `forbidden` is
