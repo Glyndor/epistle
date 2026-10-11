@@ -62,6 +62,7 @@ fn add_account(store: &AccountStore, name: &str, address: &str) {
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add");
@@ -449,6 +450,7 @@ fn add_account_with_primary_hash(
 			scram: None,
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.expect("add");

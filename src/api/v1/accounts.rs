@@ -114,6 +114,7 @@ pub async fn create(
 			scram: Some(derive_scram(&request.password)?),
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 		.map_err(store_error)?;

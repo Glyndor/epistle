@@ -97,6 +97,13 @@ pub struct DynamicAccount {
 	/// to suspend an account without removing its mailbox.
 	#[serde(default)]
 	pub disabled: bool,
+	/// Storage quota (bytes) for this account. `None` (the default, and the
+	/// value on `accounts.toml` files written before the field existed)
+	/// falls back to the domain quota, then the server default, exactly the
+	/// way static `Account::quota_bytes = None` does. IMAP `GETQUOTAROOT` and
+	/// the delivery quota check both read the rebuilt directory's quota map.
+	#[serde(default)]
+	pub quota_bytes: Option<u64>,
 	/// Restrict which authentication protocols this account may sign in
 	/// through. `None` (the default) means every protocol the directory
 	/// knows about — the pre-restriction behaviour. When set, only the
@@ -126,6 +133,7 @@ impl DynamicAccount {
 			scram: Some(scram),
 			totp_secret: None,
 			disabled: false,
+			quota_bytes: None,
 			allowed_protocols: None,
 		})
 	}

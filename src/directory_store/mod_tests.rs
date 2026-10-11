@@ -35,6 +35,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		scram: None,
 		totp_secret: None,
 		disabled: false,
+		quota_bytes: None,
 		allowed_protocols: None,
 	}
 }

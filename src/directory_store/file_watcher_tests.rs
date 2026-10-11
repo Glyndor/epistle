@@ -48,6 +48,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		scram: None,
 		totp_secret: None,
 		disabled: false,
+		quota_bytes: None,
 		allowed_protocols: None,
 	};
 	account.password_hash = crate::smtp::auth::tests::hash(fixture_password());
