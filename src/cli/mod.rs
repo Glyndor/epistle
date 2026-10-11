@@ -34,6 +34,7 @@ mod service_edit;
 mod srv;
 mod stack;
 mod stack_socket;
+mod stack_started;
 mod stack_update;
 mod status;
 mod style;

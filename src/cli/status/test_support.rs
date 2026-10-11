@@ -23,5 +23,6 @@ pub(super) fn ctx(dir: &Path, extra: &str) -> Ctx {
 		config: Config::load(&path).map_err(|error| error.to_string()),
 		path,
 		now: SystemTime::now(),
+		podup: "sh".to_string(),
 	}
 }

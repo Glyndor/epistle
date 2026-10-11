@@ -67,7 +67,7 @@ fn json_has_an_entry_per_area_with_status_detail_and_items() {
 			.as_str()
 			.is_some_and(|d| d.contains("mail.toml"))
 	);
-	assert_eq!(config["items"], serde_json::json!([]));
+	assert_eq!(config["items"][0]["name"], "restart", "{value}");
 	assert_eq!(
 		value.as_object().expect("object").len(),
 		CheckArea::ALL.len()

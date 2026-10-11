@@ -6,6 +6,7 @@
 //! sends mail or authenticates. `status` runs every check; `check <area>`
 //! runs one and lists its findings.
 
+mod clock;
 mod config_area;
 mod report;
 #[cfg(test)]
@@ -20,6 +21,7 @@ use std::time::{Duration, SystemTime};
 use clap::ValueEnum;
 
 use crate::config::Config;
+pub(in crate::cli) use clock::parse_rfc3339;
 use report::{AreaReport, any_failed, render_json, render_table};
 
 /// Upper bound for one network operation (connect, read, query).
@@ -53,6 +55,8 @@ pub(super) struct Ctx {
 	pub(super) path: PathBuf,
 	pub(super) config: Result<Config, String>,
 	pub(super) now: SystemTime,
+	/// The `podup` program that reports the stack's container state.
+	pub(super) podup: String,
 }
 
 impl Ctx {
@@ -61,6 +65,7 @@ impl Ctx {
 			path: path.to_path_buf(),
 			config: Config::load(path).map_err(|error| error.to_string()),
 			now: SystemTime::now(),
+			podup: "podup".to_string(),
 		}
 	}
 }
