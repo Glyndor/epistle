@@ -213,6 +213,7 @@ impl Worker {
 
 	/// Age in seconds of a spooled message, derived from its UUIDv7 id (the id
 	/// encodes its creation time, so age survives restarts without extra state).
+	/// Time an operator held the message is subtracted by the caller.
 	fn message_age(&self, id: uuid::Uuid, now: u64) -> u64 {
 		let created = id.get_timestamp().map(|ts| ts.to_unix().0).unwrap_or(now);
 		now.saturating_sub(created)
@@ -317,9 +318,11 @@ impl Worker {
 		let now = self.now_epoch();
 		let mut delivered = 0;
 		for id in self.spool.list()? {
-			// Skip entries whose backoff has not elapsed yet.
-			match self.spool.load(id) {
-				Ok(entry) if entry.envelope.next_attempt > now => continue,
+			// The CLI edits entries on disk while this runs, so `held` and
+			// `next_attempt` are read from the file on every pass, never kept in
+			// memory. Skip held entries and entries still backing off.
+			match self.spool.load_envelope(id) {
+				Ok(envelope) if envelope.held.is_some() || envelope.next_attempt > now => continue,
 				Ok(_) => {}
 				// Vanished or unreadable: let deliver_entry classify it.
 				Err(_) => {}
@@ -344,13 +347,15 @@ impl Worker {
 					self.spool.remove(id)?;
 				}
 				Outcome::Retry(reason) => {
-					let prior = self
+					let (prior, held_secs) = self
 						.spool
-						.load(id)
-						.map(|entry| entry.envelope.attempts)
-						.unwrap_or(0);
-					let _ = self.spool.record_attempt(id, backoff_until(now, prior + 1));
-					let age = self.message_age(id, now);
+						.load_envelope(id)
+						.map(|envelope| (envelope.attempts, envelope.held_secs))
+						.unwrap_or((0, 0));
+					let _ = self
+						.spool
+						.record_attempt(id, backoff_until(now, prior + 1), &reason);
+					let age = self.message_age(id, now).saturating_sub(held_secs);
 					if age >= self.max_age_secs {
 						// Give up by message age, not attempt count: a recipient
 						// down for hours must not lose mail (RFC 5321 §4.5.4.1).

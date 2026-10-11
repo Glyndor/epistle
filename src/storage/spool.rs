@@ -37,6 +37,46 @@ pub struct Envelope {
 	/// is sent at most once (RFC 5321 §4.5.4.1).
 	#[serde(default)]
 	pub delay_warned: bool,
+	/// Epoch seconds at which an operator put the entry on hold. A held entry
+	/// is never attempted until released. `None` for an entry in the normal
+	/// flow, which is also how every spool file written before this field
+	/// existed loads.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub held: Option<u64>,
+	/// Seconds the entry has spent on hold in earlier hold/release cycles. The
+	/// give-up window counts message age minus this, so a message an operator
+	/// parked for a week is not bounced on its first attempt after release.
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub held_secs: u64,
+	/// Reason the most recent delivery attempt failed, for `queue show`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub last_error: Option<String>,
+}
+
+fn is_zero(value: &u64) -> bool {
+	*value == 0
+}
+
+/// Longest `last_error` kept in the envelope: remote replies can be long and
+/// the field is for an operator's eyes only.
+const LAST_ERROR_MAX: usize = 512;
+
+impl Envelope {
+	/// Put the entry on hold as of `now`. Holding an entry that is already
+	/// held keeps the original start so the held time is not shortened.
+	pub fn hold(&mut self, now: u64) {
+		if self.held.is_none() {
+			self.held = Some(now);
+		}
+	}
+
+	/// Release a held entry as of `now`, folding the time spent on hold into
+	/// [`Envelope::held_secs`]. A no-op for an entry that is not held.
+	pub fn release(&mut self, now: u64) {
+		if let Some(since) = self.held.take() {
+			self.held_secs = self.held_secs.saturating_add(now.saturating_sub(since));
+		}
+	}
 }
 
 /// One spooled message: envelope plus raw message bytes.
@@ -87,6 +127,9 @@ impl FsSpool {
 			require_tls: message.require_tls,
 			no_dsn: message.no_dsn.clone(),
 			delay_warned: false,
+			held: None,
+			held_secs: 0,
+			last_error: None,
 		};
 
 		let tmp_message = self.root.join("tmp").join(format!("{id}.eml"));
@@ -138,33 +181,82 @@ impl FsSpool {
 		Ok(ids)
 	}
 
-	/// Record a failed delivery attempt crash-safely, returning the new
-	/// attempt count. `next_attempt` is when the next retry is allowed.
-	pub fn record_attempt(&self, id: Uuid, next_attempt: u64) -> std::io::Result<u32> {
-		let mut entry = self.load(id)?;
-		entry.envelope.attempts += 1;
-		entry.envelope.next_attempt = next_attempt;
+	/// Load only the envelope of an entry, never the message body. This is
+	/// what `queue show` uses, so an operator command cannot print mail.
+	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
+		let bytes = crate::util::fs_walk::read(self.root.join("new").join(format!("{id}.json")))?;
+		serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+	}
 
-		let tmp = self.root.join("tmp").join(format!("{id}.json"));
-		let bytes = serde_json::to_vec(&entry.envelope).map_err(std::io::Error::other)?;
-		write_sync(&tmp, &bytes)?;
-		fs::rename(&tmp, self.root.join("new").join(format!("{id}.json")))?;
-		Ok(entry.envelope.attempts)
+	/// Read-modify-write one envelope under the spool lock and return the
+	/// stored result.
+	///
+	/// The delivery worker and the operator CLI are separate processes editing
+	/// the same files. Every edit and every removal takes an exclusive `flock`
+	/// on `<root>/lock`, so two edits cannot interleave their load and write
+	/// (a lost update), and an edit cannot resurrect an envelope a removal just
+	/// deleted. The new envelope goes to a uniquely named file under `tmp/` and
+	/// is renamed over the old one, so a reader never sees a partial file. A
+	/// missing entry is reported as `NotFound` and nothing is written.
+	pub fn update_envelope(
+		&self,
+		id: Uuid,
+		edit: impl FnOnce(&mut Envelope),
+	) -> std::io::Result<Envelope> {
+		let _guard = self.lock()?;
+		let mut envelope = self.load_envelope(id)?;
+		edit(&mut envelope);
+		let tmp = self
+			.root
+			.join("tmp")
+			.join(format!("{id}.{}.json", Uuid::now_v7()));
+		let bytes = serde_json::to_vec(&envelope).map_err(std::io::Error::other)?;
+		let written = write_sync(&tmp, &bytes)
+			.and_then(|()| fs::rename(&tmp, self.root.join("new").join(format!("{id}.json"))));
+		if let Err(error) = written {
+			let _ = fs::remove_file(&tmp);
+			return Err(error);
+		}
+		Ok(envelope)
+	}
+
+	/// Take the exclusive spool lock; it is released when the guard drops.
+	fn lock(&self) -> std::io::Result<fs::File> {
+		let file = fs::OpenOptions::new()
+			.create(true)
+			.truncate(false)
+			.write(true)
+			.open(self.root.join("lock"))?;
+		file.lock()?;
+		Ok(file)
+	}
+
+	/// Record a failed delivery attempt crash-safely, returning the new
+	/// attempt count. `next_attempt` is when the next retry is allowed and
+	/// `reason` is kept (truncated) as the entry's last error.
+	pub fn record_attempt(
+		&self,
+		id: Uuid,
+		next_attempt: u64,
+		reason: &str,
+	) -> std::io::Result<u32> {
+		let envelope = self.update_envelope(id, |envelope| {
+			envelope.attempts += 1;
+			envelope.next_attempt = next_attempt;
+			envelope.last_error = Some(reason.chars().take(LAST_ERROR_MAX).collect());
+		})?;
+		Ok(envelope.attempts)
 	}
 
 	/// Mark the delay-warning DSN as sent, crash-safely, so it is sent once.
 	pub fn mark_delay_warned(&self, id: Uuid) -> std::io::Result<()> {
-		let mut entry = self.load(id)?;
-		entry.envelope.delay_warned = true;
-		let tmp = self.root.join("tmp").join(format!("{id}.json"));
-		let bytes = serde_json::to_vec(&entry.envelope).map_err(std::io::Error::other)?;
-		write_sync(&tmp, &bytes)?;
-		fs::rename(&tmp, self.root.join("new").join(format!("{id}.json")))?;
-		Ok(())
+		self.update_envelope(id, |envelope| envelope.delay_warned = true)
+			.map(|_| ())
 	}
 
 	/// Remove a spooled message after successful processing.
 	pub fn remove(&self, id: Uuid) -> std::io::Result<()> {
+		let _guard = self.lock()?;
 		// Envelope first: a message file without an envelope is invisible.
 		fs::remove_file(self.root.join("new").join(format!("{id}.json")))?;
 		fs::remove_file(self.root.join("new").join(format!("{id}.eml")))?;
@@ -292,3 +384,7 @@ mod tests {
 		assert!(result.is_err());
 	}
 }
+
+#[cfg(test)]
+#[path = "spool_tests_edit.rs"]
+mod tests_edit;

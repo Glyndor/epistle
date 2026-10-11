@@ -436,10 +436,58 @@ scope here):
 |---|---|
 | `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
-| `epistle queue` | List the outbound delivery queue. |
+| `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle suppression [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+
+## Outbound queue
+
+`epistle queue <action>` inspects and steers the outbound spool in
+`data_dir/spool`. The running server picks up every change on its next queue
+pass, with no restart: the worker re-reads each entry from disk before it
+decides whether to attempt it.
+
+| Command | What it does |
+|---|---|
+| `epistle queue list [--json]` | One line per message (id, attempts, sender, recipients, `held`), or a JSON array with the envelope and last error. |
+| `epistle queue show <id>` | Envelope, attempts, next attempt, held state and the last delivery error. Never prints the message body. |
+| `epistle queue retry <id>\|--all` | Make the next attempt happen now, skipping the backoff. The attempt count is kept, and a held entry stays held. |
+| `epistle queue hold <id>\|--all` | Never attempt the entry until it is released. |
+| `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
+| `epistle queue remove <id>` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). |
+
+A held entry is not attempted and its time on hold does not count toward the
+give-up window below, so a message parked for a week is not bounced on its first
+attempt after release. A hold that arrives while the worker is already
+delivering that entry takes effect for the next attempt.
+
+## Authentication bans
+
+`epistle ban <action>` manages the shared authentication ban store: the client
+addresses refused after repeated failed logins, plus a few operator controls.
+It needs `[database]`, because the bans live in PostgreSQL
+(`auth_ban`, `auth_failure`, `auth_allow`). The server reads those tables on every
+authentication check, so a change made here applies to the running server at once,
+with no restart. Without `[database]` the command prints that bans are kept in
+memory by the running server and are not manageable from the CLI, and exits 1.
+
+| Command | What it does |
+|---|---|
+| `epistle ban list [--json]` | Active bans: subject (`ip:<addr>`, `cidr:<net>/<prefix>` or `account:<login>`), reason, and the epoch second each one ends. |
+| `epistle ban add <ip\|cidr> [--for 24h]` | Ban an address or network by hand. `--for` takes a number and a unit (`s`, `m`, `h`, `d`, `w`); the default is 24h. Refused for an address on the allow list. |
+| `epistle ban remove <ip\|cidr>` | Lift the ban now and clear the address's failure counter, so the next failure starts from zero. Exits 1 if there was neither a ban nor a failure record. |
+| `epistle ban allow list [--json]` | Addresses and networks that are never banned. |
+| `epistle ban allow add <ip\|cidr>` | Never ban this address or network. |
+| `epistle ban allow remove <ip\|cidr>` | Take it off the allow list. |
+
+The allow list is the table `auth_allow` (migration `0006_auth_allow.sql`), so it is
+shared by every listener and editable while the server runs. An allow-listed client
+is never banned, whatever bans exist, and its failed logins are not counted toward
+a ban. It does not change the per-connection limit that SMTP applies to one
+connection (three failed attempts close it), which keeps no state between
+connections. A network ban (`add 203.0.113.0/24`) covers every address in it;
+`add 203.0.113.9/32` is the same ban as `add 203.0.113.9`.
 
 ## Expunged-message archive
 
