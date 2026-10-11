@@ -32,8 +32,10 @@ pub(super) fn build_tls(
 	challenge_store: ChallengeStore,
 ) -> std::io::Result<TlsStack> {
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
-	let tls_acceptor = match &config.tls {
-		Some(tls_config) => Some(crate::tls::acceptor(tls_config).map_err(std::io::Error::other)?),
+	// The certificate comes from the shared resolver: after a restart the
+	// persisted ACME pair must win over the bootstrap one.
+	let tls_acceptor = match crate::tls::served_tls(config) {
+		Some(served) => Some(crate::tls::acceptor(&served.tls).map_err(std::io::Error::other)?),
 		None => None,
 	};
 	// Every listener clone must retain the same certificate resolver.
@@ -86,3 +88,7 @@ pub(super) fn build_tls(
 #[cfg(test)]
 #[path = "serve_tls_tests_reload.rs"]
 mod tests_reload;
+
+#[cfg(test)]
+#[path = "serve_tls_tests_restart.rs"]
+mod tests_restart;

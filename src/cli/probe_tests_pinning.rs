@@ -210,3 +210,26 @@ async fn tls_listener_without_configured_cert_fails_with_clear_reason() {
 		"reason must explain the missing config; got {reason:?}"
 	);
 }
+
+#[test]
+fn probe_pins_the_acme_certificate_serve_presents() {
+	let dir = tempfile::tempdir().expect("dir");
+	let pair = rcgen::generate_simple_self_signed(vec!["mail.example.org".into()]).expect("pair");
+	std::fs::create_dir(dir.path().join("acme")).expect("acme dir");
+	std::fs::write(dir.path().join("acme/cert.pem"), pair.cert.pem()).expect("cert");
+	std::fs::write(
+		dir.path().join("acme/key.pem"),
+		pair.signing_key.serialize_pem(),
+	)
+	.expect("key");
+	let config: crate::config::Config = toml::from_str(&format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\n[tls]\ncert_file = '/etc/epistle/bootstrap.pem'\nkey_file = '/etc/epistle/bootstrap.key'\n[acme]\ndirectory_url = 'https://acme.invalid/directory'\ndomains = ['mail.example.org']\n",
+		dir.path()
+	))
+	.expect("config");
+	assert_eq!(
+		super::pinned_cert_path(&config),
+		Some(dir.path().join("acme/cert.pem")),
+		"probe must pin the renewed certificate, not the bootstrap one"
+	);
+}

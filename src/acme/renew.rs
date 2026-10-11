@@ -30,7 +30,7 @@ fn account_key_path(data_dir: &Path) -> PathBuf {
 pub(crate) fn cert_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("cert.pem")
 }
-fn key_path(data_dir: &Path) -> PathBuf {
+pub(crate) fn key_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("key.pem")
 }
 

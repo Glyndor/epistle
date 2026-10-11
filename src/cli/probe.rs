@@ -67,8 +67,8 @@ pub(super) struct ProbeLine {
 /// when every listener answered, FAILURE when at least one did not.
 pub(super) fn run(config: &Config, json: bool) -> ExitCode {
 	ensure_crypto_provider();
-	let cert_path = config.tls.as_ref().map(|tls| tls.cert_file.as_path());
-	let results = match execute(&config.listeners, cert_path) {
+	let cert_path = pinned_cert_path(config);
+	let results = match execute(&config.listeners, cert_path.as_deref()) {
 		Ok(results) => results,
 		Err(error) => {
 			super::style::error(format_args!("probe: {error}"));
@@ -81,6 +81,11 @@ pub(super) fn run(config: &Config, json: bool) -> ExitCode {
 	} else {
 		ExitCode::FAILURE
 	}
+}
+
+/// The certificate file the probe pins: the one `serve` presents.
+pub(super) fn pinned_cert_path(config: &Config) -> Option<PathBuf> {
+	crate::tls::served_tls(config).map(|served| served.tls.cert_file)
 }
 
 /// Drive every listener probe from inside a one-thread runtime. The
