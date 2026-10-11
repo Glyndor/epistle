@@ -73,6 +73,58 @@ pub struct RotationState {
 	pub previous: Option<Previous>,
 }
 
+/// File name of the persisted rotation state inside the data directory.
+pub const STATE_FILE: &str = "dkim-rotation.json";
+
+/// The ed25519 key currently in service: its selector and an absolute key path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveKey {
+	/// Selector published at `<selector>._domainkey.<domain>`.
+	pub selector: String,
+	/// Private key file (PKCS#8 PEM), resolved against the data directory.
+	pub key_file: PathBuf,
+}
+
+/// Read `<data_dir>/dkim-rotation.json`. `Ok(None)` only when the file does
+/// not exist; an unreadable or invalid file is an error, because guessing the
+/// configured key would show (or sign with) a selector that is not in service.
+pub fn read_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
+	let path = data_dir.join(STATE_FILE);
+	let bytes = match std::fs::read(&path) {
+		Ok(bytes) => bytes,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(RotateError(format!("read {}: {error}", path.display()))),
+	};
+	let state: RotationState = serde_json::from_slice(&bytes)
+		.map_err(|error| RotateError(format!("parse {}: {error}", path.display())))?;
+	if state.selector.is_empty() {
+		return Err(RotateError(format!(
+			"{} has an empty selector",
+			path.display()
+		)));
+	}
+	Ok(Some(state))
+}
+
+/// The one answer to "which ed25519 key is in service": the rotation state
+/// when it exists, the configured key otherwise. Startup, `dns-records`,
+/// `verify-dns` and `dkim show` all call this, so they cannot disagree.
+pub fn active_ed25519(
+	dkim: &crate::config::Dkim,
+	data_dir: &std::path::Path,
+) -> Result<ActiveKey, RotateError> {
+	Ok(match read_state(data_dir)? {
+		Some(state) => ActiveKey {
+			selector: state.selector,
+			key_file: data_dir.join(state.key_file),
+		},
+		None => ActiveKey {
+			selector: dkim.selector.clone(),
+			key_file: dkim.key_file.clone(),
+		},
+	})
+}
+
 /// The interval between automatic DKIM key rotations, in days.
 ///
 /// Rotation is a security property of the server, not a per-deployment
@@ -370,3 +422,7 @@ mod tests_signing;
 #[cfg(test)]
 #[path = "rotate_tests_multidomain.rs"]
 mod tests_multidomain;
+
+#[cfg(test)]
+#[path = "rotate_tests_active.rs"]
+mod tests_active;
