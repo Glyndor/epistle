@@ -145,8 +145,9 @@ async fn a_renewed_acme_certificate_wins_over_the_bootstrap_file() {
 	let data_dir = ctx.config.as_ref().expect("config").data_dir.clone();
 	let acme = data_dir.join("acme");
 	std::fs::create_dir_all(&acme).expect("acme dir");
-	let (renewed, _key) = write_cert(dir.path(), "renewed", &["mail.example.org"], 80);
+	let (renewed, key) = write_cert(dir.path(), "renewed", &["mail.example.org"], 80);
 	std::fs::copy(renewed, acme.join("cert.pem")).expect("copy");
+	std::fs::copy(key, acme.join("key.pem")).expect("copy key");
 	ctx.config.as_mut().expect("config").acme = Some(crate::config::Acme {
 		directory_url: "https://acme.invalid/dir".into(),
 		contacts: Vec::new(),

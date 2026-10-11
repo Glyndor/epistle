@@ -170,6 +170,9 @@ pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor,
 mod reload;
 pub use reload::ReloadableAcceptor;
 
+mod served;
+pub use served::{CertSource, ServedTls, served_tls};
+
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, TlsError> {
 	let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path)
 		.map_err(|source| TlsError::Read {

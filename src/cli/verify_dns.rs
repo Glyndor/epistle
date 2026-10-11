@@ -36,7 +36,13 @@ pub(super) fn run_with_writers(
 			return ExitCode::FAILURE;
 		}
 	};
-	let selectors = dkim_selectors(config);
+	let selectors = match dkim_selectors(config) {
+		Ok(selectors) => selectors,
+		Err(error) => {
+			super::style::error(format_args!("{error}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	let progress = crate::cli::style::Progress::start("checking");
 	runtime.block_on(report(
 		&config.domains,
@@ -68,23 +74,17 @@ pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std:
 /// startup before the first tick has run. The RSA selector is always the
 /// one in the config (RSA key material is rotated manually with
 /// `epistle dkim-keygen --rsa`).
-pub(super) fn dkim_selectors(config: &Config) -> Vec<String> {
+pub(super) fn dkim_selectors(
+	config: &Config,
+) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
 	let Some(dkim) = &config.dkim else {
-		return Vec::new();
+		return Ok(Vec::new());
 	};
-	let ed = match std::fs::read(config.data_dir.join("dkim-rotation.json")) {
-		Ok(bytes) => serde_json::from_slice::<crate::dkim::rotate::RotationState>(&bytes)
-			.ok()
-			.map(|state| state.selector)
-			.filter(|s| !s.is_empty())
-			.unwrap_or_else(|| dkim.selector.clone()),
-		Err(_) => dkim.selector.clone(),
-	};
-	let mut selectors = vec![ed];
+	let mut selectors = vec![crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)?.selector];
 	if let Some(rsa) = &dkim.rsa_selector {
 		selectors.push(rsa.clone());
 	}
-	selectors
+	Ok(selectors)
 }
 
 /// Check the hostname's addresses and their reverse DNS first, then every

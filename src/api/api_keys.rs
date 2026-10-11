@@ -313,6 +313,26 @@ impl ApiKeyStore {
 		self.persist()
 	}
 
+	/// Replace the secret of `label` with the one hashing to `hash`, keeping
+	/// its scopes, domains, expiry and CIDR. One atomic rewrite of the file:
+	/// the file watcher swaps the old secret for the new one in a single step,
+	/// so there is no moment with both or neither accepted. `NotFound` if the
+	/// label is absent.
+	pub fn rotate(&mut self, label: &str, hash: String) -> std::io::Result<()> {
+		let key = self
+			.keys
+			.iter_mut()
+			.find(|existing| existing.label == label)
+			.ok_or_else(|| {
+				std::io::Error::new(
+					std::io::ErrorKind::NotFound,
+					format!("no such API key \"{label}\""),
+				)
+			})?;
+		key.hash = hash;
+		self.persist()
+	}
+
 	/// Every key as an [`ApiKeySummary`], sorted by label. Hashes are never
 	/// exposed.
 	pub fn list(&self) -> Vec<ApiKeySummary> {

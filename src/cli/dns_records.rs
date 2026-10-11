@@ -14,27 +14,22 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	// (the one the rotator currently has in service, or the configured one
 	// before the first tick), plus the optional RSA dual-signing selector
 	// when both fields are set.
+	let mut failed = false;
 	let dkim_owned: Vec<(String, String)> = config
 		.dkim
 		.as_ref()
 		.map(|dkim| {
 			let mut pairs = Vec::new();
-			let ed_selector = match std::fs::read(config.data_dir.join("dkim-rotation.json")) {
-				Ok(bytes) => serde_json::from_slice::<crate::dkim::rotate::RotationState>(&bytes)
-					.ok()
-					.map(|state| state.selector)
-					.filter(|s| !s.is_empty())
-					.unwrap_or_else(|| dkim.selector.clone()),
-				Err(_) => dkim.selector.clone(),
+			let active = match crate::dkim::rotate::active_ed25519(dkim, &config.data_dir) {
+				Ok(active) => active,
+				Err(error) => {
+					failed = true;
+					super::style::error(format_args!("{error}"));
+					return pairs;
+				}
 			};
-			let key_file = match std::fs::read(config.data_dir.join("dkim-rotation.json")) {
-				Ok(bytes) => serde_json::from_slice::<crate::dkim::rotate::RotationState>(&bytes)
-					.ok()
-					.map(|state| config.data_dir.join(state.key_file))
-					.unwrap_or_else(|| dkim.key_file.clone()),
-				Err(_) => dkim.key_file.clone(),
-			};
-			match crate::dkim::Signer::load(&ed_selector, &key_file) {
+			let ed_selector = active.selector;
+			match crate::dkim::Signer::load(&ed_selector, &active.key_file) {
 				Ok(signer) => {
 					pairs.push((ed_selector, signer.dns_record_value()));
 					if let (Some(rsa_selector), Some(rsa_key_file)) =
@@ -61,6 +56,10 @@ pub(super) fn run(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			pairs
 		})
 		.unwrap_or_default();
+
+	if failed {
+		return ExitCode::FAILURE;
+	}
 
 	// TLSA association from the leaf certificate, if a cert is configured.
 	let tlsa = config
@@ -204,3 +203,7 @@ key_file = "{}"
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "dns_records_tests_state.rs"]
+mod tests_state;

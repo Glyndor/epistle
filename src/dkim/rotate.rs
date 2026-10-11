@@ -73,6 +73,58 @@ pub struct RotationState {
 	pub previous: Option<Previous>,
 }
 
+/// File name of the persisted rotation state inside the data directory.
+pub const STATE_FILE: &str = "dkim-rotation.json";
+
+/// The ed25519 key currently in service: its selector and an absolute key path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveKey {
+	/// Selector published at `<selector>._domainkey.<domain>`.
+	pub selector: String,
+	/// Private key file (PKCS#8 PEM), resolved against the data directory.
+	pub key_file: PathBuf,
+}
+
+/// Read `<data_dir>/dkim-rotation.json`. `Ok(None)` only when the file does
+/// not exist; an unreadable or invalid file is an error, because guessing the
+/// configured key would show (or sign with) a selector that is not in service.
+pub fn read_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
+	let path = data_dir.join(STATE_FILE);
+	let bytes = match std::fs::read(&path) {
+		Ok(bytes) => bytes,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(RotateError(format!("read {}: {error}", path.display()))),
+	};
+	let state: RotationState = serde_json::from_slice(&bytes)
+		.map_err(|error| RotateError(format!("parse {}: {error}", path.display())))?;
+	if state.selector.is_empty() {
+		return Err(RotateError(format!(
+			"{} has an empty selector",
+			path.display()
+		)));
+	}
+	Ok(Some(state))
+}
+
+/// The one answer to "which ed25519 key is in service": the rotation state
+/// when it exists, the configured key otherwise. Startup, `dns-records`,
+/// `verify-dns` and `dkim show` all call this, so they cannot disagree.
+pub fn active_ed25519(
+	dkim: &crate::config::Dkim,
+	data_dir: &std::path::Path,
+) -> Result<ActiveKey, RotateError> {
+	Ok(match read_state(data_dir)? {
+		Some(state) => ActiveKey {
+			selector: state.selector,
+			key_file: data_dir.join(state.key_file),
+		},
+		None => ActiveKey {
+			selector: dkim.selector.clone(),
+			key_file: dkim.key_file.clone(),
+		},
+	})
+}
+
 /// The interval between automatic DKIM key rotations, in days.
 ///
 /// Rotation is a security property of the server, not a per-deployment
@@ -133,6 +185,8 @@ pub struct Rotator {
 	signing_domains: Vec<String>,
 	interval: u64,
 	overlap: u64,
+	/// Earliest epoch second at which a failed operator request is retried.
+	request_retry_at: std::sync::atomic::AtomicU64,
 }
 
 impl Rotator {
@@ -168,6 +222,7 @@ impl Rotator {
 			signing_domains,
 			interval,
 			overlap,
+			request_retry_at: std::sync::atomic::AtomicU64::new(0),
 		}
 	}
 
@@ -181,17 +236,20 @@ impl Rotator {
 		name == zone || name.ends_with(&format!(".{zone}"))
 	}
 
-	/// Load persisted state, or a default (empty) state.
-	fn load_state(&self) -> RotationState {
-		std::fs::read(&self.state_path)
-			.ok()
-			.and_then(|bytes| serde_json::from_slice(&bytes).ok())
-			.unwrap_or_default()
+	/// Load persisted state, or a default (empty) state when no file exists.
+	/// An unreadable or invalid file is an error: treating it as empty would
+	/// bootstrap a second key and orphan the published one.
+	fn load_state(&self) -> Result<RotationState, RotateError> {
+		Ok(read_state(&self.data_dir)?.unwrap_or_default())
 	}
 
+	/// Replace the state file atomically, so a concurrent `dkim show` or a
+	/// restart never reads a half-written file.
 	fn save_state(&self, state: &RotationState) -> std::io::Result<()> {
 		let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
-		std::fs::write(&self.state_path, bytes)
+		let tmp = self.state_path.with_extension("json.tmp");
+		std::fs::write(&tmp, bytes)?;
+		std::fs::rename(&tmp, &self.state_path)
 	}
 
 	/// The DNS record name for a selector's public key at `domain`.
@@ -202,119 +260,132 @@ impl Rotator {
 	/// Run one rotation tick at `now` (epoch seconds), performing at most one
 	/// action. Returns the action taken.
 	pub async fn tick(&self, now: u64) -> Result<Decision, RotateError> {
-		let mut state = self.load_state();
+		let mut state = self.load_state()?;
 		let decision = decide(&state, now, self.interval, self.overlap);
 		match &decision {
 			Decision::Idle => {}
 			Decision::Rotate => {
-				let selector = selector_for(now);
 				// A same-day re-run must not collide with the active selector.
-				if selector == state.selector {
+				if selector_for(now) == state.selector {
 					return Ok(Decision::Idle);
 				}
-				let (pem, txt) = super::generate_key().map_err(|e| RotateError(e.to_string()))?;
-				let key_file = self.data_dir.join(format!("dkim-{selector}.key"));
-				write_key(&key_file, &pem)?;
-				// Publish TXT for every configured in-zone domain BEFORE the
-				// signer switches: a half-published rotation would leave
-				// some domains signing with a key receivers cannot verify.
-				// If one upsert fails, the records already published for
-				// this selector are withdrawn (best effort) and the new key
-				// file is removed, so a failed tick leaves neither orphan
-				// TXT records nor a stray key behind.
-				let mut published: Vec<&String> = Vec::new();
-				for domain in &self.signing_domains {
-					let upsert = self
-						.provider
-						.upsert(
-							&self.zone,
-							txt_record(&Self::record_name(&selector, domain), &txt),
-						)
-						.await;
-					if let Err(error) = upsert {
-						for done in published {
-							let _ = self
-								.provider
-								.delete(
-									&self.zone,
-									txt_record(&Self::record_name(&selector, done), ""),
-								)
-								.await;
-						}
-						let _ = std::fs::remove_file(&key_file);
-						return Err(RotateError(format!(
-							"publish {selector}._domainkey.{domain}: {error}"
-						)));
-					}
-					published.push(domain);
-				}
-				let signer = self
-					.signer
-					.current()
-					.with_rotated_key(&selector, &key_file)
-					.map_err(|e| RotateError(e.to_string()))?;
-				self.signer.reload(Arc::new(signer));
-				// Retire the just-replaced selector after the overlap window.
-				let previous = (!state.selector.is_empty()).then(|| Previous {
-					selector: state.selector.clone(),
-					key_file: state.key_file.clone(),
-					retire_at: now.saturating_add(self.overlap),
-				});
-				state = RotationState {
-					selector,
-					key_file,
-					rotated_at: now,
-					previous,
-				};
-				self.save_state(&state)?;
+				self.rotate(&mut state, now).await?;
 			}
-			Decision::Retire(selector) => {
-				let retired_key_file = state.previous.as_ref().and_then(|p| {
-					(p.selector == *selector && !p.key_file.as_os_str().is_empty())
-						.then(|| p.key_file.clone())
-				});
-				// Remove the retired TXT from every in-zone domain it was
-				// published under. If any delete fails, the state keeps the
-				// previous selector, so the next tick retries every delete
-				// (deleting an absent record is harmless).
-				let mut last_error: Option<String> = None;
-				for domain in &self.signing_domains {
-					if let Err(error) = self
+			Decision::Retire(selector) => self.retire(&mut state, selector).await?,
+		}
+		Ok(decision)
+	}
+
+	/// Generate a key under `selector_for(now)`, publish it for every signing
+	/// domain, switch the live signer to it and persist the new state. The
+	/// caller has already ruled out a selector collision.
+	async fn rotate(&self, state: &mut RotationState, now: u64) -> Result<(), RotateError> {
+		let selector = selector_for(now);
+		let (pem, txt) = super::generate_key().map_err(|e| RotateError(e.to_string()))?;
+		let key_file = self.data_dir.join(format!("dkim-{selector}.key"));
+		write_key(&key_file, &pem)?;
+		// Publish TXT for every configured in-zone domain BEFORE the
+		// signer switches: a half-published rotation would leave
+		// some domains signing with a key receivers cannot verify.
+		// If one upsert fails, the records already published for
+		// this selector are withdrawn (best effort) and the new key
+		// file is removed, so a failed tick leaves neither orphan
+		// TXT records nor a stray key behind.
+		let mut published: Vec<&String> = Vec::new();
+		for domain in &self.signing_domains {
+			let upsert = self
+				.provider
+				.upsert(
+					&self.zone,
+					txt_record(&Self::record_name(&selector, domain), &txt),
+				)
+				.await;
+			if let Err(error) = upsert {
+				for done in published {
+					let _ = self
 						.provider
 						.delete(
 							&self.zone,
-							txt_record(&Self::record_name(selector, domain), ""),
+							txt_record(&Self::record_name(&selector, done), ""),
 						)
-						.await
-					{
-						last_error = Some(format!(
-							"delete {}.{domain}: {error}",
-							Self::record_name(selector, domain)
-						));
-					}
+						.await;
 				}
-				if let Some(error) = last_error {
-					return Err(RotateError(error));
-				}
-				state.previous = None;
-				self.save_state(&state)?;
-				// Best-effort: the state and the DNS are already consistent,
-				// the file is the leftover. A failure (typically permissions)
-				// is logged but does not abort the rotation, and `NotFound`
-				// is the idempotent case the operator caused by hand.
-				if let Some(path) = retired_key_file
-					&& let Err(error) = std::fs::remove_file(&path)
-					&& error.kind() != std::io::ErrorKind::NotFound
-				{
-					tracing::warn!(
-						%error,
-						path = %path.display(),
-						"failed to remove retired DKIM key file; DNS and state already cleared",
-					);
-				}
+				let _ = std::fs::remove_file(&key_file);
+				return Err(RotateError(format!(
+					"publish {selector}._domainkey.{domain}: {error}"
+				)));
+			}
+			published.push(domain);
+		}
+		let signer = self
+			.signer
+			.current()
+			.with_rotated_key(&selector, &key_file)
+			.map_err(|e| RotateError(e.to_string()))?;
+		self.signer.reload(Arc::new(signer));
+		// Retire the just-replaced selector after the overlap window.
+		let previous = (!state.selector.is_empty()).then(|| Previous {
+			selector: state.selector.clone(),
+			key_file: state.key_file.clone(),
+			retire_at: now.saturating_add(self.overlap),
+		});
+		*state = RotationState {
+			selector,
+			key_file,
+			rotated_at: now,
+			previous,
+		};
+		self.save_state(state)?;
+		Ok(())
+	}
+
+	/// Take the previous selector's TXT down from every signing domain, drop
+	/// it from the state and remove its key file.
+	async fn retire(&self, state: &mut RotationState, selector: &str) -> Result<(), RotateError> {
+		let retired_key_file = state.previous.as_ref().and_then(|p| {
+			(p.selector == selector && !p.key_file.as_os_str().is_empty())
+				.then(|| p.key_file.clone())
+		});
+		// Remove the retired TXT from every in-zone domain it was
+		// published under. If any delete fails, the state keeps the
+		// previous selector, so the next tick retries every delete
+		// (deleting an absent record is harmless).
+		let mut last_error: Option<String> = None;
+		for domain in &self.signing_domains {
+			if let Err(error) = self
+				.provider
+				.delete(
+					&self.zone,
+					txt_record(&Self::record_name(selector, domain), ""),
+				)
+				.await
+			{
+				last_error = Some(format!(
+					"delete {}.{domain}: {error}",
+					Self::record_name(selector, domain)
+				));
 			}
 		}
-		Ok(decision)
+		if let Some(error) = last_error {
+			return Err(RotateError(error));
+		}
+		state.previous = None;
+		self.save_state(state)?;
+		// Best-effort: the state and the DNS are already consistent,
+		// the file is the leftover. A failure (typically permissions)
+		// is logged but does not abort the rotation, and `NotFound`
+		// is the idempotent case the operator caused by hand.
+		if let Some(path) = retired_key_file
+			&& let Err(error) = std::fs::remove_file(&path)
+			&& error.kind() != std::io::ErrorKind::NotFound
+		{
+			tracing::warn!(
+				%error,
+				path = %path.display(),
+				"failed to remove retired DKIM key file; DNS and state already cleared",
+			);
+		}
+		Ok(())
 	}
 }
 
@@ -370,3 +441,18 @@ mod tests_signing;
 #[cfg(test)]
 #[path = "rotate_tests_multidomain.rs"]
 mod tests_multidomain;
+
+#[path = "rotate_request.rs"]
+mod request;
+pub use request::{
+	ERROR_FILE, REQUEST_FILE, RotationRequest, last_error, pending_request, request_rotation,
+	rotated_today,
+};
+
+#[cfg(test)]
+#[path = "rotate_tests_active.rs"]
+mod tests_active;
+
+#[cfg(test)]
+#[path = "rotate_tests_request.rs"]
+mod tests_request;

@@ -206,3 +206,47 @@ async fn bad_file_keeps_the_old_keys() {
 		"a bad api_keys.toml must not invalidate the running key set",
 	);
 }
+
+/// Rotating a key through the same `ApiKeyStore::rotate` path the CLI uses
+/// swaps the secret on the next watcher poll: the old token stops
+/// authenticating, the new one works, and the key keeps its scope.
+#[tokio::test]
+async fn rotated_key_replaces_the_old_secret_after_watcher_poll() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	{
+		let mut store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
+		store.add(read_key("old-secret")).expect("add key");
+	}
+	let keys = api_keys(dir.path());
+	let app = router(test_state(dir.path(), 0).with_api_keys(Arc::clone(&keys)));
+	let store = account_store(dir.path());
+	let mut watcher = build_watcher(dir.path(), store, Arc::clone(&keys));
+
+	let (status, _) = request(&app, "GET", "/api/v1/status", Some("old-secret")).await;
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"old secret authenticates before rotation"
+	);
+
+	{
+		let mut store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
+		store
+			.rotate("ci", crate::api::api_keys::sha256_hash("new-secret"))
+			.expect("rotate");
+	}
+	let _ = watcher.poll();
+
+	let (status, _) = request(&app, "GET", "/api/v1/status", Some("old-secret")).await;
+	assert_eq!(
+		status,
+		StatusCode::UNAUTHORIZED,
+		"old secret must stop authenticating"
+	);
+	let (status, _) = request(&app, "GET", "/api/v1/status", Some("new-secret")).await;
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"new secret must authenticate with the same scope"
+	);
+}

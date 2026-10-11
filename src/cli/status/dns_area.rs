@@ -36,8 +36,11 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 		}
 	};
 	let signing_key_failed = !findings.is_empty();
+	// When the signing key cannot be resolved the failure is already
+	// reported; the DNS records are still checked with whatever selectors
+	// can be named, and with none if the rotation state itself is broken.
 	let selectors: Vec<String> = if signing_key_failed {
-		crate::cli::verify_dns::dkim_selectors(config)
+		crate::cli::verify_dns::dkim_selectors(config).unwrap_or_default()
 	} else {
 		keys.iter().map(|key| key.selector.clone()).collect()
 	};

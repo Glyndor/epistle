@@ -293,7 +293,7 @@ rsa_key_file = "/etc/mail/rsa.pem"
 		dir.path().display(),
 	))
 	.expect("config");
-	let selectors = dkim_selectors(&config);
+	let selectors = dkim_selectors(&config).expect("selectors");
 	assert_eq!(
 		selectors,
 		vec!["ed-rotated".to_string(), "rsa-stable".to_string()],
@@ -319,10 +319,26 @@ key_file = "/etc/mail/dkim.pem"
 		dir.path().display(),
 	))
 	.expect("config");
-	let selectors = dkim_selectors(&config);
+	let selectors = dkim_selectors(&config).expect("selectors");
 	assert_eq!(
 		selectors,
 		vec!["ed-original".to_string()],
 		"absent state file must fall back to the configured selector"
+	);
+}
+
+#[test]
+fn dkim_selectors_fail_on_invalid_rotation_state() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(dir.path().join("dkim-rotation.json"), "invalid JSON").expect("state");
+	let config: Config = toml::from_str(&format!(
+		"hostname = 'mail.example.org'\ndata_dir = '{}'\ndomains = ['example.org']\n[dkim]\nselector = 'ed-original'\nkey_file = '/etc/mail/dkim.pem'\n",
+		dir.path().display(),
+	))
+	.expect("config");
+	let error = dkim_selectors(&config).expect_err("invalid state must be an error");
+	assert!(
+		error.to_string().contains("dkim-rotation.json"),
+		"error must name the state file, got: {error}"
 	);
 }

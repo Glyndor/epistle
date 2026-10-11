@@ -119,6 +119,11 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		true,
 	),
 	(&["api-keys"], true),
+	(&["dkim", "show"], true),
+	(&["dkim", "rotate", "--dry-run"], true),
+	(&["tls", "show"], true),
+	(&["tls", "renew", "--force"], true),
+	(&["api-key", "rotate", "ci"], true),
 	(&["api-key-revoke", "--label", "ci"], true),
 	(&["archive", "list", "alice"], true),
 	(

@@ -62,19 +62,10 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	AreaReport::from_items(items, summary)
 }
 
-/// The certificate file the running server holds. `serve` loads `[tls]
-/// cert_file`; with `[acme]` the renewal task rewrites
-/// `<data_dir>/acme/cert.pem` and hot-reloads it, so that file is the live one
-/// once it exists.
+/// The certificate file the running server presents, resolved the same way
+/// `serve` and `epistle probe` resolve it ([`crate::tls::served_tls`]).
 fn served_certificate(config: &Config) -> Option<PathBuf> {
-	let tls = config.tls.as_ref()?;
-	if config.acme.is_some() {
-		let renewed = crate::acme::renew::cert_path(&config.data_dir);
-		if renewed.exists() {
-			return Some(renewed);
-		}
-	}
-	Some(tls.cert_file.clone())
+	crate::tls::served_tls(config).map(|served| served.tls.cert_file)
 }
 
 fn read_leaf(path: &std::path::Path) -> Result<Leaf, String> {
