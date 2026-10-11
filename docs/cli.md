@@ -291,6 +291,135 @@ never overwrites a rule: remove it first. Supports `--dry-run` and `--config FIL
 
 ## Stack (`epistle stack`)
 
+## Domains (`epistle domain`)
+
+```sh
+epistle domain list
+epistle domain list --json
+epistle domain show example.org
+epistle domain show example.org --json
+epistle domain add new.example.org
+epistle domain add new.example.org --dry-run
+epistle domain remove old.example.org
+epistle domain alias add alias.example.org example.org
+epistle domain alias remove alias.example.org
+```
+
+`list` writes every configured domain with the domains that target it
+(`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
+the alias edges plus the accounts and aliases that route mail through
+the domain, so the operator can see what depends on it before removing
+it. JSON records contain `domain`, `aliases_to`, `aliases_from`,
+`accounts` and `aliases`.
+
+`add` validates the name (`validate_dns_name`, same rules the loader
+uses), appends it to `[domains]` and prints the DNS records the operator
+must publish for the new domain (filtered to that domain only). It
+refuses when the domain is already configured, when it collides with
+a `domain_aliases` source or target, or when the loader rejects the
+final document.
+
+`remove` walks every account (static `[accounts]` plus `<data_dir>/accounts.toml`),
+every `[alias]` and its members and senders, every `domain_aliases`
+entry and every masked address on disk. If any of those still uses the
+domain, the command fails with a message that lists each offender by
+category (`account alice@example.org`, `alias team@example.org`,
+`domain_aliases maps alias.example.org to example.org`,
+`masked address ...`). The file is only written after every offender
+has been cleaned up.
+
+`domain alias add` writes an entry under `[domain_aliases]`. The target
+must already be a configured domain; the alias name must not collide
+with another `domain_aliases` key or with any configured domain.
+`domain alias remove` drops a single key.
+
+Edits preserve every other TOML value, validate through the normal
+loader before atomic replacement, and follow the same restart policy
+as `service` and `limits` (compose restart or a manual restart message).
+Secrets never appear in `show`/`list` output. `--dry-run` on `add` and
+`remove` prints the validated unified diff without writing.
+
+## Aliases (`epistle alias`)
+
+```sh
+epistle alias list
+epistle alias list --json
+epistle alias show team@example.org
+epistle alias add team@example.org alice@example.org bob@example.org
+epistle alias add team@example.org alice@example.org --sender ceo@example.org --list-id team.example.org --visible
+epistle alias remove team@example.org
+epistle alias member add team@example.org carol@example.org
+epistle alias member remove team@example.org bob@example.org
+epistle alias sender add team@example.org ceo@example.org
+epistle alias sender remove team@example.org ceo@example.org
+epistle alias enable team@example.org
+epistle alias disable team@example.org
+epistle alias add team@example.org alice@example.org --dry-run
+```
+
+`list` writes every `[[alias]]` with its enabled state and visibility
+(default `hidden`, `visible` only with `--visible` on add). `show`
+writes `address`, `members`, `senders`, `hidden`, `list_id` and
+`enabled`. When `senders` is empty, `show` prints `(any member)` instead
+of an empty string so the operator is not misled.
+
+`add` writes one `[[alias]]` row. The address must not already be used
+by another alias, by an account (static `[accounts]` or `<data_dir>/accounts.toml`),
+or by a masked address (`<data_dir>/masked.json`). The address must also
+live in a configured domain. Members and senders must be valid email
+addresses; at least one member is required.
+
+`remove` drops the whole row. `member add|remove` and `sender add|remove`
+edit one entry on an existing alias; `member remove` refuses to leave
+an alias with no members (use `alias remove` for that). `enable` and
+`disable` toggle the disabled flag in `<data_dir>/aliases.json` through
+`AccountStore::set_alias_enabled`. The dynamic store is hot-reloaded by
+the 2 s file watcher, so the change takes effect without a restart and
+without going through the config engine.
+
+Edits to `[alias]` go through the same config-edit engine as `service`
+and `limits` (validated, atomic, comment-preserving, restart-on-change
+when compose exists). `enable`/`disable` do not touch `mail.toml` and
+do not request a restart. `--dry-run` on the config edits prints the
+validated unified diff without writing.
+
+## Antispam (`epistle antispam`)
+
+```sh
+epistle antispam show
+epistle antispam set greylist-delay 5m
+epistle antispam set clamd-socket /run/clamav/clamd.sock
+epistle antispam set clamd-on-found reject
+epistle antispam unset greylist-delay
+epistle antispam add dnsbl-zones zen.spamhaus.org
+epistle antispam remove dnsbl-zones zen.spamhaus.org
+epistle antispam add dnsbl-zones zen.spamhaus.org --dry-run
+```
+
+`show` writes every key and its current value. The three DNSBL list
+keys (`dnsbl-zones`, `dnsbl-domain-zones`, `dnsbl-url-zones`) print as
+`<key>\t<comma-separated values>\tconfigured` (or `(empty)\tdefault`).
+The LLM block fields (`llm-endpoint`, `llm-model`, `llm-api-key-env`)
+print as `set`/`unset` only — the values are secrets and never appear
+on stdout.
+
+`set <key> <value>` writes one key. For list keys the value replaces
+the whole list; for every other key exactly one value is accepted.
+`unset <key>` removes the key. `add <key> <value>` and `remove <key> <value>`
+edit one entry on the three DNSBL lists. SubjectPass `on` requires a
+`[database]` section (the uncertain band needs the Bayesian score);
+`clamd-socket` is refused when `[scanner_hook_url]` is already set,
+surfacing the loader's exact refusal message.
+
+Every action preserves the rest of the file, validates before writing,
+and follows the same restart policy as the other resources. Secrets are
+never accepted as command-line arguments (the LLM endpoint and model
+live in the config, and the API key is the name of an environment
+variable the server reads at startup). `--dry-run` prints the validated
+unified diff without writing or restarting.
+
+## Stack (`epistle`)
+
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).
 With the repository configured, the production sequence is:
 
