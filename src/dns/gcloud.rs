@@ -34,6 +34,8 @@ use ring::signature::{self, RsaKeyPair};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::net::HttpsUrl;
+
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
 use super::records::txt_strings;
 
@@ -106,8 +108,8 @@ pub struct GcloudProvider {
 	account: ServiceAccount,
 	zone: String,
 	cached: Arc<Mutex<Option<CachedToken>>>,
-	token_base: String,
-	dns_base: String,
+	token_base: HttpsUrl,
+	dns_base: HttpsUrl,
 }
 
 impl GcloudProvider {
@@ -120,20 +122,21 @@ impl GcloudProvider {
 			account,
 			zone: secret.zone().to_string(),
 			cached: Arc::new(Mutex::new(None)),
-			token_base: DEFAULT_TOKEN_BASE.to_string(),
-			dns_base: DEFAULT_DNS_BASE.to_string(),
+			token_base: HttpsUrl::from_static(DEFAULT_TOKEN_BASE),
+			dns_base: HttpsUrl::from_static(DEFAULT_DNS_BASE),
 		}
 	}
 
 	/// Point the OAuth2 token endpoint at an alternate URL (tests).
-	pub fn with_token_base(mut self, base: impl Into<String>) -> Self {
-		self.token_base = base.into();
+	pub fn with_token_base(mut self, base: HttpsUrl) -> Self {
+		self.token_base = base;
 		self
 	}
 
 	/// Point the Cloud DNS API at an alternate URL (tests).
-	pub fn with_dns_base(mut self, base: impl Into<String>) -> Self {
-		self.dns_base = base.into();
+	/// The base is the API root including its version (`.../dns/v1`).
+	pub fn with_dns_base(mut self, base: HttpsUrl) -> Self {
+		self.dns_base = base;
 		self
 	}
 
@@ -227,17 +230,25 @@ impl GcloudProvider {
 		}
 	}
 
+	/// `{dns_base}/projects/{project}/managedZones[/{tail...}]`, with the
+	/// project id and every tail segment escaped as one path segment. The
+	/// base already ends in `/dns/v1`, which is not repeated here.
+	fn managed_zones_url(&self, tail: &[&str]) -> Result<HttpsUrl, ProviderError> {
+		let mut segments = vec!["projects", self.account.project_id.as_str(), "managedZones"];
+		segments.extend_from_slice(tail);
+		Ok(self.dns_base.with_segments(segments)?)
+	}
+
 	/// The managed-zone id (`name`) whose `dnsName` matches `zone`.
 	async fn find_managed_zone(&self, zone: &str) -> Result<String, ProviderError> {
 		let token = self.ensure_token().await?;
 		let dns_name = format!("{}.", zone.trim_end_matches('.'));
-		let url = format!(
-			"{}/dns/v1/projects/{}/managedZones?dnsName={dns_name}",
-			self.dns_base, self.account.project_id
-		);
+		let url = self
+			.managed_zones_url(&[])?
+			.with_query("dnsName", &dns_name);
 		let response = self
 			.client
-			.get(&url)
+			.get(url.into_url())
 			.bearer_auth(&token)
 			.send()
 			.await
@@ -256,13 +267,10 @@ impl GcloudProvider {
 
 	async fn list_rrsets(&self, managed_zone: &str) -> Result<Vec<Rrset>, ProviderError> {
 		let token = self.ensure_token().await?;
-		let url = format!(
-			"{}/dns/v1/projects/{}/managedZones/{managed_zone}/rrsets",
-			self.dns_base, self.account.project_id
-		);
+		let url = self.managed_zones_url(&[managed_zone, "rrsets"])?;
 		let response = self
 			.client
-			.get(&url)
+			.get(url.into_url())
 			.bearer_auth(&token)
 			.send()
 			.await
@@ -281,10 +289,7 @@ impl GcloudProvider {
 		deletions: &[Rrset],
 	) -> Result<(), ProviderError> {
 		let token = self.ensure_token().await?;
-		let url = format!(
-			"{}/dns/v1/projects/{}/managedZones/{managed_zone}/changes",
-			self.dns_base, self.account.project_id
-		);
+		let url = self.managed_zones_url(&[managed_zone, "changes"])?;
 		let body = serde_json::to_string(&json!({
 			"additions": additions,
 			"deletions": deletions,
@@ -292,7 +297,7 @@ impl GcloudProvider {
 		.map_err(|e| ProviderError::Remote(e.to_string()))?;
 		let response = self
 			.client
-			.post(&url)
+			.post(url.into_url())
 			.bearer_auth(&token)
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 			.body(body)
@@ -333,7 +338,7 @@ impl GcloudProvider {
 			format!("grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion={jwt}");
 		let response = self
 			.client
-			.post(format!("{}/token", self.token_base))
+			.post(self.token_base.with_segments(["token"])?.into_url())
 			.header(
 				reqwest::header::CONTENT_TYPE,
 				"application/x-www-form-urlencoded",
@@ -563,7 +568,6 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 #[path = "gcloud_test_support.rs"]
 mod test_support;
 #[cfg(test)]
@@ -572,3 +576,6 @@ mod tests;
 #[cfg(test)]
 #[path = "gcloud_tests_txt.rs"]
 mod tests_txt;
+#[cfg(test)]
+#[path = "gcloud_tests_url.rs"]
+mod tests_url;
