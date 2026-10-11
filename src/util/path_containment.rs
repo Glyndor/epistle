@@ -27,10 +27,12 @@
 //! outside the threat model. The part of a path that does not exist yet is
 //! never resolved, only restricted to plain names.
 //!
-//! [`contained_child`] is the cheap form for the many files inside a
-//! directory that [`contained`] already vetted: it joins one plain name with
-//! no filesystem access, so listing or scanning a large mailbox does not pay
-//! for a resolution per message.
+//! [`contained_subdir`] and [`contained_child`] are the forms for one
+//! user-influenced name inside a directory that was already vetted. The first
+//! resolves an existing directory, the second touches no filesystem, so
+//! listing or scanning a large mailbox does not pay for a resolution per
+//! message. They refuse exactly `.`, `..`, separators and NUL, so names such
+//! as `a..b` stay valid.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -132,13 +134,20 @@ pub fn contained(root: &Path, candidate: &Path) -> io::Result<PathBuf> {
 	}
 }
 
+/// Whether `name` is exactly one plain name: not empty, not `.` or `..`, and
+/// without a separator or NUL. Other characters, including `..` inside a
+/// longer name such as `a..b`, are ordinary file name characters.
+fn is_single_name(name: &str) -> bool {
+	!name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
+}
+
 /// `dir/name` for a single plain `name`, without touching the filesystem.
 ///
-/// `dir` must come from [`contained`] (or from another call of this function).
-/// The name is refused unless it is one non-empty component with no `..`,
-/// separator or NUL, and the result must still start with `dir`.
+/// `dir` must come from [`contained`] or [`contained_subdir`]. The name is
+/// refused unless [`is_single_name`] accepts it, and the result must still be
+/// a direct child of `dir`.
 pub fn contained_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
-	if name.is_empty() || name.contains("..") || name.contains(['/', '\\', '\0']) {
+	if !is_single_name(name) {
 		return Err(escapes_root());
 	}
 	let child = dir.join(name);
@@ -146,6 +155,32 @@ pub fn contained_child(dir: &Path, name: &str) -> io::Result<PathBuf> {
 		Ok(child)
 	} else {
 		Err(escapes_root())
+	}
+}
+
+/// `dir/name` for a single plain `name` that names a directory.
+///
+/// Like [`contained_child`], but when the directory already exists it is
+/// resolved, and a link that leads out of `dir` is refused. A name that
+/// does not exist yet is returned as the plain child, but a dangling link is
+/// refused because creating through it would write outside `dir`. `dir` must
+/// come from [`contained`] or from this function.
+pub fn contained_subdir(dir: &Path, name: &str) -> io::Result<PathBuf> {
+	let child = match contained_child(dir, name) {
+		Ok(child) => child,
+		Err(error) => return Err(error),
+	};
+	match child.canonicalize() {
+		Ok(real) if real.starts_with(dir) => Ok(real),
+		Ok(_) => Err(escapes_root()),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+			if std::fs::symlink_metadata(&child).is_ok() {
+				Err(escapes_root())
+			} else {
+				Ok(child)
+			}
+		}
+		Err(error) => Err(unresolvable(&error)),
 	}
 }
 

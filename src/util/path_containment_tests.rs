@@ -89,17 +89,53 @@ fn child_of_a_vetted_directory_is_one_plain_name() {
 #[test]
 fn child_names_that_could_leave_the_directory_are_refused() {
 	let (_guard, root) = data_dir();
-	for name in [
-		"",
-		"..",
-		"a/b",
-		"../x",
-		"a\\b",
-		"a..b",
-		"x\0y",
-		"/etc/passwd",
-	] {
+	for name in ["", "..", "a/b", "../x", "a\\b", "x\0y", "/etc/passwd"] {
 		let error = contained_child(&root, name).expect_err(name);
 		assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+	}
+}
+
+#[test]
+fn child_names_with_dot_dot_inside_are_ordinary() {
+	let (_guard, root) = data_dir();
+	for name in ["a..b", "Projects..2024", "..a", "a.."] {
+		assert_eq!(contained_child(&root, name).expect(name), root.join(name));
+		assert_eq!(contained_subdir(&root, name).expect(name), root.join(name));
+	}
+}
+
+#[test]
+fn subdir_resolves_an_existing_directory_and_accepts_a_new_one() {
+	let (_guard, root) = data_dir();
+	assert_eq!(
+		contained_subdir(&root, "accounts").expect("existing"),
+		root.join("accounts")
+	);
+	assert_eq!(
+		contained_subdir(&root, "fresh").expect("new"),
+		root.join("fresh")
+	);
+}
+
+#[test]
+fn subdir_refuses_dot_dot_and_separators() {
+	let (_guard, root) = data_dir();
+	for name in ["", ".", "..", "a/b", "../x"] {
+		let error = contained_subdir(&root, name).expect_err(name);
+		assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+	}
+}
+
+#[cfg(unix)]
+#[test]
+fn subdir_refuses_links_that_leave_the_directory() {
+	let (guard, root) = data_dir();
+	let outside = guard.path().canonicalize().expect("canonical").join("out");
+	fs::create_dir_all(&outside).expect("outside");
+	std::os::unix::fs::symlink(&outside, root.join("link")).expect("link");
+	std::os::unix::fs::symlink(outside.join("missing"), root.join("dangling")).expect("link");
+	for name in ["link", "dangling"] {
+		let error = contained_subdir(&root, name).expect_err(name);
+		assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{name}");
 	}
 }

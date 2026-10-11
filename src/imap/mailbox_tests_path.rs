@@ -176,3 +176,40 @@ fn hierarchy_delimiters_are_still_refused() {
 		"a refused name creates nothing"
 	);
 }
+
+#[test]
+fn folder_names_with_dot_dot_inside_are_ordinary_names() {
+	let (_root, data) = nested();
+	for name in ["a..b", "Projects..2024"] {
+		assert!(valid_name(name), "{name:?} is a valid folder name");
+		create(&data, "alice", name).expect("create");
+		assert!(exists(&data, "alice", name));
+		assert_eq!(
+			mailbox_dir(&data, "alice", name),
+			Some(data.join(format!("accounts/alice/folders/{name}/new")))
+		);
+	}
+	assert_eq!(
+		list(&data, "alice"),
+		vec!["INBOX", "Projects..2024", "a..b"]
+	);
+	let snapshot = Snapshot::open(&data, "alice", "a..b", &MessageCrypto::disabled());
+	assert!(snapshot.is_ok(), "SELECT of a..b must open");
+}
+
+#[test]
+fn an_existing_folder_with_dot_dot_inside_is_listed() {
+	let (_root, data) = nested();
+	std::fs::create_dir_all(data.join("accounts/alice/folders/a..b/new")).expect("folder");
+	assert_eq!(list(&data, "alice"), vec!["INBOX", "a..b"]);
+}
+
+#[test]
+fn single_and_double_dot_are_not_folder_names() {
+	let (_root, data) = nested();
+	for name in [".", ".."] {
+		assert!(!valid_name(name));
+		assert!(create(&data, "alice", name).is_err());
+		assert!(!exists(&data, "alice", name));
+	}
+}

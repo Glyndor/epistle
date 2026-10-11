@@ -48,12 +48,9 @@ fn plain_component_accepts_ordinary_names() {
 }
 
 #[test]
-fn plain_component_refuses_a_name_with_dot_dot_inside() {
-	for name in ["a..b", "..a", "a..", "Hold..."] {
-		assert!(
-			!is_plain_component(name),
-			"{name:?} holds `..`, which the containment check refuses anyway"
-		);
+fn plain_component_keeps_names_with_dot_dot_inside() {
+	for name in ["a..b", "..a", "a..", "Projects..2024"] {
+		assert!(is_plain_component(name), "{name:?} is an ordinary name");
 	}
 }
 
@@ -140,7 +137,14 @@ fn mailbox_name_rejects_dangerous_names() {
 
 #[test]
 fn mailbox_name_accepts_what_folders_use() {
-	for name in ["Work", "Sent Items", "a-b_c.d", "2024"] {
+	for name in [
+		"Work",
+		"Sent Items",
+		"a-b_c.d",
+		"2024",
+		"a..b",
+		"Projects..2024",
+	] {
 		assert_eq!(MailboxName::new(name), Ok(MailboxName::Folder(name)));
 	}
 	for name in ["INBOX", "inbox", "InBoX"] {

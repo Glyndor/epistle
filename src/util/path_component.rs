@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::path_containment::{contained, contained_child};
+use super::path_containment::{contained, contained_child, contained_subdir};
 
 /// Longest account or mailbox name accepted (bytes). Well under the 255 byte
 /// limit of common filesystems, leaving room for suffixes.
@@ -48,14 +48,13 @@ impl From<InvalidComponent> for std::io::Error {
 }
 
 /// Whether `name` is a single plain path component: not empty, not `.` or
-/// `..`, no `..` anywhere inside it (the containment check refuses those), no separator, no NUL or other control character, not absolute, and
+/// `..`, no separator, no NUL or other control character, not absolute, and
 /// not longer than `MAX_COMPONENT_LEN` bytes.
 pub fn is_plain_component(name: &str) -> bool {
 	!name.is_empty()
 		&& name.len() <= MAX_COMPONENT_LEN
 		&& name != "."
 		&& name != ".."
-		&& !name.contains("..")
 		&& !name
 			.chars()
 			.any(|c| c.is_control() || matches!(c, '/' | '\\'))
@@ -97,7 +96,7 @@ impl<'a> AccountName<'a> {
 	/// and checked to lie inside `<data_dir>/accounts`.
 	pub fn root(&self, data_dir: &Path) -> std::io::Result<AccountRoot> {
 		let accounts = contained(data_dir, &data_dir.join("accounts"))?;
-		contained(&accounts, &accounts.join(self.0)).map(AccountRoot)
+		contained_subdir(&accounts, self.0).map(AccountRoot)
 	}
 
 	/// An account name that skips validation, so tests can show that the
@@ -220,7 +219,7 @@ impl<'a> MailboxName<'a> {
 			Self::Inbox => root.child(FixedDir::New),
 			Self::Folder(name) => {
 				let folders = root.child(FixedDir::Folders)?;
-				contained(&folders, &folders.join(name).join("new"))
+				contained_child(&contained_subdir(&folders, name)?, "new")
 			}
 		}
 	}
@@ -236,7 +235,7 @@ impl<'a> MailboxName<'a> {
 			Self::Inbox => Ok(None),
 			Self::Folder(name) => {
 				let folders = folders_dir(account, data_dir)?;
-				contained(&folders, &folders.join(name)).map(Some)
+				contained_subdir(&folders, name).map(Some)
 			}
 		}
 	}
