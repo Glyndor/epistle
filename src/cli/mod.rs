@@ -14,6 +14,8 @@ mod backup;
 mod ban;
 mod config_check;
 pub mod config_edit;
+mod dkim_cli;
+mod dkim_show;
 mod dns_provider;
 mod dns_records;
 mod domain;
@@ -48,6 +50,7 @@ mod status;
 mod storage_blobs;
 mod style;
 mod suppression;
+mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
 mod tracing_setup;
@@ -652,6 +655,36 @@ pub enum Command {
 		/// The stack sub-action.
 		#[command(subcommand)]
 		action: stack::StackCli,
+	},
+	/// Show the DKIM signing key in service or force a rotation. Rotation is
+	/// queued for the running server, which stays the only writer of keys and
+	/// DNS records.
+	Dkim {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// DKIM action (`show`, `rotate`).
+		#[command(subcommand)]
+		action: dkim_cli::DkimCli,
+	},
+	/// Show the TLS certificate the server presents or ask it to renew the
+	/// ACME certificate now.
+	Tls {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// TLS action (`show`, `renew`).
+		#[command(subcommand)]
+		action: tls_cli::TlsCli,
+	},
+	/// Operate on one existing management API key (`rotate`).
+	ApiKey {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// API key action.
+		#[command(subcommand)]
+		action: api_keys::ApiKeyCli,
 	},
 	/// Probe each enabled listener and report whether it is answering.
 	///

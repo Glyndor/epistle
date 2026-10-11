@@ -63,6 +63,49 @@ pub(super) fn create(
 	}
 }
 
+/// Replace the secret of an API key, keeping its scopes, domains, expiry and
+/// CIDR. The new key is printed once; the old one stops authenticating when
+/// the running server's file watcher picks the change up.
+pub(super) fn rotate(config: &Config, label: &str, out: &mut impl std::io::Write) -> ExitCode {
+	let Some(secret) = super::generate_secret() else {
+		super::style::error("cannot gather randomness for the key");
+		return ExitCode::FAILURE;
+	};
+	let mut store = match ApiKeyStore::open(&config.data_dir) {
+		Ok(store) => store,
+		Err(error) => {
+			super::style::error(format_args!("opening API key store: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	match store.rotate(label, crate::api::api_keys::sha256_hash(&secret)) {
+		Ok(()) => {
+			let _ = writeln!(
+				out,
+				"rotated API key \"{label}\"; the old key stops working within seconds"
+			);
+			let _ = writeln!(out, "key (shown once): {secret}");
+			ExitCode::SUCCESS
+		}
+		Err(error) => {
+			super::style::error(error);
+			ExitCode::FAILURE
+		}
+	}
+}
+
+/// `epistle api-key <action>`: operations on one existing key.
+#[derive(Debug, clap::Subcommand)]
+pub enum ApiKeyCli {
+	/// Replace a key's secret and print the new one once. Scopes, domains,
+	/// expiry and CIDR stay as they are; the old secret is revoked in the same
+	/// write.
+	Rotate {
+		/// The label of the API key to rotate.
+		label: String,
+	},
+}
+
 /// List the management API keys (never the key or its hash).
 pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	let store = match ApiKeyStore::open(&config.data_dir) {
@@ -133,3 +176,7 @@ pub(super) fn revoke(config: &Config, label: &str, out: &mut impl std::io::Write
 #[cfg(test)]
 #[path = "api_keys_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "api_keys_tests_rotate.rs"]
+mod tests_rotate;

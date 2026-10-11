@@ -47,7 +47,10 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }
 		| Command::Alias { config, .. }
-		| Command::Domain { config, .. } => Some(config),
+		| Command::Domain { config, .. }
+		| Command::Dkim { config, .. }
+		| Command::Tls { config, .. }
+		| Command::ApiKey { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

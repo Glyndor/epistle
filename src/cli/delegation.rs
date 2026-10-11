@@ -52,6 +52,9 @@ impl Command {
 			| Command::ApiKeys { .. }
 			| Command::ApiKeyRevoke { .. }
 			| Command::Archive { .. }
+			| Command::Dkim { .. }
+			| Command::Tls { .. }
+			| Command::ApiKey { .. }
 			| Command::Reports { .. } => true,
 			Command::Serve { .. }
 			| Command::MtaStsServe { .. }

@@ -685,6 +685,27 @@ scope here):
 | `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
+## Rotations (`epistle dkim`, `epistle tls`, `epistle api-key`)
+
+| Command | What it does |
+|---|---|
+| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, RSA selector) and whether the published TXT of each signing domain matches it. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. |
+| `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now. Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. `--dry-run` prints the selector and the TXT names and changes nothing. |
+| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise `[tls]`): subject, names, issuer, expiry, days left, and `acme` or `static` as the source. `serve`, `probe` and this command resolve it the same way. |
+| `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the certificate is outside its `renew_before_days` window. |
+| `epistle api-key rotate LABEL` | Replace the secret of an API key and print the new one once. Scopes, domains, expiry and CIDR stay; the old secret stops working in the same write, when the running server's file watcher reloads `api_keys.toml`. |
+
+`dkim rotate` and `tls renew` do not rotate or issue anything themselves. The
+running server is the only writer of DKIM keys, DNS records and the ACME
+account, so these commands drop a request file in the data directory
+(`dkim-rotate.request`, `acme/renew.request`) and the server serves it within a
+minute through the same code as the scheduled rotation, removing the file on
+success. A request survives a failed publication or issuance (the reason is in
+`dkim-rotate.error` or `acme/renew.error` and in `show`), and a stopped server
+serves it at its next start. DKIM signing switches in process as soon as the
+new TXT records are published, so no restart is needed. A forced DKIM rotation
+retires an older previous selector first, since the state holds only one.
+
 ## Accounts
 
 | Command | What it does |

@@ -10,9 +10,9 @@ use std::process::ExitCode;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
-	autodiscover, backup, ban, dns_records, domain, export, import, init, local, masked,
+	autodiscover, backup, ban, dkim_cli, dns_records, domain, export, import, init, local, masked,
 	mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status, style,
-	suppression, verify, verify_dns,
+	suppression, tls_cli, verify, verify_dns,
 };
 use crate::config::Config;
 
@@ -445,6 +445,31 @@ impl Cli {
 			} => domain::run(&config, action),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Dkim { config, action } => match Config::load(&config) {
+				Ok(config) => dkim_cli::run(&config, action, &mut std::io::stdout().lock()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::Tls { config, action } => match Config::load(&config) {
+				Ok(config) => tls_cli::run(&config, action, &mut std::io::stdout().lock()),
+				Err(error) => {
+					style::error(error);
+					ExitCode::FAILURE
+				}
+			},
+			Command::ApiKey { config, action } => match Config::load(&config) {
+				Ok(config) => match action {
+					api_keys::ApiKeyCli::Rotate { label } => {
+						api_keys::rotate(&config, &label, &mut std::io::stdout().lock())
+					}
+				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

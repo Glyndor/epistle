@@ -528,4 +528,4 @@ mod bind;
 #[path = "serve_dkim_rotation.rs"]
 mod dkim_rotation;
 
-pub(super) use dkim_rotation::spawn_dkim_rotation;
+pub(super) use dkim_rotation::{DkimRotationPlan, decide_dkim_rotation, spawn_dkim_rotation};
