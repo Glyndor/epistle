@@ -10,8 +10,8 @@ use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::get;
 
-use super::super::provider::{DnsRecord, RecordKind, ScopedSecret};
 use super::NamecheapProvider;
+use crate::dns::provider::{DnsRecord, RecordKind, ScopedSecret};
 
 #[derive(Default)]
 pub(super) struct MockState {

@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use super::provider::{
+use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
 };
 
@@ -526,7 +526,7 @@ fn parse_kind(kind: &str) -> Option<RecordKind> {
 
 /// Compare two wire elements by their value-identifying fields for
 /// `kind`, per the upsert/delete contract in
-/// [`super::provider::DnsProvider`]. The matching rule differs by
+/// [`crate::dns::provider::DnsProvider`]. The matching rule differs by
 /// kind:
 ///
 /// - TXT: `data` is compared through [`same_txt_purpose`], so two
@@ -606,13 +606,13 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "godaddy_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "godaddy_tests_b.rs"]
+#[path = "tests_b.rs"]
 mod tests_b;
 
 #[cfg(test)]
-#[path = "godaddy_tests_path.rs"]
+#[path = "tests_path.rs"]
 mod path_tests;
