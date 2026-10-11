@@ -97,9 +97,14 @@ fn password_change_makes_old_password_fail_and_new_one_authenticate() {
 	let harness = build();
 	let mut store = reload_store(&harness);
 
-	// Change the password to a known one.
+	// Change the password to a fresh one generated for this run.
+	let new_password = crate::test_fixtures::second_password();
 	assert_eq!(
-		account::password_with_store(&store, DYNAMIC_NAME, Cursor::new("a-new-password-1\n"),),
+		account::password_with_store(
+			&store,
+			DYNAMIC_NAME,
+			Cursor::new(format!("{new_password}\n")),
+		),
 		ExitCode::SUCCESS,
 		"password change should succeed"
 	);
@@ -110,7 +115,7 @@ fn password_change_makes_old_password_fail_and_new_one_authenticate() {
 	let protocol = crate::config::Protocol::Api;
 	assert_eq!(
 		directory
-			.authenticate(DYNAMIC_NAME, "a-new-password-1", protocol)
+			.authenticate(DYNAMIC_NAME, new_password, protocol)
 			.as_deref(),
 		Some(DYNAMIC_NAME),
 		"the new password must authenticate"
@@ -137,7 +142,7 @@ fn password_change_also_updates_scram_credentials() {
 	// dynamic row. The new password's stored_key under the salt on
 	// disk must match a fresh SCRAM derivation, which is the whole
 	// point of keeping scram in sync with the password hash.
-	let new_password = "another-fresh-password";
+	let new_password = crate::test_fixtures::wrong_password();
 	assert_eq!(
 		account::password_with_store(
 			&store,
