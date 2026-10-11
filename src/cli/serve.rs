@@ -45,6 +45,8 @@ pub fn run(config: Config) -> ExitCode {
 }
 
 async fn serve(config: Config) -> std::io::Result<()> {
+	// The log pseudonym key must exist before the first log line names an account.
+	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;
 	// Single-signature DKIM warning at the very top of startup so it is
 	// visible before any listener binds. The wording is the shared helper
