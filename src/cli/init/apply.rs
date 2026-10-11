@@ -581,3 +581,5 @@ mod tests_keep_listeners;
 #[cfg(test)]
 #[path = "apply_listeners_lines_tests.rs"]
 mod tests_listeners_lines;
+
+pub(crate) use apply_config_merge::set_listener_enabled;

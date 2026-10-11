@@ -57,9 +57,7 @@ pub(crate) fn merge_with_read_config(
 				}
 				Ok(super::apply_config::ConfigWrite::Identical)
 			} else {
-				let serialized = toml::to_string(&merged)
-					.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
-				write_validated_config(path, &serialized)?;
+				write_config_value(path, &merged)?;
 				Ok(super::apply_config::ConfigWrite::Updated)
 			}
 		}
@@ -372,3 +370,74 @@ fn random_hex_suffix() -> String {
 	}
 	out
 }
+
+/// Change one listener without replacing unrelated configuration.
+pub(crate) fn set_listener_enabled(
+	path: &Path,
+	kind: crate::config::ListenerKind,
+	enabled: bool,
+) -> Result<bool, ApplyError> {
+	use crate::config::ListenerKind;
+	if kind == ListenerKind::Smtp && !enabled {
+		return Err(ApplyError::ConfigInvalid(
+			"smtp cannot be disabled: inbound mail needs it".into(),
+		));
+	}
+	let opened = read_config(path)?.ok_or_else(|| {
+		ApplyError::ConfigRead(
+			path.to_path_buf(),
+			std::io::Error::from(std::io::ErrorKind::NotFound),
+		)
+	})?;
+	let current = opened
+		.validate(path)
+		.map_err(|e| ApplyError::ConfigInvalid(e.to_string()))?;
+	if current
+		.listeners
+		.iter()
+		.any(|listener| listener.kind == kind)
+		== enabled
+	{
+		return Ok(false);
+	}
+	let mut value = parsed(&opened.text)?;
+	let listeners = value
+		.as_table_mut()
+		.ok_or_else(|| ApplyError::ConfigInvalid("config must be a table".into()))?
+		.entry("listeners")
+		.or_insert_with(|| toml::Value::Array(Vec::new()))
+		.as_array_mut()
+		.ok_or_else(|| ApplyError::ConfigInvalid("listeners must be an array".into()))?;
+	if enabled {
+		let addr = if kind == ListenerKind::Api {
+			std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+		} else {
+			current
+				.listeners
+				.iter()
+				.find(|listener| listener.kind == ListenerKind::Smtp)
+				.map(|listener| listener.addr)
+				.unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED))
+		};
+		let mut listener = toml::Table::new();
+		listener.insert("kind".into(), toml::Value::String(kind.as_str().into()));
+		listener.insert("addr".into(), toml::Value::String(addr.to_string()));
+		listeners.push(toml::Value::Table(listener));
+	} else {
+		listeners.retain(|listener| {
+			listener.get("kind").and_then(toml::Value::as_str) != Some(kind.as_str())
+		});
+	}
+	write_config_value(path, &value)?;
+	Ok(true)
+}
+
+fn write_config_value(path: &Path, value: &toml::Value) -> Result<(), ApplyError> {
+	let serialized =
+		toml::to_string(value).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
+	write_validated_config(path, &serialized)
+}
+
+#[cfg(test)]
+#[path = "apply_config_tests_service.rs"]
+mod tests_service;

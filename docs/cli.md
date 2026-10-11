@@ -52,6 +52,37 @@ per check for `verify-dns`) that gets cleared when the command finishes. When
 stderr is not a terminal, the progress line is suppressed and the summary is
 printed once at the end.
 
+## Service listeners
+
+```sh
+epistle service list
+epistle service list --json
+epistle service enable imaps
+epistle service disable imap
+epistle service --config /path/to/mail.toml enable submission
+```
+
+`list` shows enabled or disabled state, port, and bind address. Enabled rows use
+actual configured sockets, including custom ports; disabled rows show the defaults
+that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bind`.
+
+Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
+`pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), and `api`
+(loopback, 8025). IMAP and submission TLS siblings can be toggled independently.
+`smtp` (25) cannot be disabled because inbound mail needs it.
+
+Edits preserve every other configuration value, use init's comment-free TOML
+formatting, and validate through the normal loader before atomically replacing
+`/etc/epistle/mail.toml` (or `--config`). Existing TLS and API prerequisites must
+be valid. New mail listeners inherit SMTP's bind address; API uses loopback.
+An already enabled or disabled service reports no change and exits successfully.
+
+When `<data_dir>/compose/compose.yaml` exists, the generated mail port map is
+updated and the mail service is restarted through `epistle stack`. The operator
+compose override stays untouched. Host installations print that the server must
+be restarted. Status messages go to stderr; listings go to stdout. Running under
+sudo delegates to the service account, like the other administration commands.
+
 ## Running the server
 
 | Command | What it does |

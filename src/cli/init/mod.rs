@@ -12,7 +12,9 @@ mod compose;
 mod plan;
 
 pub use answers::Answers;
+pub(crate) use apply::set_listener_enabled;
 pub use compose::compose_file_path;
+pub(crate) use compose::update_listener_ports;
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER};
 
 use std::io::Write;

@@ -24,6 +24,7 @@ mod serve_ratelimit;
 mod serve_smtp_state;
 mod serve_tasks;
 mod serve_tls;
+mod service;
 mod srv;
 mod stack;
 mod stack_socket;
@@ -420,6 +421,15 @@ pub enum Command {
 		/// Print the answers template to stdout and exit.
 		#[arg(long)]
 		print_answers: bool,
+	},
+	/// List, enable, or disable individual service listeners.
+	Service {
+		/// Configuration file; accepted before or after the service action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Listener administration action.
+		#[command(subcommand)]
+		action: service::ServiceCli,
 	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.
