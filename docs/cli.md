@@ -252,6 +252,26 @@ changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
 file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
 never refused. Supports `--dry-run` and `--config FILE`.
 
+## Webhook (`epistle webhook`)
+
+```sh
+epistle webhook show [--json]
+epistle webhook set https://hooks.example/mail --secret-stdin < secret.txt
+epistle webhook unset
+epistle webhook test
+```
+
+Manages the `[webhook]` section. The URL must be `https`, or `http` on a loopback
+address (`127.0.0.1`, `::1`, `localhost`), and cannot carry credentials. The signing
+secret arrives on stdin as one line and is stored inline in the 0600 configuration
+file; `show` prints only `set` or `unset`. `set` without `--secret-stdin` keeps a
+secret that is already configured. `unset` is refused while an alert still posts
+to the webhook.
+
+`test` posts one `test` event (see [configuration](configuration.md)), signed like
+any other, and reports the HTTP status. It fails on a non-2xx answer, a connection
+error, or no answer within 10 seconds. Supports `--dry-run` and `--config FILE`.
+
 ## Stack (`epistle stack`)
 
 Install the signed repository with the [installer](https://apt.glyndor.net/install/epistle).

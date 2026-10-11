@@ -381,6 +381,11 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::storage_blobs::run(&config, action, dry_run),
+			Command::Webhook {
+				config,
+				action,
+				dry_run,
+			} => super::webhook_admin::run(&config, action, dry_run),
 			Command::Relay {
 				config,
 				action,
@@ -424,6 +429,7 @@ impl Command {
 			| Command::Relay { .. }
 			| Command::Dns { .. }
 			| Command::Storage { .. }
+			| Command::Webhook { .. }
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }

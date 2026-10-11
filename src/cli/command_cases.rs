@@ -154,6 +154,18 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		],
 		true,
 	),
+	(&["webhook", "show"], true),
+	(
+		&[
+			"webhook",
+			"set",
+			"https://hooks.example/mail",
+			"--secret-stdin",
+		],
+		true,
+	),
+	(&["webhook", "unset"], true),
+	(&["webhook", "test"], true),
 	(&["relay", "list"], true),
 	(&["relay", "show", "--domain", "example.org"], true),
 	(

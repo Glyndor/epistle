@@ -49,6 +49,7 @@ mod tracing_setup;
 mod util;
 mod verify;
 mod verify_dns;
+mod webhook_admin;
 
 /// Re-export of the answers structure so integration tests can
 /// deserialise the `epistle init --print-answers` output without
@@ -505,6 +506,18 @@ pub enum Command {
 		/// Storage administration area.
 		#[command(subcommand)]
 		action: storage_blobs::StorageCli,
+	},
+	/// Manage the outbound event webhook.
+	Webhook {
+		/// Configuration file; accepted before or after the webhook action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Webhook administration action.
+		#[command(subcommand)]
+		action: webhook_admin::WebhookCli,
 	},
 	/// Manage outbound smarthost (relay) rules.
 	Relay {
