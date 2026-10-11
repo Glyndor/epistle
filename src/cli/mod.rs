@@ -677,6 +677,7 @@ pub enum Command {
 	},
 }
 
+mod delegation;
 mod dispatch;
 mod rootless;
 

@@ -461,65 +461,6 @@ impl Cli {
 	}
 }
 
-impl Command {
-	fn requires_service_user(&self) -> bool {
-		// Explicit arms keep new stateful commands from silently running as root.
-		match self {
-			Command::Init { .. }
-			| Command::Stack { .. }
-			| Command::Service { .. }
-			| Command::Limits { .. }
-			| Command::Status { .. }
-			| Command::Check { .. }
-			| Command::Relay { .. }
-			| Command::Dns { .. }
-			| Command::Storage { .. }
-			| Command::Webhook { .. }
-			| Command::Alert { .. }
-			| Command::Antispam { .. }
-			| Command::Alias { .. }
-			| Command::Domain { .. }
-			| Command::ConfigCheck { .. }
-			| Command::Export { .. }
-			| Command::Import { .. }
-			| Command::Backup { .. }
-			| Command::Restore { .. }
-			| Command::Verify { .. }
-			| Command::VerifyDns { .. }
-			| Command::DnsRecords { .. }
-			| Command::Mobileconfig { .. }
-			| Command::SrvRecords { .. }
-			| Command::Autoconfig { .. }
-			| Command::Autodiscover { .. }
-			| Command::Suppression { .. }
-			| Command::ReportAbuse { .. }
-			| Command::Accounts { .. }
-			| Command::AccountAdd { .. }
-			| Command::AccountRemove { .. }
-			| Command::Account { .. }
-			| Command::Queue { .. }
-			| Command::Ban { .. }
-			| Command::Masked { .. }
-			| Command::AppPasswordCreate { .. }
-			| Command::AppPasswords { .. }
-			| Command::AppPasswordRevoke { .. }
-			| Command::ApiKeyCreate { .. }
-			| Command::ApiKeys { .. }
-			| Command::ApiKeyRevoke { .. }
-			| Command::Archive { .. }
-			| Command::Reports { .. } => true,
-			Command::Serve { .. }
-			| Command::MtaStsServe { .. }
-			| Command::DkimKeygen { .. }
-			| Command::StorageKeygen
-			| Command::OauthKeygen
-			| Command::TokenHash
-			| Command::Local { .. }
-			| Command::Probe { .. } => false,
-		}
-	}
-}
-
 #[cfg(test)]
 #[path = "dispatch_tests_delegation.rs"]
 mod tests_delegation;
