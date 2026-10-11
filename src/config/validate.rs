@@ -137,17 +137,25 @@ impl Config {
 		let Some(webhook) = &self.webhook else {
 			return Ok(());
 		};
-		// Event payloads carry message metadata, so require TLS — except for a
-		// loopback endpoint, which never leaves the host.
-		let loopback = ["http://127.0.0.1", "http://[::1]", "http://localhost"]
-			.iter()
-			.any(|prefix| webhook.url.starts_with(prefix));
-		if !webhook.url.starts_with("https://") && !loopback {
-			return Err(ConfigError::Invalid(
-				"[webhook] url must be https (or a loopback http endpoint)".into(),
-			));
+		// Event payloads carry message metadata, so require TLS, except for a
+		// loopback endpoint, which never leaves the host. The host is compared
+		// after parsing: a name that only starts like `localhost` or
+		// `127.0.0.1` can point anywhere.
+		let refused = || {
+			ConfigError::Invalid("[webhook] url must be https (or a loopback http endpoint)".into())
+		};
+		let url = url::Url::parse(&webhook.url).map_err(|_| refused())?;
+		let loopback = match url.host() {
+			Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+			Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+			Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+			None => false,
+		};
+		match url.scheme() {
+			"https" => Ok(()),
+			"http" if loopback => Ok(()),
+			_ => Err(refused()),
 		}
-		Ok(())
 	}
 
 	fn validate_acme(&self) -> Result<(), ConfigError> {
