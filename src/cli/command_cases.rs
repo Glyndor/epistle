@@ -195,4 +195,15 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["relay", "test"], true),
 	(&["service", "enable", "imap"], true),
 	(&["service", "disable", "imaps"], true),
+	(&["antispam", "show"], true),
+	(&["antispam", "set", "greylist-delay", "5m"], true),
+	(&["antispam", "unset", "greylist-delay"], true),
+	(
+		&["antispam", "add", "dnsbl-zones", "zen.spamhaus.org"],
+		true,
+	),
+	(
+		&["antispam", "remove", "dnsbl-zones", "zen.spamhaus.org"],
+		true,
+	),
 ];

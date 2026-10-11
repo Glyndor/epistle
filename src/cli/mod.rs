@@ -3,6 +3,7 @@
 mod account;
 mod accounts;
 mod alert;
+mod antispam;
 mod api_keys;
 mod app_passwords;
 mod archive;
@@ -578,6 +579,18 @@ pub enum Command {
 		/// Print the result as JSON instead of a table.
 		#[arg(long)]
 		json: bool,
+	},
+	/// Show or edit antispam knobs (DNSBL lists, greylist delay, clamd, LLM).
+	Antispam {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Antispam administration action.
+		#[command(subcommand)]
+		action: antispam::AntispamCli,
 	},
 	/// Drive the `podup` command-line against the compose file
 	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.
