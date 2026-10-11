@@ -38,12 +38,15 @@ use std::path::Path;
 const TEST_FILE_FRAGMENTS: &[&str] = &[
 	// Covers *_tests_b.rs, *_tests_c.rs, ..., *_tests_<word>.rs.
 	r"_tests(_[a-z0-9_]+)?",
-	// Covers cli/local/test_support.rs, dns/gcloud_test_support.rs and
-	// smtp/directory_test_support.rs.
+	// Covers cli/local/test_support.rs, dns/providers/gcloud/test_support.rs
+	// and smtp/directory_test_support.rs.
 	r"test_support",
-	// Covers dns/namecheap/tests_basic.rs, dns/namecheap/tests_errors.rs
-	// and dns/namecheap/tests_render.rs.
+	// Covers dns/providers/namecheap/tests_basic.rs, tests_path.rs and the
+	// other tests_<word>.rs files beside a module.
 	r"tests_[a-z0-9_]+",
+	// Covers a module directory's own tests.rs, such as
+	// dns/providers/cloudflare/tests.rs.
+	r"/tests",
 ];
 
 /// The shared file-extension anchor at the end of the alternation. Written as
