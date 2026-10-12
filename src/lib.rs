@@ -19,6 +19,7 @@ pub mod autodiscovery;
 pub mod cidr;
 pub mod cli;
 pub mod clock;
+pub mod compose;
 pub mod config;
 pub mod dane;
 pub mod db;

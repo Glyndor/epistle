@@ -203,6 +203,18 @@ mod send_tests_principal;
 mod send_tests_outbound;
 
 #[cfg(test)]
+#[path = "send_tests_rich.rs"]
+mod send_tests_rich;
+
+#[cfg(test)]
+#[path = "send_tests_rich_headers.rs"]
+mod send_tests_rich_headers;
+
+#[cfg(test)]
+#[path = "send_tests_injection.rs"]
+mod send_tests_injection;
+
+#[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 
