@@ -31,6 +31,20 @@ pub struct Entry {
 	pub content_type: &'static str,
 	/// A strong-ish ETag, already quoted, for a non-collection; empty to omit.
 	pub etag: String,
+	/// The `DAV:sync-token` value for a calendar or addressbook
+	/// collection, an opaque URI. Empty when the entry is not a CalDAV
+	/// or CardDAV collection, or when the change log is empty (the
+	/// initial token).
+	pub sync_token: String,
+	/// The `CS:getctag` value for a calendar or addressbook collection.
+	/// Same value as `sync_token`; kept as a separate field because the
+	/// two are conventionally named differently in the spec. Empty for
+	/// entries that do not advertise a ctag.
+	pub getctag: String,
+	/// The `DAV:supported-report-set` block to emit, or empty to omit.
+	/// CalDAV and CardDAV collections advertise `sync-collection` here so
+	/// a client can discover the report without a probe.
+	pub supported_report_set: String,
 }
 
 /// Build the full `<multistatus>` document for the given entries.
@@ -89,11 +103,36 @@ fn response(entry: &Entry) -> String {
 	} else {
 		format!("\t\t\t\t<D:getetag>{}</D:getetag>\n", escape(&entry.etag))
 	};
+	// `DAV:sync-token`, `CS:getctag`, and the supported-report-set are
+	// CalDAV/CardDAV-only. Emitted on a collection whose resourcetype
+	// carries `<C:addressbook/>` or `<CAL:calendar/>`; empty for
+	// everything else.
+	let sync_props = if entry.is_addressbook || entry.is_calendar {
+		let mut out = String::new();
+		if !entry.sync_token.is_empty() {
+			out.push_str(&format!(
+				"\t\t\t\t<D:sync-token>{}</D:sync-token>\n",
+				escape(&entry.sync_token)
+			));
+		}
+		if !entry.getctag.is_empty() {
+			out.push_str(&format!(
+				"\t\t\t\t<CS:getctag xmlns:CS=\"http://calendarserver.org/ns/\">{}</CS:getctag>\n",
+				escape(&entry.getctag)
+			));
+		}
+		if !entry.supported_report_set.is_empty() {
+			out.push_str(&format!("\t\t\t\t{}\n", entry.supported_report_set));
+		}
+		out
+	} else {
+		String::new()
+	};
 	format!(
 		"\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
 		\t\t\t\t{resourcetype}\n\
 		\t\t\t\t<D:displayname>{name}</D:displayname>\n\
-		{length}{modified}{content_type}{etag}\
+		{length}{modified}{content_type}{etag}{sync_props}\
 		\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n",
 		href = escape(&entry.href),
 		name = escape(&entry.display_name),

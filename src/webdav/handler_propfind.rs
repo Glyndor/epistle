@@ -41,12 +41,11 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 		Ok(metadata) => metadata,
 		Err(_) => return StatusCode::NOT_FOUND.into_response(),
 	};
-	let mut entries = vec![entry_for(
-		uri_path,
-		target,
-		&metadata,
-		display_name(uri_path),
-	)];
+	let mut entries: Vec<(propfind::Entry, PathBuf)> = Vec::new();
+	entries.push((
+		entry_for(uri_path, target, &metadata, display_name(uri_path)),
+		target.to_path_buf(),
+	));
 	if depth != "0"
 		&& metadata.is_dir()
 		&& let Ok(mut dir) = tokio::fs::read_dir(target).await
@@ -81,15 +80,25 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 				continue;
 			};
 			let href = format!("{base}/{}", href::segment(&name));
-			entries.push(entry_for(
-				&href,
-				&child.path(),
-				&child_meta,
-				name.to_string(),
+			entries.push((
+				entry_for(&href, &child.path(), &child_meta, name.to_string()),
+				child.path(),
 			));
 		}
 	}
-	xml_multistatus(propfind::multistatus(&entries))
+	// Fill in the live sync-token and getctag for every calendar or
+	// addressbook collection entry. The change log is the source of
+	// truth, and reading it is async, so this happens once after the
+	// synchronous entry construction.
+	for (entry, disk) in &mut entries {
+		if (entry.is_addressbook || entry.is_calendar) && entry.sync_token.is_empty() {
+			let state = super::super::sync::current(disk).await;
+			entry.sync_token = state.token.clone();
+			entry.getctag = state.token;
+		}
+	}
+	let rendered: Vec<propfind::Entry> = entries.into_iter().map(|(e, _)| e).collect();
+	xml_multistatus(propfind::multistatus(&rendered))
 }
 
 /// Answer a `PROPFIND` whose `Depth` is missing or `infinity` with
@@ -139,7 +148,11 @@ fn account_home(uri_path: &str) -> String {
 /// Build a PROPFIND [`Entry`] from filesystem metadata. A collection's href is
 /// given a trailing slash (RFC 4918); an addressbook/calendar collection is
 /// flagged so its resourcetype carries `<C:addressbook/>`/`<CAL:calendar/>`; a
-/// vCard or iCalendar file carries its content type and an ETag.
+/// vCard or iCalendar file carries its content type and an ETag. A
+/// calendar or addressbook collection also advertises its
+/// `DAV:sync-token` and `CS:getctag` (RFC 6578) and lists
+/// `DAV:supported-report-set` so a client can discover the report
+/// without a probe.
 fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: String) -> Entry {
 	let is_collection = metadata.is_dir();
 	let href = if is_collection && !href.ends_with('/') {
@@ -147,11 +160,28 @@ fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: Str
 	} else {
 		href.to_string()
 	};
+	let is_addressbook = is_collection && carddav::is_addressbook(disk);
+	let is_calendar = is_collection && caldav::is_calendar(disk);
+	let (sync_token, getctag) = if is_addressbook || is_calendar {
+		// Reading the change log is async; the synchronous `entry_for`
+		// cannot do it. We hand back a placeholder here and let the
+		// caller in `propfind` overwrite the two fields with the real
+		// values once it has the runtime to await on. Empty strings
+		// mean "no value yet" and the renderer omits the property.
+		(String::new(), String::new())
+	} else {
+		(String::new(), String::new())
+	};
+	let supported_report_set = if is_addressbook || is_calendar {
+		super::super::sync::supported_report_set_row()
+	} else {
+		String::new()
+	};
 	Entry {
 		href,
 		is_collection,
-		is_addressbook: is_collection && carddav::is_addressbook(disk),
-		is_calendar: is_collection && caldav::is_calendar(disk),
+		is_addressbook,
+		is_calendar,
 		length: metadata.len(),
 		modified: metadata.modified().ok(),
 		display_name: display,
@@ -161,6 +191,9 @@ fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: Str
 		} else {
 			carddav::etag(metadata)
 		},
+		sync_token,
+		getctag,
+		supported_report_set,
 	}
 }
 
