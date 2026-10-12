@@ -665,3 +665,7 @@ mod tests_dual_stack;
 #[cfg(test)]
 #[path = "server_tests_starttls.rs"]
 mod tests_starttls;
+
+#[cfg(test)]
+#[path = "server_tests_author.rs"]
+mod tests_author;
