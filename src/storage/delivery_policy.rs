@@ -45,8 +45,15 @@ impl LocalDelivery {
 		let source = fs::read_to_string(path).ok()?;
 		let tokens = crate::sieve::lexer::tokenize(&source).ok()?;
 		let commands = crate::sieve::parser::parse(&tokens).ok()?;
+		// The `mailbox` extension's `mailboxexists` test consults the
+		// account's mailbox list, so hand the interpreter the names in
+		// their IMAP on-disk spelling (modified UTF-7). `imap::mailbox::list`
+		// always includes INBOX, matching what `mailboxexists "INBOX"`
+		// expects.
+		let mut mailboxes = crate::imap::mailbox::list(&self.data_dir, account);
 		let parsed = crate::sieve::interp::Message::parse(&message.data)
-			.with_envelope(message.reverse_path.clone(), message.recipients.clone());
+			.with_envelope(message.reverse_path.clone(), message.recipients.clone())
+			.with_mailboxes(&mut mailboxes);
 		Some(crate::sieve::interp::evaluate(&commands, &parsed))
 	}
 }

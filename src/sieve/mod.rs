@@ -15,4 +15,7 @@ mod vars;
 #[cfg(test)]
 mod interp_tests;
 #[cfg(test)]
+#[path = "interp_tests_mailbox.rs"]
+mod interp_tests_mailbox;
+#[cfg(test)]
 mod parser_tests;

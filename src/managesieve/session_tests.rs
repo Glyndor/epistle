@@ -83,6 +83,7 @@ fn capability_advertises_implemented_sieve_extensions() {
 		"body",
 		"date",
 		"comparator-i;ascii-numeric",
+		"mailbox",
 	] {
 		assert!(text.contains(ext), "missing {ext} in: {text}");
 	}

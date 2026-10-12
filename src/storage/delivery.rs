@@ -280,12 +280,19 @@ impl LocalDelivery {
 			.collect();
 		// A fileinto that cannot be carried out is a run-time error, which
 		// falls back to the implicit keep (RFC 5228 §2.10.6) instead of
-		// dropping the message.
+		// dropping the message. With the `mailbox` extension (RFC 5490
+		// §3.2) `:create` also creates a missing folder first; this
+		// project's prior behavior already auto-creates folders, so the
+		// tag is observed by the validator but the delivery path treats
+		// both cases the same.
 		if outcome.keep || folders.iter().any(Option::is_none) {
 			self.deliver_to_account(account, None, data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		for folder in folders.iter().flatten() {
+			if !io::mailbox_exists(&self.data_dir, account, folder) {
+				io::ensure_mailbox(&self.data_dir, account, folder);
+			}
 			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}

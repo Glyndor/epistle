@@ -2,6 +2,8 @@
 //! to decide where it is delivered. Unknown tests evaluate to false and unknown
 //! actions are ignored, so an unsupported script fails safe.
 
+use std::collections::BTreeSet;
+
 use super::ast::{Argument, Command};
 
 /// The delivery decision a script produces.
@@ -11,6 +13,10 @@ pub struct Outcome {
 	pub keep: bool,
 	/// Mailboxes to file into.
 	pub fileinto: Vec<String>,
+	/// Of `fileinto` targets, the ones that carried the `:create` tag
+	/// (RFC 5490): the delivery side creates the folder if it does not
+	/// exist before delivering.
+	pub fileinto_creates: BTreeSet<String>,
 	/// Addresses to redirect to.
 	pub redirects: Vec<String>,
 	/// The message was explicitly discarded.
@@ -97,7 +103,15 @@ fn run(
 				"vacation" => outcome.vacation = parse_vacation(args),
 				"fileinto" => {
 					if let Some(target) = first_str(args) {
-						outcome.fileinto.push(expand(&target, vars));
+						let folder = expand(&target, vars);
+						outcome.fileinto.push(folder.clone());
+						// `:create` (RFC 5490): the delivery side creates the
+						// folder if it does not exist before filing. Without
+						// it, a missing folder is a run-time error that
+						// keeps the message in INBOX (RFC 5228 §2.10.6).
+						if has_tag(args, "create") {
+							outcome.fileinto_creates.insert(folder);
+						}
 						// `:copy` (RFC 3894) leaves the implicit keep in place.
 						if !has_tag(args, "copy") {
 							*cancel_implicit = true;
