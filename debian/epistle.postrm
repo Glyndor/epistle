@@ -13,6 +13,15 @@
 
 set -e
 
+# Print "$1 <first>-<last>" for each subordinate id range file $2 lists for
+# glyndor-epistle.
+epistle_account_subids() {
+	awk -F: -v option="$1" '
+		$1 == "glyndor-epistle" && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $3 > 0 {
+			printf "%s %d-%d\n", option, $2, $2 + $3 - 1
+		}' "$2" 2>/dev/null || true
+}
+
 case "$1" in
 purge)
 	if [ -d /run/systemd/system ]; then
@@ -21,7 +30,17 @@ purge)
 		fi
 	fi
 
-	if ! usermod --del-subuids 100000-165535 --del-subgids 100000-165535 glyndor-epistle; then
+	# The postinst picks a free block per host, so the ranges to remove are
+	# the ones listed for the account, not a fixed pair. A missing table
+	# simply contributes nothing.
+	subid_args=$(
+		epistle_account_subids --del-subuids /etc/subuid
+		epistle_account_subids --del-subgids /etc/subgid
+	)
+	# $subid_args is left unquoted on purpose: it holds options and numeric
+	# ranges only, and each must reach usermod as its own word.
+	# shellcheck disable=SC2086
+	if [ -n "$subid_args" ] && ! usermod $subid_args glyndor-epistle; then
 		echo "epistle: could not remove the subuid/subgid ranges for glyndor-epistle" >&2
 	fi
 
