@@ -149,3 +149,29 @@ async fn mailbox_get_of_all_is_request_too_large_past_max_objects_in_get() {
 		Some(MAX_OBJECTS_IN_GET)
 	);
 }
+
+/// `Email/copy` creates objects the way `/set` does, and is held to the same
+/// `maxObjectsInSet`.
+#[tokio::test]
+async fn an_email_copy_over_max_objects_in_set_is_request_too_large() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	let copies = |count: usize| -> Map<String, Value> {
+		(0..count)
+			.map(|i| {
+				let spec = json!({ "id": format!("missing-{i}"), "mailboxIds": { "INBOX": true } });
+				(format!("k{i}"), spec)
+			})
+			.collect()
+	};
+	let args = |count: usize| json!({ "fromAccountId": "alice", "accountId": "alice", "create": copies(count) });
+
+	let at_limit = call(&app, "Email/copy", args(MAX_OBJECTS_IN_SET)).await;
+	assert_eq!(at_limit[0], "Email/copy");
+	let over = call(&app, "Email/copy", args(MAX_OBJECTS_IN_SET + 1)).await;
+	assert!(
+		is_too_large(&over),
+		"Email/copy over the limit: {}",
+		over[0]
+	);
+}

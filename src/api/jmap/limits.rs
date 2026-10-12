@@ -35,10 +35,11 @@ pub const MAX_OBJECTS_IN_GET: usize = 500;
 /// together, one `/set` call may carry (RFC 8620 §5.3).
 pub const MAX_OBJECTS_IN_SET: usize = 500;
 
-/// Whether a `/get` call names more ids than [`MAX_OBJECTS_IN_GET`], or a
+/// Whether a `/get` call names more ids than [`MAX_OBJECTS_IN_GET`], a
 /// `/set` call carries more creates, updates and destroys than
-/// [`MAX_OBJECTS_IN_SET`]. Such a call is answered `requestTooLarge`
-/// (RFC 8620 §5.1, §5.3) and not run.
+/// [`MAX_OBJECTS_IN_SET`], or a `/copy` more creates than that. Such a call
+/// is answered `requestTooLarge` (RFC 8620 §5.1, §5.3) and not run. A
+/// `/copy` creates objects the way a `/set` does, so it gets the same cap.
 pub(super) fn too_many_objects(method: &str, args: &serde_json::Value) -> bool {
 	let count = |key: &str| match args.get(key) {
 		Some(serde_json::Value::Array(items)) => items.len(),
@@ -49,6 +50,8 @@ pub(super) fn too_many_objects(method: &str, args: &serde_json::Value) -> bool {
 		count("ids") > MAX_OBJECTS_IN_GET
 	} else if method.ends_with("/set") {
 		count("create") + count("update") + count("destroy") > MAX_OBJECTS_IN_SET
+	} else if method.ends_with("/copy") {
+		count("create") > MAX_OBJECTS_IN_SET
 	} else {
 		false
 	}
