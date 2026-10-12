@@ -24,9 +24,7 @@ use std::path::Path;
 const TRAILING_NEWLINE_FILES: &[&str] = &[
 	".github/workflows/rust-audit.yml",
 	".github/workflows/reusable-rust-audit.yml",
-	".github/scripts/rust_audit_report.py",
 	".github/scripts/rust_audit_combine.py",
-	".github/scripts/test_rust_audit_report.py",
 	".github/scripts/test_rust_audit_combine.py",
 	".github/scripts/test_rust_audit_lookup.py",
 ];

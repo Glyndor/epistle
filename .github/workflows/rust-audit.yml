@@ -35,10 +35,9 @@ on:
       # alters what the job accepts, so none should land without the job
       # having run.
       - ".github/workflows/reusable-rust-audit.yml"
-      - ".github/scripts/rust_audit_report.py"
       - ".github/scripts/rust_audit_combine.py"
-      - ".github/scripts/test_rust_audit_report.py"
       - ".github/scripts/test_rust_audit_combine.py"
+      - ".github/scripts/test_rust_audit_lookup.py"
       - ".cargo/audit.toml"
 
 permissions:

@@ -39,13 +39,13 @@ const REQUIRED_REFS: &[&str] = &["develop", "main"];
 /// is in its own filter on purpose: a workflow whose path list omits
 /// itself does not run on the pull request that changes it, so a broken
 /// edit merges without ever having been executed. The reusable and the
-/// two Python scripts the report job runs belong to the same family: a
+/// Python scripts the report job runs belong to the same family: a
 /// pull request that changes what the audit accepts has to run it.
 const REQUIRED_PATHS: &[&str] = &[
 	".github/workflows/rust-audit.yml",
 	".github/workflows/reusable-rust-audit.yml",
-	".github/scripts/rust_audit_report.py",
 	".github/scripts/rust_audit_combine.py",
+	".github/scripts/test_rust_audit_lookup.py",
 ];
 
 /// Job ids the workflow must define. The `audit` job is the matrix entry

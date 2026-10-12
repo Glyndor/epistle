@@ -5,12 +5,14 @@ Run from the repository root with:
 
 	python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
-Drives the script as an external command over a directory of fake
-artifacts, the way the workflow downloads them. Every assertion is on a
-JSON value the script emits; nothing depends on a sentence in the body,
-so wording changes that keep the fields intact cannot break a test.
+The combine script reads raw `cargo audit --json` documents from a
+directory of `audit-json-<ref>/audit.json` files (the way the workflow
+downloads them) and emits one combined JSON object. Every assertion is
+on a JSON value the script emits; nothing depends on a sentence in the
+body, so wording changes that keep the fields intact cannot break a
+test.
 
-The `--no-lookup` flag covers everything except the `gh api` call,
+The `--no-lookup` flag covers everything except the `gh` call,
 because the call needs a real GitHub token and real network access. The
 lookup branch is exercised manually by the workflow, where the token is
 available in the step's `env:` block; here, the test only needs to prove
@@ -29,133 +31,135 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 COMBINE_PY = REPO_ROOT / ".github" / "scripts" / "rust_audit_combine.py"
 
 
-def _run_json(text: dict) -> dict:
-	"""Pass one report on stdin, return the parsed stdout."""
-	proc = subprocess.run(
-		[sys.executable, str(COMBINE_PY), "-", "--no-lookup"],
-		input=json.dumps(text),
-		capture_output=True,
-		text=True,
-		check=False,
-		cwd=str(REPO_ROOT),
-	)
-	if proc.returncode != 0:
-		raise AssertionError(f"combine failed: {proc.stdout} {proc.stderr}")
-	return json.loads(proc.stdout)
-
-
-def _run_dir(directory: Path) -> dict:
-	"""Run combine against a directory of audit-json-<ref>/audit.json files."""
-	proc = subprocess.run(
-		[sys.executable, str(COMBINE_PY), str(directory), "--no-lookup"],
-		capture_output=True,
-		text=True,
-		check=False,
-		cwd=str(REPO_ROOT),
-	)
-	if proc.returncode != 0:
-		raise AssertionError(f"combine failed: {proc.stdout} {proc.stderr}")
-	return json.loads(proc.stdout)
-
-
-def _report(
-	ref: str,
+def _vulnerability(
+	advisory_id: str,
+	package: str,
+	version: str,
+	patched: list[str],
 	*,
-	clean: bool,
-	title: str | None = None,
-	body: str | None = None,
+	title: str = "an issue",
 ) -> dict:
-	"""Build a fake per-ref report. `clean: true` ignores title/body."""
-	if clean:
-		return {"ref": ref, "clean": True, "title": None, "body": None, "advisories": []}
+	"""One cargo-audit JSON entry, the way `cargo audit --json` prints it."""
 	return {
-		"ref": ref,
-		"clean": False,
-		"title": title,
-		"body": body,
-		"advisories": [],
+		"advisory": {
+			"id": advisory_id,
+			"title": title,
+			"description": "details",
+			"date": "2026-09-01",
+		},
+		"versions": {"patched": patched, "unaffected": []},
+		"affected": None,
+		"package": {"name": package, "version": version},
 	}
 
 
-def _write_artifact(directory: Path, ref: str, report: dict) -> Path:
+def _audit(findings: list[dict], warnings: dict | None = None) -> dict:
+	"""Wrap `findings` into the top-level `cargo audit --json` document."""
+	return {
+		"database": {"advisory-count": 1300, "last_updated": "2026-09-30T00:00:00Z"},
+		"lockfile": {"dependency-count": 397},
+		"settings": {"ignore": []},
+		"vulnerabilities": {"found": bool(findings), "count": len(findings), "list": findings},
+		"warnings": warnings or {},
+	}
+
+
+def _run_dir(directory: Path, *extra_args: str) -> dict:
+	"""Run combine against a directory of audit-json-<ref>/audit.json files."""
+	proc = subprocess.run(
+		[sys.executable, str(COMBINE_PY), str(directory), "--no-lookup", *extra_args],
+		capture_output=True,
+		text=True,
+		check=False,
+		cwd=str(REPO_ROOT),
+	)
+	if proc.returncode != 0:
+		raise AssertionError(f"combine failed: {proc.stdout} {proc.stderr}")
+	return json.loads(proc.stdout)
+
+
+def _write_artifact(directory: Path, ref: str, audit_document: dict) -> Path:
 	"""Drop a `audit-json-<ref>/audit.json` file into `directory`."""
 	subdir = directory / f"audit-json-{ref}"
 	subdir.mkdir(parents=True, exist_ok=True)
 	path = subdir / "audit.json"
-	path.write_text(json.dumps(report), encoding="utf-8")
+	path.write_text(json.dumps(audit_document), encoding="utf-8")
 	return path
 
 
-class TestCombine(unittest.TestCase):
-	"""Single-ref and multi-ref aggregation rules."""
+class TestClean(unittest.TestCase):
+	"""`vulnerabilities.found == false` yields the clean shape."""
 
-	def test_clean_input_is_clean(self) -> None:
-		out = _run_json(_report("develop", clean=True))
+	def test_empty_vulnerabilities_exits_zero_and_is_clean(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "develop", _audit([]))
+			out = _run_dir(directory)
 		self.assertTrue(out["clean"])
 		self.assertIsNone(out["title"])
 		self.assertIsNone(out["body"])
-		self.assertEqual(out["existing"], "")
 
-	def test_single_dirty_ref_yields_its_title_and_body(self) -> None:
-		report = _report(
-			"develop",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0338",
-			body="### RUSTSEC-2026-0338 - quinn-proto 0.11.18",
-		)
-		out = _run_json(report)
+	def test_found_false_with_empty_list_is_clean(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(
+				directory,
+				"main",
+				{"vulnerabilities": {"found": False, "count": 0, "list": []}},
+			)
+			out = _run_dir(directory)
+		self.assertTrue(out["clean"])
+
+
+class TestDirty(unittest.TestCase):
+	"""A non-empty `vulnerabilities.list` yields a deterministic title and body."""
+
+	def test_single_advisory_title_lists_its_id(self) -> None:
+		findings = [_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"])]
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "develop", _audit(findings))
+			out = _run_dir(directory)
 		self.assertFalse(out["clean"])
 		self.assertEqual(out["title"], "Dependency advisories: RUSTSEC-2026-0338")
-		self.assertIn("quinn-proto 0.11.18", out["body"])
-		self.assertEqual(out["existing"], "")
+		self.assertIsNotNone(out["body"])
+		self.assertIn("`develop`", out["body"])
+		self.assertIn("RUSTSEC-2026-0338", out["body"])
+		self.assertIn("quinn-proto", out["body"])
+
+	def test_multiple_advisories_sort_ids_in_title(self) -> None:
+		findings = [
+			_vulnerability("RUSTSEC-2026-0343", "quinn-proto", "0.11.18", [">=0.11.19"]),
+			_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"]),
+			_vulnerability("RUSTSEC-2026-0340", "quinn-proto", "0.11.18", [">=0.11.19"]),
+		]
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "main", _audit(findings))
+			out = _run_dir(directory)
+		self.assertEqual(
+			out["title"],
+			"Dependency advisories: RUSTSEC-2026-0338, RUSTSEC-2026-0340, RUSTSEC-2026-0343",
+		)
 
 	def test_two_refs_with_the_same_advisory_dedup_to_one_id(self) -> None:
 		# When both develop and main hit RUSTSEC-2026-0338, the combined
-		# title reads "RUSTSEC-2026-0338" once. A duplicate id would
-		# produce a redundant issue title and confuse the open-or-comment
-		# lookup if the dedupe ran out of order.
-		report_a = _report(
-			"develop",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0338",
-			body="body for develop",
-		)
-		report_b = _report(
-			"main",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0338",
-			body="body for main",
-		)
+		# title reads "RUSTSEC-2026-0338" once.
+		findings = [_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"])]
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "develop", report_a)
-			_write_artifact(directory, "main", report_b)
+			_write_artifact(directory, "develop", _audit(findings))
+			_write_artifact(directory, "main", _audit(findings))
 			out = _run_dir(directory)
 		self.assertEqual(out["title"], "Dependency advisories: RUSTSEC-2026-0338")
-		self.assertIn("body for develop", out["body"])
-		self.assertIn("body for main", out["body"])
 
 	def test_two_refs_with_disjoint_advisories_concatenate_ids(self) -> None:
-		# develop sees A; main sees B. The combined title must carry both,
-		# sorted. A flaky sort here would put `,` between ids and a
-		# comment on the same issue would diff every time the order
-		# changed.
-		report_a = _report(
-			"develop",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0338",
-			body="body for develop",
-		)
-		report_b = _report(
-			"main",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0340",
-			body="body for main",
-		)
+		a = [_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"])]
+		b = [_vulnerability("RUSTSEC-2026-0340", "quinn-proto", "0.11.18", [">=0.11.19"])]
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "develop", report_a)
-			_write_artifact(directory, "main", report_b)
+			_write_artifact(directory, "develop", _audit(a))
+			_write_artifact(directory, "main", _audit(b))
 			out = _run_dir(directory)
 		self.assertEqual(
 			out["title"],
@@ -166,43 +170,43 @@ class TestCombine(unittest.TestCase):
 		# develop clean; main dirty. The combine output must reflect only
 		# the dirty report, otherwise the title would read "clean: True"
 		# even though main failed.
-		clean = _report("develop", clean=True)
-		dirty = _report(
-			"main",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0338",
-			body="main is dirty",
-		)
+		dirty = [_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"])]
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "develop", clean)
-			_write_artifact(directory, "main", dirty)
+			_write_artifact(directory, "develop", _audit([]))
+			_write_artifact(directory, "main", _audit(dirty))
 			out = _run_dir(directory)
 		self.assertFalse(out["clean"])
 		self.assertEqual(out["title"], "Dependency advisories: RUSTSEC-2026-0338")
-		self.assertIn("main is dirty", out["body"])
 
 	def test_yanked_warning_appears_in_combined_title(self) -> None:
-		# Synthetic ids for warnings keep their `kind:crate@version` form
-		# so the title is still a deterministic key.
-		report_a = _report(
-			"develop",
-			clean=False,
-			title="Dependency advisories: yanked:stale@0.1.0",
-			body="stale is yanked",
-		)
-		report_b = _report(
-			"main",
-			clean=False,
-			title="Dependency advisories: yanked:stale@0.1.0",
-			body="stale is yanked on main too",
-		)
+		# A yanked crate has no RUSTSEC id; the synthetic id keeps the
+		# title deterministic.
+		warnings = {
+			"yanked": [
+				{
+					"kind": "yanked",
+					"package": {"name": "stale", "version": "0.1.0"},
+					"advisory": None,
+					"versions": None,
+					"affected": None,
+				}
+			]
+		}
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "develop", report_a)
-			_write_artifact(directory, "main", report_b)
+			_write_artifact(directory, "develop", _audit([], warnings))
+			_write_artifact(directory, "main", _audit([], warnings))
 			out = _run_dir(directory)
 		self.assertEqual(out["title"], "Dependency advisories: yanked:stale@0.1.0")
+
+	def test_advisory_without_patched_version_still_admitted(self) -> None:
+		findings = [_vulnerability("RUSTSEC-2026-9999", "ghost", "9.9.9", [])]
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "develop", _audit(findings))
+			out = _run_dir(directory)
+		self.assertIn("no fixed version recorded", out["body"])
 
 
 class TestFailureIssue(unittest.TestCase):
@@ -211,23 +215,7 @@ class TestFailureIssue(unittest.TestCase):
 	operator still has a loud signal."""
 
 	def _run_with_run_url(self, directory: Path, run_url: str) -> dict:
-		proc = subprocess.run(
-			[
-				sys.executable,
-				str(COMBINE_PY),
-				str(directory),
-				"--no-lookup",
-				"--run-url",
-				run_url,
-			],
-			capture_output=True,
-			text=True,
-			check=False,
-			cwd=str(REPO_ROOT),
-		)
-		if proc.returncode != 0:
-			raise AssertionError(f"combine failed: {proc.stdout} {proc.stderr}")
-		return json.loads(proc.stdout)
+		return _run_dir(directory, "--run-url", run_url)
 
 	def test_clean_with_run_url_produces_failure_issue(self) -> None:
 		# Two empty per-ref directories mimic a reusable that crashed
@@ -250,11 +238,10 @@ class TestFailureIssue(unittest.TestCase):
 		# develop produced JSON (succeeded); main did not (failed
 		# without writing JSON). The failure title must name only `main`,
 		# because that is the ref whose failure the operator needs to
-		# chase. Naming both would muddle that signal.
-		clean_report = _report("develop", clean=True)
+		# chase.
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "develop", clean_report)
+			_write_artifact(directory, "develop", _audit([]))
 			(directory / "audit-json-main").mkdir()
 			out = self._run_with_run_url(
 				directory, "https://example.com/runs/43"
@@ -267,15 +254,10 @@ class TestFailureIssue(unittest.TestCase):
 		# An advisory-bearing input must still take the advisory path,
 		# even with --run-url. The brief is explicit: the failure issue
 		# is for non-advisory failures only.
-		dirty = _report(
-			"main",
-			clean=False,
-			title="Dependency advisories: RUSTSEC-2026-0338",
-			body="quinn-proto 0.11.18",
-		)
+		findings = [_vulnerability("RUSTSEC-2026-0338", "quinn-proto", "0.11.18", [">=0.11.19"])]
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "main", dirty)
+			_write_artifact(directory, "main", _audit(findings))
 			out = self._run_with_run_url(
 				directory, "https://example.com/runs/44"
 			)
@@ -287,19 +269,10 @@ class TestFailureIssue(unittest.TestCase):
 	def test_clean_without_run_url_stays_clean(self) -> None:
 		# Without --run-url, a clean combine is the close signal. The
 		# script must not invent a failure issue on its own.
-		clean_report = _report("develop", clean=True)
 		with tempfile.TemporaryDirectory() as tmp:
 			directory = Path(tmp)
-			_write_artifact(directory, "develop", clean_report)
-			proc = subprocess.run(
-				[sys.executable, str(COMBINE_PY), str(directory), "--no-lookup"],
-				capture_output=True,
-				text=True,
-				check=False,
-				cwd=str(REPO_ROOT),
-			)
-		self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
-		out = json.loads(proc.stdout)
+			_write_artifact(directory, "develop", _audit([]))
+			out = _run_dir(directory)
 		self.assertTrue(out["clean"])
 		self.assertIsNone(out["title"])
 		self.assertIsNone(out["body"])

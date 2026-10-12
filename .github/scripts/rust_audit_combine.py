@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Combine one or more `rust_audit_report.py` outputs into the JSON the
+"""Combine one or more `cargo audit --json` outputs into the JSON the
 rust-audit workflow consumes to open or comment on an issue.
 
 The workflow downloads every `audit-json-<ref>` artifact the matrix
-produced and feeds them in. Each input is the JSON the parser wrote
-(its own object, see `.github/scripts/rust_audit_report.py`). The
-combined shape:
+produced and feeds them in. Each artifact is a raw `cargo audit --json`
+document (`vulnerabilities.list[]`, `warnings.<kind>[]`, etc.); this
+script normalizes every per-ref document, folds them into one object,
+and emits:
 
 	{
 	  "clean": true|false,
@@ -16,9 +17,10 @@ combined shape:
 
 `existing` is the number of an already-open issue with the same title
 and the matching label set, or the empty string when none exists. The
-workflow uses it to decide whether to open a new issue or comment on the
-one it already has. The script only emits the lookup; the `gh` call is
-in the workflow so the GitHub token stays in the step's `env:` block.
+workflow uses it to decide whether to open a new issue or comment on
+the one it already has. The script only emits the lookup; the `gh`
+call is in the workflow so the GitHub token stays in the step's
+`env:` block.
 
 When `--run-url` is passed, a clean combine (no advisories in any
 input) becomes a non-advisory failure issue. The title is
@@ -27,15 +29,6 @@ with a note that the failure is not an advisory. The workflow runs
 this script only when the reusable already failed (`if: failure()`),
 so a clean combine output here means a non-advisory failure happened
 somewhere in the reusable and operators still need a loud signal.
-
-Usage:
-	rust_audit_combine.py <reports-dir>
-	rust_audit_combine.py -                # read JSONL from stdin
-
-A clean report (every input's `clean` is true and the combined body is
-empty) exits 0 with a clean shape; the workflow reads it as the close
-signal. The body is empty only when every input was clean, because a
-dirty input always has a body to contribute.
 
 Exit codes:
 	0  reports combined
@@ -52,8 +45,148 @@ from pathlib import Path
 
 
 LABELS = ["type:security", "type:deps", "prio:P1", "area:meta"]
-
 _FAILURE_TITLE_PREFIX = "Rust audit failed on "
+
+_BODY_TEMPLATE = """\
+Dependency advisories open against {ref}.
+
+This issue is opened automatically by the `rust-audit` workflow on the
+`{ref}` ref. The next run on both `develop` and `main` that finds no
+advisories closes it.
+
+{per_advisory}
+
+Advisories in dependencies are public, so a public issue is fine.
+"""
+
+
+def _per_advisory(advisories: list[dict]) -> str:
+	"""Render the per-advisory markdown, sorted by id for a stable diff."""
+	lines: list[str] = []
+	for advisory in sorted(advisories, key=lambda a: a["id"]):
+		heading = f"### {advisory['id']} - {advisory['package']} {advisory['version']}"
+		lines.append(heading)
+		lines.append(f"- Kind: `{advisory['kind']}`")
+		if advisory["patched"]:
+			lines.append(f"- Patched in: `{advisory['patched']}`")
+		else:
+			lines.append("- Patched in: _no fixed version recorded_")
+		refs = ", ".join(f"`{ref}`" for ref in sorted(advisory["refs"]))
+		lines.append(f"- Found on: {refs}")
+		lines.append("")
+	return "\n".join(lines)
+
+
+def _vulnerability_advisory(vulnerability: dict, ref: str) -> dict:
+	"""Map one cargo-audit vulnerability entry to the workflow's shape."""
+	advisory = vulnerability.get("advisory") or {}
+	versions = vulnerability.get("versions") or {}
+	package = vulnerability.get("package") or {}
+	patched = versions.get("patched") or []
+	return {
+		"id": str(advisory.get("id", "")),
+		"kind": "vulnerability",
+		"package": str(package.get("name", "")),
+		"version": str(package.get("version", "")),
+		"patched": str(patched[0]) if patched else "",
+		"refs": [ref],
+	}
+
+
+def _warning_advisory(warning: dict, ref: str) -> dict:
+	"""Map one cargo-audit warning entry to the workflow's shape.
+
+	A warning without a RUSTSEC id (a yanked crate, for example) gets a
+	synthesised id of the form `<kind>:<crate>@<version>`. The id never
+	collides with a real RUSTSEC id (those are `RUSTSEC-YYYY-NNNN`).
+	"""
+	advisory = warning.get("advisory") or {}
+	package = warning.get("package") or {}
+	versions = warning.get("versions") or {}
+	raw_id = advisory.get("id", "")
+	kind = str(warning.get("kind", ""))
+	package_name = str(package.get("name", ""))
+	package_version = str(package.get("version", ""))
+	synthetic_id = f"{kind}:{package_name}@{package_version}" if kind and package_name and package_version else ""
+	synth_id = str(raw_id) if raw_id else synthetic_id
+	patched = (versions.get("patched") or []) if isinstance(versions, dict) else []
+	return {
+		"id": synth_id,
+		"kind": kind or "warning",
+		"package": package_name,
+		"version": package_version,
+		"patched": str(patched[0]) if patched else "",
+		"refs": [ref],
+	}
+
+
+def _collect_warnings(document: dict, ref: str) -> list[dict]:
+	"""Flatten the `warnings` map into the advisories shape.
+
+	The cargo-audit JSON puts warnings under `warnings.<kind>[]`; we collect
+	them into one list so the title and body treat every finding the same
+	way.
+	"""
+	warnings = document.get("warnings")
+	if not isinstance(warnings, dict):
+		return []
+	out: list[dict] = []
+	for kind, entries in warnings.items():
+		if not isinstance(entries, list):
+			continue
+		for entry in entries:
+			if not isinstance(entry, dict):
+				continue
+			out.append(_warning_advisory(entry, ref))
+	return out
+
+
+def parse_audit_json(audit_json_text: str, ref: str) -> dict:
+	"""Parse one cargo-audit JSON document into the workflow's shape.
+
+	Raises `ValueError` on missing required fields. The script exits 2 on
+	that, which the workflow reads as a step failure rather than as a
+	missing-advisories state. A report without the `vulnerabilities` key
+	is treated as malformed: treating it as clean would silently close an
+	open advisory issue if cargo-audit's output format ever changed.
+	"""
+	try:
+		document = json.loads(audit_json_text)
+	except json.JSONDecodeError as exc:
+		raise ValueError(f"audit JSON is not valid JSON: {exc}") from exc
+	if not isinstance(document, dict):
+		raise ValueError("audit JSON must be an object")
+	if "vulnerabilities" not in document:
+		raise ValueError("audit JSON is missing the `vulnerabilities` field")
+	vulnerabilities = document["vulnerabilities"]
+	if not isinstance(vulnerabilities, dict):
+		raise ValueError("audit JSON `vulnerabilities` must be an object")
+	findings = vulnerabilities.get("list") or []
+	if not isinstance(findings, list):
+		raise ValueError("audit JSON `vulnerabilities.list` must be an array")
+
+	advisories: list[dict] = [_vulnerability_advisory(entry, ref) for entry in findings]
+	advisories.extend(_collect_warnings(document, ref))
+	clean = vulnerabilities.get("found") is False and not advisories
+	if clean:
+		return {
+			"ref": ref,
+			"clean": True,
+			"title": None,
+			"body": None,
+			"advisories": [],
+		}
+
+	ids = sorted({a["id"] for a in advisories if a["id"]})
+	title = "Dependency advisories: " + ", ".join(ids) if ids else None
+	body = _BODY_TEMPLATE.format(ref=ref, per_advisory=_per_advisory(advisories))
+	return {
+		"ref": ref,
+		"clean": False,
+		"title": title,
+		"body": body,
+		"advisories": advisories,
+	}
 
 
 def combine(reports: list[dict]) -> dict:
@@ -135,36 +268,22 @@ def failure_issue(reports_dir: Path, run_url: str) -> dict:
 
 
 def _read_reports_from_dir(directory: Path) -> list[dict]:
-	"""Find every per-ref report in `directory` and parse it."""
+	"""Find every `audit-json-<ref>/audit.json` in `directory` and
+	normalize it via `parse_audit_json`. The ref is taken from the
+	directory name (`audit-json-develop` -> `develop`).
+	"""
 	if not directory.exists():
 		raise ValueError(f"{directory} does not exist; the artifact download is stale")
 	if not directory.is_dir():
 		raise ValueError(f"{directory} is not a directory")
 	reports: list[dict] = []
 	for path in sorted(directory.glob("audit-json-*/audit.json")):
+		ref = path.parent.name[len("audit-json-"):]
 		try:
 			text = path.read_text(encoding="utf-8")
 		except OSError as exc:
 			raise ValueError(f"cannot read {path}: {exc}") from exc
-		try:
-			report = json.loads(text)
-		except json.JSONDecodeError as exc:
-			raise ValueError(f"{path} is not valid JSON: {exc}") from exc
-		reports.append(report)
-	return reports
-
-
-def _read_reports_from_stdin() -> list[dict]:
-	"""Read one JSON object per line from stdin."""
-	reports: list[dict] = []
-	for line in sys.stdin:
-		line = line.strip()
-		if not line:
-			continue
-		try:
-			reports.append(json.loads(line))
-		except json.JSONDecodeError as exc:
-			raise ValueError(f"stdin line is not valid JSON: {exc}") from exc
+		reports.append(parse_audit_json(text, ref))
 	return reports
 
 
@@ -220,9 +339,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 	)
 	parser.add_argument(
 		"reports_dir",
-		nargs="?",
-		default="-",
-		help="Directory of per-ref audit-json-<ref>/audit.json files, or `-` for stdin",
+		help="Directory the workflow downloaded the audit-json-<ref>/ artifacts into.",
 	)
 	parser.add_argument(
 		"--repo",
@@ -248,23 +365,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
 	args = _parse_args(argv)
 	try:
-		if args.reports_dir == "-":
-			reports = _read_reports_from_stdin()
-			reports_dir = Path("-")
-		else:
-			reports_dir = Path(args.reports_dir)
-			reports = _read_reports_from_dir(reports_dir)
+		reports_dir = Path(args.reports_dir)
+		reports = _read_reports_from_dir(reports_dir)
 	except ValueError as exc:
 		print(f"rust_audit_combine: {exc}", file=sys.stderr)
 		return 2
 	combined = combine(reports)
 	if combined["clean"] and args.run_url:
 		combined = failure_issue(reports_dir, args.run_url)
+	lookup_title = combined["title"] or ""
 	if (
-		not combined["clean"]
-		or (combined["clean"] and args.run_url)
+		(combined["clean"] and args.run_url)
+		or not combined["clean"]
 	) and args.repo and not args.no_lookup:
-		combined["existing"] = lookup_existing(args.repo, combined["title"] or "")
+		combined["existing"] = lookup_existing(args.repo, lookup_title)
 	json.dump(combined, sys.stdout, indent=2, sort_keys=True)
 	sys.stdout.write("\n")
 	return 0
