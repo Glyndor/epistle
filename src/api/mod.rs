@@ -159,6 +159,10 @@ mod jmap_tests_principal;
 mod jmap_tests_principal_b;
 
 #[cfg(test)]
+#[path = "jmap_tests_principal_c.rs"]
+mod jmap_tests_principal_c;
+
+#[cfg(test)]
 #[path = "jmap_tests_limits.rs"]
 mod jmap_tests_limits;
 
