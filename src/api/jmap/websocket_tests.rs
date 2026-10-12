@@ -271,7 +271,7 @@ fn push_subscription_destroy_removes() {
 		&mut push,
 	));
 	assert_eq!(reply["methodResponses"][0][1]["destroyed"][0], id);
-	assert!(state.push_subscriptions().is_empty());
+	assert!(state.with_push_subscriptions(|store| store.is_empty()));
 }
 
 #[tokio::test]

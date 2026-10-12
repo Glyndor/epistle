@@ -69,8 +69,8 @@ struct Inner {
 	api_keys: std::sync::Arc<super::api_keys::ApiKeySet>,
 	/// Session-scoped PushSubscription objects (RFC 8620 §7.2). Held in memory:
 	/// real out-of-band delivery is out of scope, so these only need to round-trip
-	/// through `PushSubscription/get`/`set`. Keyed by subscription id.
-	push_subscriptions: std::sync::Mutex<Vec<serde_json::Value>>,
+	/// through `PushSubscription/get`/`set`. Each carries the caller that created it.
+	push_subscriptions: std::sync::Mutex<Vec<super::jmap::push_subscription::StoredSubscription>>,
 	/// At-rest crypto for stored message bodies and uploaded blobs.
 	crypto: MessageCrypto,
 	/// The built-in OAuth 2.0 authorization server, present only when a signing
@@ -571,21 +571,11 @@ impl ApiState {
 		&self.inner.data_dir
 	}
 
-	/// The current PushSubscription objects (RFC 8620 §7.2), cloned out for a
-	/// `PushSubscription/get`.
-	pub fn push_subscriptions(&self) -> Vec<serde_json::Value> {
-		self.inner
-			.push_subscriptions
-			.lock()
-			.unwrap_or_else(|p| p.into_inner())
-			.clone()
-	}
-
 	/// Run `f` against the mutable PushSubscription store, returning its result.
-	/// Used by `PushSubscription/set` to create and destroy subscriptions.
-	pub fn with_push_subscriptions<R>(
+	/// Used by `PushSubscription/get` and `/set`, which filter by caller.
+	pub(crate) fn with_push_subscriptions<R>(
 		&self,
-		f: impl FnOnce(&mut Vec<serde_json::Value>) -> R,
+		f: impl FnOnce(&mut Vec<super::jmap::push_subscription::StoredSubscription>) -> R,
 	) -> R {
 		let mut guard = self
 			.inner

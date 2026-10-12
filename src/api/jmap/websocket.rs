@@ -1,5 +1,4 @@
-//! JMAP over WebSocket (RFC 8887) and the PushSubscription objects (RFC 8620
-//! §7.2).
+//! JMAP over WebSocket (RFC 8887).
 //!
 //! `GET /jmap/ws` upgrades to a WebSocket carried under the same bearer auth as
 //! the rest of the API. Each text frame is a JMAP WebSocket message object
@@ -12,16 +11,23 @@
 //! - `WebSocketPushEnable` / `WebSocketPushDisable` — opt the connection in or
 //!   out of in-band push (RFC 8887 §5).
 //! - anything else, or an unparseable frame — answered with a `RequestError`
-//!   problem-details object (RFC 8887 §4.2); the connection is never dropped.
+//!   problem-details object (RFC 8887 §4.2); the connection is not dropped.
+//!
+//! The credential is checked again on every incoming frame, not only at the
+//! upgrade: a socket can stay open for hours, and a key revoked or expired,
+//! or an account disabled or removed, in the meantime must stop reaching the
+//! mailbox. Such a frame is answered with a `forbidden` `RequestError` and the
+//! socket is closed with 1008 (policy violation).
 //!
 //! When push is enabled, a `Request` whose dispatch changed an account's state
 //! is followed by a `StateChange` frame describing the new state. The push is
 //! **connection-scoped**: it is sent on the same socket to the client that made
 //! the change. Full cross-connection / out-of-band delivery — POSTing to the
 //! `url` of a `PushSubscription` — is OUT OF SCOPE here; the PushSubscription
-//! objects round-trip through get/set but nothing is delivered to them.
+//! objects (`push_subscription.rs`) round-trip through get/set but
+//! nothing is delivered to them.
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Extension, State};
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
@@ -44,11 +50,11 @@ pub async fn ws_upgrade(
 
 /// Per-connection loop: read text frames, answer each, and emit any in-band push
 /// frames. Binary frames are rejected with a `RequestError`; close/ping/pong are
-/// left to the transport.
+/// left to the transport. A text frame arriving after the credential stopped
+/// being valid is refused and ends the connection.
 async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
-	// Resolve the principal once when the connection opens; the WebSocket
-	// carries the same credential across every frame on the socket, so
-	// resolving it per frame would only repeat work.
+	// The principal the socket was opened as. Every frame is checked against
+	// it again, see `credential_still_valid`.
 	let principal = Principal::for_token(&state, &auth);
 	let mut push = PushState::default();
 	while let Some(Ok(message)) = socket.recv().await {
@@ -64,12 +70,66 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 			Message::Close(_) => return,
 			Message::Ping(_) | Message::Pong(_) => continue,
 		};
+		if !credential_still_valid(&state, &auth, &principal) {
+			let refusal = Message::Text(credential_refusal(&text).into());
+			if socket.send(refusal).await.is_ok() {
+				let close = CloseFrame {
+					code: close_code::POLICY,
+					reason: "credential no longer valid".into(),
+				};
+				socket.send(Message::Close(Some(close))).await.ok();
+			}
+			return;
+		}
 		for reply in handle_ws_message(&state, &principal, &text, &mut push) {
 			if socket.send(Message::Text(reply.into())).await.is_err() {
 				return;
 			}
 		}
 	}
+}
+
+/// Whether the credential that opened the socket still grants what it granted
+/// then. The key is looked up again the same way every HTTP request looks it
+/// up, so a key removed or expired since (or whose IP pin no longer matches)
+/// resolves to a different principal; so does one whose `account` or `domains`
+/// were edited, and the socket was opened for the old reach. A credential bound
+/// to one account also needs that account to still exist and not be disabled.
+///
+/// The configured static token is fixed for the life of the process, so it is
+/// not compared again: its hash may be a legacy argon2id one, and hashing on
+/// every frame is a cost a long-lived socket should not pay.
+fn credential_still_valid(state: &ApiState, auth: &MatchedAuth, opened_as: &Principal) -> bool {
+	if matches!(opened_as, Principal::Admin { credential: None }) {
+		return true;
+	}
+	if Principal::for_token(state, auth) != *opened_as {
+		return false;
+	}
+	match opened_as {
+		Principal::Account { name, .. } => {
+			!state.store().is_disabled(name)
+				&& state.accounts().iter().any(|account| &account.name == name)
+		}
+		_ => true,
+	}
+}
+
+/// The `RequestError` answering a frame that arrived after the credential
+/// stopped being valid, echoing the frame's `id` as `requestId` when it has one.
+fn credential_refusal(text: &str) -> String {
+	let mut error = request_error(
+		"forbidden",
+		"the credential for this connection is no longer valid",
+	);
+	error["status"] = json!(403);
+	if let Some(id) = serde_json::from_str::<Value>(text)
+		.ok()
+		.and_then(|frame| frame.get("id").and_then(Value::as_str).map(str::to_string))
+	{
+		error["requestId"] = json!(id);
+	}
+	error.to_string()
 }
 
 /// Whether the connection has opted into in-band push, and for which data types
@@ -225,113 +285,6 @@ fn request_error(kind: &str, detail: &str) -> Value {
 		"status": 400,
 		"detail": detail,
 	})
-}
-
-/// `PushSubscription/get` (RFC 8620 §7.2): session-scoped, so it takes no
-/// `accountId`. Returns the stored subscriptions, optionally filtered by `ids`.
-pub fn push_subscription_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
-	let wanted: Option<Vec<String>> = args.get("ids").and_then(Value::as_array).map(|ids| {
-		ids.iter()
-			.filter_map(|id| id.as_str().map(str::to_string))
-			.collect()
-	});
-	let all = state.push_subscriptions();
-	let list: Vec<Value> = all
-		.into_iter()
-		.filter(|sub| {
-			wanted.as_ref().is_none_or(|ids| {
-				sub.get("id")
-					.and_then(Value::as_str)
-					.is_some_and(|id| ids.iter().any(|w| w == id))
-			})
-		})
-		.collect();
-	json!(["PushSubscription/get", { "state": "0", "list": list, "notFound": [] }, call_id])
-}
-
-/// `PushSubscription/set` (RFC 8620 §7.2): create, update and destroy
-/// session-scoped subscriptions. Subscriptions are validated and echoed but no
-/// out-of-band delivery is performed (out of scope), so server-set fields are
-/// minimal: an id and the client's `verificationCode` echo are not sent.
-pub fn push_subscription_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
-	let mut created = serde_json::Map::new();
-	let mut not_created = serde_json::Map::new();
-	let mut updated = serde_json::Map::new();
-	let mut not_updated = serde_json::Map::new();
-	let mut destroyed = Vec::new();
-	let mut not_destroyed = serde_json::Map::new();
-
-	state.with_push_subscriptions(|store| {
-		if let Some(creates) = args.get("create").and_then(Value::as_object) {
-			for (key, props) in creates {
-				// A subscription must carry a delivery `url` (RFC 8620 §7.2).
-				if props
-					.get("url")
-					.and_then(Value::as_str)
-					.is_none_or(str::is_empty)
-				{
-					not_created.insert(
-						key.clone(),
-						json!({ "type": "invalidProperties", "properties": ["url"] }),
-					);
-					continue;
-				}
-				let id = uuid::Uuid::now_v7().to_string();
-				let mut object = props.clone();
-				if let Some(map) = object.as_object_mut() {
-					map.insert("id".to_string(), json!(id));
-					// We never verify or push, so report no pending keys.
-					map.entry("verificationCode").or_insert(Value::Null);
-				}
-				store.push(object);
-				created.insert(key.clone(), json!({ "id": id }));
-			}
-		}
-		if let Some(updates) = args.get("update").and_then(Value::as_object) {
-			for (id, patch) in updates {
-				match store
-					.iter_mut()
-					.find(|sub| sub.get("id").and_then(Value::as_str) == Some(id.as_str()))
-				{
-					Some(sub) => {
-						if let (Some(target), Some(patch)) =
-							(sub.as_object_mut(), patch.as_object())
-						{
-							for (k, v) in patch {
-								target.insert(k.clone(), v.clone());
-							}
-						}
-						updated.insert(id.clone(), Value::Null);
-					}
-					None => {
-						not_updated.insert(id.clone(), json!({ "type": "notFound" }));
-					}
-				}
-			}
-		}
-		if let Some(ids) = args.get("destroy").and_then(Value::as_array) {
-			for id in ids.iter().filter_map(Value::as_str) {
-				let before = store.len();
-				store.retain(|sub| sub.get("id").and_then(Value::as_str) != Some(id));
-				if store.len() < before {
-					destroyed.push(json!(id));
-				} else {
-					not_destroyed.insert(id.to_string(), json!({ "type": "notFound" }));
-				}
-			}
-		}
-	});
-
-	json!([
-		"PushSubscription/set",
-		{
-			"oldState": null, "newState": "0",
-			"created": created, "notCreated": not_created,
-			"updated": updated, "notUpdated": not_updated,
-			"destroyed": destroyed, "notDestroyed": not_destroyed,
-		},
-		call_id
-	])
 }
 
 #[cfg(test)]
