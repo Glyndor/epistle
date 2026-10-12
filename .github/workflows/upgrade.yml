@@ -1,0 +1,374 @@
+name: Upgrade
+
+# Proves a newer binary opens the data the previous release wrote. The job
+# downloads the latest published `epistle-<tag>-x86_64-linux` binary and its
+# `SHA256SUMS`, verifies the hash, starts the old binary with the same
+# `submissions` + `imaps` setup `e2e.yml` uses, creates the account, submits
+# a message, sets a flag and creates an app password, then stops it. It
+# builds this commit's binary, starts it on the same data and config, and
+# runs `tests/upgrade.rs` against it: the password still logs in, the
+# message and its flag are still there, the app password still
+# authenticates, and the new server's startup log has no `ERROR` line.
+#
+# Path filter on pull_request only. The job downloads, runs, rebuilds and
+# re-runs, so a PR that does not touch the relevant code, the upgrade test,
+# or the workflow does not pay for it. Push to
+# `develop` or `main` is a checkpoint, so the full run fires there
+# unconditionally.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "tests/upgrade.rs"
+      - ".github/workflows/upgrade.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: upgrade-survival
+    runs-on: ubuntu-22.04
+    env:
+      SQLX_OFFLINE: "true"
+      E2E_HOST: "127.0.0.1"
+      E2E_SERVER_NAME: "mail.epistle.test"
+      E2E_SUBMISSION_PORT: "4465"
+      E2E_IMAPS_PORT: "4993"
+      E2E_ACCOUNT: "tester@epistle.test"
+      DATA_DIR: "${{ github.workspace }}/upgrade-data"
+      CONF_DIR: "${{ github.workspace }}/upgrade-conf"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install toolchain
+        run: |
+          # Pinned to 1.98, the same compiler the build and release
+          # workflows use. A toolchain drift between the binary we
+          # download (built by 1.98.0) and the one we compile here
+          # (also 1.98) is the difference between an upgrade smoke
+          # test that proves something and one that proves the
+          # toolchain happens to agree.
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
+
+      - name: Resolve the latest published release tag
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # `gh release view --json tagName` reads the same field the
+          # release page renders. `head -1` guards against a future
+          # return shape that would put more than one tagName in the
+          # output. The tag is the source of truth for the asset
+          # names that follow (`epistle-<tag>-x86_64-linux`,
+          # `SHA256SUMS`), so a wrong tag here would download a
+          # binary that does not match the checksum file.
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q '.tagName' | head -1)
+          if [ -z "$tag" ]; then
+            echo "::error::no published release was found for $GITHUB_REPOSITORY"
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Latest release: ${tag}"
+
+      - name: Download the latest published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.latest.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Two assets, both pinned by name. `--clobber` so a
+          # re-run replaces the binary instead of refusing to.
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$RUNNER_TEMP/release" \
+            --clobber \
+            --pattern "epistle-${TAG}-x86_64-linux" \
+            --pattern "SHA256SUMS"
+          ls -la "$RUNNER_TEMP/release"
+
+      - name: Verify the binary against SHA256SUMS
+        run: |
+          set -euo pipefail
+          # `sha256sum -c --strict` reads the listed checksums
+          # and exits non-zero on a mismatch. The grep pulls the
+          # two lines that cover the assets we downloaded, so
+          # the check is unambiguous (the release also ships
+          # `.sig` and `.cdx.json` whose sums live in the same
+          # file, and `sha256sum -c` would refuse to verify a
+          # file it cannot find).
+          cd "$RUNNER_TEMP/release"
+          grep -E '(epistle-.*-x86_64-linux|^[[:xdigit:]]+ +\*?SHA256SUMS)' SHA256SUMS \
+            > sums.checked
+          sha256sum -c --strict sums.checked
+
+      - name: Install the previous binary
+        run: |
+          set -euo pipefail
+          install -m 0755 \
+            "$RUNNER_TEMP/release"/epistle-*-x86_64-linux \
+            "$RUNNER_TEMP/epistle-prev"
+          "$RUNNER_TEMP/epistle-prev" --version
+
+      - name: Generate password, certificate and DKIM key
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA_DIR" "$CONF_DIR"
+          password=$(openssl rand -hex 16)
+          echo "::add-mask::$password"
+          echo "E2E_PASSWORD=$password" >> "$GITHUB_ENV"
+          # CA:FALSE is required: the test's rustls client trusts
+          # this self-signed certificate as its sole root AND the
+          # server presents it as the leaf, and rustls rejects a
+          # CA-flagged certificate used as an end entity.
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$CONF_DIR/key.pem" -out "$CONF_DIR/cert.pem" \
+            -days 2 -subj "/CN=mail.epistle.test" \
+            -addext "subjectAltName=DNS:mail.epistle.test,IP:127.0.0.1" \
+            -addext "basicConstraints=critical,CA:FALSE"
+          echo "E2E_CA_PEM=$CONF_DIR/cert.pem" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/epistle-prev" dkim-keygen --out "$CONF_DIR/dkim.pem" >/dev/null
+
+      - name: Write config
+        run: |
+          set -euo pipefail
+          cat > "$CONF_DIR/epistle.toml" <<EOF
+          hostname = "mail.epistle.test"
+          data_dir = "$DATA_DIR"
+          domains = ["epistle.test"]
+
+          [tls]
+          cert_file = "$CONF_DIR/cert.pem"
+          key_file = "$CONF_DIR/key.pem"
+
+          [[listeners]]
+          kind = "submissions"
+          addr = "127.0.0.1"
+          port = $E2E_SUBMISSION_PORT
+
+          [[listeners]]
+          kind = "imaps"
+          addr = "127.0.0.1"
+          port = $E2E_IMAPS_PORT
+          EOF
+          chmod 600 "$CONF_DIR/epistle.toml"
+          "$RUNNER_TEMP/epistle-prev" config-check --config "$CONF_DIR/epistle.toml"
+
+      - name: Add the account on the previous binary
+        run: |
+          set -euo pipefail
+          printf '%s' "$E2E_PASSWORD" | "$RUNNER_TEMP/epistle-prev" account-add \
+            --config "$CONF_DIR/epistle.toml" \
+            --name tester --address "$E2E_ACCOUNT"
+
+      - name: Start the previous binary under systemd
+        run: |
+          set -euo pipefail
+          sudo systemd-run --unit=epistle-upgrade-prev --property=Type=simple \
+            --setenv=SQLX_OFFLINE=true \
+            "$RUNNER_TEMP/epistle-prev" serve --config "$CONF_DIR/epistle.toml"
+
+      - name: Wait for the previous binary's ports
+        run: |
+          set -euo pipefail
+          for port in "$E2E_SUBMISSION_PORT" "$E2E_IMAPS_PORT"; do
+            for _ in $(seq 1 60); do
+              if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+                exec 3>&- 3<&-
+                echo "port $port is up"
+                break
+              fi
+              sleep 1
+            done
+            if ! (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+              echo "port $port never came up"
+              sudo journalctl -u epistle-upgrade-prev --no-pager || true
+              exit 1
+            fi
+            exec 3>&- 3<&-
+          done
+
+      - name: Seed (submit a message and set a flag)
+        env:
+          MARKER: "upgrade-${{ github.run_id }}-${{ github.run_attempt }}"
+          E2E_PASSWORD: "${{ env.E2E_PASSWORD }}"
+          E2E_CA_PEM: "${{ env.E2E_CA_PEM }}"
+        run: |
+          set -euo pipefail
+          echo "MARKER=${MARKER}" >> "$GITHUB_ENV"
+          # The CA path and password are passed through env so they
+          # do not appear in the script body or in the runner log.
+          # The marker is a positional arg because it is a single
+          # value and is not a secret.
+          python3 - "$MARKER" <<'PYEOF'
+          import socket, ssl, base64, os, sys
+          account = "tester@epistle.test"
+          pw = os.environ["E2E_PASSWORD"]
+          ca = os.environ["E2E_CA_PEM"]
+          ctx = ssl.create_default_context()
+          ctx.load_verify_locations(cafile=ca)
+          ctx.check_hostname = False
+
+          # 1) Submit a message over the implicit-TLS submissions port.
+          s = ctx.wrap_socket(socket.socket(), server_hostname="mail.epistle.test")
+          s.connect(("127.0.0.1", 4465))
+          buf = b""
+          def rd(until):
+              global buf
+              while until not in buf:
+                  c = s.recv(4096)
+                  if not c: return buf
+                  buf += c
+              idx = buf.index(until) + len(until)
+              out = buf[:idx]
+              globals()["buf"] = buf[idx:]
+              return out
+          def wr(b): s.sendall(b.encode())
+          rd(b"OK\r\n")
+          wr("EHLO upgrade.client.test\r\n"); rd(b"250 \r\n")
+          plain = base64.b64encode(("\0" + account + "\0" + pw).encode()).decode()
+          wr("AUTH PLAIN " + plain + "\r\n"); rd(b"235 \r\n")
+          wr("MAIL FROM:<" + account + ">\r\n"); rd(b"250 \r\n")
+          wr("RCPT TO:<" + account + ">\r\n"); rd(b"250 \r\n")
+          wr("DATA\r\n"); rd(b"354 \r\n")
+          marker = sys.argv[1]
+          body = ("From: " + account + "\r\nTo: " + account
+                  + "\r\nSubject: " + marker + "\r\n\r\nbody " + marker + "\r\n.\r\n")
+          wr(body); rd(b"250 \r\n")
+          wr("QUIT\r\n"); rd(b"221 \r\n")
+          s.close()
+
+          # 2) Log in over IMAPS and STORE \\Flagged on the message.
+          s = ctx.wrap_socket(socket.socket(), server_hostname="mail.epistle.test")
+          s.connect(("127.0.0.1", 4993))
+          buf = b""
+          rd(b"OK\r\n")
+          wr("a1 LOGIN " + account + " " + pw + "\r\n"); rd(b"a1 OK\r\n")
+          wr("a2 SELECT INBOX\r\n"); rd(b"a2 OK\r\n")
+          wr("a3 STORE 1 +FLAGS (\\Flagged)\r\n"); rd(b"a3 OK\r\n")
+          wr("a4 FETCH 1 (FLAGS)\r\n"); rd(b"a4 OK\r\n")
+          wr("a5 LOGOUT\r\n"); rd(b"a5 OK\r\n")
+          s.close()
+          PYEOF
+          echo "marker seeded"
+
+      - name: Seed (create the app password on the previous binary)
+        env:
+          APP_OUT: "${{ env.CONF_DIR }}/app-password.txt"
+        run: |
+          set -euo pipefail
+          # The seed runs against the previous binary's CLI, so
+          # this is the app-password command of the published
+          # release. The flat command stays as an alias, so it
+          # keeps working across releases.
+          secret=$("$RUNNER_TEMP/epistle-prev" app-password-create \
+            --config "$CONF_DIR/epistle.toml" \
+            --account tester --label "upgrade-test" \
+            | awk '/^secret \(shown once\):/ {print $NF}')
+          if [ -z "$secret" ]; then
+            echo "::error::app-password-create did not print a secret"
+            exit 1
+          fi
+          echo "::add-mask::$secret"
+          printf '%s' "$secret" > "$APP_OUT"
+          chmod 600 "$APP_OUT"
+          echo "UPGRADE_APP_PASSWORD_FILE=$APP_OUT" >> "$GITHUB_ENV"
+
+      - name: Stop the previous binary
+        if: always()
+        run: sudo systemctl stop epistle-upgrade-prev || true
+
+      - name: Capture the previous binary's log
+        if: always()
+        run: |
+          set -euo pipefail
+          sudo journalctl -u epistle-upgrade-prev --no-pager 2>&1 \
+            | tee "$CONF_DIR/server-prev.log" > /dev/null || true
+
+      - name: Build the upgrade binary
+        run: cargo build --locked --release
+
+      - name: Replace the previous binary with this commit's
+        run: |
+          set -euo pipefail
+          install -m 0755 target/release/epistle "$RUNNER_TEMP/epistle-prev"
+          "$RUNNER_TEMP/epistle-prev" --version
+
+      - name: Start the new binary on the same data and config
+        run: |
+          set -euo pipefail
+          sudo systemd-run --unit=epistle-upgrade-new --property=Type=simple \
+            --setenv=SQLX_OFFLINE=true \
+            "$RUNNER_TEMP/epistle-prev" serve --config "$CONF_DIR/epistle.toml"
+
+      - name: Wait for the new binary's ports
+        run: |
+          set -euo pipefail
+          for port in "$E2E_SUBMISSION_PORT" "$E2E_IMAPS_PORT"; do
+            for _ in $(seq 1 60); do
+              if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+                exec 3>&- 3<&-
+                echo "port $port is up"
+                break
+              fi
+              sleep 1
+            done
+            if ! (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+              echo "port $port never came up"
+              sudo journalctl -u epistle-upgrade-new --no-pager || true
+              exit 1
+            fi
+            exec 3>&- 3<&-
+          done
+
+      - name: Run the upgrade-survival test
+        env:
+          UPGRADE_HOST: ${{ env.E2E_HOST }}
+          UPGRADE_SERVER_NAME: ${{ env.E2E_SERVER_NAME }}
+          UPGRADE_IMAPS_PORT: ${{ env.E2E_IMAPS_PORT }}
+          UPGRADE_ACCOUNT: ${{ env.E2E_ACCOUNT }}
+          UPGRADE_PASSWORD: ${{ env.E2E_PASSWORD }}
+          UPGRADE_APP_PASSWORD_FILE: ${{ env.UPGRADE_APP_PASSWORD_FILE }}
+          UPGRADE_CA_PEM: ${{ env.E2E_CA_PEM }}
+          UPGRADE_MARKER: ${{ env.MARKER }}
+          UPGRADE_SERVER_LOG: ${{ env.CONF_DIR }}/server-new.log
+        run: |
+          set -euo pipefail
+          # The app password is read from a file so the secret
+          # never appears in the runner log: the env var only
+          # names the path.
+          UPGRADE_APP_PASSWORD=$(cat "$UPGRADE_APP_PASSWORD_FILE")
+          export UPGRADE_APP_PASSWORD
+          # Build the test first so the journal snapshot below holds
+          # the whole startup of the new binary, then hand it over.
+          cargo test --locked --test upgrade --no-run
+          sudo journalctl -u epistle-upgrade-new --no-pager 2>&1 \
+            | tee "$UPGRADE_SERVER_LOG" > /dev/null
+          cargo test --locked --test upgrade -- --ignored
+
+      - name: Capture the new binary's log
+        if: always()
+        run: |
+          set -euo pipefail
+          sudo journalctl -u epistle-upgrade-new --no-pager 2>&1 \
+            | tee "$CONF_DIR/server-new.log" > /dev/null || true
+
+      - name: Stop the new binary
+        if: always()
+        run: sudo systemctl stop epistle-upgrade-new || true
+
+      - name: Upload the new server log
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: epistle-upgrade-log
+          path: ${{ env.CONF_DIR }}/server-new.log
+          if-no-files-found: ignore
