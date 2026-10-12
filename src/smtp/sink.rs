@@ -8,6 +8,16 @@ pub trait MessageSink: Send + Sync {
 	/// Persist an accepted message. Returning an error makes the server
 	/// answer with a transient failure so the client retries later.
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError>;
+
+	/// [`MessageSink::deliver`], with the outbound queue entry (if the
+	/// message leaves the server) stored under `queue_id`, so the submitter
+	/// can hand that id back to its client. A sink that never queues has
+	/// nothing to name and delivers as usual; a sink that queues overrides
+	/// this.
+	fn submit(&self, message: AcceptedMessage, queue_id: uuid::Uuid) -> Result<(), SinkError> {
+		let _ = queue_id;
+		self.deliver(message)
+	}
 }
 
 /// Why a delivery could not be accepted.

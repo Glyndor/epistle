@@ -337,7 +337,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_blob_backend(blob_backend)
 				.with_tenant_limits(Arc::clone(&tenant_limits))
 				.with_correspondents((*correspondents).clone())
-				.with_new_recipients_per_day(daily_new_recipients);
+				.with_new_recipients_per_day(daily_new_recipients)
+				.with_outbound(Arc::clone(&sink));
 				if let Some((store, queue)) = &bayes {
 					state = state
 						.with_training(queue.clone())

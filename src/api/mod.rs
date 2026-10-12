@@ -199,6 +199,10 @@ mod jmap_tests_ws_revoke;
 mod send_tests_principal;
 
 #[cfg(test)]
+#[path = "send_tests_outbound.rs"]
+mod send_tests_outbound;
+
+#[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 

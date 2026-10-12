@@ -1,5 +1,5 @@
 //! `POST /api/v1/send`: transactional outbound submission. Builds a minimal
-//! RFC 5322 text message from JSON and enqueues it on the outbound spool.
+//! RFC 5322 text message from JSON and submits it like SMTP submission does.
 
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -169,10 +169,9 @@ pub async fn send(
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
-	let id = state
-		.spool()
-		.store(&message)
-		.map_err(|_| ApiError::internal())?;
+	// The same outbound path as SMTP submission: DKIM for remote mail,
+	// local recipients straight to their mailboxes.
+	let id = state.submit(message).map_err(|_| ApiError::internal())?;
 	Ok(Json(Queued {
 		queued: id.to_string(),
 	}))

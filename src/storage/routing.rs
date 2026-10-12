@@ -210,6 +210,12 @@ impl SplitDelivery {
 
 impl MessageSink for SplitDelivery {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
+		self.submit(message, uuid::Uuid::now_v7())
+	}
+
+	/// Route `message`: local recipients to their mailboxes, the rest to the
+	/// outbound spool under `queue_id`, DKIM-signed when a signer is set.
+	fn submit(&self, message: AcceptedMessage, queue_id: uuid::Uuid) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
 		let mut srs_returns = Vec::new();
@@ -361,7 +367,7 @@ impl MessageSink for SplitDelivery {
 				outbound_message.data = signed;
 			}
 			self.outbound
-				.store(&outbound_message)
+				.store_as(&outbound_message, queue_id)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		Ok(())

@@ -46,7 +46,8 @@ pub(super) fn email_submission_set(
 	])
 }
 
-/// Queue one submission: read its email, build the envelope, spool it.
+/// Submit one email: read it, build the envelope, route it like SMTP
+/// submission (DKIM for remote mail, local recipients to their mailboxes).
 fn submit_email(
 	state: &ApiState,
 	account: &str,
@@ -155,8 +156,7 @@ fn submit_email(
 		no_dsn: Vec::new(),
 	};
 	state
-		.spool()
-		.store(&message)
+		.submit(message)
 		.map(|id| id.to_string())
 		.map_err(|_| "serverFail")
 }

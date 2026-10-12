@@ -105,6 +105,9 @@ struct Inner {
 	/// store, both `None` without a database. Builders and accessors
 	/// live in `state_bayes.rs`.
 	bayes: bayes::BayesBindings,
+	/// The outbound path SMTP submission uses (routing, DKIM, local
+	/// delivery); `None` sends straight to `spool`. See `state_outbound.rs`.
+	outbound: Option<Arc<dyn crate::smtp::sink::MessageSink>>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -240,6 +243,7 @@ impl ApiState {
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
 				bayes: bayes::BayesBindings::default(),
+				outbound: None,
 			}),
 		}
 	}
@@ -720,6 +724,9 @@ mod auth;
 
 #[path = "state_bayes.rs"]
 mod bayes;
+
+#[path = "state_outbound.rs"]
+mod outbound;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]
