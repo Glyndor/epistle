@@ -31,3 +31,20 @@ pub(crate) fn check_mail_from(
 		Err(MailFromRefusal::NotOwned)
 	}
 }
+
+/// Whether `account` may send `message` as its author: exactly one From
+/// field naming exactly one address the account owns, the rule SMTP
+/// submission applies at the end of DATA. The From header is what the
+/// DKIM signature covers and what DMARC judges, so owning the envelope
+/// sender alone is not enough.
+pub(crate) fn owns_author(state: &ApiState, account: &str, message: &[u8]) -> bool {
+	match crate::dmarc::author::author(message) {
+		crate::dmarc::author::Author::Addresses(addresses) => match addresses.as_slice() {
+			[address] => {
+				Address::parse(address).is_ok_and(|parsed| state.owns_address(account, &parsed))
+			}
+			_ => false,
+		},
+		_ => false,
+	}
+}

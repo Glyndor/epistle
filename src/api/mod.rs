@@ -139,6 +139,10 @@ mod masked_tests;
 mod jmap_tests;
 
 #[cfg(test)]
+#[path = "jmap_tests_author.rs"]
+mod jmap_tests_author;
+
+#[cfg(test)]
 #[path = "jmap_tests_b.rs"]
 mod jmap_tests_b;
 

@@ -95,6 +95,11 @@ fn submit_email(
 			crate::api::mail_from::MailFromRefusal::NotOwned => "forbiddenFrom",
 		}
 	})?;
+	// The same rule for the message itself: its single From must be an
+	// address the account owns (RFC 8621 section 7.5.2, `forbiddenFrom`).
+	if !crate::api::mail_from::owns_author(state, account, &raw) {
+		return Err("forbiddenFrom");
+	}
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
