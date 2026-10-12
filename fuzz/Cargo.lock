@@ -658,6 +658,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "flate2",
+ "futures-core",
  "hickory-resolver",
  "hyper",
  "hyper-util",

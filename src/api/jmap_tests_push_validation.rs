@@ -43,8 +43,11 @@ async fn a_delivery_url_that_is_not_https_is_refused() {
 		reply[1]["notUpdated"][&id]["type"], "invalidProperties",
 		"{reply}"
 	);
+	// `get` never returns `url` (RFC 8620 §7.2.1); the subscription is still
+	// there, unchanged in what it does return.
 	let got = call(&app, ANN, "PushSubscription/get", json!({ "ids": [id] })).await;
-	assert_eq!(got[1]["list"][0]["url"], "https://push.example/p");
+	assert_eq!(got[1]["list"][0]["deviceClientId"], "d", "{got}");
+	assert!(got[1]["list"][0].get("url").is_none(), "{got}");
 }
 
 #[tokio::test]

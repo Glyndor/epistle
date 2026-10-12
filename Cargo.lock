@@ -752,6 +752,7 @@ dependencies = [
  "clap",
  "criterion",
  "flate2",
+ "futures-core",
  "hickory-resolver",
  "hyper",
  "hyper-util",

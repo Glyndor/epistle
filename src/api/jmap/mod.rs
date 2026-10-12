@@ -33,6 +33,7 @@ mod blobs;
 mod dispatcher;
 mod download;
 mod email;
+pub mod event_source;
 pub use download::download;
 mod email_submission;
 mod limits;
@@ -136,7 +137,8 @@ pub async fn session(
 		"apiUrl": "/jmap/api",
 		"downloadUrl": "/jmap/download/{accountId}/{blobId}/{name}",
 		"uploadUrl": "/jmap/upload/{accountId}",
-		"eventSourceUrl": "/jmap/eventsource",
+		// RFC 8620 §7.3: a URI Template carrying the three variables.
+		"eventSourceUrl": "/jmap/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
 		"state": "0",
 	}))
 }
@@ -228,41 +230,31 @@ pub fn dispatch_request(
 				continue;
 			}
 		};
-		// Scope tightening: the middleware infers `Read` for any `POST
-		// /jmap/api`, but mutating methods need `Write` (or `Send` for
-		// outbound submission). A read-only key hitting the dispatcher would
-		// otherwise reach `Mailbox/set`, `EmailSubmission/set`, etc. Scope
-		// checks are run against the resolved principal so handlers do not
-		// re-look-up the bearer.
+		// Scope tightening: the middleware lets any scoped key through to
+		// `POST /jmap/api`, so each method call is checked here against the
+		// scope it needs ([`required_scope`]). Scopes are independent: a key
+		// issued only to write or only to send does not read the mailbox, and
+		// a read-only key does not reach `Mailbox/set`,
+		// `EmailSubmission/set`, etc. The check runs against the resolved
+		// principal so handlers do not re-look-up the bearer.
+		if let Some(scope) = required_scope(&name)
+			&& state.require_scope_for_principal(principal, scope).is_err()
+		{
+			let response = jmap_scope_error(&call_id);
+			resolver.record_result(&response);
+			method_responses.push(response);
+			continue;
+		}
 		let response = match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
-			"Mailbox/set" => match state.require_scope_for_principal(principal, Scope::Write) {
-				Ok(()) => methods::mailbox_set(state, principal, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"Email/set" => match state.require_scope_for_principal(principal, Scope::Write) {
-				Ok(()) => email::email_set(state, principal, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"Email/copy" => match state.require_scope_for_principal(principal, Scope::Write) {
-				Ok(()) => email::email_copy(state, principal, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
+			"Mailbox/set" => methods::mailbox_set(state, principal, &args, &call_id),
+			"Email/set" => email::email_set(state, principal, &args, &call_id),
+			"Email/copy" => email::email_copy(state, principal, &args, &call_id),
 			"EmailSubmission/set" => {
-				match state.require_scope_for_principal(principal, Scope::Send) {
-					Ok(()) => {
-						email_submission::email_submission_set(state, principal, &args, &call_id)
-					}
-					Err(_) => jmap_scope_error(&call_id),
-				}
+				email_submission::email_submission_set(state, principal, &args, &call_id)
 			}
-			"PushSubscription/set" => {
-				match state.require_scope_for_principal(principal, Scope::Write) {
-					Ok(()) => push_subscription::set(state, principal, &args, &call_id),
-					Err(_) => jmap_scope_error(&call_id),
-				}
-			}
+			"PushSubscription/set" => push_subscription::set(state, principal, &args, &call_id),
 			"Mailbox/get" => methods::mailbox_get(state, principal, &args, &call_id),
 			"Mailbox/query" => methods::mailbox_query(state, principal, &args, &call_id),
 			"Email/query" => methods::email_query(state, principal, &args, &call_id),
@@ -285,6 +277,31 @@ pub fn dispatch_request(
 		method_responses.push(response);
 	}
 	Ok(Response { method_responses })
+}
+
+/// The scope a method call needs: `Write` to change stored data or push
+/// subscriptions, `Send` to submit mail, `Read` for everything that returns
+/// account data. `None` for `Core/echo`, which touches nothing, and for a
+/// method this server does not know, which is answered `unknownMethod`.
+fn required_scope(method: &str) -> Option<Scope> {
+	match method {
+		"Mailbox/set" | "Email/set" | "Email/copy" | "PushSubscription/set" => Some(Scope::Write),
+		"EmailSubmission/set" => Some(Scope::Send),
+		"Mailbox/get"
+		| "Mailbox/query"
+		| "Mailbox/changes"
+		| "Mailbox/queryChanges"
+		| "Email/get"
+		| "Email/query"
+		| "Email/changes"
+		| "Email/queryChanges"
+		| "Thread/get"
+		| "Thread/changes"
+		| "Identity/get"
+		| "Quota/get"
+		| "PushSubscription/get" => Some(Scope::Read),
+		_ => None,
+	}
 }
 
 /// The JMAP spec does not define a "forbidden" method error; `forbidden` is
