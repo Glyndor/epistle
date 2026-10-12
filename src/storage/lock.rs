@@ -64,7 +64,7 @@ pub(crate) fn open_lock_file(path: &Path) -> std::io::Result<File> {
 
 /// An exclusive advisory lock on a sibling file. The lock is released
 /// when the guard drops (closing the `File` lets the kernel release the
-/// `flock(2)` lock — `LOCK_UN` is fire-and-forget and not required).
+/// `flock(2)` lock; `LOCK_UN` is fire-and-forget and not required).
 pub struct FileLock {
 	file: File,
 }

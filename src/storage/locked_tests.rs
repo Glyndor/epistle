@@ -52,7 +52,7 @@ fn edit_applies_to_missing_file_and_persists() {
 
 /// Edit re-reads the file from disk before applying the closure. A
 /// mutation written between two consecutive edits is preserved across
-/// the second one — this is the property that defeats lost updates.
+/// the second one; this is the property that defeats lost updates.
 #[test]
 fn edit_reflects_a_writers_update_between_calls() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -83,7 +83,7 @@ fn edit_reflects_a_writers_update_between_calls() {
 }
 
 /// A mutation whose closure returns `Err` does not write the file or
-/// release the lock prematurely — the file's mtime stays identical
+/// release the lock prematurely; the file's mtime stays identical
 /// after the rejection, and the next caller still reads the previous
 /// on-disk content.
 #[test]

@@ -11,7 +11,7 @@
 //! fresh state to the closure, writes the result atomically through
 //! [`crate::storage::write_secret`], and returns the post-write state.
 //! The caller's in-memory mirror is refreshed by replacing it with the
-//! returned value — that is what makes a sibling process's write visible
+//! returned value; that is what makes a sibling process's write visible
 //! without a server restart.
 //!
 //! Readers do not need the lock: atomic renames mean an in-flight

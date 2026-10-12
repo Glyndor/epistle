@@ -9,7 +9,7 @@
 //! API-key) handles on the same data directory, add a different row
 //! through each, and confirm both rows reach the on-disk file after
 //! the writes. The handles live in the same process, so they exercise
-//! the "re-read under the lock" half of the contract — the cross-process
+//! the "re-read under the lock" half of the contract; the cross-process
 //! half rests on the lock primitive whose own tests are in
 //! [`crate::storage::lock_tests`].
 
