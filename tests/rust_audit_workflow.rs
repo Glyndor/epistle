@@ -255,8 +255,8 @@ fn matches_ref(block: &str, ref_name: &str) -> bool {
 			if child_indent <= parent_indent {
 				break;
 			}
-			if child_trimmed.starts_with("- ") {
-				let value = child_trimmed[2..].trim();
+			if let Some(stripped) = child_trimmed.strip_prefix("- ") {
+				let value = stripped.trim();
 				if value == ref_name {
 					return true;
 				}
