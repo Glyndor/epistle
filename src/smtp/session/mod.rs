@@ -561,6 +561,10 @@ impl Session {
 mod tests_basic;
 
 #[cfg(test)]
+#[path = "../session_tests_enhanced.rs"]
+mod tests_enhanced;
+
+#[cfg(test)]
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
 

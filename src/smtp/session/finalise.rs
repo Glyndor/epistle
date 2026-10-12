@@ -24,7 +24,7 @@ use super::{Action, MAX_MESSAGE_SIZE, Reply, Session, cap};
 pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: usize) -> Action {
 	session.state = State::Greeted;
 	if running_size > MAX_MESSAGE_SIZE {
-		return Action::Continue(Reply::single(552, "message exceeds maximum size"));
+		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
 	}
 	if let Some(reply) = cap::check_or_reply(
 		session.authenticated.as_deref(),
