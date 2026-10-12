@@ -34,7 +34,9 @@ permissions:
 jobs:
   upgrade:
     name: upgrade-survival
-    runs-on: ubuntu-22.04
+    # The published binary links against glibc 2.39; 22.04 ships 2.35
+    # and cannot start it.
+    runs-on: ubuntu-24.04
     env:
       SQLX_OFFLINE: "true"
       E2E_HOST: "127.0.0.1"
