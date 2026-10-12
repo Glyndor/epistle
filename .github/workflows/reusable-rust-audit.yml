@@ -60,7 +60,9 @@ concurrency:
 
 jobs:
   audit:
-    name: cargo audit (${{ inputs.ref }})
+    # On a pull request the ref is empty and the name stays `cargo audit`,
+    # the check name branch rules and the release PR already know.
+    name: cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -162,7 +164,7 @@ jobs:
           done
 
   deny:
-    name: cargo deny (${{ inputs.ref }})
+    name: cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
     defaults:
       run:
