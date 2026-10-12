@@ -12,6 +12,7 @@ mod assistant;
 mod compose;
 mod detect;
 mod plan;
+mod ptr;
 
 pub use answers::Answers;
 pub use compose::compose_file_path;
@@ -49,16 +50,26 @@ const EXIT_INVALID: u8 = 2;
 /// fills the same `Answers` structure the file deserialises. Every
 /// question validates through the same rule.
 pub fn run(args: Args) -> ExitCode {
-	run_with(
-		args,
-		&detect::LiveDetector,
-		&mut crate::cli::style::stderr(),
-	)
+	let probes = Probes {
+		detector: &detect::LiveDetector,
+		resolver: &ptr::system_resolver,
+	};
+	run_with(args, &probes, &mut crate::cli::style::stderr())
 }
 
-/// [`run`] with the address detector and the stream for its notices
-/// injected, so the tests never walk a real interface list.
-fn run_with(args: Args, detector: &dyn detect::Detector, out: &mut dyn Write) -> ExitCode {
+/// What `init` reads from the host and the network without changing
+/// either: the interface list and the resolver behind the PTR block.
+/// Injected so the tests use a scripted detector and the fake resolver.
+struct Probes<'a> {
+	detector: &'a dyn detect::Detector,
+	/// Built only when there is an address to look up.
+	resolver: &'a dyn Fn() -> Option<Box<dyn crate::spf::DnsLookup>>,
+}
+
+/// [`run`] with the probes and the stream for the detection notices and
+/// the PTR block injected.
+fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
+	let detector = probes.detector;
 	if args.print_answers {
 		println!("{}", Answers::template());
 		return ExitCode::from(EXIT_OK);
@@ -105,8 +116,8 @@ fn run_with(args: Args, detector: &dyn detect::Detector, out: &mut dyn Write) ->
 	};
 	render_plan(&plan);
 	if args.dry_run {
-		let mut out = crate::cli::style::stderr();
 		let _ = writeln!(out, "dry-run: nothing was written");
+		report_ptr(&answers, probes, out);
 		return ExitCode::from(EXIT_OK);
 	}
 	if args.answers.is_none() && !confirm(std::io::stdin().lock(), crate::cli::style::stderr()) {
@@ -119,7 +130,10 @@ fn run_with(args: Args, detector: &dyn detect::Detector, out: &mut dyn Write) ->
 		render_report(&outcome.report);
 	}
 	match outcome.error {
-		None => ExitCode::from(EXIT_OK),
+		None => {
+			report_ptr(&answers, probes, out);
+			ExitCode::from(EXIT_OK)
+		}
 		Some(error) => {
 			crate::cli::style::error(error);
 			ExitCode::from(EXIT_PARTIAL)
@@ -153,6 +167,25 @@ fn confirm<R: std::io::BufRead>(reader: R, out: impl std::io::Write) -> bool {
 	let mut reader = reader;
 	let mut out = out;
 	assistant::confirm(&mut reader, &mut out).unwrap_or(false)
+}
+
+/// The reverse-DNS block for the addresses that ended up in `answers`,
+/// typed, read from the file or detected. Informational only: the caller
+/// returns the same exit code whatever it says, and without an address
+/// there is no block and no resolver is built.
+fn report_ptr(answers: &Answers, probes: &Probes, out: &mut dyn Write) {
+	let addresses: Vec<std::net::IpAddr> = [
+		answers.public_ipv4.map(std::net::IpAddr::V4),
+		answers.public_ipv6.map(std::net::IpAddr::V6),
+	]
+	.into_iter()
+	.flatten()
+	.collect();
+	if addresses.is_empty() {
+		return;
+	}
+	let resolver = (probes.resolver)();
+	ptr::render(&answers.hostname, &addresses, resolver.as_deref(), out);
 }
 
 fn render_warnings(warnings: &[Warning]) {
@@ -207,3 +240,7 @@ mod tests_parse_privacy;
 #[cfg(test)]
 #[path = "init_detect_tests.rs"]
 mod tests_detect;
+
+#[cfg(test)]
+#[path = "init_ptr_tests.rs"]
+mod tests_ptr;

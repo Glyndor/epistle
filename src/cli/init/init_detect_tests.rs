@@ -3,9 +3,18 @@
 use super::detect::tests::{MustNotDetect, Scripted, v4};
 use super::*;
 
+/// Probes with `detector` and no resolver, so the PTR block reports
+/// every lookup as failed without touching the network.
+fn no_lookups(detector: &dyn super::detect::Detector) -> Probes<'_> {
+	Probes {
+		detector,
+		resolver: &|| None,
+	}
+}
+
 /// A dry-run answers file under a fresh tempdir, with `extra` appended to
 /// the top-level keys.
-fn dry_run_args(dir: &std::path::Path, extra: &str) -> Args {
+pub(super) fn dry_run_args(dir: &std::path::Path, extra: &str) -> Args {
 	let answers_file = dir.join("answers.toml");
 	let body = format!(
 		"mode = \"manual\"\n\
@@ -33,7 +42,11 @@ fn answers_without_an_address_take_the_detected_one() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let detector = Scripted::found(Some(v4()), None);
 	let mut out = Vec::new();
-	let code = run_with(dry_run_args(dir.path(), ""), &detector, &mut out);
+	let code = run_with(
+		dry_run_args(dir.path(), ""),
+		&no_lookups(&detector),
+		&mut out,
+	);
 	assert_eq!(code, ExitCode::from(EXIT_OK));
 	assert_eq!(detector.calls.get(), 1);
 	let text = String::from_utf8(out).expect("utf-8");
@@ -48,7 +61,11 @@ fn answers_with_both_addresses_never_call_the_detector() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let extra = "public_ipv4 = \"1.1.1.1\"\npublic_ipv6 = \"2606:4700::1111\"\n";
 	let mut out = Vec::new();
-	let code = run_with(dry_run_args(dir.path(), extra), &MustNotDetect, &mut out);
+	let code = run_with(
+		dry_run_args(dir.path(), extra),
+		&no_lookups(&MustNotDetect),
+		&mut out,
+	);
 	assert_eq!(code, ExitCode::from(EXIT_OK));
 	let text = String::from_utf8(out).expect("utf-8");
 	assert!(
