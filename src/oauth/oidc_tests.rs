@@ -206,39 +206,52 @@ fn is_internal_classifies_address_ranges() {
 }
 
 /// The four scenarios the rule was written for, expressed against the pure
-/// decision so the tests do not depend on DNS resolving.
+/// decision so the tests do not depend on DNS resolving. Third argument is
+/// `allow_private_jwks`; the closed-by-default tests assert the rule's
+/// default behaviour (refuse on private without opt-in, accept on the
+/// self-pivot edge case for a legitimate internal IdP, accept when the
+/// opt-in is set).
 #[test]
-fn jwks_ips_allowed_matches_the_rule() {
+fn jwks_uri_allowed_matches_the_rule() {
 	use std::net::Ipv4Addr;
 
 	let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
 	let private = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 	let cloud_meta = IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254));
 
-	// jwks_uri publico: pasa. Discovery content is irrelevant when no jwks IP
-	// is internal, so pass an empty discovery set to prove it.
-	assert!(jwks_ips_allowed(&[public], &[]));
-	assert!(jwks_ips_allowed(&[public, public], &[private]));
+	// jwks_uri public: passes with or without the opt-in. Discovery content is
+	// irrelevant when no jwks IP is internal, so pass an empty discovery set to
+	// prove it.
+	assert!(jwks_uri_allowed(&[public], &[], false));
+	assert!(jwks_uri_allowed(&[public], &[], true));
+	assert!(jwks_uri_allowed(&[public, public], &[private], false));
 
-	// jwks_uri en rango privado y discovery_url publico: rechazado.
-	assert!(!jwks_ips_allowed(&[private], &[public]));
-	assert!(!jwks_ips_allowed(&[cloud_meta], &[public]));
+	// jwks_uri private, discovery public, opt-in off: rejected. This is the
+	// pivot the rule was written for.
+	assert!(!jwks_uri_allowed(&[private], &[public], false));
+	assert!(!jwks_uri_allowed(&[cloud_meta], &[public], false));
 
-	// jwks_uri y discovery_url en el mismo host privado: pasa. This is the
-	// legitimate internal-IdP case the rule preserves.
-	assert!(jwks_ips_allowed(&[private], &[private]));
-	assert!(jwks_ips_allowed(&[private, public], &[private, public]));
+	// jwks_uri and discovery_url on the same private host: passes under the
+	// legacy self-pivot shortcut when the operator has not opted in. This is
+	// the legitimate internal IdP case the rule preserves.
+	assert!(jwks_uri_allowed(&[private], &[private], false));
+	assert!(jwks_uri_allowed(
+		&[private, public],
+		&[private, public],
+		false
+	));
 
-	// Mix: at least one internal jwks IP must overlap with a discovery IP, but
-	// the public ones can be ignored.
-	assert!(!jwks_ips_allowed(&[private, public], &[public]));
-	assert!(jwks_ips_allowed(&[private, public], &[private]));
+	// With allow_private_jwks = true, every private set passes regardless of
+	// overlap. The opt-in is the gate; the network does not second-guess.
+	assert!(jwks_uri_allowed(&[private], &[public], true));
+	assert!(jwks_uri_allowed(&[cloud_meta], &[public], true));
+	assert!(jwks_uri_allowed(&[private, public], &[public], true));
 }
 
 /// IPv4-mapped IPv6 to a private range is rejected even when the discovery
 /// host is purely public — the mapped form is unwrapped before the check.
 #[test]
-fn jwks_ips_allowed_rejects_ipv4_mapped_ipv6_to_private() {
+fn jwks_uri_allowed_rejects_ipv4_mapped_ipv6_to_private() {
 	use std::net::{Ipv4Addr, Ipv6Addr};
 
 	let mapped_private = IpAddr::V6("::ffff:10.0.0.1".parse::<Ipv6Addr>().unwrap());
@@ -246,21 +259,29 @@ fn jwks_ips_allowed_rejects_ipv4_mapped_ipv6_to_private() {
 	let discovery_with_mapped_public = IpAddr::V6("::ffff:8.8.8.8".parse::<Ipv6Addr>().unwrap());
 
 	// The mapped form is detected as internal and does not overlap with the
-	// pure-v4 public discovery address.
-	assert!(!jwks_ips_allowed(&[mapped_private], &[public]));
-	// A mapped-private jwks is allowed only when the discovery set also
+	// pure-v4 public discovery address, so the default policy refuses it.
+	assert!(!jwks_uri_allowed(&[mapped_private], &[public], false));
+	// A mapped-private jwks self-pivots only when the discovery set also
 	// contains that exact mapped address — not just any v4 from the same
 	// range.
-	assert!(jwks_ips_allowed(&[mapped_private], &[mapped_private]));
-	assert!(!jwks_ips_allowed(
+	assert!(jwks_uri_allowed(
 		&[mapped_private],
-		&[discovery_with_mapped_public]
+		&[mapped_private],
+		false
 	));
+	assert!(!jwks_uri_allowed(
+		&[mapped_private],
+		&[discovery_with_mapped_public],
+		false
+	));
+	// With the opt-in set, the self-pivot check is bypassed entirely.
+	assert!(jwks_uri_allowed(&[mapped_private], &[public], true));
 }
 
 /// The error variant carries the resolved internal address(es) in its
 /// Display, so an operator reading a startup log sees what the IdP tried to
-/// pivot to.
+/// pivot to. The message names the rule so an operator who never set the
+/// opt-in still understands why a fresh deployment refused to start.
 #[test]
 fn jwks_uri_off_scope_error_mentions_the_resolved_address() {
 	let err = OidcError::JwksUriOffScope("169.254.169.254".to_string());
@@ -276,12 +297,152 @@ fn jwks_uri_off_scope_error_mentions_the_resolved_address() {
 }
 
 #[test]
-fn jwks_ips_allowed_rejects_a_set_mixing_the_discovery_host_with_another_internal_address() {
+fn jwks_uri_allowed_rejects_a_set_mixing_the_discovery_host_with_another_internal_address() {
 	use std::net::{IpAddr, Ipv4Addr};
 	let lan: IpAddr = Ipv4Addr::new(192, 168, 1, 5).into();
 	let metadata: IpAddr = Ipv4Addr::new(169, 254, 169, 254).into();
 	assert!(
-		!super::jwks_ips_allowed(&[lan, metadata], &[lan]),
+		!super::jwks_uri_allowed(&[lan, metadata], &[lan], false),
 		"a jwks set containing an internal address the discovery host does not have must be rejected"
 	);
+	// With the opt-in set, every internal address is admitted even if it is
+	// unrelated to the discovery host.
+	assert!(super::jwks_uri_allowed(&[lan, metadata], &[lan], true));
+}
+
+/// `ensure_jwks_uri_in_scope` is the integration of the pure policy above
+/// with DNS resolution. Tests pin the resolution with a stub [`NameResolver`]
+/// so the screen can be exercised without a real DNS lookup.
+#[cfg(test)]
+mod screen_with_resolver_stub {
+	use std::collections::HashMap;
+	use std::net::{IpAddr, Ipv4Addr};
+	use std::sync::{Arc, Mutex};
+
+	use crate::net::HttpsUrl;
+
+	use super::{NameResolver, OidcError};
+
+	/// Hand a hand-rolled map from host name to addresses; missing entries
+	/// are reported as a network error so a typo in the JWKS host also
+	/// surfaces here without needing a real DNS server.
+	#[derive(Default)]
+	struct StubResolver {
+		by_host: HashMap<String, Vec<IpAddr>>,
+	}
+
+	impl NameResolver for StubResolver {
+		fn lookup(&self, name: &str) -> Result<Vec<IpAddr>, OidcError> {
+			match self.by_host.get(name) {
+				Some(addrs) => Ok(addrs.clone()),
+				None => Err(OidcError::Network(format!("DNS resolution for {name}"))),
+			}
+		}
+	}
+
+	fn https_url(host: &str) -> HttpsUrl {
+		crate::net::HttpsUrl::parse(&format!("https://{host}/.well-known/openid-configuration"))
+			.expect("https URL")
+	}
+
+	#[tokio::test]
+	async fn private_jwks_uri_is_refused_without_opt_in() {
+		// Discovery host resolves to a public address, JWKS host resolves
+		// to a private one. Without the opt-in, the screen rejects.
+		let mut stub = StubResolver::default();
+		stub.by_host.insert(
+			"idp.example".to_string(),
+			vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		stub.by_host.insert(
+			"jwks.idp.example".to_string(),
+			vec!["10.0.0.5".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		let resolver = Arc::new(stub);
+
+		let discovery = https_url("idp.example");
+		let jwks_uri = crate::net::HttpsUrl::parse("https://jwks.idp.example/jwks.json")
+			.expect("https jwks URL");
+
+		let err = super::super::ensure_jwks_uri_in_scope_for_test(
+			&discovery,
+			&jwks_uri,
+			false,
+			&*resolver as &dyn NameResolver,
+		)
+		.await
+		.expect_err("default policy must refuse a private jwks_uri");
+		match err {
+			OidcError::JwksUriOffScope(address) => {
+				assert!(
+					address.contains("10.0.0.5"),
+					"error must name the offending address: {address}"
+				)
+			}
+			other => panic!("expected JwksUriOffScope, got {other:?}"),
+		}
+	}
+
+	#[tokio::test]
+	async fn private_jwks_uri_is_accepted_with_opt_in() {
+		// Same setup, with allow_private_jwks = true. The exact same private
+		// address is admitted because the operator accepted the risk.
+		let mut stub = StubResolver::default();
+		stub.by_host.insert(
+			"idp.example".to_string(),
+			vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		stub.by_host.insert(
+			"jwks.idp.example".to_string(),
+			vec!["10.0.0.5".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		let resolver = Arc::new(stub);
+
+		let discovery = https_url("idp.example");
+		let jwks_uri = crate::net::HttpsUrl::parse("https://jwks.idp.example/jwks.json")
+			.expect("https jwks URL");
+
+		super::super::ensure_jwks_uri_in_scope_for_test(
+			&discovery,
+			&jwks_uri,
+			true,
+			&*resolver as &dyn NameResolver,
+		)
+		.await
+		.expect("explicit opt-in admits a private jwks_uri");
+	}
+
+	#[tokio::test]
+	async fn public_jwks_uri_is_unaffected_by_the_opt_in() {
+		// Both URLs resolve to public addresses. The opt-in is neither
+		// required nor load-bearing.
+		let mut stub = StubResolver::default();
+		stub.by_host.insert(
+			"idp.example".to_string(),
+			vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		stub.by_host.insert(
+			"jwks.idp.example".to_string(),
+			vec!["1.1.1.1".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		let resolver = Arc::new(stub);
+
+		let discovery = https_url("idp.example");
+		let jwks_uri = crate::net::HttpsUrl::parse("https://jwks.idp.example/jwks.json")
+			.expect("https jwks URL");
+
+		super::super::ensure_jwks_uri_in_scope_for_test(
+			&discovery,
+			&jwks_uri,
+			false,
+			&*resolver as &dyn NameResolver,
+		)
+		.await
+		.expect("public jwks_uri passes by default");
+		// Arc placeholder so the Mutex import is not flagged as unused when
+		// the resolver grows parallel writers; today the stub is read-only
+		// and the lock would be unnecessary, so silence the warning with an
+		// explicit reference.
+		let _ = Mutex::new(());
+	}
 }

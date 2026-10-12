@@ -427,6 +427,9 @@ OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 | `audience` | Expected audience. |
 | `algorithm` | Signing algorithm (e.g. `RS256`). |
 | `public_key` | The IdP's public key. |
+| `discovery_url` | OIDC discovery URL (alternative to `public_key`). |
+| `signing_key` | Base64 PKCS#8 ES256 private key; turns the server into its own OAuth 2.0 authorization server. |
+| `allow_private_jwks` | Permit the discovery document's `jwks_uri` to resolve to a loopback, private (RFC 1918 / RFC 4193), link-local or unspecified address. Default `false`. The check exists because the `jwks_uri` is chosen by the IdP, not the operator, and a hostile or compromised IdP could pivot it at a cloud-metadata service (`169.254.169.254`) or an internal host. Set this only when the IdP genuinely lives on a private network and the trust relationship justifies it. |
 
 ### `[webhook]`
 Outbound event notifications. The URL must be `https://` (or a loopback `http://`).

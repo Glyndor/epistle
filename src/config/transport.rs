@@ -23,7 +23,7 @@ pub enum TransportKind {
 }
 
 /// One outbound transport rule.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Transport {
 	/// Match mail sent by this local account (the envelope sender's local part).
@@ -55,8 +55,28 @@ pub struct Transport {
 	pub socks_proxy: Option<String>,
 }
 
+impl std::fmt::Debug for Transport {
+	// Every other field is not a secret, so it is printed verbatim; only the
+	// relay's SMTP AUTH password is redacted. A relaying server prints its
+	// rules to the log on startup and on reload, and a literal password is
+	// the obvious thing that should not reach that sink.
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Transport")
+			.field("account", &self.account)
+			.field("domain", &self.domain)
+			.field("kind", &self.kind)
+			.field("host", &self.host)
+			.field("port", &self.port)
+			.field("starttls", &self.starttls)
+			.field("username", &self.username)
+			.field("password", &self.password.as_ref().map(|_| "***"))
+			.field("socks_proxy", &self.socks_proxy)
+			.finish()
+	}
+}
+
 /// Match specificity, most specific first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Specificity {
 	/// Catch-all (neither account nor domain set).
 	Any,

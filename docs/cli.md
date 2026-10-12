@@ -542,6 +542,23 @@ which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
 file on the host is created in `$TMPDIR` and removed after the copy.
 
+### What lives in the tar
+
+The archive is a faithful snapshot of `data_dir`, **including the live
+private-key material**: DKIM signing keys (`dkim-*.key` / `.pem`), the
+ARC seal key, the at-rest message-encryption key file, `log-pseudonym.key`,
+and the per-account credential store. Treat the archive the way you would
+treat the keys themselves: store it offline, encrypt it at rest, restrict
+who can read it, and never leave a copy on a shared host. Delete the
+archive file once `restore` has been verified.
+
+Restore writes every private-key file at `0600` regardless of what the
+archive recorded: an archive that captured a permissive umask (or that
+was tampered with) cannot bring a key back group- or world-readable.
+Every other file lands at the mode the archive recorded (always masked
+to the lower 9 bits, so `setuid` / `setgid` / sticky bits never survive
+a round-trip).
+
 ## `epistle mta-sts-serve`
 
 Run a second instance of the same binary for the public policy endpoint:

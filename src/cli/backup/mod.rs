@@ -441,9 +441,18 @@ mod helpers {
 				std::fs::create_dir_all(parent).expect("mkdir parent");
 			}
 			std::fs::write(&dest, &content).expect("write entry");
+			// Private-key material lands at 0600 even if the archive
+			// recorded it at 0644; ordinary files keep the archive's mode.
+			// The same classifier [`restore_files`] uses in production
+			// drives both paths, so an honest restore and a test restore
+			// apply the same floor.
 			#[cfg(unix)]
 			{
 				use std::os::unix::fs::PermissionsExt;
+				let mode = crate::cli::backup::restore_files::enforced_mode_for(
+					std::path::Path::new(stripped),
+					mode,
+				);
 				std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode))
 					.expect("chmod");
 			}

@@ -33,6 +33,17 @@ pub struct Oauth {
 	/// verifier. Generate a matching pair with `epistle oauth-keygen`.
 	#[serde(default)]
 	pub signing_key: Option<String>,
+	/// Permit fetching the `jwks_uri` published by the discovery document
+	/// even when it resolves to a loopback, private (RFC 1918 / RFC 4193),
+	/// link-local or unspecified address. Off by default: a hostile or
+	/// compromised IdP could pivot the discovery document to an internal
+	/// service (cloud metadata at `169.254.169.254`, a LAN neighbour,
+	/// ...), and an explicit opt-in is the gate. Set this only when the
+	/// IdP really lives on a private network and the trust relationship
+	/// justifies it (Keycloak on the LAN that publishes its own JWKS, for
+	/// example).
+	#[serde(default)]
+	pub allow_private_jwks: bool,
 }
 
 /// Why an `[oauth]` section is invalid.
