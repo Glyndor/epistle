@@ -61,6 +61,43 @@ pub(crate) fn mx_security(
 	})
 }
 
+/// The DNSSEC state of an implicit MX (RFC 7672 sections 2.2.1 and
+/// 2.2.2): the domain has no MX, and `denial` and `address` are the
+/// validation proofs of that denial and of the domain's address answer.
+/// Secure only when both are; a bogus side fails the lookup, so the
+/// message waits; anything unsigned or unanchored is insecure.
+pub(crate) fn implicit_mx_security(
+	denial: hickory_resolver::proto::dnssec::Proof,
+	address: hickory_resolver::proto::dnssec::Proof,
+) -> Result<MxSecurity, crate::spf::DnsFailure> {
+	use hickory_resolver::proto::dnssec::Proof;
+	if denial == Proof::Bogus || address == Proof::Bogus {
+		return Err(crate::spf::DnsFailure::Temporary);
+	}
+	Ok(if denial == Proof::Secure && address == Proof::Secure {
+		MxSecurity::Secure
+	} else {
+		MxSecurity::Insecure
+	})
+}
+
+/// One proof for a set of records: bogus if any is, secure if there are
+/// some and all are, insecure otherwise.
+fn summarize(
+	proofs: impl IntoIterator<Item = hickory_resolver::proto::dnssec::Proof>,
+) -> hickory_resolver::proto::dnssec::Proof {
+	use hickory_resolver::proto::dnssec::Proof;
+	let mut summary = None;
+	for proof in proofs {
+		summary = Some(match (summary, proof) {
+			(_, Proof::Bogus) | (Some(Proof::Bogus), _) => Proof::Bogus,
+			(None | Some(Proof::Secure), Proof::Secure) => Proof::Secure,
+			_ => Proof::Insecure,
+		});
+	}
+	summary.unwrap_or(Proof::Insecure)
+}
+
 impl Connection {
 	/// A connection over a transport without socket addresses.
 	pub fn new(stream: BoxedStream, host: String) -> Self {
@@ -153,10 +190,23 @@ impl MxConnector {
 					},
 				))
 			}
-			// No MX records: fall back to the implicit MX.
-			Err(NetError::Dns(DnsError::NoRecordsFound(_))) => {
-				Ok((vec![domain.to_string()], MxSecurity::Insecure))
+			// No MX records: fall back to the implicit MX, as secure as the
+			// denial and the domain's own address answer prove it to be.
+			Err(NetError::Dns(DnsError::NoRecordsFound(no_records))) => {
+				let denial = summarize(no_records.soa.iter().map(|soa| soa.proof).chain(
+					no_records.authorities.iter().flat_map(|records| {
+						records
+							.iter()
+							.map(|record| record.proof)
+							.collect::<Vec<_>>()
+					}),
+				));
+				self.implicit(domain, denial).await
 			}
+			Err(NetError::Dns(DnsError::Nsec { proof, .. })) => self.implicit(domain, proof).await,
+			Err(NetError::Dns(DnsError::DnssecBogus)) => Err(DeliveryError::Transient(format!(
+				"MX answer for {domain} failed DNSSEC validation"
+			))),
 			Err(error) => Err(DeliveryError::Transient(format!(
 				"MX lookup failed: {error}"
 			))),
@@ -191,6 +241,41 @@ fn exchangers_from(
 		Ok(vec![domain.to_string()])
 	} else {
 		Ok(hosts)
+	}
+}
+
+impl MxConnector {
+	/// The implicit MX of `domain`, given how its MX denial validated.
+	async fn implicit(
+		&self,
+		domain: &str,
+		denial: hickory_resolver::proto::dnssec::Proof,
+	) -> Result<(Vec<String>, MxSecurity), DeliveryError> {
+		let address = self.address_proof(domain).await;
+		match implicit_mx_security(denial, address) {
+			Ok(security) => Ok((vec![domain.to_string()], security)),
+			Err(_) => Err(DeliveryError::Transient(format!(
+				"implicit MX of {domain} failed DNSSEC validation"
+			))),
+		}
+	}
+
+	/// How the A and AAAA answers of `host` validated, together.
+	async fn address_proof(&self, host: &str) -> hickory_resolver::proto::dnssec::Proof {
+		use hickory_resolver::net::{DnsError, NetError};
+		use hickory_resolver::proto::dnssec::Proof;
+		use hickory_resolver::proto::rr::RecordType;
+		let mut proofs = Vec::new();
+		for kind in [RecordType::A, RecordType::AAAA] {
+			match self.resolver.lookup(format!("{host}."), kind).await {
+				Ok(lookup) => proofs.extend(lookup.answers().iter().map(|record| record.proof)),
+				Err(NetError::Dns(DnsError::NoRecordsFound(_))) => {}
+				Err(NetError::Dns(DnsError::Nsec { proof, .. })) => proofs.push(proof),
+				Err(NetError::Dns(DnsError::DnssecBogus)) => proofs.push(Proof::Bogus),
+				Err(_) => proofs.push(Proof::Insecure),
+			}
+		}
+		summarize(proofs)
 	}
 }
 

@@ -90,3 +90,52 @@ fn a_bogus_record_fails_the_lookup() {
 		Err(crate::spf::DnsFailure::Temporary)
 	);
 }
+
+#[test]
+fn a_secure_denial_and_secure_addresses_make_a_secure_implicit_mx() {
+	assert_eq!(
+		implicit_mx_security(Proof::Secure, Proof::Secure),
+		Ok(MxSecurity::Secure)
+	);
+}
+
+#[test]
+fn an_unsigned_side_makes_an_insecure_implicit_mx() {
+	for (denial, address) in [
+		(Proof::Insecure, Proof::Secure),
+		(Proof::Secure, Proof::Insecure),
+		(Proof::Indeterminate, Proof::Secure),
+		(Proof::Secure, Proof::Indeterminate),
+	] {
+		assert_eq!(
+			implicit_mx_security(denial, address),
+			Ok(MxSecurity::Insecure),
+			"{denial:?} {address:?}"
+		);
+	}
+}
+
+#[test]
+fn a_bogus_denial_or_address_fails_the_implicit_mx() {
+	for (denial, address) in [
+		(Proof::Bogus, Proof::Secure),
+		(Proof::Secure, Proof::Bogus),
+		(Proof::Bogus, Proof::Insecure),
+		(Proof::Insecure, Proof::Bogus),
+	] {
+		assert_eq!(
+			implicit_mx_security(denial, address),
+			Err(crate::spf::DnsFailure::Temporary),
+			"{denial:?} {address:?}"
+		);
+	}
+}
+
+#[test]
+fn a_set_of_proofs_is_as_strong_as_its_weakest_record() {
+	assert_eq!(summarize([Proof::Secure, Proof::Secure]), Proof::Secure);
+	assert_eq!(summarize([Proof::Secure, Proof::Insecure]), Proof::Insecure);
+	assert_eq!(summarize([Proof::Insecure, Proof::Bogus]), Proof::Bogus);
+	assert_eq!(summarize([Proof::Bogus, Proof::Secure]), Proof::Bogus);
+	assert_eq!(summarize([]), Proof::Insecure);
+}

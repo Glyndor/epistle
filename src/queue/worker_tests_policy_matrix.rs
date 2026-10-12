@@ -52,12 +52,17 @@ pub(super) enum Mx {
 	Plain,
 }
 
-/// The DNSSEC state of the MX answer that named the host.
+/// The DNSSEC state of the MX answer that named the host, or for a
+/// domain without MX (implicit MX) of the denial and the address answer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum MxDns {
 	Secure,
 	Insecure,
 	Bogus,
+	ImplicitSecure,
+	ImplicitInsecure,
+	ImplicitBogusDenial,
+	ImplicitBogusAddress,
 }
 
 /// How one delivery attempt ended.
@@ -130,7 +135,13 @@ struct MxConnector {
 impl Connector for MxConnector {
 	fn connect(&self, _domain: &str, _policy: Option<&crate::mtasts::Policy>) -> ConnectFuture<'_> {
 		Box::pin(async move {
-			// What the real connector does with a bogus MX answer.
+			// What the real connector does with each answer.
+			use hickory_resolver::proto::dnssec::Proof;
+			let implicit = |denial, address| {
+				crate::queue::resolver::implicit_mx_security(denial, address).map_err(|_| {
+					DeliveryError::Transient("implicit MX failed DNSSEC validation".into())
+				})
+			};
 			let security = match self.mx_dns {
 				MxDns::Secure => crate::queue::resolver::MxSecurity::Secure,
 				MxDns::Insecure => crate::queue::resolver::MxSecurity::Insecure,
@@ -139,6 +150,10 @@ impl Connector for MxConnector {
 						"MX answer failed DNSSEC validation".into(),
 					));
 				}
+				MxDns::ImplicitSecure => implicit(Proof::Secure, Proof::Secure)?,
+				MxDns::ImplicitInsecure => implicit(Proof::Insecure, Proof::Secure)?,
+				MxDns::ImplicitBogusDenial => implicit(Proof::Bogus, Proof::Secure)?,
+				MxDns::ImplicitBogusAddress => implicit(Proof::Secure, Proof::Bogus)?,
 			};
 			let directory = crate::directory_store::DirectoryHandle::new(Directory::new(
 				["remote.example".to_string()],
@@ -297,12 +312,18 @@ pub(super) async fn attempt_with(
 /// What RFC 8461 and RFC 7672 call for in one cell.
 fn expected(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls, mx_dns: MxDns) -> Seen {
 	match mx_dns {
-		// A forged or broken MX answer: wait, as for any lookup failure.
-		MxDns::Bogus => return Seen::Deferred,
-		// DANE needs a secure MX RRset (RFC 7672 section 2.2.1): the TLSA
-		// of a host an insecure answer named is never looked at.
-		MxDns::Insecure => return expected(sts, Tlsa::Absent, mx, mode, MxDns::Secure),
-		MxDns::Secure => {}
+		// A forged or broken MX answer, denial or address answer: wait, as
+		// for any lookup failure.
+		MxDns::Bogus | MxDns::ImplicitBogusDenial | MxDns::ImplicitBogusAddress => {
+			return Seen::Deferred;
+		}
+		// DANE needs a secure MX RRset (RFC 7672 section 2.2.1), or for an
+		// implicit MX a secure denial and address answer (section 2.2.2):
+		// otherwise the TLSA is never looked at.
+		MxDns::Insecure | MxDns::ImplicitInsecure => {
+			return expected(sts, Tlsa::Absent, mx, mode, MxDns::Secure);
+		}
+		MxDns::Secure | MxDns::ImplicitSecure => {}
 	}
 	let pkix_ok = mx == Mx::Good;
 	let any_tls = mx != Mx::Plain;
@@ -337,7 +358,15 @@ async fn every_cell_of_the_transport_matrix() {
 		for sts in [Sts::None, Sts::Testing, Sts::Enforce] {
 			for tlsa in [Tlsa::Absent, Tlsa::Usable, Tlsa::Unusable, Tlsa::TempFail] {
 				for mx in [Mx::Good, Mx::DaneOnly, Mx::Bad, Mx::Plain] {
-					for mx_dns in [MxDns::Secure, MxDns::Insecure, MxDns::Bogus] {
+					for mx_dns in [
+						MxDns::Secure,
+						MxDns::Insecure,
+						MxDns::Bogus,
+						MxDns::ImplicitSecure,
+						MxDns::ImplicitInsecure,
+						MxDns::ImplicitBogusDenial,
+						MxDns::ImplicitBogusAddress,
+					] {
 						cells += 1;
 						let want = expected(sts, tlsa, mx, mode, mx_dns);
 						let got = attempt(sts, tlsa, mx, mode, mx_dns).await;
@@ -351,6 +380,6 @@ async fn every_cell_of_the_transport_matrix() {
 			}
 		}
 	}
-	assert_eq!(cells, 288);
+	assert_eq!(cells, 672);
 	assert!(wrong.is_empty(), "wrong cells:\n{}", wrong.join("\n"));
 }
