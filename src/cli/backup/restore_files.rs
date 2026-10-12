@@ -1,10 +1,13 @@
 //! Validate archive paths before replacing files under the data directory.
 
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::util::path_component::StateFile;
 
 pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
 	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
@@ -21,7 +24,7 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 			// `run_restore` extracts the SQL bytes from the same
 			// `entries` slice and hands them straight to the database
 			// restore step.
-			if name == super::DATABASE_SQL_NAME {
+			if !lays_down(name) {
 				return None;
 			}
 			match relative_path(name) {
@@ -35,12 +38,37 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 		.collect::<io::Result<Vec<_>>>()?;
 	for ((_, mode, content), relative) in entries
 		.iter()
-		.filter(|(name, _, _)| name.as_str() != super::DATABASE_SQL_NAME)
+		.filter(|(name, _, _)| lays_down(name))
 		.zip(paths)
 	{
 		write_file(data_dir, relative, *mode, content)?;
+		if relative.file_name() == Some(OsStr::new(StateFile::JmapJournal.name())) {
+			forget_jmap_epoch(data_dir, relative)?;
+		}
 	}
 	Ok(())
+}
+
+/// Whether an archive entry is written under `data_dir`. `database.sql` goes
+/// to the database restore step instead. A JMAP journal header is never
+/// restored: the restored journal is older than what clients may hold, and
+/// without its header the next JMAP request starts a new epoch, so every
+/// client resyncs once instead of trusting positions that were rewound.
+fn lays_down(name: &str) -> bool {
+	name != super::DATABASE_SQL_NAME
+		&& Path::new(name).file_name() != Some(OsStr::new(StateFile::JmapState.name()))
+}
+
+/// Drop the journal header next to a restored journal, which `--force` may
+/// have left from the data directory being overwritten.
+fn forget_jmap_epoch(data_dir: &Path, journal: &Path) -> io::Result<()> {
+	let header = data_dir
+		.join(journal)
+		.with_file_name(StateFile::JmapState.name());
+	match std::fs::remove_file(header) {
+		Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+		_ => Ok(()),
+	}
 }
 
 fn relative_path(name: &str) -> io::Result<&Path> {
@@ -268,6 +296,43 @@ mod tests {
 			0o644,
 			"ordinary file should keep the archive's mode, got {:o}",
 			ordinary_mode & 0o777
+		);
+	}
+
+	/// A restored JMAP journal is older than what clients may hold, so its
+	/// header must not come back: neither the archived one nor the one a
+	/// `--force` restore would leave in place. Without it the journal starts
+	/// a new epoch and every client resyncs instead of trusting rewound
+	/// positions.
+	#[test]
+	fn lay_files_drops_the_jmap_journal_header() {
+		let data_dir = tempfile::tempdir().expect("tempdir");
+		let account = data_dir.path().join("accounts/alice");
+		std::fs::create_dir_all(&account).expect("account dir");
+		std::fs::write(account.join(".jmap_state"), "777 0\n").expect("live header");
+		let entries = vec![
+			(
+				"data/accounts/alice/.jmap_changes".to_string(),
+				0o600_u32,
+				b"1 e c 00000000-0000-0000-0000-000000000001\n".to_vec(),
+			),
+			(
+				"data/accounts/alice/.jmap_state".to_string(),
+				0o600_u32,
+				b"777 0\n".to_vec(),
+			),
+		];
+		lay_files(&entries, data_dir.path()).expect("lay_files");
+
+		assert!(account.join(".jmap_changes").is_file(), "journal restored");
+		assert!(
+			!account.join(".jmap_state").exists(),
+			"the journal header must not survive a restore"
+		);
+		let position = crate::imap::changelog::current(&account).expect("current");
+		assert_ne!(
+			position.epoch, 777,
+			"the restored journal must start a new epoch"
 		);
 	}
 }

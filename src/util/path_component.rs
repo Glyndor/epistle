@@ -362,7 +362,8 @@ pub enum StateFile {
 }
 
 impl StateFile {
-	fn name(self) -> &'static str {
+	/// The file name inside the directory it belongs to.
+	pub(crate) fn name(self) -> &'static str {
 		match self {
 			Self::UidNext => ".uidnext",
 			Self::UidValidity => ".uidvalidity",

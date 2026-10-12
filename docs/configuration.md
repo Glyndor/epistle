@@ -336,10 +336,9 @@ and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
   anything else. `Mailbox/queryChanges` covers every `Mailbox/query`.
 - `cannotCalculateChanges` answers a malformed state, a state of another
   type or account, one older than the trimmed journal, and one ahead of
-  it. Restoring an older backup rewinds the journal: clients holding a
-  newer state resync, but one taken before the restore point may get an
-  incomplete answer once the account moves past it again; delete
-  `.jmap_state` after a restore to make every client resync.
+  it. `epistle restore` never brings back the journal header
+  (`.jmap_state`), so after a restore every JMAP client resyncs once
+  instead of trusting positions the restore rewound.
 
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
