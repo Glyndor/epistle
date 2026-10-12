@@ -17,13 +17,13 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 /// The oldest PostgreSQL major version this release supports.
 ///
-/// 14 is the oldest major still in upstream support today, so the floor is
-/// declared once and never derived. [`connect`] enforces it before any
+/// 18 is the major the stack `epistle init` writes runs, and no install
+/// predates it, so the floor is that major, declared once and never derived. [`connect`] enforces it before any
 /// migration runs, and the `Database` CI workflow tests against both this
 /// floor and the current major so a future query that needs something newer
 /// fails as `ServerTooOld` at startup rather than as an SQL syntax error at
 /// runtime.
-pub const MIN_SERVER_VERSION: u32 = 14;
+pub const MIN_SERVER_VERSION: u32 = 18;
 
 /// Errors from database setup.
 #[derive(Debug, thiserror::Error)]
