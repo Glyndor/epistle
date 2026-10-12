@@ -19,6 +19,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::caldav_filter_xml::{
 	attr, contains_local_element, first_open, is_supported_element, local_names, matching_close,
+	tag_attr, unescape,
 };
 use super::rrule;
 
@@ -460,20 +461,57 @@ fn component_matches(filter: &CompFilter, comp: &VComponent) -> bool {
 
 /// Apply a `text-match` to a property value. The two collations
 /// (`i;unicode-casemap` and `i;octet`) and the four match-types
-/// (`contains`, `equals`, `starts-with`, `ends-with`) are honoured.
+/// (`contains`, `equals`, `starts-with`, `ends-with`) are honoured, and
+/// `negate-condition` inverts the result.
 pub fn text_passes(value: &str, tm: &TextMatch) -> bool {
+	text_hits(value, tm) != tm.negate_condition
+}
+
+/// The positive half of a `text-match`: the collation and match-type
+/// applied to `value`, ignoring `negate-condition`. CardDAV negates once
+/// per property rather than once per value, so it needs this form.
+pub fn text_hits(value: &str, tm: &TextMatch) -> bool {
 	let (value, needle) = if tm.collation == "i;octet" {
 		(value.to_string(), tm.text.clone())
 	} else {
 		(value.to_lowercase(), tm.text.to_lowercase())
 	};
-	let raw = match tm.match_type.as_str() {
+	match tm.match_type.as_str() {
 		"equals" => value == needle,
 		"starts-with" => value.starts_with(&needle),
 		"ends-with" => value.ends_with(&needle),
 		_ => value.contains(&needle),
+	}
+}
+
+/// Build a [`TextMatch`] from a `text-match` element: `tag` is its opening
+/// tag (attributes included) and `inner` its text. `None` for a collation,
+/// match-type or `negate-condition` value outside what RFC 4791 and RFC 6352
+/// define, which the caller answers with `supported-filter` (or
+/// `supported-collation`, folded into the same refusal).
+pub fn text_match(tag: &str, inner: &str) -> Option<TextMatch> {
+	let collation = tag_attr(tag, "collation").unwrap_or_else(|| "i;unicode-casemap".to_string());
+	if collation != "i;unicode-casemap" && collation != "i;octet" {
+		return None;
+	}
+	let match_type = tag_attr(tag, "match-type").unwrap_or_else(|| "contains".to_string());
+	if !matches!(
+		match_type.as_str(),
+		"contains" | "equals" | "starts-with" | "ends-with"
+	) {
+		return None;
+	}
+	let negate_condition = match tag_attr(tag, "negate-condition").as_deref() {
+		None | Some("no") | Some("false") => false,
+		Some("yes") | Some("true") => true,
+		Some(_) => return None,
 	};
-	if tm.negate_condition { !raw } else { raw }
+	Some(TextMatch {
+		text: unescape(inner.trim()),
+		match_type,
+		collation,
+		negate_condition,
+	})
 }
 
 /// Flatten an iCalendar object into the components the filter

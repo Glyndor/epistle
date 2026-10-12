@@ -33,6 +33,7 @@ pub mod caldav;
 pub mod caldav_filter;
 mod caldav_filter_xml;
 pub mod carddav;
+pub mod carddav_filter;
 pub mod handler;
 mod href;
 pub mod path;
@@ -40,6 +41,8 @@ pub mod propfind;
 pub mod rrule;
 pub mod sync;
 mod sync_multistatus;
+#[cfg(test)]
+mod test_support;
 
 /// Shared handler state: the directory (for authentication) and the data root
 /// under which each account's `dav` tree lives.
