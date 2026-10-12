@@ -75,7 +75,11 @@ fn run_restore_lays_down_data_files_from_archive() {
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
-	assert_eq!(run_restore(&config, &archive, &mut out), ExitCode::SUCCESS);
+	let mut status = Vec::new();
+	assert_eq!(
+		run_restore(&config, &archive, true, false, &mut out, &mut status),
+		ExitCode::SUCCESS
+	);
 	let restored = data_dir.join("accounts/alice/new/m1.eml");
 	let body = std::fs::read(&restored).expect("read restored");
 	assert_eq!(body, b"Subject: hi\r\n\r\nbody");
@@ -100,8 +104,9 @@ fn run_restore_fails_when_archive_carries_database_sql_but_psql_errors() {
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
+	let mut status = Vec::new();
 	let resolver = stub_resolver(vec![("psql".to_string(), psql_stub.clone())]);
-	let exit = run_restore_with(&config, &archive, &mut out, &resolver);
+	let exit = run_restore_with(&config, &archive, true, false, &mut out, &mut status, &resolver);
 	assert_ne!(
 		exit,
 		ExitCode::SUCCESS,
@@ -122,8 +127,9 @@ fn run_restore_fails_when_archive_has_no_database_sql_but_database_is_configured
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
+	let mut status = Vec::new();
 	assert_ne!(
-		run_restore(&config, &archive, &mut out),
+		run_restore(&config, &archive, true, false, &mut out, &mut status),
 		ExitCode::SUCCESS,
 		"a configured database with no SQL in the archive is a restore error"
 	);
@@ -140,8 +146,9 @@ fn run_restore_fails_on_empty_archive() {
 	);
 	let config: Config = toml::from_str(&toml).expect("config");
 	let mut out = Vec::new();
+	let mut status = Vec::new();
 	assert_ne!(
-		run_restore(&config, &[], &mut out),
+		run_restore(&config, &[], true, false, &mut out, &mut status),
 		ExitCode::SUCCESS,
 		"empty bytes are not a valid archive"
 	);

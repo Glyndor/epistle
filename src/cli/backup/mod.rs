@@ -80,8 +80,20 @@ pub(super) fn run_with(
 /// the configured database when the archive carries one. The hard rule is
 /// the same as the backup path: a `database.sql` in the archive that cannot
 /// be loaded is a restore error, never a silent skip.
-pub(super) fn run_restore(config: &Config, archive: &[u8], out: &mut impl Write) -> ExitCode {
-	run_restore_with(config, archive, out, &db_dump::default_program_resolver)
+///
+/// `force` bypasses the safety checks (`refuse_unsafe_targets` returns
+/// `None`), `dry_run` lists the entries the restore would write without
+/// touching `data_dir` or the database. Status messages go to `status`
+/// so the operator can tell them apart from the archive stream.
+pub(super) fn run_restore(
+	config: &Config,
+	archive: &[u8],
+	force: bool,
+	dry_run: bool,
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> ExitCode {
+	run_restore_with(config, archive, force, dry_run, out, status, &db_dump::default_program_resolver)
 }
 
 /// Same as [`run_restore`] with a custom program resolver. The test
@@ -91,7 +103,10 @@ pub(super) fn run_restore(config: &Config, archive: &[u8], out: &mut impl Write)
 pub(super) fn run_restore_with(
 	config: &Config,
 	archive: &[u8],
+	force: bool,
+	dry_run: bool,
 	out: &mut impl Write,
+	status: &mut impl Write,
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> ExitCode {
 	let tar = match gunzip_archive(archive) {
@@ -105,6 +120,25 @@ pub(super) fn run_restore_with(
 	if entries.is_empty() {
 		super::style::error("archive is empty");
 		return ExitCode::FAILURE;
+	}
+	if let Err(message) = refuse_unsafe_targets(config, force, dry_run, status) {
+		super::style::error(format_args!("{message}"));
+		return ExitCode::FAILURE;
+	}
+	if dry_run {
+		let _ = writeln!(out, "would restore {} entries:", entries.len());
+		for (name, _mode, content) in &entries {
+			if name == DATABASE_SQL_NAME {
+				let _ = writeln!(out, "  database.sql ({} bytes, replayed to psql)", content.len());
+			} else {
+				let _ = writeln!(out, "  data/{name}");
+			}
+		}
+		let _ = writeln!(
+			out,
+			"no files written; rerun without --dry-run to apply"
+		);
+		return ExitCode::SUCCESS;
 	}
 	if let Err(error) = lay_files(&entries, &config.data_dir) {
 		super::style::error(format_args!("laying down files: {error}"));
@@ -126,6 +160,100 @@ pub(super) fn run_restore_with(
 	}
 	writeln!(out, "restored {} entries", entries.len()).ok();
 	ExitCode::SUCCESS
+}
+
+/// Refuse to restore when `data_dir` already has account data or the
+/// mail service is running, unless `--force` was supplied. The check
+/// happens before `lay_files` so the byte-identity of `data_dir` is
+/// preserved on refusal. The dry-run path also wants to know whether
+/// a real restore would be allowed, so it is included in the check.
+/// Each offender the operator can act on is named on its own line,
+/// followed by a one-line suggestion that points at the matching
+/// command (stop the service, pass `--force`).
+pub(in crate::cli) fn refuse_unsafe_targets(
+	config: &Config,
+	force: bool,
+	dry_run: bool,
+	status: &mut impl Write,
+) -> Result<(), String> {
+	if force {
+		return Ok(());
+	}
+	if let Err(reason) = data_dir_has_accounts(&config.data_dir) {
+		let _ = writeln!(
+			status,
+			"refusing to restore: {} already holds account data in {}",
+			reason,
+			config.data_dir.display()
+		);
+		let _ = writeln!(
+			status,
+			"  stop the mail service, move the directory aside, or pass --force"
+		);
+		return Err(format!("data_dir already holds account data"));
+	}
+	if mail_service_is_running(&config.data_dir) {
+		let _ = writeln!(
+			status,
+			"refusing to restore: the mail service is reported running by the compose stack in {}",
+			config.data_dir.display()
+		);
+		let _ = writeln!(
+			status,
+			"  stop the mail service first (`epistle stack down`), or pass --force"
+		);
+		return Err("mail service is running".into());
+	}
+	let _ = dry_run;
+	Ok(())
+}
+
+/// True when `data_dir` has any of the artefacts a previously running
+/// server would have produced: an account store, masked addresses,
+/// per-account files, or any regular file under `accounts/`. The
+/// presence of a `database.sql` artefact from an earlier aborted
+/// restore is also a sign the directory is not fresh.
+///
+/// Returns the offender file name so the error message names the
+/// actual artefact found, not a generic `data_dir is non-empty`.
+fn data_dir_has_accounts(data_dir: &Path) -> Result<(), String> {
+	for relative in [
+		"accounts.toml",
+		"masked.json",
+		"queue.toml",
+		"bayes.json",
+		"database.sql",
+	] {
+		if data_dir.join(relative).exists() {
+			return Err(format!("{relative}"));
+		}
+	}
+	let accounts_dir = data_dir.join("accounts");
+	if accounts_dir.is_dir()
+		&& let Ok(read) = std::fs::read_dir(&accounts_dir)
+	{
+		for entry in read.flatten().take(1) {
+			if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+				return Err(format!("accounts/{}", entry.file_name().to_string_lossy()));
+			}
+		}
+	}
+	Ok(())
+}
+
+/// Detect whether the mail service is currently running by asking the
+/// compose stack. The compose file lives at `<data_dir>/compose/compose.yaml`;
+/// without it (the standalone host install, or a setup the operator
+/// built by hand) there is no stack to talk to and the answer is "not
+/// running" — the operator has nothing to stop. When the compose file
+/// exists, the `podup ps` listing is the source of truth. The probe
+/// shares the live `podup` binary the rest of the CLI calls, so the
+/// answer is what the operator sees.
+fn mail_service_is_running(data_dir: &Path) -> bool {
+	super::stack_started::mail_started_at(data_dir, "podup")
+		.ok()
+		.flatten()
+		.is_some()
 }
 
 /// Gunzip an archive and return its raw tar bytes. Tiny wrapper over
@@ -479,6 +607,14 @@ mod tests_container;
 #[cfg(test)]
 #[path = "../backup_restore_run_tests.rs"]
 mod tests_restore_run;
+
+#[cfg(test)]
+#[path = "../backup_db_sql_tests.rs"]
+mod tests_db_sql;
+
+#[cfg(test)]
+#[path = "../backup_restore_guards_tests.rs"]
+mod tests_restore_guards;
 
 #[cfg(test)]
 #[path = "../backup_tests_paths.rs"]

@@ -10,22 +10,40 @@ pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> 
 	// Preflight the entire archive so a later invalid entry cannot leave a partial restore.
 	let paths = entries
 		.iter()
-		.map(|(name, _, _)| {
-			let relative = relative_path(name)?;
-			validate_destination(data_dir, relative)?;
-			Ok(relative)
+		.filter_map(|(name, _, _)| {
+			// `database.sql` is the database dump; it goes to the
+			// database restore step, not to `data_dir`. Laying it down
+			// under `data_dir/database.sql` would make the next backup
+			// carry it again, expose it to anything that walks the
+			// data directory, and is not how the archive describes it
+			// (it lives at the archive root, not under the `data/`
+			// prefix that everything else uses). Skip the entry here;
+			// `run_restore` extracts the SQL bytes from the same
+			// `entries` slice and hands them straight to the database
+			// restore step.
+			if name == super::DATABASE_SQL_NAME {
+				return None;
+			}
+			match relative_path(name) {
+				Ok(relative) => match validate_destination(data_dir, relative) {
+					Ok(()) => Some(Ok(relative)),
+					Err(error) => Some(Err(error)),
+				},
+				Err(error) => Some(Err(error)),
+			}
 		})
 		.collect::<io::Result<Vec<_>>>()?;
-	for ((_, mode, content), relative) in entries.iter().zip(paths) {
+	for ((_, mode, content), relative) in entries
+		.iter()
+		.filter(|(name, _, _)| name.as_str() != super::DATABASE_SQL_NAME)
+		.zip(paths)
+	{
 		write_file(data_dir, relative, *mode, content)?;
 	}
 	Ok(())
 }
 
 fn relative_path(name: &str) -> io::Result<&Path> {
-	if name == super::DATABASE_SQL_NAME {
-		return Ok(Path::new(name));
-	}
 	let relative = name
 		.strip_prefix("data/")
 		.ok_or_else(|| io::Error::other("unsupported archive entry name"))?;

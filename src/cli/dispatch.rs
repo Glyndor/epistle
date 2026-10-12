@@ -109,7 +109,11 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Restore { config } => match Config::load(&config) {
+			Command::Restore {
+				config,
+				force,
+				dry_run,
+			} => match Config::load(&config) {
 				Ok(config) => {
 					let mut input = Vec::new();
 					if let Err(error) =
@@ -118,7 +122,14 @@ impl Cli {
 						style::error(format_args!("reading archive from stdin: {error}"));
 						ExitCode::FAILURE
 					} else {
-						backup::run_restore(&config, &input, &mut std::io::stdout().lock())
+						backup::run_restore(
+							&config,
+							&input,
+							force,
+							dry_run,
+							&mut std::io::stdout().lock(),
+							&mut style::stderr(),
+						)
 					}
 				}
 				Err(error) => {
