@@ -63,17 +63,17 @@ async fn greylist_sql_store_matches_the_decision_contract() {
 
 	// First sighting at 1000: defer and remember.
 	assert_eq!(decide(&store, &triplet, 1000, 60).await, Decision::Defer);
-	assert_eq!(store.first_seen(&key).await, Some(1000));
+	assert_eq!(store.first_seen(&key).await, Ok(Some(1000)));
 
 	// Retry at 1030: too soon, keep deferring. `first_seen` must NOT
 	// advance (the `ON CONFLICT` path keeps the original).
 	assert_eq!(decide(&store, &triplet, 1030, 60).await, Decision::Defer);
-	assert_eq!(store.first_seen(&key).await, Some(1000));
+	assert_eq!(store.first_seen(&key).await, Ok(Some(1000)));
 
 	// Retry at 1060: past the delay, accept. The stored `first_seen`
 	// still anchors the row.
 	assert_eq!(decide(&store, &triplet, 1060, 60).await, Decision::Accept);
-	assert_eq!(store.first_seen(&key).await, Some(1000));
+	assert_eq!(store.first_seen(&key).await, Ok(Some(1000)));
 
 	sqlx::query("DELETE FROM greylist_triplet WHERE key = $1")
 		.bind(&key)
@@ -136,12 +136,12 @@ async fn greylist_sql_sweep_drops_only_old_rows() {
 
 	assert_eq!(
 		store.first_seen(&old_key_clone).await,
-		None,
+		Ok(None),
 		"old triplet must be gone after the sweep"
 	);
 	assert_eq!(
 		store.first_seen(&young_key).await,
-		Some(9_000),
+		Ok(Some(9_000)),
 		"young triplet must remain after the sweep"
 	);
 
@@ -186,7 +186,7 @@ async fn greylist_sql_store_survives_a_restart() {
 	let store_b = epistle::antispam::PgGreylistStore::new(pool.clone());
 	assert_eq!(
 		store_b.first_seen(&key).await,
-		Some(1_000),
+		Ok(Some(1_000)),
 		"a fresh store must observe the first sighting persisted by the previous one"
 	);
 

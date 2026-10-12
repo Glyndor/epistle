@@ -8,7 +8,7 @@
 
 use sqlx::PgPool;
 
-use super::greylist::{GreylistStore, StoreFuture};
+use super::greylist::{GreylistStore, StoreFuture, StoreUnavailable};
 
 /// The production [`GreylistStore`]: the `greylist_triplet` table
 /// keyed by the lowercase `triplet.key()` string. State survives a restart,
@@ -33,7 +33,7 @@ impl PgGreylistStore {
 }
 
 impl GreylistStore for PgGreylistStore {
-	fn first_seen(&self, key: &str) -> StoreFuture<'_, Option<u64>> {
+	fn first_seen(&self, key: &str) -> StoreFuture<'_, Result<Option<u64>, StoreUnavailable>> {
 		let key = key.to_string();
 		Box::pin(async move {
 			// Non-macro `sqlx::query`: avoids touching the offline
@@ -45,11 +45,15 @@ impl GreylistStore for PgGreylistStore {
 					.fetch_optional(&self.pool)
 					.await;
 			match row {
-				Ok(Some((first_seen,))) => Some(first_seen.max(0) as u64),
-				// Fail open on a database hiccup: an unreachable table
-				// must not silently behave like "always Accept" or "always
-				// Defer". A query failure logs in the caller, not here.
-				_ => None,
+				Ok(Some((first_seen,))) => Ok(Some(first_seen.max(0) as u64)),
+				Ok(None) => Ok(None),
+				// Reported as unavailable, never as "not seen": a first
+				// sighting is deferred, so mapping an outage onto it would
+				// defer every inbound message until the database is back.
+				Err(error) => {
+					tracing::warn!(%error, "greylist: lookup failed; accepting");
+					Err(StoreUnavailable)
+				}
 			}
 		})
 	}
