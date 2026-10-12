@@ -26,6 +26,9 @@ pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: u
 	if running_size > MAX_MESSAGE_SIZE {
 		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
 	}
+	if let Some(reply) = super::author::check(session, &message.data) {
+		return Action::Continue(reply);
+	}
 	if let Some(reply) = cap::check_or_reply(
 		session.authenticated.as_deref(),
 		&message,

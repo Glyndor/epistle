@@ -170,9 +170,11 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 		2,
 		"MAIL FROM and RCPT TO accepted: {batch}"
 	);
-	tls.write_all(b"Subject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n")
-		.await
-		.expect("data");
+	tls.write_all(
+		b"From: alice@example.org\r\nSubject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n",
+	)
+	.await
+	.expect("data");
 	let mut tail = String::new();
 	while !tail.contains("221 ") {
 		tail.push_str(&reply(&mut tls).await);
