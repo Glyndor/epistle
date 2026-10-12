@@ -4,6 +4,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -13,6 +15,7 @@ use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
+pub use super::spool_recipients::{RecipientState, RecipientStatus};
 
 /// Envelope metadata stored next to the raw message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +56,10 @@ pub struct Envelope {
 	/// Reason the most recent delivery attempt failed, for `queue show`.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub last_error: Option<String>,
+	/// Delivery state per recipient (see [`RecipientState`]). Empty in every
+	/// envelope written before it existed, which reads as all pending.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub recipient_state: BTreeMap<String, RecipientState>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -161,6 +168,7 @@ impl FsSpool {
 			held: None,
 			held_secs: 0,
 			last_error: None,
+			recipient_state: BTreeMap::new(),
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;
