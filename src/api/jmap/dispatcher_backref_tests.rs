@@ -1,6 +1,8 @@
 //! Unit tests for JMAP result back-reference resolution (RFC 8620 §3.7).
 
-use super::*;
+use serde_json::{Value, json};
+
+use super::super::dispatcher::*;
 
 /// A prior response triple `[name, arguments, callId]`.
 fn response(name: &str, args: Value, call_id: &str) -> Value {

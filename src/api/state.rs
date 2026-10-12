@@ -679,6 +679,34 @@ impl ApiState {
 		}
 	}
 
+	/// Re-check `principal` against `required_scope`. Same as
+	/// [`Self::require_scope`] but takes the resolved principal directly, so
+	/// handlers that already computed one do not have to look up the token a
+	/// second time. The middleware never calls this; the path/method
+	/// inference it does is enough for the routes that reach it.
+	///
+	/// When the principal carries a bearer (`Account` or `Domains` or a
+	/// key-shaped `Admin`), scope is decided by the API key that
+	/// authenticated, the same way [`Self::require_scope`] reads it.
+	/// The bare `Admin` (the configured static token) admits every
+	/// scope.
+	pub fn require_scope_for_principal(
+		&self,
+		principal: &super::Principal,
+		scope: Scope,
+	) -> Result<(), ApiError> {
+		match principal.token() {
+			Some(token) => {
+				if self.authorizes(token, None, &[scope]) {
+					Ok(())
+				} else {
+					Err(ApiError::unauthenticated())
+				}
+			}
+			None => Ok(()),
+		}
+	}
+
 	fn token_matches(&self, token: &str) -> bool {
 		let stored = &self.inner.token_hash;
 		if let Some(expected_hex) = stored.strip_prefix("sha256:") {

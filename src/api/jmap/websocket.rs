@@ -26,6 +26,7 @@ use axum::extract::{Extension, State};
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 
+use super::Principal;
 use super::Request;
 use crate::api::state::{ApiState, MatchedAuth};
 
@@ -45,6 +46,10 @@ pub async fn ws_upgrade(
 /// frames. Binary frames are rejected with a `RequestError`; close/ping/pong are
 /// left to the transport.
 async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
+	// Resolve the principal once when the connection opens; the WebSocket
+	// carries the same credential across every frame on the socket, so
+	// resolving it per frame would only repeat work.
+	let principal = Principal::for_token(&state, &auth);
 	let mut push = PushState::default();
 	while let Some(Ok(message)) = socket.recv().await {
 		let text = match message {
@@ -59,7 +64,7 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 			Message::Close(_) => return,
 			Message::Ping(_) | Message::Pong(_) => continue,
 		};
-		for reply in handle_ws_message(&state, &auth, &text, &mut push) {
+		for reply in handle_ws_message(&state, &principal, &text, &mut push) {
 			if socket.send(Message::Text(reply.into())).await.is_err() {
 				return;
 			}
@@ -86,7 +91,7 @@ const STATEFUL_TYPES: [&str; 2] = ["Email", "Mailbox"];
 /// unit-tested with JSON strings.
 pub fn handle_ws_message(
 	state: &ApiState,
-	auth: &MatchedAuth,
+	principal: &Principal,
 	text: &str,
 	push: &mut PushState,
 ) -> Vec<String> {
@@ -94,7 +99,7 @@ pub fn handle_ws_message(
 		return vec![request_error("notJSON", "frame is not valid JSON").to_string()];
 	};
 	match value.get("@type").and_then(Value::as_str) {
-		Some("Request") => handle_request(state, auth, &value, push),
+		Some("Request") => handle_request(state, principal, &value, push),
 		Some("WebSocketPushEnable") => {
 			push.enabled = true;
 			push.data_types = value
@@ -124,7 +129,7 @@ pub fn handle_ws_message(
 /// `StateChange` when push is enabled and a `/set` changed an account's state.
 fn handle_request(
 	state: &ApiState,
-	auth: &MatchedAuth,
+	principal: &Principal,
 	value: &Value,
 	push: &PushState,
 ) -> Vec<String> {
@@ -138,10 +143,16 @@ fn handle_request(
 	let request_id = value.get("id").and_then(Value::as_str).map(str::to_string);
 
 	// Sample account state before and after dispatch so a successful /set that
-	// actually changed stored mail can be reported (RFC 8887 §5.2).
-	let accounts: Vec<String> = state.accounts().into_iter().map(|a| a.name).collect();
+	// actually changed stored mail can be reported (RFC 8887 §5.2). The list
+	// is filtered through the principal so a domain-scoped connection does
+	// not learn the existence of foreign tenants' state tokens.
+	let accounts: Vec<String> = principal
+		.admissible_accounts(&state.accounts())
+		.into_iter()
+		.map(|a| a.name.clone())
+		.collect();
 	let before: Vec<String> = accounts.iter().map(|a| state.account_state(a)).collect();
-	let response = match super::dispatch_request(state, auth, request) {
+	let response = match super::dispatch_request(state, principal, request) {
 		Ok(response) => response,
 		Err(mut problem) => {
 			problem["@type"] = json!("RequestError");

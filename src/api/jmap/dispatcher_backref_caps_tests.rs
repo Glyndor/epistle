@@ -5,6 +5,9 @@
 //! that bounds the cumulative cost of a back-reference chain, so the
 //! test file only compiles once the cap is in place.
 
+use serde_json::{Value, json};
+
+use super::super::{MethodCall, Request};
 use super::*;
 
 /// Build the JMAP request for a "doubling" chain: each call's

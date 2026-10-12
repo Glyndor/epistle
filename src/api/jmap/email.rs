@@ -3,7 +3,8 @@
 
 use serde_json::{Value, json};
 
-use super::super::state::{ApiState, MatchedAuth};
+use super::super::Principal;
+use super::super::state::ApiState;
 use super::objects;
 use crate::api::api_keys::Scope;
 
@@ -11,30 +12,31 @@ use crate::api::api_keys::Scope;
 /// source account into the destination account, leaving the source intact.
 pub(super) fn email_copy(
 	state: &ApiState,
-	auth: &MatchedAuth,
+	principal: &Principal,
 	args: &Value,
 	call_id: &str,
 ) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	let scope = state.domain_scope(auth);
 	let accounts = state.accounts();
-	let destination_allowed = accounts
-		.iter()
-		.find(|a| a.name == account)
-		.is_some_and(|a| scope.admits_account(a.addresses.iter().map(String::as_str)));
-	if !destination_allowed {
+	let Some(destination) = accounts.iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&destination.name, &destination.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let Some(source) = args.get("fromAccountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	let source_allowed = accounts
-		.iter()
-		.find(|a| a.name == source)
-		.is_some_and(|a| scope.admits_account(a.addresses.iter().map(String::as_str)));
-	if !source_allowed || state.require_scope(auth, Scope::Read).is_err() {
+	let source_view = accounts.iter().find(|a| a.name == source);
+	let source_allowed =
+		source_view.is_some_and(|view| principal.admits_account(&view.name, &view.addresses));
+	if !source_allowed
+		|| state
+			.require_scope_for_principal(principal, Scope::Read)
+			.is_err()
+	{
 		return json!(["error", { "type": "fromAccountNotFound" }, call_id]);
 	}
 	let mut created = serde_json::Map::new();
@@ -87,11 +89,19 @@ fn copy_email(
 
 /// `Email/set` (RFC 8621 §4.6): apply keyword updates (mark read/flagged etc.).
 /// Only full `keywords` replacement on `update` is supported so far.
-pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_set(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let mut created = serde_json::Map::new();
