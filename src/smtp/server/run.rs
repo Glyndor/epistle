@@ -479,13 +479,34 @@ impl Server {
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}
+					// Bayesian thresholds that decide on their own: a score at or above
+					// `bayes_junk_at` routes to Junk with the spam-marking
+					// headers stamped on it; a score at or above
+					// `bayes_reject_at` (when configured) refuses the DATA
+					// phase with `550 5.7.1`. Runs before the uncertain band
+					// so a high-confidence verdict never burns an LLM call.
+					match self
+						.handle_bayes_thresholds(
+							&mut message,
+							session.authenticated().is_some(),
+							&mut stream,
+						)
+						.await?
+					{
+						super::run_band::BayesOutcome::Rejected => continue,
+						super::run_band::BayesOutcome::SendToJunk
+						| super::run_band::BayesOutcome::Continue => {}
+					}
 					// Uncertain-band logic: SubjectPass (if enabled) accepts
 					// the retry that carries a valid token in the subject,
 					// otherwise the band consults the LLM hook if one is
 					// configured, otherwise (no LLM verdict) it refuses with
 					// a 550 5.7.1 challenge and a fresh token. The check runs
 					// after DNSBL, SPF, DMARC and the scanner hook, so a
-					// valid token never overrides a hard rejection.
+					// valid token never overrides a hard rejection. The
+					// Bayes path has already set the message's mailbox when
+					// it decided, so the band's "stay out of an upstream
+					// decision" guard skips it naturally.
 					if matches!(
 						self.handle_uncertain_band(
 							&mut message,

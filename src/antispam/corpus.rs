@@ -414,6 +414,19 @@ pub trait BayesScorer: Send + Sync {
 		text: &'a [u8],
 	) -> super::trainer::TrainerFuture<'a, Option<f64>>;
 
+	/// Whether `scope` has accumulated enough ham and spam messages for
+	/// the threshold-based decisions to trust a score it returns. The
+	/// default returns `true` so a fake scorer wires in without writing
+	/// database shims; the production `BayesStore` gates on
+	/// [`super::trainer::MIN_TRUSTED_MESSAGES`] on either side.
+	fn is_trusted<'a>(
+		&'a self,
+		scope: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+		let _ = scope;
+		Box::pin(async move { true })
+	}
+
 	/// Train the corpus on `text` as ham (`spam = false`) or spam. The
 	/// default implementation is a no-op so a fake scoring source does not
 	/// need to back a database.
@@ -436,6 +449,25 @@ impl BayesScorer for BayesStore {
 		text: &'a [u8],
 	) -> super::trainer::TrainerFuture<'a, Option<f64>> {
 		super::trainer::BayesTrainer::score_for_account(self, account, text)
+	}
+
+	fn is_trusted<'a>(
+		&'a self,
+		scope: &'a str,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+		Box::pin(async move {
+			match BayesStore::is_trained(self, scope).await {
+				Ok(trusted) => trusted,
+				Err(error) => {
+					tracing::warn!(
+						scope,
+						%error,
+						"bayes trained-lookup failed; treating as untrusted"
+					);
+					false
+				}
+			}
+		})
 	}
 
 	fn train(&self, scope: &str, text: &str, spam: bool) {

@@ -218,6 +218,31 @@ fn strip_cr(line: &[u8]) -> &[u8] {
 	}
 }
 
+/// Prepend the two spam-marking headers a downstream client uses to tell
+/// ham from junk: `X-Spam-Status: Yes` plus the raw probability in
+/// `X-Spam-Score`. The injector only fires when the corpus returned a
+/// score at or above `bayes_junk_at`: a below-threshold message must not
+/// grow headers the recipient did not ask for.
+///
+/// Header lines are inserted at the top of the existing header block (the
+/// prefix before the first blank line, CRLF or LF). The byte boundary is
+/// not re-scanned for "X-Spam-Status" already present: in practice the
+/// SMTP server runs this exactly once per accepted message, so a
+/// duplicate pass would imply a real bug in the call site, not a
+/// repeated correlate header.
+pub fn inject_spam_headers(data: &[u8], score: f64) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let (headers, body) = data.split_at(header_end);
+	// Six decimals is plenty for a probability and avoids leaking the
+	// floating-point noise that `f64::to_string` would emit.
+	let prefix = format!("X-Spam-Status: Yes\r\nX-Spam-Score: {score:.6}\r\n");
+	let mut out = Vec::with_capacity(data.len() + prefix.len());
+	out.extend_from_slice(prefix.as_bytes());
+	out.extend_from_slice(headers);
+	out.extend_from_slice(body);
+	out
+}
+
 #[cfg(test)]
 #[path = "trace_tests.rs"]
 mod tests;
