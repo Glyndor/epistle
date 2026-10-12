@@ -5,6 +5,7 @@ mod diff;
 mod edits;
 mod elements;
 mod file;
+mod lookup;
 mod restart;
 mod rules;
 mod tables;

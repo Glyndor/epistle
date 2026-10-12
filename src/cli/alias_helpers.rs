@@ -3,8 +3,10 @@
 
 use std::collections::HashSet;
 
+use crate::cli::config_edit::ConfigDocument;
 use crate::config::{Alias, Config};
 use crate::directory_store::AccountStore;
+use crate::util::address::normalize;
 use crate::util::address_reason;
 
 /// Validate that `raw` is a syntactically valid email address whose
@@ -29,11 +31,12 @@ pub(super) fn validate_alias_address(
 			address_reason::not_handled(parsed.domain())
 		));
 	}
+	let raw = &normalize(raw);
 	let used_by_account = config
 		.accounts
 		.iter()
 		.flat_map(|account| account.addresses.iter())
-		.any(|existing| existing.eq_ignore_ascii_case(raw));
+		.any(|existing| normalize(existing) == *raw);
 	if used_by_account {
 		return Err(format!("alias address {raw} is already used by an account"));
 	}
@@ -41,7 +44,7 @@ pub(super) fn validate_alias_address(
 		if dynamic
 			.addresses
 			.iter()
-			.any(|existing| existing.eq_ignore_ascii_case(raw))
+			.any(|existing| normalize(existing) == *raw)
 		{
 			return Err(format!("alias address {raw} is already used by an account"));
 		}
@@ -52,7 +55,7 @@ pub(super) fn validate_alias_address(
 		&& let Some(addresses) = file.get("addresses").and_then(|v| v.as_object())
 	{
 		for key in addresses.keys() {
-			if key.eq_ignore_ascii_case(raw) {
+			if normalize(key) == *raw {
 				return Err(format!(
 					"alias address {raw} is already used by a masked address"
 				));
@@ -73,12 +76,27 @@ pub(super) fn validate_member_or_sender(label: &str, raw: &str) -> Result<(), St
 	Ok(())
 }
 
-/// Find one alias by address, case-insensitively.
+/// Find one alias by address, whatever its spelling.
 pub(super) fn find_alias<'a>(config: &'a Config, address: &str) -> Option<&'a Alias> {
+	let wanted = normalize(address);
 	config
 		.alias
 		.iter()
-		.find(|alias| alias.address.eq_ignore_ascii_case(address))
+		.find(|alias| normalize(&alias.address) == wanted)
+}
+
+/// The `[[alias]]` address as the file spells it, for edits that match the
+/// element by its key; the stored form when the file has no such alias yet.
+pub(super) fn document_address(document: &ConfigDocument, address: &str) -> String {
+	let wanted = normalize(address);
+	document
+		.element_value("alias", "address", |raw| normalize(raw) == wanted)
+		.unwrap_or(wanted)
+}
+
+/// Every address in its stored form.
+pub(super) fn normalized(addresses: &[String]) -> Vec<String> {
+	addresses.iter().map(|address| normalize(address)).collect()
 }
 
 /// Read the disabled-overlay file directly when possible, falling back to

@@ -199,3 +199,134 @@ fn a_mixed_case_account_name_and_address_are_stored_in_lowercase() {
 		"suppressed bounce@elsewhere.example for alice\n"
 	);
 }
+
+#[test]
+fn alias_add_and_edits_write_lowercase() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let added = epistle(
+		&[
+			"alias",
+			"--config",
+			&config,
+			"add",
+			"Team@Example.ORG",
+			"Alice@Example.ORG",
+			"--sender",
+			"Bob@Example.org",
+		],
+		b"",
+	);
+	assert!(added.status.success(), "{}", stderr(&added));
+	let member = epistle(
+		&[
+			"alias",
+			"--config",
+			&config,
+			"member",
+			"add",
+			"TEAM@example.org",
+			"Carol@Example.ORG",
+		],
+		b"",
+	);
+	assert!(member.status.success(), "{}", stderr(&member));
+	let list = epistle(&["alias", "--config", &config, "list", "--json"], b"");
+	let rows: serde_json::Value = serde_json::from_slice(&list.stdout).expect("json");
+	assert_eq!(rows[0]["address"], "team@example.org");
+	assert_eq!(
+		rows[0]["members"],
+		serde_json::json!(["alice@example.org", "carol@example.org"])
+	);
+	assert_eq!(rows[0]["senders"], serde_json::json!(["bob@example.org"]));
+	let file = std::fs::read_to_string(&config).expect("config");
+	assert!(!file.contains("Example"), "{file}");
+}
+
+#[test]
+fn a_hand_written_mixed_case_alias_is_edited_and_removed_by_any_spelling() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let mut file = std::fs::read_to_string(&config).expect("config");
+	file.push_str(
+		"\n[[alias]]\naddress = \"Team@Example.ORG\"\nmembers = [\"alice@example.org\"]\n",
+	);
+	std::fs::write(&config, file).expect("write");
+	let member = epistle(
+		&[
+			"alias",
+			"--config",
+			&config,
+			"member",
+			"add",
+			"team@example.org",
+			"bob@example.org",
+		],
+		b"",
+	);
+	assert!(member.status.success(), "{}", stderr(&member));
+	let after = std::fs::read_to_string(&config).expect("config");
+	assert_eq!(after.matches("[[alias]]").count(), 1, "{after}");
+	let removed = epistle(
+		&[
+			"alias",
+			"--config",
+			&config,
+			"remove",
+			"team@example.org",
+			"--yes",
+		],
+		b"",
+	);
+	assert!(removed.status.success(), "{}", stderr(&removed));
+	let after = std::fs::read_to_string(&config).expect("config");
+	assert!(!after.contains("[[alias]]"), "{after}");
+}
+
+#[test]
+fn domain_and_domain_alias_edits_write_lowercase() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let mut file = std::fs::read_to_string(&config).expect("config");
+	file.push_str("\n[domain_aliases]\n\"Old.Example\" = \"example.org\"\n");
+	std::fs::write(&config, file).expect("write");
+	let added = epistle(&["domain", "--config", &config, "add", "Example.NET"], b"");
+	assert!(added.status.success(), "{}", stderr(&added));
+	let aliased = epistle(
+		&[
+			"domain",
+			"--config",
+			&config,
+			"alias",
+			"add",
+			"Alias.Example",
+			"Example.NET",
+		],
+		b"",
+	);
+	assert!(aliased.status.success(), "{}", stderr(&aliased));
+	let removed = epistle(
+		&[
+			"domain",
+			"--config",
+			&config,
+			"alias",
+			"remove",
+			"old.example",
+			"--yes",
+		],
+		b"",
+	);
+	assert!(removed.status.success(), "{}", stderr(&removed));
+	let file = std::fs::read_to_string(&config).expect("config");
+	assert!(
+		file.contains("domains = [\"example.org\", \"example.net\"]"),
+		"{file}"
+	);
+	assert!(
+		file.contains("\"alias.example\" = \"example.net\""),
+		"{file}"
+	);
+	assert!(!file.contains("Old.Example"), "{file}");
+	assert!(!file.contains("NET") && !file.contains("Alias."), "{file}");
+}

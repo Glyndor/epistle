@@ -14,7 +14,9 @@ use crate::config::Config;
 use super::config_edit::ConfigDocument;
 use super::style;
 
-use alias_helpers::{disabled_set, find_alias, validate_alias_address, validate_member_or_sender};
+use crate::util::address::normalize;
+use alias_helpers::{disabled_set, document_address, find_alias, normalized};
+use alias_helpers::{validate_alias_address, validate_member_or_sender};
 use alias_writers::{commit_and_restart, set_enabled, upsert_alias_members, upsert_alias_senders};
 
 #[path = "alias_helpers.rs"]
@@ -224,7 +226,7 @@ fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 			}
 			match commit_and_restart(
 				document,
-				&args.address,
+				&normalize(&args.address),
 				"added",
 				dry_run,
 				&mut out,
@@ -437,16 +439,21 @@ fn add_alias(config: &Config, document: &mut ConfigDocument, args: &AddArgs) -> 
 		validate_member_or_sender("sender", sender)?;
 	}
 	let hidden = !args.visible;
+	let (address, members, senders) = (
+		normalize(&args.address),
+		normalized(&args.members),
+		normalized(&args.senders),
+	);
 	let mut members_array = toml_edit::Array::new();
-	for member in &args.members {
+	for member in &members {
 		members_array.push(toml_edit::Value::from(member.clone()));
 	}
 	let mut fields: Vec<(&str, toml_edit::Value)> = Vec::new();
-	fields.push(("address", toml_edit::Value::from(args.address.clone())));
+	fields.push(("address", toml_edit::Value::from(address.clone())));
 	fields.push(("members", toml_edit::Value::Array(members_array)));
-	if !args.senders.is_empty() {
+	if !senders.is_empty() {
 		let mut senders_array = toml_edit::Array::new();
-		for sender in &args.senders {
+		for sender in &senders {
 			senders_array.push(toml_edit::Value::from(sender.clone()));
 		}
 		fields.push(("senders", toml_edit::Value::Array(senders_array)));
@@ -457,7 +464,7 @@ fn add_alias(config: &Config, document: &mut ConfigDocument, args: &AddArgs) -> 
 	if let Some(list_id) = &args.list_id {
 		fields.push(("list_id", toml_edit::Value::from(list_id.clone())));
 	}
-	document.upsert_element("alias", "address", &args.address, &fields)?;
+	document.upsert_element("alias", "address", &address, &fields)?;
 	Ok(())
 }
 
@@ -469,7 +476,8 @@ fn remove_alias(
 	if find_alias(config, address).is_none() {
 		return Err(format!("alias {address} not found"));
 	}
-	document.remove_elements("alias", "address", address)?;
+	let key = document_address(document, address);
+	document.remove_elements("alias", "address", &key)?;
 	Ok(())
 }
 
@@ -481,13 +489,11 @@ fn member_edit(
 	match args.action {
 		MemberSubcommand::Add { address, member } => {
 			validate_member_or_sender("member", &member)?;
+			let member = normalize(&member);
 			let alias =
 				find_alias(config, &address).ok_or_else(|| format!("alias {address} not found"))?;
 			let mut members = alias.members.clone();
-			if members
-				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&member))
-			{
+			if members.iter().any(|existing| normalize(existing) == member) {
 				return Err(format!("alias {address} already has member {member}"));
 			}
 			members.push(member.clone());
@@ -505,7 +511,7 @@ fn member_edit(
 			let mut members: Vec<String> = alias
 				.members
 				.iter()
-				.filter(|existing| !existing.eq_ignore_ascii_case(&member))
+				.filter(|existing| normalize(existing) != normalize(&member))
 				.cloned()
 				.collect();
 			if members.len() == alias.members.len() {
@@ -526,13 +532,11 @@ fn sender_edit(
 	match args.action {
 		SenderSubcommand::Add { address, sender } => {
 			validate_member_or_sender("sender", &sender)?;
+			let sender = normalize(&sender);
 			let alias =
 				find_alias(config, &address).ok_or_else(|| format!("alias {address} not found"))?;
 			let mut senders = alias.senders.clone();
-			if senders
-				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&sender))
-			{
+			if senders.iter().any(|existing| normalize(existing) == sender) {
 				return Err(format!("alias {address} already allows sender {sender}"));
 			}
 			senders.push(sender.clone());
@@ -545,7 +549,7 @@ fn sender_edit(
 			let senders: Vec<String> = alias
 				.senders
 				.iter()
-				.filter(|existing| !existing.eq_ignore_ascii_case(&sender))
+				.filter(|existing| normalize(existing) != normalize(&sender))
 				.cloned()
 				.collect();
 			if senders.len() == alias.senders.len() {

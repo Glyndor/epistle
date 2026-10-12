@@ -20,10 +20,11 @@ pub(super) fn upsert_alias_members(
 	for member in members {
 		values.push(toml_edit::Value::from(member.clone()));
 	}
+	let key = super::alias_helpers::document_address(document, address);
 	document.upsert_element(
 		"alias",
 		"address",
-		address,
+		&key,
 		&[("members", toml_edit::Value::Array(values))],
 	)
 }
@@ -38,10 +39,11 @@ pub(super) fn upsert_alias_senders(
 	for sender in senders {
 		values.push(toml_edit::Value::from(sender.clone()));
 	}
+	let key = super::alias_helpers::document_address(document, address);
 	document.upsert_element(
 		"alias",
 		"address",
-		address,
+		&key,
 		&[("senders", toml_edit::Value::Array(values))],
 	)
 }
