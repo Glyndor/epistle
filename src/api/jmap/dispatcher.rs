@@ -3,41 +3,38 @@
 //! A JMAP request envelope can carry a chain of `#`-prefixed arguments,
 //! where each call's argument references the result of a previous one
 //! (RFC 8620 §3.7). The resolver walks those references, substitutes the
-//! resolved value in place of the `#`-key, and bounds the cumulative
-//! materialised size of the chain so a chain that doubles the payload on
-//! every step (the classic reference-loop abuse) cannot blow past the
-//! per-request cap the Session advertises.
+//! resolved value in place of the `#`-key, and bounds what it
+//! materialises: one reference may resolve to no more objects than a `/get`
+//! or `/set` may name, and all of a request's references together to no more
+//! octets than a request may carry. A chain that doubles the payload on every
+//! step (the classic reference-loop abuse) is refused before it grows.
 
 use serde_json::Value;
 
-use super::MAX_SIZE_REQUEST;
+use super::limits::{MAX_OBJECTS_IN_GET, MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST};
 
-/// Per-request limits used by the back-reference resolver. Mirrors the
-/// values advertised in the Session resource (RFC 8620 §6.1): the
-/// `maxSizeRequest` byte cap and the sum of `maxObjectsInGet` and
-/// `maxObjectsInSet`. A request whose chain of `#`-prefixed arguments
-/// would materialise more than this is refused with `requestTooLarge`
-/// on the first call that crosses the bound.
+/// The limits the back-reference resolver applies, taken from the values
+/// the Session advertises (RFC 8620 §2). A call whose references cross
+/// either one is refused with `requestTooLarge`.
 pub(crate) struct RequestLimits {
-	/// Cumulative bytes of resolved arguments across the request. A
-	/// request whose chain would materialise more than this is
-	/// rejected on the first call that crosses the bound.
+	/// Bytes all of a request's references may resolve to together: a
+	/// request's arguments after resolution are no bigger than a request
+	/// may be (`maxSizeRequest`). Only what references resolve to counts,
+	/// not what the methods return.
 	pub max_size_request: u64,
-	/// Cumulative element count of resolved arguments across the
-	/// request. Mirrors the spec's `maxObjectsInGet + maxObjectsInSet`
-	/// cap; a request whose chain would materialise more leaves than
-	/// this is rejected the same way.
-	pub max_objects_total: u64,
+	/// Leaves (ids, in the usual `#ids` case) one reference may resolve to:
+	/// as many objects as a `/get` or `/set` may name.
+	pub max_objects_per_reference: u64,
 }
 
-/// The default per-request limits, matching the Session resource.
+/// The limits the resolver applies, matching the Session resource.
 pub(crate) const MAX_REQUEST_LIMITS: RequestLimits = RequestLimits {
-	// The Session's `maxSizeRequest`.
 	max_size_request: MAX_SIZE_REQUEST as u64,
-	// maxObjectsInGet (500) + maxObjectsInSet (500). The cap is on
-	// total resolved leaves, not on objects returned by a single
-	// method, so this is the conservative sum.
-	max_objects_total: 200,
+	max_objects_per_reference: if MAX_OBJECTS_IN_GET > MAX_OBJECTS_IN_SET {
+		MAX_OBJECTS_IN_GET as u64
+	} else {
+		MAX_OBJECTS_IN_SET as u64
+	},
 };
 
 /// Count the number of leaves (scalars, empty objects/arrays) in a
@@ -75,21 +72,18 @@ fn byte_size(value: &Value) -> u64 {
 		.unwrap_or(0)
 }
 
-/// A request-scoped counter that bounds the cumulative work the
-/// back-reference resolver does for a single JMAP request. Without
-/// this, a request of N `Core/echo` calls each carrying two
-/// references to the previous result would double the materialised
-/// data N times, so 25 calls could push a few KB into hundreds of MB
-/// the request would be processed and the answer would be huge.
-/// The resolver instead refuses the first call that crosses either
-/// bound with `requestTooLarge` (RFC 8620 §3.7.2 / §3.6.2).
+/// A request-scoped resolver that bounds the work back-references do for a
+/// single JMAP request. Without it, a request of N `Core/echo` calls each
+/// carrying two references to the previous result would double the
+/// materialised data N times, so 25 calls could push a few KB into
+/// hundreds of MB. The resolver instead refuses a call with
+/// `requestTooLarge` (RFC 8620 §5.1, §5.3) when one of its references
+/// resolves to more objects than a method may be given, or when the
+/// request's references together would exceed `maxSizeRequest`.
 pub(crate) struct Resolver {
 	limits: RequestLimits,
-	/// Cumulative resolved bytes materialised so far in the request.
+	/// Bytes the request's references have resolved to so far.
 	resolved_bytes: u64,
-	/// Cumulative resolved elements materialised so far in the
-	/// request.
-	resolved_elements: u64,
 }
 
 impl Resolver {
@@ -98,25 +92,13 @@ impl Resolver {
 		Self {
 			limits,
 			resolved_bytes: 0,
-			resolved_elements: 0,
 		}
 	}
 
-	/// Bytes and elements materialised so far. Read by the dispatcher
-	/// when it needs to attribute work to a particular call.
+	/// Bytes the request's references have resolved to so far.
 	#[cfg(test)]
-	pub fn materialised(&self) -> (u64, u64) {
-		(self.resolved_bytes, self.resolved_elements)
-	}
-
-	/// Record the cost of a method response just produced, so the next
-	/// call's references resolve against a counter that already
-	/// includes the new bytes.
-	pub fn record_result(&mut self, response: &Value) {
-		if let Some(args) = response.get(1) {
-			self.resolved_bytes = self.resolved_bytes.saturating_add(byte_size(args));
-			self.resolved_elements = self.resolved_elements.saturating_add(element_count(args));
-		}
+	pub fn materialised(&self) -> u64 {
+		self.resolved_bytes
 	}
 
 	/// Resolve the `#`-prefixed arguments of `args` against the
@@ -140,17 +122,20 @@ impl Resolver {
 			Ok(false) => return Err(ResolveError::Unresolvable),
 			Err(()) => return Err(ResolveError::Unresolvable),
 		}
-		// Sum the per-reference cost; the whole call's materialised
-		// value is the cap-relevant quantity.
-		let total_bytes: u64 = additions.iter().map(|(_, _, b, _)| *b).sum();
-		let total_elements: u64 = additions.iter().map(|(_, _, _, e)| *e).sum();
-		if self.resolved_bytes.saturating_add(total_bytes) > self.limits.max_size_request
-			|| self.resolved_elements.saturating_add(total_elements) > self.limits.max_objects_total
+		// Each reference on its own is held to the object limit; their
+		// bytes, added to what earlier calls' references resolved to, to
+		// the request size.
+		if additions
+			.iter()
+			.any(|(_, _, _, elements)| *elements > self.limits.max_objects_per_reference)
 		{
 			return Err(ResolveError::TooLarge);
 		}
+		let total_bytes: u64 = additions.iter().map(|(_, _, b, _)| *b).sum();
+		if self.resolved_bytes.saturating_add(total_bytes) > self.limits.max_size_request {
+			return Err(ResolveError::TooLarge);
+		}
 		self.resolved_bytes = self.resolved_bytes.saturating_add(total_bytes);
-		self.resolved_elements = self.resolved_elements.saturating_add(total_elements);
 		Ok(args)
 	}
 }
@@ -210,9 +195,9 @@ fn resolve_references_recursive(
 /// `invalidResultReference`).
 #[derive(Debug)]
 pub(crate) enum ResolveError {
-	/// Adding the resolved value would push the cumulative bytes or
-	/// element count over the per-request cap. The first call that
-	/// crosses the bound is rejected.
+	/// One reference resolves to more objects than a method may be
+	/// given, or the request's references together to more bytes than a
+	/// request may carry.
 	TooLarge,
 	/// A `#ResultOf` reference pointed at a missing call or path.
 	Unresolvable,

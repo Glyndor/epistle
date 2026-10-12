@@ -226,14 +226,14 @@ pub fn dispatch_request(
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
-		// responses. The resolver bounds the cumulative cost of a chain
-		// a request where each call's argument is a `#ResultOf`
-		// reference to the previous result would, without the bound,
-		// double the materialised data every step and reach hundreds
-		// of MB on a 25-call chain. The first call that crosses the
-		// bound is refused with `requestTooLarge` (RFC 8620 §3.7.2 /
-		// §3.6.2); an unresolvable reference fails with
-		// `invalidResultReference`.
+		// responses. Without a bound, a request where each call's argument
+		// is a `#ResultOf` reference to the previous result would double
+		// the materialised data every step and reach hundreds of MB on a
+		// 25-call chain. A call with a reference resolving to more
+		// objects than maxObjectsInGet/maxObjectsInSet, or whose
+		// references push the request's resolved bytes past
+		// maxSizeRequest, is refused with `requestTooLarge`; an
+		// unresolvable reference fails with `invalidResultReference`.
 		let args = match resolver.resolve(&args, &method_responses) {
 			Ok(args) => args,
 			Err(ResolveError::TooLarge) => {
@@ -264,13 +264,11 @@ pub fn dispatch_request(
 			&& state.require_scope_for_principal(principal, scope).is_err()
 		{
 			let response = jmap_scope_error(&call_id);
-			resolver.record_result(&response);
 			method_responses.push(response);
 			continue;
 		}
 		if limits::too_many_objects(&name, &args) {
 			let response = json!(["error", { "type": "requestTooLarge" }, call_id]);
-			resolver.record_result(&response);
 			method_responses.push(response);
 			continue;
 		}
@@ -302,7 +300,6 @@ pub fn dispatch_request(
 			"PushSubscription/get" => push_subscription::get(state, principal, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
-		resolver.record_result(&response);
 		method_responses.push(response);
 	}
 	Ok(Response { method_responses })

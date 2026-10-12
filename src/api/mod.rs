@@ -233,6 +233,10 @@ mod jmap_tests_limits_concurrency;
 mod auth_once_tests;
 
 #[cfg(test)]
+#[path = "jmap_tests_limits_backref.rs"]
+mod jmap_tests_limits_backref;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 
