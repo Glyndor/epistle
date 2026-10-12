@@ -127,8 +127,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
-	// task prunes stale triplets so the map stays bounded.
-	let greylist = super::serve_tasks::build_greylist(&config);
+	// task prunes stale triplets so the map stays bounded. The store is
+	// PostgreSQL-backed when `[database]` is configured, in-memory otherwise;
+	// the choice is logged once at startup.
+	let greylist = super::serve_tasks::build_greylist(&config, reputation_pool.as_ref()).await;
 
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With

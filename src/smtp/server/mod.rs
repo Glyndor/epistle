@@ -86,8 +86,10 @@ pub struct Server {
 	report_dir: Option<std::path::PathBuf>,
 	/// If set, inbound unauthenticated mail is sealed into its ARC chain.
 	arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
-	/// If set, greylist unseen triplets: the store and the delay in seconds.
-	greylist: Option<(Arc<crate::antispam::greylist::MemoryGreylist>, u64)>,
+	/// If set, greylist unseen triplets: the store (in-memory or
+	/// PostgreSQL-backed) and the delay in seconds. The trait object lets
+	/// `serve` swap in the persistent store when `[database]` is configured.
+	greylist: Option<(Arc<dyn crate::antispam::greylist::GreylistStore>, u64)>,
 	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
@@ -278,9 +280,11 @@ impl Server {
 	}
 
 	/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
+	/// The store can be either backing (`MemoryGreylist` or `PgGreylistStore`);
+	/// they implement the same trait.
 	pub fn with_greylist(
 		mut self,
-		store: Arc<crate::antispam::greylist::MemoryGreylist>,
+		store: Arc<dyn crate::antispam::greylist::GreylistStore>,
 		delay_secs: u64,
 	) -> Self {
 		self.greylist = Some((store, delay_secs));

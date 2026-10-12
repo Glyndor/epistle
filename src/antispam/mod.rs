@@ -10,6 +10,9 @@ pub mod bayes;
 pub mod clamd;
 pub mod corpus;
 pub mod greylist;
+#[path = "greylist_sql.rs"]
+mod greylist_sql;
+pub use greylist_sql::PgGreylistStore;
 pub mod hook;
 pub mod llm;
 pub mod reputation;

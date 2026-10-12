@@ -72,7 +72,8 @@ impl crate::spf::DnsLookup for ListingDns {
 /// greylist is in-memory; a real MTA retries and is then accepted.
 #[tokio::test]
 async fn unknown_sender_is_greylisted() {
-	let greylist = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+	let greylist: Arc<dyn crate::antispam::greylist::GreylistStore> =
+		Arc::new(crate::antispam::greylist::MemoryGreylist::new());
 	let sink = Arc::new(MemorySink::new());
 	let server = Arc::new(
 		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
@@ -109,7 +110,8 @@ async fn a_known_correspondent_skips_greylisting() {
 		.record("bob", &["correspondent@sender.example"])
 		.expect("seed marker");
 
-	let greylist = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+	let greylist: Arc<dyn crate::antispam::greylist::GreylistStore> =
+		Arc::new(crate::antispam::greylist::MemoryGreylist::new());
 	let sink = Arc::new(MemorySink::new());
 	let server = Arc::new(
 		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
@@ -147,7 +149,8 @@ async fn a_known_correspondent_is_still_checked_by_dnsbl() {
 		.record("bob", &["correspondent@sender.example"])
 		.expect("seed marker");
 
-	let greylist = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+	let greylist: Arc<dyn crate::antispam::greylist::GreylistStore> =
+		Arc::new(crate::antispam::greylist::MemoryGreylist::new());
 	let sink = Arc::new(MemorySink::new());
 	let server = Arc::new(
 		Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)

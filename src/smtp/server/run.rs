@@ -174,7 +174,10 @@ impl Server {
 						);
 					}
 					// Greylisting: defer an unseen triplet's first attempt. A real
-					// MTA retries and is then accepted.
+					// MTA retries and is then accepted. The store is the
+					// in-memory one by default and the PostgreSQL-backed one
+					// when `[database]` is configured, so a restart does not
+					// re-defer legitimate senders when persistence is enabled.
 					if known_correspondent.is_none()
 						&& let (Some((store, delay)), Some(ip), None) =
 							(&self.greylist, peer, session.authenticated())
@@ -190,7 +193,7 @@ impl Server {
 							recipient,
 						};
 						if crate::antispam::greylist::decide(store.as_ref(), &triplet, now, *delay)
-							== crate::antispam::greylist::Decision::Defer
+							.await == crate::antispam::greylist::Decision::Defer
 						{
 							tracing::info!(%ip, "greylisting: deferring first attempt");
 							send(
