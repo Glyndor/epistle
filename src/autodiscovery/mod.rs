@@ -21,6 +21,8 @@ mod https;
 pub mod mobileconfig;
 
 pub use https::serve;
+#[cfg(test)]
+pub(crate) use https::serve_on;
 
 /// Build the Thunderbird autoconfig `clientConfig` document for `domain`: IMAP
 /// over implicit TLS (993) and SMTP submission over STARTTLS (587),

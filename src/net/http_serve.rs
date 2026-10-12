@@ -25,22 +25,20 @@ pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Largest request head accepted, in bytes; a larger one gets 431.
 pub const MAX_REQUEST_HEAD: usize = 64 * 1024;
 
-/// Pause after a failed accept (for example out of file descriptors)
-/// before trying again, so the loop neither dies nor spins.
-const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
-
 /// Serve `router` on `listener` forever, with the peer address available
 /// to handlers as `ConnectInfo<SocketAddr>`.
 pub async fn serve(listener: TcpListener, router: Router) -> std::io::Result<()> {
+	serve_on(listener, router).await
+}
+
+/// [`serve`] over any source of connections.
+pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+	listener: A,
+	router: Router,
+) -> std::io::Result<()> {
+	let mut accepting = crate::net::accept::Accepting::new(listener);
 	loop {
-		let (stream, peer) = match listener.accept().await {
-			Ok(accepted) => accepted,
-			Err(error) => {
-				tracing::warn!(%error, "HTTP accept failed; retrying");
-				tokio::time::sleep(ACCEPT_BACKOFF).await;
-				continue;
-			}
-		};
+		let (stream, peer) = accepting.next().await;
 		let router = router.clone().layer(axum::Extension(ConnectInfo(peer)));
 		tokio::spawn(connection(stream, router));
 	}

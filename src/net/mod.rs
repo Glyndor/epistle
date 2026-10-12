@@ -17,6 +17,7 @@
 //! (stable since Rust 1.82; the crate's `rust-version` is 1.94) so a
 //! future Rust upgrade cannot silently regress this invariant.
 
+pub mod accept;
 pub mod http_serve;
 mod https_url;
 

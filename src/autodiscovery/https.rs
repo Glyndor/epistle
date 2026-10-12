@@ -26,7 +26,7 @@ const MAX_REQUEST_HEAD: usize = 8 * 1024;
 /// stalls cannot hold a slot.
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Serve `router` on `listener` until an accept error. With `tls` every
+/// Serve `router` on `listener`; a failed accept does not end it. With `tls` every
 /// connection is a TLS handshake followed by HTTP/1.1; without it the router
 /// is served as plain HTTP. At most `max_connections` TLS connections run at
 /// once; extra ones are closed straight away.
@@ -36,15 +36,25 @@ pub async fn serve(
 	tls: Option<TlsAcceptor>,
 	max_connections: usize,
 ) -> io::Result<()> {
+	serve_on(listener, router, tls, max_connections).await
+}
+
+/// [`serve`] over any source of connections.
+pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+	listener: A,
+	router: Router,
+	tls: Option<TlsAcceptor>,
+	max_connections: usize,
+) -> io::Result<()> {
 	let Some(tls) = tls else {
-		return crate::net::http_serve::serve(listener, router).await;
+		return crate::net::http_serve::serve_on(listener, router).await;
 	};
+	let mut accepting = crate::net::accept::Accepting::new(listener);
 	let semaphore = Arc::new(Semaphore::new(max_connections));
 	let mut connections = JoinSet::new();
 	loop {
 		tokio::select! {
-			accepted = listener.accept() => {
-				let (stream, _) = accepted?;
+			(stream, _) = accepting.next() => {
 				let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() else {
 					drop(stream);
 					continue;

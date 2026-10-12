@@ -539,9 +539,18 @@ impl Server {
 
 	/// Accept connections forever. Each connection runs in its own task.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = accepting.next().await;
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize before the address reaches
 			// SPF, DNSBL, the ban table, the greylist, the inbound rate
