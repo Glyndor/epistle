@@ -35,7 +35,10 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   count it was derived with, which the server announces in the exchange,
   and is rewritten at 600000 under a fresh salt the next time the account
   logs in successfully with PLAIN or LOGIN. Accounts in `mail.toml` carry
-  no verifier and are never rewritten.
+  no verifier and are never rewritten. `[auth] scram = false` turns SCRAM
+  off entirely: the mechanisms are no longer offered and no verifier is
+  stored for new passwords, so `accounts.toml` holds only argon2id hashes
+  once every account has changed its password.
 - **OAuth2/OIDC** (OAUTHBEARER/XOAUTH2) bearer tokens are verified against the
   configured issuer/audience/key.
 - **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths.

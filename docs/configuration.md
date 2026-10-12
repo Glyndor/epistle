@@ -420,6 +420,14 @@ ARC sealing of inbound mail (RFC 8617), so authentication survives forwarders.
 | `selector` | ARC selector. |
 | `key_file` | Ed25519 sealing key (DKIM format). |
 
+### `[auth]`
+Authentication mechanisms. Absent keeps the defaults. As with every other
+section, an unknown key fails the config load.
+
+| Key | Meaning |
+|---|---|
+| `scram` | Offer SCRAM-SHA-256 (and SCRAM-SHA-256-PLUS where channel binding is available) and store a SCRAM verifier for each dynamic account (default `true`). With `false` the mechanisms are not advertised on SMTP, IMAP or ManageSieve, an `AUTH`/`AUTHENTICATE` with them is refused exactly like an unknown mechanism, no verifier is derived when an account is created or its password set (CLI, `/api/v1/accounts`, SCIM), and the next password change of an account that has one drops it. PLAIN and LOGIN stay available. |
+
 ### `[oauth]`
 OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 
