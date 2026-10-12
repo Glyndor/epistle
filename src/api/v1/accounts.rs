@@ -210,7 +210,7 @@ pub async fn set_password(
 }
 
 /// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
-/// random salt. `None` when SCRAM is disabled via `[auth] scram = false` —
+/// random salt. `None` when SCRAM is disabled via `[auth] scram = false`:
 /// the password mutator passes that `None` to [`AccountStore::set_password_hash`]
 /// so an existing verifier is removed on the next password change. Fails
 /// closed if the CSPRNG cannot produce a salt rather than storing a

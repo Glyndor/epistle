@@ -143,7 +143,7 @@ fn successful_cleartext_auth_asks_for_a_4096_verifier_rewrite() {
 fn successful_cleartext_auth_does_not_rewrite_an_upgraded_verifier() {
 	// Once a verifier is already at the current iteration count, the
 	// upgrade is a no-op. The salt must not churn either, so the cost is
-	// one extra map lookup on every PLAIN/LOGIN — no PBKDER cost.
+	// one extra map lookup on every PLAIN/LOGIN, no PBKDF2 cost.
 	let password = fixtures::password();
 	let fresh = ScramStored::with_fresh_salt(password).expect("csprng");
 	let account = DynamicAccount {
