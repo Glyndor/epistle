@@ -73,6 +73,29 @@ pub(super) fn spawn_dmarc_flush(
 	Ok(())
 }
 
+/// Spawn the hourly TLS-RPT sender: each completed UTC day's recorded
+/// sessions become one report per `rua=` of the recipient domain, queued
+/// through `sink` (so `mailto:` reports are DKIM-signed like other mail) or
+/// POSTed. Not spawned with `[queue] tlsrpt_reports = false`.
+pub(super) fn spawn_tlsrpt_reports(
+	config: &Config,
+	dns: Arc<dyn crate::spf::DnsLookup>,
+	sink: Arc<dyn crate::smtp::sink::MessageSink>,
+) -> std::io::Result<()> {
+	if !config.queue.tlsrpt_reports {
+		return Ok(());
+	}
+	let poster = crate::tlsrpt::send::HttpsPoster::new().map_err(std::io::Error::other)?;
+	tokio::spawn(crate::tlsrpt::send::run(
+		config.data_dir.clone(),
+		config.hostname.clone(),
+		dns,
+		sink,
+		Arc::new(poster),
+	));
+	Ok(())
+}
+
 /// JMAP uploaded blobs are transient (RFC 8620 §6.1): time-to-live for an
 /// unreferenced upload before it is reclaimed.
 const BLOB_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);

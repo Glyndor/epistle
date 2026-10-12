@@ -127,7 +127,7 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `manage-sieve` | 4190 | ManageSieve (RFC 5804), STARTTLS before auth. Requires `[tls]`. |
 | `api` | 8025 | Management HTTP API. Requires `[api]`. |
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
-| `acme` | 80 | ACME HTTP-01 challenge responder. |
+| `acme` | 80 | ACME HTTP-01 challenge responder. Needed only with `[acme] challenge = "http-01"` (the default). |
 | `autoconfig` | 8091 | Serves Thunderbird autoconfig + Microsoft Autodiscover. Point `autoconfig.<domain>`/`autodiscover.<domain>` here (behind your TLS proxy). |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
@@ -140,7 +140,7 @@ A public install has to let inbound TCP through the host firewall (or fronting l
 | Port | Protocol | Required for |
 |---|---|---|
 | 25 | SMTP | Inbound mail from other servers. |
-| 80 | HTTP | Certificate issuance: the Let's Encrypt HTTP-01 challenge responder (`acme` listener). Open to the public internet — the CA connects from outside. |
+| 80 | HTTP | Certificate issuance with `[acme] challenge = "http-01"` (the default): the HTTP-01 challenge responder (`acme` listener). Open to the public internet, the CA connects from outside. Not needed with `tls-alpn-01` or `dns-01`. |
 | 143 | IMAP+STARTTLS | Mail clients that negotiate TLS on connect. |
 | 465 | Submissions | Mail clients that use implicit TLS for submission. |
 | 587 | Submission+STARTTLS | Mail clients that submit with STARTTLS. |
@@ -148,7 +148,7 @@ A public install has to let inbound TCP through the host firewall (or fronting l
 
 Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`, `8091` (autoconfig) when the operator wants Thunderbird/Outlook autodiscovery.
 
-Port 80 has to be open even when no certificate renewal is in flight: the ACME HTTP-01 challenge is the only mechanism Let's Encrypt uses for a fresh install, and the renewal loop runs against the same responder. Closing port 80 means the first certificate never lands.
+With the default `http-01` challenge, port 80 has to be open even when no certificate renewal is in flight: the first certificate and every renewal are validated through the same responder, so closing it means the first certificate never lands. Port 80 is needed only with `http-01`. With `tls-alpn-01` the CA connects to port 443 instead, and with `dns-01` it connects to nothing on this host (see [`[acme]`](#acme)).
 
 ## Sections
 
@@ -411,6 +411,11 @@ Automatic TLS certificates for the mail protocols (not the panel's web TLS).
 | `contacts` | Account contact URIs. |
 | `domains` | Domains to issue for (each must be a configured `domains` entry). |
 | `renew_before_days` | Renew this many days before expiry. |
+| `challenge` | How the CA validates each domain: `http-01` (default), `tls-alpn-01` or `dns-01`. |
+
+- `http-01`: the CA fetches a token from the `acme` listener on port 80.
+- `tls-alpn-01` (RFC 8737): the CA opens TLS to port 443 with the `acme-tls/1` ALPN. Requires a listener that terminates TLS on port 443 (`submissions`, `imaps` or `pop3s` with `port = 443`); the start is refused otherwise. While an order is pending that listener answers `acme-tls/1` with the challenge certificate; ordinary handshakes keep the normal certificate. TLS listeners then negotiate ALPN and offer `acme-tls/1`, `imap`, `pop3`, `managesieve` and `smtp`, so a client that offers only some other ALPN identifier is refused.
+- `dns-01`: the server publishes `_acme-challenge.<domain>` TXT through the `[dns]` provider, waits until every authoritative server of the zone returns it (up to 5 minutes, then the attempt fails with a message naming the record), asks the CA to validate, and removes the record afterwards whether the order succeeded or not. Requires a `[dns]` provider other than `manual`; the start is refused otherwise.
 
 ### `[arc]`
 ARC sealing of inbound mail (RFC 8617), so authentication survives forwarders.
@@ -607,7 +612,7 @@ guide's "Data at rest".
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
-| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. |
+| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
@@ -1146,8 +1151,9 @@ Outbound queue settings. Absent keeps the secure defaults.
 | Key | Meaning |
 |---|---|
 | `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
+| `tlsrpt_reports` | Send TLS-RPT reports (RFC 8460) about our outbound TLS, default `true`. Each direct delivery to a recipient MX records its TLS outcome (success, or the failure type: `starttls-not-supported`, `certificate-expired`, `certificate-host-mismatch`, `certificate-not-trusted`, `tlsa-invalid`, `sts-policy-invalid`, `validation-failure`) under `data_dir/reports/tlsrpt-outbound/`. Once a UTC day is over, every domain with sessions that publishes a `_smtp._tls` TXT record gets one report per `rua=`: `mailto:` as a message from `postmaster@<hostname>` with the gzip report attached, queued and DKIM-signed like other mail; `https:` as a POST with `Content-Type: application/tlsrpt+gzip` (30 s timeout, no redirects, at most 1 MiB). Domains without the record get nothing, and the day's sessions are deleted once reported. Mail through a `[[transport]]` relay is not recorded. `false` records and sends nothing. |
 
-This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
+`outbound_tls` never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
 
 ## JMAP submission
 

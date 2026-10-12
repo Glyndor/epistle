@@ -10,6 +10,7 @@ use crate::storage::FsSpool;
 
 use super::client::{self, DeliveryError};
 use super::resolver::Connector;
+use super::tls_outcome::{STS_POLICY_INVALID, TlsOutcome};
 
 /// Base retry delay; attempt n waits `base * 2^n`, capped at one hour.
 const BACKOFF_BASE_SECS: u64 = 60;
@@ -62,6 +63,9 @@ pub struct Worker {
 	/// STARTTLS authentication mode for unmandated, non-DANE delivery. Defaults
 	/// to strict PKIX (the secure default); see [`crate::config::OutboundTls`].
 	outbound_tls: crate::config::OutboundTls,
+	/// Data directory whose TLS-RPT journal records each direct delivery's TLS
+	/// outcome. `None` records nothing (sending reports is turned off).
+	tlsrpt_dir: Option<std::path::PathBuf>,
 }
 
 impl Worker {
@@ -81,7 +85,15 @@ impl Worker {
 			transports: Vec::new(),
 			dane_dns: None,
 			outbound_tls: crate::config::OutboundTls::default(),
+			tlsrpt_dir: None,
 		}
+	}
+
+	/// Record the TLS outcome of every direct MX delivery attempt in the
+	/// TLS-RPT session journal under `data_dir`.
+	pub fn with_tlsrpt(mut self, data_dir: &std::path::Path) -> Self {
+		self.tlsrpt_dir = Some(data_dir.to_path_buf());
+		self
 	}
 
 	/// Set the outbound STARTTLS authentication mode for unmandated, non-DANE
@@ -414,19 +426,25 @@ impl Worker {
 
 		for (domain, recipients) in by_domain {
 			// MTA-STS: an enforce policy constrains MX choice and mandates TLS.
-			let policy = match &self.mta_sts {
+			// A testing-mode policy is kept for TLS-RPT, which reports on it.
+			let mut sts_invalid = false;
+			let fetched = match &self.mta_sts {
 				Some((store, dns)) => match store.policy(dns.as_ref(), &domain).await {
-					Ok(policy) => {
-						policy.filter(|policy| policy.mode == crate::mtasts::Mode::Enforce)
-					}
+					Ok(policy) => policy,
 					Err(crate::mtasts::PolicyError::Temporary(reason)) => {
 						return Outcome::Retry(reason);
 					}
 					// Malformed/absent policies fall back to opportunistic.
-					Err(_) => None,
+					Err(error) => {
+						sts_invalid = matches!(error, crate::mtasts::PolicyError::Malformed(_));
+						None
+					}
 				},
 				None => None,
 			};
+			let policy = fetched
+				.clone()
+				.filter(|policy| policy.mode == crate::mtasts::Mode::Enforce);
 			// MTA-STS enforce or a sender's REQUIRETLS both mandate verified TLS.
 			let require_tls = policy.is_some() || entry.envelope.require_tls;
 
@@ -439,7 +457,7 @@ impl Worker {
 				.filter(|local| !local.is_empty());
 			let transport =
 				crate::config::select_transport(&self.transports, sender_account, &domain);
-			let (stream, server_name, auth, tls_required, dane) = match transport {
+			let (stream, server_name, auth, tls_required, dane, endpoints) = match transport {
 				Some(rule) if rule.kind == crate::config::TransportKind::Fail => {
 					return Outcome::Dropped(format!("transport policy rejects {domain}"));
 				}
@@ -465,12 +483,13 @@ impl Worker {
 					// starttls (required whenever AUTH is configured) forces TLS.
 					// DANE does not apply to a configured smarthost (RFC 7672 is
 					// keyed on the recipient's MX), so no TLSA records here.
-					(stream, host, auth, rule.starttls, Vec::new())
+					(stream, host, auth, rule.starttls, Vec::new(), None)
 				}
 				_ => {
 					// Direct (no rule, or kind = direct): MX delivery.
 					match self.connector.connect(&domain, policy.as_ref()).await {
-						Ok((stream, server_name)) => {
+						Ok(connection) => {
+							let server_name = connection.host;
 							// DANE: TLSA is published under the MX hostname. A
 							// transient TLSA lookup failure defers delivery rather
 							// than downgrading to opportunistic TLS (RFC 7672 §2.1).
@@ -482,13 +501,22 @@ impl Worker {
 									));
 								}
 							};
-							(stream, server_name, None, require_tls, tlsa)
+							let endpoints = Some((connection.local_ip, connection.peer_ip));
+							(
+								connection.stream,
+								server_name,
+								None,
+								require_tls,
+								tlsa,
+								endpoints,
+							)
 						}
 						Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
 						Err(DeliveryError::Permanent(reason)) => return Outcome::Dropped(reason),
 					}
 				}
 			};
+			let mut tls = None;
 			let result = client::deliver(
 				stream,
 				&server_name,
@@ -500,8 +528,28 @@ impl Worker {
 				auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
 				&dane,
 				self.outbound_tls,
+				&mut tls,
 			)
 			.await;
+			// TLS-RPT covers the recipient's own MX only, not a smarthost.
+			if let Some((local_ip, peer_ip)) = endpoints {
+				let outcome = match sts_invalid {
+					true => Some(TlsOutcome::Failure(STS_POLICY_INVALID)),
+					false => tls,
+				};
+				let attempt = crate::tlsrpt::sessions::Attempt {
+					policy_domain: &domain,
+					mx_host: &server_name,
+					sts: fetched.as_ref(),
+					sts_invalid,
+					dane: !dane.is_empty(),
+					local_ip,
+					peer_ip,
+				};
+				if let (Some(dir), Some(outcome)) = (&self.tlsrpt_dir, outcome) {
+					crate::tlsrpt::sessions::record(dir, self.now_epoch(), &attempt, outcome);
+				}
+			}
 			match result {
 				Ok(()) => {}
 				Err(DeliveryError::Transient(reason)) => return Outcome::Retry(reason),
@@ -523,3 +571,7 @@ enum Outcome {
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worker_tests_tlsrpt.rs"]
+mod tests_tlsrpt;

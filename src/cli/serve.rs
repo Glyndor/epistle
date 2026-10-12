@@ -235,6 +235,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	if let Some(webhook) = &webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}
+	if config.queue.tlsrpt_reports {
+		worker = worker.with_tlsrpt(&config.data_dir);
+	}
 	let worker = Arc::new(worker);
 	if config.start_queue_worker() {
 		tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
@@ -244,6 +247,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// DMARC aggregate report flush runs hourly in the background.
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
+	super::serve_tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 
 	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
 

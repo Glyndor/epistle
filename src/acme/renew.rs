@@ -1,7 +1,7 @@
 //! ACME renewal: persist the account key and issued certificate, decide when
 //! to renew, and hot-reload the TLS acceptor with a fresh certificate.
 //!
-//! This is the I/O glue tying the (unit-tested) ACME client, the HTTP-01
+//! This is the I/O glue tying the (unit-tested) ACME client, the challenge
 //! responder, certificate persistence and the reloadable acceptor together; it
 //! is excluded from the no-network coverage gate. The pure decision
 //! (`needs_renewal`) and key persistence are tested.
@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 
+use super::challenge::ChallengeResponder;
 use super::client::{AcmeClient, AcmeError};
-use super::http01::ChallengeStore;
 use super::jws::AccountKey;
 use super::renew_request::{Backoff, Issuer, Outcome, cycle};
 use super::transport::HttpTransport;
@@ -134,14 +134,15 @@ type TlsaPublisher = (
 	String,
 );
 
-/// Run one issuance: register, obtain a certificate over HTTP-01, persist it,
+/// Run one issuance: register, obtain a certificate through the configured
+/// challenge, persist it,
 /// hot-reload the acceptor, and (when a DNS provider is configured) refresh the
 /// TLSA record for the new certificate.
 async fn issue(
 	directory_url: &str,
 	contacts: &[String],
 	domains: &[String],
-	store: &ChallengeStore,
+	responder: &dyn ChallengeResponder,
 	data_dir: &Path,
 	reloadable: &ReloadableAcceptor,
 	tlsa: Option<&TlsaPublisher>,
@@ -150,7 +151,7 @@ async fn issue(
 	let key = load_or_create_account_key(data_dir)?;
 	let client = AcmeClient::connect(transport, key, directory_url).await?;
 	client.register(contacts).await?;
-	let (chain, key_pem) = client.obtain_certificate(domains, store, 10).await?;
+	let (chain, key_pem) = client.obtain_certificate(domains, responder, 10).await?;
 
 	let dir = data_dir.join("acme");
 	fs::create_dir_all(&dir).map_err(|e| AcmeError::Transport(e.to_string()))?;
@@ -179,7 +180,7 @@ struct AcmeIssuer {
 	directory_url: String,
 	contacts: Vec<String>,
 	domains: Vec<String>,
-	store: ChallengeStore,
+	responder: std::sync::Arc<dyn ChallengeResponder>,
 	data_dir: PathBuf,
 	reloadable: ReloadableAcceptor,
 	tlsa: Option<TlsaPublisher>,
@@ -191,7 +192,7 @@ impl Issuer for AcmeIssuer {
 			&self.directory_url,
 			&self.contacts,
 			&self.domains,
-			&self.store,
+			self.responder.as_ref(),
 			&self.data_dir,
 			&self.reloadable,
 			self.tlsa.as_ref(),
@@ -207,7 +208,7 @@ pub async fn run(
 	directory_url: String,
 	contacts: Vec<String>,
 	domains: Vec<String>,
-	store: ChallengeStore,
+	responder: std::sync::Arc<dyn ChallengeResponder>,
 	data_dir: PathBuf,
 	reloadable: ReloadableAcceptor,
 	renew_before_days: u64,
@@ -217,7 +218,7 @@ pub async fn run(
 		directory_url,
 		contacts,
 		domains,
-		store,
+		responder,
 		data_dir: data_dir.clone(),
 		reloadable,
 		tlsa,

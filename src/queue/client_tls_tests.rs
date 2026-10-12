@@ -109,6 +109,7 @@ async fn run_with(
 		None,
 		&tlsa,
 		mode,
+		&mut None,
 	)
 	.await;
 	let _ = task.await;

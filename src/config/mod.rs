@@ -33,7 +33,7 @@ pub(crate) use validate::validate_dns_name;
 mod webhook;
 
 pub use account::Account;
-pub use acme::Acme;
+pub use acme::{Acme, AcmeChallenge};
 pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};

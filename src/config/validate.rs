@@ -197,7 +197,8 @@ impl Config {
 				)));
 			}
 		}
-		Ok(())
+		super::acme::validate_challenge(acme, self.dns.as_ref(), &self.listeners)
+			.map_err(ConfigError::Invalid)
 	}
 
 	fn validate_api(&self) -> Result<(), ConfigError> {

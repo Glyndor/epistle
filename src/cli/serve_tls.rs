@@ -5,8 +5,12 @@
 
 use tokio_rustls::TlsAcceptor;
 
+use std::sync::Arc;
+
+use crate::acme::challenge::{ChallengeResponder, Dns01};
 use crate::acme::http01::ChallengeStore;
-use crate::config::Config;
+use crate::acme::tlsalpn::AlpnChallengeStore;
+use crate::config::{AcmeChallenge, Config};
 use crate::tls::{ReloadableAcceptor, tls_server_end_point};
 
 /// TLS/ACME startup state: listener acceptors share one reloadable certificate
@@ -38,8 +42,17 @@ pub(super) fn build_tls(
 		Some(served) => Some(crate::tls::acceptor(&served.tls).map_err(std::io::Error::other)?),
 		None => None,
 	};
-	// Every listener clone must retain the same certificate resolver.
-	let reloadable_tls = tls_acceptor.map(ReloadableAcceptor::new);
+	// Every listener clone must retain the same certificate resolver. With
+	// TLS-ALPN-01 that resolver also answers the CA's `acme-tls/1` handshake.
+	let alpn_store = config
+		.acme
+		.as_ref()
+		.filter(|acme| acme.challenge == AcmeChallenge::TlsAlpn01)
+		.map(|_| Arc::new(AlpnChallengeStore::new()));
+	let reloadable_tls = tls_acceptor.map(|acceptor| match &alpn_store {
+		Some(store) => ReloadableAcceptor::with_acme_alpn(acceptor, store.clone()),
+		None => ReloadableAcceptor::new(acceptor),
+	});
 	let tls_acceptor = reloadable_tls.as_ref().map(ReloadableAcceptor::current);
 
 	// SCRAM-SHA-256-PLUS channel binding (tls-server-end-point). Offered only
@@ -63,11 +76,12 @@ pub(super) fn build_tls(
 					.as_ref()
 					.and_then(|dns| dns.build_for_host(&config.hostname))
 					.map(|provider| (provider, config.hostname.clone()));
+				let responder = responder(config, challenge_store, alpn_store)?;
 				tokio::spawn(crate::acme::renew::run(
 					acme.directory_url.clone(),
 					acme.contacts.clone(),
 					acme.domains.clone(),
-					challenge_store,
+					responder,
 					config.data_dir.clone(),
 					reloadable.clone(),
 					u64::from(acme.renew_before_days),
@@ -83,6 +97,34 @@ pub(super) fn build_tls(
 		reloadable_tls,
 		channel_binding,
 	})
+}
+
+/// The responder for the configured `[acme] challenge`. Validation already
+/// refused a dns-01 without a publishing `[dns]` provider; a provider whose
+/// credentials cannot be loaded still stops the start here (fail closed).
+fn responder(
+	config: &Config,
+	http01: ChallengeStore,
+	alpn: Option<Arc<AlpnChallengeStore>>,
+) -> std::io::Result<Arc<dyn ChallengeResponder>> {
+	let challenge = config.acme.as_ref().map(|acme| acme.challenge);
+	match (challenge, alpn) {
+		(Some(AcmeChallenge::TlsAlpn01), Some(store)) => Ok(Arc::new(store)),
+		(Some(AcmeChallenge::Dns01), _) => {
+			let provider = config
+				.dns
+				.as_ref()
+				.and_then(|dns| dns.build_for_host(&config.hostname))
+				.ok_or_else(|| {
+					std::io::Error::other(
+						"[acme] challenge = \"dns-01\": the [dns] provider could not be built (check its credentials)",
+					)
+				})?;
+			let visibility = crate::acme::dns01_authoritative::AuthoritativeTxt::from_system()?;
+			Ok(Arc::new(Dns01::new(provider, Arc::new(visibility))))
+		}
+		_ => Ok(Arc::new(http01)),
+	}
 }
 
 #[cfg(test)]
