@@ -321,7 +321,7 @@ where
 			let Some(tls) = tls_acceptor else {
 				return Ok(());
 			};
-			let upgraded = tls.accept(stream).await?;
+			let upgraded = crate::tls::accept_within(tls, stream).await?;
 			stream = Box::new(upgraded);
 			session.set_tls();
 			decoder = LineDecoder::new();

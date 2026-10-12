@@ -242,7 +242,7 @@ impl Server {
 	{
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
-				let tls = self.tls.accept(stream).await?;
+				let tls = crate::tls::accept_within(&self.tls, stream).await?;
 				let identity = tls
 					.get_ref()
 					.1
@@ -502,7 +502,7 @@ impl Server {
 				if output.upgrade_tls {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
-					let tls = self.tls.accept(stream).await?;
+					let tls = crate::tls::accept_within(&self.tls, stream).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls
 						.get_ref()

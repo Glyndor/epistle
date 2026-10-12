@@ -89,7 +89,7 @@ impl Server {
 	}
 
 	async fn handle(&self, stream: TcpStream, peer_ip: std::net::IpAddr) -> std::io::Result<()> {
-		let stream = self.tls.accept(stream).await?;
+		let stream = crate::tls::accept_within(&self.tls, stream).await?;
 		let backend = MailboxBackend::new_with_crypto(
 			self.directory.clone(),
 			self.data_dir.clone(),

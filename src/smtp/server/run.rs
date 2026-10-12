@@ -580,7 +580,7 @@ impl Server {
 					// Bytes received before the handshake are discarded:
 					// a pipelining client cannot smuggle plaintext commands
 					// into the TLS session.
-					let tls_stream = acceptor.current().accept(stream).await?;
+					let tls_stream = crate::tls::accept_within(&acceptor.current(), stream).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls_stream
 						.get_ref()

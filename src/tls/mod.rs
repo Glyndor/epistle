@@ -170,6 +170,30 @@ pub fn acceptor_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsAcceptor,
 mod reload;
 pub use reload::ReloadableAcceptor;
 
+/// How long a client gets to complete a TLS handshake, on an implicit-TLS
+/// listener or after STARTTLS. Every read after the handshake has its own
+/// protocol timeout; without this one a client that connects and stalls
+/// mid-handshake would hold the connection and its task forever.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Accept a TLS connection on `stream`, giving up with
+/// [`std::io::ErrorKind::TimedOut`] after [`HANDSHAKE_TIMEOUT`].
+pub async fn accept_within<IO>(
+	acceptor: &TlsAcceptor,
+	stream: IO,
+) -> std::io::Result<tokio_rustls::server::TlsStream<IO>>
+where
+	IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+	match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+		Ok(result) => result,
+		Err(_) => Err(std::io::Error::new(
+			std::io::ErrorKind::TimedOut,
+			"TLS handshake timed out",
+		)),
+	}
+}
+
 mod served;
 pub use served::{CertSource, ServedTls, served_tls};
 
@@ -199,6 +223,10 @@ fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>, TlsError> {
 		other => TlsError::Invalid(other.to_string()),
 	})
 }
+
+#[cfg(test)]
+#[path = "handshake_tests.rs"]
+mod handshake_tests;
 
 /// Test-only helpers shared across modules.
 #[cfg(test)]
