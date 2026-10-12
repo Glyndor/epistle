@@ -91,3 +91,21 @@ async fn the_change_log_is_not_listed_as_a_member() {
 	assert!(listing.contains("/cal/a.ics"));
 	assert!(!listing.contains("changelog"));
 }
+
+#[tokio::test]
+async fn the_change_log_cannot_be_read_or_replaced() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = test_app(dir.path());
+	send_as_alice(&app, "MKCOL", "/cal", &[], MKCOL_CALENDAR).await;
+	send_as_alice(&app, "PUT", "/cal/a.ics", &[], EVENT).await;
+	let before = propfind(&app, "/cal", "0").await;
+	for method in ["GET", "PUT", "DELETE"] {
+		let (status, _) = send_as_alice(&app, method, "/cal/.changelog", &[], b"forged").await;
+		assert_eq!(status, StatusCode::NOT_FOUND, "{method}");
+	}
+	let dest = [("Destination", "/cal/.changelog")];
+	let (status, _) = send_as_alice(&app, "COPY", "/cal/a.ics", &dest, b"").await;
+	assert_eq!(status, StatusCode::FORBIDDEN);
+	let after = propfind(&app, "/cal", "0").await;
+	assert_eq!(ctag(&after), ctag(&before), "the log is untouched");
+}
