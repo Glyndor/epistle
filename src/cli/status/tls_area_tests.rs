@@ -153,6 +153,7 @@ async fn a_renewed_acme_certificate_wins_over_the_bootstrap_file() {
 		contacts: Vec::new(),
 		domains: vec!["mail.example.org".into()],
 		renew_before_days: 30,
+		challenge: crate::config::AcmeChallenge::Http01,
 	});
 	let report = check(&ctx).await;
 	assert_eq!(report.status, Level::Ok, "{report:?}");
