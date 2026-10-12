@@ -210,7 +210,9 @@ fn push_subscription_set_then_get_round_trips() {
 		.expect("list");
 	assert_eq!(list.len(), 1);
 	assert_eq!(list[0]["id"], id);
-	assert_eq!(list[0]["url"], "https://push.example/endpoint");
+	// RFC 8620 §7.2.1: `url` is never returned; the rest round-trips.
+	assert!(list[0].get("url").is_none(), "{}", list[0]);
+	assert_eq!(list[0]["types"], json!(["Email"]));
 }
 
 #[test]
