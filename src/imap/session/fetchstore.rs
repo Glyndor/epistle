@@ -2,7 +2,8 @@
 //! operations (RFC 7162).
 
 use super::super::command::SequenceSet;
-use super::mailbox::{Flag, render_flags};
+use super::mailbox::{Flag, Snapshot, render_flags};
+use super::select::flags_line_for;
 use super::state::State;
 use super::{Output, Session, StoreMode};
 
@@ -21,6 +22,24 @@ fn next_flags(mode: StoreMode, current: &[Flag], flags: &[Flag]) -> Vec<Flag> {
 	};
 	super::mailbox::dedup_flags(&mut next);
 	next
+}
+
+/// Every user keyword currently attached to any message in `snapshot`,
+/// deduplicated case-insensitively. Used to detect when STORE newly
+/// places a keyword on a message so the response can advertise it via
+/// an updated FLAGS line (RFC 9051 7.3.5) before the FETCH that
+/// mentions the keyword.
+fn collect_mailbox_keywords(snapshot: &Snapshot) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for message in snapshot.messages() {
+		for keyword in super::mailbox::keywords_in(&message.flags) {
+			let name = keyword.as_str().to_string();
+			if !out.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+				out.push(name);
+			}
+		}
+	}
+	out
 }
 
 impl Session {
@@ -120,6 +139,16 @@ impl Session {
 		}
 		let mut response = String::new();
 		let mut modified: Vec<u32> = Vec::new();
+		// RFC 9051 7.3.5: any keyword a STORE places on a message for the
+		// first time in this mailbox must appear in an untagged FLAGS
+		// response before the FETCH that mentions it. Dovecot's imaptest
+		// tracks the keyword set the client last heard about and treats
+		// any FETCH that introduces a keyword the FLAGS list hasn't
+		// advertised as a state error. Sampling the keyword set before
+		// the loop lets the comparison stay cheap (a single pass over the
+		// messages) and gives a deterministic answer when many messages
+		// gain the same new keyword.
+		let pre_keywords = collect_mailbox_keywords(&snapshot);
 		for sequence_number in 1..=total {
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;
@@ -185,6 +214,27 @@ impl Session {
 				}
 			}
 		}
+		// Compare the keyword set after `store_flags` against the
+		// pre-loop snapshot. Only the genuinely new keywords need
+		// advertising: STORE -FLAGS on the last message carrying a
+		// keyword leaves the mailbox keyword set unchanged, and
+		// emitting a redundant FLAGS line in that case would just be
+		// more bytes on the wire.
+		let post_keywords = collect_mailbox_keywords(&snapshot);
+		let newly_added: Vec<String> = post_keywords
+			.into_iter()
+			.filter(|name| {
+				!pre_keywords
+					.iter()
+					.any(|existing| existing.eq_ignore_ascii_case(name))
+			})
+			.collect();
+		let prelude = if newly_added.is_empty() {
+			String::new()
+		} else {
+			format!("* {}", flags_line_for(&newly_added))
+		};
+		response = format!("{prelude}{response}");
 		let code = if modified.is_empty() {
 			String::new()
 		} else {
