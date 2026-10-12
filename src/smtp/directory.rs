@@ -384,6 +384,13 @@ impl Directory {
 		self.domains.iter().cloned().collect()
 	}
 
+	/// Whether `domain` is hosted here, directly or as an alias domain:
+	/// the domains the DKIM key is published for.
+	pub fn hosts_domain(&self, domain: &str) -> bool {
+		let domain = domain.to_ascii_lowercase();
+		self.domains.contains(&domain) || self.domain_aliases.contains_key(&domain)
+	}
+
 	/// The storage quota for an account: its own quota, else the quota of a
 	/// hosted domain it has an address in, else `None` (use the server default).
 	pub fn quota_for(&self, account: &str) -> Option<u64> {
