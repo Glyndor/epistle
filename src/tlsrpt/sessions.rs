@@ -7,8 +7,9 @@
 //! store. Losing a line costs one session in a report, so a write failure is
 //! logged and never holds up delivery.
 
+use std::io::BufRead;
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::mtasts::{Mode, Policy};
 use crate::queue::tls_outcome::TlsOutcome;
@@ -88,4 +89,23 @@ fn policy_strings(policy: &Policy) -> Vec<String> {
 	lines.extend(policy.mx.iter().map(|mx| format!("mx: {mx}")));
 	lines.push(format!("max_age: {}", policy.max_age));
 	lines
+}
+
+/// The journal root, `data_dir/reports/tlsrpt-outbound`.
+pub(crate) fn root(data_dir: &Path) -> PathBuf {
+	data_dir.join("reports").join(OUTBOUND_TLSRPT)
+}
+
+/// Every session in one journal file. Unparsable lines are skipped so one
+/// torn write does not cost the rest of the day.
+pub(crate) fn read(path: &Path) -> Vec<TlsSession> {
+	let Ok(file) = std::fs::File::open(path) else {
+		return Vec::new();
+	};
+	std::io::BufReader::new(file)
+		.lines()
+		.map_while(Result::ok)
+		.filter(|line| !line.is_empty())
+		.filter_map(|line| serde_json::from_str(&line).ok())
+		.collect()
 }

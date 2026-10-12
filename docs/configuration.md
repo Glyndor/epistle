@@ -612,7 +612,7 @@ guide's "Data at rest".
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
-| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. |
+| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
@@ -1151,8 +1151,9 @@ Outbound queue settings. Absent keeps the secure defaults.
 | Key | Meaning |
 |---|---|
 | `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
+| `tlsrpt_reports` | Send TLS-RPT reports (RFC 8460) about our outbound TLS, default `true`. Each direct delivery to a recipient MX records its TLS outcome (success, or the failure type: `starttls-not-supported`, `certificate-expired`, `certificate-host-mismatch`, `certificate-not-trusted`, `tlsa-invalid`, `sts-policy-invalid`, `validation-failure`) under `data_dir/reports/tlsrpt-outbound/`. Once a UTC day is over, every domain with sessions that publishes a `_smtp._tls` TXT record gets one report per `rua=`: `mailto:` as a message from `postmaster@<hostname>` with the gzip report attached, queued and DKIM-signed like other mail; `https:` as a POST with `Content-Type: application/tlsrpt+gzip` (30 s timeout, no redirects, at most 1 MiB). Domains without the record get nothing, and the day's sessions are deleted once reported. Mail through a `[[transport]]` relay is not recorded. `false` records and sends nothing. |
 
-This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
+`outbound_tls` never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
 
 ## JMAP submission
 

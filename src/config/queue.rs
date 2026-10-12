@@ -53,3 +53,17 @@ impl Default for Queue {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn tlsrpt_reports_default_on_and_can_be_turned_off() {
+		assert!(Queue::default().tlsrpt_reports);
+		let parsed: Queue = toml::from_str("outbound_tls = \"strict\"").expect("parse");
+		assert!(parsed.tlsrpt_reports);
+		let off: Queue = toml::from_str("tlsrpt_reports = false").expect("parse");
+		assert!(!off.tlsrpt_reports);
+	}
+}
