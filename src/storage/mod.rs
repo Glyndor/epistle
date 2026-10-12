@@ -10,6 +10,8 @@ pub(crate) mod blob_backend;
 pub mod correspondents;
 mod crypto;
 mod delivery;
+pub(crate) mod lock;
+pub(crate) mod locked;
 mod routing;
 mod spool;
 
@@ -36,12 +38,24 @@ pub use spool::{Envelope, FsSpool, SpoolEntry};
 /// The file is created `O_EXCL` at `0600` from the start — never written at the
 /// umask default and tightened afterwards — so a file holding secrets (account
 /// TOTP/credential stores, corpus keys) is never briefly group- or
-/// world-readable. Writes to a sibling temp, fsyncs, then renames onto `path`.
+/// world-readable. The temp file lives in the same directory as `path` and
+/// carries a UUID v7 suffix so two concurrent writers never share a name (the
+/// older fixed `<file>.secret.tmp` name would let a second writer `unlink`
+/// the first's temp mid-write). The temp is `fsync(2)`'d before the rename,
+/// and the parent directory is `fsync(2)`'d afterwards so the rename survives
+/// a power failure between the rename and a follow-up dirent write.
 pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 	use std::io::Write;
-	let tmp = path.with_extension("secret.tmp");
-	// A leftover temp from a crashed write would make create_new fail.
-	let _ = std::fs::remove_file(&tmp);
+	let parent = path
+		.parent()
+		.filter(|p| !p.as_os_str().is_empty())
+		.unwrap_or(std::path::Path::new("."));
+	let name = path
+		.file_name()
+		.and_then(|n| n.to_str())
+		.unwrap_or("secret");
+	let unique = uuid::Uuid::now_v7();
+	let tmp = parent.join(format!(".{name}.{unique}.tmp"));
 	let mut options = std::fs::OpenOptions::new();
 	options.write(true).create_new(true);
 	#[cfg(unix)]
@@ -54,7 +68,11 @@ pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
 		file.write_all(bytes)?;
 		file.sync_all()?;
 	}
-	std::fs::rename(&tmp, path)
+	std::fs::rename(&tmp, path)?;
+	// `fsync(2)` the parent directory so the rename survives a power
+	// failure that hits the file but not the dirent write.
+	std::fs::File::open(parent).and_then(|dir| dir.sync_all())?;
+	Ok(())
 }
 
 /// Load a 32-byte per-instance key stored under `data_dir`/`name`, generating and
@@ -110,3 +128,15 @@ mod secret_write_tests {
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "lock_tests.rs"]
+mod lock_tests;
+
+#[cfg(test)]
+#[path = "locked_tests.rs"]
+mod locked_tests;
+
+#[cfg(test)]
+#[path = "secret_write_concurrency_tests.rs"]
+mod secret_write_concurrency_tests;
