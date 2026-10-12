@@ -48,7 +48,7 @@ impl StoredSubscription {
 /// its label, which survives a rotation of the secret, and the configured
 /// static token is its own caller. `None` when the credential no longer maps
 /// to a key, which owns nothing.
-fn owner_of(state: &ApiState, principal: &Principal) -> Option<String> {
+pub(crate) fn owner_of(state: &ApiState, principal: &Principal) -> Option<String> {
 	if let Principal::Account { name, .. } = principal {
 		return Some(format!("account:{name}"));
 	}

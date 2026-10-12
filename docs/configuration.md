@@ -360,7 +360,9 @@ and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
   journal once a second for every account the key reaches, sends a
   `state` event when one moved and a `ping` (1 to 300 seconds) when idle,
   and ends once the key or its account stops being valid. No event ids
-  are sent; a reconnecting client catches up with `/changes`.
+  are sent; a reconnecting client catches up with `/changes`. One
+  credential holds at most 4 streams open at once; the next answers 429
+  with the JMAP `limit` error.
 
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.

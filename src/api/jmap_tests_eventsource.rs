@@ -234,3 +234,27 @@ async fn the_event_source_needs_read_and_valid_arguments() {
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
 	}
 }
+
+#[tokio::test]
+async fn one_caller_holds_a_bounded_number_of_streams() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(es_state(dir.path()));
+	let max = crate::api::jmap::event_source::MAX_STREAMS_PER_CALLER;
+	let mut held = Vec::new();
+	for _ in 0..max {
+		let (status, body) = open(&app, ALICE, "types=*&closeafter=no&ping=0").await;
+		assert_eq!(status, StatusCode::OK);
+		held.push(body);
+	}
+	let (status, _) = open(&app, ALICE, "types=*&closeafter=no&ping=0").await;
+	assert_eq!(
+		status,
+		StatusCode::TOO_MANY_REQUESTS,
+		"a caller past the cap must be refused"
+	);
+	let (status, _carol) = open(&app, CAROL, "types=*&closeafter=no&ping=0").await;
+	assert_eq!(status, StatusCode::OK, "the cap is per caller");
+	held.pop();
+	let (status, _) = open(&app, ALICE, "types=*&closeafter=no&ping=0").await;
+	assert_eq!(status, StatusCode::OK, "a closed stream frees its slot");
+}
