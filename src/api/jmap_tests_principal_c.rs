@@ -216,6 +216,7 @@ async fn websocket_requests_reach_only_the_principals_accounts() {
 		let auth = MatchedAuth {
 			token: Some(SECRET.to_string()),
 			client_ip: None,
+			configured: false,
 		};
 		let principal = Principal::for_token(&state, &auth);
 		let frame = |account: &str| {

@@ -113,7 +113,9 @@ impl Principal {
 				credential: None,
 			};
 		};
-		if state.is_configured_token(token) {
+		// Read from the middleware, which compared the bearer against the
+		// configured hash once for the whole request.
+		if auth.configured {
 			return Principal::Admin { credential: None };
 		}
 		let now = std::time::SystemTime::now()

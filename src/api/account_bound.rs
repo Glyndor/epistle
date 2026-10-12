@@ -33,7 +33,7 @@ pub(crate) fn is_account_bound(state: &ApiState, auth: &MatchedAuth) -> bool {
 	let Some(token) = auth.token.as_deref() else {
 		return false;
 	};
-	if state.is_configured_token(token) {
+	if auth.configured {
 		return false;
 	}
 	let now = std::time::SystemTime::now()

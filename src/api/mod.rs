@@ -229,6 +229,10 @@ mod jmap_tests_limits_objects;
 mod jmap_tests_limits_concurrency;
 
 #[cfg(test)]
+#[path = "auth_once_tests.rs"]
+mod auth_once_tests;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 

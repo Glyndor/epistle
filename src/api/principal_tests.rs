@@ -67,6 +67,7 @@ fn a_token_that_matches_no_credential_reaches_no_account() {
 	let auth = MatchedAuth {
 		token: Some("removed-key-secret".to_string()),
 		client_ip: None,
+		configured: false,
 	};
 	let principal = Principal::for_token(&state, &auth);
 	assert!(
