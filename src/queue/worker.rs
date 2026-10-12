@@ -374,3 +374,7 @@ mod tests_tlsrpt;
 #[cfg(test)]
 #[path = "worker_tests_recipients.rs"]
 mod tests_recipients;
+
+#[cfg(test)]
+#[path = "worker_tests_classes.rs"]
+mod tests_classes;

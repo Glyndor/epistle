@@ -207,3 +207,53 @@ fn accept_any_verifier_asserts_and_advertises_schemes() {
 	// matches what the signature checks can verify.
 	assert!(!verifier.supported_verify_schemes().is_empty());
 }
+
+#[test]
+fn a_reply_is_read_by_its_code_and_enhanced_status() {
+	let cases: &[(u16, &str, DeliveryError)] = &[
+		(
+			550,
+			"550 5.1.1 no such user\r\n",
+			DeliveryError::Permanent("550 5.1.1 no such user".into()),
+		),
+		// Mailbox full is persistent transient (RFC 3463 X.2.2), whatever
+		// the basic code says.
+		(
+			552,
+			"552 5.2.2 mailbox full\r\n",
+			DeliveryError::Transient("552 5.2.2 mailbox full".into()),
+		),
+		// A multiline reply reads as one line, its status code once.
+		(
+			550,
+			"550-5.7.1 rejected by\r\n550 5.7.1 local policy\r\n",
+			DeliveryError::Permanent("550 5.7.1 rejected by local policy".into()),
+		),
+		(
+			451,
+			"451 4.3.0 try again later\r\n",
+			DeliveryError::Transient("451 4.3.0 try again later".into()),
+		),
+		// No enhanced status: the basic code decides; 552 is a storage
+		// allocation problem (RFC 5321 §4.5.3.1.10), retried.
+		(
+			552,
+			"552 too much mail stored\r\n",
+			DeliveryError::Transient("552 too much mail stored".into()),
+		),
+		// An enhanced status whose class contradicts the reply code is
+		// ignored (RFC 3463 §2): the basic 550 stands.
+		(
+			550,
+			"550 4.2.2 odd\r\n",
+			DeliveryError::Permanent("550 4.2.2 odd".into()),
+		),
+	];
+	for (code, raw, expected) in cases {
+		assert_eq!(
+			&DeliveryError::from_reply(*code, raw),
+			expected,
+			"reply {raw:?}"
+		);
+	}
+}

@@ -31,11 +31,17 @@ pub enum DeliveryError {
 }
 
 impl DeliveryError {
-	fn from_reply(code: u16, line: &str) -> Self {
-		if code >= 500 {
-			DeliveryError::Permanent(format!("{code} {line}"))
+	/// The error for a reply that was not the one expected. `raw` is the
+	/// whole reply as received; the reason keeps it as one line. Whether it
+	/// is worth retrying follows the reply's enhanced status when it has one
+	/// (a 552 5.2.2 full mailbox is retried), else its basic code.
+	fn from_reply(code: u16, raw: &str) -> Self {
+		let reason = super::reply::normalize(code, raw);
+		let text = reason.get(4..).unwrap_or_default();
+		if code >= 500 && super::reply::classify(code, text).permanent {
+			DeliveryError::Permanent(reason)
 		} else {
-			DeliveryError::Transient(format!("{code} {line}"))
+			DeliveryError::Transient(reason)
 		}
 	}
 }

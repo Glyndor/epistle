@@ -4,6 +4,7 @@
 use super::Worker;
 use super::conversation::Conversation;
 use crate::queue::client::DeliveryError;
+use crate::queue::reply::{FailureClass, classify_reason};
 use crate::storage::{RecipientStatus, SpoolEntry};
 
 impl Worker {
@@ -58,6 +59,18 @@ impl Worker {
 				}
 				Err(DeliveryError::Permanent(reason)) => {
 					tracing::warn!(%id, %recipient, remote, %reason, "delivery failed");
+					if classify_reason(reason, true).class == FailureClass::PolicyRejected {
+						// Not the address: the remote does not want mail from
+						// us. The operator has to look at the sending side.
+						tracing::warn!(
+							%id,
+							remote,
+							%reason,
+							"remote refused mail on policy grounds: check the sending \
+							 reputation (IP and domain listings, SPF, DKIM, DMARC)"
+						);
+						self.metric(|m| m.outbound_policy_rejected());
+					}
 					self.suppress(&entry.envelope.reverse_path, recipient);
 					self.notify_failed(recipient, reason);
 				}
