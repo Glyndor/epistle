@@ -211,54 +211,39 @@ jobs:
           # The marker is a positional arg because it is a single
           # value and is not a secret.
           python3 - "$MARKER" <<'PYEOF'
-          import socket, ssl, base64, os, sys
+          import imaplib, os, smtplib, ssl, sys, time
+          from email.message import EmailMessage
           account = "tester@epistle.test"
           pw = os.environ["E2E_PASSWORD"]
-          ca = os.environ["E2E_CA_PEM"]
-          ctx = ssl.create_default_context()
-          ctx.load_verify_locations(cafile=ca)
+          marker = sys.argv[1]
+          ctx = ssl.create_default_context(cafile=os.environ["E2E_CA_PEM"])
           ctx.check_hostname = False
 
           # 1) Submit a message over the implicit-TLS submissions port.
-          s = ctx.wrap_socket(socket.socket(), server_hostname="mail.epistle.test")
-          s.connect(("127.0.0.1", 4465))
-          buf = b""
-          def rd(until):
-              global buf
-              while until not in buf:
-                  c = s.recv(4096)
-                  if not c: return buf
-                  buf += c
-              idx = buf.index(until) + len(until)
-              out = buf[:idx]
-              globals()["buf"] = buf[idx:]
-              return out
-          def wr(b): s.sendall(b.encode())
-          rd(b"OK\r\n")
-          wr("EHLO upgrade.client.test\r\n"); rd(b"250 \r\n")
-          plain = base64.b64encode(("\0" + account + "\0" + pw).encode()).decode()
-          wr("AUTH PLAIN " + plain + "\r\n"); rd(b"235 \r\n")
-          wr("MAIL FROM:<" + account + ">\r\n"); rd(b"250 \r\n")
-          wr("RCPT TO:<" + account + ">\r\n"); rd(b"250 \r\n")
-          wr("DATA\r\n"); rd(b"354 \r\n")
-          marker = sys.argv[1]
-          body = ("From: " + account + "\r\nTo: " + account
-                  + "\r\nSubject: " + marker + "\r\n\r\nbody " + marker + "\r\n.\r\n")
-          wr(body); rd(b"250 \r\n")
-          wr("QUIT\r\n"); rd(b"221 \r\n")
-          s.close()
+          msg = EmailMessage()
+          msg["From"] = account
+          msg["To"] = account
+          msg["Subject"] = marker
+          msg.set_content("body " + marker)
+          with smtplib.SMTP_SSL("127.0.0.1", 4465, context=ctx, timeout=30) as smtp:
+              smtp.login(account, pw)
+              smtp.send_message(msg)
 
-          # 2) Log in over IMAPS and STORE \\Flagged on the message.
-          s = ctx.wrap_socket(socket.socket(), server_hostname="mail.epistle.test")
-          s.connect(("127.0.0.1", 4993))
-          buf = b""
-          rd(b"OK\r\n")
-          wr("a1 LOGIN " + account + " " + pw + "\r\n"); rd(b"a1 OK\r\n")
-          wr("a2 SELECT INBOX\r\n"); rd(b"a2 OK\r\n")
-          wr("a3 STORE 1 +FLAGS (\\Flagged)\r\n"); rd(b"a3 OK\r\n")
-          wr("a4 FETCH 1 (FLAGS)\r\n"); rd(b"a4 OK\r\n")
-          wr("a5 LOGOUT\r\n"); rd(b"a5 OK\r\n")
-          s.close()
+          # 2) Wait for local delivery, then STORE \Flagged on it over IMAPS.
+          imap = imaplib.IMAP4_SSL("127.0.0.1", 4993, ssl_context=ctx, timeout=30)
+          imap.login(account, pw)
+          for _ in range(30):
+              typ, data = imap.select("INBOX")
+              if typ == "OK" and int(data[0]) > 0:
+                  break
+              time.sleep(1)
+          else:
+              sys.exit("the submitted message never reached INBOX")
+          typ, _ = imap.store("1", "+FLAGS", "(\\Flagged)")
+          assert typ == "OK", typ
+          typ, data = imap.fetch("1", "(FLAGS)")
+          assert typ == "OK" and b"\\Flagged" in data[0], data
+          imap.logout()
           PYEOF
           echo "marker seeded"
 
