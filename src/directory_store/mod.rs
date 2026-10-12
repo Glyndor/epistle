@@ -55,6 +55,8 @@ pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
 mod mutate_store;
+mod normalize;
+pub use normalize::account_name;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -310,9 +312,9 @@ impl AccountStore {
 	) -> Result<Self, StoreError> {
 		let path = data_dir.join("accounts.toml");
 		let dynamic: DynamicFile = match std::fs::read_to_string(&path) {
-			Ok(text) => {
-				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?
-			}
+			Ok(text) => normalize::file(
+				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?,
+			),
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => DynamicFile::default(),
 			Err(error) => return Err(error.into()),
 		};
@@ -440,7 +442,9 @@ impl AccountStore {
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
-	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
+	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
+		account.name = normalize::account_name(&account.name);
+		normalize::account(&mut account);
 		self.mutate_store(|state| {
 			validate_name(&account.name)?;
 			if account.addresses.is_empty() {
@@ -578,6 +582,7 @@ impl AccountStore {
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
+			normalize::account(&mut fresh);
 			let mut known_addresses: Vec<String> = self
 				.static_accounts
 				.iter()
@@ -590,14 +595,11 @@ impl AccountStore {
 						.filter(|(index, _)| *index != slot)
 						.flat_map(|(_, existing)| existing.addresses.iter()),
 				)
-				.map(|address| address.to_ascii_lowercase())
+				.map(|address| crate::util::address::normalize(address))
 				.collect();
 			known_addresses.sort();
 			for raw in &fresh.addresses {
-				if known_addresses
-					.binary_search(&raw.to_ascii_lowercase())
-					.is_ok()
-				{
+				if known_addresses.binary_search(raw).is_ok() {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
 			}
@@ -716,3 +718,7 @@ mod account_mutators_tests;
 #[cfg(test)]
 #[path = "cross_handle_tests.rs"]
 mod cross_handle_tests;
+
+#[cfg(test)]
+#[path = "lowercase_tests.rs"]
+mod lowercase_tests;

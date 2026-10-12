@@ -128,7 +128,7 @@ fn resolve_addresses(emails: &[Email], fallback: &[String]) -> Result<Vec<String
 	}
 	let mut out: Vec<String> = Vec::with_capacity(emails.len());
 	for email in emails {
-		let lower = email.value.trim().to_ascii_lowercase();
+		let lower = crate::util::address::normalize(&email.value);
 		if lower.is_empty() {
 			return Err(ScimError::invalid("email value must not be empty"));
 		}
@@ -232,7 +232,7 @@ pub async fn create_user(
 	State(state): State<ApiState>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let name = body.user_name.trim().to_string();
+	let name = crate::directory_store::account_name(&body.user_name);
 	if name.is_empty() {
 		return Err(ScimError::invalid("userName must not be empty"));
 	}
@@ -250,7 +250,7 @@ pub async fn create_user(
 	let addresses = resolve_addresses(&body.emails, &[])?;
 	let active = body.active;
 	let account = DynamicAccount {
-		name,
+		name: name.clone(),
 		addresses,
 		password_hash,
 		scram,
@@ -261,7 +261,7 @@ pub async fn create_user(
 		..DynamicAccount::default()
 	};
 	state.store().add(account).map_err(store_to_scim)?;
-	let stored = lookup(&state, &body.user_name)?;
+	let stored = lookup(&state, &name)?;
 	Ok(scim_resource(StatusCode::CREATED, render_user(&stored)))
 }
 
@@ -310,7 +310,7 @@ pub async fn put_user(
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let existing = lookup(&state, &id)?;
-	if body.user_name != id {
+	if crate::directory_store::account_name(&body.user_name) != id {
 		return Err(ScimError::invalid(
 			"userName cannot be changed via PUT; use DELETE then POST",
 		));

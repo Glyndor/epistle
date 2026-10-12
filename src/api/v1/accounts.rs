@@ -105,10 +105,11 @@ pub async fn create(
 	check_password(&request.password)?;
 	let password_hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
+	let name = crate::directory_store::account_name(&request.name);
 	state
 		.store()
 		.add(DynamicAccount {
-			name: request.name.clone(),
+			name: name.clone(),
 			addresses: request.addresses,
 			password_hash,
 			scram: derive_scram(&request.password, state.store())?,
@@ -119,9 +120,7 @@ pub async fn create(
 			..DynamicAccount::default()
 		})
 		.map_err(store_error)?;
-	Ok(Json(Created {
-		created: request.name,
-	}))
+	Ok(Json(Created { created: name }))
 }
 
 #[derive(Serialize)]

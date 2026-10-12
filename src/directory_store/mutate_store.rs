@@ -45,9 +45,11 @@ impl AccountStore {
 		edit_and_commit(
 			&self.path,
 			|text| {
-				toml::from_str::<DynamicFile>(text).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
+				toml::from_str::<DynamicFile>(text)
+					.map(super::normalize::file)
+					.map_err(|error| {
+						std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+					})
 			},
 			|state| serialize_dynamic_file(self, state),
 			DynamicFile::default,

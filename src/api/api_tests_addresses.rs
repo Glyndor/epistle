@@ -64,3 +64,25 @@ async fn send_names_the_rule_a_recipient_breaks() {
 		"Invalid recipient address: consecutive dots in the local part."
 	);
 }
+
+#[tokio::test]
+async fn account_create_stores_and_lists_the_lowercase_form() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	let (status, body) = create(&app, "Bob", "Bob.Smith@Example.ORG").await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["created"], "bob");
+	let (status, body) =
+		super::tests::request(&app, "GET", "/api/v1/accounts", Some(TOKEN.as_str())).await;
+	assert_eq!(status, StatusCode::OK);
+	let bob = body["accounts"]
+		.as_array()
+		.expect("accounts")
+		.iter()
+		.find(|account| account["name"] == "bob")
+		.expect("bob is listed under the lowercase name");
+	assert_eq!(
+		bob["addresses"],
+		serde_json::json!(["bob.smith@example.org"])
+	);
+}

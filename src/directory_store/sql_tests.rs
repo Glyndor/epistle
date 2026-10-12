@@ -250,7 +250,7 @@ fn sql_and_ldap_style_names_resolve_while_unsafe_ones_are_dropped() {
 #[test]
 fn creating_an_account_keeps_the_strict_policy() {
 	let store = store_with(Vec::new());
-	for name in ["john.doe", "J_Smith", "Alice"] {
+	for name in ["john.doe", "J_Smith", "../alice"] {
 		let result = store.add(crate::directory_store::DynamicAccount {
 			name: name.to_string(),
 			addresses: vec!["x@example.org".to_string()],

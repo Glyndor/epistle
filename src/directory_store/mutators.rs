@@ -6,6 +6,7 @@
 //! the "re-read before mutate" check the rest of the dynamic mutators
 //! apply are inherited for free.
 
+use crate::util::address::normalize;
 use crate::util::address_reason;
 
 use super::{AccountStore, DynamicAccount, StoreError};
@@ -84,6 +85,8 @@ impl AccountStore {
 		except: Option<&str>,
 		raw: &str,
 	) -> bool {
+		let wanted = normalize(raw);
+		let same = |address: &String| normalize(address) == wanted;
 		let used_by_account = self
 			.static_accounts
 			.iter()
@@ -94,16 +97,13 @@ impl AccountStore {
 					.filter(|existing| Some(existing.name.as_str()) != except)
 					.flat_map(|existing| existing.addresses.iter()),
 			)
-			.any(|address| address.eq_ignore_ascii_case(raw));
-		let used_by_alias = self
-			.aliases
-			.iter()
-			.any(|alias| alias.address.eq_ignore_ascii_case(raw));
+			.any(same);
+		let used_by_alias = self.aliases.iter().any(|alias| same(&alias.address));
 		let used_by_masked = self
 			.masked
 			.read()
 			.unwrap_or_else(|poisoned| poisoned.into_inner())
-			.get(raw)
+			.get(&wanted)
 			.is_some();
 		used_by_account || used_by_alias || used_by_masked
 	}
@@ -117,6 +117,8 @@ impl AccountStore {
 	/// Rebuilds the directory so the next delivery attempt resolves the
 	/// new address.
 	pub fn add_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
+		let raw = normalize(raw);
+		let raw = raw.as_str();
 		let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
 		if !self
 			.domains
@@ -135,7 +137,7 @@ impl AccountStore {
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?
 				.addresses
 				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(raw));
+				.any(|existing| normalize(existing) == raw);
 			if existing_on_self || self.address_taken(&state.accounts, Some(name), raw) {
 				return Err(StoreError::Duplicate(raw.to_string()));
 			}
@@ -157,13 +159,14 @@ impl AccountStore {
 	/// the directory so the next delivery attempt rejects the removed
 	/// address identically to an unknown user.
 	pub fn remove_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
+		let wanted = normalize(raw);
 		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			let is_target = |existing: &String| existing.eq_ignore_ascii_case(raw);
+			let is_target = |existing: &String| normalize(existing) == wanted;
 			if !target.addresses.iter().any(is_target) {
 				return Err(StoreError::Invalid(format!(
 					"address {raw} is not assigned to {name}"
