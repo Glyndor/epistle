@@ -9,6 +9,7 @@ use crate::smtp::sink::MemorySink;
 struct FakeDns {
 	txt: HashMap<String, Vec<String>>,
 	fail: bool,
+	fail_names: Vec<String>,
 }
 
 impl crate::spf::DnsLookup for FakeDns {
@@ -16,7 +17,7 @@ impl crate::spf::DnsLookup for FakeDns {
 		&self,
 		name: &str,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>> {
-		let result = if self.fail {
+		let result = if self.fail || self.fail_names.iter().any(|failing| failing == name) {
 			Err(crate::spf::DnsFailure::Temporary)
 		} else {
 			Ok(self.txt.get(name).cloned().unwrap_or_default())
@@ -365,4 +366,74 @@ async fn flush_pending_external_rua_skipped_when_unauthorized() {
 		sink.messages().is_empty(),
 		"external rua without authorization TXT must not send"
 	);
+}
+
+#[tokio::test]
+async fn flush_pending_external_rua_skipped_when_the_authorization_lookup_fails() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	record_delivery(dir.path(), "20240101", &sample_record("victim.example"));
+
+	let mut dns = FakeDns::default();
+	dns.txt
+		.entry("_dmarc.victim.example".to_string())
+		.or_default()
+		.push("v=DMARC1; p=reject; rua=mailto:agg@collector.example".to_string());
+	dns.fail_names
+		.push("victim.example._report._dmarc.collector.example".to_string());
+	let sink = MemorySink::new();
+	let sender = build_sender(dir.path(), &dns, &sink);
+	flush_pending(&sender, "20240102").await;
+
+	assert!(
+		sink.messages().is_empty(),
+		"an external rua whose authorization cannot be looked up must not be sent"
+	);
+}
+
+#[tokio::test]
+async fn flush_pending_refuses_a_rua_that_would_inject_headers() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	record_delivery(dir.path(), "20240101", &sample_record("evil.example"));
+
+	let mut dns = FakeDns::default();
+	dns.txt.entry("_dmarc.evil.example".to_string()).or_default().push(
+		"v=DMARC1; p=reject; rua=mailto:a@evil.example\r\nBcc: victim@other.example,mailto:b c@evil.example,mailto:ok@evil.example"
+			.to_string(),
+	);
+	let sink = MemorySink::new();
+	let sender = build_sender(dir.path(), &dns, &sink);
+	flush_pending(&sender, "20240102").await;
+
+	let messages = sink.messages();
+	assert_eq!(messages.len(), 1, "only the plain address may be sent to");
+	assert_eq!(messages[0].recipients, ["ok@evil.example"]);
+	let data = String::from_utf8_lossy(&messages[0].data);
+	assert!(!data.contains("Bcc:"), "no injected header: {data}");
+}
+
+#[test]
+fn report_address_accepts_only_plain_mailboxes() {
+	assert_eq!(
+		report_address("mailto:agg@example.org"),
+		Some("agg@example.org")
+	);
+	assert_eq!(
+		report_address("mailto:agg@example.org?subject=x"),
+		Some("agg@example.org")
+	);
+	for bad in [
+		"https://example.org/report",
+		"mailto:",
+		"mailto:noat",
+		"mailto:@example.org",
+		"mailto:a@",
+		"mailto:a@b@example.org",
+		"mailto:a\r\nBcc: x@y@example.org",
+		"mailto:a b@example.org",
+		"mailto:<a@example.org>",
+		"mailto:a@example.org,b@example.org",
+		"mailto:\"a\"@example.org",
+	] {
+		assert_eq!(report_address(bad), None, "{bad:?} must be refused");
+	}
 }

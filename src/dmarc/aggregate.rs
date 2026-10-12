@@ -148,13 +148,10 @@ pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 			);
 
 			for uri in &rua {
-				let Some(to_addr) = uri.strip_prefix("mailto:") else {
+				let Some(to_addr) = report_address(uri) else {
+					tracing::debug!(policy_domain = %from_domain, %uri, "DMARC rua= is not a usable mailto: address; skipping");
 					continue;
 				};
-				let to_addr = to_addr.split('?').next().unwrap_or_default();
-				if to_addr.is_empty() {
-					continue;
-				}
 				// RFC 7489 §7.1: when the rua= domain is not the policy
 				// domain (or a subdomain sharing its organizational
 				// domain), only send if the policy domain authorizes the
@@ -230,6 +227,23 @@ async fn lookup_rua(dns: &dyn DnsLookup, domain: &str) -> Result<Vec<String>, Lo
 	Err(LookupError::Permanent)
 }
 
+/// The mailbox of a `mailto:` `rua=` URI, or `None` when it is not a plain
+/// `local@domain` address. The URI comes from a TXT record the sending
+/// domain controls and ends up in the `To:` header of a message we sign,
+/// so anything that could break out of that header (CR, LF, spaces,
+/// commas, angle brackets, quotes) is refused rather than escaped.
+fn report_address(uri: &str) -> Option<&str> {
+	let mailbox = uri.strip_prefix("mailto:")?.split('?').next()?;
+	let (local, domain) = mailbox.split_once('@')?;
+	let plain = |part: &str| {
+		!part.is_empty()
+			&& part
+				.bytes()
+				.all(|byte| byte.is_ascii_graphic() && !b"@<>,;:\\\"()[]".contains(&byte))
+	};
+	(plain(local) && plain(domain) && mailbox.len() <= 254).then_some(mailbox)
+}
+
 /// RFC 7489 §7.1: an `rua=` is authorized to receive reports for
 /// `policy_domain` when the local-part is not interesting and either:
 ///
@@ -240,9 +254,9 @@ async fn lookup_rua(dns: &dyn DnsLookup, domain: &str) -> Result<Vec<String>, Lo
 ///   `<policy>._report._dmarc.<rua domain>` whose value starts with
 ///   `v=DMARC1`.
 ///
-/// The lookup is best-effort: a transient failure here means we *do* send
-/// (we cannot prove the destination is unauthorized) and a missing or
-/// non-DMARC TXT means we do not.
+/// The authorization record is published by the receiving domain. A
+/// transient DNS failure means we do not send: without the record we cannot
+/// tell an authorized collector from a third party.
 async fn authorized_external(policy_domain: &str, to_address: &str, dns: &dyn DnsLookup) -> bool {
 	let Some((_, rua_domain)) = to_address.rsplit_once('@') else {
 		return false;
@@ -263,7 +277,7 @@ async fn authorized_external(policy_domain: &str, to_address: &str, dns: &dyn Dn
 	let probe = format!("{policy_domain}._report._dmarc.{rua_domain}");
 	let records = match dns.txt(&probe).await {
 		Ok(records) => records,
-		Err(DnsFailure::Temporary) => return true,
+		Err(DnsFailure::Temporary) => return false,
 	};
 	records.iter().any(|record| {
 		record
