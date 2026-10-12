@@ -300,7 +300,7 @@ async fn report_bad_body_is_bad_request() {
 		"/cal",
 		Some(&alice()),
 		&[],
-		b"<D:sync-collection xmlns:D=\"DAV:\"/>",
+		b"<D:principal-property-search xmlns:D=\"DAV:\"/>",
 	)
 	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);

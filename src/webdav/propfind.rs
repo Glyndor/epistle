@@ -31,6 +31,9 @@ pub struct Entry {
 	pub content_type: &'static str,
 	/// A strong-ish ETag, already quoted, for a non-collection; empty to omit.
 	pub etag: String,
+	/// The `DAV:sync-token` of a calendar or addressbook collection, also
+	/// sent as its `CS:getctag`; empty to omit both.
+	pub sync_token: String,
 }
 
 /// Build the full `<multistatus>` document for the given entries.
@@ -89,11 +92,12 @@ fn response(entry: &Entry) -> String {
 	} else {
 		format!("\t\t\t\t<D:getetag>{}</D:getetag>\n", escape(&entry.etag))
 	};
+	let sync_props = sync_props(entry);
 	format!(
 		"\t<D:response>\n\t\t<D:href>{href}</D:href>\n\t\t<D:propstat>\n\t\t\t<D:prop>\n\
 		\t\t\t\t{resourcetype}\n\
 		\t\t\t\t<D:displayname>{name}</D:displayname>\n\
-		{length}{modified}{content_type}{etag}\
+		{length}{modified}{content_type}{etag}{sync_props}\
 		\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 200 OK</D:status>\n\t\t</D:propstat>\n\t</D:response>\n",
 		href = escape(&entry.href),
 		name = escape(&entry.display_name),
@@ -174,6 +178,45 @@ pub fn wants_discovery(body: &str) -> bool {
 		|| body.contains("calendar-home-set")
 		|| body.contains("schedule-outbox-URL")
 		|| body.contains("schedule-inbox-URL")
+}
+
+/// The incremental-sync properties of a calendar or addressbook (RFC 6578
+/// and the calendarserver.org `getctag`): its sync token, the same value as
+/// the ctag, and the reports the collection answers. Empty for anything
+/// else.
+fn sync_props(entry: &Entry) -> String {
+	let reports: &[&str] = if entry.is_calendar {
+		&[
+			"D:sync-collection",
+			"CAL:calendar-query",
+			"CAL:calendar-multiget",
+			"CAL:free-busy-query",
+		]
+	} else if entry.is_addressbook {
+		&[
+			"D:sync-collection",
+			"C:addressbook-query",
+			"C:addressbook-multiget",
+		]
+	} else {
+		return String::new();
+	};
+	let mut out = String::new();
+	if !entry.sync_token.is_empty() {
+		let token = escape(&entry.sync_token);
+		out.push_str(&format!(
+			"\t\t\t\t<D:sync-token>{token}</D:sync-token>\n\
+			\t\t\t\t<CS:getctag xmlns:CS=\"http://calendarserver.org/ns/\">{token}</CS:getctag>\n"
+		));
+	}
+	out.push_str("\t\t\t\t<D:supported-report-set>");
+	for report in reports {
+		out.push_str(&format!(
+			"<D:supported-report><D:report><{report}/></D:report></D:supported-report>"
+		));
+	}
+	out.push_str("</D:supported-report-set>\n");
+	out
 }
 
 /// Escape the XML special characters for safe interpolation into the body.

@@ -24,6 +24,8 @@ use super::propfind;
 #[path = "handler_propfind.rs"]
 mod propfind_handler;
 use propfind_handler::propfind;
+#[path = "handler_sync.rs"]
+mod sync_handler;
 
 /// The `Allow` header listing every method this server implements.
 const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
@@ -73,6 +75,9 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	// canonical root.
 	if !symlink_check_ok(&target, &root, request.method().as_str()) {
 		return StatusCode::FORBIDDEN.into_response();
+	}
+	if sync_handler::is_reserved(&target) {
+		return StatusCode::NOT_FOUND.into_response();
 	}
 
 	match request.method().clone() {
@@ -163,17 +168,23 @@ async fn read_body_capped(
 	}
 }
 
-/// `REPORT` (RFC 6352 / RFC 4791): read the body and hand it to the right
-/// report dispatcher. The choice is made by peeking the body's root element: a
-/// body naming a CalDAV report (`calendar-multiget`/`calendar-query`/
-/// `free-busy-query`) goes to the CalDAV handler, everything else to CardDAV.
-/// Both enforce the same per-account confinement on every href they return.
+/// `REPORT` (RFC 6352 / RFC 4791 / RFC 6578): read the body and hand it to
+/// the right report dispatcher, chosen by the body's root element: a
+/// `sync-collection` goes to [`sync_handler`], a CalDAV report
+/// (`calendar-multiget`/`calendar-query`/`free-busy-query`) to the CalDAV
+/// handler, everything else to CardDAV. All of them build hrefs from the same
+/// confined `root` and `target`.
 async fn report(root: &Path, target: &Path, request: Request) -> Response {
-	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
+	let (parts, body) = request.into_parts();
+	let body = match read_body_capped(body, XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
 		Err(response) => return *response,
 	};
-	if caldav::is_caldav_report(&String::from_utf8_lossy(&body)) {
+	let text = String::from_utf8_lossy(&body);
+	if super::sync_report::is_sync_collection(&text) {
+		return sync_handler::report(root, target, &parts.headers, &text).await;
+	}
+	if caldav::is_caldav_report(&text) {
 		caldav::report(root, target, &body).await
 	} else {
 		carddav::report(root, target, &body).await
@@ -302,7 +313,10 @@ async fn put(target: &Path, request: Request) -> Response {
 		Err(response) => return *response,
 	};
 	match tokio::fs::write(target, &body).await {
-		Ok(()) => put_success(target, existed).await,
+		Ok(()) => {
+			sync_handler::log_member(target, false).await;
+			put_success(target, existed).await
+		}
 		Err(error) if error.kind() == std::io::ErrorKind::StorageFull => {
 			StatusCode::INSUFFICIENT_STORAGE.into_response()
 		}
@@ -337,7 +351,12 @@ async fn delete(target: &Path) -> Response {
 		tokio::fs::remove_file(target).await
 	};
 	match result {
-		Ok(()) => StatusCode::NO_CONTENT.into_response(),
+		Ok(()) => {
+			if !metadata.is_dir() {
+				sync_handler::log_member(target, true).await;
+			}
+			StatusCode::NO_CONTENT.into_response()
+		}
 		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
 	}
 }
@@ -405,6 +424,9 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	if sync_handler::is_reserved(&dest_path) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 	// RFC 4918 §9.8.5 / §9.9.4, copying or moving a collection into itself
 	// (or onto itself) would lose data: the existing implementation removes
 	// the destination before the source is read. Detect any overlap before
@@ -444,6 +466,9 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	if let Err(response) = perform_copy(source, &dest_path, dest_was_dir).await {
 		return *response;
 	}
+	if !source_meta.is_dir() {
+		sync_handler::log_member(&dest_path, false).await;
+	}
 	if remove {
 		let removal = if source_meta.is_dir() {
 			tokio::fs::remove_dir_all(source).await
@@ -452,6 +477,9 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 		};
 		if removal.is_err() {
 			return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+		}
+		if !source_meta.is_dir() {
+			sync_handler::log_member(source, true).await;
 		}
 	}
 	if dest_existed {
@@ -503,6 +531,15 @@ async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
 		while let Some(child) = dir.next_entry().await? {
 			let file_type = child.file_type().await?;
 			if !crate::util::fs_walk::allowed(&child.path(), file_type) {
+				continue;
+			}
+			// A copied calendar starts its own change log: tokens issued for
+			// the source must not be valid on the copy.
+			if child
+				.file_name()
+				.to_str()
+				.is_some_and(super::sync::is_internal)
+			{
 				continue;
 			}
 			let child_to = to.join(child.file_name());

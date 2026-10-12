@@ -96,10 +96,13 @@ pub enum ReportKind {
 ///
 /// `addressbook-multiget` returns each `<D:href>` named in `body` (resolved
 /// through `root`, so a traversal or cross-account href is silently dropped, not
-/// served). `addressbook-query` ignores the filter — a valid, widely-used
-/// simplification — and returns every `.vcf` in the target collection. Both
-/// reply `207 Multi-Status` with `address-data` + `getetag` per card. A body
-/// naming neither report is `400`.
+/// served). `addressbook-query` honours the `<CR:filter>` in `body`
+/// (`prop-filter` with `text-match`; the `test="anyof"|"allof"` attribute
+/// combines multiple prop-filters; `is-not-defined` is also honoured). An
+/// unsupported filter element answers `403 Forbidden` with the
+/// `CARDDAV:supported-filter` precondition rather than being silently
+/// ignored. Both reports reply `207 Multi-Status` with `address-data` +
+/// `getetag` per card. A body naming neither report is `400`.
 pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	let text = String::from_utf8_lossy(body);
 	let Some(kind) = report_kind(&text) else {
@@ -118,7 +121,11 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 			}
 		}
 		ReportKind::Query => {
-			collect_cards(root, target, &mut entries).await;
+			let filter = match super::carddav_filter::parse(&text) {
+				Ok(filter) => filter,
+				Err(_) => return super::carddav_filter::unsupported_filter_response(),
+			};
+			collect_cards_filtered(root, target, &filter, &mut entries).await;
 		}
 	}
 	multistatus(&entries).into_response()
@@ -151,11 +158,18 @@ async fn push_card(entries: &mut Vec<Card>, href: &str, disk: &Path) {
 	}
 }
 
-/// Append every `.vcf` directly inside the `collection` directory to `entries`.
-/// The child href is the collection path plus the file name. A non-directory
-/// target yields nothing. Children that are themselves symlinks (planted
-/// escapes) are skipped, their target may live outside the per-account root.
-async fn collect_cards(root: &Path, collection: &Path, entries: &mut Vec<Card>) {
+/// Append every `.vcf` directly inside the `collection` directory to
+/// `entries`, applying the `filter` to each card: a card whose body
+/// does not match the filter is skipped. Children that are themselves
+/// symlinks are skipped, they may have been planted in the user's
+/// tree, and following them would read cards that belong to no
+/// account.
+async fn collect_cards_filtered(
+	root: &Path,
+	collection: &Path,
+	filter: &super::carddav_filter::AddressbookQueryFilter,
+	entries: &mut Vec<Card>,
+) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
 	};
@@ -182,16 +196,23 @@ async fn collect_cards(root: &Path, collection: &Path, entries: &mut Vec<Card>) 
 		if !metadata.is_file() {
 			continue;
 		}
-		if let Ok(data) = tokio::fs::read(child.path()).await {
-			entries.push(Card {
-				href: match super::href::resource(root, &child.path()) {
-					Some(href) => href,
-					None => continue,
-				},
-				data,
-				etag: etag(&metadata),
-			});
+		let Ok(data) = tokio::fs::read(child.path()).await else {
+			continue;
+		};
+		// Apply the filter. An empty filter (no `prop-filter`
+		// children) is a no-op, so the call is cheap.
+		let text = String::from_utf8_lossy(&data);
+		if !super::carddav_filter::matches(filter, &text) {
+			continue;
 		}
+		entries.push(Card {
+			href: match super::href::resource(root, &child.path()) {
+				Some(href) => href,
+				None => continue,
+			},
+			data,
+			etag: etag(&metadata),
+		});
 	}
 }
 
@@ -322,6 +343,10 @@ fn multistatus(entries: &[Card]) -> Response {
 #[cfg(test)]
 #[path = "carddav_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "carddav_filter_integration_tests.rs"]
+mod filter_integration_tests;
 
 #[cfg(test)]
 #[path = "carddav_scan_tests.rs"]
