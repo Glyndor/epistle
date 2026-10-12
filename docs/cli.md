@@ -724,8 +724,10 @@ What this build does:
   shows a detected address as the default (empty accepts it, `none` skips the
   field, anything typed replaces it), and an answers file that leaves an
   address out gets the detected one, reported on stderr. An address the file
-  names is never replaced. Behind NAT the host has no global address, and a
-  one-line hint says to set the public one by hand;
+  names is never replaced, and `public_ipv4 = "none"` (or `public_ipv6`) says
+  there is no address of that family: detection never overrides it, and with
+  both families settled the interfaces are not read. Behind NAT the host has
+  no global address, and a one-line hint says to set the public one by hand;
 - ends with the reverse DNS (PTR) of each public address, on stderr, after a
   successful run and after `--dry-run`. Each line says whether the PTR names
   the hostname and the hostname resolves back to the address, points
