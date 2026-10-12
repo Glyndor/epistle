@@ -232,6 +232,23 @@ pub(super) async fn connect_database(
 	metrics: &crate::metrics::Metrics,
 ) -> std::io::Result<Option<sqlx::PgPool>> {
 	let Some(db) = &config.database else {
+		// No `[database]` at all: warn once about which antispam features
+		// need one and are silently off. Mail still flows; the operator
+		// sees this in the same startup window every other warning lands
+		// in, so a misconfigured install surfaces without log scraping.
+		// The warning is omitted when the install is clearly minimal
+		// (no greylist, no Bayes, no reputation-aware delivery at all):
+		// in that case the absence is not surprising.
+		let greylist_off = config.greylist_delay_secs == 0;
+		let subjectpass_off = !config.subjectpass.enabled;
+		if !greylist_off || !subjectpass_off {
+			tracing::warn!(
+				"antispam: no [database] configured. The Bayes classifier, \
+				 per-domain reputation, persistent auth-ban storage, and \
+				 greylist persistence are off; mail flows unfiltered. \
+				 Add [database] to enable them."
+			);
+		}
 		return Ok(None);
 	};
 	match crate::db::connect(
