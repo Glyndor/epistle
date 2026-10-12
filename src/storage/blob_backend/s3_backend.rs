@@ -19,9 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
-use super::BlobBackend;
 use super::BlobError;
 use super::sigv4;
+use super::{BlobAccount, BlobBackend};
 
 /// `Send + Sync` future alias specific to this module. Uses `'static` (with
 /// the per-call state cloned into the `async move`) so the four verbs have
@@ -73,10 +73,20 @@ impl S3Backend {
 		}
 	}
 
-	/// The S3 object key for `(id, suffix)`. `suffix` is `""` for the payload
-	/// and `".type"` / `".owner"` for the sidecars — exactly what the on-disk
-	/// layout uses.
-	fn key(&self, id: Uuid, suffix: &str) -> String {
+	/// The object key for `(account, id, suffix)`: the account's partition,
+	/// `accounts/<account>/<id><suffix>`. The account segment is
+	/// percent-encoded down to the RFC 3986 unreserved set, so it is one
+	/// path segment in the URL and already in the form SigV4 signs.
+	/// `suffix` is `""` for the payload and `".type"` / `".owner"` for the
+	/// sidecars, exactly what the on-disk layout uses.
+	fn key(account: &BlobAccount, id: Uuid, suffix: &str) -> String {
+		format!("accounts/{}/{id}{suffix}", urlencode(account.as_str()))
+	}
+
+	/// The key older versions wrote, at the bucket root: `<id><suffix>`.
+	/// Still read, and removed on delete, so blobs stored before the
+	/// partitions keep being served to their recorded owner.
+	fn shared_key(id: Uuid, suffix: &str) -> String {
 		format!("{id}{suffix}")
 	}
 
@@ -161,10 +171,9 @@ struct SignedObjectHeaders {
 	authorization: String,
 }
 
-impl BlobBackend for S3Backend {
-	fn get(&self, id: Uuid, suffix: &str) -> BoxFuture<'static, Option<Vec<u8>>> {
-		let inner = self.inner.clone();
-		let key = self.key(id, suffix);
+impl S3Backend {
+	/// `GetObject` for one key: `None` on 404.
+	fn get_key(inner: Arc<Inner>, key: String) -> BoxFuture<'static, Option<Vec<u8>>> {
 		Box::pin(async move {
 			let url = Self::object_url(&inner, &key);
 			let hdr = Self::signed_object_headers(&inner, "GET", &key, &[]);
@@ -198,10 +207,8 @@ impl BlobBackend for S3Backend {
 		})
 	}
 
-	fn put(&self, id: Uuid, suffix: &str, bytes: &[u8]) -> BoxFuture<'static, ()> {
-		let inner = self.inner.clone();
-		let key = self.key(id, suffix);
-		let payload = bytes.to_vec();
+	/// `PutObject` for one key.
+	fn put_key(inner: Arc<Inner>, key: String, payload: Vec<u8>) -> BoxFuture<'static, ()> {
 		Box::pin(async move {
 			let url = Self::object_url(&inner, &key);
 			let hdr = Self::signed_object_headers(&inner, "PUT", &key, &payload);
@@ -221,9 +228,8 @@ impl BlobBackend for S3Backend {
 		})
 	}
 
-	fn delete(&self, id: Uuid, suffix: &str) -> BoxFuture<'static, ()> {
-		let inner = self.inner.clone();
-		let key = self.key(id, suffix);
+	/// `DeleteObject` for one key; a missing key is success.
+	fn delete_key(inner: Arc<Inner>, key: String) -> BoxFuture<'static, ()> {
 		Box::pin(async move {
 			let url = Self::object_url(&inner, &key);
 			let hdr = Self::signed_object_headers(&inner, "DELETE", &key, &[]);
@@ -244,6 +250,51 @@ impl BlobBackend for S3Backend {
 				return Ok(());
 			}
 			Self::check(response)
+		})
+	}
+}
+
+impl BlobBackend for S3Backend {
+	fn get(
+		&self,
+		account: &BlobAccount,
+		id: Uuid,
+		suffix: &str,
+	) -> BoxFuture<'static, Option<Vec<u8>>> {
+		let inner = self.inner.clone();
+		let partitioned = Self::key(account, id, suffix);
+		let shared = Self::shared_key(id, suffix);
+		Box::pin(async move {
+			// The account's partition first, then the shared keys an older
+			// version wrote. Another account's partition is never asked for.
+			match Self::get_key(inner.clone(), partitioned).await? {
+				Some(bytes) => Ok(Some(bytes)),
+				None => Self::get_key(inner, shared).await,
+			}
+		})
+	}
+
+	fn put(
+		&self,
+		account: &BlobAccount,
+		id: Uuid,
+		suffix: &str,
+		bytes: &[u8],
+	) -> BoxFuture<'static, ()> {
+		Self::put_key(
+			self.inner.clone(),
+			Self::key(account, id, suffix),
+			bytes.to_vec(),
+		)
+	}
+
+	fn delete(&self, account: &BlobAccount, id: Uuid, suffix: &str) -> BoxFuture<'static, ()> {
+		let inner = self.inner.clone();
+		let partitioned = Self::key(account, id, suffix);
+		let shared = Self::shared_key(id, suffix);
+		Box::pin(async move {
+			Self::delete_key(inner.clone(), partitioned).await?;
+			Self::delete_key(inner, shared).await
 		})
 	}
 
@@ -336,7 +387,10 @@ impl BlobBackend for S3Backend {
 					if entry.key.ends_with(".type") || entry.key.ends_with(".owner") {
 						continue;
 					}
-					if let Ok(id) = Uuid::parse_str(&entry.key) {
+					// Partitioned keys end in the id after the last `/`;
+					// shared keys are the bare id.
+					let name = entry.key.rsplit('/').next().unwrap_or_default();
+					if let Ok(id) = Uuid::parse_str(name) {
 						out.push(id);
 					}
 				}

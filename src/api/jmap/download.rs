@@ -39,7 +39,7 @@ pub async fn download(
 	} else if let Some(bytes) =
 		blobs::read_blob(state.blob_backend(), &account, &blob_id, state.crypto()).await
 	{
-		let content_type = blobs::read_blob_type(state.blob_backend(), &blob_id)
+		let content_type = blobs::read_blob_type(state.blob_backend(), &account, &blob_id)
 			.await
 			.unwrap_or_else(|| DEFAULT_BLOB_TYPE.to_owned());
 		Some((content_type, bytes))

@@ -167,12 +167,20 @@ fn id(tail: &str) -> Uuid {
 	Uuid::parse_str(&uuid).expect("fixture")
 }
 
+/// The account partition most tests write into.
+fn alice() -> crate::storage::BlobAccount {
+	crate::storage::BlobAccount::new("alice").expect("alice")
+}
+
 #[tokio::test]
 async fn put_then_get_round_trips_bytes() {
 	let (backend, _state) = mock().await;
 	let blob_id = id("0001aabb");
-	backend.put(blob_id, "", b"hello-blob").await.expect("put");
-	let read = backend.get(blob_id, "").await.expect("get");
+	backend
+		.put(&alice(), blob_id, "", b"hello-blob")
+		.await
+		.expect("put");
+	let read = backend.get(&alice(), blob_id, "").await.expect("get");
 	assert_eq!(read, Some(b"hello-blob".to_vec()));
 }
 
@@ -184,27 +192,39 @@ async fn sidecar_put_lands_under_its_own_suffix() {
 	let (backend, state) = mock().await;
 	let blob_id = id("0002ccdd");
 	backend
-		.put(blob_id, "", b"payload")
+		.put(&alice(), blob_id, "", b"payload")
 		.await
 		.expect("payload put");
 	backend
-		.put(blob_id, ".type", b"text/plain")
+		.put(&alice(), blob_id, ".type", b"text/plain")
 		.await
 		.expect("type put");
 	backend
-		.put(blob_id, ".owner", b"alice")
+		.put(&alice(), blob_id, ".owner", b"alice")
 		.await
 		.expect("owner put");
 	let s = state.lock().unwrap();
-	assert!(s.objects.contains_key(&format!("{blob_id}")));
-	assert!(s.objects.contains_key(&format!("{blob_id}.type")));
-	assert!(s.objects.contains_key(&format!("{blob_id}.owner")));
+	assert!(s.objects.contains_key(&format!("accounts/alice/{blob_id}")));
+	assert!(
+		s.objects
+			.contains_key(&format!("accounts/alice/{blob_id}.type"))
+	);
+	assert!(
+		s.objects
+			.contains_key(&format!("accounts/alice/{blob_id}.owner"))
+	);
 	assert_eq!(
-		s.objects.get(&format!("{blob_id}.type")).unwrap().bytes,
+		s.objects
+			.get(&format!("accounts/alice/{blob_id}.type"))
+			.unwrap()
+			.bytes,
 		b"text/plain".to_vec()
 	);
 	assert_eq!(
-		s.objects.get(&format!("{blob_id}.owner")).unwrap().bytes,
+		s.objects
+			.get(&format!("accounts/alice/{blob_id}.owner"))
+			.unwrap()
+			.bytes,
 		b"alice".to_vec()
 	);
 }
@@ -213,7 +233,7 @@ async fn sidecar_put_lands_under_its_own_suffix() {
 async fn get_of_an_absent_key_returns_none() {
 	let (backend, _state) = mock().await;
 	let blob_id = id("0003eeff");
-	let read = backend.get(blob_id, "").await.expect("get");
+	let read = backend.get(&alice(), blob_id, "").await.expect("get");
 	assert_eq!(read, None, "absent object must be a clean `None`");
 }
 
@@ -223,7 +243,7 @@ async fn delete_absent_key_is_ok_so_caller_does_not_branch() {
 	let blob_id = id("0004aabb");
 	// Deleting something that was never written is a no-op (S3 returns 404
 	// for `NoSuchKey`, which we map to `Ok(())`).
-	let outcome = backend.delete(blob_id, "").await;
+	let outcome = backend.delete(&alice(), blob_id, "").await;
 	assert!(
 		outcome.is_ok(),
 		"delete of an absent key must be Ok: {outcome:?}"
@@ -234,10 +254,10 @@ async fn delete_absent_key_is_ok_so_caller_does_not_branch() {
 async fn delete_present_key_actually_removes_it() {
 	let (backend, state) = mock().await;
 	let blob_id = id("0005ccdd");
-	backend.put(blob_id, "", b"x").await.expect("put");
-	backend.delete(blob_id, "").await.expect("delete");
+	backend.put(&alice(), blob_id, "", b"x").await.expect("put");
+	backend.delete(&alice(), blob_id, "").await.expect("delete");
 	let s = state.lock().unwrap();
-	assert!(!s.objects.contains_key(&blob_id.to_string()));
+	assert!(!s.objects.contains_key(&format!("accounts/alice/{blob_id}")));
 }
 
 #[tokio::test]
@@ -294,7 +314,7 @@ async fn forbid_bucket_returns_blob_error_auth_not_none() {
 		);
 	})
 	.await;
-	let outcome = backend.get(id("0007aabb"), "").await;
+	let outcome = backend.get(&alice(), id("0007aabb"), "").await;
 	assert!(
 		matches!(outcome, Err(BlobError::Auth)),
 		"403 must be Auth, got {outcome:?}"
@@ -313,7 +333,7 @@ async fn requests_carry_a_signed_authorization_header() {
 	// all.
 	let (backend, state) = mock().await;
 	let blob_id = id("0008bbcc");
-	backend.put(blob_id, "", b"x").await.expect("put");
+	backend.put(&alice(), blob_id, "", b"x").await.expect("put");
 	let captured = {
 		let s = state.lock().unwrap();
 		(
@@ -358,4 +378,57 @@ async fn unit_urlencode_round_trips_unreserved_characters() {
 	// Reserved characters get percent-encoded.
 	assert_eq!(urlencode("a/b"), "a%2Fb");
 	assert_eq!(urlencode("a b"), "a%20b");
+}
+
+#[tokio::test]
+async fn a_blob_is_found_only_in_its_own_partition() {
+	let (backend, _state) = mock().await;
+	let blob_id = id("0009aabb");
+	backend
+		.put(&alice(), blob_id, "", b"mine")
+		.await
+		.expect("put");
+	let bob = crate::storage::BlobAccount::new("bob").expect("bob");
+	let read = backend.get(&bob, blob_id, "").await.expect("get");
+	assert_eq!(read, None, "alice's object must not be found as bob");
+}
+
+#[tokio::test]
+async fn shared_keys_from_before_the_partitions_are_still_read_and_deleted() {
+	let blob_id = id("000acafe");
+	let (backend, state) = mock_with(|s| {
+		s.objects.insert(
+			blob_id.to_string(),
+			StoredObject {
+				bytes: b"older".to_vec(),
+			},
+		);
+	})
+	.await;
+	let read = backend.get(&alice(), blob_id, "").await.expect("get");
+	assert_eq!(read, Some(b"older".to_vec()));
+	backend.delete(&alice(), blob_id, "").await.expect("delete");
+	assert!(
+		state.lock().unwrap().objects.is_empty(),
+		"shared key removed"
+	);
+}
+
+#[tokio::test]
+async fn an_account_name_stays_one_key_segment_and_lists_back() {
+	let (backend, state) = mock().await;
+	let blob_id = id("000b0b0b");
+	let spaced = crate::storage::BlobAccount::new("ann b?#").expect("plain component");
+	backend.put(&spaced, blob_id, "", b"x").await.expect("put");
+	let read = backend.get(&spaced, blob_id, "").await.expect("get");
+	assert_eq!(read, Some(b"x".to_vec()));
+	assert!(
+		state
+			.lock()
+			.unwrap()
+			.objects
+			.contains_key(&format!("accounts/ann b?#/{blob_id}")),
+		"the decoded key keeps the account as one segment"
+	);
+	assert_eq!(backend.list().await.expect("list"), vec![blob_id]);
 }

@@ -168,6 +168,10 @@ mod jmap_tests_principal_c;
 mod send_tests_principal;
 
 #[cfg(test)]
+#[path = "jmap_tests_partition.rs"]
+mod jmap_tests_partition;
+
+#[cfg(test)]
 #[path = "jmap_tests_limits.rs"]
 mod jmap_tests_limits;
 

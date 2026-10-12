@@ -43,9 +43,12 @@ fn build_defaults_to_fs_when_no_section() {
 	// Two clones: one to keep for the assertion, one to push into the
 	// first `async move` so the second `async move` finds it unchanged.
 	let put_bytes = bytes.clone();
-	let put_result = rt.block_on(async move { backend_put.put(id, "", &put_bytes).await });
+	let account = super::BlobAccount::new("alice").expect("alice");
+	let put_account = account.clone();
+	let put_result =
+		rt.block_on(async move { backend_put.put(&put_account, id, "", &put_bytes).await });
 	assert!(put_result.is_ok(), "fs default write: {put_result:?}");
-	let read = rt.block_on(async move { backend_get.get(id, "").await });
+	let read = rt.block_on(async move { backend_get.get(&account, id, "").await });
 	assert_eq!(read.expect("get"), Some(bytes));
 }
 

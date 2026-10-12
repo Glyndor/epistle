@@ -286,7 +286,8 @@ fn jmap_scope_error(call_id: &str) -> Value {
 }
 
 /// `POST /jmap/upload/{accountId}` (RFC 8620 §6.1): store an uploaded blob and
-/// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
+/// return its id, type and size. Blobs live in the account's partition,
+/// `<data_dir>/blobs/accounts/<account>/`.
 pub async fn upload(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
@@ -399,13 +400,23 @@ pub async fn upload(
 			);
 		}
 	};
+	// The blob goes into the account's partition. An account whose name is
+	// not one plain path component cannot have one, so the upload fails
+	// rather than landing anywhere shared.
 	let backend = state.blob_backend();
-	if backend.put(blob_id, "", &stored).await.is_err()
+	let Some(partition) = crate::storage::BlobAccount::new(&account) else {
+		return jmap_error(
+			StatusCode::INTERNAL_SERVER_ERROR,
+			"serverFail",
+			"cannot store blob",
+		);
+	};
+	if backend.put(&partition, blob_id, "", &stored).await.is_err()
 		|| backend
-			.put(blob_id, ".type", content_type.as_bytes())
+			.put(&partition, blob_id, ".type", content_type.as_bytes())
 			.await
 			.is_err()
-		|| blobs::write_blob_owner(backend, blob_id, &account)
+		|| blobs::write_blob_owner(backend, blob_id, &partition)
 			.await
 			.is_err()
 	{
