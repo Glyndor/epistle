@@ -24,13 +24,21 @@ fn database_url() -> Option<String> {
 /// Pre-fab triplet pointing at deterministic test values. The literal
 /// sender and recipient host names keep the key obviously test-only, so
 /// a stray debug log cannot be mistaken for a real sender.
-fn greylist_triplet() -> epistle::antispam::greylist::Triplet<'static> {
+/// Each test owns its triplet. The tests in this file run in parallel against
+/// one database, so a shared key let one test's cleanup delete the row
+/// another was asserting on.
+fn greylist_triplet(recipient: &'static str) -> epistle::antispam::greylist::Triplet<'static> {
 	epistle::antispam::greylist::Triplet {
 		client_ip: "192.0.2.10".parse().expect("ip"),
 		sender: "Sender@Example.org",
-		recipient: "Bob@Example.net",
+		recipient,
 	}
 }
+
+/// Timestamps for the tests that do not sweep. The sweep test deletes every
+/// row first seen before `10_000 - 3600`, across the whole table and while the
+/// other tests run, so they record their triplets well above that horizon.
+const BASE: u64 = 1_000_000;
 
 /// The PostgreSQL store enforces the same decision logic the memory
 /// store does: first sighting defers, a retry before the delay defers,
@@ -51,7 +59,7 @@ async fn greylist_sql_store_matches_the_decision_contract() {
 		.expect("connect and migrate");
 	let store = epistle::antispam::PgGreylistStore::new(pool.clone());
 
-	let triplet = greylist_triplet();
+	let triplet = greylist_triplet("Contract@Example.net");
 	let key = triplet.key();
 
 	// Always start clean.
@@ -61,19 +69,25 @@ async fn greylist_sql_store_matches_the_decision_contract() {
 		.await
 		.expect("cleanup");
 
-	// First sighting at 1000: defer and remember.
-	assert_eq!(decide(&store, &triplet, 1000, 60).await, Decision::Defer);
-	assert_eq!(store.first_seen(&key).await, Ok(Some(1000)));
+	// First sighting at BASE: defer and remember.
+	assert_eq!(decide(&store, &triplet, BASE, 60).await, Decision::Defer);
+	assert_eq!(store.first_seen(&key).await, Ok(Some(BASE)));
 
-	// Retry at 1030: too soon, keep deferring. `first_seen` must NOT
+	// Retry at BASE + 30: too soon, keep deferring. `first_seen` must NOT
 	// advance (the `ON CONFLICT` path keeps the original).
-	assert_eq!(decide(&store, &triplet, 1030, 60).await, Decision::Defer);
-	assert_eq!(store.first_seen(&key).await, Ok(Some(1000)));
+	assert_eq!(
+		decide(&store, &triplet, BASE + 30, 60).await,
+		Decision::Defer
+	);
+	assert_eq!(store.first_seen(&key).await, Ok(Some(BASE)));
 
-	// Retry at 1060: past the delay, accept. The stored `first_seen`
+	// Retry at BASE + 60: past the delay, accept. The stored `first_seen`
 	// still anchors the row.
-	assert_eq!(decide(&store, &triplet, 1060, 60).await, Decision::Accept);
-	assert_eq!(store.first_seen(&key).await, Ok(Some(1000)));
+	assert_eq!(
+		decide(&store, &triplet, BASE + 60, 60).await,
+		Decision::Accept
+	);
+	assert_eq!(store.first_seen(&key).await, Ok(Some(BASE)));
 
 	sqlx::query("DELETE FROM greylist_triplet WHERE key = $1")
 		.bind(&key)
@@ -169,7 +183,7 @@ async fn greylist_sql_store_survives_a_restart() {
 		.await
 		.expect("connect and migrate");
 
-	let triplet = greylist_triplet();
+	let triplet = greylist_triplet("Restart@Example.net");
 	let key = triplet.key();
 	sqlx::query("DELETE FROM greylist_triplet WHERE key = $1")
 		.bind(&key)
@@ -179,20 +193,20 @@ async fn greylist_sql_store_survives_a_restart() {
 
 	// Process A: record the first sighting.
 	let store_a = epistle::antispam::PgGreylistStore::new(pool.clone());
-	assert_eq!(decide(&store_a, &triplet, 1_000, 60).await, Decision::Defer);
+	assert_eq!(decide(&store_a, &triplet, BASE, 60).await, Decision::Defer);
 	drop(store_a);
 
 	// Process B: a fresh handle observes the row recorded by A.
 	let store_b = epistle::antispam::PgGreylistStore::new(pool.clone());
 	assert_eq!(
 		store_b.first_seen(&key).await,
-		Ok(Some(1_000)),
+		Ok(Some(BASE)),
 		"a fresh store must observe the first sighting persisted by the previous one"
 	);
 
 	// A retry past the delay is accepted without re-deferral.
 	assert_eq!(
-		decide(&store_b, &triplet, 2_000, 60).await,
+		decide(&store_b, &triplet, BASE + 1_000, 60).await,
 		Decision::Accept,
 		"after a restart the same triplet must wait out the delay exactly once"
 	);
