@@ -227,7 +227,9 @@ impl ApiState {
 				correspondents: None,
 				new_recipients_per_day: None,
 				admins: Vec::new(),
-				quota_limit: std::sync::atomic::AtomicU64::new(0),
+				quota_limit: std::sync::atomic::AtomicU64::new(
+					crate::imap::session::DEFAULT_QUOTA_BYTES,
+				),
 				api_keys,
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
 				caller_slots: Arc::default(),
@@ -385,7 +387,9 @@ impl ApiState {
 		}
 	}
 
-	/// Set the per-account storage quota in bytes (0 = unlimited).
+	/// Set the server default per-account storage quota in bytes, the
+	/// configured `quota_bytes` (0 = unlimited). Without this call the
+	/// documented 5 GiB default applies, as in IMAP.
 	pub fn with_quota(self, bytes: u64) -> Self {
 		self.inner
 			.quota_limit
@@ -486,7 +490,18 @@ impl ApiState {
 		Arc::new(self.inner.tenant_limits.clone())
 	}
 
-	/// The configured per-account storage quota in bytes (0 = unlimited).
+	/// The quota in force for `account` (its own, its domain's, else the
+	/// server default); `None` is no limit. The rule IMAP QUOTA applies.
+	pub(crate) fn quota_for_account(&self, account: &str) -> Option<u64> {
+		match self.directory_snapshot() {
+			Some(directory) => {
+				crate::smtp::quota::limit_for(&directory, account, self.quota_limit())
+			}
+			None => Some(self.quota_limit()).filter(|bytes| *bytes != 0),
+		}
+	}
+
+	/// The server default per-account storage quota in bytes (0 = unlimited).
 	pub fn quota_limit(&self) -> u64 {
 		self.inner
 			.quota_limit

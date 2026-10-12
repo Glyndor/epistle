@@ -19,6 +19,17 @@ use super::address::Address;
 use super::directory::{Directory, Resolution};
 use crate::storage::MessageCrypto;
 
+/// The quota in force for `account`: its own, else its domain's, else
+/// `default` (the server's `quota_bytes`, 5 GiB when unset). A quota of 0
+/// at any of these levels means no limit: `None`. IMAP QUOTA, JMAP
+/// `Quota/get`, and every delivery path read the quota through here.
+pub fn limit_for(directory: &Directory, account: &str, default: u64) -> Option<u64> {
+	match directory.quota_for(account).unwrap_or(default) {
+		0 => None,
+		bytes => Some(bytes),
+	}
+}
+
 /// How many bytes an account stores.
 pub type UsageProbe = Arc<dyn Fn(&str) -> u64 + Send + Sync>;
 
@@ -55,19 +66,21 @@ impl MailboxQuota {
 		)
 	}
 
-	/// The quota in force for `account`.
-	pub fn limit(&self, directory: &Directory, account: &str) -> u64 {
-		directory.quota_for(account).unwrap_or(self.default_bytes)
+	/// The quota in force for `account`; `None` is no limit.
+	pub fn limit(&self, directory: &Directory, account: &str) -> Option<u64> {
+		limit_for(directory, account, self.default_bytes)
 	}
 
 	/// Whether `account` already stores at least its quota.
 	pub fn is_full(&self, directory: &Directory, account: &str) -> bool {
-		(self.usage)(account) >= self.limit(directory, account)
+		self.limit(directory, account)
+			.is_some_and(|limit| (self.usage)(account) >= limit)
 	}
 
 	/// Whether `size` more bytes would put `account` over its quota.
 	pub fn would_overflow(&self, directory: &Directory, account: &str, size: u64) -> bool {
-		(self.usage)(account).saturating_add(size) > self.limit(directory, account)
+		self.limit(directory, account)
+			.is_some_and(|limit| (self.usage)(account).saturating_add(size) > limit)
 	}
 
 	/// The recipients among `recipients` that are a local account `size`

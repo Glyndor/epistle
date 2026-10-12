@@ -30,7 +30,7 @@ pub(super) fn quota_get(
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let used = crate::imap::mailbox::account_usage(state.data_dir(), account, state.crypto());
-	let limit = state.quota_limit();
+	let limit = state.quota_for_account(account);
 	let mut quota = serde_json::Map::from_iter([
 		("id".to_string(), json!("mail")),
 		("resourceType".to_string(), json!("octets")),
@@ -39,10 +39,11 @@ pub(super) fn quota_get(
 		("name".to_string(), json!("Mail storage")),
 		("types".to_string(), json!(["Mail"])),
 	]);
-	// A configured limit is the hard limit; 0 means unlimited (omit it).
+	// The limit in force is the hard limit; no limit (a quota of 0) is
+	// omitted.
 	quota.insert(
 		"limit".to_string(),
-		if limit > 0 { json!(limit) } else { Value::Null },
+		limit.map_or(Value::Null, |limit| json!(limit)),
 	);
 	let quota_state =
 		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());

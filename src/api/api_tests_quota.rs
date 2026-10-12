@@ -161,3 +161,33 @@ async fn a_jmap_submission_to_a_full_local_mailbox_is_over_quota() {
 	);
 	assert_eq!(queued(dir.path()), 0);
 }
+
+async fn quota_limit(app: &axum::Router, account: &str) -> serde_json::Value {
+	let request = serde_json::json!({
+		"using": ["urn:ietf:params:jmap:quota"],
+		"methodCalls": [["Quota/get", { "accountId": account }, "q"]],
+	});
+	let (_, body) = request_with_body(
+		app,
+		"POST",
+		"/jmap/api",
+		Some(TOKEN.as_str()),
+		Some(request),
+	)
+	.await;
+	body["methodResponses"][0][1]["list"][0]["limit"].clone()
+}
+
+#[tokio::test]
+async fn jmap_quota_reports_the_same_limit_as_imap() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(state(dir.path()));
+	// No server default configured: the documented 5 GiB, as IMAP QUOTA.
+	assert_eq!(quota_limit(&app, "alice").await, 5u64 * 1024 * 1024 * 1024);
+	// bob's own quota wins, as in IMAP.
+	assert_eq!(quota_limit(&app, "bob").await, 64);
+
+	// A configured 0 is no limit: JMAP omits it.
+	let app = router(state(dir.path()).with_quota(0));
+	assert_eq!(quota_limit(&app, "alice").await, serde_json::Value::Null);
+}

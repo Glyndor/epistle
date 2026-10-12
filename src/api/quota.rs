@@ -11,16 +11,10 @@ use crate::smtp::quota::MailboxQuota;
 /// bytes would put over its quota.
 pub(crate) fn full_recipient(state: &ApiState, recipients: &[String], size: u64) -> Option<String> {
 	let directory = state.directory_snapshot()?;
-	// `quota_limit` is 0 when no server default is configured; IMAP then
-	// applies its built-in default, and so does this check.
-	let default = match state.quota_limit() {
-		0 => crate::imap::session::DEFAULT_QUOTA_BYTES,
-		bytes => bytes,
-	};
 	let quota = MailboxQuota::on_disk(
 		state.data_dir().to_path_buf(),
 		state.crypto().clone(),
-		default,
+		state.quota_limit(),
 	);
 	quota
 		.overflowing(&directory, recipients, size)

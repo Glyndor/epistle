@@ -280,7 +280,7 @@ Values equal to a built-in default are marked `default`, even when configured.
 
 | Key | Value |
 |---|---|
-| `quota` | Bytes per account, default 5 GiB. |
+| `quota` | Bytes per account, default 5 GiB; `0` means no limit and shows as `unlimited`. |
 | `submission-rate` | Messages per minute per account, default disabled. |
 | `new-recipients-per-day` | New recipients per account in a rolling 24 hours, default disabled. |
 | `queue-give-up` | Queue age before bouncing, default 5 days. |

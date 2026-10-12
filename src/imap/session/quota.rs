@@ -30,10 +30,14 @@ impl Session {
 		Output::text(format!("{quota}{tag} OK GETQUOTA completed\r\n"))
 	}
 
-	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet units.
+	/// The `* QUOTA` line for an account: STORAGE used/limit in 1024-octet
+	/// units, or no resource at all when the account has no limit.
 	fn quota_line(&self, account: &str) -> String {
+		let Some(limit) = self.effective_quota() else {
+			return "* QUOTA \"\" ()\r\n".to_string();
+		};
 		let used_kib = mailbox::account_usage(&self.data_dir, account, &self.crypto).div_ceil(1024);
-		let limit_kib = self.effective_quota().div_ceil(1024);
+		let limit_kib = limit.div_ceil(1024);
 		format!("* QUOTA \"\" (STORAGE {used_kib} {limit_kib})\r\n")
 	}
 }

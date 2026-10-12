@@ -325,7 +325,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					Arc::clone(&account_store),
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
-				.with_quota(config.quota_bytes.unwrap_or(0))
+				.with_quota(
+					config
+						.quota_bytes
+						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+				)
 				.with_api_keys(Arc::clone(&api_keys_set))
 				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone())

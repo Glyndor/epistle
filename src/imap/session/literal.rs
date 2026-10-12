@@ -52,7 +52,10 @@ impl Session {
 		// Quota enforcement (RFC 9208): refuse before reading the literal.
 		let projected =
 			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
-		if projected > self.effective_quota() {
+		if self
+			.effective_quota()
+			.is_some_and(|limit| projected > limit)
+		{
 			return reject_literal(
 				tag,
 				synchronizing,
@@ -157,7 +160,10 @@ impl Session {
 		}
 		let projected =
 			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
-		if projected > self.effective_quota() {
+		if self
+			.effective_quota()
+			.is_some_and(|limit| projected > limit)
+		{
 			return reject_literal(
 				tag,
 				synchronizing,

@@ -143,3 +143,20 @@ fn rcpt_before_mail_is_a_bad_sequence_whatever_the_address() {
 		);
 	}
 }
+
+#[test]
+fn a_zero_default_quota_is_unlimited() {
+	// carol has no quota of her own; a server default of 0 means no limit.
+	let directory = Directory::new(
+		["example.org".to_string()],
+		[("carol@example.org".to_string(), "carol".to_string())],
+	);
+	let quota = crate::smtp::quota::MailboxQuota::new(|_| 10, 0);
+	let mut session = Session::new("mx.example.org")
+		.with_directory(Arc::new(directory))
+		.with_quota(Arc::new(quota));
+	session.command_line("EHLO client.example.net");
+	session.command_line("MAIL FROM:<alice@sender.example>");
+	let carol = session.command_line("RCPT TO:<carol@example.org>");
+	assert_eq!(reply_line(&carol), "250 2.0.0 ok\r\n");
+}

@@ -138,3 +138,16 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 		"limits show must mark a changed value as configured"
 	);
 }
+
+#[test]
+fn a_zero_quota_shows_as_unlimited() {
+	let (_dir, file) = config_file();
+	change_config(file.path(), Key::Quota, Some("0")).unwrap();
+	let config = Config::load(file.path()).unwrap();
+	let mut out = Vec::new();
+	show(&config, &mut out).unwrap();
+	assert_eq!(
+		String::from_utf8(out).unwrap().lines().next(),
+		Some("quota\tunlimited\tconfigured")
+	);
+}
