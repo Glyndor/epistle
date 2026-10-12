@@ -237,3 +237,7 @@ mod api_key_reload_tests;
 #[cfg(test)]
 #[path = "secret_diagnostics_tests.rs"]
 mod secret_diagnostics_tests;
+
+#[cfg(test)]
+#[path = "jmap_tests_disabled.rs"]
+mod jmap_tests_disabled;

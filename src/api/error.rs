@@ -89,6 +89,18 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for an account-bound API key whose account is disabled or no
+	/// longer exists. One answer for both, the same refusal the JMAP
+	/// WebSocket gives such a key mid-connection.
+	pub fn bound_account_unavailable() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: "The account this key is bound to is disabled or no longer exists."
+				.to_string(),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

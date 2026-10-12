@@ -5,12 +5,19 @@
 //! "the key's own account", so such a key is refused there with a 403 before
 //! the handler runs. Without this the key would be read on those routes like
 //! an unconfined one.
+//!
+//! On the account-scoped surface the key acts for its account only while that
+//! account exists and is not disabled. [`bound_account_is_live`] is the one
+//! check for that: [`confine`] runs it on every HTTP request, and the JMAP
+//! WebSocket runs it again on every frame of a socket opened before the
+//! account went away.
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
 use super::ApiState;
+use super::Principal;
 use super::api_keys::Scope;
 use super::error::ApiError;
 use super::state::MatchedAuth;
@@ -42,20 +49,36 @@ pub(crate) fn is_account_bound(state: &ApiState, auth: &MatchedAuth) -> bool {
 		.is_some_and(|key| key.account.is_some())
 }
 
+/// Whether the account `principal` is bound to can still be acted on: it
+/// exists and is not disabled. A principal not bound to one account is not
+/// affected. A disabled account keeps its mail, so without this its keys would
+/// go on reading and sending as if nothing happened.
+pub(crate) fn bound_account_is_live(state: &ApiState, principal: &Principal) -> bool {
+	match principal {
+		Principal::Account { name, .. } => {
+			!state.store().is_disabled(name)
+				&& state.accounts().iter().any(|account| &account.name == name)
+		}
+		_ => true,
+	}
+}
+
 /// Middleware layered inside the bearer check: refuse an account-bound key on
-/// any route outside [`path_is_account_scoped`].
+/// any route outside [`path_is_account_scoped`], and on the routes inside it
+/// once its account is disabled or removed.
 pub(crate) async fn confine(
 	State(state): State<ApiState>,
 	request: Request,
 	next: Next,
 ) -> Result<Response, ApiError> {
-	if !path_is_account_scoped(request.uri().path())
-		&& request
-			.extensions()
-			.get::<MatchedAuth>()
-			.is_some_and(|auth| is_account_bound(&state, auth))
-	{
-		return Err(ApiError::account_bound_route());
+	if let Some(auth) = request.extensions().get::<MatchedAuth>() {
+		if !path_is_account_scoped(request.uri().path()) {
+			if is_account_bound(&state, auth) {
+				return Err(ApiError::account_bound_route());
+			}
+		} else if !bound_account_is_live(&state, &Principal::for_token(&state, auth)) {
+			return Err(ApiError::bound_account_unavailable());
+		}
 	}
 	Ok(next.run(request).await)
 }

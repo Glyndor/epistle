@@ -94,7 +94,9 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 /// up, so a key removed or expired since (or whose IP pin no longer matches)
 /// resolves to a different principal; so does one whose `account` or `domains`
 /// were edited, and the socket was opened for the old reach. A credential bound
-/// to one account also needs that account to still exist and not be disabled.
+/// to one account also needs that account to still exist and not be disabled,
+/// the same check every HTTP request gets
+/// ([`crate::api::account_bound::bound_account_is_live`]).
 ///
 /// The configured static token is fixed for the life of the process, so it is
 /// not compared again: its hash may be a legacy argon2id one, and hashing on
@@ -103,16 +105,8 @@ fn credential_still_valid(state: &ApiState, auth: &MatchedAuth, opened_as: &Prin
 	if matches!(opened_as, Principal::Admin { credential: None }) {
 		return true;
 	}
-	if Principal::for_token(state, auth) != *opened_as {
-		return false;
-	}
-	match opened_as {
-		Principal::Account { name, .. } => {
-			!state.store().is_disabled(name)
-				&& state.accounts().iter().any(|account| &account.name == name)
-		}
-		_ => true,
-	}
+	Principal::for_token(state, auth) == *opened_as
+		&& crate::api::account_bound::bound_account_is_live(state, opened_as)
 }
 
 /// The `RequestError` answering a frame that arrived after the credential
