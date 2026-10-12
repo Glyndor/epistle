@@ -219,7 +219,9 @@ fn aligned(mode: Alignment, identifier: &str, from_domain: &str) -> bool {
 
 /// Return the organizational (registrable) domain using the Mozilla PSL.
 /// Falls back to the rightmost two labels when the PSL returns no result.
-fn organizational_domain(domain: &str) -> String {
+/// `pub(crate)` so the report sender can compare the `rua=` domain to the
+/// policy domain for the external-destination check (RFC 7489 §7.1).
+pub(crate) fn organizational_domain(domain: &str) -> String {
 	use psl::Psl;
 	if let Some(d) = psl::List.domain(domain.as_bytes())
 		&& let Ok(s) = std::str::from_utf8(d.as_bytes())

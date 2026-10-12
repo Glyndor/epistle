@@ -195,7 +195,11 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Build the MIME email carrying the report as a gzip attachment.
-/// Returns raw RFC 5322 bytes ready for FsSpool.
+/// Returns raw RFC 5322 bytes ready for [`crate::smtp::sink::MessageSink`].
+/// `reporting_hostname` is the host part of the `Message-ID:` (RFC 7489
+/// §7.2.1.1 wants a unique `Message-ID` in the reporting hostname), and
+/// `now` is the `Date:` value.
+#[allow(clippy::too_many_arguments)]
 pub fn build_email(
 	from_domain: &str,
 	to_address: &str,
@@ -203,6 +207,8 @@ pub fn build_email(
 	period_start: u64,
 	period_end: u64,
 	reporting_domain: &str,
+	reporting_hostname: &str,
+	now: std::time::SystemTime,
 	attachment: &[u8],
 ) -> Vec<u8> {
 	use base64::Engine;
@@ -211,6 +217,10 @@ pub fn build_email(
 	let boundary = format!("report-boundary-{report_id}");
 	let mut email = String::with_capacity(512 + b64.len());
 
+	email.push_str(&format!("Date: {}\r\n", crate::clock::rfc5322(now)));
+	email.push_str(&format!(
+		"Message-ID: <{report_id}@{reporting_hostname}>\r\n"
+	));
 	email.push_str(&format!("From: postmaster@{reporting_domain}\r\n"));
 	email.push_str(&format!("To: {to_address}\r\n"));
 	email.push_str(&format!(
@@ -342,6 +352,7 @@ mod tests {
 			"example.org",
 			&sample_records(),
 		);
+		let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
 		let email = build_email(
 			"sender.example",
 			"reports@example.org",
@@ -349,6 +360,8 @@ mod tests {
 			1_700_000_000,
 			1_700_086_400,
 			"example.org",
+			"mail.reporter.example",
+			now,
 			&attachment,
 		);
 		let email_str = String::from_utf8_lossy(&email);
@@ -363,6 +376,11 @@ mod tests {
 		);
 		assert!(email_str.contains("application/gzip"), "{email_str}");
 		assert!(email_str.contains(".xml.gz"), "{email_str}");
+		assert!(email_str.contains("Date: "), "{email_str}");
+		assert!(
+			email_str.contains("Message-ID: <r1@mail.reporter.example>"),
+			"{email_str}"
+		);
 	}
 
 	#[test]

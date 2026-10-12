@@ -35,39 +35,37 @@ pub(super) fn serve_http(
 }
 
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with
-/// accumulated delivery records, build the reports and queue them on the
-/// outbound spool.
+/// accumulated delivery records, build the reports and queue them through
+/// `sink` (so the outbound mail is DKIM-signed like any other).
 pub(super) fn spawn_dmarc_flush(
 	config: &Config,
 	spf_dns: Arc<dyn crate::spf::DnsLookup>,
+	sink: Arc<dyn crate::smtp::sink::MessageSink>,
 ) -> std::io::Result<()> {
 	let data_dir = config.data_dir.clone();
 	let hostname = config.hostname.clone();
-	let spool = crate::storage::FsSpool::open(&config.data_dir)?;
+	let org_email = format!("postmaster@{hostname}");
 	tokio::spawn(async move {
 		let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
 		interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 		loop {
 			interval.tick().await;
-			let ts = std::time::SystemTime::now()
+			let now = std::time::SystemTime::now();
+			let ts = now
 				.duration_since(std::time::UNIX_EPOCH)
 				.map(|d| d.as_secs())
 				.unwrap_or(0);
 			let today = crate::dmarc::aggregate::unix_to_day(ts);
-			let messages = crate::dmarc::aggregate::flush_pending(
-				&data_dir,
-				&today,
-				&hostname,
-				&format!("postmaster@{hostname}"),
-				&hostname,
-				spf_dns.as_ref(),
-			)
-			.await;
-			for message in messages {
-				if let Err(e) = spool.store(&message) {
-					tracing::warn!(%e, "failed to queue DMARC report");
-				}
-			}
+			let sender = crate::dmarc::aggregate::Sender {
+				data_dir: &data_dir,
+				org_name: &hostname,
+				org_email: &org_email,
+				reporting_domain: &hostname,
+				dns: spf_dns.as_ref(),
+				sink: sink.as_ref(),
+				now,
+			};
+			crate::dmarc::aggregate::flush_pending(&sender, &today).await;
 		}
 	});
 	Ok(())
