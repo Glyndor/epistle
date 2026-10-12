@@ -254,6 +254,10 @@ impl Config {
 					"account \"{name}\" has no addresses"
 				)));
 			}
+			if let Some(raw) = &account.display_name {
+				crate::directory_store::display_name::validate(raw)
+					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
+			}
 			if let Some(hash) = &account.password_hash {
 				let argon2id = hash.starts_with("$argon2id$")
 					&& argon2::password_hash::phc::PasswordHash::new(hash).is_ok();

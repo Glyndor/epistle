@@ -44,6 +44,7 @@ fn keys() -> Keys {
 fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
 	let spool = crate::storage::FsSpool::open(dir).expect("spool");
 	let accounts = vec![crate::config::Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec![LOGIN.to_string()],
 		password_hash: Some(crate::smtp::auth::hash_password(fixtures::password()).expect("hash")),

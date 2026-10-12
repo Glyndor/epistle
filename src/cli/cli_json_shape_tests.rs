@@ -65,8 +65,8 @@ fn account_list_json_is_an_array_sorted_by_name() {
 	assert_eq!(
 		run(&config, Subcommand::List { json: true }),
 		json!([
-			{ "name": "bob", "source": "dynamic", "addresses": ["bob@example.org"] },
-			{ "name": "postmaster", "source": "static", "addresses": ["postmaster@example.org"] },
+			{ "name": "bob", "source": "dynamic", "display_name": null, "addresses": ["bob@example.org"] },
+			{ "name": "postmaster", "source": "static", "display_name": null, "addresses": ["postmaster@example.org"] },
 		])
 	);
 }
@@ -93,7 +93,7 @@ fn account_show_json_has_the_same_keys_for_both_sources() {
 	assert_eq!(
 		bob,
 		json!({
-			"name": "bob", "log_id": null, "source": "dynamic",
+			"name": "bob", "log_id": null, "source": "dynamic", "display_name": null,
 			"addresses": ["bob@example.org"], "disabled": false, "quota_bytes": null,
 			"protocols": null, "two_factor": true,
 			"forward": ["out@example.com"], "catch_all": ["example.org"],

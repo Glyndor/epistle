@@ -111,3 +111,27 @@ addresses = ["ärger@example.org"]
 		"invalid configuration: address \"ärger@example.org\" belongs to both account \"first\" and account \"second\""
 	);
 }
+
+#[test]
+fn a_static_display_name_is_kept_as_written_and_refused_with_a_line_break() {
+	let with = |name: &str| {
+		MIXED.replace(
+			"name = \"alice\"\n",
+			&format!("name = \"alice\"\ndisplay_name = \"{name}\"\n"),
+		)
+	};
+	let config = parse(&with("Alice SMITH"));
+	assert_eq!(
+		config.accounts[0].display_name.as_deref(),
+		Some("Alice SMITH")
+	);
+	let error = Config::parse_text(
+		&with("Alice\\nBcc: x@example.net"),
+		std::path::Path::new("mail.toml"),
+	)
+	.expect_err("a line break could split a header");
+	assert_eq!(
+		error.to_string(),
+		"invalid configuration: account \"alice\": the display name must not contain control characters or line breaks"
+	);
+}

@@ -45,6 +45,7 @@ fn ws_state(
 			domains.clone(),
 			std::collections::HashMap::new(),
 			vec![crate::config::Account {
+				display_name: None,
 				name: "ann".to_string(),
 				addresses: vec!["ann@example.org".to_string()],
 				password_hash: Some("$argon2id$secret".to_string()),
@@ -59,6 +60,7 @@ fn ws_state(
 	);
 	store
 		.add(crate::directory_store::DynamicAccount {
+			display_name: None,
 			name: "carol".to_string(),
 			addresses: vec!["carol@example.org".to_string()],
 			password_hash: "$argon2id$secret".to_string(),

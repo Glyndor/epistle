@@ -194,7 +194,11 @@ impl Legacy {
 				addresses,
 			} => (
 				config,
-				Resource::Account(account::Subcommand::Add { name, addresses }),
+				Resource::Account(account::Subcommand::Add {
+					name,
+					addresses,
+					display_name: None,
+				}),
 			),
 			Legacy::AccountRemove {
 				config,

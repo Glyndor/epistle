@@ -41,6 +41,7 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 			.expect("store");
 	}
 	let accounts = vec![crate::config::Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),

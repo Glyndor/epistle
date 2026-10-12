@@ -39,6 +39,7 @@ pub(super) fn push_state(dir: &std::path::Path) -> Router {
 	}
 	drop(key_store);
 	let account = |name: &str, address: &str| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),

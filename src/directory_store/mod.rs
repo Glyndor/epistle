@@ -55,6 +55,7 @@ pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
 mod collisions;
+pub mod display_name;
 mod mutate_store;
 mod normalize;
 pub use normalize::account_name;
@@ -150,6 +151,12 @@ pub struct DynamicAccount {
 	/// the static `Account::catch_all` field.
 	#[serde(default)]
 	pub catch_all: Vec<String>,
+	/// The person's name, free text used as the sender name (JMAP
+	/// `Identity.name`, the `From` that `/api/v1/send` builds). Stored as
+	/// given (trimmed), never lowercased; `None` when unset. Checked by
+	/// [`display_name::validate`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub display_name: Option<String>,
 }
 
 impl DynamicAccount {
@@ -185,6 +192,7 @@ impl DynamicAccount {
 			allowed_protocols: None,
 			forward: Vec::new(),
 			catch_all: Vec::new(),
+			display_name: None,
 		})
 	}
 }
@@ -446,6 +454,7 @@ impl AccountStore {
 	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
 		account.name = normalize::account_name(&account.name);
 		normalize::account(&mut account);
+		account.display_name = display_name::stored(account.display_name.as_deref())?;
 		self.mutate_store(|state| {
 			validate_name(&account.name)?;
 			if account.addresses.is_empty() {
@@ -584,6 +593,7 @@ impl AccountStore {
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
 			normalize::account(&mut fresh);
+			fresh.display_name = display_name::stored(fresh.display_name.as_deref())?;
 			let mut known_addresses: Vec<String> = self
 				.static_accounts
 				.iter()

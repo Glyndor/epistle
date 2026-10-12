@@ -227,6 +227,7 @@ fn static_accounts_are_not_rewritten_by_the_upgrade() {
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
 		vec![crate::config::Account {
+			display_name: None,
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: Some(hash(fixtures::password())),

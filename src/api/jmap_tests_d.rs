@@ -19,6 +19,7 @@ pub(super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiS
 	let spool = FsSpool::open(dir).expect("open spool");
 	let accounts = vec![
 		crate::config::Account {
+			display_name: None,
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: Some("$argon2id$secret".to_string()),
@@ -29,6 +30,7 @@ pub(super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiS
 			allowed_protocols: None,
 		},
 		crate::config::Account {
+			display_name: None,
 			name: "bob".to_string(),
 			addresses: vec!["bob@example.org".to_string()],
 			password_hash: Some("$argon2id$secret".to_string()),

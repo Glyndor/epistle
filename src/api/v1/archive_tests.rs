@@ -11,6 +11,7 @@ pub(super) async fn archive_test_state() -> (tempfile::TempDir, ApiState) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("open spool");
 	let accounts = vec![crate::config::Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),

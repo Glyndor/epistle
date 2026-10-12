@@ -40,6 +40,7 @@ fn write_config(toml: &str) -> tempfile::NamedTempFile {
 fn build() -> Harness {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
+		display_name: None,
 		name: STATIC_NAME.to_string(),
 		addresses: vec![format!("{STATIC_NAME}@{DOMAIN}")],
 		password_hash: Some(hash(fixture_password())),

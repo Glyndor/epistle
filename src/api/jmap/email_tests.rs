@@ -30,6 +30,7 @@ fn state_with_recording_training(dir: &std::path::Path) -> (ApiState, Arc<Record
 	);
 	let spool = crate::storage::FsSpool::open(dir).expect("spool");
 	let accounts = vec![crate::config::Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
