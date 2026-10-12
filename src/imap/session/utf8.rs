@@ -5,7 +5,9 @@
 //! or IMAP4rev2 (whose mailbox names are Net-Unicode, RFC 9051 §5.1) sends
 //! and receives the decoded names instead: its arguments are encoded on the
 //! way in, and every name the server echoes is decoded on the way out. Any
-//! other client keeps the stored spelling in both directions.
+//! other client keeps the stored spelling in both directions. Responses
+//! name a mailbox only through [`Session::mailbox_astring`], so the
+//! spelling and the quoting are decided in one place.
 
 use std::borrow::Cow;
 
@@ -20,7 +22,7 @@ impl Session {
 	}
 
 	/// How a stored mailbox name is spelled on this connection.
-	pub(super) fn wire_name<'a>(&self, stored: &'a str) -> Cow<'a, str> {
+	fn wire_name<'a>(&self, stored: &'a str) -> Cow<'a, str> {
 		if self.utf8_names()
 			&& let Some(decoded) = mutf7::decode(stored)
 		{

@@ -26,8 +26,8 @@ impl Session {
 			String::new()
 		} else {
 			format!(
-				"* METADATA \"{}\" ({})\r\n",
-				self.wire_name(mailbox),
+				"* METADATA {} ({})\r\n",
+				self.mailbox_astring(mailbox),
 				pairs.trim_start()
 			)
 		};

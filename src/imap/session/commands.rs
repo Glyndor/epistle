@@ -215,7 +215,7 @@ impl Session {
 			let hits = matching_uids(&snapshot, criteria);
 			body.push_str(&esearch_multi_line(
 				tag,
-				&self.wire_name(name),
+				&self.mailbox_astring(name),
 				snapshot.uid_validity(),
 				&hits,
 				return_opts,
