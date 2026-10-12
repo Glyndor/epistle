@@ -80,6 +80,8 @@ impl ConfigDocument {
 }
 
 #[cfg(test)]
+mod tests_dry_run;
+#[cfg(test)]
 mod tests_file;
 #[cfg(test)]
 mod tests_helpers;
