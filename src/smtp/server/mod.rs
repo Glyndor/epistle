@@ -103,6 +103,11 @@ pub struct Server {
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
 	cbind_data: Option<Vec<u8>>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are offered on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour; `false` hides both mechanisms on the wire and refuses an
+	/// explicit `AUTH` against them. PLAIN/LOGIN stay in.
+	scram_enabled: bool,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
 	/// Server-wide default submission rate limit (messages/min) for
@@ -178,6 +183,7 @@ impl Server {
 			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			auth_protocol: crate::config::Protocol::Submission,
+			scram_enabled: true,
 		}
 	}
 
@@ -281,6 +287,14 @@ impl Server {
 	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
 	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
 		self.oauth = Some(verifier);
+		self
+	}
+
+	/// Toggle the `[auth] scram` knob for this listener. `false` hides
+	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS on the wire and refuses an
+	/// explicit `AUTH` against them; PLAIN and LOGIN stay in.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
 		self
 	}
 
@@ -469,7 +483,8 @@ impl Server {
 		let mut session = Session::new(&self.hostname)
 			.with_directory(self.directory.current())
 			.with_auth_protocol(self.auth_protocol)
-			.with_metrics(Arc::clone(&self.metrics));
+			.with_metrics(Arc::clone(&self.metrics))
+			.with_scram_enabled(self.scram_enabled);
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}

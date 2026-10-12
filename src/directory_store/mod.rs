@@ -41,6 +41,11 @@ mod build;
 mod mutators;
 pub mod scram_upgrade;
 
+#[path = "scram_settings.rs"]
+mod scram_settings;
+#[path = "set_totp.rs"]
+mod set_totp;
+
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
@@ -127,21 +132,30 @@ pub struct DynamicAccount {
 
 impl DynamicAccount {
 	/// Build an account from a plaintext password, deriving the argon2id hash
-	/// and SCRAM-SHA-256 credentials (fresh random salt, RFC 7677 ≥4096 rounds).
+	/// and SCRAM-SHA-256 credentials (fresh random salt, RFC 7677 ≥4096
+	/// rounds). When `scram_enabled` is `false`, the SCRAM verifier is
+	/// omitted (`None`); a future password change with `scram_enabled`
+	/// `false` keeps it `None`.
 	pub fn with_password(
 		name: String,
 		addresses: Vec<String>,
 		password: &str,
+		scram_enabled: bool,
 	) -> Result<Self, StoreError> {
 		let password_hash = crate::smtp::auth::hash_password(password)
 			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
-		let scram = crate::smtp::scram::ScramStored::with_fresh_salt(password)
-			.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
+		let scram = if scram_enabled {
+			let stored = crate::smtp::scram::ScramStored::with_fresh_salt(password)
+				.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
+			Some(stored)
+		} else {
+			None
+		};
 		Ok(DynamicAccount {
 			name,
 			addresses,
 			password_hash,
-			scram: Some(scram),
+			scram,
 			totp_secret: None,
 			disabled: false,
 			quota_bytes: None,
@@ -251,6 +265,13 @@ pub struct AccountStore {
 	/// store; left as a no-op until then so unit tests that build a store
 	/// without a runtime never observe a real write.
 	scram_upgrader: Arc<dyn ScramUpgrader>,
+	/// Whether SCRAM-SHA-256 derivation/storage is enabled (the `[auth] scram`
+	/// knob). `true` is the historical default: account-create and
+	/// password-change paths derive a verifier and store it; the SCRAM
+	/// upgrade path is a no-op when an account has none. `false` skips
+	/// derivation entirely; the next password change of an account that
+	/// already has a verifier drops it because the mutator passes `None`.
+	scram_enabled: bool,
 	handle: DirectoryHandle,
 }
 
@@ -295,6 +316,7 @@ impl AccountStore {
 			ban_store: None,
 			metrics: None,
 			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,
+			scram_enabled: true,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -359,26 +381,6 @@ impl AccountStore {
 		self.metrics = Some(metrics);
 		self.handle.replace(self.build_directory());
 		self
-	}
-
-	/// Replace the SCRAM upgrader the rebuilt directories call when a
-	/// cleartext authentication succeeds against a low-iteration dynamic
-	/// verifier. The `serve` builder wires `Arc<Self>` so the directory's
-	/// upgrade writes round-trip to the on-disk account row.
-	pub fn with_scram_upgrader(mut self, upgrader: Arc<dyn ScramUpgrader>) -> Self {
-		self.scram_upgrader = upgrader;
-		self.handle.replace(self.build_directory());
-		self
-	}
-
-	/// Install the live upgrader on a `Arc<AccountStore>` that has
-	/// exactly one strong reference (the `serve` builder). Used once at
-	/// startup to wire the directory back to the store; subsequent
-	/// mutators go through the `Arc<dyn ScramUpgrader>` itself, which
-	/// holds a stable reference.
-	pub(crate) fn install_scram_upgrader(&mut self, upgrader: Arc<dyn ScramUpgrader>) {
-		self.scram_upgrader = upgrader;
-		self.handle.replace(self.build_directory());
 	}
 
 	/// Attach the shared ban store consulted on every password
@@ -490,16 +492,8 @@ impl AccountStore {
 	}
 
 	/// Set or clear a dynamic account's base32 TOTP secret (RFC 6238).
-	pub fn set_totp(&self, name: &str, secret: Option<String>) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		account.totp_secret = secret;
-		self.persist(&dynamic)?;
-		Ok(())
-	}
+	/// Lives on the `set_totp` sibling so `mod.rs` stays under the
+	/// per-file code-line budget.
 
 	/// Enable or disable a dynamic account (the SCIM `active` flag). The
 	/// account stays on disk and continues to own its mailboxes, but

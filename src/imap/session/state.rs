@@ -157,6 +157,12 @@ pub struct Session {
 	/// it on a `$Junk` / `$NotJunk` change. `None` disables training and
 	/// STORE answers the same.
 	pub(super) training: Option<crate::antispam::training_queue::TrainingQueue>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are enabled on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour: both mechanisms advertised in `CAPABILITY AUTH=` and
+	/// offered through `AUTHENTICATE`. `false` hides both on the wire
+	/// and refuses an explicit `AUTHENTICATE` against them.
+	pub(super) scram_enabled: bool,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -238,6 +244,7 @@ impl Session {
 			saved_search: None,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
+			scram_enabled: true,
 		}
 	}
 

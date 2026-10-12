@@ -101,7 +101,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		);
 		store = store.with_ban_store(ban_store);
 	}
-	let mut account_store = Arc::new(store);
+	let mut account_store = Arc::new(store.with_scram_enabled(config.auth.scram));
 	// Wire the live store as the SCRAM upgrader. The directory built during
 	// `with_ban_store` (and every earlier `with_*` step) carried the no-op
 	// upgrader; setting it now and rebuilding means every fresh request sees
@@ -410,6 +410,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					imap_server = imap_server.with_channel_binding(cbind.clone());
 				}
+				imap_server = imap_server.with_scram_enabled(config.auth.scram);
 				imap_server = imap_server.with_max_connections(max_conn);
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
@@ -566,6 +567,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					server = server.with_channel_binding(cbind.clone());
 				}
+				server = server.with_scram_enabled(config.auth.scram);
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}
 		}

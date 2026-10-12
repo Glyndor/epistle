@@ -78,14 +78,21 @@ pub(crate) fn password_with_store(
 			return ExitCode::FAILURE;
 		}
 	};
-	let scram = match crate::smtp::scram::ScramStored::with_fresh_salt(&plain) {
-		Some(scram) => scram,
-		None => {
-			style::error(format_args!("account {name}: cannot derive SCRAM salt"));
-			return ExitCode::FAILURE;
+	// `[auth] scram = false` produces `None` so the mutator drops an existing
+	// verifier. With SCRAM on, derivation must not fail (CSPRNG). Failures
+	// here abort the password update rather than silently skip the verifier.
+	let scram = if store.scram_enabled() {
+		match crate::smtp::scram::ScramStored::with_fresh_salt(&plain) {
+			Some(scram) => Some(scram),
+			None => {
+				style::error(format_args!("account {name}: cannot derive SCRAM salt"));
+				return ExitCode::FAILURE;
+			}
 		}
+	} else {
+		None
 	};
-	match store.set_password_hash(name, hash, Some(scram)) {
+	match store.set_password_hash(name, hash, scram) {
 		Ok(()) => {
 			println!("password updated");
 			ExitCode::SUCCESS

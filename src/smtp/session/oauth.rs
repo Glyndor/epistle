@@ -27,6 +27,7 @@ impl Session {
 		for mechanism in crate::sasl::available(
 			self.client_identity.is_some(),
 			self.cbind_data.is_some(),
+			self.scram_enabled,
 			self.oauth.is_some(),
 		) {
 			mechs.push(' ');
