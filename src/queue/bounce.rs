@@ -1,6 +1,7 @@
 //! Delivery Status Notification (bounce) generation, RFC 3464.
 
 use crate::clock;
+use crate::queue::reply::parse_enhanced;
 use crate::smtp::session::AcceptedMessage;
 
 /// Whether the report is a permanent failure or a transient-delay warning.
@@ -12,7 +13,34 @@ enum Kind {
 	Delayed,
 }
 
-/// Build a Delivery Status Notification for a permanently failed message.
+/// One recipient in a delivery status report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportRecipient {
+	/// The recipient address.
+	pub recipient: String,
+	/// The remote SMTP reply (`550 5.1.1 ...`), or a local reason when no
+	/// server answered.
+	pub reason: String,
+	/// The host whose reply `reason` is, when a server answered.
+	pub remote: Option<String>,
+	/// The message expired in the queue rather than being refused.
+	pub expired: bool,
+}
+
+impl ReportRecipient {
+	/// A recipient refused for `reason`, with no remote host to name.
+	pub fn new(recipient: &str, reason: &str) -> Self {
+		ReportRecipient {
+			recipient: recipient.to_string(),
+			reason: reason.to_string(),
+			remote: None,
+			expired: false,
+		}
+	}
+}
+
+/// Build a Delivery Status Notification for a permanently failed message,
+/// every recipient failing for the same `reason`.
 ///
 /// Produces an RFC 3464 `multipart/report; report-type=delivery-status`
 /// message: a human-readable part, a machine-readable `message/delivery-status`
@@ -28,25 +56,47 @@ pub fn build(
 	original_data: &[u8],
 	now: std::time::SystemTime,
 ) -> Option<AcceptedMessage> {
-	build_report(
-		Kind::Failed,
+	let recipients: Vec<ReportRecipient> = failed_recipients
+		.iter()
+		.map(|recipient| ReportRecipient::new(recipient, reason))
+		.collect();
+	build_failed(
 		hostname,
 		original_reverse_path,
-		failed_recipients,
-		reason,
+		&recipients,
 		original_data,
 		now,
 	)
 }
 
-/// Build a "delivery delayed" warning DSN (RFC 3464 `Action: delayed`). Unlike a
-/// bounce, the message stays queued; this just informs the sender it is taking a
-/// while. Returns `None` when the original was itself a bounce.
+/// Build one failure DSN for a message whose recipients failed each for its
+/// own reason: every recipient gets its own `Status`, `Remote-MTA` and
+/// `Diagnostic-Code`. See [`build`].
+pub fn build_failed(
+	hostname: &str,
+	original_reverse_path: &str,
+	recipients: &[ReportRecipient],
+	original_data: &[u8],
+	now: std::time::SystemTime,
+) -> Option<AcceptedMessage> {
+	build_report(
+		Kind::Failed,
+		hostname,
+		original_reverse_path,
+		recipients,
+		original_data,
+		now,
+	)
+}
+
+/// Build a "delivery delayed" warning DSN (RFC 3464 `Action: delayed`) for the
+/// recipients still pending. Unlike a bounce, the message stays queued; this
+/// just informs the sender it is taking a while. Returns `None` when the
+/// original was itself a bounce.
 pub fn build_delay_warning(
 	hostname: &str,
 	original_reverse_path: &str,
-	recipients: &[String],
-	reason: &str,
+	recipients: &[ReportRecipient],
 	original_data: &[u8],
 	now: std::time::SystemTime,
 ) -> Option<AcceptedMessage> {
@@ -55,18 +105,61 @@ pub fn build_delay_warning(
 		hostname,
 		original_reverse_path,
 		recipients,
-		reason,
 		original_data,
 		now,
 	)
+}
+
+/// The per-recipient fields of the `message/delivery-status` part
+/// (RFC 3464 §2.3).
+fn recipient_fields(kind: Kind, recipient: &ReportRecipient, reason: &str) -> String {
+	let (action, class) = match kind {
+		Kind::Failed => ("failed", 5),
+		Kind::Delayed => ("delayed", 4),
+	};
+	// The status class follows the action, not the reply: a recipient that
+	// expired after a 4.2.2 has failed (5.2.2), and one being retried after a
+	// 552 5.2.2 is delayed (4.2.2).
+	let enhanced = is_smtp_reply(reason)
+		.then(|| reason.get(4..).unwrap_or_default().split(' ').next())
+		.flatten()
+		.and_then(parse_enhanced)
+		.filter(|enhanced| reason.starts_with(&enhanced.class.to_string()));
+	let status = match enhanced {
+		Some(enhanced) => format!("{class}.{}.{}", enhanced.subject, enhanced.detail),
+		None if recipient.expired => "5.4.7".to_string(),
+		None => format!("{class}.0.0"),
+	};
+	let mut fields = format!(
+		"Final-Recipient: rfc822; {}\r\nAction: {action}\r\nStatus: {status}\r\n",
+		recipient.recipient
+	);
+	if let Some(remote) = &recipient.remote {
+		fields.push_str(&format!("Remote-MTA: dns; {}\r\n", sanitize_reason(remote)));
+	}
+	// Only a server's reply is an SMTP diagnostic; a local reason (no server
+	// answered) stays in the human-readable part.
+	if is_smtp_reply(reason) {
+		fields.push_str(&format!("Diagnostic-Code: smtp; {reason}\r\n"));
+	}
+	fields.push_str("\r\n");
+	fields
+}
+
+/// Whether `reason` starts with a three-digit SMTP reply code.
+fn is_smtp_reply(reason: &str) -> bool {
+	let bytes = reason.as_bytes();
+	bytes.len() >= 3
+		&& bytes[..3].iter().all(u8::is_ascii_digit)
+		&& matches!(bytes[0], b'2'..=b'5')
+		&& bytes.get(3).is_none_or(|b| *b == b' ')
 }
 
 fn build_report(
 	kind: Kind,
 	hostname: &str,
 	original_reverse_path: &str,
-	recipients: &[String],
-	reason: &str,
+	recipients: &[ReportRecipient],
 	original_data: &[u8],
 	now: std::time::SystemTime,
 ) -> Option<AcceptedMessage> {
@@ -75,13 +168,6 @@ fn build_report(
 		return None;
 	}
 
-	// The reason is the remote MTA's SMTP reply, attacker-influenced and read
-	// with its line breaks intact. Sanitize before it reaches any DSN header or
-	// body: a raw CR/LF would inject forged headers into the bounce we send back
-	// to the (attacker-chosen) original sender (header injection / DSN
-	// smuggling). Collapse all control characters to spaces and cap the length.
-	let reason = &sanitize_reason(reason);
-
 	let date = clock::rfc5322(now);
 	let boundary = format!(
 		"=_dsn_{}",
@@ -89,44 +175,32 @@ fn build_report(
 			.map(|d| d.as_secs())
 			.unwrap_or(0)
 	);
-	let (subject, action, default_status, intro, reason_label, closing) = match kind {
+	let (subject, intro, closing) = match kind {
 		Kind::Failed => (
 			"Undelivered Mail Returned to Sender",
-			"failed",
-			"5.0.0",
 			"Your message could not be delivered to the following recipients:",
-			"Reason:",
 			"The message will not be retried.",
 		),
 		Kind::Delayed => (
 			"Delivery Status Notification (Delay)",
-			"delayed",
-			"4.0.0",
 			"Your message is taking longer than expected to deliver to:",
-			"Reason for the delay:",
 			"No action is required: delivery will keep being retried.",
 		),
 	};
-	let status = enhanced_status(reason, default_status);
 
-	let human_recipients: String = recipients
-		.iter()
-		.map(|recipient| format!("   {recipient}\r\n"))
-		.collect();
-
-	// Per-recipient machine-readable status fields.
-	let per_recipient: String = recipients
-		.iter()
-		.map(|recipient| {
-			format!(
-				"Final-Recipient: rfc822; {recipient}\r\n\
-Action: {action}\r\n\
-Status: {status}\r\n\
-Diagnostic-Code: smtp; {reason}\r\n\
-\r\n"
-			)
-		})
-		.collect();
+	let mut human_recipients = String::new();
+	let mut per_recipient = String::new();
+	for recipient in recipients {
+		// The reason is the remote MTA's SMTP reply, attacker-influenced and
+		// read with its line breaks intact. Sanitize before it reaches any
+		// DSN header or body: a raw CR/LF would inject forged headers into
+		// the bounce we send back to the (attacker-chosen) original sender
+		// (header injection / DSN smuggling). Collapse all control
+		// characters to spaces and cap the length.
+		let reason = sanitize_reason(&recipient.reason);
+		human_recipients.push_str(&format!("   {}\r\n      {reason}\r\n", recipient.recipient));
+		per_recipient.push_str(&recipient_fields(kind, recipient, &reason));
+	}
 
 	let original_headers = original_header_block(original_data);
 
@@ -148,9 +222,6 @@ This is the mail system at host {hostname}.\r\n\
 {intro}\r\n\
 \r\n\
 {human_recipients}\
-\r\n\
-{reason_label}\r\n\
-   {reason}\r\n\
 \r\n\
 {closing}\r\n\
 \r\n\
@@ -189,24 +260,6 @@ fn sanitize_reason(reason: &str) -> String {
 		.map(|c| if c.is_control() { ' ' } else { c })
 		.take(MAX_REASON_LEN)
 		.collect()
-}
-
-/// The enhanced status code (RFC 3463, `class.subject.detail`) carried in the
-/// reason, or `default` when none is present.
-fn enhanced_status(reason: &str, default: &str) -> String {
-	reason
-		.split_whitespace()
-		.find(|token| is_enhanced_code(token))
-		.unwrap_or(default)
-		.to_string()
-}
-
-fn is_enhanced_code(token: &str) -> bool {
-	let parts: Vec<&str> = token.split('.').collect();
-	parts.len() == 3
-		&& parts
-			.iter()
-			.all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The header block of the original message (up to the first empty line),
@@ -338,8 +391,10 @@ mod tests {
 		let warning = build_delay_warning(
 			"mail.example.org",
 			"alice@example.org",
-			&["bob@elsewhere.example".to_string()],
-			"451 4.4.1 connection timed out",
+			&[ReportRecipient::new(
+				"bob@elsewhere.example",
+				"451 4.4.1 connection timed out",
+			)],
 			original(),
 			UNIX_EPOCH,
 		)
@@ -358,8 +413,7 @@ mod tests {
 			build_delay_warning(
 				"h.example",
 				"",
-				&["x@y.example".to_string()],
-				"r",
+				&[ReportRecipient::new("x@y.example", "r")],
 				original(),
 				UNIX_EPOCH
 			)

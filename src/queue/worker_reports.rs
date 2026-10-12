@@ -3,6 +3,7 @@
 
 use super::Worker;
 use super::conversation::Conversation;
+use crate::queue::bounce::ReportRecipient;
 use crate::queue::client::DeliveryError;
 use crate::queue::reply::{FailureClass, classify_reason};
 use crate::storage::{RecipientStatus, SpoolEntry};
@@ -108,6 +109,7 @@ impl Worker {
 			for recipient in pending {
 				let mut state = envelope.recipient_state(recipient);
 				state.status = RecipientStatus::Failed;
+				state.expired = true;
 				if state.last_error.is_none() {
 					state.last_error = Some("message expired in the queue".into());
 				}
@@ -137,26 +139,18 @@ impl Worker {
 		if unreported.is_empty() {
 			return Ok(false);
 		}
-		// Recipients with NOTIFY=NEVER get no failure DSN (RFC 3461).
-		let mut by_reason: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-		for recipient in unreported.iter().filter(|r| !envelope.no_dsn.contains(r)) {
-			let reason = envelope.recipient_state(recipient).last_error;
-			by_reason
-				.entry(reason.unwrap_or_default())
-				.or_default()
-				.push(recipient.clone());
-		}
-		for (reason, recipients) in by_reason {
-			if let Some(message) = crate::queue::bounce::build(
+		// Recipients with NOTIFY=NEVER get no failure DSN (RFC 3461). The
+		// others share one report, each with its own status and reply.
+		let recipients = report_recipients(envelope, &unreported);
+		if !recipients.is_empty()
+			&& let Some(message) = crate::queue::bounce::build_failed(
 				&self.ehlo_hostname,
 				&envelope.reverse_path,
 				&recipients,
-				&reason,
 				&entry.data,
 				std::time::SystemTime::now(),
 			) {
-				self.send_report(id, message, "bounce");
-			}
+			self.send_report(id, message, "bounce");
 		}
 		self.spool.update_envelope(id, |envelope| {
 			for recipient in &unreported {
@@ -177,21 +171,14 @@ impl Worker {
 		if envelope.delay_warned {
 			return;
 		}
-		let reason = envelope.last_error.clone().unwrap_or_default();
-		// NOTIFY=DELAY is not modelled separately; reuse the failure opt-out so a
-		// sender that wants no DSNs at all gets no delay warning either.
-		let recipients: Vec<String> = envelope
-			.recipients
-			.iter()
-			.filter(|r| !envelope.no_dsn.contains(r))
-			.cloned()
-			.collect();
+		// Only the recipients still pending are delayed; NOTIFY=DELAY is not
+		// modelled separately, so the failure opt-out also silences this.
+		let recipients = report_recipients(envelope, &envelope.pending());
 		if !recipients.is_empty()
 			&& let Some(message) = crate::queue::bounce::build_delay_warning(
 				&self.ehlo_hostname,
 				&envelope.reverse_path,
 				&recipients,
-				&reason,
 				&entry.data,
 				std::time::SystemTime::now(),
 			) {
@@ -219,4 +206,25 @@ impl Worker {
 			None => tracing::warn!(%id, what, "dropping report: no bounce sink configured"),
 		}
 	}
+}
+
+/// The report lines for `recipients`, leaving out those that asked for no
+/// DSN (`NOTIFY=NEVER`, RFC 3461).
+fn report_recipients(
+	envelope: &crate::storage::Envelope,
+	recipients: &[String],
+) -> Vec<ReportRecipient> {
+	recipients
+		.iter()
+		.filter(|recipient| !envelope.no_dsn.contains(recipient))
+		.map(|recipient| {
+			let state = envelope.recipient_state(recipient);
+			ReportRecipient {
+				recipient: recipient.clone(),
+				reason: state.last_error.unwrap_or_default(),
+				remote: state.remote,
+				expired: state.expired,
+			}
+		})
+		.collect()
 }

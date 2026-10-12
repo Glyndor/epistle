@@ -134,7 +134,7 @@ impl crate::spf::DnsLookup for TlsaTempFailDns {
 }
 
 /// Connector that always fails with a transient error.
-struct DownConnector;
+pub(super) struct DownConnector;
 
 impl Connector for DownConnector {
 	fn connect(&self, _domain: &str, _policy: Option<&crate::mtasts::Policy>) -> ConnectFuture<'_> {

@@ -378,3 +378,7 @@ mod tests_recipients;
 #[cfg(test)]
 #[path = "worker_tests_classes.rs"]
 mod tests_classes;
+
+#[cfg(test)]
+#[path = "worker_tests_reports.rs"]
+mod tests_reports;

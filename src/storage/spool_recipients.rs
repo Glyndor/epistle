@@ -46,6 +46,10 @@ pub struct RecipientState {
 	/// The host that gave that answer, when a server answered.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub remote: Option<String>,
+	/// Whether it failed because the message expired in the queue, rather
+	/// than being refused.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub expired: bool,
 	/// Whether the failure report (DSN) covering this recipient has been
 	/// sent, or deliberately skipped, so it goes out once.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
