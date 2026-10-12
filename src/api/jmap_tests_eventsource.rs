@@ -51,6 +51,8 @@ fn es_state(dir: &std::path::Path) -> crate::api::ApiState {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			forward: Vec::new(),
+			catch_all: Vec::new(),
 		})
 		.expect("add carol");
 	for account in ["alice", "carol"] {
