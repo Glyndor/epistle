@@ -41,7 +41,9 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   once every account has changed its password.
 - **OAuth2/OIDC** (OAUTHBEARER/XOAUTH2) bearer tokens are verified against the
   configured issuer/audience/key.
-- **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths.
+- **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths. The
+  secret is encrypted at rest only when at-rest encryption is on (see "Data at
+  rest").
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
   password, and repeated failures close the connection.
 
@@ -205,6 +207,14 @@ backup, on its own, yields only ciphertext.
 - **Backups stay encrypted:** `epistle backup` archives the on-disk bytes
   verbatim, so a backup of an encrypted store remains ciphertext — restore it on
   a host with the same key. Use `epistle export` for a decrypted copy.
+- **TOTP secrets** in `accounts.toml` are encrypted with the same key
+  (stored as `enc:v1:<base64>`) when `encrypt_at_rest = true`, and are
+  protected only then: without at-rest encryption they are stored in
+  cleartext, guarded by the `0600` file mode and the disk encryption alone.
+  A secret written before encryption was turned on keeps working and is
+  encrypted the next time the server writes `accounts.toml`. If a stored
+  secret cannot be decrypted (key missing or wrong), that account's
+  password login fails instead of skipping the second factor.
 
 ## Logs and account names
 
