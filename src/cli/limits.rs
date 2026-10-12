@@ -58,6 +58,7 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 		let configured = key.value(config);
 		let default = configured.is_none() || configured == key.default_value();
 		let value = match configured.or(key.default_value()) {
+			Some(0) if matches!(key, Key::Quota) => "unlimited".into(),
 			Some(value) => match key.unit() {
 				values::Unit::Size => format!("{value} bytes"),
 				values::Unit::Duration => format!("{value} seconds"),
@@ -88,7 +89,9 @@ pub(super) fn show_json(config: &Config) -> serde_json::Value {
 		limits.insert(
 			key.name().to_string(),
 			serde_json::json!({
-				"value": configured.or(key.default_value()),
+				"value": configured
+					.or(key.default_value())
+					.filter(|value| !(matches!(key, Key::Quota) && *value == 0)),
 				"unit": unit,
 				"source": if default { "default" } else { "configured" },
 			}),
@@ -210,3 +213,7 @@ mod tests_cli;
 #[cfg(test)]
 #[path = "limits_tests_domains.rs"]
 mod tests_domains;
+
+#[cfg(test)]
+#[path = "limits_tests_schedule.rs"]
+mod tests_schedule;

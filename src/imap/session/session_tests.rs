@@ -80,6 +80,8 @@ mod metadata;
 mod misc;
 #[path = "session_tests_paths.rs"]
 mod paths;
+#[path = "session_tests_quota_zero.rs"]
+mod quota_zero;
 #[path = "session_tests_search.rs"]
 mod search;
 

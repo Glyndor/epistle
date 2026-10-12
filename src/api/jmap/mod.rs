@@ -392,8 +392,7 @@ pub async fn upload(
 	// hit, distinguishing an over-quota rejection from the per-request
 	// `maxSizeUpload` one above. The HTTP status is 507 Insufficient Storage,
 	// the closest standard code for "would exceed the account's storage".
-	let limit = state.quota_limit();
-	if limit > 0 {
+	if let Some(limit) = state.quota_for_account(&account) {
 		let usage = blobs::account_usage_bytes(state.data_dir(), &account, state.crypto());
 		if usage.saturating_add(body.len() as u64) > limit {
 			return (

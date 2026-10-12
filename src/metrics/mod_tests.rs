@@ -138,6 +138,7 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"relayed",
 		"deferred",
 		"bounced",
+		"outbound_policy_rejected",
 		"webhook_sent",
 		"webhook_failed",
 		"scanner_clamd_failed",

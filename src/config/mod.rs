@@ -199,6 +199,14 @@ pub struct Config {
 	/// Outbound give-up window in seconds: undelivered mail older than this is
 	/// bounced to the sender. Absent uses the built-in default (5 days).
 	pub queue_give_up_secs: Option<u64>,
+	/// Outbound wait after a recipient's first failed attempt, in seconds;
+	/// each later wait doubles. Absent uses 60 (one minute).
+	pub queue_retry_base_secs: Option<u64>,
+	/// Longest outbound wait between attempts, in seconds. Absent uses 3600.
+	pub queue_retry_cap_secs: Option<u64>,
+	/// Message age, in seconds, at which the one "delivery delayed" warning
+	/// is sent. Absent uses 14400 (four hours).
+	pub queue_delay_warning_secs: Option<u64>,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
@@ -390,6 +398,9 @@ impl std::fmt::Debug for Config {
 			.field("srs_secret", &self.srs_secret.as_ref().map(|_| "***"))
 			.field("quota_bytes", &self.quota_bytes)
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
+			.field("queue_retry_base_secs", &self.queue_retry_base_secs)
+			.field("queue_retry_cap_secs", &self.queue_retry_cap_secs)
+			.field("queue_delay_warning_secs", &self.queue_delay_warning_secs)
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
 			.field("antispam", &self.antispam)

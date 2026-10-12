@@ -265,6 +265,7 @@ epistle limits show
 epistle limits set quota 5G
 epistle limits set submission-rate 120
 epistle limits set queue-give-up 12h
+epistle limits set queue-retry-base 5m
 epistle limits set quota --domain example.org 10G
 epistle limits set submission-rate --domain example.org 50
 epistle limits unset quota --domain example.org
@@ -279,10 +280,13 @@ Values equal to a built-in default are marked `default`, even when configured.
 
 | Key | Value |
 |---|---|
-| `quota` | Bytes per account, default 5 GiB. |
+| `quota` | Bytes per account, default 5 GiB; `0` means no limit and shows as `unlimited`. |
 | `submission-rate` | Messages per minute per account, default disabled. |
 | `new-recipients-per-day` | New recipients per account in a rolling 24 hours, default disabled. |
 | `queue-give-up` | Queue age before bouncing, default 5 days. |
+| `queue-retry-base` | Wait after a recipient's first failed attempt, doubling after each failure, default 1 minute, at least 1 minute. |
+| `queue-retry-cap` | Longest wait between attempts, default 1 hour, not below `queue-retry-base`. |
+| `queue-delay-warning` | Message age of the "delivery delayed" DSN, default 4 hours, below `queue-give-up`. |
 | `inbound-rate-per-ip` | Inbound messages per minute per client IP, default disabled. |
 | `inbound-rate-per-sender` | Inbound messages per minute per envelope sender, default disabled. |
 | `max-connections-per-listener` | Concurrent connections, default depends on the protocol. |
@@ -918,7 +922,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
-| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. |
+| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
@@ -1028,7 +1032,27 @@ listener serves the Apple profile at `/mobileconfig?email=<address>`.
 The queue retries transient failures with exponential backoff (1m, 2m, 4m, …
 capped at 1h). It gives up by **message age** — `queue_give_up_secs` (default 5
 days) — not by attempt count, so a recipient whose server is down for hours does
-not lose mail. A single "delivery delayed" warning DSN is sent at ~4h. A
-permanent (5xx) failure bounces immediately and adds the recipient to the
-suppression list, after which mail to that address is dropped without retrying
-(clear it with `epistle suppression remove`).
+not lose mail. A single "delivery delayed" warning DSN is sent at ~4h
+(`queue-delay-warning`). Each
+recipient has its own outcome and retry schedule: one refused or slow recipient
+does not hold back or duplicate the others.
+
+The first wait and the cap are set with `queue-retry-base` and
+`queue-retry-cap`. Each wait is spread by a random ±20%, so mail for a
+destination that comes back does not all retry in the same second.
+
+The remote reply is read by its enhanced status code (RFC 3463), or by its
+basic code when it has none:
+
+| Reply | Outcome | Suppressed |
+|---|---|---|
+| 5.1.x (bad mailbox, bad domain, null MX), 551, 553 | bounced now | yes |
+| 5.2.1 mailbox disabled, other 5.x.x, bare 550 or 554 | bounced now | no |
+| X.2.2 mailbox full, bare 552 | retried until the message expires, then bounced | no |
+| 5.3.4 / 5.2.3 message too big | bounced now | no |
+| 5.7.x policy, authentication, spam | bounced now, counted in `mail_outbound_policy_rejected_total` and logged with the remote host | no |
+| 4.x.x | retried | no |
+
+A suppressed address is dropped without retrying (clear it with
+`epistle suppression remove`). A 5.7.x refusal is about the sending side
+(IP or domain reputation, SPF, DKIM, DMARC), not the address.

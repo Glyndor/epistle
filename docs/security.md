@@ -166,9 +166,10 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
-- **Outbound suppression**: a hard bounce (permanent 5xx) suppresses the
-  recipient so the server stops sending to dead addresses, protecting the
-  sending IP's reputation.
+- **Outbound suppression**: a reply proving the address bad (5.1.x, 551,
+  553) suppresses that recipient so the server stops sending to dead
+  addresses, protecting the sending IP's reputation. Policy refusals, full or
+  disabled mailboxes and oversized messages never suppress.
 - The outbound queue gives up by **message age** (5 days), not a low attempt
   count, so transient outages don't lose mail; a delay-warning DSN is sent once.
 - **ARF** abuse reports can be generated for offending messages

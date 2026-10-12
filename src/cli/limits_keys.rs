@@ -15,6 +15,12 @@ pub enum Key {
 	NewRecipientsPerDay,
 	/// Outbound queue give-up window.
 	QueueGiveUp,
+	/// Outbound wait after the first failed attempt.
+	QueueRetryBase,
+	/// Longest outbound wait between attempts.
+	QueueRetryCap,
+	/// Message age of the delay warning.
+	QueueDelayWarning,
 	/// Inbound messages per client IP per minute.
 	InboundRatePerIp,
 	/// Inbound messages per envelope sender per minute.
@@ -30,11 +36,14 @@ pub enum Key {
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 10] = [
+	pub(super) const ALL: [Self; 13] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
 		Self::QueueGiveUp,
+		Self::QueueRetryBase,
+		Self::QueueRetryCap,
+		Self::QueueDelayWarning,
 		Self::InboundRatePerIp,
 		Self::InboundRatePerSender,
 		Self::MaxConnectionsPerListener,
@@ -49,6 +58,9 @@ impl Key {
 			Self::SubmissionRate => "submission-rate",
 			Self::NewRecipientsPerDay => "new-recipients-per-day",
 			Self::QueueGiveUp => "queue-give-up",
+			Self::QueueRetryBase => "queue-retry-base",
+			Self::QueueRetryCap => "queue-retry-cap",
+			Self::QueueDelayWarning => "queue-delay-warning",
 			Self::InboundRatePerIp => "inbound-rate-per-ip",
 			Self::InboundRatePerSender => "inbound-rate-per-sender",
 			Self::MaxConnectionsPerListener => "max-connections-per-listener",
@@ -64,6 +76,9 @@ impl Key {
 			Self::SubmissionRate => "submission_rate_limit_per_min",
 			Self::NewRecipientsPerDay => "new_recipients_per_day",
 			Self::QueueGiveUp => "queue_give_up_secs",
+			Self::QueueRetryBase => "queue_retry_base_secs",
+			Self::QueueRetryCap => "queue_retry_cap_secs",
+			Self::QueueDelayWarning => "queue_delay_warning_secs",
 			Self::InboundRatePerIp => "inbound_rate_limit_per_ip_per_min",
 			Self::InboundRatePerSender => "inbound_rate_limit_per_sender_per_min",
 			Self::MaxConnectionsPerListener => "max_connections_per_listener",
@@ -76,7 +91,12 @@ impl Key {
 	pub(super) fn unit(self) -> Unit {
 		match self {
 			Self::Quota => Unit::Size,
-			Self::QueueGiveUp | Self::FirstTimeSenderDelay | Self::GreylistDelay => Unit::Duration,
+			Self::QueueGiveUp
+			| Self::QueueRetryBase
+			| Self::QueueRetryCap
+			| Self::QueueDelayWarning
+			| Self::FirstTimeSenderDelay
+			| Self::GreylistDelay => Unit::Duration,
 			_ => Unit::Count,
 		}
 	}
@@ -100,6 +120,9 @@ impl Key {
 			Self::SubmissionRate => config.submission_rate_limit_per_min.map(u64::from),
 			Self::NewRecipientsPerDay => config.new_recipients_per_day.map(u64::from),
 			Self::QueueGiveUp => config.queue_give_up_secs.filter(|value| *value != 0),
+			Self::QueueRetryBase => config.queue_retry_base_secs.filter(|value| *value != 0),
+			Self::QueueRetryCap => config.queue_retry_cap_secs.filter(|value| *value != 0),
+			Self::QueueDelayWarning => config.queue_delay_warning_secs.filter(|value| *value != 0),
 			Self::InboundRatePerIp => config.inbound_rate_limit_per_ip_per_min.map(u64::from),
 			Self::InboundRatePerSender => {
 				config.inbound_rate_limit_per_sender_per_min.map(u64::from)
@@ -118,6 +141,9 @@ impl Key {
 		match self {
 			Self::Quota => Some(crate::imap::session::DEFAULT_QUOTA_BYTES),
 			Self::QueueGiveUp => Some(5 * 86400),
+			Self::QueueRetryBase => Some(crate::queue::schedule::DEFAULT_BASE_SECS),
+			Self::QueueRetryCap => Some(crate::queue::schedule::DEFAULT_CAP_SECS),
+			Self::QueueDelayWarning => Some(crate::queue::schedule::DEFAULT_DELAY_WARNING_SECS),
 			Self::MaskedAddressesMax => Some(100),
 			Self::FirstTimeSenderDelay | Self::GreylistDelay => Some(0),
 			_ => None,

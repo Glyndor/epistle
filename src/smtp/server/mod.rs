@@ -128,6 +128,8 @@ pub struct Server {
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// Mailbox quota of local recipients (see [`crate::smtp::quota`]).
+	quota: Option<Arc<crate::smtp::quota::MailboxQuota>>,
 	/// Per-account correspondent store, consulted at end-of-DATA to
 	/// enforce the rolling 24h new-recipient cap. `None` disables the
 	/// cap (the default) so the pre-feature behaviour survives in
@@ -179,6 +181,7 @@ impl Server {
 			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
+			quota: None,
 			correspondents: None,
 			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
@@ -248,6 +251,14 @@ impl Server {
 	/// instead of receiving `250` for a payload the spool cannot write.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.disk_guard = Some(guard);
+		self
+	}
+
+	/// Check local recipients against their mailbox quota: a full mailbox
+	/// is refused at `RCPT TO`, one this message would overfill at the end
+	/// of DATA (see [`crate::smtp::quota`]).
+	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
+		self.quota = Some(quota);
 		self
 	}
 
@@ -507,6 +518,9 @@ impl Server {
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}
+		if let Some(quota) = &self.quota {
+			session = session.with_quota(Arc::clone(quota));
+		}
 		// Build the cap state in one go: the listener already holds
 		// `correspondents`, `daily_new_recipients`, and a metrics handle;
 		// folding them into a `cap::Cap` keeps the session's field
@@ -619,6 +633,10 @@ async fn read_chunk(
 	}
 	Ok(Some(chunk))
 }
+
+#[cfg(test)]
+#[path = "server_tests_quota.rs"]
+mod tests_quota;
 
 #[cfg(test)]
 #[path = "server_tests.rs"]

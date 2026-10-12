@@ -87,15 +87,11 @@ impl MxConnector {
 					})
 					.collect();
 				records.sort_by_key(|mx| mx.preference);
-				let hosts: Vec<String> = records
+				let records = records
 					.iter()
-					.map(|mx| mx.exchange.to_utf8().trim_end_matches('.').to_string())
+					.map(|mx| (mx.preference, mx.exchange.to_utf8()))
 					.collect();
-				if hosts.is_empty() {
-					Ok(vec![domain.to_string()])
-				} else {
-					Ok(hosts)
-				}
+				exchangers_from(domain, records)
 			}
 			// No MX records: fall back to the implicit MX.
 			Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok(vec![domain.to_string()]),
@@ -103,6 +99,36 @@ impl MxConnector {
 				"MX lookup failed: {error}"
 			))),
 		}
+	}
+}
+
+/// The exchangers of `domain` from its MX records (preference, exchange
+/// name), sorted by preference; the domain itself (implicit MX, RFC 5321
+/// §5.1) when there are none.
+///
+/// A sole MX naming the root (`0 .`) is a null MX (RFC 7505): the domain
+/// accepts no mail, so delivery fails at once with 556 5.1.10, a bad
+/// address, instead of being retried against an empty host name. A root
+/// exchange next to real ones is a misconfiguration and is skipped.
+fn exchangers_from(
+	domain: &str,
+	records: Vec<(u16, String)>,
+) -> Result<Vec<String>, DeliveryError> {
+	let null = records.len() == 1 && records[0].1.trim_end_matches('.').is_empty();
+	if null {
+		return Err(DeliveryError::Permanent(format!(
+			"556 5.1.10 {domain} accepts no mail (null MX)"
+		)));
+	}
+	let hosts: Vec<String> = records
+		.into_iter()
+		.map(|(_, exchange)| exchange.trim_end_matches('.').to_string())
+		.filter(|host| !host.is_empty())
+		.collect();
+	if hosts.is_empty() {
+		Ok(vec![domain.to_string()])
+	} else {
+		Ok(hosts)
 	}
 }
 
@@ -145,3 +171,7 @@ impl Connector for MxConnector {
 		})
 	}
 }
+
+#[cfg(test)]
+#[path = "resolver_tests.rs"]
+mod tests;

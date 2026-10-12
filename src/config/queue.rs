@@ -54,6 +54,45 @@ impl Default for Queue {
 	}
 }
 
+impl super::Config {
+	/// The outbound retry schedule must make sense: a first wait of at least
+	/// a minute, a cap not below it, and a delay warning that comes before
+	/// the give-up window closes.
+	pub(super) fn validate_retry_schedule(&self) -> Result<(), super::ConfigError> {
+		use crate::queue::schedule::{MIN_BASE_SECS, RetrySchedule};
+		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
+		let schedule = RetrySchedule::from_config(
+			self.queue_retry_base_secs,
+			self.queue_retry_cap_secs,
+			self.queue_delay_warning_secs,
+		);
+		let give_up = self
+			.queue_give_up_secs
+			.filter(|secs| *secs != 0)
+			.unwrap_or(5 * 86_400);
+		if schedule.base < MIN_BASE_SECS {
+			return invalid(format!(
+				"queue_retry_base_secs must be at least {MIN_BASE_SECS} (got {})",
+				schedule.base
+			));
+		}
+		if schedule.cap < schedule.base {
+			return invalid(format!(
+				"queue_retry_cap_secs ({}) must not be below queue_retry_base_secs ({})",
+				schedule.cap, schedule.base
+			));
+		}
+		if schedule.delay_warning >= give_up {
+			return invalid(format!(
+				"queue_delay_warning_secs ({}) must be below the give-up window \
+				 queue_give_up_secs ({give_up})",
+				schedule.delay_warning
+			));
+		}
+		Ok(())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

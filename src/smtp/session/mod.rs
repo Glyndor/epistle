@@ -243,6 +243,19 @@ impl Session {
 		self
 	}
 
+	/// Check local recipients against their mailbox quota (see
+	/// [`crate::smtp::quota`]).
+	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
+		self.policy = self.policy.with_quota(quota);
+		self
+	}
+
+	/// The DSNs for recipients the last accepted message did not fit for;
+	/// the server sends them once that message is delivered.
+	pub fn take_quota_reports(&mut self) -> Vec<AcceptedMessage> {
+		self.policy.take_quota_reports()
+	}
+
 	/// Replace the cap state (correspondent store, daily limit, metrics
 	/// handle). Wired by the listener at session-construction time so
 	/// the end-of-DATA check has the configured pair in scope.
@@ -449,6 +462,17 @@ impl Session {
 	}
 
 	fn rcpt_to(&mut self, forward_path: String, notify: Option<super::command::Notify>) -> Action {
+		// The order is checked before the address is even looked at (RFC
+		// 5321 §4.1.4), so a RCPT out of sequence learns nothing about
+		// whether a mailbox exists or is full.
+		let open = match &self.state {
+			State::ReceivingRecipients { .. } => true,
+			State::ReceivingData { body, chunking, .. } => body.is_empty() && !*chunking,
+			_ => false,
+		};
+		if !open {
+			return Action::Continue(Reply::bad_sequence());
+		}
 		let Ok(address) = Address::parse(&forward_path) else {
 			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};
@@ -461,6 +485,16 @@ impl Session {
 			}
 			Resolution::UnknownUser => {
 				return Action::Continue(Reply::single(550, "5.1.1 no such user"));
+			}
+			// A full mailbox refuses this recipient only, temporarily: the
+			// owner may make room (RFC 3463 X.2.2).
+			Resolution::Account(account)
+				if self
+					.policy
+					.quota()
+					.is_some_and(|quota| quota.is_full(&self.directory, &account)) =>
+			{
+				return Action::Continue(Reply::single(452, "4.2.2 mailbox full"));
 			}
 			// A local account or a multi-target alias is an acceptable recipient.
 			Resolution::Account(_) | Resolution::Alias(_) => {}
@@ -559,6 +593,14 @@ impl Session {
 #[cfg(test)]
 #[path = "../session_tests_basic.rs"]
 mod tests_basic;
+
+#[cfg(test)]
+#[path = "../session_tests_enhanced.rs"]
+mod tests_enhanced;
+
+#[cfg(test)]
+#[path = "../session_tests_quota.rs"]
+mod tests_quota;
 
 #[cfg(test)]
 #[path = "../session_tests_auth.rs"]

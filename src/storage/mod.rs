@@ -14,6 +14,7 @@ pub(crate) mod lock;
 pub(crate) mod locked;
 mod routing;
 mod spool;
+mod spool_recipients;
 
 // KEY_LEN, MAGIC and OVERHEAD are re-exported because the public docs of the
 // items above already describe the contract in terms of them: a key is
@@ -31,7 +32,7 @@ pub use delivery::LocalDelivery;
 #[path = "crypto_e2e_tests.rs"]
 mod crypto_e2e_tests;
 pub use routing::SplitDelivery;
-pub use spool::{Envelope, FsSpool, SpoolEntry};
+pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
 
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.
 ///

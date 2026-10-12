@@ -234,6 +234,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	.with_dane(Arc::clone(&spf_dns))
 	.with_metrics(metrics.clone())
 	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
+	.with_retry_schedule(crate::queue::RetrySchedule::from_config(
+		config.queue_retry_base_secs,
+		config.queue_retry_cap_secs,
+		config.queue_delay_warning_secs,
+	))
 	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
 	.with_transports(config.transport.clone())
 	.with_outbound_tls(config.queue.outbound_tls);
@@ -320,7 +325,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					Arc::clone(&account_store),
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
-				.with_quota(config.quota_bytes.unwrap_or(0))
+				.with_quota(
+					config
+						.quota_bytes
+						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+				)
 				.with_api_keys(Arc::clone(&api_keys_set))
 				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone())
@@ -563,6 +572,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
 				}
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
+				// Same measure and default as IMAP QUOTA.
+				server = server.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::on_disk(
+					config.data_dir.clone(),
+					crypto.clone(),
+					config
+						.quota_bytes
+						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+				)));
 				// Per-account rolling 24h new-recipient cap (plan 4.10).
 				// The shared `Arc<CorrespondentStore>` is the one already
 				// opened above; the cap itself comes from the static

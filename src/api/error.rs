@@ -101,6 +101,17 @@ impl ApiError {
 		}
 	}
 
+	/// `507` for a local recipient whose mailbox is full, or would be with
+	/// this message: nothing was queued; the recipient has to make room or
+	/// be left out.
+	pub fn mailbox_full(recipient: &str) -> Self {
+		ApiError {
+			status: StatusCode::INSUFFICIENT_STORAGE,
+			code: "mailbox_full",
+			message: format!("The mailbox of {recipient} is full; nothing was sent."),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

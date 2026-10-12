@@ -78,6 +78,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("relayed", "relayed"),
 	("deferred", "deferred"),
 	("bounced", "bounced"),
+	("outbound_policy_rejected", "outbound_policy_rejected"),
 	("webhook_sent", "webhook_sent"),
 	("webhook_failed", "webhook_failed"),
 	("scanner_clamd_failed", "scanner_clamd_failed"),
@@ -126,6 +127,7 @@ pub struct Metrics {
 	relayed: AtomicU64,
 	deferred: AtomicU64,
 	bounced: AtomicU64,
+	outbound_policy_rejected: AtomicU64,
 	webhook_sent: AtomicU64,
 	webhook_failed: AtomicU64,
 	scanner_clamd_failed: AtomicU64,
@@ -213,6 +215,14 @@ impl Metrics {
 	/// Count an outbound message bounced (permanently undeliverable).
 	pub fn bounced(&self) {
 		self.bounced.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count an outbound recipient a remote refused on policy grounds
+	/// (RFC 3463 5.7.x): a sign of a sending-reputation or authentication
+	/// problem, not of a bad address.
+	pub fn outbound_policy_rejected(&self) {
+		self.outbound_policy_rejected
+			.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a webhook event delivered successfully.
@@ -387,6 +397,7 @@ impl Metrics {
 			"relayed" => &self.relayed,
 			"deferred" => &self.deferred,
 			"bounced" => &self.bounced,
+			"outbound_policy_rejected" => &self.outbound_policy_rejected,
 			"webhook_sent" => &self.webhook_sent,
 			"webhook_failed" => &self.webhook_failed,
 			"scanner_clamd_failed" => &self.scanner_clamd_failed,
@@ -482,6 +493,11 @@ impl Metrics {
 				"mail_bounced_total",
 				"Outbound messages permanently bounced.",
 				&self.bounced,
+			),
+			(
+				"mail_outbound_policy_rejected_total",
+				"Outbound recipients refused on policy grounds (5.7.x): check the sending reputation.",
+				&self.outbound_policy_rejected,
 			),
 			(
 				"mail_webhook_sent_total",

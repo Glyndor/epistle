@@ -140,6 +140,11 @@ fn submit_email(
 			}
 		}
 	}
+	// A full local mailbox is refused now, not bounced days later
+	// (RFC 8620 §5.3 `overQuota`).
+	if crate::api::quota::full_recipient(state, &recipients, stamped.len() as u64).is_some() {
+		return Err("overQuota");
+	}
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,
 		recipients,

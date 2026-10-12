@@ -14,6 +14,7 @@ pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
 mod principal;
+mod quota;
 pub mod scim;
 mod state;
 pub mod tenant_limits;
@@ -120,6 +121,10 @@ mod account_bound_tests;
 #[cfg(test)]
 #[path = "api_tests_newrecipients.rs"]
 mod tests_newrecipients;
+
+#[cfg(test)]
+#[path = "api_tests_quota.rs"]
+mod tests_quota;
 
 #[cfg(test)]
 #[path = "auth_tests.rs"]

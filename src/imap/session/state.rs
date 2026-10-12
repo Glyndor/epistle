@@ -297,11 +297,11 @@ impl Session {
 	}
 
 	/// The storage quota in force for the authenticated account: its own /
-	/// domain quota from the directory, else the server default.
-	pub(super) fn effective_quota(&self) -> u64 {
-		self.account()
-			.and_then(|account| self.directory.quota_for(account))
-			.unwrap_or(self.quota_limit_bytes)
+	/// domain quota from the directory, else the server default. `None` is
+	/// no limit (a quota of 0), the same rule every delivery path applies.
+	pub(super) fn effective_quota(&self) -> Option<u64> {
+		let account = self.account()?;
+		crate::smtp::quota::limit_for(&self.directory, account, self.quota_limit_bytes)
 	}
 
 	/// Provide the `tls-server-end-point` channel-binding data (server

@@ -14,13 +14,15 @@ use crate::queue::SuppressionList;
 pub enum SuppressionCli {
 	/// Print every suppressed address, one per line.
 	///
-	/// With `--account`, list that sending account's per-account list
-	/// instead of the global one.
+	/// A hard bounce also gives when it happened and the remote reply, tab
+	/// separated after the address. With `--account`, list that sending
+	/// account's per-account list instead of the global one.
 	List {
 		/// Restrict the list to this sending account.
 		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
-		/// Print a JSON array of `{"address", "account"}` objects.
+		/// Print a JSON array of `{"address", "account", "since", "reason"}`
+		/// objects (`since` and `reason` are null when not recorded).
 		#[arg(long)]
 		json: bool,
 	},
@@ -68,13 +70,18 @@ pub(super) fn add(
 		}
 	};
 	let address = crate::util::address::normalize(address);
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|elapsed| elapsed.as_secs())
+		.unwrap_or(0);
+	const REASON: &str = "added by hand (epistle suppression add)";
 	let line = match account {
 		Some(account) => {
-			list.suppress_for(account, &address);
+			list.suppress_for_because(account, &address, REASON, now);
 			format!("suppressed {address} for {account}")
 		}
 		None => {
-			list.suppress(&address);
+			list.suppress_because(&address, REASON, now);
 			format!("suppressed {address}")
 		}
 	};
@@ -161,19 +168,33 @@ fn list(
 			return ExitCode::FAILURE;
 		}
 	};
-	let addresses = match account {
-		Some(account) => list.list_for(account),
-		None => list.list(),
+	let entries = match account {
+		Some(account) => list.entries_for(account),
+		None => list.entries(),
 	};
+	let since = |entry: &crate::queue::Suppressed| entry.since.map(crate::clock::rfc3339);
 	if json {
-		let rows: Vec<_> = addresses
+		let rows: Vec<_> = entries
 			.iter()
-			.map(|address| serde_json::json!({ "address": address, "account": account }))
+			.map(|entry| {
+				serde_json::json!({
+					"address": entry.address,
+					"account": account,
+					"since": since(entry),
+					"reason": entry.reason,
+				})
+			})
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
-	for address in addresses {
-		if writeln!(out, "{address}").is_err() {
+	// One address per line; when the date and the reason were recorded they
+	// follow, tab separated, so `cut -f1` still yields the bare addresses.
+	for entry in &entries {
+		let line = match (since(entry), &entry.reason) {
+			(Some(since), Some(reason)) => format!("{}\t{since}\t{reason}", entry.address),
+			_ => entry.address.clone(),
+		};
+		if writeln!(out, "{line}").is_err() {
 			return ExitCode::FAILURE;
 		}
 	}
@@ -183,3 +204,7 @@ fn list(
 #[cfg(test)]
 #[path = "suppression_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "suppression_tests_reason.rs"]
+mod tests_reason;
