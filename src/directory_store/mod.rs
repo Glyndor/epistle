@@ -132,10 +132,11 @@ pub struct DynamicAccount {
 
 impl DynamicAccount {
 	/// Build an account from a plaintext password, deriving the argon2id hash
-	/// and SCRAM-SHA-256 credentials (fresh random salt, RFC 7677 ≥4096
-	/// rounds). When `scram_enabled` is `false`, the SCRAM verifier is
-	/// omitted (`None`); a future password change with `scram_enabled`
-	/// `false` keeps it `None`.
+	/// and SCRAM-SHA-256 credentials (fresh random salt,
+	/// [`crate::smtp::scram::SCRAM_ITERATIONS`] rounds). When
+	/// `scram_enabled` is `false`, the SCRAM verifier is omitted (`None`);
+	/// a future password change with `scram_enabled` `false` keeps it
+	/// `None`.
 	pub fn with_password(
 		name: String,
 		addresses: Vec<String>,

@@ -20,29 +20,22 @@ impl super::Directory {
 		self
 	}
 
-	/// Refresh the dynamic account's verifier when its stored iteration
-	/// count is below the current SCRAM constant. Static and SQL accounts
-	/// are skipped — the upgrade only runs for accounts whose SCRAM row
-	/// the store owns. The check is a single hash lookup; the upgrade is
-	/// best-effort and a failure here does not change the wire response,
-	/// which already returned `Some(account)` above.
+	/// Hand the password that just authenticated to the upgrader when the
+	/// account's stored verifier is below the current SCRAM iteration
+	/// count. Only dynamic accounts carry a verifier, so static and SQL
+	/// accounts never reach the upgrader. The check is a single map
+	/// lookup; the upgrade is best-effort and cannot change the wire
+	/// response, which is already `Some(account)`.
 	pub(super) fn maybe_upgrade_scram(&self, account: &str, password: &str) {
 		let Some(upgrader) = self.scram_upgrader.as_ref() else {
 			return;
 		};
-		let needs = match self.scram.get(&account.to_ascii_lowercase()) {
-			Some(stored) => stored.iterations < crate::smtp::scram::SCRAM_ITERATIONS,
-			// No verifier at all: SCRAM is off, or the account never had one.
-			// `authenticate_with_ip` is the only place this is consulted, and
-			// a SCRAM-less account is exactly what `scram = false` wants, so
-			// the upgrade is a no-op rather than a missing-row upgrade.
-			None => return,
-		};
-		if !needs {
-			return;
-		}
-		if let Some(fresh) = crate::smtp::scram::ScramStored::with_fresh_salt(password) {
-			upgrader.upgrade(account, fresh);
+		let below_current = self
+			.scram
+			.get(&account.to_ascii_lowercase())
+			.is_some_and(|stored| stored.iterations < crate::smtp::scram::SCRAM_ITERATIONS);
+		if below_current {
+			upgrader.upgrade(account, password);
 		}
 	}
 }

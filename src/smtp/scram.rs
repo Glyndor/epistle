@@ -24,7 +24,7 @@ const SALT_LEN: usize = 16;
 /// server-first, RFC 5802 `i=`, so the client always uses the stored value);
 /// the directory upgrades a low-iteration verifier transparently the next
 /// time the account authenticates with a cleartext password mechanism.
-pub const SCRAM_ITERATIONS: u32 = 600000;
+pub const SCRAM_ITERATIONS: u32 = 600_000;
 
 /// The per-account SCRAM credentials, derived from the password at set time.
 #[derive(Debug, Clone)]
@@ -90,7 +90,7 @@ impl ScramStored {
 	}
 
 	/// Derive stored SCRAM-SHA-256 credentials for `password` under a fresh
-	/// random salt (RFC 7677 minimum 4096 iterations). `None` when the CSPRNG
+	/// random salt at [`SCRAM_ITERATIONS`]. `None` when the CSPRNG
 	/// cannot produce one, so the caller fails closed rather than storing
 	/// credentials under a predictable salt.
 	///

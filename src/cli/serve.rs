@@ -101,15 +101,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		);
 		store = store.with_ban_store(ban_store);
 	}
-	let mut account_store = Arc::new(store.with_scram_enabled(config.auth.scram));
-	// Wire the live store as the SCRAM upgrader. The directory built during
-	// `with_ban_store` (and every earlier `with_*` step) carried the no-op
-	// upgrader; setting it now and rebuilding means every fresh request sees
-	// the real callback that rewrites low-iteration verifiers.
-	let live_upgrader: Arc<dyn crate::directory_store::ScramUpgrader> = account_store.clone();
-	if let Some(inner) = Arc::get_mut(&mut account_store) {
-		inner.install_scram_upgrader(live_upgrader);
-	}
+	// `into_shared` wires the live store as the SCRAM upgrader, so a
+	// successful cleartext login rewrites a low-iteration verifier.
+	let account_store = store.with_scram_enabled(config.auth.scram).into_shared();
 	let directory = account_store.handle();
 
 	// At-rest message encryption, loaded once and shared. Fail closed: with

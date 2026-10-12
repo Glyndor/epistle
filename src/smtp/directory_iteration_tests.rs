@@ -70,13 +70,13 @@ fn stored_low_iteration_verifier_still_authenticates() {
 /// Test double that captures every upgrade request.
 #[derive(Debug, Clone, Default)]
 struct RecordingUpgrader {
-	last: std::sync::Arc<std::sync::Mutex<Option<(String, ScramStored)>>>,
+	last: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 	calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ScramUpgrader for RecordingUpgrader {
-	fn upgrade(&self, account: &str, fresh: ScramStored) {
-		*self.last.lock().expect("upgrade record") = Some((account.to_string(), fresh));
+	fn upgrade(&self, account: &str, _password: &str) {
+		*self.last.lock().expect("upgrade record") = Some(account.to_string());
 		self.calls
 			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 	}
@@ -99,10 +99,11 @@ fn open_store(
 }
 
 #[test]
-fn successful_cleartext_auth_rewrites_a_4096_verifier() {
+fn successful_cleartext_auth_asks_for_a_4096_verifier_rewrite() {
 	// A pre-fix account keeps its 4096 verifier until PLAIN/LOGIN succeed.
-	// The first successful cleartext login against it produces a 600000
-	// verifier under a fresh salt, persisted via the upgrader trait.
+	// The first successful cleartext login against it hands the password to
+	// the upgrader; the rewrite itself is pinned against the real store in
+	// `directory_store::scram_upgrade::tests`.
 	let password = fixtures::password();
 	let low =
 		ScramStored::from_credentials(&ScramCredentials::derive(password, fixtures::salt(), 4096));
@@ -134,10 +135,7 @@ fn successful_cleartext_auth_rewrites_a_4096_verifier() {
 	assert_eq!(verified.as_deref(), Some("alice"));
 
 	let upgraded = recorder.last.lock().expect("upgrade record").clone();
-	let (upgraded_account, upgraded_stored) = upgraded.expect("upgrader was called");
-	assert_eq!(upgraded_account, "alice");
-	assert_eq!(upgraded_stored.iterations, SCRAM_ITERATIONS);
-	assert_ne!(upgraded_stored.salt, low.salt, "fresh salt");
+	assert_eq!(upgraded.as_deref(), Some("alice"));
 	assert_eq!(recorder.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
