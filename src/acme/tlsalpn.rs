@@ -17,6 +17,19 @@ use tokio_rustls::rustls::sign::CertifiedKey;
 /// The ALPN protocol identifier for the TLS-ALPN-01 challenge (RFC 8737 §4).
 pub const ACME_TLS_ALPN_PROTOCOL: &[u8] = b"acme-tls/1";
 
+/// ALPN identifiers a listener offers while TLS-ALPN-01 is configured.
+/// `acme-tls/1` has to be offered for the CA's handshake to negotiate it,
+/// and once a server offers any ALPN, rustls refuses clients whose own list
+/// shares nothing with it. The registered mail protocol identifiers are
+/// offered too so a mail client that sends one keeps connecting.
+pub const SERVED_ALPN_PROTOCOLS: &[&[u8]] = &[
+	ACME_TLS_ALPN_PROTOCOL,
+	b"imap",
+	b"pop3",
+	b"managesieve",
+	b"smtp",
+];
+
 /// `id-pe-acmeIdentifier` (1.3.6.1.5.5.7.1.31).
 const ACME_IDENTIFIER_OID: &[u64] = &[1, 3, 6, 1, 5, 5, 7, 1, 31];
 
@@ -93,6 +106,11 @@ impl AlpnChallengeStore {
 			.remove(&domain.to_ascii_lowercase());
 	}
 
+	/// Whether a challenge certificate is registered for `domain`.
+	pub fn has(&self, domain: &str) -> bool {
+		self.get(domain).is_some()
+	}
+
 	/// The challenge certificate for `domain`, if registered.
 	fn get(&self, domain: &str) -> Option<Arc<CertifiedKey>> {
 		self.inner
@@ -105,16 +123,16 @@ impl AlpnChallengeStore {
 
 /// A certificate resolver that answers `acme-tls/1` handshakes with the
 /// challenge certificate for the requested SNI host, and every other handshake
-/// with the normal `fallback` certificate.
+/// through the normal `fallback` resolver.
 #[derive(Debug)]
 pub struct AlpnResolver {
 	store: Arc<AlpnChallengeStore>,
-	fallback: Arc<CertifiedKey>,
+	fallback: Arc<dyn ResolvesServerCert>,
 }
 
 impl AlpnResolver {
-	/// Wrap a challenge store and the normal server certificate.
-	pub fn new(store: Arc<AlpnChallengeStore>, fallback: Arc<CertifiedKey>) -> Self {
+	/// Wrap a challenge store and the resolver for ordinary handshakes.
+	pub fn new(store: Arc<AlpnChallengeStore>, fallback: Arc<dyn ResolvesServerCert>) -> Self {
 		AlpnResolver { store, fallback }
 	}
 }
@@ -137,7 +155,7 @@ impl ResolvesServerCert for AlpnResolver {
 				.server_name()
 				.and_then(|sni| self.store.get(sni));
 		}
-		Some(Arc::clone(&self.fallback))
+		self.fallback.resolve(client_hello)
 	}
 }
 

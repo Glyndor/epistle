@@ -49,6 +49,33 @@ impl ReloadableAcceptor {
 		}
 	}
 
+	/// Like [`ReloadableAcceptor::new`], and also answer TLS-ALPN-01
+	/// (RFC 8737): a handshake offering `acme-tls/1` gets the challenge
+	/// certificate `store` holds for its SNI name, or fails when no order is
+	/// pending for it. Every other handshake resolves the current certificate
+	/// as before.
+	pub fn with_acme_alpn(
+		acceptor: TlsAcceptor,
+		store: Arc<crate::acme::tlsalpn::AlpnChallengeStore>,
+	) -> Self {
+		let mut config = (**acceptor.config()).clone();
+		let resolver = Arc::new(Resolver {
+			current: RwLock::new(config.cert_resolver.clone()),
+		});
+		config.cert_resolver = Arc::new(crate::acme::tlsalpn::AlpnResolver::new(
+			store,
+			resolver.clone(),
+		));
+		config.alpn_protocols = crate::acme::tlsalpn::SERVED_ALPN_PROTOCOLS
+			.iter()
+			.map(|protocol| protocol.to_vec())
+			.collect();
+		Self {
+			acceptor: TlsAcceptor::from(Arc::new(config)),
+			resolver,
+		}
+	}
+
 	/// Clone an acceptor that continues to observe certificate renewals.
 	pub fn current(&self) -> TlsAcceptor {
 		self.acceptor.clone()
@@ -61,3 +88,7 @@ impl ReloadableAcceptor {
 			acceptor.config().cert_resolver.clone();
 	}
 }
+
+#[cfg(test)]
+#[path = "reload_tests_alpn.rs"]
+mod tests_alpn;
