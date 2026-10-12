@@ -400,6 +400,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
 #[path = "server_tests_literals.rs"]
 mod tests_literals;
 
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;
+
 #[path = "server_discard.rs"]
 mod discard;
 
