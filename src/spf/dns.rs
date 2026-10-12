@@ -132,6 +132,15 @@ impl SystemDns {
 		Self::with_config(system_resolver_config()?, system_resolver_options())
 	}
 
+	/// Like [`Self::from_system`], without the resolver's answer cache:
+	/// for a caller that polls for a record it just published, where a
+	/// cached "no such name" would hide the record for its whole TTL.
+	pub fn uncached_from_system() -> std::io::Result<Self> {
+		let mut opts = system_resolver_options();
+		opts.cache_size = 0;
+		Self::with_config(system_resolver_config()?, opts)
+	}
+
 	/// Build over explicit name servers and options; [`Self::from_system`]
 	/// passes the host's.
 	pub(crate) fn with_config(config: ResolverConfig, opts: ResolverOpts) -> std::io::Result<Self> {

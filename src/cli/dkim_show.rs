@@ -197,7 +197,7 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 		writeln!(out, "rotation requested at {at}, waiting for the server")?;
 	}
 	if let Some(error) = &view.last_request_error {
-		writeln!(out, "last request error: {error}")?;
+		writeln!(out, "last rotation error: {error}")?;
 	}
 	for record in &view.records {
 		writeln!(out, "{} {}", record.status, record.name)?;

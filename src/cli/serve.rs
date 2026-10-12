@@ -259,7 +259,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	super::serve_tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 
-	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
+	super::serve_tasks::spawn_dkim_rotation(
+		&config,
+		&dkim_signer,
+		webhook.as_ref().map(Arc::clone),
+	);
 
 	super::serve_tasks::spawn_alert_engine(
 		&config,

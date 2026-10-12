@@ -187,6 +187,11 @@ pub struct Rotator {
 	overlap: u64,
 	/// Earliest epoch second at which a failed operator request is retried.
 	request_retry_at: std::sync::atomic::AtomicU64,
+	/// The resolver that must see a new selector before it signs, and the
+	/// waits between its attempts.
+	publication_check: Option<(Arc<dyn crate::spf::DnsLookup>, Vec<std::time::Duration>)>,
+	/// Where a rotation that could not be confirmed is reported.
+	webhook: Option<Arc<crate::webhook::Webhook>>,
 }
 
 impl Rotator {
@@ -223,7 +228,27 @@ impl Rotator {
 			interval,
 			overlap,
 			request_retry_at: std::sync::atomic::AtomicU64::new(0),
+			publication_check: None,
+			webhook: None,
 		}
+	}
+
+	/// Confirm through `resolver` that a new selector's TXT is visible,
+	/// with the right key, before the signer switches to it. `waits` are
+	/// the pauses between attempts; the first query is immediate.
+	pub fn with_publication_check(
+		mut self,
+		resolver: Arc<dyn crate::spf::DnsLookup>,
+		waits: Vec<std::time::Duration>,
+	) -> Self {
+		self.publication_check = Some((resolver, waits));
+		self
+	}
+
+	/// Report a rotation whose key never became visible to this webhook.
+	pub fn with_webhook(mut self, webhook: Arc<crate::webhook::Webhook>) -> Self {
+		self.webhook = Some(webhook);
+		self
 	}
 
 	/// Whether `name` sits inside `zone` (equals it or is a subdomain of it),
@@ -317,6 +342,22 @@ impl Rotator {
 			}
 			published.push(domain);
 		}
+		if let Err(reason) = self.confirm_published(&selector, &txt).await {
+			for domain in &self.signing_domains {
+				let _ = self
+					.provider
+					.delete(
+						&self.zone,
+						txt_record(&Self::record_name(&selector, domain), ""),
+					)
+					.await;
+			}
+			let _ = std::fs::remove_file(&key_file);
+			self.report_unpublished(&selector, &reason, now).await;
+			return Err(RotateError(format!(
+				"rotation to {selector} withdrawn: {reason}"
+			)));
+		}
 		let signer = self
 			.signer
 			.current()
@@ -336,6 +377,7 @@ impl Rotator {
 			previous,
 		};
 		self.save_state(state)?;
+		let _ = std::fs::remove_file(self.data_dir.join(ERROR_FILE));
 		Ok(())
 	}
 
@@ -435,12 +477,20 @@ impl From<std::io::Error> for RotateError {
 mod tests;
 
 #[cfg(test)]
+#[path = "rotate_tests_publication.rs"]
+mod tests_publication;
+
+#[cfg(test)]
 #[path = "rotate_tests_signing.rs"]
 mod tests_signing;
 
 #[cfg(test)]
 #[path = "rotate_tests_multidomain.rs"]
 mod tests_multidomain;
+
+#[path = "rotate_publication.rs"]
+mod publication;
+pub use publication::publication_waits;
 
 #[path = "rotate_request.rs"]
 mod request;
