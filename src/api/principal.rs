@@ -76,11 +76,10 @@ impl Principal {
 	/// A key with `account = "<name>"` is `Account(name)`.
 	///
 	/// Fail-closed: a token that matched the middleware but matches no key
-	/// here (the running state was swapped out from under us, or the
-	/// middleware added a credential kind this code does not yet know)
-	/// becomes `Admin`. That widens the read to whatever the static token
-	/// would do, which is the behaviour the middleware itself used before
-	/// any API key was added.
+	/// here (a reload removed the key between the middleware and the
+	/// handler, or the middleware learned a credential kind this code does
+	/// not know yet) reaches no account and holds no scope. It never falls
+	/// back to the reach of the configured token.
 	pub fn for_token(state: &ApiState, auth: &MatchedAuth) -> Principal {
 		let Some(token) = auth.token.as_deref() else {
 			// The middleware never lets an unauthenticated request reach a
@@ -116,7 +115,10 @@ impl Principal {
 				let kind = Principal::kind_of_key(key);
 				kind.into_principal(Some(token.to_string()))
 			})
-			.unwrap_or(Principal::Admin { token: None })
+			.unwrap_or(Principal::Domains {
+				domains: Vec::new(),
+				token: Some(token.to_string()),
+			})
 	}
 
 	/// The bearer that authenticated, when the principal came from a real
@@ -135,10 +137,12 @@ impl Principal {
 	/// token. An `account` declaration narrows the principal to that
 	/// account; an empty `domains` is `Admin`; a non-empty `domains` is
 	/// `Domains(domains)`. Both empty is the legacy un-confined key.
+	///
+	/// A present but empty `account` names no account, so it reaches none:
+	/// reading it as "no binding" would widen a key its operator meant to
+	/// narrow.
 	pub fn kind_of_key(key: &ApiKey) -> PrincipalKind {
-		if let Some(account) = key.account.as_deref()
-			&& !account.is_empty()
-		{
+		if let Some(account) = key.account.as_deref() {
 			return PrincipalKind::Account(account.to_string());
 		}
 		if key.domains.is_empty() {

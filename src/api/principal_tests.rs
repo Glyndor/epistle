@@ -43,13 +43,41 @@ fn a_key_with_an_account_becomes_account() {
 }
 
 #[test]
-fn an_empty_account_string_falls_back_to_domains() {
-	// Defensive: a key with `account = ""` (present but empty) must not
-	// collapse to an `Account("")` that admits no one; the field's intent
-	// is "ties this key to one account", and an empty value is not that.
-	assert_eq!(
-		Principal::kind_of_key(&key(&["a.example"], Some(""))),
-		PrincipalKind::Domains(vec!["a.example".to_string()])
+fn an_empty_account_string_admits_no_account() {
+	// A key with `account = ""` (present but empty) names no account. It
+	// must not be read as "no binding" and widen to the domains, or to
+	// every account when `domains` is empty too.
+	for domains in [&[][..], &["a.example"][..]] {
+		let principal = Principal::kind_of_key(&key(domains, Some(""))).into_principal(None);
+		assert!(
+			!principal.admits_account("ann", &["ann@a.example".into()]),
+			"account = \"\" with domains {domains:?} must reach no account"
+		);
+	}
+}
+
+#[test]
+fn a_token_that_matches_no_credential_reaches_no_account() {
+	// The middleware matched the bearer, but by the time the handler
+	// resolves the principal the key set no longer holds it (a reload
+	// removed the key in between). The request must reach nothing, not
+	// fall back to the reach of the configured token.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = crate::api::tests::test_state(dir.path(), 0);
+	let auth = MatchedAuth {
+		token: Some("removed-key-secret".to_string()),
+		client_ip: None,
+	};
+	let principal = Principal::for_token(&state, &auth);
+	assert!(
+		!principal.admits_account("alice", &["alice@example.org".into()]),
+		"a credential that matches no key must reach no account"
+	);
+	assert!(
+		state
+			.require_scope_for_principal(&principal, crate::api::api_keys::Scope::Write)
+			.is_err(),
+		"a credential that matches no key must hold no scope"
 	);
 }
 
