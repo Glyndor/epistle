@@ -449,8 +449,8 @@ impl Cli {
 			Command::Domain {
 				config,
 				action,
-				dry_run: _,
-			} => domain::run(&config, action),
+				dry_run,
+			} => domain::run(&config, action, dry_run),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {

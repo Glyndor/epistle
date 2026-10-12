@@ -47,9 +47,6 @@ pub enum DomainCli {
 		/// Domain to add (e.g. `example.org`).
 		#[arg(value_name = "DOMAIN")]
 		domain: String,
-		/// Print the validated diff without writing or restarting.
-		#[arg(long)]
-		dry_run: bool,
 	},
 	/// Remove a domain from `domains`. Refuses while the domain is still
 	/// used by an account, alias, masked address or `domain_aliases` entry.
@@ -57,9 +54,6 @@ pub enum DomainCli {
 		/// Domain to remove.
 		#[arg(value_name = "DOMAIN")]
 		domain: String,
-		/// Print the validated diff without writing or restarting.
-		#[arg(long)]
-		dry_run: bool,
 	},
 	/// Edit the `domain_aliases` map.
 	Alias(DomainAliasArgs),
@@ -91,8 +85,8 @@ pub enum DomainAliasSubcommand {
 }
 
 /// Run the chosen domain action.
-pub(super) fn run(path: &Path, action: DomainCli) -> ExitCode {
-	match execute(path, action) {
+pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool) -> ExitCode {
+	match execute(path, action, dry_run) {
 		Ok(code) => code,
 		Err(error) => {
 			style::error(error);
@@ -101,7 +95,7 @@ pub(super) fn run(path: &Path, action: DomainCli) -> ExitCode {
 	}
 }
 
-fn execute(path: &Path, action: DomainCli) -> Result<ExitCode, String> {
+fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Result<ExitCode, String> {
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
 	let config = Config::load(path).map_err(|e| e.to_string())?;
@@ -114,12 +108,12 @@ fn execute(path: &Path, action: DomainCli) -> Result<ExitCode, String> {
 			show(&config, &domain, json, &mut out).map_err(|e| e.to_string())?;
 			Ok(ExitCode::SUCCESS)
 		}
-		DomainCli::Add { domain, dry_run } => {
+		DomainCli::Add { domain } => {
 			let mut document = open(path)?;
 			add_domain(&config, &mut document, &domain)?;
 			commit_add(&config, document, &domain, dry_run, &mut out, &mut err)
 		}
-		DomainCli::Remove { domain, dry_run } => {
+		DomainCli::Remove { domain } => {
 			let mut document = open(path)?;
 			remove_domain(&config, &mut document, &domain)?;
 			commit_remove(document, &domain, dry_run, &mut out, &mut err)
@@ -129,13 +123,13 @@ fn execute(path: &Path, action: DomainCli) -> Result<ExitCode, String> {
 				let mut document = open(path)?;
 				let owned_alias = alias.clone();
 				add_alias_map(&config, &mut document, &alias, &target)?;
-				commit_alias(document, &owned_alias, "added", false, &mut out, &mut err)
+				commit_alias(document, &owned_alias, "added", dry_run, &mut out, &mut err)
 			}
 			DomainAliasSubcommand::Remove { alias } => {
 				let mut document = open(path)?;
 				let owned_alias = alias.clone();
 				remove_alias_map(&config, &mut document, &alias)?;
-				commit_alias(document, &owned_alias, "removed", false, &mut out, &mut err)
+				commit_alias(document, &owned_alias, "removed", dry_run, &mut out, &mut err)
 			}
 		},
 	}
@@ -433,6 +427,9 @@ mod tests;
 #[cfg(test)]
 #[path = "domain_tests_aliases.rs"]
 mod tests_aliases;
+#[cfg(test)]
+#[path = "domain_tests_dry_run.rs"]
+mod tests_dry_run;
 #[cfg(test)]
 #[path = "domain_tests_removal.rs"]
 mod tests_removal;
