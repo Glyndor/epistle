@@ -183,6 +183,10 @@ mod jmap_tests_push;
 mod jmap_tests_push_validation;
 
 #[cfg(test)]
+#[path = "jmap_tests_ws_revoke.rs"]
+mod jmap_tests_ws_revoke;
+
+#[cfg(test)]
 #[path = "send_tests_principal.rs"]
 mod send_tests_principal;
 
