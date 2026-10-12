@@ -491,10 +491,6 @@ impl AccountStore {
 		Ok(())
 	}
 
-	/// Set or clear a dynamic account's base32 TOTP secret (RFC 6238).
-	/// Lives on the `set_totp` sibling so `mod.rs` stays under the
-	/// per-file code-line budget.
-
 	/// Enable or disable a dynamic account (the SCIM `active` flag). The
 	/// account stays on disk and continues to own its mailboxes, but
 	/// authentication rejects it while disabled. Returns the previous state
