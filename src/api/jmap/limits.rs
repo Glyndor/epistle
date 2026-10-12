@@ -101,7 +101,7 @@ pub(super) fn upload_too_large() -> serde_json::Value {
 
 /// The `urn:ietf:params:jmap:error:limit` problem (RFC 8620 §3.6.1), whose
 /// `limit` property names the Session limit that was applied.
-fn problem(limit: &str, status: StatusCode, detail: &str) -> serde_json::Value {
+pub(super) fn problem(limit: &str, status: StatusCode, detail: &str) -> serde_json::Value {
 	serde_json::json!({
 		"type": "urn:ietf:params:jmap:error:limit",
 		"limit": limit,

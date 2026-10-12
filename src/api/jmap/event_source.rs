@@ -80,11 +80,14 @@ pub async fn event_source(
 	let Some(slot) =
 		CallerSlot::take_for(&state, &owner, Work::EventSource, MAX_STREAMS_PER_CALLER)
 	else {
-		return super::jmap_error(
+		// The limit problem must name the limit it applied (RFC 8620
+		// §3.6.1). This one is the server's own, not a Session capability.
+		let problem = super::limits::problem(
+			"maxConcurrentEventSources",
 			StatusCode::TOO_MANY_REQUESTS,
-			"limit",
 			"too many open event-source streams for this credential",
 		);
+		return (StatusCode::TOO_MANY_REQUESTS, axum::Json(problem)).into_response();
 	};
 	let known = positions(&state, &principal);
 	let opened = tokio::time::Instant::now();

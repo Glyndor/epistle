@@ -248,12 +248,19 @@ async fn one_caller_holds_a_bounded_number_of_streams() {
 		assert_eq!(status, StatusCode::OK);
 		held.push(body);
 	}
-	let (status, _) = open(&app, ALICE, "types=*&closeafter=no&ping=0").await;
+	let (status, refused) = open(&app, ALICE, "types=*&closeafter=no&ping=0").await;
 	assert_eq!(
 		status,
 		StatusCode::TOO_MANY_REQUESTS,
 		"a caller past the cap must be refused"
 	);
+	// The refusal is the RFC 8620 limit problem, naming the limit applied.
+	let refused = axum::body::to_bytes(refused, usize::MAX)
+		.await
+		.expect("body");
+	let refused: Value = serde_json::from_slice(&refused).expect("json");
+	assert_eq!(refused["type"], "urn:ietf:params:jmap:error:limit");
+	assert_eq!(refused["limit"], "maxConcurrentEventSources", "{refused}");
 	let (status, _carol) = open(&app, CAROL, "types=*&closeafter=no&ping=0").await;
 	assert_eq!(status, StatusCode::OK, "the cap is per caller");
 	held.pop();
