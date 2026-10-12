@@ -246,7 +246,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	}
 
 	// DMARC aggregate report flush runs hourly in the background.
-	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
+	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	super::serve_tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 
 	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
