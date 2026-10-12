@@ -46,7 +46,7 @@ fn create_list_revoke_roundtrip() {
 	assert!(!listed.contains("key"));
 
 	let mut out = Vec::new();
-	assert_eq!(revoke(&config, "ci", &mut out), ExitCode::SUCCESS);
+	assert_eq!(revoke(&config, "ci", true, &mut out), ExitCode::SUCCESS);
 	assert_eq!(ApiKeyStore::open(dir.path()).expect("open").keys().len(), 0);
 }
 
@@ -120,5 +120,5 @@ fn revoke_missing_label_fails() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let mut out = Vec::new();
-	assert_eq!(revoke(&config, "absent", &mut out), ExitCode::FAILURE);
+	assert_eq!(revoke(&config, "absent", true, &mut out), ExitCode::FAILURE);
 }

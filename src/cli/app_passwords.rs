@@ -125,11 +125,16 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	ExitCode::SUCCESS
 }
 
-/// Revoke an account's app password by label.
+/// Revoke an account's app password by label. Asks
+/// `Revoke app password "<label>" for "<account>"? [y/N]` on a
+/// terminal; `yes` (`--yes` / `-y`) skips it. Without `--yes` on a
+/// non-interactive stdin the command refuses with exit code 2 and a
+/// message that names `--yes`.
 pub(super) fn revoke(
 	config: &Config,
 	account: &str,
 	label: &str,
+	yes: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let mut store = match AppPasswordStore::open(&config.data_dir) {
@@ -139,6 +144,21 @@ pub(super) fn revoke(
 			return ExitCode::FAILURE;
 		}
 	};
+	let known = store
+		.list()
+		.iter()
+		.any(|(owner, name, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
+	if !known {
+		super::style::error(crate::directory_store::StoreError::NotFound(format!(
+			"{}/{label}",
+			account.to_ascii_lowercase()
+		)));
+		return ExitCode::FAILURE;
+	}
+	let question = format!("Revoke app password \"{label}\" for \"{account}\"? [y/N]");
+	if let Err(code) = super::prompt::confirm_destructive("app-password-revoke", &question, yes) {
+		return code;
+	}
 	match store.remove(account, label) {
 		Ok(()) => {
 			let _ = writeln!(out, "revoked app password \"{label}\" for {account}");

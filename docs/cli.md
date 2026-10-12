@@ -55,6 +55,39 @@ an escape sequence or spinner frame were ever written there, so they are pinned 
 | `epistle storage-keygen` | A single base64 32-byte at-rest key. |
 | `epistle oauth-keygen --out F` | Write a PKCS#8 ES256 private key plus the matching public point to `F` (mode 0600, an existing file is refused). The private key is never printed. |
 
+## Prompts and `--yes`
+
+Questions and password prompts go to stderr. stdout carries only command
+output, so `--json` stays parseable.
+
+**Passwords.** On a terminal, `account-add` and `account password` ask for the
+password with echo off, then ask again (`Repeat password`); two different
+values are refused with `passwords do not match`. The password policy still
+applies (12 to 64 printable ASCII characters, not on the breached list) and the
+error names the rule that failed. `account password` checks that the account
+exists before it asks: an unknown name fails with `no such account: <name>`,
+a static one with the hint to edit the config file. `relay add
+--password-stdin` and `webhook set --secret-stdin` also read with echo off on
+a terminal. Echo comes back when the read ends, Ctrl-C included.
+
+**Destructive commands.** `account-remove`, `app-password-revoke`,
+`api-key-revoke`, `archive purge`, `domain remove`, `domain alias remove`,
+`alias remove`, `masked remove`, `queue remove` and `restore` ask before they
+change anything, and the question names what goes: the account with its masked
+addresses and app passwords, the API key's scopes, the queued message's sender
+and recipient count, the number of archived entries (`Purge all N archived
+entries` when `archive purge` has no `--older-than-days`). Only `y` or `yes`
+goes ahead; anything else, Enter included, cancels with exit code 2. `restore`
+reads the archive on stdin, so it asks on the controlling terminal. A
+`--dry-run` asks nothing.
+
+**Scripts.** Without a terminal (stdin or stderr redirected) nothing is asked.
+A secret is read as one line from stdin, as before. A destructive command exits
+2 with `<command> was not confirmed; re-run with --yes to apply, or answer the
+question on a terminal` and changes nothing; pass `--yes` (`-y`) to go ahead.
+On `restore`, `--yes` only answers the question: overwriting a non-empty
+`data_dir` or running against a live service still needs `--force`.
+
 `backup`'s `warnings` sink (the externally-referenced paths that are not in the
 archive) is also stderr, by the same rule.
 
@@ -369,9 +402,9 @@ epistle domain show example.org
 epistle domain show example.org --json
 epistle domain add new.example.org
 epistle domain add new.example.org --dry-run
-epistle domain remove old.example.org
+epistle domain remove old.example.org [--yes|-y]
 epistle domain alias add alias.example.org example.org
-epistle domain alias remove alias.example.org
+epistle domain alias remove alias.example.org [--yes|-y]
 ```
 
 `list` writes every configured domain with the domains that target it
@@ -397,10 +430,12 @@ category (`account alice@example.org`, `alias team@example.org`,
 `masked address ...`). The file is only written after every offender
 has been cleaned up.
 
+`domain alias remove` drops a single key. Both removals ask first (see
+[Prompts and `--yes`](#prompts-and---yes)).
+
 `domain alias add` writes an entry under `[domain_aliases]`. The target
 must already be a configured domain; the alias name must not collide
 with another `domain_aliases` key or with any configured domain.
-`domain alias remove` drops a single key.
 
 Edits preserve every other TOML value, validate through the normal
 loader before atomic replacement, and follow the same restart policy
@@ -416,7 +451,7 @@ epistle alias list --json
 epistle alias show team@example.org
 epistle alias add team@example.org alice@example.org bob@example.org
 epistle alias add team@example.org alice@example.org --sender ceo@example.org --list-id team.example.org --visible
-epistle alias remove team@example.org
+epistle alias remove team@example.org [--yes|-y]
 epistle alias member add team@example.org carol@example.org
 epistle alias member remove team@example.org bob@example.org
 epistle alias sender add team@example.org ceo@example.org
@@ -438,10 +473,10 @@ or by a masked address (`<data_dir>/masked.json`). The address must also
 live in a configured domain. Members and senders must be valid email
 addresses; at least one member is required.
 
-`remove` drops the whole row. `member add|remove` and `sender add|remove`
-edit one entry on an existing alias; `member remove` refuses to leave
-an alias with no members (use `alias remove` for that). `enable` and
-`disable` toggle the disabled flag in `<data_dir>/aliases.json` through
+`remove` drops the whole row, after asking. `member add|remove` and
+`sender add|remove` edit one entry on an existing alias; `member remove`
+refuses to leave an alias with no members (use `alias remove` for that).
+`enable` and `disable` toggle the disabled flag in `<data_dir>/aliases.json` through
 `AccountStore::set_alias_enabled`. The dynamic store is hot-reloaded by
 the 2 s file watcher, so the change takes effect without a restart and
 without going through the config engine.
@@ -548,8 +583,11 @@ disabled with `stack down` stay disabled until `stack up`.
 
 `epistle backup --config F` writes a gzip-compressed tar to stdout
 (the same archive the `Backup` table at the top of this document
-describes) and `epistle restore --config F` replays one back onto
-the data directory. Both detect the container stack by looking for
+describes) and `epistle restore [--force] [--dry-run] [--yes|-y] --config F`
+replays one back onto the data directory. `--dry-run` lists the
+entries the restore would write and changes nothing. Without it,
+`restore` asks on the terminal first; `--yes` answers that question and
+never stands in for `--force`. Both detect the container stack by looking for
 `<data_dir>/compose/compose.yaml` and route the database work
 through `podup exec -T db` in that case, so the same command line
 works on the host and inside the container deployment:
@@ -813,21 +851,21 @@ retires an older previous selector first, since the state holds only one.
 | Command | What it does |
 |---|---|
 | `epistle accounts` | List configured accounts. |
-| `epistle account-add --name N --address a@b [--address …]` | Create an account; reads the password from stdin (one line). |
-| `epistle account-remove --name N --queue discard\|drain` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it to be delivered). Prints the per-record counts removed. |
-| `epistle account password N` | Update the password for a dynamic account; reads the new password from stdin (one line). Hashes it with argon2id and derives a fresh SCRAM salt, the same way `account-add` does on a fresh account. Refuses a static account with a hint to edit the config file. |
+| `epistle account-add --name N --address a@b [--address …]` | Create an account. On a terminal the password is asked twice with echo off; piped, it is read from stdin (one line). |
+| `epistle account-remove --name N --queue discard\|drain [--yes\|-y]` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it for delivery). Prints the per-record counts removed. Asks first; `--yes` skips the question. |
+| `epistle account password N` | Update the password for a dynamic account, asked twice with echo off on a terminal or read from stdin (one line). The account is checked before anything is read. Hashes with argon2id and derives a fresh SCRAM salt, the same way `account-add` does on a fresh account. Refuses a static account with a hint to edit the config file. |
 | `epistle account disable N` / `epistle account enable N` | Toggle the SCIM `active` flag. A disabled account keeps its mailbox but rejects authentication identically to an unknown login until `enable` is run. |
 | `epistle account address add N a@b` / `epistle account address remove N a@b` | Add or remove a delivery address for the account. Address validation reuses the checks `account-add` runs (malformed, foreign domain, conflict with another account). Removing the last remaining address is refused. |
 | `epistle account quota N SIZE\|none` | Set the storage quota. The size accepts `K`, `M`, `G`, `T` suffixes (`500M`, `10G`, `1T`); `none` clears the quota back to the server default. Falls through to the domain quota and then the server default when the account's own quota is unset. |
 | `epistle account protocols N LIST\|all` | Restrict which authentication protocols the account may sign in through. `LIST` is a comma-separated list of protocol names (`imap,smtp,api,webdav`); `all` clears the restriction. |
-| `epistle account show N` | Print the public view of the account (name, log id, addresses, disabled, quota, protocols). Never the password hash, SCRAM credentials, or TOTP secret. The log id is the `acct-<12 hex>` pseudonym the server logs use instead of the name. |
+| `epistle account show N` | Print the public view of the account (name, log id, addresses, disabled, quota, protocols). Works for static accounts too. Never the password hash, SCRAM credentials, or TOTP secret. The log id is the `acct-<12 hex>` pseudonym the server logs use instead of the name. |
 | `epistle account find-log-id acct-…` | Print the account (or accounts) whose log id is the one given, so a pseudonym found in a log line can be traced back. It uses this server's `log-pseudonym.key`, so it also matches a login that was an address. |
 | `epistle app-password-create --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
 | `epistle app-passwords [--account N]` | List app passwords (label, expiry, IP restriction). |
-| `epistle app-password-revoke --account N --label L` | Revoke an app password. |
+| `epistle app-password-revoke --account N --label L [--yes\|-y]` | Revoke an app password. Asks first; `--yes` skips the question. |
 | `epistle api-key-create --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
 | `epistle api-keys` | List API keys (label, expiry, IP restriction). |
-| `epistle api-key-revoke --label L` | Revoke an API key. |
+| `epistle api-key-revoke --label L [--yes\|-y]` | Revoke an API key. Asks first; `--yes` skips the question. |
 
 ## Mail in and out
 
@@ -855,7 +893,7 @@ decides whether to attempt it.
 | `epistle queue retry <id>\|--all` | Make the next attempt happen now, skipping the backoff. The attempt count is kept, and a held entry stays held. |
 | `epistle queue hold <id>\|--all` | Never attempt the entry until it is released. |
 | `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
-| `epistle queue remove <id>` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). |
+| `epistle queue remove <id> [--yes\|-y]` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). Asks first; `--yes` skips the question. |
 
 A held entry is not attempted and its time on hold does not count toward the
 give-up window below, so a message parked for a week is not bounced on its first
@@ -874,7 +912,7 @@ not exist is refused.
 |---|---|
 | `epistle masked list <account> [--json]` | One line per address (address, label, `enabled` or `disabled`), or a JSON array. |
 | `epistle masked add <account> [--label L] [--domain D]` | Mint a new address and print it. The domain defaults to that of the account's first address; `--domain` must be a configured domain. |
-| `epistle masked remove <account> <address>` | Delete the address. |
+| `epistle masked remove <account> <address> [--yes\|-y]` | Delete the address. Asks first; `--yes` skips the question. |
 | `epistle masked disable <account> <address>` | Stop delivery to the address (it is refused like an unknown user) without deleting it. |
 | `epistle masked enable <account> <address>` | Deliver to it again. |
 
@@ -921,7 +959,7 @@ configured window.
 |---|---|
 | `epistle archive list <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
 | `epistle archive restore <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
-| `epistle archive purge <ACCOUNT> [--older-than-days N]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. |
+| `epistle archive purge <ACCOUNT> [--older-than-days N] [--yes\|-y]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. Asks first, saying "all" when there is no threshold; `--yes` skips the question. |
 
 ## Client autodiscovery
 

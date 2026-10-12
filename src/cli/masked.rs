@@ -44,6 +44,11 @@ pub enum MaskedCli {
 		account: String,
 		/// The masked address to delete.
 		address: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Let a disabled masked address receive mail again.
 	Enable {
@@ -110,9 +115,24 @@ pub(super) fn run(
 				.add_masked(account, &label, &domain, now)
 				.map(|entry| entry.address)
 		}
-		MaskedCli::Remove { address, .. } => store
-			.remove_masked(account, &address)
-			.map(|()| format!("removed {address}")),
+		MaskedCli::Remove { address, yes, .. } => {
+			// An address the account does not own goes straight to the
+			// store, which refuses it; there is nothing to confirm.
+			let owned = store
+				.list_masked(account)
+				.iter()
+				.any(|masked| masked.address.eq_ignore_ascii_case(&address));
+			let question = format!("Remove masked address \"{address}\" from \"{account}\"? [y/N]");
+			if owned
+				&& let Err(code) =
+					super::prompt::confirm_destructive("masked remove", &question, yes)
+			{
+				return code;
+			}
+			store
+				.remove_masked(account, &address)
+				.map(|()| format!("removed {address}"))
+		}
 		MaskedCli::Enable { address, .. } => store
 			.set_masked_enabled(account, &address, true)
 			.map(|_| format!("enabled {address}")),

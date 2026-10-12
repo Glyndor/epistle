@@ -34,26 +34,26 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 }
 
 /// Create a dynamic account with `addresses`, reading the password from
-/// `reader` (one line) and hashing it (argon2id + SCRAM). `reader` is
-/// injectable so the whole flow is testable.
+/// `reader` and hashing it (argon2id + SCRAM). On a terminal the password
+/// is typed twice with echo off; piped stdin gives one line. The policy
+/// (length, breached list) is checked before anything is written.
 pub(super) fn add(
 	config: &Config,
 	name: &str,
 	addresses: Vec<String>,
-	reader: impl std::io::BufRead,
+	mut reader: impl std::io::BufRead,
 ) -> ExitCode {
 	// let-else, not `match`: a match arm that returns is still an arm of the
 	// expression whose value binds to `password`, and the taint analyser follows
 	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
-	// the Err arm as a password reaching `validate(&password)`. An else block has
-	// to diverge, so no value can travel from it to the binding.
-	let Ok(password) = super::read_line(reader) else {
+	// the Err arm as a password reaching the hash. An else block has to diverge,
+	// so no value can travel from it to the binding. `new_password` has already
+	// printed why it refused (no input, mismatch, or the policy rule that failed).
+	let Some(password) =
+		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
+	else {
 		return ExitCode::FAILURE;
 	};
-	if let Err(rejection) = crate::password::validate(&password) {
-		super::style::error(rejection.message());
-		return ExitCode::FAILURE;
-	}
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -163,10 +163,15 @@ fn open_bayes_store(
 /// with a helpful message and no side effects. Spins up a short-lived
 /// runtime because `remove_account` is async (it consults the optional
 /// Bayesian store via sqlx).
+///
+/// On a terminal it asks before touching anything (see
+/// [`removal_question`]); `yes` (`--yes` / `-y`) skips the question, and
+/// without a terminal or `--yes` it refuses with exit code 2.
 pub(super) fn remove(
 	config: &Config,
 	name: &str,
 	queue: QueuePolicy,
+	yes: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	// Open without crypto: the removal path doesn't need to read message
@@ -186,6 +191,20 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
+	if store.is_static(name) {
+		super::style::error(format_args!(
+			"account {name}: edit the config file to change a static account"
+		));
+		return ExitCode::FAILURE;
+	}
+	if store.dynamic(name).is_none() {
+		super::style::error(format_args!("no such account: {name}"));
+		return ExitCode::FAILURE;
+	}
+	let question = removal_question(config, &store, name, queue);
+	if let Err(code) = super::prompt::confirm_destructive("account-remove", &question, yes) {
+		return code;
+	}
 	let spool = match FsSpool::open(&config.data_dir) {
 		Ok(spool) => spool,
 		Err(error) => {
@@ -218,6 +237,35 @@ pub(super) fn remove(
 		bayes_store.as_ref(),
 		out,
 		&mut err,
+	)
+}
+
+/// The question `account-remove` asks: the account, and the counts that
+/// are cheap to read before anything is touched (masked addresses and app
+/// passwords), plus the queue policy when queued mail will be dropped.
+fn removal_question(
+	config: &Config,
+	store: &AccountStore,
+	name: &str,
+	queue: QueuePolicy,
+) -> String {
+	let masked = store.list_masked(name).len();
+	let app_passwords = crate::directory_store::AppPasswordStore::open(&config.data_dir)
+		.map(|passwords| {
+			passwords
+				.list()
+				.into_iter()
+				.filter(|(account, _, _, _)| account == name)
+				.count()
+		})
+		.unwrap_or(0);
+	let queued = match queue {
+		QueuePolicy::Discard => ", discarding its queued mail",
+		QueuePolicy::Drain => "",
+	};
+	format!(
+		"Remove account \"{name}\" and its mailbox ({masked} masked addresses, \
+		 {app_passwords} app passwords){queued}? [y/N]"
 	)
 }
 

@@ -12,7 +12,7 @@ use crate::config::Protocol;
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
 
 use super::style;
-use crate::cli::util::read_line;
+use crate::cli::prompt;
 
 /// Pretty rendering of a `DynamicAccount` for `account show`. The
 /// fields here are exactly the ones a release / wire operator wants to
@@ -59,18 +59,22 @@ pub(crate) fn render_protocols(allowed: Option<&Vec<Protocol>>) -> String {
 /// Update the password for a dynamic account using the given store and
 /// password reader. Splits the dispatcher from the CLI glue so tests
 /// can drive the password flow without touching stdin.
+///
+/// On a terminal the password is typed twice with echo off and a mismatch
+/// is refused before any hashing; piped stdin gives one line. The
+/// dispatcher calls this only after [`crate::cli::account::prepare`] has
+/// confirmed the account exists, so nobody types a password for a name
+/// that is not there.
 pub(crate) fn password_with_store(
 	store: &AccountStore,
 	name: &str,
-	reader: impl std::io::BufRead,
+	mut reader: impl std::io::BufRead,
 ) -> ExitCode {
-	let Ok(plain) = read_line(reader) else {
+	// let-else for the same reason as `accounts::add`: no value may flow
+	// from a diverging arm into the binding the hash reads.
+	let Some(plain) = prompt::new_password(&format!("Password for \"{name}\""), &mut reader) else {
 		return ExitCode::FAILURE;
 	};
-	if let Err(rejection) = crate::password::validate(&plain) {
-		style::error(rejection.message());
-		return ExitCode::FAILURE;
-	}
 	let hash = match crate::smtp::auth::hash_password(&plain) {
 		Ok(hash) => hash,
 		Err(error) => {
@@ -227,26 +231,48 @@ pub(crate) fn show_with_store(
 	name: &str,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	match store.dynamic(name) {
-		Some(account) => {
-			render(&account, out);
-			ExitCode::SUCCESS
-		}
-		None => handle_error(name, StoreError::NotFound(name.to_string())),
+	if let Some(account) = store.dynamic(name) {
+		render(&account, out);
+		return ExitCode::SUCCESS;
 	}
+	if let Some(account) = store.static_view(name) {
+		render_static(account, out);
+		return ExitCode::SUCCESS;
+	}
+	style::error(format_args!("no such account: {name}"));
+	ExitCode::FAILURE
+}
+
+/// Public view of a static `[accounts]` row. Static accounts do not
+/// carry a `disabled` flag or SCRAM/TOTP material, so the renderer
+/// reports the loader-controlled fields only. The password hash is
+/// never printed (matches the dynamic viewer's contract).
+fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write) {
+	let _ = writeln!(out, "name: {}", account.name);
+	let _ = writeln!(out, "log_id: {}", crate::log_id::account(&account.name));
+	let _ = writeln!(out, "source: static");
+	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
+	let quota = match account.quota_bytes {
+		Some(bytes) => bytes.to_string(),
+		None => "server default".to_string(),
+	};
+	let _ = writeln!(out, "quota_bytes: {quota}");
+	let _ = writeln!(
+		out,
+		"protocols: {}",
+		render_protocols(account.allowed_protocols.as_ref())
+	);
 }
 
 /// Convert a store error into the exit code plus the message the
-/// operator sees on stderr. Static-account errors carry a hint that
-/// tells the operator to edit the config file; the mutators return
-/// `NotFound` for both static and unknown names, but every action here
-/// already calls `is_static` first to disambiguate.
+/// operator sees on stderr. `NotFound` means the name is unknown: a static
+/// account is refused with the config-file hint by
+/// [`crate::cli::account::prepare`] before it reaches a mutator, so this
+/// path prints `no such account`.
 pub(crate) fn handle_error(name: &str, error: StoreError) -> ExitCode {
 	match error {
 		StoreError::NotFound(_) => {
-			style::error(format_args!(
-				"account {name}: edit the config file to change a static account"
-			));
+			style::error(format_args!("no such account: {name}"));
 			ExitCode::FAILURE
 		}
 		StoreError::Duplicate(what) => {

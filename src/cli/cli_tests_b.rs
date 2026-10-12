@@ -360,6 +360,7 @@ fn archive_purge_dispatch_runs_against_real_layout() {
 				config: std::path::PathBuf::from(path),
 				account: "alice".to_string(),
 				older_than_days: None,
+				yes: true,
 			},
 			&mut out,
 		),

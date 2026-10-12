@@ -49,6 +49,7 @@ fn parses_account_remove_with_each_queue_policy() {
 			config,
 			name,
 			queue,
+			yes: _,
 		} = cli.command
 		else {
 			panic!("expected AccountRemove, got: {:?}", cli.command);
@@ -145,7 +146,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 	let config = crate::config::Config::load(cfg_path).expect("load config");
 	let mut out = Vec::new();
 	assert_eq!(
-		accounts::remove(&config, "alice", QueuePolicy::Discard, &mut out),
+		accounts::remove(&config, "alice", QueuePolicy::Discard, true, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -186,7 +187,7 @@ fn account_remove_unknown_account_returns_failure_without_touching_storage() {
 
 	let mut out = Vec::new();
 	assert_eq!(
-		accounts::remove(&config, "ghost", QueuePolicy::Drain, &mut out),
+		accounts::remove(&config, "ghost", QueuePolicy::Drain, true, &mut out),
 		ExitCode::FAILURE
 	);
 	let text = String::from_utf8(out).expect("utf8");

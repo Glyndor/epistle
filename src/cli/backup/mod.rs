@@ -429,7 +429,7 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 }
 
 /// Build a gzip-compressed USTAR archive from named byte entries.
-fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
+pub(in crate::cli) fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
 	let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
 	for (name, mode, data) in entries {
 		encoder.write_all(&ustar_header(name, *mode, data.len())?)?;

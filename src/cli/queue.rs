@@ -40,6 +40,11 @@ pub enum QueueCli {
 	Remove {
 		/// Spool id of the entry.
 		id: Uuid,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 }
 
@@ -78,13 +83,32 @@ pub(super) fn run(
 		QueueCli::Release(target) => edit_many(&spool, &target, "released", out, |e| {
 			e.release(now);
 		}),
-		QueueCli::Remove { id } => match spool.remove(id) {
-			Ok(()) => {
-				let _ = writeln!(out, "removed {id}");
-				ExitCode::SUCCESS
+		QueueCli::Remove { id, yes } => {
+			let envelope = match spool.load_envelope(id) {
+				Ok(envelope) => envelope,
+				Err(error) => return entry_error(id, &error),
+			};
+			let sender = if envelope.reverse_path.is_empty() {
+				"<>"
+			} else {
+				envelope.reverse_path.as_str()
+			};
+			let question = format!(
+				"Remove queued message {id} from {sender} to {} recipients? \
+				 It will not be delivered and no bounce is sent. [y/N]",
+				envelope.recipients.len()
+			);
+			if let Err(code) = super::prompt::confirm_destructive("queue remove", &question, yes) {
+				return code;
 			}
-			Err(error) => entry_error(id, &error),
-		},
+			match spool.remove(id) {
+				Ok(()) => {
+					let _ = writeln!(out, "removed {id}");
+					ExitCode::SUCCESS
+				}
+				Err(error) => entry_error(id, &error),
+			}
+		}
 	}
 }
 

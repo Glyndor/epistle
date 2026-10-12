@@ -21,6 +21,7 @@ pub mod aliases;
 pub mod masked;
 mod names;
 use names::{validate_name, with_safe_names};
+mod account_views;
 mod app_passwords_api;
 mod masked_api;
 mod reload_api;

@@ -92,7 +92,7 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 	std::fs::write(&email, b"Subject: hi\r\n\r\nbody\r\n").expect("write message");
 
 	let mut out = Vec::new();
-	let exit = accounts::remove(&config, "alice", QueuePolicy::Discard, &mut out);
+	let exit = accounts::remove(&config, "alice", QueuePolicy::Discard, true, &mut out);
 	assert_eq!(
 		exit,
 		ExitCode::FAILURE,
