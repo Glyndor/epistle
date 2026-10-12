@@ -140,110 +140,111 @@ impl MaskedAddressStore {
 	/// or when no `domain` is available. The random suffix comes from the
 	/// CSPRNG — never the clock, never the request — so addresses are not
 	/// guessable.
-///
-/// The whole-file rewrite goes through [`crate::storage::locked::edit`]
-/// so a CLI `masked add` and a server `add` running in parallel both
-/// reach disk: each takes the sibling lock, re-reads the file, mutates
-/// the freshly-loaded state, and writes atomically. The per-account
-/// limit, the duplicate-detection, and the CSPRNG mint all happen
-/// under the lock against the freshly-loaded state.
-pub fn add(
-	&mut self,
-	account: &str,
-	label: &str,
-	domain: &str,
-	now: u64,
-) -> Result<MaskedAddress, StoreError> {
-	if account.is_empty() {
-		return Err(StoreError::Invalid("account is empty".to_string()));
-	}
-	if domain.is_empty() {
-		return Err(StoreError::Invalid("domain is empty".to_string()));
-	}
-	let slug = slugify_label(label);
-	if slug.is_empty() {
-		return Err(StoreError::Invalid(
-			"label must contain at least one alphanumeric character".to_string(),
-		));
-	}
-	let max_per_account = self.max_per_account;
-	let account = account.to_ascii_lowercase();
-	let label = label.trim().to_string();
+	///
+	/// The whole-file rewrite goes through locked::edit_function
+	/// so a CLI `masked add` and a server `add` running in parallel both
+	/// reach disk: each takes the sibling lock, re-reads the file, mutates
+	/// the freshly-loaded state, and writes atomically. The per-account
+	/// limit, the duplicate-detection, and the CSPRNG mint all happen
+	/// under the lock against the freshly-loaded state.
+	pub fn add(
+		&mut self,
+		account: &str,
+		label: &str,
+		domain: &str,
+		now: u64,
+	) -> Result<MaskedAddress, StoreError> {
+		if account.is_empty() {
+			return Err(StoreError::Invalid("account is empty".to_string()));
+		}
+		if domain.is_empty() {
+			return Err(StoreError::Invalid("domain is empty".to_string()));
+		}
+		let slug = slugify_label(label);
+		if slug.is_empty() {
+			return Err(StoreError::Invalid(
+				"label must contain at least one alphanumeric character".to_string(),
+			));
+		}
+		let max_per_account = self.max_per_account;
+		let account = account.to_ascii_lowercase();
+		let label = label.trim().to_string();
 
-	// Closure captures the path through `Option<MaskedAddress>` because
-	// the CSPRNG retry path may need to mint twice; the helper returns
-	// `Result<(), E>` and the value is surfaced here on success.
-	let mut minted: Option<MaskedAddress> = None;
-	let new_state = edit(
-		&self.path,
-		|text| {
-			serde_json::from_str::<MaskedFile>(text)
-				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
-		},
-		|state| {
-			Ok(serde_json::to_string_pretty(state)
-				.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
-		},
-		MaskedFile::default,
-		|state: &mut MaskedFile| -> Result<(), StoreError> {
-			if max_per_account > 0 {
-				let current = state
-					.addresses
-					.values()
-					.filter(|entry| entry.account == account)
-					.count();
-				if current >= max_per_account {
-					return Err(StoreError::LimitReached { max: max_per_account });
+		// Closure captures the path through `Option<MaskedAddress>` because
+		// the CSPRNG retry path may need to mint twice; the helper returns
+		// `Result<(), E>` and the value is surfaced here on success.
+		let mut minted: Option<MaskedAddress> = None;
+		let new_state = edit(
+			&self.path,
+			|text| {
+				serde_json::from_str::<MaskedFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			|state| {
+				serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::other(error.to_string()))
+			},
+			MaskedFile::default,
+			|state: &mut MaskedFile| -> Result<(), StoreError> {
+				if max_per_account > 0 {
+					let current = state
+						.addresses
+						.values()
+						.filter(|entry| entry.account == account)
+						.count();
+					if current >= max_per_account {
+						return Err(StoreError::LimitReached {
+							max: max_per_account,
+						});
+					}
 				}
-			}
-			let mut entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
-			if state.addresses.contains_key(&entry.address) {
-				entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
+				let mut entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
 				if state.addresses.contains_key(&entry.address) {
-					return Err(StoreError::Invalid(
-						"cannot generate a unique masked address".to_string(),
-					));
+					entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
+					if state.addresses.contains_key(&entry.address) {
+						return Err(StoreError::Invalid(
+							"cannot generate a unique masked address".to_string(),
+						));
+					}
 				}
-			}
-			state
-				.addresses
-				.insert(entry.address.clone(), entry.clone());
-			minted = Some(entry);
-			Ok(())
-		},
-	)
-	.map_err(|error| match error {
-		EditError::Io(io) => StoreError::Io(io),
-		EditError::Mutate(store) => store,
-	})?;
-	self.entries = new_state.addresses;
-	Ok(minted.expect("closure ran and minted an entry"))
-}
+				state.addresses.insert(entry.address.clone(), entry.clone());
+				minted = Some(entry);
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.entries = new_state.addresses;
+		Ok(minted.expect("closure ran and minted an entry"))
+	}
 
 	/// Build a fresh [`MaskedAddress`] with a new random suffix. The
-/// address itself is generated from the CSPRNG; callers check
-/// uniqueness against the in-memory map and retry via this same
-/// function on collision. Free function so the [`locked::edit`]
-/// closure can mint under the lock without borrowing the store
-/// immutable for the CSPRNG.
-fn fresh_entry(
-	account: &str,
-	slug: &str,
-	label: &str,
-	domain: &str,
-	now: u64,
-) -> Result<MaskedAddress, StoreError> {
-	let suffix = random_suffix()?;
-	let address = format!("{slug}.{suffix}@{domain}").to_ascii_lowercase();
-	Ok(MaskedAddress {
-		address,
-		account: account.to_string(),
-		label: label.trim().to_string(),
-		created_at: now,
-		enabled: true,
-		last_used_at: None,
-	})
-}
+	/// address itself is generated from the CSPRNG; callers check
+	/// uniqueness against the in-memory map and retry via this same
+	/// function on collision. Free function so the locked::edit_function
+	/// closure can mint under the lock without borrowing the store
+	/// immutable for the CSPRNG.
+	fn fresh_entry(
+		account: &str,
+		slug: &str,
+		label: &str,
+		domain: &str,
+		now: u64,
+	) -> Result<MaskedAddress, StoreError> {
+		let suffix = random_suffix()?;
+		let address = format!("{slug}.{suffix}@{domain}").to_ascii_lowercase();
+		Ok(MaskedAddress {
+			address,
+			account: account.to_string(),
+			label: label.trim().to_string(),
+			created_at: now,
+			enabled: true,
+			last_used_at: None,
+		})
+	}
 
 	/// Toggle the `enabled` flag on an address owned by `account`. `NotFound`
 	/// when the address does not exist or belongs to another account (so the
@@ -260,12 +261,13 @@ fn fresh_entry(
 		let new_state = edit(
 			&self.path,
 			|text| {
-				serde_json::from_str::<MaskedFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				serde_json::from_str::<MaskedFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(serde_json::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+				serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::other(error.to_string()))
 			},
 			MaskedFile::default,
 			|state: &mut MaskedFile| -> Result<(), StoreError> {
@@ -302,12 +304,13 @@ fn fresh_entry(
 		let new_state = edit(
 			&self.path,
 			|text| {
-				serde_json::from_str::<MaskedFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				serde_json::from_str::<MaskedFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(serde_json::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+				serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::other(error.to_string()))
 			},
 			MaskedFile::default,
 			|state: &mut MaskedFile| -> Result<(), StoreError> {
@@ -341,19 +344,18 @@ fn fresh_entry(
 		let new_state = edit(
 			&self.path,
 			|text| {
-				serde_json::from_str::<MaskedFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				serde_json::from_str::<MaskedFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(serde_json::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+				serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::other(error.to_string()))
 			},
 			MaskedFile::default,
 			|state: &mut MaskedFile| -> Result<(), StoreError> {
 				let before = state.addresses.len();
-				state
-					.addresses
-					.retain(|_, entry| entry.account != account);
+				state.addresses.retain(|_, entry| entry.account != account);
 				removed = Some((before - state.addresses.len()) as u32);
 				Ok(())
 			},
@@ -376,12 +378,13 @@ fn fresh_entry(
 		let new_state = edit(
 			&self.path,
 			|text| {
-				serde_json::from_str::<MaskedFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				serde_json::from_str::<MaskedFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(serde_json::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+				serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::other(error.to_string()))
 			},
 			MaskedFile::default,
 			|state: &mut MaskedFile| -> Result<(), StoreError> {
@@ -417,22 +420,12 @@ fn fresh_entry(
 	}
 
 	/// Atomically rewrite the backing JSON file (write-temp-then-rename, mode 0600).
-	fn persist(&self) -> Result<(), StoreError> {
-		let file = MaskedFile {
-			addresses: self.entries.clone(),
-		};
-		let text = serde_json::to_string_pretty(&file)
-			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		crate::storage::write_secret(&self.path, text.as_bytes())?;
-		Ok(())
-	}
-
 	/// Replace the entries map wholesale. Used by the file watcher to
 	/// reload state from disk: the on-disk JSON is parsed and the
 	/// resulting map takes the place of the in-memory one in a single
 	/// operation. The path and `max_per_account` are preserved so a
-	/// later `persist()` still writes to the same place and the
-	/// per-account cap is unaffected by a reload.
+	/// later write still writes to the same place and the per-account
+	/// cap is unaffected by a reload.
 	pub(crate) fn replace_entries(&mut self, new: HashMap<String, MaskedAddress>) {
 		self.entries = new;
 	}

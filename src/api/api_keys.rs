@@ -288,44 +288,48 @@ impl ApiKeyStore {
 
 	/// Add a key. The hash must already be `sha256:<hex>`; a duplicate label is
 	/// rejected, as is a malformed CIDR or an empty/unknown `scopes` vector.
-/// Routes through [`crate::storage::locked::edit`] so a CLI
+	/// Routes through locked::edit_function so a CLI
 	/// `epistle api-key create` and a server-side rotation/update running
-/// in parallel both reach disk without losing the other's row.
-pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
-	if let Some(spec) = &key.ip_cidr
-		&& crate::cidr::Cidr::parse(spec).is_none()
-	{
-		return Err(std::io::Error::new(
-			std::io::ErrorKind::InvalidInput,
-			format!("invalid CIDR \"{spec}\""),
-		));
+	/// in parallel both reach disk without losing the other's row.
+	pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
+		if let Some(spec) = &key.ip_cidr
+			&& crate::cidr::Cidr::parse(spec).is_none()
+		{
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::InvalidInput,
+				format!("invalid CIDR \"{spec}\""),
+			));
+		}
+		validate_new_scopes(&key.scopes)?;
+		let new_state = crate::storage::locked::edit(
+			&self.path,
+			|text| {
+				toml::from_str::<ApiKeyFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			|state| {
+				toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			ApiKeyFile::default,
+			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				if state
+					.keys
+					.iter()
+					.any(|existing| existing.label == key.label)
+				{
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::AlreadyExists,
+						format!("API key \"{}\" already exists", key.label),
+					));
+				}
+				state.keys.push(key.clone());
+				Ok(())
+			},
+		)?;
+		self.keys = new_state.keys;
+		Ok(())
 	}
-	validate_new_scopes(&key.scopes)?;
-	let new_state = crate::storage::locked::edit(
-		&self.path,
-		|text| {
-			toml::from_str::<ApiKeyFile>(text)
-				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-		},
-		|state| {
-			Ok(toml::to_string_pretty(state)
-				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?)
-		},
-		ApiKeyFile::default,
-		|state: &mut ApiKeyFile| -> std::io::Result<()> {
-			if state.keys.iter().any(|existing| existing.label == key.label) {
-				return Err(std::io::Error::new(
-					std::io::ErrorKind::AlreadyExists,
-					format!("API key \"{}\" already exists", key.label),
-				));
-			}
-			state.keys.push(key.clone());
-			Ok(())
-		},
-	)?;
-	self.keys = new_state.keys;
-	Ok(())
-}
 
 	/// Remove a key by label. `NotFound` if absent.
 	pub fn remove(&mut self, label: &str) -> std::io::Result<()> {
@@ -337,8 +341,8 @@ pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
 					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 			},
 			|state| {
-				Ok(toml::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?)
+				toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 			},
 			ApiKeyFile::default,
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
@@ -371,8 +375,8 @@ pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
 					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 			},
 			|state| {
-				Ok(toml::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?)
+				toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 			},
 			ApiKeyFile::default,
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
@@ -409,16 +413,6 @@ pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
 			.collect();
 		rows.sort_by(|a, b| a.label.cmp(&b.label));
 		rows
-	}
-
-	/// Atomically rewrite the backing file.
-	fn persist(&self) -> std::io::Result<()> {
-		let file = ApiKeyFile {
-			keys: self.keys.clone(),
-		};
-		let text = toml::to_string_pretty(&file)
-			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-		crate::storage::write_secret(&self.path, text.as_bytes())
 	}
 }
 

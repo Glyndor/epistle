@@ -30,10 +30,11 @@ pub(crate) fn flock_exclusive_blocking(fd: RawFd) -> std::io::Result<()> {
 }
 
 /// Try to take an exclusive [`flock`] on `fd` without blocking. Returns
-/// `Err` carrying `EWOULDBLOCK`/`EAGAIN` when another holder keeps it; any
+/// `Err` carrying `EWOULDBLOCK` when another holder keeps it; any
 /// other error is a real failure.
 ///
 /// [`flock`]: https://man7.org/linux/man-pages/man2/flock.2.html
+#[allow(dead_code)]
 pub(crate) fn flock_exclusive_nonblocking(fd: RawFd) -> std::io::Result<()> {
 	let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 	if result == 0 {
@@ -74,6 +75,7 @@ impl FileLock {
 	/// Try to acquire an exclusive lock on `path` without blocking.
 	/// Returns `Ok(None)` when another holder keeps the lock; the
 	/// `Ok(Some(_))` arm means the caller now holds an exclusive lock.
+	#[allow(dead_code)]
 	pub fn try_acquire(path: &Path) -> std::io::Result<Option<Self>> {
 		let file = open_lock_file(path)?;
 		match flock_exclusive_nonblocking(file.as_raw_fd()) {

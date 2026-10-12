@@ -18,7 +18,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::lock::{FileLock, flock_exclusive_blocking, flock_exclusive_nonblocking, open_lock_file};
+use super::lock::{
+	FileLock, flock_exclusive_blocking, flock_exclusive_nonblocking, open_lock_file,
+};
 
 /// `try_acquire` on a free path hands back the lock; dropping the guard
 /// frees it for the next caller.

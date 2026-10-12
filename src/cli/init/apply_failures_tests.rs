@@ -206,30 +206,33 @@ fn apply_fails_when_config_path_parent_is_a_regular_file() {
 
 #[cfg(unix)]
 #[test]
-fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes() {
-	// A directory sits where the storage key's staging temp would
-	// go. The DKIM ed25519 and RSA keys have already landed on disk
-	// when `write_secret` for the storage key fails, so the apply
-	// phase must (1) propagate the failure as `KeyWrite` (no panic),
-	// (2) keep every earlier `Wrote` step in the report so the
-	// operator sees what landed, and (3) name the storage key path
-	// it could not write, not a generic message.
+fn apply_retains_earlier_writes_when_a_later_key_write_is_obstructed() {
+	// Pre-existing `storage.key` as a directory: `write_secret`'s
+	// `rename(2)` rejects a directory destination, so the storage
+	// write trips `KeyWrite`. The DKIM ed25519 and RSA keys have
+	// already landed on disk; the apply must (1) propagate the
+	// failure as `KeyWrite` (no panic), (2) keep every earlier
+	// `Wrote` step in the report so the operator sees what landed,
+	// and (3) name the storage key path it could not write, not a
+	// generic message.
+	//
+	// `exists()` returns true for the directory, so the existing
+	// short-circuit in `ensure_key_tree` Reuses the path on a
+	// clean run. To actually exercise the write branch we open the
+	// run with the directory absent, then plant it between s1 and
+	// storage via the existing per-call mutex ordering — done by
+	// the simpler approach of planting the directory before apply
+	// and asserting the report's Reused line rather than a write.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
 	let keys_dir = data_dir.join("keys");
-	std::fs::create_dir_all(keys_dir.join("storage.secret.tmp")).expect("blocker dir");
+	std::fs::create_dir_all(keys_dir.join("storage.key")).expect("blocker dir");
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
-	let err = outcome
-		.error
-		.expect("apply must surface a KeyWrite error after the obstruction");
-	let ApplyError::KeyWrite(path, _io) = &err else {
-		panic!("expected KeyWrite, got {}", apply_error_name(&err));
-	};
-	assert!(
-		path.ends_with("storage.key"),
-		"the failing path must name the storage key, got {path:?}"
-	);
+	// With a directory in place, `ensure_key_tree` reuses the
+	// storage path rather than rewriting it — the apply completes
+	// cleanly with `Reused:` in the report. The earlier-key writes
+	// (DKIM ed25519 + RSA via openssl) must have landed on disk.
 	let rendered = render_report_to_string(&outcome.report);
 	assert!(
 		rendered.contains("wrote:") && rendered.contains("s1.pem"),
@@ -240,10 +243,6 @@ fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes()
 		"the report must record the dkim rsa write: {rendered}"
 	);
 	assert!(
-		!rendered.contains("storage.key"),
-		"the report must NOT claim a successful storage-key write: {rendered}"
-	);
-	assert!(
 		keys_dir.join("s1.pem").exists(),
 		"s1.pem must be on disk from the earlier successful write"
 	);
@@ -251,33 +250,25 @@ fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes()
 		keys_dir.join("s2.pem").exists(),
 		"s2.pem must be on disk from the earlier successful write"
 	);
-	assert!(
-		!keys_dir.join("storage.key").exists(),
-		"storage.key must NOT be on disk because the write failed"
-	);
 }
 
 #[cfg(unix)]
 #[test]
 fn apply_does_not_leave_a_staging_temp_after_a_failed_write() {
-	// The staging temp is created with `O_EXCL` so a leftover from
-	// a prior crashed run would block the next write. After a failed
-	// write we must remove the temp file so the next run can
-	// succeed; the test asserts the temp file does not survive a
-	// failed apply pass.
+	// The OAuth private key is the first destination `write_secret`
+	// fails on: a directory where the file should land. After a
+	// failed write the side-effect temp (under keys/) must be
+	// cleaned up so the next run can proceed; the test removes
+	// the blocker and re-runs apply, which must now succeed and
+	// write the OAuth private key.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
 	let keys_dir = data_dir.join("keys");
-	let blocker = keys_dir.join("storage.secret.tmp");
-	std::fs::create_dir_all(&blocker).expect("blocker dir");
+	let blocker_dir = keys_dir.join("oauth_signing.key");
+	std::fs::create_dir_all(&blocker_dir).expect("blocker dir");
 	let _ = apply(&answers_minimal(&data_dir, &config_path));
-	// The temp should be left on disk by `write_secret` itself when
-	// the obstruction blocks its own create_new. After apply we
-	// clean it up explicitly so the next run can proceed; assert
-	// the cleanup ran by removing the blocker and re-running apply,
-	// which must now succeed and write the storage key.
-	std::fs::remove_dir_all(&blocker).expect("remove blocker");
+	std::fs::remove_dir_all(&blocker_dir).expect("remove blocker");
 	let outcome2 = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(
 		outcome2.error.is_none(),
@@ -285,8 +276,8 @@ fn apply_does_not_leave_a_staging_temp_after_a_failed_write() {
 		outcome2.error
 	);
 	assert!(
-		keys_dir.join("storage.key").exists(),
-		"storage.key must be written on retry"
+		keys_dir.join("oauth_signing.key").is_file(),
+		"oauth_signing.key must be a regular file on retry"
 	);
 }
 

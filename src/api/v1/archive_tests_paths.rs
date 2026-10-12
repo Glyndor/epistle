@@ -11,6 +11,13 @@ fn entries(dir: &std::path::Path) -> Vec<String> {
 		.expect("read_dir")
 		.flatten()
 		.map(|entry| entry.file_name().to_string_lossy().into_owned())
+		// `flock(2)` advisory locks and `write_secret` temp files live next
+		// to the data files (the rename-then-fsync-the-parent contract
+		// from `crate::storage::locked` and `crate::storage::write_secret`).
+		// Filter them out: this test asserts that the API does not
+		// create an account directory, and a sibling lock or temp is
+		// not one.
+		.filter(|name| !name.ends_with(".lock") && !name.ends_with(".tmp"))
 		.collect();
 	names.sort();
 	names

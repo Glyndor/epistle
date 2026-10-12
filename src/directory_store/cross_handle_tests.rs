@@ -15,8 +15,8 @@
 
 use std::thread;
 
-use crate::api::api_keys::{ApiKey, ApiKeyStore};
 use crate::api::api_keys::Scope;
+use crate::api::api_keys::{ApiKey, ApiKeyStore};
 use crate::directory_store::{
 	AccountStore, AppPassword, AppPasswordStore, DynamicAccount, MaskedAddressStore,
 };
@@ -211,7 +211,8 @@ fn two_masked_address_handles_lose_no_writes() {
 	let cli_dir = dir.path().to_path_buf();
 	let cli_thread = thread::spawn(move || {
 		let mut cli = MaskedAddressStore::open(&cli_dir).expect("cli open");
-		cli.add("alice", "shop", "example.org", 1).expect("cli add shop");
+		cli.add("alice", "shop", "example.org", 1)
+			.expect("cli add shop");
 	});
 	cli_thread.join().expect("cli thread");
 

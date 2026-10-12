@@ -59,11 +59,7 @@ fn edit_reflects_a_writers_update_between_calls() {
 	let path = dir.path().join("state.toml");
 
 	// Seed the file as if another process wrote it.
-	crate::storage::write_secret(
-		&path,
-		br#"items = ["alpha"]"#,
-	)
-	.expect("seed");
+	crate::storage::write_secret(&path, br#"items = ["alpha"]"#).expect("seed");
 
 	let state = edit(
 		&path,
@@ -83,10 +79,7 @@ fn edit_reflects_a_writers_update_between_calls() {
 		},
 	)
 	.expect("edit");
-	assert_eq!(
-		state.items,
-		vec!["alpha".to_string(), "bravo".to_string()]
-	);
+	assert_eq!(state.items, vec!["alpha".to_string(), "bravo".to_string()]);
 }
 
 /// A mutation whose closure returns `Err` does not write the file or
@@ -99,7 +92,10 @@ fn edit_rejects_without_writing() {
 	let path = dir.path().join("state.toml");
 	crate::storage::write_secret(&path, b"").expect("seed empty");
 
-	let mtime_before = std::fs::metadata(&path).expect("stat").modified().expect("mtime");
+	let mtime_before = std::fs::metadata(&path)
+		.expect("stat")
+		.modified()
+		.expect("mtime");
 	let result = edit(
 		&path,
 		|text| toml::from_str::<TaggedItems>(text).map_err(io_err),
@@ -110,9 +106,14 @@ fn edit_rejects_without_writing() {
 			Err::<(), &'static str>("rejected by the closure")
 		},
 	);
-	assert!(matches!(result, Err(EditError::Mutate("rejected by the closure"))));
-	let mtime_after_reject =
-		std::fs::metadata(&path).expect("stat").modified().expect("mtime");
+	assert!(matches!(
+		result,
+		Err(EditError::Mutate("rejected by the closure"))
+	));
+	let mtime_after_reject = std::fs::metadata(&path)
+		.expect("stat")
+		.modified()
+		.expect("mtime");
 	assert_eq!(
 		mtime_before, mtime_after_reject,
 		"a rejected edit must not rewrite the file",
@@ -135,8 +136,10 @@ fn edit_rejects_without_writing() {
 	)
 	.expect("second edit");
 	assert_eq!(next.items, vec!["bravo".to_string()]);
-	let mtime_after_success =
-		std::fs::metadata(&path).expect("stat").modified().expect("mtime");
+	let mtime_after_success = std::fs::metadata(&path)
+		.expect("stat")
+		.modified()
+		.expect("mtime");
 	assert!(
 		mtime_after_success > mtime_after_reject,
 		"a successful edit must rewrite the file",

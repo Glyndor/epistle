@@ -62,7 +62,7 @@ impl<E: std::fmt::Display> From<EditError<E>> for std::io::Error {
 	fn from(error: EditError<E>) -> Self {
 		match error {
 			EditError::Io(io) => io,
-			EditError::Mutate(other) => std::io::Error::new(std::io::ErrorKind::Other, other.to_string()),
+			EditError::Mutate(other) => std::io::Error::other(other.to_string()),
 		}
 	}
 }
@@ -106,9 +106,6 @@ pub(crate) fn lock_path(path: &Path) -> PathBuf {
 		.parent()
 		.filter(|p| !p.as_os_str().is_empty())
 		.unwrap_or(Path::new("."));
-	let name = path
-		.file_name()
-		.and_then(|n| n.to_str())
-		.unwrap_or("store");
+	let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("store");
 	parent.join(format!(".{name}.lock"))
 }

@@ -78,21 +78,25 @@ impl super::AccountStore {
 		// which the caller matches for the silent-skip outcome;
 		// `Io` and other real failures fall through to the
 		// `tracing::warn` path.
-		let result = self.mutate_store(|state| match state
-			.accounts
-			.iter_mut()
-			.find(|existing| existing.name == account)
-		{
-			Some(row)
-				if row
-					.scram
-					.as_ref()
-					.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS) =>
+		let result = self.mutate_store(|state| {
+			match state
+				.accounts
+				.iter_mut()
+				.find(|existing| existing.name == account)
 			{
-				row.scram = Some(fresh);
-				Ok(())
+				Some(row)
+					if row
+						.scram
+						.as_ref()
+						.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS) =>
+				{
+					row.scram = Some(fresh);
+					Ok(())
+				}
+				_ => Err(super::StoreError::Invalid(
+					"scram upgrade: no change".into(),
+				)),
 			}
-			_ => Err(super::StoreError::Invalid("scram upgrade: no change".into())),
 		});
 		match result {
 			Ok(new_state) => self.refresh_after_write(new_state),
@@ -122,16 +126,6 @@ impl super::AccountStore {
 				);
 			}
 		}
-	}
-
-	fn needs_scram_upgrade(&self, account: &str) -> bool {
-		self.dynamic
-			.read()
-			.expect("store lock")
-			.iter()
-			.find(|existing| existing.name == account)
-			.and_then(|row| row.scram.as_ref())
-			.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS)
 	}
 }
 

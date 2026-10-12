@@ -137,12 +137,14 @@ impl AppPasswordStore {
 		let new_state = edit(
 			&self.path,
 			|text| {
-				toml::from_str::<AppPasswordFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(toml::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))?)
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			AppPasswordFile::default,
 			|state| -> Result<(), StoreError> {
@@ -163,7 +165,8 @@ impl AppPasswordStore {
 		// without the file watcher running.
 		self.accounts.clear();
 		for (name, entry) in new_state.accounts {
-			self.accounts.insert(name.to_ascii_lowercase(), entry.passwords);
+			self.accounts
+				.insert(name.to_ascii_lowercase(), entry.passwords);
 		}
 		Ok(())
 	}
@@ -175,12 +178,14 @@ impl AppPasswordStore {
 		let new_state = edit(
 			&self.path,
 			|text| {
-				toml::from_str::<AppPasswordFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(toml::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))?)
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			AppPasswordFile::default,
 			|state| {
@@ -202,7 +207,8 @@ impl AppPasswordStore {
 		})?;
 		self.accounts.clear();
 		for (name, entry) in new_state.accounts {
-			self.accounts.insert(name.to_ascii_lowercase(), entry.passwords);
+			self.accounts
+				.insert(name.to_ascii_lowercase(), entry.passwords);
 		}
 		Ok(())
 	}
@@ -221,12 +227,14 @@ impl AppPasswordStore {
 		let new_state = edit(
 			&self.path,
 			|text| {
-				toml::from_str::<AppPasswordFile>(text)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			|state| {
-				Ok(toml::to_string_pretty(state)
-					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))?)
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
 			},
 			AppPasswordFile::default,
 			|state: &mut AppPasswordFile| -> Result<(), StoreError> {
@@ -256,16 +264,14 @@ impl AppPasswordStore {
 			.accounts
 			.iter()
 			.flat_map(|(account, passwords)| {
-				passwords
-					.iter()
-					.map(move |password| {
-						(
-							account.clone(),
-							password.label.clone(),
-							password.expires_at,
-							password.ip_cidr.clone(),
-						)
-					})
+				passwords.iter().map(move |password| {
+					(
+						account.clone(),
+						password.label.clone(),
+						password.expires_at,
+						password.ip_cidr.clone(),
+					)
+				})
 			})
 			.collect();
 		rows.sort();
@@ -281,23 +287,6 @@ impl AppPasswordStore {
 #[allow(dead_code)]
 impl AppPasswordStore {
 	pub(crate) fn persist(&self) -> Result<(), StoreError> {
-		let file = AppPasswordFile {
-			accounts: self
-				.accounts
-				.iter()
-				.map(|(name, passwords)| {
-					(
-						name.clone(),
-						AccountEntry {
-							passwords: passwords.clone(),
-						},
-					)
-				})
-				.collect(),
-		};
-		let text = toml::to_string_pretty(&file)
-			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		crate::storage::write_secret(&self.path, text.as_bytes())?;
 		Ok(())
 	}
 }

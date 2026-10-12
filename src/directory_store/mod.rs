@@ -51,20 +51,7 @@ mod set_totp;
 pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
-/// Format the on-disk bytes for `accounts.toml`, sealing every cleartext
-/// TOTP secret under at-rest encryption on the way out. Lives at module
-/// scope so the `Fn` signature it satisfies can capture `&AccountStore`
-/// without a separate lifetime parameter on each callsite.
-fn serialize_dynamic_file(
-	store: &AccountStore,
-	state: &DynamicFile,
-) -> std::io::Result<String> {
-	let sealed = store
-		.sealed_for_disk(&state.accounts)
-		.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?;
-	toml::to_string_pretty(&DynamicFile { accounts: sealed })
-		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
-}
+mod mutate_store;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -556,14 +543,14 @@ impl AccountStore {
 		self.dynamic.read().expect("store lock").clone()
 	}
 
-/// Replace a dynamic account in place, preserving its position in the
-/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
-/// in SCIM terms) without churning the file. `NotFound` if no
-/// dynamic account carries `name`; `Duplicate` if the replacement's
-/// addresses collide with another account (including itself if the
-/// new list is unchanged — `add` short-circuits the collision check
-/// on self, but a fresh `add` after `remove` doesn't, so we do the
-/// same dance here).
+	/// Replace a dynamic account in place, preserving its position in the
+	/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
+	/// in SCIM terms) without churning the file. `NotFound` if no
+	/// dynamic account carries `name`; `Duplicate` if the replacement's
+	/// addresses collide with another account (including itself if the
+	/// new list is unchanged — `add` short-circuits the collision check
+	/// on self, but a fresh `add` after `remove` doesn't, so we do the
+	/// same dance here).
 	pub fn replace_account(
 		&self,
 		name: &str,
@@ -605,43 +592,6 @@ impl AccountStore {
 		})?;
 		self.refresh_after_write(new_state);
 		Ok(())
-	}
-
-	/// Run `mutate` under the cross-process lock on `accounts.toml`
-	/// with the latest on-disk state rehydrated into `state`. Returns
-	/// the post-mutation state so the caller can replace its in-memory
-	/// mirror without re-reading the file. The closure's return type
-	/// is the shared `StoreError` so a validation failure under the lock
-	/// surfaces a typed error rather than a string.
-	fn mutate_store<F>(&self, mutate: F) -> Result<DynamicFile, StoreError>
-	where
-		F: FnOnce(&mut DynamicFile) -> Result<(), StoreError>,
-	{
-		use crate::storage::locked::{EditError, edit};
-		edit(
-			&self.path,
-			|text| {
-				toml::from_str::<DynamicFile>(text).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			|state| serialize_dynamic_file(self, state),
-			DynamicFile::default,
-			mutate,
-		)
-		.map_err(|error| match error {
-			EditError::Io(io) => StoreError::Io(io),
-			EditError::Mutate(store) => store,
-		})
-	}
-
-	/// Replace the in-memory dynamic-account mirror with the
-	/// post-write state and rebuild the directory handle so the next
-	/// authentication or resolution call sees the change without going
-	/// through the file watcher.
-	fn refresh_after_write(&self, new_state: DynamicFile) {
-		*self.dynamic.write().expect("store lock") = new_state.accounts;
-		self.handle.replace(self.build_directory());
 	}
 
 	fn build_directory(&self) -> Directory {

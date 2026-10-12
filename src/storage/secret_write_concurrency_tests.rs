@@ -41,9 +41,16 @@ fn many_concurrent_writers_leave_one_complete_file() {
 
 	let final_bytes = std::fs::read(&path).expect("read final");
 	let final_text = std::str::from_utf8(&final_bytes).expect("final is utf-8");
-	let expected_bytes = format!("writer-{}-says-hello\n", written.iter().position(|w| w == final_text).expect("writer present"));
+	let expected_bytes = format!(
+		"writer-{}-says-hello\n",
+		written
+			.iter()
+			.position(|w| w == final_text)
+			.expect("writer present")
+	);
 	assert_eq!(
-		final_text, expected_bytes.as_str(),
+		final_text,
+		expected_bytes.as_str(),
 		"final file must be one writer's complete payload, not a mix of two",
 	);
 
@@ -99,7 +106,10 @@ fn final_file_is_a_complete_payload_under_contention() {
 
 	let bytes = std::fs::read(&path).expect("read final");
 	let text = std::str::from_utf8(&bytes).expect("utf-8");
-	let newline = text.bytes().position(|b| b == b'\n').expect("complete payload");
+	let newline = text
+		.bytes()
+		.position(|b| b == b'\n')
+		.expect("complete payload");
 	let prefix = &text[..newline];
 	let line = prefix.strip_suffix('\n').unwrap_or(prefix);
 	assert!(
@@ -108,7 +118,10 @@ fn final_file_is_a_complete_payload_under_contention() {
 	);
 	// The "EXTRA" trailer means we got the full body, not a truncated
 	// rename that stopped mid-write.
-	assert!(text.ends_with("EXTRA"), "final file must contain every writer's trailer");
+	assert!(
+		text.ends_with("EXTRA"),
+		"final file must contain every writer's trailer"
+	);
 }
 
 /// All temp files emitted by [`super::write_secret`] live in the same
