@@ -593,3 +593,7 @@ mod discard;
 #[cfg(test)]
 #[path = "server_tests_discard.rs"]
 mod tests_discard;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;
