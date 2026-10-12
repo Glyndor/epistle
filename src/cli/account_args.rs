@@ -17,7 +17,7 @@ pub enum ForwardSubcommand {
 	/// Print every forward target the account has.
 	List {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// Print a JSON array of `{"address"}` objects.
 		#[arg(long)]
@@ -26,7 +26,7 @@ pub enum ForwardSubcommand {
 	/// Add an external address to the account's forward list.
 	Add {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The destination address (must be a valid mail address and not
 		/// one of the account's own addresses).
@@ -36,7 +36,7 @@ pub enum ForwardSubcommand {
 	/// Drop a forward target from the account's list.
 	Remove {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The destination address to remove (must already be on the
 		/// list).
@@ -60,7 +60,7 @@ pub enum TwoFactorSubcommand {
 	/// secret itself).
 	Show {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// Print a JSON object `{"name", "enrolled"}`.
 		#[arg(long)]
@@ -72,7 +72,7 @@ pub enum TwoFactorSubcommand {
 	/// Destructive: a confirmation prompt opens on a terminal.
 	Disable {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// Skip the interactive confirmation. A non-interactive run
 		/// without `--yes` is refused with exit code 2.
@@ -95,7 +95,7 @@ pub enum CatchAllSubcommand {
 	/// Print every catch-all domain the account serves.
 	List {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// Print a JSON array of `{"domain"}` objects.
 		#[arg(long)]
@@ -104,7 +104,7 @@ pub enum CatchAllSubcommand {
 	/// Add a configured domain to the account's catch-all list.
 	Add {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// A configured domain (must already be served by this server).
 		#[arg(value_name = "DOMAIN")]
@@ -113,7 +113,7 @@ pub enum CatchAllSubcommand {
 	/// Drop a domain from the account's catch-all list.
 	Remove {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// A domain currently on the catch-all list.
 		#[arg(value_name = "DOMAIN")]
@@ -135,7 +135,7 @@ pub enum AddressSubcommand {
 	/// Append the address to the account.
 	Add {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The address to add.
 		#[arg(value_name = "ADDRESS")]
@@ -144,7 +144,7 @@ pub enum AddressSubcommand {
 	/// Drop the address from the account (cannot remove the last one).
 	Remove {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The address to remove.
 		#[arg(value_name = "ADDRESS")]

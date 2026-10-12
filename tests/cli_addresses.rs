@@ -118,3 +118,84 @@ fn alias_and_suppression_name_the_rule_an_address_breaks() {
 		"error: cannot suppress: spaces are not allowed\n"
 	);
 }
+
+fn stdout(output: &Output) -> String {
+	String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn a_mixed_case_account_name_and_address_are_stored_in_lowercase() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let added = epistle(
+		&[
+			"account-add",
+			"--config",
+			&config,
+			"--name",
+			"Alice",
+			"--address",
+			"Alice.Smith@Example.ORG",
+		],
+		PASSWORD,
+	);
+	assert!(added.status.success(), "{}", stderr(&added));
+	assert_eq!(
+		stderr(&added),
+		"note: account name \"Alice\" is stored as \"alice\"\n"
+	);
+	let added = epistle(
+		&[
+			"account",
+			"--config",
+			&config,
+			"add",
+			"Bob",
+			"--address",
+			"Bob@Example.ORG",
+		],
+		PASSWORD,
+	);
+	assert!(added.status.success(), "{}", stderr(&added));
+	assert_eq!(
+		stderr(&added),
+		"note: account name \"Bob\" is stored as \"bob\"\n"
+	);
+
+	// Every later command finds the account under any spelling.
+	let address = epistle(
+		&[
+			"account",
+			"--config",
+			&config,
+			"address",
+			"add",
+			"ALICE",
+			"Smith@EXAMPLE.org",
+		],
+		b"",
+	);
+	assert!(address.status.success(), "{}", stderr(&address));
+	let list = epistle(&["account", "--config", &config, "list"], b"");
+	assert_eq!(
+		stdout(&list),
+		"alice\tdynamic\talice.smith@example.org,smith@example.org\n\
+		 bob\tdynamic\tbob@example.org\n2 accounts\n"
+	);
+	let suppressed = epistle(
+		&[
+			"suppression",
+			"--config",
+			&config,
+			"add",
+			"Bounce@Elsewhere.Example",
+			"--account",
+			"Alice",
+		],
+		b"",
+	);
+	assert_eq!(
+		stdout(&suppressed),
+		"suppressed bounce@elsewhere.example for alice\n"
+	);
+}

@@ -21,6 +21,7 @@ pub enum MaskedCli {
 	/// List an account's masked addresses.
 	List {
 		/// Account that owns the addresses.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// Print a JSON array instead of text lines.
 		#[arg(long)]
@@ -29,6 +30,7 @@ pub enum MaskedCli {
 	/// Mint a new masked address for an account.
 	Add {
 		/// Account that will receive the mail.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// Human-readable label; its slug starts the address.
 		#[arg(long, default_value = "mask")]
@@ -41,6 +43,7 @@ pub enum MaskedCli {
 	/// Delete a masked address.
 	Remove {
 		/// Account that owns the address.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The masked address to delete.
 		address: String,
@@ -53,6 +56,7 @@ pub enum MaskedCli {
 	/// Let a disabled masked address receive mail again.
 	Enable {
 		/// Account that owns the address.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The masked address to enable.
 		address: String,
@@ -60,6 +64,7 @@ pub enum MaskedCli {
 	/// Stop delivery to a masked address without deleting it.
 	Disable {
 		/// Account that owns the address.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The masked address to disable.
 		address: String,

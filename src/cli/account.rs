@@ -81,7 +81,7 @@ pub enum Subcommand {
 	/// entries and, with `--queue discard`, its queued mail.
 	Remove {
 		/// Account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// What to do with queued outbound mail: `discard` (drop) or `drain`
 		/// (leave it for delivery). Required.
@@ -100,7 +100,7 @@ pub enum Subcommand {
 	/// fresh account.
 	Password {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 	},
 	/// Disable an account.
@@ -109,13 +109,13 @@ pub enum Subcommand {
 	/// mailbox stays on disk; re-enable with `account enable`.
 	Disable {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 	},
 	/// Re-enable a previously disabled account.
 	Enable {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 	},
 	/// Add or remove a delivery address for the account.
@@ -126,7 +126,7 @@ pub enum Subcommand {
 	/// `none` for the server default).
 	Quota {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The quota size (accepts `K`, `M`, `G`, `T` suffixes and the
 		/// literal `none` for the server default).
@@ -139,7 +139,7 @@ pub enum Subcommand {
 	/// `all` clears the restriction.
 	Protocols {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The protocol allowlist, comma-separated
 		/// (`imap,smtp,api,webdav`), or `all` to clear.
@@ -152,7 +152,7 @@ pub enum Subcommand {
 	/// protocols, log id). Never secrets.
 	Show {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// Print one JSON object instead of `key: value` lines.
 		#[arg(long)]

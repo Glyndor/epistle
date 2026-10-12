@@ -20,9 +20,11 @@ pub struct SuppressionList {
 	dir: PathBuf,
 }
 
-/// SHA-256 hex of a lowercased value, safe as a filename.
+/// SHA-256 hex of the stored form of a value (see
+/// [`crate::util::address::normalize`]), safe as a filename.
 fn digest_name(value: &str) -> String {
-	let digest = ring::digest::digest(&ring::digest::SHA256, value.to_ascii_lowercase().as_bytes());
+	let stored = crate::util::address::normalize(value);
+	let digest = ring::digest::digest(&ring::digest::SHA256, stored.as_bytes());
 	digest.as_ref().iter().fold(String::new(), |mut acc, byte| {
 		use std::fmt::Write;
 		let _ = write!(acc, "{byte:02x}");
@@ -51,7 +53,10 @@ impl SuppressionList {
 	/// Add an address to the global suppression list (idempotent). The marker
 	/// stores the address so it can be listed back.
 	pub fn suppress(&self, address: &str) {
-		let _ = fs::write(self.path(address), address.to_ascii_lowercase().as_bytes());
+		let _ = fs::write(
+			self.path(address),
+			crate::util::address::normalize(address).as_bytes(),
+		);
 	}
 
 	/// Whether an address is suppressed globally.
@@ -75,7 +80,7 @@ impl SuppressionList {
 		if fs::create_dir_all(&dir).is_ok() {
 			let _ = fs::write(
 				dir.join(digest_name(address)),
-				address.to_ascii_lowercase().as_bytes(),
+				crate::util::address::normalize(address).as_bytes(),
 			);
 		}
 	}

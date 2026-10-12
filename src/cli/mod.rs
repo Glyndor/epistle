@@ -2,6 +2,7 @@
 
 mod account;
 mod account_json;
+mod account_name;
 mod accounts;
 mod alert;
 mod alias;

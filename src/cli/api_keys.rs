@@ -188,7 +188,7 @@ pub enum ApiKeyCli {
 		/// Bind the key to one account (then it reaches only JMAP and
 		/// `/api/v1/send`). An account-bound key has no domain-wide reach,
 		/// so `--domain` cannot be combined with it.
-		#[arg(long, value_name = "ACCOUNT", conflicts_with = "domains")]
+		#[arg(long, value_name = "ACCOUNT", conflicts_with = "domains", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 	},
 	/// Revoke an API key by label.

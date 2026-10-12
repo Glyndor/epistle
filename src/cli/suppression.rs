@@ -18,7 +18,7 @@ pub enum SuppressionCli {
 	/// instead of the global one.
 	List {
 		/// Restrict the list to this sending account.
-		#[arg(long, value_name = "ACCOUNT")]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 		/// Print a JSON array of `{"address", "account"}` objects.
 		#[arg(long)]
@@ -32,7 +32,7 @@ pub enum SuppressionCli {
 		/// Recipient address to suppress.
 		address: String,
 		/// Suppress it for this sending account only, not for everyone.
-		#[arg(long, value_name = "ACCOUNT")]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 	},
 	/// Resume delivering to an address.
@@ -43,7 +43,7 @@ pub enum SuppressionCli {
 		/// Recipient address to resume delivering to.
 		address: String,
 		/// Remove the per-account suppression for this sender only.
-		#[arg(long, value_name = "ACCOUNT")]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 	},
 }
@@ -67,7 +67,7 @@ pub(super) fn add(
 			return ExitCode::FAILURE;
 		}
 	};
-	let address = address.to_ascii_lowercase();
+	let address = crate::util::address::normalize(address);
 	let line = match account {
 		Some(account) => {
 			list.suppress_for(account, &address);

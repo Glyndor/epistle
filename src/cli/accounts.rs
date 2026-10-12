@@ -43,6 +43,7 @@ pub(super) fn add(
 	addresses: Vec<String>,
 	mut reader: impl std::io::BufRead,
 ) -> ExitCode {
+	let name = &super::account_name::for_new_account(name);
 	// let-else, not `match`: a match arm that returns is still an arm of the
 	// expression whose value binds to `password`, and the taint analyser follows
 	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
