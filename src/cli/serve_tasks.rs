@@ -27,11 +27,7 @@ pub(super) fn serve_http(
 	listener: TcpListener,
 	router: axum::Router,
 ) -> tokio::task::JoinHandle<std::io::Result<()>> {
-	tokio::spawn(async move {
-		axum::serve(listener, router)
-			.await
-			.map_err(std::io::Error::other)
-	})
+	tokio::spawn(crate::net::http_serve::serve(listener, router))
 }
 
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with

@@ -37,9 +37,7 @@ pub async fn serve(
 	max_connections: usize,
 ) -> io::Result<()> {
 	let Some(tls) = tls else {
-		return axum::serve(listener, router)
-			.await
-			.map_err(io::Error::other);
+		return crate::net::http_serve::serve(listener, router).await;
 	};
 	let semaphore = Arc::new(Semaphore::new(max_connections));
 	let mut connections = JoinSet::new();
