@@ -16,7 +16,7 @@ fn seeded(data_dir: &std::path::Path) -> Config {
 				account,
 				AppPassword {
 					label: label.to_string(),
-					hash: crate::smtp::auth::tests::hash("app-password-fixture"),
+					hash: crate::smtp::auth::tests::hash(crate::test_fixtures::password()),
 					expires_at: None,
 					ip_cidr: None,
 				},

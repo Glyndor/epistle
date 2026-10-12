@@ -42,16 +42,16 @@ fn smtp_ehlo_drops_scram_mechanisms_when_scram_disabled() {
 	let text = reply.to_string();
 	assert!(
 		!text.contains("SCRAM-SHA-256"),
-		"EHLO inside TLS must not advertise SCRAM-SHA-256 when scram=false, got {text}"
+		"EHLO inside TLS must not advertise SCRAM-SHA-256 when scram=false"
 	);
 	// PLANE and LOGIN stay in: the password still authenticates.
 	assert!(
 		text.contains("PLAIN"),
-		"PLAIN must still be advertised when scram=false, got {text}"
+		"PLAIN must still be advertised when scram=false"
 	);
 	assert!(
 		text.contains("LOGIN"),
-		"LOGIN must still be advertised when scram=false, got {text}"
+		"LOGIN must still be advertised when scram=false"
 	);
 }
 
@@ -155,8 +155,7 @@ fn directory_with_password_omits_scram_when_disabled() {
 	.expect("hashed account");
 	assert!(
 		account.scram.is_none(),
-		"scram=false must omit the SCRAM row, got {:?}",
-		account.scram
+		"scram=false must omit the SCRAM row"
 	);
 	// Sanity: the password hash is still there, the toggle only affects SCRAM.
 	assert!(!account.password_hash.is_empty());

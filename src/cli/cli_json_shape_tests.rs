@@ -159,7 +159,7 @@ fn app_password_list_json() {
 			"bob",
 			AppPassword {
 				label: "phone".to_string(),
-				hash: crate::smtp::auth::tests::hash("app-password-fixture"),
+				hash: crate::smtp::auth::tests::hash(crate::test_fixtures::password()),
 				expires_at: Some(99),
 				ip_cidr: None,
 			},

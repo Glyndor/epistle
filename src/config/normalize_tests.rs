@@ -70,7 +70,10 @@ fn every_entry_that_was_not_lowercase_is_named() {
 #[test]
 fn a_lowercase_file_names_nothing() {
 	let config = parse(&MIXED.to_lowercase());
-	assert!(config.mixed_case.is_empty(), "{:?}", config.mixed_case);
+	assert!(
+		config.mixed_case.is_empty(),
+		"a lowercase file must report no mixed-case identifier"
+	);
 }
 
 #[test]

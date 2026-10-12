@@ -119,11 +119,11 @@ fn forward_add_remove_round_trip() {
 	let all = store.forwards("bob");
 	assert!(
 		all.contains(&"outside@example.com".to_string()),
-		"first forward missing: {all:?}"
+		"first forward missing from the stored forwards"
 	);
 	assert!(
 		all.contains(&"second@example.com".to_string()),
-		"second forward missing: {all:?}"
+		"second forward missing from the stored forwards"
 	);
 	store
 		.remove_forward("bob", "outside@example.com")
@@ -245,12 +245,13 @@ fn dynamic_catch_all_is_picked_up_by_directory_builder() {
 	// the domain should resolve to bob.
 	let unknown = crate::smtp::address::Address::parse("nobody@example.org").expect("parse");
 	let resolved = dir_view.resolve(&unknown);
-	match resolved {
-		crate::smtp::directory::Resolution::Account(account) => {
-			assert_eq!(account, "bob");
-		}
-		other => panic!("expected Account(\"bob\"), got {other:?}"),
-	}
+	assert!(
+		matches!(
+			resolved,
+			crate::smtp::directory::Resolution::Account(ref account) if account == "bob"
+		),
+		"an unknown local part on the catch-all domain must resolve to bob's account"
+	);
 }
 
 #[test]
