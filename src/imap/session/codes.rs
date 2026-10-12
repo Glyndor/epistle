@@ -15,8 +15,9 @@ pub(super) fn esearch_line(tag: &str, uid: bool, hits: &[u32], opts: &[ReturnOpt
 }
 
 /// Build one MULTISEARCH (RFC 7377) ESEARCH reply line. The correlator carries
-/// the mailbox name and its UIDVALIDITY so the client can attribute results
-/// across mailboxes; results are always UIDs. Returns an empty string when the
+/// the mailbox name (`mailbox`, already written as an astring) and its
+/// UIDVALIDITY so the client can attribute results across mailboxes; results
+/// are always UIDs. Returns an empty string when the
 /// requested options produce no output for this mailbox (e.g. only `ALL` was
 /// asked for and nothing matched), so empty per-mailbox lines are omitted.
 pub(super) fn esearch_multi_line(
@@ -31,7 +32,7 @@ pub(super) fn esearch_multi_line(
 		return String::new();
 	}
 	format!(
-		"* ESEARCH (TAG \"{tag}\" MAILBOX \"{mailbox}\" UIDVALIDITY {uid_validity}) UID{results}\r\n"
+		"* ESEARCH (TAG \"{tag}\" MAILBOX {mailbox} UIDVALIDITY {uid_validity}) UID{results}\r\n"
 	)
 }
 

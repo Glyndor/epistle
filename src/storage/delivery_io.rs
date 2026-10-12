@@ -1,5 +1,6 @@
 //! Tiny I/O helpers for `delivery.rs`: persist the IMAP `.flags` sidecar a
-//! Sieve `addflag`/`setflag` produces, and the mailbox-name safety check.
+//! Sieve `addflag`/`setflag` produces, the mailbox-name safety check, and
+//! the stored spelling of a Sieve `fileinto` target.
 //! Pulled out so the parent stays focused on the delivery decision tree.
 
 use uuid::Uuid;
@@ -32,4 +33,19 @@ pub(super) fn is_safe_mailbox(name: &str) -> bool {
 		&& name
 			.chars()
 			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' '))
+}
+
+/// The stored spelling of a mailbox a Sieve script names. Sieve names are
+/// UTF-8 (RFC 5228) and folders are stored under their modified
+/// UTF-7 encoding, so `fileinto "Año"` reaches the folder an IMAP `CREATE`
+/// of the same name made (`A&APE-o`). `None` when IMAP would refuse the
+/// name too, such as one holding the `/` delimiter of a hierarchy this
+/// flat store does not have.
+pub(super) fn sieve_mailbox(name: &str) -> Option<String> {
+	use crate::util::path_component::MailboxName;
+	let stored = crate::util::mutf7::encode(name);
+	match MailboxName::new(&stored).ok()? {
+		MailboxName::Inbox => Some("INBOX".to_string()),
+		MailboxName::Folder(_) => Some(stored),
+	}
 }

@@ -14,7 +14,7 @@ impl Session {
 		let quota = self.quota_line(&account);
 		Output::text(format!(
 			"* QUOTAROOT {} \"\"\r\n{quota}{tag} OK GETQUOTAROOT completed\r\n",
-			self.wire_name(mailbox_name)
+			self.mailbox_astring(mailbox_name)
 		))
 	}
 

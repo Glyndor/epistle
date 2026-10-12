@@ -11,6 +11,10 @@ use crate::dane::tlsa::TlsaRecord;
 #[cfg(test)]
 mod dns_tests;
 
+#[path = "dns_tests_ptr.rs"]
+#[cfg(test)]
+mod dns_tests_ptr;
+
 /// Build a `ResolverConfig` from the system configuration (`/etc/resolv.conf`
 /// on Unix, the registry on Windows) keeping only the TCP connection of each
 /// name server. The UDP connection is dropped because, behind
@@ -51,8 +55,13 @@ fn keep_only_tcp(mut config: ResolverConfig) -> ResolverConfig {
 /// through this so the systemd-resolved truncation workaround stays in one
 /// place.
 pub fn system_resolver() -> std::io::Result<hickory_resolver::TokioResolver> {
-	let config = system_resolver_config()?;
-	let opts = system_resolver_options();
+	build_resolver(system_resolver_config()?, system_resolver_options())
+}
+
+fn build_resolver(
+	config: ResolverConfig,
+	opts: ResolverOpts,
+) -> std::io::Result<hickory_resolver::TokioResolver> {
 	let mut builder = hickory_resolver::TokioResolver::builder_with_config(
 		config,
 		hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
@@ -106,6 +115,9 @@ pub trait DnsLookup: Send + Sync {
 /// Real resolver on top of hickory.
 pub struct SystemDns {
 	resolver: hickory_resolver::TokioResolver,
+	/// The same name servers without DNSSEC validation, for PTR only (see
+	/// [`DnsLookup::ptr`] below).
+	reverse: hickory_resolver::TokioResolver,
 }
 
 impl SystemDns {
@@ -119,8 +131,17 @@ impl SystemDns {
 	/// against a non-validating-aware path, answers come back unauthenticated
 	/// and TLSA lookups yield nothing, so DANE simply does not engage.
 	pub fn from_system() -> std::io::Result<Self> {
+		Self::with_config(system_resolver_config()?, system_resolver_options())
+	}
+
+	/// Build over explicit name servers and options; [`Self::from_system`]
+	/// passes the host's.
+	pub(crate) fn with_config(config: ResolverConfig, opts: ResolverOpts) -> std::io::Result<Self> {
+		let mut reverse_opts = opts.clone();
+		reverse_opts.validate = false;
 		Ok(SystemDns {
-			resolver: system_resolver()?,
+			resolver: build_resolver(config.clone(), opts)?,
+			reverse: build_resolver(config, reverse_opts)?,
 		})
 	}
 
@@ -227,11 +248,15 @@ impl DnsLookup for SystemDns {
 		})
 	}
 
+	/// Unvalidated: nothing trusts a PTR because of DNSSEC (the name is
+	/// only believed once it resolves back), most of the reverse tree is
+	/// unsigned, and hickory reports some unsigned `ip6.arpa` answers as
+	/// bogus, which turned every such IPv6 lookup into a failure.
 	fn ptr(&self, ip: IpAddr) -> Lookup<'_, Vec<String>> {
 		Box::pin(async move {
 			use hickory_resolver::net::{DnsError, NetError};
 			use hickory_resolver::proto::rr::RData;
-			match self.resolver.reverse_lookup(ip).await {
+			match self.reverse.reverse_lookup(ip).await {
 				Ok(lookup) => Ok(lookup
 					.answers()
 					.iter()
