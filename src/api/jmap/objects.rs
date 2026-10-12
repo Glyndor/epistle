@@ -211,6 +211,14 @@ struct ParsedAddress {
 /// tokenizer that splits at top-level commas and locates the
 /// angle-addr lives in [`super::address_tokenizer`] so the parser and
 /// its work counter can evolve independently.
+/// The email of every address in an address-list header value.
+pub(super) fn header_emails(value: &str) -> Vec<String> {
+	parse_address_list(value)
+		.into_iter()
+		.map(|address| address.email)
+		.collect()
+}
+
 fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 	let parts = split_top_level(value, ',');
 	parts

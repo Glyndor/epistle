@@ -264,3 +264,18 @@ fn spam_headers_handle_messages_with_no_blank_line() {
 		"the original line stays at the end: {text:?}"
 	);
 }
+
+#[test]
+fn strip_bcc_drops_every_bcc_field_and_keeps_the_rest() {
+	let data = b"From: a@x\r\nBCC : one@x,\r\n\ttwo@x\r\nTo: b@x\r\nResent-Bcc: three@x\r\n\
+		X-Bcc-Note: kept\r\nSubject: s\r\n\r\nBcc: body line\r\n";
+	let stripped = super::strip_bcc(data);
+	assert_eq!(
+		String::from_utf8_lossy(&stripped),
+		"From: a@x\r\nTo: b@x\r\nX-Bcc-Note: kept\r\nSubject: s\r\n\r\nBcc: body line\r\n"
+	);
+	assert_eq!(
+		super::strip_bcc(b"Subject: s\r\n\r\nx"),
+		b"Subject: s\r\n\r\nx"
+	);
+}

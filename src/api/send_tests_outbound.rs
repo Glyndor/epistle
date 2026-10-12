@@ -16,7 +16,7 @@ use serde_json::json;
 
 /// The test state with the routing sink the server builds, signing with a
 /// fresh key under selector `sel`.
-fn routed_state(dir: &std::path::Path) -> ApiState {
+pub(super) fn routed_state(dir: &std::path::Path) -> ApiState {
 	let (pem, _) = crate::dkim::generate_key().expect("key");
 	let key_file = dir.join("dkim.key");
 	std::fs::write(&key_file, pem).expect("write key");
@@ -33,7 +33,7 @@ fn routed_state(dir: &std::path::Path) -> ApiState {
 }
 
 /// Every stored message file under alice's mail, whatever the mailbox.
-fn alice_messages(dir: &std::path::Path) -> Vec<Vec<u8>> {
+pub(super) fn alice_messages(dir: &std::path::Path) -> Vec<Vec<u8>> {
 	let mut found = Vec::new();
 	let mut pending = vec![dir.join("accounts").join("alice")];
 	while let Some(path) = pending.pop() {

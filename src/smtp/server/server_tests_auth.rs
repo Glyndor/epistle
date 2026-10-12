@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::*;
 use crate::smtp::sink::MemorySink;
 
-fn directory_with_password() -> DirectoryHandle {
+pub(super) fn directory_with_password() -> DirectoryHandle {
 	DirectoryHandle::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -20,7 +20,7 @@ fn directory_with_password() -> DirectoryHandle {
 	)
 }
 
-fn connector(
+pub(super) fn connector(
 	cert: tokio_rustls::rustls::pki_types::CertificateDer<'static>,
 ) -> tokio_rustls::TlsConnector {
 	let mut roots = tokio_rustls::rustls::RootCertStore::empty();
@@ -32,7 +32,7 @@ fn connector(
 	tokio_rustls::TlsConnector::from(Arc::new(config))
 }
 
-async fn reply<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> String {
+pub(super) async fn reply<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> String {
 	let mut buffer = [0u8; 1024];
 	let read = reader.read(&mut buffer).await.expect("read");
 	String::from_utf8_lossy(&buffer[..read]).to_string()

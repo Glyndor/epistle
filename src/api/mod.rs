@@ -219,6 +219,10 @@ mod send_tests_injection;
 mod jmap_tests_email_create;
 
 #[cfg(test)]
+#[path = "send_tests_bcc.rs"]
+mod send_tests_bcc;
+
+#[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 
