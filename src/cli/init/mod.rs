@@ -1,14 +1,16 @@
 //! `epistle init`: the first-run assistant that lays down the answers,
 //! generates the keys, and writes the configuration file.
 //!
-//! Detection of public addresses and DNS publishing are other parts and
-//! are deliberately out of scope here: the plan step list always
-//! carries the `dns` step as `not implemented in this build`.
+//! The public addresses the operator leaves out are proposed from the
+//! host's own interfaces (`detect`). DNS publishing is another part and
+//! is deliberately out of scope here: the plan step list always carries
+//! the `dns` step as `not implemented in this build`.
 
 mod answers;
 mod apply;
 mod assistant;
 mod compose;
+mod detect;
 mod plan;
 
 pub use answers::Answers;
@@ -47,13 +49,26 @@ const EXIT_INVALID: u8 = 2;
 /// fills the same `Answers` structure the file deserialises. Every
 /// question validates through the same rule.
 pub fn run(args: Args) -> ExitCode {
+	run_with(
+		args,
+		&detect::LiveDetector,
+		&mut crate::cli::style::stderr(),
+	)
+}
+
+/// [`run`] with the address detector and the stream for its notices
+/// injected, so the tests never walk a real interface list.
+fn run_with(args: Args, detector: &dyn detect::Detector, out: &mut dyn Write) -> ExitCode {
 	if args.print_answers {
 		println!("{}", Answers::template());
 		return ExitCode::from(EXIT_OK);
 	}
 	let mut answers = match args.answers.as_ref() {
 		Some(path) => match read_answers(path) {
-			Ok(answers) => answers,
+			Ok(mut answers) => {
+				detect::fill_missing(&mut answers, detector, out);
+				answers
+			}
 			Err(error) => {
 				crate::cli::style::error(error);
 				return ExitCode::from(EXIT_INVALID);
@@ -188,3 +203,7 @@ mod tests_answers_errors;
 #[cfg(test)]
 #[path = "init_tests_parse_privacy.rs"]
 mod tests_parse_privacy;
+
+#[cfg(test)]
+#[path = "init_detect_tests.rs"]
+mod tests_detect;
