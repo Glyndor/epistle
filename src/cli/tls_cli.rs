@@ -16,8 +16,10 @@ use crate::tls::served_tls;
 /// Actions of `epistle tls`.
 #[derive(Debug, Subcommand)]
 pub enum TlsCli {
-	/// Show the certificate the server presents: subject, names, issuer,
-	/// expiry and where it comes from.
+	/// Show the certificate the server presents.
+	///
+	/// Show the certificate the server presents: subject, names, issuer, expiry
+	/// and where it comes from.
 	Show {
 		/// Print one JSON object instead of text lines.
 		#[arg(long)]

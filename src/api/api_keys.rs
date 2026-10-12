@@ -215,6 +215,10 @@ pub struct ApiKeySummary {
 	/// Permissions granted to the key (canonical strings, e.g. `read`); empty
 	/// means the legacy "any scope" form.
 	pub scopes: Vec<String>,
+	/// Domains the key is confined to; empty reaches every domain.
+	pub domains: Vec<String>,
+	/// The account the key is bound to, if any.
+	pub account: Option<String>,
 }
 
 /// Filesystem-backed store of management API keys.
@@ -409,6 +413,8 @@ impl ApiKeyStore {
 				expires_at: key.expires_at,
 				ip_cidr: key.ip_cidr.clone(),
 				scopes: key.scopes.clone(),
+				domains: key.domains.clone(),
+				account: key.account.clone(),
 			})
 			.collect();
 		rows.sort_by(|a, b| a.label.cmp(&b.label));

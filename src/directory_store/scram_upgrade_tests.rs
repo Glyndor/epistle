@@ -39,10 +39,7 @@ fn store_with_legacy_alice(dir: &std::path::Path) -> AccountStore {
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: hash(fixtures::password()),
 			scram: Some(legacy_verifier()),
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("add");
 	store

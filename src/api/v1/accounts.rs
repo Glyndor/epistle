@@ -116,6 +116,7 @@ pub async fn create(
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created {

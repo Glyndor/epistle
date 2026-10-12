@@ -59,11 +59,7 @@ fn add_account(store: &AccountStore, name: &str, address: &str) {
 			name: name.to_string(),
 			addresses: vec![address.to_string()],
 			password_hash: "$argon2id$placeholder".to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add");
 }
@@ -447,11 +443,7 @@ fn add_account_with_primary_hash(
 			name: name.to_string(),
 			addresses: vec![address.to_string()],
 			password_hash: password_hash.to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add");
 }

@@ -141,7 +141,7 @@ fn add_bob(typed: &str) -> (ExitCode, String, bool, bool) {
 fn account_add_on_a_terminal_refuses_a_mismatch_with_the_exact_message() {
 	let strong = crate::test_fixtures::second_password();
 	let (code, stderr, created, echo) = add_bob(&format!("{strong}\n{strong}x\n"));
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert_eq!(stderr, format!("{}{}", asked_twice("bob"), error(MISMATCH)));
 	assert!(!created, "a mismatch creates nothing");
 	assert!(echo, "echo is back on after the prompt");
@@ -150,7 +150,7 @@ fn account_add_on_a_terminal_refuses_a_mismatch_with_the_exact_message() {
 #[test]
 fn account_add_on_a_terminal_names_the_policy_rule_that_failed() {
 	let (code, stderr, created, _) = add_bob("short\nshort\n");
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert_eq!(
 		stderr,
 		format!(
@@ -185,7 +185,7 @@ fn account_password_refuses_an_unknown_name_before_reading_anything() {
 			&mut Vec::new(),
 		)
 	});
-	assert_eq!(run.value, ExitCode::FAILURE);
+	assert_eq!(run.value, ExitCode::from(2));
 	assert_eq!(run.unread, typed.len(), "nothing typed was read");
 	assert_eq!(run.stderr, "", "no password question for an unknown name");
 }
@@ -222,6 +222,7 @@ fn account_show_reads_a_static_account() {
 		cfg.path(),
 		account::Subcommand::Show {
 			name: "bob".to_string(),
+			json: false,
 		},
 		&mut out,
 	);

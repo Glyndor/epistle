@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
-	Cli, Command, account, accounts, alias, antispam, api_keys, app_passwords, archive, autoconfig,
+	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, autoconfig,
 	autodiscover, backup, ban, dkim_cli, dns_records, domain, export, import, init, local, masked,
 	mobileconfig, probe, queue, report_abuse, reports, serve, srv, stack, status, style,
 	suppression, tls_cli, verify, verify_dns,
@@ -60,7 +60,7 @@ pub(super) fn dispatch_restore(config: PathBuf, force: bool, dry_run: bool, yes:
 /// non-zero exit code on a parse failure. The closure shape lets the
 /// simple dispatch arms stay one-liners while keeping the failure
 /// path identical across them.
-fn with_config<F: FnOnce(&Config) -> ExitCode>(path: &Path, f: F) -> ExitCode {
+pub(super) fn with_config<F: FnOnce(&Config) -> ExitCode>(path: &Path, f: F) -> ExitCode {
 	match Config::load(path) {
 		Ok(config) => f(&config),
 		Err(error) => {
@@ -197,15 +197,10 @@ impl Cli {
 				account,
 			} => match Config::load(&config) {
 				Ok(config) => match action {
-					Some(suppression::SuppressionCli::Add { address, account }) => {
-						suppression::add(
-							&config,
-							&address,
-							account.as_deref(),
-							&mut std::io::stdout().lock(),
-						)
+					Some(action) => {
+						suppression::run(&config, action, &mut std::io::stdout().lock())
 					}
-					None => suppression::run(
+					None => suppression::run_legacy(
 						&config,
 						remove.as_deref(),
 						account.as_deref(),
@@ -227,24 +222,7 @@ impl Cli {
 					&mut std::io::stdout().lock(),
 				)
 			}),
-			Command::Accounts { config } => with_config(&config, |config| {
-				accounts::list(config, &mut std::io::stdout().lock())
-			}),
-			Command::AccountAdd {
-				config,
-				name,
-				addresses,
-			} => with_config(&config, |config| {
-				accounts::add(config, &name, addresses, super::prompt::stdin())
-			}),
-			Command::AccountRemove {
-				config,
-				name,
-				queue,
-				yes,
-			} => with_config(&config, |config| {
-				accounts::remove(config, &name, queue, yes, &mut std::io::stdout().lock())
-			}),
+			Command::Legacy(command) => super::legacy::run(command),
 			Command::Account { config, action } => {
 				let mut out = std::io::stdout().lock();
 				match Config::load(&config) {
@@ -297,82 +275,8 @@ impl Cli {
 			Command::StorageKeygen => storage_keygen(),
 			Command::OauthKeygen { out } => oauth_keygen(&out),
 			Command::TokenHash => token_hash(),
-			Command::AppPasswordCreate {
-				config,
-				account,
-				label,
-				expires_at,
-				ip_cidr,
-			} => match Config::load(&config) {
-				Ok(config) => app_passwords::create(
-					&config,
-					&account,
-					&label,
-					expires_at,
-					ip_cidr,
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::AppPasswords { config } => match Config::load(&config) {
-				Ok(config) => app_passwords::list(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::AppPasswordRevoke {
-				config,
-				account,
-				label,
-				yes,
-			} => match Config::load(&config) {
-				Ok(config) => app_passwords::revoke(
-					&config,
-					&account,
-					&label,
-					yes,
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::ApiKeyCreate {
-				config,
-				label,
-				expires_at,
-				ip_cidr,
-				scopes,
-				domains,
-			} => match Config::load(&config) {
-				Ok(config) => api_keys::create(
-					&config,
-					&label,
-					expires_at,
-					ip_cidr,
-					scopes,
-					domains,
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::ApiKeys { config } => match Config::load(&config) {
-				Ok(config) => api_keys::list(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::ApiKeyRevoke { config, label, yes } => match Config::load(&config) {
-				Ok(config) => api_keys::revoke(&config, &label, yes, &mut std::io::stdout().lock()),
+			Command::AppPassword { config, action } => match Config::load(&config) {
+				Ok(config) => app_passwords::run(&config, action, &mut std::io::stdout().lock()),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -465,17 +369,9 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::ApiKey { config, action } => match Config::load(&config) {
-				Ok(config) => match action {
-					api_keys::ApiKeyCli::Rotate { label } => {
-						api_keys::rotate(&config, &label, &mut std::io::stdout().lock())
-					}
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::ApiKey { config, action } => with_config(&config, |config| {
+				api_keys::run(config, action, &mut std::io::stdout().lock())
+			}),
 			Command::Probe { config, json } => {
 				with_config(&config, |config| probe::run(config, json))
 			}

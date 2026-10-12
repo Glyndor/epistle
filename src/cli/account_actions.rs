@@ -72,8 +72,10 @@ pub(crate) fn password_with_store(
 ) -> ExitCode {
 	// let-else for the same reason as `accounts::add`: no value may flow
 	// from a diverging arm into the binding the hash reads.
+	// `new_password` has printed why it refused (no input, mismatch, or
+	// the policy rule that failed): the input is rejected, exit code 2.
 	let Some(plain) = prompt::new_password(&format!("Password for \"{name}\""), &mut reader) else {
-		return ExitCode::FAILURE;
+		return ExitCode::from(crate::cli::exit::REFUSED);
 	};
 	let hash = match crate::smtp::auth::hash_password(&plain) {
 		Ok(hash) => hash,
@@ -220,8 +222,7 @@ pub(crate) fn find_log_id_with_store(
 		}
 	}
 	if !found {
-		style::error("no account matches that log id on this server");
-		return ExitCode::FAILURE;
+		return crate::cli::exit::refused("no account matches that log id on this server");
 	}
 	ExitCode::SUCCESS
 }
@@ -239,8 +240,7 @@ pub(crate) fn show_with_store(
 		render_static(account, out);
 		return ExitCode::SUCCESS;
 	}
-	style::error(format_args!("no such account: {name}"));
-	ExitCode::FAILURE
+	crate::cli::exit::refused(format_args!("no such account: {name}"))
 }
 
 /// Public view of a static `[accounts]` row. Static accounts do not
@@ -270,26 +270,14 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 /// [`crate::cli::account::prepare`] before it reaches a mutator, so this
 /// path prints `no such account`.
 pub(crate) fn handle_error(name: &str, error: StoreError) -> ExitCode {
+	let code = crate::cli::exit::for_store_error(&error);
 	match error {
-		StoreError::NotFound(_) => {
-			style::error(format_args!("no such account: {name}"));
-			ExitCode::FAILURE
-		}
+		StoreError::NotFound(_) => style::error(format_args!("no such account: {name}")),
 		StoreError::Duplicate(what) => {
 			style::error(format_args!("account {name}: {what} already exists"));
-			ExitCode::FAILURE
 		}
-		StoreError::Invalid(message) => {
-			style::error(format_args!("account {name}: {message}"));
-			ExitCode::FAILURE
-		}
-		StoreError::Io(error) => {
-			style::error(format_args!("account {name}: {error}"));
-			ExitCode::FAILURE
-		}
-		other => {
-			style::error(format_args!("account {name}: {other}"));
-			ExitCode::FAILURE
-		}
+		StoreError::Invalid(message) => style::error(format_args!("account {name}: {message}")),
+		other => style::error(format_args!("account {name}: {other}")),
 	}
+	code
 }

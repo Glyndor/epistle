@@ -16,11 +16,14 @@ fn create_key(config: &Config, label: &str) -> String {
 	assert_eq!(
 		create(
 			config,
-			label,
-			Some(4_000_000_000),
-			Some("203.0.113.0/24".into()),
-			vec!["read".into(), "send".into()],
-			vec!["example.org".into()],
+			NewKey {
+				label: label.to_string(),
+				expires_at: Some(4_000_000_000),
+				ip_cidr: Some("203.0.113.0/24".into()),
+				scopes: vec!["read".into(), "send".into()],
+				domains: vec!["example.org".into()],
+				account: None,
+			},
 			&mut out
 		),
 		ExitCode::SUCCESS

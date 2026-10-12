@@ -2,8 +2,27 @@
 
 All administration is done through the `epistle` command. Every command that needs
 configuration defaults to `/etc/epistle/mail.toml`. Use `--config <FILE>` to
-select another file, for example `epistle accounts --config /path/to/mail.toml`.
+select another file, for example `epistle account list --config /path/to/mail.toml`.
 Run `epistle <command> --help` for the exact flags.
+
+## Resources
+
+Commands take the shape `epistle <resource> <action>`. Every `list` and `show`
+accepts `--json`: a list prints one JSON array, a show one object, on stdout.
+Exit codes: `0` done, `1` the operation failed (I/O, database), `2` usage
+error or refused (unknown name, rejected input, a static account, a
+destructive action without `--yes`).
+
+| Resource | Actions | Older flat form (hidden, still works) |
+|---|---|---|
+| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
+| `account forward` | `list`, `add`, `remove` | |
+| `account catch-all` | `list`, `add`, `remove` | |
+| `account 2fa` | `show`, `disable` | |
+| `app-password` | `list`, `create`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
+| `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
+| `suppression` | `list`, `add`, `remove` | `suppression`, `suppression --remove ADDR` |
+| `masked`, `ban`, `queue`, `domain`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
 ## Common tasks
 
@@ -60,7 +79,7 @@ an escape sequence or spinner frame were ever written there, so they are pinned 
 Questions and password prompts go to stderr. stdout carries only command
 output, so `--json` stays parseable.
 
-**Passwords.** On a terminal, `account-add` and `account password` ask for the
+**Passwords.** On a terminal, `account add` and `account password` ask for the
 password with echo off, then ask again (`Repeat password`); two different
 values are refused with `passwords do not match`. The password policy still
 applies (12 to 64 printable ASCII characters, not on the breached list) and the
@@ -70,8 +89,8 @@ a static one with the hint to edit the config file. `relay add
 --password-stdin` and `webhook set --secret-stdin` also read with echo off on
 a terminal. Echo comes back when the read ends, Ctrl-C included.
 
-**Destructive commands.** `account-remove`, `app-password-revoke`,
-`api-key-revoke`, `archive purge`, `domain remove`, `domain alias remove`,
+**Destructive commands.** `account remove`, `account 2fa disable`,
+`app-password revoke`, `api-key revoke`, `archive purge`, `domain remove`, `domain alias remove`,
 `alias remove`, `masked remove`, `queue remove` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
@@ -848,24 +867,33 @@ retires an older previous selector first, since the state holds only one.
 
 ## Accounts
 
+Changes to a dynamic account (`<data_dir>/accounts.toml`) reach the running
+server within seconds, no restart. A static account (`[[accounts]]` in
+`mail.toml`) is refused with a hint to edit the config file.
+
 | Command | What it does |
 |---|---|
-| `epistle accounts` | List configured accounts. |
-| `epistle account-add --name N --address a@b [--address …]` | Create an account. On a terminal the password is asked twice with echo off; piped, it is read from stdin (one line). |
-| `epistle account-remove --name N --queue discard\|drain [--yes\|-y]` | Remove a dynamic account and its whole footprint: mailbox, masked addresses, app passwords, per-account suppression, and queued outbound mail. `--queue` is required and chooses what to do with queued mail on behalf of the account (`discard` drops it, `drain` leaves it for delivery). Prints the per-record counts removed. Asks first; `--yes` skips the question. |
-| `epistle account password N` | Update the password for a dynamic account, asked twice with echo off on a terminal or read from stdin (one line). The account is checked before anything is read. Hashes with argon2id and derives a fresh SCRAM salt, the same way `account-add` does on a fresh account. Refuses a static account with a hint to edit the config file. |
-| `epistle account disable N` / `epistle account enable N` | Toggle the SCIM `active` flag. A disabled account keeps its mailbox but rejects authentication identically to an unknown login until `enable` is run. |
-| `epistle account address add N a@b` / `epistle account address remove N a@b` | Add or remove a delivery address for the account. Address validation reuses the checks `account-add` runs (malformed, foreign domain, conflict with another account). Removing the last remaining address is refused. |
-| `epistle account quota N SIZE\|none` | Set the storage quota. The size accepts `K`, `M`, `G`, `T` suffixes (`500M`, `10G`, `1T`); `none` clears the quota back to the server default. Falls through to the domain quota and then the server default when the account's own quota is unset. |
-| `epistle account protocols N LIST\|all` | Restrict which authentication protocols the account may sign in through. `LIST` is a comma-separated list of protocol names (`imap,smtp,api,webdav`); `all` clears the restriction. |
-| `epistle account show N` | Print the public view of the account (name, log id, addresses, disabled, quota, protocols). Works for static accounts too. Never the password hash, SCRAM credentials, or TOTP secret. The log id is the `acct-<12 hex>` pseudonym the server logs use instead of the name. |
-| `epistle account find-log-id acct-…` | Print the account (or accounts) whose log id is the one given, so a pseudonym found in a log line can be traced back. It uses this server's `log-pseudonym.key`, so it also matches a login that was an address. |
-| `epistle app-password-create --account N --label L [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an app password for an account (IMAP/SMTP); prints the generated secret once. |
-| `epistle app-passwords [--account N]` | List app passwords (label, expiry, IP restriction). |
-| `epistle app-password-revoke --account N --label L [--yes\|-y]` | Revoke an app password. Asks first; `--yes` skips the question. |
-| `epistle api-key-create --label L [--expires-at EPOCH] [--ip-cidr CIDR] [--domain D] --scope S` | Create a management-API key; prints the generated key once. `--scope` is required and may be repeated (`read`, `write`, `send`, `scim`). `--domain` may be repeated to confine the key to those domains; omitted, it reaches every configured domain. |
-| `epistle api-keys` | List API keys (label, expiry, IP restriction). |
-| `epistle api-key-revoke --label L [--yes\|-y]` | Revoke an API key. Asks first; `--yes` skips the question. |
+| `epistle account list [--json]` | List every account, static and dynamic, with its addresses. |
+| `epistle account add N --address a@b [--address …]` | Create a dynamic account. On a terminal the password is asked twice with echo off; piped, it is read from stdin (one line). |
+| `epistle account remove N --queue discard\|drain [--yes\|-y]` | Remove the account and everything it owns: mailbox, masked addresses, app passwords, per-account suppression, queued mail (`discard` drops it, `drain` leaves it for delivery). Prints the counts removed. Asks first. |
+| `epistle account password N` | Change the password (asked twice with echo off, or one line from stdin). The account is checked before anything is read. |
+| `epistle account disable N` / `enable N` | A disabled account keeps its mailbox but rejects authentication like an unknown login. |
+| `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
+| `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
+| `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
+| `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
+| `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
+| `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while `srs_secret` is unset (without SRS the copy fails SPF at the next hop). |
+| `epistle account catch-all list\|add\|remove N [DOMAIN]` | Deliver mail for unknown users of `DOMAIN` to the account. `DOMAIN` must be a configured domain (not an alias) that no other account catches. |
+| `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
+| `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
+| `epistle app-password list [--account N] [--json]` | App passwords (label, expiry, IP restriction), never the secret. |
+| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an IMAP/SMTP app password; prints it once. Dynamic accounts only. |
+| `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
+| `epistle api-key list [--json]` | API keys: label, expiry, CIDR, scopes, domains, bound account. Never the key. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N]` | Create a key; prints it once. Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
+| `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
 
 ## Mail in and out
 
@@ -874,8 +902,9 @@ retires an older previous selector first, since the state holds only one.
 | `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
-| `epistle suppression [--remove ADDR]` | List suppressed (hard-bounced) recipients, or remove one. |
-| `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` (the sending address, as in `suppression --account`) it applies to that sender only. |
+| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. |
+| `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
+| `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
 | `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
@@ -918,7 +947,7 @@ not exist is refused.
 
 ## Authentication bans
 
-With the container stack, `ban` and `account-remove` also run inside `mail`
+With the container stack, `ban` and `account remove` also run inside `mail`
 when the configured database socket directory is absent on the host. Credentials
 stay in the mounted config and password file, never in the exec arguments.
 
@@ -986,4 +1015,4 @@ days) — not by attempt count, so a recipient whose server is down for hours do
 not lose mail. A single "delivery delayed" warning DSN is sent at ~4h. A
 permanent (5xx) failure bounces immediately and adds the recipient to the
 suppression list, after which mail to that address is dropped without retrying
-(clear it with `epistle suppression --remove`).
+(clear it with `epistle suppression remove`).

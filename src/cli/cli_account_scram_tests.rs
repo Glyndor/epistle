@@ -38,6 +38,7 @@ fn harness(auth_section: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("add bob");
 	let mut config = tempfile::NamedTempFile::new().expect("config file");

@@ -16,7 +16,11 @@ fn database_config(command: &Command) -> Option<&Path> {
 			area: CheckArea::Db,
 			..
 		}
-		| Command::AccountRemove { config, .. } => Some(config),
+		| Command::Account {
+			config,
+			action: super::account::Subcommand::Remove { .. },
+		}
+		| Command::Legacy(super::legacy::Legacy::AccountRemove { config, .. }) => Some(config),
 		_ => None,
 	}
 }

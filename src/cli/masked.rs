@@ -99,7 +99,7 @@ pub(super) fn run(
 	// would then resolve to an account that cannot log in. Refuse it here.
 	let Some(first_address) = first_address(&store, account) else {
 		super::style::error_to(err, format_args!("no such account: {account}"));
-		return ExitCode::FAILURE;
+		return ExitCode::from(super::exit::REFUSED);
 	};
 	let result = match action {
 		MaskedCli::List { json, .. } => return list(&store, account, json, out, err),
@@ -108,7 +108,7 @@ pub(super) fn run(
 				Ok(domain) => domain,
 				Err(message) => {
 					super::style::error_to(err, message);
-					return ExitCode::FAILURE;
+					return ExitCode::from(super::exit::REFUSED);
 				}
 			};
 			store
@@ -147,7 +147,7 @@ pub(super) fn run(
 		}
 		Err(error) => {
 			super::style::error_to(err, describe(&error));
-			ExitCode::FAILURE
+			super::exit::for_store_error(&error)
 		}
 	}
 }

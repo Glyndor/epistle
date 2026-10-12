@@ -261,6 +261,7 @@ pub async fn create_user(
 		disabled: !active,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	state.store().add(account).map_err(store_to_scim)?;
 	let stored = lookup(&state, &body.user_name)?;
@@ -342,6 +343,7 @@ pub async fn put_user(
 				disabled: !body.active,
 				quota_bytes: None,
 				allowed_protocols: existing.allowed_protocols.clone(),
+				..DynamicAccount::default()
 			},
 		)
 		.map_err(store_to_scim)?;

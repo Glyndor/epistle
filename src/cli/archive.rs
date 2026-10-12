@@ -28,7 +28,12 @@ pub enum Subcommand {
 		/// The account whose archive to list.
 		#[arg(value_name = "ACCOUNT")]
 		account: String,
+		/// Print a JSON array of `{"id", "mailbox", "deleted_at"}` objects.
+		#[arg(long)]
+		json: bool,
 	},
+	/// Restore an archived message to its mailbox.
+	///
 	/// Restore an archived message to its original mailbox (or INBOX when that
 	/// mailbox no longer exists). The restored message is appended as a new
 	/// message with a fresh UID; the original `.eml` is removed from the
@@ -44,8 +49,10 @@ pub enum Subcommand {
 		#[arg(value_name = "ID")]
 		id: Uuid,
 	},
-	/// Delete archived entries. Without `--older-than-days`, every archived
-	/// entry for the account is purged.
+	/// Delete archived entries.
+	///
+	/// Without `--older-than-days`, every archived entry for the account is
+	/// purged.
 	Purge {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
@@ -68,9 +75,13 @@ pub enum Subcommand {
 /// Dispatch a parsed subcommand.
 pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) -> ExitCode {
 	match subcommand {
-		Subcommand::List { config, account } => match Config::load(&config) {
+		Subcommand::List {
+			config,
+			account,
+			json,
+		} => match Config::load(&config) {
 			Ok(config) => match message_crypto(&config) {
-				Ok(crypto) => list(&config.data_dir, &account, &crypto, out),
+				Ok(crypto) => list(&config.data_dir, &account, &crypto, json, out),
 				Err(code) => code,
 			},
 			Err(error) => error_exit(error),
@@ -114,6 +125,7 @@ fn list(
 	data_dir: &Path,
 	account: &str,
 	_crypto: &crate::storage::MessageCrypto,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Ok(account) = AccountName::new(account) else {
@@ -121,6 +133,19 @@ fn list(
 		return ExitCode::FAILURE;
 	};
 	match account.root(data_dir).and_then(|root| archive::list(&root)) {
+		Ok(entries) if json => {
+			let rows = entries
+				.iter()
+				.map(|entry| {
+					serde_json::json!({
+						"id": entry.id,
+						"mailbox": entry.mailbox,
+						"deleted_at": entry.deleted_at,
+					})
+				})
+				.collect();
+			super::json_out::print(out, &serde_json::Value::Array(rows))
+		}
 		Ok(entries) => {
 			render_entries(&entries, out);
 			ExitCode::SUCCESS

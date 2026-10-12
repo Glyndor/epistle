@@ -3,8 +3,56 @@
 
 use std::process::ExitCode;
 
+use clap::Subcommand;
+
 use crate::config::Config;
 use crate::directory_store::{AccountStore, AppPassword, AppPasswordStore};
+
+/// The `epistle app-password …` resource actions.
+#[derive(Debug, Subcommand)]
+pub enum AppPasswordCli {
+	/// List every account's app passwords (never the secret).
+	List {
+		/// Restrict the list to one account.
+		#[arg(long, value_name = "ACCOUNT")]
+		account: Option<String>,
+		/// Print a JSON array of `{"account", "label", "expires_at",
+		/// "ip_cidr"}` objects.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Create an app password and print it once.
+	///
+	/// Create a new app password for an account. The plaintext secret is
+	/// printed once and never stored.
+	Create {
+		/// The account the app password belongs to.
+		#[arg(value_name = "ACCOUNT")]
+		account: String,
+		/// A human-readable label for this credential (e.g. `iphone`).
+		#[arg(value_name = "LABEL")]
+		label: String,
+		/// Optional expiry as Unix epoch seconds.
+		#[arg(long, value_name = "EPOCH")]
+		expires_at: Option<u64>,
+		/// Optional single-CIDR client-IP allowlist (e.g. `203.0.113.0/24`).
+		#[arg(long, value_name = "CIDR")]
+		ip_cidr: Option<String>,
+	},
+	/// Revoke an existing app password by label.
+	Revoke {
+		/// The account the app password belongs to.
+		#[arg(value_name = "ACCOUNT")]
+		account: String,
+		/// The label of the app password to revoke.
+		#[arg(value_name = "LABEL")]
+		label: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
+}
 
 /// Generate a strong random secret, hash it (argon2id) and store it for
 /// `account` under `label`. The plaintext secret is printed once and never
@@ -24,9 +72,8 @@ pub(super) fn create(
 	ip_cidr: Option<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	if let Err(error) = ensure_known_dynamic_account(config, account) {
-		super::style::error(error);
-		return ExitCode::FAILURE;
+	if let Err(code) = ensure_known_dynamic_account(config, account) {
+		return code;
 	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
@@ -62,34 +109,40 @@ pub(super) fn create(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_store_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
 }
 
 /// Open the account store and refuse anything that is not a real
-/// dynamic account. `AppPasswordStore::add` does not enforce this, so
+/// dynamic account (exit code 2; a store that cannot be opened is 1). `AppPasswordStore::add` does not enforce this, so
 /// a typo (or a hostile `epistle app-password-create` against a fresh
 /// `data_dir`) would otherwise produce an orphan credential that a
 /// later account with the same name inherits. Static accounts are
 /// not dynamic, so we reject them too: `AppPasswordStore` would not
 /// be able to attribute the credential to them anyway.
-fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), String> {
+fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), ExitCode> {
 	let store = AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
 		config.domain_aliases.clone(),
 		config.accounts.clone(),
 	)
-	.map_err(|error| format!("opening account store: {error}"))?;
+	.map_err(|error| {
+		super::style::error(format_args!("opening account store: {error}"));
+		ExitCode::FAILURE
+	})?;
 	if store.is_static(account) {
-		return Err(format!(
+		return Err(super::exit::refused(format_args!(
 			"account {account} is a static account; edit mail.toml to manage its credentials"
-		));
+		)));
 	}
 	let Some(_) = first_address(&store, account) else {
-		return Err(format!("no such account: {account}"));
+		return Err(super::exit::refused(format_args!(
+			"no such account: {account}"
+		)));
 	};
 	Ok(())
 }
@@ -106,8 +159,15 @@ fn first_address(store: &AccountStore, account: &str) -> Option<String> {
 		.map(|(_, addresses, _)| addresses.into_iter().next().unwrap_or_default())
 }
 
-/// List every account's app passwords (never the secret or hash).
-pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+/// List the app passwords (never the secret or hash) of every account, or
+/// of `account` alone when it is given, one per line or, with `json`, as
+/// an array of objects.
+pub(super) fn list(
+	config: &Config,
+	account: Option<&str>,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let store = match AppPasswordStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
@@ -115,7 +175,24 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	for (account, label, expires_at, ip_cidr) in store.list() {
+	let rows = store
+		.list()
+		.into_iter()
+		.filter(|(owner, ..)| account.is_none_or(|wanted| owner.eq_ignore_ascii_case(wanted)));
+	if json {
+		let rows = rows
+			.map(|(account, label, expires_at, ip_cidr)| {
+				serde_json::json!({
+					"account": account,
+					"label": label,
+					"expires_at": expires_at,
+					"ip_cidr": ip_cidr,
+				})
+			})
+			.collect();
+		return super::json_out::print(out, &serde_json::Value::Array(rows));
+	}
+	for (account, label, expires_at, ip_cidr) in rows {
 		let expiry = expires_at.map_or_else(|| "never".to_string(), |e| e.to_string());
 		let cidr = ip_cidr.unwrap_or_else(|| "any".to_string());
 		if writeln!(out, "{account}\t{label}\texpires={expiry}\tip={cidr}").is_err() {
@@ -123,6 +200,30 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		}
 	}
 	ExitCode::SUCCESS
+}
+
+/// Run `epistle app-password …` against the same handlers the flat
+/// forms use. The actions live as a resource so a single root
+/// (`epistle app-password …`) covers list, create, and revoke.
+pub(super) fn run(
+	config: &Config,
+	action: AppPasswordCli,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	match action {
+		AppPasswordCli::List { account, json } => list(config, account.as_deref(), json, out),
+		AppPasswordCli::Create {
+			account,
+			label,
+			expires_at,
+			ip_cidr,
+		} => create(config, &account, &label, expires_at, ip_cidr, out),
+		AppPasswordCli::Revoke {
+			account,
+			label,
+			yes,
+		} => revoke(config, &account, &label, yes, out),
+	}
 }
 
 /// Revoke an account's app password by label. Asks
@@ -149,11 +250,10 @@ pub(super) fn revoke(
 		.iter()
 		.any(|(owner, name, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
 	if !known {
-		super::style::error(crate::directory_store::StoreError::NotFound(format!(
+		return super::exit::refused(crate::directory_store::StoreError::NotFound(format!(
 			"{}/{label}",
 			account.to_ascii_lowercase()
 		)));
-		return ExitCode::FAILURE;
 	}
 	let question = format!("Revoke app password \"{label}\" for \"{account}\"? [y/N]");
 	if let Err(code) = super::prompt::confirm_destructive("app-password-revoke", &question, yes) {
@@ -165,8 +265,9 @@ pub(super) fn revoke(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_store_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
 }

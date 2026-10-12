@@ -38,6 +38,8 @@ fn state_with_carol(dir: &std::path::Path) -> ApiState {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			forward: Vec::new(),
+			catch_all: Vec::new(),
 		})
 		.expect("add carol");
 	state

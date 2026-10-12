@@ -45,11 +45,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
 		password_hash: "$argon2id$stub".to_string(),
-		scram: None,
-		totp_secret: None,
-		disabled: false,
-		quota_bytes: None,
-		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	account.password_hash = crate::smtp::auth::tests::hash(fixture_password());
 	account

@@ -92,7 +92,13 @@ impl Key {
 #[derive(Debug, Subcommand)]
 pub enum AntispamCli {
 	/// Print every antispam key and its current value (never secrets).
-	Show,
+	Show {
+		/// Print one JSON object keyed by antispam key.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Set one antispam key, or replace a DNSBL list.
+	///
 	/// Replace the value of a single key (or replace the whole list for the
 	/// DNSBL zones). For list keys the trailing values replace the list.
 	Set {
@@ -103,8 +109,10 @@ pub enum AntispamCli {
 		#[arg(required = true)]
 		value: Vec<String>,
 	},
-	/// Remove a key, restoring the built-in default. Refuses for the DNSBL
-	/// zones; use `remove <key> <value>` to take entries out one at a time.
+	/// Remove a key, restoring the built-in default.
+	///
+	/// Refuses for the DNSBL zones; use `remove <key> <value>` to take entries
+	/// out one at a time.
 	Unset {
 		/// The antispam key to remove.
 		#[arg(value_enum)]
@@ -145,8 +153,14 @@ fn execute(path: &Path, action: AntispamCli, dry_run: bool) -> Result<ExitCode, 
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
 	match action {
-		AntispamCli::Show => {
+		AntispamCli::Show { json } => {
 			let config = Config::load(path).map_err(|e| e.to_string())?;
+			if json {
+				return Ok(super::json_out::print(
+					&mut out,
+					&antispam_show::show_json(&config),
+				));
+			}
 			show_keys(&config, &mut out).map_err(|e| e.to_string())?;
 			Ok(ExitCode::SUCCESS)
 		}

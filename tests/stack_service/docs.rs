@@ -36,7 +36,7 @@ fn operator_docs_use_the_packaged_config_default_and_show_an_override() {
 	for example in [
 		"defaults to `/etc/epistle/mail.toml`",
 		"epistle backup > backup.tar.gz",
-		"epistle accounts --config /path/to/mail.toml",
+		"epistle account list --config /path/to/mail.toml",
 	] {
 		assert!(
 			cli.contains(example),

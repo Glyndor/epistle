@@ -42,11 +42,7 @@ fn add_bob(store: &AccountStore) {
 		name: "bob".to_string(),
 		addresses: vec!["bob@example.org".to_string()],
 		password_hash: crate::smtp::auth::tests::hash(fixture_password()),
-		scram: None,
-		totp_secret: None,
-		disabled: false,
-		quota_bytes: None,
-		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	store.add(account).expect("add bob");
 }
@@ -403,11 +399,7 @@ fn dynamic_with(address: &str) -> DynamicAccount {
 		name: "carol".to_string(),
 		addresses: vec![address.to_string()],
 		password_hash: crate::smtp::auth::tests::hash(fixture_password()),
-		scram: None,
-		totp_secret: None,
-		disabled: false,
-		quota_bytes: None,
-		allowed_protocols: None,
+		..DynamicAccount::default()
 	}
 }
 

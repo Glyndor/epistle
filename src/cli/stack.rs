@@ -40,8 +40,9 @@ pub enum StackCli {
 	Update,
 	/// Start the stack in the background.
 	Up,
-	/// Stop the stack. The compose volumes are not removed: the
-	/// database lives in one of them.
+	/// Stop the stack.
+	///
+	/// The compose volumes are not removed: the database lives in one of them.
 	Down,
 	/// List the running services (table by default, JSON with
 	/// `--json`).
@@ -65,8 +66,10 @@ pub enum StackCli {
 		#[arg(value_name = "SERVICE")]
 		service: Option<String>,
 	},
-	/// Stop the whole stack, or a single service (for example `mail`
-	/// before a restore, keeping `db` up), without removing containers.
+	/// Stop the whole stack, or one service, without removing containers.
+	///
+	/// Stop the whole stack, or a single service (for example `mail` before a
+	/// restore, keeping `db` up), without removing containers.
 	Stop {
 		/// Optional service name to stop.
 		#[arg(value_name = "SERVICE")]

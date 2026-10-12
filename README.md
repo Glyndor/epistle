@@ -38,7 +38,7 @@ sudo epistle stack ps        # the containers and their state
 sudo epistle status          # is everything running?
 sudo epistle dns-records     # the records to publish for your domains
 sudo epistle verify-dns      # check that they are published
-sudo epistle account-add --name alice --address alice@example.org   # reads the password from stdin
+sudo epistle account add alice --address alice@example.org   # reads the password from stdin
 ```
 
 Everything else follows `epistle <resource> <action>`: accounts, aliases,

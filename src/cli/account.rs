@@ -17,7 +17,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use clap::{Args, Subcommand as ClapSubcommand};
+use clap::Subcommand as ClapSubcommand;
 
 use crate::cli::style;
 use crate::config::{Config, Protocol};
@@ -25,6 +25,12 @@ use crate::directory_store::{AccountStore, StoreError};
 
 #[path = "account_actions.rs"]
 mod account_actions;
+#[path = "account_args.rs"]
+mod account_args;
+#[path = "account_forward_catch_all.rs"]
+mod account_forward_catch_all;
+#[path = "account_two_factor.rs"]
+mod account_two_factor;
 #[allow(unused_imports)]
 pub(super) use account_actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
@@ -32,24 +38,75 @@ pub(super) use account_actions::{
 	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
 	show_with_store,
 };
+pub use account_args::{
+	AddressArgs, AddressSubcommand, CatchAllArgs, CatchAllSubcommand, ForwardArgs,
+	ForwardSubcommand, TwoFactorArgs, TwoFactorSubcommand,
+};
+#[allow(unused_imports)]
+pub(super) use account_forward_catch_all::{
+	catch_all_add_with_store, catch_all_list, catch_all_remove_with_store, forward_add_with_store,
+	forward_list, forward_remove_with_store,
+};
+#[allow(unused_imports)]
+pub(super) use account_two_factor::{two_factor_disable, two_factor_show};
 
 /// Every action the `epistle account` umbrella command understands.
 /// Each maps to a single handler below; `clap` deserialises the trailing
-/// positional arguments into the right variant.
+/// positional arguments into the right variant. The first line of each
+/// `about` must stay under 80 characters so the umbrella's `--help`
+/// block fits one terminal page; longer context moves to `long_about`.
 #[derive(Debug, ClapSubcommand)]
 pub enum Subcommand {
+	/// List every account (static and dynamic) with its addresses and source.
+	List {
+		/// Print a JSON array of `{"name", "source", "addresses"}` objects.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Create a dynamic account.
+	///
+	/// Password is asked twice with echo off on a terminal, one line from stdin
+	/// otherwise.
+	Add {
+		/// Account login name.
+		#[arg(value_name = "NAME")]
+		name: String,
+		/// An email address for the account (repeatable).
+		#[arg(long = "address", value_name = "ADDR", required = true)]
+		addresses: Vec<String>,
+	},
+	/// Remove a dynamic account and everything it owns.
+	///
+	/// That is its mailbox, masked addresses, app passwords, suppression
+	/// entries and, with `--queue discard`, its queued mail.
+	Remove {
+		/// Account login name.
+		#[arg(value_name = "NAME")]
+		name: String,
+		/// What to do with queued outbound mail: `discard` (drop) or `drain`
+		/// (leave it for delivery). Required.
+		#[arg(long = "queue", value_name = "POLICY", value_parser = crate::cli::accounts::parse_queue_policy)]
+		queue: crate::directory_store::removal::QueuePolicy,
+		/// Skip the interactive confirmation. A non-interactive run without
+		/// `--yes` is refused with exit code 2.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
+	/// Change an account's password.
+	///
 	/// Update the password for an account: asked twice with echo off on a
-	/// terminal, read from stdin (one line) otherwise. Hashes it with
-	/// argon2id and derives a fresh SCRAM salt, exactly the way
-	/// `account-add` does on a fresh account.
+	/// terminal, read from stdin (one line) otherwise. Hashes it with argon2id
+	/// and derives a fresh SCRAM salt, exactly the way account-add does on a
+	/// fresh account.
 	Password {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
 		name: String,
 	},
-	/// Disable an account. Authentication rejects it identically to an
-	/// unknown login while the mailbox stays on disk; re-enable with
-	/// `account enable`.
+	/// Disable an account.
+	///
+	/// Authentication rejects it identically to an unknown login while the
+	/// mailbox stays on disk; re-enable with `account enable`.
 	Disable {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
@@ -63,8 +120,10 @@ pub enum Subcommand {
 	},
 	/// Add or remove a delivery address for the account.
 	Address(AddressArgs),
-	/// Set the storage quota for the account (e.g. `500M`, `10G`, `1T`,
-	/// or `none` for the server default).
+	/// Set the account's storage quota (500M, 10G, 1T or none).
+	///
+	/// Set the storage quota for the account (e.g. `500M`, `10G`, `1T`, or
+	/// `none` for the server default).
 	Quota {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
@@ -74,8 +133,10 @@ pub enum Subcommand {
 		#[arg(value_name = "SIZE")]
 		size: String,
 	},
-	/// Restrict which authentication protocols the account may sign in
-	/// through. `all` clears the restriction.
+	/// Restrict which protocols the account may sign in through.
+	///
+	/// Restrict which authentication protocols the account may sign in through.
+	/// `all` clears the restriction.
 	Protocols {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
@@ -85,51 +146,40 @@ pub enum Subcommand {
 		#[arg(value_name = "LIST")]
 		list: String,
 	},
+	/// Print the public view of an account, never its secrets.
+	///
 	/// Print the public view of an account (addresses, disabled, quota,
 	/// protocols, log id). Never secrets.
 	Show {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
 		name: String,
+		/// Print one JSON object instead of `key: value` lines.
+		#[arg(long)]
+		json: bool,
 	},
-	/// Map a log pseudonym (`acct-` plus 12 hex characters) back to the
-	/// account it stands for, using this server's pseudonym key.
+	/// Map a log pseudonym back to the account it stands for.
+	///
+	/// Map a log pseudonym (`acct-` plus 12 hex characters) back to the account
+	/// it stands for, using this server's pseudonym key.
 	FindLogId {
 		/// The pseudonym as it appears in the server log.
 		#[arg(value_name = "LOG_ID")]
 		log_id: String,
 	},
-}
-
-/// Sub-action on `epistle account address`.
-#[derive(Debug, Args)]
-pub struct AddressArgs {
-	/// Add or remove the address.
-	#[command(subcommand)]
-	pub action: AddressSubcommand,
-}
-
-/// Add or remove a single address.
-#[derive(Debug, ClapSubcommand)]
-pub enum AddressSubcommand {
-	/// Append the address to the account.
-	Add {
-		/// The account login name.
-		#[arg(value_name = "NAME")]
-		name: String,
-		/// The address to add.
-		#[arg(value_name = "ADDRESS")]
-		address: String,
-	},
-	/// Drop the address from the account (cannot remove the last one).
-	Remove {
-		/// The account login name.
-		#[arg(value_name = "NAME")]
-		name: String,
-		/// The address to remove.
-		#[arg(value_name = "ADDRESS")]
-		address: String,
-	},
+	/// Inspect or remove the account's two-factor (TOTP) enrolment.
+	#[command(name = "2fa", alias = "two-factor")]
+	TwoFactor(TwoFactorArgs),
+	/// Manage the addresses an account's mail is also sent to.
+	///
+	/// Manage per-account forward targets (extra addresses a delivered message
+	/// is also sent to).
+	Forward(ForwardArgs),
+	/// Manage the domains whose unknown users reach this account.
+	///
+	/// Manage per-account catch-all domains (deliver unknown local users in a
+	/// domain to this account).
+	CatchAll(CatchAllArgs),
 }
 
 /// A byte suffix (K, M, G, T) parsed from the operator's quota string.
@@ -276,10 +326,9 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 pub(super) fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
 	let store = prepare_show(config_path, name)?;
 	if store.is_static(name) {
-		style::error(format_args!(
+		return Err(crate::cli::exit::refused(format_args!(
 			"account {name}: edit the config file to change a static account"
-		));
-		return Err(ExitCode::FAILURE);
+		)));
 	}
 	Ok(store)
 }
@@ -304,8 +353,9 @@ pub(super) fn prepare_show(config_path: &Path, name: &str) -> Result<AccountStor
 		}
 	};
 	if !store.account_known(name) {
-		style::error(format_args!("no such account: {name}"));
-		return Err(ExitCode::FAILURE);
+		return Err(crate::cli::exit::refused(format_args!(
+			"no such account: {name}"
+		)));
 	}
 	Ok(store)
 }
@@ -331,7 +381,46 @@ pub(super) fn run(
 	subcommand: Subcommand,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	// `list`/`add`/`remove` route to the same handlers the flat
+	// `accounts`/`account-add`/`account-remove` commands drive, so the two
+	// parsers cannot drift. `list` only reads; `add` is the one action that
+	// reads from stdin (a new password) and so re-opens its own prompt
+	// reader, while `remove` decides the queue policy before it touches
+	// anything.
 	match subcommand {
+		Subcommand::List { json } => {
+			let config = match Config::load(config_path) {
+				Ok(config) => config,
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			};
+			if json {
+				return super::account_json::list(&config, out);
+			}
+			super::accounts::list(&config, out)
+		}
+		Subcommand::Add { name, addresses } => {
+			let config = match Config::load(config_path) {
+				Ok(config) => config,
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			};
+			super::accounts::add(&config, &name, addresses, super::prompt::stdin())
+		}
+		Subcommand::Remove { name, queue, yes } => {
+			let config = match Config::load(config_path) {
+				Ok(config) => config,
+				Err(error) => {
+					style::error(error);
+					return ExitCode::FAILURE;
+				}
+			};
+			super::accounts::remove(&config, &name, queue, yes, out)
+		}
 		Subcommand::Password { name } => {
 			let store = match prepare(config_path, &name) {
 				Ok(store) => store,
@@ -373,8 +462,7 @@ pub(super) fn run(
 			let parsed = match parse_quota_size(&size) {
 				Ok(size) => size,
 				Err(error) => {
-					style::error(format_args!("account {name}: {error}"));
-					return ExitCode::FAILURE;
+					return crate::cli::exit::refused(format_args!("account {name}: {error}"));
 				}
 			};
 			let store = match prepare(config_path, &name) {
@@ -387,8 +475,7 @@ pub(super) fn run(
 			let parsed = match parse_protocol_list(&list) {
 				Ok(list) => list,
 				Err(error) => {
-					style::error(format_args!("account {name}: {error}"));
-					return ExitCode::FAILURE;
+					return crate::cli::exit::refused(format_args!("account {name}: {error}"));
 				}
 			};
 			let store = match prepare(config_path, &name) {
@@ -397,13 +484,16 @@ pub(super) fn run(
 			};
 			protocols_with_store(&store, &name, parsed)
 		}
-		Subcommand::Show { name } => {
+		Subcommand::Show { name, json } => {
 			let store = match prepare_show(config_path, &name) {
 				Ok(store) => store,
 				Err(code) => return code,
 			};
 			if let Err(code) = init_log_id(config_path) {
 				return code;
+			}
+			if json {
+				return super::account_json::show(&store, &name, out);
 			}
 			show_with_store(&store, &name, out)
 		}
@@ -427,5 +517,124 @@ pub(super) fn run(
 				}
 			}
 		}
+		// `forward` and `catch-all` accept the same umbrella shape, with a
+		// dynamic-only mutator behind each: the dispatcher refuses a
+		// static account with the config-file hint before any mutator
+		// runs, mirroring `account enable`/`disable`.
+		Subcommand::Forward(args) => dispatch_forward(args, config_path, out),
+		Subcommand::CatchAll(args) => dispatch_catch_all(args, config_path, out),
+		Subcommand::TwoFactor(args) => dispatch_two_factor(args, config_path, out),
+	}
+}
+
+/// Run `epistle account forward …` against the dynamic store. The
+/// mutator refuses a static account so a typo cannot land on disk;
+/// refusing up front keeps the prepare/store sequence identical to the
+/// rest of the umbrella.
+fn dispatch_forward(
+	args: ForwardArgs,
+	config_path: &Path,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let store = match prepare(config_path, dynamic_name(&args.action)) {
+		Ok(store) => store,
+		Err(code) => return code,
+	};
+	match args.action {
+		ForwardSubcommand::List { name, json: true } => {
+			super::account_json::forwards(&store, &name, out)
+		}
+		ForwardSubcommand::List { name, json: false } => forward_list(&store, &name, out),
+		ForwardSubcommand::Add { name, address } => {
+			// Delivery rewrites a forwarded envelope sender with SRS only
+			// when `srs_secret` is set; without it the next hop checks SPF
+			// against the original sender's domain and a `-all` domain
+			// rejects the copy. The config loader refuses a static forward
+			// for the same reason.
+			if Config::load(config_path).is_ok_and(|config| config.srs_secret.is_none()) {
+				return crate::cli::exit::refused(format_args!(
+					"account {name} forward: set `srs_secret` in the config first; \
+					 without SRS a forwarded copy fails SPF at the next hop"
+				));
+			}
+			forward_add_with_store(&store, &name, &address)
+		}
+		ForwardSubcommand::Remove { name, address } => {
+			forward_remove_with_store(&store, &name, &address)
+		}
+	}
+}
+
+/// Run `epistle account catch-all …` against the dynamic store.
+fn dispatch_catch_all(
+	args: CatchAllArgs,
+	config_path: &Path,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let store = match prepare(config_path, catch_all_name(&args.action)) {
+		Ok(store) => store,
+		Err(code) => return code,
+	};
+	match args.action {
+		CatchAllSubcommand::List { name, json: true } => {
+			super::account_json::catch_alls(&store, &name, out)
+		}
+		CatchAllSubcommand::List { name, json: false } => catch_all_list(&store, &name, out),
+		CatchAllSubcommand::Add { name, domain } => {
+			catch_all_add_with_store(&store, &name, &domain)
+		}
+		CatchAllSubcommand::Remove { name, domain } => {
+			catch_all_remove_with_store(&store, &name, &domain)
+		}
+	}
+}
+
+/// The account name from any forward sub-action. The dispatcher above
+/// uses it as the canonical "is this a static account" check before
+/// running any mutator.
+fn dynamic_name(action: &ForwardSubcommand) -> &str {
+	match action {
+		ForwardSubcommand::List { name, .. }
+		| ForwardSubcommand::Add { name, .. }
+		| ForwardSubcommand::Remove { name, .. } => name,
+	}
+}
+
+/// The account name from any catch-all sub-action.
+fn catch_all_name(action: &CatchAllSubcommand) -> &str {
+	match action {
+		CatchAllSubcommand::List { name, .. }
+		| CatchAllSubcommand::Add { name, .. }
+		| CatchAllSubcommand::Remove { name, .. } => name,
+	}
+}
+
+/// Run `epistle account 2fa …` against the dynamic store. The mutator
+/// refuses a static account with the config-edit hint before any TOTP
+/// action runs, mirroring the rest of the umbrella.
+fn dispatch_two_factor(
+	args: TwoFactorArgs,
+	config_path: &Path,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let store = match prepare(config_path, two_factor_name(&args.action)) {
+		Ok(store) => store,
+		Err(code) => return code,
+	};
+	match args.action {
+		TwoFactorSubcommand::Show { name, json: true } => {
+			super::account_json::two_factor(&store, &name, out)
+		}
+		TwoFactorSubcommand::Show { name, json: false } => two_factor_show(&store, &name, out),
+		TwoFactorSubcommand::Disable { name, yes } => two_factor_disable(&store, &name, yes),
+	}
+}
+
+/// The account name from any 2fa sub-action. The dispatcher above uses
+/// it as the canonical "is this a static account" check before any
+/// mutator or read runs.
+fn two_factor_name(action: &TwoFactorSubcommand) -> &str {
+	match action {
+		TwoFactorSubcommand::Show { name, .. } | TwoFactorSubcommand::Disable { name, .. } => name,
 	}
 }

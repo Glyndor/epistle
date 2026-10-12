@@ -118,7 +118,7 @@ fn domain_flag_picks_the_domain_and_a_foreign_domain_is_refused() {
 			domain: Some("elsewhere.test".to_string()),
 		},
 	);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert!(out.is_empty(), "nothing is printed on failure: {out}");
 	assert!(err.contains("elsewhere.test"), "{err}");
 }
@@ -129,7 +129,7 @@ fn per_account_cap_applies() {
 	let config = config(dir.path(), "masked_addresses_max = 1");
 	assert_eq!(add(&config, "alice", "one", None).0, ExitCode::SUCCESS);
 	let (code, out) = add(&config, "alice", "two", None);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert!(out.is_empty(), "{out}");
 	let listed = exec(
 		&config,
@@ -153,7 +153,7 @@ fn unknown_account_is_refused_and_nothing_is_written() {
 			domain: None,
 		},
 	);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert!(out.is_empty(), "{out}");
 	assert!(err.contains("no such account: nobody"), "{err}");
 	assert!(!dir.path().join("masked.json").exists());
@@ -175,7 +175,7 @@ fn another_accounts_address_cannot_be_touched() {
 			yes: true,
 		},
 	);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert!(err.contains("no such masked address"), "{err}");
 	assert_eq!(
 		resolve(&config, &address),
@@ -229,7 +229,7 @@ fn list_of_unknown_account_fails() {
 			json: false,
 		},
 	);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert!(out.is_empty(), "{out}");
 	assert!(err.contains("no such account: nobody"), "{err}");
 }

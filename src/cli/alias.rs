@@ -41,9 +41,10 @@ pub enum AliasCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Add an alias with at least one member. Optional senders and
-	/// `--list-id` identify the alias as a mailing list. `--visible`
-	/// overrides the default hidden membership behaviour.
+	/// Add an alias with at least one member.
+	///
+	/// Optional senders and `--list-id` identify the alias as a mailing list.
+	/// `--visible` overrides the default hidden membership behaviour.
 	Add(AddArgs),
 	/// Remove an alias entirely.
 	Remove {
@@ -66,8 +67,10 @@ pub enum AliasCli {
 		#[arg(value_name = "ADDRESS")]
 		address: String,
 	},
-	/// Disable an alias. The alias address falls through to the next step
-	/// of delivery resolution and rejects like one that never existed.
+	/// Disable an alias.
+	///
+	/// The alias address falls through to the next step of delivery resolution
+	/// and rejects like one that never existed.
 	Disable {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -107,6 +110,7 @@ pub struct MemberArgs {
 /// Add or remove a single member.
 #[derive(Debug, Subcommand)]
 pub enum MemberSubcommand {
+	/// Add a member to the alias.
 	Add {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -115,6 +119,7 @@ pub enum MemberSubcommand {
 		#[arg(value_name = "MEMBER")]
 		member: String,
 	},
+	/// Remove a member from the alias.
 	Remove {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -135,6 +140,7 @@ pub struct SenderArgs {
 /// Add or remove a single sender.
 #[derive(Debug, Subcommand)]
 pub enum SenderSubcommand {
+	/// Allow an address to send as the alias.
 	Add {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -143,6 +149,7 @@ pub enum SenderSubcommand {
 		#[arg(value_name = "SENDER")]
 		sender: String,
 	},
+	/// Stop an address from sending as the alias.
 	Remove {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]

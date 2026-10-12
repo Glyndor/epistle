@@ -31,8 +31,10 @@ pub enum DomainCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Show one configured domain plus its alias targets and reverse
-	/// aliases (other domains pointing at it).
+	/// Show one domain with its alias targets and reverse aliases.
+	///
+	/// Show one configured domain plus its alias targets and reverse aliases
+	/// (other domains pointing at it).
 	Show {
 		/// The domain to show.
 		#[arg(value_name = "DOMAIN")]
@@ -41,15 +43,19 @@ pub enum DomainCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Add a domain to `domains` and print the DNS records the operator
-	/// now needs to publish.
+	/// Add a domain and print the DNS records to publish.
+	///
+	/// Add a domain to `domains` and print the DNS records the operator now
+	/// needs to publish.
 	Add {
 		/// Domain to add (e.g. `example.org`).
 		#[arg(value_name = "DOMAIN")]
 		domain: String,
 	},
-	/// Remove a domain from `domains`. Refuses while the domain is still
-	/// used by an account, alias, masked address or `domain_aliases` entry.
+	/// Remove a domain from `domains`.
+	///
+	/// Refuses while the domain is still used by an account, alias, masked
+	/// address or `domain_aliases` entry.
 	Remove {
 		/// Domain to remove.
 		#[arg(value_name = "DOMAIN")]
@@ -74,6 +80,7 @@ pub struct DomainAliasArgs {
 /// Add or remove a single `domain_aliases` entry.
 #[derive(Debug, Subcommand)]
 pub enum DomainAliasSubcommand {
+	/// Make an alias domain resolve as a configured domain.
 	Add {
 		/// The alias domain.
 		#[arg(value_name = "ALIAS")]
@@ -82,6 +89,7 @@ pub enum DomainAliasSubcommand {
 		#[arg(value_name = "TARGET")]
 		target: String,
 	},
+	/// Drop a domain alias.
 	Remove {
 		/// The alias domain to drop.
 		#[arg(value_name = "ALIAS")]
