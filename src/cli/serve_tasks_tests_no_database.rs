@@ -29,7 +29,7 @@ async fn no_database_logs_one_warning_listing_every_off_feature() {
 		config.database.is_none(),
 		"the fixture must omit [database]"
 	);
-	// Greylist as a feature needs the warning — pick a delay that
+	// Greylist as a feature needs the warning: pick a delay that
 	// forces it.
 	let mut config = config;
 	config.greylist_delay_secs = 60;

@@ -63,7 +63,7 @@ impl GreylistStore for PgGreylistStore {
 		Box::pin(async move {
 			// `ON CONFLICT (key) DO UPDATE` keeps the `first_seen` that
 			// already exists. A retry that arrives much later should not
-			// reset the wait — only touch `last_seen`. `passed_at` is set
+			// reset the wait; only touch `last_seen`. `passed_at` is set
 			// by callers that observe a successful retry, not here.
 			let result = sqlx::query(
 				"INSERT INTO greylist_triplet (key, first_seen, last_seen) \
