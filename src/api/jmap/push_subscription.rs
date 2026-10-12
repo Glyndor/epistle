@@ -125,16 +125,8 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 	let destroys = args.get("destroy").and_then(Value::as_array);
 	state.with_push_subscriptions(|store| {
 		for (key, props) in creates.into_iter().flatten() {
-			// A subscription must carry a delivery `url` (RFC 8620 §7.2).
-			if props
-				.get("url")
-				.and_then(Value::as_str)
-				.is_none_or(str::is_empty)
-			{
-				not_created.insert(
-					key.clone(),
-					json!({ "type": "invalidProperties", "properties": ["url"] }),
-				);
+			if let Err(error) = check_create(props) {
+				not_created.insert(key.clone(), error);
 				continue;
 			}
 			if store.iter().filter(|sub| sub.owner == owner).count() >= MAX_PER_CALLER {
@@ -165,7 +157,14 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 				not_updated.insert(id.clone(), json!({ "type": "notFound" }));
 				continue;
 			};
-			if let (Some(target), Some(patch)) = (sub.object.as_object_mut(), patch.as_object()) {
+			let patch = match check_update(patch) {
+				Ok(patch) => patch,
+				Err(error) => {
+					not_updated.insert(id.clone(), error);
+					continue;
+				}
+			};
+			if let Some(target) = sub.object.as_object_mut() {
 				for (k, v) in patch {
 					target.insert(k.clone(), v.clone());
 				}
@@ -195,4 +194,113 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 		},
 		call_id
 	])
+}
+
+/// The properties an update may change (RFC 8620 §7.2): `url`, `keys` and
+/// `deviceClientId` are immutable and `id` is server-set, so a patch touching
+/// them is refused. Without this an update could swap the checked `url` for an
+/// unchecked one.
+const UPDATABLE: [&str; 3] = ["verificationCode", "expires", "types"];
+
+fn invalid(properties: &[&str]) -> Value {
+	json!({ "type": "invalidProperties", "properties": properties })
+}
+
+/// Check a create: the delivery `url` must be an absolute `https` URL with a
+/// host and no embedded credentials, the same rule every outbound request
+/// that carries a secret follows ([`crate::net::HttpsUrl`]); nothing is
+/// pushed yet, but a stored subscription must already be one we could
+/// deliver to safely. `expires`, when present, must be a UTCDate.
+fn check_create(props: &Value) -> Result<(), Value> {
+	let url_ok = props
+		.get("url")
+		.and_then(Value::as_str)
+		.is_some_and(|url| crate::net::HttpsUrl::parse(url).is_ok());
+	let mut bad = Vec::new();
+	if !url_ok {
+		bad.push("url");
+	}
+	if !expires_ok(props.get("expires")) {
+		bad.push("expires");
+	}
+	if bad.is_empty() {
+		Ok(())
+	} else {
+		Err(invalid(&bad))
+	}
+}
+
+/// Check an update patch: only [`UPDATABLE`] properties, and a valid
+/// `expires`. Returns the patch's properties to apply.
+fn check_update(patch: &Value) -> Result<&serde_json::Map<String, Value>, Value> {
+	let Some(patch) = patch.as_object() else {
+		return Err(json!({ "type": "invalidPatch" }));
+	};
+	let mut bad: Vec<&str> = patch
+		.keys()
+		.map(String::as_str)
+		.filter(|key| !UPDATABLE.contains(key))
+		.collect();
+	if !expires_ok(patch.get("expires")) {
+		bad.push("expires");
+	}
+	if bad.is_empty() {
+		Ok(patch)
+	} else {
+		Err(invalid(&bad))
+	}
+}
+
+/// `expires` is `UTCDate|null` (RFC 8620 §7.2); absent is the same as null.
+fn expires_ok(expires: Option<&Value>) -> bool {
+	match expires {
+		None | Some(Value::Null) => true,
+		Some(Value::String(text)) => is_utc_date(text),
+		Some(_) => false,
+	}
+}
+
+/// Whether `text` is a UTCDate (RFC 8620 §1.4): `YYYY-MM-DDThh:mm:ss`, an
+/// optional fraction of a second, and `Z`, naming a day the month has.
+fn is_utc_date(text: &str) -> bool {
+	let Some(body) = text.strip_suffix('Z') else {
+		return false;
+	};
+	let (clock, fraction) = body.split_once('.').unwrap_or((body, "0"));
+	let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+	let bytes = clock.as_bytes();
+	if !digits(fraction) || bytes.len() != 19 || !clock.is_ascii() {
+		return false;
+	}
+	if [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':')]
+		.iter()
+		.any(|&(at, sep)| bytes[at] != sep)
+	{
+		return false;
+	}
+	let field = |at: usize, len: usize| {
+		let part = &clock[at..at + len];
+		if digits(part) {
+			part.parse::<i64>().ok()
+		} else {
+			None
+		}
+	};
+	let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+		field(0, 4),
+		field(5, 2),
+		field(8, 2),
+		field(11, 2),
+		field(14, 2),
+		field(17, 2),
+	) else {
+		return false;
+	};
+	if !(1..=12).contains(&month) || day < 1 || hour > 23 || minute > 59 || second > 59 {
+		return false;
+	}
+	// A day past the end of the month (`2030-02-30`) rolls into the next one
+	// on the way through days-since-epoch, so the round trip catches it.
+	let days = crate::webdav::rrule::days_from_civil(year, month, day);
+	crate::webdav::rrule::civil_from_secs(days * 86_400) == (year, month, day)
 }
