@@ -114,6 +114,18 @@ fn write_secret_with_report(
 	Ok(())
 }
 
+/// Whether a DKIM or storage key is already in place and can be
+/// reused. Only a regular file (or a symlink to one) counts: these keys
+/// are not read back here, so a directory or another entry at the path
+/// would be reported as `Reused` and the config would point at
+/// something the server cannot load. Treating it as absent makes apply
+/// attempt the write, which fails with a `KeyWrite` naming the path.
+/// The OAuth pair keeps `exists()`: it is read back to derive or check
+/// the public half, and that read already reports such an entry.
+pub(super) fn key_file_present(path: &Path) -> bool {
+	path.is_file()
+}
+
 /// Lay down the five key-tree files under `keys_dir`:
 /// `s1.pem` (DKIM ed25519), `s2.pem` (DKIM RSA via openssl, or
 /// skipped when openssl is not on PATH, or refused when genpkey
@@ -130,7 +142,7 @@ fn ensure_key_tree(
 	oauth_public: &Path,
 	report: &mut Report,
 ) -> Result<(), ApplyError> {
-	if s1.exists() {
+	if key_file_present(s1) {
 		report.steps.push(ReportStep::Reused(s1.to_path_buf()));
 	} else {
 		// A CSPRNG failure surfaces as `ApplyError::Rng` so the run
@@ -141,7 +153,7 @@ fn ensure_key_tree(
 		write_secret_with_report(s1, pem.as_bytes(), report)?;
 	}
 
-	if s2.exists() {
+	if key_file_present(s2) {
 		report.steps.push(ReportStep::Reused(s2.to_path_buf()));
 	} else if openssl_available() {
 		let (pem, _record) = match crate::cli::util::generate_rsa_key(2048) {
@@ -164,7 +176,7 @@ fn ensure_key_tree(
 		});
 	}
 
-	if storage.exists() {
+	if key_file_present(storage) {
 		report.steps.push(ReportStep::Reused(storage.to_path_buf()));
 	} else {
 		let key = crate::storage::generate_key_base64()
@@ -248,8 +260,8 @@ pub(super) fn ensure_keys_and_certs(
 	let oauth_private = keys_dir.join("oauth_signing.key");
 	let oauth_public = keys_dir.join("oauth_public.key");
 	ensure_key_tree(&s1, &s2, &storage, &oauth_private, &oauth_public, report)?;
-	let ed = s1.exists().then(|| s1.clone());
-	let rsa = s2.exists().then(|| s2.clone());
+	let ed = key_file_present(&s1).then(|| s1.clone());
+	let rsa = key_file_present(&s2).then(|| s2.clone());
 	let (cert, key) = ensure_self_signed_cert(keys_dir, hostname, report)?;
 	Ok((ed, rsa, cert, key))
 }

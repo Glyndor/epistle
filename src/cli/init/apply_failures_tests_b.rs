@@ -396,3 +396,25 @@ fn apply_refuses_when_surviving_oauth_public_key_is_unreadable() {
 		"the diagnostic must name the unreadable oauth public key"
 	);
 }
+
+/// A directory at the storage key path is not a key the run can reuse:
+/// the plan must say the key will be written, matching the apply phase,
+/// which attempts the write and reports the failure on that path.
+#[test]
+fn plan_does_not_reuse_a_directory_at_the_storage_key_path() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let config_path = dir.path().join("mail.toml");
+	let storage = data_dir.join("keys").join("storage.key");
+	std::fs::create_dir_all(&storage).expect("blocker dir");
+	let plan = apply_plan::plan(&answers_minimal(&data_dir, &config_path)).expect("plan");
+	let reused = plan.steps.iter().find_map(|step| match step {
+		crate::cli::init::plan::PlanStep::Storage { reused, .. } => Some(*reused),
+		_ => None,
+	});
+	assert_eq!(
+		reused,
+		Some(false),
+		"the plan must not report a directory as a reused storage key"
+	);
+}

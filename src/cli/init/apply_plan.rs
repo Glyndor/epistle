@@ -9,6 +9,7 @@ use super::Answers;
 use super::ApplyError;
 use super::apply_config;
 use super::apply_config_acme;
+use super::apply_keys::key_file_present;
 use crate::cli::init::compose;
 use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
@@ -104,16 +105,16 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 	steps.extend([
 		PlanStep::DkimEd25519 {
 			path: s1.clone(),
-			reused: s1.exists(),
+			reused: key_file_present(&s1),
 		},
 		PlanStep::DkimRsa {
 			path: s2.clone(),
-			reused: s2.exists(),
+			reused: key_file_present(&s2),
 			openssl_available: openssl_available(),
 		},
 		PlanStep::Storage {
 			path: storage.clone(),
-			reused: storage.exists(),
+			reused: key_file_present(&storage),
 		},
 		PlanStep::OAuthPrivate {
 			path: oauth_private.clone(),
@@ -425,12 +426,12 @@ fn config_is_identical_to_desired(
 	// if the file already exists. The plan reads the same signals so
 	// the desired config it builds matches the one apply will write
 	// a moment later.
-	let dkim_rsa_for_desired: Option<&std::path::Path> = if dkim_rsa.exists() || openssl_available()
-	{
-		Some(dkim_rsa)
-	} else {
-		None
-	};
+	let dkim_rsa_for_desired: Option<&std::path::Path> =
+		if key_file_present(dkim_rsa) || openssl_available() {
+			Some(dkim_rsa)
+		} else {
+			None
+		};
 	let desired = apply_config::build_config(
 		answers,
 		mail_addr,

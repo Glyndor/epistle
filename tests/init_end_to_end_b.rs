@@ -121,9 +121,60 @@ fn dry_run_refuses_api_service_in_answers() {
 /// operator can recover the partial tree.
 #[cfg(unix)]
 #[test]
-#[ignore = "the obstruction this test relied on (a directory at the old `<file>.secret.tmp` temp path) no longer blocks the rename now that `write_secret` uses a UUID-suffixed temp; the partial-report contract is covered by `cli::init::apply::tests_failures`"]
 fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
-	let _dir = tempfile::tempdir().expect("tempdir");
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	let config_path = dir.path().join("etc").join("mail.toml");
+	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
+	let keys_dir = data_dir.join("keys");
+	// A directory where the storage key should land: init tries to
+	// write the key and the `rename(2)` onto the directory fails with
+	// `EISDIR` (for root too) once the ed25519 and RSA keys have
+	// already landed.
+	std::fs::create_dir_all(keys_dir.join("storage.key")).expect("blocker dir");
+	let body = format!(
+		"mode = \"manual\"\n\
+		 hostname = \"mail.example.org\"\n\
+		 domains = [\"example.org\"]\n\
+		 data_dir = \"{}\"\n\
+		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
+		data_dir.display(),
+		config_path.display(),
+	);
+	let answers = write_answers(dir.path(), "answers.toml", &body);
+	let output = run_init(&answers);
+	assert_eq!(
+		output.status.code(),
+		Some(1),
+		"obstructed key write must surface as exit 1 (no panic); got {:?}; stderr: {}",
+		output.status,
+		String::from_utf8_lossy(&output.stderr)
+	);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr.contains("report:"),
+		"the rendered report must appear even on failure: {stderr}"
+	);
+	assert!(
+		stderr.contains("s1.pem"),
+		"the report must list the dkim ed25519 key that landed: {stderr}"
+	);
+	assert!(
+		stderr.contains("s2.pem"),
+		"the report must list the dkim rsa key that landed: {stderr}"
+	);
+	// `storage.key` may appear in the error message but never on a
+	// `wrote:` line: the report must not claim a successful write.
+	assert!(
+		!stderr
+			.lines()
+			.any(|line| line.contains("wrote:") && line.contains("storage.key")),
+		"the report must NOT claim a successful storage-key write: {stderr}"
+	);
+	assert!(
+		stderr.contains("cannot write"),
+		"the error must name the failing key path: {stderr}"
+	);
 }
 
 /// Finding 3 (binary): after a successful first run, deleting only
