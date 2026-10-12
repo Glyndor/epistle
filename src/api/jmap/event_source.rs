@@ -54,7 +54,7 @@ pub(crate) const MAX_PING: u64 = 300;
 pub(crate) const MAX_STREAMS_PER_CALLER: usize = 4;
 
 /// The data types with a state, and the kind that encodes each one's state.
-const TYPES: [(&str, Kind); 3] = [
+pub(super) const TYPES: [(&str, Kind); 3] = [
 	("Email", Kind::Email),
 	("Mailbox", Kind::Mailbox),
 	("Thread", Kind::Thread),
@@ -149,7 +149,7 @@ impl Options {
 
 /// The journal position (epoch, position) of every account `principal`
 /// reaches. An account whose journal cannot be read is left out until it can.
-fn positions(state: &ApiState, principal: &Principal) -> HashMap<String, (u64, u64)> {
+pub(super) fn positions(state: &ApiState, principal: &Principal) -> HashMap<String, (u64, u64)> {
 	principal
 		.admissible_accounts(&state.accounts())
 		.into_iter()
@@ -159,6 +159,42 @@ fn positions(state: &ApiState, principal: &Principal) -> HashMap<String, (u64, u
 			Some((account.name.clone(), (position.epoch, position.current)))
 		})
 		.collect()
+}
+
+/// The `changed` map of a `StateChange` (RFC 8620 §7.1): for every account
+/// whose journal position moved from `before` to `now`, the state of each of
+/// `types` at `now`, the same string its `/get` returns and its `/changes`
+/// accepts. Accounts not in `before` are left out; so is everything when
+/// `types` is empty.
+pub(super) fn changed_states(
+	before: &HashMap<String, (u64, u64)>,
+	now: &HashMap<String, (u64, u64)>,
+	types: &[(&str, Kind)],
+) -> Map<String, Value> {
+	let mut changed = Map::new();
+	for (account, &(epoch, position)) in now {
+		if before
+			.get(account)
+			.is_none_or(|known| *known == (epoch, position))
+		{
+			continue;
+		}
+		let states: Map<String, Value> = types
+			.iter()
+			.map(|&(name, kind)| {
+				let state = super::state::State {
+					kind,
+					epoch,
+					position,
+				};
+				(name.to_string(), json!(state.encode()))
+			})
+			.collect();
+		if !states.is_empty() {
+			changed.insert(account.clone(), Value::Object(states));
+		}
+	}
+	changed
 }
 
 /// The event stream: on every [`POLL`] tick, re-check the credential, then
@@ -192,30 +228,7 @@ impl Events {
 	/// that appeared since are taken as they are; ones gone are dropped.
 	fn state_change(&mut self) -> Option<Value> {
 		let now = positions(&self.state, &self.principal);
-		let mut changed = Map::new();
-		for (account, &(epoch, position)) in &now {
-			if self.known.get(account) == Some(&(epoch, position))
-				|| !self.known.contains_key(account)
-			{
-				continue;
-			}
-			let states: Map<String, Value> = self
-				.options
-				.types
-				.iter()
-				.map(|&(name, kind)| {
-					let state = super::state::State {
-						kind,
-						epoch,
-						position,
-					};
-					(name.to_string(), json!(state.encode()))
-				})
-				.collect();
-			if !states.is_empty() {
-				changed.insert(account.clone(), Value::Object(states));
-			}
-		}
+		let changed = changed_states(&self.known, &now, &self.options.types);
 		self.known = now;
 		(!changed.is_empty()).then(|| json!({ "@type": "StateChange", "changed": changed }))
 	}

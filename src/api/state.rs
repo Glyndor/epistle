@@ -563,17 +563,6 @@ impl ApiState {
 	) -> Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>> {
 		Arc::clone(&self.inner.caller_slots)
 	}
-
-	/// A cheap, opaque state token for an account's mail, derived from total
-	/// stored bytes. It changes whenever a message is added, removed, or resized,
-	/// which is enough for the connection-scoped WebSocket push (RFC 8887 §5) to
-	/// signal "something changed" to the client that made the change. It is not a
-	/// JMAP change-log cursor (we do not track one — see `/changes`).
-	pub fn account_state(&self, account: &str) -> String {
-		let usage =
-			crate::imap::mailbox::account_usage(&self.inner.data_dir, account, &self.inner.crypto);
-		format!("{usage}")
-	}
 }
 
 /// The client IP extracted from the `ConnectInfo<SocketAddr>` extension of
