@@ -2,5 +2,6 @@
 
 mod record;
 pub mod report;
+pub mod sessions;
 
 pub use record::{Record, parse};

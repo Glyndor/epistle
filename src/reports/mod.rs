@@ -9,7 +9,7 @@
 //! Errors do not block delivery. The mail still lands in the mailbox; the
 //! operator can read the raw report there. The hook only logs and counts.
 
-mod bounds;
+pub(crate) mod bounds;
 mod decompress;
 pub mod dmarc;
 mod mime;

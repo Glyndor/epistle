@@ -11,9 +11,33 @@ use super::client::DeliveryError;
 pub type BoxedStream = Box<dyn DynStream>;
 
 /// Future returned by [`Connector::connect`].
-pub type ConnectFuture<'a> = std::pin::Pin<
-	Box<dyn Future<Output = Result<(BoxedStream, String), DeliveryError>> + Send + 'a>,
->;
+pub type ConnectFuture<'a> =
+	std::pin::Pin<Box<dyn Future<Output = Result<Connection, DeliveryError>> + Send + 'a>>;
+
+/// An open connection to one exchanger of a domain.
+pub struct Connection {
+	/// The stream the SMTP client drives.
+	pub stream: BoxedStream,
+	/// The exchanger's host name (TLS server name, DANE/TLSA owner).
+	pub host: String,
+	/// Our side of the connection, when the transport knows it. TLS-RPT
+	/// reports it as `sending-mta-ip`.
+	pub local_ip: Option<std::net::IpAddr>,
+	/// The exchanger's address, when the transport knows it.
+	pub peer_ip: Option<std::net::IpAddr>,
+}
+
+impl Connection {
+	/// A connection over a transport without socket addresses.
+	pub fn new(stream: BoxedStream, host: String) -> Self {
+		Connection {
+			stream,
+			host,
+			local_ip: None,
+			peer_ip: None,
+		}
+	}
+}
 
 /// Object-safe stream alias.
 pub trait DynStream: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -100,7 +124,16 @@ impl Connector for MxConnector {
 			let mut last_error = DeliveryError::Transient(format!("no exchangers for {domain}"));
 			for host in hosts {
 				match TcpStream::connect((host.as_str(), 25)).await {
-					Ok(stream) => return Ok((Box::new(stream) as BoxedStream, host)),
+					Ok(stream) => {
+						let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
+						let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
+						return Ok(Connection {
+							stream: Box::new(stream),
+							host,
+							local_ip,
+							peer_ip,
+						});
+					}
 					Err(error) => {
 						last_error = DeliveryError::Transient(format!(
 							"connect to {host}:25 failed: {error}"

@@ -1,9 +1,10 @@
 //! Outbound queue configuration: the `[queue]` section.
 //!
-//! Currently a single knob, `outbound_tls`, selecting how the STARTTLS
-//! certificate of a recipient MX is authenticated. The default is the most
-//! restrictive option (strict PKIX verification), so an absent `[queue]`
-//! section leaves existing deployments unchanged (fail closed).
+//! `outbound_tls` selects how the STARTTLS certificate of a recipient MX is
+//! authenticated; its default is the most restrictive option (strict PKIX
+//! verification), so an absent `[queue]` section leaves existing deployments
+//! unchanged (fail closed). `tlsrpt_reports` turns the outbound TLS-RPT
+//! reports off.
 
 use serde::Deserialize;
 
@@ -26,11 +27,29 @@ pub enum OutboundTls {
 }
 
 /// The `[queue]` configuration section.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Queue {
 	/// Outbound STARTTLS authentication mode for unmandated, non-DANE delivery.
 	/// Defaults to [`OutboundTls::Strict`].
 	#[serde(default)]
 	pub outbound_tls: OutboundTls,
+	/// Record the TLS outcome of each delivery and send the daily TLS-RPT
+	/// report (RFC 8460) to every recipient domain that asks for one.
+	/// Defaults to `true`.
+	#[serde(default = "default_tlsrpt_reports")]
+	pub tlsrpt_reports: bool,
+}
+
+const fn default_tlsrpt_reports() -> bool {
+	true
+}
+
+impl Default for Queue {
+	fn default() -> Self {
+		Queue {
+			outbound_tls: OutboundTls::default(),
+			tlsrpt_reports: default_tlsrpt_reports(),
+		}
+	}
 }

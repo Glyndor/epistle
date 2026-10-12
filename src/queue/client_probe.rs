@@ -58,7 +58,9 @@ where
 			));
 		}
 		conn.command("STARTTLS", 220).await?;
-		let (tls, _chain) = tls_connect(conn.into_inner(), server_name, authenticate_pkix).await?;
+		let (tls, _chain) = tls_connect(conn.into_inner(), server_name, authenticate_pkix)
+			.await
+			.map_err(|(error, _)| error)?;
 		conn = Conn::new(Box::new(tls));
 		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 		steps.push("STARTTLS");

@@ -152,6 +152,7 @@ async fn outbound_client_delivers_to_postfix() {
 		None,
 		&[],
 		epistle::config::OutboundTls::Opportunistic,
+		&mut None,
 	)
 	.await;
 

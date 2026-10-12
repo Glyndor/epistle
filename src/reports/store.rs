@@ -6,6 +6,7 @@
 //! reports/
 //!   dmarc/{YYYYMMDD}/{org}.jsonl
 //!   tlsrpt/{YYYYMMDD}/{org}.jsonl
+//!   tlsrpt-outbound/{YYYYMMDD}/{recipient-domain}.jsonl
 //! ```
 //!
 //! One JSON object per line. The directory is created on demand; missing
@@ -36,8 +37,21 @@ pub fn append(
 	org: &str,
 	report: &impl serde::Serialize,
 ) -> std::io::Result<()> {
+	append_to(data_dir, kind.dir_name(), day, org, report)
+}
+
+/// [`append`] into any bucket under `{data_dir}/reports/`. The outbound
+/// TLS-RPT session journal uses its own bucket ([`OUTBOUND_TLSRPT`]) so it
+/// never mixes with the reports other servers send us.
+pub(crate) fn append_to(
+	data_dir: &Path,
+	bucket: &str,
+	day: &str,
+	org: &str,
+	report: &impl serde::Serialize,
+) -> std::io::Result<()> {
 	let reports = contained(data_dir, &data_dir.join("reports"))?;
-	let kind_dir = contained_subdir(&reports, kind.dir_name())?;
+	let kind_dir = contained_subdir(&reports, bucket)?;
 	let dir = contained_subdir(&kind_dir, day)?;
 	std::fs::create_dir_all(&dir)?;
 	set_owner_only_dir(&dir)?;
@@ -86,11 +100,15 @@ fn set_owner_only_dir(_path: &Path) -> std::io::Result<()> {
 	Ok(())
 }
 
-/// Remove day directories older than `days` under both report buckets.
+/// Bucket of the TLS sessions our own outbound deliveries recorded, read by
+/// the daily TLS-RPT report sender (`crate::tlsrpt::send`).
+pub(crate) const OUTBOUND_TLSRPT: &str = "tlsrpt-outbound";
+
+/// Remove day directories older than `days` under every report bucket.
 /// `today` is the current `YYYYMMDD` string. Days are whole days; a day
 /// directory is removed when `today - directory > days`.
 pub fn prune(data_dir: &Path, today: &str, days: u32) {
-	for bucket in ["dmarc", "tlsrpt"] {
+	for bucket in ["dmarc", "tlsrpt", OUTBOUND_TLSRPT] {
 		let Ok(root) = contained(data_dir, &data_dir.join("reports").join(bucket)) else {
 			continue;
 		};

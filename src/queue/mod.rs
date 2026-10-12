@@ -5,6 +5,7 @@ pub mod client;
 pub(crate) mod resolver;
 pub mod srs;
 pub mod suppression;
+pub mod tls_outcome;
 mod transport;
 pub use transport::relay_connect;
 mod worker;

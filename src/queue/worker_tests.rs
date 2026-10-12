@@ -29,7 +29,7 @@ impl Connector for LoopbackConnector {
 			.with_directory(directory);
 			let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
 			tokio::spawn(async move { server.handle(server_stream, None).await });
-			Ok((
+			Ok(crate::queue::resolver::Connection::new(
 				Box::new(client_stream) as BoxedStream,
 				"mx.remote.example".to_string(),
 			))

@@ -19,6 +19,8 @@ use crate::dane::policy::DaneOutcome;
 use crate::dane::tlsa::TlsaRecord;
 use crate::dane::verify::verify_chain;
 
+use super::tls_outcome::{STARTTLS_NOT_SUPPORTED, TLSA_INVALID, TlsOutcome, classify_handshake};
+
 /// Whether the attempt may be retried later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryError {
@@ -58,6 +60,9 @@ impl DeliveryError {
 /// * neither: `mode` decides — [`OutboundTls::Strict`] (the default) uses strict
 ///   PKIX, [`OutboundTls::Opportunistic`] completes the handshake with any
 ///   certificate (encryption without authentication, the SMTP norm).
+///
+/// `tls` receives how the TLS part ended (for TLS-RPT), once the attempt gets
+/// as far as the STARTTLS decision; it stays `None` before that.
 #[allow(clippy::too_many_arguments)]
 pub async fn deliver<S>(
 	stream: S,
@@ -70,6 +75,7 @@ pub async fn deliver<S>(
 	auth: Option<(&str, &str)>,
 	tlsa: &[TlsaRecord],
 	mode: OutboundTls,
+	tls: &mut Option<TlsOutcome>,
 ) -> Result<(), DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -79,6 +85,9 @@ where
 
 	conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 	let offers_starttls = conn.last_reply_contains("STARTTLS");
+	if !offers_starttls {
+		*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
+	}
 	// DANE presence makes STARTTLS mandatory (RFC 7672 §2.2): never downgrade.
 	if (require_tls || !tlsa.is_empty()) && !offers_starttls {
 		return Err(DeliveryError::Transient(
@@ -88,25 +97,35 @@ where
 
 	let mut tls_active = false;
 	if offers_starttls {
-		conn.command("STARTTLS", 220).await?;
+		if let Err(error) = conn.command("STARTTLS", 220).await {
+			*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
+			return Err(error);
+		}
 		let inner = conn.into_inner();
 		// Authenticate the certificate via PKIX (webpki + hostname) only when TLS
 		// is mandated, or when it is purely opportunistic AND strict mode is set.
 		// With TLSA present, DANE (below) authenticates instead, so the handshake
 		// accepts any certificate — a DANE-EE leaf is normally self-signed.
 		let authenticate_pkix = require_tls || (tlsa.is_empty() && mode == OutboundTls::Strict);
-		let (tls, peer_chain) = tls_connect(inner, server_name, authenticate_pkix).await?;
+		let (stream, peer_chain) = tls_connect(inner, server_name, authenticate_pkix)
+			.await
+			.map_err(|(error, result_type)| {
+				*tls = Some(TlsOutcome::Failure(result_type));
+				error
+			})?;
 		// DANE: authenticate the presented chain against validated TLSA records.
 		// With none, this is a no-op (opportunistic); a mismatch fails closed.
 		match verify_chain(tlsa, &peer_chain) {
 			DaneOutcome::Authenticated | DaneOutcome::NoRecords => {}
 			DaneOutcome::Mismatch => {
+				*tls = Some(TlsOutcome::Failure(TLSA_INVALID));
 				return Err(DeliveryError::Transient(format!(
 					"DANE: no TLSA record matches the certificate of {server_name}"
 				)));
 			}
 		}
-		conn = Conn::new(Box::new(tls));
+		*tls = Some(TlsOutcome::Success);
+		conn = Conn::new(Box::new(stream));
 		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 		tls_active = true;
 	}
@@ -144,7 +163,7 @@ where
 /// accepts any certificate (encryption only): the caller authenticates the
 /// returned chain by another means (DANE via `verify_chain`) or accepts
 /// unauthenticated TLS (opportunistic mode). The peer chain is captured in both
-/// cases so DANE can run on it.
+/// cases so DANE can run on it. A failure carries its RFC 8460 result type.
 async fn tls_connect(
 	stream: Box<dyn Stream>,
 	server_name: &str,
@@ -154,7 +173,7 @@ async fn tls_connect(
 		tokio_rustls::client::TlsStream<Box<dyn Stream>>,
 		Vec<Vec<u8>>,
 	),
-	DeliveryError,
+	(DeliveryError, &'static str),
 > {
 	crate::tls::ensure_crypto_provider();
 	let config = if authenticate {
@@ -169,12 +188,21 @@ async fn tls_connect(
 			.with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert::new()))
 			.with_no_client_auth()
 	};
-	let name = ServerName::try_from(server_name.to_string())
-		.map_err(|_| DeliveryError::Transient(format!("invalid TLS name {server_name}")))?;
+	let name = ServerName::try_from(server_name.to_string()).map_err(|_| {
+		(
+			DeliveryError::Transient(format!("invalid TLS name {server_name}")),
+			"validation-failure",
+		)
+	})?;
 	let tls = TlsConnector::from(Arc::new(config))
 		.connect(name, stream)
 		.await
-		.map_err(|error| DeliveryError::Transient(format!("TLS handshake failed: {error}")))?;
+		.map_err(|error| {
+			(
+				DeliveryError::Transient(format!("TLS handshake failed: {error}")),
+				classify_handshake(&error),
+			)
+		})?;
 	let peer_chain = tls
 		.get_ref()
 		.1
@@ -411,6 +439,7 @@ mod tests {
 			None,
 			&[],
 			OutboundTls::Strict,
+			&mut None,
 		)
 		.await
 		.expect("delivery succeeds");
@@ -452,6 +481,7 @@ mod tests {
 			None,
 			&[],
 			OutboundTls::Strict,
+			&mut None,
 		)
 		.await;
 
@@ -473,6 +503,7 @@ mod tests {
 			None,
 			&[],
 			OutboundTls::Strict,
+			&mut None,
 		)
 		.await
 	}
@@ -502,6 +533,7 @@ mod tests {
 			Some(("user", "pass")),
 			&[],
 			OutboundTls::Strict,
+			&mut None,
 		)
 		.await;
 		// AUTH credentials must never cross plaintext: fail closed.

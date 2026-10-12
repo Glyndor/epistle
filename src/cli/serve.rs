@@ -235,6 +235,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	if let Some(webhook) = &webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}
+	if config.queue.tlsrpt_reports {
+		worker = worker.with_tlsrpt(&config.data_dir);
+	}
 	let worker = Arc::new(worker);
 	if config.start_queue_worker() {
 		tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
