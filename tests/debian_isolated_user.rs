@@ -296,3 +296,6 @@ mod subid;
 
 #[path = "debian/subid_purge.rs"]
 mod subid_purge;
+
+#[path = "debian/completions.rs"]
+mod completions;

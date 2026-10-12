@@ -33,6 +33,10 @@ BUILT = target/$(RUST_TARGET)/release/epistle
 # Pin the target dir so a CARGO_TARGET_DIR from the environment cannot move
 # the binary away from the path the install step expects.
 export CARGO_TARGET_DIR = $(CURDIR)/target
+# Build output that is not cargo's: the man pages and completion scripts. It
+# lives under target/ so `cargo clean` removes it with everything else, and
+# debian/epistle.manpages names the same directory.
+GENERATED = target/generated
 # The queries are checked against the committed .sqlx cache, so the build needs
 # no database and no network to reach one.
 export SQLX_OFFLINE = true
@@ -54,6 +58,15 @@ ifneq ($(wildcard vendor/),)
 	$(if $(wildcard .cargo/config.toml),,$(MAKE) -f debian/rules debian/cargo-config)
 endif
 	cargo build --release --locked --target $(RUST_TARGET) $(CARGO_FLAGS)
+	# Man pages and completion scripts come from the binary just built, so they
+	# describe the parser that ships rather than a copy that can fall behind.
+	# This runs the target binary on the build machine, which holds because
+	# every .deb is built natively on its own architecture (release.yml).
+	$(BUILT) manpages $(GENERATED)/man
+	mkdir -p $(GENERATED)/completions
+	$(BUILT) completions bash > $(GENERATED)/completions/epistle
+	$(BUILT) completions zsh > $(GENERATED)/completions/_epistle
+	$(BUILT) completions fish > $(GENERATED)/completions/epistle.fish
 
 # The unit tests that touch a live PostgreSQL are gated on DATABASE_URL and skip
 # without it, so this runs the rest. The database-backed suite runs in CI
@@ -69,6 +82,15 @@ override_dh_auto_install:
 	# operator's, so an override survives an upgrade of this package.
 	install -D -m 0644 debian/epistle.sysctl \
 		debian/epistle/usr/lib/sysctl.d/30-glyndor-epistle.conf
+	# The Debian locations each shell searches without configuration. The man
+	# pages go through dh_installman (debian/epistle.manpages) instead, which
+	# compresses them and picks the section from the file name.
+	install -D -m 0644 $(GENERATED)/completions/epistle \
+		debian/epistle/usr/share/bash-completion/completions/epistle
+	install -D -m 0644 $(GENERATED)/completions/_epistle \
+		debian/epistle/usr/share/zsh/vendor-completions/_epistle
+	install -D -m 0644 $(GENERATED)/completions/epistle.fish \
+		debian/epistle/usr/share/fish/vendor_completions.d/epistle.fish
 
 override_dh_auto_clean:
 	cargo clean
