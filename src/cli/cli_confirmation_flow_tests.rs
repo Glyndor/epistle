@@ -111,6 +111,7 @@ pub(super) fn with_alice() -> (tempfile::TempDir, tempfile::NamedTempFile) {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("add alice");
 	(dir, cfg)
@@ -142,7 +143,7 @@ fn account_remove_refuses_an_unknown_or_static_name_without_asking() {
 		let run = scripted(true, None, "y\n", || {
 			accounts::remove(&config, name, QueuePolicy::Drain, false, &mut Vec::new())
 		});
-		assert_eq!(run.value, ExitCode::FAILURE, "{name}");
+		assert_eq!(run.value, ExitCode::from(2), "{name}");
 		assert_eq!(run.stderr, "", "{name}: nothing is asked");
 		assert_eq!(run.unread, 2, "{name}: no answer is read");
 	}
@@ -266,15 +267,12 @@ fn api_key_revoke_asks_with_the_key_scopes() {
 		|_| "Revoke API key \"ci\" (scopes: read)? [y/N]".to_string(),
 		|| {
 			let (dir, cfg) = fixture("");
-			let created = api_keys::create(
-				&load(cfg.path()),
-				"ci",
-				None,
-				None,
-				vec!["read".to_string()],
-				Vec::new(),
-				&mut Vec::new(),
-			);
+			let key = api_keys::NewKey {
+				label: "ci".to_string(),
+				scopes: vec!["read".to_string()],
+				..api_keys::NewKey::default()
+			};
+			let created = api_keys::create(&load(cfg.path()), key, &mut Vec::new());
 			assert_eq!(created, ExitCode::SUCCESS);
 			(dir, cfg)
 		},

@@ -30,6 +30,7 @@ fn add_alice(store: &AccountStore, totp_secret: Option<String>) {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("add alice");
 }

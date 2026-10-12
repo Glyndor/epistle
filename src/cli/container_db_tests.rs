@@ -88,13 +88,25 @@ fn only_operator_paths_that_open_a_pool_are_selected() {
 			],
 			true,
 		),
+		// The resource form of `account-remove` purges the same bayes rows.
+		(
+			vec![
+				"epistle", "account", "remove", "alice", "--queue", "discard",
+			],
+			true,
+		),
+		(vec!["epistle", "account", "list"], false),
 		(vec!["epistle", "check", "ports"], false),
 		(vec!["epistle", "probe"], false),
 		(vec!["epistle", "serve"], false),
 		(vec!["epistle", "backup"], false),
 	] {
-		let cli = super::super::Cli::try_parse_from(args).expect("CLI");
-		assert_eq!(database_config(&cli.command).is_some(), selected);
+		let cli = super::super::Cli::try_parse_from(args.clone()).expect("CLI");
+		assert_eq!(
+			database_config(&cli.command).is_some(),
+			selected,
+			"{args:?}"
+		);
 	}
 }
 

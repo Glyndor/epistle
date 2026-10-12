@@ -69,7 +69,10 @@ fn parses_legacy_account_add_and_remove() {
 		&format!("bob@{DOMAIN}"),
 	])
 	.expect("legacy account-add parses");
-	assert!(matches!(cli.command, Command::AccountAdd { .. }));
+	assert!(matches!(
+		cli.command,
+		Command::Legacy(crate::cli::legacy::Legacy::AccountAdd { .. })
+	));
 
 	let cli = Cli::try_parse_from([
 		"epistle",
@@ -82,7 +85,10 @@ fn parses_legacy_account_add_and_remove() {
 		"discard",
 	])
 	.expect("legacy account-remove parses");
-	assert!(matches!(cli.command, Command::AccountRemove { .. }));
+	assert!(matches!(
+		cli.command,
+		Command::Legacy(crate::cli::legacy::Legacy::AccountRemove { .. })
+	));
 }
 
 #[test]

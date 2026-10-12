@@ -26,6 +26,7 @@ fn store_with(dir: &Path, names: &[&str]) -> AccountStore {
 				disabled: false,
 				quota_bytes: None,
 				allowed_protocols: None,
+				..DynamicAccount::default()
 			})
 			.expect("add account");
 	}
@@ -79,7 +80,7 @@ fn find_log_id_reports_no_match_without_printing_anything() {
 	let store = store_with(dir.path(), &["bob"]);
 	let mut out = Vec::new();
 	let code = account::find_log_id_with_store(&store, "acct-000000000000", &mut out);
-	assert_eq!(code, ExitCode::FAILURE);
+	assert_eq!(code, ExitCode::from(2));
 	assert!(out.is_empty(), "a miss must print nothing on stdout");
 }
 

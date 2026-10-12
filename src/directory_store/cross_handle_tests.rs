@@ -56,11 +56,7 @@ fn two_account_store_handles_lose_no_writes() {
 			name: "alpha".to_string(),
 			addresses: vec!["alpha@example.org".to_string()],
 			password_hash: "$argon2id$cli".to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("cli add alpha");
 	});
@@ -75,11 +71,7 @@ fn two_account_store_handles_lose_no_writes() {
 			name: "bravo".to_string(),
 			addresses: vec!["bravo@example.org".to_string()],
 			password_hash: "$argon2id$server".to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("server add bravo");
 
@@ -253,11 +245,7 @@ fn cli_write_round_trips_to_a_fresh_directory_handle() {
 			name: "carol".to_string(),
 			addresses: vec!["carol@example.org".to_string()],
 			password_hash: "$argon2id$cli".to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..DynamicAccount::default()
 		})
 		.expect("cli add");
 	});

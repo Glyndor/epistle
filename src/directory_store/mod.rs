@@ -38,6 +38,8 @@ pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
 
 mod build;
 
+#[path = "forward_catch_all_mutators.rs"]
+mod forward_catch_all_mutators;
 #[path = "mutators.rs"]
 mod mutators;
 pub mod scram_upgrade;
@@ -92,8 +94,11 @@ impl DirectoryHandle {
 /// them so `mod.rs` stays under the per-file code-line budget.
 pub use crate::directory_store::scram_upgrade::{NoopScramUpgrader, ScramUpgrader};
 
-/// A dynamic account as persisted in `accounts.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A dynamic account as persisted in `accounts.toml`. `Default` is an
+/// empty record for test fixtures and API constructors to fill with
+/// `..DynamicAccount::default()`; it is not a valid account on its own
+/// (`AccountStore::add` requires a password hash and an address).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DynamicAccount {
 	/// Account login name (the local part used by IMAP/SMTP AUTH, without
 	/// the `@domain`). Lowercase ASCII, no leading hyphen; validated by
@@ -131,6 +136,17 @@ pub struct DynamicAccount {
 	/// that the account exists.
 	#[serde(default)]
 	pub allowed_protocols: Option<Vec<Protocol>>,
+	/// External addresses this account's mail is also forwarded to.
+	/// Empty (the default) disables forwarding. Mirrors the static
+	/// `Account::forward` field; dynamic forwards chain onto static ones
+	/// in the directory builder so the two pools compose at delivery time.
+	#[serde(default)]
+	pub forward: Vec<String>,
+	/// Domains for which this account receives mail addressed to otherwise
+	/// unknown local users (catch-all). Empty (the default) opts out; mirrors
+	/// the static `Account::catch_all` field.
+	#[serde(default)]
+	pub catch_all: Vec<String>,
 }
 
 impl DynamicAccount {
@@ -164,6 +180,8 @@ impl DynamicAccount {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			forward: Vec::new(),
+			catch_all: Vec::new(),
 		})
 	}
 }
@@ -599,12 +617,7 @@ impl AccountStore {
 		let allowed_protocols =
 			build::allowed_protocols(&self.static_accounts, &dynamic).collect::<Vec<_>>();
 		let hashes = build::password_hashes(&sql, &self.static_accounts, &dynamic);
-		let catch_all = self.static_accounts.iter().flat_map(|account| {
-			account
-				.catch_all
-				.iter()
-				.map(|domain| (domain.clone(), account.name.clone()))
-		});
+		let catch_all = build::catch_all(&self.static_accounts, &dynamic);
 		let scram = build::scram(&dynamic);
 		let totp = build::totp(&dynamic, &self.crypto);
 		// Disabled accounts are passed through to the directory as a name
@@ -625,16 +638,7 @@ impl AccountStore {
 					.map(|bytes| (account.name.clone(), bytes))
 			})
 			.chain(build::quota_bytes(&dynamic));
-		let forwards = self
-			.static_accounts
-			.iter()
-			.filter(|account| !account.forward.is_empty())
-			.map(|account| {
-				(
-					account.name.clone(),
-					(account.forward.clone(), account.forward_keep_local),
-				)
-			});
+		let forwards = build::forwards(&self.static_accounts, &dynamic);
 		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
 		let aliases = self.aliases.iter().map(|alias| {
 			(

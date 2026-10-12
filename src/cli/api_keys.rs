@@ -1,4 +1,4 @@
-//! `epistle api-key`: create, list and revoke management API keys.
+//! `epistle api-key`: list, create, revoke and rotate management API keys.
 
 use std::process::ExitCode;
 
@@ -6,27 +6,59 @@ use crate::api::api_keys::Scope;
 use crate::api::{ApiKey, ApiKeyStore};
 use crate::config::Config;
 
-/// Generate a strong random key, hash it (SHA-256) and store it under `label`.
-/// The plaintext key is printed once and never stored. `expires_at` is epoch
-/// seconds; `ip_cidr` a single CIDR allowlist; `scopes` lists the permissions
-/// granted (`read`, `write`, `send`, `scim`). The CLI requires at least one
-/// scope — unscoped keys would be admin-equivalent on first leak, which is
-/// the problem the scope field exists to fix. `domains` confines the key to
-/// those domains; empty reaches every configured domain.
-pub(super) fn create(
-	config: &Config,
-	label: &str,
-	expires_at: Option<u64>,
-	ip_cidr: Option<String>,
-	scopes: Vec<String>,
-	domains: Vec<String>,
-	out: &mut impl std::io::Write,
-) -> ExitCode {
+/// What `api-key create` (and the flat `api-key-create`) asks for.
+#[derive(Debug, Default)]
+pub(super) struct NewKey {
+	/// A label identifying the key (e.g. "ci").
+	pub(super) label: String,
+	/// Expiry as Unix epoch seconds.
+	pub(super) expires_at: Option<u64>,
+	/// Single-CIDR client-IP allowlist.
+	pub(super) ip_cidr: Option<String>,
+	/// Permissions granted (`read`, `write`, `send`, `scim`).
+	pub(super) scopes: Vec<String>,
+	/// Domains the key is confined to; empty reaches every domain.
+	pub(super) domains: Vec<String>,
+	/// The one account the key is bound to.
+	pub(super) account: Option<String>,
+}
+
+/// Generate a strong random key, hash it (SHA-256) and store it under
+/// `key.label`. The plaintext key is printed once and never stored. The CLI
+/// requires at least one scope: an unscoped key would be admin-equivalent on
+/// first leak, which is the problem the scope field exists to fix. With
+/// `account`, the key is bound to that account (static or dynamic) and only
+/// the account-scoped surface (JMAP and `/api/v1/send`) accepts it, so it
+/// may hold `read`, `write` and `send` but never `scim`, an administrative
+/// scope with no "own account" to act on.
+pub(super) fn create(config: &Config, key: NewKey, out: &mut impl std::io::Write) -> ExitCode {
+	let NewKey {
+		label,
+		expires_at,
+		ip_cidr,
+		scopes,
+		domains,
+		account,
+	} = key;
+	let (label, account) = (label.as_str(), account.as_deref());
 	if scopes.is_empty() {
-		super::style::error(
+		return super::exit::refused(
 			"--scope is required (repeat to grant more than one: read, write, send, scim)",
 		);
-		return ExitCode::FAILURE;
+	}
+	if let Some(name) = account {
+		match account_known(config, name) {
+			Ok(true) => {}
+			Ok(false) => {
+				return super::exit::refused(format_args!("--account {name}: no such account"));
+			}
+			Err(code) => return code,
+		}
+		if scopes.iter().any(|scope| scope == "scim") {
+			return super::exit::refused(
+				"account-bound API keys cannot hold the scim scope (scim is administrative)",
+			);
+		}
 	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
@@ -49,19 +81,41 @@ pub(super) fn create(
 		ip_cidr,
 		scopes,
 		domains,
-		account: None,
+		account: account.map(str::to_string),
 	};
 	match store.add(key) {
 		Ok(()) => {
 			let _ = writeln!(out, "created API key \"{label}\"");
+			if let Some(name) = account {
+				let _ = writeln!(out, "account-bound to {name}");
+			}
 			let _ = writeln!(out, "key (shown once): {secret}");
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_io_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
+}
+
+/// Whether `name` is an account on this server, static or dynamic. The
+/// API resolves an account-bound key to that account through the same
+/// directory delivery and IMAP use, so either kind can hold one. A store
+/// that cannot be opened is an operation failure, not an unknown name.
+fn account_known(config: &Config, name: &str) -> Result<bool, ExitCode> {
+	crate::directory_store::AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map(|store| store.account_known(name))
+	.map_err(|error| {
+		super::style::error(format_args!("opening account store: {error}"));
+		ExitCode::FAILURE
+	})
 }
 
 /// Replace the secret of an API key, keeping its scopes, domains, expiry and
@@ -89,26 +143,107 @@ pub(super) fn rotate(config: &Config, label: &str, out: &mut impl std::io::Write
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_io_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
 }
 
-/// `epistle api-key <action>`: operations on one existing key.
+/// `epistle api-key <action>`.
 #[derive(Debug, clap::Subcommand)]
 pub enum ApiKeyCli {
-	/// Replace a key's secret and print the new one once. Scopes, domains,
-	/// expiry and CIDR stay as they are; the old secret is revoked in the same
-	/// write.
+	/// List the management API keys (never the key or its hash).
+	List {
+		/// Print a JSON array of key objects instead of one line per key.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Create an API key and print it once.
+	///
+	/// The plaintext key is never stored. With `--account`, the key is bound
+	/// to that account and refused by every route except JMAP and
+	/// `/api/v1/send`; it may hold `read`, `write` and `send`, never `scim`.
+	Create {
+		/// A label identifying this API key (e.g. "ci").
+		#[arg(value_name = "LABEL")]
+		label: String,
+		/// Optional expiry as Unix epoch seconds.
+		#[arg(long, value_name = "EPOCH")]
+		expires_at: Option<u64>,
+		/// Optional single-CIDR client-IP allowlist.
+		#[arg(long, value_name = "CIDR")]
+		ip_cidr: Option<String>,
+		/// Permissions granted (repeat to grant more than one: `read`,
+		/// `write`, `send`). `scim` is rejected for account-bound keys.
+		#[arg(
+			long = "scope",
+			value_name = "SCOPE",
+			value_parser = parse_scope,
+		)]
+		scopes: Vec<String>,
+		/// Confine this key to a domain (repeat for more).
+		#[arg(long = "domain", value_name = "DOMAIN")]
+		domains: Vec<String>,
+		/// Bind the key to one account (then it reaches only JMAP and
+		/// `/api/v1/send`). An account-bound key has no domain-wide reach,
+		/// so `--domain` cannot be combined with it.
+		#[arg(long, value_name = "ACCOUNT", conflicts_with = "domains")]
+		account: Option<String>,
+	},
+	/// Revoke an API key by label.
+	///
+	/// Asks for confirmation on a terminal; `--yes` skips it, and a run
+	/// without a terminal and without `--yes` is refused with exit code 2.
+	Revoke {
+		/// The label of the API key to revoke.
+		#[arg(value_name = "LABEL")]
+		label: String,
+		/// Skip the interactive confirmation.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
+	/// Replace a key's secret and print the new one once.
+	///
+	/// Scopes, domains, expiry and CIDR stay as they are; the old secret is
+	/// revoked in the same write.
 	Rotate {
 		/// The label of the API key to rotate.
 		label: String,
 	},
 }
 
-/// List the management API keys (never the key or its hash).
-pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+/// Run one `epistle api-key <action>`.
+pub(super) fn run(config: &Config, action: ApiKeyCli, out: &mut impl std::io::Write) -> ExitCode {
+	match action {
+		ApiKeyCli::List { json } => list(config, json, out),
+		ApiKeyCli::Create {
+			label,
+			expires_at,
+			ip_cidr,
+			scopes,
+			domains,
+			account,
+		} => create(
+			config,
+			NewKey {
+				label,
+				expires_at,
+				ip_cidr,
+				scopes,
+				domains,
+				account,
+			},
+			out,
+		),
+		ApiKeyCli::Revoke { label, yes } => revoke(config, &label, yes, out),
+		ApiKeyCli::Rotate { label } => rotate(config, &label, out),
+	}
+}
+
+/// List the management API keys (never the key or its hash), one line per
+/// key or, with `json`, as an array of objects.
+pub(super) fn list(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	let store = match ApiKeyStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
@@ -116,6 +251,23 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
+	if json {
+		let rows = store
+			.list()
+			.into_iter()
+			.map(|row| {
+				serde_json::json!({
+					"label": row.label,
+					"expires_at": row.expires_at,
+					"ip_cidr": row.ip_cidr,
+					"scopes": row.scopes,
+					"domains": row.domains,
+					"account": row.account,
+				})
+			})
+			.collect();
+		return super::json_out::print(out, &serde_json::Value::Array(rows));
+	}
 	for row in store.list() {
 		let expiry = row
 			.expires_at
@@ -128,9 +280,13 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		} else {
 			row.scopes.join(",")
 		};
+		let bound = row
+			.account
+			.map(|account| format!("\taccount={account}"))
+			.unwrap_or_default();
 		if writeln!(
 			out,
-			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}",
+			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}{bound}",
 			label = row.label,
 		)
 		.is_err()
@@ -171,8 +327,7 @@ pub(super) fn revoke(
 		}
 	};
 	let Some(key) = store.list().into_iter().find(|key| key.label == label) else {
-		super::style::error(format_args!("no such API key \"{label}\""));
-		return ExitCode::FAILURE;
+		return super::exit::refused(format_args!("no such API key \"{label}\""));
 	};
 	let question = format!(
 		"Revoke API key \"{label}\" (scopes: {})? [y/N]",
@@ -187,8 +342,9 @@ pub(super) fn revoke(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_io_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
 }

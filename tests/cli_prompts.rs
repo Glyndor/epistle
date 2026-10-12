@@ -98,7 +98,7 @@ fn an_unknown_account_and_a_static_one_get_different_errors() {
 			&[&["account"], args, &["--config", config.as_str()]].concat(),
 			b"",
 		);
-		assert_eq!(output.status.code(), Some(1), "{args:?}");
+		assert_eq!(output.status.code(), Some(2), "{args:?}");
 		String::from_utf8_lossy(&output.stderr).into_owned()
 	};
 	assert_eq!(

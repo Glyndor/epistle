@@ -32,7 +32,10 @@ pub enum AlertCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Add an alert rule that fires when a counter's change over a window crosses a threshold.
+	/// Add an alert rule on a counter's change over a window.
+	///
+	/// Add an alert rule that fires when a counter's change over a window
+	/// crosses a threshold.
 	Add {
 		/// Unique rule name, used in the webhook payload, the email subject and the logs.
 		name: String,

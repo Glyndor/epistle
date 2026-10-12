@@ -144,7 +144,7 @@ fn show_and_remove_of_an_unknown_id_fail() {
 	// `queue_remove_refuses_without_yes`.
 	for action in ["show", "remove"] {
 		let (code, text) = run_args(dir.path(), &[action, &missing], 100);
-		assert_eq!(code, ExitCode::FAILURE, "{action}");
+		assert_eq!(code, ExitCode::from(2), "{action}");
 		assert_eq!(text, "", "{action}");
 	}
 }
@@ -264,4 +264,26 @@ fn dispatch_reaches_the_spool_named_by_the_config_file() {
 		.expect("parses");
 	assert_eq!(release.run(), ExitCode::SUCCESS);
 	assert!(spool.load_envelope(ids[0]).expect("load").held.is_none());
+}
+
+#[test]
+fn show_json_prints_one_object_for_the_entry() {
+	let (dir, _spool, ids) = spool_with(1);
+	let id = ids[0].to_string();
+	let (code, text) = run_args(dir.path(), &["show", &id, "--json"], 0);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+	assert_eq!(value["id"], serde_json::json!(id));
+	assert_eq!(value["reverse_path"], "alice0@example.org");
+	assert_eq!(
+		value["recipients"],
+		serde_json::json!(["bob0@remote.example"])
+	);
+	assert_eq!(value["held"], false);
+	assert_eq!(value["held_since"], serde_json::Value::Null);
+	assert_eq!(value["require_tls"], false);
+	assert!(
+		!text.contains("top secret"),
+		"the body leaked into the JSON"
+	);
 }

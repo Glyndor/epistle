@@ -52,7 +52,7 @@ pub(super) fn add(
 	let Some(password) =
 		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
 	else {
-		return ExitCode::FAILURE;
+		return ExitCode::from(super::exit::REFUSED);
 	};
 	let store = match AccountStore::open(
 		&config.data_dir,
@@ -74,6 +74,7 @@ pub(super) fn add(
 	) {
 		Ok(account) => account,
 		Err(error) => {
+			// Hashing or salt generation failed: an operation failure.
 			super::style::error(error);
 			return ExitCode::FAILURE;
 		}
@@ -84,8 +85,9 @@ pub(super) fn add(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_store_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
 }
@@ -192,14 +194,12 @@ pub(super) fn remove(
 		}
 	};
 	if store.is_static(name) {
-		super::style::error(format_args!(
+		return super::exit::refused(format_args!(
 			"account {name}: edit the config file to change a static account"
 		));
-		return ExitCode::FAILURE;
 	}
 	if store.dynamic(name).is_none() {
-		super::style::error(format_args!("no such account: {name}"));
-		return ExitCode::FAILURE;
+		return super::exit::refused(format_args!("no such account: {name}"));
 	}
 	let question = removal_question(config, &store, name, queue);
 	if let Err(code) = super::prompt::confirm_destructive("account-remove", &question, yes) {
@@ -316,11 +316,11 @@ pub(super) fn remove_with_bayes(
 		}
 		Err(StoreError::NotFound(what)) => {
 			super::style::error_to(err, format_args!("no such dynamic account: {what}"));
-			ExitCode::FAILURE
+			ExitCode::from(super::exit::REFUSED)
 		}
 		Err(StoreError::Invalid(message)) => {
 			super::style::error_to(err, message);
-			ExitCode::FAILURE
+			ExitCode::from(super::exit::REFUSED)
 		}
 		Err(error @ StoreError::BayesPurge { .. }) => {
 			super::style::warn_to(

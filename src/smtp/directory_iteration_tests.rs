@@ -116,6 +116,7 @@ fn successful_cleartext_auth_asks_for_a_4096_verifier_rewrite() {
 		disabled: false,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	let recorder = RecordingUpgrader::default();
 	let recorder_arc: std::sync::Arc<dyn ScramUpgrader> = std::sync::Arc::new(recorder.clone());
@@ -155,6 +156,7 @@ fn successful_cleartext_auth_does_not_rewrite_an_upgraded_verifier() {
 		disabled: false,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	let recorder = RecordingUpgrader::default();
 	let recorder_arc: std::sync::Arc<dyn ScramUpgrader> = std::sync::Arc::new(recorder.clone());
@@ -191,6 +193,7 @@ fn failed_cleartext_auth_does_not_rewrite_the_verifier() {
 		disabled: false,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	let recorder = RecordingUpgrader::default();
 	let recorder_arc: std::sync::Arc<dyn ScramUpgrader> = std::sync::Arc::new(recorder.clone());
@@ -270,6 +273,7 @@ fn noop_upgrader_does_not_panic() {
 		disabled: false,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = AccountStore::open(

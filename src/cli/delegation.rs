@@ -38,19 +38,13 @@ impl Command {
 			| Command::Autodiscover { .. }
 			| Command::Suppression { .. }
 			| Command::ReportAbuse { .. }
-			| Command::Accounts { .. }
-			| Command::AccountAdd { .. }
-			| Command::AccountRemove { .. }
 			| Command::Account { .. }
+			// Every flat alias reaches a stateful account-side handler.
+			| Command::Legacy(_)
 			| Command::Queue { .. }
 			| Command::Ban { .. }
 			| Command::Masked { .. }
-			| Command::AppPasswordCreate { .. }
-			| Command::AppPasswords { .. }
-			| Command::AppPasswordRevoke { .. }
-			| Command::ApiKeyCreate { .. }
-			| Command::ApiKeys { .. }
-			| Command::ApiKeyRevoke { .. }
+			| Command::AppPassword { .. }
 			| Command::Archive { .. }
 			| Command::Dkim { .. }
 			| Command::Tls { .. }

@@ -84,6 +84,7 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 	let inbox = dir.path().join("accounts/alice/new");
@@ -170,6 +171,7 @@ fn cli_remove_error_lines_do_not_pollute_stdout() {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");

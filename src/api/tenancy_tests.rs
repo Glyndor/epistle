@@ -61,6 +61,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add bob");
 	ApiState::new(

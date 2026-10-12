@@ -262,6 +262,7 @@ fn archive_list_dispatch_runs_against_real_layout() {
 			archive::Subcommand::List {
 				config: std::path::PathBuf::from(path),
 				account: "alice".to_string(),
+				json: false,
 			},
 			&mut out,
 		),

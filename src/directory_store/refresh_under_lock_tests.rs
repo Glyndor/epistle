@@ -20,11 +20,7 @@ fn account(name: &str) -> DynamicAccount {
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
 		password_hash: "$argon2id$test".to_string(),
-		scram: None,
-		totp_secret: None,
-		disabled: false,
-		quota_bytes: None,
-		allowed_protocols: None,
+		..DynamicAccount::default()
 	}
 }
 

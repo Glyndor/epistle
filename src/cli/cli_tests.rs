@@ -201,7 +201,10 @@ fn export_run_streams_account_mailboxes() {
 fn parses_accounts_command() {
 	let cli = Cli::try_parse_from(["epistle", "accounts", "--config", "/etc/mail.toml"])
 		.expect("accounts parses");
-	assert!(matches!(cli.command, Command::Accounts { .. }));
+	assert!(matches!(
+		cli.command,
+		Command::Legacy(crate::cli::legacy::Legacy::Accounts { .. })
+	));
 }
 
 fn write_config(toml: &str) -> tempfile::NamedTempFile {
@@ -248,7 +251,10 @@ fn parses_account_add_command() {
 		"bob@example.org",
 	])
 	.expect("account-add parses");
-	assert!(matches!(cli.command, Command::AccountAdd { .. }));
+	assert!(matches!(
+		cli.command,
+		Command::Legacy(crate::cli::legacy::Legacy::AccountAdd { .. })
+	));
 }
 
 #[test]
@@ -268,7 +274,7 @@ fn account_add_creates_and_validates() {
 			vec!["bob@example.org".into()],
 			Cursor::new("\n")
 		),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 	assert_eq!(
 		accounts::add(
@@ -277,7 +283,7 @@ fn account_add_creates_and_validates() {
 			vec!["bob@example.org".into()],
 			Cursor::new("short")
 		),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 	assert_eq!(
 		accounts::add(
@@ -298,7 +304,7 @@ fn account_add_creates_and_validates() {
 			vec!["bob2@example.org".into()],
 			Cursor::new("a-long-password")
 		),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 
 	let file = tempfile::NamedTempFile::new().expect("file");

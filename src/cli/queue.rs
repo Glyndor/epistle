@@ -29,6 +29,9 @@ pub enum QueueCli {
 	Show {
 		/// Spool id of the entry.
 		id: Uuid,
+		/// Print one JSON object instead of `key: value` lines.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Make the next delivery attempt happen now, skipping the backoff.
 	Retry(Target),
@@ -75,7 +78,8 @@ pub(super) fn run(
 	match action {
 		QueueCli::List { json: false } => list(data_dir, out),
 		QueueCli::List { json: true } => list_json(&spool, out),
-		QueueCli::Show { id } => show(&spool, id, now, out),
+		QueueCli::Show { id, json: false } => show(&spool, id, now, out),
+		QueueCli::Show { id, json: true } => show_json(&spool, id, out),
 		QueueCli::Retry(target) => edit_many(&spool, &target, "retried", out, |e| {
 			e.next_attempt = 0;
 		}),
@@ -127,7 +131,7 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
 
 fn entry_error(id: Uuid, error: &std::io::Error) -> ExitCode {
 	if error.kind() == std::io::ErrorKind::NotFound {
-		fail(format_args!("no such queue entry: {id}"))
+		super::exit::refused(format_args!("no such queue entry: {id}"))
 	} else {
 		fail(format_args!("queue entry {id}: {error}"))
 	}
@@ -249,6 +253,27 @@ fn show(spool: &FsSpool, id: Uuid, now: u64, out: &mut impl Write) -> ExitCode {
 		envelope.last_error.as_deref().unwrap_or("none")
 	);
 	ExitCode::SUCCESS
+}
+
+/// `queue show --json`: the envelope fields of `queue list --json`, plus
+/// when the hold started and whether TLS is required.
+fn show_json(spool: &FsSpool, id: Uuid, out: &mut impl Write) -> ExitCode {
+	let envelope = match spool.load_envelope(id) {
+		Ok(envelope) => envelope,
+		Err(error) => return entry_error(id, &error),
+	};
+	let view = serde_json::json!({
+		"id": envelope.id,
+		"reverse_path": envelope.reverse_path,
+		"recipients": envelope.recipients,
+		"attempts": envelope.attempts,
+		"next_attempt": envelope.next_attempt,
+		"held": envelope.held.is_some(),
+		"held_since": envelope.held,
+		"require_tls": envelope.require_tls,
+		"last_error": envelope.last_error,
+	});
+	super::json_out::print(out, &view)
 }
 
 /// Apply `edit` to one entry or to every entry, then say how many changed.

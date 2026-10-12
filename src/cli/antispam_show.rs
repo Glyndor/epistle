@@ -16,6 +16,38 @@ pub fn show(config: &Config, out: &mut impl std::io::Write) -> std::io::Result<(
 	Ok(())
 }
 
+/// `antispam show --json`: `{"<key>": {"value", "source"}}` with the same
+/// values and sources as the text rows. A DNSBL list is an array; every
+/// other value is the string the text form prints (`unset` when absent,
+/// `set` for a secret).
+pub fn show_json(config: &Config) -> serde_json::Value {
+	let mut keys = serde_json::Map::new();
+	for key in all_keys() {
+		let row = render_row(config, key);
+		let mut fields = row.splitn(3, '\t');
+		let (name, value, source) = (
+			fields.next().unwrap_or_default(),
+			fields.next().unwrap_or_default(),
+			fields.next().unwrap_or_default(),
+		);
+		let value = match key {
+			Key::DnsblZones | Key::DnsblDomainZones | Key::DnsblUrlZones => {
+				let values: Vec<&str> = match value {
+					"(empty)" => Vec::new(),
+					list => list.split(',').collect(),
+				};
+				serde_json::json!(values)
+			}
+			_ => serde_json::json!(value),
+		};
+		keys.insert(
+			name.to_string(),
+			serde_json::json!({ "value": value, "source": source }),
+		);
+	}
+	serde_json::Value::Object(keys)
+}
+
 pub(super) fn list_row(name: &str, values: &[String]) -> String {
 	if values.is_empty() {
 		format!("{name}\t(empty)\tdefault")

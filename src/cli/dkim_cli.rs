@@ -16,6 +16,8 @@ use crate::dkim::rotate::{self, selector_for};
 /// Actions of `epistle dkim`.
 #[derive(Debug, Subcommand)]
 pub enum DkimCli {
+	/// Show the signing key in service and its next rotation.
+	///
 	/// Show the signing key in service, the next rotation and whether the
 	/// published TXT records match it.
 	Show {
@@ -23,6 +25,8 @@ pub enum DkimCli {
 		#[arg(long)]
 		json: bool,
 	},
+	/// Rotate the signing key now.
+	///
 	/// Rotate the signing key now, publishing the new TXT record for every
 	/// signing domain before the server switches to it.
 	Rotate {

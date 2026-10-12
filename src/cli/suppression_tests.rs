@@ -21,13 +21,13 @@ fn lists_and_removes_suppressed_addresses() {
 
 	// List shows the suppressed address.
 	let mut out = Vec::new();
-	assert_eq!(run(&config, None, None, &mut out), ExitCode::SUCCESS);
+	assert_eq!(run_legacy(&config, None, None, &mut out), ExitCode::SUCCESS);
 	assert_eq!(String::from_utf8(out).expect("utf8"), "bob@example.net\n");
 
 	// Remove clears it.
 	let mut out = Vec::new();
 	assert_eq!(
-		run(&config, Some("bob@example.net"), None, &mut out),
+		run_legacy(&config, Some("bob@example.net"), None, &mut out),
 		ExitCode::SUCCESS
 	);
 	assert!(
@@ -47,12 +47,12 @@ fn lists_and_removes_per_account_addresses() {
 
 	// The global list is empty; the per-account list shows the address.
 	let mut out = Vec::new();
-	assert_eq!(run(&config, None, None, &mut out), ExitCode::SUCCESS);
+	assert_eq!(run_legacy(&config, None, None, &mut out), ExitCode::SUCCESS);
 	assert!(out.is_empty());
 
 	let mut out = Vec::new();
 	assert_eq!(
-		run(&config, None, Some("alice@example.org"), &mut out),
+		run_legacy(&config, None, Some("alice@example.org"), &mut out),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(String::from_utf8(out).expect("utf8"), "bob@example.net\n");
@@ -60,7 +60,7 @@ fn lists_and_removes_per_account_addresses() {
 	// Remove scoped to the account clears it.
 	let mut out = Vec::new();
 	assert_eq!(
-		run(
+		run_legacy(
 			&config,
 			Some("bob@example.net"),
 			Some("alice@example.org"),
@@ -119,7 +119,7 @@ fn add_refuses_something_that_is_not_an_address() {
 	let mut out = Vec::new();
 	assert_eq!(
 		add(&config, "not an address", None, &mut out),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 	assert!(out.is_empty());
 	assert!(

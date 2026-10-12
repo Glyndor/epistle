@@ -65,6 +65,7 @@ fn build() -> Harness {
 		disabled: false,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	store.add(dynamic).expect("add dynamic");
 	let config = write_config(&format!(
@@ -362,7 +363,7 @@ fn address_add_rejects_static_address() {
 	let store = reload_store(&harness);
 	assert_eq!(
 		account::address_add_with_store(&store, DYNAMIC_NAME, &format!("{STATIC_NAME}@{DOMAIN}")),
-		ExitCode::FAILURE,
+		ExitCode::from(2),
 		"address owned by a static account must be refused"
 	);
 }
@@ -377,7 +378,7 @@ fn address_add_rejects_foreign_domain() {
 			DYNAMIC_NAME,
 			&format!("{DYNAMIC_NAME}@elsewhere.example")
 		),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 }
 
@@ -422,7 +423,7 @@ fn static_account_refused_with_edit_config_hint() {
 		account::quota_with_store(&store, STATIC_NAME, Some(1024)),
 		account::protocols_with_store(&store, STATIC_NAME, None),
 	] {
-		assert_eq!(code, ExitCode::FAILURE, "static account must be refused");
+		assert_eq!(code, ExitCode::from(2), "static account must be refused");
 	}
 }
 
@@ -478,7 +479,7 @@ fn show_refuses_unknown_account() {
 	let mut out = Vec::new();
 	assert_eq!(
 		account::show_with_store(&store, "nobody", &mut out),
-		ExitCode::FAILURE,
+		ExitCode::from(2),
 		"a name that exists nowhere must say so",
 	);
 }

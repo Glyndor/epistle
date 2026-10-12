@@ -255,11 +255,7 @@ fn creating_an_account_keeps_the_strict_policy() {
 			name: name.to_string(),
 			addresses: vec!["x@example.org".to_string()],
 			password_hash: "$argon2id$stub".to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		});
 		assert!(
 			matches!(&result, Err(crate::directory_store::StoreError::Invalid(m)) if m.contains("lowercase")),

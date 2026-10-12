@@ -167,3 +167,49 @@ pub(super) fn quota_bytes(dynamic: &[DynamicAccount]) -> Vec<(String, u64)> {
 		})
 		.collect()
 }
+
+/// Catch-all domain to account pairs: static accounts first, then dynamic
+/// ones. Both stores refuse a domain another account already catches, so
+/// no pair overwrites another in the directory's map.
+pub(super) fn catch_all<'a>(
+	static_accounts: &'a [Account],
+	dynamic: &'a [DynamicAccount],
+) -> impl Iterator<Item = (String, String)> + 'a {
+	let pairs = |name: &'a str, domains: &'a [String]| {
+		domains
+			.iter()
+			.map(move |domain| (domain.clone(), name.to_string()))
+	};
+	static_accounts
+		.iter()
+		.flat_map(move |account| pairs(&account.name, &account.catch_all))
+		.chain(
+			dynamic
+				.iter()
+				.flat_map(move |account| pairs(&account.name, &account.catch_all)),
+		)
+}
+
+/// Account to (forward targets, keep a local copy) for every account that
+/// forwards. A dynamic account always keeps its local copy: the store has
+/// no switch for pure forwarding.
+pub(super) fn forwards<'a>(
+	static_accounts: &'a [Account],
+	dynamic: &'a [DynamicAccount],
+) -> impl Iterator<Item = (String, (Vec<String>, bool))> + 'a {
+	static_accounts
+		.iter()
+		.filter(|account| !account.forward.is_empty())
+		.map(|account| {
+			(
+				account.name.clone(),
+				(account.forward.clone(), account.forward_keep_local),
+			)
+		})
+		.chain(
+			dynamic
+				.iter()
+				.filter(|account| !account.forward.is_empty())
+				.map(|account| (account.name.clone(), (account.forward.clone(), true))),
+		)
+}

@@ -24,11 +24,14 @@ fn create_list_revoke_roundtrip() {
 	assert_eq!(
 		create(
 			&config,
-			"ci",
-			None,
-			None,
-			read_scope(),
-			Vec::new(),
+			NewKey {
+				label: "ci".to_string(),
+				expires_at: None,
+				ip_cidr: None,
+				scopes: read_scope(),
+				domains: Vec::new(),
+				account: None,
+			},
 			&mut out
 		),
 		ExitCode::SUCCESS
@@ -39,7 +42,7 @@ fn create_list_revoke_roundtrip() {
 	assert_eq!(ApiKeyStore::open(dir.path()).expect("open").keys().len(), 1);
 
 	let mut out = Vec::new();
-	assert_eq!(list(&config, &mut out), ExitCode::SUCCESS);
+	assert_eq!(list(&config, false, &mut out), ExitCode::SUCCESS);
 	let listed = String::from_utf8(out).expect("utf8");
 	assert!(listed.contains("ci"));
 	assert!(listed.contains("scopes=read"), "{listed}");
@@ -58,12 +61,15 @@ fn create_with_expiry_and_cidr_is_stored() {
 	assert_eq!(
 		create(
 			&config,
-			"ci",
-			Some(9999),
-			Some("10.0.0.0/8".to_string()),
-			read_scope(),
-			Vec::new(),
-			&mut out,
+			NewKey {
+				label: "ci".to_string(),
+				expires_at: Some(9999),
+				ip_cidr: Some("10.0.0.0/8".to_string()),
+				scopes: read_scope(),
+				domains: Vec::new(),
+				account: None,
+			},
+			&mut out
 		),
 		ExitCode::SUCCESS
 	);
@@ -81,8 +87,19 @@ fn create_without_scope_is_rejected() {
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&config, "ci", None, None, Vec::new(), Vec::new(), &mut out),
-		ExitCode::FAILURE,
+		create(
+			&config,
+			NewKey {
+				label: "ci".to_string(),
+				expires_at: None,
+				ip_cidr: None,
+				scopes: Vec::new(),
+				domains: Vec::new(),
+				account: None,
+			},
+			&mut out
+		),
+		ExitCode::from(2),
 		"--scope must be required"
 	);
 }
@@ -95,14 +112,17 @@ fn create_rejects_bad_cidr() {
 	assert_eq!(
 		create(
 			&config,
-			"ci",
-			None,
-			Some("bogus".to_string()),
-			read_scope(),
-			Vec::new(),
-			&mut out,
+			NewKey {
+				label: "ci".to_string(),
+				expires_at: None,
+				ip_cidr: Some("bogus".to_string()),
+				scopes: read_scope(),
+				domains: Vec::new(),
+				account: None,
+			},
+			&mut out
 		),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 }
 
@@ -120,5 +140,5 @@ fn revoke_missing_label_fails() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let mut out = Vec::new();
-	assert_eq!(revoke(&config, "absent", true, &mut out), ExitCode::FAILURE);
+	assert_eq!(revoke(&config, "absent", true, &mut out), ExitCode::from(2));
 }
