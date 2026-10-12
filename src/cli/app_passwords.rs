@@ -14,7 +14,7 @@ pub enum AppPasswordCli {
 	/// List every account's app passwords (never the secret).
 	List {
 		/// Restrict the list to one account.
-		#[arg(long, value_name = "ACCOUNT")]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 		/// Print a JSON array of `{"account", "label", "expires_at",
 		/// "ip_cidr"}` objects.
@@ -27,7 +27,7 @@ pub enum AppPasswordCli {
 	/// printed once and never stored.
 	Create {
 		/// The account the app password belongs to.
-		#[arg(value_name = "ACCOUNT")]
+		#[arg(value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// A human-readable label for this credential (e.g. `iphone`).
 		#[arg(value_name = "LABEL")]
@@ -42,7 +42,7 @@ pub enum AppPasswordCli {
 	/// Revoke an existing app password by label.
 	Revoke {
 		/// The account the app password belongs to.
-		#[arg(value_name = "ACCOUNT")]
+		#[arg(value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The label of the app password to revoke.
 		#[arg(value_name = "LABEL")]

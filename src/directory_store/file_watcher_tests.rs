@@ -19,6 +19,7 @@ use crate::{
 
 fn static_alice() -> Account {
 	Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),

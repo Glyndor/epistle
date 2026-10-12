@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Account, Protocol};
 use crate::directory_store::aliases::AliasStore;
-use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
+use crate::util::address_reason;
 
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
@@ -54,7 +54,11 @@ mod set_totp;
 pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
+mod collisions;
+pub mod display_name;
 mod mutate_store;
+mod normalize;
+pub use normalize::account_name;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -147,6 +151,12 @@ pub struct DynamicAccount {
 	/// the static `Account::catch_all` field.
 	#[serde(default)]
 	pub catch_all: Vec<String>,
+	/// The person's name, free text used as the sender name (JMAP
+	/// `Identity.name`, the `From` that `/api/v1/send` builds). Stored as
+	/// given (trimmed), never lowercased; `None` when unset. Checked by
+	/// [`display_name::validate`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub display_name: Option<String>,
 }
 
 impl DynamicAccount {
@@ -182,6 +192,7 @@ impl DynamicAccount {
 			allowed_protocols: None,
 			forward: Vec::new(),
 			catch_all: Vec::new(),
+			display_name: None,
 		})
 	}
 }
@@ -310,9 +321,9 @@ impl AccountStore {
 	) -> Result<Self, StoreError> {
 		let path = data_dir.join("accounts.toml");
 		let dynamic: DynamicFile = match std::fs::read_to_string(&path) {
-			Ok(text) => {
-				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?
-			}
+			Ok(text) => normalize::file(
+				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?,
+			),
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => DynamicFile::default(),
 			Err(error) => return Err(error.into()),
 		};
@@ -440,22 +451,24 @@ impl AccountStore {
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
-	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
+	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
+		account.name = normalize::account_name(&account.name);
+		normalize::account(&mut account);
+		account.display_name = display_name::stored(account.display_name.as_deref())?;
 		self.mutate_store(|state| {
 			validate_name(&account.name)?;
 			if account.addresses.is_empty() {
 				return Err(StoreError::Invalid("addresses must not be empty".into()));
 			}
 			for raw in &account.addresses {
-				let address = Address::parse(raw)
-					.map_err(|_| StoreError::Invalid(format!("invalid address {raw}")))?;
+				let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
 				if !self
 					.domains
 					.iter()
 					.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
 				{
-					return Err(StoreError::Invalid(format!(
-						"address {raw} is not in a configured domain"
+					return Err(StoreError::Invalid(address_reason::not_handled(
+						address.domain(),
 					)));
 				}
 			}
@@ -579,6 +592,8 @@ impl AccountStore {
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
+			normalize::account(&mut fresh);
+			fresh.display_name = display_name::stored(fresh.display_name.as_deref())?;
 			let mut known_addresses: Vec<String> = self
 				.static_accounts
 				.iter()
@@ -591,14 +606,11 @@ impl AccountStore {
 						.filter(|(index, _)| *index != slot)
 						.flat_map(|(_, existing)| existing.addresses.iter()),
 				)
-				.map(|address| address.to_ascii_lowercase())
+				.map(|address| crate::util::address::normalize(address))
 				.collect();
 			known_addresses.sort();
 			for raw in &fresh.addresses {
-				if known_addresses
-					.binary_search(&raw.to_ascii_lowercase())
-					.is_ok()
-				{
+				if known_addresses.binary_search(raw).is_ok() {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
 			}
@@ -717,3 +729,7 @@ mod account_mutators_tests;
 #[cfg(test)]
 #[path = "cross_handle_tests.rs"]
 mod cross_handle_tests;
+
+#[cfg(test)]
+#[path = "lowercase_tests.rs"]
+mod lowercase_tests;

@@ -21,9 +21,12 @@ use crate::smtp::scram::ScramStored;
 use super::{DynamicAccount, LdapAccount, SqlAccount};
 
 /// `(address, account)` pairs for every account across all sources.
-/// LDAP first, SQL next, then static config, then dynamic — so static
-/// config and dynamic accounts take precedence on a name or address
-/// collision (the directory's maps keep the last writer).
+/// LDAP first, SQL next, then static config, then dynamic, so static
+/// config and dynamic accounts take precedence over the external
+/// directories (the directory's maps keep the last writer). Between
+/// static and dynamic accounts the first claim of an address wins (static
+/// before dynamic, file order within each): a later claim stays on disk
+/// and is reported by `AccountStore::address_collisions`.
 pub(super) fn address_accounts<'a>(
 	ldap: &'a [LdapAccount],
 	sql: &'a [SqlAccount],
@@ -43,19 +46,27 @@ pub(super) fn address_accounts<'a>(
 				.iter()
 				.map(|address| (address.clone(), account.name.clone()))
 		}))
-		.chain(static_accounts.iter().flat_map(|account| {
-			account
-				.addresses
-				.iter()
-				.map(|address| (address.clone(), account.name.clone()))
-		}))
-		.chain(dynamic.iter().flat_map(|account| {
-			account
-				.addresses
-				.iter()
-				.map(|address| (address.clone(), account.name.clone()))
-		}))
+		.chain(first_claims(static_accounts, dynamic))
 		.collect()
+}
+
+/// Static then dynamic `(address, account)` pairs, keeping only the first
+/// claim of each address in its stored form.
+fn first_claims<'a>(
+	static_accounts: &'a [Account],
+	dynamic: &'a [DynamicAccount],
+) -> impl Iterator<Item = (String, String)> + 'a {
+	let mut seen = HashSet::new();
+	static_accounts
+		.iter()
+		.map(|account| (&account.addresses, &account.name))
+		.chain(
+			dynamic
+				.iter()
+				.map(|account| (&account.addresses, &account.name)),
+		)
+		.flat_map(|(addresses, name)| addresses.iter().map(move |a| (a.clone(), name.clone())))
+		.filter(move |(address, _)| seen.insert(crate::util::address::normalize(address)))
 }
 
 /// `(account, hash)` pairs for every account with a stored argon2id

@@ -37,12 +37,31 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 /// `reader` and hashing it (argon2id + SCRAM). On a terminal the password
 /// is typed twice with echo off; piped stdin gives one line. The policy
 /// (length, breached list) is checked before anything is written.
+#[cfg(test)]
 pub(super) fn add(
 	config: &Config,
 	name: &str,
 	addresses: Vec<String>,
+	reader: impl std::io::BufRead,
+) -> ExitCode {
+	add_with_display_name(config, name, addresses, None, reader)
+}
+
+/// [`add`] with an optional display name, checked before the password is
+/// read so nobody types one for an account that cannot be created.
+pub(super) fn add_with_display_name(
+	config: &Config,
+	name: &str,
+	addresses: Vec<String>,
+	display_name: Option<&str>,
 	mut reader: impl std::io::BufRead,
 ) -> ExitCode {
+	let name = &super::account_name::for_new_account(name);
+	let display_name = match display_name.map(crate::directory_store::display_name::validate) {
+		None => None,
+		Some(Ok(stored)) => stored,
+		Some(Err(why)) => return super::exit::refused(format_args!("account {name}: {why}")),
+	};
 	// let-else, not `match`: a match arm that returns is still an arm of the
 	// expression whose value binds to `password`, and the taint analyser follows
 	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
@@ -72,7 +91,10 @@ pub(super) fn add(
 		&password,
 		config.auth.scram,
 	) {
-		Ok(account) => account,
+		Ok(account) => DynamicAccount {
+			display_name,
+			..account
+		},
 		Err(error) => {
 			// Hashing or salt generation failed: an operation failure.
 			super::style::error(error);

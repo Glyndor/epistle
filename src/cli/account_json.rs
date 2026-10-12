@@ -41,7 +41,13 @@ pub(crate) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 		.into_iter()
 		.map(|(name, addresses, dynamic)| {
 			let source = if dynamic { "dynamic" } else { "static" };
-			json!({ "name": name, "source": source, "addresses": addresses })
+			let display_name = store.display_name(&name);
+			json!({
+				"name": name,
+				"source": source,
+				"display_name": display_name,
+				"addresses": addresses,
+			})
 		})
 		.collect();
 	super::json_out::print(out, &Value::Array(rows))
@@ -55,6 +61,7 @@ pub(crate) fn show(store: &AccountStore, name: &str, out: &mut impl std::io::Wri
 			"name": account.name,
 			"log_id": crate::log_id::account(&account.name),
 			"source": "dynamic",
+			"display_name": account.display_name,
 			"addresses": account.addresses,
 			"disabled": account.disabled,
 			"quota_bytes": account.quota_bytes,
@@ -68,6 +75,7 @@ pub(crate) fn show(store: &AccountStore, name: &str, out: &mut impl std::io::Wri
 			"name": account.name,
 			"log_id": crate::log_id::account(&account.name),
 			"source": "static",
+			"display_name": account.display_name,
 			"addresses": account.addresses,
 			"disabled": false,
 			"quota_bytes": account.quota_bytes,

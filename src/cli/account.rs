@@ -36,7 +36,7 @@ pub(super) use account_actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
 	find_log_id_with_store, handle_error, password_with_store, protocols_changed,
 	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
-	show_with_store,
+	set_name_with_store, show_with_store,
 };
 pub use account_args::{
 	AddressArgs, AddressSubcommand, CatchAllArgs, CatchAllSubcommand, ForwardArgs,
@@ -74,6 +74,18 @@ pub enum Subcommand {
 		/// An email address for the account (repeatable).
 		#[arg(long = "address", value_name = "ADDR", required = true)]
 		addresses: Vec<String>,
+		/// The person's name, shown as the sender name (any case and script).
+		#[arg(long, value_name = "TEXT")]
+		display_name: Option<String>,
+	},
+	/// Set the display name of a dynamic account; an empty one clears it.
+	SetName {
+		/// The account login name.
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
+		name: String,
+		/// The person's name, kept as written.
+		#[arg(value_name = "DISPLAY_NAME")]
+		display_name: String,
 	},
 	/// Remove a dynamic account and everything it owns.
 	///
@@ -81,7 +93,7 @@ pub enum Subcommand {
 	/// entries and, with `--queue discard`, its queued mail.
 	Remove {
 		/// Account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// What to do with queued outbound mail: `discard` (drop) or `drain`
 		/// (leave it for delivery). Required.
@@ -100,7 +112,7 @@ pub enum Subcommand {
 	/// fresh account.
 	Password {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 	},
 	/// Disable an account.
@@ -109,13 +121,13 @@ pub enum Subcommand {
 	/// mailbox stays on disk; re-enable with `account enable`.
 	Disable {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 	},
 	/// Re-enable a previously disabled account.
 	Enable {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 	},
 	/// Add or remove a delivery address for the account.
@@ -126,7 +138,7 @@ pub enum Subcommand {
 	/// `none` for the server default).
 	Quota {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The quota size (accepts `K`, `M`, `G`, `T` suffixes and the
 		/// literal `none` for the server default).
@@ -139,7 +151,7 @@ pub enum Subcommand {
 	/// `all` clears the restriction.
 	Protocols {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// The protocol allowlist, comma-separated
 		/// (`imap,smtp,api,webdav`), or `all` to clear.
@@ -152,7 +164,7 @@ pub enum Subcommand {
 	/// protocols, log id). Never secrets.
 	Show {
 		/// The account login name.
-		#[arg(value_name = "NAME")]
+		#[arg(value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// Print one JSON object instead of `key: value` lines.
 		#[arg(long)]
@@ -401,7 +413,11 @@ pub(super) fn run(
 			}
 			super::accounts::list(&config, out)
 		}
-		Subcommand::Add { name, addresses } => {
+		Subcommand::Add {
+			name,
+			addresses,
+			display_name,
+		} => {
 			let config = match Config::load(config_path) {
 				Ok(config) => config,
 				Err(error) => {
@@ -409,7 +425,13 @@ pub(super) fn run(
 					return ExitCode::FAILURE;
 				}
 			};
-			super::accounts::add(&config, &name, addresses, super::prompt::stdin())
+			super::accounts::add_with_display_name(
+				&config,
+				&name,
+				addresses,
+				display_name.as_deref(),
+				super::prompt::stdin(),
+			)
 		}
 		Subcommand::Remove { name, queue, yes } => {
 			let config = match Config::load(config_path) {
@@ -428,6 +450,10 @@ pub(super) fn run(
 			};
 			password_with_store(&store, &name, super::prompt::stdin())
 		}
+		Subcommand::SetName { name, display_name } => match prepare(config_path, &name) {
+			Ok(store) => set_name_with_store(&store, &name, &display_name),
+			Err(code) => code,
+		},
 		Subcommand::Disable { name } => {
 			let store = match prepare(config_path, &name) {
 				Ok(store) => store,

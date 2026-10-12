@@ -26,6 +26,7 @@ fn state(dir: &std::path::Path, token: &str) -> ApiState {
 	]
 	.into_iter()
 	.map(|(name, domain)| crate::config::Account {
+		display_name: None,
 		name: name.into(),
 		addresses: vec![format!("{name}@{domain}")],
 		password_hash: None,

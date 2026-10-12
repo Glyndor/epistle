@@ -11,6 +11,7 @@ fn store_with(domains: &[&str], accounts: &[(&str, &[&str])]) -> AccountStore {
 	let list: Vec<Account> = accounts
 		.iter()
 		.map(|(name, addresses)| Account {
+			display_name: None,
 			name: (*name).to_string(),
 			addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 			password_hash: None,

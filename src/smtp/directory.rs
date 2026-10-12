@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use super::address::Address;
+use crate::util::address::normalize;
 
 /// Run an async future synchronously from a non-async context. Every
 /// listener's authentication path is synchronous (the sans-IO state
@@ -164,7 +165,7 @@ impl Directory {
 				.collect(),
 			accounts_by_address: address_accounts
 				.into_iter()
-				.map(|(address, account)| (address.to_ascii_lowercase(), account))
+				.map(|(address, account)| (normalize(&address), account))
 				.collect(),
 			password_hashes: HashMap::new(),
 			// The `+` separator is the de-facto standard, enabled by default.
@@ -234,7 +235,7 @@ impl Directory {
 	pub fn with_masked(mut self, entries: impl IntoIterator<Item = (String, String)>) -> Self {
 		self.masked_by_address = entries
 			.into_iter()
-			.map(|(address, account)| (address.to_ascii_lowercase(), account))
+			.map(|(address, account)| (normalize(&address), account))
 			.collect();
 		self
 	}
@@ -243,7 +244,7 @@ impl Directory {
 	pub fn with_aliases(mut self, aliases: impl IntoIterator<Item = (String, AliasSpec)>) -> Self {
 		self.aliases = aliases
 			.into_iter()
-			.map(|(address, spec)| (address.to_ascii_lowercase(), spec))
+			.map(|(address, spec)| (normalize(&address), spec))
 			.collect();
 		self
 	}
@@ -251,7 +252,7 @@ impl Directory {
 	/// The member accounts of an alias address, or `None` when the address is
 	/// not an alias or its membership is hidden (privacy).
 	pub fn alias_members(&self, address: &str) -> Option<Vec<String>> {
-		let spec = self.aliases.get(&address.to_ascii_lowercase())?;
+		let spec = self.aliases.get(&normalize(address))?;
 		(!spec.hidden).then(|| spec.members.clone())
 	}
 
@@ -259,7 +260,7 @@ impl Directory {
 	/// a trailing CRLF) for an address, or `None` when it is not a list. Prepended
 	/// to delivered copies so clients can identify and leave the list (RFC 2369).
 	pub fn list_headers(&self, address: &str) -> Option<String> {
-		let spec = self.aliases.get(&address.to_ascii_lowercase())?;
+		let spec = self.aliases.get(&normalize(address))?;
 		let list_id = spec.list_id.as_ref()?;
 		Some(format!(
 			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n\
@@ -613,7 +614,7 @@ impl Directory {
 
 	/// Whether `address` belongs to `account`.
 	pub fn owns_address(&self, account: &str, address: &Address) -> bool {
-		let key = address.to_string().to_ascii_lowercase();
+		let key = normalize(&address.to_string());
 		if let Some(owner) = self.accounts_by_address.get(&key) {
 			return owner == account;
 		}
@@ -627,7 +628,7 @@ impl Directory {
 			};
 			return permitted.iter().any(|addr| {
 				self.accounts_by_address
-					.get(&addr.to_ascii_lowercase())
+					.get(&normalize(addr))
 					.is_some_and(|owner| owner == account)
 			});
 		}
@@ -652,7 +653,7 @@ impl Directory {
 		if !self.domains.contains(domain) {
 			return Resolution::NotLocal;
 		}
-		let key = format!("{local}@{domain}").to_ascii_lowercase();
+		let key = normalize(&format!("{local}@{domain}"));
 		if let Some(account) = self.accounts_by_address.get(&key) {
 			return Resolution::Account(account.clone());
 		}
@@ -661,7 +662,7 @@ impl Directory {
 			let accounts = spec
 				.members
 				.iter()
-				.filter_map(|member| self.accounts_by_address.get(&member.to_ascii_lowercase()))
+				.filter_map(|member| self.accounts_by_address.get(&normalize(member)))
 				.cloned()
 				.collect();
 			return Resolution::Alias(accounts);
@@ -697,7 +698,7 @@ impl Directory {
 		if cut == 0 {
 			return None;
 		}
-		Some(format!("{}@{}", &local[..cut], domain).to_ascii_lowercase())
+		Some(normalize(&format!("{}@{}", &local[..cut], domain)))
 	}
 }
 

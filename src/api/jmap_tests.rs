@@ -368,7 +368,7 @@ async fn jmap_identity_get_lists_addresses() {
 	assert_eq!(status, StatusCode::OK);
 	let identity = &body["methodResponses"][0][1]["list"][0];
 	assert_eq!(identity["email"], "alice@example.org");
-	assert_eq!(identity["name"], "alice");
+	assert_eq!(identity["name"], "", "no display name is set");
 }
 
 #[tokio::test]

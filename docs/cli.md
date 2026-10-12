@@ -884,10 +884,13 @@ Changes to a dynamic account (`<data_dir>/accounts.toml`) reach the running
 server within seconds, no restart. A static account (`[[accounts]]` in
 `mail.toml`) is refused with a hint to edit the config file.
 
+Addresses, domains and account names are stored in lowercase whatever you type: `account add Alice` creates `alice` and says so on stderr.
+
 | Command | What it does |
 |---|---|
 | `epistle account list [--json]` | List every account, static and dynamic, with its addresses. |
-| `epistle account add N --address a@b [--address …]` | Create a dynamic account. On a terminal the password is asked twice with echo off; piped, it is read from stdin (one line). |
+| `epistle account add N --address a@b [--address …] [--display-name TEXT]` | Create a dynamic account. On a terminal the password is asked twice with echo off; piped, it is read from stdin (one line). |
+| `epistle account set-name N TEXT` | Set the person's name used as sender name (JMAP identity, `/api/v1/send` From), kept as written; `""` clears it. |
 | `epistle account remove N --queue discard\|drain [--yes\|-y]` | Remove the account and everything it owns: mailbox, masked addresses, app passwords, per-account suppression, queued mail (`discard` drops it, `drain` leaves it for delivery). Prints the counts removed. Asks first. |
 | `epistle account password N` | Change the password (asked twice with echo off, or one line from stdin). The account is checked before anything is read. |
 | `epistle account disable N` / `enable N` | A disabled account keeps its mailbox but rejects authentication like an unknown login. |

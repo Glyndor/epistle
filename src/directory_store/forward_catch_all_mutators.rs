@@ -13,9 +13,8 @@
 //! entry must name a configured domain no other account catches, the
 //! same rule the config loader applies to a static `catch_all`.
 
-use crate::smtp::address::Address;
-
 use super::{AccountStore, DynamicAccount, StoreError};
+use crate::util::address::normalize;
 
 impl AccountStore {
 	/// Append `target` to the dynamic account's forward list. Refuses:
@@ -29,19 +28,18 @@ impl AccountStore {
 	///   silently would mint a second delivery for every message).
 	pub fn add_forward(&self, name: &str, target: &str) -> Result<(), StoreError> {
 		self.mutate_store(|state| {
-			let target_owned = target.to_string();
-			let target_parsed = Address::parse(&target_owned)
-				.map_err(|_| StoreError::Invalid(format!("invalid address {target}")))?;
+			let target_owned = normalize(target);
+			let target_parsed =
+				crate::util::address_reason::parse(&target_owned).map_err(StoreError::Invalid)?;
 			let account = state
 				.accounts
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			let target_lower = target_owned.to_ascii_lowercase();
 			if account
 				.addresses
 				.iter()
-				.any(|owned| owned.eq_ignore_ascii_case(&target_owned))
+				.any(|owned| normalize(owned) == target_owned)
 			{
 				return Err(StoreError::Invalid(format!(
 					"cannot forward {name} to its own address {target}"
@@ -50,9 +48,9 @@ impl AccountStore {
 			if account
 				.forward
 				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&target_owned))
+				.any(|existing| normalize(existing) == target_owned)
 			{
-				return Err(StoreError::Duplicate(format!("{}/{}", name, target_lower)));
+				return Err(StoreError::Duplicate(format!("{name}/{target_owned}")));
 			}
 			// Touch the parsed form so the parse-validated path is the
 			// same one the builder's forward chain uses at delivery.
@@ -67,14 +65,14 @@ impl AccountStore {
 	/// must currently be on the list; an unknown target is `Invalid`, not
 	/// a silent skip (silent skips let a typo sit, doing nothing).
 	pub fn remove_forward(&self, name: &str, target: &str) -> Result<(), StoreError> {
-		let target_owned = target.to_string();
+		let target_owned = normalize(target);
 		self.mutate_store(|state| {
 			let account = state
 				.accounts
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			let is_target = |existing: &String| existing.eq_ignore_ascii_case(&target_owned);
+			let is_target = |existing: &String| normalize(existing) == target_owned;
 			if !account.forward.iter().any(is_target) {
 				return Err(StoreError::Invalid(format!(
 					"{target} is not in {name}'s forward list"
@@ -99,7 +97,7 @@ impl AccountStore {
 	///
 	/// The domain is stored lowercase, as the directory compares it.
 	pub fn add_catch_all(&self, name: &str, domain: &str) -> Result<(), StoreError> {
-		let domain_lower = domain.trim().to_ascii_lowercase();
+		let domain_lower = crate::util::address::normalize_domain(domain);
 		if let Some(target) = self.domain_aliases.get(&domain_lower) {
 			return Err(StoreError::Invalid(format!(
 				"{domain} is an alias of {target}; set the catch-all on {target}"
@@ -110,9 +108,9 @@ impl AccountStore {
 			.iter()
 			.any(|configured| configured.eq_ignore_ascii_case(&domain_lower))
 		{
-			return Err(StoreError::Invalid(format!(
-				"{domain} is not a configured domain"
-			)));
+			return Err(StoreError::Invalid(
+				crate::util::address_reason::not_handled(&domain_lower),
+			));
 		}
 		let catches = |list: &[String]| list.iter().any(|d| d.eq_ignore_ascii_case(&domain_lower));
 		if let Some(owner) = self
@@ -153,14 +151,16 @@ impl AccountStore {
 	/// Drop `domain` from the dynamic account's catch-all list. Unknown
 	/// domain is `Invalid`, not a silent skip.
 	pub fn remove_catch_all(&self, name: &str, domain: &str) -> Result<(), StoreError> {
-		let domain_owned = domain.to_string();
+		let domain_owned = crate::util::address::normalize_domain(domain);
 		self.mutate_store(|state| {
 			let account = state
 				.accounts
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			let is_target = |existing: &String| existing.eq_ignore_ascii_case(&domain_owned);
+			let is_target = |existing: &String| {
+				crate::util::address::normalize_domain(existing) == domain_owned
+			};
 			if !account.catch_all.iter().any(is_target) {
 				return Err(StoreError::Invalid(format!(
 					"{domain} is not in {name}'s catch-all list"

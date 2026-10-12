@@ -363,6 +363,11 @@ pub struct Config {
 	/// file as an unknown field, by design).
 	#[serde(skip, default)]
 	pub hold_outbound: bool,
+	/// Mail addresses and domains the file spells with capitals, each as a
+	/// line naming the entry and the lowercase form epistle uses for it.
+	/// Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub mixed_case: Vec<String>,
 }
 
 impl std::fmt::Debug for Config {
@@ -723,3 +728,6 @@ max_connections_per_listener = 2048
 }
 
 mod parse;
+
+#[path = "normalize.rs"]
+mod normalize;

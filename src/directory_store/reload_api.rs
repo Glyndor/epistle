@@ -27,7 +27,7 @@ impl AccountStore {
 	pub fn reload_accounts_from(&self, text: &str) -> Result<(), StoreError> {
 		let parsed: super::DynamicFile =
 			toml::from_str(text).map_err(|error| StoreError::Invalid(error.to_string()))?;
-		*self.dynamic.write().expect("store lock") = parsed.accounts;
+		*self.dynamic.write().expect("store lock") = super::normalize::file(parsed).accounts;
 		self.handle.replace(self.build_directory());
 		Ok(())
 	}

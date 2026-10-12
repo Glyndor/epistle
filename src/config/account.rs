@@ -41,6 +41,11 @@ pub struct Account {
 	/// reveals that the account exists.
 	#[serde(default)]
 	pub allowed_protocols: Option<Vec<Protocol>>,
+	/// The person's name, free text used as the sender name (JMAP
+	/// `Identity.name`, the `From` that `/api/v1/send` builds). Kept as
+	/// written, any case and script; trimmed, bounded, no control characters.
+	#[serde(default)]
+	pub display_name: Option<String>,
 }
 
 /// Serde default for boolean fields that default to true.

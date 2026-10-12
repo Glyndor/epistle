@@ -27,6 +27,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 
 	let domains = vec!["a.example".to_string(), "b.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 		password_hash: Some("$argon2id$secret".to_string()),

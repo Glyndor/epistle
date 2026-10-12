@@ -254,6 +254,10 @@ impl Config {
 					"account \"{name}\" has no addresses"
 				)));
 			}
+			if let Some(raw) = &account.display_name {
+				crate::directory_store::display_name::validate(raw)
+					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
+			}
 			if let Some(hash) = &account.password_hash {
 				let argon2id = hash.starts_with("$argon2id$")
 					&& argon2::password_hash::phc::PasswordHash::new(hash).is_ok();
@@ -264,17 +268,23 @@ impl Config {
 				}
 			}
 			for raw in &account.addresses {
-				let address = crate::smtp::address::Address::parse(raw).map_err(|_| {
-					ConfigError::Invalid(format!("account \"{name}\": invalid address \"{raw}\""))
-				})?;
+				let address = crate::util::address_reason::parse(raw)
+					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
 				if !domains.contains(address.domain()) {
 					return Err(ConfigError::Invalid(format!(
-						"account \"{name}\": address \"{raw}\" is not in a configured domain"
+						"account \"{name}\": {}",
+						crate::util::address_reason::not_handled(address.domain())
 					)));
 				}
-				if !addresses.insert(address.to_string().to_ascii_lowercase()) {
+				let key = crate::util::address::normalize(raw);
+				if !addresses.insert(key.clone()) {
+					let first = self
+						.accounts
+						.iter()
+						.find(|other| other.addresses.contains(&key))
+						.map_or(name.as_str(), |other| other.name.as_str());
 					return Err(ConfigError::Invalid(format!(
-						"address \"{raw}\" is assigned to more than one account"
+						"address \"{key}\" belongs to both account \"{first}\" and account \"{name}\""
 					)));
 				}
 			}
@@ -570,7 +580,8 @@ pub(crate) fn validate_dns_name(field: &str, name: &str) -> Result<(), ConfigErr
 			"{field} \"{name}\" is confusable with an ASCII name and is refused"
 		))),
 		Err(crate::domain::DomainError::Invalid) => Err(ConfigError::Invalid(format!(
-			"{field} \"{name}\" is not a valid DNS name"
+			"{field}: {}",
+			crate::util::address_reason::domain_reason(name)
 		))),
 	}
 }

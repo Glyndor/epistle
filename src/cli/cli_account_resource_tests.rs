@@ -52,7 +52,9 @@ fn account_add_resource_parses() {
 	.expect("account add parses");
 	match cli.command {
 		Command::Account { action, .. } => match action {
-			crate::cli::account::Subcommand::Add { name, addresses } => {
+			crate::cli::account::Subcommand::Add {
+				name, addresses, ..
+			} => {
 				assert_eq!(name, "bob");
 				assert_eq!(addresses, vec!["bob@example.org".to_string()]);
 			}

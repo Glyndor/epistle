@@ -22,6 +22,11 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 	let _ = writeln!(out, "name: {}", account.name);
 	let _ = writeln!(out, "log_id: {}", crate::log_id::account(&account.name));
 	let _ = writeln!(out, "source: dynamic");
+	let _ = writeln!(
+		out,
+		"display_name: {}",
+		shown(account.display_name.as_deref())
+	);
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
 	let _ = writeln!(
 		out,
@@ -38,6 +43,26 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 		"protocols: {}",
 		render_protocols(account.allowed_protocols.as_ref())
 	);
+}
+
+/// A display name for `account show`, or `unset`.
+fn shown(display_name: Option<&str>) -> &str {
+	display_name.unwrap_or("unset")
+}
+
+/// `account set-name`: set or (with an empty name) clear the display name.
+pub(crate) fn set_name_with_store(store: &AccountStore, name: &str, raw: &str) -> ExitCode {
+	match store.set_display_name(name, raw) {
+		Ok(Some(stored)) => {
+			println!("display name of {name} set to \"{stored}\"");
+			ExitCode::SUCCESS
+		}
+		Ok(None) => {
+			println!("display name of {name} cleared");
+			ExitCode::SUCCESS
+		}
+		Err(error) => handle_error(name, error),
+	}
 }
 
 /// Render the protocol allowlist. `None` is the pre-restriction
@@ -251,6 +276,11 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 	let _ = writeln!(out, "name: {}", account.name);
 	let _ = writeln!(out, "log_id: {}", crate::log_id::account(&account.name));
 	let _ = writeln!(out, "source: static");
+	let _ = writeln!(
+		out,
+		"display_name: {}",
+		shown(account.display_name.as_deref())
+	);
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
 	let quota = match account.quota_bytes {
 		Some(bytes) => bytes.to_string(),

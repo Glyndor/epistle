@@ -5,6 +5,7 @@
 //! binds to localhost unless explicitly configured otherwise.
 
 mod account_bound;
+mod account_view;
 pub mod api_keys;
 mod audit;
 pub mod domain_scope;
@@ -271,3 +272,11 @@ mod jmap_tests_push_get;
 #[cfg(test)]
 #[path = "jmap_tests_eventsource.rs"]
 mod jmap_tests_eventsource;
+
+#[cfg(test)]
+#[path = "api_tests_addresses.rs"]
+mod tests_addresses;
+
+#[cfg(test)]
+#[path = "api_tests_display_name.rs"]
+mod tests_display_name;

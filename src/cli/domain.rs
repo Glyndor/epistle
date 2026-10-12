@@ -439,7 +439,7 @@ fn validate_domain_for_add(config: &Config, raw: &str) -> Result<(), String> {
 fn add_domain(config: &Config, document: &mut ConfigDocument, domain: &str) -> Result<(), String> {
 	validate_domain_for_add(config, domain)?;
 	let mut domains = config.domains.clone();
-	domains.push(domain.to_string());
+	domains.push(domain.trim().to_ascii_lowercase());
 	let mut new_array = toml_edit::Array::new();
 	for existing in &domains {
 		new_array.push(toml_edit::Value::from(existing.clone()));
@@ -508,7 +508,11 @@ fn add_alias_map(
 			"domain alias {alias} collides with a configured domain"
 		));
 	}
-	document.set_map_entry("domain_aliases", alias, target.to_string())?;
+	let (alias, target) = (
+		alias.trim().to_ascii_lowercase(),
+		target.trim().to_ascii_lowercase(),
+	);
+	document.set_map_entry("domain_aliases", &alias, target)?;
 	Ok(())
 }
 
@@ -524,7 +528,12 @@ fn remove_alias_map(
 	{
 		return Err(format!("domain alias {alias} is not declared"));
 	}
-	document.remove_map_entry("domain_aliases", alias)?;
+	let key = document
+		.map_key("domain_aliases", |key| {
+			key.eq_ignore_ascii_case(alias.trim())
+		})
+		.unwrap_or_else(|| alias.to_string());
+	document.remove_map_entry("domain_aliases", &key)?;
 	Ok(())
 }
 

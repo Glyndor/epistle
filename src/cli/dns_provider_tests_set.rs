@@ -240,7 +240,7 @@ fn invalid_requests_are_refused_and_leave_the_file_untouched() {
 				"--token-env",
 				"A",
 			],
-			"--zone \"not a zone\" is not a valid DNS name".to_string(),
+			"--zone: spaces are not allowed".to_string(),
 		),
 	] {
 		let run = run(DNS, &args, false);

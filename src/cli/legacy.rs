@@ -49,7 +49,7 @@ pub enum Legacy {
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account name.
-		#[arg(long, value_name = "NAME")]
+		#[arg(long, value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		name: String,
 		/// What to do with queued outbound mail from the account:
 		/// `discard` (drop it) or `drain` (leave it for delivery).
@@ -69,7 +69,7 @@ pub enum Legacy {
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account the app password belongs to.
-		#[arg(long, value_name = "NAME")]
+		#[arg(long, value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// A label identifying this app password (e.g. "iphone").
 		#[arg(long, value_name = "LABEL")]
@@ -96,7 +96,7 @@ pub enum Legacy {
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// The account the app password belongs to.
-		#[arg(long, value_name = "NAME")]
+		#[arg(long, value_name = "NAME", value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The label of the app password to revoke.
 		#[arg(long, value_name = "LABEL")]
@@ -141,7 +141,7 @@ pub enum Legacy {
 		/// JMAP and `/api/v1/send`). The `scim` scope is rejected for
 		/// account-bound keys, since SCIM manages accounts from outside and
 		/// there is no equivalent of "the key's own account".
-		#[arg(long, value_name = "ACCOUNT")]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 	},
 	/// (Compatibility) List API keys: use `api-key list` instead.
@@ -194,7 +194,11 @@ impl Legacy {
 				addresses,
 			} => (
 				config,
-				Resource::Account(account::Subcommand::Add { name, addresses }),
+				Resource::Account(account::Subcommand::Add {
+					name,
+					addresses,
+					display_name: None,
+				}),
 			),
 			Legacy::AccountRemove {
 				config,

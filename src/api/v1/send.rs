@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
-use crate::smtp::address::Address;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::CapOutcome;
+use crate::util::address_reason;
 
 #[derive(Deserialize)]
 pub struct SendRequest {
@@ -20,6 +20,10 @@ pub struct SendRequest {
 	subject: String,
 	#[serde(default)]
 	text: String,
+	/// The sender's name for the `From` header. Absent uses the account's
+	/// display name.
+	#[serde(default)]
+	from_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -61,11 +65,19 @@ pub async fn send(
 		));
 	}
 	// Sender and every recipient must be syntactically valid addresses.
-	if Address::parse(&request.from).is_err() {
-		return Err(ApiError::invalid_input("Invalid sender address."));
+	if let Err(why) = address_reason::parse(&request.from) {
+		return Err(ApiError::invalid_input(&format!(
+			"Invalid sender address: {why}."
+		)));
 	}
-	if request.to.iter().any(|to| Address::parse(to).is_err()) {
-		return Err(ApiError::invalid_input("Invalid recipient address."));
+	if let Some(why) = request
+		.to
+		.iter()
+		.find_map(|to| address_reason::parse(to).err())
+	{
+		return Err(ApiError::invalid_input(&format!(
+			"Invalid recipient address: {why}."
+		)));
 	}
 	// The request acts for one account the credential may reach, and the
 	// sender must be an address that account owns: the rule
@@ -129,11 +141,16 @@ pub async fn send(
 		.unwrap_or("localhost");
 	let date = crate::clock::rfc5322(std::time::SystemTime::now());
 	let message_id = format!("<{}@{domain}>", uuid::Uuid::now_v7());
+	let display_name = match request.from_name.as_deref() {
+		Some(raw) => crate::directory_store::display_name::validate(raw)
+			.map_err(|why| ApiError::invalid_input(&format!("Invalid from_name: {why}.")))?,
+		None => state.store().display_name(&account),
+	};
 	let data = format!(
 		"From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: {date}\r\n\
 		 Message-ID: {message_id}\r\nMIME-Version: 1.0\r\n\
 		 Content-Type: text/plain; charset=utf-8\r\n\r\n{text}",
-		from = request.from,
+		from = super::send_from::from_header(display_name.as_deref(), &request.from),
 		to = request.to.join(", "),
 		subject = request.subject,
 		text = request.text,
@@ -167,14 +184,14 @@ fn acting_account(state: &ApiState, principal: &Principal, from: &str) -> Option
 	if let Principal::Account { name, .. } = principal {
 		return Some(name.clone());
 	}
-	let lower = from.to_ascii_lowercase();
+	let lower = crate::util::address::normalize(from);
 	state
 		.accounts()
 		.into_iter()
 		.find(|view| {
 			view.addresses
 				.iter()
-				.any(|address| address.to_ascii_lowercase() == lower)
+				.any(|address| crate::util::address::normalize(address) == lower)
 		})
 		.filter(|view| principal.admits_account(&view.name, &view.addresses))
 		.map(|view| view.name)

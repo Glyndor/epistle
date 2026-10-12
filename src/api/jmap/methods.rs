@@ -54,7 +54,9 @@ pub(super) fn quota_get(
 }
 
 /// `Identity/get` (RFC 8621 §6.1): the account's sending identities, one per
-/// configured address.
+/// configured address. `name` is the account's display name, or empty when it
+/// has none (RFC 8621 allows an empty name; the account identifier is not a
+/// person's name).
 pub(super) fn identity_get(
 	state: &ApiState,
 	principal: &Principal,
@@ -76,7 +78,7 @@ pub(super) fn identity_get(
 		.map(|address| {
 			json!({
 				"id": address,
-				"name": view.name,
+				"name": view.display_name.as_deref().unwrap_or_default(),
 				"email": address,
 				"replyTo": null,
 				"bcc": null,
