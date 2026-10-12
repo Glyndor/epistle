@@ -209,7 +209,7 @@ pub(in crate::cli) fn refuse_unsafe_targets(
 		);
 		let _ = writeln!(
 			status,
-			"  stop the mail service first (`epistle stack down`), or pass --force"
+			"  stop it first and keep the database up (`epistle stack stop mail`), or pass --force"
 		);
 		return Err("mail service is running".into());
 	}
@@ -254,7 +254,7 @@ fn data_dir_has_accounts(data_dir: &Path) -> Result<(), String> {
 /// compose stack. The compose file lives at `<data_dir>/compose/compose.yaml`;
 /// without it (the standalone host install, or a setup the operator
 /// built by hand) there is no stack to talk to and the answer is "not
-/// running" — the operator has nothing to stop. When the compose file
+/// running": the operator has nothing to stop. When the compose file
 /// exists, the `podup ps` listing is the source of truth. The probe
 /// shares the live `podup` binary the rest of the CLI calls, so the
 /// answer is what the operator sees.

@@ -67,7 +67,7 @@ fn database_sql_is_not_laid_into_data_dir() {
 			// `Command::new` falls back to `PATH`; the production
 			// resolver would return `None`. The real `psql` is
 			// not on the host `PATH` here, so the database step
-			// fails with `BinaryMissing` — which is the failure
+			// fails with `BinaryMissing`, which is the failure
 			// mode the assertion below relies on.
 			let _ = program;
 			None
@@ -81,7 +81,7 @@ fn database_sql_is_not_laid_into_data_dir() {
 	);
 	// The mail entry under `data/` is still extracted.
 	assert!(data_dir.join("accounts/alice/new/m1.eml").exists());
-	// Database restore nevertheless got the SQL bytes — the archive
+	// Database restore nevertheless got the SQL bytes: the archive
 	// entry is reached through `entries` in `run_restore`, separate
 	// from `lay_files`. We assert that here by checking the bytes
 	// are passed to the psql process: with `psql` absent, the absence
@@ -136,8 +136,8 @@ fn database_sql_reaches_psql_through_the_entry_list() {
 	);
 	// The stub exits 0, so the database restore succeeds and the
 	// overall restore is green even though `psql` was the dummy.
-	// We do not assert on the exit code here — the binary does
-	// not write a psql-conf error — only on the side-effects.
+	// We do not assert on the exit code here: the binary does
+	// not write a psql-conf error, only on the side-effects.
 	let _ = exit;
 	let marker = std::fs::read_to_string(&marker_path).unwrap_or_default();
 	assert!(

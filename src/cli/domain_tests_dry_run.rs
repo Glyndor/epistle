@@ -49,7 +49,7 @@ fn parsed_domain_action(argv: &[&str]) -> (std::path::PathBuf, bool, DomainCli) 
 }
 
 /// Drive one parsed domain action through the production `commit_*`
-/// helpers — every leaf route ends in one of those — but with the
+/// helpers (every leaf route ends in one of those) but with the
 /// `restart` callback stubbed as a panic so a non-dry-run path that
 /// triggers a restart fails the test loudly.
 fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitCode {

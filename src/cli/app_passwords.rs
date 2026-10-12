@@ -73,7 +73,7 @@ pub(super) fn create(
 /// a typo (or a hostile `epistle app-password-create` against a fresh
 /// `data_dir`) would otherwise produce an orphan credential that a
 /// later account with the same name inherits. Static accounts are
-/// not dynamic, so we reject them too — `AppPasswordStore` would not
+/// not dynamic, so we reject them too: `AppPasswordStore` would not
 /// be able to attribute the credential to them anyway.
 fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), String> {
 	let store = AccountStore::open(
