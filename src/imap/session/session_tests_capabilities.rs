@@ -8,11 +8,11 @@ use super::*;
 const POST_LOGIN: &str = "* CAPABILITY IMAP4rev1 IMAP4rev2 MOVE IDLE LITERAL+ SPECIAL-USE NAMESPACE \
 ID UIDPLUS SORT THREAD=ORDEREDSUBJECT UNSELECT ENABLE ESEARCH MULTISEARCH QUOTA QUOTA=RES-STORAGE \
 STATUS=SIZE CONDSTORE LIST-EXTENDED LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL \
-RIGHTS=texk METADATA CHILDREN WITHIN SEARCHRES COMPRESS=DEFLATE NOTIFY UIDONLY AUTH=SCRAM-SHA-256 AUTH=PLAIN \
+RIGHTS=texk METADATA CHILDREN WITHIN SEARCHRES COMPRESS=DEFLATE NOTIFY UIDONLY UTF8=ACCEPT AUTH=SCRAM-SHA-256 AUTH=PLAIN \
 AUTH=LOGIN SASL-IR\r\n";
 
 #[test]
-fn post_login_capability_lists_uidonly() {
+fn post_login_capability_lists_uidonly_and_utf8_accept() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	let response = text(&session.command_line("c1 CAPABILITY"));
@@ -23,7 +23,7 @@ fn post_login_capability_lists_uidonly() {
 }
 
 #[test]
-fn pre_login_capability_leaves_uidonly_out() {
+fn pre_login_capability_leaves_enable_only_extensions_out() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let response = text(&session.command_line("c1 CAPABILITY"));
@@ -32,6 +32,7 @@ fn pre_login_capability_leaves_uidonly_out() {
 		"{response}"
 	);
 	assert!(!response.contains(" UIDONLY"), "{response}");
+	assert!(!response.contains(" UTF8=ACCEPT"), "{response}");
 }
 
 #[test]
