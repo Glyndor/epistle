@@ -98,8 +98,9 @@ impl ScriptStore {
 	pub fn validate(script: &str) -> Result<(), StoreError> {
 		let tokens = crate::sieve::lexer::tokenize(script)
 			.map_err(|error| StoreError::InvalidScript(format!("{error:?}")))?;
-		crate::sieve::parser::parse(&tokens)
+		let commands = crate::sieve::parser::parse(&tokens)
 			.map_err(|error| StoreError::InvalidScript(format!("{error:?}")))?;
+		enforce_mailbox_require(&commands)?;
 		Ok(())
 	}
 
@@ -241,6 +242,84 @@ impl ScriptStore {
 			}
 		}
 	}
+}
+
+/// Walk a parsed script and reject it if it uses a feature of the
+/// `mailbox` extension (RFC 5490) without first declaring it. The
+/// `mailboxexists` test and the `:create` tag of `fileinto` only exist
+/// when the extension is required, so a script that names them without
+/// `require "mailbox"` cannot run anywhere it is uploaded; refusing it
+/// here keeps the on-disk filter honest.
+fn enforce_mailbox_require(commands: &[crate::sieve::ast::Command]) -> Result<(), StoreError> {
+	if !uses_mailbox_feature(commands) {
+		return Ok(());
+	}
+	if declares_mailbox_require(commands) {
+		return Ok(());
+	}
+	Err(StoreError::InvalidScript(
+		"mailboxexists or fileinto :create requires `require \"mailbox\"`".into(),
+	))
+}
+
+/// Whether the script uses any of the `mailbox` extension's features.
+fn uses_mailbox_feature(commands: &[crate::sieve::ast::Command]) -> bool {
+	fn in_command(command: &crate::sieve::ast::Command) -> bool {
+		match command {
+			crate::sieve::ast::Command::Action { name, args } => {
+				if name == "fileinto" {
+					// `fileinto :create` only exists with the extension.
+					if args.iter().any(
+						|arg| matches!(arg, crate::sieve::ast::Argument::Tag(t) if t == "create"),
+					) {
+						return true;
+					}
+				}
+				false
+			}
+			crate::sieve::ast::Command::If(conditional) => {
+				in_test(&conditional.branches[0].test)
+					|| conditional.branches.iter().any(|b| in_test(&b.test))
+					|| conditional
+						.branches
+						.iter()
+						.any(|b| b.body.iter().any(in_command))
+					|| conditional
+						.otherwise
+						.as_ref()
+						.is_some_and(|body| body.iter().any(in_command))
+			}
+		}
+	}
+	fn in_test(test: &crate::sieve::ast::Test) -> bool {
+		if test.name == "mailboxexists" {
+			return true;
+		}
+		test.children.iter().any(in_test)
+	}
+	commands.iter().any(in_command)
+}
+
+/// Whether the script has a `require "mailbox"` (or a list including
+/// `"mailbox"`) anywhere in its top-level commands. Per RFC 5228 §3.3
+/// the `require` must precede the first use, but for the validator's
+/// purpose the presence anywhere in the script is enough; a client
+/// that splits `require` from the action is malformed Sieve anyway.
+fn declares_mailbox_require(commands: &[crate::sieve::ast::Command]) -> bool {
+	use crate::sieve::ast::{Argument, Command};
+	fn arg_names(arg: &Argument) -> Vec<&str> {
+		match arg {
+			Argument::Str(name) => vec![name.as_str()],
+			Argument::StrList(list) => list.iter().map(String::as_str).collect(),
+			_ => Vec::new(),
+		}
+	}
+	commands.iter().any(|command| match command {
+		Command::Action { name, args } => {
+			name == "require" && args.iter().flat_map(arg_names).any(|s| s == "mailbox")
+		}
+		Command::If(_) => false,
+	})
 }
 
 #[cfg(test)]

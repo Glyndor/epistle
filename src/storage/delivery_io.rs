@@ -6,6 +6,7 @@
 use uuid::Uuid;
 
 use crate::storage::spool::write_sync;
+use crate::util::path_component::AccountName;
 
 /// Persist Sieve-assigned flags as the message's IMAP `.flags` sidecar, so
 /// a `setflag`/`addflag` filter is reflected when the mailbox is opened.
@@ -48,4 +49,21 @@ pub(super) fn sieve_mailbox(name: &str) -> Option<String> {
 		MailboxName::Inbox => Some("INBOX".to_string()),
 		MailboxName::Folder(_) => Some(stored),
 	}
+}
+
+/// Whether the named mailbox already exists in the account (INBOX is
+/// always present for a valid account).
+pub(super) fn mailbox_exists(data_dir: &std::path::Path, account: &str, mailbox: &str) -> bool {
+	if mailbox.eq_ignore_ascii_case("INBOX") {
+		return AccountName::new(account).is_ok();
+	}
+	crate::imap::mailbox::exists(data_dir, account, mailbox)
+}
+
+/// Create the named mailbox if it does not exist (RFC 5490 §3.2 `:create`).
+/// Errors from `imap::mailbox::create` are swallowed: a failed create
+/// turns the fileinto into a run-time error that the delivery path
+/// falls back from, never a delivery failure that loses mail.
+pub(super) fn ensure_mailbox(data_dir: &std::path::Path, account: &str, mailbox: &str) {
+	let _ = crate::imap::mailbox::create(data_dir, account, mailbox);
 }

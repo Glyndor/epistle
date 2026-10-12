@@ -117,3 +117,41 @@ fn fileinto_a_name_imap_cannot_create_keeps_the_message() {
 		folders(dir.path())
 	);
 }
+
+#[test]
+fn mailboxexists_keeps_the_message_when_the_folder_does_not_exist() {
+	// The interpreter sees the account's mailbox list (so mailboxexists
+	// is true only for real folders) and a missing folder short-circuits
+	// the body, leaving the implicit keep.
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver_with(
+		dir.path(),
+		"require \"mailbox\"; \
+		 if mailboxexists \"Junk\" { fileinto \"Junk\"; }",
+	);
+	assert_eq!(
+		inbox_messages(dir.path()),
+		1,
+		"mailboxexists false on a missing folder: the implicit keep stands"
+	);
+	assert_eq!(
+		folder_messages(dir.path(), "Junk"),
+		0,
+		"the fileinto never ran; no folder was created"
+	);
+}
+
+#[test]
+fn mailboxexists_uses_an_existing_folder() {
+	// IMAP CREATEd folders appear in the mailbox list, so the fileinto
+	// branch runs and the message lands there.
+	let dir = tempfile::tempdir().expect("tempdir");
+	crate::imap::mailbox::create(dir.path(), "alice", "Junk").expect("IMAP CREATE");
+	deliver_with(
+		dir.path(),
+		"require \"mailbox\"; \
+		 if mailboxexists \"Junk\" { fileinto \"Junk\"; }",
+	);
+	assert_eq!(folder_messages(dir.path(), "Junk"), 1);
+	assert_eq!(inbox_messages(dir.path()), 0);
+}
