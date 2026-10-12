@@ -132,11 +132,8 @@ fn resolve_addresses(emails: &[Email], fallback: &[String]) -> Result<Vec<String
 		if lower.is_empty() {
 			return Err(ScimError::invalid("email value must not be empty"));
 		}
-		if !lower.contains('@') {
-			return Err(ScimError::invalid(format!(
-				"invalid email \"{}\"",
-				email.value
-			)));
+		if let Err(why) = crate::util::address_reason::parse(&lower) {
+			return Err(ScimError::invalid(format!("email: {why}")));
 		}
 		out.push(lower);
 	}

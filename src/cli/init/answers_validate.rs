@@ -35,13 +35,15 @@ fn check_domain(value: &str) -> Result<String, Invalid> {
 		Ok(norm) => Ok(norm),
 		Err(why) => {
 			let reason = match why {
-				crate::domain::DomainError::Invalid => "is not a valid FQDN".to_string(),
+				crate::domain::DomainError::Invalid => {
+					crate::util::address_reason::domain_reason(value)
+				}
 				crate::domain::DomainError::Confusable => {
 					"is confusable with another name".to_string()
 				}
 			};
 			Err(Invalid::Domain {
-				value: value.to_string(),
+				value: crate::util::address_reason::shorten(value),
 				reason,
 			})
 		}

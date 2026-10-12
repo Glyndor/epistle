@@ -13,8 +13,6 @@
 //! entry must name a configured domain no other account catches, the
 //! same rule the config loader applies to a static `catch_all`.
 
-use crate::smtp::address::Address;
-
 use super::{AccountStore, DynamicAccount, StoreError};
 
 impl AccountStore {
@@ -30,8 +28,8 @@ impl AccountStore {
 	pub fn add_forward(&self, name: &str, target: &str) -> Result<(), StoreError> {
 		self.mutate_store(|state| {
 			let target_owned = target.to_string();
-			let target_parsed = Address::parse(&target_owned)
-				.map_err(|_| StoreError::Invalid(format!("invalid address {target}")))?;
+			let target_parsed =
+				crate::util::address_reason::parse(&target_owned).map_err(StoreError::Invalid)?;
 			let account = state
 				.accounts
 				.iter_mut()
@@ -110,9 +108,9 @@ impl AccountStore {
 			.iter()
 			.any(|configured| configured.eq_ignore_ascii_case(&domain_lower))
 		{
-			return Err(StoreError::Invalid(format!(
-				"{domain} is not a configured domain"
-			)));
+			return Err(StoreError::Invalid(
+				crate::util::address_reason::not_handled(&domain_lower),
+			));
 		}
 		let catches = |list: &[String]| list.iter().any(|d| d.eq_ignore_ascii_case(&domain_lower));
 		if let Some(owner) = self

@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
-use crate::smtp::address::Address;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::CapOutcome;
+use crate::util::address_reason;
 
 #[derive(Deserialize)]
 pub struct SendRequest {
@@ -61,11 +61,19 @@ pub async fn send(
 		));
 	}
 	// Sender and every recipient must be syntactically valid addresses.
-	if Address::parse(&request.from).is_err() {
-		return Err(ApiError::invalid_input("Invalid sender address."));
+	if let Err(why) = address_reason::parse(&request.from) {
+		return Err(ApiError::invalid_input(&format!(
+			"Invalid sender address: {why}."
+		)));
 	}
-	if request.to.iter().any(|to| Address::parse(to).is_err()) {
-		return Err(ApiError::invalid_input("Invalid recipient address."));
+	if let Some(why) = request
+		.to
+		.iter()
+		.find_map(|to| address_reason::parse(to).err())
+	{
+		return Err(ApiError::invalid_input(&format!(
+			"Invalid recipient address: {why}."
+		)));
 	}
 	// The request acts for one account the credential may reach, and the
 	// sender must be an address that account owns: the rule

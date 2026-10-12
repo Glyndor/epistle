@@ -57,8 +57,8 @@ pub(super) fn add(
 ) -> ExitCode {
 	// Anything that is not a deliverable address would sit in the list
 	// forever and match nothing, so refuse it up front.
-	if crate::smtp::address::Address::parse(address).is_err() {
-		return super::exit::refused(format_args!("{address:?} is not a valid email address"));
+	if let Err(why) = crate::util::address_reason::parse(address) {
+		return super::exit::refused(format_args!("cannot suppress: {why}"));
 	}
 	let list = match SuppressionList::open(&config.data_dir) {
 		Ok(list) => list,

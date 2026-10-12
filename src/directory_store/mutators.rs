@@ -6,7 +6,7 @@
 //! the "re-read before mutate" check the rest of the dynamic mutators
 //! apply are inherited for free.
 
-use crate::smtp::address::Address;
+use crate::util::address_reason;
 
 use super::{AccountStore, DynamicAccount, StoreError};
 
@@ -117,15 +117,14 @@ impl AccountStore {
 	/// Rebuilds the directory so the next delivery attempt resolves the
 	/// new address.
 	pub fn add_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
-		let address = Address::parse(raw)
-			.map_err(|_| StoreError::Invalid(format!("invalid address {raw}")))?;
+		let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
 		if !self
 			.domains
 			.iter()
 			.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
 		{
-			return Err(StoreError::Invalid(format!(
-				"address {raw} is not in a configured domain"
+			return Err(StoreError::Invalid(address_reason::not_handled(
+				address.domain(),
 			)));
 		}
 		self.mutate_store(|state| {

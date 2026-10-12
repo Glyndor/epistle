@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use crate::config::{Alias, Config};
 use crate::directory_store::AccountStore;
-use crate::smtp::address::Address;
+use crate::util::address_reason;
 
 /// Validate that `raw` is a syntactically valid email address whose
 /// domain is configured, and that no other owner already uses it.
@@ -18,14 +18,16 @@ pub(super) fn validate_alias_address(
 	raw: &str,
 	store: &AccountStore,
 ) -> Result<(), String> {
-	let parsed = Address::parse(raw)
-		.map_err(|_| format!("alias address {raw} is not a valid email address"))?;
+	let parsed = address_reason::parse(raw).map_err(|why| format!("alias address: {why}"))?;
 	if !config
 		.domains
 		.iter()
 		.any(|domain| domain.eq_ignore_ascii_case(parsed.domain()))
 	{
-		return Err(format!("alias address {raw} is not in a configured domain"));
+		return Err(format!(
+			"alias address: {}",
+			address_reason::not_handled(parsed.domain())
+		));
 	}
 	let used_by_account = config
 		.accounts
@@ -64,8 +66,7 @@ pub(super) fn validate_alias_address(
 /// but does not check against the store (the alias itself is allowed to
 /// deliver to addresses the directory cannot route to).
 pub(super) fn validate_member_or_sender(label: &str, raw: &str) -> Result<(), String> {
-	let parsed = Address::parse(raw)
-		.map_err(|_| format!("{label} address {raw} is not a valid email address"))?;
+	let parsed = address_reason::parse(raw).map_err(|why| format!("{label} address: {why}"))?;
 	if parsed.local_part().is_empty() || parsed.domain().is_empty() {
 		return Err(format!("{label} address {raw} is empty"));
 	}

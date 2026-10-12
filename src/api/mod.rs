@@ -271,3 +271,7 @@ mod jmap_tests_push_get;
 #[cfg(test)]
 #[path = "jmap_tests_eventsource.rs"]
 mod jmap_tests_eventsource;
+
+#[cfg(test)]
+#[path = "api_tests_addresses.rs"]
+mod tests_addresses;

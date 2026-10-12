@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Account, Protocol};
 use crate::directory_store::aliases::AliasStore;
-use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
+use crate::util::address_reason;
 
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
@@ -447,15 +447,14 @@ impl AccountStore {
 				return Err(StoreError::Invalid("addresses must not be empty".into()));
 			}
 			for raw in &account.addresses {
-				let address = Address::parse(raw)
-					.map_err(|_| StoreError::Invalid(format!("invalid address {raw}")))?;
+				let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
 				if !self
 					.domains
 					.iter()
 					.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
 				{
-					return Err(StoreError::Invalid(format!(
-						"address {raw} is not in a configured domain"
+					return Err(StoreError::Invalid(address_reason::not_handled(
+						address.domain(),
 					)));
 				}
 			}
