@@ -685,25 +685,25 @@ impl ApiState {
 	/// second time. The middleware never calls this; the path/method
 	/// inference it does is enough for the routes that reach it.
 	///
-	/// When the principal carries a bearer (`Account` or `Domains` or a
+	/// When the principal carries a credential (`Account` or `Domains` or a
 	/// key-shaped `Admin`), scope is decided by the API key that
-	/// authenticated, the same way [`Self::require_scope`] reads it.
-	/// The bare `Admin` (the configured static token) admits every
-	/// scope.
+	/// authenticated, from the same peer, the same way
+	/// [`Self::require_scope`] reads it. The bare `Admin` (the configured
+	/// static token) admits every scope; any other principal without a
+	/// credential admits none.
 	pub fn require_scope_for_principal(
 		&self,
 		principal: &super::Principal,
 		scope: Scope,
 	) -> Result<(), ApiError> {
-		match principal.token() {
-			Some(token) => {
-				if self.authorizes(token, None, &[scope]) {
-					Ok(())
-				} else {
-					Err(ApiError::unauthenticated())
-				}
-			}
-			None => Ok(()),
+		let allowed = match principal.credential() {
+			Some(credential) => self.authorizes(&credential.token, credential.client_ip, &[scope]),
+			None => matches!(principal, super::Principal::Admin { .. }),
+		};
+		if allowed {
+			Ok(())
+		} else {
+			Err(ApiError::unauthenticated())
 		}
 	}
 

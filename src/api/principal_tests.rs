@@ -83,7 +83,7 @@ fn a_token_that_matches_no_credential_reaches_no_account() {
 
 #[test]
 fn admin_admits_any_account() {
-	let principal = Principal::Admin { token: None };
+	let principal = Principal::Admin { credential: None };
 	assert!(principal.admits_account("alice", &["alice@example.org".into()]));
 	assert!(principal.admits_account("ghost", &[]));
 }
@@ -92,7 +92,7 @@ fn admin_admits_any_account() {
 fn account_admits_only_its_own_name() {
 	let principal = Principal::Account {
 		name: "alice".to_string(),
-		token: None,
+		credential: None,
 	};
 	assert!(principal.admits_account("alice", &["alice@example.org".into()]));
 	assert!(!principal.admits_account("bob", &["bob@example.org".into()]));
@@ -104,7 +104,7 @@ fn account_admits_only_its_own_name() {
 fn domains_admits_only_addresses_in_scope() {
 	let principal = Principal::Domains {
 		domains: vec!["a.example".to_string()],
-		token: None,
+		credential: None,
 	};
 	assert!(principal.admits_account("alice", &["alice@a.example".into()]));
 	// Straddling accounts are out of scope, matching the existing
@@ -116,7 +116,7 @@ fn domains_admits_only_addresses_in_scope() {
 fn domains_rejects_account_with_no_addresses() {
 	let principal = Principal::Domains {
 		domains: vec!["a.example".to_string()],
-		token: None,
+		credential: None,
 	};
 	// An account with no addresses has no evidence tying it to the
 	// tenant, so a tenant-scoped principal refuses it.
@@ -127,7 +127,7 @@ fn domains_rejects_account_with_no_addresses() {
 fn domains_compare_is_case_insensitive() {
 	let principal = Principal::Domains {
 		domains: vec!["a.example".to_string()],
-		token: None,
+		credential: None,
 	};
 	assert!(
 		principal.admits_account("alice", &["alice@A.EXAMPLE".into()]),
@@ -156,7 +156,7 @@ fn admissible_accounts_filters_using_the_same_rule() {
 	];
 	let principal = Principal::Domains {
 		domains: vec!["a.example".to_string()],
-		token: None,
+		credential: None,
 	};
 	let names: Vec<&str> = principal
 		.admissible_accounts(&accounts)

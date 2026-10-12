@@ -16,10 +16,10 @@ fn one(frames: Vec<String>) -> Value {
 }
 
 /// `Admin` principal matching the configured static token. The middleware
-/// would compute the same `Principal::Admin { token: None }` for that bearer, so the
+/// would compute the same `Principal::Admin { credential: None }` for that bearer, so the
 /// `handle_ws_message` calls below dispatch unimpeded.
 fn principal_for_test() -> Principal {
-	Principal::Admin { token: None }
+	Principal::Admin { credential: None }
 }
 
 #[test]

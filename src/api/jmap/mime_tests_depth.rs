@@ -101,8 +101,12 @@ async fn exercise_deep_messages() {
 		"fetchAllBodyValues":true});
 	let (raw, opaque) = multipart(10_000);
 	std::fs::write(inbox.join(format!("{ID}.eml")), &raw).expect("message");
-	let response =
-		super::super::methods::email_get(&state, &Principal::Admin { token: None }, &args, "c");
+	let response = super::super::methods::email_get(
+		&state,
+		&Principal::Admin { credential: None },
+		&args,
+		"c",
+	);
 	assert_eq!(
 		response[0], "Email/get",
 		"deep messages must return Email/get"
@@ -145,8 +149,12 @@ async fn exercise_deep_messages() {
 	let header = "Content-Type: message/rfc822\r\n\r\n";
 	let raw = format!("{}Subject: inner\r\n\r\nInside", header.repeat(10_000));
 	std::fs::write(inbox.join(format!("{ID}.eml")), &raw).expect("message");
-	let response =
-		super::super::methods::email_get(&state, &Principal::Admin { token: None }, &args, "c");
+	let response = super::super::methods::email_get(
+		&state,
+		&Principal::Admin { credential: None },
+		&args,
+		"c",
+	);
 	let email = &response[1]["list"][0];
 	let expected = leaf("0", raw.len() - header.len(), "message/rfc822", Value::Null);
 	assert_eq!(

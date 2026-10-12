@@ -19,7 +19,7 @@ pub mod v1;
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
-pub use principal::Principal;
+pub use principal::{Credential, Principal};
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
 
@@ -153,6 +153,10 @@ mod jmap_tests_g;
 #[cfg(test)]
 #[path = "jmap_tests_principal.rs"]
 mod jmap_tests_principal;
+
+#[cfg(test)]
+#[path = "jmap_tests_principal_b.rs"]
+mod jmap_tests_principal_b;
 
 #[cfg(test)]
 #[path = "jmap_tests_limits.rs"]

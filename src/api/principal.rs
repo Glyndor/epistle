@@ -28,44 +28,66 @@
 use super::api_keys::ApiKey;
 use super::state::{AccountView, ApiState, MatchedAuth};
 
+/// The bearer that authenticated a request and the peer it came from,
+/// kept so a handler can re-check a scope against the same key, under the
+/// same `ip_cidr` pin, that the middleware matched.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Credential {
+	/// The bearer as presented.
+	pub token: String,
+	/// The peer IP the middleware saw, `None` when the listener does not
+	/// report it (an IP-pinned key then never matches, fail-closed).
+	pub client_ip: Option<std::net::IpAddr>,
+}
+
+impl std::fmt::Debug for Credential {
+	// The bearer is a secret: a principal that ends up in a log line or a
+	// test failure message must not carry it along.
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Credential")
+			.field("token", &"<redacted>")
+			.field("client_ip", &self.client_ip)
+			.finish()
+	}
+}
+
 /// What a credential is allowed to act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Principal {
 	/// Every account. The configured static token, or a key without a
-	/// `domains` or `account` declaration. The `token` is the matched
+	/// `domains` or `account` declaration. The `credential` is the matched
 	/// bearer when the principal came from a key: it lets scope re-checks
 	/// (e.g. a `read`-only key not writing) consult the same key the
 	/// middleware matched. `None` for the static token, which admits
 	/// every scope by design.
 	Admin {
-		/// The bearer token that mapped to this principal, when it came
+		/// The credential that mapped to this principal, when it came
 		/// from a key. `None` for the configured static token.
-		token: Option<String>,
+		credential: Option<Credential>,
 	},
 	/// Only accounts whose addresses all sit inside this set (case-folded
 	/// DNS domains, the same way [`crate::api::domain_scope::DomainScope`]
 	/// treats them). An account straddling the boundary is out of scope.
-	/// The carried `token` is the bearer that authenticated, kept so
+	/// The carried `credential` is the bearer that authenticated, kept so
 	/// handlers can re-check scopes against the same key the middleware
 	/// matched.
 	Domains {
 		/// The lowercased DNS domains this principal is allowed to reach.
 		domains: Vec<String>,
-		/// The bearer token that mapped to this principal. `None` when the
+		/// The credential that mapped to this principal. `None` when the
 		/// principal was constructed in a test or by code that did not go
-		/// through the bearer middleware (in that case scope re-checks are
-		/// refused, fail-closed).
-		token: Option<String>,
+		/// through the bearer middleware.
+		credential: Option<Credential>,
 	},
 	/// Exactly one account. Refused to every other account, even if the
-	/// account shares domains with the requester. `token` carries the
+	/// account shares domains with the requester. `credential` carries the
 	/// matched bearer, same as [`Self::Domains`].
 	Account {
 		/// The single account this principal may act on.
 		name: String,
-		/// The bearer token that mapped to this principal, when the
+		/// The credential that mapped to this principal, when the
 		/// principal was resolved from a real credential.
-		token: Option<String>,
+		credential: Option<Credential>,
 	},
 }
 
@@ -87,11 +109,11 @@ impl Principal {
 			// Refuse to widen to Admin.
 			return Principal::Domains {
 				domains: Vec::new(),
-				token: auth.token.clone(),
+				credential: None,
 			};
 		};
 		if state.is_configured_token(token) {
-			return Principal::Admin { token: None };
+			return Principal::Admin { credential: None };
 		}
 		let now = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
@@ -108,28 +130,33 @@ impl Principal {
 			super::api_keys::Scope::Write,
 			super::api_keys::Scope::Send,
 		];
+		let credential = Credential {
+			token: token.to_string(),
+			client_ip: auth.client_ip,
+		};
 		let keys = state.api_keys().snapshot();
-		keys.iter()
+		match keys
+			.iter()
 			.find(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE))
-			.map(|key| {
-				let kind = Principal::kind_of_key(key);
-				kind.into_principal(Some(token.to_string()))
-			})
-			.unwrap_or(Principal::Domains {
+		{
+			Some(key) => Principal::kind_of_key(key).into_principal(Some(credential)),
+			None => Principal::Domains {
 				domains: Vec::new(),
-				token: Some(token.to_string()),
-			})
+				credential: Some(credential),
+			},
+		}
 	}
 
-	/// The bearer that authenticated, when the principal came from a real
-	/// credential. `None` for the configured static token. Used by
+	/// The credential that authenticated, when the principal came from a
+	/// key. `None` for the configured static token. Used by
 	/// [`crate::api::state::ApiState::require_scope_for_principal`] to
-	/// look the same key up again when re-checking scopes.
-	pub fn token(&self) -> Option<&str> {
+	/// look the same key up again, from the same peer, when re-checking
+	/// scopes.
+	pub fn credential(&self) -> Option<&Credential> {
 		match self {
-			Principal::Admin { token, .. }
-			| Principal::Domains { token, .. }
-			| Principal::Account { token, .. } => token.as_deref(),
+			Principal::Admin { credential, .. }
+			| Principal::Domains { credential, .. }
+			| Principal::Account { credential, .. } => credential.as_ref(),
 		}
 	}
 
@@ -200,14 +227,17 @@ pub enum PrincipalKind {
 }
 
 impl PrincipalKind {
-	/// Wrap into a [`Principal`] with the given bearer, when the principal
-	/// came from a real credential. The bearer rides on every variant so
-	/// scope re-checks have somewhere to look.
-	pub fn into_principal(self, token: Option<String>) -> Principal {
+	/// Wrap into a [`Principal`] with the given credential, when the
+	/// principal came from a real one. The credential rides on every
+	/// variant so scope re-checks have somewhere to look.
+	pub fn into_principal(self, credential: Option<Credential>) -> Principal {
 		match self {
-			PrincipalKind::Admin => Principal::Admin { token },
-			PrincipalKind::Domains(domains) => Principal::Domains { domains, token },
-			PrincipalKind::Account(name) => Principal::Account { name, token },
+			PrincipalKind::Admin => Principal::Admin { credential },
+			PrincipalKind::Domains(domains) => Principal::Domains {
+				domains,
+				credential,
+			},
+			PrincipalKind::Account(name) => Principal::Account { name, credential },
 		}
 	}
 }
