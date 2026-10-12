@@ -182,3 +182,23 @@ fn a_reload_from_a_sibling_process_reads_lowercase() {
 		vec!["carol@example.org"]
 	);
 }
+
+#[test]
+fn a_mixed_case_masked_file_is_read_in_lowercase() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(
+		dir.path().join("masked.json"),
+		r#"{"addresses": {"Shop.ABCDEFGH@Example.ORG": {
+			"address": "Shop.ABCDEFGH@Example.ORG", "account": "Bob",
+			"label": "shop", "created_at": 0, "enabled": true}}}"#,
+	)
+	.expect("write masked.json");
+	let store = open_store(dir.path());
+	let listed = store.list_masked("bob");
+	assert_eq!(listed.len(), 1);
+	assert_eq!(listed[0].address, "shop.abcdefgh@example.org");
+	assert_eq!(
+		resolve(&store, "SHOP.abcdefgh@example.org"),
+		Resolution::Account("bob".to_string())
+	);
+}

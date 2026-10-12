@@ -71,7 +71,7 @@ impl MaskedAddressStore {
 			Ok(text) => {
 				let file: MaskedFile = serde_json::from_str(&text)
 					.map_err(|error| StoreError::Invalid(error.to_string()))?;
-				file.addresses
+				super::normalize::masked(file.addresses)
 			}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
 			Err(error) => return Err(error.into()),
@@ -112,7 +112,7 @@ impl MaskedAddressStore {
 
 	/// Look up an entry by lowercased address.
 	pub fn get(&self, address: &str) -> Option<&MaskedAddress> {
-		self.entries.get(&address.to_ascii_lowercase())
+		self.entries.get(&crate::util::address::normalize(address))
 	}
 
 	/// Every entry for an account (lowercased lookup), as the public
@@ -256,7 +256,7 @@ impl MaskedAddressStore {
 		enabled: bool,
 	) -> Result<bool, StoreError> {
 		let account = account.to_ascii_lowercase();
-		let key = address.to_ascii_lowercase();
+		let key = crate::util::address::normalize(address);
 		let mut previous: Option<bool> = None;
 		let new_state = edit(
 			&self.path,
@@ -300,7 +300,7 @@ impl MaskedAddressStore {
 	/// not exist or belongs to another account.
 	pub fn remove(&mut self, account: &str, address: &str) -> Result<(), StoreError> {
 		let account = account.to_ascii_lowercase();
-		let key = address.to_ascii_lowercase();
+		let key = crate::util::address::normalize(address);
 		let new_state = edit(
 			&self.path,
 			|text| {
@@ -374,7 +374,7 @@ impl MaskedAddressStore {
 	/// best-effort). Persistence failures are logged and swallowed.
 	pub fn touch_last_used(&mut self, account: &str, address: &str, now: u64) {
 		let account = account.to_ascii_lowercase();
-		let key = address.to_ascii_lowercase();
+		let key = crate::util::address::normalize(address);
 		let new_state = edit(
 			&self.path,
 			|text| {
@@ -427,7 +427,7 @@ impl MaskedAddressStore {
 	/// later write still writes to the same place and the per-account
 	/// cap is unaffected by a reload.
 	pub(crate) fn replace_entries(&mut self, new: HashMap<String, MaskedAddress>) {
-		self.entries = new;
+		self.entries = super::normalize::masked(new);
 	}
 }
 

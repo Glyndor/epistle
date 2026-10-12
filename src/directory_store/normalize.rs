@@ -40,3 +40,18 @@ fn normalize_list(values: &mut Vec<String>, normalize: fn(&str) -> String) {
 		.filter(|value| seen.insert(value.clone()))
 		.collect();
 }
+
+/// Re-key a parsed `masked.json` by the stored form of each address, with
+/// the address and the owning account name in their stored forms too.
+pub(super) fn masked(
+	entries: std::collections::HashMap<String, super::MaskedAddress>,
+) -> std::collections::HashMap<String, super::MaskedAddress> {
+	entries
+		.into_values()
+		.map(|mut entry| {
+			entry.address = normalize(&entry.address);
+			entry.account = account_name(&entry.account);
+			(entry.address.clone(), entry)
+		})
+		.collect()
+}
