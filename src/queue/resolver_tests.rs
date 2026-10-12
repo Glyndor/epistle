@@ -1,4 +1,8 @@
-//! Choosing the exchangers of a recipient domain from its MX records.
+//! Choosing the exchangers of a recipient domain from its MX records, and
+//! the DNSSEC state of the answer (RFC 7672 section 2.2.1): DANE only for
+//! hosts a secure answer named, and a bogus answer is a failure.
+
+use hickory_resolver::proto::dnssec::Proof;
 
 use super::*;
 
@@ -52,5 +56,37 @@ fn a_root_exchange_next_to_real_ones_is_skipped() {
 	assert_eq!(
 		exchangers_from("example.net", records),
 		Ok(vec!["mx.example.net".to_string()])
+	);
+}
+
+#[test]
+fn an_answer_whose_every_record_validated_is_secure() {
+	assert_eq!(
+		mx_security([Proof::Secure, Proof::Secure]),
+		Ok(MxSecurity::Secure)
+	);
+}
+
+#[test]
+fn an_unsigned_or_unanchored_answer_is_insecure() {
+	for proofs in [
+		vec![Proof::Insecure],
+		vec![Proof::Indeterminate],
+		vec![Proof::Secure, Proof::Insecure],
+		vec![],
+	] {
+		assert_eq!(
+			mx_security(proofs.clone()),
+			Ok(MxSecurity::Insecure),
+			"{proofs:?}"
+		);
+	}
+}
+
+#[test]
+fn a_bogus_record_fails_the_lookup() {
+	assert_eq!(
+		mx_security([Proof::Secure, Proof::Bogus]),
+		Err(crate::spf::DnsFailure::Temporary)
 	);
 }

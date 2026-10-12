@@ -25,6 +25,40 @@ pub struct Connection {
 	pub local_ip: Option<std::net::IpAddr>,
 	/// The exchanger's address, when the transport knows it.
 	pub peer_ip: Option<std::net::IpAddr>,
+	/// Whether the MX answer that named this host was DNSSEC-secure.
+	pub mx: MxSecurity,
+}
+
+/// The DNSSEC state of the MX lookup that named an exchanger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MxSecurity {
+	/// Every MX record validated.
+	Secure,
+	/// The answer was unsigned, or there was no MX record to validate.
+	Insecure,
+}
+
+/// The DNSSEC state of an MX answer from the validation proof of each
+/// record. A record that failed validation fails the lookup, as RFC 7672
+/// section 2.1.1 asks of any bogus answer; the answer is secure only
+/// when there are records and every one of them validated.
+pub(crate) fn mx_security(
+	proofs: impl IntoIterator<Item = hickory_resolver::proto::dnssec::Proof>,
+) -> Result<MxSecurity, crate::spf::DnsFailure> {
+	use hickory_resolver::proto::dnssec::Proof;
+	let mut secure = None;
+	for proof in proofs {
+		match proof {
+			Proof::Bogus => return Err(crate::spf::DnsFailure::Temporary),
+			Proof::Secure => secure = Some(secure.unwrap_or(true)),
+			Proof::Insecure | Proof::Indeterminate => secure = Some(false),
+		}
+	}
+	Ok(if secure == Some(true) {
+		MxSecurity::Secure
+	} else {
+		MxSecurity::Insecure
+	})
 }
 
 impl Connection {
@@ -35,7 +69,14 @@ impl Connection {
 			host,
 			local_ip: None,
 			peer_ip: None,
+			mx: MxSecurity::Insecure,
 		}
+	}
+
+	/// Record the DNSSEC state of the MX answer that named this host.
+	pub fn with_mx(mut self, mx: MxSecurity) -> Self {
+		self.mx = mx;
+		self
 	}
 }
 
@@ -68,7 +109,7 @@ impl MxConnector {
 
 	/// MX hostnames in preference order; implicit MX (the domain itself,
 	/// RFC 5321 section 5.1) when no MX records exist.
-	async fn exchangers(&self, domain: &str) -> Result<Vec<String>, DeliveryError> {
+	async fn exchangers(&self, domain: &str) -> Result<(Vec<String>, MxSecurity), DeliveryError> {
 		use hickory_resolver::net::{DnsError, NetError};
 		use hickory_resolver::proto::rr::{RecordType, rdata::MX};
 
@@ -86,15 +127,36 @@ impl MxConnector {
 						_ => None,
 					})
 					.collect();
+				let security = mx_security(lookup.answers().iter().map(|record| record.proof))
+					.map_err(|_| {
+						DeliveryError::Transient(format!(
+							"MX answer for {domain} failed DNSSEC validation"
+						))
+					})?;
 				records.sort_by_key(|mx| mx.preference);
-				let records = records
+				let records: Vec<(u16, String)> = records
 					.iter()
 					.map(|mx| (mx.preference, mx.exchange.to_utf8()))
 					.collect();
-				exchangers_from(domain, records)
+				// With no exchange to name, the domain itself is the implicit
+				// MX, which no validated MX record vouches for.
+				let named = records
+					.iter()
+					.any(|(_, exchange)| !exchange.trim_end_matches('.').is_empty());
+				let hosts = exchangers_from(domain, records)?;
+				Ok((
+					hosts,
+					if named {
+						security
+					} else {
+						MxSecurity::Insecure
+					},
+				))
 			}
 			// No MX records: fall back to the implicit MX.
-			Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok(vec![domain.to_string()]),
+			Err(NetError::Dns(DnsError::NoRecordsFound(_))) => {
+				Ok((vec![domain.to_string()], MxSecurity::Insecure))
+			}
 			Err(error) => Err(DeliveryError::Transient(format!(
 				"MX lookup failed: {error}"
 			))),
@@ -137,7 +199,7 @@ impl Connector for MxConnector {
 		let domain = domain.to_string();
 		let policy = policy.cloned();
 		Box::pin(async move {
-			let mut hosts = self.exchangers(&domain).await?;
+			let (mut hosts, mx) = self.exchangers(&domain).await?;
 			if let Some(policy) = &policy {
 				hosts.retain(|host| policy.permits_mx(host));
 				if hosts.is_empty() {
@@ -158,6 +220,7 @@ impl Connector for MxConnector {
 							host,
 							local_ip,
 							peer_ip,
+							mx,
 						});
 					}
 					Err(error) => {

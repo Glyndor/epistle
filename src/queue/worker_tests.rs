@@ -32,7 +32,8 @@ impl Connector for LoopbackConnector {
 			Ok(crate::queue::resolver::Connection::new(
 				Box::new(client_stream) as BoxedStream,
 				"mx.remote.example".to_string(),
-			))
+			)
+			.with_mx(crate::queue::resolver::MxSecurity::Secure))
 		})
 	}
 }

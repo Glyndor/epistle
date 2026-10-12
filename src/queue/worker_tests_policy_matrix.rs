@@ -1,6 +1,7 @@
 //! The transport policy matrix: every combination of MTA-STS mode, TLSA
-//! RRset and what the MX offers, driven through the worker against a real
-//! SMTP server, with the outcome RFC 8461 and RFC 7672 call for.
+//! RRset, the DNSSEC state of the MX answer and what the MX offers,
+//! driven through the worker against a real SMTP server, with the outcome
+//! RFC 8461 and RFC 7672 call for.
 
 use std::sync::OnceLock;
 
@@ -49,6 +50,14 @@ pub(super) enum Mx {
 	Bad,
 	/// No STARTTLS.
 	Plain,
+}
+
+/// The DNSSEC state of the MX answer that named the host.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum MxDns {
+	Secure,
+	Insecure,
+	Bogus,
 }
 
 /// How one delivery attempt ended.
@@ -115,11 +124,22 @@ fn acceptor(leaf: &(CertificateDer<'static>, Vec<u8>)) -> TlsAcceptor {
 struct MxConnector {
 	sink: Arc<MemorySink>,
 	mx: Mx,
+	mx_dns: MxDns,
 }
 
 impl Connector for MxConnector {
 	fn connect(&self, _domain: &str, _policy: Option<&crate::mtasts::Policy>) -> ConnectFuture<'_> {
 		Box::pin(async move {
+			// What the real connector does with a bogus MX answer.
+			let security = match self.mx_dns {
+				MxDns::Secure => crate::queue::resolver::MxSecurity::Secure,
+				MxDns::Insecure => crate::queue::resolver::MxSecurity::Insecure,
+				MxDns::Bogus => {
+					return Err(DeliveryError::Transient(
+						"MX answer failed DNSSEC validation".into(),
+					));
+				}
+			};
 			let directory = crate::directory_store::DirectoryHandle::new(Directory::new(
 				["remote.example".to_string()],
 				[("bob@remote.example".to_string(), "bob".to_string())],
@@ -143,7 +163,8 @@ impl Connector for MxConnector {
 			Ok(crate::queue::resolver::Connection::new(
 				Box::new(client) as BoxedStream,
 				MX.to_string(),
-			))
+			)
+			.with_mx(security))
 		})
 	}
 }
@@ -209,9 +230,15 @@ impl crate::mtasts::PolicyFetcher for Fetcher {
 }
 
 /// Run one delivery attempt for the cell and report how it ended.
-pub(super) async fn attempt(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls) -> Seen {
+pub(super) async fn attempt(
+	sts: Sts,
+	tlsa: Tlsa,
+	mx: Mx,
+	mode: OutboundTls,
+	mx_dns: MxDns,
+) -> Seen {
 	let dns: Arc<dyn DnsLookup> = Arc::new(Dns { sts, tlsa });
-	attempt_with(dns, Box::new(Fetcher(sts)), mx, mode).await
+	attempt_with(dns, Box::new(Fetcher(sts)), mx, mode, mx_dns).await
 }
 
 /// One delivery attempt with the given DNS (MTA-STS discovery and TLSA)
@@ -221,6 +248,7 @@ pub(super) async fn attempt_with(
 	fetcher: Box<dyn crate::mtasts::PolicyFetcher>,
 	mx: Mx,
 	mode: OutboundTls,
+	mx_dns: MxDns,
 ) -> Seen {
 	crate::queue::client::TEST_ROOTS.with(|roots| *roots.borrow_mut() = vec![certs().ca.clone()]);
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -243,6 +271,7 @@ pub(super) async fn attempt_with(
 		Arc::new(MxConnector {
 			sink: sink.clone(),
 			mx,
+			mx_dns,
 		}),
 		"mail.sender.example",
 	)
@@ -266,7 +295,15 @@ pub(super) async fn attempt_with(
 }
 
 /// What RFC 8461 and RFC 7672 call for in one cell.
-fn expected(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls) -> Seen {
+fn expected(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls, mx_dns: MxDns) -> Seen {
+	match mx_dns {
+		// A forged or broken MX answer: wait, as for any lookup failure.
+		MxDns::Bogus => return Seen::Deferred,
+		// DANE needs a secure MX RRset (RFC 7672 section 2.2.1): the TLSA
+		// of a host an insecure answer named is never looked at.
+		MxDns::Insecure => return expected(sts, Tlsa::Absent, mx, mode, MxDns::Secure),
+		MxDns::Secure => {}
+	}
 	let pkix_ok = mx == Mx::Good;
 	let any_tls = mx != Mx::Plain;
 	match tlsa {
@@ -300,18 +337,20 @@ async fn every_cell_of_the_transport_matrix() {
 		for sts in [Sts::None, Sts::Testing, Sts::Enforce] {
 			for tlsa in [Tlsa::Absent, Tlsa::Usable, Tlsa::Unusable, Tlsa::TempFail] {
 				for mx in [Mx::Good, Mx::DaneOnly, Mx::Bad, Mx::Plain] {
-					cells += 1;
-					let want = expected(sts, tlsa, mx, mode);
-					let got = attempt(sts, tlsa, mx, mode).await;
-					if got != want {
-						wrong.push(format!(
-							"{mode:?} {sts:?} {tlsa:?} {mx:?}: want {want:?}, got {got:?}"
-						));
+					for mx_dns in [MxDns::Secure, MxDns::Insecure, MxDns::Bogus] {
+						cells += 1;
+						let want = expected(sts, tlsa, mx, mode, mx_dns);
+						let got = attempt(sts, tlsa, mx, mode, mx_dns).await;
+						if got != want {
+							wrong.push(format!(
+								"{mode:?} {sts:?} {tlsa:?} {mx:?} {mx_dns:?}: want {want:?}, got {got:?}"
+							));
+						}
 					}
 				}
 			}
 		}
 	}
-	assert_eq!(cells, 96);
+	assert_eq!(cells, 288);
 	assert!(wrong.is_empty(), "wrong cells:\n{}", wrong.join("\n"));
 }

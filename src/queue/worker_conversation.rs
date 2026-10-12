@@ -117,7 +117,15 @@ impl Worker {
 						// DANE: TLSA is published under the MX hostname. A
 						// transient TLSA lookup failure defers delivery rather
 						// than downgrading to opportunistic TLS (RFC 7672 §2.1).
-						let tlsa = match self.tlsa_for(&server_name).await {
+						// Only a secure MX answer can vouch for the host whose
+						// TLSA would authenticate it (RFC 7672 section 2.2.1);
+						// otherwise MTA-STS or opportunistic TLS decides.
+						let tlsa = if connection.mx != crate::queue::resolver::MxSecurity::Secure {
+							Ok(crate::dane::rrset::TlsaRrset::Absent)
+						} else {
+							self.tlsa_for(&server_name).await
+						};
+						let tlsa = match tlsa {
 							Ok(records) => records,
 							Err(crate::spf::DnsFailure::Temporary) => {
 								let reason =

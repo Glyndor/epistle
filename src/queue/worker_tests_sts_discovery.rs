@@ -4,7 +4,7 @@
 //! policy that may not exist. A cached policy is covered by the store's
 //! own tests.
 
-use super::tests_policy_matrix::{Mx, Seen, attempt_with};
+use super::tests_policy_matrix::{Mx, MxDns, Seen, attempt_with};
 use super::*;
 use crate::config::OutboundTls;
 use crate::dane::rrset::TlsaRrset;
@@ -64,6 +64,7 @@ async fn deliver_plain(txt_fails: bool, body: Option<&'static str>) -> Seen {
 		Box::new(PolicyHost(body)),
 		Mx::Plain,
 		OutboundTls::Strict,
+		MxDns::Secure,
 	)
 	.await
 }
