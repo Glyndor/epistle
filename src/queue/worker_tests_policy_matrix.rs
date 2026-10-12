@@ -210,6 +210,18 @@ impl crate::mtasts::PolicyFetcher for Fetcher {
 
 /// Run one delivery attempt for the cell and report how it ended.
 pub(super) async fn attempt(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls) -> Seen {
+	let dns: Arc<dyn DnsLookup> = Arc::new(Dns { sts, tlsa });
+	attempt_with(dns, Box::new(Fetcher(sts)), mx, mode).await
+}
+
+/// One delivery attempt with the given DNS (MTA-STS discovery and TLSA)
+/// and policy fetcher.
+pub(super) async fn attempt_with(
+	dns: Arc<dyn DnsLookup>,
+	fetcher: Box<dyn crate::mtasts::PolicyFetcher>,
+	mx: Mx,
+	mode: OutboundTls,
+) -> Seen {
 	crate::queue::client::TEST_ROOTS.with(|roots| *roots.borrow_mut() = vec![certs().ca.clone()]);
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
@@ -225,8 +237,7 @@ pub(super) async fn attempt(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls) -> 
 		})
 		.expect("store");
 	let sink = Arc::new(MemorySink::new());
-	let dns: Arc<dyn DnsLookup> = Arc::new(Dns { sts, tlsa });
-	let store = Arc::new(crate::mtasts::PolicyStore::new(Box::new(Fetcher(sts))));
+	let store = Arc::new(crate::mtasts::PolicyStore::new(fetcher));
 	let worker = Worker::new(
 		spool,
 		Arc::new(MxConnector {

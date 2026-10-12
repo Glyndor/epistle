@@ -43,8 +43,11 @@ impl Worker {
 		let fetched = match &self.mta_sts {
 			Some((store, dns)) => match store.policy(dns.as_ref(), &domain).await {
 				Ok(policy) => policy,
+				// No policy could be fetched and none is cached: deliver as
+				// though the domain published none (RFC 8461 section 3.3).
 				Err(crate::mtasts::PolicyError::Temporary(reason)) => {
-					return Conversation::all(recipients, None, DeliveryError::Transient(reason));
+					tracing::warn!(%domain, %reason, "MTA-STS policy unavailable; delivering without it");
+					None
 				}
 				// Malformed/absent policies fall back to opportunistic.
 				Err(error) => {

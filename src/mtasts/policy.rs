@@ -175,13 +175,29 @@ impl PolicyFetcher for SystemFetcher {
 	}
 }
 
-/// Cap on how long a policy is cached regardless of `max_age`.
+/// How long a policy is used before it is fetched again, at most. The
+/// policy itself stays valid as a fallback for its whole `max_age`.
 const MAX_CACHE: Duration = Duration::from_secs(24 * 3600);
+
+/// How long "no policy" is remembered before discovery runs again.
+const NO_POLICY_CACHE: Duration = Duration::from_secs(600);
+
+/// One cached discovery result.
+#[derive(Clone)]
+struct Cached {
+	/// The policy, or `None` when the domain publishes none.
+	policy: Option<Policy>,
+	/// Until then the entry is used as is.
+	refresh: Instant,
+	/// Until then a policy still applies when a refresh fails (RFC 8461
+	/// section 3.3 and 5.1).
+	expires: Instant,
+}
 
 /// Discovery + cache: TXT presence check, HTTPS fetch, expiry by max_age.
 pub struct PolicyStore {
 	fetcher: Box<dyn PolicyFetcher>,
-	cache: Mutex<HashMap<String, (Option<Policy>, Instant)>>,
+	cache: Mutex<HashMap<String, Cached>>,
 }
 
 impl PolicyStore {
@@ -194,49 +210,113 @@ impl PolicyStore {
 	}
 
 	/// The policy for a recipient domain, or `None` when the domain does
-	/// not publish MTA-STS. Transient failures propagate so callers retry.
+	/// not publish MTA-STS.
+	///
+	/// A cached policy that has not reached its `max_age` keeps applying
+	/// when a refresh fails or the TXT record is gone (RFC 8461 sections
+	/// 3.3 and 5.1), so blocking the policy host cannot strip an enforce
+	/// policy early. Without one, a failed lookup or fetch is returned as
+	/// an error, and RFC 8461 section 3.3 has the caller deliver as
+	/// though the domain published no policy.
 	pub async fn policy(
 		&self,
 		dns: &dyn DnsLookup,
 		domain: &str,
 	) -> Result<Option<Policy>, PolicyError> {
 		let domain = domain.to_ascii_lowercase();
-		if let Some((policy, expiry)) = self
+		let now = Instant::now();
+		let cached = self
 			.cache
 			.lock()
 			.expect("mta-sts cache mutex")
 			.get(&domain)
-			.cloned() && Instant::now() < expiry
+			.cloned();
+		if let Some(entry) = &cached
+			&& now < entry.refresh
 		{
-			return Ok(policy);
+			return Ok(entry.policy.clone());
 		}
+		let fallback = cached
+			.filter(|entry| now < entry.expires)
+			.and_then(|entry| entry.policy);
 
-		// Discovery: the `_mta-sts` TXT record must exist (section 3.1).
+		match self.discover(dns, &domain).await {
+			Ok(Some(policy)) => {
+				let max_age = Duration::from_secs(policy.max_age);
+				self.remember(
+					&domain,
+					Some(policy.clone()),
+					max_age.min(MAX_CACHE),
+					max_age,
+				);
+				Ok(Some(policy))
+			}
+			Ok(None) => match fallback {
+				Some(policy) => Ok(Some(policy)),
+				None => {
+					self.remember(&domain, None, NO_POLICY_CACHE, NO_POLICY_CACHE);
+					Ok(None)
+				}
+			},
+			Err(error) => match fallback {
+				Some(policy) => {
+					tracing::warn!(%domain, ?error, "MTA-STS refresh failed; keeping the cached policy");
+					Ok(Some(policy))
+				}
+				None => Err(error),
+			},
+		}
+	}
+
+	/// Discovery: the `_mta-sts` TXT record (section 3.1), then the policy.
+	async fn discover(
+		&self,
+		dns: &dyn DnsLookup,
+		domain: &str,
+	) -> Result<Option<Policy>, PolicyError> {
 		let records = match dns.txt(&format!("_mta-sts.{domain}")).await {
 			Ok(records) => records,
 			Err(DnsFailure::Temporary) => {
 				return Err(PolicyError::Temporary("TXT lookup failed".into()));
 			}
 		};
-		let advertised = records.iter().any(|record| record.starts_with("v=STSv1"));
-		if !advertised {
-			self.cache
-				.lock()
-				.expect("mta-sts cache mutex")
-				.insert(domain, (None, Instant::now() + Duration::from_secs(600)));
+		if !records.iter().any(|record| record.starts_with("v=STSv1")) {
 			return Ok(None);
 		}
+		let body = self.fetcher.fetch(domain).await?;
+		parse(&body).map(Some)
+	}
 
-		let body = self.fetcher.fetch(&domain).await?;
-		let policy = parse(&body)?;
-		let ttl = Duration::from_secs(policy.max_age).min(MAX_CACHE);
-		self.cache
+	fn remember(&self, domain: &str, policy: Option<Policy>, refresh: Duration, expires: Duration) {
+		let now = Instant::now();
+		self.cache.lock().expect("mta-sts cache mutex").insert(
+			domain.to_string(),
+			Cached {
+				policy,
+				refresh: now + refresh,
+				expires: now + expires,
+			},
+		);
+	}
+
+	/// Make the cached entry for `domain` due for refresh now, as if its
+	/// refresh time had passed.
+	#[cfg(test)]
+	pub(crate) fn due_for_refresh(&self, domain: &str) {
+		if let Some(entry) = self
+			.cache
 			.lock()
 			.expect("mta-sts cache mutex")
-			.insert(domain, (Some(policy.clone()), Instant::now() + ttl));
-		Ok(Some(policy))
+			.get_mut(domain)
+		{
+			entry.refresh = Instant::now();
+		}
 	}
 }
+
+#[cfg(test)]
+#[path = "policy_tests_cache.rs"]
+mod tests_cache;
 
 #[cfg(test)]
 mod tests {
