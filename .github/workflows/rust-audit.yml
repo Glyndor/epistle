@@ -71,14 +71,15 @@ jobs:
       extra-lockfiles: fuzz/Cargo.lock
 
   report:
-    # Runs only when at least one matrix entry of `audit` failed. Reads
-    # every audit-json-* artifact the matrix produced and decides whether
-    # to open a new issue or comment on the open one with the same title.
-    # `permissions: issues: write` is scoped to this job; the rest of the
-    # workflow inherits the caller-level `contents: read` and never sees
-    # a write token.
+    # Runs only when at least one matrix entry of `audit` failed, AND
+    # only on schedule or workflow_dispatch. A pull_request run would
+    # open an issue on every PR audit failure (the matrix is single
+    # there, so any failure is a real PR-introduced vulnerability);
+    # that is not what an issue owned by this workflow is for. The
+    # matrix on PR is for the per-PR required check, the open-issue
+    # behaviour is for the daily cadence.
     needs: audit
-    if: failure()
+    if: failure() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -132,12 +133,14 @@ jobs:
           fi
 
   close:
-    # Runs only when every matrix entry of `audit` succeeded. Closes any
-    # still-open advisory issue this workflow opened previously: a stale
-    # red issue is worse than no issue, because "open" reads as "current"
-    # and the next person to look trusts it.
+    # Runs only when every matrix entry of `audit` succeeded, AND only
+    # on schedule or workflow_dispatch. The matrix on pull_request is
+    # single (the PR head), so a green PR run would close every still
+    # open advisory issue this workflow opened on develop/main. The
+    # close signal belongs to the daily cadence, not the per-PR
+    # required check.
     needs: audit
-    if: success()
+    if: success() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       issues: write
