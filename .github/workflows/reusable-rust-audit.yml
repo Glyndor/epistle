@@ -115,13 +115,19 @@ jobs:
           fi
 
       - name: Upload cargo audit JSON
-        # The artifact is named with the ref so the caller's report job can
-        # download every matrix entry's report at once. Always runs (no
-        # `if:`); a failing audit still wrote the JSON to `audit.json`.
+        # `if: always()` because the step must run when the audit failed
+        # too: the report job needs the JSON either way to decide
+        # whether to open an issue. The `hashFiles` check skips the step
+        # only when the audit crashed before writing JSON at all; an
+        # `audit.json` written by a failing step is still uploaded so
+        # the caller can read it.
+        if: always() && hashFiles('audit.json') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: audit-json-${{ inputs.ref }}
-          path: audit.json
+          path: |
+            audit.json
+            audit-fuzz.json
           if-no-files-found: error
           retention-days: 7
 
@@ -136,6 +142,9 @@ jobs:
         # reports advisories this repository has already assessed. That is how
         # fuzz/Cargo.lock looked like it carried four findings when the same
         # graph audits clean from here.
+        # The fuzz audit emits JSON to `audit-fuzz.json` so the report job
+        # sees it through the same artifact path; without that, fuzz's
+        # findings are invisible to the open-issue decision.
         run: |
           set -euo pipefail
           echo "$EXTRA_LOCKFILES" | while read -r lockfile; do
@@ -144,8 +153,12 @@ jobs:
               echo "::error::$lockfile does not exist; the input is stale."
               exit 1
             fi
-            echo "Auditing $lockfile"
-            cargo audit --deny warnings --file "$lockfile"
+            stem="$(basename "$lockfile" .lock)"
+            if ! cargo audit --json --deny warnings --file "$lockfile" \
+                > "audit-${stem}.json" 2>"audit-${stem}.stderr"; then
+              cat "audit-${stem}.stderr" >&2
+              exit 1
+            fi
           done
 
   deny:
