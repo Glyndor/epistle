@@ -205,6 +205,106 @@ class TestCombine(unittest.TestCase):
 		self.assertEqual(out["title"], "Dependency advisories: yanked:stale@0.1.0")
 
 
+class TestFailureIssue(unittest.TestCase):
+	"""When the reusable failed without surfacing advisories, the
+	combine script builds a `Rust audit failed on <refs>` issue so an
+	operator still has a loud signal."""
+
+	def _run_with_run_url(self, directory: Path, run_url: str) -> dict:
+		proc = subprocess.run(
+			[
+				sys.executable,
+				str(COMBINE_PY),
+				str(directory),
+				"--no-lookup",
+				"--run-url",
+				run_url,
+			],
+			capture_output=True,
+			text=True,
+			check=False,
+			cwd=str(REPO_ROOT),
+		)
+		if proc.returncode != 0:
+			raise AssertionError(f"combine failed: {proc.stdout} {proc.stderr}")
+		return json.loads(proc.stdout)
+
+	def test_clean_with_run_url_produces_failure_issue(self) -> None:
+		# Two empty per-ref directories mimic a reusable that crashed
+		# before it could write JSON for either ref.
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			(directory / "audit-json-develop").mkdir()
+			(directory / "audit-json-main").mkdir()
+			out = self._run_with_run_url(
+				directory, "https://example.com/runs/42"
+			)
+		self.assertTrue(out["clean"])
+		self.assertEqual(
+			out["title"], "Rust audit failed on develop, main"
+		)
+		self.assertIn("https://example.com/runs/42", out["body"])
+		self.assertIn("not an advisory", out["body"])
+
+	def test_clean_with_run_url_names_only_failed_refs(self) -> None:
+		# develop produced JSON (succeeded); main did not (failed
+		# without writing JSON). The failure title must name only `main`,
+		# because that is the ref whose failure the operator needs to
+		# chase. Naming both would muddle that signal.
+		clean_report = _report("develop", clean=True)
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "develop", clean_report)
+			(directory / "audit-json-main").mkdir()
+			out = self._run_with_run_url(
+				directory, "https://example.com/runs/43"
+			)
+		self.assertTrue(out["clean"])
+		self.assertEqual(out["title"], "Rust audit failed on main")
+		self.assertIn("https://example.com/runs/43", out["body"])
+
+	def test_dirty_with_run_url_keeps_advisory_title(self) -> None:
+		# An advisory-bearing input must still take the advisory path,
+		# even with --run-url. The brief is explicit: the failure issue
+		# is for non-advisory failures only.
+		dirty = _report(
+			"main",
+			clean=False,
+			title="Dependency advisories: RUSTSEC-2026-0338",
+			body="quinn-proto 0.11.18",
+		)
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "main", dirty)
+			out = self._run_with_run_url(
+				directory, "https://example.com/runs/44"
+			)
+		self.assertFalse(out["clean"])
+		self.assertEqual(
+			out["title"], "Dependency advisories: RUSTSEC-2026-0338"
+		)
+
+	def test_clean_without_run_url_stays_clean(self) -> None:
+		# Without --run-url, a clean combine is the close signal. The
+		# script must not invent a failure issue on its own.
+		clean_report = _report("develop", clean=True)
+		with tempfile.TemporaryDirectory() as tmp:
+			directory = Path(tmp)
+			_write_artifact(directory, "develop", clean_report)
+			proc = subprocess.run(
+				[sys.executable, str(COMBINE_PY), str(directory), "--no-lookup"],
+				capture_output=True,
+				text=True,
+				check=False,
+				cwd=str(REPO_ROOT),
+			)
+		self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+		out = json.loads(proc.stdout)
+		self.assertTrue(out["clean"])
+		self.assertIsNone(out["title"])
+		self.assertIsNone(out["body"])
+
+
 class TestUnreadableInput(unittest.TestCase):
 	"""A bad input must fail loud, never emit a clean shape."""
 

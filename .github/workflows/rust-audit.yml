@@ -100,36 +100,41 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        # The whole decision lives in a Python script so the bash stays
-        # at the level of "do what the script said". The script returns
-        # `existing` as an issue number when one is already open with the
-        # same title and labels, otherwise empty. `set -e` then makes the
-        # gh calls fail loud on any step-level error.
+          # The full URL of this run; included in the failure-issue body
+          # so an operator can click straight to the red logs.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # The combine script decides whether to open an advisory issue
+        # or a non-advisory failure issue. The advisory branch runs
+        # when at least one ref's JSON listed advisories; the failure
+        # branch runs when the reusable failed without surfacing
+        # advisories (cargo-deny policy, tool install error, missing
+        # lockfile, or a JSON shape the combine script could not
+        # parse). The script looks up any existing issue with the
+        # same title so the run comments rather than opens a duplicate.
         run: |
           set -euo pipefail
-          combined="$(python3 .github/scripts/rust_audit_combine.py audits --repo "$REPO")"
-          echo "$combined"
-          if [ "$(echo "$combined" | python3 -c 'import json,sys; print(json.load(sys.stdin)["clean"])')" = "True" ]; then
-            # The audit step in the reusable failed (otherwise we would
-            # not be running) but every report the combine saw was clean.
-            # That means a non-advisory failure happened in the reusable
-            # (an extra lockfile missing, an install step error, etc.)
-            # and the issue we are about to open would say "no
-            # advisories". Refuse instead: a misleading open issue is
-            # worse than a red check, because it silences the reason.
-            echo "::error::audit failed but combine found no advisories; refusing to open an empty issue."
-            exit 1
-          fi
-          title="$(echo "$combined" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
-          body="$(echo "$combined" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')"
-          existing="$(echo "$combined" | python3 -c 'import json,sys; print(json.load(sys.stdin)["existing"])')"
+          python3 .github/scripts/rust_audit_combine.py audits --repo "$REPO" \
+            --run-url "$RUN_URL" > combined.json
+          cat combined.json
+          clean="$(python3 -c 'import json; print(json.load(open("combined.json"))["clean"])')"
+          title="$(python3 -c 'import json; print(json.load(open("combined.json"))["title"] or "")')"
+          body_file="$(mktemp)"
+          python3 -c 'import json,sys; open(sys.argv[1], "w").write(json.load(open("combined.json"))["body"] or "")' "$body_file"
+          existing="$(python3 -c 'import json; print(json.load(open("combined.json"))["existing"] or "")')"
           labels="type:security,type:deps,prio:P1,area:meta"
           if [ -n "$existing" ]; then
             echo "::notice::commenting on existing issue #$existing"
-            gh issue comment "$existing" --repo "$REPO" --body "$body"
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
           else
             echo "::notice::opening a new issue: $title"
-            gh issue create --repo "$REPO" --title "$title" --body "$body" --label "$labels"
+            gh issue create --repo "$REPO" --title "$title" --body-file "$body_file" --label "$labels"
+          fi
+          # A clean combine alongside a failed reusable is still a
+          # failure that needs to keep the run summary red. The issue
+          # already opened (or commented on) names the run via the
+          # URL, so an operator has somewhere to look.
+          if [ "$clean" = "True" ]; then
+            exit 1
           fi
 
   close:

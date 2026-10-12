@@ -20,6 +20,14 @@ workflow uses it to decide whether to open a new issue or comment on the
 one it already has. The script only emits the lookup; the `gh` call is
 in the workflow so the GitHub token stays in the step's `env:` block.
 
+When `--run-url` is passed, a clean combine (no advisories in any
+input) becomes a non-advisory failure issue. The title is
+`Rust audit failed on <refs>` and the body points at the run URL,
+with a note that the failure is not an advisory. The workflow runs
+this script only when the reusable already failed (`if: failure()`),
+so a clean combine output here means a non-advisory failure happened
+somewhere in the reusable and operators still need a loud signal.
+
 Usage:
 	rust_audit_combine.py <reports-dir>
 	rust_audit_combine.py -                # read JSONL from stdin
@@ -44,6 +52,8 @@ from pathlib import Path
 
 
 LABELS = ["type:security", "type:deps", "prio:P1", "area:meta"]
+
+_FAILURE_TITLE_PREFIX = "Rust audit failed on "
 
 
 def combine(reports: list[dict]) -> dict:
@@ -78,6 +88,46 @@ def combine(reports: list[dict]) -> dict:
 	body = "\n\n---\n\n".join(combined_body_parts)
 	return {
 		"clean": False,
+		"title": title,
+		"body": body,
+		"existing": "",  # filled in by `lookup_existing`
+	}
+
+
+def failure_issue(reports_dir: Path, run_url: str) -> dict:
+	"""Build the issue the workflow opens when the reusable failed
+	without surfacing advisories.
+
+	The title names the refs that did not produce JSON: an `audit-json-<ref>`
+	subdirectory without an `audit.json` inside it points at a reusable
+	that crashed before it could write the JSON (tool install error,
+	missing lockfile, etc.). The body names the run URL and says the
+	failure is not an advisory, so an operator does not chase a phantom
+	vulnerable crate.
+	"""
+	failed_refs: list[str] = []
+	if reports_dir.exists():
+		for entry in sorted(reports_dir.iterdir()):
+			if not entry.is_dir() or not entry.name.startswith("audit-json-"):
+				continue
+			if not (entry / "audit.json").exists():
+				ref = entry.name[len("audit-json-"):]
+				failed_refs.append(ref or "<pr head>")
+	title = _FAILURE_TITLE_PREFIX + (
+		", ".join(failed_refs) if failed_refs else "audit"
+	)
+	body = (
+		"The daily cargo audit run failed without reporting advisories.\n\n"
+		"The reusable workflow exited non-zero but the JSON the combine step "
+		"read listed no advisories. That points at a non-advisory failure: "
+		"cargo-deny policy, tool install error, missing lockfile, or a JSON "
+		"shape the combine script does not understand.\n\n"
+		f"Run URL: {run_url}\n\n"
+		"This issue is not an advisory; the audit step itself did not flag a "
+		"vulnerable crate. Investigate the run linked above."
+	)
+	return {
+		"clean": True,
 		"title": title,
 		"body": body,
 		"existing": "",  # filled in by `lookup_existing`
@@ -183,6 +233,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 		action="store_true",
 		help="Skip the issue lookup; emit `existing: \"\"`",
 	)
+	parser.add_argument(
+		"--run-url",
+		default="",
+		help=(
+			"URL of the workflow run. When set, a clean combine (no "
+			"advisories) is turned into a non-advisory failure issue "
+			"with the URL in the body."
+		),
+	)
 	return parser.parse_args(argv)
 
 
@@ -191,17 +250,20 @@ def main(argv: list[str]) -> int:
 	try:
 		if args.reports_dir == "-":
 			reports = _read_reports_from_stdin()
+			reports_dir = Path("-")
 		else:
-			reports = _read_reports_from_dir(Path(args.reports_dir))
+			reports_dir = Path(args.reports_dir)
+			reports = _read_reports_from_dir(reports_dir)
 	except ValueError as exc:
 		print(f"rust_audit_combine: {exc}", file=sys.stderr)
 		return 2
 	combined = combine(reports)
+	if combined["clean"] and args.run_url:
+		combined = failure_issue(reports_dir, args.run_url)
 	if (
 		not combined["clean"]
-		and args.repo
-		and not args.no_lookup
-	):
+		or (combined["clean"] and args.run_url)
+	) and args.repo and not args.no_lookup:
 		combined["existing"] = lookup_existing(args.repo, combined["title"] or "")
 	json.dump(combined, sys.stdout, indent=2, sort_keys=True)
 	sys.stdout.write("\n")
