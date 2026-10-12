@@ -223,6 +223,10 @@ mod jmap_tests_email_create;
 mod send_tests_bcc;
 
 #[cfg(test)]
+#[path = "jmap_tests_attachment_limit.rs"]
+mod jmap_tests_attachment_limit;
+
+#[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 

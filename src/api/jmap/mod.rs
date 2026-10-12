@@ -39,7 +39,7 @@ pub use uploads::Uploads;
 mod limits;
 pub use limits::{
 	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
-	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+	MAX_OBJECTS_IN_SET, MAX_SIZE_ATTACHMENTS_PER_EMAIL, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
 };
 mod methods;
 mod objects;
@@ -117,7 +117,7 @@ pub async fn session(
 				"maxMailboxesPerEmail": null,
 				"maxMailboxDepth": null,
 				"maxSizeMailboxName": 128u32,
-				"maxSizeAttachmentsPerEmail": 50_000_000u64,
+				"maxSizeAttachmentsPerEmail": limits::MAX_SIZE_ATTACHMENTS_PER_EMAIL as u64,
 				"emailQuerySortOptions": [],
 				"mayCreateTopLevelMailbox": true,
 			},

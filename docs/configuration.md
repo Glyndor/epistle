@@ -305,7 +305,8 @@ header before sending and keeps those recipients on the envelope.
 itself, `bodyStructure` together with the body lists, more than one part in
 `textBody` or `htmlBody`, or a part with both or neither of `partId` and
 `blobId` are refused with `invalidProperties`; a message over 25 MiB with
-`tooLarge`.
+`tooLarge`. The Session's `maxSizeAttachmentsPerEmail` is the attachment
+size that still fits 25 MiB once base64-encoded (about 18 MB).
 
 ### Uploaded blob storage
 

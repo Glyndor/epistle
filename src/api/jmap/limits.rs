@@ -10,6 +10,17 @@ use axum::http::StatusCode;
 /// problem, however much larger it is.
 pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 
+/// `maxSizeAttachmentsPerEmail` (RFC 8621 section 1.3.1): attachment octets
+/// that still fit the message size limit once written. Base64 takes four
+/// characters for three octets and a CRLF after every 76 characters; the
+/// rest of [`ATTACHMENT_HEADROOM`] is left for the headers, the body and
+/// each part's own headers.
+pub const MAX_SIZE_ATTACHMENTS_PER_EMAIL: usize =
+	(crate::smtp::session::MAX_MESSAGE_SIZE - ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
+
+/// Room kept outside the attachments in [`MAX_SIZE_ATTACHMENTS_PER_EMAIL`].
+pub const ATTACHMENT_HEADROOM: usize = 256 * 1024;
+
 /// `maxSizeRequest`: the most octets accepted in one `POST /jmap/api` body.
 /// 10 MB, not the 2 MiB axum applies by default: Email/set and
 /// EmailSubmission/set carry message bodies inline, and the uploads a client

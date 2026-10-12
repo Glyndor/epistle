@@ -21,7 +21,7 @@ async fn jmap(app: &Router, call: Value) -> Value {
 
 /// Create one Email from `spec` (merged into a minimal draft); the
 /// `Email/set` response.
-async fn create(app: &Router, spec: Value) -> Value {
+pub(super) async fn create(app: &Router, spec: Value) -> Value {
 	let mut email = json!({
 		"mailboxIds": {"INBOX": true},
 		"from": [{"email": "alice@example.org"}],
@@ -67,7 +67,7 @@ fn body_of(email: &Value, list: &str) -> (String, String) {
 	)
 }
 
-async fn upload(app: &Router, content_type: &str, data: &[u8]) -> String {
+pub(super) async fn upload(app: &Router, content_type: &str, data: &[u8]) -> String {
 	let request = Request::builder()
 		.method("POST")
 		.uri("/jmap/upload/alice")
@@ -97,7 +97,7 @@ async fn download(app: &Router, blob_id: &str) -> Vec<u8> {
 		.to_vec()
 }
 
-fn app() -> (tempfile::TempDir, Router) {
+pub(super) fn app() -> (tempfile::TempDir, Router) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
 	let app = router(test_state(dir.path(), 0));
