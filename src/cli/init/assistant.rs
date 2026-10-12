@@ -11,6 +11,7 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use super::answers::{Answers, DnsAnswers, Invalid, Mode, Services};
+use super::detect::Detector;
 
 /// The outcome of running the assistant: the answers they typed in.
 /// Warnings are surfaced by the caller through `Answers::validate` so
@@ -143,15 +144,28 @@ fn ask_mode<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<Mode, ()
 	}
 }
 
+/// Ask for one public address. With a `detected` default the prompt shows
+/// it: an empty answer accepts it, `none` skips the field, and anything
+/// else typed replaces it. Without one an empty answer skips the field.
+/// A typed address goes through the same family and non-global rules
+/// either way.
 fn parse_ip<R: BufRead>(
 	reader: &mut R,
-	prompt: &str,
+	label: &str,
 	family: IpFamily,
+	detected: Option<std::net::IpAddr>,
 	out: &mut impl Write,
 ) -> Result<Option<std::net::IpAddr>, ()> {
+	let prompt = match detected {
+		Some(address) => format!("{label} [{address}] (empty to accept, \"none\" to skip)> "),
+		None => format!("{label} (empty to skip)> "),
+	};
 	loop {
-		let raw = ask_line(reader, prompt, out)?;
+		let raw = ask_line(reader, &prompt, out)?;
 		if raw.is_empty() {
+			return Ok(detected);
+		}
+		if detected.is_some() && raw.eq_ignore_ascii_case("none") {
 			return Ok(None);
 		}
 		match raw.parse::<std::net::IpAddr>() {
@@ -171,6 +185,16 @@ fn parse_ip<R: BufRead>(
 			}
 		}
 	}
+}
+
+/// The detected addresses worth offering as defaults: a detector is
+/// trusted no further than the rule a typed answer must pass, so a
+/// non-global address is dropped here.
+fn offered(detector: &dyn Detector) -> (Option<std::net::IpAddr>, Option<std::net::IpAddr>) {
+	let (v4, v6) = super::detect::detect_or_none(detector);
+	let v4 = v4.filter(|a| crate::config::non_global_ipv4_reason(*a).is_none());
+	let v6 = v6.filter(|a| crate::config::non_global_ipv6_reason(*a).is_none());
+	(v4.map(std::net::IpAddr::V4), v6.map(std::net::IpAddr::V6))
 }
 
 /// What family an IP address slot accepts. `public_*` slots reject
@@ -219,31 +243,29 @@ impl std::fmt::Display for IpFamily {
 /// validator pass. Errors and warnings from the file path and the
 /// assistant path share the same text, so an operator who switches
 /// modes sees the same feedback.
-pub fn run<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<Filled, ()> {
+pub fn run<R: BufRead>(
+	reader: &mut R,
+	out: &mut impl Write,
+	detector: &dyn Detector,
+) -> Result<Filled, ()> {
+	let (detected_v4, detected_v6) = offered(detector);
 	let mode = ask_mode(reader, out)?;
 	let hostname = ask_domain(reader, "hostname> ", out)?;
 	let _ = writeln!(out, "domains:");
 	let domains = ask_domain_list(reader, out)?;
-	let public_ipv4 = parse_ip(
-		reader,
-		"public IPv4 (empty to skip)> ",
-		IpFamily::V4Public,
-		out,
-	)?
-	.and_then(|addr| match addr {
-		std::net::IpAddr::V4(v4) => Some(v4),
-		std::net::IpAddr::V6(_) => None,
-	});
-	let public_ipv6 = parse_ip(
-		reader,
-		"public IPv6 (empty to skip)> ",
-		IpFamily::V6Public,
-		out,
-	)?
-	.and_then(|addr| match addr {
-		std::net::IpAddr::V6(v6) => Some(v6),
-		std::net::IpAddr::V4(_) => None,
-	});
+	if let Some(hint) = super::detect::nat_hint(detected_v4.is_none(), detected_v6.is_none()) {
+		let _ = writeln!(out, "  {hint}");
+	}
+	let public_ipv4 = parse_ip(reader, "public IPv4", IpFamily::V4Public, detected_v4, out)?
+		.and_then(|addr| match addr {
+			std::net::IpAddr::V4(v4) => Some(v4),
+			std::net::IpAddr::V6(_) => None,
+		});
+	let public_ipv6 = parse_ip(reader, "public IPv6", IpFamily::V6Public, detected_v6, out)?
+		.and_then(|addr| match addr {
+			std::net::IpAddr::V6(v6) => Some(v6),
+			std::net::IpAddr::V4(_) => None,
+		});
 	let data_dir = ask_line(reader, "data_dir> ", out)?;
 	let config_path = ask_line(reader, "config_path> ", out)?;
 	let dns = if mode == Mode::Automatic {
@@ -324,3 +346,7 @@ pub fn confirm<R: BufRead>(reader: &mut R, out: &mut impl Write) -> Result<bool,
 #[cfg(test)]
 #[path = "assistant_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "assistant_tests_detect.rs"]
+mod tests_detect;

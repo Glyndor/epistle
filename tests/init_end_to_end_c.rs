@@ -162,10 +162,13 @@ fn init_clears_dns_section_when_switching_to_manual_mode() {
 	);
 }
 
-/// Finding 5 (public_ipv4): omitting a previously-supplied
-/// `public_ipv4` in the answers file must remove the key from the
+/// Finding 5 (public_ipv4): dropping a previously-supplied
+/// `public_ipv4` from the answers must remove the key from the
 /// existing config; the merge must not preserve the previous
-/// value just because the desired config does not name it.
+/// value just because the desired config does not name it. The
+/// second file says `"none"` rather than leaving the key out: a
+/// left-out address is filled from the host's interfaces, which
+/// would make the outcome depend on the machine running the test.
 #[test]
 fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -198,6 +201,8 @@ fn init_clears_omitted_public_ip_when_the_answers_drop_it() {
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
 		 domains = [\"example.org\"]\n\
+		 public_ipv4 = \"none\"\n\
+		 public_ipv6 = \"none\"\n\
 		 data_dir = \"{}\"\n\
 		 config_path = \"{}\"\n		 image = \"localhost/epistle:dev\"\n\n		 [services]\n		 database = false\n",
 		data_dir.display(),

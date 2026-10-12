@@ -141,10 +141,10 @@ pub struct Answers {
 	/// Domains this server accepts mail for.
 	pub domains: Vec<String>,
 	/// Optional public IPv4 (must be global unicast when present).
-	#[serde(default)]
+	#[serde(default, deserialize_with = "super::answers_none::ipv4")]
 	pub public_ipv4: Option<Ipv4Addr>,
 	/// Optional public IPv6 (must be global unicast when present).
-	#[serde(default)]
+	#[serde(default, deserialize_with = "super::answers_none::ipv6")]
 	pub public_ipv6: Option<Ipv6Addr>,
 	/// `data_dir` written into the generated config.
 	pub data_dir: PathBuf,
@@ -450,8 +450,8 @@ impl Answers {
 		 mode = \"manual\"                   # \"manual\" or \"automatic\"\n\
 		 hostname = \"mail.example.org\"     # FQDN the server identifies as\n\
 		 domains = [\"example.org\"]         # at least one; not equal to hostname\n\
-		 # public_ipv4 = \"203.0.113.10\"    # optional; must be a global unicast address\n\
-		 # public_ipv6 = \"2001:db8::10\"    # optional; must be a global unicast address\n\
+		 # public_ipv4 = \"203.0.113.10\"    # global unicast, or \"none\"; left out, detected\n\
+		 # public_ipv6 = \"2001:db8::10\"    # global unicast, or \"none\"; left out, detected\n\
 		 data_dir = \"/var/lib/glyndor/epistle/data\"\n\
 		 config_path = \"/etc/epistle/mail.toml\"\n\
 		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\n\

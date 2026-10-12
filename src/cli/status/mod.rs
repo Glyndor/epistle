@@ -15,7 +15,7 @@ mod disk_area;
 mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
-mod dns_fake;
+pub(crate) mod dns_fake;
 mod ports;
 mod queue_area;
 mod report;
@@ -23,6 +23,8 @@ mod subid_area;
 #[cfg(test)]
 mod test_support;
 mod tls_area;
+
+pub(crate) use dns_area::TimeoutDns;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

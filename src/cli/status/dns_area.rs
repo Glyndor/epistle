@@ -116,8 +116,9 @@ async fn key_item(key: &SigningKey, domain: &str, dns: &dyn DnsLookup) -> Option
 	compare(key, domain, &published)
 }
 
-/// Wraps a resolver so no single query outlives [`NET_TIMEOUT`].
-pub(super) struct TimeoutDns<D>(pub(super) D);
+/// Wraps a resolver so no single query outlives [`NET_TIMEOUT`]. `init`
+/// uses it for its reverse-DNS block too.
+pub(crate) struct TimeoutDns<D>(pub(crate) D);
 
 impl<D: DnsLookup> DnsLookup for TimeoutDns<D> {
 	fn txt(&self, name: &str) -> Lookup<'_, Vec<String>> {

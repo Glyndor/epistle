@@ -5,7 +5,8 @@ use super::*;
 fn harness(input: &str) -> (Vec<u8>, Result<Filled, ()>) {
 	let mut reader = std::io::BufReader::new(input.as_bytes());
 	let mut out = Vec::new();
-	let result = run(&mut reader, &mut out);
+	let nothing_found = super::super::detect::tests::Scripted::found(None, None);
+	let result = run(&mut reader, &mut out, &nothing_found);
 	(out, result)
 }
 

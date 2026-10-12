@@ -718,6 +718,23 @@ What this build does:
   was reused, what was written, and what was skipped; the report is also
   printed when a later step fails, so the operator can see what is already
   on disk before fixing the failure.
+- proposes the public addresses from the host's own interfaces, keeping only
+  global ones (the rule `public_ipv4`/`public_ipv6` must pass, so no private,
+  loopback, link-local, ULA, CGNAT or documentation address): the assistant
+  shows a detected address as the default (empty accepts it, `none` skips the
+  field, anything typed replaces it), and an answers file that leaves an
+  address out gets the detected one, reported on stderr. An address the file
+  names is never replaced, and `public_ipv4 = "none"` (or `public_ipv6`) says
+  there is no address of that family: detection never overrides it, and with
+  both families settled the interfaces are not read. Behind NAT the host has
+  no global address, and a one-line hint says to set the public one by hand;
+- ends with the reverse DNS (PTR) of each public address, on stderr, after a
+  successful run and after `--dry-run`. Each line says whether the PTR names
+  the hostname and the hostname resolves back to the address, points
+  elsewhere, is missing, or could not be looked up; a missing or wrong PTR
+  names what to ask the hosting provider for, since the record lives in the
+  address owner's zone. The block never changes the exit code: a missing PTR
+  is reported, not fatal. `epistle verify-dns` runs the same check later.
 
 ### Why a self-signed cert
 
@@ -750,8 +767,6 @@ single key.
 What this build does **not** do (other parts of `init`, deliberately out of
 scope here):
 
-- public-address detection: the operator types `public_ipv4`/`public_ipv6` in
-  the answers file or leaves them blank;
 - DNS publishing for automatic mode: the plan still lists the `dns` step, but
   the step renders `not implemented in this build`. The operator follows it by
   hand or waits for the next part of `init` to land;
