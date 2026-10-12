@@ -21,11 +21,17 @@ use std::path::Path;
 ///
 /// [`flock`]: https://man7.org/linux/man-pages/man2/flock.2.html
 pub(crate) fn flock_exclusive_blocking(fd: RawFd) -> std::io::Result<()> {
-	let result = unsafe { libc::flock(fd, libc::LOCK_EX) };
-	if result == 0 {
-		Ok(())
-	} else {
-		Err(std::io::Error::last_os_error())
+	loop {
+		let result = unsafe { libc::flock(fd, libc::LOCK_EX) };
+		if result == 0 {
+			return Ok(());
+		}
+		let error = std::io::Error::last_os_error();
+		// A signal delivered while waiting interrupts the call; the lock
+		// is still wanted, so wait again.
+		if error.kind() != std::io::ErrorKind::Interrupted {
+			return Err(error);
+		}
 	}
 }
 
