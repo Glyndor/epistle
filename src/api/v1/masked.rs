@@ -1,8 +1,8 @@
 //! `/api/v1/accounts/{name}/masked`: list, create, update, delete masked
 //! email addresses for one account. Read scope for the listing, write scope
 //! for create/update/delete (the middleware already enforces the path-based
-//! scope; `require_scope` would only matter for an ambiguous POST, which
-//! this route is not).
+//! scope; a per-handler scope check would only matter for an ambiguous POST,
+//! which this route is not).
 
 use axum::Extension;
 use axum::Json;

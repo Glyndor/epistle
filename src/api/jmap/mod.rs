@@ -218,10 +218,10 @@ pub fn dispatch_request(
 	// `PushSubscription/*` and `Core/echo` are session-scoped: they do not
 	// carry an `accountId`. `Core/echo` touches nothing; the push
 	// subscriptions are filtered by the caller that created them. The rest
-	// of the methods need an account check; the
-	// `state.auth_extension_for(principal)` helper, where one exists, calls
-	// `state.require_scope` and the per-method handler does the principal
-	// check on the `accountId` it pulls out of the arguments.
+	// of the methods need an account check: the scope each call needs is
+	// checked below with `state.require_scope_for_principal`, and the
+	// per-method handler does the principal check on the `accountId` it
+	// pulls out of the arguments.
 	let mut method_responses = Vec::with_capacity(calls);
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {

@@ -89,38 +89,17 @@ impl ApiState {
 		}
 	}
 
-	/// Re-check `auth` against `required_scope`. Used by handlers whose scope
+	/// Re-check `principal` against `scope`. Used by handlers whose scope
 	/// cannot be inferred from path+method (most JMAP method calls: the same
 	/// `POST /jmap/api` route serves reads, writes and outbound submissions
 	/// depending on the request body, so the middleware's coarse inference
 	/// defaults to passing any scoped key and lets each handler tighten it).
-	///
-	/// The configured token has every scope; a leaked configured token is
-	/// admin-equivalent regardless. Per-key scopes only matter for the
-	/// optional, labeled keys in `api_keys.toml`.
-	pub fn require_scope(&self, auth: &MatchedAuth, scope: Scope) -> Result<(), ApiError> {
-		let allowed = auth.configured
-			|| auth
-				.token
-				.as_deref()
-				.is_some_and(|token| self.key_authorizes(token, auth.client_ip, &[scope]));
-		if allowed {
-			Ok(())
-		} else {
-			Err(ApiError::unauthenticated())
-		}
-	}
-
-	/// Re-check `principal` against `required_scope`. Same as
-	/// [`Self::require_scope`] but takes the resolved principal directly, so
-	/// handlers that already computed one do not have to look up the token a
-	/// second time. The middleware never calls this; the path/method
-	/// inference it does is enough for the routes that reach it.
+	/// The middleware never calls this; the path/method inference it does is
+	/// enough for the routes that reach it.
 	///
 	/// When the principal carries a credential (`Account` or `Domains` or a
 	/// key-shaped `Admin`), scope is decided by the API key that
-	/// authenticated, from the same peer, the same way
-	/// [`Self::require_scope`] reads it. A principal carries a credential
+	/// authenticated, from the same peer. A principal carries a credential
 	/// only when its bearer was not the configured token, so the configured
 	/// hash is not compared again. The bare `Admin` (the configured static
 	/// token) admits every scope; any other principal without a credential
