@@ -661,3 +661,7 @@ mod tests_subjectpass;
 #[cfg(test)]
 #[path = "server_tests_dual_stack.rs"]
 mod tests_dual_stack;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;

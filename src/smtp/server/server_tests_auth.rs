@@ -70,7 +70,6 @@ async fn auth_login_over_starttls_authenticates() {
 		.connect(server_name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");
@@ -134,7 +133,6 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 		.connect(server_name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");

@@ -577,7 +577,10 @@ impl Server {
 					stream = Box::new(tls_stream);
 					session.tls_started();
 					decoder = LineDecoder::new();
-					send(&mut stream, &session.greeting()).await?;
+					// No greeting inside TLS (RFC 3207 section 4.2): the
+					// session is back in the state after the 220 banner and
+					// the client speaks first with EHLO. A banner here is read
+					// as the reply to that EHLO and shifts every later reply.
 				}
 				Action::Close(reply) => {
 					send(&mut stream, &reply).await?;
