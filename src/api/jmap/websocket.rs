@@ -87,8 +87,7 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 			}
 			return;
 		}
-		let uploads = read_ahead(&state, &principal, &text).await;
-		for reply in handle_ws_message_with(&state, &principal, &text, &mut push, &uploads) {
+		for reply in handle_frame(&state, &principal, &text, &mut push).await {
 			if socket.send(Message::Text(reply.into())).await.is_err() {
 				return;
 			}
@@ -154,6 +153,18 @@ pub fn handle_ws_message(
 	push: &mut PushState,
 ) -> Vec<String> {
 	handle_ws_message_with(state, principal, text, push, &super::Uploads::default())
+}
+
+/// One text frame as the socket loop handles it: the uploads it names read
+/// first, then the frame itself.
+async fn handle_frame(
+	state: &ApiState,
+	principal: &Principal,
+	text: &str,
+	push: &mut PushState,
+) -> Vec<String> {
+	let uploads = read_ahead(state, principal, text).await;
+	handle_ws_message_with(state, principal, text, push, &uploads)
 }
 
 /// The uploaded blobs a `Request` frame's `Email/set` creates name, read
@@ -330,3 +341,7 @@ mod tests;
 #[cfg(test)]
 #[path = "websocket_tests_state.rs"]
 mod tests_state;
+
+#[cfg(test)]
+#[path = "websocket_tests_upload.rs"]
+mod tests_upload;
