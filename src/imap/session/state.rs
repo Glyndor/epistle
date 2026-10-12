@@ -27,6 +27,9 @@ pub struct Output {
 	/// exclusive with `collect_literal`: a command either accepts the
 	/// literal and stores it, or rejects it and discards it.
 	pub discard_literal: Option<usize>,
+	/// The octets that must follow a collected literal: CRLF, or `)` CRLF
+	/// for the RFC 6855 `UTF8 (~{n})` APPEND data item.
+	pub literal_trailer: &'static [u8],
 	/// Whether the session is now in the IDLE state; the network layer
 	/// expects `DONE` or a 29-minute timeout before resuming the pump.
 	pub idle: bool,
@@ -47,6 +50,7 @@ impl Output {
 			bytes: text.into_bytes(),
 			close: false,
 			collect_literal: None,
+			literal_trailer: b"\r\n",
 			discard_literal: None,
 			idle: false,
 			upgrade_tls: false,

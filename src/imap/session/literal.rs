@@ -25,15 +25,27 @@ impl Session {
 		flag_tokens: &[String],
 		size: usize,
 		synchronizing: bool,
+		utf8: bool,
 	) -> Output {
+		// A rejected `UTF8 (~{n+})` also drains the `)` after the literal.
+		let wire_size = size + usize::from(utf8);
 		let Some(account) = self.account().map(str::to_string) else {
-			return reject_literal(tag, synchronizing, size, "NO not authenticated\r\n");
+			return reject_literal(tag, synchronizing, wire_size, "NO not authenticated\r\n");
 		};
+		// RFC 6855 §4: the UTF8 data item is only meaningful once enabled.
+		if utf8 && !self.utf8_accept {
+			return reject_literal(
+				tag,
+				synchronizing,
+				wire_size,
+				"BAD UTF8 APPEND requires ENABLE UTF8=ACCEPT\r\n",
+			);
+		}
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return reject_literal(
 				tag,
 				synchronizing,
-				size,
+				wire_size,
 				"NO [TRYCREATE] no such mailbox\r\n",
 			);
 		}
@@ -44,7 +56,7 @@ impl Session {
 			return reject_literal(
 				tag,
 				synchronizing,
-				size,
+				wire_size,
 				"NO [OVERQUOTA] storage quota exceeded\r\n",
 			);
 		}
@@ -53,7 +65,12 @@ impl Session {
 			match Flag::parse(token) {
 				Some(flag) => flags.push(flag),
 				None => {
-					return reject_literal(tag, synchronizing, size, "BAD unsupported flag\r\n");
+					return reject_literal(
+						tag,
+						synchronizing,
+						wire_size,
+						"BAD unsupported flag\r\n",
+					);
 				}
 			}
 		}
@@ -64,7 +81,7 @@ impl Session {
 			return reject_literal(
 				tag,
 				synchronizing,
-				size,
+				wire_size,
 				"BAD too many keywords (max {})\r\n",
 			);
 		}
@@ -76,6 +93,9 @@ impl Session {
 		});
 		let mut output = Output::text("+ ready for literal data\r\n".to_string());
 		output.collect_literal = Some(size);
+		if utf8 {
+			output.literal_trailer = b")\r\n";
+		}
 		output
 	}
 

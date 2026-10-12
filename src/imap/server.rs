@@ -417,10 +417,12 @@ impl Server {
 							decoder.feed(&chunk[needed..read]);
 						}
 					}
-					// Now consume exactly two bytes for the trailer. The
-					// decoder keeps any surplus for the next command line.
-					let mut trailer = decoder.take_buffered(2);
-					while trailer.len() < 2 {
+					// Now consume exactly the trailer (CRLF, or `)` CRLF after
+					// a UTF8 APPEND literal). The decoder keeps any surplus
+					// for the next command line.
+					let expected = output.literal_trailer;
+					let mut trailer = decoder.take_buffered(expected.len());
+					while trailer.len() < expected.len() {
 						let read =
 							match tokio::time::timeout(self.read_timeout, stream.read(&mut chunk))
 								.await
@@ -436,7 +438,7 @@ impl Server {
 						if read == 0 {
 							return Ok(());
 						}
-						let needed = 2 - trailer.len();
+						let needed = expected.len() - trailer.len();
 						if read <= needed {
 							trailer.extend_from_slice(&chunk[..read]);
 						} else {
@@ -444,7 +446,7 @@ impl Server {
 							decoder.feed(&chunk[needed..read]);
 						}
 					}
-					if trailer == b"\r\n" {
+					if trailer == expected {
 						output = session.literal_done(&literal);
 					} else {
 						// Put the non-CRLF trailer bytes back into the
@@ -580,6 +582,10 @@ mod tests_compress;
 #[cfg(test)]
 #[path = "server_tests_literals.rs"]
 mod tests_literals;
+
+#[cfg(test)]
+#[path = "server_tests_utf8_append.rs"]
+mod tests_utf8_append;
 
 #[path = "server_discard.rs"]
 mod discard;

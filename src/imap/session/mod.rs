@@ -202,7 +202,8 @@ impl Session {
 				flags,
 				size,
 				synchronizing,
-			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing),
+				utf8,
+			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing, utf8),
 			Command::Replace {
 				sequence,
 				mailbox,
