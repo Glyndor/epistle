@@ -18,8 +18,9 @@
 //! - [`caldav`] — the CalDAV (RFC 4791) layer: calendar collections, the
 //!   calendar `REPORT`s, free-busy, and the scheduling Outbox (RFC 6638).
 //! - [`rrule`] — a self-contained iCalendar recurrence expander for free-busy.
-//! - [`sync`] — the per-collection change log and `DAV:sync-token` used by the
-//!   RFC 6578 `sync-collection` REPORT.
+//! - [`sync`] and `sync_report`: the per-collection change log, the
+//!   `DAV:sync-token`/`CS:getctag` it yields, and the RFC 6578
+//!   `sync-collection` REPORT.
 
 use std::path::PathBuf;
 
@@ -41,7 +42,7 @@ pub mod path;
 pub mod propfind;
 pub mod rrule;
 pub mod sync;
-mod sync_multistatus;
+mod sync_report;
 #[cfg(test)]
 mod test_support;
 

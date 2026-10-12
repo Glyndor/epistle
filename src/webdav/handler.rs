@@ -24,6 +24,8 @@ use super::propfind;
 #[path = "handler_propfind.rs"]
 mod propfind_handler;
 use propfind_handler::propfind;
+#[path = "handler_sync.rs"]
+mod sync_handler;
 
 /// The `Allow` header listing every method this server implements.
 const ALLOW: &str = "OPTIONS, GET, HEAD, POST, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, REPORT";
@@ -73,6 +75,9 @@ pub async fn dispatch(State(state): State<WebDavState>, request: Request) -> Res
 	// canonical root.
 	if !symlink_check_ok(&target, &root, request.method().as_str()) {
 		return StatusCode::FORBIDDEN.into_response();
+	}
+	if sync_handler::is_reserved(&target) {
+		return StatusCode::NOT_FOUND.into_response();
 	}
 
 	match request.method().clone() {
@@ -126,7 +131,7 @@ async fn dispatch_extension(
 	match method {
 		"MKCOL" => mkcol(target, request).await,
 		"PROPFIND" => propfind(target, uri_path, request).await,
-		"REPORT" => report(root, target, uri_path, request).await,
+		"REPORT" => report(root, target, request).await,
 		"COPY" => copy_move(root, target, request.headers(), false).await,
 		"MOVE" => copy_move(root, target, request.headers(), true).await,
 		_ => method_not_allowed(),
@@ -163,66 +168,26 @@ async fn read_body_capped(
 	}
 }
 
-/// `REPORT` (RFC 6352 / RFC 4791): read the body and hand it to the right
-/// report dispatcher. The choice is made by peeking the body's root element: a
-/// body naming a CalDAV report (`calendar-multiget`/`calendar-query`/
-/// `free-busy-query`) goes to the CalDAV handler, everything else to CardDAV.
-/// A body naming `sync-collection` (RFC 6578) is handled by [`super::sync`]
-/// once the target collection is known: a calendar for a CalDAV report, an
-/// addressbook for CardDAV. The sync handler enforces per-account
-/// confinement through the same `target` path the rest of the report
-/// dispatchers see.
-async fn report(root: &Path, target: &Path, uri_path: &str, request: Request) -> Response {
-	let body = match read_body_capped(request.into_body(), XML_BODY_LIMIT).await {
+/// `REPORT` (RFC 6352 / RFC 4791 / RFC 6578): read the body and hand it to
+/// the right report dispatcher, chosen by the body's root element: a
+/// `sync-collection` goes to [`sync_handler`], a CalDAV report
+/// (`calendar-multiget`/`calendar-query`/`free-busy-query`) to the CalDAV
+/// handler, everything else to CardDAV. All of them build hrefs from the same
+/// confined `root` and `target`.
+async fn report(root: &Path, target: &Path, request: Request) -> Response {
+	let (parts, body) = request.into_parts();
+	let body = match read_body_capped(body, XML_BODY_LIMIT).await {
 		Ok(bytes) => bytes,
 		Err(response) => return *response,
 	};
 	let text = String::from_utf8_lossy(&body);
-	if super::sync::is_sync_collection(&text) {
-		return sync_collection_report(target, uri_path, &text).await;
+	if super::sync_report::is_sync_collection(&text) {
+		return sync_handler::report(root, target, &parts.headers, &text).await;
 	}
 	if caldav::is_caldav_report(&text) {
 		caldav::report(root, target, &body).await
 	} else {
 		carddav::report(root, target, &body).await
-	}
-}
-
-/// Dispatch a `sync-collection` REPORT against `target`. The target must
-/// be a calendar or an addressbook; other collections (and the account
-/// root) get `403` with the `DAV:valid-sync-token` precondition, mirroring
-/// the RFC's shape for a server that does not support sync on a given
-/// collection.
-async fn sync_collection_report(target: &Path, uri_path: &str, body: &str) -> Response {
-	let is_calendar = caldav::is_calendar(target);
-	let is_addressbook = carddav::is_addressbook(target);
-	if !is_calendar && !is_addressbook {
-		return super::sync::invalid_token_response();
-	}
-	let collection_href = canonical_collection_href(uri_path);
-	match super::sync::handle_report(target, body, is_calendar, is_addressbook, &collection_href)
-		.await
-	{
-		super::sync::ReportOutcome::Multistatus(body) => (
-			StatusCode::MULTI_STATUS,
-			[(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
-			body,
-		)
-			.into_response(),
-		super::sync::ReportOutcome::Forbidden => super::sync::invalid_token_response(),
-	}
-}
-
-/// Build the collection's own href as the client sees it: a normalised
-/// version of `uri_path` with a trailing slash. The multistatus answers
-/// reference each child as `collection_href + name`, so this is the
-/// prefix the client gets back.
-fn canonical_collection_href(uri_path: &str) -> String {
-	let trimmed = uri_path.trim_end_matches('/');
-	if trimmed.is_empty() {
-		"/".to_string()
-	} else {
-		format!("{trimmed}/")
 	}
 }
 
@@ -347,18 +312,9 @@ async fn put(target: &Path, request: Request) -> Response {
 		Ok(bytes) => bytes,
 		Err(response) => return *response,
 	};
-	let result = tokio::fs::write(target, &body).await;
-	match result {
+	match tokio::fs::write(target, &body).await {
 		Ok(()) => {
-			// Record the change in the parent collection's change log so a
-			// `sync-collection` REPORT can see the new version. Only record
-			// when the parent is a calendar or addressbook; the rest of the
-			// WebDAV tree (loose files) has no log.
-			if let Some(relative) = resource_relative(parent, target)
-				&& (caldav::is_calendar(parent) || carddav::is_addressbook(parent))
-			{
-				super::sync::record(parent, &relative, false).await;
-			}
+			sync_handler::log_member(target, false).await;
 			put_success(target, existed).await
 		}
 		Err(error) if error.kind() == std::io::ErrorKind::StorageFull => {
@@ -366,25 +322,6 @@ async fn put(target: &Path, request: Request) -> Response {
 		}
 		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
 	}
-}
-
-/// The path of `target` relative to `parent`, with forward slashes, ready
-/// to be the `href` half of a change-log line. Returns `None` if `target`
-/// is not under `parent` (which the dispatch guard already prevented, but
-/// failing closed here is correct).
-fn resource_relative(parent: &Path, target: &Path) -> Option<String> {
-	let rel = target.strip_prefix(parent).ok()?;
-	let mut out = String::new();
-	for component in rel.components() {
-		let std::path::Component::Normal(name) = component else {
-			return None;
-		};
-		if !out.is_empty() {
-			out.push('/');
-		}
-		out.push_str(&name.to_string_lossy());
-	}
-	Some(out)
 }
 
 /// Build the success response for a completed `PUT`: `204`/`201` carrying the
@@ -415,58 +352,13 @@ async fn delete(target: &Path) -> Response {
 	};
 	match result {
 		Ok(()) => {
-			// Record the deletion in the parent collection's change log so a
-			// `sync-collection` REPORT can return `404` for the href. For a
-			// collection delete we record every file we are about to remove
-			// under the collection's parent: each child becomes a `deleted`
-			// entry. For a single-file delete, one entry is enough.
-			if metadata.is_dir() {
-				if let Some(parent) = target.parent() {
-					let entries = collect_child_hrefs(target);
-					if caldav::is_calendar(parent) || carddav::is_addressbook(parent) {
-						let entries: Vec<(String, bool)> =
-							entries.into_iter().map(|href| (href, true)).collect();
-						super::sync::record_many(parent, &entries).await;
-					}
-				}
-			} else if let Some(parent) = target.parent()
-				&& let Some(relative) = resource_relative(parent, target)
-				&& (caldav::is_calendar(parent) || carddav::is_addressbook(parent))
-			{
-				super::sync::record(parent, &relative, true).await;
+			if !metadata.is_dir() {
+				sync_handler::log_member(target, true).await;
 			}
 			StatusCode::NO_CONTENT.into_response()
 		}
 		Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
 	}
-}
-
-/// Collect every `.ics` or `.vcf` href (relative to `dir`) of a directory
-/// the server is about to delete. Used to populate the change log so a
-/// sync-collection REPORT for the parent still knows the children are
-/// gone. Other file kinds are ignored — only the kind the collection is
-/// supposed to hold can land in the log.
-fn collect_child_hrefs(dir: &Path) -> Vec<String> {
-	let mut out = Vec::new();
-	let Ok(mut entries) = std::fs::read_dir(dir) else {
-		return out;
-	};
-	while let Some(Ok(child)) = entries.next() {
-		let Ok(kind) = child.file_type() else {
-			continue;
-		};
-		if kind.is_dir() {
-			continue;
-		}
-		let name = child.file_name();
-		let name = name.to_string_lossy();
-		let lower = name.to_ascii_lowercase();
-		if lower.ends_with(".ics") || lower.ends_with(".vcf") {
-			out.push(name.into_owned());
-		}
-	}
-	out.sort();
-	out
 }
 
 /// `MKCOL` (RFC 4918) and extended-MKCOL (RFC 5689): create a single
@@ -532,6 +424,9 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	let Some(dest_path) = destination_path(root, headers) else {
 		return StatusCode::FORBIDDEN.into_response();
 	};
+	if sync_handler::is_reserved(&dest_path) {
+		return StatusCode::FORBIDDEN.into_response();
+	}
 	// RFC 4918 §9.8.5 / §9.9.4, copying or moving a collection into itself
 	// (or onto itself) would lose data: the existing implementation removes
 	// the destination before the source is read. Detect any overlap before
@@ -571,40 +466,10 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 	if let Err(response) = perform_copy(source, &dest_path, dest_was_dir).await {
 		return *response;
 	}
-	// Record the destination-side changes: a fresh resource lands in the
-	// destination's parent. The destination parent may itself be a calendar
-	// or addressbook (the common case for a WebDAV client); if it is
-	// neither, the change log is a no-op.
-	if let Some(dest_parent) = dest_path.parent() {
-		let dest_relative = resource_relative(dest_parent, &dest_path);
-		if let Some(relative) = dest_relative
-			&& (caldav::is_calendar(dest_parent) || carddav::is_addressbook(dest_parent))
-		{
-			super::sync::record(dest_parent, &relative, false).await;
-		}
+	if !source_meta.is_dir() {
+		sync_handler::log_member(&dest_path, false).await;
 	}
-	// For `MOVE`, the source side is gone: log every href that disappeared
-	// from the source's parent. A file MOVE is one entry; a collection MOVE
-	// is one per child.
 	if remove {
-		if let Some(source_parent) = source.parent() {
-			let source_entries: Vec<String> = if source_meta.is_dir() {
-				collect_child_hrefs(source)
-			} else if let Some(rel) = resource_relative(source_parent, source) {
-				vec![rel]
-			} else {
-				Vec::new()
-			};
-			if !source_entries.is_empty()
-				&& (caldav::is_calendar(source_parent) || carddav::is_addressbook(source_parent))
-			{
-				let entries: Vec<(String, bool)> = source_entries
-					.into_iter()
-					.map(|href| (href, true))
-					.collect();
-				super::sync::record_many(source_parent, &entries).await;
-			}
-		}
 		let removal = if source_meta.is_dir() {
 			tokio::fs::remove_dir_all(source).await
 		} else {
@@ -612,6 +477,9 @@ async fn copy_move(root: &Path, source: &Path, headers: &HeaderMap, remove: bool
 		};
 		if removal.is_err() {
 			return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+		}
+		if !source_meta.is_dir() {
+			sync_handler::log_member(source, true).await;
 		}
 	}
 	if dest_existed {
@@ -663,6 +531,15 @@ async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
 		while let Some(child) = dir.next_entry().await? {
 			let file_type = child.file_type().await?;
 			if !crate::util::fs_walk::allowed(&child.path(), file_type) {
+				continue;
+			}
+			// A copied calendar starts its own change log: tokens issued for
+			// the source must not be valid on the copy.
+			if child
+				.file_name()
+				.to_str()
+				.is_some_and(super::sync::is_internal)
+			{
 				continue;
 			}
 			let child_to = to.join(child.file_name());

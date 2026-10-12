@@ -13,8 +13,6 @@ fn file_entry() -> Entry {
 		content_type: "application/octet-stream",
 		etag: String::new(),
 		sync_token: String::new(),
-		getctag: String::new(),
-		supported_report_set: String::new(),
 	}
 }
 
@@ -30,8 +28,6 @@ fn dir_entry() -> Entry {
 		content_type: "application/octet-stream",
 		etag: String::new(),
 		sync_token: String::new(),
-		getctag: String::new(),
-		supported_report_set: String::new(),
 	}
 }
 
@@ -87,8 +83,6 @@ fn escapes_special_characters_in_name() {
 		content_type: "application/octet-stream",
 		etag: String::new(),
 		sync_token: String::new(),
-		getctag: String::new(),
-		supported_report_set: String::new(),
 	};
 	let body = multistatus(&[entry]);
 	assert!(body.contains("a&amp;b&lt;c&gt;"));
