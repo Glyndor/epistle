@@ -46,15 +46,18 @@ permissions:
 
 jobs:
   audit:
-    # Matrix over develop and main. `fail-fast: false` lets one slow or
-    # dirty ref's report still publish, so an open issue is created the
-    # day something breaks on `main` even while the `develop` job is
-    # still running. The `report` and `close` jobs below wait for every
-    # matrix entry to finish before deciding what to do.
+    # Two shapes. On schedule and workflow_dispatch the matrix is
+    # `[develop, main]` so a finding on either branch opens an issue
+    # the day it appears. On pull_request the matrix is `[""]` so the
+    # reusable audits the PR's own lockfile (an empty `ref` makes
+    # `actions/checkout` use the pull-request head). A PR that bumps a
+    # crate to a vulnerable version is caught at the pull request, not
+    # by the next day's main run. `fail-fast: false` keeps both halves
+    # independent: a slow or dirty ref's report still publishes.
     strategy:
       fail-fast: false
       matrix:
-        ref: [develop, main]
+        ref: ${{ fromJSON(github.event_name == 'pull_request' && '[""]' || '["develop","main"]') }}
     uses: ./.github/workflows/reusable-rust-audit.yml
     with:
       ref: ${{ matrix.ref }}
