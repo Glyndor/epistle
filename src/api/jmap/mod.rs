@@ -9,7 +9,6 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
 use axum::extract::{Extension, FromRequest, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
@@ -19,6 +18,7 @@ use serde_json::{Value, json};
 use super::Principal;
 use super::state::{ApiState, MatchedAuth};
 use crate::api::api_keys::Scope;
+use caller_slots::{CallerSlot, Work};
 
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
@@ -26,6 +26,7 @@ const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 mod address_tokenizer;
 pub(crate) mod blob_path;
 mod blobs;
+pub(crate) mod caller_slots;
 mod dispatcher;
 mod download;
 mod email;
@@ -34,7 +35,8 @@ pub use download::download;
 mod email_submission;
 mod limits;
 pub use limits::{
-	MAX_CALLS_IN_REQUEST, MAX_OBJECTS_IN_GET, MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
+	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
 };
 mod methods;
 mod objects;
@@ -100,9 +102,9 @@ pub async fn session(
 		"capabilities": {
 			CORE_CAPABILITY: {
 				"maxSizeUpload": MAX_UPLOAD_SIZE as u64,
-				"maxConcurrentUpload": 4u32,
+				"maxConcurrentUpload": MAX_CONCURRENT_UPLOAD as u32,
 				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
-				"maxConcurrentRequests": 4u32,
+				"maxConcurrentRequests": MAX_CONCURRENT_REQUESTS as u32,
 				"maxCallsInRequest": MAX_CALLS_IN_REQUEST as u32,
 				"maxObjectsInGet": MAX_OBJECTS_IN_GET as u32,
 				"maxObjectsInSet": MAX_OBJECTS_IN_SET as u32,
@@ -164,11 +166,25 @@ pub struct Response {
 pub async fn api(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
-	request: Result<Json<Request>, JsonRejection>,
+	request: axum::extract::Request,
 ) -> axum::response::Response {
+	let principal = Principal::for_token(&state, &auth);
+	// The slot is held from before the body is read until the response is
+	// built, so a request counts against `maxConcurrentRequests` for as long
+	// as the server is busy with it.
+	let Some(_slot) = CallerSlot::take(
+		&state,
+		&principal,
+		Work::Request,
+		limits::MAX_CONCURRENT_REQUESTS,
+	) else {
+		let problem =
+			limits::too_many_concurrent("maxConcurrentRequests", limits::MAX_CONCURRENT_REQUESTS);
+		return (StatusCode::TOO_MANY_REQUESTS, Json(problem)).into_response();
+	};
 	// A body over the route's cap (`maxSizeRequest`) is answered with the
 	// RFC 8620 `limit` problem naming it, not axum's plain-text 413.
-	let request = match request {
+	let request = match Json::<Request>::from_request(request, &()).await {
 		Ok(Json(request)) => request,
 		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
 			let problem = limits::request_too_large();
@@ -176,7 +192,6 @@ pub async fn api(
 		}
 		Err(rejection) => return rejection.into_response(),
 	};
-	let principal = Principal::for_token(&state, &auth);
 	match dispatch_request(&state, &principal, request) {
 		Ok(response) => Json(response).into_response(),
 		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
@@ -349,6 +364,16 @@ pub async fn upload(
 	if !principal.admits_account(&view.name, &view.addresses) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
+	let Some(_slot) = CallerSlot::take(
+		&state,
+		&principal,
+		Work::Upload,
+		limits::MAX_CONCURRENT_UPLOAD,
+	) else {
+		let problem =
+			limits::too_many_concurrent("maxConcurrentUpload", limits::MAX_CONCURRENT_UPLOAD);
+		return (StatusCode::TOO_MANY_REQUESTS, Json(problem)).into_response();
+	};
 	let headers = request.headers().clone();
 	// The route caps the body at the advertised maxSizeUpload; anything
 	// larger is answered with the spec's limit error (RFC 8620 §6.1) rather

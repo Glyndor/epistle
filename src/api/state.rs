@@ -71,9 +71,9 @@ struct Inner {
 	/// real out-of-band delivery is out of scope, so these only need to round-trip
 	/// through `PushSubscription/get`/`set`. Each carries the caller that created it.
 	push_subscriptions: std::sync::Mutex<Vec<super::jmap::push_subscription::StoredSubscription>>,
-	/// Open `/jmap/eventsource` streams per caller, so one credential cannot
-	/// hold an unbounded number of polling streams open.
-	event_streams: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
+	/// JMAP work in flight per caller and kind (event-source streams, API
+	/// requests, uploads), so one credential cannot hold more than its limits.
+	caller_slots: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
 	/// At-rest crypto for stored message bodies and uploaded blobs.
 	crypto: MessageCrypto,
 	/// The built-in OAuth 2.0 authorization server, present only when a signing
@@ -234,7 +234,7 @@ impl ApiState {
 				quota_limit: std::sync::atomic::AtomicU64::new(0),
 				api_keys,
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
-				event_streams: Arc::default(),
+				caller_slots: Arc::default(),
 				crypto: MessageCrypto::disabled(),
 				authz: None,
 				directory: None,
@@ -589,11 +589,12 @@ impl ApiState {
 		f(&mut guard)
 	}
 
-	/// The per-caller count of open event-source streams.
-	pub(crate) fn event_streams(
+	/// The per-caller counts of JMAP work in flight
+	/// ([`super::jmap::caller_slots`]).
+	pub(crate) fn caller_slots(
 		&self,
 	) -> Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>> {
-		Arc::clone(&self.inner.event_streams)
+		Arc::clone(&self.inner.caller_slots)
 	}
 
 	/// A cheap, opaque state token for an account's mail, derived from total

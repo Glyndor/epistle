@@ -37,6 +37,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
 use super::Principal;
+use super::caller_slots::{CallerSlot, Work};
 use super::state::{Kind, account_root};
 use crate::api::api_keys::Scope;
 use crate::api::state::{ApiState, MatchedAuth};
@@ -51,40 +52,6 @@ pub(crate) const MAX_PING: u64 = 300;
 /// Streams one caller may hold open at once. Each polls the journals every
 /// second, so the cap bounds what one credential can cost the server.
 pub(crate) const MAX_STREAMS_PER_CALLER: usize = 4;
-
-/// One open stream counted against its caller; released when the stream is
-/// dropped, however it ends.
-struct StreamSlot {
-	streams: std::sync::Arc<std::sync::Mutex<HashMap<String, usize>>>,
-	owner: String,
-}
-
-impl StreamSlot {
-	fn take(state: &ApiState, owner: String) -> Option<Self> {
-		let streams = state.event_streams();
-		{
-			let mut open = streams.lock().unwrap_or_else(|p| p.into_inner());
-			let count = open.entry(owner.clone()).or_insert(0);
-			if *count >= MAX_STREAMS_PER_CALLER {
-				return None;
-			}
-			*count += 1;
-		}
-		Some(Self { streams, owner })
-	}
-}
-
-impl Drop for StreamSlot {
-	fn drop(&mut self) {
-		let mut open = self.streams.lock().unwrap_or_else(|p| p.into_inner());
-		if let Some(count) = open.get_mut(&self.owner) {
-			*count = count.saturating_sub(1);
-			if *count == 0 {
-				open.remove(&self.owner);
-			}
-		}
-	}
-}
 
 /// The data types with a state, and the kind that encodes each one's state.
 const TYPES: [(&str, Kind); 3] = [
@@ -110,7 +77,9 @@ pub async fn event_source(
 	let Some(owner) = super::push_subscription::owner_of(&state, &principal) else {
 		return super::jmap_error(StatusCode::FORBIDDEN, "forbidden", "no caller identity");
 	};
-	let Some(slot) = StreamSlot::take(&state, owner) else {
+	let Some(slot) =
+		CallerSlot::take_for(&state, &owner, Work::EventSource, MAX_STREAMS_PER_CALLER)
+	else {
 		return super::jmap_error(
 			StatusCode::TOO_MANY_REQUESTS,
 			"limit",
@@ -206,7 +175,7 @@ struct Events {
 	quiet_since: tokio::time::Instant,
 	done: bool,
 	/// Released when the stream is dropped.
-	_slot: StreamSlot,
+	_slot: CallerSlot,
 }
 
 impl Events {

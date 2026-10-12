@@ -19,6 +19,14 @@ pub const MAX_SIZE_REQUEST: usize = 10_000_000;
 /// `maxCallsInRequest`: the most method calls accepted in one request.
 pub const MAX_CALLS_IN_REQUEST: usize = 16;
 
+/// `maxConcurrentRequests`: the most `POST /jmap/api` requests, and
+/// WebSocket `Request` frames, one credential may have in flight at once.
+pub const MAX_CONCURRENT_REQUESTS: usize = 4;
+
+/// `maxConcurrentUpload`: the most `POST /jmap/upload` requests one
+/// credential may have in flight at once.
+pub const MAX_CONCURRENT_UPLOAD: usize = 4;
+
 /// `maxObjectsInGet`: the most ids one `/get` call may name, and the most
 /// records `ids: null` may return (RFC 8620 §5.1).
 pub const MAX_OBJECTS_IN_GET: usize = 500;
@@ -64,6 +72,18 @@ pub(super) fn request_too_large() -> serde_json::Value {
 		"maxSizeRequest",
 		StatusCode::PAYLOAD_TOO_LARGE,
 		&format!("a request may be at most {MAX_SIZE_REQUEST} octets"),
+	)
+}
+
+/// The error for a request refused because its credential already has
+/// `max` of them in flight; `limit` is `maxConcurrentRequests` or
+/// `maxConcurrentUpload`. 429, as the same request succeeds once one of the
+/// others ends.
+pub(super) fn too_many_concurrent(limit: &str, max: usize) -> serde_json::Value {
+	problem(
+		limit,
+		StatusCode::TOO_MANY_REQUESTS,
+		&format!("at most {max} such requests may be in flight per credential"),
 	)
 }
 

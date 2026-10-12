@@ -225,6 +225,10 @@ mod jmap_tests_limits;
 mod jmap_tests_limits_objects;
 
 #[cfg(test)]
+#[path = "jmap_tests_limits_concurrency.rs"]
+mod jmap_tests_limits_concurrency;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 

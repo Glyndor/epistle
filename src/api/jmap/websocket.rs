@@ -36,6 +36,7 @@ use serde_json::{Value, json};
 
 use super::Principal;
 use super::Request;
+use super::caller_slots::{CallerSlot, Work};
 use crate::api::state::{ApiState, MatchedAuth};
 
 /// `GET /jmap/ws` (RFC 8887 §3): upgrade to a WebSocket. Auth is already enforced
@@ -222,6 +223,24 @@ fn handle_request(
 		.map(|a| a.name.clone())
 		.collect();
 	let before: Vec<String> = accounts.iter().map(|a| state.account_state(a)).collect();
+	// A Request frame is an API request of the socket's credential and
+	// counts against `maxConcurrentRequests` while it runs.
+	let Some(_slot) = CallerSlot::take(
+		state,
+		principal,
+		Work::Request,
+		super::limits::MAX_CONCURRENT_REQUESTS,
+	) else {
+		let mut error = super::limits::too_many_concurrent(
+			"maxConcurrentRequests",
+			super::limits::MAX_CONCURRENT_REQUESTS,
+		);
+		error["@type"] = json!("RequestError");
+		if let Some(id) = &request_id {
+			error["requestId"] = json!(id);
+		}
+		return vec![error.to_string()];
+	};
 	let response = match super::dispatch_request(state, principal, request) {
 		Ok(response) => response,
 		Err(mut problem) => {
