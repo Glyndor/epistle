@@ -1,195 +1,79 @@
 # epistle
 
-Self-hosted, headless mail server — SMTP, IMAP and modern email security through an API and CLI. Part of the Glyndor stack.
+A self-hosted mail server for your own domains. epistle runs SMTP, IMAP, POP3
+and JMAP with modern email security, on rootless Podman, driven from one CLI.
+It has no web interface: you run it through the CLI and its API.
 
 [![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
 
-```mermaid
-flowchart LR
-	client([SMTP client]) -->|25 / 587 / 465| tls[TLS / STARTTLS]
-	tls --> smtp[SMTP listener]
-	smtp --> session[Session + AUTH]
-	session --> auth[SPF / DKIM / DMARC]
-	auth -->|local| mailbox[(Account mailboxes)]
-	auth -->|relay, DKIM-signed| queue[(Outbound queue)]
-	queue -->|MX + STARTTLS| internet([Remote servers])
-	cli[CLI] --> config[Config / fail-closed validation]
-	config --> smtp
-```
+## Features
 
-## ✨ What works today
-
-- 📨 **SMTP server core** — strict RFC 5321 session handling: HELO/EHLO, MAIL FROM (with `SIZE`/`BODY`), RCPT TO, DATA, RSET, NOOP, QUIT
-- 🔐 **TLS everywhere** — STARTTLS (RFC 3207) on SMTP/submission, implicit TLS for `submissions`; rustls, no OpenSSL; broken TLS material refuses to start instead of degrading
-- 🛡️ **Smuggling-immune by construction** — bare CR, bare LF or NUL anywhere in the stream closes the connection; CRLF is enforced at the framing layer
-- 🚫 **No relay, no ghosts** — recipients outside the configured `domains` answer `550 5.7.1`, unknown users in local domains answer `550 5.1.1`; with nothing configured everything is denied (fail closed)
-- ✅ **Full authentication chain** — SPF (RFC 7208) with `fail` rejection, DKIM verification (RFC 6376, rsa + ed25519), DMARC alignment and policy enforcement (RFC 7489); results recorded in `Authentication-Results`
-- ✍️ **DKIM signing** — outbound mail signed with ed25519; `epistle dkim-keygen` generates the key and prints the DNS record
-- 🔑 **Submission with AUTH** — `AUTH PLAIN` over TLS only, argon2id password hashes, no user-enumeration oracle; authenticated users relay from their own addresses
-- 📤 **Outbound queue** — MX resolution, opportunistic STARTTLS, per-domain delivery with retry/backoff semantics
-- 📬 **Local delivery** — accepted mail lands once per recipient account under `data_dir/accounts/<name>/new/`
-- 🔒 **Secure by default** — listeners bind to localhost unless explicitly configured otherwise; configuration fails closed on any unknown key or invalid value
-- 💾 **Crash-safe writes** — accepted messages are fsynced and atomically renamed into the mailbox before the server answers `250`
-- 🧰 **Operator CLI** — `epistle serve`, `epistle config-check`, `epistle dkim-keygen`, meaningful exit codes
+- 📨 **SMTP in and out, submission on 587 and 465**, IMAP4rev2, POP3 and JMAP, plus basic CalDAV and CardDAV.
+- 🔏 **SPF, DKIM, DMARC, ARC, MTA-STS and DANE**, with DMARC aggregate reports and automatic DKIM key rotation.
+- 🧹 **Sieve filters with ManageSieve**, greylisting, DNSBL, ClamAV, and Bayesian and reputation antispam.
+- 👥 **Accounts, aliases, catch-all and masked addresses**, TOTP and app passwords; LDAP, SQL and OIDC directories.
+- 🌐 **DNS records published for you** on Cloudflare, Route 53, Google Cloud DNS, DigitalOcean, OVH, GoDaddy, Namecheap, Porkbun, Spaceship, Bunny, deSEC, DNSimple, or your own nameserver over RFC 2136. Certificates through ACME.
+- 🔒 **Fails closed**: an unknown config key, broken TLS material or a missing secret stops the server instead of degrading it.
 
 ## Install
+
+epistle needs **Podman 5 or newer**, which means Debian 13 or Ubuntu 25.04 and
+later, on x86_64 or arm64.
 
 ```sh
 curl -fsSL https://apt.glyndor.net/install/epistle | sudo sh
 sudo epistle init
 sudo epistle stack up
-sudo epistle stack ps
 ```
 
 The installer adds the signed Glyndor apt repository and runs
-`sudo apt install epistle`, including Podman and podup. Init configures the
-server; stack up enables its service to start after reboot. Upgrades arrive
-through apt, including the server image for an enabled stack. See
-[the operator CLI guide](docs/cli.md#stack-epistle-stack) for configuration,
-customizations and recovery.
+`sudo apt install epistle`, which brings Podman and podup. `init` writes the
+configuration, and `stack up` starts the containers and brings them back after
+a reboot. `apt upgrade` keeps the server current.
 
-epistle runs on Linux and ships as a `.deb`. It needs Podman 5 or newer,
-which means Debian 13, Ubuntu 25.04 or later. On a system without apt,
-build from source below.
-
-## 🚀 Quick start (from source)
+## Quick start
 
 ```sh
-cargo build --release
-
-cat > mail.toml <<'EOF'
-hostname = "mail.example.org"
-data_dir = "/var/lib/glyndor/epistle/data"
-domains = ["example.org"]
-
-[[accounts]]
-name = "alice"
-addresses = ["alice@example.org", "postmaster@example.org"]
-
-[[listeners]]
-kind = "smtp"
-EOF
-
-./target/release/epistle config-check --config mail.toml
-./target/release/epistle serve --config mail.toml
+sudo epistle stack ps        # the containers and their state
+sudo epistle status          # is everything running?
+sudo epistle dns-records     # the records to publish for your domains
+sudo epistle verify-dns      # check that they are published
+sudo epistle account-add --name alice --address alice@example.org   # reads the password from stdin
 ```
 
-The SMTP listener binds to `127.0.0.1:25` by default — exposing it is an explicit decision:
+Everything else follows `epistle <resource> <action>`: accounts, aliases,
+domains, limits, queue, antispam. [Common tasks](docs/cli.md#common-tasks) maps
+what you want to do to the command that does it.
 
-```toml
-[[listeners]]
-kind = "smtp"
-addr = "0.0.0.0"
+## How it runs
+
+```mermaid
+flowchart LR
+	net([Internet]) -->|25 · 465 · 587 · 993 · 995| mail[mail: epistle]
+	mail -->|Unix socket| db[(PostgreSQL)]
+	mail -->|Unix socket| clamd[clamd]
+	freshclam[freshclam] -->|signatures| clamd
+	mail --> data[(Mail data)]
+	cli[epistle CLI] -->|podup| mail
 ```
 
-### Configuration secrets
+The mail container keeps the real client address. PostgreSQL and clamd have no
+network at all and are reached only through Unix sockets.
 
-The config file must be owner-only — `epistle` refuses to load a file that is group- or world-accessible (`chmod 600 mail.toml`). Keep secrets out of the file itself: any `${VAR}` is substituted from the process environment at load time, and a referenced variable that is unset fails the load (never a silent empty value). For example, source the database password from the environment instead of writing it on disk:
+## Documentation
 
-```toml
-[database]
-url = "postgres://mail:${MAIL_DB_PASSWORD}@db/mail"
-```
+| Guide | What it covers |
+|---|---|
+| [CLI reference](docs/cli.md) | Every command, starting with common tasks |
+| [Configuration](docs/configuration.md) | The `mail.toml` file, every section and key, secrets |
+| [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |
+| [Container stack](docs/container.md) | What `epistle stack` runs and how it is built |
+| [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
+| [ASVS mapping](docs/asvs.md) | The controls mapped to OWASP ASVS |
+| [Performance](docs/performance.md) | The measured hot paths and how to reproduce them |
+| [Contributing](CONTRIBUTING.md) | Building from source, tests and the contribution flow |
 
-Substitution happens before the TOML is parsed, so a substituted value must not contain TOML metacharacters (`"`, newlines); percent-encode such characters in a connection URL.
+## License
 
-### Privilege separation
-
-Binding the mail ports (25, 465, 587, 993, 143, 995, 80) needs root, but the server should not keep that privilege. With a `[privileges]` section, `epistle` drops to an unprivileged user once every listener is bound and before it serves a single connection, so a later compromise cannot act as root:
-
-```toml
-[privileges]
-user = "glyndor-epistle"
-group = "glyndor-epistle"  # optional; defaults to the user's primary group
-```
-
-The drop fails closed: if the user/group cannot be resolved, the process is not root, or the drop cannot be verified (including that root can no longer be regained), the server refuses to start. Omit the section to run as whoever launched the process (for example under a systemd `User=`).
-
-The `.deb` creates `glyndor-epistle` for you, with home `/var/lib/glyndor/epistle` and mail directory `/var/lib/glyndor/epistle/data` at mode `0700`, the subuid/subgid ranges rootless Podman needs, and systemd linger so the account's services come back after a reboot. It also installs `/usr/lib/sysctl.d/30-glyndor-epistle.conf`, which sets `net.ipv4.ip_unprivileged_port_start = 25` so that the account can bind the SMTP port without root at all, which is what a rootless container needs. That floor is machine-wide rather than per-user: once it is applied, any local unprivileged user can bind ports from 25 up. On a dedicated mail host that is the trade worth making; on a shared host, read [Port 25 without root](docs/security.md#port-25-without-root) first and override the value in `/etc/sysctl.d` if you would rather not take it. The package attempts each step and warns on stderr when one does not take, never failing the install; `epistle init` is what verifies the result and refuses to continue when something is missing.
-
-## ✨ Features
-
-- **Protocols** — SMTP (submission + relay), IMAP4rev2 (CONDSTORE/QRESYNC/OBJECTID/BINARY/IDLE), POP3, and JMAP (RFC 8620/8621).
-- **Authentication** — SASL PLAIN/LOGIN/SCRAM-SHA-256/OAUTHBEARER with TOTP two-factor, all over TLS.
-- **Email security** — SPF, DKIM (sign + verify, ed25519 + RSA), DMARC with aggregate reports, ARC, MTA-STS, DANE and TLS-RPT.
-- **Filtering** — Sieve (tests, actions, variables, vacation) with remote script management over ManageSieve (RFC 5804), plus greylisting, DNSBL, Bayesian and reputation antispam.
-- **Operations** — automatic TLS via ACME, a management API, outbound webhooks, Prometheus metrics, and a CLI (`serve`, `export`/`import`, `queue`, `accounts`, `account-add`, `dkim-keygen`, `token-hash`).
-
-## 📚 Documentation
-
-- [Configuration reference](docs/configuration.md) — the TOML file, every section and key, listener kinds, and a full example.
-- [Common tasks](docs/cli.md#common-tasks): what you want to do, and the command that does it.
-- [CLI reference](docs/cli.md) — every `epistle` command, plus the outbound retry/suppression policy.
-- [DNS setup](docs/dns.md) — every record to publish (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, PTR, SRV) with examples.
-- [Security](docs/security.md) — the transport, authentication, anti-abuse and at-rest controls, and how to report a vulnerability.
-- [Threat model](docs/threat-model.md) — assets, trust boundaries, each threat with its control and the test behind it, and the residual risks.
-
-## 🧪 End-to-end test matrix
-
-Beyond the unit and in-process protocol tests, an end-to-end matrix
-([`.github/workflows/e2e.yml`](.github/workflows/e2e.yml)) exercises the real
-shipped binary as it runs in production:
-
-- **Full server, not a harness** — `epistle serve` is built `--release` and
-  launched under **systemd** (`systemd-run`), exactly as an operator would run
-  it from [`docs/epistle.service`](docs/epistle.service).
-- **Real ports and TLS** — it binds a `submissions` listener (implicit TLS) and
-  an `imaps` listener (implicit TLS) on real TCP ports with a self-signed
-  certificate.
-- **A real round trip** — `tests/e2e.rs` opens a TLS client to the submission
-  port, authenticates (`AUTH PLAIN`), submits a message with a unique marker,
-  then polls the IMAP port over TLS and asserts the message is delivered and
-  fetchable.
-- **A VM matrix** — every step runs on each GitHub VM runner in the matrix
-  (`ubuntu-22.04`, `ubuntu-24.04`); GitHub's hosted runners are virtual
-  machines, so this is the VM coverage.
-
-The test is gated on `E2E_*` environment variables and skips cleanly when they
-are unset, so the default `cargo test` run is unaffected. To run it locally
-against a server you have started, point it at the live ports and the server's
-certificate:
-
-```sh
-cargo build --release
-
-# Generate a TLS certificate (the client must trust it as both root and leaf,
-# so it must not be CA-flagged), a config, and an account, then serve.
-openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
-  -days 2 -subj "/CN=mail.epistle.test" \
-  -addext "subjectAltName=DNS:mail.epistle.test,IP:127.0.0.1" \
-  -addext "basicConstraints=critical,CA:FALSE"
-
-cat > e2e.toml <<'EOF'
-hostname = "mail.epistle.test"
-data_dir = "/var/lib/epistle-e2e"
-domains = ["epistle.test"]
-[tls]
-cert_file = "cert.pem"
-key_file = "key.pem"
-[[listeners]]
-kind = "submissions"
-addr = "127.0.0.1"
-port = 4465
-[[listeners]]
-kind = "imaps"
-addr = "127.0.0.1"
-port = 4993
-EOF
-chmod 600 e2e.toml
-
-printf 'a-strong-password' | ./target/release/epistle account-add \
-  --config e2e.toml --name tester --address tester@epistle.test
-./target/release/epistle serve --config e2e.toml &
-
-E2E_HOST=127.0.0.1 E2E_SUBMISSION_PORT=4465 E2E_IMAPS_PORT=4993 \
-  E2E_ACCOUNT=tester@epistle.test E2E_PASSWORD=a-strong-password \
-  E2E_CA_PEM=cert.pem cargo test --test e2e
-```
-
-## 🗺️ Roadmap
-
-Remaining work — an LDAP directory backend, IMAP `COMPRESS`, and CalDAV/CardDAV groupware — is tracked in the [issues](https://github.com/Glyndor/epistle/issues).
-
-## 📄 License
-
-[MIT](LICENSE)
+[MIT](LICENSE). Report vulnerabilities privately through the **Security** tab,
+never in a public issue.

@@ -98,6 +98,19 @@ add and dual-write in one release, read the new shape in the next, and
 drop the old shape in the one after that; the test in
 `tests/migrations_expand_contract.rs` enforces it.
 
+## Building from source
+
+```sh
+cargo build --release
+./target/release/epistle config-check --config mail.toml
+./target/release/epistle serve --config mail.toml
+```
+
+A source build runs on any Linux without the container stack. Listeners bind
+to `127.0.0.1` unless `addr` says otherwise, and the config file must be
+owner-only (`chmod 600`). [Configuration](docs/configuration.md) has a full
+example and every key.
+
 ## Tests
 
 The suite that runs in CI is:
@@ -119,6 +132,47 @@ needs a live Postfix on the loopback; the e2e test needs a live `epistle`
 under `systemd-run` with self-signed TLS material and the `E2E_*`
 environment variables set. The default `cargo test` skips all three when
 those are absent.
+
+To run the e2e test against a server you started yourself, give it a
+certificate that is not CA-flagged (the client trusts it as root and leaf),
+two TLS listeners and an account:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
+  -days 2 -subj "/CN=mail.epistle.test" \
+  -addext "subjectAltName=DNS:mail.epistle.test,IP:127.0.0.1" \
+  -addext "basicConstraints=critical,CA:FALSE"
+
+cat > e2e.toml <<'EOF'
+hostname = "mail.epistle.test"
+data_dir = "/var/lib/epistle-e2e"
+domains = ["epistle.test"]
+[tls]
+cert_file = "cert.pem"
+key_file = "key.pem"
+[[listeners]]
+kind = "submissions"
+addr = "127.0.0.1"
+port = 4465
+[[listeners]]
+kind = "imaps"
+addr = "127.0.0.1"
+port = 4993
+EOF
+chmod 600 e2e.toml
+
+printf 'a-strong-password' | ./target/release/epistle account-add \
+  --config e2e.toml --name tester --address tester@epistle.test
+./target/release/epistle serve --config e2e.toml &
+
+E2E_HOST=127.0.0.1 E2E_SUBMISSION_PORT=4465 E2E_IMAPS_PORT=4993 \
+  E2E_ACCOUNT=tester@epistle.test E2E_PASSWORD=a-strong-password \
+  E2E_CA_PEM=cert.pem cargo test --test e2e
+```
+
+The test submits a message over implicit TLS with `AUTH PLAIN`, then polls
+IMAPS until it can fetch it. In CI, `e2e.yml` runs the same thing with the
+server under `systemd-run` on `ubuntu-22.04` and `ubuntu-24.04`.
 
 The coverage gate is 90% with a fixed ignore regex for files that need a
 live service or are thin connection-accept glue (see `ci.yml`). The MSRV
