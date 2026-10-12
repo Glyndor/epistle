@@ -54,6 +54,8 @@ pub fn router(state: ApiState) -> Router {
 		// JMAP over WebSocket (RFC 8887): the upgrade endpoint, under the same
 		// bearer auth as the rest of the authenticated router.
 		.route("/jmap/ws", get(jmap::websocket::ws_upgrade))
+		// JMAP push over an event source (RFC 8620 §7.3).
+		.route("/jmap/eventsource", get(jmap::event_source::event_source))
 		.route(
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
@@ -249,3 +251,7 @@ mod jmap_tests_read_scope;
 #[cfg(test)]
 #[path = "jmap_tests_push_get.rs"]
 mod jmap_tests_push_get;
+
+#[cfg(test)]
+#[path = "jmap_tests_eventsource.rs"]
+mod jmap_tests_eventsource;

@@ -33,6 +33,7 @@ mod blobs;
 mod dispatcher;
 mod download;
 mod email;
+pub mod event_source;
 pub use download::download;
 mod email_submission;
 mod limits;
@@ -136,7 +137,8 @@ pub async fn session(
 		"apiUrl": "/jmap/api",
 		"downloadUrl": "/jmap/download/{accountId}/{blobId}/{name}",
 		"uploadUrl": "/jmap/upload/{accountId}",
-		"eventSourceUrl": "/jmap/eventsource",
+		// RFC 8620 §7.3: a URI Template carrying the three variables.
+		"eventSourceUrl": "/jmap/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
 		"state": "0",
 	}))
 }

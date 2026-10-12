@@ -26,6 +26,8 @@
 //! `url` of a `PushSubscription` — is OUT OF SCOPE here; the PushSubscription
 //! objects (`push_subscription.rs`) round-trip through get/set but
 //! nothing is delivered to them.
+//! A client that wants changes made by other connections or protocols uses
+//! the event source ([`super::event_source`]).
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Extension, State};
@@ -101,7 +103,11 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 /// The configured static token is fixed for the life of the process, so it is
 /// not compared again: its hash may be a legacy argon2id one, and hashing on
 /// every frame is a cost a long-lived socket should not pay.
-fn credential_still_valid(state: &ApiState, auth: &MatchedAuth, opened_as: &Principal) -> bool {
+pub(super) fn credential_still_valid(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	opened_as: &Principal,
+) -> bool {
 	if matches!(opened_as, Principal::Admin { credential: None }) {
 		return true;
 	}

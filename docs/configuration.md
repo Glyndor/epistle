@@ -259,8 +259,8 @@ Scopes are independent: holding one does not grant another.
 
 - `read`: the JMAP Session, every JMAP method that returns account data
   (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
-  `Quota/get`), downloads, the WebSocket, and the `GET` routes of the
-  management API.
+  `Quota/get`), downloads, the WebSocket and the event source, and the
+  `GET` routes of the management API.
 - `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
   of the management API.
 - `send`: JMAP `EmailSubmission/set` and `POST /api/v1/send`.
@@ -355,6 +355,12 @@ and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
   it. `epistle restore` never brings back the journal header
   (`.jmap_state`), so after a restore every JMAP client resyncs once
   instead of trusting positions the restore rewound.
+- Push over an event source (RFC 8620 §7.3) is served at
+  `/jmap/eventsource?types=..&closeafter=..&ping=..`. It reads the same
+  journal once a second for every account the key reaches, sends a
+  `state` event when one moved and a `ping` (1 to 300 seconds) when idle,
+  and ends once the key or its account stops being valid. No event ids
+  are sent; a reconnecting client catches up with `/changes`.
 
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
