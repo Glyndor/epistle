@@ -365,6 +365,13 @@ impl ApiState {
 		self
 	}
 
+	/// The live directory, when one is wired.
+	pub(crate) fn directory_snapshot(
+		&self,
+	) -> Option<std::sync::Arc<crate::smtp::directory::Directory>> {
+		self.inner.directory.as_ref().map(|handle| handle.current())
+	}
+
 	/// Whether `account` owns `address` — used to enforce send-as on the API
 	/// path the same way SMTP does (`src/smtp/session/mod.rs`). Fail-closed:
 	/// returns `false` when no directory has been attached (e.g. in tests or

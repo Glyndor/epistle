@@ -568,6 +568,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
 				}
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
+				// Same measure and default as IMAP QUOTA.
+				server = server.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::on_disk(
+					config.data_dir.clone(),
+					crypto.clone(),
+					config
+						.quota_bytes
+						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+				)));
 				// Per-account rolling 24h new-recipient cap (plan 4.10).
 				// The shared `Arc<CorrespondentStore>` is the one already
 				// opened above; the cap itself comes from the static

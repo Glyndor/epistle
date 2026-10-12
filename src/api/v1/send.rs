@@ -157,6 +157,9 @@ pub async fn send(
 	)
 	.into_bytes();
 
+	if let Some(full) = crate::api::quota::full_recipient(&state, &request.to, data.len() as u64) {
+		return Err(ApiError::mailbox_full(&full));
+	}
 	let message = AcceptedMessage {
 		reverse_path: request.from,
 		recipients: request.to,

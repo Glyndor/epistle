@@ -133,6 +133,9 @@ impl Server {
 					send(&mut stream, &reply).await?;
 				}
 				Action::Deliver(reply, mut message) => {
+					// DSNs for recipients this message did not fit for; sent
+					// only if the message itself is delivered.
+					let quota_reports = session.take_quota_reports();
 					// Loop guard: reject mail that has already traversed too many
 					// hops before adding our own Received header (RFC 5321 §6.3).
 					if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
@@ -527,6 +530,11 @@ impl Server {
 					let reply = match self.sink.deliver(message) {
 						Ok(()) => {
 							self.metrics.accepted();
+							for report in quota_reports {
+								if let Err(error) = self.sink.deliver(report) {
+									tracing::warn!(%error, "mailbox-full report not delivered");
+								}
+							}
 							if let (Some(pool), Some(domain), None) =
 								(&self.reputation, rep_domain, session.authenticated())
 							{

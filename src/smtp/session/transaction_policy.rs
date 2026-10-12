@@ -42,6 +42,13 @@ pub(crate) struct TransactionPolicy {
 	/// Shared disk-space guard for `data_dir`. When set, MAIL FROM is
 	/// rejected with `452` if the filesystem cannot hold another message.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// Mailbox quota of local recipients: `RCPT TO` refuses a full mailbox,
+	/// and the end of DATA catches one this message would overfill.
+	quota: Option<Arc<crate::smtp::quota::MailboxQuota>>,
+	/// Failure reports (DSNs) for recipients the last accepted message
+	/// could not be stored for, waiting for the server to send them once
+	/// the message itself is delivered.
+	quota_reports: Vec<super::types::AcceptedMessage>,
 }
 
 impl TransactionPolicy {
@@ -155,6 +162,27 @@ impl TransactionPolicy {
 			));
 		}
 		None
+	}
+
+	/// Check local recipients against their mailbox quota.
+	pub(crate) fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
+		self.quota = Some(quota);
+		self
+	}
+
+	/// The mailbox quota checks, when wired.
+	pub(crate) fn quota(&self) -> Option<&crate::smtp::quota::MailboxQuota> {
+		self.quota.as_deref()
+	}
+
+	/// Queue a failure report to send after the message is delivered.
+	pub(crate) fn push_quota_report(&mut self, report: super::types::AcceptedMessage) {
+		self.quota_reports.push(report);
+	}
+
+	/// Take the failure reports waiting to be sent.
+	pub(crate) fn take_quota_reports(&mut self) -> Vec<super::types::AcceptedMessage> {
+		std::mem::take(&mut self.quota_reports)
 	}
 
 	/// Whether the spool still has room for a payload of `size_bytes`. When
