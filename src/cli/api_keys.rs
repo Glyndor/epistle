@@ -153,8 +153,16 @@ pub(super) fn parse_scope(value: &str) -> Result<String, String> {
 	}
 }
 
-/// Revoke a management API key by label.
-pub(super) fn revoke(config: &Config, label: &str, out: &mut impl std::io::Write) -> ExitCode {
+/// Revoke a management API key by label. Asks
+/// `Revoke API key "<label>"? [y/N]` on a terminal; `yes` (`--yes` /
+/// `-y`) skips it. Without `--yes` on a non-interactive stdin the
+/// command refuses with exit code 2 and a message that names `--yes`.
+pub(super) fn revoke(
+	config: &Config,
+	label: &str,
+	yes: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	let mut store = match ApiKeyStore::open(&config.data_dir) {
 		Ok(store) => store,
 		Err(error) => {
@@ -162,6 +170,17 @@ pub(super) fn revoke(config: &Config, label: &str, out: &mut impl std::io::Write
 			return ExitCode::FAILURE;
 		}
 	};
+	let Some(key) = store.list().into_iter().find(|key| key.label == label) else {
+		super::style::error(format_args!("no such API key \"{label}\""));
+		return ExitCode::FAILURE;
+	};
+	let question = format!(
+		"Revoke API key \"{label}\" (scopes: {})? [y/N]",
+		key.scopes.join(", ")
+	);
+	if let Err(code) = super::prompt::confirm_destructive("api-key-revoke", &question, yes) {
+		return code;
+	}
 	match store.remove(label) {
 		Ok(()) => {
 			let _ = writeln!(out, "revoked API key \"{label}\"");

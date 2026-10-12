@@ -38,9 +38,10 @@ pub(super) use account_actions::{
 /// positional arguments into the right variant.
 #[derive(Debug, ClapSubcommand)]
 pub enum Subcommand {
-	/// Update the password for an account, reading the new password from
-	/// stdin (one line). Hashes it with argon2id and derives a fresh SCRAM
-	/// salt, exactly the way `account-add` does on a fresh account.
+	/// Update the password for an account: asked twice with echo off on a
+	/// terminal, read from stdin (one line) otherwise. Hashes it with
+	/// argon2id and derives a fresh SCRAM salt, exactly the way
+	/// `account-add` does on a fresh account.
 	Password {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
@@ -266,11 +267,28 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 
 /// `handle_error` lives in `account_actions`; the umbrella module only
 /// re-exports it so callers can write `account::handle_error`.
-/// Common prelude every action shares: load the config, open the
-/// store, refuse static accounts. Returns the open store on success or
-/// has already printed an error and returned `ExitCode::FAILURE` so
-/// the caller can early-return.
+/// Common prelude every mutating action shares: [`prepare_show`], then
+/// refuse a static account with the config-file hint. Returns the open
+/// store, or has already printed the error and returns
+/// `ExitCode::FAILURE` so the caller can early-return. Both refusals run
+/// before anything is read from stdin, so nobody types a password for a
+/// name that cannot take one.
 pub(super) fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
+	let store = prepare_show(config_path, name)?;
+	if store.is_static(name) {
+		style::error(format_args!(
+			"account {name}: edit the config file to change a static account"
+		));
+		return Err(ExitCode::FAILURE);
+	}
+	Ok(store)
+}
+
+/// Load the config, open the store and refuse a name that is neither a
+/// static nor a dynamic account with `no such account: <name>`. Static
+/// accounts pass: `account show` reports their public view and changes
+/// nothing.
+pub(super) fn prepare_show(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
 	let config = match Config::load(config_path) {
 		Ok(config) => config,
 		Err(error) => {
@@ -285,10 +303,8 @@ pub(super) fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, Ex
 			return Err(ExitCode::FAILURE);
 		}
 	};
-	if store.is_static(name) {
-		style::error(format_args!(
-			"account {name}: edit the config file to change a static account"
-		));
+	if !store.account_known(name) {
+		style::error(format_args!("no such account: {name}"));
 		return Err(ExitCode::FAILURE);
 	}
 	Ok(store)
@@ -321,7 +337,7 @@ pub(super) fn run(
 				Ok(store) => store,
 				Err(code) => return code,
 			};
-			password_with_store(&store, &name, std::io::stdin().lock())
+			password_with_store(&store, &name, super::prompt::stdin())
 		}
 		Subcommand::Disable { name } => {
 			let store = match prepare(config_path, &name) {
@@ -382,7 +398,7 @@ pub(super) fn run(
 			protocols_with_store(&store, &name, parsed)
 		}
 		Subcommand::Show { name } => {
-			let store = match prepare(config_path, &name) {
+			let store = match prepare_show(config_path, &name) {
 				Ok(store) => store,
 				Err(code) => return code,
 			};

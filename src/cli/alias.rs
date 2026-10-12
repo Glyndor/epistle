@@ -50,6 +50,11 @@ pub enum AliasCli {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
 		address: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Edit one alias in place: members and senders.
 	Member(MemberArgs),
@@ -151,54 +156,111 @@ pub enum SenderSubcommand {
 /// Run the chosen alias action.
 pub(super) fn run(path: &Path, action: AliasCli, dry_run: bool) -> ExitCode {
 	match execute(path, action, dry_run) {
-		Ok(code) => code,
-		Err(error) => {
+		Outcome::Code(code) => code,
+		Outcome::Error(error) => {
 			style::error(error);
 			ExitCode::FAILURE
 		}
 	}
 }
 
-fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Result<ExitCode, String> {
+/// The discriminated result of [`execute`]. Returning a structured
+/// outcome (rather than `Result<ExitCode, String>`) lets the refusal
+/// path surface exit code 2 instead of being squashed into the
+/// generic failure exit code.
+enum Outcome {
+	Code(ExitCode),
+	Error(String),
+}
+
+impl From<ExitCode> for Outcome {
+	fn from(value: ExitCode) -> Self {
+		Outcome::Code(value)
+	}
+}
+
+impl From<&str> for Outcome {
+	fn from(value: &str) -> Self {
+		Outcome::Error(value.to_string())
+	}
+}
+
+impl From<String> for Outcome {
+	fn from(value: String) -> Self {
+		Outcome::Error(value)
+	}
+}
+
+fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
-	let config = Config::load(path).map_err(|e| e.to_string())?;
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => return Outcome::Error(error.to_string()),
+	};
 	match action {
-		AliasCli::List { json } => {
-			list(&config, json, &mut out).map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
-		}
-		AliasCli::Show { address, json } => {
-			show(&config, &address, json, &mut out).map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
-		}
+		AliasCli::List { json } => match list(&config, json, &mut out) {
+			Ok(()) => Outcome::Code(ExitCode::SUCCESS),
+			Err(error) => Outcome::Error(error.to_string()),
+		},
+		AliasCli::Show { address, json } => match show(&config, &address, json, &mut out) {
+			Ok(()) => Outcome::Code(ExitCode::SUCCESS),
+			Err(error) => Outcome::Error(error.to_string()),
+		},
 		AliasCli::Add(args) => {
-			let mut document = open(path)?;
-			add_alias(&config, &mut document, &args)?;
-			commit_and_restart(
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = add_alias(&config, &mut document, &args) {
+				return Outcome::Error(error);
+			}
+			match commit_and_restart(
 				document,
 				&args.address,
 				"added",
 				dry_run,
 				&mut out,
 				&mut err,
-			)
+			) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
-		AliasCli::Remove { address } => {
+		AliasCli::Remove { address, yes } => {
 			let owned_address = address.clone();
-			let mut document = open(path)?;
-			remove_alias(&config, &mut document, &address)?;
-			commit_and_restart(
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = remove_alias(&config, &mut document, &address) {
+				return Outcome::Error(error);
+			}
+			// Asked after the edit is validated; a dry run destroys nothing.
+			let question = format!("Remove alias \"{address}\"? [y/N]");
+			if !dry_run
+				&& let Err(code) =
+					super::prompt::confirm_destructive("alias remove", &question, yes)
+			{
+				return code.into();
+			}
+			match commit_and_restart(
 				document,
 				&owned_address,
 				"removed",
 				dry_run,
 				&mut out,
 				&mut err,
-			)
+			) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
 		AliasCli::Member(args) => {
-			let mut document = open(path)?;
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
 			let verb = match &args.action {
 				MemberSubcommand::Add { .. } => "member added",
 				MemberSubcommand::Remove { .. } => "member removed",
@@ -207,11 +269,19 @@ fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Result<ExitCode, Str
 				MemberSubcommand::Add { address, .. }
 				| MemberSubcommand::Remove { address, .. } => address.clone(),
 			};
-			member_edit(&config, &mut document, args)?;
-			commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err)
+			if let Err(error) = member_edit(&config, &mut document, args) {
+				return Outcome::Error(error);
+			}
+			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
 		AliasCli::Sender(args) => {
-			let mut document = open(path)?;
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
 			let verb = match &args.action {
 				SenderSubcommand::Add { .. } => "sender added",
 				SenderSubcommand::Remove { .. } => "sender removed",
@@ -220,11 +290,26 @@ fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Result<ExitCode, Str
 				SenderSubcommand::Add { address, .. }
 				| SenderSubcommand::Remove { address, .. } => address.clone(),
 			};
-			sender_edit(&config, &mut document, args)?;
-			commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err)
+			if let Err(error) = sender_edit(&config, &mut document, args) {
+				return Outcome::Error(error);
+			}
+			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
-		AliasCli::Enable { address } => set_enabled(&config, &address, true, &mut out, &mut err),
-		AliasCli::Disable { address } => set_enabled(&config, &address, false, &mut out, &mut err),
+		AliasCli::Enable { address } => {
+			match set_enabled(&config, &address, true, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
+		}
+		AliasCli::Disable { address } => {
+			match set_enabled(&config, &address, false, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
+		}
 	}
 }
 

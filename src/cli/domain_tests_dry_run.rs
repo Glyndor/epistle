@@ -74,7 +74,7 @@ fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitC
 				let _ = commit_add_full(&config, document, &domain, &mut out, &mut err_buf);
 			}
 		}
-		DomainCli::Remove { domain } => {
+		DomainCli::Remove { domain, .. } => {
 			let config = Config::load(path).expect("config loads");
 			let mut document = ConfigDocument::open(path).expect("document open");
 			remove_domain(&config, &mut document, &domain).expect("remove_domain");
@@ -95,7 +95,7 @@ fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitC
 					let _ = commit_alias_full(document, &alias, "added", &mut out, &mut err_buf);
 				}
 			}
-			DomainAliasSubcommand::Remove { alias } => {
+			DomainAliasSubcommand::Remove { alias, .. } => {
 				let config = Config::load(path).expect("config loads");
 				let mut document = ConfigDocument::open(path).expect("document open");
 				remove_alias_map(&config, &mut document, &alias).expect("remove_alias_map");

@@ -29,6 +29,7 @@ mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
 mod probe;
+mod prompt;
 mod queue;
 mod relay;
 mod report_abuse;
@@ -65,7 +66,7 @@ mod webhook_admin;
 /// depending on the otherwise-private `init` module.
 pub use init::Answers;
 
-use util::{generate_secret, read_line};
+use util::generate_secret;
 
 use std::path::PathBuf;
 
@@ -190,7 +191,9 @@ pub enum Command {
 	/// loaded is a restore error, not a silent skip. Refuses to overwrite
 	/// an existing `data_dir` or run against a live mail service unless
 	/// `--force` is set; `--dry-run` lists the entries that would be
-	/// written and changes nothing.
+	/// written and changes nothing. `--yes` skips the interactive
+	/// confirmation that restore prompts on a terminal; it does not
+	/// imply `--force`.
 	Restore {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
@@ -204,6 +207,11 @@ pub enum Command {
 		/// touching `data_dir` or restarting the service.
 		#[arg(long)]
 		dry_run: bool,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
@@ -290,7 +298,8 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
-	/// Create a mail account, reading the password from stdin (one line).
+	/// Create a mail account. The password is asked twice with echo off on
+	/// a terminal, read from stdin (one line) otherwise.
 	AccountAdd {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
@@ -319,6 +328,11 @@ pub enum Command {
 		/// `discard` (drop it) or `drain` (leave it for delivery).
 		#[arg(long = "queue", value_name = "POLICY", value_parser = accounts::parse_queue_policy)]
 		queue: QueuePolicy,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Operate on a single dynamic account in place: change its password,
 	/// enable or disable authentication, add or remove a delivery address,
@@ -412,6 +426,11 @@ pub enum Command {
 		/// The label of the app password to revoke.
 		#[arg(long, value_name = "LABEL")]
 		label: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Create a management API key. The generated key is printed once and never
 	/// stored.
@@ -458,6 +477,11 @@ pub enum Command {
 		/// The label of the API key to revoke.
 		#[arg(long, value_name = "LABEL")]
 		label: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Inspect and operate on the per-account expunged-message archive
 	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
@@ -771,6 +795,10 @@ mod cli_account_subcommand_tests;
 #[cfg(test)]
 #[path = "cli_account_subcommand_tests_b.rs"]
 mod cli_account_subcommand_tests_b;
+
+#[cfg(test)]
+#[path = "cli_confirmation_flow_tests.rs"]
+mod cli_confirmation_flow_tests;
 
 #[cfg(test)]
 #[path = "cli_account_scram_tests.rs"]

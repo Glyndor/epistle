@@ -60,7 +60,7 @@ fn create_list_revoke_roundtrip() {
 	// Revoke removes it.
 	let mut out = Vec::new();
 	assert_eq!(
-		revoke(&config, "alice", "phone", &mut out),
+		revoke(&config, "alice", "phone", true, &mut out),
 		ExitCode::SUCCESS
 	);
 	assert_eq!(
@@ -121,7 +121,7 @@ fn revoke_missing_label_fails() {
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
-		revoke(&config, "alice", "absent", &mut out),
+		revoke(&config, "alice", "absent", true, &mut out),
 		ExitCode::FAILURE
 	);
 }

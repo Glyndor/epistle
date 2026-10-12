@@ -94,6 +94,7 @@ fn remove_deletes_the_address() {
 	let remove = MaskedCli::Remove {
 		account: "alice".to_string(),
 		address: address.clone(),
+		yes: true,
 	};
 	let (code, out, _) = exec(&config, remove);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -171,6 +172,7 @@ fn another_accounts_address_cannot_be_touched() {
 		MaskedCli::Remove {
 			account: "bob".to_string(),
 			address: address.clone(),
+			yes: true,
 		},
 	);
 	assert_eq!(code, ExitCode::FAILURE);

@@ -57,6 +57,11 @@ pub enum Subcommand {
 		/// entry is purged. The sweep uses the same threshold.
 		#[arg(long, value_name = "DAYS")]
 		older_than_days: Option<u64>,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 }
 
@@ -85,8 +90,9 @@ pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) ->
 			config,
 			account,
 			older_than_days,
+			yes,
 		} => match Config::load(&config) {
-			Ok(config) => purge(&config.data_dir, &account, older_than_days, out),
+			Ok(config) => purge(&config.data_dir, &account, older_than_days, yes, out),
 			Err(error) => error_exit(error),
 		},
 	}
@@ -156,13 +162,14 @@ fn purge(
 	data_dir: &Path,
 	account: &str,
 	older_than_days: Option<u64>,
+	yes: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	let Ok(account) = AccountName::new(account) else {
+	let Ok(parsed) = AccountName::new(account) else {
 		super::style::error(format_args!("purging archive: invalid account name"));
 		return ExitCode::FAILURE;
 	};
-	let account_root = match account.root(data_dir) {
+	let account_root = match parsed.root(data_dir) {
 		Ok(root) => root,
 		Err(error) => {
 			super::style::error(format_args!("purging archive: {error}"));
@@ -181,6 +188,28 @@ fn purge(
 	} else {
 		older_than_secs.saturating_sub(1)
 	};
+	// Count what the purge will take, with the purge's own test, so the
+	// question carries the number. No selector purges everything, and the
+	// question says "all" so nobody reads it as a partial cleanup.
+	let doomed = match crate::imap::archive::list(&account_root) {
+		Ok(entries) => entries
+			.iter()
+			.filter(|entry| now.saturating_sub(entry.deleted_at) > threshold)
+			.count(),
+		Err(error) => {
+			super::style::error(format_args!("purging archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	let question = match older_than_days {
+		Some(days) => format!(
+			"Purge {doomed} archived entries older than {days} days for \"{account}\"? [y/N]"
+		),
+		None => format!("Purge all {doomed} archived entries for \"{account}\"? [y/N]"),
+	};
+	if let Err(code) = super::prompt::confirm_destructive("archive purge", &question, yes) {
+		return code;
+	}
 	match archive::purge(&account_root, threshold, now) {
 		Ok(removed) => {
 			let _ = writeln!(out, "purged {removed} archived entries");

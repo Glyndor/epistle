@@ -21,7 +21,7 @@ use crate::config::Config;
 /// config, hand the bytes to [`backup::run_restore`]. Lives here rather
 /// than in the match arm so the dispatch table stays compact and the
 /// per-file line budget keeps `dispatch.rs` under 500 code lines.
-fn dispatch_restore(config: PathBuf, force: bool, dry_run: bool) -> ExitCode {
+pub(super) fn dispatch_restore(config: PathBuf, force: bool, dry_run: bool, yes: bool) -> ExitCode {
 	let config = match Config::load(&config) {
 		Ok(config) => config,
 		Err(error) => {
@@ -29,8 +29,20 @@ fn dispatch_restore(config: PathBuf, force: bool, dry_run: bool) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
+	// stdin carries the archive, so the question is answered on the
+	// terminal. `--yes` answers it; it never stands in for `--force`, and
+	// the restore still refuses an unsafe target without `--force`.
+	let question = format!(
+		"Restore the archive on stdin into {}, replacing what is there? [y/N]",
+		config.data_dir.display()
+	);
+	if !dry_run
+		&& let Err(code) = super::prompt::confirm_destructive_on_terminal("restore", &question, yes)
+	{
+		return code;
+	}
 	let mut input = Vec::new();
-	if let Err(error) = std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut input) {
+	if let Err(error) = std::io::Read::read_to_end(&mut super::prompt::stdin(), &mut input) {
 		style::error(format_args!("reading archive from stdin: {error}"));
 		return ExitCode::FAILURE;
 	}
@@ -149,7 +161,8 @@ impl Cli {
 				config,
 				force,
 				dry_run,
-			} => dispatch_restore(config, force, dry_run),
+				yes,
+			} => dispatch_restore(config, force, dry_run, yes),
 			Command::Verify { config } => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
 					Ok(crypto) => {
@@ -222,14 +235,15 @@ impl Cli {
 				name,
 				addresses,
 			} => with_config(&config, |config| {
-				accounts::add(config, &name, addresses, std::io::stdin().lock())
+				accounts::add(config, &name, addresses, super::prompt::stdin())
 			}),
 			Command::AccountRemove {
 				config,
 				name,
 				queue,
+				yes,
 			} => with_config(&config, |config| {
-				accounts::remove(config, &name, queue, &mut std::io::stdout().lock())
+				accounts::remove(config, &name, queue, yes, &mut std::io::stdout().lock())
 			}),
 			Command::Account { config, action } => {
 				let mut out = std::io::stdout().lock();
@@ -314,10 +328,15 @@ impl Cli {
 				config,
 				account,
 				label,
+				yes,
 			} => match Config::load(&config) {
-				Ok(config) => {
-					app_passwords::revoke(&config, &account, &label, &mut std::io::stdout().lock())
-				}
+				Ok(config) => app_passwords::revoke(
+					&config,
+					&account,
+					&label,
+					yes,
+					&mut std::io::stdout().lock(),
+				),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -352,8 +371,8 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::ApiKeyRevoke { config, label } => match Config::load(&config) {
-				Ok(config) => api_keys::revoke(&config, &label, &mut std::io::stdout().lock()),
+			Command::ApiKeyRevoke { config, label, yes } => match Config::load(&config) {
+				Ok(config) => api_keys::revoke(&config, &label, yes, &mut std::io::stdout().lock()),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

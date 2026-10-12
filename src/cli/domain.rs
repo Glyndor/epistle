@@ -54,6 +54,11 @@ pub enum DomainCli {
 		/// Domain to remove.
 		#[arg(value_name = "DOMAIN")]
 		domain: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Edit the `domain_aliases` map.
 	Alias(DomainAliasArgs),
@@ -81,62 +86,149 @@ pub enum DomainAliasSubcommand {
 		/// The alias domain to drop.
 		#[arg(value_name = "ALIAS")]
 		alias: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 }
 
 /// Run the chosen domain action.
 pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool) -> ExitCode {
 	match execute(path, action, dry_run) {
-		Ok(code) => code,
-		Err(error) => {
+		Outcome::Code(code) => code,
+		Outcome::Error(error) => {
 			style::error(error);
 			ExitCode::FAILURE
 		}
 	}
 }
 
-fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Result<ExitCode, String> {
+/// The discriminated result of [`execute`]. Returning a structured
+/// outcome (rather than `Result<ExitCode, String>`) lets the refusal
+/// path surface exit code 2 instead of being squashed into the
+/// generic failure exit code.
+enum Outcome {
+	Code(ExitCode),
+	Error(String),
+}
+
+impl From<String> for Outcome {
+	fn from(value: String) -> Self {
+		Outcome::Error(value)
+	}
+}
+
+impl From<&str> for Outcome {
+	fn from(value: &str) -> Self {
+		Outcome::Error(value.to_string())
+	}
+}
+
+impl From<ExitCode> for Outcome {
+	fn from(value: ExitCode) -> Self {
+		Outcome::Code(value)
+	}
+}
+
+fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Outcome {
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
-	let config = Config::load(path).map_err(|e| e.to_string())?;
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => return Outcome::Error(error.to_string()),
+	};
 	match action {
 		DomainCli::List { json } => {
-			list(&config, json, &mut out).map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
+			if let Err(error) = list(&config, json, &mut out) {
+				return Outcome::Error(error.to_string());
+			}
+			Outcome::Code(ExitCode::SUCCESS)
 		}
 		DomainCli::Show { domain, json } => {
-			show(&config, &domain, json, &mut out).map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
+			if let Err(error) = show(&config, &domain, json, &mut out) {
+				return Outcome::Error(error.to_string());
+			}
+			Outcome::Code(ExitCode::SUCCESS)
 		}
 		DomainCli::Add { domain } => {
-			let mut document = open(path)?;
-			add_domain(&config, &mut document, &domain)?;
-			commit_add(&config, document, &domain, dry_run, &mut out, &mut err)
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = add_domain(&config, &mut document, &domain) {
+				return Outcome::Error(error);
+			}
+			match commit_add(&config, document, &domain, dry_run, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
-		DomainCli::Remove { domain } => {
-			let mut document = open(path)?;
-			remove_domain(&config, &mut document, &domain)?;
-			commit_remove(document, &domain, dry_run, &mut out, &mut err)
+		DomainCli::Remove { domain, yes } => {
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = remove_domain(&config, &mut document, &domain) {
+				return Outcome::Error(error);
+			}
+			// Asked after the edit is validated, so a refused removal is
+			// reported before anyone is asked; a dry run destroys nothing.
+			let question = format!("Remove domain \"{domain}\" from the configuration? [y/N]");
+			if !dry_run
+				&& let Err(code) =
+					super::prompt::confirm_destructive("domain remove", &question, yes)
+			{
+				return code.into();
+			}
+			match commit_remove(document, &domain, dry_run, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
 		DomainCli::Alias(args) => match args.action {
 			DomainAliasSubcommand::Add { alias, target } => {
-				let mut document = open(path)?;
+				let mut document = match open(path) {
+					Ok(document) => document,
+					Err(error) => return Outcome::Error(error),
+				};
 				let owned_alias = alias.clone();
-				add_alias_map(&config, &mut document, &alias, &target)?;
-				commit_alias(document, &owned_alias, "added", dry_run, &mut out, &mut err)
+				if let Err(error) = add_alias_map(&config, &mut document, &alias, &target) {
+					return Outcome::Error(error);
+				}
+				match commit_alias(document, &owned_alias, "added", dry_run, &mut out, &mut err) {
+					Ok(code) => Outcome::Code(code),
+					Err(error) => Outcome::Error(error),
+				}
 			}
-			DomainAliasSubcommand::Remove { alias } => {
-				let mut document = open(path)?;
+			DomainAliasSubcommand::Remove { alias, yes } => {
+				let mut document = match open(path) {
+					Ok(document) => document,
+					Err(error) => return Outcome::Error(error),
+				};
 				let owned_alias = alias.clone();
-				remove_alias_map(&config, &mut document, &alias)?;
-				commit_alias(
+				if let Err(error) = remove_alias_map(&config, &mut document, &alias) {
+					return Outcome::Error(error);
+				}
+				let question = format!("Remove domain alias \"{alias}\"? [y/N]");
+				if !dry_run
+					&& let Err(code) =
+						super::prompt::confirm_destructive("domain alias remove", &question, yes)
+				{
+					return code.into();
+				}
+				match commit_alias(
 					document,
 					&owned_alias,
 					"removed",
 					dry_run,
 					&mut out,
 					&mut err,
-				)
+				) {
+					Ok(code) => Outcome::Code(code),
+					Err(error) => Outcome::Error(error),
+				}
 			}
 		},
 	}

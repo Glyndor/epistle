@@ -451,14 +451,35 @@ fn show_prints_public_view_without_secrets() {
 }
 
 #[test]
-fn show_refuses_static_account() {
+fn show_prints_static_view_without_secrets() {
 	let harness = build();
 	let store = reload_store(&harness);
 	let mut out = Vec::new();
 	assert_eq!(
 		account::show_with_store(&store, STATIC_NAME, &mut out),
+		ExitCode::SUCCESS,
+		"static accounts are addressable through `account show` (read-only)"
+	);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(text.contains("name: alice"), "{text}");
+	assert!(text.contains("source: static"), "{text}");
+	assert!(text.contains("addresses: alice@example.org"), "{text}");
+	assert!(text.contains("quota_bytes: server default"), "{text}");
+	assert!(text.contains("protocols: all"), "{text}");
+	// The static view must never carry the password hash.
+	assert!(!text.contains("argon2id"), "{text}");
+	assert!(!text.contains("password_hash"), "{text}");
+}
+
+#[test]
+fn show_refuses_unknown_account() {
+	let harness = build();
+	let store = reload_store(&harness);
+	let mut out = Vec::new();
+	assert_eq!(
+		account::show_with_store(&store, "nobody", &mut out),
 		ExitCode::FAILURE,
-		"a static account is not addressable through `account show`"
+		"a name that exists nowhere must say so",
 	);
 }
 
