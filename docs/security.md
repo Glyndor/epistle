@@ -28,6 +28,14 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
   certificate is configured; under ACME (where the certificate is renewed at
   runtime) it is omitted and clients use SCRAM-SHA-256.
+- **SCRAM verifiers** stored next to the argon2id hash are derived with
+  600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
+  verifier is not a cheaper target than the hash for someone who reads
+  `accounts.toml`. A verifier from an older version keeps the iteration
+  count it was derived with, which the server announces in the exchange,
+  and is rewritten at 600000 under a fresh salt the next time the account
+  logs in successfully with PLAIN or LOGIN. Accounts in `mail.toml` carry
+  no verifier and are never rewritten.
 - **OAuth2/OIDC** (OAUTHBEARER/XOAUTH2) bearer tokens are verified against the
   configured issuer/audience/key.
 - **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths.
