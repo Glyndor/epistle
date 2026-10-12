@@ -45,7 +45,7 @@ pub trait ReportPoster: Send + Sync {
 /// The production poster: `Content-Type: application/tlsrpt+gzip`, a bounded
 /// timeout, and no redirects (the report goes where the record says). The
 /// destination is chosen by the recipient domain, so it is checked and the
-/// connection pinned first ([`super::https_target`]).
+/// connection pinned first (see `tlsrpt::https_target`).
 pub struct HttpsPoster;
 
 impl HttpsPoster {
