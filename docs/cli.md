@@ -24,6 +24,19 @@ destructive action without `--yes`).
 | `suppression` | `list`, `add`, `remove` | `suppression`, `suppression --remove ADDR` |
 | `masked`, `ban`, `queue`, `domain`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
 
+## Shell completion and man pages
+
+The Debian package installs completion for bash, zsh and fish, and a man page
+per command: `man epistle`, `man epistle-account`, `man epistle-account-add`.
+Both are generated from the binary at package build time, so they match the
+installed version. With a binary installed by hand, print the script yourself:
+
+```sh
+epistle completions bash > ~/.local/share/bash-completion/completions/epistle
+epistle completions zsh > ~/.zfunc/_epistle   # a directory on your $fpath
+epistle completions fish > ~/.config/fish/completions/epistle.fish
+```
+
 ## Common tasks
 
 Every change is validated before it is written, keeps the comments in

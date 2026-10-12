@@ -273,4 +273,6 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		true,
 	),
 	(&["domain", "alias", "remove", "alias.example.org"], true),
+	(&["completions", "bash"], false),
+	(&["manpages", "/tmp/man"], false),
 ];

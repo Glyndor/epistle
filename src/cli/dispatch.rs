@@ -375,6 +375,8 @@ impl Cli {
 			Command::Probe { config, json } => {
 				with_config(&config, |config| probe::run(config, json))
 			}
+			Command::Completions { shell } => super::completions::run_completions(shell),
+			Command::Manpages { dir } => super::completions::run_manpages(&dir),
 		}
 	}
 }
