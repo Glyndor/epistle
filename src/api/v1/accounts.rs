@@ -111,7 +111,7 @@ pub async fn create(
 			name: request.name.clone(),
 			addresses: request.addresses,
 			password_hash,
-			scram: Some(derive_scram(&request.password)?),
+			scram: derive_scram(&request.password, state.store())?,
 			totp_secret: None,
 			disabled: false,
 			quota_bytes: None,
@@ -200,20 +200,31 @@ pub async fn set_password(
 	check_password(&request.password)?;
 	let hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
-	let scram = derive_scram(&request.password)?;
+	let scram = derive_scram(&request.password, state.store())?;
 	state
 		.store()
-		.set_password_hash(&name, hash, Some(scram))
+		.set_password_hash(&name, hash, scram)
 		.map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::PasswordReset, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
 }
 
 /// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
-/// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the CSPRNG
-/// cannot produce a salt rather than storing a predictable one.
-fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ApiError> {
-	crate::smtp::scram::ScramStored::with_fresh_salt(password).ok_or_else(ApiError::internal)
+/// random salt. `None` when SCRAM is disabled via `[auth] scram = false`:
+/// the password mutator passes that `None` to [`AccountStore::set_password_hash`]
+/// so an existing verifier is removed on the next password change. Fails
+/// closed if the CSPRNG cannot produce a salt rather than storing a
+/// predictable one.
+fn derive_scram(
+	password: &str,
+	store: &crate::directory_store::AccountStore,
+) -> Result<Option<crate::smtp::scram::ScramStored>, ApiError> {
+	if !store.scram_enabled() {
+		return Ok(None);
+	}
+	crate::smtp::scram::ScramStored::with_fresh_salt(password)
+		.map(Some)
+		.ok_or_else(ApiError::internal)
 }
 
 /// The enrolled TOTP secret and its `otpauth://` provisioning URI.

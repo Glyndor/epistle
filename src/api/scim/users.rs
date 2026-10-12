@@ -96,10 +96,20 @@ fn check_password(password: &str) -> Result<(), ScimError> {
 }
 
 /// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
-/// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the
-/// CSPRNG cannot produce a salt rather than storing a predictable one.
-fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ScimError> {
-	crate::smtp::scram::ScramStored::with_fresh_salt(password).ok_or_else(ScimError::internal)
+/// random salt. `None` when SCRAM is disabled via `[auth] scram = false`,
+/// so a PUT that changes the password for an account that already has a
+/// verifier drops the verifier. Fails closed if the CSPRNG cannot produce
+/// a salt rather than storing a predictable one.
+fn derive_scram(
+	password: &str,
+	store: &crate::directory_store::AccountStore,
+) -> Result<Option<crate::smtp::scram::ScramStored>, ScimError> {
+	if !store.scram_enabled() {
+		return Ok(None);
+	}
+	crate::smtp::scram::ScramStored::with_fresh_salt(password)
+		.map(Some)
+		.ok_or_else(ScimError::internal)
 }
 
 /// Hash a plaintext password with the global argon2id KDF. The `password`
@@ -232,7 +242,7 @@ pub async fn create_user(
 
 	let (password_hash, scram) = if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
-		(hash_password(plain)?, Some(derive_scram(plain)?))
+		(hash_password(plain)?, derive_scram(plain, state.store())?)
 	} else {
 		// No password supplied: create the account with an inert hash and
 		// no SCRAM credentials. The IdP can PATCH `password` later, or the
@@ -311,10 +321,10 @@ pub async fn put_user(
 	if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
 		let hash = hash_password(plain)?;
-		let scram = derive_scram(plain)?;
+		let scram = derive_scram(plain, state.store())?;
 		state
 			.store()
-			.set_password_hash(&id, hash, Some(scram))
+			.set_password_hash(&id, hash, scram)
 			.map_err(store_to_scim)?;
 	}
 
@@ -383,10 +393,10 @@ fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<()
 				.ok_or_else(|| ScimError::invalid("password must be a string"))?;
 			check_password(plain)?;
 			let hash = hash_password(plain)?;
-			let scram = derive_scram(plain)?;
+			let scram = derive_scram(plain, state.store())?;
 			state
 				.store()
-				.set_password_hash(id, hash, Some(scram))
+				.set_password_hash(id, hash, scram)
 				.map_err(store_to_scim)?;
 			Ok(())
 		}

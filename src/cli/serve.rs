@@ -61,6 +61,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// API-managed dynamic accounts, hot-swapped on mutation. An optional live
 	// LDAP authenticator is attached here so per-request binds work immediately.
 	let ldap_auth = super::serve_tasks::build_ldap_authenticator(&config);
+	// At-rest encryption, loaded once and shared. Fail closed: with
+	// encryption enabled but no usable key the server refuses to start.
+	// Built before the account store, which seals TOTP secrets with it.
+	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
+		.map_err(std::io::Error::other)?;
 	let mut store = crate::directory_store::AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -101,13 +106,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		);
 		store = store.with_ban_store(ban_store);
 	}
-	let account_store = Arc::new(store);
+	// `into_shared` wires the live store as the SCRAM upgrader, so a
+	// successful cleartext login rewrites a low-iteration verifier.
+	let account_store = store
+		.with_scram_enabled(config.auth.scram)
+		.with_crypto(crypto.clone())
+		.into_shared();
 	let directory = account_store.handle();
-
-	// At-rest message encryption, loaded once and shared. Fail closed: with
-	// encryption enabled but no usable key the server refuses to start.
-	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
-		.map_err(std::io::Error::other)?;
 
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured. The
@@ -402,6 +407,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					imap_server = imap_server.with_channel_binding(cbind.clone());
 				}
+				imap_server = imap_server.with_scram_enabled(config.auth.scram);
 				imap_server = imap_server.with_max_connections(max_conn);
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
@@ -558,6 +564,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					server = server.with_channel_binding(cbind.clone());
 				}
+				server = server.with_scram_enabled(config.auth.scram);
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}
 		}

@@ -11,6 +11,7 @@ mod alias;
 mod antispam;
 mod api;
 mod arc;
+mod auth;
 mod database;
 mod dkim;
 mod dns;
@@ -38,6 +39,7 @@ pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
+pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
@@ -341,6 +343,13 @@ pub struct Config {
 	/// Absent uses the secure defaults (strict outbound TLS).
 	#[serde(default)]
 	pub queue: Queue,
+	/// Authentication toggles. Absent keeps the historical default of
+	/// `scram = true`. Present with `scram = false` hides the mechanism on
+	/// the wire, refuses an explicit `AUTHENTICATE`/`AUTH` against it,
+	/// and prevents account-create and password-change paths from deriving
+	/// or storing a verifier.
+	#[serde(default)]
+	pub auth: Auth,
 	/// Alert rules: periodic metric comparisons that fire webhooks or email
 	/// when the configured condition holds. Absent or empty disables the
 	/// alert engine entirely (the default).
@@ -421,6 +430,7 @@ impl std::fmt::Debug for Config {
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)
+			.field("auth", &self.auth)
 			.field("alerts", &self.alerts)
 			.field("hold_outbound", &self.hold_outbound)
 			.finish()

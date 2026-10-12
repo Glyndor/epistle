@@ -28,9 +28,22 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
   certificate is configured; under ACME (where the certificate is renewed at
   runtime) it is omitted and clients use SCRAM-SHA-256.
+- **SCRAM verifiers** stored next to the argon2id hash are derived with
+  600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
+  verifier is not a cheaper target than the hash for someone who reads
+  `accounts.toml`. A verifier from an older version keeps the iteration
+  count it was derived with, which the server announces in the exchange,
+  and is rewritten at 600000 under a fresh salt the next time the account
+  logs in successfully with PLAIN or LOGIN. Accounts in `mail.toml` carry
+  no verifier and are never rewritten. `[auth] scram = false` turns SCRAM
+  off entirely: the mechanisms are no longer offered and no verifier is
+  stored for new passwords, so `accounts.toml` holds only argon2id hashes
+  once every account has changed its password.
 - **OAuth2/OIDC** (OAUTHBEARER/XOAUTH2) bearer tokens are verified against the
   configured issuer/audience/key.
-- **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths.
+- **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths. The
+  secret is encrypted at rest only when at-rest encryption is on (see "Data at
+  rest").
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
   password, and repeated failures close the connection.
 
@@ -194,6 +207,14 @@ backup, on its own, yields only ciphertext.
 - **Backups stay encrypted:** `epistle backup` archives the on-disk bytes
   verbatim, so a backup of an encrypted store remains ciphertext — restore it on
   a host with the same key. Use `epistle export` for a decrypted copy.
+- **TOTP secrets** in `accounts.toml` are encrypted with the same key
+  (stored as `enc:v1:<base64>`) when `encrypt_at_rest = true`, and are
+  protected only then: without at-rest encryption they are stored in
+  cleartext, guarded by the `0600` file mode and the disk encryption alone.
+  A secret written before encryption was turned on keeps working and is
+  encrypted the next time the server writes `accounts.toml`. If a stored
+  secret cannot be decrypted (key missing or wrong), that account's
+  password login fails instead of skipping the second factor.
 
 ## Logs and account names
 

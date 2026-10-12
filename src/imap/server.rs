@@ -56,6 +56,11 @@ pub struct Server {
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables AUTH=SCRAM-SHA-256-PLUS.
 	cbind_data: Option<Vec<u8>>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are offered on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour; `false` hides both mechanisms in `CAPABILITY AUTH=` and
+	/// refuses an explicit `AUTHENTICATE` against them. PLAIN/LOGIN stay in.
+	scram_enabled: bool,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 	/// At-rest crypto for stored message bodies, shared by every session.
@@ -98,6 +103,7 @@ impl Server {
 			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
 			oauth: None,
 			cbind_data: None,
+			scram_enabled: true,
 			max_connections: MAX_CONNECTIONS,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			read_timeout: DEFAULT_READ_TIMEOUT,
@@ -156,6 +162,14 @@ impl Server {
 		self
 	}
 
+	/// Toggle the `[auth] scram` knob for this listener. `false` hides
+	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS in `CAPABILITY AUTH=` and
+	/// refuses an explicit `AUTHENTICATE` against them; PLAIN/LOGIN stay in.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
+		self
+	}
+
 	/// Tag every password authentication attempt through this server with
 	/// `protocol` so the directory's per-account `allowed_protocols` set
 	/// can admit or reject it. Use the [`Protocol`](crate::config::Protocol) value matching the
@@ -184,7 +198,8 @@ impl Server {
 		.with_crypto(self.crypto.clone())
 		.with_oauth(self.oauth.clone())
 		.with_retention_days(self.retention_days)
-		.with_auth_protocol(self.auth_protocol);
+		.with_auth_protocol(self.auth_protocol)
+		.with_scram_enabled(self.scram_enabled);
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
 		}

@@ -78,6 +78,7 @@ impl Session {
 			parsed,
 			self.client_identity.is_some(),
 			self.cbind_data.is_some(),
+			self.scram_enabled,
 			self.oauth.is_some(),
 		) {
 			return unsupported();

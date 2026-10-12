@@ -93,6 +93,14 @@ pub struct Session {
 	/// does not move. Server sets this to its own `Arc<Metrics>` so the
 	/// every-listener metric lands in the same registry.
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are enabled on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour: both mechanisms advertised and accounted for in the
+	/// capability lines. `false` hides them on the wire and refuses an
+	/// explicit `AUTH` against them. Plaintext PLAIN / LOGIN are still
+	/// advertised regardless, so a SCRAM-less listener still accepts the
+	/// password.
+	scram_enabled: bool,
 }
 
 impl Session {
@@ -121,6 +129,7 @@ impl Session {
 			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
 			metrics: None,
+			scram_enabled: true,
 		}
 	}
 
@@ -159,6 +168,15 @@ impl Session {
 		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
 	) -> Self {
 		self.policy = self.policy.with_send_limiter(limiter);
+		self
+	}
+
+	/// Toggle the `[auth] scram` knob for this listener. `true` keeps the
+	/// default behaviour (both SCRAM-SHA-256 and `-PLUS` advertised when
+	/// channel binding is available); `false` hides both on the wire and
+	/// refuses an explicit `AUTH` against them.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
 		self
 	}
 
@@ -567,3 +585,6 @@ mod tests_scram_ban_lifecycle;
 #[cfg(test)]
 #[path = "../session_tests_scram_bans.rs"]
 mod tests_scram_bans;
+#[cfg(test)]
+#[path = "../session_tests_scram_off.rs"]
+mod tests_scram_off;

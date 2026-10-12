@@ -761,6 +761,10 @@ mod cli_account_subcommand_tests;
 mod cli_account_subcommand_tests_b;
 
 #[cfg(test)]
+#[path = "cli_account_scram_tests.rs"]
+mod cli_account_scram_tests;
+
+#[cfg(test)]
 #[path = "cli_account_log_id_tests.rs"]
 mod cli_account_log_id_tests;
 

@@ -62,6 +62,15 @@ impl Session {
 		self
 	}
 
+	/// Toggle the `[auth] scram` knob for this listener. `true` keeps the
+	/// default behaviour (both SCRAM-SHA-256 and `-PLUS` advertised when
+	/// channel binding is available); `false` hides both on the wire and
+	/// refuses an explicit `AUTHENTICATE` against them.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
+		self
+	}
+
 	/// The advertised SASL mechanisms, including OAuth when configured.
 	pub(super) fn sasl_capability(&self) -> String {
 		// Shared mechanism set: -PLUS only with a bound certificate hash, the
@@ -70,6 +79,7 @@ impl Session {
 		for mechanism in crate::sasl::available(
 			self.client_identity.is_some(),
 			self.cbind_data.is_some(),
+			self.scram_enabled,
 			self.oauth.is_some(),
 		) {
 			caps.push_str(" AUTH=");
@@ -162,6 +172,7 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 			parsed,
 			self.client_identity.is_some(),
 			self.cbind_data.is_some(),
+			self.scram_enabled,
 			self.oauth.is_some(),
 		) {
 			return unsupported();

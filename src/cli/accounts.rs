@@ -66,7 +66,12 @@ pub(super) fn add(
 			return ExitCode::FAILURE;
 		}
 	};
-	let account = match DynamicAccount::with_password(name.to_string(), addresses, &password) {
+	let account = match DynamicAccount::with_password(
+		name.to_string(),
+		addresses,
+		&password,
+		config.auth.scram,
+	) {
 		Ok(account) => account,
 		Err(error) => {
 			super::style::error(error);

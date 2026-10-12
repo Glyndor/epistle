@@ -137,15 +137,18 @@ pub(super) fn scram(dynamic: &[DynamicAccount]) -> Vec<(String, ScramStored)> {
 }
 
 /// TOTP secrets per dynamic account (RFC 6238; `None` leaves 2FA
-/// disabled).
-pub(super) fn totp(dynamic: &[DynamicAccount]) -> Vec<(String, String)> {
+/// disabled), opened with `crypto` when they are stored sealed.
+pub(super) fn totp(
+	dynamic: &[DynamicAccount],
+	crypto: &crate::storage::MessageCrypto,
+) -> Vec<(String, String)> {
 	dynamic
 		.iter()
 		.filter_map(|account| {
 			account
 				.totp_secret
-				.clone()
-				.map(|secret| (account.name.clone(), secret))
+				.as_deref()
+				.map(|stored| (account.name.clone(), super::set_totp::open(crypto, stored)))
 		})
 		.collect()
 }

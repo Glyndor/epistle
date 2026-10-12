@@ -252,6 +252,8 @@ fn parse_protocol(name: &str) -> Result<Protocol, String> {
 
 /// Open the store the action will mutate. Centralising the error
 /// handling keeps the per-action branches focused on their mutator.
+/// `[auth] scram` is applied here because `account password` derives (or,
+/// with SCRAM off, drops) the verifier from the store's flag.
 fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 	AccountStore::open(
 		&config.data_dir,
@@ -259,6 +261,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 		config.domain_aliases.clone(),
 		config.accounts.clone(),
 	)
+	.map(|store| store.with_scram_enabled(config.auth.scram))
 }
 
 /// `handle_error` lives in `account_actions`; the umbrella module only
@@ -267,7 +270,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 /// store, refuse static accounts. Returns the open store on success or
 /// has already printed an error and returned `ExitCode::FAILURE` so
 /// the caller can early-return.
-fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
+pub(super) fn prepare(config_path: &Path, name: &str) -> Result<AccountStore, ExitCode> {
 	let config = match Config::load(config_path) {
 		Ok(config) => config,
 		Err(error) => {
