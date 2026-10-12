@@ -140,6 +140,8 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 	(&["local", "--dir", "/tmp/local"], false),
 	(&["init"], true),
 	(&["stack", "ps"], true),
+	(&["stack", "stop", "mail"], true),
+	(&["stack", "start"], true),
 	(&["probe"], false),
 	(&["status"], true),
 	(&["status", "--json"], true),

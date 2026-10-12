@@ -65,6 +65,19 @@ pub enum StackCli {
 		#[arg(value_name = "SERVICE")]
 		service: Option<String>,
 	},
+	/// Stop the whole stack, or a single service (for example `mail`
+	/// before a restore, keeping `db` up), without removing containers.
+	Stop {
+		/// Optional service name to stop.
+		#[arg(value_name = "SERVICE")]
+		service: Option<String>,
+	},
+	/// Start what `stop` stopped.
+	Start {
+		/// Optional service name to start.
+		#[arg(value_name = "SERVICE")]
+		service: Option<String>,
+	},
 }
 
 impl From<StackCli> for StackAction {
@@ -76,6 +89,14 @@ impl From<StackCli> for StackAction {
 			StackCli::Ps { json } => StackAction::Ps { as_json: json },
 			StackCli::Logs { follow, service } => StackAction::Logs { follow, service },
 			StackCli::Restart { service } => StackAction::Restart { service },
+			StackCli::Stop { service } => StackAction::Passthrough {
+				verb: "stop",
+				service,
+			},
+			StackCli::Start { service } => StackAction::Passthrough {
+				verb: "start",
+				service,
+			},
 		}
 	}
 }
@@ -114,6 +135,13 @@ pub(super) enum StackAction {
 	/// stack or one service.
 	Restart {
 		/// Optional service name to restart; passed as a positional.
+		service: Option<String>,
+	},
+	/// `podup -f <compose> <verb> [<service>]` for `stop` and `start`.
+	Passthrough {
+		/// The podup subcommand.
+		verb: &'static str,
+		/// Optional service name; passed as a positional.
 		service: Option<String>,
 	},
 	/// `podup -f <compose> up -d <service>`, recreate one service from
@@ -238,6 +266,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			}
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
 			run_inherited(podup, &compose, &extra_ref)
+		}
+		StackAction::Passthrough { verb, service } => {
+			let mut extra: Vec<&str> = vec![verb];
+			if let Some(name) = service.as_deref() {
+				extra.push(name);
+			}
+			run_inherited(podup, &compose, &extra)
 		}
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])

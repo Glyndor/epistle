@@ -521,6 +521,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
 | `sudo epistle stack update` | Restarts the `mail` service in default mode (a new .deb replaces the host binary the compose file bind-mounts) and runs `podup pull` followed by `podup up -d` in custom image mode to recreate changed services while retaining data. |
 
 Keep container customizations in
