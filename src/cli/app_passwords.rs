@@ -4,11 +4,18 @@
 use std::process::ExitCode;
 
 use crate::config::Config;
-use crate::directory_store::{AppPassword, AppPasswordStore};
+use crate::directory_store::{AccountStore, AppPassword, AppPasswordStore};
 
 /// Generate a strong random secret, hash it (argon2id) and store it for
 /// `account` under `label`. The plaintext secret is printed once and never
 /// stored. `expires_at` is epoch seconds; `ip_cidr` a single CIDR allowlist.
+///
+/// Refuses unknown or static accounts: an app password created under a
+/// name nobody owns is orphan data the next account with the same name
+/// inherits, and static accounts are not addressable through the
+/// mutable `AppPasswordStore`. The check opens the account store
+/// (the same kind of check `epistle masked` performs) so the failure
+/// surfaces before any persistence happens.
 pub(super) fn create(
 	config: &Config,
 	account: &str,
@@ -17,6 +24,10 @@ pub(super) fn create(
 	ip_cidr: Option<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
+	if let Err(error) = ensure_known_dynamic_account(config, account) {
+		super::style::error(error);
+		return ExitCode::FAILURE;
+	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
 		None => {
@@ -55,6 +66,47 @@ pub(super) fn create(
 			ExitCode::FAILURE
 		}
 	}
+}
+
+/// Open the account store and refuse anything that is not a real
+/// dynamic account. `AppPasswordStore::add` does not enforce this, so
+/// a typo (or a hostile `epistle app-password-create` against a fresh
+/// `data_dir`) would otherwise produce an orphan credential that a
+/// later account with the same name inherits. Static accounts are
+/// not dynamic, so we reject them too — `AppPasswordStore` would not
+/// be able to attribute the credential to them anyway.
+fn ensure_known_dynamic_account(
+	config: &Config,
+	account: &str,
+) -> Result<(), String> {
+	let store = AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map_err(|error| format!("opening account store: {error}"))?;
+	if store.is_static(account) {
+		return Err(format!(
+			"account {account} is a static account; edit mail.toml to manage its credentials"
+		));
+	}
+	let Some(_) = first_address(&store, account) else {
+		return Err(format!("no such account: {account}"));
+	};
+	Ok(())
+}
+
+/// The first address of `account` from the account store's view, or
+/// `None` when no such account exists in either static or dynamic
+/// tables. A static account was filtered out one line above, so a
+/// `Some` here proves the account is dynamic.
+fn first_address(store: &AccountStore, account: &str) -> Option<String> {
+	store
+		.account_views()
+		.into_iter()
+		.find(|(name, _, _)| name == account)
+		.map(|(_, addresses, _)| addresses.into_iter().next().unwrap_or_default())
 }
 
 /// List every account's app passwords (never the secret or hash).
