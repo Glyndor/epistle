@@ -462,6 +462,17 @@ impl Session {
 	}
 
 	fn rcpt_to(&mut self, forward_path: String, notify: Option<super::command::Notify>) -> Action {
+		// The order is checked before the address is even looked at (RFC
+		// 5321 §4.1.4), so a RCPT out of sequence learns nothing about
+		// whether a mailbox exists or is full.
+		let open = match &self.state {
+			State::ReceivingRecipients { .. } => true,
+			State::ReceivingData { body, chunking, .. } => body.is_empty() && !*chunking,
+			_ => false,
+		};
+		if !open {
+			return Action::Continue(Reply::bad_sequence());
+		}
 		let Ok(address) = Address::parse(&forward_path) else {
 			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};

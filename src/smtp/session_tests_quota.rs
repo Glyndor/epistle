@@ -128,3 +128,18 @@ fn an_authenticated_submission_to_a_full_local_mailbox_is_refused_too() {
 	let bob = session.command_line("RCPT TO:<bob@example.org>");
 	assert_eq!(reply_line(&bob), "452 4.2.2 mailbox full\r\n");
 }
+
+#[test]
+fn rcpt_before_mail_is_a_bad_sequence_whatever_the_address() {
+	// RFC 5321 §4.1.4: the order is checked first, so the reply says nothing
+	// about whether the mailbox exists or is full.
+	let mut session = session(HashMap::from([("bob", 100)]));
+	for recipient in ["carol@example.org", "nobody@example.org", "bob@example.org"] {
+		let reply = session.command_line(&format!("RCPT TO:<{recipient}>"));
+		assert_eq!(
+			reply_line(&reply),
+			"503 5.5.1 bad sequence of commands\r\n",
+			"{recipient}"
+		);
+	}
+}
