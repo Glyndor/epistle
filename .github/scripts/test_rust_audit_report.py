@@ -193,6 +193,51 @@ class TestDirty(unittest.TestCase):
 		self.assertEqual(report["title"], "Dependency advisories: RUSTSEC-2026-0338")
 		self.assertEqual(len(report["advisories"]), 2)
 
+	def test_yanked_warning_without_rustsec_id_still_appears_in_the_title(self) -> None:
+		# A yanked crate has no RUSTSEC id. The script still opens an issue
+		# for it; the synthetic id keeps the title deterministic.
+		report = _report([])
+		report["warnings"] = {
+			"yanked": [
+				{
+					"kind": "yanked",
+					"package": {"name": "stale", "version": "0.1.0"},
+					"advisory": None,
+					"versions": None,
+					"affected": None,
+				}
+			]
+		}
+		proc = _run(json.dumps(report), "develop")
+		self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+		out = json.loads(proc.stdout)
+		self.assertFalse(out["clean"])
+		self.assertEqual(out["title"], "Dependency advisories: yanked:stale@0.1.0")
+		self.assertEqual(out["advisories"][0]["kind"], "yanked")
+		self.assertEqual(out["advisories"][0]["package"], "stale")
+		self.assertIn("`yanked`", out["body"])
+
+	def test_warning_with_a_rustsec_id_uses_that_id(self) -> None:
+		# Unmaintained advisories do carry a RUSTSEC id. The id round-trips
+		# into the title.
+		report = _report([])
+		report["warnings"] = {
+			"unmaintained": [
+				{
+					"kind": "unmaintained",
+					"package": {"name": "old", "version": "0.2.0"},
+					"advisory": {"id": "RUSTSEC-2024-9999"},
+					"versions": {"patched": [], "unaffected": []},
+					"affected": None,
+				}
+			]
+		}
+		proc = _run(json.dumps(report), "develop")
+		self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+		out = json.loads(proc.stdout)
+		self.assertEqual(out["title"], "Dependency advisories: RUSTSEC-2024-9999")
+		self.assertEqual(out["advisories"][0]["kind"], "unmaintained")
+
 
 class TestStdin(unittest.TestCase):
 	"""`rust_audit_report.py - <ref>` reads JSON from stdin."""

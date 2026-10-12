@@ -9,6 +9,12 @@ input. The title is the comma-separated, alphabetically sorted list of
 advisory ids; the body carries the crate, the installed version, the first
 patched version and the ref where the advisory was found.
 
+The script treats both vulnerabilities and denied warnings (unmaintained,
+unsound, yanked) as advisories. A warning without a RUSTSEC id gets a
+synthesised one of the form `<kind>:<crate>@<version>` so it still
+appears in the title; the body labels it as a warning rather than a
+vulnerability.
+
 Usage:
 	rust_audit_report.py <audit-json-path> <ref>
 	rust_audit_report.py -  <ref>           # read JSON from stdin
@@ -24,11 +30,12 @@ Output is a single JSON object on stdout, with this shape:
 	{
 	  "ref": "main",
 	  "clean": false,
-	  "title": "Dependency advisories: RUSTSEC-2026-0338, RUSTSEC-2026-0340",
+	  "title": "Dependency advisories: RUSTSEC-2026-0338, yanked:foo@1.0.0",
 	  "body": "...markdown body naming each advisory, crate, version and patched version...",
 	  "advisories": [
 	    {
 	      "id": "RUSTSEC-2026-0338",
+	      "kind": "vulnerability",
 	      "package": "quinn-proto",
 	      "version": "0.11.18",
 	      "patched": ">=0.11.19",
@@ -37,9 +44,10 @@ Output is a single JSON object on stdout, with this shape:
 	  ]
 	}
 
-A clean audit (no `vulnerabilities.list` entries) yields `clean: true`,
-`title: null`, `body: null` and an empty advisories list. The workflow
-treats that as the close signal for any open issue with the matching labels.
+A clean audit (no `vulnerabilities.list` or `warnings` entries) yields
+`clean: true`, `title: null`, `body: null` and an empty advisories list.
+The workflow treats that as the close signal for any open issue with the
+matching labels.
 
 Exit codes:
 	0  the report was parsed and emitted
@@ -54,12 +62,7 @@ import sys
 from pathlib import Path
 
 
-# Body template. Markdown so `gh issue create --body` renders it as-is. The
-# per-advisory breakdown is one block per id, sorted, so two consecutive
-# issues have a readable diff. The fixed version is the first item from
-# `versions.patched`; a more elaborate parser would honour every entry in
-# the range, but the issue body is for humans and the first fix is what
-# they want to read.
+# Body template. Markdown so `gh issue create --body` renders it as-is.
 _BODY_TEMPLATE = """\
 Dependency advisories open against {ref}.
 
@@ -79,6 +82,7 @@ def _per_advisory(advisories: list[dict]) -> str:
 	for advisory in sorted(advisories, key=lambda a: a["id"]):
 		heading = f"### {advisory['id']} - {advisory['package']} {advisory['version']}"
 		lines.append(heading)
+		lines.append(f"- Kind: `{advisory['kind']}`")
 		if advisory["patched"]:
 			lines.append(f"- Patched in: `{advisory['patched']}`")
 		else:
@@ -89,25 +93,68 @@ def _per_advisory(advisories: list[dict]) -> str:
 	return "\n".join(lines)
 
 
-def _advisory(vulnerability: dict, ref: str) -> dict:
-	"""Pull the fields the issue body needs out of one vulnerability entry.
-
-	The entry is the JSON object `cargo audit --json` emits per finding; the
-	advisory id and metadata live on `.advisory`, the installed version on
-	`.package.version`, and the patched range on `.versions.patched` (a list
-	of version-req strings, e.g. `">=1.2.3"`).
-	"""
+def _vulnerability_advisory(vulnerability: dict, ref: str) -> dict:
+	"""Map one cargo-audit vulnerability entry to the workflow's shape."""
 	advisory = vulnerability.get("advisory") or {}
 	versions = vulnerability.get("versions") or {}
 	package = vulnerability.get("package") or {}
 	patched = versions.get("patched") or []
 	return {
 		"id": str(advisory.get("id", "")),
+		"kind": "vulnerability",
 		"package": str(package.get("name", "")),
 		"version": str(package.get("version", "")),
 		"patched": str(patched[0]) if patched else "",
 		"refs": [ref],
 	}
+
+
+def _warning_advisory(warning: dict, ref: str) -> dict:
+	"""Map one cargo-audit warning entry to the workflow's shape.
+
+	A warning without a RUSTSEC id (a yanked crate, for example) gets a
+	synthesised id of the form `<kind>:<crate>@<version>`. The id never
+	collides with a real RUSTSEC id (those are `RUSTSEC-YYYY-NNNN`).
+	"""
+	advisory = warning.get("advisory") or {}
+	package = warning.get("package") or {}
+	versions = warning.get("versions") or {}
+	raw_id = advisory.get("id", "")
+	kind = str(warning.get("kind", ""))
+	package_name = str(package.get("name", ""))
+	package_version = str(package.get("version", ""))
+	synthetic_id = f"{kind}:{package_name}@{package_version}" if kind and package_name and package_version else ""
+	synth_id = str(raw_id) if raw_id else synthetic_id
+	patched = (versions.get("patched") or []) if isinstance(versions, dict) else []
+	return {
+		"id": synth_id,
+		"kind": kind or "warning",
+		"package": package_name,
+		"version": package_version,
+		"patched": str(patched[0]) if patched else "",
+		"refs": [ref],
+	}
+
+
+def _collect_warnings(document: dict, ref: str) -> list[dict]:
+	"""Flatten the `warnings` map into the advisories shape.
+
+	The cargo-audit JSON puts warnings under `warnings.<kind>[]`; we collect
+	them into one list so the title and body treat every finding the same
+	way.
+	"""
+	warnings = document.get("warnings")
+	if not isinstance(warnings, dict):
+		return []
+	out: list[dict] = []
+	for kind, entries in warnings.items():
+		if not isinstance(entries, list):
+			continue
+		for entry in entries:
+			if not isinstance(entry, dict):
+				continue
+			out.append(_warning_advisory(entry, ref))
+	return out
 
 
 def parse(audit_json_text: str, ref: str) -> dict:
@@ -134,7 +181,8 @@ def parse(audit_json_text: str, ref: str) -> dict:
 	if not isinstance(findings, list):
 		raise ValueError("audit JSON `vulnerabilities.list` must be an array")
 
-	advisories = [_advisory(entry, ref) for entry in findings]
+	advisories: list[dict] = [_vulnerability_advisory(entry, ref) for entry in findings]
+	advisories.extend(_collect_warnings(document, ref))
 	clean = vulnerabilities.get("found") is False and not advisories
 	if clean:
 		return {
