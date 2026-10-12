@@ -97,6 +97,10 @@ mod tests;
 mod tests_b;
 
 #[cfg(test)]
+#[path = "scram_off_tests.rs"]
+mod scram_off_tests;
+
+#[cfg(test)]
 #[path = "api_tests_newrecipients.rs"]
 mod tests_newrecipients;
 

@@ -260,3 +260,88 @@ fn auth_section_default_is_scram_true() {
 	let parsed: Auth = toml::from_str("").expect("parse empty");
 	assert!(parsed.scram);
 }
+
+/// The SMTP EHLO capability line for AUTH, exactly.
+fn smtp_auth_line(session: &mut super::Session) -> String {
+	let Action::Continue(reply) = session.command_line("EHLO c.example.org") else {
+		panic!("expected continue");
+	};
+	reply
+		.to_string()
+		.lines()
+		.find(|line| line.contains("AUTH "))
+		.map(str::to_string)
+		.unwrap_or_default()
+}
+
+#[test]
+fn smtp_ehlo_auth_line_is_exactly_plain_login_when_scram_disabled() {
+	let mut session = tls_session().with_scram_enabled(false);
+	assert_eq!(smtp_auth_line(&mut session), "250-AUTH PLAIN LOGIN");
+	let mut enabled = tls_session();
+	assert_eq!(
+		smtp_auth_line(&mut enabled),
+		"250-AUTH SCRAM-SHA-256 PLAIN LOGIN",
+		"control: the same listener with SCRAM on"
+	);
+}
+
+#[test]
+fn smtp_scram_refusal_is_the_unknown_mechanism_reply() {
+	let reply_to = |line: &str| {
+		let mut session = tls_session().with_scram_enabled(false);
+		let Action::Continue(reply) = session.command_line(line) else {
+			panic!("expected continue");
+		};
+		reply.to_string()
+	};
+	let unknown = reply_to("AUTH DIGEST-MD5 bixuPWFsaWNlLHI9Q04=");
+	assert_eq!(
+		reply_to("AUTH SCRAM-SHA-256 bixuPWFsaWNlLHI9Q04="),
+		unknown,
+		"SCRAM-SHA-256 must be refused byte for byte like an unknown mechanism"
+	);
+	assert_eq!(
+		reply_to("AUTH SCRAM-SHA-256-PLUS"),
+		reply_to("AUTH DIGEST-MD5")
+	);
+}
+
+fn imap_session_scram_off() -> crate::imap::session::Session {
+	crate::imap::session::Session::new(
+		"imap.example.org",
+		std::path::PathBuf::from("/tmp"),
+		std::sync::Arc::new(crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[("alice@example.org".to_string(), "alice".to_string())],
+		)),
+	)
+	.with_scram_enabled(false)
+}
+
+#[test]
+fn imap_capability_auth_list_is_exactly_plain_login_when_scram_disabled() {
+	let text = imap_capability_text(&mut imap_session_scram_off());
+	let auth: Vec<&str> = text
+		.split_whitespace()
+		.filter(|word| word.starts_with("AUTH="))
+		.collect();
+	assert_eq!(auth, ["AUTH=PLAIN", "AUTH=LOGIN"], "capability: {text}");
+}
+
+#[test]
+fn imap_scram_refusal_is_the_unknown_mechanism_reply() {
+	let reply_to = |line: &str| {
+		let action = imap_session_scram_off().command_line(line);
+		String::from_utf8_lossy(&action.bytes).into_owned()
+	};
+	assert_eq!(
+		reply_to("A1 AUTHENTICATE SCRAM-SHA-256 bixuPWFsaWNlLHI9Q04="),
+		reply_to("A1 AUTHENTICATE DIGEST-MD5 bixuPWFsaWNlLHI9Q04="),
+		"SCRAM-SHA-256 must be refused byte for byte like an unknown mechanism"
+	);
+	assert_eq!(
+		reply_to("A1 AUTHENTICATE SCRAM-SHA-256-PLUS"),
+		reply_to("A1 AUTHENTICATE DIGEST-MD5")
+	);
+}
