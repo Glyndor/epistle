@@ -109,6 +109,16 @@ impl Signer {
 	/// header line (with trailing CRLF) to prepend.
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {
 		let (headers, body) = split_message(raw)?;
+		// One From field, or no signature: the send-as check and DMARC read
+		// the single From, and with two the signature below would cover only
+		// the last one (RFC 6376 section 5.4.2 picks bottom-up).
+		let from_fields = headers
+			.iter()
+			.filter(|(name, _)| name.eq_ignore_ascii_case("from"))
+			.count();
+		if from_fields > 1 {
+			return None;
+		}
 
 		let canonical_body = canon::body(Canon::Relaxed, body);
 		let body_hash = BASE64.encode(ring::digest::digest(&ring::digest::SHA256, &canonical_body));
@@ -311,6 +321,10 @@ fn split_message(raw: &[u8]) -> Option<(HeaderPairs<'_>, &[u8])> {
 	}
 	Some((parsed, body))
 }
+
+#[cfg(test)]
+#[path = "sign_tests_from.rs"]
+mod tests_from;
 
 #[cfg(test)]
 mod tests {
