@@ -100,6 +100,7 @@ pub(super) fn email_set(
 	principal: &Principal,
 	args: &Value,
 	call_id: &str,
+	uploads: &super::Uploads,
 ) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
@@ -116,12 +117,18 @@ pub(super) fn email_set(
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (cid, spec) in create {
-			match create_email(state.data_dir(), account, spec, state.crypto()) {
+			let sources = super::email_build::Sources {
+				data_dir: state.data_dir(),
+				account,
+				crypto: state.crypto(),
+				uploads,
+			};
+			match create_email(spec, &sources) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
-				Err(reason) => {
-					not_created.insert(cid.clone(), json!({ "type": reason }));
+				Err(error) => {
+					not_created.insert(cid.clone(), error);
 				}
 			}
 		}
@@ -164,14 +171,11 @@ pub(super) fn email_set(
 	])
 }
 
-/// Create a message from a JMAP Email object (Email/set create): build an
-/// RFC 5322 message and deliver it to the target mailbox.
-fn create_email(
-	data_dir: &std::path::Path,
-	account: &str,
-	spec: &Value,
-	crypto: &crate::storage::MessageCrypto,
-) -> Result<Value, &'static str> {
+/// Create a message from a JMAP Email object (Email/set create): build the
+/// RFC 5322 message (RFC 8621 section 4.6) and store it in the target
+/// mailbox. The error is the SetError to answer with.
+fn create_email(spec: &Value, sources: &super::email_build::Sources<'_>) -> Result<Value, Value> {
+	let (data_dir, account, crypto) = (sources.data_dir, sources.account, sources.crypto);
 	let mailbox = spec
 		.get("mailboxIds")
 		.and_then(Value::as_object)
@@ -185,14 +189,14 @@ fn create_email(
 				if v.as_bool() != Some(true) {
 					continue;
 				}
-				out.push(keyword_to_flag(k)?);
+				out.push(keyword_to_flag(k).map_err(|reason| json!({ "type": reason }))?);
 			}
 		}
 		out
 	};
-	let raw = objects::build_rfc5322(spec);
+	let raw = super::email_build::build(spec, sources)?;
 	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
-		.map_err(|_| "serverFail")?;
+		.map_err(|_| json!({ "type": "serverFail" }))?;
 	Ok(json!({
 		"id": id.to_string(),
 		"blobId": id.to_string(),

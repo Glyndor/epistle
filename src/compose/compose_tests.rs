@@ -200,3 +200,16 @@ fn a_missing_content_type_comes_from_the_bytes_then_the_name() {
 	);
 	assert_eq!(content_type_for(None, b"??"), "application/octet-stream");
 }
+
+#[test]
+fn a_folded_address_is_unfolded_and_folded_again_without_a_blank_line() {
+	let name = crate::util::encoded_word::encode(&"é".repeat(30));
+	assert!(name.contains("\r\n "), "a long name arrives folded");
+	let line = address_list("To", &[format!("{name} <jane@example.org>")]).expect("folded");
+	assert!(!line.contains("\r\n\r\n"), "{line:?}");
+	assert!(
+		line.split("\r\n")
+			.skip(1)
+			.all(|l| l.is_empty() || l.starts_with(' '))
+	);
+}

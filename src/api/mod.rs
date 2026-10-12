@@ -215,6 +215,10 @@ mod send_tests_rich_headers;
 mod send_tests_injection;
 
 #[cfg(test)]
+#[path = "jmap_tests_email_create.rs"]
+mod jmap_tests_email_create;
+
+#[cfg(test)]
 #[path = "jmap_tests_partition.rs"]
 mod jmap_tests_partition;
 

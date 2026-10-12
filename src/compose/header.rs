@@ -44,12 +44,19 @@ pub fn structured(name: &str, value: &str) -> Result<String, ComposeError> {
 	Ok(fold(name, value))
 }
 
-/// An address list (`To`, `Cc`, `Reply-To`), folded between addresses.
+/// An address list (`To`, `Cc`, `Reply-To`), folded between addresses. An
+/// address may arrive already folded (CRLF and a space, as long RFC 2047
+/// names are): it is unfolded first, since a fold cannot start a new
+/// header line; any other line break is refused.
 pub fn address_list(name: &str, addresses: &[String]) -> Result<String, ComposeError> {
-	if addresses.iter().any(|address| breaks(address)) {
+	let joined = addresses
+		.join(", ")
+		.replace("\r\n ", " ")
+		.replace("\r\n\t", " ");
+	if breaks(&joined) {
 		return Err(ComposeError::HeaderBreak);
 	}
-	Ok(fold(name, &addresses.join(", ")))
+	Ok(fold(name, &joined))
 }
 
 /// `Name: value` with a fold (CRLF and the space it replaces) before a

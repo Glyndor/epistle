@@ -292,6 +292,18 @@ The response's `queued` id names the queue entry.
 A control character in any of these is refused with `400`. A message over
 25 MiB once encoded is refused with `413 message_too_large`.
 
+### JMAP `Email/set` create
+
+A new Email is built from `textBody`, `htmlBody` and `attachments` (inline
+parts with a `cid` go beside the HTML in `multipart/related`), or from an
+explicit `bodyStructure`, with the same MIME builder as `/api/v1/send`. Text
+comes from `bodyValues` by `partId`; octets by `blobId`, from an upload or
+from a stored message or one of its parts. `Content-*` headers on the Email
+itself, `bodyStructure` together with the body lists, more than one part in
+`textBody` or `htmlBody`, or a part with both or neither of `partId` and
+`blobId` are refused with `invalidProperties`; a message over 25 MiB with
+`tooLarge`.
+
 ### Uploaded blob storage
 
 JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the

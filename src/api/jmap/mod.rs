@@ -30,9 +30,12 @@ pub(crate) mod caller_slots;
 mod dispatcher;
 mod download;
 mod email;
+mod email_build;
 pub mod event_source;
 pub use download::download;
 mod email_submission;
+mod uploads;
+pub use uploads::Uploads;
 mod limits;
 pub use limits::{
 	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
@@ -192,7 +195,10 @@ pub async fn api(
 		}
 		Err(rejection) => return rejection.into_response(),
 	};
-	match dispatch_request(&state, &principal, request) {
+	// Uploaded blobs an `Email/set` create names are read here, where the
+	// blob backend can be awaited; dispatch itself is synchronous.
+	let uploads = Uploads::prefetch(&state, &principal, &request).await;
+	match dispatch_request(&state, &principal, request, &uploads) {
 		Ok(response) => Json(response).into_response(),
 		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
 	}
@@ -210,6 +216,7 @@ pub fn dispatch_request(
 	state: &ApiState,
 	principal: &Principal,
 	request: Request,
+	uploads: &Uploads,
 ) -> Result<Response, Value> {
 	let calls = request.method_calls.len();
 	if calls > limits::MAX_CALLS_IN_REQUEST {
@@ -276,7 +283,7 @@ pub fn dispatch_request(
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
 			"Mailbox/set" => methods::mailbox_set(state, principal, &args, &call_id),
-			"Email/set" => email::email_set(state, principal, &args, &call_id),
+			"Email/set" => email::email_set(state, principal, &args, &call_id, uploads),
 			"Email/copy" => email::email_copy(state, principal, &args, &call_id),
 			"EmailSubmission/set" => {
 				email_submission::email_submission_set(state, principal, &args, &call_id)
