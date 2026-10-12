@@ -19,6 +19,7 @@ mod dns_fake;
 mod ports;
 mod queue_area;
 mod report;
+mod subid_area;
 #[cfg(test)]
 mod test_support;
 mod tls_area;
@@ -62,6 +63,8 @@ pub enum CheckArea {
 	Queue,
 	/// The data filesystem has room.
 	Disk,
+	/// The service account's subordinate id ranges overlap no other account's.
+	Subid,
 }
 
 impl CheckArea {
@@ -76,6 +79,7 @@ impl CheckArea {
 		CheckArea::Antispam,
 		CheckArea::Queue,
 		CheckArea::Disk,
+		CheckArea::Subid,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -90,6 +94,7 @@ impl CheckArea {
 			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
 			CheckArea::Disk => "disk",
+			CheckArea::Subid => "subid",
 		}
 	}
 }
@@ -213,6 +218,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
 		CheckArea::Disk => disk_area::check(ctx).await,
+		CheckArea::Subid => subid_area::check(ctx).await,
 	}
 }
 
