@@ -148,3 +148,6 @@ mod quota_names;
 
 #[path = "session_tests_utf8_responses.rs"]
 mod utf8_responses;
+
+#[path = "session_tests_flags_update.rs"]
+mod flags_update;
