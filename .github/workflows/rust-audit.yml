@@ -157,19 +157,16 @@ jobs:
           # other workflow labels issues with all four at the same time;
           # dependabot-security-watch opens pull requests, not issues,
           # and the supply-chain gate labels only `type:deps` without
-          # `prio:P1`. Page through every open issue with the labels and
-          # close each, because there is no way to know from the title
-          # alone which one the previous run opened.
-          page=1
-          while :; do
-            numbers="$(gh api \
-              "repos/${REPO}/issues?state=open&labels=$(echo "$LABELS" | tr ',' '%2C')&per_page=100&page=${page}" \
-              --jq '[.[] | select(.pull_request == null) | .number] | join(" ")')"
-            [ -n "$numbers" ] || break
-            for number in $numbers; do
-              echo "::notice::closing stale advisory issue #$number"
-              gh issue close "$number" --repo "$REPO" \
-                --comment "Both refs are clean on this run; closing automatically."
-            done
-            page=$((page + 1))
+          # `prio:P1`. `gh issue list --label` matches every issue that
+          # carries all four labels (AND semantics), and pagination is
+          # handled internally by the `gh` wrapper, so the loop walks
+          # every result without an explicit page counter.
+          for number in $(gh issue list \
+              --repo "$REPO" --state open \
+              --label "type:security" --label "type:deps" \
+              --label "prio:P1" --label "area:meta" \
+              --json number --jq '.[].number'); do
+            echo "::notice::closing stale advisory issue #$number"
+            gh issue close "$number" --repo "$REPO" \
+              --comment "Both refs are clean on this run; closing automatically."
           done

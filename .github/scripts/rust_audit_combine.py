@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -123,32 +122,46 @@ def lookup_existing(repo: str, title: str) -> str:
 	"""Find an open issue with `title` and the audit labels.
 
 	Returns the issue number as a string, or an empty string when none
-	exists. Filters out pull requests because `gh api repos/.../issues`
-	includes them (they have the same shape) and they would otherwise be
-	mistaken for a matching advisory issue.
+	exists. The lookup uses `gh issue list --label ...` (the `gh`
+	wrapper handles pagination), then filters the result by exact title
+	in Python. Filtering locally keeps the title comparison exact
+	rather than relying on `gh` substring search, which would match
+	"Dependency advisories: RUSTSEC-2026-0338" against an issue titled
+	"Dependency advisories: RUSTSEC-2026-0338, RUSTSEC-2026-0340".
 	"""
-	label_arg = ",".join(LABELS)
 	cmd = [
 		"gh",
-		"api",
-		f"repos/{repo}/issues?state=open&labels={label_arg}&per_page=100",
-		"--jq",
-		'[.[] | select(.pull_request == null and .title == $TITLE) | .number] | first // empty',
+		"issue",
+		"list",
+		"--repo",
+		repo,
+		"--state",
+		"open",
+		"--json",
+		"number,title",
 	]
+	for label in LABELS:
+		cmd += ["--label", label]
 	result = subprocess.run(
 		cmd,
 		input="",
 		capture_output=True,
 		text=True,
 		check=False,
-		env={**os.environ, "TITLE": title},
 	)
 	if result.returncode != 0:
-		# `gh api` exit non-zero on auth failure or network error. The
+		# `gh` exits non-zero on auth failure or network error. The
 		# workflow needs to open a new issue in that case, so we return
 		# empty rather than fail the whole combine step.
 		return ""
-	return result.stdout.strip()
+	try:
+		issues = json.loads(result.stdout)
+	except json.JSONDecodeError:
+		return ""
+	for issue in issues:
+		if issue.get("title") == title:
+			return str(issue.get("number", ""))
+	return ""
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
