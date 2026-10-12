@@ -9,8 +9,8 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::{Extension, Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::extract::{Extension, FromRequest, Path, State};
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,11 +18,7 @@ use serde_json::{Value, json};
 use super::Principal;
 use super::state::{ApiState, MatchedAuth};
 use crate::api::api_keys::Scope;
-
-/// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
-/// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
-/// `urn:ietf:params:jmap:error:limit` problem-details response.
-pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
+use caller_slots::{CallerSlot, Work};
 
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
@@ -30,6 +26,7 @@ const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 mod address_tokenizer;
 pub(crate) mod blob_path;
 mod blobs;
+pub(crate) mod caller_slots;
 mod dispatcher;
 mod download;
 mod email;
@@ -37,7 +34,10 @@ pub mod event_source;
 pub use download::download;
 mod email_submission;
 mod limits;
-pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
+pub use limits::{
+	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
+	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+};
 mod methods;
 mod objects;
 pub(crate) mod push_subscription;
@@ -101,13 +101,13 @@ pub async fn session(
 	Json(json!({
 		"capabilities": {
 			CORE_CAPABILITY: {
-				"maxSizeUpload": 50_000_000u64,
-				"maxConcurrentUpload": 4u32,
+				"maxSizeUpload": MAX_UPLOAD_SIZE as u64,
+				"maxConcurrentUpload": MAX_CONCURRENT_UPLOAD as u32,
 				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
-				"maxConcurrentRequests": 4u32,
+				"maxConcurrentRequests": MAX_CONCURRENT_REQUESTS as u32,
 				"maxCallsInRequest": MAX_CALLS_IN_REQUEST as u32,
-				"maxObjectsInGet": 500u32,
-				"maxObjectsInSet": 500u32,
+				"maxObjectsInGet": MAX_OBJECTS_IN_GET as u32,
+				"maxObjectsInSet": MAX_OBJECTS_IN_SET as u32,
 				"collationAlgorithms": [],
 			},
 			MAIL_CAPABILITY: {
@@ -166,9 +166,32 @@ pub struct Response {
 pub async fn api(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
-	Json(request): Json<Request>,
+	request: axum::extract::Request,
 ) -> axum::response::Response {
 	let principal = Principal::for_token(&state, &auth);
+	// The slot is held from before the body is read until the response is
+	// built, so a request counts against `maxConcurrentRequests` for as long
+	// as the server is busy with it.
+	let Some(_slot) = CallerSlot::take(
+		&state,
+		&principal,
+		Work::Request,
+		limits::MAX_CONCURRENT_REQUESTS,
+	) else {
+		let problem =
+			limits::too_many_concurrent("maxConcurrentRequests", limits::MAX_CONCURRENT_REQUESTS);
+		return (StatusCode::TOO_MANY_REQUESTS, Json(problem)).into_response();
+	};
+	// A body over the route's cap (`maxSizeRequest`) is answered with the
+	// RFC 8620 `limit` problem naming it, not axum's plain-text 413.
+	let request = match Json::<Request>::from_request(request, &()).await {
+		Ok(Json(request)) => request,
+		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+			let problem = limits::request_too_large();
+			return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+		}
+		Err(rejection) => return rejection.into_response(),
+	};
 	match dispatch_request(&state, &principal, request) {
 		Ok(response) => Json(response).into_response(),
 		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
@@ -195,22 +218,22 @@ pub fn dispatch_request(
 	// `PushSubscription/*` and `Core/echo` are session-scoped: they do not
 	// carry an `accountId`. `Core/echo` touches nothing; the push
 	// subscriptions are filtered by the caller that created them. The rest
-	// of the methods need an account check; the
-	// `state.auth_extension_for(principal)` helper, where one exists, calls
-	// `state.require_scope` and the per-method handler does the principal
-	// check on the `accountId` it pulls out of the arguments.
+	// of the methods need an account check: the scope each call needs is
+	// checked below with `state.require_scope_for_principal`, and the
+	// per-method handler does the principal check on the `accountId` it
+	// pulls out of the arguments.
 	let mut method_responses = Vec::with_capacity(calls);
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
-		// responses. The resolver bounds the cumulative cost of a chain
-		// a request where each call's argument is a `#ResultOf`
-		// reference to the previous result would, without the bound,
-		// double the materialised data every step and reach hundreds
-		// of MB on a 25-call chain. The first call that crosses the
-		// bound is refused with `requestTooLarge` (RFC 8620 §3.7.2 /
-		// §3.6.2); an unresolvable reference fails with
-		// `invalidResultReference`.
+		// responses. Without a bound, a request where each call's argument
+		// is a `#ResultOf` reference to the previous result would double
+		// the materialised data every step and reach hundreds of MB on a
+		// 25-call chain. A call with a reference resolving to more
+		// objects than maxObjectsInGet/maxObjectsInSet, or whose
+		// references push the request's resolved bytes past
+		// maxSizeRequest, is refused with `requestTooLarge`; an
+		// unresolvable reference fails with `invalidResultReference`.
 		let args = match resolver.resolve(&args, &method_responses) {
 			Ok(args) => args,
 			Err(ResolveError::TooLarge) => {
@@ -241,7 +264,11 @@ pub fn dispatch_request(
 			&& state.require_scope_for_principal(principal, scope).is_err()
 		{
 			let response = jmap_scope_error(&call_id);
-			resolver.record_result(&response);
+			method_responses.push(response);
+			continue;
+		}
+		if limits::too_many_objects(&name, &args) {
+			let response = json!(["error", { "type": "requestTooLarge" }, call_id]);
 			method_responses.push(response);
 			continue;
 		}
@@ -273,7 +300,6 @@ pub fn dispatch_request(
 			"PushSubscription/get" => push_subscription::get(state, principal, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
-		resolver.record_result(&response);
 		method_responses.push(response);
 	}
 	Ok(Response { method_responses })
@@ -318,8 +344,7 @@ pub async fn upload(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Path(account): Path<String>,
-	headers: HeaderMap,
-	body: axum::body::Bytes,
+	request: axum::extract::Request,
 ) -> impl IntoResponse {
 	let principal = Principal::for_token(&state, &auth);
 	// `Write` scope: a read-only key must not be able to fill the quota or
@@ -336,20 +361,28 @@ pub async fn upload(
 	if !principal.admits_account(&view.name, &view.addresses) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	// Reject anything over the advertised maxSizeUpload with the spec's limit
-	// error (RFC 8620 §6.1) rather than a transport-level 413.
-	if body.len() > MAX_UPLOAD_SIZE {
-		return (
-			StatusCode::PAYLOAD_TOO_LARGE,
-			Json(json!({
-				"type": "urn:ietf:params:jmap:error:limit",
-				"limit": "maxSizeUpload",
-				"status": 413,
-				"detail": "upload exceeds maxSizeUpload",
-			})),
-		)
-			.into_response();
-	}
+	let Some(_slot) = CallerSlot::take(
+		&state,
+		&principal,
+		Work::Upload,
+		limits::MAX_CONCURRENT_UPLOAD,
+	) else {
+		let problem =
+			limits::too_many_concurrent("maxConcurrentUpload", limits::MAX_CONCURRENT_UPLOAD);
+		return (StatusCode::TOO_MANY_REQUESTS, Json(problem)).into_response();
+	};
+	let headers = request.headers().clone();
+	// The route caps the body at the advertised maxSizeUpload; anything
+	// larger is answered with the spec's limit error (RFC 8620 §6.1) rather
+	// than a transport-level 413.
+	let body = match axum::body::Bytes::from_request(request, &()).await {
+		Ok(body) => body,
+		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+			let problem = limits::upload_too_large();
+			return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+		}
+		Err(rejection) => return rejection.into_response(),
+	};
 	// Enforce the account's storage quota before persisting (RFC 8620 §6.1:
 	// upload may be refused once a limit is reached). A configured limit is the
 	// hard cap; 0 means unlimited. Fail closed — reject when the blob would push

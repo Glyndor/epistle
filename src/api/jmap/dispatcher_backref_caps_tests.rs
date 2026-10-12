@@ -1,9 +1,8 @@
 //! Integration tests for the JMAP request-cap on result back-references.
 //!
 //! These tests exercise `dispatch_request` end-to-end. They require the
-//! `Resolver` type and its `MAX_REQUEST_LIMITS` constant, the new code
-//! that bounds the cumulative cost of a back-reference chain, so the
-//! test file only compiles once the cap is in place.
+//! `Resolver` type and its `MAX_REQUEST_LIMITS` constant, which bound
+//! what a back-reference chain may materialise.
 
 use serde_json::{Value, json};
 
@@ -78,8 +77,8 @@ fn element_count(value: &Value) -> u64 {
 
 /// The bounded `Resolver` is the new code that holds the cap; the
 /// test below feeds a doubling chain through it and asserts the
-/// first over-cap call gets `requestTooLarge` and the cumulative
-/// materialised cost stays under the cap. The unfixed resolver
+/// first over-cap call gets `requestTooLarge` and the materialised
+/// bytes stay under the cap. The unfixed resolver
 /// (no bound) would have materialised the whole chain, far past
 /// the cap, and the test would fail with the assertion below.
 #[test]
@@ -108,7 +107,6 @@ fn doubling_chain_first_over_cap_call_is_request_too_large() {
 			}
 		};
 		let response = json!([name, resolved, call_id]);
-		resolver.record_result(&response);
 		responses.push(response);
 	}
 	// The chain must have tripped `requestTooLarge` well before
@@ -125,13 +123,8 @@ fn doubling_chain_first_over_cap_call_is_request_too_large() {
 		first_too_large < 15,
 		"the doubling chain must be refused before its 15th call, was refused at {first_too_large}"
 	);
-	// The resolver's counters stayed under the cap.
-	let (resolved_bytes, resolved_elements) = resolver.materialised();
-	assert!(
-		resolved_elements <= MAX_REQUEST_LIMITS.max_objects_total,
-		"resolver materialised {resolved_elements} elements before refusing, cap {}",
-		MAX_REQUEST_LIMITS.max_objects_total
-	);
+	// The resolver's byte count stayed under the cap.
+	let resolved_bytes = resolver.materialised();
 	assert!(
 		resolved_bytes <= MAX_REQUEST_LIMITS.max_size_request,
 		"resolver materialised {resolved_bytes} bytes before refusing, cap {}",
@@ -155,7 +148,6 @@ fn small_request_still_resolves() {
 	for MethodCall(name, args, call_id) in calls.into_iter() {
 		let resolved = resolver.resolve(&args, &responses).expect("resolve");
 		let response = json!([name, resolved, call_id]);
-		resolver.record_result(&response);
 		responses.push(response);
 	}
 	assert_eq!(responses.len(), 1);
@@ -163,9 +155,8 @@ fn small_request_still_resolves() {
 
 /// A JMAP request that is well within the per-request cap must
 /// resolve every back-reference and produce the expected
-/// `Core/echo` response. The cap is per-request, so a single
-/// envelope that references the same call's previous result a
-/// handful of times stays well below it.
+/// `Core/echo` response: a reference to a small result stays well
+/// below the per-reference cap.
 #[test]
 fn small_chain_within_cap_resolves() {
 	let calls = vec![
@@ -191,7 +182,6 @@ fn small_chain_within_cap_resolves() {
 			.resolve(&args, &responses)
 			.expect("within-cap chain must resolve");
 		let response = json!([name, resolved, call_id]);
-		resolver.record_result(&response);
 		responses.push(response);
 	}
 	// The chain produced two normal echoes, no errors.
@@ -240,16 +230,10 @@ fn dispatch_request_refuses_doubling_chain() {
 			}
 		};
 		let response = json!([name, resolved, call_id]);
-		resolver.record_result(&response);
 		responses.push(response);
 	}
-	// The cumulative materialised cost stayed under the cap.
-	let (resolved_bytes, resolved_elements) = resolver.materialised();
-	assert!(
-		resolved_elements <= MAX_REQUEST_LIMITS.max_objects_total,
-		"resolver materialised {resolved_elements} elements, cap {}",
-		MAX_REQUEST_LIMITS.max_objects_total
-	);
+	// The cumulative materialised bytes stayed under the cap.
+	let resolved_bytes = resolver.materialised();
 	assert!(
 		resolved_bytes <= MAX_REQUEST_LIMITS.max_size_request,
 		"resolver materialised {resolved_bytes} bytes, cap {}",
@@ -280,8 +264,8 @@ fn dispatch_request_refuses_doubling_chain() {
 	let elements = element_count(args);
 	assert!(elements > 0, "the first echo has at least one element");
 	assert!(
-		elements <= MAX_REQUEST_LIMITS.max_objects_total,
+		elements <= MAX_REQUEST_LIMITS.max_objects_per_reference,
 		"first echo materialised {elements} elements, cap {}",
-		MAX_REQUEST_LIMITS.max_objects_total
+		MAX_REQUEST_LIMITS.max_objects_per_reference
 	);
 }

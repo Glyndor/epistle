@@ -37,6 +37,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
 use super::Principal;
+use super::caller_slots::{CallerSlot, Work};
 use super::state::{Kind, account_root};
 use crate::api::api_keys::Scope;
 use crate::api::state::{ApiState, MatchedAuth};
@@ -52,42 +53,8 @@ pub(crate) const MAX_PING: u64 = 300;
 /// second, so the cap bounds what one credential can cost the server.
 pub(crate) const MAX_STREAMS_PER_CALLER: usize = 4;
 
-/// One open stream counted against its caller; released when the stream is
-/// dropped, however it ends.
-struct StreamSlot {
-	streams: std::sync::Arc<std::sync::Mutex<HashMap<String, usize>>>,
-	owner: String,
-}
-
-impl StreamSlot {
-	fn take(state: &ApiState, owner: String) -> Option<Self> {
-		let streams = state.event_streams();
-		{
-			let mut open = streams.lock().unwrap_or_else(|p| p.into_inner());
-			let count = open.entry(owner.clone()).or_insert(0);
-			if *count >= MAX_STREAMS_PER_CALLER {
-				return None;
-			}
-			*count += 1;
-		}
-		Some(Self { streams, owner })
-	}
-}
-
-impl Drop for StreamSlot {
-	fn drop(&mut self) {
-		let mut open = self.streams.lock().unwrap_or_else(|p| p.into_inner());
-		if let Some(count) = open.get_mut(&self.owner) {
-			*count = count.saturating_sub(1);
-			if *count == 0 {
-				open.remove(&self.owner);
-			}
-		}
-	}
-}
-
 /// The data types with a state, and the kind that encodes each one's state.
-const TYPES: [(&str, Kind); 3] = [
+pub(super) const TYPES: [(&str, Kind); 3] = [
 	("Email", Kind::Email),
 	("Mailbox", Kind::Mailbox),
 	("Thread", Kind::Thread),
@@ -110,12 +77,17 @@ pub async fn event_source(
 	let Some(owner) = super::push_subscription::owner_of(&state, &principal) else {
 		return super::jmap_error(StatusCode::FORBIDDEN, "forbidden", "no caller identity");
 	};
-	let Some(slot) = StreamSlot::take(&state, owner) else {
-		return super::jmap_error(
+	let Some(slot) =
+		CallerSlot::take_for(&state, &owner, Work::EventSource, MAX_STREAMS_PER_CALLER)
+	else {
+		// The limit problem must name the limit it applied (RFC 8620
+		// §3.6.1). This one is the server's own, not a Session capability.
+		let problem = super::limits::problem(
+			"maxConcurrentEventSources",
 			StatusCode::TOO_MANY_REQUESTS,
-			"limit",
 			"too many open event-source streams for this credential",
 		);
+		return (StatusCode::TOO_MANY_REQUESTS, axum::Json(problem)).into_response();
 	};
 	let known = positions(&state, &principal);
 	let opened = tokio::time::Instant::now();
@@ -180,7 +152,7 @@ impl Options {
 
 /// The journal position (epoch, position) of every account `principal`
 /// reaches. An account whose journal cannot be read is left out until it can.
-fn positions(state: &ApiState, principal: &Principal) -> HashMap<String, (u64, u64)> {
+pub(super) fn positions(state: &ApiState, principal: &Principal) -> HashMap<String, (u64, u64)> {
 	principal
 		.admissible_accounts(&state.accounts())
 		.into_iter()
@@ -190,6 +162,42 @@ fn positions(state: &ApiState, principal: &Principal) -> HashMap<String, (u64, u
 			Some((account.name.clone(), (position.epoch, position.current)))
 		})
 		.collect()
+}
+
+/// The `changed` map of a `StateChange` (RFC 8620 §7.1): for every account
+/// whose journal position moved from `before` to `now`, the state of each of
+/// `types` at `now`, the same string its `/get` returns and its `/changes`
+/// accepts. Accounts not in `before` are left out; so is everything when
+/// `types` is empty.
+pub(super) fn changed_states(
+	before: &HashMap<String, (u64, u64)>,
+	now: &HashMap<String, (u64, u64)>,
+	types: &[(&str, Kind)],
+) -> Map<String, Value> {
+	let mut changed = Map::new();
+	for (account, &(epoch, position)) in now {
+		if before
+			.get(account)
+			.is_none_or(|known| *known == (epoch, position))
+		{
+			continue;
+		}
+		let states: Map<String, Value> = types
+			.iter()
+			.map(|&(name, kind)| {
+				let state = super::state::State {
+					kind,
+					epoch,
+					position,
+				};
+				(name.to_string(), json!(state.encode()))
+			})
+			.collect();
+		if !states.is_empty() {
+			changed.insert(account.clone(), Value::Object(states));
+		}
+	}
+	changed
 }
 
 /// The event stream: on every [`POLL`] tick, re-check the credential, then
@@ -206,7 +214,7 @@ struct Events {
 	quiet_since: tokio::time::Instant,
 	done: bool,
 	/// Released when the stream is dropped.
-	_slot: StreamSlot,
+	_slot: CallerSlot,
 }
 
 impl Events {
@@ -223,30 +231,7 @@ impl Events {
 	/// that appeared since are taken as they are; ones gone are dropped.
 	fn state_change(&mut self) -> Option<Value> {
 		let now = positions(&self.state, &self.principal);
-		let mut changed = Map::new();
-		for (account, &(epoch, position)) in &now {
-			if self.known.get(account) == Some(&(epoch, position))
-				|| !self.known.contains_key(account)
-			{
-				continue;
-			}
-			let states: Map<String, Value> = self
-				.options
-				.types
-				.iter()
-				.map(|&(name, kind)| {
-					let state = super::state::State {
-						kind,
-						epoch,
-						position,
-					};
-					(name.to_string(), json!(state.encode()))
-				})
-				.collect();
-			if !states.is_empty() {
-				changed.insert(account.clone(), Value::Object(states));
-			}
-		}
+		let changed = changed_states(&self.known, &now, &self.options.types);
 		self.known = now;
 		(!changed.is_empty()).then(|| json!({ "@type": "StateChange", "changed": changed }))
 	}

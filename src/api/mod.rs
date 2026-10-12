@@ -60,12 +60,12 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
 		)
-		// Allow the upload route a body limit matching maxSizeUpload (plus a
-		// small margin so the handler returns the spec's limit error rather
-		// than a bare transport 413); other routes keep the default cap.
+		// The upload route's body limit is maxSizeUpload; the handler answers
+		// a larger body with the spec's limit error. Other routes keep the
+		// default cap.
 		.route(
 			"/jmap/upload/{account_id}",
-			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE + 1_048_576)),
+			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE)),
 		)
 		// Runs after the bearer check below (layers wrap outward), so the
 		// matched credentials are already in the request.
@@ -219,6 +219,22 @@ mod jmap_tests_changes_c;
 #[cfg(test)]
 #[path = "jmap_tests_limits.rs"]
 mod jmap_tests_limits;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits_objects.rs"]
+mod jmap_tests_limits_objects;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits_concurrency.rs"]
+mod jmap_tests_limits_concurrency;
+
+#[cfg(test)]
+#[path = "auth_once_tests.rs"]
+mod auth_once_tests;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits_backref.rs"]
+mod jmap_tests_limits_backref;
 
 #[cfg(test)]
 #[path = "tenancy_tests.rs"]

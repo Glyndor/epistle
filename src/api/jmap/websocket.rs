@@ -29,6 +29,8 @@
 //! A client that wants changes made by other connections or protocols uses
 //! the event source ([`super::event_source`]).
 
+use std::collections::HashMap;
+
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Extension, State};
 use axum::response::IntoResponse;
@@ -36,6 +38,8 @@ use serde_json::{Value, json};
 
 use super::Principal;
 use super::Request;
+use super::caller_slots::{CallerSlot, Work};
+use super::event_source::{TYPES, changed_states, positions};
 use crate::api::state::{ApiState, MatchedAuth};
 
 /// `GET /jmap/ws` (RFC 8887 §3): upgrade to a WebSocket. Auth is already enforced
@@ -140,11 +144,6 @@ pub struct PushState {
 	data_types: Option<Vec<String>>,
 }
 
-/// The JMAP data types whose state a successful `/set` may change, reported in a
-/// `StateChange` (RFC 8620 §5.3). We do not track a per-type change log, so a
-/// change to any of them is signalled together from one account-state token.
-const STATEFUL_TYPES: [&str; 2] = ["Email", "Mailbox"];
-
 /// Handle one decoded WebSocket frame, returning the frames to send back (zero,
 /// one, or — for a state-changing `Request` with push enabled — a `Response`
 /// followed by a `StateChange`). Pure with respect to the socket so it can be
@@ -159,6 +158,16 @@ pub fn handle_ws_message(
 		return vec![request_error("notJSON", "frame is not valid JSON").to_string()];
 	};
 	match value.get("@type").and_then(Value::as_str) {
+		// A Request frame is held to `maxSizeRequest` like a `POST /jmap/api`
+		// body, and refused before anything in it runs.
+		Some("Request") if text.len() > super::MAX_SIZE_REQUEST => {
+			let mut error = super::limits::request_too_large();
+			error["@type"] = json!("RequestError");
+			if let Some(id) = value.get("id").and_then(Value::as_str) {
+				error["requestId"] = json!(id);
+			}
+			vec![error.to_string()]
+		}
 		Some("Request") => handle_request(state, principal, &value, push),
 		Some("WebSocketPushEnable") => {
 			push.enabled = true;
@@ -202,16 +211,30 @@ fn handle_request(
 	};
 	let request_id = value.get("id").and_then(Value::as_str).map(str::to_string);
 
-	// Sample account state before and after dispatch so a successful /set that
-	// actually changed stored mail can be reported (RFC 8887 §5.2). The list
-	// is filtered through the principal so a domain-scoped connection does
-	// not learn the existence of foreign tenants' state tokens.
-	let accounts: Vec<String> = principal
-		.admissible_accounts(&state.accounts())
-		.into_iter()
-		.map(|a| a.name.clone())
-		.collect();
-	let before: Vec<String> = accounts.iter().map(|a| state.account_state(a)).collect();
+	// Sample each account's change-journal position before and after
+	// dispatch so a request that changed it can be reported (RFC 8887 §5.2).
+	// Only the accounts the principal reaches are sampled, so a
+	// domain-scoped connection does not learn the existence of foreign
+	// tenants' states.
+	let before = positions(state, principal);
+	// A Request frame is an API request of the socket's credential and
+	// counts against `maxConcurrentRequests` while it runs.
+	let Some(_slot) = CallerSlot::take(
+		state,
+		principal,
+		Work::Request,
+		super::limits::MAX_CONCURRENT_REQUESTS,
+	) else {
+		let mut error = super::limits::too_many_concurrent(
+			"maxConcurrentRequests",
+			super::limits::MAX_CONCURRENT_REQUESTS,
+		);
+		error["@type"] = json!("RequestError");
+		if let Some(id) = &request_id {
+			error["requestId"] = json!(id);
+		}
+		return vec![error.to_string()];
+	};
 	let response = match super::dispatch_request(state, principal, request) {
 		Ok(response) => response,
 		Err(mut problem) => {
@@ -232,48 +255,34 @@ fn handle_request(
 	let mut frames = vec![Value::Object(response_frame).to_string()];
 
 	if push.enabled
-		&& let Some(state_change) = build_state_change(state, &accounts, &before, push)
+		&& let Some(state_change) = build_state_change(state, principal, &before, push)
 	{
 		frames.push(state_change.to_string());
 	}
 	frames
 }
 
-/// Build a `StateChange` for the accounts whose state token moved, restricted to
-/// the push subscription's data types (RFC 8887 §5.2 / RFC 8620 §5.3). Returns
-/// `None` when nothing changed.
+/// Build a `StateChange` for the accounts whose change journal moved since
+/// `before`, restricted to the push subscription's data types (RFC 8887 §5.2,
+/// RFC 8620 §7.1). Each state is the one that type's `/get` returns and its
+/// `/changes` accepts, so the client catches up from exactly what it was told.
+/// Returns `None` when nothing changed.
 fn build_state_change(
 	state: &ApiState,
-	accounts: &[String],
-	before: &[String],
+	principal: &Principal,
+	before: &HashMap<String, (u64, u64)>,
 	push: &PushState,
 ) -> Option<Value> {
-	let types: Vec<&str> = STATEFUL_TYPES
+	let types: Vec<_> = TYPES
 		.into_iter()
-		.filter(|t| {
+		.filter(|(name, _)| {
 			push.data_types
 				.as_ref()
-				.is_none_or(|wanted| wanted.iter().any(|w| w == t))
+				.is_none_or(|wanted| wanted.iter().any(|w| w == name))
 		})
 		.collect();
-	if types.is_empty() {
-		return None;
-	}
-	let mut changed = serde_json::Map::new();
-	for (account, prior) in accounts.iter().zip(before) {
-		let now = state.account_state(account);
-		if &now != prior {
-			let states: serde_json::Map<String, Value> = types
-				.iter()
-				.map(|t| ((*t).to_string(), json!(now)))
-				.collect();
-			changed.insert(account.clone(), Value::Object(states));
-		}
-	}
-	if changed.is_empty() {
-		return None;
-	}
-	Some(json!({ "@type": "StateChange", "changed": changed }))
+	let changed = changed_states(before, &positions(state, principal), &types);
+	(!changed.is_empty()).then(|| json!({ "@type": "StateChange", "changed": changed }))
 }
 
 /// A RFC 8887 §4.2 `RequestError`: a problem-details object carried in a frame
@@ -290,3 +299,7 @@ fn request_error(kind: &str, detail: &str) -> Value {
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "websocket_tests_state.rs"]
+mod tests_state;
