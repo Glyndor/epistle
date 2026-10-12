@@ -24,6 +24,14 @@ pub(super) fn run(
 			if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(&config) {
 				super::style::warn_to(err, warning);
 			}
+			// Capitals in an address or a domain are accepted (epistle uses
+			// the lowercase form), but named so the file can be fixed.
+			for entry in &config.mixed_case {
+				super::style::warn_to(
+					err,
+					format_args!("{entry} is not lowercase in the configuration file"),
+				);
+			}
 			let _ = writeln!(out, "configuration is valid");
 			ExitCode::SUCCESS
 		}
@@ -37,3 +45,7 @@ pub(super) fn run(
 #[cfg(test)]
 #[path = "config_check_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_check_tests_case.rs"]
+mod tests_case;
