@@ -59,7 +59,10 @@ a connection URL.
 | `inbound_rate_limit_per_sender_per_min` | int | unset | Max messages a single envelope sender may start per minute across all clients (lowercased reverse path). Excludes the null sender used by bounces. A send over the cap is deferred with `450 4.7.1 too many messages from this sender; retry later`. Absent disables the per-sender limit. |
 | `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` disables the feature; requests above the cap return `429`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
-| `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
+| `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at `queue_delay_warning_secs`. |
+| `queue_retry_base_secs` | int | 60 | Wait after a recipient's first failed attempt; each later wait doubles up to `queue_retry_cap_secs`. Every wait is spread by a random ±20% so mail deferred together does not all retry in the same second. At least 60. |
+| `queue_retry_cap_secs` | int | 3600 | Longest wait between attempts for one recipient. Not below `queue_retry_base_secs`. |
+| `queue_delay_warning_secs` | int | 4 hours | Message age at which the one "delivery delayed" DSN is sent for the recipients still pending. Below `queue_give_up_secs`. |
 | `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
 | `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |

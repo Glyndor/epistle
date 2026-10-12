@@ -17,26 +17,10 @@ mod conversation;
 #[path = "worker_reports.rs"]
 mod reports;
 
-/// Base retry delay; attempt n waits `base * 2^n`, capped at one hour.
-const BACKOFF_BASE_SECS: u64 = 60;
-const BACKOFF_CAP_SECS: u64 = 3600;
-
 /// Default give-up window: a message older than this is bounced (RFC 5321
 /// §4.5.4.1 guidance of 4–5 days). The bound is by message age, not attempt
 /// count, so a recipient down for hours does not lose mail. Operator-tunable.
 const DEFAULT_MAX_AGE_SECS: u64 = 5 * 86_400;
-
-/// Send a "delivery delayed" warning DSN once the message has been queued this
-/// long without success (~4 hours), so the sender knows it is still trying.
-const DELAY_WARNING_SECS: u64 = 4 * 3600;
-
-/// When attempt number `attempts` may run, given the current time.
-fn backoff_until(now_epoch: u64, attempts: u32) -> u64 {
-	let delay = BACKOFF_BASE_SECS
-		.saturating_mul(1u64 << attempts.min(16))
-		.min(BACKOFF_CAP_SECS);
-	now_epoch.saturating_add(delay)
-}
 
 /// Outbound queue worker.
 pub struct Worker {
@@ -71,6 +55,11 @@ pub struct Worker {
 	/// Data directory whose TLS-RPT journal records each direct delivery's TLS
 	/// outcome. `None` records nothing (sending reports is turned off).
 	tlsrpt_dir: Option<std::path::PathBuf>,
+	/// When pending recipients are retried and the delay warning is sent.
+	schedule: super::RetrySchedule,
+	/// Draws the spread factor of each wait; replaced in tests so the
+	/// schedule is deterministic.
+	jitter: fn() -> f64,
 }
 
 impl Worker {
@@ -91,7 +80,21 @@ impl Worker {
 			dane_dns: None,
 			outbound_tls: crate::config::OutboundTls::default(),
 			tlsrpt_dir: None,
+			schedule: super::RetrySchedule::default(),
+			jitter: super::schedule::random_factor,
 		}
+	}
+
+	/// Retry pending recipients and warn about delays on this schedule
+	/// instead of the default one.
+	pub fn with_retry_schedule(mut self, schedule: super::RetrySchedule) -> Self {
+		self.schedule = schedule;
+		self
+	}
+
+	/// When a recipient that has failed `attempts` times is next due.
+	fn retry_at(&self, now: u64, attempts: u32) -> u64 {
+		now.saturating_add(self.schedule.wait(attempts, (self.jitter)()))
 	}
 
 	/// Record the TLS outcome of every direct MX delivery attempt in the
@@ -178,6 +181,11 @@ impl Worker {
 	) -> Self {
 		self.mta_sts = Some((store, dns));
 		self
+	}
+
+	#[cfg(test)]
+	fn set_jitter(&mut self, jitter: fn() -> f64) {
+		self.jitter = jitter;
 	}
 
 	#[cfg(test)]
@@ -316,7 +324,7 @@ impl Worker {
 					Ok(()) => state.status = RecipientStatus::Delivered,
 					Err(DeliveryError::Transient(reason)) => {
 						state.attempts += 1;
-						state.next_attempt = backoff_until(now, state.attempts);
+						state.next_attempt = self.retry_at(now, state.attempts);
 						state.last_error = Some(reason.clone());
 						envelope.last_error = Some(reason.chars().take(512).collect());
 					}
@@ -354,7 +362,7 @@ impl Worker {
 		if envelope.pending().is_empty() {
 			return self.spool.remove(id);
 		}
-		if age >= DELAY_WARNING_SECS {
+		if age >= self.schedule.delay_warning {
 			self.warn_delayed(id);
 		}
 		tracing::debug!(%id, age, "delivery deferred");
@@ -386,3 +394,7 @@ mod tests_reports;
 #[cfg(test)]
 #[path = "worker_tests_webhook.rs"]
 mod tests_webhook;
+
+#[cfg(test)]
+#[path = "worker_tests_schedule.rs"]
+mod tests_schedule;

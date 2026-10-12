@@ -210,3 +210,7 @@ mod tests_cli;
 #[cfg(test)]
 #[path = "limits_tests_domains.rs"]
 mod tests_domains;
+
+#[cfg(test)]
+#[path = "limits_tests_schedule.rs"]
+mod tests_schedule;

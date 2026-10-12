@@ -234,6 +234,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	.with_dane(Arc::clone(&spf_dns))
 	.with_metrics(metrics.clone())
 	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
+	.with_retry_schedule(crate::queue::RetrySchedule::from_config(
+		config.queue_retry_base_secs,
+		config.queue_retry_cap_secs,
+		config.queue_delay_warning_secs,
+	))
 	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
 	.with_transports(config.transport.clone())
 	.with_outbound_tls(config.queue.outbound_tls);

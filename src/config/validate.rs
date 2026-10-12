@@ -28,6 +28,7 @@ impl Config {
 		self.validate_listeners()?;
 		self.validate_acme()?;
 		self.validate_webhook()?;
+		self.validate_retry_schedule()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
 		self.validate_oauth()?;

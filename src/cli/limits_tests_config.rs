@@ -123,7 +123,7 @@ fn limits_show_marks_effective_defaults_and_configured_values() {
 	show(&config, &mut out).unwrap();
 	assert_eq!(
 		String::from_utf8(out).unwrap(),
-		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\n",
+		"quota\t5368709120 bytes\tdefault\nsubmission-rate\tdisabled\tdefault\nnew-recipients-per-day\tdisabled\tdefault\nqueue-give-up\t432000 seconds\tdefault\nqueue-retry-base\t60 seconds\tdefault\nqueue-retry-cap\t3600 seconds\tdefault\nqueue-delay-warning\t14400 seconds\tdefault\ninbound-rate-per-ip\tdisabled\tdefault\ninbound-rate-per-sender\tdisabled\tdefault\nmax-connections-per-listener\tprotocol defaults\tdefault\nmasked-addresses-max\t100\tdefault\nfirst-time-sender-delay\t0 seconds\tdefault\ngreylist-delay\t0 seconds\tdefault\n",
 		"limits show must print each effective value and mark built-in defaults"
 	);
 	change_config(file.path(), Key::SubmissionRate, Some("120")).unwrap();

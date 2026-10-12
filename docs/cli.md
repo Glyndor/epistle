@@ -265,6 +265,7 @@ epistle limits show
 epistle limits set quota 5G
 epistle limits set submission-rate 120
 epistle limits set queue-give-up 12h
+epistle limits set queue-retry-base 5m
 epistle limits set quota --domain example.org 10G
 epistle limits set submission-rate --domain example.org 50
 epistle limits unset quota --domain example.org
@@ -283,6 +284,9 @@ Values equal to a built-in default are marked `default`, even when configured.
 | `submission-rate` | Messages per minute per account, default disabled. |
 | `new-recipients-per-day` | New recipients per account in a rolling 24 hours, default disabled. |
 | `queue-give-up` | Queue age before bouncing, default 5 days. |
+| `queue-retry-base` | Wait after a recipient's first failed attempt, doubling after each failure, default 1 minute, at least 1 minute. |
+| `queue-retry-cap` | Longest wait between attempts, default 1 hour, not below `queue-retry-base`. |
+| `queue-delay-warning` | Message age of the "delivery delayed" DSN, default 4 hours, below `queue-give-up`. |
 | `inbound-rate-per-ip` | Inbound messages per minute per client IP, default disabled. |
 | `inbound-rate-per-sender` | Inbound messages per minute per envelope sender, default disabled. |
 | `max-connections-per-listener` | Concurrent connections, default depends on the protocol. |
@@ -1028,9 +1032,14 @@ listener serves the Apple profile at `/mobileconfig?email=<address>`.
 The queue retries transient failures with exponential backoff (1m, 2m, 4m, …
 capped at 1h). It gives up by **message age** — `queue_give_up_secs` (default 5
 days) — not by attempt count, so a recipient whose server is down for hours does
-not lose mail. A single "delivery delayed" warning DSN is sent at ~4h. Each
+not lose mail. A single "delivery delayed" warning DSN is sent at ~4h
+(`queue-delay-warning`). Each
 recipient has its own outcome and retry schedule: one refused or slow recipient
 does not hold back or duplicate the others.
+
+The first wait and the cap are set with `queue-retry-base` and
+`queue-retry-cap`. Each wait is spread by a random ±20%, so mail for a
+destination that comes back does not all retry in the same second.
 
 The remote reply is read by its enhanced status code (RFC 3463), or by its
 basic code when it has none:
