@@ -72,12 +72,76 @@ fn forbidden(call_id: &str) -> Value {
 	json!(["error", { "type": "forbidden" }, call_id])
 }
 
+/// Every property a PushSubscription has (RFC 8620 §7.2).
+const PROPERTIES: [&str; 7] = [
+	"id",
+	"deviceClientId",
+	"url",
+	"keys",
+	"verificationCode",
+	"expires",
+	"types",
+];
+
+/// The properties `get` never returns: where and how a push reaches one
+/// device is private to that device (RFC 8620 §7.2.1).
+const PRIVATE: [&str; 2] = ["url", "keys"];
+
+/// The properties a `get` returns, from its `properties` argument: null or
+/// omitted is every property but [`PRIVATE`], and `id` is always returned
+/// (RFC 8620 §5.1). Asking for a private one is `forbidden`, an unknown one
+/// `invalidArguments`.
+fn wanted_properties(args: &Value, call_id: &str) -> Result<Vec<&'static str>, Value> {
+	let names = match args.get("properties") {
+		None | Some(Value::Null) => {
+			return Ok(PROPERTIES
+				.into_iter()
+				.filter(|p| !PRIVATE.contains(p))
+				.collect());
+		}
+		Some(Value::Array(names)) => names,
+		Some(_) => return Err(json!(["error", { "type": "invalidArguments" }, call_id])),
+	};
+	let mut wanted = vec!["id"];
+	for name in names {
+		let Some(property) = PROPERTIES.into_iter().find(|p| Some(*p) == name.as_str()) else {
+			return Err(json!(["error", { "type": "invalidArguments" }, call_id]));
+		};
+		if PRIVATE.contains(&property) {
+			return Err(forbidden(call_id));
+		}
+		if !wanted.contains(&property) {
+			wanted.push(property);
+		}
+	}
+	Ok(wanted)
+}
+
+/// `stored` reduced to `properties`, an unset one reported as null.
+fn project(stored: &Value, properties: &[&str]) -> Value {
+	let object: serde_json::Map<String, Value> = properties
+		.iter()
+		.map(|p| {
+			(
+				p.to_string(),
+				stored.get(*p).cloned().unwrap_or(Value::Null),
+			)
+		})
+		.collect();
+	Value::Object(object)
+}
+
 /// `PushSubscription/get` (RFC 8620 §7.2.1): the caller's own subscriptions,
 /// optionally narrowed by `ids`. An id the caller does not own is reported in
-/// `notFound`, the same as one that does not exist.
+/// `notFound`, the same as one that does not exist. `url` and `keys` are never
+/// returned, and the response carries no `state`.
 pub(crate) fn get(state: &ApiState, principal: &Principal, args: &Value, call_id: &str) -> Value {
 	let Some(owner) = owner_of(state, principal) else {
 		return forbidden(call_id);
+	};
+	let properties = match wanted_properties(args, call_id) {
+		Ok(properties) => properties,
+		Err(error) => return error,
 	};
 	let own: Vec<StoredSubscription> = state.with_push_subscriptions(|store| {
 		store
@@ -88,7 +152,10 @@ pub(crate) fn get(state: &ApiState, principal: &Principal, args: &Value, call_id
 	});
 	let mut not_found = Vec::new();
 	let list: Vec<Value> = match args.get("ids").and_then(Value::as_array) {
-		None => own.into_iter().map(|sub| sub.object).collect(),
+		None => own
+			.iter()
+			.map(|sub| project(&sub.object, &properties))
+			.collect(),
 		Some(ids) => ids
 			.iter()
 			.filter_map(Value::as_str)
@@ -97,11 +164,11 @@ pub(crate) fn get(state: &ApiState, principal: &Principal, args: &Value, call_id
 				if found.is_none() {
 					not_found.push(json!(id));
 				}
-				found.map(|sub| sub.object.clone())
+				found.map(|sub| project(&sub.object, &properties))
 			})
 			.collect(),
 	};
-	json!(["PushSubscription/get", { "state": "0", "list": list, "notFound": not_found }, call_id])
+	json!(["PushSubscription/get", { "list": list, "notFound": not_found }, call_id])
 }
 
 /// `PushSubscription/set` (RFC 8620 §7.2.2): create subscriptions under the

@@ -245,3 +245,7 @@ mod jmap_tests_disabled;
 #[cfg(test)]
 #[path = "jmap_tests_read_scope.rs"]
 mod jmap_tests_read_scope;
+
+#[cfg(test)]
+#[path = "jmap_tests_push_get.rs"]
+mod jmap_tests_push_get;
