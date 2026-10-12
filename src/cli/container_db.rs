@@ -32,11 +32,10 @@ pub(super) fn exec_spec(
 	config: &Config,
 	args: &[OsString],
 ) -> Result<Option<ProcessCommand>, String> {
-	let compose = super::init::compose_file_path(&config.data_dir);
 	let Some(database) = &config.database else {
 		return Ok(None);
 	};
-	if !compose.is_file() {
+	if !super::init::compose_file_path(&config.data_dir).is_file() {
 		return Ok(None);
 	}
 	let options = sqlx::postgres::PgConnectOptions::from_str(&database.url)
@@ -44,7 +43,32 @@ pub(super) fn exec_spec(
 	let Some(socket) = options.get_socket() else {
 		return Ok(None);
 	};
-	if socket.exists() {
+	stack_exec_for_socket(config, socket, args)
+}
+
+/// `podup exec` of the mail container's epistle with `args`, when clamd's
+/// socket (`[antispam] clamd_socket`) only exists inside the stack; `None`
+/// when it is reachable from here or clamd is not configured.
+pub(super) fn clamd_exec_spec(
+	config: &Config,
+	args: &[OsString],
+) -> Result<Option<ProcessCommand>, String> {
+	match &config.antispam.clamd_socket {
+		Some(socket) => stack_exec_for_socket(config, socket, args),
+		None => Ok(None),
+	}
+}
+
+/// The stack-side command for a Unix socket that does not exist on this
+/// host but is mounted in the mail container; `None` when there is no
+/// stack or the socket is reachable here.
+fn stack_exec_for_socket(
+	config: &Config,
+	socket: &Path,
+	args: &[OsString],
+) -> Result<Option<ProcessCommand>, String> {
+	let compose = super::init::compose_file_path(&config.data_dir);
+	if !compose.is_file() || socket.exists() {
 		return Ok(None);
 	}
 
