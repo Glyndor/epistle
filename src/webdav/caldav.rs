@@ -110,10 +110,12 @@ pub fn is_caldav_report(body: &str) -> bool {
 ///
 /// `calendar-multiget` returns each `<D:href>` named in `body`, resolved through
 /// `root` (a traversal or cross-account href is silently dropped).
-/// `calendar-query` ignores the filter and returns every `.ics` in `target`.
-/// `free-busy-query` scans `target`, expands recurrences over the requested
-/// range, and returns a `text/calendar` `VFREEBUSY`. A body naming no report is
-/// `400`.
+/// `calendar-query` honours the filter in `body` (`comp-filter` for
+/// `VEVENT`/`VTODO`, `time-range`, and `prop-filter` with `text-match`); an
+/// unsupported filter element is `403` with the `CALDAV:supported-filter`
+/// precondition rather than being silently ignored. `free-busy-query` scans
+/// `target`, expands recurrences over the requested range, and returns a
+/// `text/calendar` `VFREEBUSY`. A body naming no report is `400`.
 pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 	let text = String::from_utf8_lossy(body);
 	let Some(kind) = report_kind(&text) else {
@@ -133,8 +135,12 @@ pub async fn report(root: &Path, target: &Path, body: &[u8]) -> Response {
 			multistatus(&entries).into_response()
 		}
 		ReportKind::Query => {
+			let filter = match super::caldav_filter::parse(&text) {
+				Ok(filter) => filter,
+				Err(_) => return super::caldav_filter::unsupported_filter_response(),
+			};
 			let mut entries = Vec::new();
-			collect_events(root, target, &mut entries).await;
+			collect_events_filtered(root, target, &filter, &mut entries).await;
 			multistatus(&entries).into_response()
 		}
 		ReportKind::FreeBusy => free_busy_report(target, &text).await,
@@ -477,10 +483,17 @@ async fn push_event(entries: &mut Vec<Event>, href: &str, disk: &Path) {
 }
 
 /// Append every `.ics` directly inside the `collection` directory to
-/// `entries`. Children that are themselves symlinks are skipped, they may
-/// have been planted in the user's tree, and following them would read
+/// `entries`, applying the `filter` (RFC 4791 §9.7) to each file: a
+/// resource whose `.ics` body does not match the filter is skipped.
+/// Children that are themselves symlinks are skipped, they may have
+/// been planted in the user's tree, and following them would read
 /// events that belong to no account.
-async fn collect_events(root: &Path, collection: &Path, entries: &mut Vec<Event>) {
+async fn collect_events_filtered(
+	root: &Path,
+	collection: &Path,
+	filter: &super::caldav_filter::CalendarQueryFilter,
+	entries: &mut Vec<Event>,
+) {
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
 	};
@@ -507,16 +520,23 @@ async fn collect_events(root: &Path, collection: &Path, entries: &mut Vec<Event>
 		if !metadata.is_file() {
 			continue;
 		}
-		if let Ok(data) = tokio::fs::read(child.path()).await {
-			entries.push(Event {
-				href: match super::href::resource(root, &child.path()) {
-					Some(href) => href,
-					None => continue,
-				},
-				data,
-				etag: super::carddav::etag(&metadata),
-			});
+		let Ok(data) = tokio::fs::read(child.path()).await else {
+			continue;
+		};
+		// Apply the filter. An empty filter (no `comp-filter`
+		// children) is a no-op, so the call is cheap.
+		let text = String::from_utf8_lossy(&data);
+		if !super::caldav_filter::matches(filter, &text) {
+			continue;
 		}
+		entries.push(Event {
+			href: match super::href::resource(root, &child.path()) {
+				Some(href) => href,
+				None => continue,
+			},
+			data,
+			etag: super::carddav::etag(&metadata),
+		});
 	}
 }
 
@@ -634,6 +654,10 @@ fn multistatus(entries: &[Event]) -> Response {
 #[cfg(test)]
 #[path = "caldav_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "caldav_filter_integration_tests.rs"]
+mod filter_integration_tests;
 
 #[cfg(test)]
 #[path = "caldav_scan_tests.rs"]
