@@ -18,7 +18,7 @@ async fn an_attachment_of_the_advertised_size_is_accepted() {
 	let size = usize::try_from(advertised).expect("fits");
 	assert_eq!(
 		size,
-		crate::api::jmap::MAX_SIZE_ATTACHMENTS_PER_EMAIL,
+		crate::api::jmap::limits::MAX_SIZE_ATTACHMENTS_PER_EMAIL,
 		"the Session reports the limit the server enforces"
 	);
 	assert!(

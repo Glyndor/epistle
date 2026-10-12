@@ -36,10 +36,10 @@ pub use download::download;
 mod email_submission;
 mod uploads;
 pub use uploads::Uploads;
-mod limits;
+pub(crate) mod limits;
 pub use limits::{
 	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
-	MAX_OBJECTS_IN_SET, MAX_SIZE_ATTACHMENTS_PER_EMAIL, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
 };
 mod methods;
 mod objects;
