@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::storage::locked::{EditError, edit};
+
 use super::StoreError;
 
 /// A single masked email address entry as persisted in `masked.json`.
@@ -138,77 +140,110 @@ impl MaskedAddressStore {
 	/// or when no `domain` is available. The random suffix comes from the
 	/// CSPRNG — never the clock, never the request — so addresses are not
 	/// guessable.
-	pub fn add(
-		&mut self,
-		account: &str,
-		label: &str,
-		domain: &str,
-		now: u64,
-	) -> Result<MaskedAddress, StoreError> {
-		let account = account.to_ascii_lowercase();
-		if account.is_empty() {
-			return Err(StoreError::Invalid("account is empty".to_string()));
-		}
-		if domain.is_empty() {
-			return Err(StoreError::Invalid("domain is empty".to_string()));
-		}
-		let slug = slugify_label(label);
-		if slug.is_empty() {
-			return Err(StoreError::Invalid(
-				"label must contain at least one alphanumeric character".to_string(),
-			));
-		}
-		if self.max_per_account > 0 {
-			let current = self
-				.entries
-				.values()
-				.filter(|entry| entry.account == account)
-				.count();
-			if current >= self.max_per_account {
-				return Err(StoreError::LimitReached {
-					max: self.max_per_account,
-				});
-			}
-		}
-		// The CSPRNG generates the suffix; we retry on the (vanishingly
-		// unlikely) collision with an existing address so the caller cannot
-		// tell whether a collision happened — same outcome either way.
-		let mut entry = self.fresh_entry(&account, &slug, label, domain, now)?;
-		if self.entries.contains_key(&entry.address) {
-			entry = self.fresh_entry(&account, &slug, label, domain, now)?;
-			if self.entries.contains_key(&entry.address) {
-				return Err(StoreError::Invalid(
-					"cannot generate a unique masked address".to_string(),
-				));
-			}
-		}
-		self.entries.insert(entry.address.clone(), entry.clone());
-		self.persist()?;
-		Ok(entry)
+///
+/// The whole-file rewrite goes through [`crate::storage::locked::edit`]
+/// so a CLI `masked add` and a server `add` running in parallel both
+/// reach disk: each takes the sibling lock, re-reads the file, mutates
+/// the freshly-loaded state, and writes atomically. The per-account
+/// limit, the duplicate-detection, and the CSPRNG mint all happen
+/// under the lock against the freshly-loaded state.
+pub fn add(
+	&mut self,
+	account: &str,
+	label: &str,
+	domain: &str,
+	now: u64,
+) -> Result<MaskedAddress, StoreError> {
+	if account.is_empty() {
+		return Err(StoreError::Invalid("account is empty".to_string()));
 	}
+	if domain.is_empty() {
+		return Err(StoreError::Invalid("domain is empty".to_string()));
+	}
+	let slug = slugify_label(label);
+	if slug.is_empty() {
+		return Err(StoreError::Invalid(
+			"label must contain at least one alphanumeric character".to_string(),
+		));
+	}
+	let max_per_account = self.max_per_account;
+	let account = account.to_ascii_lowercase();
+	let label = label.trim().to_string();
 
-	/// Build a fresh [`MaskedAddress`] with a new random suffix. The address
-	/// itself is generated from the CSPRNG; callers check uniqueness against
-	/// the in-memory map (and retry via this same function on collision).
-	fn fresh_entry(
-		&self,
-		account: &str,
-		slug: &str,
-		label: &str,
-		domain: &str,
-		now: u64,
-	) -> Result<MaskedAddress, StoreError> {
-		let suffix = random_suffix()?;
-		let address = format!("{slug}.{suffix}@{domain}").to_ascii_lowercase();
-		Ok(MaskedAddress {
-			address,
-			account: account.to_string(),
-			label: label.trim().to_string(),
-			created_at: now,
-			enabled: true,
-			last_used_at: None,
-		})
-	}
+	// Closure captures the path through `Option<MaskedAddress>` because
+	// the CSPRNG retry path may need to mint twice; the helper returns
+	// `Result<(), E>` and the value is surfaced here on success.
+	let mut minted: Option<MaskedAddress> = None;
+	let new_state = edit(
+		&self.path,
+		|text| {
+			serde_json::from_str::<MaskedFile>(text)
+				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+		},
+		|state| {
+			Ok(serde_json::to_string_pretty(state)
+				.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+		},
+		MaskedFile::default,
+		|state: &mut MaskedFile| -> Result<(), StoreError> {
+			if max_per_account > 0 {
+				let current = state
+					.addresses
+					.values()
+					.filter(|entry| entry.account == account)
+					.count();
+				if current >= max_per_account {
+					return Err(StoreError::LimitReached { max: max_per_account });
+				}
+			}
+			let mut entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
+			if state.addresses.contains_key(&entry.address) {
+				entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
+				if state.addresses.contains_key(&entry.address) {
+					return Err(StoreError::Invalid(
+						"cannot generate a unique masked address".to_string(),
+					));
+				}
+			}
+			state
+				.addresses
+				.insert(entry.address.clone(), entry.clone());
+			minted = Some(entry);
+			Ok(())
+		},
+	)
+	.map_err(|error| match error {
+		EditError::Io(io) => StoreError::Io(io),
+		EditError::Mutate(store) => store,
+	})?;
+	self.entries = new_state.addresses;
+	Ok(minted.expect("closure ran and minted an entry"))
+}
+
+	/// Build a fresh [`MaskedAddress`] with a new random suffix. The
+/// address itself is generated from the CSPRNG; callers check
+/// uniqueness against the in-memory map and retry via this same
+/// function on collision. Free function so the [`locked::edit`]
+/// closure can mint under the lock without borrowing the store
+/// immutable for the CSPRNG.
+fn fresh_entry(
+	account: &str,
+	slug: &str,
+	label: &str,
+	domain: &str,
+	now: u64,
+) -> Result<MaskedAddress, StoreError> {
+	let suffix = random_suffix()?;
+	let address = format!("{slug}.{suffix}@{domain}").to_ascii_lowercase();
+	Ok(MaskedAddress {
+		address,
+		account: account.to_string(),
+		label: label.trim().to_string(),
+		created_at: now,
+		enabled: true,
+		last_used_at: None,
+	})
+}
 
 	/// Toggle the `enabled` flag on an address owned by `account`. `NotFound`
 	/// when the address does not exist or belongs to another account (so the
@@ -221,20 +256,42 @@ impl MaskedAddressStore {
 	) -> Result<bool, StoreError> {
 		let account = account.to_ascii_lowercase();
 		let key = address.to_ascii_lowercase();
-		let entry = self
-			.entries
-			.get(&key)
-			.filter(|entry| entry.account == account)
-			.ok_or_else(|| StoreError::NotFound(format!("{account}/{address}")))?;
-		let previous = entry.enabled;
-		if previous == enabled {
-			return Ok(previous);
-		}
-		let mut updated = entry.clone();
-		updated.enabled = enabled;
-		self.entries.insert(key, updated);
-		self.persist()?;
-		Ok(previous)
+		let mut previous: Option<bool> = None;
+		let new_state = edit(
+			&self.path,
+			|text| {
+				serde_json::from_str::<MaskedFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+			},
+			|state| {
+				Ok(serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+			},
+			MaskedFile::default,
+			|state: &mut MaskedFile| -> Result<(), StoreError> {
+				let entry = state
+					.addresses
+					.get(&key)
+					.filter(|entry| entry.account == account)
+					.ok_or_else(|| StoreError::NotFound(format!("{account}/{address}")))?;
+				let was = entry.enabled;
+				if was == enabled {
+					previous = Some(was);
+					return Ok(());
+				}
+				let mut updated = entry.clone();
+				updated.enabled = enabled;
+				state.addresses.insert(key.clone(), updated);
+				previous = Some(was);
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.entries = new_state.addresses;
+		Ok(previous.expect("closure ran"))
 	}
 
 	/// Remove an address owned by `account`. `NotFound` when the address does
@@ -242,14 +299,34 @@ impl MaskedAddressStore {
 	pub fn remove(&mut self, account: &str, address: &str) -> Result<(), StoreError> {
 		let account = account.to_ascii_lowercase();
 		let key = address.to_ascii_lowercase();
-		let entry = self
-			.entries
-			.get(&key)
-			.filter(|entry| entry.account == account)
-			.ok_or_else(|| StoreError::NotFound(format!("{account}/{address}")))?;
-		let entry = entry.clone();
-		self.entries.remove(&entry.address);
-		self.persist()
+		let new_state = edit(
+			&self.path,
+			|text| {
+				serde_json::from_str::<MaskedFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+			},
+			|state| {
+				Ok(serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+			},
+			MaskedFile::default,
+			|state: &mut MaskedFile| -> Result<(), StoreError> {
+				let address_owned_by_account = state
+					.addresses
+					.get(&key)
+					.filter(|entry| entry.account == account)
+					.map(|entry| entry.address.clone())
+					.ok_or_else(|| StoreError::NotFound(format!("{account}/{address}")))?;
+				state.addresses.remove(&address_owned_by_account);
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.entries = new_state.addresses;
+		Ok(())
 	}
 
 	/// Remove every entry owned by `account` (case-insensitive). Returns the
@@ -260,13 +337,33 @@ impl MaskedAddressStore {
 	/// many masks.
 	pub fn remove_all_for_account(&mut self, account: &str) -> Result<u32, StoreError> {
 		let account = account.to_ascii_lowercase();
-		let before = self.entries.len();
-		self.entries.retain(|_, entry| entry.account != account);
-		let removed = (before - self.entries.len()) as u32;
-		if removed > 0 {
-			self.persist()?;
-		}
-		Ok(removed)
+		let mut removed: Option<u32> = None;
+		let new_state = edit(
+			&self.path,
+			|text| {
+				serde_json::from_str::<MaskedFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+			},
+			|state| {
+				Ok(serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+			},
+			MaskedFile::default,
+			|state: &mut MaskedFile| -> Result<(), StoreError> {
+				let before = state.addresses.len();
+				state
+					.addresses
+					.retain(|_, entry| entry.account != account);
+				removed = Some((before - state.addresses.len()) as u32);
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.entries = new_state.addresses;
+		Ok(removed.unwrap_or(0))
 	}
 
 	/// Update `last_used_at` to `now` for an enabled address owned by
@@ -276,27 +373,46 @@ impl MaskedAddressStore {
 	pub fn touch_last_used(&mut self, account: &str, address: &str, now: u64) {
 		let account = account.to_ascii_lowercase();
 		let key = address.to_ascii_lowercase();
-		let Some(entry) = self
-			.entries
-			.get(&key)
-			.filter(|entry| entry.enabled && entry.account == account)
-		else {
-			return;
-		};
-		if entry.last_used_at == Some(now) {
-			return;
-		}
-		let mut updated = entry.clone();
-		updated.last_used_at = Some(now);
-		self.entries.insert(key, updated);
-		if let Err(error) = self.persist() {
-			tracing::warn!(
-				target: "epistle::directory_store::masked",
-				account = %crate::log_id::account(&account),
-				%address,
-				%error,
-				"cannot persist masked-address last_used_at update"
-			);
+		let new_state = edit(
+			&self.path,
+			|text| {
+				serde_json::from_str::<MaskedFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+			},
+			|state| {
+				Ok(serde_json::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?)
+			},
+			MaskedFile::default,
+			|state: &mut MaskedFile| -> Result<(), StoreError> {
+				let Some(entry) = state
+					.addresses
+					.get(&key)
+					.filter(|entry| entry.enabled && entry.account == account)
+				else {
+					return Ok(());
+				};
+				if entry.last_used_at == Some(now) {
+					return Ok(());
+				}
+				let mut updated = entry.clone();
+				updated.last_used_at = Some(now);
+				state.addresses.insert(key.clone(), updated);
+				Ok(())
+			},
+		);
+		match new_state {
+			Ok(state) => self.entries = state.addresses,
+			Err(EditError::Io(error)) | Err(EditError::Mutate(StoreError::Io(error))) => {
+				tracing::warn!(
+					target: "epistle::directory_store::masked",
+					account = %crate::log_id::account(&account),
+					%address,
+					%error,
+					"cannot persist masked-address last_used_at update"
+				);
+			}
+			Err(_) => {}
 		}
 	}
 

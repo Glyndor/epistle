@@ -288,37 +288,73 @@ impl ApiKeyStore {
 
 	/// Add a key. The hash must already be `sha256:<hex>`; a duplicate label is
 	/// rejected, as is a malformed CIDR or an empty/unknown `scopes` vector.
-	pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
-		if let Some(spec) = &key.ip_cidr
-			&& crate::cidr::Cidr::parse(spec).is_none()
-		{
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::InvalidInput,
-				format!("invalid CIDR \"{spec}\""),
-			));
-		}
-		validate_new_scopes(&key.scopes)?;
-		if self.keys.iter().any(|existing| existing.label == key.label) {
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::AlreadyExists,
-				format!("API key \"{}\" already exists", key.label),
-			));
-		}
-		self.keys.push(key);
-		self.persist()
+/// Routes through [`crate::storage::locked::edit`] so a CLI
+	/// `epistle api-key create` and a server-side rotation/update running
+/// in parallel both reach disk without losing the other's row.
+pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
+	if let Some(spec) = &key.ip_cidr
+		&& crate::cidr::Cidr::parse(spec).is_none()
+	{
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			format!("invalid CIDR \"{spec}\""),
+		));
 	}
+	validate_new_scopes(&key.scopes)?;
+	let new_state = crate::storage::locked::edit(
+		&self.path,
+		|text| {
+			toml::from_str::<ApiKeyFile>(text)
+				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+		},
+		|state| {
+			Ok(toml::to_string_pretty(state)
+				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?)
+		},
+		ApiKeyFile::default,
+		|state: &mut ApiKeyFile| -> std::io::Result<()> {
+			if state.keys.iter().any(|existing| existing.label == key.label) {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::AlreadyExists,
+					format!("API key \"{}\" already exists", key.label),
+				));
+			}
+			state.keys.push(key.clone());
+			Ok(())
+		},
+	)?;
+	self.keys = new_state.keys;
+	Ok(())
+}
 
 	/// Remove a key by label. `NotFound` if absent.
 	pub fn remove(&mut self, label: &str) -> std::io::Result<()> {
-		let before = self.keys.len();
-		self.keys.retain(|existing| existing.label != label);
-		if self.keys.len() == before {
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::NotFound,
-				format!("no such API key \"{label}\""),
-			));
-		}
-		self.persist()
+		let label_owned = label.to_string();
+		let new_state = crate::storage::locked::edit(
+			&self.path,
+			|text| {
+				toml::from_str::<ApiKeyFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			|state| {
+				Ok(toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?)
+			},
+			ApiKeyFile::default,
+			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				let before = state.keys.len();
+				state.keys.retain(|existing| existing.label != label_owned);
+				if state.keys.len() == before {
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::NotFound,
+						format!("no such API key \"{label}\""),
+					));
+				}
+				Ok(())
+			},
+		)?;
+		self.keys = new_state.keys;
+		Ok(())
 	}
 
 	/// Replace the secret of `label` with the one hashing to `hash`, keeping
@@ -327,18 +363,35 @@ impl ApiKeyStore {
 	/// so there is no moment with both or neither accepted. `NotFound` if the
 	/// label is absent.
 	pub fn rotate(&mut self, label: &str, hash: String) -> std::io::Result<()> {
-		let key = self
-			.keys
-			.iter_mut()
-			.find(|existing| existing.label == label)
-			.ok_or_else(|| {
-				std::io::Error::new(
-					std::io::ErrorKind::NotFound,
-					format!("no such API key \"{label}\""),
-				)
-			})?;
-		key.hash = hash;
-		self.persist()
+		let label_owned = label.to_string();
+		let new_state = crate::storage::locked::edit(
+			&self.path,
+			|text| {
+				toml::from_str::<ApiKeyFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			|state| {
+				Ok(toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?)
+			},
+			ApiKeyFile::default,
+			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				let key = state
+					.keys
+					.iter_mut()
+					.find(|existing| existing.label == label_owned)
+					.ok_or_else(|| {
+						std::io::Error::new(
+							std::io::ErrorKind::NotFound,
+							format!("no such API key \"{label}\""),
+						)
+					})?;
+				key.hash = hash.clone();
+				Ok(())
+			},
+		)?;
+		self.keys = new_state.keys;
+		Ok(())
 	}
 
 	/// Every key as an [`ApiKeySummary`], sorted by label. Hashes are never

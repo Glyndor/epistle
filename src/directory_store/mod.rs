@@ -51,6 +51,21 @@ mod set_totp;
 pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
+/// Format the on-disk bytes for `accounts.toml`, sealing every cleartext
+/// TOTP secret under at-rest encryption on the way out. Lives at module
+/// scope so the `Fn` signature it satisfies can capture `&AccountStore`
+/// without a separate lifetime parameter on each callsite.
+fn serialize_dynamic_file(
+	store: &AccountStore,
+	state: &DynamicFile,
+) -> std::io::Result<String> {
+	let sealed = store
+		.sealed_for_disk(&state.accounts)
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?;
+	toml::to_string_pretty(&DynamicFile { accounts: sealed })
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+}
+
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
 pub struct DirectoryHandle {
@@ -420,58 +435,56 @@ impl AccountStore {
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
 	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
-		validate_name(&account.name)?;
-		if account.addresses.is_empty() {
-			return Err(StoreError::Invalid("addresses must not be empty".into()));
-		}
-		for raw in &account.addresses {
-			let address = Address::parse(raw)
-				.map_err(|_| StoreError::Invalid(format!("invalid address {raw}")))?;
-			if !self
-				.domains
+		let new_state = self.mutate_store(|state| {
+			validate_name(&account.name)?;
+			if account.addresses.is_empty() {
+				return Err(StoreError::Invalid("addresses must not be empty".into()));
+			}
+			for raw in &account.addresses {
+				let address = Address::parse(raw)
+					.map_err(|_| StoreError::Invalid(format!("invalid address {raw}")))?;
+				if !self
+					.domains
+					.iter()
+					.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
+				{
+					return Err(StoreError::Invalid(format!(
+						"address {raw} is not in a configured domain"
+					)));
+				}
+			}
+			let name_taken = self
+				.static_accounts
 				.iter()
-				.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-			{
-				return Err(StoreError::Invalid(format!(
-					"address {raw} is not in a configured domain"
-				)));
+				.map(|existing| existing.name.as_str())
+				.chain(state.accounts.iter().map(|existing| existing.name.as_str()))
+				.any(|existing| existing == account.name);
+			if name_taken {
+				return Err(StoreError::Duplicate(account.name.clone()));
 			}
-		}
-
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let name_taken = self
-			.static_accounts
-			.iter()
-			.map(|existing| existing.name.as_str())
-			.chain(dynamic.iter().map(|existing| existing.name.as_str()))
-			.any(|existing| existing == account.name);
-		if name_taken {
-			return Err(StoreError::Duplicate(account.name.clone()));
-		}
-		for raw in &account.addresses {
-			if self.address_taken(&dynamic, None, raw) {
-				return Err(StoreError::Duplicate(raw.clone()));
+			for raw in &account.addresses {
+				if self.address_taken(&state.accounts, None, raw) {
+					return Err(StoreError::Duplicate(raw.to_string()));
+				}
 			}
-		}
-
-		dynamic.push(account);
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
+			state.accounts.push(account);
+			Ok(())
+		})?;
+		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
 	/// Remove a dynamic account. Static accounts cannot be removed here.
 	pub fn remove(&self, name: &str) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let before = dynamic.len();
-		dynamic.retain(|account| account.name != name);
-		if dynamic.len() == before {
-			return Err(StoreError::NotFound(name.to_string()));
-		}
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
+		let new_state = self.mutate_store(|state| {
+			let before = state.accounts.len();
+			state.accounts.retain(|account| account.name != name);
+			if state.accounts.len() == before {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
+			Ok(())
+		})?;
+		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
@@ -482,16 +495,17 @@ impl AccountStore {
 		hash: String,
 		scram: Option<crate::smtp::scram::ScramStored>,
 	) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		account.password_hash = hash;
-		account.scram = scram;
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
+		let new_state = self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			target.password_hash = hash;
+			target.scram = scram;
+			Ok(())
+		})?;
+		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
@@ -500,17 +514,19 @@ impl AccountStore {
 	/// authentication rejects it while disabled. Returns the previous state
 	/// so callers can detect a no-op.
 	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		let previous = account.disabled;
-		account.disabled = disabled;
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
-		Ok(previous)
+		let mut previous = None;
+		let new_state = self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			previous = Some(target.disabled);
+			target.disabled = disabled;
+			Ok(())
+		})?;
+		self.refresh_after_write(new_state);
+		Ok(previous.expect("closure ran"))
 	}
 
 	/// Whether a dynamic account is administratively disabled.
@@ -540,65 +556,92 @@ impl AccountStore {
 		self.dynamic.read().expect("store lock").clone()
 	}
 
-	/// Replace a dynamic account in place, preserving its position in the
-	/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
-	/// in SCIM terms) without churning the file. `NotFound` if no
-	/// dynamic account carries `name`; `Duplicate` if the replacement's
-	/// addresses collide with another account (including itself if the
-	/// new list is unchanged — `add` short-circuits the collision check
-	/// on self, but a fresh `add` after `remove` doesn't, so we do the
-	/// same dance here).
+/// Replace a dynamic account in place, preserving its position in the
+/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
+/// in SCIM terms) without churning the file. `NotFound` if no
+/// dynamic account carries `name`; `Duplicate` if the replacement's
+/// addresses collide with another account (including itself if the
+/// new list is unchanged — `add` short-circuits the collision check
+/// on self, but a fresh `add` after `remove` doesn't, so we do the
+/// same dance here).
 	pub fn replace_account(
 		&self,
 		name: &str,
 		replacement: DynamicAccount,
 	) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let slot = dynamic
-			.iter()
-			.position(|existing| existing.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		let mut fresh = replacement;
-		fresh.name = name.to_string();
-		// The collision check on add ignores "self" — we want the same
-		// behaviour here, so seed the address map with the existing row.
-		let mut known_addresses: Vec<String> = self
-			.static_accounts
-			.iter()
-			.flat_map(|existing| existing.addresses.iter())
-			.chain(
-				dynamic
-					.iter()
-					.enumerate()
-					.filter(|(index, _)| *index != slot)
-					.flat_map(|(_, existing)| existing.addresses.iter()),
-			)
-			.map(|address| address.to_ascii_lowercase())
-			.collect();
-		known_addresses.sort();
-		for raw in &fresh.addresses {
-			if known_addresses
-				.binary_search(&raw.to_ascii_lowercase())
-				.is_ok()
-			{
-				return Err(StoreError::Duplicate(raw.clone()));
+		let new_state = self.mutate_store(|state| {
+			let slot = state
+				.accounts
+				.iter()
+				.position(|existing| existing.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			let mut fresh = replacement;
+			fresh.name = name.to_string();
+			let mut known_addresses: Vec<String> = self
+				.static_accounts
+				.iter()
+				.flat_map(|existing| existing.addresses.iter())
+				.chain(
+					state
+						.accounts
+						.iter()
+						.enumerate()
+						.filter(|(index, _)| *index != slot)
+						.flat_map(|(_, existing)| existing.addresses.iter()),
+				)
+				.map(|address| address.to_ascii_lowercase())
+				.collect();
+			known_addresses.sort();
+			for raw in &fresh.addresses {
+				if known_addresses
+					.binary_search(&raw.to_ascii_lowercase())
+					.is_ok()
+				{
+					return Err(StoreError::Duplicate(raw.to_string()));
+				}
 			}
-		}
-		dynamic[slot] = fresh;
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
+			state.accounts[slot] = fresh;
+			Ok(())
+		})?;
+		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
-	fn persist(&self, dynamic: &[DynamicAccount]) -> Result<(), StoreError> {
-		let file = DynamicFile {
-			accounts: self.sealed_for_disk(dynamic)?,
-		};
-		let text = toml::to_string_pretty(&file)
-			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		crate::storage::write_secret(&self.path, text.as_bytes())?;
-		Ok(())
+	/// Run `mutate` under the cross-process lock on `accounts.toml`
+	/// with the latest on-disk state rehydrated into `state`. Returns
+	/// the post-mutation state so the caller can replace its in-memory
+	/// mirror without re-reading the file. The closure's return type
+	/// is the shared `StoreError` so a validation failure under the lock
+	/// surfaces a typed error rather than a string.
+	fn mutate_store<F>(&self, mutate: F) -> Result<DynamicFile, StoreError>
+	where
+		F: FnOnce(&mut DynamicFile) -> Result<(), StoreError>,
+	{
+		use crate::storage::locked::{EditError, edit};
+		edit(
+			&self.path,
+			|text| {
+				toml::from_str::<DynamicFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			|state| serialize_dynamic_file(self, state),
+			DynamicFile::default,
+			mutate,
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})
+	}
+
+	/// Replace the in-memory dynamic-account mirror with the
+	/// post-write state and rebuild the directory handle so the next
+	/// authentication or resolution call sees the change without going
+	/// through the file watcher.
+	fn refresh_after_write(&self, new_state: DynamicFile) {
+		*self.dynamic.write().expect("store lock") = new_state.accounts;
+		self.handle.replace(self.build_directory());
 	}
 
 	fn build_directory(&self) -> Directory {
@@ -701,10 +744,6 @@ impl AccountStore {
 	}
 }
 
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
-
 /// Manual Debug so the `ScramUpgrader` trait object can sit in the
 /// `Directory` struct (which derives Debug) without forcing every
 /// implementor to depend on the store's internals.
@@ -724,3 +763,7 @@ impl std::fmt::Debug for AccountStore {
 #[cfg(test)]
 #[path = "account_mutators_tests.rs"]
 mod account_mutators_tests;
+
+#[cfg(test)]
+#[path = "cross_handle_tests.rs"]
+mod cross_handle_tests;

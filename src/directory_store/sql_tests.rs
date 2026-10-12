@@ -25,8 +25,18 @@ fn static_account(name: &str, address: &str, password: Option<&str>) -> Account 
 
 fn store_with(static_accounts: Vec<Account>) -> AccountStore {
 	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().to_path_buf();
+	// Leak the `TempDir` so the directory stays alive for the rest of
+	// the process. The store's on-disk writes need a live parent
+	// directory (the rename-then-fsync-the-parent contract for secret
+	// writes); without this the directory drops when `store_with`
+	// returns and any mutator that follows errors out. Leaking is
+	// fine here because the storage used by a handful of unit
+	// tests amounts to a few KB per case and is collected when the
+	// test binary exits.
+	std::mem::forget(dir);
 	AccountStore::open(
-		dir.path(),
+		&path,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
 		static_accounts,

@@ -58,6 +58,15 @@ impl<E> From<std::io::Error> for EditError<E> {
 	}
 }
 
+impl<E: std::fmt::Display> From<EditError<E>> for std::io::Error {
+	fn from(error: EditError<E>) -> Self {
+		match error {
+			EditError::Io(io) => io,
+			EditError::Mutate(other) => std::io::Error::new(std::io::ErrorKind::Other, other.to_string()),
+		}
+	}
+}
+
 /// Take the exclusive `flock` on `path`, re-read it from disk, hand the
 /// fresh state to `mutate`, write atomically, and return the post-write
 /// state. `parse` reads the on-disk text; `serialize` produces the
