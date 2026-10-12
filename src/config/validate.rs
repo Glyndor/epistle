@@ -272,9 +272,15 @@ impl Config {
 						crate::util::address_reason::not_handled(address.domain())
 					)));
 				}
-				if !addresses.insert(address.to_string().to_ascii_lowercase()) {
+				let key = crate::util::address::normalize(raw);
+				if !addresses.insert(key.clone()) {
+					let first = self
+						.accounts
+						.iter()
+						.find(|other| other.addresses.contains(&key))
+						.map_or(name.as_str(), |other| other.name.as_str());
 					return Err(ConfigError::Invalid(format!(
-						"address \"{raw}\" is assigned to more than one account"
+						"address \"{key}\" belongs to both account \"{first}\" and account \"{name}\""
 					)));
 				}
 			}

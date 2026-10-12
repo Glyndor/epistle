@@ -76,6 +76,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	.with_domain_quotas(config.domain_quotas.clone())
 	.with_aliases(config.alias.clone())
 	.with_masked_max(config.masked_addresses_max);
+	// Two owners of one address are never merged: the first keeps it and
+	// both are named here (and in `epistle status`) until someone fixes it.
+	for collision in store.address_collisions() {
+		tracing::error!("{collision}");
+	}
 	if let Some(auth) = ldap_auth {
 		store = store.with_ldap_authenticator(auth);
 	}

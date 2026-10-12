@@ -110,6 +110,13 @@ impl MaskedAddressStore {
 			.map(|entry| (entry.address.clone(), entry.account.clone()))
 	}
 
+	/// Every `(address, account)`, enabled or not.
+	pub(crate) fn all(&self) -> impl Iterator<Item = (String, String)> + '_ {
+		self.entries
+			.values()
+			.map(|entry| (entry.address.clone(), entry.account.clone()))
+	}
+
 	/// Look up an entry by lowercased address.
 	pub fn get(&self, address: &str) -> Option<&MaskedAddress> {
 		self.entries.get(&crate::util::address::normalize(address))

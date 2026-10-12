@@ -21,11 +21,51 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		.and_then(|meta| meta.modified())
 		.map(epoch);
 	let restart = restart_item(modified.ok(), started);
-	let summary = match restart.status {
+	let mut summary = match restart.status {
 		Level::Ok => format!("{} loads", ctx.path.display()),
 		_ => format!("{} loads, restart pending", ctx.path.display()),
 	};
-	AreaReport::from_items(vec![restart], summary)
+	let addresses = address_items(config);
+	let shared = addresses
+		.iter()
+		.filter(|item| item.status != Level::Ok)
+		.count();
+	match shared {
+		0 => {}
+		1 => summary.push_str(", 1 address with two owners"),
+		n => summary.push_str(&format!(", {n} addresses with two owners")),
+	}
+	AreaReport::from_items(std::iter::once(restart).chain(addresses).collect(), summary)
+}
+
+/// One warning per address two owners claim, the lines the server logs at
+/// startup (see `AccountStore::address_collisions`), or a single ok item.
+fn address_items(config: &crate::config::Config) -> Vec<Item> {
+	let store = crate::directory_store::AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map(|store| store.with_aliases(config.alias.clone()));
+	let collisions = match store {
+		Ok(store) => store.address_collisions(),
+		Err(error) => {
+			let why = format!("skipped: cannot read the account store: {error}");
+			return vec![Item::new("addresses", Level::Ok, why)];
+		}
+	};
+	if collisions.is_empty() {
+		return vec![Item::new(
+			"addresses",
+			Level::Ok,
+			"every address has one owner",
+		)];
+	}
+	collisions
+		.into_iter()
+		.map(|line| Item::new("addresses", Level::Warn, line))
+		.collect()
 }
 
 /// Decide the "restart pending" finding from the file's modification time and
@@ -52,3 +92,7 @@ fn restart_item(modified: Option<i64>, started: Result<Option<i64>, String>) -> 
 #[cfg(test)]
 #[path = "config_area_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_area_tests_addresses.rs"]
+mod tests_addresses;

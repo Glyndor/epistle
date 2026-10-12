@@ -54,6 +54,7 @@ mod set_totp;
 pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
 
+mod collisions;
 mod mutate_store;
 mod normalize;
 pub use normalize::account_name;

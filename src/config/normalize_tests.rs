@@ -88,3 +88,26 @@ fn a_unicode_domain_is_still_refused() {
 		"{error}"
 	);
 }
+
+#[test]
+fn two_static_accounts_with_one_address_refuse_to_start_naming_both() {
+	let text = r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["example.org"]
+
+[[accounts]]
+name = "first"
+addresses = ["Ärger@example.org", "postmaster@example.org"]
+
+[[accounts]]
+name = "second"
+addresses = ["ärger@example.org"]
+"#;
+	let error = Config::parse_text(text, std::path::Path::new("mail.toml"))
+		.expect_err("one mailbox cannot belong to two accounts");
+	assert_eq!(
+		error.to_string(),
+		"invalid configuration: address \"ärger@example.org\" belongs to both account \"first\" and account \"second\""
+	);
+}
