@@ -1141,6 +1141,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. |
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
+| `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
 
 ### `[[alias]]`
 A multi-target alias: one address that delivers to several local accounts.

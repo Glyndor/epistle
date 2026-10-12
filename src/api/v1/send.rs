@@ -20,6 +20,10 @@ pub struct SendRequest {
 	subject: String,
 	#[serde(default)]
 	text: String,
+	/// The sender's name for the `From` header. Absent uses the account's
+	/// display name.
+	#[serde(default)]
+	from_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -137,11 +141,16 @@ pub async fn send(
 		.unwrap_or("localhost");
 	let date = crate::clock::rfc5322(std::time::SystemTime::now());
 	let message_id = format!("<{}@{domain}>", uuid::Uuid::now_v7());
+	let display_name = match request.from_name.as_deref() {
+		Some(raw) => crate::directory_store::display_name::validate(raw)
+			.map_err(|why| ApiError::invalid_input(&format!("Invalid from_name: {why}.")))?,
+		None => state.store().display_name(&account),
+	};
 	let data = format!(
 		"From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: {date}\r\n\
 		 Message-ID: {message_id}\r\nMIME-Version: 1.0\r\n\
 		 Content-Type: text/plain; charset=utf-8\r\n\r\n{text}",
-		from = request.from,
+		from = super::send_from::from_header(display_name.as_deref(), &request.from),
 		to = request.to.join(", "),
 		subject = request.subject,
 		text = request.text,
@@ -175,14 +184,14 @@ fn acting_account(state: &ApiState, principal: &Principal, from: &str) -> Option
 	if let Principal::Account { name, .. } = principal {
 		return Some(name.clone());
 	}
-	let lower = from.to_ascii_lowercase();
+	let lower = crate::util::address::normalize(from);
 	state
 		.accounts()
 		.into_iter()
 		.find(|view| {
 			view.addresses
 				.iter()
-				.any(|address| address.to_ascii_lowercase() == lower)
+				.any(|address| crate::util::address::normalize(address) == lower)
 		})
 		.filter(|view| principal.admits_account(&view.name, &view.addresses))
 		.map(|view| view.name)
