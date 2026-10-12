@@ -74,7 +74,7 @@ fn run_with(args: Args, detector: &dyn detect::Detector, out: &mut dyn Write) ->
 				return ExitCode::from(EXIT_INVALID);
 			}
 		},
-		None => match read_interactive() {
+		None => match read_interactive(detector) {
 			Ok(filled) => filled.answers,
 			Err(()) => return ExitCode::from(EXIT_INVALID),
 		},
@@ -143,10 +143,10 @@ fn read_answers(path: &PathBuf) -> Result<Answers, ApplyError> {
 	})
 }
 
-fn read_interactive() -> Result<assistant::Filled, ()> {
+fn read_interactive(detector: &dyn detect::Detector) -> Result<assistant::Filled, ()> {
 	let mut stdin = std::io::stdin().lock();
 	let mut stderr = crate::cli::style::stderr();
-	assistant::run(&mut stdin, &mut stderr)
+	assistant::run(&mut stdin, &mut stderr, detector)
 }
 
 fn confirm<R: std::io::BufRead>(reader: R, out: impl std::io::Write) -> bool {
