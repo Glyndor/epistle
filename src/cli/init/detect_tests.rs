@@ -6,6 +6,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use super::super::answers::{Mode, Services};
+use super::super::answers_none::Declined;
 use super::*;
 
 /// A detector with a scripted answer that counts its calls.
@@ -73,7 +74,7 @@ fn answers(public_ipv4: Option<Ipv4Addr>, public_ipv6: Option<Ipv6Addr>) -> Answ
 
 fn fill(answers: &mut Answers, detector: &dyn Detector) -> String {
 	let mut out = Vec::new();
-	fill_missing(answers, detector, &mut out);
+	fill_missing(answers, Declined::default(), detector, &mut out);
 	String::from_utf8(out).expect("utf-8")
 }
 
@@ -143,6 +144,57 @@ fn a_failing_detector_counts_as_nothing_found() {
 	let text = fill(&mut filled, &detector);
 	assert_eq!(detector.calls.get(), 1);
 	assert_eq!((filled.public_ipv4, filled.public_ipv6), (None, Some(v6())));
+	assert_eq!(
+		text,
+		"no global IPv4 address on this host's interfaces (behind NAT the public one is not visible here; set it by hand if the server has one)\n"
+	);
+}
+
+fn fill_declining(answers: &mut Answers, declined: Declined, detector: &dyn Detector) -> String {
+	let mut out = Vec::new();
+	fill_missing(answers, declined, detector, &mut out);
+	String::from_utf8(out).expect("utf-8")
+}
+
+#[test]
+fn an_explicit_none_is_kept_and_the_detector_is_not_called() {
+	let declined = Declined { v4: true, v6: true };
+	let mut filled = answers(None, None);
+	let text = fill_declining(&mut filled, declined, &MustNotDetect);
+	assert_eq!((filled.public_ipv4, filled.public_ipv6), (None, None));
+	assert_eq!(text, "", "no notice and no NAT hint for a declined family");
+}
+
+#[test]
+fn an_explicit_none_for_one_family_still_detects_the_other() {
+	let declined = Declined {
+		v4: true,
+		v6: false,
+	};
+	let detector = Scripted::found(Some(v4()), Some(v6()));
+	let mut filled = answers(None, None);
+	let text = fill_declining(&mut filled, declined, &detector);
+	assert_eq!(
+		filled.public_ipv4, None,
+		"\"none\" must win over the detected IPv4"
+	);
+	assert_eq!(filled.public_ipv6, Some(v6()));
+	assert_eq!(
+		text,
+		"detected public_ipv6 = 2606:4700::1111 (not in the answers file)\n"
+	);
+}
+
+#[test]
+fn a_declined_family_gets_no_nat_hint() {
+	let declined = Declined {
+		v4: false,
+		v6: true,
+	};
+	let detector = Scripted::found(None, Some(v6()));
+	let mut filled = answers(None, None);
+	let text = fill_declining(&mut filled, declined, &detector);
+	assert_eq!(filled.public_ipv6, None);
 	assert_eq!(
 		text,
 		"no global IPv4 address on this host's interfaces (behind NAT the public one is not visible here; set it by hand if the server has one)\n"

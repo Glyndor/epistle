@@ -73,3 +73,21 @@ fn answers_with_both_addresses_never_call_the_detector() {
 		"nothing detected may be reported: {text}"
 	);
 }
+
+#[test]
+fn answers_saying_none_never_call_the_detector() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let extra = "public_ipv4 = \"none\"\npublic_ipv6 = \"none\"\n";
+	let mut out = Vec::new();
+	let code = run_with(
+		dry_run_args(dir.path(), extra),
+		&no_lookups(&MustNotDetect),
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::from(EXIT_OK));
+	let text = String::from_utf8(out).expect("utf-8");
+	assert_eq!(
+		text, "dry-run: nothing was written\n",
+		"no notice, no hint and no PTR block without an address"
+	);
+}

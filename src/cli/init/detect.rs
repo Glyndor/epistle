@@ -13,6 +13,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use super::Answers;
+use super::answers_none::Declined;
 
 /// One global address per family, either of which may be absent.
 pub(super) type Detected = (Option<Ipv4Addr>, Option<Ipv6Addr>);
@@ -53,12 +54,18 @@ pub(super) fn nat_hint(missing_v4: bool, missing_v6: bool) -> Option<String> {
 }
 
 /// Fill the addresses an answers file leaves out from `detector`. An
-/// address the file names is never second-guessed, and when the file
-/// names both the detector is not called at all. Every filled address is
+/// address the file names, or a family it sets to `"none"` (`declined`),
+/// is never second-guessed, and when the file settles both families the
+/// detector is not called at all. Every filled address is
 /// reported on `out`, and the families still empty get the NAT hint.
-pub(super) fn fill_missing(answers: &mut Answers, detector: &dyn Detector, out: &mut dyn Write) {
-	let want_v4 = answers.public_ipv4.is_none();
-	let want_v6 = answers.public_ipv6.is_none();
+pub(super) fn fill_missing(
+	answers: &mut Answers,
+	declined: Declined,
+	detector: &dyn Detector,
+	out: &mut dyn Write,
+) {
+	let want_v4 = answers.public_ipv4.is_none() && !declined.v4;
+	let want_v6 = answers.public_ipv6.is_none() && !declined.v6;
 	if !want_v4 && !want_v6 {
 		return;
 	}
@@ -77,7 +84,10 @@ pub(super) fn fill_missing(answers: &mut Answers, detector: &dyn Detector, out: 
 			"detected public_ipv6 = {address} (not in the answers file)"
 		);
 	}
-	if let Some(hint) = nat_hint(answers.public_ipv4.is_none(), answers.public_ipv6.is_none()) {
+	if let Some(hint) = nat_hint(
+		want_v4 && answers.public_ipv4.is_none(),
+		want_v6 && answers.public_ipv6.is_none(),
+	) {
 		let _ = writeln!(out, "{hint}");
 	}
 }

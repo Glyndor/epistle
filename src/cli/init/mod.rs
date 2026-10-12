@@ -7,6 +7,7 @@
 //! the `dns` step as `not implemented in this build`.
 
 mod answers;
+mod answers_none;
 mod apply;
 mod assistant;
 mod compose;
@@ -24,6 +25,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use answers::Warning;
+use answers_none::Declined;
 use apply::ApplyError;
 use plan::Plan;
 
@@ -76,8 +78,8 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	}
 	let mut answers = match args.answers.as_ref() {
 		Some(path) => match read_answers(path) {
-			Ok(mut answers) => {
-				detect::fill_missing(&mut answers, detector, out);
+			Ok((mut answers, declined)) => {
+				detect::fill_missing(&mut answers, declined, detector, out);
 				answers
 			}
 			Err(error) => {
@@ -141,10 +143,11 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 	}
 }
 
-fn read_answers(path: &PathBuf) -> Result<Answers, ApplyError> {
+/// The answers file, and the address families it sets to `"none"`.
+fn read_answers(path: &PathBuf) -> Result<(Answers, Declined), ApplyError> {
 	let raw = std::fs::read_to_string(path)
 		.map_err(|error| ApplyError::ConfigRead(path.clone(), error))?;
-	toml::from_str(&raw).map_err(|error| {
+	let answers = toml::from_str(&raw).map_err(|error| {
 		// Parser messages and source excerpts can both include credential values.
 		let mut diagnostic = "invalid answers TOML".to_string();
 		if let Some(span) = error.span() {
@@ -154,7 +157,8 @@ fn read_answers(path: &PathBuf) -> Result<Answers, ApplyError> {
 			diagnostic.push_str(&format!(" at line {line}, column {column}"));
 		}
 		ApplyError::ConfigEncode(diagnostic)
-	})
+	})?;
+	Ok((answers, answers_none::declined(&raw)))
 }
 
 fn read_interactive(detector: &dyn detect::Detector) -> Result<assistant::Filled, ()> {
