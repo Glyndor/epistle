@@ -27,8 +27,16 @@ pub enum WebhookEvent {
 	DeliveryFailed {
 		/// The recipient that could not be reached.
 		recipient: String,
-		/// The failure reason (remote response or local error).
+		/// The failure reason: the remote reply as one line
+		/// (`550 5.1.1 ...`), or the local error when no server answered.
 		reason: String,
+		/// What the failure was about: `invalid_address`, `mailbox_full`,
+		/// `policy_rejected`, `too_big` or `other`.
+		#[serde(default)]
+		class: String,
+		/// The server that gave `reason`, when one answered.
+		#[serde(default)]
+		remote: Option<String>,
 	},
 	/// A `[[alerts]]` rule crossed its threshold over its sample window.
 	MetricAlert {

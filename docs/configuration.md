@@ -510,6 +510,16 @@ Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
 
+`delivery_failed` is sent per recipient when outbound delivery fails for good
+(refused, or expired in the queue). `reason` is the remote reply as one line, or
+the local error when no server answered; `remote` is the server that answered
+(or `null`); `class` is one of `invalid_address`, `mailbox_full`,
+`policy_rejected`, `too_big`, `other`:
+
+```json
+{"event":"delivery_failed","recipient":"carol@example.net","reason":"550 5.1.1 no such user","class":"invalid_address","remote":"mx.example.net"}
+```
+
 `test` is sent only by `epistle webhook test`, once, to check reachability and
 signature verification. It has a single fixed field, so receivers can acknowledge
 it and otherwise ignore it:

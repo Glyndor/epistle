@@ -382,3 +382,7 @@ mod tests_classes;
 #[cfg(test)]
 #[path = "worker_tests_reports.rs"]
 mod tests_reports;
+
+#[cfg(test)]
+#[path = "worker_tests_webhook.rs"]
+mod tests_webhook;

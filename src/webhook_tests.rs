@@ -143,6 +143,8 @@ async fn records_delivery_metrics() {
 	ok.notify(&WebhookEvent::DeliveryFailed {
 		recipient: "x@y".into(),
 		reason: "boom".into(),
+		class: "other".into(),
+		remote: None,
 	})
 	.await;
 	assert!(
@@ -158,6 +160,8 @@ async fn records_delivery_metrics() {
 	bad.notify(&WebhookEvent::DeliveryFailed {
 		recipient: "x@y".into(),
 		reason: "boom".into(),
+		class: "other".into(),
+		remote: None,
 	})
 	.await;
 	assert!(

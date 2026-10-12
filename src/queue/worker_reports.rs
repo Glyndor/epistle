@@ -56,11 +56,14 @@ impl Worker {
 			match result {
 				Ok(()) => tracing::debug!(%id, %recipient, remote, "delivered"),
 				Err(DeliveryError::Transient(reason)) => {
-					tracing::debug!(%id, %recipient, remote, %reason, "delivery deferred");
+					let class = classify_reason(reason, false).class.label();
+					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
 				}
 				Err(DeliveryError::Permanent(reason)) => {
-					tracing::warn!(%id, %recipient, remote, %reason, "delivery failed");
-					if classify_reason(reason, true).class == FailureClass::PolicyRejected {
+					let verdict = classify_reason(reason, true);
+					let class = verdict.class.label();
+					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
 						// us. The operator has to look at the sending side.
 						tracing::warn!(
@@ -75,10 +78,10 @@ impl Worker {
 					// Only a reply proving the address bad suppresses it; a
 					// policy refusal, a full or disabled mailbox, a message
 					// too big say nothing about the address.
-					if classify_reason(reason, true).suppress {
+					if verdict.suppress {
 						self.suppress(&entry.envelope.reverse_path, recipient, reason);
 					}
-					self.notify_failed(recipient, reason);
+					self.notify_failed(recipient, reason, conversation.remote.clone());
 				}
 			}
 		}
@@ -97,13 +100,16 @@ impl Worker {
 		}
 	}
 
-	/// Fire the advisory delivery-failure webhook for one recipient.
-	fn notify_failed(&self, recipient: &str, reason: &str) {
+	/// Fire the advisory delivery-failure webhook for one recipient, with
+	/// the class of the failure and the server that answered.
+	fn notify_failed(&self, recipient: &str, reason: &str, remote: Option<String>) {
 		if let Some(webhook) = &self.webhook {
 			let webhook = webhook.clone();
 			let event = crate::webhook::WebhookEvent::DeliveryFailed {
 				recipient: recipient.to_string(),
 				reason: reason.to_string(),
+				class: classify_reason(reason, true).class.label().to_string(),
+				remote,
 			};
 			tokio::spawn(async move { webhook.notify(&event).await });
 		}
@@ -125,10 +131,12 @@ impl Worker {
 			envelope.settle();
 		})?;
 		for recipient in pending {
-			let reason = envelope.recipient_state(recipient).last_error;
-			let reason = reason.as_deref().unwrap_or_default();
-			tracing::warn!(%id, %recipient, %reason, "giving up: message expired");
-			self.notify_failed(recipient, reason);
+			let state = envelope.recipient_state(recipient);
+			let reason = state.last_error.as_deref().unwrap_or_default();
+			let class = classify_reason(reason, false).class.label();
+			let remote = state.remote.as_deref().unwrap_or("-");
+			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
+			self.notify_failed(recipient, reason, state.remote.clone());
 		}
 		Ok(())
 	}
