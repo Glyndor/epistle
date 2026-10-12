@@ -34,11 +34,16 @@ mod dispatcher;
 mod download;
 mod email;
 pub use download::download;
+mod email_submission;
 mod limits;
 pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
 mod methods;
 mod objects;
 pub mod websocket;
+
+mod fold;
+mod query_changes;
+pub(crate) mod state;
 
 pub(crate) use dispatcher::MAX_REQUEST_LIMITS;
 use dispatcher::{ResolveError, Resolver};
@@ -244,7 +249,9 @@ pub fn dispatch_request(
 			},
 			"EmailSubmission/set" => {
 				match state.require_scope_for_principal(principal, Scope::Send) {
-					Ok(()) => methods::email_submission_set(state, principal, &args, &call_id),
+					Ok(()) => {
+						email_submission::email_submission_set(state, principal, &args, &call_id)
+					}
 					Err(_) => jmap_scope_error(&call_id),
 				}
 			}
@@ -259,14 +266,14 @@ pub fn dispatch_request(
 			"Email/query" => methods::email_query(state, principal, &args, &call_id),
 			"Email/get" => methods::email_get(state, principal, &args, &call_id),
 			"Thread/get" => methods::thread_get(state, principal, &args, &call_id),
-			// We do not track a change log, so /changes and /queryChanges are
-			// not calculable (RFC 8620 §5.2, §5.6); report it per spec rather
-			// than unknownMethod.
-			"Mailbox/changes"
-			| "Email/changes"
-			| "Thread/changes"
-			| "Mailbox/queryChanges"
-			| "Email/queryChanges" => methods::cannot_calculate_changes(state, principal, &args, &call_id),
+			// `/changes` answers against the per-type change log
+			// (RFC 8620 §5.2). The method name tells the handler which
+			// counter to compare the since-state against.
+			"Mailbox/changes" | "Email/changes" | "Thread/changes" => {
+				state::changes(state, principal, &args, &call_id, name.as_str())
+			}
+			"Mailbox/queryChanges" => query_changes::mailbox(state, principal, &args, &call_id),
+			"Email/queryChanges" => query_changes::email(state, principal, &args, &call_id),
 			"Identity/get" => methods::identity_get(state, principal, &args, &call_id),
 			"Quota/get" => methods::quota_get(state, principal, &args, &call_id),
 			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),

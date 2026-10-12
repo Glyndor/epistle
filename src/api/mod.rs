@@ -183,6 +183,26 @@ mod send_tests_principal;
 mod jmap_tests_partition;
 
 #[cfg(test)]
+#[path = "jmap_tests_changes_helpers.rs"]
+mod jmap_tests_changes_helpers;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes.rs"]
+mod jmap_tests_changes;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes_b.rs"]
+mod jmap_tests_changes_b;
+
+#[cfg(test)]
+#[path = "jmap_tests_query_changes.rs"]
+mod jmap_tests_query_changes;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes_c.rs"]
+mod jmap_tests_changes_c;
+
+#[cfg(test)]
 #[path = "jmap_tests_limits.rs"]
 mod jmap_tests_limits;
 

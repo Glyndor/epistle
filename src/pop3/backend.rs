@@ -89,11 +89,26 @@ impl Backend for MailboxBackend {
 	}
 
 	fn remove(&self, account: &str, uids: &[String]) {
+		use crate::imap::changelog::{Change, Op};
 		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
 			return;
 		};
+		let mut changes = Vec::new();
 		for uid in uids {
-			let _ = std::fs::remove_file(dir.join(format!("{uid}.eml")));
+			if std::fs::remove_file(dir.join(format!("{uid}.eml"))).is_ok()
+				&& let Ok(id) = uuid::Uuid::parse_str(uid)
+			{
+				changes.push(Change::email(Op::Destroyed, id));
+			}
+		}
+		if !changes.is_empty() {
+			changes.push(Change::mailbox(Op::Updated, "INBOX"));
+			if let Some(root) = crate::util::path_component::AccountName::new(account)
+				.ok()
+				.and_then(|name| name.root(&self.data_dir).ok())
+			{
+				crate::imap::changelog::note(root.as_path(), &changes);
+			}
 		}
 	}
 }
@@ -195,5 +210,35 @@ mod tests {
 		assert!(backend.load("alice").is_empty());
 		// Removing from a missing account is a harmless no-op.
 		backend.remove("nobody", &["whatever".to_string()]);
+	}
+
+	/// A POP3 delete is an expunge JMAP clients must learn about.
+	#[test]
+	fn remove_records_the_destroyed_message_for_jmap() {
+		use crate::imap::changelog::{Change, Op};
+		let dir = tempfile::tempdir().expect("tempdir");
+		let backend = backend(dir.path());
+		let id = crate::imap::mailbox::append(
+			dir.path(),
+			"alice",
+			"INBOX",
+			&[],
+			b"x\r\n",
+			&MessageCrypto::disabled(),
+		)
+		.expect("append");
+		let root = dir.path().join("accounts").join("alice");
+		let before = crate::imap::changelog::current(&root).expect("current");
+		backend.remove("alice", &[id.to_string()]);
+		let (_, entries) =
+			crate::imap::changelog::since(&root, before.epoch, before.current).expect("since");
+		let changes: Vec<Change> = entries.into_iter().map(|e| e.change).collect();
+		assert_eq!(
+			changes,
+			vec![
+				Change::email(Op::Destroyed, id),
+				Change::mailbox(Op::Updated, "INBOX")
+			]
+		);
 	}
 }

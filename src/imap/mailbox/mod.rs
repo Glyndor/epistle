@@ -9,6 +9,7 @@
 
 mod defaults;
 mod flag;
+pub(crate) mod journal;
 
 pub(crate) use defaults::ensure_defaults;
 
@@ -20,10 +21,12 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::imap::changelog::{Change, Op};
 use crate::storage::MessageCrypto;
 use crate::util::path_component::{
 	AccountName, AccountRoot, FixedDir, MailboxName, MessageExt, folders_dir, message_file,
 };
+use crate::util::path_containment::contained_child;
 
 /// A snapshot of one mailbox at SELECT time. Sequence numbers are positions
 /// in `messages` (1-based); UIDs are persistent, assigned in arrival order.
@@ -133,7 +136,9 @@ pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	if dir.is_dir() {
 		return Err(std::io::Error::other("mailbox already exists"));
 	}
-	std::fs::create_dir_all(&dir)
+	std::fs::create_dir_all(&dir)?;
+	journal::note(data_dir, &account, &[Change::mailbox(Op::Created, mailbox)]);
+	Ok(())
 }
 
 /// Delete a mailbox and its messages. INBOX cannot be deleted.
@@ -146,12 +151,22 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	if !dir.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
 	}
-	std::fs::remove_dir_all(dir)
+	// The messages go with the mailbox: each one is destroyed for JMAP.
+	let ids = journal::message_ids(&contained_child(&dir, "new")?);
+	std::fs::remove_dir_all(dir)?;
+	let mut changes: Vec<Change> = ids
+		.into_iter()
+		.map(|id| Change::email(Op::Destroyed, id))
+		.collect();
+	changes.push(Change::mailbox(Op::Destroyed, mailbox));
+	journal::note(data_dir, &account, &changes);
+	Ok(())
 }
 
 /// Rename a mailbox. INBOX cannot be renamed.
 pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::Result<()> {
 	let account = AccountName::new(account)?;
+	let (from_name, to_name) = (from, to);
 	let (Ok(from), Ok(to)) = (MailboxName::folder(from), MailboxName::folder(to)) else {
 		return Err(std::io::Error::other("cannot rename"));
 	};
@@ -170,7 +185,20 @@ pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::
 	if !from.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
 	}
-	std::fs::rename(from, to)
+	std::fs::rename(from, &to)?;
+	// The mailbox id is its name, so the old id is gone and a new one exists;
+	// every message keeps its id but its `mailboxIds` changed.
+	let mut changes = vec![
+		Change::mailbox(Op::Destroyed, from_name),
+		Change::mailbox(Op::Created, to_name),
+	];
+	changes.extend(
+		journal::message_ids(&contained_child(&to, "new")?)
+			.into_iter()
+			.map(|id| Change::email(Op::Updated, id)),
+	);
+	journal::note(data_dir, &account, &changes);
+	Ok(())
 }
 
 /// Existing mailbox names: INBOX plus folders, sorted. An account that is not
@@ -211,6 +239,7 @@ pub fn append(
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	let tmp_dir = account.root(data_dir)?.child(FixedDir::Tmp)?;
+	let new_mailbox = !mailbox.eq_ignore_ascii_case("INBOX") && !account_dir.is_dir();
 	std::fs::create_dir_all(&account_dir)?;
 	std::fs::create_dir_all(&tmp_dir)?;
 
@@ -221,6 +250,13 @@ pub fn append(
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
 	}
+	let mut changes = Vec::with_capacity(3);
+	if new_mailbox {
+		changes.push(Change::mailbox(Op::Created, mailbox));
+	}
+	changes.push(Change::email(Op::Created, id));
+	changes.push(Change::mailbox(Op::Updated, mailbox));
+	journal::note(data_dir, &account, &changes);
 	Ok(id)
 }
 

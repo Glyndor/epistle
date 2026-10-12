@@ -2,6 +2,7 @@
 
 pub mod acl;
 pub mod archive;
+pub(crate) mod changelog;
 pub mod command;
 mod compress;
 mod fetch;

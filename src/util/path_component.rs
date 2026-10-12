@@ -339,7 +339,8 @@ pub fn message_tmp_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Resul
 	contained_child(dir, &format!("{id}{}.tmp", ext.suffix()))
 }
 
-/// The fixed per-mailbox bookkeeping files.
+/// The fixed per-mailbox (and, for the JMAP journal, per-account) bookkeeping
+/// files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateFile {
 	/// Next UID counter.
@@ -352,6 +353,12 @@ pub enum StateFile {
 	Vanished,
 	/// Metadata index.
 	Index,
+	/// Per-account JMAP change journal (one line per changed object).
+	JmapJournal,
+	/// Per-account JMAP journal header: epoch and trim floor.
+	JmapState,
+	/// Per-account lock serialising every JMAP journal reader and writer.
+	JmapLock,
 }
 
 impl StateFile {
@@ -362,6 +369,9 @@ impl StateFile {
 			Self::ModseqCounter => ".modseqctr",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",
+			Self::JmapJournal => ".jmap_changes",
+			Self::JmapState => ".jmap_state",
+			Self::JmapLock => ".jmap_lock",
 		}
 	}
 }
