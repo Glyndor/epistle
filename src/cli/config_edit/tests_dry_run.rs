@@ -20,9 +20,7 @@ fn dry_run_redacts_changed_secret_value() {
 		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n[[transport]]\ndomain = \"example.net\"\npassword = \"hunter2\"\n",
 	);
 	let mut doc = ConfigDocument::open(&path).unwrap();
-	let transport = doc
-		.document
-		["transport"]
+	let transport = doc.document["transport"]
 		.as_array_of_tables_mut()
 		.unwrap()
 		.iter_mut()
@@ -68,8 +66,14 @@ fn dry_run_redacts_secret_on_context_line() {
 	doc.document["quota_bytes"] = toml_edit::value(2_i64);
 	let rendered = doc.dry_run().unwrap();
 	assert!(rendered.contains(" srs_secret = <redacted>"), "{rendered}");
-	assert!(!rendered.contains("old-secret"), "secret leaked: {rendered}");
-	assert!(rendered.contains("quota_bytes"), "non-secret line kept: {rendered}");
+	assert!(
+		!rendered.contains("old-secret"),
+		"secret leaked: {rendered}"
+	);
+	assert!(
+		rendered.contains("quota_bytes"),
+		"non-secret line kept: {rendered}"
+	);
 }
 
 #[test]

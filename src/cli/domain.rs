@@ -129,7 +129,14 @@ fn execute(path: &Path, action: DomainCli, dry_run: bool) -> Result<ExitCode, St
 				let mut document = open(path)?;
 				let owned_alias = alias.clone();
 				remove_alias_map(&config, &mut document, &alias)?;
-				commit_alias(document, &owned_alias, "removed", dry_run, &mut out, &mut err)
+				commit_alias(
+					document,
+					&owned_alias,
+					"removed",
+					dry_run,
+					&mut out,
+					&mut err,
+				)
 			}
 		},
 	}

@@ -106,7 +106,15 @@ fn run_restore_fails_when_archive_carries_database_sql_but_psql_errors() {
 	let mut out = Vec::new();
 	let mut status = Vec::new();
 	let resolver = stub_resolver(vec![("psql".to_string(), psql_stub.clone())]);
-	let exit = run_restore_with(&config, &archive, true, false, &mut out, &mut status, &resolver);
+	let exit = run_restore_with(
+		&config,
+		&archive,
+		true,
+		false,
+		&mut out,
+		&mut status,
+		&resolver,
+	);
 	assert_ne!(
 		exit,
 		ExitCode::SUCCESS,

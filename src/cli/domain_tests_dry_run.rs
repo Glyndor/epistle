@@ -37,8 +37,7 @@ fn fixture(extra: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 fn parsed_domain_action(argv: &[&str]) -> (std::path::PathBuf, bool, DomainCli) {
 	let mut full: Vec<&str> = vec!["epistle", "domain"];
 	full.extend_from_slice(argv);
-	let cli =
-		<Cli as clap::Parser>::try_parse_from(full).expect("domain arguments must parse");
+	let cli = <Cli as clap::Parser>::try_parse_from(full).expect("domain arguments must parse");
 	match cli.command {
 		crate::cli::Command::Domain {
 			config,
@@ -111,11 +110,7 @@ fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitC
 	ExitCode::SUCCESS
 }
 
-fn commit_add_dry_run(
-	document: &ConfigDocument,
-	out: &mut impl Write,
-	_status: &mut impl Write,
-) {
+fn commit_add_dry_run(document: &ConfigDocument, out: &mut impl Write, _status: &mut impl Write) {
 	write!(out, "{}", document.dry_run().expect("dry_run")).expect("write dry_run");
 }
 
@@ -183,13 +178,17 @@ fn commit_alias_full(
 #[test]
 fn dry_run_flag_propagates_through_clap() {
 	let (_dir, path) = fixture("");
-	let (cfg, dry_run, _) = parsed_domain_action(&["--config", path.to_str().unwrap(), "--dry-run", "list"]);
+	let (cfg, dry_run, _) =
+		parsed_domain_action(&["--config", path.to_str().unwrap(), "--dry-run", "list"]);
 	assert!(dry_run, "parent --dry-run must be parsed");
 	assert_eq!(cfg, path);
 
 	let (_, dry_run_tail, _) =
 		parsed_domain_action(&["--config", path.to_str().unwrap(), "list", "--dry-run"]);
-	assert!(dry_run_tail, "--dry-run must be accepted after the subcommand too");
+	assert!(
+		dry_run_tail,
+		"--dry-run must be accepted after the subcommand too"
+	);
 }
 
 #[test]
@@ -265,9 +264,7 @@ fn domain_alias_add_dry_run_leaves_file_unchanged() {
 
 #[test]
 fn domain_alias_remove_dry_run_leaves_file_unchanged() {
-	let (_dir, path) = fixture(
-		"[domain_aliases]\n\"alias.example.org\" = \"example.org\"\n",
-	);
+	let (_dir, path) = fixture("[domain_aliases]\n\"alias.example.org\" = \"example.org\"\n");
 	let before = std::fs::read_to_string(&path).unwrap();
 	let (_cfg, dry_run, action) = parsed_domain_action(&[
 		"--config",

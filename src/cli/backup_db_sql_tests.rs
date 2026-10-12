@@ -64,13 +64,13 @@ fn database_sql_is_not_laid_into_data_dir() {
 		&mut out,
 		&mut status,
 		&|program| {
-			// The real path the production resolver would have used:
-			// `Command::new` will find `psql` on the host `PATH`.
-			if program == "psql" {
-				None
-			} else {
-				None
-			}
+			// `Command::new` falls back to `PATH`; the production
+			// resolver would return `None`. The real `psql` is
+			// not on the host `PATH` here, so the database step
+			// fails with `BinaryMissing` — which is the failure
+			// mode the assertion below relies on.
+			let _ = program;
+			None
 		},
 	);
 	assert_ne!(exit, ExitCode::SUCCESS, "no psql → restore must fail");
@@ -100,10 +100,7 @@ fn database_sql_reaches_psql_through_the_entry_list() {
 	let marker_str = marker_path.to_string_lossy().into_owned();
 	write_shell_stub(
 		&psql_stub,
-		format!(
-			"#!/bin/sh\nprintf 'saw-psql' > {marker_str}\nexit 0\n"
-		)
-		.as_bytes(),
+		format!("#!/bin/sh\nprintf 'saw-psql' > {marker_str}\nexit 0\n").as_bytes(),
 	);
 	// Re-apply the executable permission: `write_shell_stub` already
 	// does this, but the help text makes the dependency explicit.
@@ -128,7 +125,15 @@ fn database_sql_reaches_psql_through_the_entry_list() {
 			None
 		}
 	};
-	let exit = run_restore_with(&config, &archive, true, false, &mut out, &mut status, &resolver);
+	let exit = run_restore_with(
+		&config,
+		&archive,
+		true,
+		false,
+		&mut out,
+		&mut status,
+		&resolver,
+	);
 	// The stub exits 0, so the database restore succeeds and the
 	// overall restore is green even though `psql` was the dummy.
 	// We do not assert on the exit code here — the binary does

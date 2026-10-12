@@ -17,7 +17,14 @@ fn restore_entry(data_dir: &Path, name: &str, mode: u32) -> (ExitCode, Vec<u8>) 
 	.expect("archive");
 	let mut out = Vec::new();
 	let mut status = Vec::new();
-	let exit = run_restore(&config_for(data_dir), &archive, true, false, &mut out, &mut status);
+	let exit = run_restore(
+		&config_for(data_dir),
+		&archive,
+		true,
+		false,
+		&mut out,
+		&mut status,
+	);
 	(exit, out)
 }
 

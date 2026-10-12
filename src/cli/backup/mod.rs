@@ -93,7 +93,15 @@ pub(super) fn run_restore(
 	out: &mut impl Write,
 	status: &mut impl Write,
 ) -> ExitCode {
-	run_restore_with(config, archive, force, dry_run, out, status, &db_dump::default_program_resolver)
+	run_restore_with(
+		config,
+		archive,
+		force,
+		dry_run,
+		out,
+		status,
+		&db_dump::default_program_resolver,
+	)
 }
 
 /// Same as [`run_restore`] with a custom program resolver. The test
@@ -129,15 +137,16 @@ pub(super) fn run_restore_with(
 		let _ = writeln!(out, "would restore {} entries:", entries.len());
 		for (name, _mode, content) in &entries {
 			if name == DATABASE_SQL_NAME {
-				let _ = writeln!(out, "  database.sql ({} bytes, replayed to psql)", content.len());
+				let _ = writeln!(
+					out,
+					"  database.sql ({} bytes, replayed to psql)",
+					content.len()
+				);
 			} else {
 				let _ = writeln!(out, "  data/{name}");
 			}
 		}
-		let _ = writeln!(
-			out,
-			"no files written; rerun without --dry-run to apply"
-		);
+		let _ = writeln!(out, "no files written; rerun without --dry-run to apply");
 		return ExitCode::SUCCESS;
 	}
 	if let Err(error) = lay_files(&entries, &config.data_dir) {
@@ -190,7 +199,7 @@ pub(in crate::cli) fn refuse_unsafe_targets(
 			status,
 			"  stop the mail service, move the directory aside, or pass --force"
 		);
-		return Err(format!("data_dir already holds account data"));
+		return Err("data_dir already holds account data".to_string());
 	}
 	if mail_service_is_running(&config.data_dir) {
 		let _ = writeln!(
@@ -225,7 +234,7 @@ fn data_dir_has_accounts(data_dir: &Path) -> Result<(), String> {
 		"database.sql",
 	] {
 		if data_dir.join(relative).exists() {
-			return Err(format!("{relative}"));
+			return Err(relative.to_string());
 		}
 	}
 	let accounts_dir = data_dir.join("accounts");

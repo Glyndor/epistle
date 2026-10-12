@@ -75,10 +75,7 @@ pub(super) fn create(
 /// later account with the same name inherits. Static accounts are
 /// not dynamic, so we reject them too — `AppPasswordStore` would not
 /// be able to attribute the credential to them anyway.
-fn ensure_known_dynamic_account(
-	config: &Config,
-	account: &str,
-) -> Result<(), String> {
+fn ensure_known_dynamic_account(config: &Config, account: &str) -> Result<(), String> {
 	let store = AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),

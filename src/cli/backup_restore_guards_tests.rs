@@ -42,7 +42,11 @@ fn restore_refuses_non_empty_data_dir_without_force() {
 	let mut out = Vec::new();
 	let mut status = Vec::new();
 	let exit = run_restore(&config, &archive, false, false, &mut out, &mut status);
-	assert_ne!(exit, ExitCode::SUCCESS, "non-empty data_dir must be refused");
+	assert_ne!(
+		exit,
+		ExitCode::SUCCESS,
+		"non-empty data_dir must be refused"
+	);
 	let status_text = String::from_utf8(status).unwrap();
 	assert!(
 		status_text.contains("refusing to restore"),
@@ -75,7 +79,11 @@ fn restore_force_overwrites_existing_data_dir() {
 	let mut out = Vec::new();
 	let mut status = Vec::new();
 	let exit = run_restore(&config, &archive, true, false, &mut out, &mut status);
-	assert_eq!(exit, ExitCode::SUCCESS, "force must let the restore succeed");
+	assert_eq!(
+		exit,
+		ExitCode::SUCCESS,
+		"force must let the restore succeed"
+	);
 	assert!(data_dir.join("accounts/alice/new/m1.eml").exists());
 }
 
@@ -119,7 +127,11 @@ fn restore_dry_run_with_database_sql_mentions_psql_but_not_data_dir() {
 		0o644,
 		b"Subject: hi\r\n\r\nbody".to_vec(),
 	)];
-	entries.push(("database.sql".to_string(), 0o644, b"create table x (id int);\n".to_vec()));
+	entries.push((
+		"database.sql".to_string(),
+		0o644,
+		b"create table x (id int);\n".to_vec(),
+	));
 	let archive = tar_gz(&entries).expect("tar_gz");
 	let config = build_config(&data_dir);
 	let mut out = Vec::new();

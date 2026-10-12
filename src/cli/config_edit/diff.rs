@@ -189,7 +189,7 @@ fn find_assignment(line: &str) -> Option<Assignment> {
 }
 
 fn is_secret_key(key: &str) -> bool {
-	SECRET_KEYS.iter().any(|name| *name == key)
+	SECRET_KEYS.contains(&key)
 }
 
 /// Parse `value` (the RHS of a `key = ...` line, with surrounding quotes
