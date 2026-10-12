@@ -175,6 +175,10 @@ mod jmap_tests_principal_b;
 mod jmap_tests_principal_c;
 
 #[cfg(test)]
+#[path = "jmap_tests_push.rs"]
+mod jmap_tests_push;
+
+#[cfg(test)]
 #[path = "send_tests_principal.rs"]
 mod send_tests_principal;
 

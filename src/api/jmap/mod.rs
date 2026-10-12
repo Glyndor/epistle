@@ -39,6 +39,7 @@ mod limits;
 pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
 mod methods;
 mod objects;
+pub(crate) mod push_subscription;
 pub mod websocket;
 
 mod fold;
@@ -190,8 +191,9 @@ pub fn dispatch_request(
 		return Err(limits::too_many_calls());
 	}
 	// `PushSubscription/*` and `Core/echo` are session-scoped: they do not
-	// carry an `accountId` and therefore have nothing to check against the
-	// principal. The rest of the methods need an account check; the
+	// carry an `accountId`. `Core/echo` touches nothing; the push
+	// subscriptions are filtered by the caller that created them. The rest
+	// of the methods need an account check; the
 	// `state.auth_extension_for(principal)` helper, where one exists, calls
 	// `state.require_scope` and the per-method handler does the principal
 	// check on the `accountId` it pulls out of the arguments.
@@ -257,7 +259,7 @@ pub fn dispatch_request(
 			}
 			"PushSubscription/set" => {
 				match state.require_scope_for_principal(principal, Scope::Write) {
-					Ok(()) => websocket::push_subscription_set(state, &args, &call_id),
+					Ok(()) => push_subscription::set(state, principal, &args, &call_id),
 					Err(_) => jmap_scope_error(&call_id),
 				}
 			}
@@ -276,7 +278,7 @@ pub fn dispatch_request(
 			"Email/queryChanges" => query_changes::email(state, principal, &args, &call_id),
 			"Identity/get" => methods::identity_get(state, principal, &args, &call_id),
 			"Quota/get" => methods::quota_get(state, principal, &args, &call_id),
-			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),
+			"PushSubscription/get" => push_subscription::get(state, principal, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
 		resolver.record_result(&response);
