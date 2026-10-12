@@ -9,6 +9,7 @@ mod audit;
 pub mod domain_scope;
 mod error;
 pub(crate) mod jmap;
+mod mail_from;
 pub mod oauth;
 mod principal;
 pub mod scim;
@@ -161,6 +162,10 @@ mod jmap_tests_principal_b;
 #[cfg(test)]
 #[path = "jmap_tests_principal_c.rs"]
 mod jmap_tests_principal_c;
+
+#[cfg(test)]
+#[path = "send_tests_principal.rs"]
+mod send_tests_principal;
 
 #[cfg(test)]
 #[path = "jmap_tests_limits.rs"]

@@ -6,7 +6,6 @@ use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
 
-use crate::smtp::address::Address;
 use crate::smtp::trace::ensure_submission_headers;
 
 /// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
@@ -111,12 +110,12 @@ fn submit_email(
 	// (JMAP `Envelope.mailFrom.email: null`), legal for bounces; a non-empty
 	// mailFrom that does not parse, or that the account does not own, is
 	// rejected with the RFC 8621 §7.5.2 `forbiddenFrom` error.
-	if !mail_from.is_empty() {
-		let parsed = Address::parse(&mail_from).map_err(|_| "invalidEmail")?;
-		if !state.owns_address(account, &parsed) {
-			return Err("forbiddenFrom");
+	crate::api::mail_from::check_mail_from(state, account, &mail_from).map_err(|refusal| {
+		match refusal {
+			crate::api::mail_from::MailFromRefusal::Invalid => "invalidEmail",
+			crate::api::mail_from::MailFromRefusal::NotOwned => "forbiddenFrom",
 		}
-	}
+	})?;
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse

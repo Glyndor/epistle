@@ -66,6 +66,18 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for a submission whose envelope sender the acting account does
+	/// not own. One answer for every such sender, owned by another account
+	/// or by none, so the refusal says nothing about which addresses exist.
+	pub fn forbidden_from() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden_from",
+			message: "The sender address is not owned by an account this credential may act for."
+				.to_string(),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.
