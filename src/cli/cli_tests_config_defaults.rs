@@ -63,6 +63,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::OauthKeygen { .. }
 		| Command::TokenHash
 		| Command::Local { .. }
+		| Command::Completions { .. }
+		| Command::Manpages { .. }
 		| Command::Init { .. } => None,
 	}
 }

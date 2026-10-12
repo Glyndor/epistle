@@ -13,6 +13,7 @@ mod autoconfig;
 mod autodiscover;
 mod backup;
 mod ban;
+mod completions;
 mod config_check;
 pub mod config_edit;
 mod container_db;
@@ -681,6 +682,25 @@ pub enum Command {
 		/// `error` field on failure.
 		#[arg(long)]
 		json: bool,
+	},
+	/// Print a shell completion script on stdout.
+	///
+	/// The Debian package already installs all three; this is for a binary
+	/// installed by hand, for example
+	/// `epistle completions bash > ~/.local/share/bash-completion/completions/epistle`.
+	Completions {
+		/// The shell to write the script for.
+		#[arg(value_enum, value_name = "SHELL")]
+		shell: completions::CompletionShell,
+	},
+	/// Write `epistle.1` and one man page per subcommand into DIR.
+	///
+	/// Run by debian/rules at package build time.
+	#[command(hide = true)]
+	Manpages {
+		/// Directory to write the pages into; created when missing.
+		#[arg(value_name = "DIR")]
+		dir: PathBuf,
 	},
 }
 

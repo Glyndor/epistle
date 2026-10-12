@@ -57,7 +57,9 @@ impl Command {
 			| Command::OauthKeygen { .. }
 			| Command::TokenHash
 			| Command::Local { .. }
-			| Command::Probe { .. } => false,
+			| Command::Probe { .. }
+			| Command::Completions { .. }
+			| Command::Manpages { .. } => false,
 		}
 	}
 }
