@@ -178,3 +178,26 @@ fn write_secret_overwrites_existing_file_atomically() {
 		"rewrite must land on disk with the new bytes and nothing else",
 	);
 }
+
+/// A rename that fails after the temp was created and filled must not
+/// leave the temp behind: a directory at the destination makes
+/// `rename(2)` fail with `EISDIR` for every user, root included, and
+/// the call must clean up its `.<name>.<uuid>.tmp` before returning.
+#[test]
+fn a_failed_rename_removes_the_staging_temp() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("storage.key");
+	std::fs::create_dir(&path).expect("blocker dir");
+	let error = super::write_secret(&path, b"payload").expect_err("rename onto a directory");
+	assert_eq!(
+		error.kind(),
+		std::io::ErrorKind::IsADirectory,
+		"the rename failure must surface unchanged"
+	);
+	assert_eq!(
+		leftover_temp_files(dir.path()),
+		Vec::<String>::new(),
+		"a failed write must not leave its staging temp in the directory"
+	);
+	assert!(path.is_dir(), "the obstruction must be left untouched");
+}

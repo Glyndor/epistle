@@ -99,17 +99,15 @@ fn ensure_self_signed_cert(
 /// Write `bytes` to `path` through `storage::write_secret`. On success
 /// the step is pushed into the report before the call returns, so a
 /// later step that fails does not lose the earlier `Wrote` line. On
-/// failure the path is mapped to `ApplyError::KeyWrite` and the staging
-/// temp left by `write_secret` is removed so the next run can proceed
-/// without a leftover `O_EXCL` blocker.
+/// failure the path is mapped to `ApplyError::KeyWrite`; `write_secret`
+/// has already removed its own staging temp, so the next run starts
+/// from a clean directory.
 fn write_secret_with_report(
 	path: &Path,
 	bytes: &[u8],
 	report: &mut Report,
 ) -> Result<(), ApplyError> {
 	if let Err(error) = crate::storage::write_secret(path, bytes) {
-		let tmp = path.with_extension("secret.tmp");
-		let _ = fs::remove_file(&tmp);
 		return Err(ApplyError::KeyWrite(path.to_path_buf(), error));
 	}
 	report.steps.push(ReportStep::Wrote(path.to_path_buf()));

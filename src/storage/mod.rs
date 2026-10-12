@@ -63,12 +63,21 @@ pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
 		use std::os::unix::fs::OpenOptionsExt;
 		options.mode(0o600);
 	}
-	{
-		let mut file = options.open(&tmp)?;
-		file.write_all(bytes)?;
-		file.sync_all()?;
+	let mut file = options.open(&tmp)?;
+	// From here on the temp exists: any failure before the rename lands
+	// removes it, so a failed write never leaves a stray secret copy
+	// beside the destination.
+	let staged = file
+		.write_all(bytes)
+		.and_then(|()| file.sync_all())
+		.and_then(|()| {
+			drop(file);
+			std::fs::rename(&tmp, path)
+		});
+	if let Err(error) = staged {
+		let _ = std::fs::remove_file(&tmp);
+		return Err(error);
 	}
-	std::fs::rename(&tmp, path)?;
 	// `fsync(2)` the parent directory so the rename survives a power
 	// failure that hits the file but not the dirent write.
 	std::fs::File::open(parent).and_then(|dir| dir.sync_all())?;
