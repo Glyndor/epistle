@@ -15,8 +15,16 @@ use ring::{digest, hmac, pbkdf2};
 /// Salt length in bytes for a freshly derived SCRAM secret.
 const SALT_LEN: usize = 16;
 
-/// SCRAM-SHA-256 iteration count. RFC 7677 sets 4096 as the minimum.
-const SCRAM_ITERATIONS: u32 = 4096;
+/// SCRAM-SHA-256 iteration count for freshly-derived verifiers. The value
+/// matches the OWASP 2023 PBKDF2-HMAC-SHA256 recommendation: 600000 rounds
+/// is the floor that aligns the verifier's work factor with the account's
+/// argon2id password hash, so a reader of `accounts.toml` cannot pick the
+/// cheaper PBKDF2 verifier over the argon2 one. Stored verifiers keep the
+/// count they were derived with (the SCRAM protocol exchanges it in
+/// server-first, RFC 5802 `i=`, so the client always uses the stored value);
+/// the directory upgrades a low-iteration verifier transparently the next
+/// time the account authenticates with a cleartext password mechanism.
+pub const SCRAM_ITERATIONS: u32 = 600000;
 
 /// The per-account SCRAM credentials, derived from the password at set time.
 #[derive(Debug, Clone)]

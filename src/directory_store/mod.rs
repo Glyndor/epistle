@@ -39,6 +39,7 @@ mod build;
 
 #[path = "mutators.rs"]
 mod mutators;
+pub mod scram_upgrade;
 
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
@@ -75,6 +76,13 @@ impl DirectoryHandle {
 		*self.inner.write().expect("directory lock") = Arc::new(directory);
 	}
 }
+
+/// Hook the directory calls back into when a cleartext authentication
+/// succeeds against a dynamic account whose stored SCRAM verifier is below
+/// the current iteration constant. See [`crate::directory_store::scram_upgrade`]
+/// for the trait + no-op default + store impl; this file only re-exports
+/// them so `mod.rs` stays under the per-file code-line budget.
+pub use crate::directory_store::scram_upgrade::{NoopScramUpgrader, ScramUpgrader};
 
 /// A dynamic account as persisted in `accounts.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,6 +244,13 @@ pub struct AccountStore {
 	/// `None` in unit tests that do not exercise the counters — the
 	/// directory still emits the structured tracing event regardless.
 	metrics: Option<Arc<crate::metrics::Metrics>>,
+	/// Callback wired into every rebuilt directory to upgrade a dynamic
+	/// account's SCRAM verifier when its stored iteration count is below
+	/// the current constant. Set by the `serve` builder with an
+	/// `Arc<Self>` so the directory's upgrade writes round-trip to the
+	/// store; left as a no-op until then so unit tests that build a store
+	/// without a runtime never observe a real write.
+	scram_upgrader: Arc<dyn ScramUpgrader>,
 	handle: DirectoryHandle,
 }
 
@@ -279,6 +294,7 @@ impl AccountStore {
 			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
 			ban_store: None,
 			metrics: None,
+			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -343,6 +359,26 @@ impl AccountStore {
 		self.metrics = Some(metrics);
 		self.handle.replace(self.build_directory());
 		self
+	}
+
+	/// Replace the SCRAM upgrader the rebuilt directories call when a
+	/// cleartext authentication succeeds against a low-iteration dynamic
+	/// verifier. The `serve` builder wires `Arc<Self>` so the directory's
+	/// upgrade writes round-trip to the on-disk account row.
+	pub fn with_scram_upgrader(mut self, upgrader: Arc<dyn ScramUpgrader>) -> Self {
+		self.scram_upgrader = upgrader;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Install the live upgrader on a `Arc<AccountStore>` that has
+	/// exactly one strong reference (the `serve` builder). Used once at
+	/// startup to wire the directory back to the store; subsequent
+	/// mutators go through the `Arc<dyn ScramUpgrader>` itself, which
+	/// holds a stable reference.
+	pub(crate) fn install_scram_upgrader(&mut self, upgrader: Arc<dyn ScramUpgrader>) {
+		self.scram_upgrader = upgrader;
+		self.handle.replace(self.build_directory());
 	}
 
 	/// Attach the shared ban store consulted on every password
@@ -666,6 +702,7 @@ impl AccountStore {
 		if let Some(ban_store) = self.ban_store.clone() {
 			dir = dir.with_ban_store(ban_store);
 		}
+		dir = dir.with_scram_upgrader(self.scram_upgrader.clone());
 		dir
 	}
 }
@@ -673,6 +710,22 @@ impl AccountStore {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+/// Manual Debug so the `ScramUpgrader` trait object can sit in the
+/// `Directory` struct (which derives Debug) without forcing every
+/// implementor to depend on the store's internals.
+impl std::fmt::Debug for AccountStore {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AccountStore")
+			.field("path", &self.path)
+			.field("domains", &self.domains)
+			.field(
+				"dynamic_count",
+				&self.dynamic.read().map(|g| g.len()).unwrap_or(0),
+			)
+			.finish_non_exhaustive()
+	}
+}
 
 #[cfg(test)]
 #[path = "account_mutators_tests.rs"]

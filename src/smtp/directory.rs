@@ -135,6 +135,13 @@ pub struct Directory {
 	/// `[database]`; those fall back to the per-connection three-strikes
 	/// counters that the listeners already maintain.
 	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
+	/// Optional callback invoked after a successful cleartext (PLAIN/LOGIN)
+	/// authentication to a dynamic account whose stored SCRAM verifier was
+	/// derived with fewer than the current iteration constant. The store
+	/// regenerates the verifier with a fresh salt and persists it, so the
+	/// next exchange pays the full cost. `None` in unit tests that do not
+	/// exercise the upgrade path.
+	scram_upgrader: Option<std::sync::Arc<dyn crate::directory_store::ScramUpgrader>>,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
 	/// `with_scram_lookup_counter` so the delta they assert is
@@ -178,6 +185,7 @@ impl Directory {
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
+			scram_upgrader: None,
 			#[cfg(test)]
 			scram_lookup_counter: None,
 		}
@@ -493,6 +501,7 @@ impl Directory {
 		if let Some(primary) = primary
 			&& super::auth::verify_password(hash, primary)
 		{
+			self.maybe_upgrade_scram(&account, primary);
 			return Some(account);
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
@@ -695,6 +704,9 @@ impl Directory {
 #[path = "directory_scram.rs"]
 mod scram;
 
+#[path = "directory_scram_upgrade.rs"]
+mod scram_upgrade;
+
 #[path = "directory_bans.rs"]
 pub mod bans;
 
@@ -721,6 +733,10 @@ mod alias_tests;
 #[cfg(test)]
 #[path = "directory_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+#[path = "directory_iteration_tests.rs"]
+mod iteration_tests;
 
 #[cfg(test)]
 #[path = "directory_totp_tests.rs"]
