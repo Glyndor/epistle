@@ -253,6 +253,22 @@ Two rules are worth knowing before you rely on this:
   code, so an account it may not touch looks exactly like one that does not
   exist.
 
+### What each key scope reaches
+
+Scopes are independent: holding one does not grant another.
+
+- `read`: the JMAP Session, every JMAP method that returns account data
+  (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
+  `Quota/get`), downloads, the WebSocket, and the `GET` routes of the
+  management API.
+- `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
+  of the management API.
+- `send`: JMAP `EmailSubmission/set` and `POST /api/v1/send`.
+- `scim`: `/scim/v2`.
+
+A key that only sends or only writes therefore cannot read the mailbox; give
+it `read` too if the client needs to.
+
 ### Uploaded blob storage
 
 JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the

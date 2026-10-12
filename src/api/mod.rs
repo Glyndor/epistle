@@ -241,3 +241,7 @@ mod secret_diagnostics_tests;
 #[cfg(test)]
 #[path = "jmap_tests_disabled.rs"]
 mod jmap_tests_disabled;
+
+#[cfg(test)]
+#[path = "jmap_tests_read_scope.rs"]
+mod jmap_tests_read_scope;
