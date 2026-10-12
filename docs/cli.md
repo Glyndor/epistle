@@ -918,7 +918,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
-| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. |
+| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
@@ -1028,7 +1028,22 @@ listener serves the Apple profile at `/mobileconfig?email=<address>`.
 The queue retries transient failures with exponential backoff (1m, 2m, 4m, …
 capped at 1h). It gives up by **message age** — `queue_give_up_secs` (default 5
 days) — not by attempt count, so a recipient whose server is down for hours does
-not lose mail. A single "delivery delayed" warning DSN is sent at ~4h. A
-permanent (5xx) failure bounces immediately and adds the recipient to the
-suppression list, after which mail to that address is dropped without retrying
-(clear it with `epistle suppression remove`).
+not lose mail. A single "delivery delayed" warning DSN is sent at ~4h. Each
+recipient has its own outcome and retry schedule: one refused or slow recipient
+does not hold back or duplicate the others.
+
+The remote reply is read by its enhanced status code (RFC 3463), or by its
+basic code when it has none:
+
+| Reply | Outcome | Suppressed |
+|---|---|---|
+| 5.1.x (bad mailbox, bad domain, null MX), 551, 553 | bounced now | yes |
+| 5.2.1 mailbox disabled, other 5.x.x, bare 550 or 554 | bounced now | no |
+| X.2.2 mailbox full, bare 552 | retried until the message expires, then bounced | no |
+| 5.3.4 / 5.2.3 message too big | bounced now | no |
+| 5.7.x policy, authentication, spam | bounced now, counted in `mail_outbound_policy_rejected_total` and logged with the remote host | no |
+| 4.x.x | retried | no |
+
+A suppressed address is dropped without retrying (clear it with
+`epistle suppression remove`). A 5.7.x refusal is about the sending side
+(IP or domain reputation, SPF, DKIM, DMARC), not the address.

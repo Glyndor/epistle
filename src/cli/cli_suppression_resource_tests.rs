@@ -214,7 +214,7 @@ fn suppression_list_json_prints_an_array_of_objects() {
 	let value: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
 	assert_eq!(
 		value,
-		serde_json::json!([{ "address": "bob@example.net", "account": null }])
+		serde_json::json!([{ "address": "bob@example.net", "account": null, "since": null, "reason": null }])
 	);
 
 	let mut out = Vec::new();
@@ -229,6 +229,6 @@ fn suppression_list_json_prints_an_array_of_objects() {
 	let value: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
 	assert_eq!(
 		value,
-		serde_json::json!([{ "address": "carol@example.net", "account": "alice" }])
+		serde_json::json!([{ "address": "carol@example.net", "account": "alice", "since": null, "reason": null }])
 	);
 }

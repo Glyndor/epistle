@@ -134,9 +134,78 @@ async fn a_policy_rejection_is_counted_as_a_reputation_problem() {
 
 	assert_eq!(bounces.messages().len(), 1, "bounced for this message");
 	assert!(
+		!suppressed(dir.path(), "carol@remote.example"),
+		"a policy refusal says nothing about the address"
+	);
+	assert!(
 		metrics
 			.render()
 			.contains("mail_outbound_policy_rejected_total 1\n"),
 		"the policy rejection must be counted"
 	);
+}
+
+#[tokio::test]
+async fn a_message_too_big_bounces_every_accepted_recipient_without_suppressing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_to(dir.path(), &["bob@remote.example", "carol@remote.example"]);
+	let remote = FakeRemote::default();
+	remote.script(
+		"remote.example",
+		Script {
+			data: Some("552 5.3.4 message too big".into()),
+			..Script::default()
+		},
+	);
+	let (worker, bounces, _) = worker(dir.path(), spool, &remote);
+
+	worker.pass().await.expect("pass");
+
+	let bodies = bodies(&bounces);
+	assert_eq!(bodies.len(), 1);
+	assert_eq!(bodies[0].matches("Status: 5.3.4\r\n").count(), 2);
+	for recipient in ["bob@remote.example", "carol@remote.example"] {
+		assert!(
+			!suppressed(dir.path(), recipient),
+			"too big is about the message, not {recipient}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn a_disabled_mailbox_bounces_without_suppressing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_to(dir.path(), &["carol@remote.example"]);
+	let remote = FakeRemote::default();
+	remote.script(
+		"remote.example",
+		Script::rcpt("carol@remote.example", "550 5.2.1 mailbox disabled"),
+	);
+	let (worker, bounces, _) = worker(dir.path(), spool, &remote);
+
+	worker.pass().await.expect("pass");
+
+	assert_eq!(bounces.messages().len(), 1);
+	assert!(
+		!suppressed(dir.path(), "carol@remote.example"),
+		"a disabled mailbox is not suppressed"
+	);
+}
+
+#[tokio::test]
+async fn a_bad_address_is_suppressed_for_its_sender_too() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_to(dir.path(), &["carol@remote.example"]);
+	let remote = FakeRemote::default();
+	remote.script(
+		"remote.example",
+		Script::rcpt("carol@remote.example", "550 5.1.1 no such user"),
+	);
+	let (worker, _, _) = worker(dir.path(), spool, &remote);
+
+	worker.pass().await.expect("pass");
+
+	let list = SuppressionList::open(dir.path()).expect("suppression");
+	assert!(list.is_suppressed("carol@remote.example"));
+	assert!(list.is_suppressed_for(SENDER, "carol@remote.example"));
 }

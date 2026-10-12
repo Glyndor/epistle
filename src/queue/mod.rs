@@ -14,5 +14,5 @@ pub use transport::relay_connect;
 mod worker;
 
 pub use resolver::{Connector, MxConnector};
-pub use suppression::SuppressionList;
+pub use suppression::{Suppressed, SuppressionList};
 pub use worker::Worker;

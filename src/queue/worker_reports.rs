@@ -72,7 +72,12 @@ impl Worker {
 						);
 						self.metric(|m| m.outbound_policy_rejected());
 					}
-					self.suppress(&entry.envelope.reverse_path, recipient);
+					// Only a reply proving the address bad suppresses it; a
+					// policy refusal, a full or disabled mailbox, a message
+					// too big say nothing about the address.
+					if classify_reason(reason, true).suppress {
+						self.suppress(&entry.envelope.reverse_path, recipient, reason);
+					}
 					self.notify_failed(recipient, reason);
 				}
 			}
@@ -80,12 +85,14 @@ impl Worker {
 	}
 
 	/// Record `recipient` on the suppression lists, global and the sending
-	/// account's, so future mail to it is not even attempted.
-	fn suppress(&self, account: &str, recipient: &str) {
+	/// account's, with the reply that proved it bad, so future mail to it is
+	/// not even attempted.
+	fn suppress(&self, account: &str, recipient: &str, reason: &str) {
 		if let Some(suppression) = &self.suppression {
-			suppression.suppress(recipient);
+			let now = self.now_epoch();
+			suppression.suppress_because(recipient, reason, now);
 			if !account.is_empty() {
-				suppression.suppress_for(account, recipient);
+				suppression.suppress_for_because(account, recipient, reason, now);
 			}
 		}
 	}
