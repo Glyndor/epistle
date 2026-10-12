@@ -3,9 +3,10 @@
 use libfuzzer_sys::fuzz_target;
 
 // The IMAP command parser takes pre-authentication network input and must
-// never panic on hostile bytes.
+// never panic on hostile bytes. The literal announcement (`{n}`, `{n+}`,
+// `~{n}`) the connection loop reads first goes through the same line.
 fuzz_target!(|data: &[u8]| {
 	if let Ok(line) = std::str::from_utf8(data) {
-		let _ = epistle::imap::command::parse(line);
+		epistle::fuzzing::imap_command_line(line);
 	}
 });

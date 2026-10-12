@@ -3,7 +3,7 @@
 pub(crate) mod canon;
 pub mod rotate;
 mod sign;
-mod signature;
+pub(crate) mod signature;
 mod spki;
 mod verify;
 

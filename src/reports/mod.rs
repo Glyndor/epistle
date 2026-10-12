@@ -12,7 +12,7 @@
 pub(crate) mod bounds;
 mod decompress;
 pub mod dmarc;
-mod mime;
+pub(crate) mod mime;
 pub(crate) mod store;
 pub mod tlsrpt;
 

@@ -342,6 +342,16 @@ pub(super) fn unix_to_utc(time: std::time::SystemTime) -> String {
 }
 
 /// Build one JMAP Mailbox object from a mailbox name.
+/// The JMAP body properties of `raw` with every body value fetched.
+/// Entry point for the MIME fuzz target.
+pub(crate) fn email_body_for_fuzzing(raw: &[u8]) -> Value {
+	mime::email_body(
+		"m",
+		raw,
+		&serde_json::json!({ "fetchAllBodyValues": true, "maxBodyValueBytes": 4096 }),
+	)
+}
+
 pub(super) fn mailbox_object(data_dir: &std::path::Path, account: &str, name: &str) -> Value {
 	let (total, unread) = crate::imap::mailbox::Snapshot::open(
 		data_dir,
