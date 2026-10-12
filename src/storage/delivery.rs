@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::directory_store::DirectoryHandle;
+use crate::imap::changelog::{Change, Op};
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
@@ -148,6 +149,8 @@ impl LocalDelivery {
 		};
 		let tmp_dir = contained_child(&base, "tmp")?;
 		let new_dir = contained_child(&base, "new")?;
+		// A Sieve `fileinto` may name a folder that does not exist yet.
+		let new_mailbox = mailbox.is_some() && !new_dir.is_dir();
 		fs::create_dir_all(&tmp_dir)?;
 		fs::create_dir_all(&new_dir)?;
 
@@ -156,6 +159,14 @@ impl LocalDelivery {
 		fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?)?;
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
 		io::write_flag_sidecar(&new_dir, id, flags);
+		let name = mailbox.unwrap_or("INBOX");
+		let mut changes = Vec::with_capacity(3);
+		if new_mailbox {
+			changes.push(Change::mailbox(Op::Created, name));
+		}
+		changes.push(Change::email(Op::Created, id));
+		changes.push(Change::mailbox(Op::Updated, name));
+		crate::imap::changelog::note(account_dir.as_path(), &changes);
 		Ok(id)
 	}
 

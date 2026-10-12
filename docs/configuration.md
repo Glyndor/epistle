@@ -316,6 +316,30 @@ a message round-trips through set+get without loss. `\Deleted` is
 intentionally not exposed on the JMAP side (RFC 8621 §4.1.1: J
 MAP has a separate `isDeleted` boolean).
 
+### JMAP incremental sync
+
+`Email/changes`, `Mailbox/changes`, `Thread/changes` (RFC 8620 §5.2) and
+`Email/queryChanges`, `Mailbox/queryChanges` (§5.6) answer from a
+per-account change journal that IMAP, POP3, SMTP delivery and JMAP all
+write, so a flag set over IMAP shows up in `Email/changes`. The journal
+lives at `<data_dir>/accounts/<name>/.jmap_changes` (with `.jmap_state`
+and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
+
+- `maxChanges` pages end on an intermediate `newState` with
+  `hasMoreChanges: true`; following them loses nothing.
+- `Mailbox/changes` sets `updatedProperties` to the four count
+  properties when only counts moved. A rename is the old id destroyed
+  and the new one created (a mailbox id is its name).
+- `Email/queryChanges` covers `Email/query` with no filter or only
+  `inMailbox`, sorted newest first (no sort or `receivedAt`
+  descending); `Email/query` reports `canCalculateChanges: false` for
+  anything else. `Mailbox/queryChanges` covers every `Mailbox/query`.
+- `cannotCalculateChanges` answers a malformed state, a state of another
+  type or account, one older than the trimmed journal, and one ahead of
+  it. `epistle restore` never brings back the journal header
+  (`.jmap_state`), so after a restore every JMAP client resyncs once
+  instead of trusting positions the restore rewound.
+
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in

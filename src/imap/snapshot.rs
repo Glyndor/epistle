@@ -4,6 +4,7 @@
 //! `impl` block so the mailbox module file stays under the per-file line
 //! limit.
 
+use super::changelog::{Change, Op};
 use super::mailbox::Snapshot;
 use crate::util::path_component::{AccountName, AccountRoot, MessageExt, message_file};
 
@@ -229,8 +230,15 @@ impl Snapshot {
 		let modseq = super::modseq::next_counter(&self.account_dir)?;
 		let _ = super::modseq::write_message(&self.account_dir, id, modseq);
 		self.highest_modseq = self.highest_modseq.max(modseq);
+		let seen = super::mailbox::Flag::Seen;
+		let unread_changed = self.messages[index].flags.contains(&seen) != flags.contains(&seen);
 		self.messages[index].flags = flags;
 		self.messages[index].modseq = modseq;
+		let mut changes = vec![Change::email(Op::Updated, id)];
+		if unread_changed {
+			changes.push(Change::mailbox(Op::Updated, &self.mailbox));
+		}
+		super::changelog::note(self.account_root.as_path(), &changes);
 		Ok(&self.messages[index].flags)
 	}
 
@@ -293,6 +301,7 @@ impl Snapshot {
 	) -> Vec<(u32, u32)> {
 		let mut messages = std::mem::take(&mut self.messages);
 		let mut taken = Vec::new();
+		let mut changes = Vec::new();
 		let mut position = 0usize;
 		messages.retain(|message| {
 			let hit = doomed(message);
@@ -300,11 +309,16 @@ impl Snapshot {
 				self.remove_files(message.id);
 				let sequence = u32::try_from(position + 1 - taken.len()).unwrap_or(u32::MAX);
 				taken.push((sequence, message.uid));
+				changes.push(Change::email(Op::Destroyed, message.id));
 			}
 			position += 1;
 			!hit
 		});
 		self.messages = messages;
+		if !changes.is_empty() {
+			changes.push(Change::mailbox(Op::Updated, &self.mailbox));
+			super::changelog::note(self.account_root.as_path(), &changes);
+		}
 		taken
 	}
 

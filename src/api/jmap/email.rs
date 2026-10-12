@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
+use super::state;
 use crate::api::api_keys::Scope;
 
 /// `Email/copy` (RFC 8620 section 5.4): copy messages from an accessible
@@ -39,6 +40,8 @@ pub(super) fn email_copy(
 	{
 		return json!(["error", { "type": "fromAccountNotFound" }, call_id]);
 	}
+	let old_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	let mut created = serde_json::Map::new();
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
@@ -53,9 +56,12 @@ pub(super) fn email_copy(
 			}
 		}
 	}
+	let new_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Email/copy",
 		{ "fromAccountId": source, "accountId": account,
+		  "oldState": old_state, "newState": new_state,
 		  "created": created, "notCreated": not_created },
 		call_id,
 	])
@@ -104,6 +110,8 @@ pub(super) fn email_set(
 	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
+	let old_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	let mut created = serde_json::Map::new();
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
@@ -144,9 +152,11 @@ pub(super) fn email_set(
 			}
 		}
 	}
+	let new_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Email/set",
-		{ "accountId": account, "oldState": "0", "newState": "0",
+		{ "accountId": account, "oldState": old_state, "newState": new_state,
 		  "created": created, "notCreated": not_created,
 		  "updated": updated, "notUpdated": not_updated,
 		  "destroyed": destroyed, "notDestroyed": not_destroyed },
