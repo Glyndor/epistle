@@ -73,7 +73,7 @@ impl<A: Accept> Accepting<A> {
 						tokio::time::sleep(self.backoff).await;
 						self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
 					} else if !per_connection(&error) {
-						// Unknown failure: pause briefly rather than spin.
+						// Unknown failure: pause for a moment rather than spin.
 						tokio::time::sleep(MIN_BACKOFF).await;
 					}
 				}
