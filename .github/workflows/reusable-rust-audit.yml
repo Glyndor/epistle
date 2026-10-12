@@ -3,6 +3,11 @@ name: Rust audit (reusable)
 # Scheduled supply-chain audit for Rust crates: cargo-audit flags RUSTSEC
 # advisories, cargo-deny enforces the license/ban/source policy in deny.toml.
 # Callers wire the schedule (e.g. weekly cron) in their own workflow.
+#
+# Each invocation audits one ref. The caller is expected to put a matrix
+# over `develop` and `main` in its own workflow file; the `report` and
+# `close` jobs that read the artifacts are there, not here, because they
+# need to see every matrix entry at once.
 
 on:
   workflow_call:
@@ -11,6 +16,14 @@ on:
         description: Directory containing the Cargo workspace
         type: string
         default: "."
+      # Ref to audit. Each matrix entry in the caller passes one ref, so
+      # the reusable sees a single value per invocation. The default is
+      # `develop` because that is the branch the org uses for in-progress
+      # work; weekly callers audit main by passing it through their matrix.
+      ref:
+        description: Branch or ref to checkout before running the audit
+        type: string
+        default: "develop"
       # Pinned, not the runner's floating preinstalled Rust — see rust-ci.yml's
       # toolchain input for why an unpinned toolchain is a problem.
       toolchain:
@@ -38,12 +51,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-audit-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}
+  # Per-ref concurrency so a ref's daily run cancels an older still-running
+  # one. Different refs (develop vs main) must not cancel each other: a
+  # slow `develop` run that finishes during the `main` run would close
+  # open issues for advisories `main` still sees.
+  group: rust-audit-${{ github.workflow }}-${{ inputs.ref }}-${{ inputs.working-directory }}
   cancel-in-progress: true
 
 jobs:
   audit:
-    name: cargo audit
+    name: cargo audit (${{ inputs.ref }})
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,6 +70,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Each invocation audits one ref, so the checkout is the ref
+          # the caller named in its matrix. `persist-credentials: false`
+          # matches what the rest of the workflow does; a token lying in
+          # `.git/config` would let the next step exfiltrate it.
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Install toolchain
@@ -82,8 +104,26 @@ jobs:
 
       - name: Run cargo audit
         # --deny warnings so unmaintained/unsound/yanked advisories also fail,
-        # not just vulnerabilities.
-        run: cargo audit --deny warnings
+        # not just vulnerabilities. The JSON output is captured unconditionally
+        # so the report job can read the full report whether the step passed
+        # or failed; the exit code is preserved on a non-zero result so the
+        # step still fails the workflow.
+        run: |
+          if ! cargo audit --json --deny warnings > audit.json 2>audit.stderr; then
+            cat audit.stderr >&2
+            exit 1
+          fi
+
+      - name: Upload cargo audit JSON
+        # The artifact is named with the ref so the caller's report job can
+        # download every matrix entry's report at once. Always runs (no
+        # `if:`); a failing audit still wrote the JSON to `audit.json`.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: audit-json-${{ inputs.ref }}
+          path: audit.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run cargo audit on the extra lockfiles
         if: inputs.extra-lockfiles != ''
@@ -109,7 +149,7 @@ jobs:
           done
 
   deny:
-    name: cargo deny
+    name: cargo deny (${{ inputs.ref }})
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -119,6 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Install toolchain
