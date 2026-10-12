@@ -273,6 +273,8 @@ pub struct AccountStore {
 	/// derivation entirely; the next password change of an account that
 	/// already has a verifier drops it because the mutator passes `None`.
 	scram_enabled: bool,
+	/// At-rest encryption for the TOTP secret (see `set_totp.rs`).
+	crypto: crate::storage::MessageCrypto,
 	handle: DirectoryHandle,
 }
 
@@ -318,6 +320,7 @@ impl AccountStore {
 			metrics: None,
 			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,
 			scram_enabled: true,
+			crypto: crate::storage::MessageCrypto::disabled(),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -590,7 +593,7 @@ impl AccountStore {
 
 	fn persist(&self, dynamic: &[DynamicAccount]) -> Result<(), StoreError> {
 		let file = DynamicFile {
-			accounts: dynamic.to_vec(),
+			accounts: self.sealed_for_disk(dynamic)?,
 		};
 		let text = toml::to_string_pretty(&file)
 			.map_err(|error| StoreError::Invalid(error.to_string()))?;
@@ -614,7 +617,7 @@ impl AccountStore {
 				.map(|domain| (domain.clone(), account.name.clone()))
 		});
 		let scram = build::scram(&dynamic);
-		let totp = build::totp(&dynamic);
+		let totp = build::totp(&dynamic, &self.crypto);
 		// Disabled accounts are passed through to the directory as a name
 		// set so `authenticate_local` can reject them before any password
 		// work runs. The set rebuilds on every directory swap, mirroring
