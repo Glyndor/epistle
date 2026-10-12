@@ -162,14 +162,7 @@ impl AuthLimiter {
 	}
 }
 
-/// What the API exposes about an account: never credentials.
-#[derive(Clone, serde::Serialize)]
-pub struct AccountView {
-	pub name: String,
-	pub addresses: Vec<String>,
-	/// Whether the account is API-managed (deletable) or from the config.
-	pub dynamic: bool,
-}
+pub use super::account_view::AccountView;
 
 impl ApiState {
 	/// Build the state from configuration data. API keys are loaded from
@@ -508,6 +501,7 @@ impl ApiState {
 			.account_views()
 			.into_iter()
 			.map(|(name, addresses, dynamic)| AccountView {
+				display_name: self.inner.store.display_name(&name),
 				name,
 				addresses,
 				dynamic,

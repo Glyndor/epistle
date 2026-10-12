@@ -143,16 +143,19 @@ fn admissible_accounts_filters_using_the_same_rule() {
 			name: "ann".to_string(),
 			addresses: vec!["ann@a.example".to_string()],
 			dynamic: false,
+			display_name: None,
 		},
 		AccountView {
 			name: "bob".to_string(),
 			addresses: vec!["bob@b.example".to_string()],
 			dynamic: false,
+			display_name: None,
 		},
 		AccountView {
 			name: "both".to_string(),
 			addresses: vec!["both@a.example".to_string(), "both@b.example".to_string()],
 			dynamic: false,
+			display_name: None,
 		},
 	];
 	let principal = Principal::Domains {

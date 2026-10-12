@@ -44,7 +44,11 @@ pub async fn list(
 /// able to enumerate another tenant's account names by reading the status
 /// code, so an account it may not touch is indistinguishable from one that
 /// does not exist.
-fn require_in_scope(state: &ApiState, scope: &DomainScope, name: &str) -> Result<(), ApiError> {
+pub(super) fn require_in_scope(
+	state: &ApiState,
+	scope: &DomainScope,
+	name: &str,
+) -> Result<(), ApiError> {
 	let known = state
 		.accounts()
 		.into_iter()
@@ -65,6 +69,8 @@ pub struct CreateAccount {
 	name: String,
 	addresses: Vec<String>,
 	password: String,
+	#[serde(default)]
+	display_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -117,6 +123,7 @@ pub async fn create(
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			display_name: request.display_name,
 			..DynamicAccount::default()
 		})
 		.map_err(store_error)?;
@@ -278,7 +285,7 @@ pub async fn disable_totp(
 	Ok(Json(PasswordChanged { updated: name }))
 }
 
-fn store_error(error: StoreError) -> ApiError {
+pub(super) fn store_error(error: StoreError) -> ApiError {
 	match error {
 		StoreError::Invalid(message) => ApiError::invalid_input(&message),
 		StoreError::Duplicate(what) => ApiError::invalid_input(&format!("{what} already exists.")),

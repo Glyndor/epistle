@@ -48,7 +48,7 @@ fn render_user(account: &DynamicAccount) -> User {
 		schemas: vec![USER_SCHEMA.to_string()],
 		external_id: None,
 		user_name: account.name.clone(),
-		display_name: Some(account.name.clone()),
+		display_name: account.display_name.clone(),
 		active: !account.disabled,
 		emails,
 		name: Some(Name::default()),
@@ -258,6 +258,7 @@ pub async fn create_user(
 		disabled: !active,
 		quota_bytes: None,
 		allowed_protocols: None,
+		display_name: body.display_name.clone(),
 		..DynamicAccount::default()
 	};
 	state.store().add(account).map_err(store_to_scim)?;
@@ -340,6 +341,7 @@ pub async fn put_user(
 				disabled: !body.active,
 				quota_bytes: None,
 				allowed_protocols: existing.allowed_protocols.clone(),
+				display_name: body.display_name.clone(),
 				..DynamicAccount::default()
 			},
 		)
@@ -399,8 +401,17 @@ fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<()
 				.map_err(store_to_scim)?;
 			Ok(())
 		}
+		("replace", Some("displayName")) | ("add", Some("displayName")) => {
+			let display_name = op.value.as_str().unwrap_or_default();
+			state
+				.store()
+				.set_display_name(id, display_name)
+				.map_err(store_to_scim)?;
+			Ok(())
+		}
 		("replace", Some(path)) | ("add", Some(path)) => Err(ScimError::invalid(format!(
-			"`{path}` cannot be modified via PATCH; only `active` and `password` are accepted"
+			"`{path}` cannot be modified via PATCH; only `active`, `password` and \
+			 `displayName` are accepted"
 		))),
 		("replace", None) | ("add", None) => {
 			Err(ScimError::invalid("a `path` is required for replace/add"))
