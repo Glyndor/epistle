@@ -50,5 +50,8 @@ fn enabled_uidonly_refuses_a_sequence_number_fetch() {
 		"f1 BAD [UIDREQUIRED] FETCH requires UID under UIDONLY\r\n"
 	);
 	let uid_fetch = text(&session.command_line("f2 UID FETCH 1:* (FLAGS)"));
-	assert!(uid_fetch.contains("f2 OK"), "{uid_fetch}");
+	assert!(
+		uid_fetch.contains("f2 OK"),
+		"UID FETCH must still complete under UIDONLY"
+	);
 }

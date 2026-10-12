@@ -51,7 +51,7 @@ async fn upload(app: &Router, account: &str, body: &[u8]) -> uuid::Uuid {
 		.body(Body::from(body.to_vec()))
 		.expect("request");
 	let response = app.clone().oneshot(request).await.expect("response");
-	assert_eq!(response.status(), StatusCode::OK, "upload to {account}");
+	assert_eq!(response.status(), StatusCode::OK, "upload status");
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("body");

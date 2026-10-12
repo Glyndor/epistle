@@ -142,7 +142,7 @@ fn a_mixed_case_account_name_and_address_are_stored_in_lowercase() {
 	assert!(added.status.success(), "{}", stderr(&added));
 	assert_eq!(
 		stderr(&added),
-		"note: account name \"Alice\" is stored as \"alice\"\n"
+		"note: the account name is stored in lowercase without surrounding spaces; use that form from now on\n"
 	);
 	let added = epistle(
 		&[
@@ -159,7 +159,7 @@ fn a_mixed_case_account_name_and_address_are_stored_in_lowercase() {
 	assert!(added.status.success(), "{}", stderr(&added));
 	assert_eq!(
 		stderr(&added),
-		"note: account name \"Bob\" is stored as \"bob\"\n"
+		"note: the account name is stored in lowercase without surrounding spaces; use that form from now on\n"
 	);
 
 	// Every later command finds the account under any spelling.

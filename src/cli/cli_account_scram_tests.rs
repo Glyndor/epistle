@@ -81,8 +81,7 @@ fn password_change_with_scram_disabled_drops_the_verifier() {
 	let after = change_password(dir.path(), config.path());
 	assert!(
 		after.is_none(),
-		"with scram = false the CLI password change must leave no verifier, found one with i={}",
-		after.map(|stored| stored.iterations).unwrap_or_default()
+		"with scram = false the CLI password change must leave no verifier"
 	);
 }
 

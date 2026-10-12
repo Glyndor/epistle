@@ -139,7 +139,10 @@ fn read_secret_on_a_terminal_without_echo_control_refuses_to_read() {
 	// Interactive but no terminal to silence: reading would echo the secret,
 	// so nothing is read at all.
 	let (secret, err, unread) = with(true, "visible\n", |c| read_secret(c, "Password", true));
-	assert!(matches!(secret, Secret::Failed(_)), "{secret:?}");
+	assert!(
+		matches!(secret, Secret::Failed(_)),
+		"reading must fail rather than return what was typed"
+	);
 	assert_eq!(err, "");
 	assert_eq!(unread, "visible\n".len());
 }

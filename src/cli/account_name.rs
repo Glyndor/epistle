@@ -13,12 +13,16 @@ pub(crate) fn parse(raw: &str) -> Result<String, String> {
 }
 
 /// The stored form of a name typed for a new account, with a note on stderr
-/// when it differs from what was typed, so the operator knows which name
-/// to use from now on.
+/// when it differs from what was typed, so the operator knows to use the
+/// stored form from now on. The note repeats neither name: an account name
+/// is personal data, and stderr often ends up in a log.
 pub(crate) fn for_new_account(typed: &str) -> String {
 	let stored = account_name(typed);
 	if stored != typed {
-		eprintln!("note: account name \"{typed}\" is stored as \"{stored}\"");
+		eprintln!(
+			"note: the account name is stored in lowercase without surrounding spaces; \
+			 use that form from now on"
+		);
 	}
 	stored
 }
