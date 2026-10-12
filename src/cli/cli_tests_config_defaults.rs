@@ -11,7 +11,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Export { config, .. }
 		| Command::Import { config, .. }
 		| Command::Backup { config }
-		| Command::Restore { config }
+		| Command::Restore { config, .. }
 		| Command::Verify { config }
 		| Command::VerifyDns { config }
 		| Command::DnsRecords { config }

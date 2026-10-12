@@ -187,11 +187,23 @@ pub enum Command {
 	/// Replay a backup tar.gz (read from stdin) over the data directory and,
 	/// when a database is configured, into the database. The hard rule
 	/// matches `backup`: a `database.sql` in the archive that cannot be
-	/// loaded is a restore error, not a silent skip.
+	/// loaded is a restore error, not a silent skip. Refuses to overwrite
+	/// an existing `data_dir` or run against a live mail service unless
+	/// `--force` is set; `--dry-run` lists the entries that would be
+	/// written and changes nothing.
 	Restore {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Allow overwriting a non-empty data dir or restoring while the
+		/// mail service is running. Without this flag, the restore
+		/// refuses so a stray command cannot destroy live data.
+		#[arg(long)]
+		force: bool,
+		/// List the entries the restore would write, then exit without
+		/// touching `data_dir` or restarting the service.
+		#[arg(long)]
+		dry_run: bool,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {

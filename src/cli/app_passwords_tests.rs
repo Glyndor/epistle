@@ -11,9 +11,24 @@ fn config(data_dir: &std::path::Path) -> Config {
 	toml::from_str(&toml).expect("config parses")
 }
 
+/// Lay down a dynamic account row in `<data_dir>/accounts.toml` so the
+/// `create` command's "account must exist" check passes. The password
+/// hash is a placeholder; the test path does not authenticate.
+fn seed_dynamic_account(data_dir: &std::path::Path, name: &str, address: &str) {
+	let path = data_dir.join("accounts.toml");
+	std::fs::write(
+		&path,
+		format!(
+			"[[accounts]]\nname = \"{name}\"\naddresses = [\"{address}\"]\npassword_hash = \"stub\"\n"
+		),
+	)
+	.expect("write accounts.toml");
+}
+
 #[test]
 fn create_list_revoke_roundtrip() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	seed_dynamic_account(dir.path(), "alice", "alice@example.org");
 	let config = config(dir.path());
 
 	// Create prints the secret once.
@@ -60,6 +75,7 @@ fn create_list_revoke_roundtrip() {
 #[test]
 fn create_with_expiry_and_cidr_is_stored() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	seed_dynamic_account(dir.path(), "alice", "alice@example.org");
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
@@ -82,6 +98,7 @@ fn create_with_expiry_and_cidr_is_stored() {
 #[test]
 fn create_rejects_bad_cidr() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	seed_dynamic_account(dir.path(), "alice", "alice@example.org");
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
@@ -100,10 +117,47 @@ fn create_rejects_bad_cidr() {
 #[test]
 fn revoke_missing_label_fails() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	seed_dynamic_account(dir.path(), "alice", "alice@example.org");
 	let config = config(dir.path());
 	let mut out = Vec::new();
 	assert_eq!(
 		revoke(&config, "alice", "absent", &mut out),
 		ExitCode::FAILURE
 	);
+}
+
+#[test]
+fn create_refuses_unknown_account_and_writes_nothing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let mut out = Vec::new();
+	let exit = create(&config, "ghost", "phone", None, None, &mut out);
+	assert_eq!(exit, ExitCode::FAILURE, "unknown account must be refused");
+	// The store has no row, so no orphan credential is left behind:
+	// the check ran before any persistence.
+	let store_path = dir.path().join("app_passwords.toml");
+	assert!(
+		!store_path.exists(),
+		"store file must not appear on the refusal path"
+	);
+}
+
+#[test]
+fn create_refuses_static_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let toml = format!(
+		"hostname = \"mail.example.org\"\n\
+		 data_dir = \"{}\"\n\
+		 \n\
+		 [[accounts]]\n\
+		 name = \"alice\"\n\
+		 addresses = [\"alice@example.org\"]\n\
+		 password_hash = \"stub\"\n",
+		dir.path().display()
+	);
+	let config: Config = toml::from_str(&toml).expect("config");
+	let mut out = Vec::new();
+	let exit = create(&config, "alice", "phone", None, None, &mut out);
+	assert_eq!(exit, ExitCode::FAILURE, "static account must be refused");
+	assert!(!dir.path().join("app_passwords.toml").exists());
 }
