@@ -128,7 +128,7 @@ fn single_account_key_state(dir: &std::path::Path) -> (Router, String) {
 
 // --- JMAP method-level cross-account refusals ---------------------------------
 
-/// REJECTION — a domain-scoped key asking for `Mailbox/get` on a foreign
+/// REJECTION: a domain-scoped key asking for `Mailbox/get` on a foreign
 /// account gets the JMAP `accountNotFound` error. The same call from the
 /// configured token returns the mailbox (sanity, paired with the rejection
 /// test above).

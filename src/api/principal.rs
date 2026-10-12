@@ -13,14 +13,15 @@
 //!
 //! - `Admin`: the configured static token, or a key with no `domains` field
 //!   and no `account` field. Acts on any account.
-//! - `Domains { domains, token }`: a labeled API key that declared one or
-//!   more `domains`. Acts only on accounts whose addresses all live inside
-//!   the declared set. The `token` is the matched bearer, kept so handlers
-//!   can re-check scopes against the same key the middleware matched.
-//! - `Account { name, token }`: a credential that belongs to one account —
-//!   a per-user OAuth token once such a credential type is wired into the
-//!   bearer middleware, or an API key with `account = "<name>"`. Acts only
-//!   on that one account.
+//! - `Domains { domains, credential }`: a labeled API key that declared one
+//!   or more `domains`. Acts only on accounts whose addresses all live
+//!   inside the declared set. The `credential` is the matched bearer and
+//!   peer IP, kept so handlers can re-check scopes against the same key the
+//!   middleware matched.
+//! - `Account { name, credential }`: a credential that belongs to one
+//!   account: an API key with `account = "<name>"`, or a per-user OAuth
+//!   token once such a credential type is wired into the bearer middleware.
+//!   Acts only on that one account.
 //!
 //! Refusals surface as the JMAP `accountNotFound` (or HTTP 404 on
 //! upload/download) so the existence of other accounts is not revealed.
