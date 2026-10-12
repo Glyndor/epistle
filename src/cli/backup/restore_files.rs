@@ -139,9 +139,7 @@ pub(super) fn is_private_key_path(relative: &Path) -> bool {
 	// Exact filenames: anything that sits at the data_dir root and is a known
 	// server-wide key. The match is by tail so `accounts/<name>/key` (if such
 	// a path is ever added) does not collide.
-	if path_str == "log-pseudonym.key"
-		|| path_str.ends_with("/log-pseudonym.key")
-	{
+	if path_str == "log-pseudonym.key" || path_str.ends_with("/log-pseudonym.key") {
 		return true;
 	}
 	// Any file ending in `.key` is private by convention: DKIM selectors

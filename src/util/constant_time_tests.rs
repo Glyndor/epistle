@@ -36,7 +36,10 @@ fn scram_stored_key_check() {
 	let mut wrong_same_length = stored_key;
 	wrong_same_length[0] ^= 0x01;
 	let wrong_other_length = [0xaa_u8; 31];
-	assert!(eq(&stored_key, &stored_key), "matching stored_key must be accepted");
+	assert!(
+		eq(&stored_key, &stored_key),
+		"matching stored_key must be accepted"
+	);
 	assert!(
 		!eq(&stored_key, &wrong_same_length),
 		"single-bit-flip stored_key must be rejected"

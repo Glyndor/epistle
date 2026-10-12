@@ -235,7 +235,11 @@ fn jwks_uri_allowed_matches_the_rule() {
 	// legacy self-pivot shortcut when the operator has not opted in. This is
 	// the legitimate internal IdP case the rule preserves.
 	assert!(jwks_uri_allowed(&[private], &[private], false));
-	assert!(jwks_uri_allowed(&[private, public], &[private, public], false));
+	assert!(jwks_uri_allowed(
+		&[private, public],
+		&[private, public],
+		false
+	));
 
 	// With allow_private_jwks = true, every private set passes regardless of
 	// overlap. The opt-in is the gate; the network does not second-guess.
@@ -260,7 +264,11 @@ fn jwks_uri_allowed_rejects_ipv4_mapped_ipv6_to_private() {
 	// A mapped-private jwks self-pivots only when the discovery set also
 	// contains that exact mapped address — not just any v4 from the same
 	// range.
-	assert!(jwks_uri_allowed(&[mapped_private], &[mapped_private], false));
+	assert!(jwks_uri_allowed(
+		&[mapped_private],
+		&[mapped_private],
+		false
+	));
 	assert!(!jwks_uri_allowed(
 		&[mapped_private],
 		&[discovery_with_mapped_public],
@@ -342,10 +350,14 @@ mod screen_with_resolver_stub {
 		// Discovery host resolves to a public address, JWKS host resolves
 		// to a private one. Without the opt-in, the screen rejects.
 		let mut stub = StubResolver::default();
-		stub.by_host
-			.insert("idp.example".to_string(), vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()]);
-		stub.by_host
-			.insert("jwks.idp.example".to_string(), vec!["10.0.0.5".parse::<Ipv4Addr>().unwrap().into()]);
+		stub.by_host.insert(
+			"idp.example".to_string(),
+			vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		stub.by_host.insert(
+			"jwks.idp.example".to_string(),
+			vec!["10.0.0.5".parse::<Ipv4Addr>().unwrap().into()],
+		);
 		let resolver = Arc::new(stub);
 
 		let discovery = https_url("idp.example");
@@ -362,7 +374,10 @@ mod screen_with_resolver_stub {
 		.expect_err("default policy must refuse a private jwks_uri");
 		match err {
 			OidcError::JwksUriOffScope(address) => {
-				assert!(address.contains("10.0.0.5"), "error must name the offending address: {address}")
+				assert!(
+					address.contains("10.0.0.5"),
+					"error must name the offending address: {address}"
+				)
 			}
 			other => panic!("expected JwksUriOffScope, got {other:?}"),
 		}
@@ -373,10 +388,14 @@ mod screen_with_resolver_stub {
 		// Same setup, with allow_private_jwks = true. The exact same private
 		// address is admitted because the operator accepted the risk.
 		let mut stub = StubResolver::default();
-		stub.by_host
-			.insert("idp.example".to_string(), vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()]);
-		stub.by_host
-			.insert("jwks.idp.example".to_string(), vec!["10.0.0.5".parse::<Ipv4Addr>().unwrap().into()]);
+		stub.by_host.insert(
+			"idp.example".to_string(),
+			vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		stub.by_host.insert(
+			"jwks.idp.example".to_string(),
+			vec!["10.0.0.5".parse::<Ipv4Addr>().unwrap().into()],
+		);
 		let resolver = Arc::new(stub);
 
 		let discovery = https_url("idp.example");
@@ -398,10 +417,14 @@ mod screen_with_resolver_stub {
 		// Both URLs resolve to public addresses. The opt-in is neither
 		// required nor load-bearing.
 		let mut stub = StubResolver::default();
-		stub.by_host
-			.insert("idp.example".to_string(), vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()]);
-		stub.by_host
-			.insert("jwks.idp.example".to_string(), vec!["1.1.1.1".parse::<Ipv4Addr>().unwrap().into()]);
+		stub.by_host.insert(
+			"idp.example".to_string(),
+			vec!["8.8.8.8".parse::<Ipv4Addr>().unwrap().into()],
+		);
+		stub.by_host.insert(
+			"jwks.idp.example".to_string(),
+			vec!["1.1.1.1".parse::<Ipv4Addr>().unwrap().into()],
+		);
 		let resolver = Arc::new(stub);
 
 		let discovery = https_url("idp.example");

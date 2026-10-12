@@ -10,15 +10,15 @@
 //! The `jwks_uri` named by the discovery document is fetched as a second
 //! request. That URL is chosen by the IdP, not the operator, so a hostile or
 //! compromised IdP could point it at an internal address (cloud metadata at
-//! `169.254.169.254`, a service on the LAN, ...). [`ensure_jwks_uri_in_scope`]
-//! closes that pivot: a `jwks_uri` that resolves to a private, loopback,
-//! link-local or unspecified address refuses to fetch by default; the operator
-//! must opt in with `[oauth] allow_private_jwks = true` (documented, off by
-//! default). The opt-in is the single gate because every other rationale a
-//! legitimate internal IdP can offer — "the same address is also reachable
-//! from the discovery host", "the JWKS points at the IdP itself" — also
-//! describes a successful SSRF pivot on top of an honest IdP, and trusting
-//! the network after the fact gives the pivot back to the attacker.
+//! `169.254.169.254`, a service on the LAN, ...). The off-scope screen
+//! refuses to fetch such a `jwks_uri` by default; the operator must opt
+//! in with `[oauth] allow_private_jwks = true` (documented, off by
+//! default). The opt-in is the single gate because every other rationale
+//! a legitimate internal IdP can offer — "the same address is also
+//! reachable from the discovery host", "the JWKS points at the IdP
+//! itself" — also describes a successful SSRF pivot on top of an honest
+//! IdP, and trusting the network after the fact gives the pivot back to
+//! the attacker.
 
 use std::net::{IpAddr, ToSocketAddrs};
 
@@ -142,7 +142,7 @@ impl NameResolver for SystemResolver {
 /// `resolver` is the DNS dependency used by the off-scope screen (production
 /// passes [`SystemResolver`], tests pass a stub). `allow_private_jwks`
 /// controls whether a `jwks_uri` that resolves to an internal address is
-/// allowed to fetch (see [`ensure_jwks_uri_in_scope`]).
+/// allowed to fetch.
 ///
 /// reqwest is built without the `json` feature here, so bodies are read with
 /// `.text()` and parsed with `serde_json`, matching the other callers.
@@ -157,13 +157,7 @@ pub async fn fetch_keys(
 	let discovery: Discovery =
 		serde_json::from_str(&body).map_err(|e| OidcError::BadJson(e.to_string()))?;
 	let jwks_uri = parse_endpoint(&discovery.jwks_uri)?;
-	ensure_jwks_uri_in_scope(
-		discovery_url,
-		&jwks_uri,
-		allow_private_jwks,
-		resolver,
-	)
-	.await?;
+	ensure_jwks_uri_in_scope(discovery_url, &jwks_uri, allow_private_jwks, resolver).await?;
 	let jwks_body = get_text(client, &jwks_uri).await?;
 	parse_jwks(&jwks_body, default_alg)
 }
@@ -223,11 +217,14 @@ pub(crate) async fn ensure_jwks_uri_in_scope_for_test(
 /// host, or every address a DNS lookup of the host name returns. An empty
 /// result (host did not resolve) is reported as a network error so a typo in
 /// the discovery doc does not silently fall through.
-async fn collect_ips(url: &HttpsUrl, resolver: &dyn NameResolver) -> Result<Vec<IpAddr>, OidcError> {
+async fn collect_ips(
+	url: &HttpsUrl,
+	resolver: &dyn NameResolver,
+) -> Result<Vec<IpAddr>, OidcError> {
 	match url.as_url().host() {
 		Some(url::Host::Ipv4(ip)) => Ok(vec![IpAddr::V4(ip)]),
 		Some(url::Host::Ipv6(ip)) => Ok(vec![IpAddr::V6(ip)]),
-		Some(url::Host::Domain(name)) => resolver.lookup(&name),
+		Some(url::Host::Domain(name)) => resolver.lookup(name),
 		None => Err(OidcError::Network(format!("OIDC URL {url} has no host"))),
 	}
 }
