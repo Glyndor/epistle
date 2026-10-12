@@ -94,7 +94,18 @@ impl Session {
 			flags,
 			replace: None,
 		});
-		let mut output = Output::text("+ ready for literal data\r\n".to_string());
+		// RFC 7888 §4: a non-synchronizing literal ({n+}) has no
+		// continuation response. The client already sent the payload
+		// in the same write as the command line, and Dovecot's
+		// imaptest (and any IMAP4rev2 client using LITERAL+) crashes
+		// when the server replies with `+ ready for literal data`
+		// because its APPEND state machine expects the tagged
+		// response next.
+		let mut output = if synchronizing {
+			Output::text("+ ready for literal data\r\n".to_string())
+		} else {
+			Output::text(String::new())
+		};
 		output.collect_literal = Some(size);
 		if utf8 {
 			output.literal_trailer = b")\r\n";
@@ -199,7 +210,12 @@ impl Session {
 			// a different message.
 			replace: Some((selected, target_uid)),
 		});
-		let mut output = Output::text("+ ready for literal data\r\n".to_string());
+		// See the matching note in `append_begin` above.
+		let mut output = if synchronizing {
+			Output::text("+ ready for literal data\r\n".to_string())
+		} else {
+			Output::text(String::new())
+		};
 		output.collect_literal = Some(size);
 		output
 	}
