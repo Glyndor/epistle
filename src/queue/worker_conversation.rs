@@ -97,7 +97,14 @@ impl Worker {
 				// starttls (required whenever AUTH is configured) forces TLS.
 				// DANE does not apply to a configured smarthost (RFC 7672 is
 				// keyed on the recipient's MX), so no TLSA records here.
-				(stream, host, auth, rule.starttls, Vec::new(), None)
+				(
+					stream,
+					host,
+					auth,
+					rule.starttls,
+					crate::dane::rrset::TlsaRrset::Absent,
+					None,
+				)
 			}
 			_ => {
 				// Direct (no rule, or kind = direct): MX delivery.
@@ -159,7 +166,7 @@ impl Worker {
 				mx_host: &server_name,
 				sts: fetched.as_ref(),
 				sts_invalid,
-				dane: !dane.is_empty(),
+				dane: !dane.records().is_empty(),
 				local_ip,
 				peer_ip,
 			};

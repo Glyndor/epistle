@@ -119,10 +119,9 @@ impl Worker {
 		self
 	}
 
-	/// DNSSEC-validated TLSA records for an MX host, queried at `_25._tcp.<host>`
-	/// (RFC 7672 §3). `Ok(vec![])` when DANE is disabled, the host publishes
-	/// none, or the response is not authenticated — the lookup only ever returns
-	/// trusted records, so an empty result means "no DANE" (opportunistic TLS).
+	/// The TLSA RRset of an MX host, queried at `_25._tcp.<host>` (RFC 7672
+	/// §3). `Absent` when DANE is disabled, the host publishes none, or the
+	/// response is not authenticated: only validated records ever count.
 	///
 	/// A transient TLSA lookup failure is propagated as `Err`, never collapsed
 	/// into an empty result: treating a temporary resolver error as "no DANE"
@@ -132,10 +131,10 @@ impl Worker {
 	async fn tlsa_for(
 		&self,
 		mx_host: &str,
-	) -> Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure> {
+	) -> Result<crate::dane::rrset::TlsaRrset, crate::spf::DnsFailure> {
 		match &self.dane_dns {
 			Some(dns) => dns.tlsa(&format!("_25._tcp.{mx_host}")).await,
-			None => Ok(Vec::new()),
+			None => Ok(crate::dane::rrset::TlsaRrset::Absent),
 		}
 	}
 
@@ -378,6 +377,10 @@ mod tests;
 #[cfg(test)]
 #[path = "worker_tests_tlsrpt.rs"]
 mod tests_tlsrpt;
+
+#[cfg(test)]
+#[path = "worker_tests_policy_matrix.rs"]
+mod tests_policy_matrix;
 
 #[cfg(test)]
 #[path = "worker_tests_recipients.rs"]

@@ -125,7 +125,7 @@ async fn own_outbound_client_delivers_over_starttls() {
 		b"Subject: over tls\r\n\r\nbody\r\n",
 		false,
 		None,
-		&[],
+		&crate::dane::rrset::TlsaRrset::Absent,
 		crate::config::OutboundTls::Opportunistic,
 		&mut tls,
 	)

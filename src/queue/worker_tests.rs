@@ -76,13 +76,13 @@ impl crate::spf::DnsLookup for DaneDns {
 		_name: &str,
 	) -> std::pin::Pin<
 		Box<
-			dyn Future<Output = Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure>>
+			dyn Future<Output = Result<crate::dane::rrset::TlsaRrset, crate::spf::DnsFailure>>
 				+ Send
 				+ '_,
 		>,
 	> {
 		let record = self.record.clone();
-		Box::pin(async move { Ok(vec![record]) })
+		Box::pin(async move { Ok(crate::dane::rrset::TlsaRrset::Usable(vec![record])) })
 	}
 }
 
@@ -124,7 +124,7 @@ impl crate::spf::DnsLookup for TlsaTempFailDns {
 		_name: &str,
 	) -> std::pin::Pin<
 		Box<
-			dyn Future<Output = Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure>>
+			dyn Future<Output = Result<crate::dane::rrset::TlsaRrset, crate::spf::DnsFailure>>
 				+ Send
 				+ '_,
 		>,

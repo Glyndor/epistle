@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 use hickory_resolver::config::{ProtocolConfig, ResolverConfig, ResolverOpts};
 
-use crate::dane::tlsa::TlsaRecord;
+use crate::dane::rrset::TlsaRrset;
 
 #[path = "dns_tests.rs"]
 #[cfg(test)]
@@ -89,18 +89,16 @@ pub trait DnsLookup: Send + Sync {
 	fn addresses(&self, name: &str) -> Lookup<'_, Vec<IpAddr>>;
 	/// MX exchange hostnames of a name.
 	fn mx(&self, name: &str) -> Lookup<'_, Vec<String>>;
-	/// DNSSEC-validated TLSA records of a name (the full owner name, e.g.
-	/// `_25._tcp.mx.example.com`).
+	/// The TLSA RRset of a name (the full owner name, e.g.
+	/// `_25._tcp.mx.example.com`), classified by
+	/// [`crate::dane::rrset::classify`].
 	///
-	/// DANE MUST NOT trust unvalidated TLSA (RFC 7672 §2.1): an implementation
-	/// returns records only when the DNS response was authenticated (DNSSEC
-	/// "secure"). When the response is unvalidated, the name does not exist, or
-	/// no records are published, this returns an empty vector — the caller then
-	/// treats the host as having no DANE policy (opportunistic TLS). The default
-	/// implementation returns no records, so a resolver without DNSSEC support
-	/// never enables DANE enforcement.
-	fn tlsa(&self, _name: &str) -> Lookup<'_, Vec<TlsaRecord>> {
-		Box::pin(async { Ok(Vec::new()) })
+	/// DANE MUST NOT trust unvalidated TLSA (RFC 7672 §2.1): records count
+	/// only when the DNS response was authenticated (DNSSEC "secure"). The
+	/// default implementation reports no RRset, so a resolver without DNSSEC
+	/// support never enables DANE enforcement.
+	fn tlsa(&self, _name: &str) -> Lookup<'_, TlsaRrset> {
+		Box::pin(async { Ok(TlsaRrset::Absent) })
 	}
 	/// PTR (reverse DNS) records for an IP address: every name the address
 	/// points at, in lower case without a trailing dot. A reverse lookup that
@@ -212,10 +210,12 @@ impl DnsLookup for SystemDns {
 		})
 	}
 
-	fn tlsa(&self, name: &str) -> Lookup<'_, Vec<TlsaRecord>> {
+	fn tlsa(&self, name: &str) -> Lookup<'_, TlsaRrset> {
 		let name = name.to_string();
 		Box::pin(async move {
+			use crate::dane::rrset::{TlsaAnswer, Validation};
 			use hickory_resolver::net::{DnsError, NetError};
+			use hickory_resolver::proto::dnssec::Proof;
 			use hickory_resolver::proto::rr::{RData, RecordType};
 			let lookup = match self
 				.resolver
@@ -223,28 +223,29 @@ impl DnsLookup for SystemDns {
 				.await
 			{
 				Ok(lookup) => lookup,
-				Err(NetError::Dns(DnsError::NoRecordsFound(_))) => return Ok(Vec::new()),
+				Err(NetError::Dns(DnsError::NoRecordsFound(_))) => return Ok(TlsaRrset::Absent),
 				Err(_) => return Err(DnsFailure::Temporary),
 			};
-			// Only DNSSEC-"secure" answers may be trusted for DANE (RFC 7672
-			// §2.1). A record whose proof is anything else (insecure, bogus,
-			// indeterminate) is dropped, so an unvalidated zone yields no TLSA
-			// and DANE does not engage — fail open to opportunistic TLS, never
-			// trust unauthenticated association data.
-			Ok(lookup
+			let answers: Vec<TlsaAnswer> = lookup
 				.answers()
 				.iter()
-				.filter(|record| record.proof.is_secure())
 				.filter_map(|record| match &record.data {
-					RData::TLSA(tlsa) => TlsaRecord::from_parts(
-						u8::from(tlsa.cert_usage),
-						u8::from(tlsa.selector),
-						u8::from(tlsa.matching),
-						tlsa.cert_data.clone(),
-					),
+					RData::TLSA(tlsa) => Some(TlsaAnswer {
+						validation: match record.proof {
+							Proof::Secure => Validation::Secure,
+							Proof::Insecure => Validation::Insecure,
+							Proof::Bogus => Validation::Bogus,
+							Proof::Indeterminate => Validation::Indeterminate,
+						},
+						usage: u8::from(tlsa.cert_usage),
+						selector: u8::from(tlsa.selector),
+						matching_type: u8::from(tlsa.matching),
+						data: tlsa.cert_data.clone(),
+					}),
 					_ => None,
 				})
-				.collect())
+				.collect();
+			crate::dane::rrset::classify(&answers)
 		})
 	}
 

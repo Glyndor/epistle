@@ -2,5 +2,6 @@
 //! DNSSEC-validated TLSA records instead of (or alongside) the public CA set.
 
 pub mod policy;
+pub mod rrset;
 pub mod tlsa;
 pub mod verify;

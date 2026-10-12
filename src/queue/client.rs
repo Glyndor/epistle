@@ -16,7 +16,7 @@ use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, S
 
 use crate::config::OutboundTls;
 use crate::dane::policy::DaneOutcome;
-use crate::dane::tlsa::TlsaRecord;
+use crate::dane::rrset::TlsaRrset;
 use crate::dane::verify::verify_chain;
 
 use super::tls_outcome::{STARTTLS_NOT_SUPPORTED, TLSA_INVALID, TlsOutcome, classify_handshake};
@@ -49,23 +49,24 @@ impl DeliveryError {
 /// One outbound delivery attempt over an established stream.
 ///
 /// `server_name` is the MX hostname used for TLS verification when the remote
-/// offers STARTTLS. `tlsa` are the DNSSEC-validated TLSA records for this MX (an
-/// empty slice means none): when present they make STARTTLS mandatory and the
-/// presented certificate is authenticated against them (RFC 7672). TLS is
-/// otherwise opportunistic: a remote without STARTTLS and no TLSA still gets the
-/// mail. Fail closed: a TLSA mismatch, or DANE-mandated STARTTLS the remote does
-/// not offer, returns a transient error so the message is retried, never sent in
-/// the clear.
+/// offers STARTTLS. `tlsa` is the classified TLSA RRset of this MX: any secure
+/// RRset, usable or not, makes STARTTLS mandatory (RFC 7672 section 2.2), and
+/// usable records authenticate the presented certificate. Without TLSA and
+/// without a mandate, TLS is opportunistic: a remote without STARTTLS still
+/// gets the mail. Fail closed: a TLSA mismatch, or mandatory STARTTLS the
+/// remote does not offer, returns a transient error so the message is
+/// retried, never sent in the clear.
 ///
-/// How the STARTTLS certificate is authenticated depends on three inputs:
-/// * `require_tls` (MTA-STS enforce / REQUIRETLS) → strict PKIX (webpki +
-///   hostname), always.
-/// * `tlsa` present → accept-any handshake, then `verify_chain` authenticates
-///   the chain against the TLSA records (DANE-EE certificates are commonly
-///   self-signed, so PKIX must not run first).
-/// * neither: `mode` decides — [`OutboundTls::Strict`] (the default) uses strict
-///   PKIX, [`OutboundTls::Opportunistic`] completes the handshake with any
-///   certificate (encryption without authentication, the SMTP norm).
+/// How the STARTTLS certificate is authenticated:
+/// * usable TLSA records: accept-any handshake, then `verify_chain`
+///   authenticates the chain against them (DANE-EE certificates are commonly
+///   self-signed, so PKIX must not run first). This holds under MTA-STS
+///   enforce and REQUIRETLS too.
+/// * otherwise `require_tls` (MTA-STS enforce / REQUIRETLS): strict PKIX
+///   (webpki + hostname).
+/// * otherwise `mode` decides: [`OutboundTls::Strict`] (the default) uses
+///   strict PKIX, [`OutboundTls::Opportunistic`] completes the handshake with
+///   any certificate (encryption without authentication, the SMTP norm).
 ///
 /// `tls` receives how the TLS part ended (for TLS-RPT), once the attempt gets
 /// as far as the STARTTLS decision; it stays `None` before that.
@@ -83,7 +84,7 @@ pub async fn deliver<S>(
 	data: &[u8],
 	require_tls: bool,
 	auth: Option<(&str, &str)>,
-	tlsa: &[TlsaRecord],
+	tlsa: &TlsaRrset,
 	mode: OutboundTls,
 	tls: &mut Option<TlsOutcome>,
 ) -> Result<(), DeliveryError>
@@ -132,13 +133,17 @@ pub async fn deliver_each<S>(
 	data: &[u8],
 	require_tls: bool,
 	auth: Option<(&str, &str)>,
-	tlsa: &[TlsaRecord],
+	tlsa: &TlsaRrset,
 	mode: OutboundTls,
 	tls: &mut Option<TlsOutcome>,
 ) -> Result<Vec<RecipientResult>, DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+	// Any secure TLSA RRset makes TLS mandatory, even when none of its
+	// records can authenticate the server (RFC 7672 section 2.2).
+	let tls_mandatory = require_tls || *tlsa != TlsaRrset::Absent;
+	let tlsa = tlsa.records();
 	let mut conn = Conn::new(Box::new(stream));
 	conn.expect(220).await?;
 
@@ -148,7 +153,7 @@ where
 		*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
 	}
 	// DANE presence makes STARTTLS mandatory (RFC 7672 §2.2): never downgrade.
-	if (require_tls || !tlsa.is_empty()) && !offers_starttls {
+	if tls_mandatory && !offers_starttls {
 		return Err(DeliveryError::Transient(
 			"TLS required (MTA-STS/DANE) but remote offers no STARTTLS".into(),
 		));
@@ -161,11 +166,10 @@ where
 			return Err(error);
 		}
 		let inner = conn.into_inner();
-		// Authenticate the certificate via PKIX (webpki + hostname) only when TLS
-		// is mandated, or when it is purely opportunistic AND strict mode is set.
-		// With TLSA present, DANE (below) authenticates instead, so the handshake
-		// accepts any certificate — a DANE-EE leaf is normally self-signed.
-		let authenticate_pkix = require_tls || (tlsa.is_empty() && mode == OutboundTls::Strict);
+		// Authenticate the certificate via PKIX (webpki + hostname) unless usable
+		// TLSA records do it (DANE, below), when TLS is mandated or strict mode
+		// is set; a DANE-EE leaf is normally self-signed.
+		let authenticate_pkix = pkix_required(require_tls, !tlsa.is_empty(), mode);
 		let (stream, peer_chain) = tls_connect(inner, server_name, authenticate_pkix)
 			.await
 			.map_err(|(error, result_type)| {
@@ -233,6 +237,17 @@ where
 	Ok(results)
 }
 
+/// Whether the STARTTLS certificate must pass PKIX (webpki roots and the
+/// MX name). Usable TLSA records authenticate the server instead: DANE
+/// takes precedence over MTA-STS (RFC 8461 section 2) and satisfies
+/// REQUIRETLS (RFC 8689 section 4.2.1), and a DANE-EE certificate is
+/// usually self-signed, so PKIX must not run in front of it. Without
+/// them, a mandate (MTA-STS enforce, REQUIRETLS) or strict mode requires
+/// PKIX.
+fn pkix_required(require_tls: bool, dane_records: bool, mode: OutboundTls) -> bool {
+	!dane_records && (require_tls || mode == OutboundTls::Strict)
+}
+
 /// Complete a STARTTLS handshake, returning the encrypted stream and the DER
 /// certificate chain the peer presented (leaf first), for DANE authentication.
 ///
@@ -257,6 +272,12 @@ async fn tls_connect(
 	let config = if authenticate {
 		let mut roots = RootCertStore::empty();
 		roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+		#[cfg(test)]
+		TEST_ROOTS.with(|extra| {
+			for root in extra.borrow().iter() {
+				let _ = roots.add(root.clone());
+			}
+		});
 		ClientConfig::builder()
 			.with_root_certificates(roots)
 			.with_no_client_auth()
@@ -288,6 +309,14 @@ async fn tls_connect(
 		.map(|certs| certs.iter().map(|cert| cert.as_ref().to_vec()).collect())
 		.unwrap_or_default();
 	Ok((tls, peer_chain))
+}
+
+#[cfg(test)]
+thread_local! {
+	/// Trust anchors added to the webpki roots for PKIX in tests on this
+	/// thread: no test certificate chains to a public root.
+	pub(crate) static TEST_ROOTS: std::cell::RefCell<Vec<CertificateDer<'static>>> =
+		const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A `rustls` certificate verifier that accepts ANY server certificate without
