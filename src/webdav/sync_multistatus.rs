@@ -82,7 +82,11 @@ pub async fn build(
 					etag = carddav::etag(&meta)
 				));
 				if let Ok(bytes) = tokio::fs::read(&resource).await {
-					let element = if is_calendar { "calendar-data" } else { "address-data" };
+					let element = if is_calendar {
+						"calendar-data"
+					} else {
+						"address-data"
+					};
 					let prefix = if is_calendar { "CAL" } else { "C" };
 					let text = String::from_utf8_lossy(&bytes);
 					response.push_str(&format!(
@@ -95,10 +99,10 @@ pub async fn build(
 				// file is gone (concurrent delete, race). Return 404 so
 				// the client drops the resource, matching what a
 				// freshly-emptied collection would do.
-				response.push_str(&format!(
+				response.push_str(
 					"\t\t\t</D:prop>\n\t\t\t<D:status>HTTP/1.1 404 Not Found</D:status>\n\
-					\t\t</D:propstat>\n\t</D:response>\n"
-				));
+					\t\t</D:propstat>\n\t</D:response>\n",
+				);
 				body.push_str(&response);
 				continue;
 			}

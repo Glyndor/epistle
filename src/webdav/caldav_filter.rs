@@ -189,7 +189,7 @@ pub fn parse(body: &str) -> Result<CalendarQueryFilter, Unsupported> {
 	// used inside `first_open` to extract the name; we
 	// re-extract here for the check.
 	let root_name = attr(body, root_open, "name").unwrap_or_default();
-	if root_name.to_ascii_uppercase() != "VCALENDAR" {
+	if !root_name.eq_ignore_ascii_case("VCALENDAR") {
 		return Err(Unsupported);
 	}
 	let mut components = Vec::new();
@@ -250,9 +250,7 @@ fn extract_time_range(content: &str) -> Option<TimeRange> {
 			continue;
 		}
 		let rest = &content[i..];
-		let Some(close) = rest.find('>') else {
-			return None;
-		};
+		let close = rest.find('>')?;
 		let tag = &rest[1..close];
 		if tag.starts_with('?') || tag.starts_with('!') {
 			i += close + 1;
@@ -340,9 +338,7 @@ fn extract_text_match(content: &str) -> Option<TextMatch> {
 			continue;
 		}
 		let rest = &content[i..];
-		let Some(close) = rest.find('>') else {
-			return None;
-		};
+		let close = rest.find('>')?;
 		let tag = &rest[1..close];
 		if tag.starts_with('?') || tag.starts_with('!') {
 			i += close + 1;
@@ -352,10 +348,7 @@ fn extract_text_match(content: &str) -> Option<TextMatch> {
 		if local == "text-match" {
 			// `<C:text-match ...>TEXT</C:text-match>`.
 			let after_open = i + close + 1;
-			let Some((close_idx, _)) = matching_close(content, after_open, "text-match")
-			else {
-				return None;
-			};
+			let (close_idx, _) = matching_close(content, after_open, "text-match")?;
 			let inner = &content[after_open..close_idx];
 			let text = inner.trim().to_string();
 			// The attributes are on the open tag (at `i`), so
@@ -363,14 +356,14 @@ fn extract_text_match(content: &str) -> Option<TextMatch> {
 			let negate = attr(content, i, "negate-condition")
 				.map(|value| matches!(value.trim(), "yes" | "true" | "1"))
 				.unwrap_or(false);
-			let collation = attr(content, i, "collation")
-				.unwrap_or_else(|| "i;unicode-casemap".to_string());
+			let collation =
+				attr(content, i, "collation").unwrap_or_else(|| "i;unicode-casemap".to_string());
 			// Only two collations are defined; the rest are unsupported.
 			if collation != "i;unicode-casemap" && collation != "i;octet" {
 				return None;
 			}
-			let match_type = attr(content, i, "match-type")
-				.unwrap_or_else(|| "contains".to_string());
+			let match_type =
+				attr(content, i, "match-type").unwrap_or_else(|| "contains".to_string());
 			if !matches!(
 				match_type.as_str(),
 				"contains" | "equals" | "starts-with" | "ends-with"
@@ -410,9 +403,7 @@ pub fn matches(filter: &CalendarQueryFilter, ics: &str) -> bool {
 		// be absent from the object. The component list above
 		// already reflects "present", so a missing one always
 		// matches the is-not-defined case.
-		if comp_filter.is_not_defined
-			&& !components.iter().any(|c| c.name == comp_filter.name)
-		{
+		if comp_filter.is_not_defined && !components.iter().any(|c| c.name == comp_filter.name) {
 			return true;
 		}
 	}
@@ -514,9 +505,7 @@ fn extract_components(ics: &str) -> Vec<VComponent> {
 				// stack frame is `VCALENDAR`. After popping the
 				// component, the new top of stack tells us its
 				// parent.
-				if comp.name == name
-					&& stack.last().is_some_and(|p| p.name == "VCALENDAR")
-				{
+				if comp.name == name && stack.last().is_some_and(|p| p.name == "VCALENDAR") {
 					out.push(comp);
 				}
 				// Otherwise the component is nested (e.g. VALARM),
@@ -553,13 +542,13 @@ fn apply_line(comp: &mut VComponent, line: &str) {
 
 /// A handy constructor for the most common test filter: a single
 /// `comp-filter` of `name` on a top-level VCALENDAR, with the
-/// requested time-range. Returns `Err(())` for an empty range, which
+/// requested time-range. Returns `None` for an empty range, which
 /// is the only shape we use internally.
-pub fn time_range_only(component: &str, range: TimeRange) -> Result<CalendarQueryFilter, ()> {
+pub fn time_range_only(component: &str, range: TimeRange) -> Option<CalendarQueryFilter> {
 	if range.end <= range.start {
-		return Err(());
+		return None;
 	}
-	Ok(CalendarQueryFilter {
+	Some(CalendarQueryFilter {
 		components: vec![CompFilter {
 			name: component.to_ascii_uppercase(),
 			time_range: Some(range),
@@ -579,7 +568,10 @@ pub fn none() -> CalendarQueryFilter {
 /// Check whether a `.ics` resource should be served under the given
 /// `target` collection: the on-disk file has to be a regular file the
 /// filter can read.
-pub async fn load_and_match(filter: &CalendarQueryFilter, disk: &Path) -> Option<(String, Vec<u8>)> {
+pub async fn load_and_match(
+	filter: &CalendarQueryFilter,
+	disk: &Path,
+) -> Option<(String, Vec<u8>)> {
 	let data = tokio::fs::read(disk).await.ok()?;
 	let text = String::from_utf8_lossy(&data);
 	if !matches(filter, &text) {

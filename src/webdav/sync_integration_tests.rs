@@ -317,7 +317,15 @@ async fn sync_collection_infinite_level_is_forbidden() {
 async fn sync_collection_works_for_addressbook() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(&alice()), &[], MKCOL_ADDRESSBOOK).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
 	send(&app, "PUT", "/book/a.vcf", Some(&alice()), &[], VCARD).await;
 	let (status, body, _) = send(
 		&app,
@@ -499,9 +507,9 @@ async fn propfind_advertises_sync_token_getctag_and_supported_report_set() {
 	// Sync-token is a `urn:epistle:sync:<n>` URI.
 	assert!(text.contains("<D:sync-token>urn:epistle:sync:"));
 	// getctag is in the calendarserver namespace and carries the same value.
-	assert!(text.contains(
-		"<CS:getctag xmlns:CS=\"http://calendarserver.org/ns/\">urn:epistle:sync:"
-	));
+	assert!(
+		text.contains("<CS:getctag xmlns:CS=\"http://calendarserver.org/ns/\">urn:epistle:sync:")
+	);
 	// supported-report-set lists sync-collection.
 	assert!(text.contains("<D:supported-report-set>"));
 	assert!(text.contains("<D:report><D:sync-collection/></D:report>"));
@@ -511,7 +519,15 @@ async fn propfind_advertises_sync_token_getctag_and_supported_report_set() {
 async fn propfind_on_addressbook_advertises_same_set() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = test_app(dir.path());
-	send(&app, "MKCOL", "/book", Some(&alice()), &[], MKCOL_ADDRESSBOOK).await;
+	send(
+		&app,
+		"MKCOL",
+		"/book",
+		Some(&alice()),
+		&[],
+		MKCOL_ADDRESSBOOK,
+	)
+	.await;
 	let (status, body, _) = send(
 		&app,
 		"PROPFIND",
@@ -524,9 +540,9 @@ async fn propfind_on_addressbook_advertises_same_set() {
 	assert_eq!(status, StatusCode::MULTI_STATUS);
 	let text = String::from_utf8(body).unwrap();
 	assert!(text.contains("<D:sync-token>urn:epistle:sync:"));
-	assert!(text.contains(
-		"<CS:getctag xmlns:CS=\"http://calendarserver.org/ns/\">urn:epistle:sync:"
-	));
+	assert!(
+		text.contains("<CS:getctag xmlns:CS=\"http://calendarserver.org/ns/\">urn:epistle:sync:")
+	);
 	assert!(text.contains("<D:supported-report-set>"));
 	assert!(text.contains("<D:report><D:sync-collection/></D:report>"));
 }

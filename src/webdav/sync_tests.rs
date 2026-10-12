@@ -172,10 +172,13 @@ async fn changelog_path_is_inside_collection() {
 	let log = coll.join(CHANGELOG);
 	assert!(log.starts_with(coll.as_path()));
 	// And nothing else was touched in the parent.
-	assert!(std::fs::read_dir(dir.path())
-		.expect("read parent")
-		.flatten()
-		.all(|entry| entry.path() == coll || entry.path() == log
-			|| entry.path() == coll.join("coll")));
+	assert!(
+		std::fs::read_dir(dir.path())
+			.expect("read parent")
+			.flatten()
+			.all(|entry| entry.path() == coll
+				|| entry.path() == log
+				|| entry.path() == coll.join("coll"))
+	);
 	let _ = Path::new("unused");
 }

@@ -1,6 +1,6 @@
 use super::{
-	CalendarQueryFilter, CompFilter, PropFilter, TextMatch, TimeRange,
-	load_and_match, matches, none, parse, time_range_only,
+	CalendarQueryFilter, CompFilter, PropFilter, TextMatch, TimeRange, load_and_match, matches,
+	none, parse, time_range_only,
 };
 
 const EVENT: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:e1\r\nDTSTART:20260115T090000Z\r\nDTEND:20260115T100000Z\r\nSUMMARY:One\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
@@ -20,7 +20,7 @@ fn empty_filter_matches_everything() {
 fn time_range_filter_includes_overlapping_event() {
 	let range = TimeRange {
 		start: 1_766_620_800, // 2025-12-25T00:00:00Z
-		end: 1_769_904_000, // 2026-02-01T00:00:00Z
+		end: 1_769_904_000,   // 2026-02-01T00:00:00Z
 	};
 	let f = time_range_only("VEVENT", range).expect("filter");
 	assert!(matches(&f, EVENT));
@@ -30,7 +30,7 @@ fn time_range_filter_includes_overlapping_event() {
 fn time_range_filter_excludes_event_outside_window() {
 	let range = TimeRange {
 		start: 1_700_006_400, // 2023-11-15T00:00:00Z
-		end: 1_700_092_800, // 2023-11-16T00:00:00Z
+		end: 1_700_092_800,   // 2023-11-16T00:00:00Z
 	};
 	let f = time_range_only("VEVENT", range).expect("filter");
 	assert!(!matches(&f, EVENT));
@@ -42,7 +42,7 @@ fn time_range_filter_includes_a_recurring_occurrence_in_window() {
 	// third is 2026-01-03T08:00:00Z.
 	let range = TimeRange {
 		start: 1_767_312_000, // 2026-01-02T00:00:00Z
-		end: 1_767_398_400, // 2026-01-03T00:00:00Z
+		end: 1_767_398_400,   // 2026-01-03T00:00:00Z
 	};
 	let f = time_range_only("VEVENT", range).expect("filter");
 	// The window covers the 2nd occurrence (2026-01-02T08:00Z) and
@@ -180,11 +180,10 @@ fn prop_filter_is_not_defined_excludes_when_property_present() {
 	};
 	assert!(matches(&f, EVENT));
 	// With a LOCATION property added, the same filter excludes.
-	let with_location = format!(
-		"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+	let with_location = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
 		UID:e1\r\nDTSTART:20260115T090000Z\r\nDTEND:20260115T100000Z\r\n\
 		SUMMARY:One\r\nLOCATION:Office\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-	);
+		.to_string();
 	assert!(!matches(&f, &with_location));
 }
 

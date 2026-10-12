@@ -354,12 +354,10 @@ async fn put(target: &Path, request: Request) -> Response {
 			// `sync-collection` REPORT can see the new version. Only record
 			// when the parent is a calendar or addressbook; the rest of the
 			// WebDAV tree (loose files) has no log.
-			if let Some(relative) = resource_relative(parent, target) {
-				if caldav::is_calendar(parent) {
-					super::sync::record(parent, &relative, false).await;
-				} else if carddav::is_addressbook(parent) {
-					super::sync::record(parent, &relative, false).await;
-				}
+			if let Some(relative) = resource_relative(parent, target)
+				&& (caldav::is_calendar(parent) || carddav::is_addressbook(parent))
+			{
+				super::sync::record(parent, &relative, false).await;
 			}
 			put_success(target, existed).await
 		}

@@ -513,9 +513,7 @@ fn element_text(body: &str, name: &str) -> Option<String> {
 			continue;
 		}
 		let rest = &body[i..];
-		let Some(close) = rest.find('>') else {
-			return None;
-		};
+		let close = rest.find('>')?;
 		let tag = &rest[1..close];
 		let local = tag
 			.rsplit(':')
@@ -525,9 +523,7 @@ fn element_text(body: &str, name: &str) -> Option<String> {
 			.trim();
 		if local == name {
 			let after = &rest[close + 1..];
-			let Some(end) = after.find('<') else {
-				return None;
-			};
+			let end = after.find('<')?;
 			return Some(after[..end].to_string());
 		}
 		i += close + 1;

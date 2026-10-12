@@ -79,7 +79,10 @@ async fn send(
 	let mut builder = Request::builder().method(method).uri(path);
 	if let Some(creds) = auth {
 		let encoded = base64_encode(creds.as_bytes());
-		builder = builder.header(axum::http::header::AUTHORIZATION, format!("Basic {encoded}"));
+		builder = builder.header(
+			axum::http::header::AUTHORIZATION,
+			format!("Basic {encoded}"),
+		);
 	}
 	for (name, value) in headers {
 		builder = builder.header(*name, value);
