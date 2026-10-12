@@ -99,8 +99,9 @@ LIST-STATUS BINARY QRESYNC OBJECTID SAVEDATE PREVIEW REPLACE ACL RIGHTS=texk MET
 		);
 		// NOTIFY (RFC 5465) is only usable once authenticated; advertise it in the
 		// post-authentication capability set, like other selected-state features.
+		// UIDONLY (RFC 9586) is turned on with ENABLE, which needs a login too.
 		if self.account().is_some() {
-			capabilities.push_str(" NOTIFY");
+			capabilities.push_str(" NOTIFY UIDONLY");
 		}
 		if self.tls_available {
 			capabilities.push_str(" STARTTLS");
