@@ -42,24 +42,20 @@ jobs:
     name: database integration (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
     strategy:
-      # Two legs: the floor (`MIN_SERVER_VERSION = 14` in `src/db/mod.rs`) and
-      # the current major. `include:` gives exactly these two legs and keeps
-      # the per-leg image (each major has its own digest) in the same row.
-      # A Cartesian product (`postgres:` × `image:`) would create two
-      # spurious cross-product legs and silently test unsupported pairs.
+      # One leg: the floor (`MIN_SERVER_VERSION = 18` in `src/db/mod.rs`),
+      # which is also the major the stack runs. When a newer major ships,
+      # add it as a second `include:` row with its own digest.
       fail-fast: false
       matrix:
         include:
-          - postgres: 14
-            image: postgres:14@sha256:7e900619df8eca59f34c7fb280a0bcb46e51c75f1697e98bb99f31183f71b762
           - postgres: 18
             image: postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
     services:
       postgres:
         # Digest-pinned: a major tag is a moving target, so a retag would
         # silently change what the integration tests run against. The
-        # `postgres:14` digest was resolved locally on the runner host with
-        # `podman pull docker.io/library/postgres:14` and
+        # digest was resolved locally on the runner host with
+        # `podman pull docker.io/library/postgres:18` and
         # `podman image inspect --format '{{.Digest}}'`. Bump the digest
         # deliberately, the way rust-debian.yml pins its build image.
         image: ${{ matrix.image }}
