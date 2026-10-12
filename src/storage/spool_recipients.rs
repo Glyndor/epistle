@@ -70,8 +70,17 @@ impl Envelope {
 			})
 	}
 
-	/// Replace the state of `recipient`.
+	/// Replace the state of `recipient`. The first write gives every
+	/// recipient its own entry, inherited from the entry-wide fields, so a
+	/// later change to those fields (see [`Envelope::settle`]) does not leak
+	/// into recipients that were never attempted.
 	pub fn set_recipient_state(&mut self, recipient: &str, state: RecipientState) {
+		if self.recipient_state.is_empty() {
+			for other in self.recipients.clone() {
+				let inherited = self.recipient_state(&other);
+				self.recipient_state.insert(other, inherited);
+			}
+		}
 		self.recipient_state.insert(recipient.to_string(), state);
 	}
 
@@ -129,3 +138,7 @@ impl Envelope {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "spool_recipients_tests.rs"]
+mod tests;
