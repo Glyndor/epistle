@@ -12,13 +12,15 @@ use std::sync::Arc;
 
 use super::blob_path;
 use crate::imap::mailbox;
-use crate::storage::{BlobBackend, MessageCrypto};
+use crate::storage::{BlobAccount, BlobBackend, MessageCrypto};
 
 /// Read an uploaded blob by id (rejecting any path separators in the id),
 /// decoding the at-rest envelope. Fails closed: a blob that cannot be decrypted
-/// is not returned rather than served as ciphertext, and a blob whose `.owner`
-/// sidecar does not name the requesting account is not returned either — the
-/// sidecar gates cross-account reads of the shared blob pool.
+/// is not returned rather than served as ciphertext. The backend only looks in
+/// the requesting account's partition and in the shared pool older versions
+/// wrote; there a blob whose `.owner` sidecar does not name the requesting
+/// account is not returned either. A blob in the shared pool whose owner was
+/// never recorded is served to no account.
 pub(super) async fn read_blob(
 	backend: &Arc<dyn BlobBackend>,
 	account: &str,
@@ -28,18 +30,19 @@ pub(super) async fn read_blob(
 	// Parse at the boundary: below this line the id is a `Uuid`, so a path
 	// built from it is bound to the configured backend's namespace.
 	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
+	let partition = BlobAccount::new(account)?;
 	// Owner sidecar is mandatory for every uploaded blob: missing, empty, or
 	// mismatching means the blob is not (or no longer) owned by `account`, so
 	// it must not be served. Pre-existing blobs from before this gate was
 	// introduced get an `.owner` written by the startup backfill; transient
 	// uploads that never get referenced stay sidecar-less and become
 	// unservable (the reclaim task sweeps them after their TTL anyway).
-	let owner_bytes = backend.get(blob_id, ".owner").await.ok()??;
+	let owner_bytes = backend.get(&partition, blob_id, ".owner").await.ok()??;
 	let owner = String::from_utf8(owner_bytes).ok()?;
 	if owner.as_str() != account {
 		return None;
 	}
-	let stored = backend.get(blob_id, "").await.ok()??;
+	let stored = backend.get(&partition, blob_id, "").await.ok()??;
 	crypto.decode(&stored).ok()
 }
 
@@ -47,10 +50,12 @@ pub(super) async fn read_blob(
 /// sidecar written at upload time). Returns `None` for stored messages.
 pub(super) async fn read_blob_type(
 	backend: &Arc<dyn BlobBackend>,
+	account: &str,
 	blob_id: &str,
 ) -> Option<String> {
 	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
-	let bytes = backend.get(blob_id, ".type").await.ok()??;
+	let account = BlobAccount::new(account)?;
+	let bytes = backend.get(&account, blob_id, ".type").await.ok()??;
 	let value = String::from_utf8(bytes).ok()?;
 	(!value.is_empty()).then_some(value)
 }
@@ -65,10 +70,15 @@ const OWNER_SIDECAR_SUFFIX: &str = ".owner";
 pub(super) async fn write_blob_owner(
 	backend: &Arc<dyn BlobBackend>,
 	blob_id: uuid::Uuid,
-	account: &str,
+	account: &BlobAccount,
 ) -> Result<(), crate::storage::BlobError> {
 	backend
-		.put(blob_id, OWNER_SIDECAR_SUFFIX, account.as_bytes())
+		.put(
+			account,
+			blob_id,
+			OWNER_SIDECAR_SUFFIX,
+			account.as_str().as_bytes(),
+		)
 		.await
 }
 
@@ -78,19 +88,25 @@ pub(super) async fn write_blob_owner(
 #[cfg(test)]
 pub(crate) async fn read_blob_owner(
 	backend: &Arc<dyn BlobBackend>,
+	account: &str,
 	blob_id: &str,
 ) -> Option<String> {
 	let blob_id = uuid::Uuid::parse_str(blob_id).ok()?;
-	let bytes = backend.get(blob_id, OWNER_SIDECAR_SUFFIX).await.ok()??;
+	let account = BlobAccount::new(account)?;
+	let bytes = backend
+		.get(&account, blob_id, OWNER_SIDECAR_SUFFIX)
+		.await
+		.ok()??;
 	let value = String::from_utf8(bytes).ok()?;
 	(!value.is_empty()).then_some(value)
 }
 
 /// Bytes counted against an account's storage quota: its stored mail (every
-/// message across INBOX and folders) plus the uploaded blob store. JMAP blobs
-/// live in one shared `<data_dir>/blobs` pool that is not partitioned per
-/// account, so the whole pool is counted — a conservative, fail-closed choice
-/// that never under-counts usage when enforcing the quota on upload.
+/// message across INBOX and folders), the blobs in its partition, and the
+/// whole shared pool older versions wrote. The shared pool is not split by
+/// account, so all of it counts against every account: a conservative,
+/// fail-closed choice that never under-counts usage when enforcing the quota
+/// on upload.
 ///
 /// Sizes on the blob side are read directly off the filesystem rather than
 /// through the backend: the FS backend's `list()` only returns ids, and the
@@ -101,19 +117,20 @@ pub fn account_usage_bytes(
 	account: &str,
 	crypto: &MessageCrypto,
 ) -> u64 {
-	mailbox::account_usage(data_dir, account, crypto).saturating_add(blobs_usage_bytes(data_dir))
+	let mut blobs = blob_path::walk_shared(data_dir);
+	if let Some(account) = BlobAccount::new(account) {
+		blobs.extend(blob_path::walk_account(data_dir, &account));
+	}
+	mailbox::account_usage(data_dir, account, crypto).saturating_add(blobs_usage_bytes(&blobs))
 }
 
-/// Total size in bytes of the uploaded blob store, counting blob payloads and
-/// their `.type` and `.owner` sidecars under `<data_dir>/blobs`.
-fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
+/// Total size in bytes of `blobs`, counting each payload and the `.type` and
+/// `.owner` sidecars stored next to it.
+fn blobs_usage_bytes(blobs: &[(uuid::Uuid, std::path::PathBuf)]) -> u64 {
 	let mut total = 0u64;
-	for (blob_id, path) in blob_path::walk(data_dir) {
-		for candidate in [
-			path,
-			blob_path::read_path(data_dir, blob_id, ".type"),
-			blob_path::read_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX),
-		] {
+	for (blob_id, path) in blobs {
+		for suffix in ["", ".type", OWNER_SIDECAR_SUFFIX] {
+			let candidate = path.with_file_name(format!("{blob_id}{suffix}"));
 			if let Ok(meta) = std::fs::metadata(&candidate)
 				&& meta.is_file()
 			{
@@ -133,8 +150,9 @@ fn blobs_usage_bytes(data_dir: &std::path::Path) -> u64 {
 pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> usize {
 	let now = std::time::SystemTime::now();
 	let mut removed = 0;
-	// `walk` yields payloads only, from both the sharded and the flat layout,
-	// so a blob written before this change is still reclaimed.
+	// `walk` yields payloads only, from every account partition and from
+	// both layouts of the shared pool, so a blob written before the
+	// partitions is still reclaimed.
 	for (blob_id, path) in blob_path::walk(data_dir) {
 		let expired = std::fs::metadata(&path)
 			.and_then(|meta| meta.modified())
@@ -143,7 +161,11 @@ pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> us
 			.is_some_and(|age| age > ttl);
 		if expired {
 			let _ = std::fs::remove_file(&path);
+			// A sidecar sits next to its payload, except in the shared pool
+			// where the ownership backfill may have written `.owner` to the
+			// sharded location beside a flat payload: remove both spots.
 			for sidecar in [".type", OWNER_SIDECAR_SUFFIX] {
+				let _ = std::fs::remove_file(path.with_file_name(format!("{blob_id}{sidecar}")));
 				let _ = std::fs::remove_file(blob_path::read_path(data_dir, blob_id, sidecar));
 			}
 			removed += 1;

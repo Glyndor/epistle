@@ -4,12 +4,15 @@
 //! mail-panel. Every endpoint requires the bearer token; the listener
 //! binds to localhost unless explicitly configured otherwise.
 
+mod account_bound;
 pub mod api_keys;
 mod audit;
 pub mod domain_scope;
 mod error;
 pub(crate) mod jmap;
+mod mail_from;
 pub mod oauth;
+mod principal;
 pub mod scim;
 mod state;
 pub mod tenant_limits;
@@ -18,6 +21,7 @@ pub mod v1;
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
+pub use principal::{Credential, Principal};
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
 
@@ -61,6 +65,12 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/upload/{account_id}",
 			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE + 1_048_576)),
 		)
+		// Runs after the bearer check below (layers wrap outward), so the
+		// matched credentials are already in the request.
+		.layer(middleware::from_fn_with_state(
+			state.clone(),
+			account_bound::confine,
+		))
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(
@@ -99,6 +109,10 @@ mod tests_b;
 #[cfg(test)]
 #[path = "scram_off_tests.rs"]
 mod scram_off_tests;
+
+#[cfg(test)]
+#[path = "account_bound_tests.rs"]
+mod account_bound_tests;
 
 #[cfg(test)]
 #[path = "api_tests_newrecipients.rs"]
@@ -147,6 +161,26 @@ mod jmap_tests_f;
 #[cfg(test)]
 #[path = "jmap_tests_g.rs"]
 mod jmap_tests_g;
+
+#[cfg(test)]
+#[path = "jmap_tests_principal.rs"]
+mod jmap_tests_principal;
+
+#[cfg(test)]
+#[path = "jmap_tests_principal_b.rs"]
+mod jmap_tests_principal_b;
+
+#[cfg(test)]
+#[path = "jmap_tests_principal_c.rs"]
+mod jmap_tests_principal_c;
+
+#[cfg(test)]
+#[path = "send_tests_principal.rs"]
+mod send_tests_principal;
+
+#[cfg(test)]
+#[path = "jmap_tests_partition.rs"]
+mod jmap_tests_partition;
 
 #[cfg(test)]
 #[path = "jmap_tests_limits.rs"]

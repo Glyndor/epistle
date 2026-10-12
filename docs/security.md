@@ -53,6 +53,29 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   null reverse-path from an authenticated session.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
+- JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,
+  never for an `accountId` the request names:
+  - **Admin**: the configured token, or an API key with neither `domains` nor
+    `account`. Reaches every account.
+  - **Domains**: an API key with `domains`. Reaches only accounts whose
+    addresses all sit in those domains.
+  - **Account**: an API key with `account = "<name>"` in `api_keys.toml`.
+    Reaches that one account, and only through JMAP and `/api/v1/send`:
+    every other route (`/api/v1/accounts`, `domains`, `queue`, SCIM, ...)
+    refuses it with `403 forbidden`.
+  A credential that matches no key reaches nothing. Every JMAP method, upload,
+  download and the WebSocket check the account against the principal; a
+  refused account gets the same `accountNotFound` (HTTP 404 on upload and
+  download) as one that does not exist, and the Session lists only the
+  accounts the principal reaches.
+- `/api/v1/send` acts for the bound account, or for the account that owns
+  `from` if the principal reaches it. `from` must be owned by that account,
+  the same check `EmailSubmission/set` applies to `mailFrom`; otherwise
+  `403 forbidden_from`, before any rate limit is spent.
+- Uploaded blobs live in a partition per account
+  (`<data_dir>/blobs/accounts/<account>/`). A blob is never found under
+  another account's name, whoever asks. Blobs from older versions in the
+  shared pool are served only to the owner their `.owner` sidecar records.
 
 ## Process and host
 

@@ -22,6 +22,7 @@ fn read_key(secret: &str) -> crate::api::ApiKey {
 		ip_cidr: None,
 		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
+		account: None,
 	}
 }
 

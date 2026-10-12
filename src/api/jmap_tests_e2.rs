@@ -21,7 +21,10 @@ async fn upload_writes_owner_sidecar() {
 	let (_, body) = post_raw(&app, "/jmap/upload/alice", Some(TOKEN.as_str()), None, b"x").await;
 	let blob_id =
 		uuid::Uuid::parse_str(body["blobId"].as_str().expect("blobId")).expect("blobId is a uuid");
-	let owner_path = crate::api::jmap::blob_path::read_path(dir.path(), blob_id, ".owner");
+	let alice = crate::storage::BlobAccount::new("alice").expect("alice");
+	let owner_path =
+		crate::api::jmap::blob_path::account_path(dir.path(), &alice, blob_id, ".owner")
+			.expect("alice's partition");
 	assert!(owner_path.exists(), "upload must write the owner sidecar");
 	assert_eq!(
 		std::fs::read_to_string(&owner_path).expect("read"),

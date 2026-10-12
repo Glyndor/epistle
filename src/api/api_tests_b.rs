@@ -20,6 +20,7 @@ async fn read_scoped_key_is_admitted_on_get() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -44,6 +45,7 @@ async fn read_scoped_key_is_rejected_on_send() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -79,6 +81,7 @@ async fn send_scoped_key_is_rejected_on_write() {
 			ip_cidr: None,
 			scopes: vec!["send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -117,6 +120,7 @@ async fn send_scoped_key_is_admitted_on_send() {
 			ip_cidr: None,
 			scopes: vec!["send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);

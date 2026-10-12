@@ -2,31 +2,47 @@
 
 use serde_json::{Value, json};
 
+use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
 
-use crate::smtp::address::Address;
 use crate::smtp::trace::ensure_submission_headers;
 
 /// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
 /// this server does not maintain a change log (`canCalculateChanges` is false),
 /// so the spec-correct response is the `cannotCalculateChanges` error.
-pub(super) fn cannot_calculate_changes(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn cannot_calculate_changes(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	json!(["error", { "type": "cannotCalculateChanges" }, call_id])
 }
 
 /// `EmailSubmission/set` (RFC 8621 §7.5): queue stored emails for delivery.
-pub(super) fn email_submission_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_submission_set(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let mut created = serde_json::Map::new();
@@ -94,12 +110,12 @@ fn submit_email(
 	// (JMAP `Envelope.mailFrom.email: null`), legal for bounces; a non-empty
 	// mailFrom that does not parse, or that the account does not own, is
 	// rejected with the RFC 8621 §7.5.2 `forbiddenFrom` error.
-	if !mail_from.is_empty() {
-		let parsed = Address::parse(&mail_from).map_err(|_| "invalidEmail")?;
-		if !state.owns_address(account, &parsed) {
-			return Err("forbiddenFrom");
+	crate::api::mail_from::check_mail_from(state, account, &mail_from).map_err(|refusal| {
+		match refusal {
+			crate::api::mail_from::MailFromRefusal::Invalid => "invalidEmail",
+			crate::api::mail_from::MailFromRefusal::NotOwned => "forbiddenFrom",
 		}
-	}
+	})?;
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
@@ -162,11 +178,19 @@ fn submit_email(
 }
 
 /// `Quota/get` (RFC 9425): the account's storage quota in octets.
-pub(super) fn quota_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn quota_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let used = crate::imap::mailbox::account_usage(state.data_dir(), account, state.crypto());
@@ -193,13 +217,21 @@ pub(super) fn quota_get(state: &ApiState, args: &Value, call_id: &str) -> Value 
 
 /// `Identity/get` (RFC 8621 §6.1): the account's sending identities, one per
 /// configured address.
-pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn identity_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
 	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	};
+	if !principal.admits_account(&view.name, &view.addresses) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
 	let list: Vec<Value> = view
 		.addresses
 		.iter()
@@ -224,11 +256,19 @@ pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Val
 }
 
 /// `Mailbox/set` (RFC 8621 §2.5): create, rename, and delete mailboxes.
-pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_set(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let dir = state.data_dir();
@@ -282,11 +322,19 @@ pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Valu
 }
 
 /// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
-pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let data_dir = state.data_dir();
@@ -317,11 +365,19 @@ pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Valu
 
 /// `Thread/get` (RFC 8621 §3): each email is its own singleton thread (no
 /// server-side threading yet), so a thread's id and its one email id match.
-pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn thread_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let mut list = Vec::new();
@@ -345,11 +401,19 @@ pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value
 }
 
 /// `Mailbox/query` (RFC 8621 §2.3): the account's mailbox ids, sorted by name.
-pub(super) fn mailbox_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_query(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let ids: Vec<String> = crate::imap::mailbox::list(state.data_dir(), account);
@@ -369,11 +433,19 @@ pub(super) fn mailbox_query(state: &ApiState, args: &Value, call_id: &str) -> Va
 }
 
 /// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
-pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_query(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let mailbox = args
@@ -404,11 +476,19 @@ pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Valu
 }
 
 /// `Email/get` (RFC 8621 §4.1): return parsed Email objects by id.
-pub(super) fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let requested: Vec<String> = args

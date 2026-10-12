@@ -108,6 +108,14 @@ pub struct ApiKey {
 	/// tenancy field must not silently narrow the keys already installed.
 	#[serde(default)]
 	pub domains: Vec<String>,
+	/// The single account this key may act on, if it is not a tenant- or
+	/// server-wide administrator. An `Account(name)` principal: the key can
+	/// only read or mutate the named account, regardless of the domain
+	/// configuration. Such a key reaches only JMAP and `/api/v1/send`; every
+	/// other route refuses it with a 403 (`account_bound::confine`). `None`
+	/// (the default) leaves the key at the previous behaviour.
+	#[serde(default)]
+	pub account: Option<String>,
 }
 
 impl ApiKey {

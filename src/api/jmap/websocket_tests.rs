@@ -3,8 +3,8 @@
 //! with JSON strings — no live WebSocket client is needed.
 
 use super::{PushState, handle_ws_message};
+use crate::api::Principal;
 use crate::api::router;
-use crate::api::state::MatchedAuth;
 use crate::api::tests::{TOKEN, request, test_state};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -15,14 +15,11 @@ fn one(frames: Vec<String>) -> Value {
 	serde_json::from_str(&frames[0]).expect("frame is JSON")
 }
 
-/// The configured bearer token grants every scope, so `handle_ws_message`
-/// dispatches unimpeded. (Scope-failure cases are exercised through the HTTP
-/// router in api_tests.rs, which goes through the real middleware.)
-fn auth_for_test() -> MatchedAuth {
-	MatchedAuth {
-		token: Some(TOKEN.to_string()),
-		client_ip: None,
-	}
+/// `Admin` principal matching the configured static token. The middleware
+/// would compute the same `Principal::Admin { credential: None }` for that bearer, so the
+/// `handle_ws_message` calls below dispatch unimpeded.
+fn principal_for_test() -> Principal {
+	Principal::Admin { credential: None }
 }
 
 #[test]
@@ -39,7 +36,7 @@ fn request_frame_returns_response_with_echoed_request_id() {
 	.to_string();
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&frame,
 		&mut push,
 	));
@@ -62,7 +59,7 @@ fn request_without_id_omits_request_id() {
 	.to_string();
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&frame,
 		&mut push,
 	));
@@ -77,7 +74,7 @@ fn unknown_type_returns_request_error() {
 	let mut push = PushState::default();
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&json!({"@type": "Frobnicate"}).to_string(),
 		&mut push,
 	));
@@ -93,7 +90,7 @@ fn unparseable_frame_returns_request_error() {
 	let mut push = PushState::default();
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		"{not json",
 		&mut push,
 	));
@@ -112,7 +109,7 @@ fn push_enable_then_mailbox_set_yields_state_change() {
 	// Opt the connection in (no dataTypes => all types).
 	let enable = handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&json!({"@type": "WebSocketPushEnable"}).to_string(),
 		&mut push,
 	);
@@ -132,7 +129,7 @@ fn push_enable_then_mailbox_set_yields_state_change() {
 		}, "c1"]],
 	})
 	.to_string();
-	let frames = handle_ws_message(&state, &auth_for_test(), &frame, &mut push);
+	let frames = handle_ws_message(&state, &principal_for_test(), &frame, &mut push);
 	assert_eq!(frames.len(), 2, "Response + StateChange: {frames:?}");
 	let response: Value = serde_json::from_str(&frames[0]).expect("json");
 	assert_eq!(response["@type"], "Response");
@@ -165,7 +162,7 @@ fn push_disabled_suppresses_state_change() {
 	})
 	.to_string();
 	// Push not enabled: only the Response, never a StateChange.
-	let frames = handle_ws_message(&state, &auth_for_test(), &frame, &mut push);
+	let frames = handle_ws_message(&state, &principal_for_test(), &frame, &mut push);
 	assert_eq!(frames.len(), 1, "{frames:?}");
 }
 
@@ -186,7 +183,12 @@ fn push_subscription_set_then_get_round_trips() {
 		}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &set, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&principal_for_test(),
+		&set,
+		&mut push,
+	));
 	let id = reply["methodResponses"][0][1]["created"]["s1"]["id"]
 		.as_str()
 		.expect("created id")
@@ -197,7 +199,12 @@ fn push_subscription_set_then_get_round_trips() {
 		"methodCalls": [["PushSubscription/get", {"ids": null}, "c2"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &get, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&principal_for_test(),
+		&get,
+		&mut push,
+	));
 	let list = reply["methodResponses"][0][1]["list"]
 		.as_array()
 		.expect("list");
@@ -218,7 +225,12 @@ fn push_subscription_set_rejects_missing_url() {
 		}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &set, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&principal_for_test(),
+		&set,
+		&mut push,
+	));
 	assert_eq!(
 		reply["methodResponses"][0][1]["notCreated"]["bad"]["type"],
 		"invalidProperties"
@@ -237,7 +249,12 @@ fn push_subscription_destroy_removes() {
 		}, "c1"]],
 	})
 	.to_string();
-	let reply = one(handle_ws_message(&state, &auth_for_test(), &set, &mut push));
+	let reply = one(handle_ws_message(
+		&state,
+		&principal_for_test(),
+		&set,
+		&mut push,
+	));
 	let id = reply["methodResponses"][0][1]["created"]["s1"]["id"]
 		.as_str()
 		.expect("id")
@@ -249,7 +266,7 @@ fn push_subscription_destroy_removes() {
 	.to_string();
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&destroy,
 		&mut push,
 	));
@@ -283,7 +300,7 @@ fn request_over_max_calls_in_request_is_refused_before_any_call_runs() {
 
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&frame(MAX_CALLS_IN_REQUEST),
 		&mut push,
 	));
@@ -295,7 +312,7 @@ fn request_over_max_calls_in_request_is_refused_before_any_call_runs() {
 
 	let reply = one(handle_ws_message(
 		&state,
-		&auth_for_test(),
+		&principal_for_test(),
 		&frame(MAX_CALLS_IN_REQUEST + 1),
 		&mut push,
 	));

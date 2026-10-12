@@ -15,6 +15,7 @@ fn state(dir: &std::path::Path, token: &str) -> ApiState {
 		ip_cidr: None,
 		scopes: vec!["read".into(), "write".into()],
 		domains: vec!["example.org".into()],
+		account: None,
 	})
 	.expect("key");
 	drop(keys);
