@@ -37,8 +37,8 @@ fn contains_active(text: &str, needle: &str) -> bool {
 #[test]
 fn rust_audit_report_opens_failure_issue_when_audit_failed_without_advisories() {
 	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/rust-audit.yml");
-	let text = fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {} | {e}", path.display()));
+	let text =
+		fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {} | {e}", path.display()));
 
 	assert!(
 		contains_active(&text, "RUN_URL:"),
@@ -66,8 +66,8 @@ fn rust_audit_report_opens_failure_issue_when_audit_failed_without_advisories() 
          flag is on the command line.",
 	);
 
-	let script_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-		.join(".github/scripts/rust_audit_combine.py");
+	let script_path =
+		Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/scripts/rust_audit_combine.py");
 	let script_text = fs::read_to_string(&script_path)
 		.unwrap_or_else(|e| panic!("read {} | {e}", script_path.display()));
 	assert!(

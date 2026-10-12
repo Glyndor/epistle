@@ -62,8 +62,8 @@ fn collect_run_blocks(text: &str) -> Vec<String> {
 #[test]
 fn rust_audit_passes_body_via_body_file_not_command_line() {
 	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/rust-audit.yml");
-	let text = fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {} | {e}", path.display()));
+	let text =
+		fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {} | {e}", path.display()));
 
 	// The advisory issue is opened or commented on in the `report:`
 	// job's run block. Its body must reach `gh` via `--body-file`, never
@@ -108,8 +108,7 @@ fn rust_audit_passes_body_via_body_file_not_command_line() {
 		".github/workflows/reusable-rust-audit.yml",
 	] {
 		let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(path_str);
-		let t = fs::read_to_string(&p)
-			.unwrap_or_else(|e| panic!("read {} | {e}", p.display()));
+		let t = fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {} | {e}", p.display()));
 		for run in collect_run_blocks(&t) {
 			assert!(
 				!run.contains("${{"),

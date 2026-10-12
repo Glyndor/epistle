@@ -56,10 +56,9 @@ fn extract_step(text: &str, step_name: &str) -> Option<String> {
 
 #[test]
 fn reusable_audit_uploads_json_unconditionally_and_includes_fuzz() {
-	let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-		.join(".github/workflows/reusable-rust-audit.yml");
-	let text = fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+	let path =
+		Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/reusable-rust-audit.yml");
+	let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
 	let step = extract_step(&text, "Upload cargo audit JSON")
 		.unwrap_or_else(|| panic!("reusable-rust-audit.yml has no `Upload cargo audit JSON` step"));

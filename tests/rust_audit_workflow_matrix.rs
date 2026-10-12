@@ -47,8 +47,7 @@ fn extract_block(text: &str, key: &str) -> Option<String> {
 #[test]
 fn rust_audit_matrix_audits_pr_head_when_event_is_pull_request() {
 	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/rust-audit.yml");
-	let text = fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+	let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
 	let matrix_section = extract_block(&text, "matrix:")
 		.unwrap_or_else(|| panic!("rust-audit.yml has no `strategy.matrix` for the audit matrix"));

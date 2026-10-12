@@ -68,8 +68,7 @@ fn guard_skips_pull_request(block: &str, want_outcome: &str) -> bool {
 #[test]
 fn rust_audit_report_and_close_skip_on_pull_request() {
 	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/rust-audit.yml");
-	let text = fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+	let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
 	let report = extract_job_block(&text, REPORT_KEY)
 		.unwrap_or_else(|| panic!("rust-audit.yml has no `report:` job"));

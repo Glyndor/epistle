@@ -29,8 +29,7 @@ fn contains_active(text: &str, needle: &str) -> bool {
 #[test]
 fn rust_audit_close_uses_gh_issue_list_with_repeated_label_flags() {
 	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/rust-audit.yml");
-	let text = fs::read_to_string(&path)
-		.unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+	let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
 	// The broken shape must be gone. `tr ',' '%2C'` is character-level,
 	// not string-level, so the comma that should separate labels was
@@ -64,8 +63,7 @@ fn rust_audit_close_uses_gh_issue_list_with_repeated_label_flags() {
 	// present so the close loop iterates over a number list rather
 	// than the full issue objects.
 	assert!(
-		contains_active(&text, "--json number")
-			&& contains_active(&text, "--jq '.[].number'"),
+		contains_active(&text, "--json number") && contains_active(&text, "--jq '.[].number'"),
 		"rust-audit.yml close job does not narrow the issue list to numbers.\n\
          `gh issue list --json number --jq '.[].number'` is the filter \
          that turns the list of issue objects into one number per line \
