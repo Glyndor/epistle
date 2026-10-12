@@ -9,8 +9,9 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::{Extension, Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{Extension, FromRequest, Path, State};
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,11 +19,6 @@ use serde_json::{Value, json};
 use super::Principal;
 use super::state::{ApiState, MatchedAuth};
 use crate::api::api_keys::Scope;
-
-/// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
-/// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
-/// `urn:ietf:params:jmap:error:limit` problem-details response.
-pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
 
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
@@ -37,7 +33,7 @@ pub mod event_source;
 pub use download::download;
 mod email_submission;
 mod limits;
-pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
+pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE};
 mod methods;
 mod objects;
 pub(crate) mod push_subscription;
@@ -101,7 +97,7 @@ pub async fn session(
 	Json(json!({
 		"capabilities": {
 			CORE_CAPABILITY: {
-				"maxSizeUpload": 50_000_000u64,
+				"maxSizeUpload": MAX_UPLOAD_SIZE as u64,
 				"maxConcurrentUpload": 4u32,
 				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
 				"maxConcurrentRequests": 4u32,
@@ -166,8 +162,18 @@ pub struct Response {
 pub async fn api(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
-	Json(request): Json<Request>,
+	request: Result<Json<Request>, JsonRejection>,
 ) -> axum::response::Response {
+	// A body over the route's cap (`maxSizeRequest`) is answered with the
+	// RFC 8620 `limit` problem naming it, not axum's plain-text 413.
+	let request = match request {
+		Ok(Json(request)) => request,
+		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+			let problem = limits::request_too_large();
+			return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+		}
+		Err(rejection) => return rejection.into_response(),
+	};
 	let principal = Principal::for_token(&state, &auth);
 	match dispatch_request(&state, &principal, request) {
 		Ok(response) => Json(response).into_response(),
@@ -318,8 +324,7 @@ pub async fn upload(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Path(account): Path<String>,
-	headers: HeaderMap,
-	body: axum::body::Bytes,
+	request: axum::extract::Request,
 ) -> impl IntoResponse {
 	let principal = Principal::for_token(&state, &auth);
 	// `Write` scope: a read-only key must not be able to fill the quota or
@@ -336,20 +341,18 @@ pub async fn upload(
 	if !principal.admits_account(&view.name, &view.addresses) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	// Reject anything over the advertised maxSizeUpload with the spec's limit
-	// error (RFC 8620 §6.1) rather than a transport-level 413.
-	if body.len() > MAX_UPLOAD_SIZE {
-		return (
-			StatusCode::PAYLOAD_TOO_LARGE,
-			Json(json!({
-				"type": "urn:ietf:params:jmap:error:limit",
-				"limit": "maxSizeUpload",
-				"status": 413,
-				"detail": "upload exceeds maxSizeUpload",
-			})),
-		)
-			.into_response();
-	}
+	let headers = request.headers().clone();
+	// The route caps the body at the advertised maxSizeUpload; anything
+	// larger is answered with the spec's limit error (RFC 8620 §6.1) rather
+	// than a transport-level 413.
+	let body = match axum::body::Bytes::from_request(request, &()).await {
+		Ok(body) => body,
+		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+			let problem = limits::upload_too_large();
+			return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+		}
+		Err(rejection) => return rejection.into_response(),
+	};
 	// Enforce the account's storage quota before persisting (RFC 8620 §6.1:
 	// upload may be refused once a limit is reached). A configured limit is the
 	// hard cap; 0 means unlimited. Fail closed — reject when the blob would push

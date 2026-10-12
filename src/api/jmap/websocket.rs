@@ -159,6 +159,16 @@ pub fn handle_ws_message(
 		return vec![request_error("notJSON", "frame is not valid JSON").to_string()];
 	};
 	match value.get("@type").and_then(Value::as_str) {
+		// A Request frame is held to `maxSizeRequest` like a `POST /jmap/api`
+		// body, and refused before anything in it runs.
+		Some("Request") if text.len() > super::MAX_SIZE_REQUEST => {
+			let mut error = super::limits::request_too_large();
+			error["@type"] = json!("RequestError");
+			if let Some(id) = value.get("id").and_then(Value::as_str) {
+				error["requestId"] = json!(id);
+			}
+			vec![error.to_string()]
+		}
 		Some("Request") => handle_request(state, principal, &value, push),
 		Some("WebSocketPushEnable") => {
 			push.enabled = true;
