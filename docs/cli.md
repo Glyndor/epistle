@@ -911,9 +911,11 @@ configured window.
 
 These print documents the operator publishes so clients configure themselves
 from just an email address and password. Thunderbird autoconfig and Microsoft
-Autodiscover can also be served **live** by adding an `autoconfig` listener (see
-the [configuration reference](configuration.md)) and pointing the
-`autoconfig.<domain>`/`autodiscover.<domain>` subdomains at it.
+Autodiscover can also be served **live** by adding an `autoconfigs` listener
+(HTTPS on 443, or `autoconfig` for plain HTTP behind a proxy; see the
+[configuration reference](configuration.md)) and pointing the
+`autoconfig.<domain>`/`autodiscover.<domain>` subdomains at it. The same
+listener serves the Apple profile at `/mobileconfig?email=<address>`.
 
 | Command | What it does |
 |---|---|

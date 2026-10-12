@@ -157,9 +157,14 @@ So users configure a client from just their address and password:
 
 - Publish the **SRV** records from `epistle srv-records` (submission, IMAP(S),
   POP3S, ManageSieve, and the autodiscover SRV).
-- Point `autoconfig.example.org` and `autodiscover.example.org` at the host, and
-  serve the documents from `epistle autoconfig` / `epistle autodiscover` there.
-- Hand users the Apple profile from `epistle mobileconfig` for iOS/macOS.
+- Point `autoconfig.example.org` and `autodiscover.example.org` at the host and
+  add an `autoconfigs` listener (port 443). It serves the documents over HTTPS
+  with the server certificate, so no TLS proxy is needed; the certificate must
+  cover both names (add them to `[acme] domains`). Keep the plain `autoconfig`
+  listener only if a proxy already terminates TLS for those names.
+- Apple devices have no autodiscovery of their own: send users to
+  `https://autoconfig.example.org/mobileconfig?email=<address>` (or hand them
+  the file from `epistle mobileconfig`). The profile carries no password.
 
 ## Publishing records through epistle
 

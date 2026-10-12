@@ -27,6 +27,9 @@ pub struct Output {
 	/// exclusive with `collect_literal`: a command either accepts the
 	/// literal and stores it, or rejects it and discards it.
 	pub discard_literal: Option<usize>,
+	/// The octets that must follow a collected literal: CRLF, or `)` CRLF
+	/// for the RFC 6855 `UTF8 (~{n})` APPEND data item.
+	pub literal_trailer: &'static [u8],
 	/// Whether the session is now in the IDLE state; the network layer
 	/// expects `DONE` or a 29-minute timeout before resuming the pump.
 	pub idle: bool,
@@ -47,6 +50,7 @@ impl Output {
 			bytes: text.into_bytes(),
 			close: false,
 			collect_literal: None,
+			literal_trailer: b"\r\n",
 			discard_literal: None,
 			idle: false,
 			upgrade_tls: false,
@@ -113,6 +117,8 @@ pub struct Session {
 	pub(super) uidonly: bool,
 	/// Revision negotiated for the lifetime of this connection (RFC 9051 Appendix A).
 	pub(super) imap4rev2: bool,
+	/// UTF8=ACCEPT (RFC 6855) enabled: mailbox names cross the wire as UTF-8.
+	pub(super) utf8_accept: bool,
 	pub(super) idle_tag: Option<String>,
 	/// NOTIFY (RFC 5465) events requested for the selected mailbox. `None` means
 	/// NOTIFY is not active; an empty set means notifications are explicitly off.
@@ -227,6 +233,7 @@ impl Session {
 			pending_append: None,
 			uidonly: false,
 			imap4rev2: false,
+			utf8_accept: false,
 			idle_tag: None,
 			notify_selected: None,
 			tls_active: true,

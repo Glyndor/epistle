@@ -53,12 +53,13 @@ impl Session {
 				}
 				attributes.push_str("\\HasNoChildren");
 			}
-			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n"));
+			let wire = self.wire_name(&name);
+			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{wire}\"\r\n"));
 			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
 			if !return_status.is_empty()
 				&& let Some(parts) = self.status_parts(&account, &name, return_status)
 			{
-				response.push_str(&format!("* STATUS \"{name}\" ({parts})\r\n"));
+				response.push_str(&format!("* STATUS \"{wire}\" ({parts})\r\n"));
 			}
 		}
 		response.push_str(&format!("{tag} OK LIST completed\r\n"));
@@ -76,7 +77,8 @@ impl Session {
 			return Output::text(format!("{tag} NO cannot open mailbox\r\n"));
 		};
 		Output::text(format!(
-			"* STATUS \"{mailbox}\" ({parts})\r\n{tag} OK STATUS completed\r\n"
+			"* STATUS \"{}\" ({parts})\r\n{tag} OK STATUS completed\r\n",
+			self.wire_name(mailbox)
 		))
 	}
 

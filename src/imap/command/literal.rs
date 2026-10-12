@@ -13,13 +13,39 @@ pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError>
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
-	let (flags, literal) = parse_flags_and_literal(rest.trim(), &bad)?;
+	let rest = rest.trim();
+	let (flags, literal) = parse_flags_and_literal(rest, &bad)?;
 	Ok(Command::Append {
 		mailbox,
 		flags,
 		size: literal.size,
 		synchronizing: literal.synchronizing,
+		utf8: utf8_data_item(rest),
 	})
+}
+
+/// Whether an APPEND tail ends in the RFC 6855 §4 data item
+/// `UTF8 (~{n})`, whose literal is followed by a closing `)`.
+fn utf8_data_item(tail: &str) -> bool {
+	let Some(open) = tail.rfind('{') else {
+		return false;
+	};
+	let Some(head) = tail[..open].strip_suffix('~') else {
+		return false;
+	};
+	let Some(head) = head.trim_end().strip_suffix('(') else {
+		return false;
+	};
+	let head = head.trim_end();
+	let keyword = head
+		.len()
+		.checked_sub(4)
+		.and_then(|start| head.get(start..));
+	keyword.is_some_and(|keyword| keyword.eq_ignore_ascii_case("UTF8"))
+		&& head[..head.len() - 4]
+			.chars()
+			.next_back()
+			.is_none_or(|c| c == ' ' || c == ')')
 }
 
 /// Parse `REPLACE <seq> <mailbox> [(flags)] [date] {literal}` (RFC 8508).

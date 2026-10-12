@@ -16,7 +16,8 @@ use super::Config;
 /// Variants are a subset of [`ListenerKind`]: the only listeners that
 /// actually take a password are `smtp` / `submission` / `submissions` /
 /// `imap` / `imaps` / `pop3s` / `managesieve` / `api` / `webdav`. The
-/// static `metrics`, `acme`, and `autoconfig` listeners never authenticate,
+/// static `metrics`, `acme`, `autoconfig` and `autoconfigs` listeners never
+/// authenticate,
 /// so they are not in this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -59,6 +60,7 @@ impl TryFrom<ListenerKind> for Protocol {
 			ListenerKind::Metrics => Err("metrics listener does not authenticate"),
 			ListenerKind::Acme => Err("acme listener does not authenticate"),
 			ListenerKind::Autoconfig => Err("autoconfig listener does not authenticate"),
+			ListenerKind::Autoconfigs => Err("autoconfigs listener does not authenticate"),
 		}
 	}
 }
@@ -107,8 +109,14 @@ pub enum ListenerKind {
 	Metrics,
 	/// ACME HTTP-01 challenge responder (`/.well-known/acme-challenge/*`).
 	Acme,
-	/// Client autodiscovery: Thunderbird autoconfig + Microsoft Autodiscover.
+	/// Client autodiscovery: Thunderbird autoconfig + Microsoft Autodiscover,
+	/// over plain HTTP (for operators who front it with a TLS proxy).
 	Autoconfig,
+	/// The same autodiscovery documents over HTTPS, with the server's
+	/// certificate (port 443). Kept as its own kind, like `submissions`,
+	/// `imaps` and `pop3s`, because implicit TLS changes what a client must
+	/// speak on the port.
+	Autoconfigs,
 	/// WebDAV (RFC 4918) per-account file storage.
 	WebDav,
 }
@@ -128,6 +136,7 @@ impl ListenerKind {
 			ListenerKind::Metrics => 9090,
 			ListenerKind::Acme => 80,
 			ListenerKind::Autoconfig => 8091,
+			ListenerKind::Autoconfigs => 443,
 			ListenerKind::WebDav => 8090,
 		}
 	}
@@ -150,6 +159,7 @@ impl ListenerKind {
 			ListenerKind::Metrics => "metrics",
 			ListenerKind::Acme => "acme",
 			ListenerKind::Autoconfig => "autoconfig",
+			ListenerKind::Autoconfigs => "autoconfigs",
 			ListenerKind::WebDav => "web-dav",
 		}
 	}
@@ -209,6 +219,15 @@ port = 2465
 		let addr = listener.socket_addr();
 		assert!(!addr.ip().is_loopback());
 		assert_eq!(addr.port(), 2465);
+	}
+
+	#[test]
+	fn autoconfigs_listener_defaults_to_https_port() {
+		let parsed: Result<Listener, _> = toml::from_str(r#"kind = "autoconfigs""#);
+		assert!(parsed.is_ok(), "{:?}", parsed.as_ref().err());
+		let listener = parsed.expect("checked above");
+		assert_eq!(listener.socket_addr().port(), 443);
+		assert_eq!(listener.kind.as_str(), "autoconfigs");
 	}
 
 	#[test]

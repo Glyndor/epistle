@@ -265,3 +265,19 @@ mod plaintext_listener_tls_warning {
 		assert!(result.is_ok());
 	}
 }
+
+/// The HTTPS autoconfig listener terminates TLS itself, so it cannot start
+/// without a certificate.
+#[test]
+fn autoconfigs_listener_requires_tls() {
+	let toml = format!("{BASE}\n[[listeners]]\nkind = \"autoconfigs\"\n");
+	let error = match toml::from_str::<Config>(&toml) {
+		Ok(config) => config.validate().err().map(|error| error.to_string()),
+		Err(error) => Some(error.to_string()),
+	};
+	let error = error.unwrap_or_default();
+	assert!(
+		error.contains("is \"autoconfigs\" (HTTPS) but no [tls] section is configured"),
+		"{error}"
+	);
+}

@@ -23,6 +23,7 @@ mod select;
 mod sort;
 mod state;
 mod thread;
+mod utf8;
 
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
@@ -74,7 +75,10 @@ impl Session {
 		self.apply(tagged)
 	}
 
-	fn apply(&mut self, tagged: Tagged) -> Output {
+	fn apply(&mut self, mut tagged: Tagged) -> Output {
+		if self.utf8_names() {
+			utf8::to_stored_names(&mut tagged.command);
+		}
 		let tag = tagged.tag;
 		if self.imap4rev2 && helpers::recent_command(&tagged.command) {
 			return Output::text(format!("{tag} BAD invalid arguments\r\n"));
@@ -198,7 +202,8 @@ impl Session {
 				flags,
 				size,
 				synchronizing,
-			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing),
+				utf8,
+			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing, utf8),
 			Command::Replace {
 				sequence,
 				mailbox,
@@ -350,6 +355,10 @@ impl Session {
 				"UIDONLY" => {
 					self.uidonly = true;
 					Some("UIDONLY")
+				}
+				"UTF8=ACCEPT" => {
+					self.utf8_accept = true;
+					Some("UTF8=ACCEPT")
 				}
 				_ => None,
 			})

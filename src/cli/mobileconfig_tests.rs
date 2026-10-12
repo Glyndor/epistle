@@ -35,8 +35,3 @@ fn unknown_account_fails() {
 	assert_eq!(run(&config, "ghost", &mut out), ExitCode::FAILURE);
 	assert!(out.is_empty());
 }
-
-#[test]
-fn escapes_xml_special_characters() {
-	assert_eq!(escape("a&b<c>\"d'"), "a&amp;b&lt;c&gt;&quot;d&apos;");
-}

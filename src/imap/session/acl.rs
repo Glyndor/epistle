@@ -13,7 +13,8 @@ impl Session {
 		let Some(account) = self.checked_mailbox(mailbox) else {
 			return self.acl_error(tag);
 		};
-		let mut line = format!("* ACL \"{mailbox}\" \"{account}\" {}", acl::ALL_RIGHTS);
+		let wire = self.wire_name(mailbox);
+		let mut line = format!("* ACL \"{wire}\" \"{account}\" {}", acl::ALL_RIGHTS);
 		for (id, rights) in acl::get(&self.data_dir, &account, mailbox) {
 			line.push_str(&format!(" \"{id}\" {rights}"));
 		}
@@ -27,7 +28,8 @@ impl Session {
 		};
 		let rights = acl::rights_of(&self.data_dir, &account, mailbox, &account);
 		Output::text(format!(
-			"* MYRIGHTS \"{mailbox}\" {rights}\r\n{tag} OK MYRIGHTS completed\r\n"
+			"* MYRIGHTS \"{}\" {rights}\r\n{tag} OK MYRIGHTS completed\r\n",
+			self.wire_name(mailbox)
 		))
 	}
 
@@ -44,7 +46,8 @@ impl Session {
 			format!("\"\" {}", optional.join(" "))
 		};
 		Output::text(format!(
-			"* LISTRIGHTS \"{mailbox}\" \"{identifier}\" {body}\r\n{tag} OK LISTRIGHTS completed\r\n"
+			"* LISTRIGHTS \"{}\" \"{identifier}\" {body}\r\n{tag} OK LISTRIGHTS completed\r\n",
+			self.wire_name(mailbox)
 		))
 	}
 

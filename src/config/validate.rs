@@ -428,6 +428,11 @@ impl Config {
 					"listener {addr} is \"pop3s\" (implicit TLS) but no [tls] section is configured"
 				)));
 			}
+			if listener.kind == crate::config::ListenerKind::Autoconfigs && self.tls.is_none() {
+				return Err(ConfigError::Invalid(format!(
+					"listener {addr} is \"autoconfigs\" (HTTPS) but no [tls] section is configured"
+				)));
+			}
 			let needs_tls = matches!(
 				listener.kind,
 				crate::config::ListenerKind::Imaps

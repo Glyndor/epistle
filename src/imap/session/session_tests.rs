@@ -134,3 +134,9 @@ mod fetch_edges;
 
 #[path = "session_tests_fetch_depth.rs"]
 mod fetch_depth;
+
+#[path = "session_tests_capabilities.rs"]
+mod capabilities;
+
+#[path = "session_tests_utf8.rs"]
+mod utf8;
