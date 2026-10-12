@@ -3,8 +3,10 @@
 //! A client configures itself from just an email address by fetching a config
 //! document: Thunderbird's autoconfig `clientConfig` XML and Microsoft's
 //! Autodiscover v1 POX XML. Operators point `autoconfig.<domain>` and
-//! `autodiscover.<domain>` at this listener (behind their TLS proxy). The same
-//! pure builders back the `mail autoconfig` / `mail autodiscover` CLI commands.
+//! `autodiscover.<domain>` at this listener: the `autoconfigs` kind serves
+//! HTTPS with the server's certificate, the `autoconfig` kind plain HTTP for a
+//! deployment that keeps its own TLS proxy. The same pure builders back the
+//! `mail autoconfig` / `mail autodiscover` CLI commands.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +17,10 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
+mod https;
 pub mod mobileconfig;
+
+pub use https::serve;
 
 /// Build the Thunderbird autoconfig `clientConfig` document for `domain`: IMAP
 /// over implicit TLS (993) and SMTP submission over STARTTLS (587),
@@ -268,3 +273,7 @@ mod tests;
 #[cfg(test)]
 #[path = "autodiscovery_tests_mobileconfig.rs"]
 mod tests_mobileconfig;
+
+#[cfg(test)]
+#[path = "autodiscovery_tests_tls.rs"]
+mod tests_tls;

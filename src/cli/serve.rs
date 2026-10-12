@@ -433,15 +433,22 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				);
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
-			ListenerKind::Autoconfig => {
+			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
+				// `autoconfigs` presents the shared, renewing certificate.
+				let tls = match (listener_config.kind, &reloadable_tls) {
+					(ListenerKind::Autoconfig, _) => None,
+					(_, Some(reloadable)) => Some(reloadable.https()),
+					(_, None) => {
+						return Err(std::io::Error::other(
+							"autoconfigs listener without TLS configured",
+						));
+					}
+				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router =
 					crate::autodiscovery::router(config.hostname.clone(), config.domains.clone());
-				tasks.push(tokio::spawn(async move {
-					axum::serve(listener, router)
-						.await
-						.map_err(std::io::Error::other)
-				}));
+				let serve = crate::autodiscovery::serve(listener, router, tls, max_conn);
+				tasks.push(tokio::spawn(serve));
 			}
 			ListenerKind::WebDav => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;

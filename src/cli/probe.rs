@@ -209,6 +209,7 @@ async fn probe_kind(
 		ListenerKind::Imap => probe_imap(stream).await,
 		ListenerKind::Imaps => probe_imaps(stream, pinned).await,
 		ListenerKind::Pop3s => probe_pop3s(stream, pinned).await,
+		ListenerKind::Autoconfigs => probe_https(stream, pinned).await,
 		ListenerKind::ManageSieve => probe_sieve(stream).await,
 		ListenerKind::Api
 		| ListenerKind::WebDav
@@ -299,7 +300,18 @@ async fn probe_sieve(mut stream: TcpStream) -> Result<(), String> {
 	}
 }
 
-async fn probe_http(mut stream: TcpStream) -> Result<(), String> {
+async fn probe_https(
+	stream: TcpStream,
+	pinned: &Option<Result<Arc<dyn ServerCertVerifier>, String>>,
+) -> Result<(), String> {
+	let verifier = require_verifier(pinned)?;
+	probe_http(tls_handshake(stream, verifier).await?).await
+}
+
+async fn probe_http<S>(mut stream: S) -> Result<(), String>
+where
+	S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
 	// `HEAD /` is the cheapest request that elicits a real response
 	// line. `Connection: close` asks the server to fold the socket
 	// after one exchange so the probe does not stall on a keep-alive
