@@ -28,6 +28,34 @@ impl Session {
 		}
 		Cow::Borrowed(stored)
 	}
+
+	/// A stored mailbox name as the astring a response carries: spelled
+	/// for this connection by [`Self::wire_name`], then quoted.
+	pub(super) fn mailbox_astring(&self, stored: &str) -> String {
+		astring(&self.wire_name(stored), self.utf8_names())
+	}
+}
+
+/// `value` as an IMAP string (RFC 9051 §4.3): quoted, with `"` and `\`
+/// escaped, unless it holds a character a quoted string cannot carry (CR,
+/// LF, or 8-bit without UTF-8 on the connection), which needs a literal.
+pub(super) fn astring(value: &str, utf8: bool) -> String {
+	let quotable = value
+		.chars()
+		.all(|c| !matches!(c, '\r' | '\n') && (utf8 || c.is_ascii()));
+	if !quotable {
+		return format!("{{{}}}\r\n{value}", value.len());
+	}
+	let mut quoted = String::with_capacity(value.len() + 2);
+	quoted.push('"');
+	for c in value.chars() {
+		if matches!(c, '"' | '\\') {
+			quoted.push('\\');
+		}
+		quoted.push(c);
+	}
+	quoted.push('"');
+	quoted
 }
 
 /// Rewrite the UTF-8 mailbox names in a command into their stored spelling.

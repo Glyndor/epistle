@@ -108,7 +108,10 @@ fn quota_reports_storage_usage() {
 	let mut session = logged_in(dir.path());
 
 	let response = text(&session.command_line("a2 GETQUOTAROOT INBOX"));
-	assert!(response.contains("* QUOTAROOT INBOX \"\""), "{response}");
+	assert!(
+		response.contains("* QUOTAROOT \"INBOX\" \"\""),
+		"{response}"
+	);
 	assert!(response.contains("* QUOTA \"\" (STORAGE "), "{response}");
 	assert!(
 		response.contains("a2 OK GETQUOTAROOT completed"),
