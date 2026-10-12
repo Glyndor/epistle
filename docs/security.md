@@ -60,7 +60,9 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   - **Domains**: an API key with `domains`. Reaches only accounts whose
     addresses all sit in those domains.
   - **Account**: an API key with `account = "<name>"` in `api_keys.toml`.
-    Reaches that one account.
+    Reaches that one account, and only through JMAP and `/api/v1/send`:
+    every other route (`/api/v1/accounts`, `domains`, `queue`, SCIM, ...)
+    refuses it with `403 forbidden`.
   A credential that matches no key reaches nothing. Every JMAP method, upload,
   download and the WebSocket check the account against the principal; a
   refused account gets the same `accountNotFound` (HTTP 404 on upload and

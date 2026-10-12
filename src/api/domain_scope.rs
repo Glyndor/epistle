@@ -19,8 +19,13 @@ pub enum DomainScope {
 }
 
 impl DomainScope {
-	/// The scope a key carries. An empty `domains` list means [`Self::All`].
+	/// The scope a key carries. An empty `domains` list means [`Self::All`],
+	/// except for a key bound to one account: that key has no domain-wide
+	/// reach at all, so it admits no domain here.
 	pub fn of_key(key: &ApiKey) -> Self {
+		if key.account.is_some() {
+			return Self::Only(Vec::new());
+		}
 		if key.domains.is_empty() {
 			return Self::All;
 		}

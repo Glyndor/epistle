@@ -78,6 +78,17 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for an account-bound API key on a route outside JMAP and
+	/// `/api/v1/send`.
+	pub fn account_bound_route() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: "This key is bound to one account and only reaches JMAP and /api/v1/send."
+				.to_string(),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

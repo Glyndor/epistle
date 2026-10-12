@@ -4,6 +4,7 @@
 //! mail-panel. Every endpoint requires the bearer token; the listener
 //! binds to localhost unless explicitly configured otherwise.
 
+mod account_bound;
 pub mod api_keys;
 mod audit;
 pub mod domain_scope;
@@ -64,6 +65,12 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/upload/{account_id}",
 			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE + 1_048_576)),
 		)
+		// Runs after the bearer check below (layers wrap outward), so the
+		// matched credentials are already in the request.
+		.layer(middleware::from_fn_with_state(
+			state.clone(),
+			account_bound::confine,
+		))
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(
@@ -102,6 +109,10 @@ mod tests_b;
 #[cfg(test)]
 #[path = "scram_off_tests.rs"]
 mod scram_off_tests;
+
+#[cfg(test)]
+#[path = "account_bound_tests.rs"]
+mod account_bound_tests;
 
 #[cfg(test)]
 #[path = "api_tests_newrecipients.rs"]
