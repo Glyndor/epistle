@@ -209,3 +209,38 @@ async fn a_bad_address_is_suppressed_for_its_sender_too() {
 	assert!(list.is_suppressed("carol@remote.example"));
 	assert!(list.is_suppressed_for(SENDER, "carol@remote.example"));
 }
+
+/// A recipient domain publishing a null MX (RFC 7505).
+struct NullMx;
+
+impl crate::queue::Connector for NullMx {
+	fn connect(
+		&self,
+		domain: &str,
+		_policy: Option<&crate::mtasts::Policy>,
+	) -> crate::queue::resolver::ConnectFuture<'_> {
+		let reason = format!("556 5.1.10 {domain} accepts no mail (null MX)");
+		Box::pin(async move { Err(DeliveryError::Permanent(reason)) })
+	}
+}
+
+#[tokio::test]
+async fn a_null_mx_domain_bounces_at_once_and_is_suppressed() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_to(dir.path(), &["carol@nomail.example"]);
+	let bounces = Arc::new(MemorySink::new());
+	let worker = Worker::new(spool, Arc::new(NullMx), "mail.sender.example")
+		.with_bounce_sink(bounces.clone() as Arc<dyn MessageSink>)
+		.with_suppression(SuppressionList::open(dir.path()).expect("suppression"));
+
+	worker.pass().await.expect("pass");
+
+	assert!(
+		worker.spool.list().expect("list").is_empty(),
+		"never retried"
+	);
+	let bodies = bodies(&bounces);
+	assert_eq!(bodies.len(), 1);
+	assert!(bodies[0].contains("Status: 5.1.10\r\n"), "{}", bodies[0]);
+	assert!(suppressed(dir.path(), "carol@nomail.example"));
+}
