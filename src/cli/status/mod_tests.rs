@@ -136,6 +136,7 @@ fn status_covers_every_area_in_a_stable_order() {
 			"dns",
 			"db",
 			"antivirus",
+			"antispam",
 			"queue",
 			"disk"
 		]

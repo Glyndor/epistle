@@ -448,6 +448,10 @@ async fn score_uses_the_account_scope_at_the_threshold() {
 
 	let account = format!("trained-{}", uuid::Uuid::now_v7());
 	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
+	assert!(
+		!corpus::BayesScorer::is_trusted(&store, &account).await,
+		"an untrained scope must not be trusted to decide"
+	);
 
 	// A unique marker that only this account's corpus has seen, so
 	// the per-account scope is the only one that recognises it. The
@@ -476,6 +480,10 @@ async fn score_uses_the_account_scope_at_the_threshold() {
 	}
 	let trained = store.is_trained(&account).await.expect("is_trained");
 	assert!(trained, "both sides at the threshold: trained");
+	assert!(
+		corpus::BayesScorer::is_trusted(&store, &account).await,
+		"a scope trained to the threshold on both sides is trusted"
+	);
 
 	// The per-account score for the marker is high (spam-only in this
 	// account). The shared scope has not seen the marker and falls
@@ -587,4 +595,25 @@ async fn forget_scope_removes_only_that_scope() {
 		.execute(&pool)
 		.await
 		.expect("clear bystander corpus");
+}
+
+/// A trust lookup that cannot reach the database answers "not trained", so
+/// a database outage never lets an untrained corpus junk or reject mail.
+#[tokio::test]
+async fn bayes_trust_lookup_failure_is_untrusted() {
+	use epistle::antispam::corpus::{self, BayesScorer};
+
+	let Some(url) = database_url() else {
+		eprintln!("skipping: DATABASE_URL not set");
+		return;
+	};
+	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
+		.await
+		.expect("connect and migrate");
+	let store = corpus::BayesStore::with_key(pool.clone(), fixture_key());
+	pool.close().await;
+	assert!(
+		!store.is_trusted("any-scope").await,
+		"a failed lookup must not count as a trained corpus"
+	);
 }

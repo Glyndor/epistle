@@ -86,8 +86,19 @@ pub struct Server {
 	report_dir: Option<std::path::PathBuf>,
 	/// If set, inbound unauthenticated mail is sealed into its ARC chain.
 	arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
-	/// If set, greylist unseen triplets: the store and the delay in seconds.
-	greylist: Option<(Arc<crate::antispam::greylist::MemoryGreylist>, u64)>,
+	/// If set, greylist unseen triplets: the store (in-memory or
+	/// PostgreSQL-backed) and the delay in seconds. The trait object lets
+	/// `serve` swap in the persistent store when `[database]` is configured.
+	greylist: Option<(Arc<dyn crate::antispam::greylist::GreylistStore>, u64)>,
+	/// Score thresholds for unauthenticated mail whose Bayesian
+	/// probability crosses the line:
+	/// `junk_at` routes to the Junk mailbox (default 0.95);
+	/// `reject_at`, when set, refuses the DATA phase with `550 5.7.1`.
+	/// Both are enforced only after the corpus has at least
+	/// `MIN_TRUSTED_MESSAGES` on either side, so an empty or under-trained
+	/// corpus never junks or rejects. Authenticated sessions bypass both.
+	bayes_junk_at: f64,
+	bayes_reject_at: Option<f64>,
 	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
@@ -153,6 +164,8 @@ impl Server {
 			report_dir: None,
 			arc_sealer: None,
 			greylist: None,
+			bayes_junk_at: 0.95,
+			bayes_reject_at: None,
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
@@ -278,12 +291,27 @@ impl Server {
 	}
 
 	/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
+	/// The store can be either backing (`MemoryGreylist` or `PgGreylistStore`);
+	/// they implement the same trait.
 	pub fn with_greylist(
 		mut self,
-		store: Arc<crate::antispam::greylist::MemoryGreylist>,
+		store: Arc<dyn crate::antispam::greylist::GreylistStore>,
 		delay_secs: u64,
 	) -> Self {
 		self.greylist = Some((store, delay_secs));
+		self
+	}
+
+	/// Set the Bayesian thresholds that decide on their own before the
+	/// uncertain band: any unauthenticated message whose score lands at or
+	/// above `junk_at` is delivered to the recipient's Junk mailbox;
+	/// any whose score lands at or above `reject_at` is refused with
+	/// `550 5.7.1`. `reject_at` must be at least `junk_at` so the rejected
+	/// band is a subset of the junked one. Authenticated sessions ignore
+	/// both; an under-trained corpus ignores both.
+	pub fn with_bayes_thresholds(mut self, junk_at: f64, reject_at: Option<f64>) -> Self {
+		self.bayes_junk_at = junk_at;
+		self.bayes_reject_at = reject_at;
 		self
 	}
 

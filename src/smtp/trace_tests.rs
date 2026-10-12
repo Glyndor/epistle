@@ -214,3 +214,53 @@ fn lf_only_messages_are_split_correctly() {
 	assert_eq!(message_id_count, 1, "exactly one Message-ID line: {text}");
 	assert!(text.contains("body\n"));
 }
+
+#[test]
+fn spam_headers_prepend_at_the_top_of_the_header_block() {
+	let data = b"From: a@b\r\nSubject: hi\r\n\r\nbody\r\n";
+	let out = super::inject_spam_headers(data, 0.987654321);
+	let text = std::str::from_utf8(&out).expect("utf-8");
+	// The two new headers sit at the very top, before anything the
+	// sender wrote.
+	assert!(
+		text.starts_with("X-Spam-Status: Yes\r\nX-Spam-Score: 0.987654\r\n"),
+		"new headers must come first: {text:?}"
+	);
+	// The original block is preserved, untouched in order and content.
+	let original = "From: a@b\r\nSubject: hi\r\n\r\nbody\r\n";
+	assert!(
+		text.contains(original),
+		"original message is preserved verbatim: {text:?}"
+	);
+}
+
+#[test]
+fn spam_headers_work_with_lf_only_terminators() {
+	// Defensive: a peer that speaks LF-only line endings (a non-RFC
+	// minority, but observed in the wild) still gets the header
+	// prepended at the correct spot.
+	let data = b"From: a@b\nSubject: hi\n\nbody\n";
+	let out = super::inject_spam_headers(data, 0.99);
+	let text = std::str::from_utf8(&out).expect("utf-8");
+	assert!(
+		text.starts_with("X-Spam-Status: Yes\r\nX-Spam-Score: 0.990000\r\n"),
+		"LF-only message gets the same prepend: {text:?}"
+	);
+	assert!(text.ends_with("body\n"));
+}
+
+#[test]
+fn spam_headers_handle_messages_with_no_blank_line() {
+	// Header block runs to end of input. Injector must not panic.
+	let data = b"From: a@b\r\nSubject: hi\r\n";
+	let out = super::inject_spam_headers(data, 1.0);
+	let text = std::str::from_utf8(&out).expect("utf-8");
+	assert!(
+		text.starts_with("X-Spam-Status: Yes\r\nX-Spam-Score: 1.000000\r\n"),
+		"messages without a blank separator still get the prepend: {text:?}"
+	);
+	assert!(
+		text.ends_with("Subject: hi\r\n"),
+		"the original line stays at the end: {text:?}"
+	);
+}

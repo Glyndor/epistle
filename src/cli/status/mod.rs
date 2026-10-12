@@ -6,6 +6,7 @@
 //! sends mail or authenticates. `status` runs every check; `check <area>`
 //! runs one and lists its findings.
 
+mod antispam_area;
 mod av_area;
 mod clock;
 mod config_area;
@@ -55,6 +56,8 @@ pub enum CheckArea {
 	Db,
 	/// The configured clamd answers `PING`.
 	Antivirus,
+	/// Antispam engine state: which features are on, which are off and why.
+	Antispam,
 	/// The outbound queue is draining: count, oldest age, deferred.
 	Queue,
 	/// The data filesystem has room.
@@ -70,6 +73,7 @@ impl CheckArea {
 		CheckArea::Dns,
 		CheckArea::Db,
 		CheckArea::Antivirus,
+		CheckArea::Antispam,
 		CheckArea::Queue,
 		CheckArea::Disk,
 	];
@@ -83,6 +87,7 @@ impl CheckArea {
 			CheckArea::Dns => "dns",
 			CheckArea::Db => "db",
 			CheckArea::Antivirus => "antivirus",
+			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
 			CheckArea::Disk => "disk",
 		}
@@ -205,6 +210,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Dns => dns_area::check(ctx).await,
 		CheckArea::Db => db_area::check(ctx).await,
 		CheckArea::Antivirus => av_area::check(ctx).await,
+		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
 		CheckArea::Disk => disk_area::check(ctx).await,
 	}

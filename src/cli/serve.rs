@@ -127,8 +127,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
-	// task prunes stale triplets so the map stays bounded.
-	let greylist = super::serve_tasks::build_greylist(&config);
+	// task prunes stale triplets so the map stays bounded. The store is
+	// PostgreSQL-backed when `[database]` is configured, in-memory otherwise;
+	// the choice is logged once at startup.
+	let greylist = super::serve_tasks::build_greylist(&config, reputation_pool.as_ref()).await;
 
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With
@@ -511,6 +513,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(store) = &greylist {
 					server = server.with_greylist(Arc::clone(store), config.greylist_delay_secs);
 				}
+				// Bayesian thresholds that decide on their own without the
+				// LLM hook: any unauthenticated, trained-corpus message
+				// scored at or above `junk_at` is delivered to Junk;
+				// above `reject_at` it is refused with `550 5.7.1`.
+				server = server.with_bayes_thresholds(
+					config.antispam.bayes_junk_at,
+					config.antispam.bayes_reject_at,
+				);
 				if let Some(limiter) = &send_limiter {
 					server = server.with_send_limiter(Arc::clone(limiter));
 				}

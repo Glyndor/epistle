@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
+use crate::antispam::PgGreylistStore;
 use crate::antispam::bans::BanStore;
+use crate::antispam::greylist::GreylistStore;
 use crate::config::Config;
 
 /// Bind a listener's socket and log it. Thin wrapper over the
@@ -230,6 +232,23 @@ pub(super) async fn connect_database(
 	metrics: &crate::metrics::Metrics,
 ) -> std::io::Result<Option<sqlx::PgPool>> {
 	let Some(db) = &config.database else {
+		// No `[database]` at all: warn once about which antispam features
+		// need one and are silently off. Mail still flows; the operator
+		// sees this in the same startup window every other warning lands
+		// in, so a misconfigured install surfaces without log scraping.
+		// The warning is omitted when the install is clearly minimal
+		// (no greylist, no Bayes, no reputation-aware delivery at all):
+		// in that case the absence is not surprising.
+		let greylist_off = config.greylist_delay_secs == 0;
+		let subjectpass_off = !config.subjectpass.enabled;
+		if !greylist_off || !subjectpass_off {
+			tracing::warn!(
+				"antispam: no [database] configured. The Bayes classifier, \
+				 per-domain reputation, persistent auth-ban storage, and \
+				 greylist persistence are off; mail flows unfiltered. \
+				 Add [database] to enable them."
+			);
+		}
 		return Ok(None);
 	};
 	match crate::db::connect(
@@ -494,6 +513,10 @@ pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
 #[path = "serve_tasks_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "serve_tasks_tests_no_database.rs"]
+mod tests_no_database;
+
 /// Build the optional ARC sealer from `[arc]`: a DKIM-format ed25519 key
 /// under the server hostname. Absent config yields `None`; a key that does
 /// not load is fatal (fail closed), so a misconfigured sealer never lets
@@ -512,28 +535,63 @@ pub(super) fn build_arc_sealer(
 	))))
 }
 
-/// Build the shared in-memory greylist when `greylist_delay_secs` is set,
-/// and spawn the hourly prune that drops triplets older than a day so the
-/// map stays bounded. `None` when greylisting is off.
-pub(super) fn build_greylist(
+/// Build the shared greylist store when `greylist_delay_secs` is set. With
+/// a configured `[database]` the state lives in PostgreSQL and survives a
+/// restart; without one, the in-memory store is used and the operator gets
+/// a startup line saying so. In either case the hourly sweep drops triplets
+/// older than a day so the table never grows without bound. `None` when
+/// greylisting is disabled.
+pub(super) async fn build_greylist(
 	config: &Config,
-) -> Option<Arc<crate::antispam::greylist::MemoryGreylist>> {
-	(config.greylist_delay_secs > 0).then(|| {
-		let store = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
-		let prune_store = Arc::clone(&store);
-		tokio::spawn(async move {
-			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-			loop {
-				interval.tick().await;
-				let now = std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.map(|d| d.as_secs())
-					.unwrap_or(0);
-				prune_store.prune(now, 86_400);
-			}
-		});
-		store
-	})
+	pool: Option<&sqlx::PgPool>,
+) -> Option<Arc<dyn crate::antispam::greylist::GreylistStore>> {
+	if config.greylist_delay_secs == 0 {
+		return None;
+	}
+	// Lifetime in seconds for an unseen triplet. Matches the memory store's
+	// historical default (one day); the constant lives here so the
+	// sweep task and the SQL store agree.
+	const LIFETIME_SECS: u64 = 24 * 3600;
+	let store: Arc<dyn crate::antispam::greylist::GreylistStore> = match pool {
+		Some(pool) => {
+			tracing::info!("greylist: using PostgreSQL store; triplets survive restarts");
+			let pg = Arc::new(PgGreylistStore::new(pool.clone()));
+			let store = Arc::clone(&pg) as Arc<dyn crate::antispam::greylist::GreylistStore>;
+			tokio::spawn(async move {
+				let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+				loop {
+					interval.tick().await;
+					let now = std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.map(|d| d.as_secs())
+						.unwrap_or(0);
+					pg.sweep(now, LIFETIME_SECS).await;
+				}
+			});
+			store
+		}
+		None => {
+			tracing::warn!(
+				"greylist: no [database] configured; using the in-memory store. State is lost on restart, so every legitimate sender waits out the delay once per server reload. Configure [database] to make greylist persistent."
+			);
+			let mem: Arc<dyn crate::antispam::greylist::GreylistStore> =
+				Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+			let prune_store = Arc::clone(&mem);
+			tokio::spawn(async move {
+				let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+				loop {
+					interval.tick().await;
+					let now = std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.map(|d| d.as_secs())
+						.unwrap_or(0);
+					prune_store.sweep(now, LIFETIME_SECS).await;
+				}
+			});
+			mem
+		}
+	};
+	Some(store)
 }
 
 #[path = "serve_bayes.rs"]

@@ -16,6 +16,11 @@ fn scanner_defaults_and_overrides_load() {
 	let config = load("").expect("default config");
 	assert!(config.antispam.clamd_socket.is_none());
 	assert!(config.scanner_hook_url.is_none());
+	// The Bayesian junk default is on, the reject default is off. The
+	// assertion pins both because the SMTP server relies on the same
+	// numbers when it has no `[antispam]` section.
+	assert_eq!(config.antispam.bayes_junk_at, DEFAULT_BAYES_JUNK_AT);
+	assert_eq!(config.antispam.bayes_reject_at, None);
 	let config = load("[antispam]\nclamd_socket = '/run/clamav/clamd.sock'").expect("defaults");
 	assert_eq!(
 		config.antispam.clamd_socket,
@@ -28,6 +33,35 @@ fn scanner_defaults_and_overrides_load() {
 	assert_eq!(config.antispam.clamd_on_found, ClamdOnFound::Reject);
 	assert_eq!(config.antispam.clamd_timeout_secs, 2);
 	assert_eq!(config.antispam.clamd_max_bytes, 1024);
+}
+
+#[test]
+fn bayes_thresholds_parse_and_default() {
+	let config = load("[antispam]\nbayes_junk_at = 0.9\nbayes_reject_at = 0.99").expect("load");
+	assert_eq!(config.antispam.bayes_junk_at, 0.9);
+	assert_eq!(config.antispam.bayes_reject_at, Some(0.99));
+}
+
+#[test]
+fn bayes_reject_at_must_not_below_junk_at() {
+	let error = load("[antispam]\nbayes_junk_at = 0.95\nbayes_reject_at = 0.9")
+		.expect_err("inverted bands must fail");
+	let message = format!("{error:?}");
+	assert!(
+		message.contains("bayes_reject_at"),
+		"validation must name the offending field: {message}"
+	);
+	assert!(
+		message.contains("subset of the junked one"),
+		"validation must explain the subset rule: {message}"
+	);
+}
+
+#[test]
+fn bayes_thresholds_must_be_in_range() {
+	assert!(load("[antispam]\nbayes_junk_at = 1.5").is_err());
+	assert!(load("[antispam]\nbayes_junk_at = -0.1").is_err());
+	assert!(load("[antispam]\nbayes_reject_at = 2.0").is_err());
 }
 
 #[test]

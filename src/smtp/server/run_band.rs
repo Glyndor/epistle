@@ -1,19 +1,28 @@
-//! Uncertain-band logic for the SMTP server.
+//! Uncertain-band logic and the Bayesian thresholds that decide on
+//! their own for the SMTP server.
 //!
 //! Split out of `run.rs` to keep the connection loop's code-line count
-//! under the CI hard limit (500). The band is the slice of mail where the
-//! local Bayesian classifier is not confident in either direction; on an
-//! unauthenticated message the server consults the LLM hook (if any) and,
-//! when configured, the SubjectPass signed-token path. The token path
-//! refuses with `550 5.7.1` and a freshly minted token the sender can paste
-//! in the `Subject:`; the resend that carries it is accepted as ham.
+//! under the CI hard limit (500). Two checks live here:
 //!
-//! The check runs after DNSBL, SPF, DMARC and the scanner hook in the
-//! caller, so a valid token never overrides a hard rejection.
+//! - The uncertain band: the slice of mail where the local Bayesian
+//!   classifier is not confident in either direction; on an
+//!   unauthenticated message the server consults the LLM hook (if any)
+//!   and, when configured, the SubjectPass signed-token path. The token
+//!   path refuses with `550 5.7.1` and a freshly minted token the sender
+//!   can paste in the `Subject:`; the resend that carries it is accepted
+//!   as ham.
+//! - The Bayesian thresholds (`bayes_junk_at`, `bayes_reject_at`):
+//!   delivered to the recipient's Junk mailbox or refused at DATA
+//!   before the LLM is even asked, because a high-confidence score is
+//!   its own decision. Authenticated sessions never get scored;
+//!   an under-trained corpus never decides.
+//!
+//! Both checks run after DNSBL, SPF, DMARC and the scanner hook in the
+//! caller, so a hard rejection from any of those still wins.
 
 use tokio::io::AsyncWrite;
 
-use super::{Server, send};
+use super::{Reply, Server, send};
 use crate::smtp::address::Address;
 use crate::smtp::directory::{Directory, Resolution};
 use crate::smtp::session::AcceptedMessage;
@@ -29,7 +38,135 @@ pub(super) enum BandOutcome {
 	Challenged,
 }
 
+/// What the caller should do after the score-threshold pass: the message
+/// either continues through the rest of the SMTP pipeline, lands in the
+/// recipient's Junk mailbox with `X-Spam-Status: Yes`, or has already
+/// been refused with a `550 5.7.1`.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BayesOutcome {
+	/// Below every configured threshold: hand the message to the next
+	/// stage of the SMTP pipeline (the LLM band, the reputation hook,
+	/// delivery).
+	Continue,
+	/// The Bayesian score sits at or above `bayes_junk_at` but below
+	/// `bayes_reject_at`. The caller delivers the message to the
+	/// recipient's Junk mailbox after stamping `X-Spam-Status: Yes` and
+	/// `X-Spam-Score: <value>` headers on it.
+	SendToJunk,
+	/// The Bayesian score sits at or above `bayes_reject_at`. A
+	/// `550 5.7.1` line was sent; the message must not be stored or
+	/// trained on.
+	Rejected,
+}
+
 impl Server {
+	/// Apply the two Bayesian thresholds: a score at or above
+	/// `bayes_junk_at` lands in the Junk mailbox (with the spam-marking
+	/// headers stamped on it); a score at or above `bayes_reject_at` is
+	/// refused at DATA with `550 5.7.1`. The minimum-training guard is
+	/// the same one the per-account scope already enforces:
+	/// [`MIN_TRUSTED_MESSAGES`](crate::antispam::trainer::MIN_TRUSTED_MESSAGES)
+	/// ham AND spam messages on the resolved scope. Below that bar, the
+	/// function returns `Continue` so a fresh corpus cannot junk or
+	/// reject anything.
+	///
+	/// Authenticated sessions are never scored (the directory has
+	/// already proven identity), and bounces (`MAIL FROM:<>`) are also
+	/// skipped so the verdict never lands on a verification DSN.
+	pub(super) async fn handle_bayes_thresholds<W>(
+		&self,
+		message: &mut AcceptedMessage,
+		is_authenticated: bool,
+		stream: &mut W,
+	) -> Result<BayesOutcome, std::io::Error>
+	where
+		W: AsyncWrite + Unpin,
+	{
+		let Some(bayes) = &self.bayes else {
+			return Ok(BayesOutcome::Continue);
+		};
+		if is_authenticated {
+			return Ok(BayesOutcome::Continue);
+		}
+		// A bounce has no token, no subject, and a recipient the relay
+		// server sends to automatically; the verdict can only ever land
+		// in the recipient's Junk folder, which is the wrong place for a
+		// delivery-failure DSN. Skip.
+		if message.reverse_path.is_empty() {
+			return Ok(BayesOutcome::Continue);
+		}
+		// An upstream screening hook already routed the message. The
+		// Bayes thresholds would second-guess a clamd verdict or the
+		// poor-reputation path and risk undoing the in-process training
+		// they already did. Stay out of the way.
+		if message.mailbox.is_some() {
+			return Ok(BayesOutcome::Continue);
+		}
+
+		// Same scope the uncertain band picks: the first local account
+		// in envelope order, or the shared scope when there is none. The
+		// trusted-or-not check looks at that scope's totals so the
+		// minimum-training guard is the one the band already validated.
+		let account = scoring_account(&self.directory.current(), &message.recipients);
+		let scope = account
+			.as_deref()
+			.unwrap_or(crate::antispam::corpus::SHARED);
+
+		if !bayes.is_trusted(scope).await {
+			return Ok(BayesOutcome::Continue);
+		}
+
+		// If both thresholds are unreachable, the function could only
+		// ever return `Continue`. Skip the score call so the existing
+		// single-call contracts the SMTP server's wiring relies on do
+		// not silently drift.
+		let reject_active = self
+			.bayes_reject_at
+			.is_some_and(|reject_at| reject_at <= 1.0);
+		if self.bayes_junk_at >= 1.0 && !reject_active {
+			return Ok(BayesOutcome::Continue);
+		}
+
+		let score = match bayes.score_for_account(scope, &message.data).await {
+			Some(score) => score,
+			None => {
+				// Score failure (DB hiccup). Fail open: continue down
+				// the band rather than blocking mail or junking every
+				// message because the corpus is unreachable.
+				self.metrics.llm_failed();
+				tracing::warn!("bayes score unavailable; continuing without a threshold decision");
+				return Ok(BayesOutcome::Continue);
+			}
+		};
+
+		if let Some(reject_at) = self.bayes_reject_at
+			&& score >= reject_at
+		{
+			tracing::info!(score, reject_at, "bayes: rejecting at DATA with 550 5.7.1");
+			send(
+				stream,
+				&Reply::single(550, "5.7.1 message rejected as spam"),
+			)
+			.await?;
+			return Ok(BayesOutcome::Rejected);
+		}
+		if score >= self.bayes_junk_at {
+			tracing::info!(
+				score,
+				junk_at = self.bayes_junk_at,
+				"bayes: routing to Junk"
+			);
+			message.data = crate::smtp::trace::inject_spam_headers(&message.data, score);
+			// "Junk" maps to the IMAP `\Junk` special-use mailbox via
+			// the helper in `imap/session/helpers.rs`. The historical
+			// "Rejects" alias still works; the threshold-based path uses
+			// "Junk" so the prefix lines up with what the user sees.
+			message.mailbox = Some("Junk".to_string());
+			return Ok(BayesOutcome::SendToJunk);
+		}
+		Ok(BayesOutcome::Continue)
+	}
+
 	/// Apply the uncertain-band logic to `message`. `is_authenticated` is
 	/// precomputed by the caller so this function stays free of the
 	/// session borrow. Returns `Continue` to let the caller proceed with
@@ -255,3 +392,7 @@ fn unix_day_now() -> u64 {
 #[cfg(test)]
 #[path = "run_band_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "run_band_tests_bayes.rs"]
+mod tests_bayes;
