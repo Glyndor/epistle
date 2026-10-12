@@ -273,15 +273,21 @@ impl LocalDelivery {
 				..Delivered::default()
 			});
 		}
-		if outcome.keep {
+		let folders: Vec<Option<String>> = outcome
+			.fileinto
+			.iter()
+			.map(|folder| io::sieve_mailbox(folder))
+			.collect();
+		// A fileinto that cannot be carried out is a run-time error, which
+		// falls back to the implicit keep (RFC 5228 §2.10.6) instead of
+		// dropping the message.
+		if outcome.keep || folders.iter().any(Option::is_none) {
 			self.deliver_to_account(account, None, data, &outcome.flags)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
-		for folder in &outcome.fileinto {
-			if io::is_safe_mailbox(folder) {
-				self.deliver_to_account(account, Some(folder), data, &outcome.flags)
-					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-			}
+		for folder in folders.iter().flatten() {
+			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
+				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		// vacation (RFC 5230): an autoresponse alongside normal delivery.
 		let replies = outcome
@@ -513,3 +519,7 @@ mod default_mailboxes;
 #[cfg(test)]
 #[path = "delivery_tests_containment.rs"]
 mod containment;
+
+#[cfg(test)]
+#[path = "delivery_tests_sieve_names.rs"]
+mod sieve_names;
