@@ -10,6 +10,7 @@ pub mod domain_scope;
 mod error;
 pub(crate) mod jmap;
 pub mod oauth;
+mod principal;
 pub mod scim;
 mod state;
 pub mod tenant_limits;
@@ -18,6 +19,7 @@ pub mod v1;
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
+pub use principal::Principal;
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
 

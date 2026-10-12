@@ -42,6 +42,7 @@ fn state_with_cidr_key(dir: &std::path::Path) -> crate::api::ApiState {
 		ip_cidr: Some("192.0.2.0/24".to_string()),
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
+		account: None,
 	};
 	// Force `add` to validate the CIDR at registration time so a typo
 	// in the test fixture surfaces here, not deep in the request

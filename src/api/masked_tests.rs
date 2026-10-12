@@ -271,6 +271,7 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add");
 	drop(key_store);

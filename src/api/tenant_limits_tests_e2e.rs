@@ -24,6 +24,7 @@ fn unscoped_state(dir: &std::path::Path) -> ApiState {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -81,6 +82,7 @@ fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -231,6 +233,7 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -303,6 +306,7 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);

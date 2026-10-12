@@ -361,6 +361,21 @@ impl ApiState {
 		self.inner.admins.iter().any(|admin| admin == name)
 	}
 
+	/// Whether `token` is the configured static token (every scope, no
+	/// tenancy). Exposed so [`super::principal::Principal::for_token`] can
+	/// answer the same question the middleware does without re-implementing
+	/// the comparison.
+	pub fn is_configured_token(&self, token: &str) -> bool {
+		self.token_matches(token)
+	}
+
+	/// The currently loaded API keys. Read-only snapshot; callers that
+	/// need to look up the key matching a token use this and walk the
+	/// snapshot themselves.
+	pub fn api_keys(&self) -> &std::sync::Arc<super::api_keys::ApiKeySet> {
+		&self.inner.api_keys
+	}
+
 	/// Replace the at-rest crypto used for stored messages and blobs. Must be set
 	/// before the state is shared (it rebuilds the `Arc` inner).
 	pub fn with_crypto(mut self, crypto: MessageCrypto) -> Self {

@@ -8,6 +8,7 @@ fn key(domains: &[&str]) -> ApiKey {
 		ip_cidr: None,
 		scopes: vec!["read".into()],
 		domains: domains.iter().map(|d| (*d).to_string()).collect(),
+		account: None,
 	}
 }
 
