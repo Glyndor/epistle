@@ -884,6 +884,8 @@ Changes to a dynamic account (`<data_dir>/accounts.toml`) reach the running
 server within seconds, no restart. A static account (`[[accounts]]` in
 `mail.toml`) is refused with a hint to edit the config file.
 
+Addresses, domains and account names are stored in lowercase whatever you type: `account add Alice` creates `alice` and says so on stderr.
+
 | Command | What it does |
 |---|---|
 | `epistle account list [--json]` | List every account, static and dynamic, with its addresses. |

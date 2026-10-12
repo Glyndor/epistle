@@ -1130,6 +1130,8 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 
+Addresses and domains here are used in lowercase (`config-check` names any written with capitals); an address claimed by two owners is kept by the first and reported in the log and `epistle status`.
+
 | Key | Meaning |
 |---|---|
 | `name` | Lowercase alphanumeric/hyphen; becomes the mailbox directory name. |
