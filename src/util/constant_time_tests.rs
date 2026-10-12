@@ -94,7 +94,7 @@ fn bearer_digest_check() {
 
 #[test]
 fn api_key_digest_check() {
-	// `sha256:<hex>` for an api-key — 71 bytes total; the comparison strips
+	// `sha256:<hex>` for an api-key, 71 bytes total; the comparison strips
 	// the `sha256:` prefix but the byte span is what `eq` is fed.
 	let stored = b"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 	let expected_digest = &stored[b"sha256:".len()..];

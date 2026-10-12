@@ -553,7 +553,7 @@ who can read it, and never leave a copy on a shared host. Delete the
 archive file once `restore` has been verified.
 
 Restore writes every private-key file at `0600` regardless of what the
-archive recorded — an archive that captured a permissive umask (or that
+archive recorded: an archive that captured a permissive umask (or that
 was tampered with) cannot bring a key back group- or world-readable.
 Every other file lands at the mode the archive recorded (always masked
 to the lower 9 bits, so `setuid` / `setgid` / sticky bits never survive

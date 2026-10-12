@@ -14,9 +14,9 @@
 //! refuses to fetch such a `jwks_uri` by default; the operator must opt
 //! in with `[oauth] allow_private_jwks = true` (documented, off by
 //! default). The opt-in is the single gate because every other rationale
-//! a legitimate internal IdP can offer — "the same address is also
+//! a legitimate internal IdP can offer ("the same address is also
 //! reachable from the discovery host", "the JWKS points at the IdP
-//! itself" — also describes a successful SSRF pivot on top of an honest
+//! itself") also describes a successful SSRF pivot on top of an honest
 //! IdP, and trusting the network after the fact gives the pivot back to
 //! the attacker.
 
