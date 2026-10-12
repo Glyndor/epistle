@@ -57,6 +57,8 @@ fn headers(spec: &Value) -> Result<Vec<String>, Value> {
 		("sender", "Sender"),
 		("to", "To"),
 		("cc", "Cc"),
+		// Kept on the draft; EmailSubmission/set strips it before sending.
+		("bcc", "Bcc"),
 		("replyTo", "Reply-To"),
 	] {
 		let addresses: Vec<String> = spec

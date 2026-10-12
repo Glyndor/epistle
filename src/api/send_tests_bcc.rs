@@ -1,6 +1,7 @@
 //! Bcc never reaches what is sent: JMAP `EmailSubmission/set` strips the
 //! header of the stored draft (RFC 8621 section 7.5) and keeps the Bcc
-//! recipients on the envelope; `/api/v1/send` never writes one.
+//! recipients on the envelope; `/api/v1/send` never writes one; JMAP
+//! `Email/set` stores `bcc` on the draft only.
 
 use super::router;
 use super::send_tests_outbound::{alice_messages, routed_state};
@@ -128,4 +129,48 @@ async fn api_send_bcc_to_a_local_recipient_writes_no_bcc_anywhere() {
 	let entry = spool.load(spool.list().expect("list")[0]).expect("entry");
 	assert_eq!(entry.envelope.recipients, ["bob@elsewhere.example"]);
 	assert!(!headers(&entry.data).contains("bcc:"));
+}
+
+#[tokio::test]
+async fn jmap_email_set_keeps_bcc_on_the_draft_and_submission_drops_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts").join("alice")).expect("mkdir");
+	let app = router(test_state(dir.path(), 0));
+	let created = jmap(
+		&app,
+		json!(["Email/set", {"accountId": "alice", "create": {"e": {
+			"mailboxIds": {"INBOX": true},
+			"from": [{"email": "alice@example.org"}],
+			"to": [{"email": "bob@elsewhere.example"}],
+			"bcc": [{"name": "Hidden", "email": "hidden@elsewhere.example"}],
+			"subject": "s", "bodyValues": {"0": {"value": "x"}},
+		}}}, "c"]),
+	)
+	.await;
+	let id = created["created"]["e"]["id"]
+		.as_str()
+		.expect("created")
+		.to_string();
+	let got = jmap(
+		&app,
+		json!(["Email/get", {"accountId": "alice", "ids": [&id], "properties": ["bcc"]}, "g"]),
+	)
+	.await;
+	assert_eq!(
+		got["list"][0]["bcc"],
+		json!([{"name": "Hidden", "email": "hidden@elsewhere.example"}]),
+		"the draft keeps its Bcc"
+	);
+	let response = submit(&app, &id, None).await;
+	assert!(response["created"]["s"]["id"].is_string(), "{response}");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let entry = spool.load(spool.list().expect("list")[0]).expect("entry");
+	assert_eq!(
+		entry.envelope.recipients,
+		["bob@elsewhere.example", "hidden@elsewhere.example"]
+	);
+	assert!(
+		!headers(&entry.data).contains("hidden@"),
+		"nothing sent names the Bcc"
+	);
 }

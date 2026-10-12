@@ -128,6 +128,10 @@ pub(super) fn email_object(
 		"subject": header("subject").map(|s| encoded_word_decode_subject(&s)),
 		"from": address_list(header("from").as_deref()),
 		"to": address_list(header("to").as_deref()),
+		"cc": address_list(header("cc").as_deref()),
+		"bcc": address_list(header("bcc").as_deref()),
+		"replyTo": address_list(header("reply-to").as_deref()),
+		"sender": address_list(header("sender").as_deref()),
 		"messageId": header("message-id").map(|m| vec![m]),
 	});
 	// Move the bounded MIME tree without recursively serializing it again.

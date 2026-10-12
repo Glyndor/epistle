@@ -298,7 +298,10 @@ A new Email is built from `textBody`, `htmlBody` and `attachments` (inline
 parts with a `cid` go beside the HTML in `multipart/related`), or from an
 explicit `bodyStructure`, with the same MIME builder as `/api/v1/send`. Text
 comes from `bodyValues` by `partId`; octets by `blobId`, from an upload or
-from a stored message or one of its parts. `Content-*` headers on the Email
+from a stored message or one of its parts. `bcc` is kept on the stored
+draft only: `EmailSubmission/set`, like SMTP submission, removes the Bcc
+header before sending and keeps those recipients on the envelope.
+`Content-*` headers on the Email
 itself, `bodyStructure` together with the body lists, more than one part in
 `textBody` or `htmlBody`, or a part with both or neither of `partId` and
 `blobId` are refused with `invalidProperties`; a message over 25 MiB with
