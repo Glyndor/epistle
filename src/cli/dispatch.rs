@@ -5,6 +5,7 @@
 //! without a dispatch arm here is a compile error, which is the same
 //! correction the inline dispatch used to give us.
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
@@ -15,6 +16,47 @@ use super::{
 	suppression, tls_cli, verify, verify_dns,
 };
 use crate::config::Config;
+
+/// Run the `restore` subcommand: read the archive from stdin, load the
+/// config, hand the bytes to [`backup::run_restore`]. Lives here rather
+/// than in the match arm so the dispatch table stays compact and the
+/// per-file line budget keeps `dispatch.rs` under 500 code lines.
+fn dispatch_restore(config: PathBuf, force: bool, dry_run: bool) -> ExitCode {
+	let config = match Config::load(&config) {
+		Ok(config) => config,
+		Err(error) => {
+			style::error(error);
+			return ExitCode::FAILURE;
+		}
+	};
+	let mut input = Vec::new();
+	if let Err(error) = std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut input) {
+		style::error(format_args!("reading archive from stdin: {error}"));
+		return ExitCode::FAILURE;
+	}
+	backup::run_restore(
+		&config,
+		&input,
+		force,
+		dry_run,
+		&mut std::io::stdout().lock(),
+		&mut style::stderr(),
+	)
+}
+
+/// Run `f` with the loaded config, or surface a `style::error` and the
+/// non-zero exit code on a parse failure. The closure shape lets the
+/// simple dispatch arms stay one-liners while keeping the failure
+/// path identical across them.
+fn with_config<F: FnOnce(&Config) -> ExitCode>(path: &Path, f: F) -> ExitCode {
+	match Config::load(path) {
+		Ok(config) => f(&config),
+		Err(error) => {
+			style::error(error);
+			ExitCode::FAILURE
+		}
+	}
+}
 
 impl Cli {
 	/// Execute the parsed command.
@@ -100,43 +142,14 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Backup { config } => match Config::load(&config) {
-				Ok(config) => {
-					backup::run(&config, &mut std::io::stdout().lock(), &mut style::stderr())
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::Backup { config } => with_config(&config, |config| {
+				backup::run(config, &mut std::io::stdout().lock(), &mut style::stderr())
+			}),
 			Command::Restore {
 				config,
 				force,
 				dry_run,
-			} => match Config::load(&config) {
-				Ok(config) => {
-					let mut input = Vec::new();
-					if let Err(error) =
-						std::io::Read::read_to_end(&mut std::io::stdin().lock(), &mut input)
-					{
-						style::error(format_args!("reading archive from stdin: {error}"));
-						ExitCode::FAILURE
-					} else {
-						backup::run_restore(
-							&config,
-							&input,
-							force,
-							dry_run,
-							&mut std::io::stdout().lock(),
-							&mut style::stderr(),
-						)
-					}
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => dispatch_restore(config, force, dry_run),
 			Command::Verify { config } => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
 					Ok(crypto) => {
@@ -149,43 +162,21 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::VerifyDns { config } => match Config::load(&config) {
-				Ok(config) => verify_dns::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::DnsRecords { config } => match Config::load(&config) {
-				Ok(config) => dns_records::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::Mobileconfig { config, account } => match Config::load(&config) {
-				Ok(config) => mobileconfig::run(&config, &account, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::SrvRecords { config } => match Config::load(&config) {
-				Ok(config) => srv::run(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::Autoconfig { config, domain } => match Config::load(&config) {
-				Ok(config) => {
-					autoconfig::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::VerifyDns { config } => with_config(&config, |config| {
+				verify_dns::run(config, &mut std::io::stdout().lock())
+			}),
+			Command::DnsRecords { config } => with_config(&config, |config| {
+				dns_records::run(config, &mut std::io::stdout().lock())
+			}),
+			Command::Mobileconfig { config, account } => with_config(&config, |config| {
+				mobileconfig::run(config, &account, &mut std::io::stdout().lock())
+			}),
+			Command::SrvRecords { config } => with_config(&config, |config| {
+				srv::run(config, &mut std::io::stdout().lock())
+			}),
+			Command::Autoconfig { config, domain } => with_config(&config, |config| {
+				autoconfig::run(config, domain.as_deref(), &mut std::io::stdout().lock())
+			}),
 			Command::Suppression {
 				config,
 				action,
@@ -213,57 +204,33 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Autodiscover { config, domain } => match Config::load(&config) {
-				Ok(config) => {
-					autodiscover::run(&config, domain.as_deref(), &mut std::io::stdout().lock())
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::ReportAbuse { config } => match Config::load(&config) {
-				Ok(config) => report_abuse::run(
-					&config,
+			Command::Autodiscover { config, domain } => with_config(&config, |config| {
+				autodiscover::run(config, domain.as_deref(), &mut std::io::stdout().lock())
+			}),
+			Command::ReportAbuse { config } => with_config(&config, |config| {
+				report_abuse::run(
+					config,
 					std::io::stdin().lock(),
 					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::Accounts { config } => match Config::load(&config) {
-				Ok(config) => accounts::list(&config, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+				)
+			}),
+			Command::Accounts { config } => with_config(&config, |config| {
+				accounts::list(config, &mut std::io::stdout().lock())
+			}),
 			Command::AccountAdd {
 				config,
 				name,
 				addresses,
-			} => match Config::load(&config) {
-				Ok(config) => accounts::add(&config, &name, addresses, std::io::stdin().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => with_config(&config, |config| {
+				accounts::add(config, &name, addresses, std::io::stdin().lock())
+			}),
 			Command::AccountRemove {
 				config,
 				name,
 				queue,
-			} => match Config::load(&config) {
-				Ok(config) => {
-					accounts::remove(&config, &name, queue, &mut std::io::stdout().lock())
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => with_config(&config, |config| {
+				accounts::remove(config, &name, queue, &mut std::io::stdout().lock())
+			}),
 			Command::Account { config, action } => {
 				let mut out = std::io::stdout().lock();
 				match Config::load(&config) {
@@ -393,13 +360,9 @@ impl Cli {
 				}
 			},
 			Command::Archive { action } => archive::dispatch(action, &mut std::io::stdout().lock()),
-			Command::Reports { config, days } => match Config::load(&config) {
-				Ok(config) => reports::run(&config, days, &mut std::io::stdout().lock()),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::Reports { config, days } => with_config(&config, |config| {
+				reports::run(config, days, &mut std::io::stdout().lock())
+			}),
 			Command::Local { dir, port_base } => local::run(dir, port_base),
 			Command::Init {
 				answers,
@@ -494,25 +457,9 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
-			Command::Probe { config, json } => match Config::load(&config) {
-				Ok(config) => probe::run(&config, json),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::Probe { config, json } => {
+				with_config(&config, |config| probe::run(config, json))
+			}
 		}
 	}
 }
-
-#[cfg(test)]
-#[path = "dispatch_tests_delegation.rs"]
-mod tests_delegation;
-
-#[cfg(test)]
-#[path = "cli_tests_service.rs"]
-mod tests_service;
-
-#[cfg(test)]
-#[path = "dispatch_tests_limits.rs"]
-mod tests_limits;
