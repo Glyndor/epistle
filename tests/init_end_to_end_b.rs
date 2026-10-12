@@ -127,11 +127,11 @@ fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
 	let config_path = dir.path().join("etc").join("mail.toml");
 	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	let keys_dir = data_dir.join("keys");
-	// `storage::write_secret` stages to a sibling `.secret.tmp`; a
-	// directory at that exact path makes the storage-key write fail
-	// with `AlreadyExists` once the ed25519 and RSA keys have
+	// A directory where the storage key should land: init tries to
+	// write the key and the `rename(2)` onto the directory fails with
+	// `EISDIR` (for root too) once the ed25519 and RSA keys have
 	// already landed.
-	std::fs::create_dir_all(keys_dir.join("storage.secret.tmp")).expect("blocker dir");
+	std::fs::create_dir_all(keys_dir.join("storage.key")).expect("blocker dir");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\

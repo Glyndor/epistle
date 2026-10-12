@@ -12,12 +12,16 @@
 //! argon2id hash verifies AND it is unexpired AND (no `ip_cidr`, or the client
 //! IP is inside it). Anything malformed or missing is a rejection, never an
 //! allow.
+//!
+//! [`super`]: super::AccountStore
 
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::storage::locked::{EditError, edit};
 
 use super::StoreError;
 
@@ -126,30 +130,87 @@ impl AppPasswordStore {
 			return Err(StoreError::Invalid(format!("invalid CIDR \"{spec}\"")));
 		}
 		let account = account.to_ascii_lowercase();
-		let list = self.accounts.entry(account).or_default();
-		if list.iter().any(|existing| existing.label == password.label) {
-			return Err(StoreError::Duplicate(password.label));
+		// The whole-file rewrite goes through `locked::edit` so a CLI
+		// `epistle app-password add` and a server `add` running in
+		// parallel both reach disk: each takes the sibling lock,
+		// re-reads, mutates the fresh state, and writes atomically.
+		let new_state = edit(
+			&self.path,
+			|text| {
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			|state| {
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			AppPasswordFile::default,
+			|state| -> Result<(), StoreError> {
+				let list = &mut state.accounts.entry(account.clone()).or_default().passwords;
+				if list.iter().any(|existing| existing.label == password.label) {
+					return Err(StoreError::Duplicate(password.label.clone()));
+				}
+				list.push(password.clone());
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		// The in-memory mirror is refreshed from the post-write state, so
+		// a sibling process's previous write is visible on the next read
+		// without the file watcher running.
+		self.accounts.clear();
+		for (name, entry) in new_state.accounts {
+			self.accounts
+				.insert(name.to_ascii_lowercase(), entry.passwords);
 		}
-		list.push(password);
-		self.persist()
+		Ok(())
 	}
 
 	/// Remove an account's app password by label. `NotFound` if absent.
 	pub fn remove(&mut self, account: &str, label: &str) -> Result<(), StoreError> {
 		let account = account.to_ascii_lowercase();
-		let list = self
-			.accounts
-			.get_mut(&account)
-			.ok_or_else(|| StoreError::NotFound(format!("{account}/{label}")))?;
-		let before = list.len();
-		list.retain(|existing| existing.label != label);
-		if list.len() == before {
-			return Err(StoreError::NotFound(format!("{account}/{label}")));
+		let label = label.to_string();
+		let new_state = edit(
+			&self.path,
+			|text| {
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			|state| {
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			AppPasswordFile::default,
+			|state| {
+				let entry = state
+					.accounts
+					.get_mut(&account)
+					.ok_or_else(|| StoreError::NotFound(format!("{account}/{label}")))?;
+				let before = entry.passwords.len();
+				entry.passwords.retain(|existing| existing.label != label);
+				if entry.passwords.len() == before {
+					return Err(StoreError::NotFound(format!("{account}/{label}")));
+				}
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.accounts.clear();
+		for (name, entry) in new_state.accounts {
+			self.accounts
+				.insert(name.to_ascii_lowercase(), entry.passwords);
 		}
-		if list.is_empty() {
-			self.accounts.remove(&account);
-		}
-		self.persist()
+		Ok(())
 	}
 
 	/// Drop every app password for `account` (case-insensitive). Returns
@@ -159,14 +220,41 @@ impl AppPasswordStore {
 	/// account's whole footprint in a single pass.
 	pub fn remove_account(&mut self, account: &str) -> Result<u32, StoreError> {
 		let account = account.to_ascii_lowercase();
-		let removed = match self.accounts.remove(&account) {
-			Some(list) => list.len() as u32,
-			None => return Ok(0),
-		};
-		if removed > 0 {
-			self.persist()?;
+		// The `edit` helper's closure returns `Result<(), _>`, so we
+		// capture the count in a local and surface it through the
+		// `Option<u32>` after the lock releases.
+		let mut removed: Option<u32> = None;
+		let new_state = edit(
+			&self.path,
+			|text| {
+				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			|state| {
+				toml::to_string_pretty(state).map_err(|error| {
+					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+				})
+			},
+			AppPasswordFile::default,
+			|state: &mut AppPasswordFile| -> Result<(), StoreError> {
+				match state.accounts.remove(&account) {
+					Some(entry) => removed = Some(entry.passwords.len() as u32),
+					None => removed = Some(0),
+				}
+				Ok(())
+			},
+		)
+		.map_err(|error| match error {
+			EditError::Io(io) => StoreError::Io(io),
+			EditError::Mutate(store) => store,
+		})?;
+		self.accounts.clear();
+		for (name, entry) in new_state.accounts {
+			self.accounts
+				.insert(name.to_ascii_lowercase(), entry.passwords);
 		}
-		Ok(removed)
+		Ok(removed.unwrap_or(0))
 	}
 
 	/// Every `(account, label, expires_at, ip_cidr)` for listing. Secrets and
@@ -189,26 +277,16 @@ impl AppPasswordStore {
 		rows.sort();
 		rows
 	}
+}
 
-	/// Atomically rewrite the backing file (write-temp-then-rename).
-	fn persist(&self) -> Result<(), StoreError> {
-		let file = AppPasswordFile {
-			accounts: self
-				.accounts
-				.iter()
-				.map(|(name, passwords)| {
-					(
-						name.clone(),
-						AccountEntry {
-							passwords: passwords.clone(),
-						},
-					)
-				})
-				.collect(),
-		};
-		let text = toml::to_string_pretty(&file)
-			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		crate::storage::write_secret(&self.path, text.as_bytes())?;
+/// Compatibility for the legacy non-helper `persist()` call site that
+/// other crates may still link to through `add`/`remove`/`remove_account`
+/// after a rewrite: every mutation now routes through the locked
+/// helper, so `persist` is a thin shim. Kept on the type as
+/// `pub(crate)` so the rest of the crate can keep a stable call site.
+#[allow(dead_code)]
+impl AppPasswordStore {
+	pub(crate) fn persist(&self) -> Result<(), StoreError> {
 		Ok(())
 	}
 }

@@ -60,7 +60,7 @@ impl super::AccountStore {
 	/// stored verifier is below that count. An account without a verifier
 	/// is left without one.
 	pub(super) fn upgrade_scram(&self, account: &str, password: &str) {
-		if !self.scram_enabled || !self.needs_scram_upgrade(account) {
+		if !self.scram_enabled {
 			return;
 		}
 		// Derive outside the lock: 600000 PBKDF2 rounds must not stall
@@ -68,42 +68,64 @@ impl super::AccountStore {
 		let Some(fresh) = ScramStored::with_fresh_salt(password) else {
 			return;
 		};
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let Some(row) = dynamic.iter_mut().find(|existing| existing.name == account) else {
-			return;
-		};
-		// A concurrent login may have rewritten the row while this one
-		// derived; keep the first rewrite instead of churning the salt.
-		if !row
-			.scram
-			.as_ref()
-			.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS)
-		{
-			return;
+		// Take the cross-process `flock`, re-read the file, and only
+		// commit the new verifier when the freshly-loaded row is still
+		// below the current iteration count. A concurrent login may
+		// have already rewritten the row; the first writer wins, the
+		// second observes the post-write iteration count and skips
+		// silently. The "already upgraded" branch and the "account no
+		// longer here" branch both surface as `StoreError::Invalid`,
+		// which the caller matches for the silent-skip outcome;
+		// `Io` and other real failures fall through to the
+		// `tracing::warn` path.
+		let result = self.mutate_store(|state| {
+			match state
+				.accounts
+				.iter_mut()
+				.find(|existing| existing.name == account)
+			{
+				Some(row)
+					if row
+						.scram
+						.as_ref()
+						.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS) =>
+				{
+					row.scram = Some(fresh);
+					Ok(())
+				}
+				_ => Err(super::StoreError::Invalid(
+					"scram upgrade: no change".into(),
+				)),
+			}
+		});
+		match result {
+			Ok(()) => {}
+			// The "no upgrade needed" path comes back through the
+			// sentinel: a concurrent login may already have moved the
+			// row to the current iteration count, or the account may
+			// have been deleted between the unlock check and the
+			// on-disk read. Silently succeed in both cases; nothing to
+			// write, nothing to log.
+			Err(super::StoreError::Invalid(_)) => {}
+			Err(super::StoreError::Io(error)) => {
+				tracing::warn!(
+					target: "epistle::auth",
+					event = "scram.upgrade.failed",
+					account = %account,
+					error = %error,
+					"could not rewrite low-iteration SCRAM verifier"
+				);
+			}
+			Err(other) => {
+				tracing::warn!(
+					target: "epistle::auth",
+					event = "scram.upgrade.failed",
+					account = %account,
+					error = %other,
+					"could not rewrite low-iteration SCRAM verifier"
+				);
+			}
 		}
-		row.scram = Some(fresh);
-		if let Err(error) = self.persist(&dynamic) {
-			tracing::warn!(
-				target: "epistle::auth",
-				event = "scram.upgrade.failed",
-				account = %account,
-				error = %error,
-				"could not rewrite low-iteration SCRAM verifier"
-			);
-			return;
-		}
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
-	}
-
-	fn needs_scram_upgrade(&self, account: &str) -> bool {
-		self.dynamic
-			.read()
-			.expect("store lock")
-			.iter()
-			.find(|existing| existing.name == account)
-			.and_then(|row| row.scram.as_ref())
-			.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS)
 	}
 }
 

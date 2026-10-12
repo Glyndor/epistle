@@ -68,13 +68,15 @@ impl super::AccountStore {
 		let stored = secret
 			.map(|secret| seal(&self.crypto, &secret))
 			.transpose()?;
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| super::StoreError::NotFound(name.to_string()))?;
-		account.totp_secret = stored;
-		self.persist(&dynamic)?;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| super::StoreError::NotFound(name.to_string()))?;
+			target.totp_secret = stored;
+			Ok(())
+		})?;
 		Ok(())
 	}
 

@@ -207,18 +207,20 @@ fn apply_fails_when_config_path_parent_is_a_regular_file() {
 #[cfg(unix)]
 #[test]
 fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes() {
-	// A directory sits where the storage key's staging temp would
-	// go. The DKIM ed25519 and RSA keys have already landed on disk
-	// when `write_secret` for the storage key fails, so the apply
+	// A directory sits where the storage key should land. A directory
+	// is not a key, so apply must try to write the file and the
+	// `rename(2)` onto it fails with `EISDIR` (root included, unlike a
+	// permission bit). The DKIM ed25519 and RSA keys have already
+	// landed on disk when the storage-key write fails, so the apply
 	// phase must (1) propagate the failure as `KeyWrite` (no panic),
 	// (2) keep every earlier `Wrote` step in the report so the
-	// operator sees what landed, and (3) name the storage key path
-	// it could not write, not a generic message.
+	// operator sees what landed, and (3) name the storage key path it
+	// could not write, not a generic message.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
 	let keys_dir = data_dir.join("keys");
-	std::fs::create_dir_all(keys_dir.join("storage.secret.tmp")).expect("blocker dir");
+	std::fs::create_dir_all(keys_dir.join("storage.key")).expect("blocker dir");
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	let err = outcome
 		.error
@@ -252,40 +254,55 @@ fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes()
 		"s2.pem must be on disk from the earlier successful write"
 	);
 	assert!(
-		!keys_dir.join("storage.key").exists(),
-		"storage.key must NOT be on disk because the write failed"
+		!keys_dir.join("storage.key").is_file(),
+		"storage.key must NOT be on disk as a key because the write failed"
 	);
 }
 
 #[cfg(unix)]
 #[test]
 fn apply_does_not_leave_a_staging_temp_after_a_failed_write() {
-	// The staging temp is created with `O_EXCL` so a leftover from
-	// a prior crashed run would block the next write. After a failed
-	// write we must remove the temp file so the next run can
-	// succeed; the test asserts the temp file does not survive a
-	// failed apply pass.
+	// The storage-key write fails on a directory at its destination
+	// after `write_secret` has already created and filled its staging
+	// temp. That temp must not survive the failed apply, and once the
+	// obstruction is gone a second run must write the storage key.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
 	let keys_dir = data_dir.join("keys");
-	let blocker = keys_dir.join("storage.secret.tmp");
+	let blocker = keys_dir.join("storage.key");
 	std::fs::create_dir_all(&blocker).expect("blocker dir");
-	let _ = apply(&answers_minimal(&data_dir, &config_path));
-	// The temp should be left on disk by `write_secret` itself when
-	// the obstruction blocks its own create_new. After apply we
-	// clean it up explicitly so the next run can proceed; assert
-	// the cleanup ran by removing the blocker and re-running apply,
-	// which must now succeed and write the storage key.
+	let outcome = apply(&answers_minimal(&data_dir, &config_path));
+	assert!(
+		matches!(&outcome.error, Some(ApplyError::KeyWrite(path, _)) if path.ends_with("storage.key")),
+		"the obstruction must fail the storage-key write, got {:?}",
+		outcome.error.as_ref().map(apply_error_name)
+	);
+	let leftovers: Vec<String> = std::fs::read_dir(&keys_dir)
+		.expect("read keys dir")
+		.map(|entry| {
+			entry
+				.expect("entry")
+				.file_name()
+				.to_string_lossy()
+				.into_owned()
+		})
+		.filter(|name| name.ends_with(".tmp"))
+		.collect();
+	assert_eq!(
+		leftovers,
+		Vec::<String>::new(),
+		"a failed key write must not leave a staging temp in keys/"
+	);
 	std::fs::remove_dir_all(&blocker).expect("remove blocker");
 	let outcome2 = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(
 		outcome2.error.is_none(),
 		"retry must succeed: {:?}",
-		outcome2.error
+		outcome2.error.as_ref().map(apply_error_name)
 	);
 	assert!(
-		keys_dir.join("storage.key").exists(),
+		keys_dir.join("storage.key").is_file(),
 		"storage.key must be written on retry"
 	);
 }
