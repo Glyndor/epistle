@@ -422,7 +422,7 @@ impl AccountStore {
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
 	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			validate_name(&account.name)?;
 			if account.addresses.is_empty() {
 				return Err(StoreError::Invalid("addresses must not be empty".into()));
@@ -457,13 +457,12 @@ impl AccountStore {
 			state.accounts.push(account);
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
 	/// Remove a dynamic account. Static accounts cannot be removed here.
 	pub fn remove(&self, name: &str) -> Result<(), StoreError> {
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let before = state.accounts.len();
 			state.accounts.retain(|account| account.name != name);
 			if state.accounts.len() == before {
@@ -471,7 +470,6 @@ impl AccountStore {
 			}
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
@@ -482,7 +480,7 @@ impl AccountStore {
 		hash: String,
 		scram: Option<crate::smtp::scram::ScramStored>,
 	) -> Result<(), StoreError> {
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
@@ -492,7 +490,6 @@ impl AccountStore {
 			target.scram = scram;
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
@@ -502,7 +499,7 @@ impl AccountStore {
 	/// so callers can detect a no-op.
 	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
 		let mut previous = None;
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
@@ -512,7 +509,6 @@ impl AccountStore {
 			target.disabled = disabled;
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(previous.expect("closure ran"))
 	}
 
@@ -556,7 +552,7 @@ impl AccountStore {
 		name: &str,
 		replacement: DynamicAccount,
 	) -> Result<(), StoreError> {
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let slot = state
 				.accounts
 				.iter()
@@ -590,7 +586,6 @@ impl AccountStore {
 			state.accounts[slot] = fresh;
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 

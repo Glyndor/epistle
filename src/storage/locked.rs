@@ -87,6 +87,26 @@ pub fn edit<T, E, F>(
 where
 	F: FnOnce(&mut T) -> Result<(), E>,
 {
+	edit_and_commit(path, parse, serialize, default, mutate, |state| state)
+}
+
+/// [`edit`], plus a `commit` step that receives the post-write state
+/// while the lock is still held. A caller whose in-memory mirror is
+/// shared between threads (`&self` mutators) replaces it in `commit`:
+/// replacing it after the lock is released would let a second writer
+/// commit and refresh in between, and the first writer's late refresh
+/// would roll the mirror back to the older state.
+pub fn edit_and_commit<T, E, F, R>(
+	path: &Path,
+	parse: impl Fn(&str) -> std::io::Result<T>,
+	serialize: impl Fn(&T) -> std::io::Result<String>,
+	default: impl Fn() -> T,
+	mutate: F,
+	commit: impl FnOnce(T) -> R,
+) -> Result<R, EditError<E>>
+where
+	F: FnOnce(&mut T) -> Result<(), E>,
+{
 	let _lock = FileLock::acquire(&lock_path(path))?;
 	let mut state = match std::fs::read_to_string(path) {
 		Ok(text) => parse(&text)?,
@@ -96,7 +116,7 @@ where
 	mutate(&mut state).map_err(EditError::Mutate)?;
 	let text = serialize(&state).map_err(EditError::Io)?;
 	write_secret(path, text.as_bytes())?;
-	Ok(state)
+	Ok(commit(state))
 }
 
 /// Sibling lock path used by [`edit`]: `.<name>.lock` in the same

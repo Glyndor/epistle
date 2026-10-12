@@ -36,7 +36,7 @@ impl AccountStore {
 		bytes: Option<u64>,
 	) -> Result<Option<u64>, StoreError> {
 		let mut previous = None;
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
@@ -46,7 +46,6 @@ impl AccountStore {
 			target.quota_bytes = bytes;
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(previous.expect("closure ran"))
 	}
 
@@ -62,7 +61,7 @@ impl AccountStore {
 		protocols: Option<Vec<crate::config::Protocol>>,
 	) -> Result<Option<Vec<crate::config::Protocol>>, StoreError> {
 		let mut previous: Option<Option<Vec<crate::config::Protocol>>> = None;
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
@@ -72,7 +71,6 @@ impl AccountStore {
 			target.allowed_protocols = protocols;
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(previous.expect("closure ran"))
 	}
 
@@ -130,7 +128,7 @@ impl AccountStore {
 				"address {raw} is not in a configured domain"
 			)));
 		}
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let existing_on_self = state
 				.accounts
 				.iter()
@@ -150,7 +148,6 @@ impl AccountStore {
 			target.addresses.push(raw.to_string());
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 
@@ -161,7 +158,7 @@ impl AccountStore {
 	/// the directory so the next delivery attempt rejects the removed
 	/// address identically to an unknown user.
 	pub fn remove_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
@@ -182,7 +179,6 @@ impl AccountStore {
 			target.addresses.retain(|existing| !is_target(existing));
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 }

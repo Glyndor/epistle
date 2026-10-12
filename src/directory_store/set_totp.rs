@@ -68,7 +68,7 @@ impl super::AccountStore {
 		let stored = secret
 			.map(|secret| seal(&self.crypto, &secret))
 			.transpose()?;
-		let new_state = self.mutate_store(|state| {
+		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
@@ -77,7 +77,6 @@ impl super::AccountStore {
 			target.totp_secret = stored;
 			Ok(())
 		})?;
-		self.refresh_after_write(new_state);
 		Ok(())
 	}
 

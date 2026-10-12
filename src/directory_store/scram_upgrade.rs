@@ -99,7 +99,7 @@ impl super::AccountStore {
 			}
 		});
 		match result {
-			Ok(new_state) => self.refresh_after_write(new_state),
+			Ok(()) => {}
 			// The "no upgrade needed" path comes back through the
 			// sentinel: a concurrent login may already have moved the
 			// row to the current iteration count, or the account may

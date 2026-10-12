@@ -9,7 +9,7 @@
 //! closure re-reads the on-disk state under the sibling `flock` and
 //! applies the mutation to that fresh state.
 
-use crate::storage::locked::{EditError, edit};
+use crate::storage::locked::{EditError, edit_and_commit};
 
 use super::{AccountStore, DynamicFile, StoreError};
 
@@ -32,16 +32,17 @@ pub(super) fn serialize_dynamic_file(
 impl AccountStore {
 	/// Run `mutate` under the cross-process lock on
 	/// `accounts.toml` with the latest on-disk state rehydrated into
-	/// `state`. Returns the post-mutation state so the caller can
-	/// replace its in-memory mirror without re-reading the file.
-	/// The closure's return type is the shared `StoreError` so a
+	/// `state`, write it, and replace the in-memory mirror with the
+	/// post-write state before the lock is released, so two threads
+	/// mutating through `&self` cannot leave the mirror older than the
+	/// file. The closure's return type is the shared `StoreError` so a
 	/// validation failure under the lock surfaces a typed error
 	/// rather than a string.
-	pub(super) fn mutate_store<F>(&self, mutate: F) -> Result<DynamicFile, StoreError>
+	pub(super) fn mutate_store<F>(&self, mutate: F) -> Result<(), StoreError>
 	where
 		F: FnOnce(&mut DynamicFile) -> Result<(), StoreError>,
 	{
-		edit(
+		edit_and_commit(
 			&self.path,
 			|text| {
 				toml::from_str::<DynamicFile>(text).map_err(|error| {
@@ -51,6 +52,7 @@ impl AccountStore {
 			|state| serialize_dynamic_file(self, state),
 			DynamicFile::default,
 			mutate,
+			|state| self.refresh_after_write(state),
 		)
 		.map_err(|error| match error {
 			EditError::Io(io) => StoreError::Io(io),
@@ -62,8 +64,12 @@ impl AccountStore {
 	/// post-write state and rebuild the directory handle so the next
 	/// authentication or resolution call sees the change without
 	/// going through the file watcher.
-	pub(super) fn refresh_after_write(&self, new_state: DynamicFile) {
+	fn refresh_after_write(&self, new_state: DynamicFile) {
 		*self.dynamic.write().expect("store lock") = new_state.accounts;
 		self.handle.replace(self.build_directory());
 	}
 }
+
+#[cfg(test)]
+#[path = "refresh_under_lock_tests.rs"]
+mod refresh_under_lock_tests;
