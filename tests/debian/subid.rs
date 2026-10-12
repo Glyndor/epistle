@@ -96,8 +96,16 @@ fn assert_added(run: &Run, expected: &str, case: &str) {
 
 #[test]
 fn empty_or_missing_tables_start_at_100000() {
-	assert_added(&configure(Some(""), Some(""), None), &both(100000, 100000), "empty");
-	assert_added(&configure(None, None, None), &both(100000, 100000), "missing");
+	assert_added(
+		&configure(Some(""), Some(""), None),
+		&both(100000, 100000),
+		"empty",
+	);
+	assert_added(
+		&configure(None, None, None),
+		&both(100000, 100000),
+		"missing",
+	);
 }
 
 #[test]
