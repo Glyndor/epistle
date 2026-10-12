@@ -43,28 +43,35 @@ pub trait ReportPoster: Send + Sync {
 }
 
 /// The production poster: `Content-Type: application/tlsrpt+gzip`, a bounded
-/// timeout, and no redirects (the report goes where the record says).
-pub struct HttpsPoster {
-	client: reqwest::Client,
-}
+/// timeout, and no redirects (the report goes where the record says). The
+/// destination is chosen by the recipient domain, so it is checked and the
+/// connection pinned first ([`super::https_target`]).
+pub struct HttpsPoster;
 
 impl HttpsPoster {
-	/// Build the HTTP client.
+	/// Build the poster. Kept fallible for the callers that build it at
+	/// startup; the per-request client is built after the target is checked.
 	pub fn new() -> Result<Self, reqwest::Error> {
-		let client = reqwest::Client::builder()
-			.timeout(HTTPS_TIMEOUT)
-			.redirect(reqwest::redirect::Policy::none())
-			.build()?;
-		Ok(HttpsPoster { client })
+		Ok(HttpsPoster)
 	}
 }
 
 impl ReportPoster for HttpsPoster {
 	fn post<'a>(&'a self, url: &'a str, body: &'a [u8]) -> Fut<'a, Result<(), String>> {
 		Box::pin(async move {
-			let response = self
-				.client
-				.post(url)
+			let target =
+				super::https_target::check(url, super::https_target::system_resolve).await?;
+			// Pin the name to the addresses just checked: reqwest would
+			// otherwise resolve again, and a second answer could point at an
+			// internal host.
+			let client = reqwest::Client::builder()
+				.timeout(HTTPS_TIMEOUT)
+				.redirect(reqwest::redirect::Policy::none())
+				.resolve_to_addrs(&target.host, &target.addrs)
+				.build()
+				.map_err(|error| error.to_string())?;
+			let response = client
+				.post(target.url.into_url())
 				.header("Content-Type", "application/tlsrpt+gzip")
 				.body(body.to_vec())
 				.send()
