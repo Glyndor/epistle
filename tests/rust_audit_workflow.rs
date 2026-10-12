@@ -236,7 +236,8 @@ fn matches_ref(block: &str, ref_name: &str) -> bool {
 		let after = trimmed.strip_prefix("ref:").unwrap().trim();
 		if !after.is_empty() {
 			// inline value
-			if after.split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+			if after
+				.split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
 				.any(|token| token == ref_name)
 			{
 				return true;
