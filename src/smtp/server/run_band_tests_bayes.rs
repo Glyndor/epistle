@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use tokio::io::AsyncReadExt;
 
+use crate::smtp::server::DirectoryHandle;
 use crate::smtp::server::Server;
 use crate::smtp::server::run_band::BayesOutcome;
-use crate::smtp::server::DirectoryHandle;
 use crate::smtp::sink::MemorySink;
 
 /// Always-trusted, configurable-score scorer. Implements the bare
@@ -89,11 +89,12 @@ fn bayes_server(
 
 /// Build an `AcceptedMessage` referencing bob at the SMTP level.
 fn sample_message(reverse_path: &str, body: &[u8]) -> crate::smtp::session::AcceptedMessage {
-	let mut message = crate::smtp::session::AcceptedMessage::default();
-	message.reverse_path = reverse_path.to_string();
-	message.recipients = vec!["bob@example.org".to_string()];
-	message.data = body.to_vec();
-	message
+	crate::smtp::session::AcceptedMessage {
+		reverse_path: reverse_path.to_string(),
+		recipients: vec!["bob@example.org".to_string()],
+		data: body.to_vec(),
+		..Default::default()
+	}
 }
 
 /// A score above `junk_at` and below `reject_at` lands the message in
@@ -135,12 +136,7 @@ async fn score_above_junk_at_routes_to_junk_with_headers() {
 async fn score_above_reject_at_sends_550_5_7_1() {
 	let scorer = TrustedScorer::new(0.99);
 	let mut message = sample_message("alice@example.org", b"From: a@b\r\n\r\nbody\r\n");
-	let server = bayes_server(
-		Arc::new(MemorySink::new()),
-		scorer,
-		0.95,
-		Some(0.98),
-	);
+	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, Some(0.98));
 	let (mut writer, mut reader) = tokio::io::duplex(4096);
 	let outcome = server
 		.handle_bayes_thresholds(&mut message, false, &mut writer)
@@ -166,12 +162,7 @@ async fn score_below_thresholds_is_a_no_op() {
 	let body = b"From: a@b\r\n\r\nbody\r\n".to_vec();
 	let original_data = body.clone();
 	let mut message = sample_message("alice@example.org", &body);
-	let server = bayes_server(
-		Arc::new(MemorySink::new()),
-		scorer,
-		0.95,
-		Some(0.99),
-	);
+	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, Some(0.99));
 	let mut sink = Vec::<u8>::new();
 	let outcome = server
 		.handle_bayes_thresholds(&mut message, false, &mut sink)
@@ -196,12 +187,7 @@ async fn score_below_thresholds_is_a_no_op() {
 async fn an_authenticated_session_is_never_scored() {
 	let scorer = TrustedScorer::new(1.0);
 	let mut message = sample_message("alice@example.org", b"From: a@b\r\n\r\nbody\r\n");
-	let server = bayes_server(
-		Arc::new(MemorySink::new()),
-		scorer,
-		0.95,
-		Some(0.5),
-	);
+	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, Some(0.5));
 	let mut sink = Vec::<u8>::new();
 	let outcome = server
 		.handle_bayes_thresholds(&mut message, true, &mut sink)
@@ -220,12 +206,7 @@ async fn an_untrained_corpus_never_junks() {
 	let base = TrustedScorer::new(1.0);
 	let scorer = base.with_trusted(false);
 	let mut message = sample_message("alice@example.org", b"From: a@b\r\n\r\nbody\r\n");
-	let server = bayes_server(
-		Arc::new(MemorySink::new()),
-		scorer,
-		0.95,
-		Some(0.5),
-	);
+	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, Some(0.5));
 	let mut sink = Vec::<u8>::new();
 	let outcome = server
 		.handle_bayes_thresholds(&mut message, false, &mut sink)
@@ -241,12 +222,7 @@ async fn an_untrained_corpus_never_junks() {
 async fn a_bounce_is_never_junked() {
 	let scorer = TrustedScorer::new(1.0);
 	let mut message = sample_message("", b"From: a@b\r\n\r\nbody\r\n");
-	let server = bayes_server(
-		Arc::new(MemorySink::new()),
-		scorer,
-		0.95,
-		Some(0.5),
-	);
+	let server = bayes_server(Arc::new(MemorySink::new()), scorer, 0.95, Some(0.5));
 	let mut sink = Vec::<u8>::new();
 	let outcome = server
 		.handle_bayes_thresholds(&mut message, false, &mut sink)

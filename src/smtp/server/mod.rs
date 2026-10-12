@@ -290,9 +290,9 @@ impl Server {
 		self
 	}
 
-/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
-/// The store can be either backing (`MemoryGreylist` or `PgGreylistStore`);
-/// they implement the same trait.
+	/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
+	/// The store can be either backing (`MemoryGreylist` or `PgGreylistStore`);
+	/// they implement the same trait.
 	pub fn with_greylist(
 		mut self,
 		store: Arc<dyn crate::antispam::greylist::GreylistStore>,

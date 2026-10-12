@@ -513,6 +513,10 @@ pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
 #[path = "serve_tasks_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "serve_tasks_tests_no_database.rs"]
+mod tests_no_database;
+
 /// Build the optional ARC sealer from `[arc]`: a DKIM-format ed25519 key
 /// under the server hostname. Absent config yields `None`; a key that does
 /// not load is fatal (fail closed), so a misconfigured sealer never lets

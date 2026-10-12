@@ -9,8 +9,8 @@
 //! `status` line so a misconfigured operator sees it without reading
 //! logs.
 
-use super::report::{AreaReport, Item, Level};
 use super::Ctx;
+use super::report::{AreaReport, Item, Level};
 
 /// The user-visible answer to "is the antispam engine on?" depends on
 /// two configuration knobs: `[database]` (which carries the corpus,

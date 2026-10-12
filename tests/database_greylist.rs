@@ -40,7 +40,7 @@ fn greylist_triplet() -> epistle::antispam::greylist::Triplet<'static> {
 /// than in production.
 #[tokio::test]
 async fn greylist_sql_store_matches_the_decision_contract() {
-	use epistle::antispam::greylist::{decide, Decision, GreylistStore};
+	use epistle::antispam::greylist::{Decision, GreylistStore, decide};
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
@@ -111,14 +111,12 @@ async fn greylist_sql_sweep_drops_only_old_rows() {
 		.execute(&pool)
 		.await
 		.expect("pre-clean old");
-	sqlx::query(
-		"INSERT INTO greylist_triplet (key, first_seen, last_seen) VALUES ($1, $2, $2)",
-	)
-	.bind(&old_key)
-	.bind(1_000_i64)
-	.execute(&pool)
-	.await
-	.expect("insert old");
+	sqlx::query("INSERT INTO greylist_triplet (key, first_seen, last_seen) VALUES ($1, $2, $2)")
+		.bind(&old_key)
+		.bind(1_000_i64)
+		.execute(&pool)
+		.await
+		.expect("insert old");
 
 	// Young: first_seen at 9_000, well within the same 3_600 window
 	// from `now = 10_000`. Must survive.
@@ -127,14 +125,12 @@ async fn greylist_sql_sweep_drops_only_old_rows() {
 		.execute(&pool)
 		.await
 		.expect("pre-clean young");
-	sqlx::query(
-		"INSERT INTO greylist_triplet (key, first_seen, last_seen) VALUES ($1, $2, $2)",
-	)
-	.bind(&young_key)
-	.bind(9_000_i64)
-	.execute(&pool)
-	.await
-	.expect("insert young");
+	sqlx::query("INSERT INTO greylist_triplet (key, first_seen, last_seen) VALUES ($1, $2, $2)")
+		.bind(&young_key)
+		.bind(9_000_i64)
+		.execute(&pool)
+		.await
+		.expect("insert young");
 
 	store.sweep(10_000, 3600).await;
 
@@ -163,7 +159,7 @@ async fn greylist_sql_sweep_drops_only_old_rows() {
 /// asserts the second one observes the row from the first.
 #[tokio::test]
 async fn greylist_sql_store_survives_a_restart() {
-	use epistle::antispam::greylist::{decide, Decision, GreylistStore};
+	use epistle::antispam::greylist::{Decision, GreylistStore, decide};
 
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");

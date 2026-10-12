@@ -143,11 +143,19 @@ impl Server {
 			&& score >= reject_at
 		{
 			tracing::info!(score, reject_at, "bayes: rejecting at DATA with 550 5.7.1");
-			send(stream, &Reply::single(550, "5.7.1 message rejected as spam")).await?;
+			send(
+				stream,
+				&Reply::single(550, "5.7.1 message rejected as spam"),
+			)
+			.await?;
 			return Ok(BayesOutcome::Rejected);
 		}
 		if score >= self.bayes_junk_at {
-			tracing::info!(score, junk_at = self.bayes_junk_at, "bayes: routing to Junk");
+			tracing::info!(
+				score,
+				junk_at = self.bayes_junk_at,
+				"bayes: routing to Junk"
+			);
 			message.data = crate::smtp::trace::inject_spam_headers(&message.data, score);
 			// "Junk" maps to the IMAP `\Junk` special-use mailbox via
 			// the helper in `imap/session/helpers.rs`. The historical

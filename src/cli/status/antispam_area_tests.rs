@@ -41,11 +41,16 @@ async fn antispam_status_lists_every_off_feature_when_no_database() {
 	let report = antispam_area::check(&ctx).await;
 	// The four persistent-store features must surface as Warn; the
 	// greylist item is only added when `greylist_delay_secs > 0`.
-	for name in ["bayes", "reputation", "persistent_bans", "greylist_persistence"] {
+	for name in [
+		"bayes",
+		"reputation",
+		"persistent_bans",
+		"greylist_persistence",
+	] {
 		let item = report
 			.items
 			.iter()
-				.find(|item| item.name == name)
+			.find(|item| item.name == name)
 			.unwrap_or_else(|| panic!("expected an `{name}` item in {report:?}"));
 		assert_eq!(
 			item.status,
@@ -72,7 +77,12 @@ url = "postgres:///db?host=/var/run/postgresql"
 	);
 	let ctx = ctx_for(file.path());
 	let report = antispam_area::check(&ctx).await;
-	for name in ["bayes", "reputation", "persistent_bans", "greylist_persistence"] {
+	for name in [
+		"bayes",
+		"reputation",
+		"persistent_bans",
+		"greylist_persistence",
+	] {
 		let item = report
 			.items
 			.iter()
