@@ -19,6 +19,33 @@ pub const MAX_SIZE_REQUEST: usize = 10_000_000;
 /// `maxCallsInRequest`: the most method calls accepted in one request.
 pub const MAX_CALLS_IN_REQUEST: usize = 16;
 
+/// `maxObjectsInGet`: the most ids one `/get` call may name, and the most
+/// records `ids: null` may return (RFC 8620 §5.1).
+pub const MAX_OBJECTS_IN_GET: usize = 500;
+
+/// `maxObjectsInSet`: the most creates, updates and destroys, counted
+/// together, one `/set` call may carry (RFC 8620 §5.3).
+pub const MAX_OBJECTS_IN_SET: usize = 500;
+
+/// Whether a `/get` call names more ids than [`MAX_OBJECTS_IN_GET`], or a
+/// `/set` call carries more creates, updates and destroys than
+/// [`MAX_OBJECTS_IN_SET`]. Such a call is answered `requestTooLarge`
+/// (RFC 8620 §5.1, §5.3) and not run.
+pub(super) fn too_many_objects(method: &str, args: &serde_json::Value) -> bool {
+	let count = |key: &str| match args.get(key) {
+		Some(serde_json::Value::Array(items)) => items.len(),
+		Some(serde_json::Value::Object(items)) => items.len(),
+		_ => 0,
+	};
+	if method.ends_with("/get") {
+		count("ids") > MAX_OBJECTS_IN_GET
+	} else if method.ends_with("/set") {
+		count("create") + count("update") + count("destroy") > MAX_OBJECTS_IN_SET
+	} else {
+		false
+	}
+}
+
 /// The request-level error for a request with more than
 /// [`MAX_CALLS_IN_REQUEST`] method calls (RFC 8620 §3.6.1). Nothing is run
 /// for a refused request.

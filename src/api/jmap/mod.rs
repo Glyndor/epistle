@@ -33,7 +33,9 @@ pub mod event_source;
 pub use download::download;
 mod email_submission;
 mod limits;
-pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE};
+pub use limits::{
+	MAX_CALLS_IN_REQUEST, MAX_OBJECTS_IN_GET, MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+};
 mod methods;
 mod objects;
 pub(crate) mod push_subscription;
@@ -102,8 +104,8 @@ pub async fn session(
 				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
 				"maxConcurrentRequests": 4u32,
 				"maxCallsInRequest": MAX_CALLS_IN_REQUEST as u32,
-				"maxObjectsInGet": 500u32,
-				"maxObjectsInSet": 500u32,
+				"maxObjectsInGet": MAX_OBJECTS_IN_GET as u32,
+				"maxObjectsInSet": MAX_OBJECTS_IN_SET as u32,
 				"collationAlgorithms": [],
 			},
 			MAIL_CAPABILITY: {
@@ -247,6 +249,12 @@ pub fn dispatch_request(
 			&& state.require_scope_for_principal(principal, scope).is_err()
 		{
 			let response = jmap_scope_error(&call_id);
+			resolver.record_result(&response);
+			method_responses.push(response);
+			continue;
+		}
+		if limits::too_many_objects(&name, &args) {
+			let response = json!(["error", { "type": "requestTooLarge" }, call_id]);
 			resolver.record_result(&response);
 			method_responses.push(response);
 			continue;

@@ -221,6 +221,10 @@ mod jmap_tests_changes_c;
 mod jmap_tests_limits;
 
 #[cfg(test)]
+#[path = "jmap_tests_limits_objects.rs"]
+mod jmap_tests_limits_objects;
+
+#[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tenancy_tests;
 

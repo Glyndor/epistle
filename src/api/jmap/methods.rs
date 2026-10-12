@@ -192,7 +192,13 @@ pub(super) fn mailbox_get(
 				.collect()
 		});
 
-	let list: Vec<Value> = crate::imap::mailbox::list(data_dir, account)
+	let names = crate::imap::mailbox::list(data_dir, account);
+	// `ids: null` returns every mailbox only while there are no more than
+	// `maxObjectsInGet` of them (RFC 8620 §5.1).
+	if wanted.is_none() && names.len() > super::limits::MAX_OBJECTS_IN_GET {
+		return json!(["error", { "type": "requestTooLarge" }, call_id]);
+	}
+	let list: Vec<Value> = names
 		.into_iter()
 		.filter(|name| wanted.as_ref().is_none_or(|ids| ids.contains(name)))
 		.map(|name| objects::mailbox_object(data_dir, account, &name))
