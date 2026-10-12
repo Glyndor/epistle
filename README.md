@@ -12,7 +12,7 @@ It has no web interface: you run it through the CLI and its API.
 - 🔏 **SPF, DKIM, DMARC, ARC, MTA-STS and DANE**, with DMARC aggregate reports and automatic DKIM key rotation.
 - 🧹 **Sieve filters with ManageSieve**, greylisting, DNSBL, ClamAV, and Bayesian and reputation antispam.
 - 👥 **Accounts, aliases, catch-all and masked addresses**, TOTP and app passwords; LDAP, SQL and OIDC directories.
-- 🌐 **DNS records published for you** through 13 DNS providers, and certificates through ACME.
+- 🌐 **DNS records published for you** on Cloudflare, Route 53, Google Cloud DNS, DigitalOcean, OVH, GoDaddy, Namecheap, Porkbun, Spaceship, Bunny, deSEC, DNSimple, or your own nameserver over RFC 2136. Certificates through ACME.
 - 🔒 **Fails closed**: an unknown config key, broken TLS material or a missing secret stops the server instead of degrading it.
 
 ## Install
