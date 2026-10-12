@@ -31,6 +31,7 @@ use crate::directory_store::DirectoryHandle;
 pub mod auth;
 pub mod caldav;
 pub mod caldav_filter;
+mod caldav_filter_ical;
 mod caldav_filter_xml;
 pub mod carddav;
 pub mod carddav_filter;

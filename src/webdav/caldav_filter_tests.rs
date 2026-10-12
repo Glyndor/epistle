@@ -1,7 +1,15 @@
-use super::{
-	CalendarQueryFilter, CompFilter, PropFilter, TextMatch, TimeRange, load_and_match, matches,
-	none, parse, time_range_only,
-};
+use super::{CalendarQueryFilter, CompFilter, PropFilter, TextMatch, TimeRange, matches, parse};
+
+/// A filter with one comp-filter on `component` restricted to `range`.
+fn time_range_only(component: &str, range: TimeRange) -> Option<CalendarQueryFilter> {
+	Some(CalendarQueryFilter {
+		components: vec![CompFilter {
+			name: component.to_string(),
+			time_range: Some(range),
+			..CompFilter::default()
+		}],
+	})
+}
 
 const EVENT: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:e1\r\nDTSTART:20260115T090000Z\r\nDTEND:20260115T100000Z\r\nSUMMARY:One\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
@@ -11,7 +19,7 @@ const TODO: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\nUID:t1\r\nS
 
 #[test]
 fn empty_filter_matches_everything() {
-	let f = none();
+	let f = CalendarQueryFilter::default();
 	assert!(matches(&f, EVENT));
 	assert!(matches(&f, TODO));
 }
@@ -328,40 +336,6 @@ fn text_passes_octet_is_case_sensitive() {
 	};
 	assert!(super::text_passes("FOObar", &tm));
 	assert!(!super::text_passes("foobar", &tm));
-}
-
-#[tokio::test]
-async fn load_and_match_returns_none_for_non_matching() {
-	let tmp = tempfile::tempdir().expect("dir");
-	let path = tmp.path().join("e.ics");
-	std::fs::write(&path, EVENT).expect("write");
-	let f = time_range_only(
-		"VEVENT",
-		TimeRange {
-			start: 1_700_006_400,
-			end: 1_700_092_800,
-		},
-	)
-	.expect("filter");
-	let result = load_and_match(&f, &path).await;
-	assert!(result.is_none());
-}
-
-#[tokio::test]
-async fn load_and_match_returns_some_for_matching() {
-	let tmp = tempfile::tempdir().expect("dir");
-	let path = tmp.path().join("e.ics");
-	std::fs::write(&path, EVENT).expect("write");
-	let f = time_range_only(
-		"VEVENT",
-		TimeRange {
-			start: 1_766_620_800,
-			end: 1_769_904_000,
-		},
-	)
-	.expect("filter");
-	let result = load_and_match(&f, &path).await;
-	assert!(result.is_some());
 }
 
 #[test]

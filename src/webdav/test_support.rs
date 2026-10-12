@@ -1,6 +1,6 @@
 //! Shared fixtures for the in-process WebDAV tests: a router over a temp
-//! directory with two accounts, a request helper, and the MKCOL body that
-//! creates an addressbook.
+//! directory with two accounts, a request helper, and the MKCOL bodies that
+//! create a calendar or an addressbook.
 
 use axum::Router;
 use axum::body::Body;
@@ -8,6 +8,14 @@ use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt;
 
 use crate::test_fixtures as fixtures;
+
+/// Extended MKCOL body creating a calendar collection.
+pub const MKCOL_CALENDAR: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
+<D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+	<D:set><D:prop><D:resourcetype>
+		<D:collection/><C:calendar/>
+	</D:resourcetype></D:prop></D:set>
+</D:mkcol>"#;
 
 /// Extended MKCOL body creating an addressbook collection.
 pub const MKCOL_ADDRESSBOOK: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>

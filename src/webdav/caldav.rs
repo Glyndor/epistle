@@ -660,5 +660,9 @@ mod tests;
 mod filter_integration_tests;
 
 #[cfg(test)]
+#[path = "caldav_query_tests.rs"]
+mod query_tests;
+
+#[cfg(test)]
 #[path = "caldav_scan_tests.rs"]
 mod scan_tests;

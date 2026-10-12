@@ -1,10 +1,9 @@
-//! The XML-scanning helpers used by [`super::caldav_filter`]: finding
-//! the first opening tag with a given local name, walking past a
-//! matching closing tag, pulling attribute values out of a tag, and
-//! recognising a `<...is-not-defined/>` element. The parsers they
-//! support are the `comp-filter` / `prop-filter` / `text-match` /
-//! `time-range` set the calendar-query filter allows; the rest of the
-//! module composes them.
+//! The XML-scanning helpers shared by the `calendar-query` and
+//! `addressbook-query` filter parsers: finding opening tags by local name
+//! (namespace prefix ignored), walking to the matching closing tag, listing
+//! child elements, reading an attribute from one opening tag, and decoding
+//! XML entities. Report bodies are a few hundred bytes, so linear scans are
+//! enough.
 
 /// Find the byte index of the first opening tag whose local name is
 /// `local`, allowing an optional `prefix:`. Returns `None` if no
@@ -68,14 +67,12 @@ pub fn matching_close(body: &str, start: usize, tag: &str) -> Option<(usize, usi
 		} else if matches!(bytes.get(at + 1), Some(b'!') | Some(b'?')) {
 			// Comment or PI: skip.
 		} else {
-			let after = &body[at + 1..];
-			let local_open = local_name(after);
-			if local_open.as_deref() == Some(tag) {
-				let after_name = &after[local_open.as_ref().unwrap().len()..];
-				let next = after_name.chars().next()?;
-				if next == '>' || next == '/' || next.is_ascii_whitespace() {
-					depth += 1;
-				}
+			// A nested element of the same name opens one more level,
+			// unless it closes itself (`<C:comp-filter name="X"/>`).
+			let gt = at + body[at..].find('>')?;
+			let open_tag = &body[at + 1..gt];
+			if local_name(open_tag).as_deref() == Some(tag) && !open_tag.ends_with('/') {
+				depth += 1;
 			}
 		}
 		i = at + 1;
@@ -92,38 +89,13 @@ pub fn local_name(after: &str) -> Option<String> {
 	let mut name_end = 0;
 	while name_end < bytes.len() {
 		let c = bytes[name_end];
-		if c == b'>' || c == b' ' || c == b'/' || c == b'<' || c == b'\t' || c == b'\n' {
+		if c == b'>' || c == b'/' || c == b'<' || c.is_ascii_whitespace() {
 			break;
 		}
 		name_end += 1;
 	}
 	let name = &after[..name_end];
 	Some(name.rsplit(':').next().unwrap_or(name).to_string())
-}
-
-/// Read the value of an XML attribute `name="value"` from `body`,
-/// starting the search at `from`. The whole attribute must be
-/// present at or after `from`; returns `None` if no attribute is
-/// found.
-pub fn attr(body: &str, from: usize, name: &str) -> Option<String> {
-	let needle = format!("{name}=");
-	let mut from = from;
-	while let Some(rel) = body[from..].find(&needle) {
-		let at = from + rel;
-		let before_ok = at == 0 || !body.as_bytes()[at - 1].is_ascii_alphanumeric();
-		let rest = &body[at + needle.len()..];
-		if before_ok {
-			let quote = rest.chars().next()?;
-			if quote == '"' || quote == '\'' {
-				let value = &rest[1..];
-				if let Some(close) = value.find(quote) {
-					return Some(value[..close].to_string());
-				}
-			}
-		}
-		from = at + needle.len();
-	}
-	None
 }
 
 /// Replace the five predefined XML entities and numeric character
@@ -167,6 +139,7 @@ pub fn unescape(text: &str) -> String {
 
 /// One element found by [`elements`]: the text of its opening tag (between
 /// `<` and `>`) and its content, empty for a self-closing tag.
+#[derive(Clone, Copy)]
 pub struct Element<'a> {
 	/// The opening tag without its angle brackets, attributes included.
 	pub tag: &'a str,
@@ -222,35 +195,6 @@ pub fn tag_attr(tag: &str, name: &str) -> Option<String> {
 	None
 }
 
-/// Whether the content contains a `<...:local_name/>` (or
-/// `<local_name/>`) element. The search honours namespace prefixes.
-pub fn contains_local_element(content: &str, local: &str) -> bool {
-	let bytes = content.as_bytes();
-	let mut i = 0;
-	while i < bytes.len() {
-		if bytes[i] != b'<' {
-			i += 1;
-			continue;
-		}
-		let name_start = i + 1;
-		let mut name_end = name_start;
-		while name_end < bytes.len() {
-			let c = bytes[name_end];
-			if c == b'>' || c == b' ' || c == b'/' || c == b'<' || c == b'\t' || c == b'\n' {
-				break;
-			}
-			name_end += 1;
-		}
-		let name = &content[name_start..name_end];
-		let local_name = name.rsplit(':').next().unwrap_or(name);
-		if local_name == local {
-			return true;
-		}
-		i = name_end.max(i + 1);
-	}
-	false
-}
-
 /// Walk the body and return every element's local name in document
 /// order. The caller uses this to reject unsupported elements.
 pub fn local_names(body: &str) -> Vec<String> {
@@ -285,17 +229,39 @@ pub fn local_names(body: &str) -> Vec<String> {
 	out
 }
 
-/// Whether `name` is one of the elements the calendar-query filter
-/// understands. Anything else is treated as unsupported.
-pub fn is_supported_element(name: &str) -> bool {
-	matches!(
-		name,
-		"comp-filter"
-			| "time-range"
-			| "prop-filter"
-			| "text-match"
-			| "is-not-defined"
-			| "filter"
-			| "calendar-query"
-	)
+/// The direct child elements of `content` with their local names, in
+/// document order. Text between them is ignored. `None` when an element is
+/// not closed or a closing tag has no opening one, so a malformed filter is
+/// refused rather than half read.
+pub fn children(content: &str) -> Option<Vec<(String, Element<'_>)>> {
+	let mut out = Vec::new();
+	let mut i = 0;
+	while let Some(rel) = content[i..].find('<') {
+		let open = i + rel;
+		let gt = open + content[open..].find('>')?;
+		let tag = &content[open + 1..gt];
+		if tag.starts_with('?') || tag.starts_with('!') {
+			i = gt + 1;
+			continue;
+		}
+		if tag.starts_with('/') {
+			return None;
+		}
+		let local = local_name(tag)?;
+		if tag.ends_with('/') {
+			out.push((local, Element { tag, inner: "" }));
+			i = gt + 1;
+			continue;
+		}
+		let (close, next) = matching_close(content, gt + 1, &local)?;
+		out.push((
+			local,
+			Element {
+				tag,
+				inner: &content[gt + 1..close],
+			},
+		));
+		i = next;
+	}
+	Some(out)
 }
