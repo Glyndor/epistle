@@ -85,6 +85,26 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - The configuration file must be owner-only (`0600`); the server refuses to load
   a group/world-readable file. Secrets stay in the environment via `${VAR}`.
 
+### A private subordinate id range
+
+Rootless Podman runs each container of the `glyndor-epistle` stack in a user
+namespace whose ids map onto the block of host ids listed for the account in
+`/etc/subuid` and `/etc/subgid`. Those host ids are what owns the files the
+containers write, in volumes and in image storage. If another account's block
+covers the same host ids, a process in its containers runs as the owner of the
+mail stack's files (the database volume included), and the reverse also
+holds: the namespaces are separate, the file ownership is not.
+
+`useradd` on Debian and Ubuntu gives the first regular user `100000-165535`
+(`SUB_UID_MIN 100000`, `SUB_UID_COUNT 65536` in `/etc/login.defs`), so a
+fixed block for the service account would collide on most hosts. The postinst
+therefore picks the lowest block of 65536 ids within `SUB_UID_MIN`/`SUB_UID_MAX`
+and `SUB_GID_MIN`/`SUB_GID_MAX` that overlaps no existing entry. It never
+moves a block the account already holds: packages up to 0.10.1 assigned the
+fixed `100000-165535`, and `epistle check subid` fails while that block, or
+any other, is shared. Moving it needs a backup and a restore; the steps are in
+the [CLI reference](cli.md#moving-an-overlapping-subordinate-id-range).
+
 ### Port 25 without root
 
 The production shape is a rootless Podman stack under the isolated

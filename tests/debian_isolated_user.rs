@@ -42,7 +42,8 @@ fn postinst_creates_the_isolated_user_and_its_ranges() {
 	for needle in [
 		"adduser --system",
 		"glyndor-epistle",
-		"--add-subuids 100000-165535",
+		"--add-subuids",
+		"--add-subgids",
 		"enable-linger",
 		"podman system migrate",
 	] {
@@ -289,3 +290,9 @@ mod sysctl;
 
 #[path = "debian/stubs.rs"]
 mod stubs;
+
+#[path = "debian/subid.rs"]
+mod subid;
+
+#[path = "debian/subid_purge.rs"]
+mod subid_purge;

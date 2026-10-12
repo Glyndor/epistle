@@ -132,6 +132,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
+| `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 
 `--json` prints one object keyed by area, each `{"status", "detail", "items"}`,
 where `items` lists the findings (`name`, `status`, `detail`).
@@ -146,6 +147,40 @@ directory is absent on the host, `check db` runs inside `mail`, using the config
 path from its compose command, and `status` asks `mail` for its `db` area while
 every other area is checked from the host. If `mail` is stopped, run
 `epistle stack up`.
+
+### Moving an overlapping subordinate id range
+
+Packages up to 0.10.1 gave `glyndor-epistle` the fixed block
+`100000-165535`, which `useradd` also gives the first regular user on Debian
+and Ubuntu. Newer packages pick a free block on install, but they never move a
+block the account already holds. When `epistle check subid` fails, move it by
+hand. Files in the stack's named volumes (the database among them) are owned
+by host ids of the old block, which stop mapping into the containers once the
+block changes, so the data goes through a backup:
+
+```sh
+# 1. Back up while the stack runs: the database dump is taken inside `db`.
+sudo epistle backup > /root/epistle-before-subid.tar.gz
+# 2. Stop the stack.
+sudo epistle stack down
+# 3. Pick a free block: the first id past every entry in both tables.
+awk -F: '{ end = $2 + $3; if (end > max) max = end } END { print max }' /etc/subuid /etc/subgid
+# 4. Move the account (OLD is the block `check subid` printed, NEW starts at
+#    the number above and spans 65536 ids, for example 231072-296607).
+sudo usermod --del-subuids OLD --del-subgids OLD glyndor-epistle
+sudo usermod --add-subuids NEW --add-subgids NEW glyndor-epistle
+sudo runuser -u glyndor-epistle -- podman system migrate
+# 5. Remove the stack's named volumes, whose files carry the old ids
+#    (list them with `podman volume ls` as glyndor-epistle), then start the
+#    stack with empty volumes and restore into it.
+sudo epistle stack up
+sudo epistle restore < /root/epistle-before-subid.tar.gz
+sudo epistle check subid
+```
+
+The restore writes every file again under the new mapping. Keep the backup
+until `epistle status` is clean and mail flows; it holds private keys, so
+handle it as [Backup and restore](#backup-and-restore) describes.
 
 ## Running the server
 
