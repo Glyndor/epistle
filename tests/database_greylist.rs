@@ -75,12 +75,18 @@ async fn greylist_sql_store_matches_the_decision_contract() {
 
 	// Retry at BASE + 30: too soon, keep deferring. `first_seen` must NOT
 	// advance (the `ON CONFLICT` path keeps the original).
-	assert_eq!(decide(&store, &triplet, BASE + 30, 60).await, Decision::Defer);
+	assert_eq!(
+		decide(&store, &triplet, BASE + 30, 60).await,
+		Decision::Defer
+	);
 	assert_eq!(store.first_seen(&key).await, Ok(Some(BASE)));
 
 	// Retry at BASE + 60: past the delay, accept. The stored `first_seen`
 	// still anchors the row.
-	assert_eq!(decide(&store, &triplet, BASE + 60, 60).await, Decision::Accept);
+	assert_eq!(
+		decide(&store, &triplet, BASE + 60, 60).await,
+		Decision::Accept
+	);
 	assert_eq!(store.first_seen(&key).await, Ok(Some(BASE)));
 
 	sqlx::query("DELETE FROM greylist_triplet WHERE key = $1")
