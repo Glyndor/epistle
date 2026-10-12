@@ -126,12 +126,24 @@ pub(super) async fn build_oauth_verifier(
 				.redirect(reqwest::redirect::Policy::none())
 				.build()
 				.map_err(|e| std::io::Error::other(format!("oauth http client: {e}")))?;
-			let keys = crate::oauth::oidc::fetch_keys(&client, &discovery_url, default_alg)
-				.await
-				.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
+			let keys = crate::oauth::oidc::fetch_keys(
+				&client,
+				&discovery_url,
+				default_alg,
+				oauth.allow_private_jwks,
+				&crate::oauth::oidc::SystemResolver,
+			)
+			.await
+			.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
 			let verifier =
 				crate::oauth::OauthVerifier::from_jwks(&oauth.issuer, &oauth.audience, keys);
-			spawn_jwks_refresh(verifier.jwks_cache(), client, discovery_url, default_alg);
+			spawn_jwks_refresh(
+				verifier.jwks_cache(),
+				client,
+				discovery_url,
+				default_alg,
+				oauth.allow_private_jwks,
+			);
 			verifier
 		}
 		(None, None) => unreachable!("validate() rejects the no-source case"),
@@ -167,6 +179,7 @@ fn spawn_jwks_refresh(
 	client: reqwest::Client,
 	discovery_url: crate::net::HttpsUrl,
 	default_alg: crate::jwt::Algorithm,
+	allow_private_jwks: bool,
 ) {
 	let Some(cache) = cache else {
 		return;
@@ -174,9 +187,18 @@ fn spawn_jwks_refresh(
 	tokio::spawn(async move {
 		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
 		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		let resolver = crate::oauth::oidc::SystemResolver;
 		loop {
 			ticker.tick().await;
-			match crate::oauth::oidc::fetch_keys(&client, &discovery_url, default_alg).await {
+			match crate::oauth::oidc::fetch_keys(
+				&client,
+				&discovery_url,
+				default_alg,
+				allow_private_jwks,
+				&resolver,
+			)
+			.await
+			{
 				Ok(keys) => {
 					if let Ok(mut guard) = cache.write() {
 						*guard = keys;
