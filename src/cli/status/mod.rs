@@ -16,6 +16,7 @@ mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
 pub(crate) mod dns_fake;
+mod in_stack;
 mod ports;
 mod queue_area;
 mod report;

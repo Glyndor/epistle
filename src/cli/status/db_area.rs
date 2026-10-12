@@ -23,73 +23,10 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		config,
 		&["check".into(), "db".into(), "--json".into()],
 	) {
-		Ok(Some(command)) => in_container(config, command).await,
+		Ok(Some(command)) => super::in_stack::run(config, command, "db", "database").await,
 		Ok(None) => evaluate(database, NET_TIMEOUT).await,
 		Err(error) => AreaReport::fail(error),
 	}
-}
-
-/// Run `epistle check db --json` in the mail container and read its verdict.
-async fn in_container(
-	config: &crate::config::Config,
-	command: std::process::Command,
-) -> AreaReport {
-	if let Err(error) = crate::cli::container_db::ensure_mail_running(config) {
-		return AreaReport::fail(error);
-	}
-	let run = tokio::task::spawn_blocking(move || run_bounded(command, IN_CONTAINER_TIMEOUT));
-	let stdout = match run.await {
-		Ok(Ok(stdout)) => stdout,
-		Ok(Err(error)) => return AreaReport::fail(error),
-		Err(error) => return AreaReport::fail(format!("the database check task failed: {error}")),
-	};
-	parse_in_container(&stdout)
-}
-
-/// How long the check inside the container may take: the check itself is
-/// bounded by its own 5 seconds, plus starting the exec.
-const IN_CONTAINER_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Run `command` to completion, killing it after `limit`; return its stdout.
-fn run_bounded(mut command: std::process::Command, limit: Duration) -> Result<Vec<u8>, String> {
-	use std::io::Read;
-	let mut child = command
-		.stdin(std::process::Stdio::null())
-		.stdout(std::process::Stdio::piped())
-		.stderr(std::process::Stdio::null())
-		.spawn()
-		.map_err(|error| format!("cannot run podup: {error}"))?;
-	let deadline = std::time::Instant::now() + limit;
-	loop {
-		match child.try_wait() {
-			Ok(Some(_)) => break,
-			Ok(None) if std::time::Instant::now() < deadline => {
-				std::thread::sleep(Duration::from_millis(100));
-			}
-			Ok(None) => {
-				let _ = child.kill();
-				let _ = child.wait();
-				return Err("the database check in the mail container timed out".into());
-			}
-			Err(error) => return Err(format!("cannot wait for podup: {error}")),
-		}
-	}
-	let mut stdout = Vec::new();
-	if let Some(mut pipe) = child.stdout.take() {
-		pipe.read_to_end(&mut stdout)
-			.map_err(|error| format!("cannot read podup output: {error}"))?;
-	}
-	Ok(stdout)
-}
-
-/// The `db` entry of `epistle check db --json` as printed in the container.
-fn parse_in_container(stdout: &[u8]) -> AreaReport {
-	serde_json::from_slice::<std::collections::BTreeMap<String, AreaReport>>(stdout)
-		.ok()
-		.and_then(|mut areas| areas.remove("db"))
-		.unwrap_or_else(|| {
-			AreaReport::fail("the database check in the mail container gave no answer")
-		})
 }
 
 /// Connect like the server does (but without applying migrations: a health

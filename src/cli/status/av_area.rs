@@ -22,9 +22,18 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Ok(config) => config,
 		Err(report) => return report,
 	};
-	match &config.antispam.clamd_socket {
-		Some(socket) => evaluate(socket, epoch(ctx.now), NET_TIMEOUT).await,
-		None => AreaReport::ok("no [antispam] clamd_socket is configured"),
+	let Some(socket) = &config.antispam.clamd_socket else {
+		return AreaReport::ok("no [antispam] clamd_socket is configured");
+	};
+	// With the container stack clamd's socket lives on a volume mounted in
+	// the mail container only: ask the mail container, as the db area does.
+	match crate::cli::container_db::clamd_exec_spec(
+		config,
+		&["check".into(), "antivirus".into(), "--json".into()],
+	) {
+		Ok(Some(command)) => super::in_stack::run(config, command, "antivirus", "antivirus").await,
+		Ok(None) => evaluate(socket, epoch(ctx.now), NET_TIMEOUT).await,
+		Err(error) => AreaReport::fail(error),
 	}
 }
 
