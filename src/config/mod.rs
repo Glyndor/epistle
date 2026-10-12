@@ -365,7 +365,7 @@ pub struct Config {
 	pub hold_outbound: bool,
 	/// Mail addresses and domains the file spells with capitals, each as a
 	/// line naming the entry and the lowercase form epistle uses for it.
-	/// Filled by [`Config::parse_text`], never read from the file.
+	/// Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub mixed_case: Vec<String>,
 }
