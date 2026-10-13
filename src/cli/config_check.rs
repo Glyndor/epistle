@@ -32,6 +32,14 @@ pub(super) fn run(
 					format_args!("{entry} is not lowercase in the configuration file"),
 				);
 			}
+			for domain in super::role_addresses::missing_postmaster(&config) {
+				super::style::warn_to(
+					err,
+					format_args!(
+						"{domain} has no postmaster@ address, alias or catch-all; RFC 5321 requires one (`epistle alias add postmaster@{domain} <member>`)"
+					),
+				);
+			}
 			let _ = writeln!(out, "configuration is valid");
 			ExitCode::SUCCESS
 		}

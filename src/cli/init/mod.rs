@@ -12,6 +12,7 @@ mod apply;
 mod assistant;
 mod compose;
 mod detect;
+mod first_account;
 pub(crate) mod images;
 mod plan;
 mod ptr;
@@ -81,6 +82,7 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		println!("{}", Answers::template());
 		return ExitCode::from(EXIT_OK);
 	}
+	let mut first_password = None;
 	let mut answers = match args.answers.as_ref() {
 		Some(path) => match read_answers(path) {
 			Ok((mut answers, declined)) => {
@@ -93,7 +95,10 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			}
 		},
 		None => match read_interactive(detector) {
-			Ok(filled) => filled.answers,
+			Ok(filled) => {
+				first_password = filled.first_password;
+				filled.answers
+			}
 			Err(()) => return ExitCode::from(EXIT_INVALID),
 		},
 	};
@@ -132,7 +137,25 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 		let _ = writeln!(out, "aborted: nothing was written");
 		return ExitCode::from(EXIT_OK);
 	}
-	let outcome = apply::apply(&answers);
+	// From an answers file the password is read now, after the plan and
+	// before anything is written, so a refused one leaves nothing behind.
+	if let (Some(first), None) = (&answers.first_account, &first_password) {
+		match first_account::read_password(first) {
+			Ok(password) => first_password = Some(password),
+			Err(why) => {
+				crate::cli::style::error(format_args!("first_account: {why}"));
+				return ExitCode::from(EXIT_INVALID);
+			}
+		}
+	}
+	let mut outcome = apply::apply(&answers);
+	if outcome.error.is_none()
+		&& let (Some(first), Some(password)) = (&answers.first_account, &first_password)
+		&& let Err(error) =
+			first_account::create(first, password, &answers.config_path, &mut outcome.report)
+	{
+		outcome.error = Some(error);
+	}
 	if !outcome.report.steps.is_empty() {
 		render_report(&outcome.report);
 	}
@@ -253,3 +276,7 @@ mod tests_detect;
 #[cfg(test)]
 #[path = "init_ptr_tests.rs"]
 mod tests_ptr;
+
+#[cfg(test)]
+#[path = "init_first_account_tests.rs"]
+mod tests_first_account;

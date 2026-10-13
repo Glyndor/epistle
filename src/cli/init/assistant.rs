@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use super::answers::{Answers, DnsAnswers, Invalid, Mode, Services};
 use super::detect::Detector;
+use super::first_account::{FirstAccount, Password};
 
 /// The outcome of running the assistant: the answers they typed in.
 /// Warnings are surfaced by the caller through `Answers::validate` so
@@ -20,6 +21,9 @@ use super::detect::Detector;
 pub struct Filled {
 	/// The values the operator typed in.
 	pub answers: Answers,
+	/// The first account's password, typed twice with echo off. Set
+	/// exactly when `answers.first_account` is.
+	pub first_password: Option<Password>,
 }
 
 /// Read one line, including empty ones (a `b"\n"` is a valid empty answer).
@@ -253,6 +257,7 @@ pub fn run<R: BufRead>(
 	let hostname = ask_domain(reader, "hostname> ", out)?;
 	let _ = writeln!(out, "domains:");
 	let domains = ask_domain_list(reader, out)?;
+	let (first_account, first_password) = ask_first_account(reader, out, &domains)?;
 	if let Some(hint) = super::detect::nat_hint(detected_v4.is_none(), detected_v6.is_none()) {
 		let _ = writeln!(out, "  {hint}");
 	}
@@ -320,9 +325,13 @@ pub fn run<R: BufRead>(
 		services,
 		image,
 		acme: None,
+		first_account,
 	};
 	match answers.validate() {
-		Ok(_) => Ok(Filled { answers }),
+		Ok(_) => Ok(Filled {
+			answers,
+			first_password,
+		}),
 		Err(errors) => {
 			for error in errors {
 				print_invalid(out, &error);
@@ -330,6 +339,60 @@ pub fn run<R: BufRead>(
 			Err(())
 		}
 	}
+}
+
+/// Ask for the first account: its address (empty skips it), a display
+/// name, the password twice with echo off through the prompt module, and
+/// whether `postmaster@` and `abuse@` of every domain point at it. A
+/// password refused three times ends the assistant like an end of input.
+fn ask_first_account<R: BufRead>(
+	reader: &mut R,
+	out: &mut impl Write,
+	domains: &[String],
+) -> Result<(Option<FirstAccount>, Option<Password>), ()> {
+	let domains: Vec<String> = domains
+		.iter()
+		.map(|domain| crate::domain::normalize(domain).unwrap_or_else(|_| domain.clone()))
+		.collect();
+	let mut first = FirstAccount {
+		address: String::new(),
+		display_name: None,
+		password_file: None,
+		role_aliases: true,
+	};
+	loop {
+		first.address = ask_line(reader, "first account address (empty to skip)> ", out)?;
+		if first.address.is_empty() {
+			return Ok((None, None));
+		}
+		match first.check(&domains) {
+			Ok(()) => break,
+			Err(why) => {
+				let _ = writeln!(out, "  {why}; try again");
+			}
+		}
+	}
+	loop {
+		let raw = ask_line(reader, "display name (empty for none)> ", out)?;
+		first.display_name = (!raw.is_empty()).then_some(raw);
+		match first.check(&domains) {
+			Ok(()) => break,
+			Err(why) => {
+				let _ = writeln!(out, "  {why}; try again");
+			}
+		}
+	}
+	let question = format!("Password for \"{}\"", first.name());
+	let password = (0..3)
+		.find_map(|_| crate::cli::prompt::new_password(&question, reader))
+		.ok_or(())?;
+	first.role_aliases = ask_bool(
+		reader,
+		"point postmaster@ and abuse@ of every domain at it",
+		true,
+		out,
+	)?;
+	Ok((Some(first), Some(Password::new(password))))
 }
 
 fn print_invalid(out: &mut impl Write, error: &Invalid) {
@@ -350,3 +413,7 @@ mod tests;
 #[cfg(test)]
 #[path = "assistant_tests_detect.rs"]
 mod tests_detect;
+
+#[cfg(test)]
+#[path = "assistant_tests_first_account.rs"]
+mod tests_first_account;

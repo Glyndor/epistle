@@ -171,6 +171,22 @@ pub enum PlanStep {
 		/// `update` instead of `write`).
 		file_exists: bool,
 	},
+	/// The first mail account, created once the configuration is
+	/// written (`[first_account]`).
+	Account {
+		/// The account name.
+		name: String,
+		/// The account's address.
+		address: String,
+	},
+	/// A role address (`postmaster@`, `abuse@`) made an alias of the
+	/// first account.
+	RoleAlias {
+		/// The role address.
+		address: String,
+		/// The first account's address it delivers to.
+		target: String,
+	},
 }
 
 /// One line in the `Listeners` plan step. Carries the kind, the
@@ -338,6 +354,12 @@ impl fmt::Display for PlanStep {
 					let verb = if *file_exists { "update" } else { "write" };
 					write!(f, "compose file: {verb} {}", path.display())
 				}
+			}
+			PlanStep::Account { name, address } => {
+				write!(f, "account: create {name} <{address}>")
+			}
+			PlanStep::RoleAlias { address, target } => {
+				write!(f, "alias: {address} -> {target}")
 			}
 		}
 	}

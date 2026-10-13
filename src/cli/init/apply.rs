@@ -57,6 +57,20 @@ pub enum ReportStep {
 	/// A directory was created (typically the parent of `config_path`,
 	/// which never existed on a fresh install).
 	CreatedDir(PathBuf),
+	/// The first mail account was created.
+	AccountCreated {
+		/// The account name.
+		name: String,
+		/// The account's address.
+		address: String,
+	},
+	/// A role address was made an alias of the first account.
+	AliasAdded {
+		/// The role address.
+		address: String,
+		/// The address it delivers to.
+		target: String,
+	},
 	/// A step was skipped because its precondition did not hold (e.g.
 	/// `openssl` was not on `PATH` for the RSA DKIM key).
 	Skipped {
@@ -82,6 +96,12 @@ impl Report {
 				ReportStep::Skipped { name, reason } => {
 					writeln!(out, "  skipped: {name} ({reason})")?
 				}
+				ReportStep::AccountCreated { name, address } => {
+					writeln!(out, "  account: {name} <{address}>")?
+				}
+				ReportStep::AliasAdded { address, target } => {
+					writeln!(out, "  alias:  {address} -> {target}")?
+				}
 			}
 		}
 		Ok(())
@@ -96,6 +116,9 @@ impl Report {
 pub enum ApplyError {
 	/// The database volume exists without credentials, or its state cannot be checked.
 	DatabaseVolume(String),
+	/// The first account or its role aliases could not be created after
+	/// the configuration was written. Carries the reason.
+	FirstAccount(String),
 	/// The data directory could not be created or its `keys/` child
 	/// could not be created with mode `0700`.
 	KeysDir(PathBuf, std::io::Error),
@@ -184,6 +207,7 @@ impl std::fmt::Display for ApplyError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			ApplyError::DatabaseVolume(message) => f.write_str(message),
+			ApplyError::FirstAccount(why) => write!(f, "first account: {why}"),
 			ApplyError::KeysDir(path, error) => write!(
 				f,
 				"cannot create keys directory {}: {error}",

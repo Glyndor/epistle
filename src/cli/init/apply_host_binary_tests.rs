@@ -18,6 +18,7 @@ fn answers_with_image(image: Option<&str>) -> Answers {
 		data_dir: PathBuf::from("/var/lib/epistle"),
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 		acme: None,
+		first_account: None,
 		dns: None,
 		services: AnswersServices {
 			imap: true,

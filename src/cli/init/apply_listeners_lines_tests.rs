@@ -29,6 +29,7 @@ fn answers_with_services(services: Services) -> Answers {
 		services,
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
+		first_account: None,
 	}
 }
 

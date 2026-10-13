@@ -560,6 +560,11 @@ pub(crate) fn validate(answers: &Answers) -> Result<Vec<Warning>, Vec<Invalid>> 
 	}
 	check_services(&answers.services, &mut errors, &mut warnings);
 	check_image(answers.image.as_deref(), &mut errors);
+	if let Some(first) = &answers.first_account
+		&& let Err(why) = first.check(&normalised_domains)
+	{
+		errors.push(Invalid::FirstAccount(why));
+	}
 
 	if errors.is_empty() {
 		Ok(warnings)

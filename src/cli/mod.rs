@@ -43,6 +43,7 @@ mod relay;
 mod report_abuse;
 mod reports;
 mod resource;
+mod role_addresses;
 mod serve;
 mod serve_dkim;
 mod serve_ratelimit;

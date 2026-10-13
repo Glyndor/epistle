@@ -858,6 +858,14 @@ What this build does:
 - creates the parent directory of `config_path` with mode `0750` when it
   does not exist (a fresh install has no `/etc/epistle/`), and prints it
   as a plan step so the operator sees it before confirming;
+- creates the first mail account when one is given (the assistant asks right
+  after the domains; an answers file uses an optional `[first_account]` table
+  with `address`, `display_name`, `password_file` and `role_aliases`). The
+  password is typed twice with echo off, or read from the first line of
+  `password_file` (`-` reads it from stdin); it is never written in the
+  answers file. With `role_aliases` (the default), `postmaster@` and `abuse@`
+  of every domain become aliases of that account, so `config-check` no longer
+  warns about the missing `postmaster@` (RFC 5321) address;
 - prints the plan before the confirmation, and a report on stderr listing what
   was reused, what was written, and what was skipped; the report is also
   printed when a later step fails, so the operator can see what is already
