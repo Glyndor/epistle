@@ -9,7 +9,7 @@ impl Session {
 	pub(super) fn list(
 		&mut self,
 		tag: &str,
-		pattern: &str,
+		(reference, pattern): (&str, &str),
 		return_status: &[StatusItem],
 		select_subscribed: bool,
 		select_special_use: bool,
@@ -35,7 +35,7 @@ impl Session {
 			response.push_str("* LIST (\\Noselect) \"/\" \"\"\r\n");
 		}
 		for name in mailbox::list(&self.data_dir, &account) {
-			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
+			let matches = crate::imap::list_pattern::matches(reference, pattern, &name);
 			let special_use = helpers::special_use_attribute(&name);
 			// LIST-EXTENDED (RFC 5258): `(SUBSCRIBED)` lists only subscribed boxes.
 			if !matches

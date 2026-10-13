@@ -150,15 +150,15 @@ impl Session {
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
 			Command::List {
+				reference,
 				pattern,
 				return_status,
 				select_subscribed,
 				select_special_use,
 				return_attributes,
-				..
 			} => self.list(
 				&tag,
-				&pattern,
+				(&reference, &pattern),
 				&return_status,
 				select_subscribed,
 				select_special_use,
@@ -250,7 +250,7 @@ impl Session {
 			Command::Unsubscribe { mailbox } => self.subscription_op(&tag, |data_dir, account| {
 				mailbox::unsubscribe(data_dir, account, &mailbox)
 			}),
-			Command::Lsub { pattern, .. } => self.lsub(&tag, &pattern),
+			Command::Lsub { reference, pattern } => self.lsub(&tag, &reference, &pattern),
 			Command::GetAcl { mailbox } => self.get_acl(&tag, &mailbox),
 			Command::MyRights { mailbox } => self.my_rights(&tag, &mailbox),
 			Command::ListRights {
