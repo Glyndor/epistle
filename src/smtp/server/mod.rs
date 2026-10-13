@@ -17,6 +17,7 @@ use crate::directory_store::DirectoryHandle;
 
 mod dnsbl_check;
 mod run;
+mod run_auth;
 mod run_band;
 
 /// Read buffer size per connection.
