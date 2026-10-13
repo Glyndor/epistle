@@ -10,8 +10,6 @@
 use super::render;
 use super::*;
 
-const DISTROLESS_BASE: &str = "gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d";
-
 #[test]
 fn default_mode_image_is_the_pinned_distroless_base() {
 	let value = render(&minimal_answers(), false);
@@ -19,7 +17,8 @@ fn default_mode_image_is_the_pinned_distroless_base() {
 		.as_str()
 		.expect("default mail image is a string");
 	assert_eq!(
-		image, DISTROLESS_BASE,
+		image,
+		crate::cli::init::images::mail_base(),
 		"the default mail image must be the distroless base pinned by the Containerfile digest; got {image:?}"
 	);
 }

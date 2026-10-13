@@ -40,7 +40,15 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	let data = data_dir_with_compose(dir.path());
 	let compose = data.join("compose/compose.yaml");
 	let cfg = write_config(&data);
-	let distroless = "gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d";
+	// The runtime stage of the Containerfile is the pinned mail base; reading it
+	// keeps this test right when the base image digest is bumped.
+	let distroless = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Containerfile"))
+		.lines()
+		.filter_map(|line| line.strip_prefix("FROM "))
+		.next_back()
+		.expect("a runtime stage")
+		.trim()
+		.to_string();
 	std::fs::write(
 		&compose,
 		format!(
