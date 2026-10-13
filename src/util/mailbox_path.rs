@@ -110,8 +110,37 @@ pub fn leaf(name: &str) -> &str {
 }
 
 /// Every proper ancestor of `name`, shortest first (`a`, `a/b` for `a/b/c`).
-pub fn ancestors(name: &str) -> impl Iterator<Item = &str> {
+pub fn ancestors(name: &str) -> impl DoubleEndedIterator<Item = &str> {
 	name.match_indices(DELIMITER).map(|(at, _)| &name[..at])
+}
+
+/// The closest ancestor of `name` that `exists` accepts, or `None`. Used to
+/// show a folder under the nearest mailbox that is really there, when a level
+/// in between is missing.
+pub fn nearest_parent(name: &str, exists: impl Fn(&str) -> bool) -> Option<&str> {
+	ancestors(name).rev().find(|ancestor| exists(ancestor))
+}
+
+/// The last level of `name` as a person reads it: decoded from modified
+/// UTF-7 (`Año` for `Work/A&APE-o`), or as stored if it does not decode.
+pub fn display_leaf(name: &str) -> String {
+	let leaf = leaf(name);
+	super::mutf7::decode(leaf).unwrap_or_else(|| leaf.to_string())
+}
+
+/// The stored name of the folder `level` (a UTF-8 name of one level) under
+/// `parent`, or under the top level for `None`. `None` when `level` is empty
+/// or holds the delimiter; whether the result is a valid name is up to the
+/// caller.
+pub fn child_of(parent: Option<&str>, level: &str) -> Option<String> {
+	if level.is_empty() || level.contains(DELIMITER) {
+		return None;
+	}
+	let level = super::mutf7::encode(level);
+	Some(match parent {
+		Some(parent) => format!("{parent}{DELIMITER}{level}"),
+		None => level,
+	})
 }
 
 /// Whether `name` is `ancestor` or lies below it.

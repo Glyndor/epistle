@@ -147,6 +147,10 @@ mod jmap_tests_author;
 mod jmap_tests_b;
 
 #[cfg(test)]
+#[path = "jmap_tests_mailbox_tree.rs"]
+mod jmap_tests_mailbox_tree;
+
+#[cfg(test)]
 #[path = "jmap_tests_encoded_words.rs"]
 mod jmap_tests_encoded_words;
 

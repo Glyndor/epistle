@@ -41,6 +41,7 @@ pub use limits::{
 	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
 	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
 };
+mod mailbox_set;
 mod methods;
 mod objects;
 pub(crate) use objects::email_body_for_fuzzing;
@@ -283,7 +284,7 @@ pub fn dispatch_request(
 		let response = match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
-			"Mailbox/set" => methods::mailbox_set(state, principal, &args, &call_id),
+			"Mailbox/set" => mailbox_set::mailbox_set(state, principal, &args, &call_id),
 			"Email/set" => email::email_set(state, principal, &args, &call_id, uploads),
 			"Email/copy" => email::email_copy(state, principal, &args, &call_id),
 			"EmailSubmission/set" => {

@@ -116,3 +116,21 @@ fn hierarchy_helpers() {
 	assert_eq!(canonical("inboxes/x"), "inboxes/x");
 	assert_eq!(canonical("Work/inbox"), "Work/inbox");
 }
+
+#[test]
+fn names_for_people_and_from_people() {
+	assert_eq!(display_leaf("Work/A&APE-o"), "Año");
+	assert_eq!(display_leaf("INBOX"), "INBOX");
+	assert_eq!(
+		child_of(Some("Work"), "Año").as_deref(),
+		Some("Work/A&APE-o")
+	);
+	assert_eq!(child_of(None, "Plan").as_deref(), Some("Plan"));
+	assert_eq!(child_of(None, "a/b"), None);
+	assert_eq!(child_of(Some("Work"), ""), None);
+	let exists = |name: &str| name == "a" || name == "INBOX";
+	assert_eq!(nearest_parent("a/b/c", exists), Some("a"));
+	assert_eq!(nearest_parent("INBOX/x", exists), Some("INBOX"));
+	assert_eq!(nearest_parent("z/y", exists), None);
+	assert_eq!(nearest_parent("a", exists), None);
+}
