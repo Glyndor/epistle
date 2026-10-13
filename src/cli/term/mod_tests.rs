@@ -2,6 +2,7 @@
 //! shares.
 
 use std::ffi::OsStr;
+use std::time::Duration;
 
 use super::*;
 
@@ -33,6 +34,7 @@ fn only_a_terminal_without_no_color_dumb_or_json_is_decorated() {
 #[test]
 fn the_test_build_never_decorates_unless_a_test_asks() {
 	assert_eq!(stdout(false), None);
+	assert_eq!(stderr(false), None);
 	let decor = Decor::coloured(40);
 	fake::with_stdout(decor, || {
 		assert_eq!(stdout(false), Some(decor));
@@ -68,6 +70,13 @@ fn paint_adds_escapes_only_with_colour() {
 	let green = Tone::Good.style();
 	assert_eq!(paint(green, "✔", false), "✔");
 	assert_eq!(paint(green, "✔", true), "\x1b[32m✔\x1b[0m");
+}
+
+#[test]
+fn elapsed_keeps_tenths_under_a_minute() {
+	assert_eq!(elapsed(Duration::from_millis(400)), "0.4s");
+	assert_eq!(elapsed(Duration::from_millis(12_900)), "12.9s");
+	assert_eq!(elapsed(Duration::from_secs(63)), "1m03s");
 }
 
 #[test]

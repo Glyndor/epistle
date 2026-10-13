@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use anstyle::Style;
 
+use crate::cli::term::live::{Steps, quiet};
 use crate::cli::term::{self, Decor};
 use crate::config::Config;
 use crate::dns::{self, Status};
@@ -105,59 +106,77 @@ async fn report(
 	out: &mut impl std::io::Write,
 	mut progress: crate::cli::style::Progress,
 ) -> ExitCode {
-	let mut all_ok = true;
-	let mut done = 0usize;
 	let decor = crate::cli::term::stdout(false);
-	let _ = writeln!(out, "{}", group(hostname, decor));
+	let labels: Vec<&str> = std::iter::once(hostname)
+		.chain(domains.iter().map(String::as_str))
+		.collect();
+	let mut steps = Steps::start(&labels, false);
+	steps.begin(hostname);
 	let host_checks = dns::check_host(hostname, public_ipv4, public_ipv6, dns).await;
-	for check in &host_checks {
-		let _ = match decor {
-			Some(decor) => writeln!(out, "{}", line(check, ":", decor)),
-			None => writeln!(
-				out,
-				"  {} {}: {}",
+	steps.clear();
+	let mut all_ok = dns::all_ok(&host_checks);
+	print_group(out, hostname, &host_checks, ":", decor);
+	let mut done = 0;
+	for _ in &host_checks {
+		done += 1;
+		if !steps.is_live() {
+			progress.tick(done);
+		}
+	}
+	for domain in domains {
+		steps.begin(domain);
+		let checks = dns::check_domain(domain, hostname, selectors, dns).await;
+		steps.clear();
+		print_group(out, domain, &checks, " \u{2014}", decor);
+		for _ in &checks {
+			done += 1;
+			if !steps.is_live() {
+				progress.tick(done);
+			}
+		}
+		all_ok &= dns::all_ok(&checks);
+	}
+	let summary = if all_ok {
+		format!("verified {done} records across {} domains", domains.len())
+	} else {
+		"DNS drift detected".to_string()
+	};
+	if steps.is_live() {
+		steps.conclude(all_ok, &summary);
+	} else {
+		progress.finish(&summary);
+	}
+	if all_ok {
+		ExitCode::SUCCESS
+	} else {
+		ExitCode::FAILURE
+	}
+}
+
+/// Write one group (`name:` and a line per record) in one go, with any
+/// spinner row erased first so the group starts on a clean line.
+fn print_group(
+	out: &mut impl std::io::Write,
+	name: &str,
+	checks: &[dns::Check],
+	separator: &str,
+	decor: Option<Decor>,
+) {
+	let mut text = format!("{}\n", group(name, decor));
+	for check in checks {
+		let record = match decor {
+			Some(decor) => line(check, separator, decor),
+			None => format!(
+				"  {} {}{separator} {}",
 				symbol(&check.status),
 				check.kind,
 				check.detail
 			),
 		};
-		done += 1;
-		progress.tick(done);
+		text.push_str(&record);
+		text.push('\n');
 	}
-	if !dns::all_ok(&host_checks) {
-		all_ok = false;
-	}
-	for domain in domains {
-		let _ = writeln!(out, "{}", group(domain, decor));
-		let checks = dns::check_domain(domain, hostname, selectors, dns).await;
-		for check in &checks {
-			let _ = match decor {
-				Some(decor) => writeln!(out, "{}", line(check, " \u{2014}", decor)),
-				None => writeln!(
-					out,
-					"  {} {} \u{2014} {}",
-					symbol(&check.status),
-					check.kind,
-					check.detail
-				),
-			};
-			done += 1;
-			progress.tick(done);
-		}
-		if !dns::all_ok(&checks) {
-			all_ok = false;
-		}
-	}
-	if all_ok {
-		progress.finish(&format!(
-			"verified {done} records across {} domains",
-			domains.len()
-		));
-		ExitCode::SUCCESS
-	} else {
-		progress.finish("DNS drift detected");
-		ExitCode::FAILURE
-	}
+	let _ = quiet(|| out.write_all(text.as_bytes()));
 }
 
 /// The `name:` line that opens a group, bold on a terminal.
@@ -183,10 +202,12 @@ fn line(check: &dns::Check, separator: &str, decor: Decor) -> String {
 		Status::LookupError => ("error", term::Tone::Warn),
 	};
 	let state = format!("{} {word}", tone.mark());
+	// Padded to the longest state, `✘ missing`, so the records line up.
+	let padding = " ".repeat(9usize.saturating_sub(term::columns(&state)));
 	let rest = term::sanitize(&format!("{}{separator} {}", check.kind, check.detail));
-	let room = decor.width.saturating_sub(4 + term::columns(&state));
+	let room = decor.width.saturating_sub(4 + 9);
 	let painted = term::paint(tone.style(), &state, decor.colour);
-	format!("  {painted}  {}", term::fit(&rest, room))
+	format!("  {painted}{padding}  {}", term::fit(&rest, room))
 }
 
 /// A status glyph for the report line.

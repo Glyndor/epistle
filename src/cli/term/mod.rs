@@ -11,8 +11,10 @@
 //!
 //! The renderers take a [`Decor`] (colour on or off, the width to fit) so the
 //! same function is exercised against a fake terminal in the tests; only
-//! [`stdout`] reads the real stream.
+//! [`stdout`] and [`stderr`] read the real streams.
 
+pub(crate) mod cursor;
+pub(crate) mod live;
 pub(crate) mod table;
 
 use std::ffi::OsStr;
@@ -74,8 +76,15 @@ pub(crate) fn stdout(json: bool) -> Option<Decor> {
 	for_fd(libc::STDOUT_FILENO, std::io::stdout().is_terminal(), json)
 }
 
+/// How stderr is drawn: the spinner and the step rows go there.
+#[cfg(not(test))]
+pub(crate) fn stderr(json: bool) -> Option<Decor> {
+	use std::io::IsTerminal;
+	for_fd(libc::STDERR_FILENO, std::io::stderr().is_terminal(), json)
+}
+
 #[cfg(test)]
-pub(crate) use fake::stdout;
+pub(crate) use fake::{stderr, stdout};
 
 /// The width of the terminal on `fd`, re-read on every call so a resize
 /// between two redraws is honoured. A descriptor that is not a terminal, or
@@ -197,7 +206,21 @@ pub(crate) fn sanitize(text: &str) -> String {
 		.collect()
 }
 
-/// Test stand-in for [`stdout`]: plain unless a test says
+/// `0.4s`, `12.9s`, `1m03s`: tenths under a minute, whole seconds past it.
+pub(crate) fn elapsed(duration: std::time::Duration) -> String {
+	let secs = duration.as_secs_f64();
+	if secs < 60.0 {
+		format!("{secs:.1}s")
+	} else {
+		format!(
+			"{}m{:02}s",
+			duration.as_secs() / 60,
+			duration.as_secs() % 60
+		)
+	}
+}
+
+/// Test stand-ins for [`stdout`] and [`stderr`]: plain unless a test says
 /// otherwise, so a unit test never decorates because `cargo test` happens to
 /// run in a terminal.
 #[cfg(test)]
@@ -208,11 +231,17 @@ pub(crate) mod fake {
 
 	thread_local! {
 		static STDOUT: Cell<Option<Decor>> = const { Cell::new(None) };
+		static STDERR: Cell<Option<Decor>> = const { Cell::new(None) };
 	}
 
 	/// The test build's stdout decoration.
 	pub(crate) fn stdout(json: bool) -> Option<Decor> {
 		STDOUT.with(Cell::get).filter(|_| !json)
+	}
+
+	/// The test build's stderr decoration.
+	pub(crate) fn stderr(json: bool) -> Option<Decor> {
+		STDERR.with(Cell::get).filter(|_| !json)
 	}
 
 	/// Run `body` as if stdout were a terminal drawn with `decor`.

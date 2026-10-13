@@ -66,7 +66,7 @@ pub(super) struct ProbeLine {
 /// configured listener on its loopback equivalent, and reports.
 /// Returns the exit code the dispatcher should propagate: SUCCESS
 /// when every listener answered, FAILURE when at least one did not.
-pub(super) fn run(config: &Config, json: bool) -> ExitCode {
+pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	ensure_crypto_provider();
 	let cert_path = pinned_cert_path(config);
 	let results = match execute(&config.listeners, cert_path.as_deref()) {
@@ -76,7 +76,7 @@ pub(super) fn run(config: &Config, json: bool) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	render(&results, json, &mut std::io::stdout().lock());
+	render(&results, json, out);
 	if results.iter().all(|line| line.ok) {
 		ExitCode::SUCCESS
 	} else {

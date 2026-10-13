@@ -132,19 +132,18 @@ impl Ctx {
 }
 
 /// `epistle status [--json]`: every area, one line each.
-pub(super) fn run_status(path: &Path, json: bool) -> ExitCode {
-	execute(
-		path,
-		CheckArea::ALL,
-		json,
-		false,
-		&mut std::io::stdout().lock(),
-	)
+pub(super) fn run_status(path: &Path, json: bool, out: &mut impl Write) -> ExitCode {
+	execute(path, CheckArea::ALL, json, false, out)
 }
 
 /// `epistle check <area> [--json]`: one area with its findings.
-pub(super) fn run_check(path: &Path, area: CheckArea, json: bool) -> ExitCode {
-	execute(path, &[area], json, true, &mut std::io::stdout().lock())
+pub(super) fn run_check(
+	path: &Path,
+	area: CheckArea,
+	json: bool,
+	out: &mut impl Write,
+) -> ExitCode {
+	execute(path, &[area], json, true, out)
 }
 
 /// Run `areas`, print the result to `out` and map it to an exit code: 0 when
