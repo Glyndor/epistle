@@ -141,10 +141,12 @@ async fn records_delivery_metrics() {
 		.expect("wh")
 		.with_metrics(metrics.clone());
 	ok.notify(&WebhookEvent::DeliveryFailed {
+		spool_id: None,
 		recipient: "x@y".into(),
 		reason: "boom".into(),
 		class: "other".into(),
 		remote: None,
+		extra: BTreeMap::new(),
 	})
 	.await;
 	assert!(
@@ -158,10 +160,12 @@ async fn records_delivery_metrics() {
 		.expect("wh")
 		.with_metrics(metrics.clone());
 	bad.notify(&WebhookEvent::DeliveryFailed {
+		spool_id: None,
 		recipient: "x@y".into(),
 		reason: "boom".into(),
 		class: "other".into(),
 		remote: None,
+		extra: BTreeMap::new(),
 	})
 	.await;
 	assert!(
@@ -212,4 +216,131 @@ async fn send_test_reports_an_error_status_and_an_unreachable_endpoint() {
 		down.send_test().await.is_err(),
 		"a refused connection is an error"
 	);
+}
+
+fn extra() -> BTreeMap<String, String> {
+	let mut map = BTreeMap::new();
+	map.insert("trace_id".into(), "abc-123".into());
+	map
+}
+
+#[test]
+fn delivered_serializes_with_event_tag_and_stable_field_order() {
+	let id = Uuid::nil();
+	let event = WebhookEvent::Delivered {
+		spool_id: id,
+		recipient: "bob@remote.example".into(),
+		message_id: Some("<m1@elsewhere.example>".into()),
+		remote: Some("mx.remote.example".into()),
+		extra: extra(),
+	};
+	let json: serde_json::Value = serde_json::from_str(
+		&serde_json::to_string(&event).expect("serialize"),
+	)
+	.expect("value");
+	assert_eq!(json["event"], "delivered");
+	assert_eq!(json["spool_id"], id.to_string());
+	assert_eq!(json["recipient"], "bob@remote.example");
+	assert_eq!(json["message_id"], "<m1@elsewhere.example>");
+	assert_eq!(json["remote"], "mx.remote.example");
+	assert_eq!(json["extra"]["trace_id"], "abc-123");
+}
+
+#[test]
+fn delayed_serializes_with_event_tag_and_carries_attempt_and_reason() {
+	let id = Uuid::nil();
+	let event = WebhookEvent::Delayed {
+		spool_id: id,
+		recipient: "bob@remote.example".into(),
+		reason: "450 4.2.1 mailbox busy, try later".into(),
+		remote: Some("mx.remote.example".into()),
+		attempt: 1,
+		extra: BTreeMap::new(),
+	};
+	let json: serde_json::Value = serde_json::from_str(
+		&serde_json::to_string(&event).expect("serialize"),
+	)
+	.expect("value");
+	assert_eq!(json["event"], "delayed");
+	assert_eq!(json["spool_id"], id.to_string());
+	assert_eq!(json["recipient"], "bob@remote.example");
+	assert_eq!(json["reason"], "450 4.2.1 mailbox busy, try later");
+	assert_eq!(json["remote"], "mx.remote.example");
+	assert_eq!(json["attempt"], 1);
+	assert!(
+		json.get("extra").is_none(),
+		"empty extra must not appear: {}",
+		json
+	);
+}
+
+#[test]
+fn suppressed_serializes_with_event_tag() {
+	let id = Uuid::nil();
+	let event = WebhookEvent::Suppressed {
+		spool_id: id,
+		recipient: "bob@remote.example".into(),
+		extra: BTreeMap::new(),
+	};
+	let json: serde_json::Value = serde_json::from_str(
+		&serde_json::to_string(&event).expect("serialize"),
+	)
+	.expect("value");
+	assert_eq!(json["event"], "suppressed");
+	assert_eq!(json["spool_id"], id.to_string());
+	assert_eq!(json["recipient"], "bob@remote.example");
+	assert!(json.get("extra").is_none());
+}
+
+#[test]
+fn canceled_serializes_with_event_tag() {
+	let id = Uuid::nil();
+	let event = WebhookEvent::Canceled {
+		spool_id: id,
+		recipient: "bob@remote.example".into(),
+		extra: BTreeMap::new(),
+	};
+	let json: serde_json::Value = serde_json::from_str(
+		&serde_json::to_string(&event).expect("serialize"),
+	)
+	.expect("value");
+	assert_eq!(json["event"], "canceled");
+	assert_eq!(json["spool_id"], id.to_string());
+	assert_eq!(json["recipient"], "bob@remote.example");
+	assert!(json.get("extra").is_none());
+}
+
+#[test]
+fn delivery_failed_with_a_pre_addition_body_still_deserialises() {
+	// Bodies written before `spool_id` and `extra` were added did not
+	// carry those fields. A receiver that runs an older webhook handler
+	// must keep accepting them; the deserialiser makes both fields
+	// optional with `serde(default)`.
+	let body = serde_json::json!({
+		"event": "delivery_failed",
+		"recipient": "bob@remote.example",
+		"reason": "550 5.1.1 user unknown",
+		"class": "invalid_address",
+		"remote": "mx.remote.example",
+	})
+	.to_string();
+	let event: WebhookEvent = serde_json::from_str(&body).expect("backward compat");
+	match event {
+		WebhookEvent::DeliveryFailed {
+			spool_id,
+			recipient,
+			reason,
+			class,
+			remote,
+			extra,
+		} => {
+			assert!(spool_id.is_none(), "no spool id in the old body");
+			assert_eq!(recipient, "bob@remote.example");
+			assert_eq!(reason, "550 5.1.1 user unknown");
+			assert_eq!(class, "invalid_address");
+			assert_eq!(remote.as_deref(), Some("mx.remote.example"));
+			assert!(extra.is_empty(), "no extra map in the old body");
+		}
+		other => panic!("expected DeliveryFailed, got {other:?}"),
+	}
 }
