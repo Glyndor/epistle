@@ -1,145 +1,171 @@
 //! The RFC 5256 §2.1 base subject, the SUBJECT key of SORT and the grouping
 //! key of THREAD=ORDEREDSUBJECT.
+//!
+//! The Subject is client-controlled and SORT reads it for every message, so
+//! the extraction runs in time linear in the subject: the steps move a start
+//! and an end offset over one buffer instead of editing a string, every
+//! bracket and space lookup is answered from tables built once, and a step
+//! either consumes input or ends the loop it is in.
 
 use crate::util::encoded_word;
+
+/// How much of the decoded subject is looked at. RFC 5322 §2.1.1 limits a
+/// line to 998 characters and real subjects are far shorter, so for real
+/// mail the bound never cuts anything. A longer subject still sorts by its
+/// first 8 KiB, so only two subjects that agree on all of them can compare
+/// differently than they would in full, and those then tie and fall back to
+/// the sequence number.
+const MAX_SUBJECT: usize = 8 * 1024;
 
 /// The base subject of a raw Subject header value, uppercased for the
 /// i;ascii-casemap comparison both commands use.
 pub(super) fn base_subject(raw: &str) -> String {
 	// (1) Decode encoded words and collapse every run of whitespace.
-	let decoded = encoded_word::decode(raw);
-	let mut subject = decoded
+	let mut decoded = encoded_word::decode(raw);
+	if decoded.len() > MAX_SUBJECT {
+		let mut cut = MAX_SUBJECT;
+		while !decoded.is_char_boundary(cut) {
+			cut -= 1;
+		}
+		decoded.truncate(cut);
+	}
+	let text = decoded
 		.split([' ', '\t', '\r', '\n'])
 		.filter(|word| !word.is_empty())
 		.collect::<Vec<_>>()
 		.join(" ");
+	extract(&text)
+}
+
+/// Steps (2) to (6) on a decoded subject whose whitespace is collapsed.
+fn extract(text: &str) -> String {
+	let scan = Scan::new(text.as_bytes());
+	let (mut start, mut end) = (0, text.len());
 	loop {
-		strip_trailers(&mut subject);
-		// (5) Repeat (3) and (4) until neither removes anything.
+		end = scan.strip_trailers(start, end);
+		start = scan.strip_leaders(start, end);
+		// (6) A `[fwd: ...]` wrapper is removed and the whole run starts over.
+		let wrapped = end - start >= 6
+			&& scan.text[start..start + 5].eq_ignore_ascii_case(b"[fwd:")
+			&& scan.text[end - 1] == b']';
+		if !wrapped {
+			// Every offset sits next to an ASCII byte, so the slice is UTF-8.
+			return text[start..end].to_ascii_uppercase();
+		}
+		start += 5;
+		end -= 1;
+	}
+}
+
+/// The collapsed subject with, for every offset, where the next bracket is
+/// and how many spaces start there.
+struct Scan<'a> {
+	text: &'a [u8],
+	next_bracket: Vec<usize>,
+	space_run: Vec<usize>,
+}
+
+impl<'a> Scan<'a> {
+	fn new(text: &'a [u8]) -> Self {
+		let mut next_bracket = vec![text.len(); text.len() + 1];
+		let mut space_run = vec![0; text.len() + 1];
+		for at in (0..text.len()).rev() {
+			next_bracket[at] = if matches!(text[at], b'[' | b']') {
+				at
+			} else {
+				next_bracket[at + 1]
+			};
+			space_run[at] = if text[at] == b' ' {
+				space_run[at + 1] + 1
+			} else {
+				0
+			};
+		}
+		Self {
+			text,
+			next_bracket,
+			space_run,
+		}
+	}
+
+	/// (2) The end left after removing trailing spaces and `(fwd)` trailers.
+	fn strip_trailers(&self, start: usize, mut end: usize) -> usize {
 		loop {
-			let before = subject.len();
-			strip_leaders(&mut subject);
-			strip_blob(&mut subject);
-			if subject.len() == before {
-				break;
+			if end > start && self.text[end - 1] == b' ' {
+				end -= 1;
+			} else if end - start >= 5 && self.text[end - 5..end].eq_ignore_ascii_case(b"(fwd)") {
+				end -= 5;
+			} else {
+				return end;
 			}
 		}
-		// (6) A `[fwd: ...]` wrapper is removed and the whole run starts over.
-		let wrapped = subject.len() >= 6
-			&& subject.is_char_boundary(5)
-			&& subject[..5].eq_ignore_ascii_case("[fwd:")
-			&& subject.ends_with(']');
-		if !wrapped {
-			return subject.to_ascii_uppercase();
-		}
-		subject = subject[5..subject.len() - 1].to_string();
 	}
-}
 
-/// (2) Remove trailing whitespace and `(fwd)` trailers.
-fn strip_trailers(subject: &mut String) {
-	loop {
-		if subject.ends_with(' ') {
-			subject.pop();
-		} else if subject.len() >= 5
-			&& subject.is_char_boundary(subject.len() - 5)
-			&& subject[subject.len() - 5..].eq_ignore_ascii_case("(fwd)")
-		{
-			subject.truncate(subject.len() - 5);
+	/// (3) to (5): the start left after removing leading spaces,
+	/// `*subj-blob subj-refwd` leaders, and blobs with something after them.
+	fn strip_leaders(&self, mut start: usize, end: usize) -> usize {
+		loop {
+			start += self.spaces(start, end);
+			// The blobs in front, then the leader they may introduce.
+			let mut at = start;
+			let mut last_blob = None;
+			while let Some(after) = self.blob(at, end) {
+				last_blob = Some(at);
+				at = after;
+			}
+			if let Some(after) = self.refwd(at, end) {
+				start = after;
+				continue;
+			}
+			// No leader follows the blobs, and none can appear by dropping
+			// them, so (4) drops them one by one while something is left
+			// after each: all of them, or all but the last when they run to
+			// the end of the subject.
+			return match last_blob {
+				Some(last) if at == end => last,
+				_ => at,
+			};
+		}
+	}
+
+	/// The end of a `re`, `fw` or `fwd` leader at `at`: the word, optional
+	/// spaces, an optional blob, then a colon.
+	fn refwd(&self, at: usize, end: usize) -> Option<usize> {
+		let word = |token: &[u8]| {
+			end - at >= token.len() && self.text[at..at + token.len()].eq_ignore_ascii_case(token)
+		};
+		let mut after = if word(b"fwd") {
+			at + 3
+		} else if word(b"re") || word(b"fw") {
+			at + 2
 		} else {
-			return;
+			return None;
+		};
+		after += self.spaces(after, end);
+		if let Some(blob_end) = self.blob(after, end) {
+			after = blob_end;
 		}
+		(after < end && self.text[after] == b':').then_some(after + 1)
 	}
-}
 
-/// (3) Remove leading whitespace and `*subj-blob subj-refwd` leaders, where
-/// subj-refwd is `re`, `fw` or `fwd`, optional whitespace and an optional
-/// blob, then a colon.
-fn strip_leaders(subject: &mut String) {
-	loop {
-		if subject.starts_with(' ') {
-			subject.remove(0);
-		} else if let Some(length) = refwd_leader(subject.as_bytes()) {
-			subject.drain(..length);
-		} else {
-			return;
+	/// The end of a `[...]` blob (no brackets inside) and the spaces after
+	/// it, starting at `at`.
+	fn blob(&self, at: usize, end: usize) -> Option<usize> {
+		if at >= end || self.text[at] != b'[' {
+			return None;
 		}
-	}
-}
-
-/// (4) Remove a leading blob when something is left after it.
-fn strip_blob(subject: &mut String) {
-	if let Some(length) = blob(subject.as_bytes())
-		&& length < subject.len()
-	{
-		subject.drain(..length);
-	}
-}
-
-/// The length of a `*subj-blob subj-refwd` prefix of `text`, if it has one.
-fn refwd_leader(text: &[u8]) -> Option<usize> {
-	let mut at = 0;
-	while let Some(length) = blob(&text[at..]) {
-		at += length;
-	}
-	let rest = &text[at..];
-	if rest.len() >= 2 && rest[..2].eq_ignore_ascii_case(b"re") {
-		at += 2;
-	} else if rest.len() >= 2 && rest[..2].eq_ignore_ascii_case(b"fw") {
-		at += 2;
-		if text.get(at).is_some_and(|b| b.eq_ignore_ascii_case(&b'd')) {
-			at += 1;
+		let close = self.next_bracket[at + 1];
+		if close >= end || self.text[close] != b']' {
+			return None;
 		}
-	} else {
-		return None;
+		Some(close + 1 + self.spaces(close + 1, end))
 	}
-	at += spaces(&text[at..]);
-	if let Some(length) = blob(&text[at..]) {
-		at += length;
-	}
-	(text.get(at) == Some(&b':')).then_some(at + 1)
-}
 
-/// The length of a `[...]` blob (no brackets inside) and the whitespace
-/// after it, at the start of `text`.
-fn blob(text: &[u8]) -> Option<usize> {
-	if text.first() != Some(&b'[') {
-		return None;
+	fn spaces(&self, at: usize, end: usize) -> usize {
+		self.space_run[at].min(end.saturating_sub(at))
 	}
-	let close = text[1..].iter().position(|&b| b == b'[' || b == b']')? + 1;
-	if text[close] != b']' {
-		return None;
-	}
-	Some(close + 1 + spaces(&text[close + 1..]))
-}
-
-fn spaces(text: &[u8]) -> usize {
-	text.iter().take_while(|&&b| b == b' ').count()
 }
 
 #[cfg(test)]
-mod tests {
-	use super::base_subject;
-
-	#[test]
-	fn prefixes_trailers_and_blobs_are_removed() {
-		for (raw, base) in [
-			("a", "A"),
-			("[foo] Fwd: [bar] Re: fw: b (fWd)  (fwd)", "B"),
-			("Re: [FWD: c]", "C"),
-			("[xyz]", "[XYZ]"),
-			("=?iso-8859-1?q?_?=", ""),
-			("Re: =?utf-8?q?b?=", "B"),
-			("=?iso-8859-1?q?RE:_C?=", "C"),
-			("=?us-ascii?b?UmU6IGM=?=", "C"),
-			("Ad: Re: Ad: Re: Ad: x", "AD: RE: AD: RE: AD: X"),
-			("re: [fwd: [fwd: re: [fwd: babylon]]]", "BABYLON"),
-			("b  (a)", "B (A)"),
-			("Re:\tRe :  hi", "HI"),
-			("[a] [b]", "[B]"),
-			("", ""),
-		] {
-			assert_eq!(base_subject(raw), base, "{raw}");
-		}
-	}
-}
+#[path = "base_subject_tests.rs"]
+mod tests;
