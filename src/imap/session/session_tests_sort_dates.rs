@@ -90,3 +90,52 @@ fn sort_size_breaks_ties_by_arrival_and_sequence() {
 		],
 	);
 }
+
+#[test]
+fn sort_date_uses_the_date_header_and_falls_back_to_internaldate() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	session.command_line("a SELECT INBOX");
+	for (internal, header, body) in [
+		("23:00:00", "Date: Fri, 22 Feb 2008 00:00:00 +0200", "1"),
+		("22:00:00", "Date: Fri, 22 Feb 2008 02:00:00 +0200", "2"),
+		("21:00:00", "Date: Fri, 22 Feb 2008 01:00:00 +0200", "33"),
+		("20:00:00", "Date: Fri, 22 Feb 2008 02:00:00 +0200", "44"),
+		("01:30:23", "Subject: foo", "55555"),
+		("18:00:00", "Date: Fri, 22 Feb 2008 02:00:00 +0200", "6666"),
+		("01:00:00", "Subject: foo bar foo bar foo bar fooo", "777"),
+	] {
+		append_dated(
+			&mut session,
+			&format!("22-Feb-2008 {internal} +0200"),
+			&format!("{header}\r\n\r\n{body}\r\n"),
+		);
+	}
+	assert_sorts(
+		&mut session,
+		&[
+			("date", "1 3 7 5 2 4 6"),
+			("reverse date", "2 4 6 5 3 7 1"),
+			("date reverse size", "1 7 3 5 6 4 2"),
+		],
+	);
+}
+
+#[test]
+fn sort_date_compares_instants_across_zones() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut session = logged_in(dir.path());
+	session.command_line("a SELECT INBOX");
+	// 10:00 at +0500 is 05:00 UTC, before 06:00 UTC written as 06:00 +0000.
+	append_dated(
+		&mut session,
+		"22-Feb-2008 00:00:00 +0000",
+		"Date: Fri, 22 Feb 2008 06:00:00 +0000\r\n\r\nx\r\n",
+	);
+	append_dated(
+		&mut session,
+		"22-Feb-2008 00:00:00 +0000",
+		"Date: Fri, 22 Feb 2008 10:00:00 +0500\r\n\r\ny\r\n",
+	);
+	assert_sorts(&mut session, &[("date", "2 1")]);
+}

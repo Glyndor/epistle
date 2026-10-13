@@ -24,6 +24,7 @@ mod search_fields;
 mod search_header;
 mod select;
 mod sort;
+mod sort_keys;
 mod state;
 mod sync;
 mod thread;

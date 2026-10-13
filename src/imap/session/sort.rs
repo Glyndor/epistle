@@ -3,6 +3,7 @@
 use super::super::command::SortKey;
 use super::helpers::{header_value, header_value_raw, load_content, search_matches};
 use super::mailbox::{MessageRef, Snapshot};
+use super::sort_keys::{internal_seconds, sent_seconds};
 use super::state::State;
 use super::{Output, SearchKey, Session};
 use crate::util::encoded_word;
@@ -11,7 +12,7 @@ use crate::util::encoded_word;
 /// the same variant, so cross-variant comparison never happens in practice.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum SortValue {
-	Num(u64),
+	Num(i64),
 	Text(String),
 }
 
@@ -25,16 +26,10 @@ fn sort_value(
 	snapshot: &Snapshot,
 	text: Option<&str>,
 ) -> SortValue {
-	let arrival = || {
-		message
-			.internal_date
-			.duration_since(std::time::UNIX_EPOCH)
-			.map(|d| d.as_secs())
-			.unwrap_or(0)
-	};
 	match key {
-		SortKey::Arrival | SortKey::Date => SortValue::Num(arrival()),
-		SortKey::Size => SortValue::Num(message.size),
+		SortKey::Arrival => SortValue::Num(internal_seconds(message)),
+		SortKey::Date => SortValue::Num(sent_seconds(snapshot, message)),
+		SortKey::Size => SortValue::Num(i64::try_from(message.size).unwrap_or(i64::MAX)),
 		SortKey::From => SortValue::Text(header_field(text, "from")),
 		SortKey::To => SortValue::Text(header_field(text, "to")),
 		SortKey::Cc => SortValue::Text(header_field(text, "cc")),
