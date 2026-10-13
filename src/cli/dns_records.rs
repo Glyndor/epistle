@@ -167,6 +167,7 @@ mod tests {
 			key_file: rotated_key.clone(),
 			rotated_at: 31 * 86_400,
 			previous: None,
+			pending: None,
 		};
 		std::fs::write(
 			dir.path().join("dkim-rotation.json"),

@@ -85,6 +85,7 @@ fn fixture() -> Fixture {
 		key_file,
 		rotated_at: 0,
 		previous: None,
+		pending: None,
 	};
 	std::fs::write(
 		root.join("dkim-rotation.json"),

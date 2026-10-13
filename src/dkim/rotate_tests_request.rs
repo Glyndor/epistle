@@ -70,6 +70,7 @@ fn fixture(with_previous: bool) -> Fixture {
 		key_file: active.clone(),
 		rotated_at: 0,
 		previous,
+		pending: None,
 	};
 	std::fs::write(data.join(STATE_FILE), serde_json::to_vec(&state).unwrap()).expect("state");
 	let signer = ReloadableSigner::new(Arc::new(Signer::load("ed0", &active).expect("signer")));

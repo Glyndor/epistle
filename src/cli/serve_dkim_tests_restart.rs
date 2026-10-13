@@ -83,6 +83,7 @@ async fn restart_signs_with_current_rotation_key() {
 					key_file: root.join("original.key"),
 					retire_at,
 				}),
+				pending: None,
 			};
 			std::fs::write(
 				root.join("dkim-rotation.json"),

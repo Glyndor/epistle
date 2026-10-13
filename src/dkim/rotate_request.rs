@@ -68,7 +68,12 @@ impl Rotator {
 	/// and key file behind. Refuses when the selector for `now` is already the
 	/// active one (two rotations on the same UTC day would collide).
 	pub async fn force_rotate(&self, now: u64) -> Result<(), RotateError> {
+		self.sweep_temporary_files();
 		let mut state = self.load_state()?;
+		// A rotation a killed process left half done is the one to finish.
+		if state.pending.is_some() {
+			return self.resume(&mut state, now).await;
+		}
 		if selector_for(now) == state.selector {
 			return Err(RotateError(format!(
 				"selector {} is already active; a second rotation on the same UTC day would reuse its name",

@@ -96,6 +96,7 @@ fn rotation_state_drives_selector_previous_and_next_due() {
 			key_file: std::path::PathBuf::new(),
 			retire_at: 21 * DAY,
 		}),
+		pending: None,
 	};
 	std::fs::write(
 		f.dir.path().join("dkim-rotation.json"),
