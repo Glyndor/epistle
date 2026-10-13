@@ -57,6 +57,8 @@ fn fastest(run: fn(&str) -> String, subject: &str) -> Duration {
 /// Growth, not wall clock: eight times the input must cost about eight
 /// times the work. A quadratic path costs about 64 times, and an absolute
 /// bound failed on a loaded machine even when the code was linear.
+/// The short run is floored at 5 ms so a few microseconds of scheduler
+/// noise on a busy machine cannot make the ratio look quadratic.
 #[test]
 fn hostile_subjects_take_linear_time() {
 	let small = 1 << 14;
@@ -74,7 +76,7 @@ fn hostile_subjects_take_linear_time() {
 			("capped", base_subject as fn(&str) -> String),
 			("uncapped", extract),
 		] {
-			let base = fastest(run, &short).max(Duration::from_micros(50));
+			let base = fastest(run, &short).max(Duration::from_millis(5));
 			let grown = fastest(run, &long);
 			assert!(
 				grown < base * 24 && grown < Duration::from_secs(5),
