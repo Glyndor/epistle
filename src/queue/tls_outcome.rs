@@ -21,6 +21,9 @@ pub enum TlsOutcome {
 pub const STARTTLS_NOT_SUPPORTED: &str = "starttls-not-supported";
 /// No TLSA record matched the presented certificate.
 pub const TLSA_INVALID: &str = "tlsa-invalid";
+/// The recipient domain publishes an MTA-STS policy but the HTTPS fetch
+/// of that policy failed (RFC 8460 §4.3, RFC 8461 §3.3).
+pub const STS_POLICY_FETCH_ERROR: &str = "sts-policy-fetch-error";
 /// The recipient domain's MTA-STS policy could not be parsed.
 pub const STS_POLICY_INVALID: &str = "sts-policy-invalid";
 const CERTIFICATE_EXPIRED: &str = "certificate-expired";

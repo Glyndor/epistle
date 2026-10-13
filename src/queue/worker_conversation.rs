@@ -4,8 +4,9 @@
 use super::Worker;
 use crate::dane::rrset::TlsaRrset;
 use crate::queue::client::{self, DeliveryError, RecipientResult};
-use crate::queue::tls_outcome::{STS_POLICY_INVALID, TlsOutcome};
+use crate::queue::tls_outcome::{STS_POLICY_FETCH_ERROR, STS_POLICY_INVALID, TlsOutcome};
 use crate::storage::SpoolEntry;
+use crate::tlsrpt::sessions::Attempt;
 
 /// What one conversation decided for the recipients it carried.
 pub(super) struct Conversation {
@@ -41,6 +42,7 @@ impl Worker {
 		// MTA-STS: an enforce policy constrains MX choice and mandates TLS.
 		// A testing-mode policy is kept for TLS-RPT, which reports on it.
 		let mut sts_invalid = false;
+		let mut sts_fetch_error: Option<&'static str> = None;
 		let fetched = match &self.mta_sts {
 			Some((store, dns)) => match store.policy(dns.as_ref(), &domain).await {
 				Ok(policy) => policy,
@@ -48,6 +50,7 @@ impl Worker {
 				// though the domain published none (RFC 8461 section 3.3).
 				Err(crate::mtasts::PolicyError::Temporary(reason)) => {
 					tracing::warn!(%domain, %reason, "MTA-STS policy unavailable; delivering without it");
+					sts_fetch_error = Some(STS_POLICY_FETCH_ERROR);
 					None
 				}
 				// Malformed/absent policies fall back to opportunistic.
@@ -58,6 +61,28 @@ impl Worker {
 			},
 			None => None,
 		};
+		// RFC 8460 §4.3: when the policy fetch fails, the receiving domain
+		// must see the failure in the next aggregate report. We do not have
+		// the connecting MX yet, so the journal line carries empty fields;
+		// the report groups by result-type and is still actionable.
+		if let (Some(reason), Some(dir)) = (sts_fetch_error, self.tlsrpt_dir.as_ref()) {
+			let attempt = Attempt {
+				policy_domain: &domain,
+				mx_host: "",
+				sts: None,
+				sts_invalid: false,
+				sts_fetch_failed: true,
+				dane: false,
+				local_ip: None,
+				peer_ip: None,
+			};
+			crate::tlsrpt::sessions::record(
+				dir,
+				self.now_epoch(),
+				&attempt,
+				TlsOutcome::Failure(reason),
+			);
+		}
 		let policy = fetched
 			.clone()
 			.filter(|policy| policy.mode == crate::mtasts::Mode::Enforce);
@@ -203,6 +228,7 @@ impl Worker {
 				mx_host: &server_name,
 				sts: fetched.as_ref(),
 				sts_invalid,
+				sts_fetch_failed: false,
 				dane: !dane.records().is_empty(),
 				local_ip,
 				peer_ip,
