@@ -147,7 +147,7 @@ pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 		return Err(std::io::Error::other("mailbox already exists"));
 	}
 	let mut changes = hierarchy::create_superiors(data_dir, &account, &mailbox)?;
-	hierarchy::make_mailbox(&dir)?;
+	hierarchy::make_mailbox(data_dir, &account, &dir)?;
 	changes.push(Change::mailbox(Op::Created, &mailbox));
 	journal::note(data_dir, &account, &changes);
 	Ok(())

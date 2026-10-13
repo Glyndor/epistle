@@ -36,7 +36,7 @@ pub(super) fn create_superiors(
 			.map_err(|_| invalid())?
 			.messages_dir(account, data_dir)?;
 		if !dir.is_dir() {
-			make_mailbox(&dir)?;
+			make_mailbox(data_dir, account, &dir)?;
 			changes.push(Change::mailbox(Op::Created, ancestor));
 		}
 	}
@@ -47,9 +47,13 @@ pub(super) fn create_superiors(
 /// UIDVALIDITY. The state file also keeps an empty mailbox in a backup, which
 /// archives files and not directories: a superior made for its children has
 /// no message of its own.
-pub(super) fn make_mailbox(messages_dir: &Path) -> io::Result<()> {
+pub(super) fn make_mailbox(
+	data_dir: &Path,
+	account: &AccountName<'_>,
+	messages_dir: &Path,
+) -> io::Result<()> {
 	std::fs::create_dir_all(messages_dir)?;
-	crate::imap::uidvalidity::read_or_init(messages_dir);
+	crate::imap::uidvalidity::read_or_init(messages_dir, &account.root(data_dir)?);
 	Ok(())
 }
 
