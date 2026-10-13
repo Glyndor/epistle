@@ -104,6 +104,7 @@ pub(super) fn add_with_display_name(
 		name.to_string(),
 		addresses,
 		&password,
+		&crate::password::Policy::from_config(&config.auth),
 		config.auth.scram,
 	) {
 		Ok(account) => DynamicAccount {

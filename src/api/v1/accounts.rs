@@ -109,8 +109,13 @@ pub async fn create(
 		return Err(ApiError::conflict(message));
 	}
 	check_password(&request.password)?;
+	let prepared = state
+		.store()
+		.password_policy()
+		.prepare(&request.password)
+		.map_err(|rejection| ApiError::invalid_input(rejection.message()))?;
 	let password_hash =
-		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
+		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let name = crate::directory_store::account_name(&request.name);
 	state
 		.store()
@@ -118,7 +123,7 @@ pub async fn create(
 			name: name.clone(),
 			addresses: request.addresses,
 			password_hash,
-			scram: derive_scram(&request.password, state.store())?,
+			scram: derive_scram(prepared.as_ref(), state.store())?,
 			totp_secret: None,
 			disabled: false,
 			quota_bytes: None,
@@ -205,9 +210,18 @@ pub async fn set_password(
 ) -> Result<Json<PasswordChanged>, ApiError> {
 	require_in_scope(&state, &state.domain_scope(&auth), &name)?;
 	check_password(&request.password)?;
+	// The policy's `prepare` runs both the hash and the SCRAM derive on the
+	// same canonical bytes, so the stored argon2id PHC and the verifier
+	// agree at verify-time regardless of which keyboard the candidate
+	// came from.
+	let prepared = state
+		.store()
+		.password_policy()
+		.prepare(&request.password)
+		.map_err(|rejection| ApiError::invalid_input(rejection.message()))?;
 	let hash =
-		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
-	let scram = derive_scram(&request.password, state.store())?;
+		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
+	let scram = derive_scram(prepared.as_ref(), state.store())?;
 	state
 		.store()
 		.set_password_hash(&name, hash, scram)
@@ -229,7 +243,15 @@ fn derive_scram(
 	if !store.scram_enabled() {
 		return Ok(None);
 	}
-	crate::smtp::scram::ScramStored::with_fresh_salt(password)
+	// Apply the runtime password policy (NFKC under
+	// `[auth] unicode_passwords`, no-op under the default) so the SCRAM
+	// verifier is derived from the same bytes a SCRAM-SHA-256 client
+	// computes after its own SASLprep step.
+	let prepared = store
+		.password_policy()
+		.prepare(password)
+		.map_err(|rejection| ApiError::invalid_input(rejection.message()))?;
+	crate::smtp::scram::ScramStored::with_fresh_salt(prepared.as_ref())
 		.map(Some)
 		.ok_or_else(ApiError::internal)
 }

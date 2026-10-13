@@ -5,6 +5,8 @@
 //! `maybe_upgrade_scram` call site. The block is split into a sibling
 //! so `directory.rs` stays under the per-file code-line budget.
 
+use crate::password::Policy;
+
 impl super::Directory {
 	/// Attach the callback invoked to refresh a dynamic account's SCRAM
 	/// verifier on a successful cleartext authentication. Used by the
@@ -37,5 +39,19 @@ impl super::Directory {
 		if below_current {
 			upgrader.upgrade(account, password);
 		}
+	}
+
+	/// Whether the runtime password policy on this directory is unicode
+	/// (so set-time and verify-time normalise via NFKC). The
+	/// `upgrade_scram` callback does not see the directory directly; the
+	/// store forwards its own policy in for it. Currently unused by the
+	/// directory itself — the policy is read by `authenticate_local` and
+	/// the app-password admission path — but the accessor lets the
+	/// `upgrade_scram` wiring stay decoupled from the store's internal
+	/// state, and is exercised by the storage-layer tests that build a
+	/// directory in isolation.
+	#[allow(dead_code)]
+	pub(super) fn password_policy(&self) -> Policy {
+		self.password_policy
 	}
 }

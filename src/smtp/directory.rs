@@ -1,9 +1,11 @@
 //! Recipient resolution: which account, if any, receives an address.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use super::address::Address;
+use crate::password::Policy;
 use crate::util::address::normalize;
 
 /// Run an async future synchronously from a non-async context. Every
@@ -143,6 +145,11 @@ pub struct Directory {
 	/// next exchange pays the full cost. `None` in unit tests that do not
 	/// exercise the upgrade path.
 	scram_upgrader: Option<std::sync::Arc<dyn crate::directory_store::ScramUpgrader>>,
+	/// Runtime password policy. Defaults to the ASCII-only policy; the
+	/// `serve` builder wires it from the store's `password_policy` so a
+	/// non-ASCII candidate set under `[auth] unicode_passwords = true`
+	/// verifies consistently with the bytes hashed at set-time.
+	password_policy: Policy,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
 	/// `with_scram_lookup_counter` so the delta they assert is
@@ -187,6 +194,7 @@ impl Directory {
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
 			scram_upgrader: None,
+			password_policy: Policy::ASCII_ONLY,
 			#[cfg(test)]
 			scram_lookup_counter: None,
 		}
@@ -210,6 +218,15 @@ impl Directory {
 	/// primary record. Unset in unit tests that do not exercise counters.
 	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
 		self.metrics = Some(metrics);
+		self
+	}
+
+	/// Set the runtime password policy. Verification through
+	/// [`Directory::authenticate`] normalises the candidate the same way
+	/// the storage layer did at set-time, so a non-ASCII password typed
+	/// in one decomposition verifies the same as its NFKC canonical form.
+	pub fn with_password_policy(mut self, policy: Policy) -> Self {
+		self.password_policy = policy;
 		self
 	}
 
@@ -506,10 +523,15 @@ impl Directory {
 			Some(secret) => self.totp_strip(password, secret),
 			None => Some(password),
 		};
-		if let Some(primary) = primary
-			&& super::auth::verify_password(hash, primary)
-		{
-			self.maybe_upgrade_scram(&account, primary);
+		// Compare in the form the storage layer hashed: NFKC under the
+		// Unicode policy, as given otherwise. No length or character check
+		// here: a stored hash can predate the current rules.
+		let prepared: Cow<str> = match primary {
+			Some(candidate) => self.password_policy.login_form(candidate),
+			None => Cow::Borrowed(""),
+		};
+		if !prepared.is_empty() && super::auth::verify_password(hash, &prepared) {
+			self.maybe_upgrade_scram(&account, &prepared);
 			return Some(account);
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
@@ -524,7 +546,7 @@ impl Directory {
 			.map(Vec::as_slice)
 			.unwrap_or(&[])
 		{
-			if app.admits(password, ip, now) {
+			if app.admits(password, &self.password_policy, ip, now) {
 				return Some(account.clone());
 			}
 		}
@@ -692,6 +714,10 @@ mod iteration_tests;
 #[cfg(test)]
 #[path = "directory_totp_tests.rs"]
 mod totp_tests;
+
+#[cfg(test)]
+#[path = "directory_login_form_tests.rs"]
+mod login_form_tests;
 
 #[cfg(test)]
 #[path = "directory_test_support.rs"]

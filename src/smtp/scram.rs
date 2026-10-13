@@ -579,3 +579,7 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "scram_unicode_tests.rs"]
+mod unicode_tests;

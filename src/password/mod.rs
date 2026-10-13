@@ -1,14 +1,29 @@
 //! Global password policy — enforced identically on every path that sets or
 //! changes an account password (the management API and the CLI).
 //!
-//! Per the org security standard: length 12–64, **printable ASCII only** (no
-//! control characters, no Unicode), **no composition rules** (ASVS v4 §2.1.9 and
-//! NIST 800-63B advise against them), and rejection of **known-breached / common
-//! passwords** via a bundled local list — the check that actually protects. The
-//! list is local so validation works offline, with nothing phoning home.
+//! Per the org security standard: length 12–64, **printable ASCII only** by
+//! default (no control characters, no Unicode), **no composition rules** (ASVS
+//! v4 §2.1.9 and NIST 800-63B advise against them), and rejection of
+//! **known-breached / common passwords** via a bundled local list — the
+//! check that actually protects. The list is local so validation works
+//! offline, with nothing phoning home.
+//!
+//! The default ASCII-only character set keeps a strong guarantee that older
+//! IMAP/POP clients receive and verify the same bytes that were set, since
+//! AUTH PLAIN/LOGIN still ship the password on the wire as bytes. Operators
+//! that need non-ASCII passwords flip `[auth] unicode_passwords = true`. With
+//! it on the policy accepts any non-control Unicode scalar, normalises with
+//! NFKC on both set and verify (so a password set with one keyboard verifies
+//! from another, RFC 8265 OpaqueString profile), counts length in scalars,
+//! and keeps the 64-character ceiling on the normalised form. The runtime
+//! shape of the new behaviour lives in [`Policy`] under [`policy`].
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
+
+pub mod policy;
+
+pub use policy::Policy;
 
 /// Minimum password length, in characters.
 pub const MIN_LENGTH: usize = 12;
@@ -26,7 +41,8 @@ pub enum Rejection {
 	/// More than [`MAX_LENGTH`] characters.
 	TooLong,
 	/// Contains a character outside printable ASCII (a control character or any
-	/// non-ASCII / Unicode byte).
+	/// non-ASCII / Unicode byte), or a Unicode control scalar when
+	/// `[auth] unicode_passwords` is on.
 	IllegalCharacter,
 	/// Matches an entry in the bundled known-breached / common-password list.
 	Breached,
@@ -58,41 +74,59 @@ impl Rejection {
 /// are folded in.
 static BREACHED_RAW: &str = include_str!("breached_common.txt");
 
-/// Build the breached-password set once, on first use.
-fn breached_set() -> &'static HashSet<&'static str> {
+/// The bundled NCSC top-100k list, already filtered to the entries the
+/// policy can consult (12 to 64 printable-ASCII characters). Source, checksum
+/// of the unfiltered file and both licence credits are in the file's header
+/// and in `debian/copyright`.
+pub(super) static BREACHED_RAW_TOP100K: &str = include_str!("breached_top100k.txt");
+
+/// Whether a raw password entry (one trimmed line of one of the bundled
+/// files) survives the early checks the policy applies before the breach
+/// lookup. The lookup key is the case-folded form, so the check runs on the
+/// lowered entry and rejects every entry that the validate pass would have
+/// rejected for the same reason.
+fn survives_filter(entry: &str) -> bool {
+	let lowered = entry.to_ascii_lowercase();
+	let length = lowered.chars().count();
+	if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {
+		return false;
+	}
+	lowered.bytes().all(|byte| (0x20..=0x7E).contains(&byte))
+}
+
+/// Build the breached-password set once, on first use. Combines the legacy
+/// curated list and the bundled top-100k so that any entry that survives the
+/// length and printable-ASCII gate, in either file, is refused as a breach.
+/// The set keys are case-folded so the lookup is case-insensitive regardless
+/// of which source row carried that entry.
+pub(super) fn breached_set() -> &'static HashSet<&'static str> {
 	static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
 	SET.get_or_init(|| {
-		BREACHED_RAW
-			.lines()
-			.map(str::trim)
-			.filter(|line| !line.is_empty() && !line.starts_with('#'))
-			.collect()
+		let mut set: HashSet<&'static str> = HashSet::with_capacity(2048);
+		for raw in [BREACHED_RAW, BREACHED_RAW_TOP100K] {
+			for line in raw.lines() {
+				let trimmed = line.trim();
+				if trimmed.is_empty() || trimmed.starts_with('#') || !survives_filter(trimmed) {
+					continue;
+				}
+				// Leaked once at first use: a few kilobytes for the life of
+				// the process, in exchange for `&'static str` keys.
+				set.insert(Box::leak(trimmed.to_ascii_lowercase().into_boxed_str()));
+			}
+		}
+		set
 	})
 }
 
-/// Validate a candidate password against the global policy.
+/// Validate a candidate password against the historical ASCII-only policy.
 ///
-/// Returns `Ok(())` when the password is acceptable, or the first [`Rejection`]
-/// that applies. Length and character set are checked before the breach lookup,
-/// so a rejected password never reaches the (larger) breached-set membership
-/// test unless it is a well-formed, in-range ASCII string.
+/// This is the entry point every existing call site uses; it preserves the
+/// pre-unicode behaviour exactly (printable ASCII only, no normalisation,
+/// case-insensitive breach lookup against the bundled set). New code that
+/// needs Unicode support should construct a [`Policy::unicode`] and call
+/// its `validate`.
 pub fn validate(password: &str) -> Result<(), Rejection> {
-	let length = password.chars().count();
-	if length < MIN_LENGTH {
-		return Err(Rejection::TooShort);
-	}
-	if length > MAX_LENGTH {
-		return Err(Rejection::TooLong);
-	}
-	// Printable ASCII only: 0x20 (space) through 0x7E (`~`). This rejects control
-	// characters and every non-ASCII (multibyte UTF-8) byte in one pass.
-	if !password.bytes().all(|byte| (0x20..=0x7E).contains(&byte)) {
-		return Err(Rejection::IllegalCharacter);
-	}
-	if breached_set().contains(password) {
-		return Err(Rejection::Breached);
-	}
-	Ok(())
+	Policy::ASCII_ONLY.validate(password)
 }
 
 #[cfg(test)]
@@ -214,4 +248,74 @@ mod tests {
 			);
 		}
 	}
+
+	/// Entries of the bundled top-100k file, without its comment header.
+	fn top100k_entries() -> impl Iterator<Item = &'static str> {
+		super::BREACHED_RAW_TOP100K
+			.lines()
+			.map(str::trim)
+			.filter(|line| !line.is_empty() && !line.starts_with('#'))
+	}
+
+	#[test]
+	fn the_top100k_file_ships_only_entries_the_lookup_can_reach() {
+		// The file is filtered when it is imported. An unfiltered paste would
+		// add close to a megabyte of entries that can never be looked up.
+		let mut count = 0;
+		for entry in top100k_entries() {
+			count += 1;
+			assert!(
+				survives_filter(entry),
+				"entry {entry:?} can never reach the lookup"
+			);
+		}
+		assert!(count > 1000, "only {count} entries in the top-100k file");
+	}
+
+	#[test]
+	fn every_top100k_entry_is_refused_as_breached() {
+		for entry in top100k_entries() {
+			assert_eq!(validate(entry), Err(Rejection::Breached), "{entry:?}");
+		}
+	}
+
+	#[test]
+	fn a_known_entry_lookup_is_case_insensitive() {
+		// Digits have no case, so pick an entry with a letter in it.
+		let entry = top100k_entries()
+			.find(|entry| entry.bytes().any(|b| b.is_ascii_lowercase()))
+			.expect("the list has an entry with a lowercase letter");
+		let upper = entry.to_ascii_uppercase();
+		assert_ne!(upper, entry, "shape precondition: uppercasing changed it");
+		assert_eq!(validate(&upper), Err(Rejection::Breached), "{upper:?}");
+	}
+
+	#[test]
+	fn a_fresh_random_password_still_passes_with_the_real_list() {
+		// The bundled 100k list is bigger by a wide margin; this exercises a
+		// strong random credential (URL-safe base64, all printable ASCII) so
+		// the breach check is run against the bundled set on a value that
+		// cannot be in it.
+		let password = fixtures::printable_ascii(MIN_LENGTH + 8);
+		assert!(
+			!breached_set().contains(password.as_str()),
+			"shape precondition: a freshly-generated password must not be in the bundle"
+		);
+		assert_eq!(validate(&password), Ok(()));
+	}
+
+	#[test]
+	fn the_bundled_lookup_set_covers_more_than_five_hundred_entries() {
+		// Anything under a few hundred would mean the bundle has stopped
+		// being effective.
+		assert!(
+			breached_set().len() > 500,
+			"bundled lookup set is {} entries, expected a substantial list",
+			breached_set().len(),
+		);
+	}
 }
+
+#[cfg(test)]
+#[path = "tests_unicode.rs"]
+mod tests_unicode;

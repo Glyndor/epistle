@@ -31,6 +31,32 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 
 - **Passwords** are stored as **argon2id** PHC hashes — never plaintext, never
   reversible.
+- **Breached / common passwords are refused locally**, with no network call.
+  The bundled set merges the curated starter list under `src/password/`
+  with the NCSC top-100k most-used passwords from `danielmiessler/SecLists`
+  (`Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt`,
+  committed under `src/password/breached_top100k.txt` so the build needs no
+  network, and filtered to the 1,203 entries of 12 to 64 printable-ASCII
+  characters, the only ones the lookup can reach). SecLists is MIT-licensed;
+  the underlying list was published by the UK National Cyber Security Centre
+  under the Open Government Licence v3.0. The file header and
+  `debian/copyright` carry both credits. The
+  lookup is case-insensitive (the in-memory set is keyed by the
+  case-folded form) and only runs on inputs that have already cleared the
+  12-to-64-character printable-ASCII gate, so a strong random credential
+  is unaffected.
+- **Password character set**: length 12-64 printable ASCII by default.
+  Operators that need non-ASCII passwords can opt in with
+  `[auth] unicode_passwords = true`. With the flag on the policy accepts
+  any non-control Unicode scalar, normalises with NFKC on both set and
+  verify (RFC 8265 OpaqueString profile, RFC 5802 SASLprep / RFC 7677
+  in spirit), counts length in scalars, and keeps the 64-character
+  ceiling on the normalised form. A password set with one keyboard
+  verifies from another. The flag is off by default because older IMAP
+  and POP clients mangle non-ASCII credentials in AUTH PLAIN/LOGIN on
+  the wire — the operator opts in knowing their clients need to normalise
+  consistently, which SCRAM-SHA-256's standard preparation already does.
+  See [the configuration reference](configuration.md#auth-unicode-passwords).
 - **SCRAM-SHA-256** authenticates without the password crossing the wire, and
   **SCRAM-SHA-256-PLUS** adds TLS channel binding (`tls-server-end-point`) with
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
