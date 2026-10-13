@@ -291,7 +291,7 @@ impl Server {
 		stream.write_all(&greeting.bytes).await?;
 		stream.flush().await?;
 
-		let mut decoder = LineDecoder::new();
+		let mut decoder = LineDecoder::with_limit(super::command::MAX_COMMAND_LINE);
 		let mut buffer = [0u8; 4096];
 		// Consecutive BAD responses; too many means an abusive client.
 		let mut error_streak = 0u32;
@@ -563,7 +563,7 @@ impl Server {
 					session.set_client_identity(identity);
 					stream = Box::new(tls);
 					session.tls_started();
-					decoder = LineDecoder::new();
+					decoder = LineDecoder::with_limit(super::command::MAX_COMMAND_LINE);
 					break;
 				}
 				if output.idle {

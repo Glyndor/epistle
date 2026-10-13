@@ -482,3 +482,6 @@ async fn idle_times_out_during_idle() {
 	read_until(&mut tls, "BYE idle timeout").await;
 	task.abort();
 }
+
+#[path = "server_tests_line_limit.rs"]
+mod line_limit;

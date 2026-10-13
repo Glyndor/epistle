@@ -12,22 +12,38 @@ pub const MAX_LINE_LENGTH: usize = 998;
 pub enum LineError {
 	/// A CR not followed by LF, or an LF not preceded by CR.
 	BareControlCharacter,
-	/// Line longer than `MAX_LINE_LENGTH`.
+	/// Line longer than the decoder's limit (`MAX_LINE_LENGTH` by default).
 	TooLong,
 	/// Line contains a NUL byte.
 	NulByte,
 }
 
 /// Incremental CRLF line decoder over received bytes.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LineDecoder {
 	buffer: Vec<u8>,
+	max_line: usize,
+}
+
+impl Default for LineDecoder {
+	fn default() -> Self {
+		Self::with_limit(MAX_LINE_LENGTH)
+	}
 }
 
 impl LineDecoder {
-	/// Create an empty decoder.
+	/// Create an empty decoder with the SMTP line limit.
 	pub fn new() -> Self {
 		Self::default()
+	}
+
+	/// Create an empty decoder that accepts lines of up to `max_line` octets
+	/// (excluding CRLF), for protocols whose commands are longer than SMTP's.
+	pub fn with_limit(max_line: usize) -> Self {
+		Self {
+			buffer: Vec::new(),
+			max_line,
+		}
 	}
 
 	/// Append received bytes to the internal buffer.
@@ -66,7 +82,7 @@ impl LineDecoder {
 				b'\r' => {
 					match self.buffer.get(i + 1) {
 						Some(b'\n') => {
-							if i > MAX_LINE_LENGTH {
+							if i > self.max_line {
 								return Err(LineError::TooLong);
 							}
 							let line = self.buffer[..i].to_vec();
@@ -81,7 +97,7 @@ impl LineDecoder {
 				_ => i += 1,
 			}
 		}
-		if self.buffer.len() > MAX_LINE_LENGTH + 1 {
+		if self.buffer.len() > self.max_line + 1 {
 			return Err(LineError::TooLong);
 		}
 		Ok(None)

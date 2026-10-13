@@ -1,7 +1,12 @@
 //! IMAP command parsing (RFC 9051 section 6), strict subset.
 
-/// Maximum command line length accepted.
-pub const MAX_COMMAND_LINE: usize = 8192;
+/// Maximum command line length accepted, excluding CRLF and literals.
+///
+/// RFC 7162 §4 asks servers to take at least 8000 octets, and an RFC 2971
+/// ID command at its own maximum (30 pairs of 30 and 1024 octet strings) is
+/// about 32 KiB. 64 KiB is Dovecot's default and bounds the per-connection
+/// line buffer.
+pub const MAX_COMMAND_LINE: usize = 64 * 1024;
 
 /// A parsed client command with its tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
