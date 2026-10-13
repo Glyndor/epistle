@@ -34,13 +34,17 @@ impl Policy {
 	/// A policy that requires printable ASCII only — the historical
 	/// default and the behaviour that older IMAP/POP clients expect from
 	/// AUTH PLAIN/LOGIN without surprises.
-	pub const ASCII_ONLY: Self = Self { unicode_passwords: false };
+	pub const ASCII_ONLY: Self = Self {
+		unicode_passwords: false,
+	};
 
 	/// A policy that accepts NFKC-normalised Unicode passwords. Both set
 	/// and verify normalise the candidate so a password set with one
 	/// keyboard verifies from another.
 	pub fn unicode() -> Self {
-		Self { unicode_passwords: true }
+		Self {
+			unicode_passwords: true,
+		}
 	}
 
 	/// Normalise `password` for storage or verification. With
@@ -102,7 +106,9 @@ impl Policy {
 	/// the historical ASCII-only behaviour so a config that never mentions
 	/// the new flag stays unchanged.
 	pub fn from_config(auth: &crate::config::Auth) -> Self {
-		Self { unicode_passwords: auth.unicode_passwords }
+		Self {
+			unicode_passwords: auth.unicode_passwords,
+		}
 	}
 }
 

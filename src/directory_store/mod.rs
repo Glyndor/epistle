@@ -10,8 +10,8 @@ use std::sync::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Account, Protocol};
-use crate::password::Policy;
 use crate::directory_store::aliases::AliasStore;
+use crate::password::Policy;
 use crate::smtp::directory::Directory;
 use crate::util::address_reason;
 
@@ -45,10 +45,10 @@ mod forward_catch_all_mutators;
 mod mutators;
 pub mod scram_upgrade;
 
-#[path = "scram_settings.rs"]
-mod scram_settings;
 #[path = "password_policy_settings.rs"]
 mod password_policy_settings;
+#[path = "scram_settings.rs"]
+mod scram_settings;
 #[path = "set_totp.rs"]
 mod set_totp;
 

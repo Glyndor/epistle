@@ -44,7 +44,13 @@ impl super::Directory {
 	/// Whether the runtime password policy on this directory is unicode
 	/// (so set-time and verify-time normalise via NFKC). The
 	/// `upgrade_scram` callback does not see the directory directly; the
-	/// store forwards its own policy in for it.
+	/// store forwards its own policy in for it. Currently unused by the
+	/// directory itself — the policy is read by `authenticate_local` and
+	/// the app-password admission path — but the accessor lets the
+	/// `upgrade_scram` wiring stay decoupled from the store's internal
+	/// state, and is exercised by the storage-layer tests that build a
+	/// directory in isolation.
+	#[allow(dead_code)]
 	pub(super) fn password_policy(&self) -> Policy {
 		self.password_policy
 	}

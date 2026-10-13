@@ -10,7 +10,7 @@
 // password module; this file is the test-only sibling, declared with
 // `#[path]` so the production type and the tests stay separately
 // under the line cap.
-use crate::password::{Policy, Rejection, MIN_LENGTH, MAX_LENGTH};
+use crate::password::{MAX_LENGTH, MIN_LENGTH, Policy, Rejection};
 
 /// NFC form of the brief's example password.
 const NFC_PASSWORD: &str = "contrase\u{00F1}aSegura12";
@@ -25,8 +25,7 @@ fn unicode_policy_prepare_returns_nfkc_normalised_owned() {
 	let policy = Policy::unicode();
 	let prepared = policy.prepare(NFD_PASSWORD).expect("valid");
 	assert!(
-		std::ptr::eq(prepared.as_ptr(), NFD_PASSWORD.as_ptr()) == false
-			|| prepared == NFD_PASSWORD,
+		!std::ptr::eq(prepared.as_ptr(), NFD_PASSWORD.as_ptr()) || prepared == NFD_PASSWORD,
 		"shape precondition: the NFD form must allocate or already be NFC",
 	);
 	assert_eq!(
@@ -35,7 +34,6 @@ fn unicode_policy_prepare_returns_nfkc_normalised_owned() {
 		"NFKC must collapse NFD back into NFC byte-for-byte",
 	);
 }
-
 #[test]
 fn unicode_policy_prepare_rejects_a_control_scalar() {
 	// C0 control (TAB). Embedded in a password that is otherwise long
@@ -102,8 +100,8 @@ fn ascii_only_policy_still_refuses_non_ascii() {
 	// length.
 	let password = NFC_PASSWORD;
 	assert!(
-		password.chars().any(|c| !c.is_ascii()),
-		"shape precondition: the fixture is non-ASCII"
+		!password.is_ascii(),
+		"shape precondition: the fixture is non-ASCII",
 	);
 	assert_eq!(
 		Policy::default().validate(password),

@@ -255,7 +255,10 @@ pub async fn create_user(
 
 	let (password_hash, scram) = if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
-		(hash_password(plain, state.store())?, derive_scram(plain, state.store())?)
+		(
+			hash_password(plain, state.store())?,
+			derive_scram(plain, state.store())?,
+		)
 	} else {
 		// No password supplied: create the account with an inert hash and
 		// no SCRAM credentials. The IdP can PATCH `password` later, or the

@@ -528,16 +528,15 @@ impl Directory {
 		// unicode policy it canonicalises (NFC vs NFD → NFKC) so a
 		// non-ASCII password typed in one decomposition verifies
 		// the same as the form that crossed the set boundary.
-		let prepared: Cow<str> = match primary.and_then(|bytes| self.password_policy.prepare(bytes).ok()) {
-			Some(prepared) => prepared,
-			// A candidate that fails the policy now cannot match the
-			// stored hash (which was derived from a valid input); fall
-			// through to the app passwords.
-			None => Cow::Borrowed(""),
-		};
-		if !prepared.is_empty()
-			&& super::auth::verify_password(hash, &prepared)
-		{
+		let prepared: Cow<str> =
+			match primary.and_then(|bytes| self.password_policy.prepare(bytes).ok()) {
+				Some(prepared) => prepared,
+				// A candidate that fails the policy now cannot match the
+				// stored hash (which was derived from a valid input); fall
+				// through to the app passwords.
+				None => Cow::Borrowed(""),
+			};
+		if !prepared.is_empty() && super::auth::verify_password(hash, &prepared) {
 			self.maybe_upgrade_scram(&account, &prepared);
 			return Some(account);
 		}

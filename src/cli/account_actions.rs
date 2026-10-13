@@ -109,7 +109,10 @@ pub(crate) fn password_with_store(
 	let prepared = match store.password_policy().prepare(&plain) {
 		Ok(prepared) => prepared,
 		Err(rejection) => {
-			style::error(format_args!("account {name}: {rejection}", rejection = rejection.message()));
+			style::error(format_args!(
+				"account {name}: {rejection}",
+				rejection = rejection.message()
+			));
 			return ExitCode::FAILURE;
 		}
 	};

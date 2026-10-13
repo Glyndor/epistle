@@ -325,9 +325,7 @@ fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 		config.accounts.clone(),
 	)
 	.map(|store| store.with_scram_enabled(config.auth.scram))
-	.map(|store| {
-		store.with_password_policy(crate::password::Policy::from_config(&config.auth))
-	})
+	.map(|store| store.with_password_policy(crate::password::Policy::from_config(&config.auth)))
 }
 
 /// `handle_error` lives in `account_actions`; the umbrella module only

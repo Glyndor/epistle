@@ -20,7 +20,7 @@
 //!   credentials.
 
 use crate::password::Policy;
-use crate::smtp::scram::{ScramCredentials, SCRAM_ITERATIONS};
+use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials};
 use crate::test_fixtures as fixtures;
 
 /// The brief's example password in NFC form (`ñ` precomposed U+00F1).
@@ -72,16 +72,10 @@ fn scram_derive_sees_through_preparation_to_canonical_bytes() {
 	// the same key material.
 	let prepared_nfc = Policy::unicode().prepare(NFC_PASSWORD).expect("valid");
 	let prepared_nfd = Policy::unicode().prepare(NFD_PASSWORD).expect("valid");
-	let via_nfc = ScramCredentials::derive(
-		prepared_nfc.as_ref(),
-		fixtures::salt(),
-		SCRAM_ITERATIONS,
-	);
-	let via_nfd = ScramCredentials::derive(
-		prepared_nfd.as_ref(),
-		fixtures::salt(),
-		SCRAM_ITERATIONS,
-	);
+	let via_nfc =
+		ScramCredentials::derive(prepared_nfc.as_ref(), fixtures::salt(), SCRAM_ITERATIONS);
+	let via_nfd =
+		ScramCredentials::derive(prepared_nfd.as_ref(), fixtures::salt(), SCRAM_ITERATIONS);
 	assert_eq!(
 		via_nfc.stored_key, via_nfd.stored_key,
 		"prepared forms must derive the same stored key under the same salt"

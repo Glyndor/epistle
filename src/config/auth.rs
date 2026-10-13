@@ -122,7 +122,12 @@ mod tests {
 
 	#[test]
 	fn unicode_passwords_true_opt_in_is_accepted() {
-		assert!(load("[auth]\nunicode_passwords = true\n").expect("load").auth.unicode_passwords);
+		assert!(
+			load("[auth]\nunicode_passwords = true\n")
+				.expect("load")
+				.auth
+				.unicode_passwords
+		);
 	}
 
 	#[test]

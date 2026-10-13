@@ -219,8 +219,8 @@ pub async fn set_password(
 		.password_policy()
 		.prepare(&request.password)
 		.map_err(|rejection| ApiError::invalid_input(rejection.message()))?;
-	let hash = crate::smtp::auth::hash_password(prepared.as_ref())
-		.map_err(|_| ApiError::internal())?;
+	let hash =
+		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let scram = derive_scram(prepared.as_ref(), state.store())?;
 	state
 		.store()

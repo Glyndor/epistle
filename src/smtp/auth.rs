@@ -205,7 +205,10 @@ pub(crate) mod tests {
 		let policy = Policy::unicode();
 		let nfc = "contrase\u{00F1}aSegura12";
 		let nfd = "contrase\u{006E}\u{0303}aSegura12";
-		assert_ne!(nfc, nfd, "shape precondition: the two forms differ in bytes");
+		assert_ne!(
+			nfc, nfd,
+			"shape precondition: the two forms differ in bytes"
+		);
 		let prepared_nfc = policy.prepare(nfc).expect("nfc is valid");
 		let prepared_nfd = policy.prepare(nfd).expect("nfd is valid");
 		assert_eq!(
@@ -222,7 +225,8 @@ pub(crate) mod tests {
 		// And the reverse: set with NFD-derived bytes, verify with the
 		// NFD bytes or the NFC bytes — both prepare to the same form, so
 		// both verify.
-		let phc_from_nfd = super::hash_password(prepared_nfd.as_ref()).expect("hashes under unicode");
+		let phc_from_nfd =
+			super::hash_password(prepared_nfd.as_ref()).expect("hashes under unicode");
 		assert!(verify_password(&phc_from_nfd, prepared_nfc.as_ref()));
 		assert!(verify_password(&phc_from_nfd, prepared_nfd.as_ref()));
 		// A wrong password still fails, even after the policy prepare.
