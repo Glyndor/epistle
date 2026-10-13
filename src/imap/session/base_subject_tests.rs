@@ -41,29 +41,45 @@ fn only_the_first_8_kib_count() {
 /// `[fwd: ...]` wrappers, and trailers. Each must take well under a second
 /// both through the 8 KiB cap and, to show the steps are linear on their
 /// own, straight through the extraction with no cap.
+/// The fastest of three runs, so a busy machine adds as little noise as it
+/// can to a timing comparison.
+fn fastest(run: fn(&str) -> String, subject: &str) -> Duration {
+	(0..3)
+		.map(|_| {
+			let started = Instant::now();
+			run(subject);
+			started.elapsed()
+		})
+		.min()
+		.unwrap_or_default()
+}
+
+/// Growth, not wall clock: eight times the input must cost about eight
+/// times the work. A quadratic path costs about 64 times, and an absolute
+/// bound failed on a loaded machine even when the code was linear.
 #[test]
 fn hostile_subjects_take_linear_time() {
-	let mebibyte = 1 << 20;
-	let nested = mebibyte / 7;
-	for subject in [
-		"re:".repeat(mebibyte / 3),
-		"[a]".repeat(mebibyte / 3),
-		"[a] ".repeat(mebibyte / 4) + "x",
-		format!("{}x{}", "[fwd: ".repeat(nested), "]".repeat(nested)),
-		format!("{}x", "fwd ".repeat(mebibyte / 4)),
-		format!("x{}", " (fwd)".repeat(mebibyte / 6)),
-	] {
+	let small = 1 << 14;
+	let shapes: [fn(usize) -> String; 6] = [
+		|n| "re:".repeat(n / 3),
+		|n| "[a]".repeat(n / 3),
+		|n| "[a] ".repeat(n / 4) + "x",
+		|n| format!("{}x{}", "[fwd: ".repeat(n / 7), "]".repeat(n / 7)),
+		|n| format!("{}x", "fwd ".repeat(n / 4)),
+		|n| format!("x{}", " (fwd)".repeat(n / 6)),
+	];
+	for shape in shapes {
+		let (short, long) = (shape(small), shape(small * 8));
 		for (path, run) in [
 			("capped", base_subject as fn(&str) -> String),
 			("uncapped", extract),
 		] {
-			let started = Instant::now();
-			run(&subject);
-			let took = started.elapsed();
+			let base = fastest(run, &short).max(Duration::from_micros(50));
+			let grown = fastest(run, &long);
 			assert!(
-				took < Duration::from_millis(500),
-				"{path} took {took:?} for {}",
-				&subject[..12]
+				grown < base * 24 && grown < Duration::from_secs(5),
+				"{path} went from {base:?} to {grown:?} for {}",
+				&long[..12]
 			);
 		}
 	}
