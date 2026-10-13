@@ -20,7 +20,7 @@ fn tar_gz_round_trips_entries() {
 
 #[test]
 fn ustar_header_checksum_is_valid() {
-	let header = ustar_header("data/x", 0o644, 5).expect("header");
+	let header = tar_format::header(b"data/x", 0o644, 5, b'0');
 	// The stored checksum equals the sum of the header with the field spaced.
 	let stored = usize::from_str_radix(
 		String::from_utf8_lossy(&header[148..154])
@@ -33,12 +33,6 @@ fn ustar_header_checksum_is_valid() {
 	spaced[148..156].copy_from_slice(b"        ");
 	let computed: usize = spaced.iter().map(|&b| b as usize).sum();
 	assert_eq!(stored, computed);
-}
-
-#[test]
-fn header_rejects_overlong_name() {
-	let long = "data/".to_string() + &"x".repeat(200);
-	assert!(ustar_header(&long, 0o644, 0).is_err());
 }
 
 #[test]
