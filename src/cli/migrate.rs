@@ -9,6 +9,8 @@ use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
 
+#[path = "migrate_config.rs"]
+mod config;
 #[path = "migrate_imap.rs"]
 mod imap;
 #[path = "migrate_imap_report.rs"]
@@ -20,7 +22,7 @@ pub struct MigrateArgs {
 	/// Configuration file; accepted before or after the action.
 	#[arg(long, value_name = "FILE", global = true, default_value = super::DEFAULT_CONFIG)]
 	pub config: PathBuf,
-	/// What to migrate from (`imap`).
+	/// What to migrate from (`imap`, `mox`).
 	#[command(subcommand)]
 	pub action: MigrateCli,
 }
@@ -36,6 +38,20 @@ pub enum MigrateCli {
 	/// account and remote folder, so running the same command again copies
 	/// only what arrived since, and an interrupted run resumes.
 	Imap(ImapArgs),
+	/// Import domains, accounts, aliases and DKIM keys from Mox.
+	///
+	/// Reads `mox.conf` and `domains.conf` from the Mox configuration
+	/// directory. DKIM keys keep their selectors, so DNS does not change.
+	/// Passwords cannot be carried over: accounts are created disabled for
+	/// login. Existing domains, accounts and aliases are never overwritten.
+	Mox {
+		/// The Mox configuration directory (holding mox.conf), or mox.conf.
+		#[arg(long, value_name = "DIR")]
+		from: PathBuf,
+		/// What to do with passwords, and how to run.
+		#[command(flatten)]
+		import: config::ImportArgs,
+	},
 }
 
 /// Arguments of `epistle migrate imap`.
@@ -90,5 +106,9 @@ pub struct ImapArgs {
 pub(super) fn run(args: MigrateArgs) -> ExitCode {
 	match args.action {
 		MigrateCli::Imap(imap_args) => imap::run(&args.config, imap_args),
+		MigrateCli::Mox { from, import } => {
+			let plan = crate::migrate::mox::read(&from).map_err(|error| error.to_string());
+			config::run(&args.config, plan, &import)
+		}
 	}
 }
