@@ -77,7 +77,7 @@ async fn the_failure_event_carries_the_class_the_remote_and_its_reply() {
 		.with_webhook(Arc::new(webhook));
 	worker.pass().await.expect("pass");
 
-	wait_for(|| captured.lock().expect("lock").len() >= 1).await;
+	wait_for(|| !captured.lock().expect("lock").is_empty()).await;
 	let body = captured.lock().expect("lock")[0].clone();
 	let event: serde_json::Value = serde_json::from_str(&body).expect("json");
 	assert_eq!(event["event"], "delivery_failed");
@@ -120,7 +120,7 @@ async fn the_delivered_event_carries_the_message_id_the_remote_and_the_extra() {
 		.with_webhook(Arc::new(webhook));
 	worker.pass().await.expect("pass");
 
-	wait_for(|| captured.lock().expect("lock").len() >= 1).await;
+	wait_for(|| !captured.lock().expect("lock").is_empty()).await;
 	let bodies = captured.lock().expect("lock").clone();
 	let body = bodies
 		.iter()
@@ -190,7 +190,7 @@ async fn delayed_fires_once_across_several_retries() {
 		worker.pass().await.expect("pass");
 	}
 
-	wait_for(|| captured.lock().expect("lock").len() >= 1).await;
+	wait_for(|| !captured.lock().expect("lock").is_empty()).await;
 	// One last quiet beat so any (wrong) extra `delayed` body would land.
 	tokio::time::sleep(Duration::from_millis(50)).await;
 	let bodies = captured.lock().expect("lock").clone();
@@ -239,7 +239,7 @@ async fn a_suppressed_recipient_emits_a_suppressed_webhook() {
 		.with_webhook(Arc::new(webhook));
 	worker.pass().await.expect("pass");
 
-	wait_for(|| captured.lock().expect("lock").len() >= 1).await;
+	wait_for(|| !captured.lock().expect("lock").is_empty()).await;
 	let body = captured
 		.lock()
 		.expect("lock")
