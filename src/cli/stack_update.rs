@@ -110,8 +110,8 @@ fn line_diff(old: &str, new: &str) -> Vec<String> {
 	out
 }
 
-/// Run `stack update`: plan, show and write the new compose file, then run
-/// the podup steps.
+/// Run `stack update`: plan, dump the database, write the new compose
+/// file and run the podup steps.
 pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 	let plan = match plan_update(compose, &config.data_dir, &config.listeners) {
 		Ok(plan) => plan,
@@ -120,37 +120,87 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	let mut err = super::style::stderr();
-	for note in &plan.notes {
-		let _ = writeln!(err, "epistle: {note}");
-	}
-	match &plan.rewrite {
-		None => {
-			let _ = writeln!(err, "epistle: {} is current", compose.display());
-		}
-		Some(text) => {
-			let _ = writeln!(err, "epistle: updating {}:", compose.display());
-			for line in &plan.diff {
-				let _ = writeln!(err, "  {line}");
-			}
-			if let Err(error) = crate::storage::write_secret(compose, text.as_bytes()) {
-				super::style::error(format_args!("cannot write {}: {error}", compose.display()));
-				return ExitCode::FAILURE;
-			}
+	let mut host = Live {
+		config,
+		compose,
+		podup,
+		database: plan_has_database(compose),
+	};
+	match execute::execute(&mut host, &plan) {
+		Ok(()) => ExitCode::SUCCESS,
+		Err(error) => {
+			super::style::error(format_args!("stack update failed: {error}"));
+			ExitCode::FAILURE
 		}
 	}
-	let argv: Vec<Vec<&str>> = plan
-		.steps
-		.iter()
-		.map(|step| step.0.iter().map(String::as_str).collect())
-		.collect();
-	let borrowed: Vec<&[&str]> = argv.iter().map(Vec::as_slice).collect();
-	super::stack::run_sequence(podup, compose, &borrowed)
+}
+
+/// Whether the compose file on disk has a `db` service.
+fn plan_has_database(compose: &Path) -> bool {
+	std::fs::read(compose)
+		.ok()
+		.and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+		.is_some_and(|value| value["services"].get("db").is_some())
+}
+
+/// The real host of an update: podup, the backup code's dump, stderr.
+struct Live<'a> {
+	config: &'a Config,
+	compose: &'a Path,
+	podup: &'a str,
+	database: bool,
+}
+
+impl execute::UpdateHost for Live<'_> {
+	fn has_database(&self) -> bool {
+		self.database && self.config.database.is_some()
+	}
+
+	fn dump(&mut self) -> Result<Vec<u8>, String> {
+		let database = self
+			.config
+			.database
+			.as_ref()
+			.ok_or("the config has no [database]")?;
+		super::backup::collect_dump(database, &self.config.data_dir)
+			.map_err(|error| error.to_string())
+	}
+
+	fn keep_dump(&mut self, sql: &[u8]) -> Result<std::path::PathBuf, String> {
+		let name = format!("pre-{}", env!("CARGO_PKG_VERSION"));
+		super::stack_dumps::keep(
+			&self.config.data_dir,
+			&name,
+			sql,
+			std::time::SystemTime::now(),
+		)
+		.map_err(|error| error.to_string())
+	}
+
+	fn write_compose(&mut self, text: &str) -> Result<(), String> {
+		crate::storage::write_secret(self.compose, text.as_bytes())
+			.map_err(|error| format!("cannot write {}: {error}", self.compose.display()))
+	}
+
+	fn podup(&mut self, step: &[String]) -> Result<(), String> {
+		let args: Vec<&str> = step.iter().map(String::as_str).collect();
+		match super::stack::run_sequence(self.podup, self.compose, &[&args]) {
+			code if code == ExitCode::SUCCESS => Ok(()),
+			_ => Err(format!("`podup {}` failed", args.join(" "))),
+		}
+	}
+
+	fn log(&mut self, line: &str) {
+		let _ = writeln!(super::style::stderr(), "epistle: {line}");
+	}
 }
 
 fn step(parts: &[&str]) -> Step {
 	Step(parts.iter().map(|part| part.to_string()).collect())
 }
+
+#[path = "stack_update_run.rs"]
+mod execute;
 
 #[cfg(test)]
 #[path = "stack_update_tests.rs"]
