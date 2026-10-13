@@ -38,7 +38,7 @@ fn esearch_return_options() {
 
 	// ALL returns the matching set; empty RETURN () defaults to ALL.
 	let response = text(&session.command_line("a4 SEARCH RETURN () ALL"));
-	assert!(response.contains("ALL 1,2,3"), "{response}");
+	assert!(response.contains("ALL 1:3"), "{response}");
 
 	// UID SEARCH RETURN carries the UID marker.
 	let response = text(&session.command_line("a5 UID SEARCH RETURN (COUNT) ALL"));
@@ -521,7 +521,7 @@ fn multisearch_defaults_to_selected_mailbox() {
 		response.contains("MAILBOX \"INBOX\" UIDVALIDITY"),
 		"{response}"
 	);
-	assert!(response.contains("UID ALL 1,2"), "{response}");
+	assert!(response.contains("UID ALL 1:2"), "{response}");
 }
 
 #[test]

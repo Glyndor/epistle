@@ -72,6 +72,8 @@ mod basic;
 mod commands_tests;
 #[path = "session_tests_encoded_search.rs"]
 mod encoded_search;
+#[path = "session_tests_esearch_sets.rs"]
+mod esearch_sets;
 #[path = "session_tests_keyword_search.rs"]
 mod keyword_search;
 #[path = "session_tests_metadata.rs"]
