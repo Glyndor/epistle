@@ -11,6 +11,7 @@ mod answers_none;
 mod apply;
 mod assistant;
 mod compose;
+pub(crate) mod db_roles;
 mod detect;
 mod first_account;
 pub(crate) mod host_secrets;

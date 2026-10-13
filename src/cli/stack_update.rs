@@ -228,8 +228,16 @@ impl execute::UpdateHost for Live<'_> {
 		.map_err(|error| error.to_string())
 	}
 
+	fn harden_database(&mut self) -> Result<bool, String> {
+		super::db_harden::run(self.compose)
+	}
+
 	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {
-		crate::cli::init::prepare_keys_for_update(&self.config.data_dir, self.config_path)
+		crate::cli::init::prepare_keys_for_update(
+			&self.config.data_dir,
+			self.config_path,
+			self.has_database(),
+		)
 	}
 
 	fn write_compose(&mut self, text: &str) -> Result<(), String> {

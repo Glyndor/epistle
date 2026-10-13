@@ -283,11 +283,13 @@ pub(super) fn ensure_keys_and_certs(
 
 /// What `stack update` does to the keys before it renders a compose file
 /// that mounts them: move both out of data_dir, create any that is missing
-/// as `init` would, and point a config that named the old place at the new
-/// one. Returns one line per change for the operator.
+/// as `init` would (with `database`, the PostgreSQL admin password too),
+/// and point a config that named the old place at the new one. Returns
+/// one line per change for the operator.
 pub(crate) fn prepare_keys_for_update(
 	data_dir: &Path,
 	config_path: &Path,
+	database: bool,
 ) -> Result<Vec<String>, String> {
 	use super::super::host_secrets;
 	let mut lines: Vec<String> = host_secrets::move_legacy_keys(data_dir)?
@@ -302,6 +304,10 @@ pub(crate) fn prepare_keys_for_update(
 		&mut report,
 	)
 	.map_err(|error| error.to_string())?;
+	if database {
+		super::super::compose::ensure_db_admin_password(data_dir, &mut report)
+			.map_err(|error| error.to_string())?;
+	}
 	lines.extend(report.steps.iter().filter_map(|step| match step {
 		ReportStep::Wrote(path) => Some(format!("created {}", path.display())),
 		_ => None,

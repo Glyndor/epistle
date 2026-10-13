@@ -489,6 +489,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// opens `[database] password_file` to validate the URL.
 	if answers.services.database
 		&& let Err(error) = super::compose::ensure_db_password(&answers.data_dir, &mut report)
+			.and_then(|_| super::compose::ensure_db_admin_password(&answers.data_dir, &mut report))
 	{
 		return ApplyOutcome {
 			report,

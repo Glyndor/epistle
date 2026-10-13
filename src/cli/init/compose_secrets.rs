@@ -198,3 +198,39 @@ pub(in crate::cli::init) fn db_password_reused(data_dir: &Path) -> bool {
 	}
 	matches!(fs::read(&path), Ok(bytes) if !bytes.is_empty())
 }
+
+/// Lay down the password of the PostgreSQL admin role beside data_dir,
+/// where mail cannot read it, or reuse the one already there. A cluster
+/// initialised before the admin role existed gets that password from
+/// `stack update`, which creates the role with it; a regenerated one is
+/// only ever set by that same step, so losing it locks out nothing mail
+/// needs.
+pub(in crate::cli::init) fn ensure_db_admin_password(
+	data_dir: &Path,
+	report: &mut Report,
+) -> Result<PathBuf, ApplyError> {
+	let path = super::super::host_secrets::db_admin_password(data_dir);
+	if let Some(dir) = path.parent() {
+		fs::create_dir_all(dir).map_err(|error| ApplyError::KeyWrite(dir.to_path_buf(), error))?;
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt;
+			fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+				.map_err(|error| ApplyError::KeyWrite(dir.to_path_buf(), error))?;
+		}
+	}
+	match fs::symlink_metadata(&path) {
+		Ok(metadata) if metadata.file_type().is_file() && metadata.len() > 0 => {
+			report.steps.push(ReportStep::Reused(path.clone()));
+			Ok(path)
+		}
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+			write_fresh_password(&path, report)
+		}
+		Ok(_) => Err(ApplyError::ExistingSecretUnreadable(
+			path,
+			std::io::Error::other("not a non-empty regular file; remove it and rerun"),
+		)),
+		Err(error) => Err(ApplyError::ExistingSecretUnreadable(path, error)),
+	}
+}

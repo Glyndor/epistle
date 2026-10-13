@@ -93,7 +93,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 		keys.join("storage.key").display()
 	);
 	std::fs::write(&config, &text).unwrap();
-	let lines = super::prepare_keys_for_update(&data_dir, &config).unwrap();
+	let lines = super::prepare_keys_for_update(&data_dir, &config, true).unwrap();
 	let secrets = root.path().join("secrets");
 	assert_eq!(
 		std::fs::read(secrets.join("storage.key")).unwrap(),
@@ -110,10 +110,45 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 		after.contains(secrets.join("storage.key").to_str().unwrap()),
 		"{after}"
 	);
-	assert_eq!(lines.len(), 4, "{lines:?}");
+	assert!(secrets.join("epistle_db_admin_password").is_file());
+	assert_eq!(lines.len(), 5, "{lines:?}");
 	assert_eq!(
-		super::prepare_keys_for_update(&data_dir, &config).unwrap(),
+		super::prepare_keys_for_update(&data_dir, &config, true).unwrap(),
 		Vec::<String>::new(),
 		"a second update changes nothing"
+	);
+}
+
+#[test]
+fn the_admin_password_is_minted_once_and_kept() {
+	let root = tempfile::tempdir().unwrap();
+	let data_dir = root.path().join("data");
+	let mut report = Report::default();
+	let path = crate::cli::init::compose::ensure_db_admin_password(&data_dir, &mut report).unwrap();
+	assert_eq!(path, root.path().join("secrets/epistle_db_admin_password"));
+	let first = std::fs::read(&path).unwrap();
+	assert_eq!(first.len(), 32);
+	crate::cli::init::compose::ensure_db_admin_password(&data_dir, &mut report).unwrap();
+	assert_eq!(std::fs::read(&path).unwrap(), first);
+	assert!(matches!(report.steps.last(), Some(ReportStep::Reused(_))));
+}
+
+#[test]
+fn the_plan_names_the_admin_password_beside_data_dir() {
+	let root = tempfile::tempdir().unwrap();
+	let mut answers = answers(root.path());
+	answers.services.database = true;
+	let mut rendered = String::new();
+	plan(&answers)
+		.expect("plan")
+		.write_to(&mut rendered)
+		.unwrap();
+	let admin = root.path().join("secrets/epistle_db_admin_password");
+	assert!(
+		rendered.contains(&format!(
+			"database admin password: generate {}",
+			admin.display()
+		)),
+		"{rendered}"
 	);
 }

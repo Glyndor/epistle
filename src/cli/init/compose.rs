@@ -115,7 +115,7 @@ init regenerates compose.yaml; keep image choices in the answers and customizati
 
 #[path = "compose_secrets.rs"]
 mod secrets;
-pub(super) use secrets::{db_password_reused, ensure_db_password};
+pub(super) use secrets::{db_password_reused, ensure_db_admin_password, ensure_db_password};
 #[cfg(test)]
 pub(super) use secrets::{ensure_db_password_with_probe, generate_db_password};
 
@@ -336,6 +336,11 @@ struct TopLevelSecret {
 #[derive(Debug, Serialize)]
 struct TopLevelVolume {}
 
+#[derive(Debug, Serialize)]
+struct TopLevelConfig {
+	content: &'static str,
+}
+
 /// The full compose file. `serde_json` writes the field order from
 /// the struct definition, so the rendered file matches the order
 /// the operator reads here.
@@ -352,6 +357,8 @@ pub(super) struct ComposeFile {
 	resources: BTreeMap<String, super::resources::ServiceResources>,
 	services: BTreeMap<String, ComposeService>,
 	secrets: BTreeMap<String, TopLevelSecret>,
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	configs: BTreeMap<String, TopLevelConfig>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	volumes: BTreeMap<String, TopLevelVolume>,
 }
@@ -381,6 +388,7 @@ impl ComposeFile {
 				},
 			);
 		}
+		let mut configs = BTreeMap::new();
 		let mut volumes = BTreeMap::new();
 		volumes.insert("clamd-socket".to_string(), TopLevelVolume {});
 		volumes.insert("clamav-db".to_string(), TopLevelVolume {});
@@ -390,6 +398,20 @@ impl ComposeFile {
 				"epistle_db_password".to_string(),
 				TopLevelSecret {
 					file: db_password_path(&answers.data_dir).display().to_string(),
+				},
+			);
+			secrets.insert(
+				super::db_roles::ADMIN_SECRET.to_string(),
+				TopLevelSecret {
+					file: super::host_secrets::db_admin_password(&answers.data_dir)
+						.display()
+						.to_string(),
+				},
+			);
+			configs.insert(
+				services::DB_ROLES_CONFIG.to_string(),
+				TopLevelConfig {
+					content: super::db_roles::INIT_SCRIPT,
 				},
 			);
 			volumes.insert("epistle-pgdata".to_string(), TopLevelVolume {});
@@ -408,6 +430,7 @@ impl ComposeFile {
 			resources: answers.resources.clone(),
 			services,
 			secrets,
+			configs,
 			volumes,
 		}
 	}
@@ -601,3 +624,7 @@ mod tests_resources;
 #[cfg(test)]
 #[path = "compose_tests_keys.rs"]
 mod tests_keys;
+
+#[cfg(test)]
+#[path = "compose_tests_db_roles.rs"]
+mod tests_db_roles;

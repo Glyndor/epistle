@@ -13,6 +13,8 @@ struct Fake {
 	/// Areas `status` reports failing after the restart.
 	failing: Vec<(String, String)>,
 	logged: Vec<String>,
+	/// Whether the harden step finds a superuser to take apart.
+	superuser: bool,
 }
 
 impl Fake {
@@ -38,6 +40,10 @@ impl UpdateHost for Fake {
 		Ok(PathBuf::from(
 			"/data/backups/pre-0.12.0-20261012T000000Z.sql.gz",
 		))
+	}
+	fn harden_database(&mut self) -> Result<bool, String> {
+		self.call("harden", String::new())?;
+		Ok(self.superuser)
 	}
 	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {
 		self.call("keys", String::new())?;
@@ -90,6 +96,7 @@ fn the_database_is_dumped_before_anything_changes() {
 			"write",
 			"podup up -d",
 			"podup restart mail",
+			"harden",
 			"healthy mail",
 			"status"
 		]
@@ -196,4 +203,40 @@ fn a_key_that_cannot_move_stops_the_update_before_the_compose_file_changes() {
 		"{:?}",
 		host.calls
 	);
+}
+
+#[test]
+fn an_epistle_superuser_is_taken_apart_and_mail_reconnects() {
+	let mut host = Fake {
+		database: true,
+		superuser: true,
+		..Fake::default()
+	};
+	execute(&mut host, &plan(true)).unwrap();
+	assert_eq!(
+		host.calls[host.calls.len() - 5..],
+		[
+			"podup restart mail",
+			"harden",
+			"podup restart mail",
+			"healthy mail",
+			"status"
+		],
+		"mail's pooled sessions still carry the renamed superuser until it restarts"
+	);
+}
+
+#[test]
+fn a_failed_harden_names_the_rollback() {
+	let mut host = Fake {
+		database: true,
+		fail: Some("harden"),
+		..Fake::default()
+	};
+	let error = execute(&mut host, &plan(true)).expect_err("harden");
+	assert!(
+		error.contains("harden failed") && error.contains("sudo epistle stack rollback"),
+		"{error}"
+	);
+	assert!(!host.calls.iter().any(|call| call.starts_with("healthy")));
 }

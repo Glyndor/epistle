@@ -26,6 +26,12 @@ pub(crate) fn dir(data_dir: &Path) -> PathBuf {
 	data_dir.parent().unwrap_or(Path::new("/")).join("secrets")
 }
 
+/// Where the password of the PostgreSQL admin role lives. Only `db`
+/// mounts it.
+pub(crate) fn db_admin_password(data_dir: &Path) -> PathBuf {
+	dir(data_dir).join(super::db_roles::ADMIN_SECRET)
+}
+
 /// Where the at-rest storage key lives.
 pub(crate) fn storage_key(data_dir: &Path) -> PathBuf {
 	dir(data_dir).join(STORAGE_KEY)

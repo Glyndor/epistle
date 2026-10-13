@@ -196,6 +196,10 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		// as `reused: false` (the apply will mint a new one).
 		let reused = crate::cli::init::compose::db_password_reused(&answers.data_dir);
 		steps.push(PlanStep::DbPassword { path, reused });
+		let path = crate::cli::init::host_secrets::db_admin_password(&answers.data_dir);
+		let reused = std::fs::symlink_metadata(&path)
+			.is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0);
+		steps.push(PlanStep::DbAdminPassword { path, reused });
 	}
 	steps.push(PlanStep::Config {
 		path: answers.config_path.clone(),

@@ -15,6 +15,9 @@ pub(super) trait UpdateHost {
 	/// Keep the dump as `pre-<version>-<timestamp>.sql.gz` under
 	/// `data_dir/backups`, pruning older ones.
 	fn keep_dump(&mut self, sql: &[u8]) -> Result<PathBuf, String>;
+	/// Take the superuser attribute away from the `epistle` role when an
+	/// older install still has it; `true` when it did.
+	fn harden_database(&mut self) -> Result<bool, String>;
 	/// Move the keys the compose file mounts out of data_dir and create
 	/// any that are missing; one line per thing done.
 	fn prepare_keys(&mut self) -> Result<Vec<String>, String>;
@@ -67,6 +70,16 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 	}
 	for step in &plan.steps {
 		host.podup(&step.0)?;
+	}
+	// Only now is `db` running with the admin secret mounted. Mail's open
+	// sessions keep the renamed role's superuser until it reconnects.
+	if host.has_database()
+		&& host
+			.harden_database()
+			.map_err(|error| format!("{error}. {ROLLBACK}"))?
+	{
+		host.log("the epistle role no longer has SUPERUSER; epistle_admin holds it");
+		host.podup(&["restart".to_string(), "mail".to_string()])?;
 	}
 	host.wait_healthy("mail")
 		.map_err(|error| format!("{error}. {ROLLBACK}"))?;

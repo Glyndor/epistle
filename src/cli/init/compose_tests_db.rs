@@ -43,7 +43,7 @@ fn db_secrets_uses_long_syntax_with_uid_999_and_octal_mode() {
 	let secrets = value["services"]["db"]["secrets"]
 		.as_array()
 		.expect("secrets is an array");
-	assert_eq!(secrets.len(), 1);
+	assert_eq!(secrets.len(), 2, "epistle's password and the admin's");
 	let mount = &secrets[0];
 	assert_eq!(mount["source"], "epistle_db_password");
 	assert_eq!(mount["target"], "epistle_db_password");

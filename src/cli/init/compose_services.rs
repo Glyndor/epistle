@@ -1,4 +1,5 @@
 //! Service definitions for the generated container stack.
+use super::super::db_roles;
 use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -46,6 +47,8 @@ pub(super) struct ComposeService {
 	pids_limit: Option<u32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	secrets: Option<Vec<SecretMount>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	configs: Option<Vec<ConfigMount>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	depends_on: Option<BTreeMap<String, DependsOn>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -173,6 +176,7 @@ impl ComposeService {
 			}),
 			// The keys kept outside data_dir, read-only, at their host path:
 			// the host commands read the same config and need the same path.
+			configs: None,
 			secrets: Some(
 				super::KEY_SECRETS
 					.iter()
@@ -248,14 +252,16 @@ impl ComposeService {
 	/// authentication round-trip works.
 	pub(super) fn new_db() -> Self {
 		let mut environment = BTreeMap::new();
+		// The image's POSTGRES_USER becomes the bootstrap superuser, which
+		// can never lose SUPERUSER; see `db_roles`.
 		environment.insert(
 			"POSTGRES_USER".to_string(),
-			super::DATABASE_USER.to_string(),
+			db_roles::ADMIN_USER.to_string(),
 		);
 		environment.insert("POSTGRES_DB".to_string(), super::DATABASE_NAME.to_string());
 		environment.insert(
 			"POSTGRES_PASSWORD_FILE".to_string(),
-			super::DATABASE_PASSWORD_FILE.to_string(),
+			db_roles::ADMIN_PASSWORD_FILE.to_string(),
 		);
 		environment.insert(
 			"POSTGRES_INITDB_ARGS".to_string(),
@@ -297,12 +303,23 @@ impl ComposeService {
 			mem_limit: None,
 			pids_limit: None,
 			sysctls: None,
-			secrets: Some(vec![SecretMount {
-				source: "epistle_db_password".to_string(),
-				target: "epistle_db_password".to_string(),
-				uid: "999".to_string(),
-				gid: "999".to_string(),
-				mode: DATABASE_SECRET_MODE,
+			// epistle's password for the healthcheck, the dumps and the role
+			// script; the admin password only here, never in mail.
+			secrets: Some(
+				["epistle_db_password", db_roles::ADMIN_SECRET]
+					.map(|name| SecretMount {
+						source: name.to_string(),
+						target: name.to_string(),
+						uid: "999".to_string(),
+						gid: "999".to_string(),
+						mode: DATABASE_SECRET_MODE,
+					})
+					.to_vec(),
+			),
+			configs: Some(vec![ConfigMount {
+				source: DB_ROLES_CONFIG.to_string(),
+				target: db_roles::INIT_SCRIPT_PATH.to_string(),
+				mode: 444,
 			}]),
 			depends_on: None,
 			healthcheck: Some(Healthcheck {
@@ -322,7 +339,7 @@ fn drop_all() -> Vec<String> {
 	vec!["ALL".to_string()]
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct SecretMount {
 	source: String,
 	target: String,
@@ -332,6 +349,19 @@ struct SecretMount {
 	/// file carries the same byte, and podup reads it as the octal
 	/// mode. The string form is rejected by podup's mode parser as
 	/// decimal, so the number is the only safe shape.
+	mode: u32,
+}
+
+/// The compose config that carries [`db_roles::INIT_SCRIPT`].
+pub(super) const DB_ROLES_CONFIG: &str = "epistle_db_roles";
+
+/// A compose config mounted as a file. `mode` follows the same octal
+/// reading as [`SecretMount::mode`]: `444` is `0o444`, read-only for all,
+/// which the entrypoint sources rather than executes.
+#[derive(Debug, Serialize)]
+struct ConfigMount {
+	source: String,
+	target: String,
 	mode: u32,
 }
 
@@ -373,6 +403,7 @@ impl ComposeService {
 			pids_limit: None,
 			sysctls: None,
 			secrets: None,
+			configs: None,
 			depends_on: None,
 			healthcheck: None,
 		};
