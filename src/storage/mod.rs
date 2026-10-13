@@ -36,8 +36,7 @@ mod crypto_e2e_tests;
 pub use routing::SplitDelivery;
 pub use save_sent::{
 	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason,
-	first_message_id as save_sent_first_message_id,
-	store_copy as save_sent_copy,
+	first_message_id, store_copy as save_sent_copy,
 };
 pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
 
