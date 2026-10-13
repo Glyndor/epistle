@@ -37,10 +37,6 @@ declare -A KNOWN_FAILING=(
 	[search-flags]="no message is ever \\Recent (zero-recent policy), so RECENT, NEW and OLD differ"
 	[copy]="\\Recent is not tracked: epistle reports zero recent messages"
 	[select]="\\Recent is not tracked: epistle reports zero recent messages"
-	[mutf7]="mailbox names: hierarchy and characters the store refuses"
-	[subscribe]="mailbox names: hierarchy and characters the store refuses"
-	[list]="mailbox names: hierarchy and characters the store refuses"
-	[listext]="mailbox names: hierarchy and characters the store refuses"
 )
 
 work=$(mktemp -d)

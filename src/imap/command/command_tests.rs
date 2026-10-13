@@ -14,14 +14,11 @@ fn parses_simple_commands() {
 fn parses_list_and_select() {
 	assert_eq!(
 		parse(r#"a1 LIST "" "*""#).expect("parses").command,
-		Command::List {
+		Command::List(ListCommand {
 			reference: String::new(),
-			pattern: "*".into(),
-			return_status: Vec::new(),
-			select_subscribed: false,
-			select_special_use: false,
-			return_attributes: Vec::new(),
-		}
+			patterns: vec!["*".into()],
+			..ListCommand::default()
+		})
 	);
 	assert_eq!(
 		parse("a2 SELECT INBOX").expect("parses").command,

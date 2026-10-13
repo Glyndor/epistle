@@ -67,10 +67,11 @@ pub(super) fn to_stored_names(command: &mut Command) {
 		*name = mutf7::encode(name);
 	}
 	match command {
-		Command::List {
-			reference, pattern, ..
+		Command::List(list) => {
+			encode(&mut list.reference);
+			list.patterns.iter_mut().for_each(encode);
 		}
-		| Command::Lsub { reference, pattern } => {
+		Command::Lsub { reference, pattern } => {
 			encode(reference);
 			encode(pattern);
 		}

@@ -155,21 +155,7 @@ impl Session {
 			Command::Logout => Output::closing(format!(
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
-			Command::List {
-				reference,
-				pattern,
-				return_status,
-				select_subscribed,
-				select_special_use,
-				return_attributes,
-			} => self.list(
-				&tag,
-				(&reference, &pattern),
-				&return_status,
-				select_subscribed,
-				select_special_use,
-				&return_attributes,
-			),
+			Command::List(list) => self.list(&tag, &list),
 			Command::Select { mailbox, qresync } => self.select(&tag, &mailbox, false, qresync),
 			Command::Examine { mailbox, qresync } => self.select(&tag, &mailbox, true, qresync),
 			Command::Close => self.close(&tag),
