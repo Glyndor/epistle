@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
 use super::{
 	Cli, Command, account, alias, antispam, api_keys, app_passwords, archive, autoconfig,
@@ -116,15 +117,18 @@ impl Cli {
 				maildir,
 			} => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => match maildir {
-						Some(dir) => export::run_maildir(&config.data_dir, &account, &crypto, &dir),
-						None => export::run(
-							&config.data_dir,
-							&account,
-							&crypto,
-							&mut std::io::stdout().lock(),
-						),
-					},
+					Ok(crypto) => {
+						live::run(
+							&format!("export {account}"),
+							false,
+							|mut out| match maildir {
+								Some(dir) => {
+									export::run_maildir(&config.data_dir, &account, &crypto, &dir)
+								}
+								None => export::run(&config.data_dir, &account, &crypto, &mut out),
+							},
+						)
+					}
 					Err(code) => code,
 				},
 				Err(error) => {
@@ -165,9 +169,9 @@ impl Cli {
 			} => dispatch_restore(config, force, dry_run, yes),
 			Command::Verify { config } => match Config::load(&config) {
 				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => {
-						verify::run(&config.data_dir, &crypto, &mut std::io::stdout().lock())
-					}
+					Ok(crypto) => live::run("verify", false, |mut out| {
+						verify::run(&config.data_dir, &crypto, &mut out)
+					}),
 					Err(code) => code,
 				},
 				Err(error) => {
@@ -331,8 +335,14 @@ impl Cli {
 				action,
 				dry_run,
 			} => super::limits::run(&config, action, dry_run, &mut std::io::stdout().lock()),
-			Command::Status { config, json } => status::run_status(&config, json),
-			Command::Check { config, area, json } => status::run_check(&config, area, json),
+			Command::Status { config, json } => live::run("status", json, |mut out| {
+				status::run_status(&config, json, &mut out)
+			}),
+			Command::Check { config, area, json } => {
+				live::run(&format!("check {}", area.name()), json, |mut out| {
+					status::run_check(&config, area, json, &mut out)
+				})
+			}
 			Command::Antispam {
 				config,
 				action,
@@ -360,14 +370,28 @@ impl Cli {
 				}
 			},
 			Command::Dkim { config, action } => match Config::load(&config) {
-				Ok(config) => dkim_cli::run(&config, action, &mut std::io::stdout().lock()),
+				Ok(config) => match action {
+					action @ dkim_cli::DkimCli::Rotate { .. } => {
+						live::run("dkim rotate", false, |mut out| {
+							dkim_cli::run(&config, action, &mut out)
+						})
+					}
+					action => dkim_cli::run(&config, action, &mut std::io::stdout().lock()),
+				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
 				}
 			},
 			Command::Tls { config, action } => match Config::load(&config) {
-				Ok(config) => tls_cli::run(&config, action, &mut std::io::stdout().lock()),
+				Ok(config) => match action {
+					action @ tls_cli::TlsCli::Renew { .. } => {
+						live::run("tls renew", false, |mut out| {
+							tls_cli::run(&config, action, &mut out)
+						})
+					}
+					action => tls_cli::run(&config, action, &mut std::io::stdout().lock()),
+				},
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -376,9 +400,9 @@ impl Cli {
 			Command::ApiKey { config, action } => with_config(&config, |config| {
 				api_keys::run(config, action, &mut std::io::stdout().lock())
 			}),
-			Command::Probe { config, json } => {
-				with_config(&config, |config| probe::run(config, json))
-			}
+			Command::Probe { config, json } => with_config(&config, |config| {
+				live::run("probe", json, |mut out| probe::run(config, json, &mut out))
+			}),
 			Command::Completions { shell } => super::completions::run_completions(shell),
 			Command::Manpages { dir } => super::completions::run_manpages(&dir),
 			Command::MoveSubids(args) => super::subid::run(args),

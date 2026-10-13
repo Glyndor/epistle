@@ -69,6 +69,7 @@ fn answers(public_ipv4: Option<Ipv4Addr>, public_ipv6: Option<Ipv6Addr>) -> Answ
 		services: Services::default(),
 		image: None,
 		acme: None,
+		first_account: None,
 	}
 }
 

@@ -75,7 +75,7 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 			lookup_user,
 			Path::is_dir,
 			&std::env::current_exe()?,
-			&std::env::args_os().skip(1).collect::<Vec<_>>(),
+			&super::pick::effective_args(),
 			|command| command.status(),
 		)
 	}

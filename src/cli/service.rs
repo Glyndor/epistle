@@ -1,6 +1,8 @@
 //! Listener administration without regenerating the installation configuration.
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::process::ExitCode;
@@ -102,7 +104,7 @@ pub(super) fn default_bind(config: &Config, kind: ListenerKind) -> IpAddr {
 	}
 }
 
-fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
+pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
 	let mut rows = Vec::new();
 	let names = ServiceName::value_variants();
 	for &name in names {
@@ -143,6 +145,18 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String>
 	if json {
 		serde_json::to_writer(&mut *out, &rows).map_err(|e| e.to_string())?;
 		writeln!(out).map_err(|e| e.to_string())?;
+	} else if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["SERVICE", "STATE", "PORT", "BIND"]).state_col(1);
+		for row in rows {
+			let state = if row.enabled { "enabled" } else { "disabled" };
+			table.push(vec![
+				row.name.to_string(),
+				state.into(),
+				row.port.to_string(),
+				row.bind.to_string(),
+			]);
+		}
+		table.write(decor, out).map_err(|e| e.to_string())?;
 	} else {
 		writeln!(out, "SERVICE       STATE     PORT   BIND").map_err(|e| e.to_string())?;
 		for row in rows {

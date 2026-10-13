@@ -35,6 +35,7 @@ mod local;
 mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
+mod pick;
 mod probe;
 mod prompt;
 mod queue;
@@ -42,6 +43,7 @@ mod relay;
 mod report_abuse;
 mod reports;
 mod resource;
+mod role_addresses;
 mod serve;
 mod serve_dkim;
 mod serve_queue;
@@ -64,6 +66,7 @@ mod storage_blobs;
 mod style;
 mod subid;
 mod suppression;
+mod term;
 mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
@@ -77,6 +80,7 @@ mod webhook_admin;
 /// deserialise the `epistle init --print-answers` output without
 /// depending on the otherwise-private `init` module.
 pub use init::Answers;
+pub use pick::run_from_env;
 
 use util::generate_secret;
 
@@ -747,6 +751,10 @@ mod tests_d;
 #[cfg(test)]
 #[path = "cli_tests_e.rs"]
 mod tests_e;
+
+#[cfg(test)]
+#[path = "cli_tests_decorated.rs"]
+mod cli_tests_decorated;
 
 #[cfg(test)]
 #[path = "mta_sts_serve_tests.rs"]

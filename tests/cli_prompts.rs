@@ -124,3 +124,19 @@ fn an_unknown_account_and_a_static_one_get_different_errors() {
 	);
 	assert!(String::from_utf8_lossy(&shown.stdout).contains("source: static\n"));
 }
+
+#[test]
+fn a_missing_account_without_a_terminal_is_still_a_usage_error() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let output = epistle(&["account", "show", "--config", config.as_str()], b"1\n");
+	assert_eq!(output.status.code(), Some(2), "{output:?}");
+	assert!(output.stdout.is_empty(), "{output:?}");
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr
+			.starts_with("error: the following required arguments were not provided:\n  <NAME>\n"),
+		"{stderr}"
+	);
+	assert!(!stderr.contains("Pick"), "nothing is offered: {stderr}");
+}

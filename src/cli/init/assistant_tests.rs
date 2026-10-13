@@ -19,7 +19,7 @@ fn assistant_rejects_invalid_hostname_with_the_same_text_as_the_file_path() {
 	let input = "automatic\n\
 	             not a domain\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -51,7 +51,7 @@ fn assistant_rejects_invalid_hostname_with_the_same_text_as_the_file_path() {
 fn assistant_eof_before_confirmation_is_an_error() {
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -76,7 +76,7 @@ fn assistant_invalid_domain_text_is_shown() {
 	let input = "manual\n\
 	             mail.example.org\n\
 	             bad name\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -99,7 +99,7 @@ fn assistant_invalid_domain_text_is_shown() {
 fn assistant_accepts_automatic_with_minimal_inputs() {
 	let input = "automatic\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -131,7 +131,7 @@ fn assistant_accepts_automatic_with_minimal_inputs() {
 fn assistant_defaults_services_to_imap_and_submission() {
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -157,7 +157,7 @@ fn assistant_defaults_services_to_imap_and_submission() {
 fn assistant_collects_multiple_validation_errors_at_the_end() {
 	let input = "manual\n\
 	             example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -188,7 +188,7 @@ fn assistant_prints_every_validation_error_before_returning() {
 	// guessing which answers to revisit.
 	let input = "manual\n\
 	             example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -217,7 +217,7 @@ fn assistant_keeps_the_good_value_after_a_bad_answer() {
 	let input = "foo\n\
 	             manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -250,7 +250,7 @@ fn assistant_services_questions_set_the_flags() {
 	// would surface the validation error and abort the interview.
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -284,7 +284,7 @@ fn assistant_rejects_api_service_at_final_validation() {
 	// printed and the interview aborts before any plan is produced.
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -321,7 +321,7 @@ fn assistant_automatic_mode_asks_dns_questions_and_does_not_echo_token() {
 	let input = format!(
 		"automatic\n\
 		 mail.example.org\n\
-		 example.org\n\n\
+		 example.org\n\n\n\
 		 \n\
 		 \n\
 		 /var/lib/epistle\n\
@@ -382,7 +382,7 @@ fn assistant_empty_line_on_first_domain_is_rejected_with_a_hint() {
 	let input = "manual\n\
 	             mail.example.org\n\
 	             \n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -413,7 +413,7 @@ fn assistant_invalid_bool_answer_is_echoed_as_a_hint() {
 	// yes/no value. The assistant must echo a hint and re-prompt.
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             \n\
 	             /var/lib/epistle\n\
@@ -443,7 +443,7 @@ fn assistant_invalid_ipv4_answer_is_echoed_as_a_hint() {
 	// and re-prompt.
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             not.an.ip\n\
 	             8.8.8.8\n\
 	             \n\
@@ -473,7 +473,7 @@ fn assistant_ipv6_answer_in_ipv4_question_is_rejected() {
 	// IPv4 hint, re-prompt, and accept the second answer.
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             2001:db8::1\n\
 	             8.8.8.8\n\
 	             \n\
@@ -506,7 +506,7 @@ fn assistant_ipv4_answer_in_ipv6_question_is_rejected() {
 	// IPv6 hint, re-prompt, and accept the second answer.
 	let input = "manual\n\
 	             mail.example.org\n\
-	             example.org\n\n\
+	             example.org\n\n\n\
 	             \n\
 	             8.8.8.8\n\
 	             2606:4700:4700::1111\n\

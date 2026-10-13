@@ -8,7 +8,7 @@ use super::*;
 /// Manual-mode answers with `ip_lines` (one line per answer, retries
 /// included) in place of the two address questions.
 fn input(ip_lines: &[&str]) -> String {
-	let mut text = String::from("manual\nmail.example.org\nexample.org\n\n");
+	let mut text = String::from("manual\nmail.example.org\nexample.org\n\n\n");
 	for line in ip_lines {
 		text.push_str(line);
 		text.push('\n');

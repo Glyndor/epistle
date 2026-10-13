@@ -72,8 +72,21 @@ Every `epistle` subcommand splits its output into two streams by purpose:
   `tests/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
   stdout and follow the same precedence, so `--help` may colourise its text
   under `CLICOLOR_FORCE=1` or a real terminal.
-- **stderr** carries status, warnings, errors and progress and is the only
-  stream that may carry colour or a `\r`-rewritten progress line.
+- **stderr** carries status, warnings, errors and progress, including the
+  spinner of the long commands.
+
+On a terminal, `status`, `check`, `probe`, `verify-dns` and the list commands
+draw their state as ✔ (green), ⚠ (yellow) or ✘ (red; dimmed for something
+switched off), with aligned columns cut with `…` to the window width, and the
+long commands (`backup`, `restore`, `export`, `verify`, `verify-dns`, `probe`,
+`status`, `check`, `dkim rotate`, `tls renew`) show a spinner on stderr with the
+elapsed time, ending in a ✔ or ✘ row with the total. A command missing its
+account, alias, domain or key label offers the existing ones to pick from.
+Each stream is decided on its own, and nothing of this happens when that stream
+is not a terminal (for the pick, stdin and stderr), when `NO_COLOR` is set, when
+`TERM=dumb`, when `CLICOLOR=0`, or with `--json`: the output is then the plain
+one scripts read, byte for byte, and a missing argument is a usage error with
+exit code 2. `CLICOLOR_FORCE` never turns any of this on in a pipe.
 
 Four commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
@@ -123,11 +136,14 @@ On `restore`, `--yes` only answers the question: overwriting a non-empty
 `backup`'s `warnings` sink (the externally-referenced paths that are not in the
 archive) is also stderr, by the same rule.
 
-The colour decision on stderr follows the standard precedence: `NO_COLOR`
-disables it, `CLICOLOR_FORCE=1` enables it regardless of whether stderr is a
-terminal, otherwise it follows whether stderr is a terminal and `TERM`.
-`clap`'s `--help` and `--version` on stdout follow the same precedence. To
-force a specific look in a script:
+Colour (the `error:` and `warning:` prefixes, and clap's usage errors) is
+decided once, in this order: `NO_COLOR` set and not empty turns it off;
+`CLICOLOR_FORCE` set and not `0` turns it on, even in a pipe; `CLICOLOR=0`
+turns it off; otherwise the stream must be a terminal and `TERM` not `dumb`.
+`CI` and similar variables play no part. clap gets the same answer as epistle,
+so a usage error and an `error:` line are always coloured alike; `--help` and
+`--version` apply it to stdout, where they print. To force a specific look in
+a script:
 
 ```sh
 # Coloured status, plain stdout data:
@@ -137,10 +153,9 @@ epistle backup > backup.tar.gz
 NO_COLOR=1 epistle backup > backup.tar.gz
 ```
 
-Progress is a single line on stderr (one tick per message for `import`, one tick
-per check for `verify-dns`) that gets cleared when the command finishes. When
-stderr is not a terminal, the progress line is suppressed and the summary is
-printed once at the end.
+`import` keeps a single progress line on stderr (one tick per message) that
+gets cleared when it finishes. When stderr is not a terminal, the progress line
+is suppressed and the summary is printed once at the end.
 
 ## Service listeners
 
@@ -848,6 +863,14 @@ What this build does:
 - creates the parent directory of `config_path` with mode `0750` when it
   does not exist (a fresh install has no `/etc/epistle/`), and prints it
   as a plan step so the operator sees it before confirming;
+- creates the first mail account when one is given (the assistant asks right
+  after the domains; an answers file uses an optional `[first_account]` table
+  with `address`, `display_name`, `password_file` and `role_aliases`). The
+  password is typed twice with echo off, or read from the first line of
+  `password_file` (`-` reads it from stdin); it is never written in the
+  answers file. With `role_aliases` (the default), `postmaster@` and `abuse@`
+  of every domain become aliases of that account, so `config-check` no longer
+  warns about the missing `postmaster@` (RFC 5321) address;
 - prints the plan before the confirmation, and a report on stderr listing what
   was reused, what was written, and what was skipped; the report is also
   printed when a later step fails, so the operator can see what is already

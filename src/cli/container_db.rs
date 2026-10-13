@@ -129,7 +129,7 @@ pub(super) fn reexecute(command: &Command) -> Result<Option<ExitCode>, String> {
 	let Ok(config) = Config::load(path) else {
 		return Ok(None);
 	};
-	let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+	let args = super::pick::effective_args();
 	let Some(mut child) = exec_spec(&config, &args)? else {
 		return Ok(None);
 	};

@@ -32,6 +32,10 @@ pub(crate) mod script;
 #[cfg(unix)]
 use echo::EchoOff;
 
+#[path = "prompt_choose.rs"]
+mod choose;
+pub(crate) use choose::pick;
+
 /// An answer to a yes/no question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Answer {
@@ -350,3 +354,7 @@ mod tests;
 #[cfg(all(test, unix))]
 #[path = "prompt_tests_tty.rs"]
 mod tests_tty;
+
+#[cfg(all(test, unix))]
+#[path = "prompt_choose_tests_tty.rs"]
+mod tests_choose_tty;

@@ -6,6 +6,8 @@
 //! worker's own writes. No command here ever reads or prints a message body.
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -148,6 +150,29 @@ pub(super) fn list(data_dir: &Path, out: &mut impl Write) -> ExitCode {
 		Ok(ids) => ids,
 		Err(error) => return fail(format_args!("reading spool: {error}")),
 	};
+	if let Some(decor) = super::term::stdout(false) {
+		let mut table = Table::new(&["ID", "STATE", "ATTEMPTS", "FROM", "TO"]).state_col(1);
+		for id in &ids {
+			let Ok(envelope) = spool.load_envelope(*id) else {
+				continue;
+			};
+			let state = match (envelope.held.is_some(), envelope.attempts) {
+				(true, _) => "held",
+				(false, 0) => "queued",
+				(false, _) => "deferred",
+			};
+			table.push(vec![
+				id.to_string(),
+				state.into(),
+				envelope.attempts.to_string(),
+				sender(&envelope).to_string(),
+				envelope.recipients.join(","),
+			]);
+		}
+		let _ = table.write(decor, out);
+		let _ = writeln!(out, "{} queued", ids.len());
+		return ExitCode::SUCCESS;
+	}
 	for id in &ids {
 		let Ok(envelope) = spool.load_envelope(*id) else {
 			continue;

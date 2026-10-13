@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub use super::first_account::FirstAccount;
+
 /// Top-level mode the operator chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -177,6 +179,10 @@ pub struct Answers {
 	/// flag plus `contact`.
 	#[serde(default)]
 	pub acme: Option<AcmeAnswers>,
+	/// The first mail account and its role aliases. Optional: left out,
+	/// `init` creates no mailbox.
+	#[serde(default)]
+	pub first_account: Option<FirstAccount>,
 }
 
 /// A non-fatal problem the operator should see before the file is
@@ -312,6 +318,9 @@ pub enum Invalid {
 	/// using `init` instead of `podup run`. The same check rejects
 	/// an explicit `:latest` tag, which is no better.
 	ImageUntagged(String),
+	/// `[first_account]` names an address, an account or a display
+	/// name that cannot be created. Carries the reason.
+	FirstAccount(String),
 }
 
 impl std::fmt::Display for Invalid {
@@ -392,6 +401,7 @@ impl std::fmt::Display for Invalid {
 				f,
 				"image {value:?}: must include a tag that is not 'latest' or a @sha256: digest"
 			),
+			Invalid::FirstAccount(why) => write!(f, "first_account: {why}"),
 		}
 	}
 }
@@ -469,7 +479,12 @@ impl Answers {
 		 # managesieve = false\n\
 		 # webdav = false\n\
 		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n\
-		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n"
+		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n\n\
+		 # [first_account]                  # optional first mailbox; with password_file = \"-\" the password comes from stdin\n\
+		 # address = \"alice@example.org\"   # in one of the domains; the local part is the account name\n\
+		 # display_name = \"Alice Liddell\"  # optional\n\
+		 # password_file = \"/run/secrets/alice\"  # its first line is the password; never written inline\n\
+		 # role_aliases = true               # point postmaster@ and abuse@ of every domain at it\n"
 			.to_string()
 	}
 }

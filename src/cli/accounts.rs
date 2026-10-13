@@ -3,6 +3,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use super::term::table::Table;
 use crate::config::Config;
 use crate::directory_store::removal::{QueuePolicy, remove_account};
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
@@ -25,9 +26,23 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	};
 	let mut views = store.account_views();
 	views.sort_by(|a, b| a.0.cmp(&b.0));
-	for (name, addresses, dynamic) in &views {
-		let source = if *dynamic { "dynamic" } else { "static" };
-		let _ = writeln!(out, "{name}\t{source}\t{}", addresses.join(","));
+	if let Some(decor) = super::term::stdout(false) {
+		let mut table = Table::new(&["NAME", "STATE", "SOURCE", "ADDRESSES"]).state_col(1);
+		for (name, addresses, dynamic) in &views {
+			let disabled = store.dynamic(name).is_some_and(|account| account.disabled);
+			table.push(vec![
+				name.clone(),
+				if disabled { "disabled" } else { "enabled" }.to_string(),
+				if *dynamic { "dynamic" } else { "static" }.to_string(),
+				addresses.join(","),
+			]);
+		}
+		let _ = table.write(decor, out);
+	} else {
+		for (name, addresses, dynamic) in &views {
+			let source = if *dynamic { "dynamic" } else { "static" };
+			let _ = writeln!(out, "{name}\t{source}\t{}", addresses.join(","));
+		}
 	}
 	let _ = writeln!(out, "{} accounts", views.len());
 	ExitCode::SUCCESS

@@ -45,6 +45,7 @@ fn answers_minimal() -> Answers {
 		services: Services::default(),
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
+		first_account: None,
 	}
 }
 

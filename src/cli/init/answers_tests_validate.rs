@@ -256,6 +256,7 @@ fn three_independent_mistakes_report_three_errors() {
 		services: Services::default(),
 		image: None,
 		acme: None,
+		first_account: None,
 	};
 	let errors = answers.validate().expect_err("three mistakes must error");
 	let count = errors.len();

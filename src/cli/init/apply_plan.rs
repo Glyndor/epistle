@@ -216,6 +216,19 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 			zone: dns.zone.clone(),
 		});
 	}
+	if let Some(first) = &answers.first_account {
+		let address = first.stored_address();
+		steps.push(PlanStep::Account {
+			name: first.name(),
+			address: address.clone(),
+		});
+		for role in first.role_addresses(&answers.domains) {
+			steps.push(PlanStep::RoleAlias {
+				address: role,
+				target: address.clone(),
+			});
+		}
+	}
 	Ok(Plan { steps })
 }
 

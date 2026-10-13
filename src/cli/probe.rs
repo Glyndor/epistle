@@ -34,6 +34,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::rustls;
 
+use super::term::table::Table;
 use crate::config::{Config, Listener, ListenerKind};
 use crate::tls::ensure_crypto_provider;
 
@@ -65,7 +66,7 @@ pub(super) struct ProbeLine {
 /// configured listener on its loopback equivalent, and reports.
 /// Returns the exit code the dispatcher should propagate: SUCCESS
 /// when every listener answered, FAILURE when at least one did not.
-pub(super) fn run(config: &Config, json: bool) -> ExitCode {
+pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	ensure_crypto_provider();
 	let cert_path = pinned_cert_path(config);
 	let results = match execute(&config.listeners, cert_path.as_deref()) {
@@ -75,7 +76,7 @@ pub(super) fn run(config: &Config, json: bool) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
-	render(&results, json);
+	render(&results, json, out);
 	if results.iter().all(|line| line.ok) {
 		ExitCode::SUCCESS
 	} else {
@@ -563,21 +564,40 @@ where
 	}
 }
 
-fn render(lines: &[ProbeLine], json: bool) {
+/// Print the probe results to `out`: JSON, an aligned table on a terminal,
+/// or the plain `ok <kind> <addr>` lines scripts read.
+pub(super) fn render(lines: &[ProbeLine], json: bool, out: &mut impl std::io::Write) {
 	if json {
 		match serde_json::to_string_pretty(lines) {
-			Ok(bytes) => println!("{bytes}"),
+			Ok(bytes) => {
+				let _ = writeln!(out, "{bytes}");
+			}
 			Err(error) => {
 				super::style::error(format_args!("probe: encode result: {error}"));
 			}
 		}
 		return;
 	}
-	for line in lines {
-		match &line.error {
-			None => println!("ok {} {}", line.kind, line.addr),
-			Some(reason) => println!("fail {} {}: {reason}", line.kind, line.addr),
+	if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["STATE", "SERVICE", "ADDRESS", "DETAIL"]).state_col(0);
+		for line in lines {
+			let state = if line.error.is_none() { "ok" } else { "fail" };
+			let detail = line.error.clone().unwrap_or_default();
+			table.push(vec![
+				state.into(),
+				line.kind.into(),
+				line.addr.clone(),
+				detail,
+			]);
 		}
+		let _ = table.write(decor, out);
+		return;
+	}
+	for line in lines {
+		let _ = match &line.error {
+			None => writeln!(out, "ok {} {}", line.kind, line.addr),
+			Some(reason) => writeln!(out, "fail {} {}: {reason}", line.kind, line.addr),
+		};
 	}
 }
 

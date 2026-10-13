@@ -4,6 +4,8 @@
 //! config engine).
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -338,7 +340,7 @@ fn open_store(config: &Config) -> Result<crate::directory_store::AccountStore, S
 	.map_err(|e| e.to_string())
 }
 
-fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
+pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
 	let disabled: std::collections::HashSet<String> = disabled_set(config)
 		.map(|set| set.into_iter().collect())
 		.unwrap_or_default();
@@ -362,6 +364,21 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()
 		serde_json::to_writer(&mut *out, &rows).map_err(std::io::Error::other)?;
 		writeln!(out)?;
 		return Ok(());
+	}
+	if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["ADDRESS", "STATE", "VISIBLE", "MEMBERS"]).state_col(1);
+		for alias in &config.alias {
+			let enabled = !disabled.contains(&alias.address.to_ascii_lowercase());
+			let state = if enabled { "enabled" } else { "disabled" };
+			let visible = if alias.hidden { "hidden" } else { "visible" };
+			table.push(vec![
+				alias.address.clone(),
+				state.into(),
+				visible.into(),
+				alias.members.join(","),
+			]);
+		}
+		return table.write(decor, out);
 	}
 	writeln!(
 		out,

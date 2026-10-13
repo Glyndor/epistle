@@ -8,6 +8,8 @@
 //! (`masked_addresses_max`) and the label rules are the same in both places.
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::process::ExitCode;
 
 use clap::Subcommand;
@@ -213,6 +215,17 @@ fn list(
 				super::style::error_to(err, format_args!("cannot encode the list: {error}"));
 				ExitCode::FAILURE
 			}
+		};
+	}
+	if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["ADDRESS", "LABEL", "STATE"]).state_col(2);
+		for row in rows {
+			let state = if row.enabled { "enabled" } else { "disabled" };
+			table.push(vec![row.address, row.label, state.into()]);
+		}
+		return match table.write(decor, out) {
+			Ok(()) => ExitCode::SUCCESS,
+			Err(_) => ExitCode::FAILURE,
 		};
 	}
 	for row in rows {
