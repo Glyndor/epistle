@@ -9,6 +9,7 @@
 
 mod db_dump;
 mod restore_files;
+mod tar_format;
 
 use restore_files::lay_files;
 
@@ -16,9 +17,6 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-use flate2::Compression;
-use flate2::write::GzEncoder;
 
 use super::term::live::{Steps, quiet};
 use crate::config::{BlobBackendConfig, Config};
@@ -147,7 +145,13 @@ pub(super) fn run_restore_with(
 			return ExitCode::FAILURE;
 		}
 	};
-	let entries = read_tar_entries_pub(&tar);
+	let entries = match tar_format::read_entries(&tar) {
+		Ok(entries) => entries,
+		Err(error) => {
+			super::style::error(format_args!("reading archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	if entries.is_empty() {
 		steps.fail();
 		super::style::error("archive is empty");
@@ -309,32 +313,6 @@ fn gunzip_archive(data: &[u8]) -> std::io::Result<Vec<u8>> {
 	Ok(out)
 }
 
-/// Walk a tar's 512-byte blocks, returning (name, mode, content) for each
-/// file. The mode is read from the 8-byte octal mode field at offset 100.
-fn read_tar_entries_pub(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
-	let mut out = Vec::new();
-	let mut offset = 0;
-	while offset + 512 <= tar.len() {
-		let header = &tar[offset..offset + 512];
-		if header.iter().all(|&b| b == 0) {
-			break; // end-of-archive zero block
-		}
-		if &header[257..262] != b"ustar" {
-			break;
-		}
-		let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
-		let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
-		let mode_str = String::from_utf8_lossy(&header[100..108]);
-		let mode = u32::from_str_radix(mode_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		let size_str = String::from_utf8_lossy(&header[124..135]);
-		let size = usize::from_str_radix(size_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		offset += 512;
-		out.push((name, mode, tar[offset..offset + size].to_vec()));
-		offset += size.div_ceil(512) * 512;
-	}
-	out
-}
-
 /// Write to `warnings` a description of every path the configuration references
 /// but the archive does not contain. The archive covers `data_dir` only; keys
 /// for TLS, DKIM, ARC, the at-rest message encryption, the S3 blob backend and
@@ -461,57 +439,9 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 	Ok(out)
 }
 
-/// Build a gzip-compressed USTAR archive from named byte entries.
+/// Build the gzip-compressed archive; see [`tar_format`].
 pub(in crate::cli) fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
-	let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-	for (name, mode, data) in entries {
-		encoder.write_all(&ustar_header(name, *mode, data.len())?)?;
-		encoder.write_all(data)?;
-		// Pad the file content to a 512-byte boundary.
-		let pad = (512 - data.len() % 512) % 512;
-		encoder.write_all(&vec![0u8; pad])?;
-	}
-	// Two zero blocks mark the end of the archive.
-	encoder.write_all(&[0u8; 1024])?;
-	encoder.finish()
-}
-
-/// One 512-byte USTAR header for a regular file.
-///
-/// `mode` is the permission bits to write into the header, masked to the lower
-/// 12 bits (perm + setuid/setgid/sticky) so the file-type bits from
-/// `Permissions::mode()` don't leak into the tar mode field.
-fn ustar_header(name: &str, mode: u32, size: usize) -> std::io::Result<[u8; 512]> {
-	if name.len() > 100 {
-		return Err(std::io::Error::other(format!("path too long: {name}")));
-	}
-	let mut header = [0u8; 512];
-	header[..name.len()].copy_from_slice(name.as_bytes());
-	write_field(&mut header, 100, 8, &format!("{:07o}", mode & 0o7777)); // mode
-	write_field(&mut header, 108, 8, "0000000"); // uid
-	write_field(&mut header, 116, 8, "0000000"); // gid
-	write_field(&mut header, 124, 12, &format!("{size:011o}")); // size (octal)
-	write_field(&mut header, 136, 12, "00000000000"); // mtime
-	header[156] = b'0'; // typeflag: regular file
-	header[257..263].copy_from_slice(b"ustar\0");
-	header[263..265].copy_from_slice(b"00");
-
-	// Checksum: sum of all bytes with the checksum field treated as spaces.
-	// Computed after the mode is written, a checksum over the wrong mode
-	// produces a tar `tar` itself rejects.
-	header[148..156].copy_from_slice(b"        ");
-	let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
-	let chksum = format!("{sum:06o}\0 ");
-	header[148..148 + chksum.len()].copy_from_slice(chksum.as_bytes());
-	Ok(header)
-}
-
-/// Write a NUL-terminated field into the header at `offset` (length `len`).
-fn write_field(header: &mut [u8; 512], offset: usize, len: usize, value: &str) {
-	let bytes = value.as_bytes();
-	let n = bytes.len().min(len - 1);
-	header[offset..offset + n].copy_from_slice(&bytes[..n]);
-	// The remaining bytes stay NUL (already zeroed).
+	tar_format::tar_gz(entries)
 }
 
 // The database dump/load code is split out into `db_dump` (the
@@ -587,3 +517,7 @@ mod tests_restore_guards;
 #[cfg(test)]
 #[path = "../backup_tests_paths.rs"]
 mod tests_paths;
+
+#[cfg(test)]
+#[path = "../backup_tests_long_paths.rs"]
+mod tests_long_paths;

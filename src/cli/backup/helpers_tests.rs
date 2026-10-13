@@ -22,29 +22,9 @@ pub(super) fn read_tar(tar: &[u8]) -> Vec<(String, Vec<u8>)> {
 		.collect()
 }
 
-/// Walk a tar's 512-byte blocks, returning (name, mode, content).
+/// Every entry of the tar, as the restore reads it.
 pub(super) fn read_tar_entries(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
-	let mut out = Vec::new();
-	let mut offset = 0;
-	while offset + 512 <= tar.len() {
-		let header = &tar[offset..offset + 512];
-		if header.iter().all(|&b| b == 0) {
-			break; // end-of-archive zero block
-		}
-		if &header[257..262] != b"ustar" {
-			break;
-		}
-		let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
-		let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
-		let mode_str = String::from_utf8_lossy(&header[100..108]);
-		let mode = u32::from_str_radix(mode_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		let size_str = String::from_utf8_lossy(&header[124..135]);
-		let size = usize::from_str_radix(size_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		offset += 512;
-		out.push((name, mode, tar[offset..offset + size].to_vec()));
-		offset += size.div_ceil(512) * 512;
-	}
-	out
+	super::tar_format::read_entries(tar).expect("read archive")
 }
 
 /// Extract the gunzipped tar bytes into `target`, stripping the `data/`

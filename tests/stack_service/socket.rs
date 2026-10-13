@@ -8,7 +8,15 @@ fn every_stack_action_repairs_an_absent_socket_before_podup() {
 		let dir = tempfile::tempdir().unwrap();
 		let shim = dir.path().join("bin");
 		let log = dir.path().join("argv.log");
+		// `update` waits for the healthcheck mail's generated definition has,
+		// and only a `healthy` row ends that wait.
 		let canned = write_ps_fixture(dir.path());
+		let rows = std::fs::read_to_string(&canned).unwrap();
+		std::fs::write(
+			&canned,
+			rows.replace(r#""Health": """#, r#""Health": "healthy""#),
+		)
+		.unwrap();
 		install_podup_shim(&shim, &ps_shim(&log, &canned));
 		let systemctl = shim.join("systemctl");
 		std::fs::write(
