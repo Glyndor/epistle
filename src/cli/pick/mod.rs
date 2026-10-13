@@ -3,7 +3,8 @@
 //!
 //! The command line is parsed as usual. Only when clap reports a missing
 //! argument that names something that already exists (see `target`), and
-//! stdin and stderr are both terminals, is a numbered list offered; the
+//! stdin and stderr are both terminals (and stderr is decorated: no
+//! `NO_COLOR`, no `TERM=dumb`, no `--json`), is a numbered list offered; the
 //! picked value is added to the command line, which is parsed again. Any
 //! other case (a pipe, a script, a cancelled pick, nothing to pick from)
 //! ends exactly as it did before: clap's usage error and exit code 2.
@@ -46,7 +47,13 @@ pub fn run_from_env() -> ExitCode {
 		Ok(cli) => return cli.run(),
 		Err(error) => error,
 	};
-	if error.kind() == ErrorKind::MissingRequiredArgument && prompt::is_interactive() {
+	// The same conditions as the rest of the terminal decoration: with
+	// NO_COLOR, TERM=dumb or --json the run stays the plain one.
+	let json = args.iter().any(|arg| arg == "--json");
+	if error.kind() == ErrorKind::MissingRequiredArgument
+		&& prompt::is_interactive()
+		&& super::term::stderr(json).is_some()
+	{
 		// Run as root, the command re-executes as the service account,
 		// which then asks with the store it owns.
 		if let Ok(Some(code)) = super::rootless::reexecute() {

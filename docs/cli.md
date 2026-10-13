@@ -72,8 +72,20 @@ Every `epistle` subcommand splits its output into two streams by purpose:
   `tests/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
   stdout and follow the same precedence, so `--help` may colourise its text
   under `CLICOLOR_FORCE=1` or a real terminal.
-- **stderr** carries status, warnings, errors and progress and is the only
-  stream that may carry colour or a `\r`-rewritten progress line.
+- **stderr** carries status, warnings, errors and progress, including the
+  spinner of the long commands.
+
+On a terminal, `status`, `check`, `probe`, `verify-dns` and the list commands
+draw their state as ✔ (green), ⚠ (yellow) or ✘ (red; dimmed for something
+switched off), with aligned columns cut with `…` to the window width, and the
+long commands (`backup`, `restore`, `export`, `verify`, `verify-dns`, `probe`,
+`status`, `check`, `dkim rotate`, `tls renew`) show a spinner on stderr with the
+elapsed time, ending in a ✔ or ✘ row with the total. A command missing its
+account, alias, domain or key label offers the existing ones to pick from.
+Each stream is decided on its own, and nothing of this happens when that stream
+is not a terminal (for the pick, stdin and stderr), when `NO_COLOR` is set, when
+`TERM=dumb`, or with `--json`: the output is then the plain one scripts read,
+byte for byte, and a missing argument is a usage error with exit code 2.
 
 Four commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
@@ -137,10 +149,9 @@ epistle backup > backup.tar.gz
 NO_COLOR=1 epistle backup > backup.tar.gz
 ```
 
-Progress is a single line on stderr (one tick per message for `import`, one tick
-per check for `verify-dns`) that gets cleared when the command finishes. When
-stderr is not a terminal, the progress line is suppressed and the summary is
-printed once at the end.
+`import` keeps a single progress line on stderr (one tick per message) that
+gets cleared when it finishes. When stderr is not a terminal, the progress line
+is suppressed and the summary is printed once at the end.
 
 ## Service listeners
 
