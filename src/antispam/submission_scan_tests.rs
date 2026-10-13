@@ -137,10 +137,18 @@ fn a_detection_logs_the_account_pseudonym_and_the_signature() {
 	let subscriber = tracing_subscriber::registry().with(warnings.clone());
 	tracing::subscriber::with_default(subscriber, || {
 		// Other tests reach the same warning at the same time on threads
-		// without a subscriber; without a rebuild the callsite can stay
-		// cached as uninteresting and this subscriber sees nothing.
-		tracing::callsite::rebuild_interest_cache();
-		let _ = submit(&sink, &eicar());
+		// without a subscriber, and a rebuild of the interest cache racing
+		// with theirs can leave this callsite off for one event; measured
+		// once in five runs of the suite. Each attempt rebuilds and submits
+		// again until the warning is seen: a detection that never logs
+		// still fails every attempt.
+		for _ in 0..20 {
+			tracing::callsite::rebuild_interest_cache();
+			let _ = submit(&sink, &eicar());
+			if !warnings.0.lock().expect("warnings").is_empty() {
+				break;
+			}
+		}
 	});
 	let lines = warnings.0.lock().expect("warnings").join("\n");
 	assert!(
