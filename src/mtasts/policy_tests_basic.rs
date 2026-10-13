@@ -24,10 +24,9 @@ fn parses_policy_and_matches_mx() {
 
 #[test]
 fn parses_crlf_and_ignores_unknown_keys() {
-	let policy = parse(
-		"version: STSv1\r\nmode: testing\r\nmx: a.example\r\nmax_age: 60\r\nfuture: x\r\n",
-	)
-	.expect("valid policy");
+	let policy =
+		parse("version: STSv1\r\nmode: testing\r\nmx: a.example\r\nmax_age: 60\r\nfuture: x\r\n")
+			.expect("valid policy");
 	assert_eq!(policy.mode, Mode::Testing);
 }
 
@@ -64,8 +63,7 @@ impl DnsLookup for FakeDns {
 	fn addresses(
 		&self,
 		_name: &str,
-	) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-	{
+	) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>> {
 		Box::pin(async { Ok(Vec::new()) })
 	}
 
@@ -142,8 +140,7 @@ impl DnsLookup for TempFailDns {
 	fn addresses(
 		&self,
 		_name: &str,
-	) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-	{
+	) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>> {
 		Box::pin(async { Ok(Vec::new()) })
 	}
 	fn mx(
