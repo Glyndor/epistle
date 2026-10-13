@@ -80,6 +80,7 @@ pub(crate) fn regenerate(
 			database,
 		},
 		image,
+		first_account: None,
 	};
 	let composed = ComposeFile::build(&answers, published_ports_for_listeners(listeners), database);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
