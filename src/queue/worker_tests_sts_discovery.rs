@@ -113,7 +113,7 @@ async fn a_failed_https_fetch_records_sts_policy_fetch_error() {
 
 /// RFC 8460 §4.3: when the policy body does not parse, the session is
 /// recorded as `sts-policy-invalid` (the existing code path already does
-/// this — pinned here so the behaviour has a regression test).
+/// this; pinned here so the behaviour has a regression test).
 #[tokio::test]
 async fn a_malformed_policy_body_records_sts_policy_invalid() {
 	let dns = Arc::new(Discovery { txt_fails: false });
