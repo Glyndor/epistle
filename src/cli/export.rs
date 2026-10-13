@@ -48,7 +48,9 @@ pub(super) fn run(
 
 /// Export `account`'s mailboxes to a Maildir tree under `dir`: INBOX to the
 /// root `cur/`, each other mailbox to a Dovecot Maildir++ `.Name/cur/`
-/// subdirectory (the inverse of the Maildir import). IMAP flags are carried in
+/// subdirectory, a subfolder as `.Parent.Name/cur/` (the inverse of the
+/// Maildir import). A `.` inside a level is read back by the import as a
+/// level of its own, which Maildir++ cannot tell apart. IMAP flags are carried in
 /// the Maildir `:2,<info>` filename suffix.
 pub(super) fn run_maildir(
 	data_dir: &Path,
@@ -59,10 +61,12 @@ pub(super) fn run_maildir(
 	let _warnings = crate::util::fs_walk::warning_scope();
 	let mut count = 0u64;
 	for name in mailbox::list(data_dir, account) {
+		// Maildir++ writes the hierarchy with `.`: `Work/Project` is
+		// `.Work.Project`, one directory like every other folder.
 		let folder = if name.eq_ignore_ascii_case("INBOX") {
 			dir.to_path_buf()
 		} else {
-			dir.join(format!(".{name}"))
+			dir.join(format!(".{}", name.replace('/', ".")))
 		};
 		let cur = folder.join("cur");
 		if std::fs::create_dir_all(&cur).is_err() {
@@ -132,6 +136,10 @@ fn needs_quote(line: &[u8]) -> bool {
 	let stripped = line.iter().position(|&b| b != b'>').unwrap_or(line.len());
 	line[stripped..].starts_with(b"From ")
 }
+
+#[cfg(test)]
+#[path = "export_tests_hierarchy.rs"]
+mod tests_hierarchy;
 
 #[cfg(test)]
 mod tests {
