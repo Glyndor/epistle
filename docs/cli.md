@@ -609,6 +609,22 @@ version, and the local test harness use the invoking user. If its user runtime
 is absent, run `sudo loginctl enable-linger glyndor-epistle` and retry.
 Use absolute paths for file arguments when invoking administration commands with sudo.
 
+A file or directory you name on such a command does not have to be readable
+by `glyndor-epistle`. Run as root, epistle copies the inputs (`init
+--answers`, `import --maildir`, and `migrate`'s `--password-file`, `--ca-file`
+and `--from`) into a private directory the account owns, and moves the
+outputs (`migrate --passwords-out`, `export --maildir`) to where you asked
+once the command succeeds, owned by root and readable only by it. The copy is
+removed when the command ends. Symbolic links and special files are refused,
+and a copy is bounded: 16 MiB for a file, 64 MiB for a Mox configuration
+directory, and 4 GiB for a Maildir to import, which would otherwise take
+twice its size on the data disk. For a larger Maildir, make it readable by
+`glyndor-epistle` and run the import as that account. Run as root, `export
+--maildir` writes into a missing or empty directory. The paths in
+`dns provider set` and `storage blobs set` are stored in the configuration
+for the server to read, so those files must be readable by the account where
+they are.
+
 Stack requires podup 5.10.13 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
