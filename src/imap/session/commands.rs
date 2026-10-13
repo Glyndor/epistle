@@ -6,6 +6,7 @@ use super::helpers::search_matches;
 use super::mailbox::{self, Snapshot};
 use super::state::State;
 use super::{Output, SearchKey, Session};
+use crate::imap::internal_date::InternalDate;
 
 impl Session {
 	pub(super) fn copy(
@@ -85,7 +86,21 @@ impl Session {
 				Ok(data) => data,
 				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
 			};
-			match mailbox::append(&data_dir, &account, target, &message.flags, &data, &crypto) {
+			// RFC 9051 §6.4.7: the copy keeps the source's INTERNALDATE.
+			let date = InternalDate {
+				time: message.internal_date,
+				zone: message.internal_zone,
+			};
+			let copied = mailbox::append_dated(
+				&data_dir,
+				&account,
+				target,
+				&message.flags,
+				Some(date),
+				&data,
+				&crypto,
+			);
+			match copied {
 				Ok(id) => dest_ids.push(id),
 				Err(_) => return Output::text(format!("{tag} NO copy failed\r\n")),
 			}

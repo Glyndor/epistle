@@ -210,7 +210,15 @@ impl Session {
 				size,
 				synchronizing,
 				utf8,
-			} => self.append_begin(&tag, &mailbox, &flags, date, size, synchronizing, utf8),
+				binary,
+			} => self.append_begin(
+				&tag,
+				&mailbox,
+				&flags,
+				date,
+				(size, synchronizing),
+				literal::AppendForm { utf8, binary },
+			),
 			Command::Replace {
 				sequence,
 				mailbox,

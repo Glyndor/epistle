@@ -140,7 +140,13 @@ fn parse_record(line: &str) -> Option<MessageRef> {
 	let id = Uuid::parse_str(fields.next()?).ok()?;
 	let uid: u32 = fields.next()?.parse().ok()?;
 	let size: u64 = fields.next()?.parse().ok()?;
-	let internal_date = parse_time(fields.next()?)?;
+	// `<secs>.<nanos>`, then `@<zone>` when the INTERNALDATE zone is not UTC.
+	let time_field = fields.next()?;
+	let (time, zone) = match time_field.split_once('@') {
+		Some((time, zone)) => (time, zone.parse::<i16>().ok().filter(|z| *z != 0)?),
+		None => (time_field, 0),
+	};
+	let internal_date = parse_time(time)?;
 	let modseq: u64 = fields.next()?.parse().ok()?;
 	// The flags field is the remainder (it never contains a space): present even
 	// when empty. A missing field (too few columns) is a malformed record.
@@ -149,14 +155,9 @@ fn parse_record(line: &str) -> Option<MessageRef> {
 	if fields.next().is_some() {
 		return None;
 	}
-	Some(MessageRef::from_index(
-		uid,
-		id,
-		size,
-		flags,
-		internal_date,
-		modseq,
-	))
+	let mut message = MessageRef::from_index(uid, id, size, flags, internal_date, modseq);
+	message.internal_zone = zone;
+	Some(message)
 }
 
 /// Parse the `<secs>.<nanos>` internaldate field into a [`SystemTime`].
@@ -238,6 +239,10 @@ fn write_record(out: &mut String, message: &MessageRef) {
 	out.push_str(&message.size.to_string());
 	out.push(' ');
 	write_time(out, message.internal_date);
+	if message.internal_zone != 0 {
+		out.push('@');
+		out.push_str(&message.internal_zone.to_string());
+	}
 	out.push(' ');
 	out.push_str(&message.modseq.to_string());
 	out.push(' ');

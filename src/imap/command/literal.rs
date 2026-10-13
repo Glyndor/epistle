@@ -5,7 +5,7 @@
 use super::date_time::split_date_time;
 use super::parse::{MAX_APPEND_SIZE, parse_astring};
 use super::{Command, LiteralAnnouncement, ParseError};
-use std::time::SystemTime;
+use crate::imap::internal_date::InternalDate;
 
 /// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date
 /// becomes the message's INTERNALDATE.
@@ -17,14 +17,22 @@ pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError>
 	}
 	let rest = rest.trim();
 	let (flags, date, literal) = parse_flags_and_literal(rest, &bad)?;
+	let utf8 = utf8_data_item(rest);
 	Ok(Command::Append {
 		mailbox,
 		flags,
 		date,
 		size: literal.size,
 		synchronizing: literal.synchronizing,
-		utf8: utf8_data_item(rest),
+		utf8,
+		binary: !utf8 && literal8(rest),
 	})
+}
+
+/// Whether an APPEND tail ends in a literal8 `~{n}` (RFC 3516 §4.4).
+fn literal8(tail: &str) -> bool {
+	tail.rfind('{')
+		.is_some_and(|open| tail[..open].ends_with('~'))
 }
 
 /// Whether an APPEND tail ends in the RFC 6855 §4 data item
@@ -86,7 +94,7 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 fn parse_flags_and_literal(
 	rest: &str,
 	bad: &impl Fn() -> ParseError,
-) -> Result<(Vec<String>, Option<SystemTime>, LiteralAnnouncement), ParseError> {
+) -> Result<(Vec<String>, Option<InternalDate>, LiteralAnnouncement), ParseError> {
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
 		(

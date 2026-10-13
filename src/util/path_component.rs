@@ -310,6 +310,8 @@ pub enum MessageExt {
 	Uid,
 	/// Mod-sequence sidecar.
 	Modseq,
+	/// INTERNALDATE zone sidecar.
+	Zone,
 	/// Archive deletion record.
 	Deleted,
 	/// Spool envelope.
@@ -323,6 +325,7 @@ impl MessageExt {
 			Self::Flags => ".flags",
 			Self::Uid => ".uid",
 			Self::Modseq => ".modseq",
+			Self::Zone => ".zone",
 			Self::Deleted => ".deleted",
 			Self::Json => ".json",
 		}
@@ -347,6 +350,10 @@ pub enum StateFile {
 	UidNext,
 	/// UIDVALIDITY value.
 	UidValidity,
+	/// Per-account last UIDVALIDITY handed out to a new mailbox.
+	UidValidityLast,
+	/// Per-account lock serialising UIDVALIDITY allocation.
+	UidValidityLock,
 	/// Mod-sequence counter.
 	ModseqCounter,
 	/// Expunge log (QRESYNC).
@@ -367,6 +374,8 @@ impl StateFile {
 		match self {
 			Self::UidNext => ".uidnext",
 			Self::UidValidity => ".uidvalidity",
+			Self::UidValidityLast => ".uidvalidity_last",
+			Self::UidValidityLock => ".uidvalidity_lock",
 			Self::ModseqCounter => ".modseqctr",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",

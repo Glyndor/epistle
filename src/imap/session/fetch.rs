@@ -121,7 +121,10 @@ impl Session {
 						parts.push(format!("RFC822.SIZE {}", message.size).into_bytes());
 					}
 					FetchItem::InternalDate => {
-						let dt = format_internaldate(message.internal_date);
+						let dt = crate::imap::internal_date::format(
+							message.internal_date,
+							message.internal_zone,
+						);
 						parts.push(format!("INTERNALDATE \"{dt}\"").into_bytes());
 					}
 					FetchItem::ModSeq => {

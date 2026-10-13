@@ -177,3 +177,18 @@ mod sort_text;
 
 #[path = "session_tests_thread_ordered.rs"]
 mod thread_ordered;
+
+#[path = "session_tests_notify_status.rs"]
+mod notify_status;
+
+#[path = "session_tests_uidvalidity.rs"]
+mod uidvalidity;
+
+#[path = "session_tests_fetch_whole.rs"]
+mod fetch_whole;
+
+#[path = "session_tests_append_binary.rs"]
+mod append_binary;
+
+#[path = "session_tests_append_date.rs"]
+mod append_date;

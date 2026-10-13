@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::imap::changelog::{Change, Op};
+use crate::imap::internal_date::InternalDate;
 use crate::storage::MessageCrypto;
 use crate::util::path_component::{
 	AccountName, AccountRoot, FixedDir, MailboxName, MessageExt, folders_dir, message_file,
@@ -74,6 +75,9 @@ pub struct MessageRef {
 	pub flags: Vec<Flag>,
 	/// File mtime; used for INTERNALDATE.
 	pub internal_date: std::time::SystemTime,
+	/// Minutes east of UTC that INTERNALDATE is shown in: the zone of the
+	/// APPEND date-time, UTC otherwise.
+	pub internal_zone: i16,
 	/// Mod-sequence of the last flag change (CONDSTORE, RFC 7162).
 	pub modseq: u64,
 }
@@ -100,6 +104,7 @@ impl MessageRef {
 			size,
 			flags,
 			internal_date,
+			internal_zone: 0,
 			modseq,
 		}
 	}
@@ -237,15 +242,17 @@ pub fn append(
 	append_dated(data_dir, account, mailbox, flags, None, data, crypto)
 }
 
-/// [`append`] with the INTERNALDATE an IMAP APPEND names. The date is kept
-/// as the message file's modification time, which is where the scan reads
-/// INTERNALDATE from; `None` leaves it at the arrival time.
+/// [`append`] with the INTERNALDATE an IMAP APPEND names or a COPY carries
+/// over. The instant is kept as the message file's modification time, which
+/// is where the scan reads INTERNALDATE from, and a zone other than UTC in a
+/// sidecar written before the message appears; `None` leaves it at the
+/// arrival time.
 pub fn append_dated(
 	data_dir: &Path,
 	account: &str,
 	mailbox: &str,
 	flags: &[Flag],
-	date: Option<std::time::SystemTime>,
+	date: Option<InternalDate>,
 	data: &[u8],
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
@@ -265,7 +272,8 @@ pub fn append_dated(
 		std::fs::File::options()
 			.write(true)
 			.open(&tmp)?
-			.set_modified(date)?;
+			.set_modified(date.time)?;
+		super::internal_date::write_zone(&account_dir, id, date.zone)?;
 	}
 	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
 	if !flags.is_empty() {

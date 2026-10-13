@@ -1,7 +1,13 @@
 //! IMAP command parsing (RFC 9051 section 6), strict subset.
 
-/// Maximum command line length accepted.
-pub const MAX_COMMAND_LINE: usize = 8192;
+/// Maximum command line length accepted, excluding CRLF and literals.
+///
+/// RFC 7162 §4 asks servers to take at least 8000 octets, but an RFC 2971
+/// ID command at its own maximum (30 pairs of 30 and 1024 octet strings)
+/// is 31.8 KB, so 32 KiB is the smallest round bound that holds it. The
+/// line decoder scans each byte once and the recursive parsers cap their
+/// nesting, so the bound limits memory and work per line, not stack depth.
+pub const MAX_COMMAND_LINE: usize = 32 * 1024;
 
 /// A parsed client command with its tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,7 +156,7 @@ pub enum Command {
 		/// Initial flags for the appended message (may be empty).
 		flags: Vec<String>,
 		/// The INTERNALDATE the client asked for, if any.
-		date: Option<std::time::SystemTime>,
+		date: Option<crate::imap::internal_date::InternalDate>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
@@ -160,6 +166,9 @@ pub enum Command {
 		/// The message came as `UTF8 (~{n})` (RFC 6855 §4): it may carry
 		/// UTF-8 header fields, and a `)` follows the literal.
 		utf8: bool,
+		/// The message came as a literal8 `~{n}` (RFC 3516 §4.4), so its
+		/// binary parts may hold any octet.
+		binary: bool,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected
@@ -173,7 +182,7 @@ pub enum Command {
 		/// Initial flags for the appended message.
 		flags: Vec<String>,
 		/// The INTERNALDATE the client asked for, if any.
-		date: Option<std::time::SystemTime>,
+		date: Option<crate::imap::internal_date::InternalDate>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a
@@ -346,15 +355,41 @@ pub enum NotifyRequest {
 	None,
 	/// `NOTIFY SET [STATUS] (...)`: enable notifications. `status` records the
 	/// `STATUS` return modifier. `selected` holds the events requested for the
-	/// `selected` mailbox specifier (the only specifier fully supported); other
-	/// specifiers are accepted and ignored.
+	/// `selected` mailbox specifier, the only one whose events are pushed;
+	/// `others` keeps the remaining groups for the initial STATUS replies.
 	Set {
 		/// Whether the request carried the `STATUS` return modifier: when
-		/// set, status responses for newly selected mailboxes are emitted.
+		/// set, a STATUS reply goes out for every mailbox in `others`.
 		status: bool,
 		/// Events requested for the `selected` mailbox specifier.
 		selected: Vec<NotifyEvent>,
+		/// The event groups naming other mailboxes, in request order.
+		others: Vec<NotifyGroup>,
 	},
+}
+
+/// A NOTIFY event group for mailboxes other than the selected one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotifyGroup {
+	/// Which mailboxes the group covers.
+	pub mailboxes: NotifyMailboxes,
+	/// The events requested for them (empty for `NONE`).
+	pub events: Vec<NotifyEvent>,
+}
+
+/// A `filter-mailboxes-other` mailbox specifier (RFC 5465 §8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyMailboxes {
+	/// `inboxes`: the mailboxes that receive mail, here INBOX.
+	Inboxes,
+	/// `personal`: every mailbox of the user.
+	Personal,
+	/// `subscribed`: every subscribed mailbox.
+	Subscribed,
+	/// `subtree <mailboxes>`: the named mailboxes and all their children.
+	Subtree(Vec<String>),
+	/// `mailboxes <mailboxes>`: exactly the named mailboxes.
+	Mailboxes(Vec<String>),
 }
 
 /// A NOTIFY message event (RFC 5465 §6). Only the events the server can deliver
@@ -390,6 +425,8 @@ pub enum StatusItem {
 	Deleted,
 	/// `MAILBOXID`: the mailbox's stable object id (OBJECTID, RFC 8474).
 	MailboxId,
+	/// `HIGHESTMODSEQ`: the mailbox's highest mod-sequence (RFC 7162 §3.1.6).
+	HighestModseq,
 }
 
 /// An ESEARCH `RETURN` option (RFC 4731).

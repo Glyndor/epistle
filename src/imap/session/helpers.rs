@@ -112,15 +112,9 @@ pub(super) fn search_matches(
 		SearchKey::And(keys) => keys
 			.iter()
 			.all(|k| search_matches(k, message, seqno, maxima, snapshot, content, saved)),
-		SearchKey::Before(y, m, d) => {
-			systemtime_to_epoch_day(message.internal_date) < date_to_epoch_day(*y, *m, *d)
-		}
-		SearchKey::Since(y, m, d) => {
-			systemtime_to_epoch_day(message.internal_date) >= date_to_epoch_day(*y, *m, *d)
-		}
-		SearchKey::On(y, m, d) => {
-			systemtime_to_epoch_day(message.internal_date) == date_to_epoch_day(*y, *m, *d)
-		}
+		SearchKey::Before(y, m, d) => internal_day(message) < date_to_epoch_day(*y, *m, *d),
+		SearchKey::Since(y, m, d) => internal_day(message) >= date_to_epoch_day(*y, *m, *d),
+		SearchKey::On(y, m, d) => internal_day(message) == date_to_epoch_day(*y, *m, *d),
 		SearchKey::SentBefore(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
 			.is_some_and(|day| day < date_to_epoch_day(*y, *m, *d)),
 		SearchKey::SentSince(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
@@ -162,11 +156,10 @@ pub(super) fn date_to_epoch_day(year: u32, month: u8, day: u8) -> i64 {
 	era * 146097 + doe - 719468
 }
 
-pub(super) fn systemtime_to_epoch_day(t: std::time::SystemTime) -> i64 {
-	match t.duration_since(std::time::SystemTime::UNIX_EPOCH) {
-		Ok(d) => (d.as_secs() / 86400) as i64,
-		Err(e) => -((e.duration().as_secs() / 86400 + 1) as i64),
-	}
+/// The day of a message's INTERNALDATE in the zone it was given in, which
+/// BEFORE, ON and SINCE compare (RFC 9051 §6.4.4).
+fn internal_day(message: &mailbox::MessageRef) -> i64 {
+	crate::imap::internal_date::local_day(message.internal_date, message.internal_zone)
 }
 
 /// The RFC 6154 special-use attribute for a well-known mailbox name, or an

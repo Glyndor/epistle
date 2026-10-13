@@ -110,7 +110,7 @@ fn rev1_lsub_and_fetch_move_unselect_extensions_remain_available() {
 		session.command_line("s SELECT INBOX");
 		assert!(
 			text(&session.command_line("b FETCH 1 (BINARY[] BINARY.SIZE[])"))
-				== "* 1 FETCH (BINARY[] {3}\r\none BINARY.SIZE[] 3 FLAGS (\\Seen))\r\nb OK FETCH completed\r\n",
+				== "* 1 FETCH (BINARY[] {40}\r\nContent-Transfer-Encoding: base64\r\n\r\none BINARY.SIZE[] 40 FLAGS (\\Seen))\r\nb OK FETCH completed\r\n",
 			"BINARY must preserve decoded bytes and size in both revisions"
 		);
 		let moved = text(&session.command_line("m UID MOVE 1 Sent"));

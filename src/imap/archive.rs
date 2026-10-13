@@ -79,7 +79,12 @@ pub fn archive_message(
 	// step leaves the message in its mailbox, which the caller can retry.
 	let sidecar = message_file(&archive, id, MessageExt::Deleted)?;
 	std::fs::write(sidecar, format!("{now}\n{mailbox}\n"))?;
-	for ext in [MessageExt::Flags, MessageExt::Uid, MessageExt::Eml] {
+	for ext in [
+		MessageExt::Flags,
+		MessageExt::Uid,
+		MessageExt::Zone,
+		MessageExt::Eml,
+	] {
 		let from = message_file(mailbox_dir, id, ext)?;
 		let to = message_file(&archive, id, ext)?;
 		// A missing source file is a no-op (idempotent with concurrent
@@ -211,6 +216,7 @@ pub fn restore(
 		MessageExt::Eml,
 		MessageExt::Flags,
 		MessageExt::Uid,
+		MessageExt::Zone,
 		MessageExt::Deleted,
 	] {
 		let _ = std::fs::remove_file(message_file(&archive, id, ext)?);
@@ -235,6 +241,7 @@ pub fn purge(account_root: &AccountRoot, older_than_secs: u64, now: u64) -> std:
 			MessageExt::Eml,
 			MessageExt::Flags,
 			MessageExt::Uid,
+			MessageExt::Zone,
 			MessageExt::Deleted,
 		] {
 			let _ = std::fs::remove_file(message_file(&archive, entry.id, ext)?);
