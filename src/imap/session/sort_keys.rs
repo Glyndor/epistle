@@ -2,7 +2,7 @@
 //! the INTERNALDATE as instants, and the address keys.
 
 use super::helpers::header_value_raw;
-use super::mailbox::{MessageRef, Snapshot};
+use super::mailbox::MessageRef;
 use mail_parser::{Addr, Address, HeaderValue, parsers::MessageStream};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,11 +11,11 @@ pub(super) fn internal_seconds(message: &MessageRef) -> i64 {
 	seconds(message.internal_date)
 }
 
-/// The RFC 5256 §2.2 sent date: the Date header converted to UTC, or the
-/// INTERNALDATE when the header is missing or does not parse.
-pub(super) fn sent_seconds(snapshot: &Snapshot, message: &MessageRef) -> i64 {
-	let raw = snapshot.read(message).unwrap_or_default();
-	date_header_seconds(&String::from_utf8_lossy(&raw)).unwrap_or_else(|| internal_seconds(message))
+/// The RFC 5256 §2.2 sent date of `message`, whose text is `text`: the
+/// Date header converted to UTC, or the INTERNALDATE when the header is
+/// missing or does not parse.
+pub(super) fn sent_seconds(text: &str, message: &MessageRef) -> i64 {
+	date_header_seconds(text).unwrap_or_else(|| internal_seconds(message))
 }
 
 /// The first Date header of `message` as a UTC instant.

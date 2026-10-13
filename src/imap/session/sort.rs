@@ -3,7 +3,7 @@
 use super::super::command::SortKey;
 use super::base_subject::base_subject;
 use super::helpers::{header_value_raw, search_matches};
-use super::mailbox::{MessageRef, Snapshot};
+use super::mailbox::MessageRef;
 use super::sort_keys::{address_key, internal_seconds, sent_seconds};
 use super::state::State;
 use super::{Output, SearchKey, Session};
@@ -17,17 +17,13 @@ enum SortValue {
 }
 
 /// The sort value of a message for one key. `text` is the message as read
-/// from the store, loaded only when an address or subject key is present.
-fn sort_value(
-	key: SortKey,
-	message: &MessageRef,
-	snapshot: &Snapshot,
-	text: Option<&str>,
-) -> SortValue {
+/// from the store, loaded only when a key other than ARRIVAL or SIZE is
+/// present.
+fn sort_value(key: SortKey, message: &MessageRef, text: Option<&str>) -> SortValue {
 	let text = text.unwrap_or_default();
 	match key {
 		SortKey::Arrival => SortValue::Num(internal_seconds(message)),
-		SortKey::Date => SortValue::Num(sent_seconds(snapshot, message)),
+		SortKey::Date => SortValue::Num(sent_seconds(text, message)),
 		SortKey::Size => SortValue::Num(i64::try_from(message.size).unwrap_or(i64::MAX)),
 		SortKey::From => SortValue::Text(address_key(text, "from")),
 		SortKey::To => SortValue::Text(address_key(text, "to")),
@@ -52,12 +48,9 @@ impl Session {
 
 		let total = snapshot.max_identifier(false);
 		let maxima = (total, snapshot.max_identifier(true));
-		let needs_text = keys.iter().any(|(_, key)| {
-			matches!(
-				key,
-				SortKey::From | SortKey::To | SortKey::Cc | SortKey::Subject
-			)
-		});
+		let needs_text = keys
+			.iter()
+			.any(|(_, key)| !matches!(key, SortKey::Arrival | SortKey::Size));
 
 		// Collect matching messages with their sort values.
 		let mut items: Vec<(Vec<SortValue>, u32, u32)> = Vec::new();
@@ -77,7 +70,7 @@ impl Session {
 			});
 			let values = keys
 				.iter()
-				.map(|(_, key)| sort_value(*key, message, snapshot, text.as_deref()))
+				.map(|(_, key)| sort_value(*key, message, text.as_deref()))
 				.collect();
 			items.push((values, seqno, message.uid));
 		}
