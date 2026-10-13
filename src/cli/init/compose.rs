@@ -736,3 +736,7 @@ pub(crate) fn update_listener_ports(
 #[cfg(test)]
 #[path = "compose_tests_service.rs"]
 mod tests_service;
+
+#[cfg(test)]
+#[path = "compose_tests_capabilities.rs"]
+mod tests_capabilities;

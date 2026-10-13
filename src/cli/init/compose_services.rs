@@ -31,6 +31,9 @@ pub(super) struct ComposeService {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	stop_grace_period: Option<String>,
 	security_opt: Vec<String>,
+	cap_drop: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	cap_add: Option<Vec<String>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	read_only: Option<bool>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +129,10 @@ impl ComposeService {
 			// so open SMTP transactions finish before podup sends SIGKILL.
 			stop_grace_period: Some(format!("{MAIL_STOP_GRACE_SECS}s")),
 			security_opt: vec!["no-new-privileges".to_string()],
+			// uid 65532 holds no capability, and the ports below 1024 come
+			// from the sysctl below, not from NET_BIND_SERVICE.
+			cap_drop: drop_all(),
+			cap_add: None,
 			read_only: None,
 			tmpfs: None,
 			// Lower the unprivileged port start inside the
@@ -232,7 +239,12 @@ impl ComposeService {
 				"listen_addresses=".to_string(),
 			]),
 			network_mode: Some("none".to_string()),
-			user: None,
+			// The image's postgres user. Started as root, the entrypoint
+			// chowns both volumes and steps down with gosu, which under
+			// `cap_drop: [ALL]` failed on the first chmod (measured on
+			// postgres:18). As 999 it skips both, and the volumes an
+			// earlier root start initialised are already owned by 999.
+			user: Some("999:999".to_string()),
 			userns_mode: None,
 			volumes: vec![
 				VolumeMount::Named("epistle-pgdata:/var/lib/postgresql".to_string()),
@@ -243,6 +255,8 @@ impl ComposeService {
 			restart: "unless-stopped".to_string(),
 			stop_grace_period: None,
 			security_opt: vec!["no-new-privileges".to_string()],
+			cap_drop: drop_all(),
+			cap_add: None,
 			read_only: Some(true),
 			tmpfs: Some(vec!["/tmp".to_string()]),
 			sysctls: None,
@@ -263,6 +277,12 @@ impl ComposeService {
 			}),
 		}
 	}
+}
+
+/// Every capability: each service starts from none and `cap_add` names
+/// what it was measured to need.
+fn drop_all() -> Vec<String> {
+	vec!["ALL".to_string()]
 }
 
 #[derive(Debug, Serialize)]
@@ -308,6 +328,8 @@ impl ComposeService {
 			restart: "unless-stopped".to_string(),
 			stop_grace_period: None,
 			security_opt: vec!["no-new-privileges".to_string()],
+			cap_drop: drop_all(),
+			cap_add: None,
 			read_only: None,
 			tmpfs: None,
 			sysctls: None,
@@ -315,16 +337,41 @@ impl ComposeService {
 			depends_on: None,
 			healthcheck: None,
 		};
-		service.environment.insert(
-			if freshclam {
-				"CLAMAV_NO_CLAMD"
-			} else {
-				"CLAMAV_NO_FRESHCLAMD"
-			}
-			.to_string(),
-			"true".to_string(),
-		);
-		if !freshclam {
+		if freshclam {
+			// The image's /init chowns the database volume and creates
+			// /run/clamav as root before it starts freshclam with
+			// `--user=clamav`. Running the daemon as clamav (uid 100, gid
+			// 101 in the image) from the start needs no capability: the
+			// database volume is clamav's, from the image or from earlier
+			// starts. tini stays PID 1, as under /init, so SIGTERM reaches
+			// freshclam and its children are reaped.
+			service.user = Some("100:101".to_string());
+			service.entrypoint = Some(
+				[
+					"/sbin/tini",
+					"--",
+					"freshclam",
+					"--daemon",
+					"--foreground",
+					"--stdout",
+					"--checks=1",
+				]
+				.map(str::to_string)
+				.to_vec(),
+			);
+		} else {
+			service
+				.environment
+				.insert("CLAMAV_NO_FRESHCLAMD".to_string(), "true".to_string());
+			// Measured under `cap_drop: [ALL]`, one failure per line: chown
+			// of /run/clamav (CHOWN), chmod of the now clamav-owned
+			// directory (FOWNER), and clamd's own step down to `User
+			// clamav`, which failed in initgroups() (SETGID, SETUID).
+			service.cap_add = Some(
+				["CHOWN", "FOWNER", "SETGID", "SETUID"]
+					.map(str::to_string)
+					.to_vec(),
+			);
 			service
 				.volumes
 				.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
