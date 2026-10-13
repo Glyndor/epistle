@@ -1,9 +1,9 @@
 //! IMAP SORT command (RFC 5256).
 
 use super::super::command::SortKey;
-use super::helpers::{header_value, header_value_raw, load_content, search_matches};
+use super::helpers::{header_value_raw, search_matches};
 use super::mailbox::{MessageRef, Snapshot};
-use super::sort_keys::{internal_seconds, sent_seconds};
+use super::sort_keys::{address_key, internal_seconds, sent_seconds};
 use super::state::State;
 use super::{Output, SearchKey, Session};
 use crate::util::encoded_word;
@@ -16,8 +16,8 @@ enum SortValue {
 	Text(String),
 }
 
-/// The sort value of a message for one key. `text` is the lowercased message
-/// (headers + body), loaded only when a header-based key is present. SUBJECT
+/// The sort value of a message for one key. `text` is the message as read
+/// from the store, loaded only when an address key is present. SUBJECT
 /// is treated specially: the decoded subject is computed from the RAW bytes
 /// because lowercasing a B-encoded subject would mangle its base64 payload.
 fn sort_value(
@@ -30,16 +30,11 @@ fn sort_value(
 		SortKey::Arrival => SortValue::Num(internal_seconds(message)),
 		SortKey::Date => SortValue::Num(sent_seconds(snapshot, message)),
 		SortKey::Size => SortValue::Num(i64::try_from(message.size).unwrap_or(i64::MAX)),
-		SortKey::From => SortValue::Text(header_field(text, "from")),
-		SortKey::To => SortValue::Text(header_field(text, "to")),
-		SortKey::Cc => SortValue::Text(header_field(text, "cc")),
+		SortKey::From => SortValue::Text(address_key(text.unwrap_or_default(), "from")),
+		SortKey::To => SortValue::Text(address_key(text.unwrap_or_default(), "to")),
+		SortKey::Cc => SortValue::Text(address_key(text.unwrap_or_default(), "cc")),
 		SortKey::Subject => SortValue::Text(normalized_subject_subject(snapshot, message)),
 	}
-}
-
-/// A header value from the lowercased message text, or empty.
-fn header_field(text: Option<&str>, name: &str) -> String {
-	text.and_then(|t| header_value(t, name)).unwrap_or_default()
 }
 
 /// The Subject with a leading `re:`/`fwd:` run removed (RFC 5256 base subject,
@@ -97,7 +92,9 @@ impl Session {
 			if !matches {
 				continue;
 			}
-			let text = needs_text.then(|| load_content(snapshot, message));
+			let text = needs_text.then(|| {
+				String::from_utf8_lossy(&snapshot.read(message).unwrap_or_default()).into_owned()
+			});
 			let values = keys
 				.iter()
 				.map(|(_, key)| sort_value(*key, message, snapshot, text.as_deref()))

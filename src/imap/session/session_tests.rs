@@ -171,3 +171,6 @@ mod cross_session;
 
 #[path = "session_tests_sort_dates.rs"]
 mod sort_dates;
+
+#[path = "session_tests_sort_text.rs"]
+mod sort_text;
