@@ -709,6 +709,9 @@ impl Directory {
 	}
 }
 
+#[path = "directory_final.rs"]
+mod final_recipients;
+
 #[path = "directory_scram.rs"]
 mod scram;
 

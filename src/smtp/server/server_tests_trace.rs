@@ -1,5 +1,6 @@
 //! Final delivery over SMTP: the stored copy of inbound mail starts with
-//! the `Return-Path` the envelope gave, not one the message carried.
+//! the `Return-Path` the envelope gave, not one the message carried, and
+//! the `Delivered-To` of the mailbox it landed in.
 
 use tokio::io::AsyncWriteExt;
 
@@ -53,7 +54,9 @@ async fn inbound_mail_is_stored_with_the_envelope_return_path_first() {
 			.await;
 	assert_eq!(copies.len(), 1);
 	assert!(
-		copies[0].starts_with("Return-Path: <x@example.net>\r\nReceived: "),
+		copies[0].starts_with(
+			"Return-Path: <x@example.net>\r\nDelivered-To: alice@example.org\r\nReceived: "
+		),
 		"{}",
 		copies[0]
 	);

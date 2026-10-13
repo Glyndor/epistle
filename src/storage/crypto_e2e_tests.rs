@@ -70,7 +70,8 @@ fn delivery_writes_ciphertext_and_imap_reads_plaintext() {
 	// Reading back through the IMAP mailbox API yields the plaintext, as
 	// final delivery stored it (with its trace fields).
 	let delivered = [
-		b"Return-Path: <sender@elsewhere.example>\r\n".as_slice(),
+		b"Return-Path: <sender@elsewhere.example>\r\nDelivered-To: alice@example.org\r\n"
+			.as_slice(),
 		BODY,
 	]
 	.concat();

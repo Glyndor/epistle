@@ -1,5 +1,6 @@
 //! Final delivery of what the API sends to a local recipient: the copy in
-//! the mailbox starts with `Return-Path` (RFC 5321 section 4.4), on
+//! the mailbox starts with `Return-Path` (RFC 5321 section 4.4) and
+//! `Delivered-To`, on
 //! `/api/v1/send` and on JMAP `EmailSubmission/set` alike.
 
 use super::router;
@@ -34,7 +35,8 @@ async fn api_send_to_a_local_recipient_stores_the_return_path_first() {
 	let copies = delivered(dir.path());
 	assert_eq!(copies.len(), 1);
 	assert!(
-		copies[0].starts_with("Return-Path: <alice@example.org>\r\n"),
+		copies[0]
+			.starts_with("Return-Path: <alice@example.org>\r\nDelivered-To: alice@example.org\r\n"),
 		"{}",
 		copies[0]
 	);
@@ -71,7 +73,11 @@ async fn jmap_submission_to_a_local_recipient_stores_the_return_path_first() {
 	assert_eq!(copies.len(), 2, "the draft and the delivered copy");
 	let stamped: Vec<&String> = copies
 		.iter()
-		.filter(|copy| copy.starts_with("Return-Path: <alice@example.org>\r\n"))
+		.filter(|copy| {
+			copy.starts_with(
+				"Return-Path: <alice@example.org>\r\nDelivered-To: alice@example.org\r\n",
+			)
+		})
 		.collect();
 	assert_eq!(stamped.len(), 1, "{copies:?}");
 	assert!(!stamped[0].contains("forged@"), "{}", stamped[0]);

@@ -181,6 +181,13 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   open when clamd cannot be reached, like the inbound one, and `epistle
   status` warns while scans keep failing, so an antivirus that is silently
   not scanning does not go unnoticed.
+- **Forwarding loops.** Every copy stored in a mailbox starts with
+  `Return-Path` (any one the message arrived with is removed) and the
+  `Delivered-To` of the address it was delivered to, and a forwarded copy
+  carries the `Delivered-To` of the address that forwarded it. A message
+  that comes back to an address about to forward it again (an account
+  forward or a Sieve `redirect`) is refused with a `554 5.4.6` bounce
+  instead of going round, on top of the `Received` hop limit.
 - **Outbound suppression**: a reply proving the address bad (5.1.x, 551,
   553) suppresses that recipient so the server stops sending to dead
   addresses, protecting the sending IP's reputation. Policy refusals, full or

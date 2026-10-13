@@ -8,10 +8,13 @@ mod policy;
 mod reports;
 #[path = "delivery_trace.rs"]
 mod trace;
+
+pub use trace::Redirect;
+pub(super) use trace::forwarded_copy;
 #[path = "delivery_vacation.rs"]
 mod vacation;
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -20,7 +23,6 @@ use uuid::Uuid;
 use crate::directory_store::DirectoryHandle;
 use crate::imap::changelog::{Change, Op};
 use crate::smtp::address::Address;
-use crate::smtp::directory::Resolution;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MessageSink, SinkError};
 
@@ -50,14 +52,19 @@ pub(super) fn received_hops(data: &[u8]) -> usize {
 		.count()
 }
 
-/// What local delivery produced: redirect addresses for the caller to queue,
-/// and a Sieve reject reason to bounce (if any).
+/// What local delivery produced: redirects for the caller to queue, a
+/// Sieve reject reason to bounce (if any), and the addresses whose delivery
+/// was refused as a forwarding loop.
 #[derive(Debug, Default)]
 pub struct Delivered {
-	pub redirects: Vec<String>,
+	pub redirects: Vec<Redirect>,
 	pub reject: Option<String>,
 	/// Autoresponses (e.g. Sieve vacation) to queue to the outbound spool.
 	pub replies: Vec<AcceptedMessage>,
+	/// Final addresses the message had already been delivered to and would
+	/// have been forwarded from again: nothing was stored or forwarded for
+	/// them, and the caller bounces them with 5.4.6.
+	pub looped: Vec<String>,
 }
 
 /// Delivers messages into `data_dir/accounts/<account>/new/`, one crash-safe
@@ -102,28 +109,32 @@ impl LocalDelivery {
 		self
 	}
 
-	/// Resolve recipients to their distinct accounts. The session already
-	/// rejected unresolvable recipients; hitting one here is a logic error
-	/// and fails the whole delivery (fail closed, client retries).
-	fn accounts_for(&self, message: &AcceptedMessage) -> Result<BTreeSet<String>, SinkError> {
-		let mut accounts = BTreeSet::new();
+	/// Resolve recipients to their distinct accounts, each with the address
+	/// its copy is delivered as (the first one when several recipients reach
+	/// the same account). A multi-target alias fans out to every member
+	/// account, as the member's own address. The session already rejected
+	/// unresolvable recipients; hitting one here is a logic error and fails
+	/// the whole delivery (fail closed, client retries).
+	fn accounts_for(
+		&self,
+		message: &AcceptedMessage,
+	) -> Result<BTreeMap<String, String>, SinkError> {
+		let mut accounts = BTreeMap::new();
 		for recipient in &message.recipients {
 			let address = Address::parse(recipient).map_err(|_| {
 				SinkError::Unavailable(format!("unparseable recipient {recipient}"))
 			})?;
-			match self.directory.current().resolve(&address) {
-				Resolution::Account(account) => {
-					accounts.insert(account);
-				}
-				// A multi-target alias fans out to every member account.
-				Resolution::Alias(members) => {
-					accounts.extend(members);
-				}
-				_ => {
-					return Err(SinkError::Unavailable(format!(
+			let finals = self
+				.directory
+				.current()
+				.final_recipients(&address)
+				.ok_or_else(|| {
+					SinkError::Unavailable(format!(
 						"recipient {recipient} no longer resolves to an account"
-					)));
-				}
+					))
+				})?;
+			for (account, delivered_to) in finals {
+				accounts.entry(account).or_insert(delivered_to);
 			}
 		}
 		Ok(accounts)
@@ -200,11 +211,13 @@ impl LocalDelivery {
 		// hook fires once per matching report even when an alias fans out to
 		// several accounts.
 		let mut ingested = reports::Ingested::new();
-		for account in &accounts {
-			let one = self.deliver_for_account(account, message, mailbox, &mut ingested)?;
+		for (account, delivered_to) in &accounts {
+			let one =
+				self.deliver_for_account(account, delivered_to, message, mailbox, &mut ingested)?;
 			delivered.redirects.extend(one.redirects);
 			delivered.reject = delivered.reject.or(one.reject);
 			delivered.replies.extend(one.replies);
+			delivered.looped.extend(one.looped);
 		}
 		// Report-ingest hook: fires after normal delivery, never affects
 		// outcome, and never fires twice for the same (Kind, domain).
@@ -242,11 +255,12 @@ impl LocalDelivery {
 	fn deliver_for_account(
 		&self,
 		account: &str,
+		delivered_to: &str,
 		message: &AcceptedMessage,
 		hint: Option<&str>,
 		_ingested: &mut reports::Ingested,
 	) -> Result<Delivered, SinkError> {
-		let stored = trace::final_copy(&message.reverse_path, &message.data);
+		let stored = trace::final_copy(&message.reverse_path, delivered_to, &message.data);
 		let data = &stored;
 		if let Some(mailbox) = hint {
 			self.deliver_to_account(account, Some(mailbox), data, &[])
@@ -256,6 +270,9 @@ impl LocalDelivery {
 		// Admin-configured external forwarding, independent of the user filter.
 		let (forwards, keep_local) = self.account_forwards(account, message);
 		let Some(outcome) = self.sieve_outcome(account, message) else {
+			if let Some(looped) = trace::forwarding_loop(message, delivered_to, &forwards) {
+				return Ok(looped);
+			}
 			// No filter (or it failed to compile): normal INBOX delivery, unless
 			// the account forwards with keep_local = false (pure forwarding).
 			if keep_local || forwards.is_empty() {
@@ -263,7 +280,7 @@ impl LocalDelivery {
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 			}
 			return Ok(Delivered {
-				redirects: forwards,
+				redirects: trace::redirects(forwards, delivered_to),
 				..Delivered::default()
 			});
 		};
@@ -275,6 +292,18 @@ impl LocalDelivery {
 				reject,
 				..Delivered::default()
 			});
+		}
+		// Never redirect a bounce (null sender): that risks mail loops.
+		// Account-level forwards are additive to the user's filter; local
+		// storage follows the filter (keep_local governs only the no-filter case).
+		let mut redirects = if message.reverse_path.is_empty() {
+			Vec::new()
+		} else {
+			outcome.redirects
+		};
+		redirects.extend(forwards);
+		if let Some(looped) = trace::forwarding_loop(message, delivered_to, &redirects) {
+			return Ok(looped);
 		}
 		let folders: Vec<Option<String>> = outcome
 			.fileinto
@@ -305,19 +334,11 @@ impl LocalDelivery {
 			.and_then(|request| self.vacation_reply(account, message, &request))
 			.into_iter()
 			.collect();
-		// Never redirect a bounce (null sender): that risks mail loops.
-		let mut redirects = if message.reverse_path.is_empty() {
-			Vec::new()
-		} else {
-			outcome.redirects
-		};
-		// Account-level forwards are additive to the user's filter; local
-		// storage follows the filter (keep_local governs only the no-filter case).
-		redirects.extend(forwards);
 		Ok(Delivered {
-			redirects,
+			redirects: trace::redirects(redirects, delivered_to),
 			reject: None,
 			replies,
+			looped: Vec::new(),
 		})
 	}
 }
@@ -398,7 +419,8 @@ mod tests {
 		let content = fs::read(&files[0]).expect("read delivered file");
 		assert_eq!(
 			content,
-			b"Return-Path: <sender@elsewhere.example>\r\nSubject: hi\r\n\r\nbody\r\n"
+			b"Return-Path: <sender@elsewhere.example>\r\nDelivered-To: alice@example.org\r\n\
+			  Subject: hi\r\n\r\nbody\r\n"
 		);
 	}
 

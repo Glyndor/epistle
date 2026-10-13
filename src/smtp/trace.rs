@@ -189,6 +189,34 @@ pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
 	out
 }
 
+/// The unfolded, trimmed values of every `name` field in the header block
+/// of `data`, in order. Bytes that are not UTF-8 are replaced.
+pub fn header_values(data: &[u8], name: &str) -> Vec<String> {
+	let header_end = header_block_end(data);
+	let mut values: Vec<String> = Vec::new();
+	let mut collecting = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		let text = String::from_utf8_lossy(line);
+		let text = text.trim_end_matches(['\r', '\n']);
+		if matches!(line.first(), Some(b' ' | b'\t')) {
+			if collecting && let Some(value) = values.last_mut() {
+				value.push(' ');
+				value.push_str(text.trim());
+			}
+			continue;
+		}
+		collecting =
+			field_name(line).is_some_and(|field| field.eq_ignore_ascii_case(name.as_bytes()));
+		if collecting && let Some((_, value)) = text.split_once(':') {
+			values.push(value.trim().to_string());
+		}
+	}
+	for value in &mut values {
+		*value = value.trim().to_string();
+	}
+	values
+}
+
 /// The name of the field a header line starts, without trailing blanks;
 /// `None` for a line with no colon.
 fn field_name(line: &[u8]) -> Option<&[u8]> {

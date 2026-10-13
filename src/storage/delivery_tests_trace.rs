@@ -117,3 +117,55 @@ fn every_alias_member_and_every_sieve_folder_copy_is_stamped() {
 		assert_eq!(fields(copy, "return-path"), 1, "{copy}");
 	}
 }
+
+#[test]
+fn delivered_to_follows_the_return_path_and_names_the_address_delivered_to() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery = LocalDelivery::new(dir.path(), directory()).expect("delivery");
+	let mut inbound = message(&["Also-Alice@Example.org"]);
+	inbound.data = b"Delivered-To: someone@earlier.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec();
+	delivery.deliver(inbound).expect("delivered");
+	let copy = &stored(dir.path(), "alice")[0];
+	assert!(
+		copy.starts_with(
+			"Return-Path: <sender@elsewhere.example>\r\nDelivered-To: also-alice@example.org\r\n\
+			 Delivered-To: someone@earlier.example\r\n"
+		),
+		"ours first, the earlier hop's kept: {copy}"
+	);
+	assert_eq!(fields(copy, "delivered-to"), 2, "{copy}");
+}
+
+#[test]
+fn an_alias_delivers_each_member_under_the_member_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let directory = DirectoryHandle::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[
+				("alice@example.org".to_string(), "alice".to_string()),
+				("bob@example.org".to_string(), "bob".to_string()),
+			],
+		)
+		.with_aliases([(
+			"team@example.org".to_string(),
+			AliasSpec {
+				members: vec!["alice@example.org".into(), "Bob@example.org".into()],
+				senders: Vec::new(),
+				hidden: true,
+				list_id: None,
+			},
+		)]),
+	);
+	let delivery = LocalDelivery::new(dir.path(), directory).expect("delivery");
+	delivery
+		.deliver(message(&["team@example.org"]))
+		.expect("delivered");
+	for (account, address) in [("alice", "alice@example.org"), ("bob", "bob@example.org")] {
+		let copies = stored(dir.path(), account);
+		assert_eq!(copies.len(), 1);
+		let second = copies[0].split("\r\n").nth(1).unwrap_or_default();
+		assert_eq!(second, format!("Delivered-To: {address}"), "{}", copies[0]);
+		assert_eq!(fields(&copies[0], "delivered-to"), 1);
+	}
+}

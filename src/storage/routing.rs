@@ -30,7 +30,7 @@ pub struct SplitDelivery {
 	/// used to skip re-sealing a chain we already sealed at inbound accept.
 	arc: Option<(Arc<crate::arc::sealer::ArcSealer>, String)>,
 	/// Counters for Sieve delivery outcomes (reject, vacation, redirect).
-	metrics: Option<Arc<crate::metrics::Metrics>>,
+	pub(super) metrics: Option<Arc<crate::metrics::Metrics>>,
 	/// Outbound webhook for delivery events (fire-and-forget, advisory).
 	webhook: Option<Arc<crate::webhook::Webhook>>,
 }
@@ -121,7 +121,7 @@ impl SplitDelivery {
 	/// with no prior chain — the common case — yields `cv=none` with no lookup;
 	/// a present chain reuses its own recorded status structurally rather than
 	/// re-running cryptographic verification in this sync delivery path.
-	fn arc_seal(&self, data: &[u8]) -> Option<String> {
+	pub(super) fn arc_seal(&self, data: &[u8]) -> Option<String> {
 		let (sealer, our_domain) = self.arc.as_ref()?;
 		let prior = crate::arc::chain::extract(data)
 			.ok()
@@ -153,7 +153,7 @@ impl SplitDelivery {
 
 	/// The envelope sender to use for mail forwarded to `redirect`: an SRS
 	/// rewrite of the original sender when SRS is enabled, else the original.
-	fn forward_sender(&self, original: &str) -> String {
+	pub(super) fn forward_sender(&self, original: &str) -> String {
 		if original.is_empty() {
 			return String::new();
 		}
@@ -312,33 +312,8 @@ impl SplitDelivery {
 						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 				}
 			}
-			// Queue Sieve redirects, preserving the (non-null) original sender.
-			// ARC-seal the forwarded copy once, shared across every target.
-			let forward_data = match self.arc_seal(&message.data) {
-				Some(arc_headers) => {
-					let mut sealed = arc_headers.into_bytes();
-					sealed.extend_from_slice(&message.data);
-					sealed
-				}
-				None => message.data.clone(),
-			};
-			for address in delivered.redirects {
-				let forwarded = AcceptedMessage {
-					reverse_path: self.forward_sender(&message.reverse_path),
-					recipients: vec![address],
-					data: forward_data.clone(),
-					require_tls: false,
-					mailbox: None,
-					tlsrpt_verified: false,
-					no_dsn: Vec::new(),
-				};
-				self.outbound
-					.store(&forwarded)
-					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
-				if let Some(metrics) = &self.metrics {
-					metrics.forwarded();
-				}
-			}
+			self.queue_redirects(&message, delivered.redirects)?;
+			self.bounce_loops(&message, &delivered.looped)?;
 			for reply in delivered.replies {
 				self.outbound
 					.store(&reply)
@@ -382,6 +357,14 @@ impl SplitDelivery {
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		Ok(())
+	}
+
+	/// Store `message` in the outbound spool.
+	pub(super) fn store_outbound(&self, message: &AcceptedMessage) -> Result<(), SinkError> {
+		self.outbound
+			.store(message)
+			.map(|_| ())
+			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}
 
 	/// The `d=` for an outbound message: the domain of its single From
@@ -438,3 +421,7 @@ mod tests_dkim_rotation;
 #[cfg(test)]
 #[path = "routing_tests_dkim_domain.rs"]
 mod tests_dkim_domain;
+
+#[cfg(test)]
+#[path = "routing_tests_forward.rs"]
+mod tests_forward;
