@@ -44,7 +44,12 @@ fn folder_count(root: &std::path::Path, account: &str, mailbox: &str) -> usize {
 			.join(mailbox)
 			.join("new"),
 	)
-	.map(|entries| entries.count())
+	.map(|entries| {
+		entries
+			.flatten()
+			.filter(|entry| entry.file_name().to_string_lossy().ends_with(".eml"))
+			.count()
+	})
 	.unwrap_or(0)
 }
 

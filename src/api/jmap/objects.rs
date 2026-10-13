@@ -289,7 +289,6 @@ pub(super) fn unix_to_utc(time: std::time::SystemTime) -> String {
 	format!("{year:04}-{month:02}-{day:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
-/// Build one JMAP Mailbox object from a mailbox name.
 /// The JMAP body properties of `raw` with every body value fetched.
 /// Entry point for the MIME fuzz target.
 pub(crate) fn email_body_for_fuzzing(raw: &[u8]) -> Value {
@@ -300,7 +299,14 @@ pub(crate) fn email_body_for_fuzzing(raw: &[u8]) -> Value {
 	)
 }
 
-pub(super) fn mailbox_object(data_dir: &std::path::Path, account: &str, name: &str) -> Value {
+/// One JMAP Mailbox object (RFC 8621 §2): `name` is the last level of the
+/// stored name, for people, and `parentId` the id of the mailbox above it.
+pub(super) fn mailbox_object(
+	data_dir: &std::path::Path,
+	account: &str,
+	name: &str,
+	parent_id: Option<&str>,
+) -> Value {
 	let (total, unread) = crate::imap::mailbox::Snapshot::open(
 		data_dir,
 		account,
@@ -317,8 +323,8 @@ pub(super) fn mailbox_object(data_dir: &std::path::Path, account: &str, name: &s
 	.unwrap_or((0, 0));
 	json!({
 		"id": name,
-		"name": name,
-		"parentId": null,
+		"name": crate::util::mailbox_path::display_leaf(name),
+		"parentId": parent_id,
 		"role": mailbox_role(name),
 		"sortOrder": 0,
 		"totalEmails": total,
@@ -328,7 +334,7 @@ pub(super) fn mailbox_object(data_dir: &std::path::Path, account: &str, name: &s
 		"isSubscribed": true,
 		"myRights": {
 			"mayReadItems": true, "mayAddItems": true, "mayRemoveItems": true,
-			"maySetSeen": true, "maySetKeywords": true, "mayCreateChild": false,
+			"maySetSeen": true, "maySetKeywords": true, "mayCreateChild": true,
 			"mayRename": false, "mayDelete": false, "maySubmit": true,
 		},
 	})

@@ -70,24 +70,10 @@ pub enum Command {
 		/// The requested algorithm, uppercased. Only `DEFLATE` is implemented.
 		algorithm: String,
 	},
-	/// `LIST <reference> <pattern>`: list mailboxes. `RETURN (STATUS (...))`
-	/// items are returned inline (LIST-STATUS, RFC 5819); `(SUBSCRIBED)`
-	/// narrows the result to subscribed mailboxes (RFC 5258).
-	List {
-		/// Reference name (often `""` or `"INBOX"`); defines the hierarchy
-		/// context for `pattern`.
-		reference: String,
-		/// Pattern with optional wildcards (`%` for one level, `*` for any).
-		pattern: String,
-		/// `RETURN (STATUS (...))` items to report inline (LIST-STATUS, RFC 5819).
-		return_status: Vec<StatusItem>,
-		/// `(SUBSCRIBED)` selection: list only subscribed mailboxes (RFC 5258).
-		select_subscribed: bool,
-		/// `(SPECIAL-USE)` selection: list only mailboxes with a role (RFC 6154).
-		select_special_use: bool,
-		/// Mailbox attributes explicitly requested by selection or RETURN.
-		return_attributes: Vec<ListAttribute>,
-	},
+	/// `LIST [(<selection>)] <reference> <pattern or (patterns)> [RETURN
+	/// (...)]`: list mailboxes (RFC 9051 §6.3.9, LIST-EXTENDED RFC 5258,
+	/// LIST-STATUS RFC 5819).
+	List(ListCommand),
 	/// `SELECT <mailbox>`: open the mailbox read-write. `(QRESYNC (...))`
 	/// resyncs from a previous session (RFC 7162).
 	Select {
@@ -680,6 +666,7 @@ mod acl;
 mod credentials;
 mod date_time;
 mod list;
+pub use list::ListCommand;
 pub(super) mod literal;
 mod metadata;
 mod notify;

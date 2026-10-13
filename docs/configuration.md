@@ -356,6 +356,34 @@ command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
 context underneath a client that is already decoding would desynchronise it.
 
+### IMAP mailbox names and folders
+
+Folders nest. The hierarchy delimiter is `/`, so `Work/Project` is the
+folder `Project` inside `Work`, and `INBOX/Receipts` lives under the inbox.
+Each level is ASCII letters, digits, space, `-`, `_` and `.`, plus any
+non-ASCII character (clients without UTF-8 send it in modified UTF-7, RFC
+3501 §5.1.3). A level cannot be empty, start with `.` or end with a space.
+A name has at most 16 levels and 128 bytes per level, and at most 255 bytes
+on disk.
+
+| Command | Behaviour |
+|---|---|
+| `CREATE a/b/c` | Also creates `a` and `a/b` when they are missing. A trailing `/` is dropped. |
+| `DELETE a` | Refused with `NO [HASCHILDREN]` while `a` has folders under it; delete those first. |
+| `RENAME a x/y` | Moves `a` and every folder under it to `x/y`, creating `x`. A folder cannot move under itself. |
+| `LIST` / `LSUB` | `%` stops at one level. `\HasChildren`/`\HasNoChildren` come from the folders that exist. A missing level with folders under it is returned `\Noselect \HasChildren` where `%` stops at it (`\NonExistent` under LIST-EXTENDED), and LSUB returns an unsubscribed level above a subscribed folder as `\Noselect`. LIST-EXTENDED takes several patterns and `SUBSCRIBED`, `REMOTE` and `RECURSIVEMATCH` (with `CHILDINFO`). |
+
+Every folder is one directory under `<data_dir>/accounts/<name>/folders/`
+whatever its depth: the name with each `/` written as `&AC8-` (the modified
+UTF-7 spelling of `/`), so `Work/Project` is `folders/Work&AC8-Project/`.
+A folder name can never contain `&AC8-` itself, so each directory maps back
+to exactly one name, and folders created before nesting existed need no
+migration. JMAP shows the same tree through `parentId`, as does the `tree`
+of `GET /api/v1/accounts/{name}/mailboxes`; Sieve `fileinto` and routing
+rules accept nested names, and `epistle export --maildir` writes
+`Work/Project` as the Maildir++ folder `.Work.Project` (an import reads a
+`.` in a Maildir++ folder name as a level).
+
 ### IMAP keywords
 
 `SELECT` advertises the system flags (`\Seen`, `\Answered`, `\Flagged`,

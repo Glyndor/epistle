@@ -38,9 +38,8 @@ fn list_shows_inbox() {
 	let mut session = logged_in(dir.path());
 	session.command_line("rev ENABLE IMAP4rev2");
 	let output = session.command_line(r#"a2 LIST "" "*""#);
-	// CHILDREN (RFC 3348): every leaf mailbox gets \HasNoChildren. epistle
-	// stores mailboxes flat (no hierarchy separator in names), so the answer
-	// is uniform for every returned mailbox.
+	// CHILDREN (RFC 3348): INBOX has no folder under it here, so it is a
+	// leaf and gets \HasNoChildren.
 	assert!(text(&output).contains("* LIST (\\Subscribed \\HasNoChildren) \"/\" \"INBOX\""));
 	assert!(text(&output).contains("a2 OK"));
 }

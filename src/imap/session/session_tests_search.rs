@@ -517,9 +517,8 @@ fn multisearch_selected_without_selection_is_bad() {
 
 #[test]
 fn multisearch_subtree_matches_root_not_same_prefix_sibling() {
-	// The mailbox store is flat (names cannot contain the hierarchy
-	// separator), so a subtree resolves to its named root. A sibling that
-	// merely shares the name as a prefix ("Workshop") must not be included.
+	// A subtree is its root and the folders under it. A sibling that merely
+	// shares the name as a prefix ("Workshop") must not be included.
 	let dir = tempfile::tempdir().expect("tempdir");
 	deliver_to(dir.path(), "Work", b"Subject: a\r\n\r\none\r\n");
 	deliver_to(dir.path(), "Workshop", b"Subject: b\r\n\r\ntwo\r\n");

@@ -154,6 +154,9 @@ mod utf8;
 #[path = "session_tests_quota_names.rs"]
 mod quota_names;
 
+#[path = "session_tests_hierarchy_surfaces.rs"]
+mod hierarchy_surfaces;
+
 #[path = "session_tests_utf8_responses.rs"]
 mod utf8_responses;
 

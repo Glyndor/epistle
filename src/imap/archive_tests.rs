@@ -129,6 +129,40 @@ fn restore_roundtrips_message_back_to_mailbox_with_fresh_uid() {
 }
 
 #[test]
+fn restore_returns_a_message_to_its_subfolder() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	mailbox::create(dir.path(), "alice", "Work/Project").expect("create");
+	let id = delivered(
+		dir.path(),
+		"alice",
+		"Work/Project",
+		b"Subject: hi\r\n\r\nbody\r\n",
+	);
+	let mut snapshot = Snapshot::open_at(
+		dir.path(),
+		"alice",
+		"Work/Project",
+		&MessageCrypto::disabled(),
+		30,
+		1_000,
+	)
+	.expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("flag");
+	snapshot.expunge().expect("expunge");
+	let restored_to =
+		archive::restore(dir.path(), "alice", id, &MessageCrypto::disabled()).expect("restore");
+	assert_eq!(restored_to, "Work/Project");
+	let snapshot = Snapshot::open(
+		dir.path(),
+		"alice",
+		"Work/Project",
+		&MessageCrypto::disabled(),
+	)
+	.expect("snapshot");
+	assert_eq!(snapshot.len(), 1);
+}
+
+#[test]
 fn restore_falls_back_to_inbox_when_original_mailbox_was_deleted() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let id = delivered(

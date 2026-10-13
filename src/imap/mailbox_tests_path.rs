@@ -161,9 +161,9 @@ fn legitimate_names_keep_their_layout() {
 }
 
 #[test]
-fn hierarchy_delimiters_are_still_refused() {
+fn traversals_and_empty_levels_are_refused() {
 	let (_root, data) = nested();
-	for mailbox in ["Archive/2024", "a\\b", "../x", ".."] {
+	for mailbox in ["Archive//2024", "/Archive", "a\\b", "../x", "..", "a/.."] {
 		let result = create(&data, "alice", mailbox);
 		assert!(
 			result.is_err(),

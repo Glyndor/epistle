@@ -14,9 +14,15 @@ fn write_filter(root: &Path, script: &str) {
 	fs::write(dir.join("filter.sieve"), script).expect("write filter");
 }
 
+/// The messages (`.eml` files) in a mailbox's `new/` directory.
 fn count(dir: &Path) -> usize {
 	fs::read_dir(dir)
-		.map(|entries| entries.count())
+		.map(|entries| {
+			entries
+				.flatten()
+				.filter(|entry| entry.file_name().to_string_lossy().ends_with(".eml"))
+				.count()
+		})
 		.unwrap_or(0)
 }
 
@@ -103,7 +109,7 @@ fn fileinto_create_makes_the_folder_under_its_imap_spelling() {
 #[test]
 fn fileinto_a_name_imap_cannot_create_keeps_the_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	deliver_with(dir.path(), "fileinto \"Proyectos/Año\";");
+	deliver_with(dir.path(), "fileinto \"Proyectos//Año\";");
 	assert_eq!(
 		inbox_messages(dir.path()),
 		1,
@@ -116,6 +122,36 @@ fn fileinto_a_name_imap_cannot_create_keeps_the_message() {
 		"{:?}",
 		folders(dir.path())
 	);
+}
+
+#[test]
+fn fileinto_a_hierarchical_name_lands_in_the_subfolder() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver_with(
+		dir.path(),
+		"require [\"fileinto\", \"mailbox\"]; fileinto :create \"Proyectos/Año\";",
+	);
+	assert_eq!(folder_messages(dir.path(), "Proyectos&AC8-A&APE-o"), 1);
+	assert_eq!(inbox_messages(dir.path()), 0, "nothing kept in INBOX");
+	let names = crate::imap::mailbox::list(dir.path(), "alice");
+	assert!(
+		names.contains(&"Proyectos".to_string())
+			&& names.contains(&"Proyectos/A&APE-o".to_string()),
+		"IMAP lists the subfolder and its superior: {names:?}"
+	);
+}
+
+#[test]
+fn mailboxexists_sees_a_hierarchical_folder() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	crate::imap::mailbox::create(dir.path(), "alice", "Lists/Rust").expect("IMAP CREATE");
+	deliver_with(
+		dir.path(),
+		"require [\"fileinto\", \"mailbox\"]; \
+		 if mailboxexists \"Lists/Rust\" { fileinto \"Lists/Rust\"; }",
+	);
+	assert_eq!(folder_messages(dir.path(), "Lists&AC8-Rust"), 1);
+	assert_eq!(inbox_messages(dir.path()), 0);
 }
 
 #[test]

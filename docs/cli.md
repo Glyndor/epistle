@@ -1006,8 +1006,8 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 
 | Command | What it does |
 |---|---|
-| `epistle export --account N` | Export an account's mailboxes as an mbox stream on stdout. |
-| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. |
+| `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
+| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |

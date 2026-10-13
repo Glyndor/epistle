@@ -475,9 +475,8 @@ fn list_extended_subscribed_selection_and_attribute() {
 #[test]
 fn list_advertises_has_no_children() {
 	// CHILDREN (RFC 3348): every LIST line carries \HasNoChildren or
-	// \HasChildren. epistle's mailbox store is flat (names cannot contain
-	// the hierarchy separator), so the answer is uniformly \HasNoChildren
-	// for every mailbox.
+	// \HasChildren. None of these mailboxes has a folder under it, so each
+	// is \HasNoChildren; list_status_tests_hierarchy covers \HasChildren.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	session.command_line("rev ENABLE IMAP4rev2");
@@ -500,7 +499,7 @@ fn list_advertises_has_no_children() {
 		);
 		assert!(
 			!line.contains("\\HasChildren"),
-			"unexpected \\HasChildren in flat store: {line}"
+			"unexpected \\HasChildren on a leaf: {line}"
 		);
 	}
 
@@ -514,8 +513,8 @@ fn list_advertises_has_no_children() {
 #[test]
 fn list_children_selection_option_is_accepted() {
 	// RFC 3348 §3.3 lets the client request child expansion with the
-	// `(CHILDREN)` selection option. With no hierarchy the answer is the
-	// same set of mailboxes, all still marked \HasNoChildren.
+	// `(CHILDREN)` selection option. It selects nothing more; these leaves
+	// are all marked \HasNoChildren.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	session.command_line("a2 CREATE Sent");

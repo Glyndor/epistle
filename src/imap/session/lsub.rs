@@ -1,6 +1,7 @@
 //! IMAP SUBSCRIBE / UNSUBSCRIBE / LSUB (RFC 9051 §6.3.6).
 
 use super::{Output, Session, mailbox};
+use crate::imap::list_tree::{self, Hidden};
 
 impl Session {
 	pub(super) fn lsub(&mut self, tag: &str, reference: &str, pattern: &str) -> Output {
@@ -8,12 +9,21 @@ impl Session {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
 		let mut response = String::new();
-		for name in mailbox::list_subscribed(&self.data_dir, &account) {
-			let matches = crate::imap::list_pattern::matches(reference, pattern, &name);
-			if matches {
-				let wire = self.mailbox_astring(&name);
-				response.push_str(&format!("* LSUB () \"/\" {wire}\r\n"));
-			}
+		let subscriptions = mailbox::list_subscribed(&self.data_dir, &account);
+		let matches = |name: &str| crate::imap::list_pattern::matches(reference, pattern, name);
+		// RFC 3501 §6.3.9: a level that `%` stops at, and that is not
+		// subscribed itself, is returned `\Noselect` for the subscribed
+		// names below it.
+		for entry in list_tree::select(
+			&[],
+			&subscriptions,
+			|_, _| true,
+			matches,
+			Hidden::Placeholder,
+		) {
+			let attributes = if entry.placeholder { "\\Noselect" } else { "" };
+			let wire = self.mailbox_astring(entry.name);
+			response.push_str(&format!("* LSUB ({attributes}) \"/\" {wire}\r\n"));
 		}
 		response.push_str(&format!("{tag} OK LSUB completed\r\n"));
 		Output::text(response)
