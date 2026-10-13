@@ -12,7 +12,9 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
+};
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How Spaceship takes a TXT `value` and lists it back; see `wire_value`.
@@ -219,13 +221,26 @@ impl SpaceshipProvider {
 	/// the value-bearing case includes it. Replies 204 whether or not
 	/// anything matched (idempotent by definition).
 	async fn remove(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		let url = self.records_url()?;
-		let mut item = serde_json::json!({"type": kind, "name": rel});
 		// TXT value-bearing deletes need the value to disambiguate
 		// same-name records; the wholesale empty-value case leaves
 		// the field off.
-		if record.kind == RecordKind::Txt && !record.value.is_empty() {
-			item["value"] = serde_json::Value::String(Self::wire_value(record));
+		let value = (record.kind == RecordKind::Txt && !record.value.is_empty())
+			.then(|| Self::wire_value(record));
+		self.remove_value(kind, rel, value).await
+	}
+
+	/// Send one DELETE for `(kind, rel)`, naming `value` exactly as given
+	/// when there is one.
+	async fn remove_value(
+		&self,
+		kind: &str,
+		rel: &str,
+		value: Option<String>,
+	) -> Result<(), ProviderError> {
+		let url = self.records_url()?;
+		let mut item = serde_json::json!({"type": kind, "name": rel});
+		if let Some(value) = value {
+			item["value"] = serde_json::Value::String(value);
 		}
 		let response = self
 			.request(reqwest::Method::DELETE, url)
@@ -324,8 +339,40 @@ impl SpaceshipProvider {
 		// Spaceship has no in-place update: remove the existing matching
 		// record first, then add the new one. remove() is a 204 either way,
 		// so this is also the idempotent path when the record is absent.
-		self.remove(kind, &rel, &record).await?;
+		if record.kind == RecordKind::Txt {
+			// A TXT delete matches the exact stored value, so the record
+			// to remove is the OLD one of the same purpose (the contract
+			// in `src/dns/provider.rs`), read from the zone; removing by
+			// the new value would leave a rotated DKIM key behind. A
+			// sibling of another purpose is never named.
+			for old in self.txt_values_at(&rel).await? {
+				if same_txt_purpose(&old, &record.value) {
+					self.remove_value(kind, &rel, Some(old)).await?;
+				}
+			}
+		} else {
+			self.remove(kind, &rel, &record).await?;
+		}
 		self.add(kind, &rel, &record).await
+	}
+
+	/// The stored values of every TXT at the relative name `rel`, as the
+	/// list returns them.
+	async fn txt_values_at(&self, rel: &str) -> Result<Vec<String>, ProviderError> {
+		Ok(self
+			.list_all()
+			.await?
+			.into_iter()
+			.filter(|item| {
+				item.get("type").and_then(|v| v.as_str()) == Some("TXT")
+					&& item.get("name").and_then(|v| v.as_str()) == Some(rel)
+			})
+			.filter_map(|item| {
+				item.get("value")
+					.and_then(|v| v.as_str())
+					.map(str::to_string)
+			})
+			.collect())
 	}
 
 	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
@@ -423,3 +470,7 @@ mod path_tests;
 #[cfg(test)]
 #[path = "tests_txt_forms.rs"]
 mod tests_txt_forms;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;

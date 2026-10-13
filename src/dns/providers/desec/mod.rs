@@ -9,7 +9,9 @@ use serde::Deserialize;
 
 use crate::net::HttpsUrl;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How deSEC wants a TXT value written and lists it back; see
@@ -202,7 +204,21 @@ impl DesecProvider {
 impl DnsProvider for DesecProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(async move {
-			let content = Self::record_content(record.kind, &record.value);
+			let mut content = Self::record_content(record.kind, &record.value);
+			// The bulk PUT replaces the whole rrset. The upsert contract
+			// in `src/dns/provider.rs` replaces only the TXT of the same
+			// purpose, so the siblings the live rrset holds go back in.
+			if record.kind == RecordKind::Txt {
+				self.authorize(&record)?;
+				let kind = Self::rrset_kind(record.kind)?;
+				if let Some(rrset) = self.fetch_rrset(&record.name, kind).await? {
+					let siblings = rrset
+						.records
+						.into_iter()
+						.filter(|r| !same_txt_purpose(r, &record.value));
+					content = siblings.chain(content).collect();
+				}
+			}
 			self.put_rrset(&record, content).await
 		})
 	}

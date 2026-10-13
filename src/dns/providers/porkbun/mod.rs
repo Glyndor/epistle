@@ -23,6 +23,7 @@ use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
+	same_txt_purpose,
 };
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
@@ -197,12 +198,17 @@ impl PorkbunProvider {
 		Ok(self.call(&segments, serde_json::Value::Null).await?.records)
 	}
 
-	/// The ids of every record with this fully-qualified name and type. More
-	/// than one means the zone already holds duplicates (two TXT at the same
-	/// name is the classic case), which an upsert has to collapse rather than
-	/// add to.
-	async fn matching_ids(&self, name: &str, kind: &str) -> Result<Vec<String>, ProviderError> {
-		let name = name.trim_end_matches('.');
+	/// The ids of every record an upsert of `record` replaces: same
+	/// fully-qualified name and type, and for TXT the same purpose (the
+	/// contract in `src/dns/provider.rs`), so a sibling TXT at the name is
+	/// left alone. More than one means the zone already holds duplicates,
+	/// which the upsert collapses rather than adds to.
+	async fn matching_ids(
+		&self,
+		record: &DnsRecord,
+		kind: &str,
+	) -> Result<Vec<String>, ProviderError> {
+		let name = record.name.trim_end_matches('.');
 		Ok(self
 			.retrieve()
 			.await?
@@ -210,6 +216,8 @@ impl PorkbunProvider {
 			.filter(|r| {
 				r.kind.eq_ignore_ascii_case(kind)
 					&& r.name.trim_end_matches('.').eq_ignore_ascii_case(name)
+					&& (record.kind != RecordKind::Txt
+						|| same_txt_purpose(&r.content, &record.value))
 			})
 			.map(|r| r.id)
 			.collect())
@@ -301,7 +309,7 @@ impl PorkbunProvider {
 				map.insert("content".to_string(), target.into());
 			}
 		}
-		let existing = self.matching_ids(&record.name, kind).await?;
+		let existing = self.matching_ids(&record, kind).await?;
 		match existing.split_first() {
 			// Replace in place, then drop any duplicate left at the same
 			// name/type so an upsert never widens the record set.

@@ -36,7 +36,9 @@ use serde_json::{Value, json};
 
 use crate::net::HttpsUrl;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How Cloud DNS wants a TXT value written and lists it back; see
@@ -369,16 +371,30 @@ impl GcloudProvider {
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let kind_str = record.kind.as_str();
 		let fqdn = self.fqdn(&record);
+		let existing = rrsets
+			.into_iter()
+			.find(|r| r.name == fqdn && r.kind == kind_str);
+		let mut rrdatas = self.rrdatas(&record);
+		// A change replaces the whole rrset. The upsert contract in
+		// `src/dns/provider.rs` replaces only the TXT of the same
+		// purpose, so the siblings the live rrset holds go back in.
+		if record.kind == RecordKind::Txt
+			&& let Some(old) = &existing
+		{
+			let siblings = old
+				.rrdatas
+				.iter()
+				.filter(|r| !same_txt_purpose(r, &record.value))
+				.cloned();
+			rrdatas = siblings.chain(rrdatas).collect();
+		}
 		let new_rrset = Rrset {
 			name: fqdn.clone(),
 			kind: kind_str.to_string(),
 			ttl: record.ttl,
-			rrdatas: self.rrdatas(&record),
+			rrdatas,
 		};
-		match rrsets
-			.into_iter()
-			.find(|r| r.name == fqdn && r.kind == kind_str)
-		{
+		match existing {
 			None => self.post_change(&managed_zone, &[new_rrset], &[]).await,
 			Some(old) if old.ttl == new_rrset.ttl && same_rdatas(&record, &old, &new_rrset) => {
 				Ok(())
@@ -489,19 +505,20 @@ impl DnsProvider for GcloudProvider {
 }
 
 /// Whether `old` already holds what `new` would write, so the upsert can
-/// skip the change. TXT compares logical values, because Cloud DNS may list
-/// a record with its strings spaced or escaped differently from how it was
-/// written; every other kind compares the rdata verbatim.
+/// skip the change. TXT compares the logical values in any order, because
+/// Cloud DNS may list a record with its strings spaced or escaped
+/// differently from how it was written; every other kind compares the
+/// rdata verbatim.
 fn same_rdatas(record: &DnsRecord, old: &Rrset, new: &Rrset) -> bool {
 	if record.kind != RecordKind::Txt {
 		return old.rrdatas == new.rrdatas;
 	}
-	old.rrdatas.len() == new.rrdatas.len()
-		&& old
-			.rrdatas
-			.iter()
-			.zip(&new.rrdatas)
-			.all(|(a, b)| same_txt_value(a, b))
+	let logical = |rrdatas: &[String]| {
+		let mut values: Vec<String> = rrdatas.iter().map(|r| txt_decode(r, TXT_FORM)).collect();
+		values.sort();
+		values
+	};
+	logical(&old.rrdatas) == logical(&new.rrdatas)
 }
 
 /// Map a Google type token to a [`RecordKind`], defaulting to TXT.
@@ -584,6 +601,10 @@ mod tests_txt;
 #[cfg(test)]
 #[path = "tests_txt_forms.rs"]
 mod tests_txt_forms;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;
 #[cfg(test)]
 #[path = "tests_url.rs"]
 mod tests_url;

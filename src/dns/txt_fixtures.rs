@@ -55,3 +55,14 @@ pub(crate) fn all() -> Vec<(String, String)> {
 		(CALLER_QUOTED.to_string(), CALLER_QUOTED_LOGICAL.to_string()),
 	]
 }
+
+/// An untagged TXT that shares a name with epistle's own record, the way
+/// an ACME challenge or a site verification token does. Replacing a record
+/// of another purpose at that name must leave it alone.
+pub(crate) const SIBLING: &str = "token-sibling";
+
+/// A DKIM record about to be rotated out.
+pub(crate) const OLD_DKIM: &str = "v=DKIM1; k=rsa; p=OLDKEY";
+
+/// The DKIM record that replaces [`OLD_DKIM`].
+pub(crate) const NEW_DKIM: &str = "v=DKIM1; k=rsa; p=NEWKEY";

@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::net::HttpsUrl;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
+use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, same_txt_purpose};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How Route 53 wants a TXT value written and returns it; see `change`.
@@ -340,7 +340,25 @@ fn extract_tag_lower(block_lower: &str, tag: &str) -> Option<String> {
 
 impl DnsProvider for Route53Provider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
-		Box::pin(async move { self.change("UPSERT", &record).await })
+		Box::pin(async move {
+			// An UPSERT replaces the whole rrset. The upsert contract in
+			// `src/dns/provider.rs` replaces only the TXT of the same
+			// purpose, so the siblings the live rrset holds go back in.
+			if record.kind == RecordKind::Txt
+				&& let Some(rrset) = self.fetch_txt_rrset(&record.name).await?
+			{
+				let mut values: Vec<String> = rrset
+					.values
+					.into_iter()
+					.filter(|v| !same_txt_purpose(&txt_read(v), &record.value))
+					.collect();
+				values.push(txt_encode(&record.value, TXT_FORM));
+				return self
+					.upsert_rrset(&record.name, "TXT", record.ttl, &values)
+					.await;
+			}
+			self.change("UPSERT", &record).await
+		})
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(async move {
@@ -505,6 +523,10 @@ mod tests_txt;
 #[cfg(test)]
 #[path = "tests_txt_forms.rs"]
 mod tests_txt_forms;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]

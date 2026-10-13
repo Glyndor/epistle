@@ -189,7 +189,12 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 
 #[tokio::test]
 async fn upsert_txt_under_subdomain_sends_relative_name_and_two_auth_headers() {
-	let (provider, state) = mock(Vec::new()).await;
+	// The zone already holds a DMARC record; the DELETE that clears the
+	// way names that old value, not the new one.
+	let (provider, state) = mock(vec![serde_json::json!({
+		"type": "TXT", "name": "_dmarc", "value": "v=DMARC1; p=quarantine", "ttl": 3600
+	})])
+	.await;
 	provider
 		.upsert("example.org", txt("_dmarc.example.org", "v=DMARC1; p=none"))
 		.await
@@ -216,7 +221,10 @@ async fn upsert_txt_under_subdomain_sends_relative_name_and_two_auth_headers() {
 		.expect("delete body");
 	assert!(delete_body.contains("\"type\":\"TXT\""), "{delete_body}");
 	assert!(delete_body.contains("\"name\":\"_dmarc\""), "{delete_body}");
-	assert!(delete_body.contains("v=DMARC1; p=none"), "{delete_body}");
+	assert!(
+		delete_body.contains("v=DMARC1; p=quarantine"),
+		"{delete_body}"
+	);
 	// PUT body — `force: true`, value under `value` (not `address`).
 	let put_body = s
 		.bodies

@@ -468,3 +468,6 @@ async fn mx_body_carries_the_notes_field() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+#[path = "tests_contract.rs"]
+mod contract;
