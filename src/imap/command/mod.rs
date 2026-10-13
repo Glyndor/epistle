@@ -351,15 +351,41 @@ pub enum NotifyRequest {
 	None,
 	/// `NOTIFY SET [STATUS] (...)`: enable notifications. `status` records the
 	/// `STATUS` return modifier. `selected` holds the events requested for the
-	/// `selected` mailbox specifier (the only specifier fully supported); other
-	/// specifiers are accepted and ignored.
+	/// `selected` mailbox specifier, the only one whose events are pushed;
+	/// `others` keeps the remaining groups for the initial STATUS replies.
 	Set {
 		/// Whether the request carried the `STATUS` return modifier: when
-		/// set, status responses for newly selected mailboxes are emitted.
+		/// set, a STATUS reply goes out for every mailbox in `others`.
 		status: bool,
 		/// Events requested for the `selected` mailbox specifier.
 		selected: Vec<NotifyEvent>,
+		/// The event groups naming other mailboxes, in request order.
+		others: Vec<NotifyGroup>,
 	},
+}
+
+/// A NOTIFY event group for mailboxes other than the selected one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotifyGroup {
+	/// Which mailboxes the group covers.
+	pub mailboxes: NotifyMailboxes,
+	/// The events requested for them (empty for `NONE`).
+	pub events: Vec<NotifyEvent>,
+}
+
+/// A `filter-mailboxes-other` mailbox specifier (RFC 5465 §8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyMailboxes {
+	/// `inboxes`: the mailboxes that receive mail, here INBOX.
+	Inboxes,
+	/// `personal`: every mailbox of the user.
+	Personal,
+	/// `subscribed`: every subscribed mailbox.
+	Subscribed,
+	/// `subtree <mailboxes>`: the named mailboxes and all their children.
+	Subtree(Vec<String>),
+	/// `mailboxes <mailboxes>`: exactly the named mailboxes.
+	Mailboxes(Vec<String>),
 }
 
 /// A NOTIFY message event (RFC 5465 §6). Only the events the server can deliver
@@ -395,6 +421,8 @@ pub enum StatusItem {
 	Deleted,
 	/// `MAILBOXID`: the mailbox's stable object id (OBJECTID, RFC 8474).
 	MailboxId,
+	/// `HIGHESTMODSEQ`: the mailbox's highest mod-sequence (RFC 7162 §3.1.6).
+	HighestModseq,
 }
 
 /// An ESEARCH `RETURN` option (RFC 4731).

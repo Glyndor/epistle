@@ -134,6 +134,9 @@ impl Session {
 				StatusItem::MailboxId => {
 					format!("MAILBOXID (M{})", snapshot.uid_validity())
 				}
+				StatusItem::HighestModseq => {
+					format!("HIGHESTMODSEQ {}", snapshot.highest_modseq())
+				}
 			};
 			parts.push_str(&rendered);
 		}

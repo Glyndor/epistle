@@ -1,7 +1,7 @@
 //! CONDSTORE enabling commands (RFC 7162 §3.1) and the MODSEQ value that
 //! SEARCH reports when its criteria test mod-sequences (§3.1.5).
 
-use super::super::command::{Command, FetchItem, ReturnOpt, SearchKey, Tagged};
+use super::super::command::{Command, FetchItem, ReturnOpt, SearchKey, StatusItem, Tagged};
 use super::{Output, Session, State};
 
 impl Session {
@@ -39,8 +39,8 @@ impl Session {
 
 /// Whether `command` is a CONDSTORE enabling command (RFC 7162 §3.1): FETCH
 /// with MODSEQ or CHANGEDSINCE, STORE with UNCHANGEDSINCE, a search whose
-/// criteria use MODSEQ, SELECT or EXAMINE with QRESYNC, and ENABLE
-/// CONDSTORE or QRESYNC.
+/// criteria use MODSEQ, SELECT or EXAMINE with QRESYNC, STATUS with
+/// HIGHESTMODSEQ, and ENABLE CONDSTORE or QRESYNC.
 fn enables_condstore(command: &Command) -> bool {
 	match command {
 		Command::Fetch {
@@ -56,6 +56,7 @@ fn enables_condstore(command: &Command) -> bool {
 		| Command::Sort { criteria, .. }
 		| Command::Thread { criteria, .. } => uses_modseq(criteria),
 		Command::Select { qresync, .. } | Command::Examine { qresync, .. } => qresync.is_some(),
+		Command::Status { items, .. } => items.contains(&StatusItem::HighestModseq),
 		Command::Enable { capabilities } => capabilities
 			.iter()
 			.any(|c| c.eq_ignore_ascii_case("CONDSTORE") || c.eq_ignore_ascii_case("QRESYNC")),

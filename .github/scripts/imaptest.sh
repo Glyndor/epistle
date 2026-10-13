@@ -40,7 +40,6 @@ declare -A KNOWN_FAILING=(
 	[uidvalidity]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[broken]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[fetch-body-message-rfc822-mime]="FETCH ENVELOPE, BINARY and STATUS replies differ"
-	[notify]="ID line limit; NOTIFY SET STATUS syntax"
 )
 
 work=$(mktemp -d)

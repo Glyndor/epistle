@@ -1,4 +1,4 @@
-use super::super::{Command, NotifyEvent, NotifyRequest, parse};
+use super::super::{Command, NotifyEvent, NotifyGroup, NotifyMailboxes, NotifyRequest, parse};
 
 fn notify(line: &str) -> Result<NotifyRequest, ()> {
 	match parse(line).map_err(|_| ())?.command {
@@ -26,6 +26,7 @@ fn parses_notify_set_selected() {
 				NotifyEvent::MessageExpunge,
 				NotifyEvent::FlagChange,
 			],
+			others: vec![],
 		}
 	);
 }
@@ -38,25 +39,57 @@ fn parses_notify_set_status_modifier() {
 		NotifyRequest::Set {
 			status: true,
 			selected: vec![NotifyEvent::MessageNew],
+			others: vec![],
 		}
 	);
 }
 
 #[test]
-fn accepts_and_ignores_other_specifiers() {
-	// personal/subtree/mailboxes are accepted; only `selected` events are kept.
+fn records_other_specifiers() {
 	let request = notify(
 		"a1 NOTIFY SET (personal (MessageNew)) (subtree (Foo Bar) (MessageNew)) \
 		 (selected (MessageExpunge))",
 	)
 	.expect("parses");
+	let new = vec![NotifyEvent::MessageNew];
 	assert_eq!(
 		request,
 		NotifyRequest::Set {
 			status: false,
 			selected: vec![NotifyEvent::MessageExpunge],
+			others: vec![
+				NotifyGroup {
+					mailboxes: NotifyMailboxes::Personal,
+					events: new.clone(),
+				},
+				NotifyGroup {
+					mailboxes: NotifyMailboxes::Subtree(vec!["Foo".into(), "Bar".into()]),
+					events: new,
+				},
+			],
 		}
 	);
+}
+
+#[test]
+fn parses_a_single_mailbox_without_parentheses() {
+	// RFC 5465 §8: one-or-more-mailbox = mailbox / "(" mailbox *(SP mailbox) ")"
+	let request = notify("a1 notify set status (mailboxes imaptest2 (MessageNew MessageExpunge))")
+		.expect("parses");
+	assert_eq!(
+		request,
+		NotifyRequest::Set {
+			status: true,
+			selected: vec![],
+			others: vec![NotifyGroup {
+				mailboxes: NotifyMailboxes::Mailboxes(vec!["imaptest2".into()]),
+				events: vec![NotifyEvent::MessageNew, NotifyEvent::MessageExpunge],
+			}],
+		}
+	);
+	assert!(notify("a1 NOTIFY SET (mailboxes \"a b\" NONE)").is_ok());
+	assert!(notify("a1 NOTIFY SET (mailboxes () (MessageNew))").is_err());
+	assert!(notify("a1 NOTIFY SET (mailboxes (MessageNew))").is_err());
 }
 
 #[test]
@@ -67,6 +100,7 @@ fn accepts_none_event_list_for_specifier() {
 		NotifyRequest::Set {
 			status: false,
 			selected: vec![],
+			others: vec![],
 		}
 	);
 }

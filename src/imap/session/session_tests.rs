@@ -177,3 +177,6 @@ mod sort_text;
 
 #[path = "session_tests_thread_ordered.rs"]
 mod thread_ordered;
+
+#[path = "session_tests_notify_status.rs"]
+mod notify_status;
