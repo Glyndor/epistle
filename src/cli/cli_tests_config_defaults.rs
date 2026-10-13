@@ -37,6 +37,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyRevoke { config, .. })
 		| Command::Reports { config, .. } => Some(config),
 		Command::MoveSubids(args) => Some(&args.config),
+		Command::Migrate(args) => Some(&args.config),
 		Command::Stack { config, .. }
 		| Command::Service { config, .. }
 		| Command::Limits { config, .. }

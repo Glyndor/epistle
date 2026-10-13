@@ -36,6 +36,7 @@ pub mod jwt;
 pub mod log_id;
 pub mod managesieve;
 pub mod metrics;
+pub(crate) mod migrate;
 pub mod mtasts;
 pub mod net;
 pub mod oauth;

@@ -34,6 +34,7 @@ impl Command {
 			| Command::ConfigCheck { .. }
 			| Command::Export { .. }
 			| Command::Import { .. }
+			| Command::Migrate(_)
 			| Command::Backup { .. }
 			| Command::Restore { .. }
 			| Command::Verify { .. }

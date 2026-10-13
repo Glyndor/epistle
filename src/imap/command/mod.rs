@@ -665,6 +665,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 mod acl;
 mod credentials;
 mod date_time;
+pub(crate) use date_time::parse as parse_date_time;
 mod list;
 pub use list::ListCommand;
 pub(super) mod literal;
@@ -678,7 +679,7 @@ mod select_params;
 pub(crate) use literal::{literal_announcement_in_line, literal_announcement_in_tail};
 
 pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
-pub(super) use parse::MAX_APPEND_SIZE;
+pub(crate) use parse::MAX_APPEND_SIZE;
 pub use parse::parse;
 
 #[cfg(test)]

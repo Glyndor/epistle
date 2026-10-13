@@ -34,6 +34,7 @@ mod legacy;
 mod limits;
 mod local;
 mod masked;
+mod migrate;
 mod mobileconfig;
 mod mta_sts_serve;
 mod pick;
@@ -80,12 +81,9 @@ mod webhook_admin;
 /// Re-export of the answers structure so integration tests can
 /// deserialise the `epistle init --print-answers` output without
 /// depending on the otherwise-private `init` module.
-pub use init::Answers;
-pub use pick::run_from_env;
+pub use {init::Answers, pick::run_from_env};
 
-use util::generate_secret;
-
-use std::path::PathBuf;
+use {std::path::PathBuf, util::generate_secret};
 
 #[cfg(test)]
 use std::process::ExitCode;
@@ -704,6 +702,11 @@ pub enum Command {
 		#[arg(long)]
 		json: bool,
 	},
+	/// Move mail and settings from another mail server into this one.
+	///
+	/// `imap` copies a remote account's folders over IMAP and can be run
+	/// again to copy only what arrived since.
+	Migrate(migrate::MigrateArgs),
 	/// Print a shell completion script on stdout.
 	///
 	/// The Debian package already installs all three; this is for a binary

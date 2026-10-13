@@ -22,7 +22,9 @@ pub(super) fn split_date_time(text: &str) -> Result<(Option<InternalDate>, &str)
 }
 
 /// Parse the inside of a date-time string into an instant and its zone.
-fn parse(value: &str) -> Option<InternalDate> {
+/// Shared with the IMAP migration client, which reads INTERNALDATE in the
+/// same form.
+pub(crate) fn parse(value: &str) -> Option<InternalDate> {
 	let value = value.strip_prefix(' ').unwrap_or(value);
 	let (date, rest) = value.split_once(' ')?;
 	let (time, zone) = rest.split_once(' ')?;
