@@ -1,6 +1,6 @@
 use super::super::command::SequenceSet;
 use super::mailbox::Snapshot;
-use super::{Command, SearchKey, mailbox};
+use super::{Command, SearchKey, mailbox, search_fields};
 use crate::util::encoded_word;
 pub(super) use crate::util::header::header_value as header_value_raw;
 
@@ -102,6 +102,7 @@ pub(super) fn search_matches(
 			let text = content.get_or_insert_with(|| load_content(snapshot, message));
 			text.contains(needle.as_str())
 		}
+		SearchKey::Body(needle) => search_fields::body_matches(needle, snapshot, message, content),
 		SearchKey::Or(a, b) => {
 			search_matches(a, message, seqno, maxima, snapshot, content, saved)
 				|| search_matches(b, message, seqno, maxima, snapshot, content, saved)
@@ -119,6 +120,12 @@ pub(super) fn search_matches(
 		SearchKey::On(y, m, d) => {
 			systemtime_to_epoch_day(message.internal_date) == date_to_epoch_day(*y, *m, *d)
 		}
+		SearchKey::SentBefore(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
+			.is_some_and(|day| day < date_to_epoch_day(*y, *m, *d)),
+		SearchKey::SentSince(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
+			.is_some_and(|day| day >= date_to_epoch_day(*y, *m, *d)),
+		SearchKey::SentOn(y, m, d) => search_fields::sent_epoch_day(snapshot, message)
+			.is_some_and(|day| day == date_to_epoch_day(*y, *m, *d)),
 		SearchKey::Larger(n) => message.size > u64::from(*n),
 		SearchKey::Smaller(n) => message.size < u64::from(*n),
 		SearchKey::ModSeq(n) => message.modseq >= *n,

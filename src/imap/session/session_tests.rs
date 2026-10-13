@@ -84,6 +84,8 @@ mod paths;
 mod quota_zero;
 #[path = "session_tests_search.rs"]
 mod search;
+#[path = "session_tests_search_keys.rs"]
+mod search_keys;
 
 #[path = "session_tests_rev1.rs"]
 mod rev1;

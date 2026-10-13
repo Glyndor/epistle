@@ -19,6 +19,7 @@ mod lsub;
 mod metadata;
 mod notify;
 mod quota;
+mod search_fields;
 mod select;
 mod sort;
 mod state;
