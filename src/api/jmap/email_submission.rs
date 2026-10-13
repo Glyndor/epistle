@@ -57,13 +57,24 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 		.ok_or("notFound")?;
 	let headers = String::from_utf8_lossy(&raw);
 	let envelope = submission.get("envelope");
-	let mail_from = envelope
+	// RFC 8621 section 7.5: without an envelope, MAIL FROM is the Sender
+	// header if there is one, else the From header. The null reverse path
+	// is for bounces only and never comes out of a missing envelope. Either
+	// address is checked below like an explicit one.
+	let mail_from = match envelope
 		.and_then(|e| e.get("mailFrom"))
 		.and_then(|m| m.get("email"))
 		.and_then(Value::as_str)
-		.or_else(|| submission.get("identityId").and_then(Value::as_str))
-		.unwrap_or("")
-		.to_string();
+	{
+		Some(email) => email.to_string(),
+		None => ["sender", "from"]
+			.into_iter()
+			.find_map(|name| {
+				objects::header_value(&headers, name)
+					.and_then(|value| objects::header_emails(&value).into_iter().next())
+			})
+			.unwrap_or_default(),
+	};
 	let recipients: Vec<String> = match envelope
 		.and_then(|e| e.get("rcptTo"))
 		.and_then(Value::as_array)
