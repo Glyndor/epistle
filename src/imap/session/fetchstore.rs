@@ -120,6 +120,33 @@ impl Session {
 
 		let total = snapshot.max_identifier(false);
 		let maximum = snapshot.max_identifier(uid);
+		// RFC 9051 7.3.5: any keyword a STORE places on a message for the
+		// first time in this mailbox must appear in an untagged FLAGS
+		// response before the FETCH that mentions it. Dovecot's imaptest
+		// tracks the keyword set the client last heard about and treats
+		// any FETCH that introduces a keyword the FLAGS list hasn't
+		// advertised as a state error. Sampling the keyword set before
+		// the loop lets the comparison stay cheap (a single pass over the
+		// messages) and gives a deterministic answer when many messages
+		// gain the same new keyword. It is sampled before the flags are
+		// re-read below, so a keyword another session added counts as new.
+		let pre_keywords = collect_mailbox_keywords(snapshot);
+		// +FLAGS and -FLAGS apply to the flags on disk, not to this
+		// session's copy: another session may have changed them since,
+		// and starting from the copy would undo its change. A message
+		// another session expunged is left alone.
+		let mut gone = Vec::new();
+		for sequence_number in 1..=total {
+			let Some(message) = snapshot.by_sequence(sequence_number) else {
+				continue;
+			};
+			let selector = if uid { message.uid } else { sequence_number };
+			if sequence.contains(selector, maximum, &saved)
+				&& !snapshot.reload_flags(sequence_number)
+			{
+				gone.push(sequence_number);
+			}
+		}
 		// +FLAGS overshoots only through what a message already carries,
 		// so every selected message is checked first: either all of them
 		// take the new keywords or none is changed.
@@ -130,6 +157,7 @@ impl Session {
 				};
 				let selector = if uid { message.uid } else { sequence_number };
 				if sequence.contains(selector, maximum, &saved)
+					&& !gone.contains(&sequence_number)
 					&& super::mailbox::count_keywords(&next_flags(mode, &message.flags, &flags))
 						.is_none()
 				{
@@ -142,17 +170,10 @@ impl Session {
 		}
 		let mut response = String::new();
 		let mut modified: Vec<u32> = Vec::new();
-		// RFC 9051 7.3.5: any keyword a STORE places on a message for the
-		// first time in this mailbox must appear in an untagged FLAGS
-		// response before the FETCH that mentions it. Dovecot's imaptest
-		// tracks the keyword set the client last heard about and treats
-		// any FETCH that introduces a keyword the FLAGS list hasn't
-		// advertised as a state error. Sampling the keyword set before
-		// the loop lets the comparison stay cheap (a single pass over the
-		// messages) and gives a deterministic answer when many messages
-		// gain the same new keyword.
-		let pre_keywords = collect_mailbox_keywords(snapshot);
 		for sequence_number in 1..=total {
+			if gone.contains(&sequence_number) {
+				continue;
+			}
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;
 			};

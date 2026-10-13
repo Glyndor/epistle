@@ -95,6 +95,31 @@ fn fetch_store_and_search_hold_back_expunges_until_noop() {
 	);
 }
 
+/// imaptest `store`: a STORE that adds or removes flags applies to the
+/// flags on disk, so two sessions do not undo each other's changes.
+#[test]
+fn store_from_two_sessions_keeps_both_changes() {
+	let (_dir, mut first, mut second) = two_sessions(1);
+	first.command_line(r"a STORE 1 FLAGS (\Seen)");
+	assert_eq!(
+		text(&second.command_line("b CHECK")),
+		"* 1 FETCH (FLAGS (\\Seen))\r\nb OK CHECK completed\r\n"
+	);
+	first.command_line(r"a STORE 1 +FLAGS (\Answered)");
+	assert_eq!(
+		text(&second.command_line(r"b STORE 1 -FLAGS (\Seen)")),
+		"* 1 FETCH (FLAGS (\\Answered))\r\nb OK STORE completed\r\n"
+	);
+	assert_eq!(
+		text(&first.command_line("a CHECK")),
+		"* 1 FETCH (FLAGS (\\Answered))\r\na OK CHECK completed\r\n"
+	);
+	assert_eq!(
+		text(&first.command_line("a FETCH 1 FLAGS")),
+		"* 1 FETCH (FLAGS (\\Answered))\r\na OK FETCH completed\r\n"
+	);
+}
+
 /// A keyword another session introduced is announced in FLAGS before the
 /// FETCH that carries it (RFC 9051 §7.3.5).
 #[test]

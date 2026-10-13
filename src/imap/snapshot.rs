@@ -242,6 +242,27 @@ impl Snapshot {
 		Ok(&self.messages[index].flags)
 	}
 
+	/// Re-read the flags and mod-sequence of the message at `sequence` from
+	/// its sidecars, so a STORE that adds or removes flags applies to what
+	/// another session left there rather than to this snapshot's copy.
+	/// Returns `false` when the message is no longer on disk.
+	pub fn reload_flags(&mut self, sequence: u32) -> bool {
+		let Some(index) = usize::try_from(sequence)
+			.ok()
+			.and_then(|s| s.checked_sub(1))
+			.filter(|index| *index < self.messages.len())
+		else {
+			return false;
+		};
+		let id = self.messages[index].id;
+		if !message_file(&self.account_dir, id, MessageExt::Eml).is_ok_and(|path| path.exists()) {
+			return false;
+		}
+		self.messages[index].flags = super::flags::read_flags(&self.account_dir, id);
+		self.messages[index].modseq = super::modseq::read_message(&self.account_dir, id);
+		true
+	}
+
 	/// Give every message this snapshot shares with `known` the flags and
 	/// mod-sequence `known` has for it: the client has not been told about
 	/// a change yet, so the next refresh that reports flags still sees it.

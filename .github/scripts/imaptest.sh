@@ -43,7 +43,6 @@ declare -A KNOWN_FAILING=(
 	[search-addresses]="ESEARCH and SEARCH result sets differ"
 	[search-flags]="ESEARCH and SEARCH result sets differ"
 	[search-header]="ESEARCH and SEARCH result sets differ"
-	[store]="other sessions see EXISTS drop without the EXPUNGE responses"
 	[move]="other sessions see EXISTS drop without the EXPUNGE responses"
 	[copy]="\\Recent is not tracked: epistle reports zero recent messages"
 	[select]="\\Recent is not tracked: epistle reports zero recent messages"
