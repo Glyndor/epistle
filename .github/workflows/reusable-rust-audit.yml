@@ -55,7 +55,10 @@ concurrency:
   # one. Different refs (develop vs main) must not cancel each other: a
   # slow `develop` run that finishes during the `main` run would close
   # open issues for advisories `main` still sees.
-  group: rust-audit-${{ github.workflow }}-${{ inputs.ref }}-${{ inputs.working-directory }}
+  # `github.ref` keeps pull requests apart: on a pull request `inputs.ref`
+  # is empty, and without it every open PR shared one group and cancelled
+  # the others' audit.
+  group: rust-audit-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref }}-${{ inputs.working-directory }}
   cancel-in-progress: true
 
 jobs:
