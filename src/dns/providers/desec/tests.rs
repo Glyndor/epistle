@@ -595,3 +595,6 @@ async fn upsert_body_has_only_the_documented_rrset_fields() {
 	keys.sort_unstable();
 	assert_eq!(keys, vec!["records", "subname", "ttl", "type"]);
 }
+
+#[path = "tests_txt_forms.rs"]
+mod txt_forms;

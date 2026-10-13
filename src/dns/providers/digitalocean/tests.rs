@@ -410,3 +410,6 @@ async fn list_follows_pagination_next_link() {
 		s.calls
 	);
 }
+
+#[path = "tests_txt_forms.rs"]
+mod txt_forms;

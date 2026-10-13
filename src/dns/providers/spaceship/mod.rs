@@ -13,6 +13,10 @@ use serde::Deserialize;
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv};
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+
+/// How Spaceship takes a TXT `value` and lists it back; see `wire_value`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// Spaceship's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://spaceship.dev/api/v1";
@@ -188,7 +192,7 @@ impl SpaceshipProvider {
 			let map = item.as_object_mut().expect("object");
 			map.insert(
 				Self::value_field(record.kind).to_string(),
-				record.value.clone().into(),
+				Self::wire_value(record).into(),
 			);
 		}
 		let body = serde_json::json!({
@@ -221,7 +225,7 @@ impl SpaceshipProvider {
 		// same-name records; the wholesale empty-value case leaves
 		// the field off.
 		if record.kind == RecordKind::Txt && !record.value.is_empty() {
-			item["value"] = serde_json::Value::String(record.value.clone());
+			item["value"] = serde_json::Value::String(Self::wire_value(record));
 		}
 		let response = self
 			.request(reqwest::Method::DELETE, url)
@@ -269,6 +273,22 @@ impl SpaceshipProvider {
 			skip += count;
 		}
 		Ok(out)
+	}
+
+	/// The value field for `record`. The API reference gives a TXT
+	/// `value` as one string of up to 65535 characters, with an unquoted
+	/// example and nothing on quoting or escaping, and matches a TXT on
+	/// delete by its exact, case-sensitive value
+	/// (<https://docs.spaceship.dev/>, TxtResourceRecord and
+	/// DELETE /v1/dns/records/{domain}, read 2026-10-12). So a TXT goes as
+	/// its logical value, the same bytes on the save and on every delete
+	/// that has to find it again.
+	fn wire_value(record: &DnsRecord) -> String {
+		if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
+		} else {
+			record.value.clone()
+		}
 	}
 
 	/// Pick the `value`-shaped field out of a list item: Spaceship returns
@@ -347,6 +367,8 @@ impl SpaceshipProvider {
 						.and_then(|v| v.as_str())
 						.or_else(|| item.get("value").and_then(|v| v.as_str()))?;
 					format!("{priority} {}", target.trim_end_matches('.'))
+				} else if matches!(Self::parse_kind(kind), RecordKind::Txt) {
+					txt_decode(&Self::extract_value(&item)?, TXT_FORM)
 				} else {
 					Self::extract_value(&item)?
 				};
@@ -397,3 +419,7 @@ mod tests_b;
 #[cfg(test)]
 #[path = "tests_path.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;

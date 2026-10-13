@@ -7,6 +7,7 @@ pub mod detect;
 pub mod provider;
 pub mod providers;
 pub mod records;
+pub mod txt;
 #[cfg(test)]
 mod uri_probe;
 

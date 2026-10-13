@@ -37,7 +37,11 @@ use serde_json::{Value, json};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
-use crate::dns::records::txt_strings;
+use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+/// How Cloud DNS wants a TXT value written and lists it back; see
+/// `GcloudProvider::rrdatas`.
+const TXT_FORM: TxtForm = TxtForm::Presentation;
 
 const TOKEN_AUDIENCE: &str = "https://oauth2.googleapis.com/token";
 const DNS_SCOPE: &str = "https://www.googleapis.com/auth/ndev.clouddns.readwrite";
@@ -180,31 +184,20 @@ impl GcloudProvider {
 		}
 	}
 
-	/// TXT values travel quoted in `rrdatas`, one element per character
-	/// string (RFC 1035 §3.3.14). A long value (an RSA-2048 DKIM `p=`
-	/// runs ~410 bytes, an RSA-4096 ~755) has to be split into
-	/// ≤255-octet character strings; Cloud DNS rejects any single
-	/// element past 255. But several entries in `rrdatas` would be
-	/// several TXT records, a single rrset only stitches the
-	/// character-strings into one logical value when they all belong
-	/// to a single rdata entry. The wire form is one entry carrying
-	/// the quoted pieces separated by single spaces. The per-piece
-	/// backslash and quote escaping is applied to the chunk, not to
-	/// the joined value, so a `\"` mid-chunk does not bleed across the
-	/// boundary. Resolvers concatenate the pieces back into one
-	/// logical value on read. Every other kind carries one verbatim
-	/// rdata.
+	/// Cloud DNS takes `rrdatas` in RFC 1035 presentation form and asks for
+	/// a TXT to be quoted and pre-split: "If your record data is more than
+	/// 255 bytes, divide your record into 255-byte strings and enclose each
+	/// string in quotation marks", with `"String one" "String two"` as its
+	/// example (<https://docs.cloud.google.com/dns/docs/records-overview>, TXT
+	/// section, read 2026-10-12). Each `rrdatas` element is a separate
+	/// record, so the strings go space-separated in ONE element; several
+	/// elements would be several TXT records, which no DKIM verifier
+	/// stitches back together. The read form is not documented; it is read
+	/// as the same presentation form ([`TXT_FORM`]). Every other kind
+	/// carries one verbatim rdata.
 	fn rrdatas(&self, record: &DnsRecord) -> Vec<String> {
 		if record.kind == RecordKind::Txt {
-			let joined = txt_strings(&record.value)
-				.into_iter()
-				.map(|piece| {
-					let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
-					format!("\"{escaped}\"")
-				})
-				.collect::<Vec<_>>()
-				.join(" ");
-			vec![joined]
+			vec![txt_encode(&record.value, TXT_FORM)]
 		} else {
 			vec![record.value.clone()]
 		}
@@ -387,7 +380,9 @@ impl GcloudProvider {
 			.find(|r| r.name == fqdn && r.kind == kind_str)
 		{
 			None => self.post_change(&managed_zone, &[new_rrset], &[]).await,
-			Some(old) if old.ttl == new_rrset.ttl && old.rrdatas == new_rrset.rrdatas => Ok(()),
+			Some(old) if old.ttl == new_rrset.ttl && same_rdatas(&record, &old, &new_rrset) => {
+				Ok(())
+			}
 			Some(old) => self.post_change(&managed_zone, &[new_rrset], &[old]).await,
 		}
 	}
@@ -417,21 +412,14 @@ impl GcloudProvider {
 		// one, and replaces the rrset with the remainder (a
 		// wholesale delete only when the rrset is fully gone).
 		//
-		// Long TXT values are stored as one rrdatas entry with the
-		// joined character-strings form, so the needle is the same
-		// joined form on both the upsert and the listing. The
-		// matching compares the joined value verbatim against the
-		// rrdatas Cloud DNS lists back.
+		// The match is on the logical value, so an rdata Cloud DNS
+		// lists back with its strings spaced or escaped differently
+		// is still found.
 		if record.kind == RecordKind::Txt && !record.value.is_empty() {
-			let needle = self
-				.rrdatas(&record)
-				.into_iter()
-				.next()
-				.expect("TXT always produces one joined rrdatas");
 			let remainder: Vec<String> = target
 				.rrdatas
 				.iter()
-				.filter(|r| r.as_str() != needle.as_str())
+				.filter(|r| !same_txt_value(r, &record.value))
 				.cloned()
 				.collect();
 			if remainder.len() == target.rrdatas.len() {
@@ -474,7 +462,7 @@ impl GcloudProvider {
 					name: name.clone(),
 					kind,
 					value: if kind == RecordKind::Txt {
-						value.trim_matches('"').to_string()
+						txt_decode(&value, TXT_FORM)
 					} else {
 						value
 					},
@@ -498,6 +486,22 @@ impl DnsProvider for GcloudProvider {
 		let zone = zone.to_string();
 		Box::pin(async move { self.list_inner(&zone).await })
 	}
+}
+
+/// Whether `old` already holds what `new` would write, so the upsert can
+/// skip the change. TXT compares logical values, because Cloud DNS may list
+/// a record with its strings spaced or escaped differently from how it was
+/// written; every other kind compares the rdata verbatim.
+fn same_rdatas(record: &DnsRecord, old: &Rrset, new: &Rrset) -> bool {
+	if record.kind != RecordKind::Txt {
+		return old.rrdatas == new.rrdatas;
+	}
+	old.rrdatas.len() == new.rrdatas.len()
+		&& old
+			.rrdatas
+			.iter()
+			.zip(&new.rrdatas)
+			.all(|(a, b)| same_txt_value(a, b))
 }
 
 /// Map a Google type token to a [`RecordKind`], defaulting to TXT.
@@ -576,6 +580,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_txt.rs"]
 mod tests_txt;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;
 #[cfg(test)]
 #[path = "tests_url.rs"]
 mod tests_url;

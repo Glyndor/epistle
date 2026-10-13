@@ -16,7 +16,12 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 use tags as cloudflare_tags;
+
+/// How Cloudflare wants a TXT `content` written and lists it back; see
+/// `record_value`.
+const TXT_FORM: TxtForm = TxtForm::Presentation;
 
 /// Cloudflare's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.cloudflare.com/client/v4";
@@ -201,10 +206,24 @@ impl CloudflareProvider {
 				},
 			})
 		} else {
+			// A TXT `content` "must consist of quoted "character
+			// strings" (RFC 1035), each with a length of up to 255
+			// bytes. Strings exceeding this allowed maximum length are
+			// automatically split."
+			// (<https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/>,
+			// TXTRecord.content, read 2026-10-12). Only the dashboard
+			// adds missing quotes (DNS changelog, 2024-10-15); a value
+			// sent through the API unquoted is stored as given, so it
+			// goes quoted and already split, escaped the RFC 1035 way.
+			let content = if record.kind == RecordKind::Txt {
+				txt_encode(&record.value, TXT_FORM)
+			} else {
+				record.value.clone()
+			};
 			serde_json::json!({
 				"type": kind,
 				"name": record.name,
-				"content": record.value,
+				"content": content,
 				"ttl": record.ttl,
 			})
 		};
@@ -429,11 +448,23 @@ impl CloudflareProvider {
 		Ok(records
 			.result
 			.into_iter()
-			.map(|r| DnsRecord {
-				name: r.name,
-				kind: parse_kind(&r.kind),
-				value: r.content,
-				ttl: r.ttl,
+			.map(|r| {
+				let kind = parse_kind(&r.kind);
+				// The read form is not documented. A record written by
+				// the API comes back quoted (possibly re-split), one an
+				// older release wrote unquoted comes back as it was;
+				// `txt_decode` reads both as the logical value.
+				let value = if kind == RecordKind::Txt {
+					txt_decode(&r.content, TXT_FORM)
+				} else {
+					r.content
+				};
+				DnsRecord {
+					name: r.name,
+					kind,
+					value,
+					ttl: r.ttl,
+				}
 			})
 			.collect())
 	}

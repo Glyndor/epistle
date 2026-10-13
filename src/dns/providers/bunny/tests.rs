@@ -551,3 +551,6 @@ async fn update_body_carries_the_comment_field() {
 fn expected_description() -> String {
 	format!("Epistle v{}", env!("CARGO_PKG_VERSION"))
 }
+
+#[path = "tests_txt_forms.rs"]
+mod txt_forms;

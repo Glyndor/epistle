@@ -9,7 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
-use crate::dns::records::txt_strings;
+use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+/// How Route 53 wants a TXT value written and returns it; see `change`.
+const TXT_FORM: TxtForm = TxtForm::PresentationOctal;
 
 /// Route 53 is a global service signed in `us-east-1`.
 const REGION: &str = "us-east-1";
@@ -62,37 +65,24 @@ impl Route53Provider {
 	/// Submit a ChangeResourceRecordSets request with the given action.
 	async fn change(&self, action: &str, record: &DnsRecord) -> Result<(), ProviderError> {
 		let kind = record_type(record.kind)?;
-		// A TXT record is a sequence of character strings, each at most
-		// 255 octets (RFC 1035 §3.3.14). Route 53 enforces the cap and
-		// rejects any rdata past it, so a long value (the RSA-2048 DKIM
-		// `p=` runs ~410 bytes, an RSA-4096 ~755) has to be split into
-		// one character string per piece. But several `<ResourceRecord>`
-		// entries in one RRset are several TXT records, the pieces are
-		// concatenated back into one logical value only when they all
-		// belong to a single `<ResourceRecord>`. The wire form is one
-		// `<ResourceRecord>` carrying the quoted pieces separated by single
-		// spaces. The per-piece backslash and quote escaping is applied to
-		// the chunk, not to the joined value, so a `\"` mid-chunk does not
-		// bleed into the boundary.
-		let value_xml: String = if record.kind == RecordKind::Txt {
-			let joined = txt_strings(&record.value)
-				.into_iter()
-				.map(|piece| {
-					let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
-					format!("\"{escaped}\"")
-				})
-				.collect::<Vec<_>>()
-				.join(" ");
-			format!(
-				"<ResourceRecord><Value>{}</Value></ResourceRecord>",
-				xml_escape(&joined)
-			)
+		// Route 53 wants a TXT value quoted and split by the caller: "break
+		// the value into strings of 255 characters or fewer, and enclose
+		// each string in double quotation marks" and "For the API, include
+		// all the strings in the same `Value` element", with `\"` for a
+		// quote and a byte outside printable ASCII as a backslash and a
+		// three-digit OCTAL code
+		// (<https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/ResourceRecordTypes.html#TXTFormat>,
+		// read 2026-10-12). Several `<ResourceRecord>` entries would be
+		// several TXT records, so the strings stay in one `<Value>`.
+		let value = if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
 		} else {
-			format!(
-				"<ResourceRecord><Value>{}</Value></ResourceRecord>",
-				xml_escape(&record.value)
-			)
+			record.value.clone()
 		};
+		let value_xml = format!(
+			"<ResourceRecord><Value>{}</Value></ResourceRecord>",
+			xml_escape(&value)
+		);
 		let body = format!(
 			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
 <ChangeResourceRecordSetsRequest xmlns=\"https://route53.amazonaws.com/doc/{API_VERSION}/\">\
@@ -276,8 +266,9 @@ impl Route53Provider {
 }
 
 /// A TXT rrset as the API returns it. `name` is the FQDN with the
-/// trailing dot AWS always uses; `values` is the per-rdata wire
-/// form (already quoted, no further wrapping needed).
+/// trailing dot AWS always uses; `values` is each rdata as Route 53
+/// returns it, XML entities resolved but still quoted and escaped the
+/// way `upsert_rrset` writes it back.
 #[derive(Debug)]
 struct TxtRrset {
 	name: String,
@@ -314,7 +305,7 @@ fn parse_txt_rrset(xml: &str, target: &str) -> Option<TxtRrset> {
 			// lowercased ones, slice the original instead).
 			let abs_start = abs + vstart;
 			let abs_end = abs + vend;
-			values.push(xml[abs_start..abs_end].to_string());
+			values.push(xml_unescape(&xml[abs_start..abs_end]));
 			value_cursor = vend;
 		}
 		if kind.eq_ignore_ascii_case("TXT")
@@ -365,18 +356,16 @@ impl DnsProvider for Route53Provider {
 			// remainder (a wholesale DELETE only when the rrset
 			// is fully gone).
 			//
-			// Long TXT values are stored as one `<ResourceRecord>`
-			// with the joined character-strings form, so the needle
-			// is the same joined form for both the upsert and the
-			// provider's listing. The matching compares the joined
-			// value verbatim against the rdata the LIST returned.
+			// The match is on the logical value (`txt_read`), so an
+			// rdata Route 53 returns with its strings spaced or
+			// escaped differently from how it was written is still
+			// found.
 			if record.kind == RecordKind::Txt && !record.value.is_empty() {
-				let needle = txt_joined_form(&record.value);
 				if let Some(rrset) = self.fetch_txt_rrset(&record.name).await? {
 					let remainder: Vec<String> = rrset
 						.values
 						.iter()
-						.filter(|v| v.as_str() != needle.as_str())
+						.filter(|v| !same_txt_value(&txt_read(v), &record.value))
 						.cloned()
 						.collect();
 					if remainder.len() != rrset.values.len() {
@@ -420,22 +409,10 @@ fn record_type(kind: RecordKind) -> Result<&'static str, ProviderError> {
 	}
 }
 
-/// The wire form of a TXT value the provider writes and reads back:
-/// one string with each ≤255-octet character-string quoted and the
-/// per-piece backslash/quote escapes applied, joined with a single
-/// space. Used both by `change` (the value we write) and by the
-/// value-bearing `delete` (the needle we match against the LIST
-/// response). The same shape goes in and comes back, so a delete of
-/// the same value matches even when the value spans several pieces.
-fn txt_joined_form(value: &str) -> String {
-	txt_strings(value)
-		.into_iter()
-		.map(|piece| {
-			let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
-			format!("\"{escaped}\"")
-		})
-		.collect::<Vec<_>>()
-		.join(" ")
+/// The logical value of one rdata as `parse_txt_rrset` returns it: Route
+/// 53 returns TXT rdata quoted, with octal escapes, the same form it takes.
+fn txt_read(value: &str) -> String {
+	txt_decode(value, TXT_FORM)
 }
 
 /// `(YYYYMMDDTHHMMSSZ, YYYYMMDD)` for `epoch` seconds, UTC.
@@ -505,6 +482,18 @@ fn xml_escape(value: &str) -> String {
 		.replace('>', "&gt;")
 }
 
+/// Undo the five predefined XML entities in text read from a response, so
+/// the value is the one `xml_escape` started from and can be written back
+/// without being escaped twice.
+fn xml_unescape(value: &str) -> String {
+	value
+		.replace("&lt;", "<")
+		.replace("&gt;", ">")
+		.replace("&quot;", "\"")
+		.replace("&apos;", "'")
+		.replace("&amp;", "&")
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -512,6 +501,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_txt.rs"]
 mod tests_txt;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]
