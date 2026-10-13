@@ -297,10 +297,13 @@ pub(crate) fn prepare_keys_for_update(
 		.map(|(from, to)| format!("moved {} to {}", from.display(), to.display()))
 		.collect();
 	let mut report = Report::default();
+	let keys_dir = data_dir.join("keys");
+	fs::create_dir_all(&keys_dir)
+		.map_err(|error| format!("cannot create {}: {error}", keys_dir.display()))?;
 	ensure_secret_keys(
 		&host_secrets::storage_key(data_dir),
 		&host_secrets::oauth_signing_key(data_dir),
-		&data_dir.join("keys").join("oauth_public.key"),
+		&keys_dir.join("oauth_public.key"),
 		&mut report,
 	)
 	.map_err(|error| error.to_string())?;

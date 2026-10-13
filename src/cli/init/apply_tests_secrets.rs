@@ -152,3 +152,14 @@ fn the_plan_names_the_admin_password_beside_data_dir() {
 		"{rendered}"
 	);
 }
+
+#[test]
+fn stack_update_creates_the_keys_directory_when_an_install_has_none() {
+	let root = tempfile::tempdir().unwrap();
+	let data_dir = root.path().join("data");
+	std::fs::create_dir_all(&data_dir).unwrap();
+	let config = root.path().join("mail.toml");
+	std::fs::write(&config, "hostname = \"h\"\n").unwrap();
+	super::prepare_keys_for_update(&data_dir, &config, false).unwrap();
+	assert!(data_dir.join("keys/oauth_public.key").is_file());
+}
