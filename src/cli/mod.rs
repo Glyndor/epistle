@@ -649,7 +649,7 @@ pub enum Command {
 		#[command(subcommand)]
 		action: db_upgrade::DbCli,
 	},
-	/// Show the DKIM signing key in service, force a rotation or clean up.
+	/// Show the DKIM key in service, rotate it or clean up old keys.
 	///
 	/// Rotation and cleanup are queued for the running server, which stays
 	/// the only writer of keys and DNS records.
