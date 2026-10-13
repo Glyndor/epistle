@@ -8,13 +8,15 @@ pub(in crate::imap) fn render(message: &Message<'_>, part_id: usize) -> Vec<u8> 
 		return list((0..10).map(|_| b"NIL".to_vec()));
 	};
 	let raw = |name| raw_header(message, part, name);
-	let from = raw(HeaderName::From);
+	let from = addresses(raw(HeaderName::From));
+	// Sender and Reply-To take the From value when absent or empty.
+	let or_from = |value: Vec<u8>| if value == b"NIL" { from.clone() } else { value };
 	list([
 		string(raw(HeaderName::Date)),
 		string(raw(HeaderName::Subject)),
-		addresses(from),
-		addresses(raw(HeaderName::Sender).or(from)),
-		addresses(raw(HeaderName::ReplyTo).or(from)),
+		from.clone(),
+		or_from(addresses(raw(HeaderName::Sender))),
+		or_from(addresses(raw(HeaderName::ReplyTo))),
 		addresses(raw(HeaderName::To)),
 		addresses(raw(HeaderName::Cc)),
 		addresses(raw(HeaderName::Bcc)),
@@ -104,7 +106,12 @@ fn restored(value: Option<&str>) -> Vec<u8> {
 }
 
 fn address(addr: &Addr<'_>) -> Vec<u8> {
-	let address = addr.address.as_deref();
+	// A display name or comment without an address (`group: (foo) ;`) is
+	// not a mailbox; `(name NIL NIL NIL)` would read as a group end.
+	let Some(address) = addr.address.as_deref() else {
+		return Vec::new();
+	};
+	let address = Some(address);
 	let (route, address) = address
 		.and_then(|a| a.split_once(':'))
 		.filter(|(route, _)| route.starts_with('@'))
@@ -128,3 +135,7 @@ fn address(addr: &Addr<'_>) -> Vec<u8> {
 #[cfg(test)]
 #[path = "envelope_tests_protection.rs"]
 mod tests_protection;
+
+#[cfg(test)]
+#[path = "envelope_tests_defaults.rs"]
+mod tests_defaults;

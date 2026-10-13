@@ -35,7 +35,6 @@ declare -A KNOWN_FAILING=(
 	[subscribe]="mailbox names: hierarchy and characters the store refuses"
 	[list]="mailbox names: hierarchy and characters the store refuses"
 	[listext]="mailbox names: hierarchy and characters the store refuses"
-	[fetch-envelope]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[fetch-binary-mime]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[append-binary]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[uidvalidity]="FETCH ENVELOPE, BINARY and STATUS replies differ"
