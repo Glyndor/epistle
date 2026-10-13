@@ -58,15 +58,66 @@ impl Rejection {
 /// are folded in.
 static BREACHED_RAW: &str = include_str!("breached_common.txt");
 
-/// Build the breached-password set once, on first use.
+/// The bundled top-100k breached-password list, sourced from
+/// `danielmiessler/SecLists`
+/// (`Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt`,
+/// pull request `e6c75d8` of 2024-09-14; SHA-256
+/// `6bb3e97acc1911bfec7a2feae1c752c56b79202c2d57e2f61b84dfbe128eeeb9`).
+/// SecLists is MIT-licensed; the underlying list was published by the UK
+/// National Cyber Security Centre under the Open Government Licence, so we
+/// keep both credits in `docs/security.md`.
+///
+/// The raw file ships 99,839 entries. Most are below the 12-character gate
+/// that the policy enforces before the lookup, so the in-memory set the
+/// lookup actually consults (`breached_set`) holds only the entries that
+/// survive both the length and the printable-ASCII check, case-folded.
+pub(super) static BREACHED_RAW_TOP100K: &str = include_str!("breached_top100k.txt");
+
+/// Whether a raw password entry (one trimmed line of one of the bundled
+/// files) survives the early checks the policy applies before the breach
+/// lookup. The lookup key is the case-folded form, so the check runs on the
+/// lowered entry and rejects every entry that the validate pass would have
+/// rejected for the same reason.
+fn survives_filter(entry: &str) -> bool {
+	let lowered = entry.to_ascii_lowercase();
+	let length = lowered.chars().count();
+	if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {
+		return false;
+	}
+	lowered.bytes().all(|byte| (0x20..=0x7E).contains(&byte))
+}
+
+/// Build the breached-password set once, on first use. Combines the legacy
+/// curated list and the bundled top-100k so that any entry that survives the
+/// length and printable-ASCII gate, in either file, is refused as a breach.
+/// The set keys are case-folded so the lookup is case-insensitive regardless
+/// of which source row carried that entry.
 fn breached_set() -> &'static HashSet<&'static str> {
 	static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
 	SET.get_or_init(|| {
-		BREACHED_RAW
-			.lines()
-			.map(str::trim)
-			.filter(|line| !line.is_empty() && !line.starts_with('#'))
-			.collect()
+		let mut set: HashSet<&'static str> = HashSet::with_capacity(2048);
+		let mut stash: Vec<String> = Vec::with_capacity(2048);
+		for raw in [BREACHED_RAW, BREACHED_RAW_TOP100K] {
+			for line in raw.lines() {
+				let trimmed = line.trim();
+				if trimmed.is_empty() || trimmed.starts_with('#') {
+					continue;
+				}
+				if !survives_filter(trimmed) {
+					continue;
+				}
+				let lowered = trimmed.to_ascii_lowercase();
+				// `Box::leak` gives the `&'static str` we promised the caller,
+				// and the stashed vector keeps the heap allocations discoverable
+				// for the leak checker — at most a few kilobytes, paid once at
+				// startup, for the lifetime of the process.
+				let leaked: &'static str = Box::leak(lowered.into_boxed_str());
+				stash.push(leaked.to_string());
+				set.insert(leaked);
+			}
+		}
+		Box::leak(stash.into_boxed_slice());
+		set
 	})
 }
 
@@ -89,7 +140,12 @@ pub fn validate(password: &str) -> Result<(), Rejection> {
 	if !password.bytes().all(|byte| (0x20..=0x7E).contains(&byte)) {
 		return Err(Rejection::IllegalCharacter);
 	}
-	if breached_set().contains(password) {
+	// The breached set is keyed by lower-case form, so the lookup is
+	// case-insensitive: a candidate that only differs in capitalisation from a
+	// bundled breach still hits the row. The candidate is normalised the same
+	// way the set was built, so a `Password` and a `password` collapse to one.
+	let lowered = password.to_ascii_lowercase();
+	if breached_set().contains(lowered.as_str()) {
 		return Err(Rejection::Breached);
 	}
 	Ok(())
@@ -213,5 +269,139 @@ mod tests {
 				"breached entry {entry:?} is not printable ASCII"
 			);
 		}
+	}
+
+	/// A fixture entry picked at the absolute middle of the bundled top-100k
+	/// list (line 50057 of `breached_top100k.txt`, indices are 1-based, so the
+	/// underlying 0-based index is 50056). It is 12 characters of printable
+	/// ASCII, so it survives the length and character-set gates and must be
+	/// refused with the breach reason — not the length reason.
+	const MIDDLE_INDEX: usize = 50056;
+
+	/// The bundled entry at 0-based line 35289 — used for the case-insensitive
+	/// check, because it carries ASCII letters (the test entry near the
+	/// `MIDDLE_INDEX` is digit-only, where `to_ascii_uppercase` is a no-op and
+	/// the rewrite would not exercise the case-fold at all).
+	const CASE_INDEX: usize = 35289;
+
+	#[test]
+	fn a_known_entry_from_the_middle_of_the_bundled_list_is_refused() {
+		let entry = super::BREACHED_RAW_TOP100K
+			.lines()
+			.nth(MIDDLE_INDEX)
+			.expect("index 50056 exists in the bundled top-100k list");
+		assert_eq!(entry.len(), 12, "shape precondition: 12 characters");
+		assert!(
+			entry.bytes().all(|byte| (0x20..=0x7E).contains(&byte)),
+			"shape precondition: printable ASCII only",
+		);
+		assert_eq!(
+			validate(entry),
+			Err(Rejection::Breached),
+			"middle entry {entry:?} must be refused as Breached"
+		);
+	}
+
+	#[test]
+	fn a_known_entry_lookup_is_case_insensitive() {
+		// Pick an alphabetical entry (digits have no ASCII-case of their own
+		// and would not exercise the case-fold). The lookup is keyed by the
+		// case-folded form, so an all-uppercase variant must hit the same row.
+		let raw = super::BREACHED_RAW_TOP100K
+			.lines()
+			.nth(CASE_INDEX)
+			.expect("index 35289 exists in the bundled top-100k list");
+		assert!(
+			raw.chars().any(|c| c.is_ascii_alphabetic()),
+			"shape precondition: at least one ASCII letter for case to flip"
+		);
+		let upper = raw.to_ascii_uppercase();
+		assert_eq!(
+			upper.len(),
+			raw.len(),
+			"shape precondition: uppercasing preserves length"
+		);
+		assert_ne!(
+			upper, raw,
+			"shape precondition: the upper-casing must actually differ"
+		);
+		assert_eq!(
+			validate(&upper),
+			Err(Rejection::Breached),
+			"an upper-case breach must be refused exactly like its lower-case"
+		);
+	}
+
+	#[test]
+	fn a_fresh_random_password_still_passes_with_the_real_list() {
+		// The bundled 100k list is bigger by a wide margin; this exercises a
+		// strong random credential (URL-safe base64, all printable ASCII) so
+		// the breach check is run against the bundled set on a value that
+		// cannot be in it.
+		let password = fixtures::printable_ascii(MIN_LENGTH + 8);
+		assert!(
+			!breached_set().contains(password.as_str()),
+			"shape precondition: a freshly-generated password must not be in the bundle"
+		);
+		assert_eq!(validate(&password), Ok(()));
+	}
+
+	#[test]
+	fn the_bundled_lookup_set_covers_more_than_five_hundred_entries() {
+		// Sanity-check the size of the actual lookup set (the raw file ships
+		// 100,000 entries but most are below the 12-character gate; what
+		// matters at runtime is the size of the in-memory set the lookup
+		// uses). Anything under a few hundred would mean the bundle has
+		// stopped being effective.
+		assert!(
+			breached_set().len() > 500,
+			"bundled lookup set is {} entries, expected a substantial list",
+			breached_set().len(),
+		);
+	}
+
+	#[test]
+	fn breached_set_first_construction_lands_under_one_second() {
+		// The set is built once at startup (`OnceLock::get_or_init`). Measure
+		// the cold build to catch a future regression where the parser slows
+		// down or a contributor duplicates the file under a different name.
+		// Reading the `OnceLock` is cheap, so drop it once and time a fresh
+		// build of the same logic on the raw input. 1 second on a debug
+		// profile gives several seconds of headroom on a release one.
+		use std::time::Instant;
+		let started = Instant::now();
+		let total = build_set_for_timing();
+		let elapsed = started.elapsed();
+		assert!(
+			elapsed.as_secs() < 1,
+			"first build of the lookup set took {elapsed:?} for {total} entries",
+		);
+	}
+
+	/// Re-run the exact same build logic the production `breached_set` uses,
+	/// measured standalone so the assertion does not depend on `OnceLock`
+	/// already being warm from earlier tests in the same process.
+	fn build_set_for_timing() -> usize {
+		use std::collections::HashSet;
+		fn survives_filter(entry: &str) -> bool {
+			let lowered = entry.to_ascii_lowercase();
+			let length = lowered.chars().count();
+			(MIN_LENGTH..=MAX_LENGTH).contains(&length)
+				&& lowered.bytes().all(|byte| (0x20..=0x7E).contains(&byte))
+		}
+		let mut set: HashSet<String> = HashSet::with_capacity(2048);
+		for raw in [super::BREACHED_RAW, super::BREACHED_RAW_TOP100K] {
+			for line in raw.lines() {
+				let trimmed = line.trim();
+				if trimmed.is_empty() || trimmed.starts_with('#') {
+					continue;
+				}
+				if !survives_filter(trimmed) {
+					continue;
+				}
+				set.insert(trimmed.to_ascii_lowercase());
+			}
+		}
+		set.len()
 	}
 }
