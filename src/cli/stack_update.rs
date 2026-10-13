@@ -33,7 +33,7 @@ pub(super) struct Step(pub Vec<String>);
 pub(super) struct UpdatePlan {
 	/// The new compose file, when it differs from the one on disk.
 	pub(super) rewrite: Option<String>,
-	/// The changed lines, `-` for removed and `+` for added.
+	/// What changed, one line per value under its service name.
 	pub(super) diff: Vec<String>,
 	/// How the new file was derived.
 	pub(super) notes: Vec<String>,
@@ -70,7 +70,7 @@ pub(super) fn plan_update(
 	let changed = regenerated.text != existing;
 	Ok(UpdatePlan {
 		diff: if changed {
-			line_diff(&existing, &regenerated.text)
+			compose_diff(&old, &new)
 		} else {
 			Vec::new()
 		},
@@ -81,36 +81,68 @@ pub(super) fn plan_update(
 	})
 }
 
-/// The lines only `old` has, prefixed `-`, and the lines only `new` has,
-/// prefixed `+`, in file order: a longest-common-subsequence diff without
-/// context, which is enough for a file of a few hundred lines.
-fn line_diff(old: &str, new: &str) -> Vec<String> {
-	let old: Vec<&str> = old.lines().collect();
-	let new: Vec<&str> = new.lines().collect();
-	let mut common = vec![vec![0usize; new.len() + 1]; old.len() + 1];
-	for i in (0..old.len()).rev() {
-		for j in (0..new.len()).rev() {
-			common[i][j] = if old[i] == new[j] {
-				common[i + 1][j + 1] + 1
-			} else {
-				common[i + 1][j].max(common[i][j + 1])
-			};
+/// What changed between two compose documents, one line per changed value
+/// under the service it belongs to (`clamav: image "a" -> "b"`), plus
+/// `<service>: added` / `removed`. Objects are walked; arrays and scalars
+/// are compared whole.
+pub(super) fn compose_diff(old: &Value, new: &Value) -> Vec<String> {
+	let mut lines = Vec::new();
+	let services = |value: &Value| value["services"].as_object().cloned().unwrap_or_default();
+	let (old_services, new_services) = (services(old), services(new));
+	let mut names: Vec<&String> = old_services.keys().chain(new_services.keys()).collect();
+	names.sort();
+	names.dedup();
+	for name in names {
+		match (old_services.get(name), new_services.get(name)) {
+			(None, Some(_)) => lines.push(format!("{name}: added")),
+			(Some(_), None) => lines.push(format!("{name}: removed")),
+			(Some(before), Some(after)) => {
+				for change in changes("", before, after) {
+					lines.push(format!("{name}: {change}"));
+				}
+			}
+			(None, None) => {}
 		}
 	}
-	let (mut i, mut j, mut out) = (0, 0, Vec::new());
-	while i < old.len() || j < new.len() {
-		if i < old.len() && j < new.len() && old[i] == new[j] {
-			i += 1;
-			j += 1;
-		} else if j < new.len() && (i == old.len() || common[i][j + 1] >= common[i + 1][j]) {
-			out.push(format!("+{}", new[j]));
-			j += 1;
+	let rest = |value: &Value| {
+		let mut map = value.as_object().cloned().unwrap_or_default();
+		map.remove("services");
+		Value::Object(map)
+	};
+	for change in changes("", &rest(old), &rest(new)) {
+		// `volumes.b added {}` reads as `volumes.b: added {}`.
+		lines.push(change.replacen(' ', ": ", 1));
+	}
+	lines
+}
+
+/// The changed leaves under `path`, as `<path> <old> -> <new>`,
+/// `<path> added <new>` or `<path> removed (was <old>)`.
+fn changes(path: &str, old: &Value, new: &Value) -> Vec<String> {
+	let join = |key: &str| {
+		if path.is_empty() {
+			key.to_string()
 		} else {
-			out.push(format!("-{}", old[i]));
-			i += 1;
+			format!("{path}.{key}")
 		}
+	};
+	match (old, new) {
+		(Value::Object(before), Value::Object(after)) => {
+			let mut keys: Vec<&String> = before.keys().chain(after.keys()).collect();
+			keys.sort();
+			keys.dedup();
+			keys.into_iter()
+				.flat_map(|key| match (before.get(key), after.get(key)) {
+					(Some(a), Some(b)) => changes(&join(key), a, b),
+					(None, Some(b)) => vec![format!("{} added {b}", join(key))],
+					(Some(a), None) => vec![format!("{} removed (was {a})", join(key))],
+					(None, None) => Vec::new(),
+				})
+				.collect()
+		}
+		(a, b) if a == b => Vec::new(),
+		(a, b) => vec![format!("{path} {a} -> {b}")],
 	}
-	out
 }
 
 /// Run `stack update`: plan, dump the database, write the new compose

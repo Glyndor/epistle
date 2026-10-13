@@ -78,16 +78,14 @@ fn an_older_file_is_rewritten_and_the_change_is_shown() {
 	let (_dir, plan) = plan(&old);
 	let plan = plan.expect("plan");
 	assert_eq!(plan.rewrite.as_deref(), Some(current.as_str()));
-	assert!(
-		plan.diff
-			.iter()
-			.any(|line| line.starts_with('-') && line.contains("clamav:1.4\""))
-			&& plan
-				.diff
-				.iter()
-				.any(|line| line.starts_with('+') && line.contains("@sha256:")),
-		"{:?}",
-		plan.diff
+	let clamav = crate::cli::init::images::clamav();
+	assert_eq!(
+		plan.diff,
+		[
+			format!("clamav: image \"docker.io/clamav/clamav:1.4\" -> \"{clamav}\""),
+			format!("freshclam: image \"docker.io/clamav/clamav:1.4\" -> \"{clamav}\""),
+		],
+		"each changed value once, under the service it belongs to"
 	);
 	assert!(!plan.notes.is_empty());
 	assert_eq!(
@@ -130,4 +128,33 @@ fn unreadable_or_foreign_files_are_refused() {
 	let dir = tempfile::tempdir().unwrap();
 	let missing = dir.path().join("absent.yaml");
 	assert!(plan_update(&missing, dir.path(), &[]).is_err());
+}
+
+#[test]
+fn added_removed_and_nested_changes_are_named() {
+	let old = serde_json::json!({
+		"services": {
+			"mail": {"healthcheck": {"interval": "60s"}, "ports": ["25:25"]},
+			"gone": {"image": "x"}
+		},
+		"volumes": {"a": {}}
+	});
+	let new = serde_json::json!({
+		"services": {
+			"mail": {"healthcheck": {"interval": "30s"}, "ports": ["25:25", "587:587"], "stop_grace_period": "30s"},
+			"freshclam": {"image": "y"}
+		},
+		"volumes": {"a": {}, "b": {}}
+	});
+	assert_eq!(
+		super::compose_diff(&old, &new),
+		[
+			"freshclam: added",
+			"gone: removed",
+			"mail: healthcheck.interval \"60s\" -> \"30s\"",
+			"mail: ports [\"25:25\"] -> [\"25:25\",\"587:587\"]",
+			"mail: stop_grace_period added \"30s\"",
+			"volumes.b: added {}",
+		]
+	);
 }

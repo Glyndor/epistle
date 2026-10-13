@@ -79,7 +79,7 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	);
 	let stderr = String::from_utf8_lossy(&out.stderr);
 	assert!(
-		stderr.contains("+") && stderr.contains("freshclam"),
+		stderr.contains("freshclam: added") && stderr.contains("mail: "),
 		"the change is shown before it is applied: {stderr}"
 	);
 	let value: serde_json::Value =
