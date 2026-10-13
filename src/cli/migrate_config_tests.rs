@@ -37,7 +37,7 @@ fn parse(args: &[&str]) -> Result<(MigrateCli, PathBuf), clap::Error> {
 
 fn import_args(action: MigrateCli) -> (PathBuf, ImportArgs) {
 	match action {
-		MigrateCli::Mox { from, import } => (from, import),
+		MigrateCli::Mox { from, import } | MigrateCli::Stalwart { from, import } => (from, import),
 		MigrateCli::Imap(_) => unreachable!("an import"),
 	}
 }
@@ -155,6 +155,48 @@ fn apply_with_a_password_file_and_json() {
 	);
 	assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED));
 	assert!(!changed);
+}
+
+#[test]
+fn stalwart_json_and_apply_with_a_password_file() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = epistle(dir.path());
+	let (file, _) = crate::migrate::stalwart::fixture::write(dir.path());
+	let passwords = dir.path().join("passwords");
+	let (action, _) = parse(&[
+		"stalwart",
+		"--from",
+		file.to_str().expect("utf-8"),
+		"--passwords-out",
+		passwords.to_str().expect("utf-8"),
+		"--json",
+	])
+	.expect("parse");
+	let (from, args) = import_args(action);
+	let mut out = Vec::new();
+	let (code, changed) = import(
+		&config,
+		crate::migrate::stalwart::read(&from).map_err(|e| e.to_string()),
+		&args,
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(changed);
+	let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+	assert_eq!(
+		value["changes"]["accounts_added"],
+		serde_json::json!(["john", "jane"])
+	);
+	let shown = String::from_utf8_lossy(&out);
+	let secrets = std::fs::read_to_string(&passwords).expect("passwords");
+	for line in secrets.lines() {
+		let (_, secret) = line.split_once('\t').expect("tab");
+		assert!(
+			!shown.contains(secret),
+			"a temporary password reached stdout"
+		);
+	}
+	assert!(!shown.contains("PRIVATE KEY"));
 }
 
 #[test]

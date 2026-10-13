@@ -22,7 +22,7 @@ pub struct MigrateArgs {
 	/// Configuration file; accepted before or after the action.
 	#[arg(long, value_name = "FILE", global = true, default_value = super::DEFAULT_CONFIG)]
 	pub config: PathBuf,
-	/// What to migrate from (`imap`, `mox`).
+	/// What to migrate from (`imap`, `mox`, `stalwart`).
 	#[command(subcommand)]
 	pub action: MigrateCli,
 }
@@ -47,6 +47,21 @@ pub enum MigrateCli {
 	Mox {
 		/// The Mox configuration directory (holding mox.conf), or mox.conf.
 		#[arg(long, value_name = "DIR")]
+		from: PathBuf,
+		/// What to do with passwords, and how to run.
+		#[command(flatten)]
+		import: config::ImportArgs,
+	},
+	/// Import domains, DKIM keys, accounts and aliases from Stalwart.
+	///
+	/// Reads a Stalwart config.toml (the format up to v0.15). DKIM signatures
+	/// come with their selectors; accounts and aliases come when the
+	/// directory is the in-file `memory` type, and the output says how to
+	/// move the rest. From v0.16 Stalwart keeps every setting in its
+	/// database, and that bootstrap file is refused with directions.
+	Stalwart {
+		/// Stalwart's config.toml.
+		#[arg(long, value_name = "FILE")]
 		from: PathBuf,
 		/// What to do with passwords, and how to run.
 		#[command(flatten)]
@@ -108,6 +123,10 @@ pub(super) fn run(args: MigrateArgs) -> ExitCode {
 		MigrateCli::Imap(imap_args) => imap::run(&args.config, imap_args),
 		MigrateCli::Mox { from, import } => {
 			let plan = crate::migrate::mox::read(&from).map_err(|error| error.to_string());
+			config::run(&args.config, plan, &import)
+		}
+		MigrateCli::Stalwart { from, import } => {
+			let plan = crate::migrate::stalwart::read(&from).map_err(|error| error.to_string());
 			config::run(&args.config, plan, &import)
 		}
 	}

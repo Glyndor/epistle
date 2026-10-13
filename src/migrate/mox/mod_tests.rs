@@ -101,6 +101,13 @@ fn keys_never_appear_in_the_plan_output() {
 		);
 	}
 	assert!(!shown.contains("PRIVATE KEY"));
+	assert!(
+		plan.manual
+			.iter()
+			.chain(plan.skipped.iter().map(|n| &n.reason))
+			.all(|line| !line.chars().any(char::is_control)),
+		"output lines carry no tabs or control characters"
+	);
 }
 
 #[test]
