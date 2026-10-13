@@ -175,7 +175,7 @@ async fn jmap_submission_to_a_local_recipient_is_delivered_not_queued() {
 	);
 	assert_eq!(
 		alice_messages(dir.path()).len(),
-		2,
-		"the draft plus the delivered copy"
+		3,
+		"the draft, the delivered copy, and the Sent copy"
 	);
 }

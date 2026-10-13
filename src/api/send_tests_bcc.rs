@@ -92,7 +92,14 @@ async fn a_local_bcc_recipient_gets_a_copy_without_the_bcc_header() {
 	let response = submit(&app, &draft(dir.path(), raw), Some(envelope)).await;
 	assert!(response["created"]["s"]["id"].is_string(), "{response}");
 	let stored = alice_messages(dir.path());
-	assert_eq!(stored.len(), 2, "the draft and the delivered copy");
+	// Three copies on disk: the draft (held by the Bcc recipient
+	// alice), the Bcc delivery to alice's INBOX, and the Sent copy
+	// the saver keeps by default.
+	assert_eq!(
+		stored.len(),
+		3,
+		"the draft, the Bcc delivery, and the Sent copy"
+	);
 	let with_bcc = stored
 		.iter()
 		.filter(|m| headers(m).contains("\nbcc:"))

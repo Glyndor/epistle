@@ -36,7 +36,7 @@ pub(super) use account_actions::{
 	address_add_with_store, address_remove_with_store, disable_with_store, enable_with_store,
 	find_log_id_with_store, handle_error, password_with_store, protocols_changed,
 	protocols_with_store, quota_changed, quota_with_store, render, render_protocols,
-	set_name_with_store, show_with_store,
+	save_sent_with_store, set_name_with_store, show_with_store,
 };
 pub use account_args::{
 	AddressArgs, AddressSubcommand, CatchAllArgs, CatchAllSubcommand, ForwardArgs,
@@ -145,8 +145,8 @@ pub enum Subcommand {
 		#[arg(value_name = "SIZE")]
 		size: String,
 	},
-	/// Restrict which protocols the account may sign in through.
-	///
+/// Restrict which protocols the account may sign in through.
+///
 	/// Restrict which authentication protocols the account may sign in through.
 	/// `all` clears the restriction.
 	Protocols {
@@ -157,6 +157,16 @@ pub enum Subcommand {
 		/// (`imap,smtp,api,webdav`), or `all` to clear.
 		#[arg(value_name = "LIST")]
 		list: String,
+	},
+/// Set whether the server saves a Sent copy of every send.
+	SaveSent {
+		/// The account login name.
+		#[arg(value_name = "NAME")]
+		name: String,
+		/// `on` or `off`. The default (no account setting) is "on";
+		/// `off` is the opt-out.
+		#[arg(value_name = "STATE")]
+		state: String,
 	},
 	/// Print the public view of an account, never its secrets.
 	///
@@ -291,6 +301,24 @@ pub(super) fn parse_protocol_list(raw: &str) -> Result<Option<Vec<Protocol>>, St
 		}
 	}
 	Ok(Some(out))
+}
+
+/// Parse the `on`/`off` switch the `save_sent` and quota
+/// subcommands accept. Whitespace and case are ignored; any other
+/// value is a refusal with the spelling the user typed. The CLI
+/// keeps the accepted set narrow so a typo never lands on disk:
+/// `on` and `off` are the only valid spellings; `true`/`false`/
+/// `yes`/`no` are intentionally not accepted so the operator's
+/// shell history reads the same way in every context.
+pub(super) fn parse_on_off(raw: &str) -> Result<bool, String> {
+	let trimmed = raw.trim();
+	match trimmed.to_ascii_lowercase().as_str() {
+		"on" => Ok(true),
+		"off" => Ok(false),
+		other => Err(format!(
+			"expected `on` or `off`, got {other:?}"
+		)),
+	}
 }
 
 /// Parse a single protocol name. Duplicates the kebab-case spellings
@@ -510,6 +538,21 @@ pub(super) fn run(
 				Err(code) => return code,
 			};
 			protocols_with_store(&store, &name, parsed)
+		}
+		Subcommand::SaveSent { name, state } => {
+			let value = match parse_on_off(&state) {
+				Ok(value) => value,
+				Err(error) => {
+					return crate::cli::exit::refused(format_args!(
+						"account {name}: {error}"
+					));
+				}
+			};
+			let store = match prepare(config_path, &name) {
+				Ok(store) => store,
+				Err(code) => return code,
+			};
+			save_sent_with_store(&store, &name, value)
 		}
 		Subcommand::Show { name, json } => {
 			let store = match prepare_show(config_path, &name) {

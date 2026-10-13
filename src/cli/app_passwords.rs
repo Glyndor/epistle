@@ -21,10 +21,10 @@ pub enum AppPasswordCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Create an app password and print it once.
-	///
-	/// Create a new app password for an account. The plaintext secret is
-	/// printed once and never stored.
+/// Create an app password and print it once.
+///
+/// Create a new app password for an account. The plaintext secret is
+/// printed once and never stored.
 	Create {
 		/// The account the app password belongs to.
 		#[arg(value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
@@ -38,6 +38,13 @@ pub enum AppPasswordCli {
 		/// Optional single-CIDR client-IP allowlist (e.g. `203.0.113.0/24`).
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
+		/// Optional override for this credential's `save_sent`
+		/// setting. With no override the credential inherits the
+		/// account-wide value; `on` opts this credential in (a
+		/// mailbox-only phone that should pollute its own Sent),
+		/// `off` opts it out (a relay, a read-only phone).
+		#[arg(long, value_name = "STATE")]
+		save_sent: Option<String>,
 	},
 	/// Revoke an existing app password by label.
 	Revoke {
@@ -70,11 +77,24 @@ pub(super) fn create(
 	label: &str,
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
+	save_sent: Option<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if let Err(code) = ensure_known_dynamic_account(config, account) {
 		return code;
 	}
+	let save_sent = match save_sent {
+		Some(raw) => match crate::cli::account::parse_on_off(&raw) {
+			Ok(value) => Some(value),
+			Err(error) => {
+				super::style::error(format_args!(
+					"account {account}: app-password save-sent: {error}"
+				));
+				return ExitCode::FAILURE;
+			}
+		},
+		None => None,
+	};
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
 		None => {
@@ -104,7 +124,7 @@ pub(super) fn create(
 		hash,
 		expires_at,
 		ip_cidr,
-		save_sent: None,
+		save_sent,
 	};
 	match store.add(account, app) {
 		Ok(()) => {
@@ -232,7 +252,16 @@ pub(super) fn run(
 			label,
 			expires_at,
 			ip_cidr,
-		} => create(config, &account, &label, expires_at, ip_cidr, out),
+			save_sent,
+		} => create(
+			config,
+			&account,
+			&label,
+			expires_at,
+			ip_cidr,
+			save_sent,
+			out,
+		),
 		AppPasswordCli::Revoke {
 			account,
 			label,

@@ -237,6 +237,28 @@ pub(crate) fn protocols_with_store(
 	}
 }
 
+/// Confirmation printed after the save-sent toggle.
+pub(crate) fn save_sent_changed(value: bool) -> String {
+	format!("save_sent set to {}", if value { "on" } else { "off" })
+}
+
+/// Toggle the account-wide `save_sent` preference. Static accounts
+/// carry no field; the CLI refuses them with the same hint as the
+/// other mutators.
+pub(crate) fn save_sent_with_store(
+	store: &AccountStore,
+	name: &str,
+	value: bool,
+) -> ExitCode {
+	match store.set_save_sent(name, value) {
+		Ok(_) => {
+			println!("{}", save_sent_changed(value));
+			ExitCode::SUCCESS
+		}
+		Err(error) => handle_error(name, error),
+	}
+}
+
 /// Print the name of every account whose log pseudonym is `id`. A login
 /// that was an address (SMTP and IMAP clients often present one) is
 /// pseudonymised as a whole, so an account also matches when one of its

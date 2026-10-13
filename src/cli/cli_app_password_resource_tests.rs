@@ -91,7 +91,13 @@ fn app_password_resource_create_parses() {
 				label,
 				expires_at,
 				ip_cidr,
+				save_sent,
 			} => {
+				assert_eq!(account, "bob");
+				assert_eq!(label, "phone");
+				assert!(expires_at.is_none());
+				assert!(ip_cidr.is_none());
+				assert!(save_sent.is_none());
 				assert_eq!(account, "bob");
 				assert_eq!(label, "phone");
 				assert!(expires_at.is_none());
