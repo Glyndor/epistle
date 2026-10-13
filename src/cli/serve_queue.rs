@@ -44,7 +44,11 @@ pub(super) fn spawn_queue_worker(
 	))
 	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
 	.with_transports(config.transport.clone())
-	.with_outbound_tls(config.queue.outbound_tls);
+	.with_outbound_tls(config.queue.outbound_tls)
+	.with_delivery_log(crate::storage::DeliveryLog::open(
+		&config.data_dir,
+		config.storage.as_ref().map_or(0, |s| s.delivery_log_days),
+	));
 	if let Some(webhook) = webhook {
 		worker = worker.with_webhook(Arc::clone(webhook));
 	}

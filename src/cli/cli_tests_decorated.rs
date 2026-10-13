@@ -2,6 +2,7 @@
 //! its symbol, every row inside the width. The plain form each list printed
 //! before is pinned by the command's own tests and stays as it was.
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use crate::cli::term::table::tests::visible;
@@ -144,7 +145,7 @@ fn queue_list_marks_a_held_message() {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	spool
 		.update_envelope(id, |envelope| envelope.hold(1_700_000_000))

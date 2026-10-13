@@ -1,14 +1,68 @@
 //! What the worker does with the outcome of a recipient: suppression, the
 //! failure webhook, the failure report (DSN) and the delay warning.
 
+use std::collections::BTreeMap;
+
 use super::Worker;
 use super::conversation::Conversation;
 use crate::queue::bounce::ReportRecipient;
 use crate::queue::client::DeliveryError;
 use crate::queue::reply::{FailureClass, classify_reason};
-use crate::storage::{RecipientStatus, SpoolEntry};
+use crate::storage::{DeliveryOutcome, DeliveryRecord, RecipientStatus, SpoolEntry};
 
 impl Worker {
+	/// Write one per-recipient outcome to the delivery log, when the log
+	/// is enabled. A best-effort writer: a failed `append` is logged and
+	/// otherwise ignored, the same as the webhook and the bounce sink
+	/// (mail flow must not be blocked by a logging error). The `reply`
+	/// field is truncated to 200 bytes of UTF-8 by the caller; the worker
+	/// passes it through unchanged.
+	fn log_outcome(
+		&self,
+		envelope_id: uuid::Uuid,
+		envelope_account: Option<&str>,
+		envelope_from: &str,
+		recipient: &str,
+		outcome: DeliveryOutcome,
+		remote: Option<&str>,
+		reply: Option<&str>,
+		attempt: u32,
+		extra: &BTreeMap<String, String>,
+	) {
+		let Some(log) = &self.delivery_log else {
+			return;
+		};
+		let record = DeliveryRecord {
+			time: self.now_epoch(),
+			spool_id: envelope_id,
+			account: envelope_account.map(str::to_string),
+			from: envelope_from.to_string(),
+			recipient: recipient.to_string(),
+			outcome,
+			remote: remote.filter(|value| !value.is_empty() && *value != "-").map(str::to_string),
+			reply: reply.map(str::to_string),
+			attempt,
+			extra: extra.clone(),
+		};
+		if let Err(error) = log.append(&record) {
+			tracing::warn!(%envelope_id, %error, "delivery log write failed");
+		}
+	}
+
+	/// Truncate `reply` to the first 200 bytes of UTF-8 (the first
+	/// 200 bytes of the remote SMTP reply line; longer values are not
+	/// interesting to log).
+	fn bounded_reply(reply: &str) -> String {
+		let mut out = String::new();
+		for ch in reply.chars() {
+			if out.len() + ch.len_utf8() > 200 {
+				break;
+			}
+			out.push(ch);
+		}
+		out
+	}
+
 	/// The recipients of `entry` due at `now`, minus those on a suppression
 	/// list (globally or for the sending account). Those hard-bounced before:
 	/// they are recorded as failed with no second report, and never contacted.
@@ -39,6 +93,19 @@ impl Worker {
 				}
 				envelope.settle();
 			})?;
+			for recipient in &skipped {
+				self.log_outcome(
+					id,
+					entry.envelope.account.as_deref(),
+					&entry.envelope.reverse_path,
+					recipient,
+					DeliveryOutcome::Suppressed,
+					None,
+					Some("recipient is on the suppression list"),
+					0,
+					&entry.envelope.extra,
+				);
+			}
 		}
 		Ok(due)
 	}
@@ -54,15 +121,50 @@ impl Worker {
 		let remote = conversation.remote.as_deref().unwrap_or("-");
 		for (recipient, result) in &conversation.results {
 			match result {
-				Ok(()) => tracing::debug!(%id, %recipient, remote, "delivered"),
+				Ok(()) => {
+					tracing::debug!(%id, %recipient, remote, "delivered");
+					self.log_outcome(
+						id,
+						entry.envelope.account.as_deref(),
+						&entry.envelope.reverse_path,
+						recipient,
+						DeliveryOutcome::Delivered,
+						Some(remote),
+						Some("250 OK"),
+						0,
+						&entry.envelope.extra,
+					);
+				}
 				Err(DeliveryError::Transient(reason)) => {
 					let class = classify_reason(reason, false).class.label();
 					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
+					self.log_outcome(
+						id,
+						entry.envelope.account.as_deref(),
+						&entry.envelope.reverse_path,
+						recipient,
+						DeliveryOutcome::Deferred,
+						Some(remote),
+						Some(&Self::bounded_reply(reason)),
+						entry.envelope.recipient_state(recipient).attempts,
+						&entry.envelope.extra,
+					);
 				}
 				Err(DeliveryError::Permanent(reason)) => {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
 					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					self.log_outcome(
+						id,
+						entry.envelope.account.as_deref(),
+						&entry.envelope.reverse_path,
+						recipient,
+						DeliveryOutcome::Failed,
+						Some(remote),
+						Some(&Self::bounded_reply(reason)),
+						entry.envelope.recipient_state(recipient).attempts,
+						&entry.envelope.extra,
+					);
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
 						// us. The operator has to look at the sending side.
@@ -136,6 +238,17 @@ impl Worker {
 			let class = classify_reason(reason, false).class.label();
 			let remote = state.remote.as_deref().unwrap_or("-");
 			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
+			self.log_outcome(
+				id,
+				envelope.account.as_deref(),
+				&envelope.reverse_path,
+				recipient,
+				DeliveryOutcome::Failed,
+				state.remote.as_deref(),
+				Some(&Self::bounded_reply(reason)),
+				state.attempts,
+				&envelope.extra,
+			);
 			self.notify_failed(recipient, reason, state.remote.clone());
 		}
 		Ok(())

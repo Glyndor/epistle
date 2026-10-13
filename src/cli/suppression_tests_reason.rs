@@ -1,5 +1,6 @@
 //! `epistle suppression list` says when and why an address was suppressed.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
@@ -25,7 +26,7 @@ async fn refused_with(data_dir: &std::path::Path, reply: &str) {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	let remote = FakeRemote::default();
 	remote.script(

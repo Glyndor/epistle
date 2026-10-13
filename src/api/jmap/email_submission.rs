@@ -193,7 +193,7 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 		no_dsn: Vec::new(),
 	};
 	let id = state
-		.submit(account, message)
+		.submit(account, message, &std::collections::BTreeMap::new())
 		.map_err(|error| match error {
 			// RFC 8621 section 7.5.2: the server refuses to send this message.
 			crate::smtp::sink::SinkError::VirusDetected(signature) => Refusal {

@@ -1,5 +1,6 @@
 //! The worker journals one TLS-RPT session per direct MX delivery attempt.
 
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -105,7 +106,7 @@ async fn journal_after_one_pass(remote: Remote) -> Vec<serde_json::Value> {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	let worker =
 		Worker::new(spool, Arc::new(FakeMx(remote)), "mail.sender.example").with_tlsrpt(dir.path());

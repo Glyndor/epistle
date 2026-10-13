@@ -156,7 +156,7 @@ fn dispatch(
 	}
 	if !rule.email.is_empty() {
 		let message = build_email(rule, &ctx.hostname, delta, now_unix)?;
-		ctx.spool.store(&message)?;
+		ctx.spool.store(&message, None, &std::collections::BTreeMap::new())?;
 	}
 	Ok(())
 }

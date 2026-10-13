@@ -19,7 +19,7 @@ fn sample_message() -> AcceptedMessage {
 fn open_with_entry() -> (tempfile::TempDir, Arc<FsSpool>, Uuid) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("open spool"));
-	let id = spool.store(&sample_message()).expect("store");
+	let id = spool.store(&sample_message(), None, &BTreeMap::new()).expect("store");
 	(dir, spool, id)
 }
 
@@ -35,6 +35,33 @@ fn envelope_written_before_the_hold_fields_still_loads() {
 	assert_eq!(envelope.held, None);
 	assert_eq!(envelope.held_secs, 0);
 	assert_eq!(envelope.last_error, None);
+	// An envelope written before the delivery-log fields existed loads
+	// with the empty defaults: the operator did not submit it (no
+	// `account`) and the API did not tag it (empty `extra`).
+	assert_eq!(envelope.account, None);
+	assert!(envelope.extra.is_empty());
+}
+
+#[test]
+fn an_envelope_round_trips_account_and_extra() {
+	let (_dir, spool, id) = open_with_entry();
+	let mut extra = BTreeMap::new();
+	extra.insert("campaign".into(), "winter-2026".into());
+	let written = spool
+		.update_envelope(id, |envelope| {
+			envelope.account = Some("alice@example.org".into());
+			envelope.extra = extra.clone();
+		})
+		.expect("update");
+	assert_eq!(written.account.as_deref(), Some("alice@example.org"));
+	assert_eq!(written.extra.get("campaign").map(String::as_str), Some("winter-2026"));
+
+	let on_disk = spool.load_envelope(id).expect("load");
+	assert_eq!(on_disk.account.as_deref(), Some("alice@example.org"));
+	assert_eq!(
+		on_disk.extra.get("campaign").map(String::as_str),
+		Some("winter-2026")
+	);
 }
 
 #[test]

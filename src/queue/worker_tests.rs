@@ -1,5 +1,6 @@
 //! Outbound queue worker tests.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::SuppressionList;
 use crate::queue::resolver::{BoxedStream, ConnectFuture};
@@ -154,7 +155,7 @@ fn spool_with_message(dir: &std::path::Path, recipient: &str) -> FsSpool {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	spool
 }
@@ -368,7 +369,7 @@ async fn permanent_failure_suppresses_then_drops_silently() {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	assert_eq!(worker.pass().await.expect("pass"), 0);
 	assert!(worker.spool.list().expect("list").is_empty());
@@ -459,7 +460,7 @@ async fn notify_never_suppresses_the_bounce() {
 			tlsrpt_verified: false,
 			// The sender asked for no failure DSN.
 			no_dsn: vec!["carol@remote.example".into()],
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	let connector = Arc::new(LoopbackConnector {
 		sink: Arc::new(MemorySink::new()),

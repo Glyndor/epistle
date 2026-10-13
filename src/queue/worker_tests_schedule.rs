@@ -1,6 +1,7 @@
 //! The configured retry schedule applies to each pending recipient, spread
 //! by the injected jitter, and the delay warning follows its configured age.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
@@ -17,7 +18,7 @@ fn spool_to(dir: &std::path::Path, recipients: &[&str]) -> (FsSpool, uuid::Uuid,
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	let created = id.get_timestamp().expect("v7").to_unix().0;
 	(spool, id, created)

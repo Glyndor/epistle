@@ -1,6 +1,7 @@
 //! The remote's reply decides what happens to a recipient: retried, bounced,
 //! suppressed or reported as a reputation problem.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::SuppressionList;
 use crate::queue::test_remote::{FakeRemote, Script};
@@ -20,7 +21,7 @@ fn spool_to(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	spool
 }

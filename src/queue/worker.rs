@@ -60,6 +60,10 @@ pub struct Worker {
 	/// Draws the spread factor of each wait; replaced in tests so the
 	/// schedule is deterministic.
 	jitter: fn() -> f64,
+	/// Per-recipient delivery log. `None` when the operator has not opted
+	/// in (`[storage] delivery_log_days = 0`); the writer is then a no-op
+	/// and no records are produced.
+	delivery_log: Option<crate::storage::DeliveryLog>,
 }
 
 impl Worker {
@@ -82,7 +86,16 @@ impl Worker {
 			tlsrpt_dir: None,
 			schedule: super::RetrySchedule::default(),
 			jitter: super::schedule::random_factor,
+			delivery_log: None,
 		}
+	}
+
+	/// Enable the per-recipient delivery log. A `0`-retention `log` is
+	/// a no-op; the worker still takes it so the same wiring runs
+	/// regardless of configuration.
+	pub fn with_delivery_log(mut self, log: crate::storage::DeliveryLog) -> Self {
+		self.delivery_log = Some(log);
+		self
 	}
 
 	/// Retry pending recipients and warn about delays on this schedule
@@ -409,3 +422,7 @@ mod tests_webhook;
 #[cfg(test)]
 #[path = "worker_tests_schedule.rs"]
 mod tests_schedule;
+
+#[cfg(test)]
+#[path = "worker_tests_delivery_log.rs"]
+mod tests_delivery_log;

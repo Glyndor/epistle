@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use super::*;
 use crate::test_fixtures as fixtures;
 use axum::body::Body;
@@ -37,7 +38,7 @@ pub(super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiState {
 				mailbox: None,
 				tlsrpt_verified: false,
 				no_dsn: Vec::new(),
-			})
+			}, None, &BTreeMap::new())
 			.expect("store");
 	}
 	let accounts = vec![crate::config::Account {

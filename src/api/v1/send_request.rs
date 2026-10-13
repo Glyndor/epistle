@@ -23,6 +23,15 @@ const MAX_REFERENCES: usize = 100;
 /// Most `List-Unsubscribe` URLs.
 const MAX_UNSUBSCRIBE: usize = 4;
 
+/// Most keys in the `extra` correlation map.
+pub(super) const MAX_EXTRA_KEYS: usize = 10;
+
+/// Longest single key in the `extra` correlation map, in bytes.
+pub(super) const MAX_EXTRA_KEY_LEN: usize = 64;
+
+/// Longest single value in the `extra` correlation map, in bytes.
+pub(super) const MAX_EXTRA_VALUE_LEN: usize = 256;
+
 /// `X-` headers the server writes itself from a named field.
 const RESERVED_CUSTOM: &[&str] = &["x-priority"];
 
@@ -79,6 +88,14 @@ pub struct SendRequest {
 	/// (the credential override is SMTP-only).
 	#[serde(default)]
 	save_sent: Option<bool>,
+	/// Caller-supplied correlation map: at most 10 string keys of at most 64
+	/// bytes each and string values of at most 256 bytes, all keys printable
+	/// ASCII. The server copies it onto the envelope and the delivery log and
+	/// the delivery webhooks, but never writes it into the message itself.
+	/// `validated_extra` is what reaches the spool, after the bounds below
+	/// are checked.
+	#[serde(default)]
+	extra: BTreeMap<String, String>,
 }
 
 /// An attachment or inline part: base64 `data`, with the type detected
@@ -113,6 +130,43 @@ impl SendRequest {
 	/// but the save-sent logic accommodates).
 	pub fn save_sent(&self) -> Option<bool> {
 		self.save_sent
+	}
+
+	/// The caller-supplied `extra` correlation map, after enforcing its
+	/// bounds: at most [`MAX_EXTRA_KEYS`] keys, each at most
+	/// [`MAX_EXTRA_KEY_LEN`] bytes of printable ASCII, each value at most
+	/// [`MAX_EXTRA_VALUE_LEN`] bytes. The empty default is returned when
+	/// the caller did not pass any, and the same map when all entries are
+	/// already valid; a request that exceeds any of the bounds is rejected
+	/// with the `invalid_input` error the API returns for every malformed
+	/// field, so the spool never sees a key or value out of range.
+	pub(super) fn validated_extra(&self) -> Result<BTreeMap<String, String>, ApiError> {
+		if self.extra.len() > MAX_EXTRA_KEYS {
+			return Err(invalid(&format!(
+				"extra has {} keys; the maximum is {MAX_EXTRA_KEYS}",
+				self.extra.len()
+			)));
+		}
+		for (key, value) in &self.extra {
+			if key.len() > MAX_EXTRA_KEY_LEN {
+				return Err(invalid(&format!(
+					"extra key {key:?} is {} bytes; the maximum is {MAX_EXTRA_KEY_LEN}",
+					key.len()
+				)));
+			}
+			if !key.bytes().all(|b| (0x21..=0x7e).contains(&b)) {
+				return Err(invalid(&format!(
+					"extra key {key:?} must be printable ASCII (no spaces or control characters)"
+				)));
+			}
+			if value.len() > MAX_EXTRA_VALUE_LEN {
+				return Err(invalid(&format!(
+					"extra value for key {key:?} is {} bytes; the maximum is {MAX_EXTRA_VALUE_LEN}",
+					value.len()
+				)));
+			}
+		}
+		Ok(self.extra.clone())
 	}
 
 	/// Every value that ends up on a header line, for the CR/LF and length

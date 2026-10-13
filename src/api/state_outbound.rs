@@ -3,6 +3,7 @@
 //! submission uses, so API mail is DKIM-signed, delivered locally to local
 //! recipients and queued for the rest, under the id the caller gets back.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::ApiState;
@@ -23,12 +24,19 @@ impl ApiState {
 	/// Submit `message` for `account` and return the id of its submission:
 	/// the queue id of whatever part leaves the server. A message whose
 	/// recipients are all local is delivered at once and queues nothing
-	/// under that id.
-	pub fn submit(&self, account: &str, message: AcceptedMessage) -> Result<uuid::Uuid, SinkError> {
+	/// under that id. `extra` is the caller-supplied correlation map; the
+	/// delivery log and the delivery webhooks copy it onto every record
+	/// they emit, but the message itself is never tagged with it.
+	pub fn submit(
+		&self,
+		account: &str,
+		message: AcceptedMessage,
+		extra: &BTreeMap<String, String>,
+	) -> Result<uuid::Uuid, SinkError> {
 		let id = uuid::Uuid::now_v7();
 		match &self.inner.outbound {
-			Some(sink) => sink.submit(message, id, account)?,
-			None => self.inner.spool.submit(message, id, account)?,
+			Some(sink) => sink.submit(message, id, account, extra)?,
+			None => self.inner.spool.submit(message, id, account, extra)?,
 		}
 		Ok(id)
 	}

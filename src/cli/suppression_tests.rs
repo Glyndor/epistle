@@ -1,5 +1,6 @@
 //! Tests for the `mail suppression` command.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::SuppressionList;
 
@@ -202,7 +203,7 @@ async fn deliver_once(data_dir: &std::path::Path) -> (usize, usize) {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	let connector = std::sync::Arc::new(CountingConnector(Default::default()));
 	let worker = crate::queue::Worker::new(spool, connector.clone(), "mail.example.org")

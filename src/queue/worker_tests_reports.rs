@@ -1,6 +1,7 @@
 //! The failure report (RFC 3464 DSN) and the delay warning carry one block
 //! per recipient, each with its own status and the reply that caused it.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
@@ -17,7 +18,7 @@ fn spool_to(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	spool
 }

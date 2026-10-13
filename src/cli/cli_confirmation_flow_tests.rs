@@ -4,6 +4,7 @@
 //! without asking. The handlers run unchanged; only the console under them
 //! is scripted (`prompt::script`).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -161,7 +162,7 @@ fn spooled() -> (tempfile::TempDir, uuid::Uuid) {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	(dir, id)
 }
@@ -180,6 +181,7 @@ fn queue_remove_asks_with_the_sender_and_recipient_count() {
 		|(dir, id), yes| {
 			queue::run(
 				dir.path(),
+				0,
 				Some(QueueCli::Remove { id: *id, yes }),
 				queue::now_epoch(),
 				&mut Vec::new(),

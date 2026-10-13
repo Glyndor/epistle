@@ -1,6 +1,7 @@
 //! Each recipient of a spooled message has its own outcome: one refusal or
 //! one slow domain must not decide what happens to the others.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::SuppressionList;
 use crate::queue::test_remote::{FakeRemote, Received, Script};
@@ -20,7 +21,7 @@ fn spool_to(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	spool
 }

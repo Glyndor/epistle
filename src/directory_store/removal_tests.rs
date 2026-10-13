@@ -41,15 +41,19 @@ fn store_and_spool(dir: &Path) -> (Arc<AccountStore>, FsSpool) {
 
 fn enqueue(spool: &FsSpool, reverse_path: &str, body: &str) {
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: reverse_path.to_string(),
-			recipients: vec!["bob@elsewhere.example".to_string()],
-			data: format!("Subject: {body}\r\n\r\n{body}\r\n").into_bytes(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: reverse_path.to_string(),
+				recipients: vec!["bob@elsewhere.example".to_string()],
+				data: format!("Subject: {body}\r\n\r\n{body}\r\n").into_bytes(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&std::collections::BTreeMap::new(),
+		)
 		.expect("store");
 }
 

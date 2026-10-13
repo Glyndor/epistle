@@ -1,6 +1,7 @@
 //! The delivery-failure webhook says what kind of failure it was and which
 //! server gave which reply.
 
+use std::collections::BTreeMap;
 use super::*;
 use crate::queue::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
@@ -42,7 +43,7 @@ async fn the_failure_event_carries_the_class_the_remote_and_its_reply() {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	let remote = FakeRemote::default();
 	remote.script(

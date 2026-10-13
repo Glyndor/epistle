@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -40,7 +41,12 @@ fn sink(
 }
 
 fn submit(sink: &Arc<dyn MessageSink>, body: &str) -> Result<(), SinkError> {
-	sink.submit(message(body), uuid::Uuid::now_v7(), "alice")
+	sink.submit(
+		message(body),
+		uuid::Uuid::now_v7(),
+		"alice",
+		&BTreeMap::new(),
+	)
 }
 
 #[tokio::test]
@@ -212,8 +218,13 @@ async fn sequential_scans_share_one_worker() {
 	let clamd = FakeClamd::start();
 	let sink = concrete(&clamd.socket);
 	for _ in 0..50 {
-		sink.submit(message("hello"), uuid::Uuid::now_v7(), "alice")
-			.expect("clean");
+		sink.submit(
+			message("hello"),
+			uuid::Uuid::now_v7(),
+			"alice",
+			&BTreeMap::new(),
+		)
+		.expect("clean");
 	}
 	assert_eq!(clamd.scans(), 50);
 	let workers = sink.workers.lock().expect("workers");
@@ -237,8 +248,13 @@ async fn two_hundred_small_scans_timing() {
 	let sink = concrete(&clamd.socket);
 	let started = std::time::Instant::now();
 	for _ in 0..200 {
-		sink.submit(message("hello"), uuid::Uuid::now_v7(), "alice")
-			.expect("clean");
+		sink.submit(
+			message("hello"),
+			uuid::Uuid::now_v7(),
+			"alice",
+			&BTreeMap::new(),
+		)
+		.expect("clean");
 	}
 	println!("200 small submissions scanned in {:?}", started.elapsed());
 }

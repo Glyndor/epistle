@@ -1,5 +1,6 @@
 //! CLI argument parsing and command tests.
 
+use std::collections::BTreeMap;
 use super::*;
 use clap::CommandFactory;
 use std::io::Write;
@@ -351,7 +352,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	// A bounce uses the null reverse-path, shown as <>.
 	spool
@@ -363,7 +364,7 @@ fn queue_list_reports_and_handles_edge_cases() {
 			mailbox: None,
 			tlsrpt_verified: false,
 			no_dsn: Vec::new(),
-		})
+		}, None, &BTreeMap::new())
 		.expect("store");
 	// A corrupt entry is listed but skipped on load.
 	std::fs::write(

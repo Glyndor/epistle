@@ -241,6 +241,7 @@ impl Cli {
 			Command::Queue { config, action } => match Config::load(&config) {
 				Ok(config) => queue::run(
 					&config.data_dir,
+					config.storage.as_ref().map_or(0, |s| s.delivery_log_days),
 					action,
 					queue::now_epoch(),
 					&mut std::io::stdout().lock(),
