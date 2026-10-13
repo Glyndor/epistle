@@ -50,8 +50,8 @@ fn run_restart_pair() -> Result<(), String> {
 	let base_p = pick_port_base();
 	let base_q = base_p.wrapping_add(1_000);
 	// First run: lay out the directory and bind P. We do not
-	// need its banner, only that the child reached the bind
-	// step and left the marker on disk.
+	// need its banner, only that the child bound P, which comes
+	// after it wrote `mail.toml` with base P.
 	run_until_listening_and_kill(dir.path(), base_p)?;
 	// Second run: same directory, but the operator requested
 	// base Q. The runtime must still bind P (the persisted
@@ -66,6 +66,13 @@ fn run_restart_pair() -> Result<(), String> {
 		port_base_q.as_str(),
 	];
 	let mut child = Child::spawn(&args, dir.path());
+	check_second_run(&mut child, base_p, base_q).map_err(|message| child.fail_with_stderr(message))
+}
+
+/// Drive the second run: wait for the child to bind the persisted
+/// P, read its SMTP greeting, then check every banner line names P
+/// and none names Q.
+fn check_second_run(child: &mut Child, base_p: u16, base_q: u16) -> Result<(), String> {
 	let bind_deadline = Instant::now() + BIND_DEADLINE;
 	// The persisted P-relative SMTP port is the one the
 	// runtime will actually bind; wait for it.
@@ -74,7 +81,7 @@ fn run_restart_pair() -> Result<(), String> {
 		smtp_addr,
 		bind_deadline,
 		"waiting for second-run SMTP port (the persisted P)",
-		&mut child,
+		child,
 	)?;
 	let banner = read_banner(
 		&mut smtp,
@@ -130,10 +137,15 @@ fn run_restart_pair() -> Result<(), String> {
 	Ok(())
 }
 
-/// Run the harness once with `base_p`, wait until the SMTP
-/// port is listening, then kill the child and reap it. The
+/// Run the harness once with `base_p`, wait until the child has
+/// bound the SMTP port, then kill the child and reap it. The
 /// directory is left on disk so a second run can pick up the
 /// persisted port base from `mail.toml`.
+///
+/// The child's own bind log line is what licenses the kill: a
+/// connect that succeeded against some other listener used to let
+/// this kill the child before it wrote `mail.toml`, and the second
+/// run then laid the directory out afresh at Q.
 fn run_until_listening_and_kill(dir: &Path, base_p: u16) -> Result<(), String> {
 	let port_base_str = base_p.to_string();
 	let dir_str = dir.to_str().expect("utf-8 tempdir path").to_owned();
@@ -153,6 +165,13 @@ fn run_until_listening_and_kill(dir: &Path, base_p: u16) -> Result<(), String> {
 		"waiting for first-run SMTP port",
 		&mut child,
 	)?;
+	let mail_toml = dir.join("mail.toml");
+	if !mail_toml.is_file() {
+		return Err(child.fail_with_stderr(format!(
+			"first run bound {smtp_addr} but {} is not on disk",
+			mail_toml.display()
+		)));
+	}
 	let (_stdout, _stderr) =
 		child.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, "killing first run")?;
 	Ok(())
