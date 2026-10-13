@@ -115,6 +115,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// successful cleartext login rewrites a low-iteration verifier.
 	let account_store = store
 		.with_scram_enabled(config.auth.scram)
+		.with_password_policy(crate::password::Policy::from_config(&config.auth))
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();

@@ -371,7 +371,8 @@ pub(super) fn write_dkim_key(path: &Path) -> Result<(), super::LocalError> {
 /// `hash_password` `account-add` uses) and return the PHC string for
 /// `[api] token_hash`. The plaintext token is dropped on the floor: only
 /// the harness operator gets the password, and the API is loopback-local
-/// anyway.
+/// anyway. The token is URL-safe base64, so the password policy's prepare
+/// step is a no-op here even when unicode passwords are enabled.
 pub(super) fn generate_api_token_hash() -> Result<String, super::LocalError> {
 	let secret =
 		super::super::util::generate_secret().ok_or(super::LocalError::CsprngUnavailable)?;

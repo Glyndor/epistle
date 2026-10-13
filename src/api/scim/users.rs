@@ -99,7 +99,10 @@ fn check_password(password: &str) -> Result<(), ScimError> {
 /// random salt. `None` when SCRAM is disabled via `[auth] scram = false`,
 /// so a PUT that changes the password for an account that already has a
 /// verifier drops the verifier. Fails closed if the CSPRNG cannot produce
-/// a salt rather than storing a predictable one.
+/// a salt rather than storing a predictable one. The candidate is
+/// NFKC-normalised under the store's password policy first, so a SCRAM
+/// verifier derived here matches the proof a SCRAM-SHA-256 client sends
+/// after its own SASLprep step (RFC 5802 / RFC 7677).
 fn derive_scram(
 	password: &str,
 	store: &crate::directory_store::AccountStore,
@@ -107,15 +110,28 @@ fn derive_scram(
 	if !store.scram_enabled() {
 		return Ok(None);
 	}
-	crate::smtp::scram::ScramStored::with_fresh_salt(password)
+	let prepared = store
+		.password_policy()
+		.prepare(password)
+		.map_err(|rejection| ScimError::invalid(rejection.message()))?;
+	crate::smtp::scram::ScramStored::with_fresh_salt(prepared.as_ref())
 		.map(Some)
 		.ok_or_else(ScimError::internal)
 }
 
 /// Hash a plaintext password with the global argon2id KDF. The `password`
-/// module has already vetted it; this just hashes it.
-fn hash_password(password: &str) -> Result<String, ScimError> {
-	crate::smtp::auth::hash_password(password).map_err(|_| ScimError::internal())
+/// module has already vetted it; this just hashes the policy-prepared
+/// bytes so the stored PHC matches what `verify_password` will see after
+/// its own prepare step at login-time.
+fn hash_password(
+	password: &str,
+	store: &crate::directory_store::AccountStore,
+) -> Result<String, ScimError> {
+	let prepared = store
+		.password_policy()
+		.prepare(password)
+		.map_err(|rejection| ScimError::invalid(rejection.message()))?;
+	crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ScimError::internal())
 }
 
 /// Resolve an account's full delivery list from the SCIM `emails` field.
@@ -239,7 +255,7 @@ pub async fn create_user(
 
 	let (password_hash, scram) = if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
-		(hash_password(plain)?, derive_scram(plain, state.store())?)
+		(hash_password(plain, state.store())?, derive_scram(plain, state.store())?)
 	} else {
 		// No password supplied: create the account with an inert hash and
 		// no SCRAM credentials. The IdP can PATCH `password` later, or the
@@ -319,7 +335,7 @@ pub async fn put_user(
 
 	if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
-		let hash = hash_password(plain)?;
+		let hash = hash_password(plain, state.store())?;
 		let scram = derive_scram(plain, state.store())?;
 		state
 			.store()
@@ -393,7 +409,7 @@ fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<()
 				.as_str()
 				.ok_or_else(|| ScimError::invalid("password must be a string"))?;
 			check_password(plain)?;
-			let hash = hash_password(plain)?;
+			let hash = hash_password(plain, state.store())?;
 			let scram = derive_scram(plain, state.store())?;
 			state
 				.store()

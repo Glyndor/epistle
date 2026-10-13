@@ -541,6 +541,43 @@ section, an unknown key fails the config load.
 | Key | Meaning |
 |---|---|
 | `scram` | Offer SCRAM-SHA-256 (and SCRAM-SHA-256-PLUS where channel binding is available) and store a SCRAM verifier for each dynamic account (default `true`). With `false` the mechanisms are not advertised on SMTP, IMAP or ManageSieve, an `AUTH`/`AUTHENTICATE` with them is refused exactly like an unknown mechanism, no verifier is derived when an account is created or its password set (CLI, `/api/v1/accounts`, SCIM), and the next password change of an account that has one drops it. PLAIN and LOGIN stay available. |
+| `unicode_passwords` | Accept non-ASCII passwords and normalise with NFKC on both set and verify (RFC 8265 OpaqueString profile, in spirit RFC 5802 SASLprep / RFC 7677). Default `false` keeps the historical ASCII-only policy. With the flag on the validator accepts any non-control Unicode scalar, the length is counted in scalars (still 12-64 on the normalised form), and the argon2id hash and the SCRAM verifier are derived from the same canonical form — a password set with one keyboard verifies from another. Scrambling on the client: SCRAM-SHA-256 clients already do SASLprep on the supplied credential, so a SCRAM login from a non-ASCII password works without further config. The flag is opt-in because older IMAP/POP clients mangle non-ASCII in AUTH PLAIN/LOGIN on the wire, and the operator who flips the flag is opting the deployment into the expectation that every client normalises consistently. Absent stays the historical default. |
+
+### `[auth] unicode_passwords` (`[auth] unicode_passwords = true`)
+
+The default policy (`unicode_passwords = false`) requires 12-64 printable-ASCII
+characters and rejects control scalars, mirroring what every SMTP/IMAP
+client can carry across `AUTH PLAIN` and `LOGIN` reliably. The breaches
+list still applies.
+
+With `unicode_passwords = true`, the policy:
+
+- accepts any non-control Unicode scalar (U+0000..=U+001F, U+007F..=U+009F, the
+  bidi / line-separator / paragraph-separator ranges from SASLprep are all
+  out; see RFC 8265 OpaqueString);
+- normalises the candidate with NFKC before hashing, so the canonical form
+  is what lands on disk and what SCRAM's PBKDF2 sees;
+- counts the password length in Unicode scalar values, and applies the
+  12-64 ceiling on the normalised form (a 72-character decomposed form that
+  collapses to 60 scalars is rejected; the 64-character ceiling holds on
+  the post-normalise form).
+
+A `contraseñaSegura` typed in NFC on an iOS keyboard and the same `n`+`˜`
+decomposition typed on an Android keyboard both prepare to the same canonical
+form, so the verifier matches. SCRAM-SHA-256 clients do SASLprep
+automatically (RFC 5802 / RFC 7677); PLAIN/LOGIN clients do not, and the
+caveat is theirs — the operator flips the flag knowing their clients must
+normalise consistently.
+
+```toml
+[auth]
+unicode_passwords = true
+```
+
+The setting is hot-disabled by the absence in an existing `[auth]` block:
+configs that predate the field stay ASCII-only. There is no on-the-wire
+advertisement of which policy the server is running; clients discover
+it by trying a non-ASCII credential.
 
 ### `[oauth]`
 OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.

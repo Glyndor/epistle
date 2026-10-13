@@ -25,6 +25,7 @@ fn scram_off_state(dir: &std::path::Path) -> super::ApiState {
 				"carol".to_string(),
 				vec!["carol@example.org".to_string()],
 				fixtures::password(),
+				&crate::password::Policy::ASCII_ONLY,
 				true,
 			)
 			.expect("carol"),

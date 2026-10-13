@@ -63,9 +63,19 @@ impl super::AccountStore {
 		if !self.scram_enabled {
 			return;
 		}
+		// Prepare the candidate with the same NFKC rule the storage layer
+		// applied at set-time, so the new verifier lines up with the
+		// verifier a SCRAM-SHA-256 client proves against. Without this a
+		// unicode-password account's upgrade is derived from a different
+		// byte sequence than the original verifier, and the next
+		// SCRAM-SHA-256 login would miss.
+		let prepared = match self.password_policy.prepare(password) {
+			Ok(prepared) => prepared,
+			Err(_) => return,
+		};
 		// Derive outside the lock: 600000 PBKDF2 rounds must not stall
 		// every other reader of the store.
-		let Some(fresh) = ScramStored::with_fresh_salt(password) else {
+		let Some(fresh) = ScramStored::with_fresh_salt(prepared.as_ref()) else {
 			return;
 		};
 		// Take the cross-process `flock`, re-read the file, and only

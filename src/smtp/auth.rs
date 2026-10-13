@@ -55,6 +55,15 @@ pub fn parse_plain(encoded: &str) -> Result<PlainCredentials, PlainError> {
 }
 
 /// Hash a password with argon2id for storage (PHC string).
+///
+/// The password is hashed *as given*: callers must apply whatever NFKC
+/// normalisation the password policy calls for before calling this (with
+/// the ASCII-only policy the input is already on canonical form, so a
+/// pass-through is correct; with the Unicode policy the caller must run
+/// `Policy::unicode().prepare(password)` first). Keeping the function pure
+/// — no policy parameter — means the bytes hashed and verified are
+/// always the same, and the policy decision lives at one place per call
+/// site.
 pub fn hash_password(password: &str) -> Result<String, String> {
 	use argon2::password_hash::PasswordHasher;
 	use ring::rand::{SecureRandom, SystemRandom};
@@ -69,8 +78,12 @@ pub fn hash_password(password: &str) -> Result<String, String> {
 		.map_err(|error| error.to_string())
 }
 
-/// Verify a password against an argon2id PHC hash. Any malformed hash or
-/// mismatch is a plain `false`: callers must not learn why.
+/// Verify a password against an argon2id PHC hash. The password must
+/// arrive already prepared (NFKC-normalised under the unicode password
+/// policy, raw bytes under the ASCII-only policy); the function does no
+/// preparation of its own, so the byte stream hashed at set-time and the
+/// byte stream verified at login-time always agree. Any malformed hash
+/// or mismatch is a plain `false`: callers must not learn why.
 pub fn verify_password(phc_hash: &str, password: &str) -> bool {
 	let Ok(parsed) = PasswordHash::new(phc_hash) else {
 		return false;
@@ -83,6 +96,7 @@ pub fn verify_password(phc_hash: &str, password: &str) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
 	use super::*;
+	use crate::password::Policy;
 	use crate::test_fixtures as fixtures;
 
 	pub(crate) fn hash(password: &str) -> String {
@@ -178,6 +192,41 @@ pub(crate) mod tests {
 	#[test]
 	fn rejects_malformed_hash() {
 		assert!(!verify_password("not-a-phc-string", fixture_password()));
+	}
+
+	#[test]
+	fn unicode_policy_normalises_before_hashing_and_verifying() {
+		// The crypto functions stay pure: they hash and verify whatever
+		// bytes arrive. The preparation step is the policy's job. Calling
+		// `Policy::unicode().prepare(...)` on both set and verify is what
+		// makes a password typed in one keyboard composition verify from
+		// another, and the contract here is that the same `Cow<str>` flowed
+		// in on both paths.
+		let policy = Policy::unicode();
+		let nfc = "contrase\u{00F1}aSegura12";
+		let nfd = "contrase\u{006E}\u{0303}aSegura12";
+		assert_ne!(nfc, nfd, "shape precondition: the two forms differ in bytes");
+		let prepared_nfc = policy.prepare(nfc).expect("nfc is valid");
+		let prepared_nfd = policy.prepare(nfd).expect("nfd is valid");
+		assert_eq!(
+			prepared_nfc.as_ref(),
+			prepared_nfd.as_ref(),
+			"shape precondition: NFKC collapses NFD to NFC",
+		);
+		// Set under NFC…
+		let phc = super::hash_password(prepared_nfc.as_ref()).expect("hashes under unicode");
+		// … verifies against any decomposition as long as the candidate
+		// goes through the same prepare call.
+		assert!(verify_password(&phc, prepared_nfc.as_ref()));
+		assert!(verify_password(&phc, prepared_nfd.as_ref()));
+		// And the reverse: set with NFD-derived bytes, verify with the
+		// NFD bytes or the NFC bytes — both prepare to the same form, so
+		// both verify.
+		let phc_from_nfd = super::hash_password(prepared_nfd.as_ref()).expect("hashes under unicode");
+		assert!(verify_password(&phc_from_nfd, prepared_nfc.as_ref()));
+		assert!(verify_password(&phc_from_nfd, prepared_nfd.as_ref()));
+		// A wrong password still fails, even after the policy prepare.
+		assert!(!verify_password(&phc, "wrongPassword12"));
 	}
 }
 

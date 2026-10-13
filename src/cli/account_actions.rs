@@ -102,7 +102,18 @@ pub(crate) fn password_with_store(
 	let Some(plain) = prompt::new_password(&format!("Password for \"{name}\""), &mut reader) else {
 		return ExitCode::from(crate::cli::exit::REFUSED);
 	};
-	let hash = match crate::smtp::auth::hash_password(&plain) {
+	// Apply the runtime password policy once: the hashed bytes and the SCRAM
+	// verifier must be derived from the same canonical form, so a SCRAM-SHA-256
+	// client that ran SASLprep on its candidate matches the verifier we
+	// stored. With the ASCII-only policy the prepare step is a no-op.
+	let prepared = match store.password_policy().prepare(&plain) {
+		Ok(prepared) => prepared,
+		Err(rejection) => {
+			style::error(format_args!("account {name}: {rejection}", rejection = rejection.message()));
+			return ExitCode::FAILURE;
+		}
+	};
+	let hash = match crate::smtp::auth::hash_password(prepared.as_ref()) {
 		Ok(hash) => hash,
 		Err(error) => {
 			style::error(format_args!("account {name}: {error}"));
@@ -113,7 +124,7 @@ pub(crate) fn password_with_store(
 	// verifier. With SCRAM on, derivation must not fail (CSPRNG). Failures
 	// here abort the password update rather than silently skip the verifier.
 	let scram = if store.scram_enabled() {
-		match crate::smtp::scram::ScramStored::with_fresh_salt(&plain) {
+		match crate::smtp::scram::ScramStored::with_fresh_salt(prepared.as_ref()) {
 			Some(scram) => Some(scram),
 			None => {
 				style::error(format_args!("account {name}: cannot derive SCRAM salt"));
