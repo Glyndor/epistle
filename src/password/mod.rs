@@ -1,14 +1,29 @@
 //! Global password policy — enforced identically on every path that sets or
 //! changes an account password (the management API and the CLI).
 //!
-//! Per the org security standard: length 12–64, **printable ASCII only** (no
-//! control characters, no Unicode), **no composition rules** (ASVS v4 §2.1.9 and
-//! NIST 800-63B advise against them), and rejection of **known-breached / common
-//! passwords** via a bundled local list — the check that actually protects. The
-//! list is local so validation works offline, with nothing phoning home.
+//! Per the org security standard: length 12–64, **printable ASCII only** by
+//! default (no control characters, no Unicode), **no composition rules** (ASVS
+//! v4 §2.1.9 and NIST 800-63B advise against them), and rejection of
+//! **known-breached / common passwords** via a bundled local list — the
+//! check that actually protects. The list is local so validation works
+//! offline, with nothing phoning home.
+//!
+//! The default ASCII-only character set keeps a strong guarantee that older
+//! IMAP/POP clients receive and verify the same bytes that were set, since
+//! AUTH PLAIN/LOGIN still ship the password on the wire as bytes. Operators
+//! that need non-ASCII passwords flip `[auth] unicode_passwords = true`. With
+//! it on the policy accepts any non-control Unicode scalar, normalises with
+//! NFKC on both set and verify (so a password set with one keyboard verifies
+//! from another, RFC 8265 OpaqueString profile), counts length in scalars,
+//! and keeps the 64-character ceiling on the normalised form. The runtime
+//! shape of the new behaviour lives in [`Policy`] under [`policy`].
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
+
+pub mod policy;
+
+pub use policy::Policy;
 
 /// Minimum password length, in characters.
 pub const MIN_LENGTH: usize = 12;
@@ -26,7 +41,8 @@ pub enum Rejection {
 	/// More than [`MAX_LENGTH`] characters.
 	TooLong,
 	/// Contains a character outside printable ASCII (a control character or any
-	/// non-ASCII / Unicode byte).
+	/// non-ASCII / Unicode byte), or a Unicode control scalar when
+	/// `[auth] unicode_passwords` is on.
 	IllegalCharacter,
 	/// Matches an entry in the bundled known-breached / common-password list.
 	Breached,
@@ -92,7 +108,7 @@ fn survives_filter(entry: &str) -> bool {
 /// length and printable-ASCII gate, in either file, is refused as a breach.
 /// The set keys are case-folded so the lookup is case-insensitive regardless
 /// of which source row carried that entry.
-fn breached_set() -> &'static HashSet<&'static str> {
+pub(super) fn breached_set() -> &'static HashSet<&'static str> {
 	static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
 	SET.get_or_init(|| {
 		let mut set: HashSet<&'static str> = HashSet::with_capacity(2048);
@@ -121,34 +137,15 @@ fn breached_set() -> &'static HashSet<&'static str> {
 	})
 }
 
-/// Validate a candidate password against the global policy.
+/// Validate a candidate password against the historical ASCII-only policy.
 ///
-/// Returns `Ok(())` when the password is acceptable, or the first [`Rejection`]
-/// that applies. Length and character set are checked before the breach lookup,
-/// so a rejected password never reaches the (larger) breached-set membership
-/// test unless it is a well-formed, in-range ASCII string.
+/// This is the entry point every existing call site uses; it preserves the
+/// pre-unicode behaviour exactly (printable ASCII only, no normalisation,
+/// case-insensitive breach lookup against the bundled set). New code that
+/// needs Unicode support should construct a [`Policy::unicode`] and call
+/// its `validate`.
 pub fn validate(password: &str) -> Result<(), Rejection> {
-	let length = password.chars().count();
-	if length < MIN_LENGTH {
-		return Err(Rejection::TooShort);
-	}
-	if length > MAX_LENGTH {
-		return Err(Rejection::TooLong);
-	}
-	// Printable ASCII only: 0x20 (space) through 0x7E (`~`). This rejects control
-	// characters and every non-ASCII (multibyte UTF-8) byte in one pass.
-	if !password.bytes().all(|byte| (0x20..=0x7E).contains(&byte)) {
-		return Err(Rejection::IllegalCharacter);
-	}
-	// The breached set is keyed by lower-case form, so the lookup is
-	// case-insensitive: a candidate that only differs in capitalisation from a
-	// bundled breach still hits the row. The candidate is normalised the same
-	// way the set was built, so a `Password` and a `password` collapse to one.
-	let lowered = password.to_ascii_lowercase();
-	if breached_set().contains(lowered.as_str()) {
-		return Err(Rejection::Breached);
-	}
-	Ok(())
+	Policy::ASCII_ONLY.validate(password)
 }
 
 #[cfg(test)]
@@ -405,3 +402,7 @@ mod tests {
 		set.len()
 	}
 }
+
+#[cfg(test)]
+#[path = "tests_unicode.rs"]
+mod tests_unicode;
