@@ -149,12 +149,12 @@ impl Route53Provider {
 
 	/// SigV4 authorization for a GET (the same shape; the canonical
 	/// request swaps `POST` for `GET`).
-	fn authorization_get(&self, path: &str, body: &str, amz_date: &str, date: &str) -> String {
-		let payload_hash = sha256_hex(body.as_bytes());
+	fn authorization_get(&self, path: &str, query: &str, amz_date: &str, date: &str) -> String {
+		let payload_hash = sha256_hex(b"");
 		let canonical_headers = format!("host:{HOST}\nx-amz-date:{amz_date}\n");
 		let signed_headers = "host;x-amz-date";
 		let canonical_request =
-			format!("GET\n{path}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+			format!("GET\n{path}\n{query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
 		let scope = format!("{date}/{REGION}/{SERVICE}/aws4_request");
 		let string_to_sign = format!(
 			"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
@@ -167,20 +167,43 @@ impl Route53Provider {
 		)
 	}
 
-	/// `GET /2013-04-01/hostedzone/{id}/rrset` and return the first
-	/// TXT rrset whose `<Name>` matches `name` (case-insensitive on
-	/// the wire, AWS folds). The XML the API returns is parsed with
-	/// a small hand-rolled reader because pulling in a full XML
-	/// parser for one path is overkill; the response is well-formed
-	/// by API contract.
+	/// Find the TXT rrset at `name`. ListResourceRecordSets returns at
+	/// most a page of record sets per call and says the list goes on
+	/// with `IsTruncated` true plus `NextRecordName` and `NextRecordType`,
+	/// which the next request passes as `name` and `type`
+	/// (<https://docs.aws.amazon.com/Route53/latest/APIReference/API_ListResourceRecordSets.html>,
+	/// read 2026-10-12). The pages are followed until the rrset turns up
+	/// or the list ends, so a zone bigger than one page does not hide it.
+	/// The XML is read with a small hand-rolled reader; the response is
+	/// well-formed by API contract.
 	async fn fetch_txt_rrset(&self, name: &str) -> Result<Option<TxtRrset>, ProviderError> {
-		let url = self.rrset_url()?;
+		let mut start: Option<(String, String)> = None;
+		loop {
+			let text = self.list_page(start.as_ref()).await?;
+			if let Some(rrset) = parse_txt_rrset(&text, name) {
+				return Ok(Some(rrset));
+			}
+			match next_page(&text) {
+				Some(next) if start.as_ref() != Some(&next) => start = Some(next),
+				_ => return Ok(None),
+			}
+		}
+	}
+
+	/// One signed `GET .../rrset` page, starting at `(name, type)` when
+	/// given.
+	async fn list_page(&self, start: Option<&(String, String)>) -> Result<String, ProviderError> {
+		let mut url = self.rrset_url()?;
+		if let Some((name, kind)) = start {
+			url = url.with_query("name", name).with_query("type", kind);
+		}
 		let path = url.as_url().path().to_string();
+		let query = canonical_query(url.as_url());
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap_or_default();
 		let (amz_date, date) = timestamps(now.as_secs());
-		let auth = self.authorization_get(&path, "", &amz_date, &date);
+		let auth = self.authorization_get(&path, &query, &amz_date, &date);
 		let response = self
 			.client
 			.get(url.into_url())
@@ -197,11 +220,10 @@ impl Route53Provider {
 		if !status.is_success() {
 			return Err(ProviderError::Remote(format!("HTTP {status}")));
 		}
-		let text = response
+		response
 			.text()
 			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		Ok(parse_txt_rrset(&text, name))
+			.map_err(|e| ProviderError::Remote(e.to_string()))
 	}
 
 	/// UPSERT one rrset carrying the given values verbatim. Used by
@@ -336,6 +358,44 @@ fn extract_tag_lower(block_lower: &str, tag: &str) -> Option<String> {
 	let start = block_lower.find(&open)? + open.len();
 	let end = block_lower[start..].find(&close)? + start;
 	Some(block_lower[start..end].to_string())
+}
+
+/// Where the next page of a truncated ListResourceRecordSets answer
+/// starts, as `(NextRecordName, NextRecordType)`, or `None` when the list
+/// is complete.
+fn next_page(xml: &str) -> Option<(String, String)> {
+	let lower = xml.to_ascii_lowercase();
+	if extract_tag_lower(&lower, "istruncated")?.trim() != "true" {
+		return None;
+	}
+	let tag = |name: &str| {
+		let open = format!("<{name}>");
+		let start = lower.find(&open.to_ascii_lowercase())? + open.len();
+		let end = lower[start..].find(&format!("</{}>", name.to_ascii_lowercase()))? + start;
+		Some(xml_unescape(&xml[start..end]))
+	};
+	Some((tag("NextRecordName")?, tag("NextRecordType")?))
+}
+
+/// The SigV4 canonical query string of `url`: every pair URI-encoded the
+/// AWS way (only `A-Za-z0-9-_.~` left bare) and sorted.
+fn canonical_query(url: &reqwest::Url) -> String {
+	let encode = |s: &str| {
+		s.bytes()
+			.map(|b| match b {
+				b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+					char::from(b).to_string()
+				}
+				_ => format!("%{b:02X}"),
+			})
+			.collect::<String>()
+	};
+	let mut pairs: Vec<String> = url
+		.query_pairs()
+		.map(|(k, v)| format!("{}={}", encode(&k), encode(&v)))
+		.collect();
+	pairs.sort();
+	pairs.join("&")
 }
 
 impl DnsProvider for Route53Provider {
@@ -527,6 +587,10 @@ mod tests_txt_forms;
 #[cfg(test)]
 #[path = "tests_contract.rs"]
 mod tests_contract;
+
+#[cfg(test)]
+#[path = "tests_pagination.rs"]
+mod tests_pagination;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]
