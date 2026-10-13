@@ -2,7 +2,7 @@
 
 use crate::smtp::line::LineDecoder;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub(super) struct Drain {
 	pub complete: bool,
@@ -46,4 +46,24 @@ pub(super) async fn literal<S: AsyncRead + Unpin + ?Sized>(
 		#[cfg(test)]
 		peak_storage,
 	})
+}
+
+/// Drain a rejected literal and report whether the connection stays open.
+/// A timeout answers `* BYE read timeout`; a peer that closes mid-literal
+/// ends the connection quietly.
+pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
+	stream: &mut S,
+	decoder: &mut LineDecoder,
+	size: usize,
+	deadline: Duration,
+) -> std::io::Result<bool> {
+	match literal(stream, decoder, size, deadline).await {
+		Ok(drained) => Ok(drained.complete),
+		Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+			stream.write_all(b"* BYE read timeout\r\n").await?;
+			stream.flush().await?;
+			Ok(false)
+		}
+		Err(error) => Err(error),
+	}
 }

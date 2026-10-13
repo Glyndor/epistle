@@ -295,6 +295,9 @@ impl Server {
 		let mut buffer = [0u8; 4096];
 		// Consecutive BAD responses; too many means an abusive client.
 		let mut error_streak = 0u32;
+		// Set after a rejected literal is drained: the next line is the rest
+		// of that command, not a new one.
+		let mut rejected_tail = false;
 		loop {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
@@ -355,6 +358,37 @@ impl Server {
 				}
 			};
 
+			if rejected_tail {
+				// What follows a drained literal belongs to the rejected
+				// command: its CRLF, the `)` closing a UTF8 APPEND item, or
+				// the next message of a MULTIAPPEND. Answering it as a new
+				// command would send `* BAD` for an empty line. Drop it, and
+				// drain a further non-synchronizing literal it announces.
+				rejected_tail = false;
+				let tail = String::from_utf8_lossy(&line);
+				if let Some(literal) = super::command::literal_announcement_in_tail(&tail) {
+					if literal.size > super::command::MAX_APPEND_SIZE {
+						stream.write_all(b"* BYE literal too large\r\n").await?;
+						stream.flush().await?;
+						return Ok(());
+					}
+					if !literal.synchronizing {
+						if !discard::literal_or_close(
+							&mut *stream,
+							&mut decoder,
+							literal.size,
+							self.read_timeout,
+						)
+						.await?
+						{
+							return Ok(());
+						}
+						rejected_tail = true;
+					}
+				}
+				continue;
+			}
+
 			let Ok(line) = String::from_utf8(line) else {
 				stream.write_all(b"* BAD non-ASCII command\r\n").await?;
 				stream.flush().await?;
@@ -399,24 +433,21 @@ impl Server {
 				if let Some(size) = output.discard_literal {
 					// RFC 7888 §4: a non-synchronizing literal whose command
 					// was rejected still has its payload on the wire. Drain
-					// exactly `size` bytes (the trailing CRLF, if any, goes
-					// back into the line decoder as an empty line) so the
-					// bytes never arrive as the next command. The
-					// rejection has already been written; nothing more
-					// follows, so return to the command loop instead of
-					// rewriting the same response.
-					match discard::literal(&mut *stream, &mut decoder, size, self.read_timeout)
-						.await
+					// exactly `size` bytes so they never arrive as the next
+					// command, and drop the rest of the command's line
+					// (`rejected_tail`). The rejection has already been
+					// written; return to the command loop.
+					if !discard::literal_or_close(
+						&mut *stream,
+						&mut decoder,
+						size,
+						self.read_timeout,
+					)
+					.await?
 					{
-						Ok(drained) if drained.complete => {}
-						Ok(_) => return Ok(()),
-						Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-							stream.write_all(b"* BYE read timeout\r\n").await?;
-							stream.flush().await?;
-							return Ok(());
-						}
-						Err(error) => return Err(error),
+						return Ok(());
 					}
+					rejected_tail = true;
 					break;
 				}
 				if let Some(size) = output.collect_literal {

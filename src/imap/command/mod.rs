@@ -636,7 +636,7 @@ mod parse;
 mod search;
 mod select_params;
 
-pub(crate) use literal::literal_announcement_in_line;
+pub(crate) use literal::{literal_announcement_in_line, literal_announcement_in_tail};
 
 pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
 pub(super) use parse::MAX_APPEND_SIZE;

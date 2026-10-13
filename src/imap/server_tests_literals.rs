@@ -77,6 +77,8 @@ async fn rejected_non_sync_literal_is_discarded() {
 		.await
 		.expect("append header");
 	tls.write_all(inner).await.expect("append payload");
+	// The CRLF that ends the command line after its literal.
+	tls.write_all(b"\r\n").await.expect("command end");
 
 	// The rejected APPEND returns a tagged NO. The literal bytes must not be
 	// parsed as a real command, so no `x OK` ever appears.
@@ -309,4 +311,76 @@ async fn append_literal_read_timeout_drops_connection() {
 		"expected a BYE timeout response, saw: {seen}"
 	);
 	let _ = task.await;
+}
+
+/// Log alice in over implicit TLS and return the client stream.
+async fn logged_in() -> (
+	tokio_rustls::client::TlsStream<tokio::io::DuplexStream>,
+	tokio::task::JoinHandle<std::io::Result<()>>,
+	tempfile::TempDir,
+) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		directory(),
+		acceptor,
+		TlsMode::Implicit,
+	);
+	let (client, server_stream) = tokio::io::duplex(64 * 1024);
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
+	let mut roots = RootCertStore::empty();
+	roots.add(cert).expect("trust cert");
+	crate::tls::ensure_crypto_provider();
+	let config = ClientConfig::builder()
+		.with_root_certificates(roots)
+		.with_no_client_auth();
+	let connector = TlsConnector::from(Arc::new(config));
+	let name = ServerName::try_from("mail.example.org").expect("name");
+	let mut tls = connector.connect(name, client).await.expect("handshake");
+	read_until(&mut tls, "IMAP4rev2 ready").await;
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
+		.await
+		.expect("login");
+	read_until(&mut tls, "a1 OK").await;
+	(tls, task, dir)
+}
+
+/// The CRLF that ends a rejected APPEND after its literal belongs to that
+/// command. Answering it as an empty command sent `* BAD` (imaptest's
+/// `append` script reports it on its APPEND to a missing mailbox).
+#[tokio::test]
+async fn the_line_end_after_a_rejected_literal_is_not_a_command() {
+	let (mut tls, task, _dir) = logged_in().await;
+	tls.write_all(b"a2 APPEND Missing {2+}\r\nhi\r\na3 NOOP\r\n")
+		.await
+		.expect("append");
+	let reply = read_until(&mut tls, "a3 OK").await;
+	assert!(reply.contains("a2 NO"), "{reply}");
+	assert!(!reply.contains("BAD"), "{reply}");
+	task.abort();
+}
+
+/// RFC 3502 MULTIAPPEND: after the first literal, the same command line goes
+/// on with the next message and its literal. When the command is rejected,
+/// every literal of it is drained, and none of their bytes or the flags
+/// between them reach the parser as commands.
+#[tokio::test]
+async fn every_literal_of_a_rejected_multiappend_is_drained() {
+	let (mut tls, task, _dir) = logged_in().await;
+	tls.write_all(
+		b"a2 APPEND Missing {10+}\r\nx LOGOUT\r\n (\\Seen) {10+}\r\ny LOGOUT\r\n\r\na3 NOOP\r\n",
+	)
+	.await
+	.expect("multiappend");
+	let reply = read_until(&mut tls, "a3 OK").await;
+	assert!(reply.contains("a2 NO"), "{reply}");
+	assert!(!reply.contains("BAD"), "{reply}");
+	assert!(
+		!reply.contains("x OK") && !reply.contains("y OK"),
+		"{reply}"
+	);
+	task.abort();
 }
