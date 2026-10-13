@@ -18,6 +18,13 @@ fn reject_literal(tag: &str, synchronizing: bool, size: usize, response: &str) -
 	output
 }
 
+/// How the APPEND data was sent: as the RFC 6855 `UTF8 (~{n})` item, or as
+/// an RFC 3516 literal8.
+pub(super) struct AppendForm {
+	pub(super) utf8: bool,
+	pub(super) binary: bool,
+}
+
 impl Session {
 	#[allow(clippy::too_many_arguments)]
 	pub(super) fn append_begin(
@@ -26,9 +33,8 @@ impl Session {
 		mailbox: &str,
 		flag_tokens: &[String],
 		date: Option<SystemTime>,
-		size: usize,
-		synchronizing: bool,
-		utf8: bool,
+		(size, synchronizing): (usize, bool),
+		AppendForm { utf8, binary }: AppendForm,
 	) -> Output {
 		// A rejected `UTF8 (~{n+})` also drains the `)` after the literal.
 		let wire_size = size + usize::from(utf8);
@@ -97,6 +103,7 @@ impl Session {
 			flags,
 			date,
 			replace: None,
+			binary,
 		});
 		// RFC 7888 §4: a non-synchronizing literal ({n+}) has no
 		// continuation response. The client already sent the payload
@@ -215,6 +222,7 @@ impl Session {
 			// the literal read must not move the REPLACE target to
 			// a different message.
 			replace: Some((selected, target_uid)),
+			binary: false,
 		});
 		// See the matching note in `append_begin` above.
 		let mut output = if synchronizing {
@@ -237,7 +245,12 @@ impl Session {
 			flags,
 			date,
 			replace,
+			binary,
 		} = pending;
+		let encoded = binary
+			.then(|| crate::imap::binary_append::encode_binary_parts(data))
+			.flatten();
+		let data = encoded.as_deref().unwrap_or(data);
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};

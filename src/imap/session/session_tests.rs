@@ -186,3 +186,6 @@ mod uidvalidity;
 
 #[path = "session_tests_fetch_whole.rs"]
 mod fetch_whole;
+
+#[path = "session_tests_append_binary.rs"]
+mod append_binary;

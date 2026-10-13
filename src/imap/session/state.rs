@@ -80,6 +80,8 @@ pub struct PendingLiteral {
 	/// For REPLACE only: the selected mailbox to expunge from and the source
 	/// message sequence number, resolved when the command was received.
 	pub replace: Option<(String, u32)>,
+	/// The APPEND data came as a literal8: binary parts are stored base64.
+	pub binary: bool,
 }
 
 /// State of one IMAP connection.

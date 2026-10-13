@@ -166,6 +166,9 @@ pub enum Command {
 		/// The message came as `UTF8 (~{n})` (RFC 6855 §4): it may carry
 		/// UTF-8 header fields, and a `)` follows the literal.
 		utf8: bool,
+		/// The message came as a literal8 `~{n}` (RFC 3516 §4.4), so its
+		/// binary parts may hold any octet.
+		binary: bool,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected

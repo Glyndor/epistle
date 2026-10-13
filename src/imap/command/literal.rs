@@ -17,14 +17,22 @@ pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError>
 	}
 	let rest = rest.trim();
 	let (flags, date, literal) = parse_flags_and_literal(rest, &bad)?;
+	let utf8 = utf8_data_item(rest);
 	Ok(Command::Append {
 		mailbox,
 		flags,
 		date,
 		size: literal.size,
 		synchronizing: literal.synchronizing,
-		utf8: utf8_data_item(rest),
+		utf8,
+		binary: !utf8 && literal8(rest),
 	})
+}
+
+/// Whether an APPEND tail ends in a literal8 `~{n}` (RFC 3516 §4.4).
+fn literal8(tail: &str) -> bool {
+	tail.rfind('{')
+		.is_some_and(|open| tail[..open].ends_with('~'))
 }
 
 /// Whether an APPEND tail ends in the RFC 6855 §4 data item
