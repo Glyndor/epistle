@@ -1,6 +1,6 @@
 //! A clamd stand-in for tests that cross the synchronous sink: it runs on a
 //! plain thread, so it keeps answering while the test's runtime thread is
-//! blocked inside [`super::ClamdHook::inspect_blocking`]. It reports the
+//! blocked inside a synchronous sink waiting for a scan. It reports the
 //! EICAR test signature for any message that carries the EICAR string and
 //! `OK` for everything else.
 

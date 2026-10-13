@@ -25,7 +25,7 @@ fn scanned_state(dir: &std::path::Path, enabled: bool, clamd: &FakeClamd) -> Api
 		));
 	let split = SplitDelivery::new(dir, directory).expect("sink");
 	let hook = Arc::new(ClamdHook::new(clamd.socket.clone()));
-	let sink = ScanningSink::wrap(enabled, Arc::new(split), Some(hook), None, None);
+	let sink = ScanningSink::wrap(enabled, Arc::new(split), Some(hook), None, None).expect("sink");
 	test_state(dir, 0).with_outbound(sink)
 }
 

@@ -18,7 +18,7 @@ use crate::smtp::sink::MemorySink;
 fn sinks(enabled: bool, clamd: &FakeClamd) -> (Arc<MemorySink>, Arc<dyn MessageSink>) {
 	let inner = Arc::new(MemorySink::new());
 	let hook = Arc::new(ClamdHook::new(clamd.socket.clone()));
-	let sink = ScanningSink::wrap(enabled, inner.clone(), Some(hook), None, None);
+	let sink = ScanningSink::wrap(enabled, inner.clone(), Some(hook), None, None).expect("sink");
 	(inner, sink)
 }
 

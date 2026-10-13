@@ -214,27 +214,9 @@ impl ClamdHook {
 			.await
 	}
 
-	/// [`ClamdHook::inspect`] for synchronous callers such as a
-	/// [`crate::smtp::sink::MessageSink`]. The exchange runs on its own
-	/// thread with its own runtime, so it works whether or not the caller is
-	/// inside a Tokio runtime and of which flavour; the caller blocks for at
-	/// most the configured timeout, the way it already blocks on the fsync
-	/// of the message it is about to store.
-	pub fn inspect_blocking(&self, raw: &[u8]) -> Inspection {
-		std::thread::scope(|scope| {
-			scope
-				.spawn(|| {
-					match tokio::runtime::Builder::new_current_thread()
-						.enable_all()
-						.build()
-					{
-						Ok(runtime) => runtime.block_on(self.inspect(raw)),
-						Err(error) => self.failed(&error, self.started.elapsed()),
-					}
-				})
-				.join()
-				.unwrap_or(Inspection::Unscanned)
-		})
+	/// The deadline for one whole exchange with clamd.
+	pub fn timeout(&self) -> Duration {
+		self.timeout
 	}
 }
 

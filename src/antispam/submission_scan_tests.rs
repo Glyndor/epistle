@@ -34,7 +34,8 @@ fn sink(
 		Some(clamd),
 		Some(metrics.clone()),
 		webhook,
-	);
+	)
+	.expect("scanner");
 	(sink, inner, metrics)
 }
 
@@ -85,7 +86,7 @@ async fn switched_off_the_sink_is_the_routing_sink_itself() {
 	assert_eq!(clamd.scans(), 0);
 	assert_eq!(inner.messages().len(), 1);
 	let inner: Arc<dyn MessageSink> = Arc::new(MemorySink::new());
-	let unwrapped = ScanningSink::wrap(true, inner.clone(), None, None, None);
+	let unwrapped = ScanningSink::wrap(true, inner.clone(), None, None, None).expect("sink");
 	assert!(
 		Arc::ptr_eq(&inner, &unwrapped),
 		"without clamd nothing is wrapped"
@@ -98,7 +99,7 @@ async fn an_unreachable_clamd_accepts_and_leaves_a_record_for_status() {
 	let inner = Arc::new(MemorySink::new());
 	let clamd =
 		Arc::new(ClamdHook::new(dir.path().join("missing.sock")).with_health_file(dir.path()));
-	let sink = ScanningSink::wrap(true, inner.clone(), Some(clamd), None, None);
+	let sink = ScanningSink::wrap(true, inner.clone(), Some(clamd), None, None).expect("sink");
 	submit(&sink, &eicar()).expect("fails open");
 	assert_eq!(inner.messages().len(), 1);
 	let health = crate::antispam::clamd::health::read(dir.path()).expect("recorded");
@@ -191,4 +192,77 @@ fn a_long_signature_is_cut_for_the_reply() {
 	let long = "x".repeat(500);
 	assert_eq!(bounded(&long).chars().count(), MAX_SIGNATURE_CHARS);
 	assert_eq!(bounded(SIGNATURE), SIGNATURE);
+}
+
+/// A scanning sink over a memory sink, kept concrete so a test can read
+/// which threads scanned.
+fn concrete(socket: &std::path::Path) -> ScanningSink {
+	ScanningSink {
+		inner: Arc::new(MemorySink::new()),
+		scanner: worker::Scanner::start(Arc::new(ClamdHook::new(socket.to_path_buf())))
+			.expect("scanner"),
+		metrics: None,
+		webhook: None,
+		workers: Default::default(),
+	}
+}
+
+#[tokio::test]
+async fn sequential_scans_share_one_worker() {
+	let clamd = FakeClamd::start();
+	let sink = concrete(&clamd.socket);
+	for _ in 0..50 {
+		sink.submit(message("hello"), uuid::Uuid::now_v7(), "alice")
+			.expect("clean");
+	}
+	assert_eq!(clamd.scans(), 50);
+	let workers = sink.workers.lock().expect("workers");
+	assert_eq!(
+		workers.len(),
+		1,
+		"one long-lived scanner, not one per message"
+	);
+	assert!(
+		!workers.contains(&std::thread::current().id()),
+		"the scan does not run on the caller's runtime thread"
+	);
+}
+
+/// How long 200 small submissions take against the fake clamd. Run with
+/// `cargo test --lib two_hundred -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "a measurement, not a check"]
+async fn two_hundred_small_scans_timing() {
+	let clamd = FakeClamd::start();
+	let sink = concrete(&clamd.socket);
+	let started = std::time::Instant::now();
+	for _ in 0..200 {
+		sink.submit(message("hello"), uuid::Uuid::now_v7(), "alice")
+			.expect("clean");
+	}
+	println!("200 small submissions scanned in {:?}", started.elapsed());
+}
+
+#[tokio::test]
+async fn a_silent_clamd_is_cut_off_at_its_deadline() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let socket = dir.path().join("clamd.sock");
+	let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind");
+	// Accept and never answer.
+	std::thread::spawn(move || {
+		let held: Vec<_> = listener.incoming().take(1).collect();
+		std::thread::sleep(Duration::from_secs(10));
+		drop(held);
+	});
+	let clamd = Arc::new(ClamdHook::new(socket).with_timeout(Duration::from_millis(200)));
+	let inner = Arc::new(MemorySink::new());
+	let sink = ScanningSink::wrap(true, inner.clone(), Some(clamd), None, None).expect("sink");
+	let started = std::time::Instant::now();
+	submit(&sink, &eicar()).expect("fails open");
+	assert!(
+		started.elapsed() < Duration::from_secs(2),
+		"{:?}",
+		started.elapsed()
+	);
+	assert_eq!(inner.messages().len(), 1);
 }

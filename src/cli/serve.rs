@@ -184,7 +184,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		clamd,
 		Some(metrics.clone()),
 		webhook.clone(),
-	);
+	)?;
 
 	// One Bayesian store and one training worker for the whole process.
 	// SMTP trains and scores through the store; IMAP and JMAP feed the
