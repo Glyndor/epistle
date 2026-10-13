@@ -3,6 +3,28 @@
 use super::state::State;
 use super::{Output, Session, codes, mailbox};
 
+/// Build the `* FLAGS (...)` line that lists the five system flags and
+/// every `keyword` carried by some message in the mailbox. The line
+/// ends with `\r\n`. Both SELECT/EXAMINE (§6.3.1) and the side-channel
+/// FLAGS update every other command may need to emit use the same
+/// shape so a client that tracks the per-mailbox keyword set from the
+/// last FLAGS it saw never sees a FETCH (or APPEND completion) carry
+/// a keyword it was never told about (§7.3.5).
+pub(super) fn flags_line_for(keyword_tokens: &[String]) -> String {
+	if keyword_tokens.is_empty() {
+		"FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)\r\n".to_string()
+	} else {
+		// Safe to interpolate `join` output into the format: tokens are
+		// already validated keywords (the `Flag::parse` path rejects
+		// anything with spaces or non-atom bytes), so the result is a
+		// single well-formed atom run.
+		format!(
+			"FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft {})\r\n",
+			keyword_tokens.join(" ")
+		)
+	}
+}
+
 /// Move a Selected state to Authenticated on a failed SELECT/EXAMINE, keeping
 /// the authenticated account binding intact. Returns `true` when a mailbox
 /// was selected and the caller must include `[CLOSED]` in its tagged NO
@@ -96,14 +118,7 @@ impl Session {
 			});
 			all
 		};
-		let flags_line = if keyword_tokens.is_empty() {
-			"* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)\r\n".to_string()
-		} else {
-			format!(
-				"* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft {})\r\n",
-				keyword_tokens.join(" ")
-			)
-		};
+		let flags_line = format!("* {}", flags_line_for(&keyword_tokens));
 		// The store does not assign recent-message ownership to sessions.
 		// RFC 3501 permits reporting no recent messages to any client.
 		let mut legacy = String::new();
@@ -142,6 +157,15 @@ impl Session {
 			snapshot,
 			read_only,
 		};
+		// SELECT just announced the count to the client. The NOOP path
+		// uses this value to decide whether to re-announce on the next
+		// poll, so the announcement must reach the client before any
+		// subsequent command reply could over-write it.
+		let count = match &self.state {
+			State::Selected { snapshot, .. } => snapshot.len(),
+			_ => 0,
+		};
+		self.announced_exists = Some(u32::try_from(count).unwrap_or(u32::MAX));
 		// RFC 5182 §2.1: a successful SELECT resets the search result
 		// variable to the empty sequence. Per #976 we also clear on
 		// CLOSE and UNSELECT, both of which leave the selected state.

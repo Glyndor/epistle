@@ -148,3 +148,12 @@ mod quota_names;
 
 #[path = "session_tests_utf8_responses.rs"]
 mod utf8_responses;
+
+#[path = "session_tests_flags_update.rs"]
+mod flags_update;
+
+#[path = "session_tests_append_exists.rs"]
+mod append_exists;
+
+#[path = "session_tests_noop_exists.rs"]
+mod noop_exists;

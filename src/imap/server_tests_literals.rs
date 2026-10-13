@@ -99,6 +99,70 @@ async fn rejected_non_sync_literal_is_discarded() {
 	task.abort();
 }
 
+/// RFC 7888 §4: a successful non-synchronizing literal APPEND must NOT
+/// produce a continuation response. The client sends the literal bytes
+/// immediately after the command line; if the server replies with
+/// `+ ready for literal data` it confuses clients that already sent the
+/// bytes, and Dovecot's imaptest (and any IMAP4rev2 client using
+/// LITERAL+) crashes here because its APPEND state machine assumes the
+/// tagged response comes next.
+#[tokio::test]
+async fn append_non_sync_literal_sends_no_continuation() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::create_dir_all(dir.path().join("accounts/alice")).expect("dirs");
+	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
+	let server = Server::new(
+		"mail.example.org",
+		dir.path().to_path_buf(),
+		directory(),
+		acceptor,
+		TlsMode::Implicit,
+	);
+	let (client, server_stream) = tokio::io::duplex(64 * 1024);
+	let task = tokio::spawn(async move { server.handle(server_stream, None).await });
+
+	let mut roots = RootCertStore::empty();
+	roots.add(cert).expect("trust cert");
+	crate::tls::ensure_crypto_provider();
+	let config = ClientConfig::builder()
+		.with_root_certificates(roots)
+		.with_no_client_auth();
+	let connector = TlsConnector::from(Arc::new(config));
+	let name = ServerName::try_from("mail.example.org").expect("name");
+	let mut tls = connector.connect(name, client).await.expect("handshake");
+
+	read_until(&mut tls, "IMAP4rev2 ready").await;
+	tls.write_all(format!("a1 LOGIN alice {}\r\n", fixtures::password()).as_bytes())
+		.await
+		.expect("login");
+	read_until(&mut tls, "a1 OK").await;
+
+	// Non-synchronizing literal: the client sends the body right after the
+	// command line and expects the tagged response, not a `+` continuation.
+	let inner = b"Subject: hi\r\n\r\nbody";
+	let header = format!("a2 APPEND INBOX {{{}+}}\r\n", inner.len());
+	tls.write_all(header.as_bytes())
+		.await
+		.expect("append header");
+	tls.write_all(inner).await.expect("append payload");
+	// Trailer CRLF that terminates the literal (RFC 9051 §6.3.2).
+	tls.write_all(b"\r\n").await.expect("trailer");
+
+	let reply = read_until(&mut tls, "a2 OK").await;
+	assert!(
+		reply.starts_with("a2 OK") || reply.contains("\r\na2 OK"),
+		"non-sync APPEND must reply with the tagged response only, saw: {reply}"
+	);
+	assert!(
+		!reply.contains("ready for literal"),
+		"non-sync APPEND must NOT send a continuation response, saw: {reply}"
+	);
+
+	tls.write_all(b"a3 LOGOUT\r\n").await.expect("logout");
+	let _ = read_until(&mut tls, "a3 OK").await;
+	task.abort();
+}
+
 /// APPEND must not store the message before the trailing CRLF has been
 /// validated. A literal followed by garbage instead of CRLF must produce
 /// BAD and leave the mailbox empty (RFC 9051 §6.3.2: the literal is
