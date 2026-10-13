@@ -347,6 +347,8 @@ pub enum StateFile {
 	UidNext,
 	/// UIDVALIDITY value.
 	UidValidity,
+	/// Per-account last UIDVALIDITY handed out to a new mailbox.
+	UidValidityLast,
 	/// Mod-sequence counter.
 	ModseqCounter,
 	/// Expunge log (QRESYNC).
@@ -367,6 +369,7 @@ impl StateFile {
 		match self {
 			Self::UidNext => ".uidnext",
 			Self::UidValidity => ".uidvalidity",
+			Self::UidValidityLast => ".uidvalidity_last",
 			Self::ModseqCounter => ".modseqctr",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",

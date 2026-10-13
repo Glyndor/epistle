@@ -180,3 +180,6 @@ mod thread_ordered;
 
 #[path = "session_tests_notify_status.rs"]
 mod notify_status;
+
+#[path = "session_tests_uidvalidity.rs"]
+mod uidvalidity;

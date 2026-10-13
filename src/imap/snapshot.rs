@@ -45,13 +45,13 @@ impl Snapshot {
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
 		crate::util::fs_walk::check_directories(&account_dir)?;
 		let account_root = account_name.root(data_dir)?;
+		let uid_validity = super::uidvalidity::read_or_init(&account_dir, account_root.as_path());
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
 		// doubt (missing, stale, corrupt, wrong version) falls through to the
 		// authoritative scan below — the filesystem is always the truth.
 		let generation = super::index::current_generation(&account_dir);
 		if let Some(loaded) = super::index::load(&account_dir, generation) {
-			let uid_validity = super::uidvalidity::read_or_init(&account_dir);
 			let uid_next = super::uid::read_counter(&account_dir) + 1;
 			return Ok(Snapshot {
 				account_dir,
@@ -80,7 +80,6 @@ impl Snapshot {
 		// open — the snapshot already succeeded from the scan, which is
 		// canonical.
 		let _ = super::index::write(&account_dir, generation, &scanned);
-		let uid_validity = super::uidvalidity::read_or_init(&account_dir);
 		Ok(Snapshot {
 			account_dir,
 			account_root,
