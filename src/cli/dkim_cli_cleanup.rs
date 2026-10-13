@@ -8,7 +8,8 @@
 
 use std::process::ExitCode;
 
-use super::serve_tasks::{DkimRotationPlan, decide_dkim_rotation};
+use crate::cli::serve_tasks::{DkimRotationPlan, decide_dkim_rotation};
+use crate::cli::{prompt, style};
 use crate::config::Config;
 use crate::dkim::rotate::{find_orphans, request_cleanup};
 use crate::dns::provider::DnsProvider;
@@ -36,7 +37,7 @@ pub(super) fn cleanup_with(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Some(dkim) = &config.dkim else {
-		super::style::error("[dkim] is not configured");
+		style::error("[dkim] is not configured");
 		return ExitCode::FAILURE;
 	};
 	let plan = decide_dkim_rotation(config);
@@ -58,7 +59,7 @@ pub(super) fn cleanup_with(
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {
-			super::style::error(format_args!("cannot start async runtime: {error}"));
+			style::error(format_args!("cannot start async runtime: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -71,7 +72,7 @@ pub(super) fn cleanup_with(
 	)) {
 		Ok(orphans) => orphans,
 		Err(error) => {
-			super::style::error(format_args!("dkim cleanup refused: {error}"));
+			style::error(format_args!("dkim cleanup refused: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
@@ -93,7 +94,7 @@ pub(super) fn cleanup_with(
 		return ExitCode::SUCCESS;
 	}
 	if !served {
-		super::style::error(
+		style::error(
 			"the server removes these only while it rotates DKIM keys, which this configuration does not do; remove the key files by hand",
 		);
 		return ExitCode::FAILURE;
@@ -103,11 +104,11 @@ pub(super) fn cleanup_with(
 		orphans.key_files.len(),
 		orphans.records.len()
 	);
-	if let Err(code) = super::prompt::confirm_destructive("dkim cleanup", &question, yes) {
+	if let Err(code) = prompt::confirm_destructive("dkim cleanup", &question, yes) {
 		return code;
 	}
 	if let Err(error) = request_cleanup(&config.data_dir) {
-		super::style::error(format_args!("cannot write the cleanup request: {error}"));
+		style::error(format_args!("cannot write the cleanup request: {error}"));
 		return ExitCode::FAILURE;
 	}
 	let _ = writeln!(
@@ -118,5 +119,5 @@ pub(super) fn cleanup_with(
 }
 
 #[cfg(test)]
-#[path = "dkim_cleanup_tests.rs"]
+#[path = "dkim_cli_cleanup_tests.rs"]
 mod tests;

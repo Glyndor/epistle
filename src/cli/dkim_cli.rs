@@ -62,9 +62,7 @@ pub(super) fn run(config: &Config, action: DkimCli, out: &mut impl std::io::Writ
 	match action {
 		DkimCli::Show { json } => show(config, json, out),
 		DkimCli::Rotate { dry_run } => rotate_now(config, dry_run, now_epoch(), out),
-		DkimCli::Cleanup { dry_run, yes } => {
-			super::dkim_cleanup::cleanup(config, dry_run, yes, out)
-		}
+		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, out),
 	}
 }
 
@@ -200,6 +198,9 @@ pub(super) fn rotate_now(
 	);
 	ExitCode::SUCCESS
 }
+
+#[path = "dkim_cli_cleanup.rs"]
+mod cleanup;
 
 #[cfg(test)]
 #[path = "dkim_cli_tests.rs"]

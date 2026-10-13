@@ -20,7 +20,6 @@ pub mod config_edit;
 mod container_db;
 mod db_harden;
 mod db_upgrade;
-mod dkim_cleanup;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;
