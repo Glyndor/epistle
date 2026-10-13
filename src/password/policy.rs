@@ -47,7 +47,20 @@ impl Policy {
 		}
 	}
 
-	/// Normalise `password` for storage or verification. With
+	/// The form a candidate is compared in at login: NFKC under the
+	/// Unicode policy, the bytes as given otherwise. It applies no length
+	/// or character check. Those belong to setting a password, and a stored
+	/// hash can predate them: one written into the config by hand, set by
+	/// an older release, or set while the Unicode policy was on.
+	pub fn login_form<'a>(&self, password: &'a str) -> Cow<'a, str> {
+		if self.unicode_passwords {
+			Cow::Owned(password.nfkc().collect())
+		} else {
+			Cow::Borrowed(password)
+		}
+	}
+
+	/// Normalise `password` for storage. With
 	/// `unicode_passwords = false` this enforces the historical ASCII-only
 	/// gate (printable ASCII, length 12-64): the input is borrowed as-is
 	/// when it survives, and rejected as `IllegalCharacter`, `TooShort`, or
@@ -56,6 +69,8 @@ impl Policy {
 	/// so the argon2id hash and the SCRAM `SaltedPassword` are both derived
 	/// from the canonical form, and a password set with one keyboard
 	/// verifies from another.
+	///
+	/// Login uses [`Policy::login_form`] instead, which never refuses.
 	///
 	/// Returns the same `Err` as `validate` because the input can still be
 	/// too short, too long, or carry a forbidden scalar (control); set-time

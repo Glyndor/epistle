@@ -523,19 +523,13 @@ impl Directory {
 			Some(secret) => self.totp_strip(password, secret),
 			None => Some(password),
 		};
-		// Prepare the candidate the same way the storage layer did at
-		// set-time. With the ASCII-only policy this is a no-op; with the
-		// unicode policy it canonicalises (NFC vs NFD → NFKC) so a
-		// non-ASCII password typed in one decomposition verifies
-		// the same as the form that crossed the set boundary.
-		let prepared: Cow<str> =
-			match primary.and_then(|bytes| self.password_policy.prepare(bytes).ok()) {
-				Some(prepared) => prepared,
-				// A candidate that fails the policy now cannot match the
-				// stored hash (which was derived from a valid input); fall
-				// through to the app passwords.
-				None => Cow::Borrowed(""),
-			};
+		// Compare in the form the storage layer hashed: NFKC under the
+		// Unicode policy, as given otherwise. No length or character check
+		// here: a stored hash can predate the current rules.
+		let prepared: Cow<str> = match primary {
+			Some(candidate) => self.password_policy.login_form(candidate),
+			None => Cow::Borrowed(""),
+		};
 		if !prepared.is_empty() && super::auth::verify_password(hash, &prepared) {
 			self.maybe_upgrade_scram(&account, &prepared);
 			return Some(account);
@@ -720,6 +714,10 @@ mod iteration_tests;
 #[cfg(test)]
 #[path = "directory_totp_tests.rs"]
 mod totp_tests;
+
+#[cfg(test)]
+#[path = "directory_login_form_tests.rs"]
+mod login_form_tests;
 
 #[cfg(test)]
 #[path = "directory_test_support.rs"]

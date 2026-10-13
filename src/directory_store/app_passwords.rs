@@ -59,12 +59,7 @@ impl AppPassword {
 		client_ip: Option<IpAddr>,
 		now: u64,
 	) -> bool {
-		// A candidate that fails the policy now cannot match the stored
-		// hash (which was derived from a valid input); the prepare below
-		// can produce an error too, in which case the same fate befalls it.
-		let Ok(prepared) = policy.prepare(password) else {
-			return false;
-		};
+		let prepared = policy.login_form(password);
 		let hash_ok = crate::smtp::auth::verify_password(&self.hash, prepared.as_ref());
 		let time_ok = self.expires_at.is_none_or(|expiry| now < expiry);
 		let ip_ok = match &self.ip_cidr {
