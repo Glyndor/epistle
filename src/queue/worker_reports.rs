@@ -288,24 +288,26 @@ impl Worker {
 	}
 
 	/// Fire a `Delayed` webhook for one recipient. Sent at most once
-	/// per (recipient, message). The caller passes `attempts_after` as
-	/// the recipient's `attempts` count after `record()` incremented it
-	/// (so `attempts_after == 1` means "this was the first attempt that
-	/// failed transiently" and we fire the `Delayed` event; for any
-	/// later deferral we stay quiet so retries do not spam the endpoint).
+	/// per (recipient, message). The caller passes `attempts_before`:
+	/// the recipient's `attempts` counter BEFORE this conversation
+	/// incremented it. `attempts_before == 0` means "this was the first
+	/// attempt that failed transiently" so we fire the event; any later
+	/// deferral stays quiet so retries do not spam the endpoint. The
+	/// JSON carries `attempt = attempts_before + 1`, the attempt number
+	/// that produced the deferral (the first attempt is `1`).
 	fn notify_delayed(
 		&self,
 		id: uuid::Uuid,
 		recipient: &str,
 		reason: &str,
 		remote: Option<String>,
-		attempts_after: u32,
+		attempts_before: u32,
 		extra: &BTreeMap<String, String>,
 	) {
 		let Some(webhook) = &self.webhook else {
 			return;
 		};
-		if attempts_after > 1 {
+		if attempts_before > 0 {
 			return;
 		}
 		let webhook = webhook.clone();
@@ -314,7 +316,7 @@ impl Worker {
 			recipient: recipient.to_string(),
 			reason: reason.to_string(),
 			remote,
-			attempt: attempts_after,
+			attempt: attempts_before + 1,
 			extra: extra.clone(),
 		};
 		tokio::spawn(async move { webhook.notify(&event).await });

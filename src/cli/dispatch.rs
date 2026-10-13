@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use super::term::live;
 use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
@@ -239,13 +240,22 @@ impl Cli {
 				}
 			}
 			Command::Queue { config, action } => match Config::load(&config) {
-				Ok(config) => queue::run(
-					&config.data_dir,
-					config.storage.as_ref().map_or(0, |s| s.delivery_log_days),
-					action,
-					queue::now_epoch(),
-					&mut std::io::stdout().lock(),
-				),
+				Ok(config) => {
+					let webhook = config.webhook.as_ref().map(|wh| {
+						Arc::new(
+							crate::webhook::Webhook::new(&wh.url, wh.secret.clone())
+								.expect("webhook"),
+						)
+					});
+					queue::run(
+						&config.data_dir,
+						config.storage.as_ref().map_or(0, |s| s.delivery_log_days),
+						action,
+						queue::now_epoch(),
+						webhook.as_ref(),
+						&mut std::io::stdout().lock(),
+					)
+				}
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

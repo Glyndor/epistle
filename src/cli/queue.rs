@@ -11,6 +11,7 @@ use super::term::table::Table;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Subcommand};
@@ -69,12 +70,15 @@ pub struct Target {
 /// `out`. `now` is the current epoch second (injectable for tests).
 /// `delivery_log_days` is the operator's configured retention for the
 /// per-recipient delivery log; `0` disables the log and the remove action
-/// then records nothing.
+/// then records nothing. `webhook` is the optional advisory webhook the
+/// server is configured with; the `remove` action fires a `Canceled`
+/// event for every pending recipient when it is set.
 pub(super) fn run(
 	data_dir: &Path,
 	delivery_log_days: u64,
 	action: Option<QueueCli>,
 	now: u64,
+	webhook: Option<&Arc<crate::webhook::Webhook>>,
 	out: &mut impl Write,
 ) -> ExitCode {
 	let action = action.unwrap_or(QueueCli::List { json: false });
@@ -139,6 +143,15 @@ pub(super) fn run(
 								};
 								if let Err(error) = log.append(&record) {
 									tracing::warn!(%id, %error, "delivery log write failed");
+								}
+								if let Some(webhook) = webhook {
+									let webhook = webhook.clone();
+									let event = crate::webhook::WebhookEvent::Canceled {
+										spool_id: id,
+										recipient: recipient.clone(),
+										extra: BTreeMap::new(),
+									};
+									tokio::spawn(async move { webhook.notify(&event).await });
 								}
 							}
 						}

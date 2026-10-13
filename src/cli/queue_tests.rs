@@ -44,7 +44,7 @@ fn run_args(dir: &Path, args: &[&str], now: u64) -> (ExitCode, String) {
 		*yes = true;
 	}
 	let mut out = Vec::new();
-	let code = run(dir, 0, action, now, &mut out);
+	let code = run(dir, 0, action, now, None, &mut out);
 	(code, String::from_utf8(out).expect("utf8"))
 }
 
@@ -299,6 +299,7 @@ fn remove_writes_a_canceled_record_for_each_pending_recipient() {
 		30,
 		Some(QueueCli::Remove { id, yes: true }),
 		1_700_000_000,
+		None,
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -336,8 +337,60 @@ fn remove_with_log_disabled_does_not_write_records() {
 		0,
 		Some(QueueCli::Remove { id, yes: true }),
 		1_700_000_000,
+		None,
 		&mut out,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
 	assert!(!dir.path().join("deliverylog").exists());
+}
+
+/// Start a webhook receiver; returns its URL and a shared body list.
+async fn webhook_receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+	let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+	async fn handler(
+		axum::extract::State(state): axum::extract::State<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+		body: String,
+	) -> &'static str {
+		state.lock().expect("lock").push(body);
+		"ok"
+	}
+	let app = axum::Router::new()
+		.route("/hook", axum::routing::post(handler))
+		.with_state(captured.clone());
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+	(format!("http://{addr}/hook"), captured)
+}
+
+#[tokio::test]
+async fn remove_emits_a_canceled_webhook_for_each_pending_recipient() {
+	let (url, captured) = webhook_receiver().await;
+	let (dir, _spool, ids) = spool_with(1);
+	let id = ids[0];
+	let webhook = std::sync::Arc::new(crate::webhook::Webhook::new(&url, None).expect("webhook"));
+	let mut out = Vec::new();
+	let code = run(
+		dir.path(),
+		30,
+		Some(QueueCli::Remove { id, yes: true }),
+		1_700_000_000,
+		Some(&webhook),
+		&mut out,
+	);
+	assert_eq!(code, ExitCode::SUCCESS);
+	for _ in 0..200 {
+		if !captured.lock().expect("lock").is_empty() {
+			break;
+		}
+		tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+	}
+	let bodies = captured.lock().expect("lock").clone();
+	let body = bodies
+		.iter()
+		.find(|body| body.contains("\"event\":\"canceled\""))
+		.expect("a canceled body");
+	let event: serde_json::Value = serde_json::from_str(body).expect("json");
+	assert_eq!(event["spool_id"], id.to_string());
+	assert_eq!(event["recipient"], "bob0@remote.example");
 }

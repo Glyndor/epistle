@@ -184,6 +184,7 @@ fn queue_remove_asks_with_the_sender_and_recipient_count() {
 				0,
 				Some(QueueCli::Remove { id: *id, yes }),
 				queue::now_epoch(),
+				None,
 				&mut Vec::new(),
 			)
 		},
