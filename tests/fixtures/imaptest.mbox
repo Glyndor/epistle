@@ -22,7 +22,7 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 Content-Transfer-Encoding: 8bit
 
-Body with UTF-8: café — résumé — naïve.
+Body with UTF-8: café, résumé, naïve.
 Multi-line: line one
 line two with trailing spaces   
 line three.

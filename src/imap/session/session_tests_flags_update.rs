@@ -10,7 +10,10 @@ use super::*;
 #[test]
 fn store_introducing_keyword_emits_updated_flags() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	deliver(dir.path(), b"From: a@x.example\r\nSubject: one\r\n\r\none\r\n");
+	deliver(
+		dir.path(),
+		b"From: a@x.example\r\nSubject: one\r\n\r\none\r\n",
+	);
 	let mut session = logged_in(dir.path());
 	let select = text(&session.command_line("a1 SELECT INBOX"));
 	assert!(select.contains("a1 OK"), "{select}");
@@ -57,7 +60,10 @@ fn store_introducing_keyword_emits_updated_flags() {
 #[test]
 fn append_introducing_keyword_advertises_it_on_next_select() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	deliver(dir.path(), b"From: a@x.example\r\nSubject: existing\r\n\r\nexisting\r\n");
+	deliver(
+		dir.path(),
+		b"From: a@x.example\r\nSubject: existing\r\n\r\nexisting\r\n",
+	);
 	let mut session = logged_in(dir.path());
 	let select = text(&session.command_line("a1 SELECT INBOX"));
 	assert!(select.contains("a1 OK"), "{select}");

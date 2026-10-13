@@ -34,7 +34,10 @@ fn collect_mailbox_keywords(snapshot: &Snapshot) -> Vec<String> {
 	for message in snapshot.messages() {
 		for keyword in super::mailbox::keywords_in(&message.flags) {
 			let name = keyword.as_str().to_string();
-			if !out.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+			if !out
+				.iter()
+				.any(|existing| existing.eq_ignore_ascii_case(&name))
+			{
 				out.push(name);
 			}
 		}

@@ -60,7 +60,10 @@ fn noop_emits_untagged_exists_after_unannounced_arrival() {
 #[test]
 fn noop_emits_exists_when_count_changed_since_last_announcement() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	deliver(dir.path(), b"From: a@x.example\r\nSubject: seed\r\n\r\nseed\r\n");
+	deliver(
+		dir.path(),
+		b"From: a@x.example\r\nSubject: seed\r\n\r\nseed\r\n",
+	);
 	let mut session = logged_in(dir.path());
 	let select = text(&session.command_line("a1 SELECT INBOX"));
 	assert!(select.contains("a1 OK"), "{select}");
@@ -75,7 +78,10 @@ fn noop_emits_exists_when_count_changed_since_last_announcement() {
 	// Deliver a second message out-of-band by writing the file directly,
 	// the same way the SMTP path does. The session has no idea until
 	// the next NOOP refreshes the snapshot.
-	deliver(dir.path(), b"From: a@x.example\r\nSubject: late\r\n\r\nlate\r\n");
+	deliver(
+		dir.path(),
+		b"From: a@x.example\r\nSubject: late\r\n\r\nlate\r\n",
+	);
 
 	// NOOP must observe the new file and announce the new count.
 	let noop = text(&session.command_line("a2 NOOP"));
