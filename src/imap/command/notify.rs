@@ -121,9 +121,7 @@ fn mailbox_name(input: &str) -> Option<(String, &str)> {
 	if input.starts_with('"') {
 		return parse_astring(input).filter(|(name, _)| !name.is_empty());
 	}
-	let end = input
-		.find(|c: char| c == ' ' || c == '(' || c == ')')
-		.unwrap_or(input.len());
+	let end = input.find([' ', '(', ')']).unwrap_or(input.len());
 	(end > 0).then(|| (input[..end].to_string(), &input[end..]))
 }
 
