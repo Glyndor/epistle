@@ -246,7 +246,8 @@ fn name_validation() {
 	assert!(!valid_name("INBOX"));
 	assert!(!valid_name("inbox"));
 	assert!(!valid_name("../up"));
-	assert!(!valid_name("a/b"));
+	assert!(valid_name("a/b"));
+	assert!(!valid_name("a//b"));
 	assert!(!valid_name(".hidden"));
 	assert!(!valid_name(""));
 	assert!(!valid_name("trailing "));
@@ -373,13 +374,11 @@ fn store_flags_noop_skips_disk_write_and_modseq() {
 }
 
 #[test]
-fn a_mailbox_name_cannot_contain_the_hierarchy_delimiter() {
-	// LIST answers `\HasNoChildren` for every mailbox, which is only truthful
-	// while the hierarchy is flat. That holds because `/` — the delimiter
-	// LIST reports — is not an accepted character, so no mailbox can ever be
-	// another's parent. Allowing it here would turn the CHILDREN capability
-	// epistle advertises into a lie, silently, with nothing else failing.
-	assert!(!valid_name("parent/child"));
+fn a_mailbox_name_may_hold_the_hierarchy_delimiter_between_levels() {
+	// `/` is the delimiter LIST reports, and LIST computes `\HasChildren`
+	// from the names that exist, so a hierarchical name is a real child.
+	assert!(valid_name("parent/child"));
 	assert!(!valid_name("/leading"));
+	assert!(!valid_name("trailing/"));
 	assert!(valid_name("Archive 2026"));
 }

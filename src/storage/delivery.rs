@@ -162,8 +162,16 @@ impl LocalDelivery {
 		};
 		let tmp_dir = contained_child(&base, "tmp")?;
 		let new_dir = contained_child(&base, "new")?;
-		// A Sieve `fileinto` may name a folder that does not exist yet.
-		let new_mailbox = mailbox.is_some() && !new_dir.is_dir();
+		// A Sieve `fileinto` may name a folder that does not exist yet; it is
+		// created like an IMAP CREATE, with its missing superiors, and the
+		// creation is journalled there.
+		if let Some(name) = mailbox
+			&& !new_dir.is_dir()
+			&& let Err(error) = crate::imap::mailbox::create(&self.data_dir, account.as_str(), name)
+			&& !new_dir.is_dir()
+		{
+			return Err(error);
+		}
 		fs::create_dir_all(&tmp_dir)?;
 		fs::create_dir_all(&new_dir)?;
 
@@ -173,18 +181,16 @@ impl LocalDelivery {
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
 		io::write_flag_sidecar(&new_dir, id, flags);
 		let name = mailbox.unwrap_or("INBOX");
-		let mut changes = Vec::with_capacity(3);
-		if new_mailbox {
-			changes.push(Change::mailbox(Op::Created, name));
-		}
-		changes.push(Change::email(Op::Created, id));
-		changes.push(Change::mailbox(Op::Updated, name));
+		let changes = [
+			Change::email(Op::Created, id),
+			Change::mailbox(Op::Updated, name),
+		];
 		crate::imap::changelog::note(account_dir.as_path(), &changes);
 		Ok(id)
 	}
 
 	/// Deliver one copy per recipient account into `mailbox` (a named folder),
-	/// or INBOX when `None`. The mailbox name must be a safe single segment.
+	/// or INBOX when `None`. The mailbox name must pass `is_safe_mailbox`.
 	/// Returns the redirect addresses requested by users' Sieve filters, for
 	/// the caller to queue (this sink has no outbound spool).
 	pub fn deliver_routed(
@@ -432,7 +438,12 @@ mod tests {
 				.join(mailbox)
 				.join("new"),
 		)
-		.map(|entries| entries.count())
+		.map(|entries| {
+			entries
+				.flatten()
+				.filter(|entry| entry.file_name().to_string_lossy().ends_with(".eml"))
+				.count()
+		})
 		.unwrap_or(0)
 	}
 

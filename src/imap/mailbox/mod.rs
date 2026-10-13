@@ -9,6 +9,7 @@
 
 mod defaults;
 mod flag;
+mod hierarchy;
 pub(crate) mod journal;
 
 pub(crate) use defaults::ensure_defaults;
@@ -24,6 +25,7 @@ use uuid::Uuid;
 use crate::imap::changelog::{Change, Op};
 use crate::imap::internal_date::InternalDate;
 use crate::storage::MessageCrypto;
+use crate::util::mailbox_path;
 use crate::util::path_component::{
 	AccountName, AccountRoot, FixedDir, MailboxName, MessageExt, folders_dir, message_file,
 };
@@ -132,29 +134,42 @@ pub fn exists(data_dir: &Path, account: &str, mailbox: &str) -> bool {
 	mailbox_dir(data_dir, account, mailbox).is_some_and(|dir| dir.is_dir())
 }
 
-/// Create a mailbox. Fails if invalid or already existing.
+/// Create a mailbox, and every missing superior of it (RFC 9051 §6.3.4).
+/// A trailing `/` only says the client means to create children under the
+/// name, so it is dropped. Fails if the name is invalid or already exists.
 pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	let account = AccountName::new(account)?;
-	let dir = MailboxName::folder(mailbox)
+	let mailbox = mailbox_path::canonical(mailbox.strip_suffix('/').unwrap_or(mailbox));
+	let dir = MailboxName::folder(&mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	if dir.is_dir() {
 		return Err(std::io::Error::other("mailbox already exists"));
 	}
-	std::fs::create_dir_all(&dir)?;
-	journal::note(data_dir, &account, &[Change::mailbox(Op::Created, mailbox)]);
+	let mut changes = hierarchy::create_superiors(data_dir, &account, &mailbox)?;
+	hierarchy::make_mailbox(&dir)?;
+	changes.push(Change::mailbox(Op::Created, &mailbox));
+	journal::note(data_dir, &account, &changes);
 	Ok(())
 }
 
-/// Delete a mailbox and its messages. INBOX cannot be deleted.
+/// Delete a mailbox and its messages. INBOX cannot be deleted, and neither
+/// can a mailbox with children: the answer carries `[HASCHILDREN]` (RFC 9051
+/// §6.3.5, §7.1).
 pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
-	let account = AccountName::new(account)?;
-	let dir = MailboxName::folder(mailbox)
+	let mailbox = mailbox_path::canonical(mailbox);
+	let account_name = AccountName::new(account)?;
+	let dir = MailboxName::folder(&mailbox)
 		.ok()
-		.and_then(|folder| folder.folder_dir(&account, data_dir).ok().flatten())
+		.and_then(|folder| folder.folder_dir(&account_name, data_dir).ok().flatten())
 		.ok_or_else(|| std::io::Error::other("cannot delete this mailbox"))?;
 	if !dir.is_dir() {
 		return Err(std::io::Error::other("no such mailbox"));
+	}
+	if hierarchy::has_children(data_dir, account, &mailbox) {
+		return Err(std::io::Error::other(
+			"[HASCHILDREN] delete the mailboxes under it first",
+		));
 	}
 	// The messages go with the mailbox: each one is destroyed for JMAP.
 	let ids = journal::message_ids(&contained_child(&dir, "new")?);
@@ -163,51 +178,24 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 		.into_iter()
 		.map(|id| Change::email(Op::Destroyed, id))
 		.collect();
-	changes.push(Change::mailbox(Op::Destroyed, mailbox));
-	journal::note(data_dir, &account, &changes);
+	changes.push(Change::mailbox(Op::Destroyed, &mailbox));
+	journal::note(data_dir, &account_name, &changes);
 	Ok(())
 }
 
-/// Rename a mailbox. INBOX cannot be renamed.
+/// Rename a mailbox with every mailbox below it (RFC 9051 §6.3.6). INBOX
+/// cannot be renamed, and a mailbox cannot move into its own subtree.
 pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::Result<()> {
 	let account = AccountName::new(account)?;
-	let (from_name, to_name) = (from, to);
-	let (Ok(from), Ok(to)) = (MailboxName::folder(from), MailboxName::folder(to)) else {
-		return Err(std::io::Error::other("cannot rename"));
-	};
-	let Ok(target) = to.messages_dir(&account, data_dir) else {
-		return Err(std::io::Error::other("cannot rename"));
-	};
-	if target.is_dir() {
-		return Err(std::io::Error::other("cannot rename"));
-	}
-	let (Ok(Some(from)), Ok(Some(to))) = (
-		from.folder_dir(&account, data_dir),
-		to.folder_dir(&account, data_dir),
-	) else {
-		return Err(std::io::Error::other("cannot rename"));
-	};
-	if !from.is_dir() {
-		return Err(std::io::Error::other("no such mailbox"));
-	}
-	std::fs::rename(from, &to)?;
-	// The mailbox id is its name, so the old id is gone and a new one exists;
-	// every message keeps its id but its `mailboxIds` changed.
-	let mut changes = vec![
-		Change::mailbox(Op::Destroyed, from_name),
-		Change::mailbox(Op::Created, to_name),
-	];
-	changes.extend(
-		journal::message_ids(&contained_child(&to, "new")?)
-			.into_iter()
-			.map(|id| Change::email(Op::Updated, id)),
-	);
-	journal::note(data_dir, &account, &changes);
-	Ok(())
+	let from = mailbox_path::canonical(from);
+	let to = mailbox_path::canonical(to);
+	hierarchy::rename_subtree(data_dir, &account, &from, &to)
 }
 
-/// Existing mailbox names: INBOX plus folders, sorted. An account that is not
-/// a plain directory name has only INBOX.
+/// Existing mailbox names: INBOX plus folders, sorted. Folder directories are
+/// read back through [`mailbox_path::stored_name`], so a directory that is
+/// not exactly the on-disk spelling of a valid name is not a mailbox. An
+/// account that is not a plain directory name has only INBOX.
 pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let mut names = vec!["INBOX".to_string()];
 	let Ok(account) = AccountName::new(account) else {
@@ -218,9 +206,9 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_dir())
 				&& let Some(name) = entry.file_name().to_str()
-				&& valid_name(name)
+				&& let Some(stored) = mailbox_path::stored_name(name)
 			{
-				names.push(name.to_string());
+				names.push(stored);
 			}
 		}
 	}
@@ -257,11 +245,16 @@ pub fn append_dated(
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
 	let account = AccountName::new(account)?;
+	let mailbox = &*mailbox_path::canonical(mailbox);
 	let account_dir = MailboxName::new(mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	let tmp_dir = account.root(data_dir)?.child(FixedDir::Tmp)?;
 	let new_mailbox = !mailbox.eq_ignore_ascii_case("INBOX") && !account_dir.is_dir();
+	let mut changes = Vec::with_capacity(3);
+	if new_mailbox {
+		changes = hierarchy::create_superiors(data_dir, &account, mailbox)?;
+	}
 	std::fs::create_dir_all(&account_dir)?;
 	std::fs::create_dir_all(&tmp_dir)?;
 
@@ -279,7 +272,6 @@ pub fn append_dated(
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
 	}
-	let mut changes = Vec::with_capacity(3);
 	if new_mailbox {
 		changes.push(Change::mailbox(Op::Created, mailbox));
 	}
@@ -373,3 +365,7 @@ mod tests_path;
 #[cfg(test)]
 #[path = "../mailbox_tests_remove.rs"]
 mod tests_remove;
+
+#[cfg(test)]
+#[path = "../mailbox_tests_hierarchy.rs"]
+mod tests_hierarchy;
