@@ -268,13 +268,13 @@ impl Rotator {
 		Ok(read_state(&self.data_dir)?.unwrap_or_default())
 	}
 
-	/// Replace the state file atomically, so a concurrent `dkim show` or a
-	/// restart never reads a half-written file.
+	/// Replace the state file atomically and durably: a uniquely named
+	/// temporary file is synced, renamed over the state and the directory is
+	/// synced, so neither a concurrent `dkim show`, a restart nor a power
+	/// loss right after the save reads a half-written or missing file.
 	fn save_state(&self, state: &RotationState) -> std::io::Result<()> {
 		let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
-		let tmp = self.state_path.with_extension("json.tmp");
-		std::fs::write(&tmp, bytes)?;
-		std::fs::rename(&tmp, &self.state_path)
+		crate::storage::write_secret(&self.state_path, &bytes)
 	}
 
 	/// The DNS record name for a selector's public key at `domain`.
