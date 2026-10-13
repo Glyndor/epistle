@@ -113,17 +113,29 @@ pub struct ActiveKey {
 	pub key_file: PathBuf,
 }
 
+/// File name of the last good rotation state, the one [`STATE_FILE`] held
+/// before its latest save.
+pub const STATE_BACKUP_FILE: &str = "dkim-rotation.json.bak";
+
 /// Read `<data_dir>/dkim-rotation.json`. `Ok(None)` only when the file does
 /// not exist; an unreadable or invalid file is an error, because guessing the
 /// configured key would show (or sign with) a selector that is not in service.
 pub fn read_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
-	let path = data_dir.join(STATE_FILE);
-	let bytes = match std::fs::read(&path) {
+	parse_state(&data_dir.join(STATE_FILE))
+}
+
+fn parse_state(path: &std::path::Path) -> Result<Option<RotationState>, RotateError> {
+	let bytes = match std::fs::read(path) {
 		Ok(bytes) => bytes,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
 		Err(error) => return Err(RotateError(format!("read {}: {error}", path.display()))),
 	};
-	let state: RotationState = serde_json::from_slice(&bytes)
+	decode_state(path, &bytes).map(Some)
+}
+
+/// Parse the bytes of a state file read from `path` (named in errors).
+fn decode_state(path: &std::path::Path, bytes: &[u8]) -> Result<RotationState, RotateError> {
+	let state: RotationState = serde_json::from_slice(bytes)
 		.map_err(|error| RotateError(format!("parse {}: {error}", path.display())))?;
 	if state.selector.is_empty() {
 		return Err(RotateError(format!(
@@ -131,17 +143,45 @@ pub fn read_state(data_dir: &std::path::Path) -> Result<Option<RotationState>, R
 			path.display()
 		)));
 	}
-	Ok(Some(state))
+	Ok(state)
+}
+
+/// When the state cannot be read but [`STATE_BACKUP_FILE`] can, the reason
+/// the state was rejected: the last good state is then what signs, and
+/// rotation stays stopped until the operator restores the file.
+pub fn state_fallback(data_dir: &std::path::Path) -> Option<String> {
+	let error = read_state(data_dir).err()?;
+	matches!(parse_state(&data_dir.join(STATE_BACKUP_FILE)), Ok(Some(_))).then(|| error.to_string())
 }
 
 /// The one answer to "which ed25519 key is in service": the rotation state
 /// when it exists, the configured key otherwise. Startup, `dns-records`,
 /// `verify-dns` and `dkim show` all call this, so they cannot disagree.
+///
+/// A state that cannot be read must not stop signing, so the last good
+/// state stands in for it when [`STATE_BACKUP_FILE`] reads; without one
+/// the error stands. The backup names a key whose TXT is still published:
+/// it is at most one save behind, and a retired selector leaves the state
+/// only after its records and key are gone.
 pub fn active_ed25519(
 	dkim: &crate::config::Dkim,
 	data_dir: &std::path::Path,
 ) -> Result<ActiveKey, RotateError> {
-	Ok(match read_state(data_dir)? {
+	let state = match read_state(data_dir) {
+		Ok(state) => state,
+		Err(error) => match parse_state(&data_dir.join(STATE_BACKUP_FILE)) {
+			Ok(Some(backup)) => {
+				tracing::warn!(
+					%error,
+					selector = %backup.selector,
+					"DKIM rotation state is unreadable; signing with the last good state in {STATE_BACKUP_FILE}",
+				);
+				Some(backup)
+			}
+			_ => return Err(error),
+		},
+	};
+	Ok(match state {
 		Some(state) => ActiveKey {
 			selector: state.selector,
 			key_file: data_dir.join(state.key_file),
@@ -304,9 +344,16 @@ impl Rotator {
 	/// Replace the state file atomically and durably: a uniquely named
 	/// temporary file is synced, renamed over the state and the directory is
 	/// synced, so neither a concurrent `dkim show`, a restart nor a power
-	/// loss right after the save reads a half-written or missing file.
+	/// loss right after the save reads a half-written or missing file. The
+	/// state being replaced, when it reads, is kept first as
+	/// [`STATE_BACKUP_FILE`].
 	fn save_state(&self, state: &RotationState) -> std::io::Result<()> {
 		let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
+		if let Ok(current) = std::fs::read(&self.state_path)
+			&& decode_state(&self.state_path, &current).is_ok()
+		{
+			crate::storage::write_secret(&self.data_dir.join(STATE_BACKUP_FILE), &current)?;
+		}
 		crate::storage::write_secret(&self.state_path, &bytes)
 	}
 

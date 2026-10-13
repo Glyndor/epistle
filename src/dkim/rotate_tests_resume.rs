@@ -1,7 +1,7 @@
 //! Resuming a journaled rotation in the cases a plain restart does not
 //! cover: a later day, a key file that does not load, a configuration that
 //! lost a domain, an operator request, a withdrawal the provider refuses,
-//! and temporary files a killed write left behind.
+//! temporary files a killed write left behind, and a torn state file.
 
 use super::steps::Step;
 use super::tests_crash::{DAY, DOMAINS, Lab, NOW, Start, Visibility, crash, crash_and_restart};
@@ -129,4 +129,33 @@ async fn temporary_files_of_killed_writes_are_swept() {
 			"{name} belongs to someone else"
 		);
 	}
+}
+
+#[tokio::test]
+async fn a_torn_state_signs_with_the_last_good_one_and_stops_rotating() {
+	let lab = Lab::new(Start::RotationDue);
+	let (_signer, rotator) = lab.start(Visibility::AfterOneWait);
+	rotator.tick(NOW).await.expect("rotate");
+	let bytes = std::fs::read(lab.root.join(STATE_FILE)).expect("state");
+	let torn = &bytes[..bytes.len() / 2];
+	std::fs::write(lab.root.join(STATE_FILE), torn).expect("tear");
+	assert!(
+		state_fallback(&lab.root).is_some_and(|error| error.contains(STATE_FILE)),
+		"the fallback is reported with the reason"
+	);
+
+	// Startup still signs, with the state one save behind: the journal
+	// entry whose active key ed0 keeps its TXT through the overlap.
+	let (signer, rotator) = lab.start(Visibility::AfterOneWait);
+	assert_eq!(signer.current().selector(), "ed0");
+	lab.assert_verifies(&signer, "with the last good state")
+		.await;
+
+	// Rotation does not guess: it stops and leaves the file to the operator.
+	let error = rotator.tick(NOW + DAY).await.expect_err("rotation stops");
+	assert!(error.to_string().contains(STATE_FILE), "{error}");
+	assert_eq!(
+		std::fs::read(lab.root.join(STATE_FILE)).expect("state"),
+		torn
+	);
 }

@@ -60,6 +60,44 @@ fn startup_rejects_corrupt_rotation_state() {
 	);
 }
 
+#[test]
+fn startup_with_a_torn_state_signs_with_the_last_good_state() {
+	let dir = tempfile::tempdir_in(".").expect("tempdir");
+	let root = dir.path().canonicalize().expect("absolute data dir");
+	let (pem, _) = crate::dkim::generate_key().expect("key");
+	std::fs::write(root.join("original.key"), &pem).expect("write key");
+	std::fs::write(root.join("current.key"), &pem).expect("write key");
+	let good = RotationState {
+		selector: "current".into(),
+		key_file: root.join("current.key"),
+		rotated_at: 1,
+		previous: None,
+		pending: None,
+	};
+	std::fs::write(
+		root.join(crate::dkim::rotate::STATE_BACKUP_FILE),
+		serde_json::to_vec(&good).expect("state JSON"),
+	)
+	.expect("write backup");
+	std::fs::write(root.join("dkim-rotation.json"), b"{\"selector\":\"cur").expect("torn");
+	let companions = build(&config(&root)).expect("startup must not stop on a torn state");
+	let header = companions
+		.dkim_signer
+		.expect("signer")
+		.current()
+		.sign("example.org", b"From: alice@example.org\r\n\r\nHello\r\n")
+		.expect("sign");
+	assert_eq!(
+		signature_fields(header.as_bytes()),
+		vec![(
+			"current".into(),
+			"example.org".into(),
+			"ed25519-sha256".into()
+		)],
+		"the last good state names the key that signs"
+	);
+}
+
 #[tokio::test]
 async fn restart_signs_with_current_rotation_key() {
 	for relative in [false, true] {
