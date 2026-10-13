@@ -3,6 +3,11 @@ name: Rust audit (reusable)
 # Scheduled supply-chain audit for Rust crates: cargo-audit flags RUSTSEC
 # advisories, cargo-deny enforces the license/ban/source policy in deny.toml.
 # Callers wire the schedule (e.g. weekly cron) in their own workflow.
+#
+# Each invocation audits one ref. The caller is expected to put a matrix
+# over `develop` and `main` in its own workflow file; the `report` and
+# `close` jobs that read the artifacts are there, not here, because they
+# need to see every matrix entry at once.
 
 on:
   workflow_call:
@@ -11,6 +16,14 @@ on:
         description: Directory containing the Cargo workspace
         type: string
         default: "."
+      # Ref to audit. Each matrix entry in the caller passes one ref, so
+      # the reusable sees a single value per invocation. The default is
+      # `develop` because that is the branch the org uses for in-progress
+      # work; weekly callers audit main by passing it through their matrix.
+      ref:
+        description: Branch or ref to checkout before running the audit
+        type: string
+        default: "develop"
       # Pinned, not the runner's floating preinstalled Rust — see rust-ci.yml's
       # toolchain input for why an unpinned toolchain is a problem.
       toolchain:
@@ -38,12 +51,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-audit-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}
+  # Per-ref concurrency so a ref's daily run cancels an older still-running
+  # one. Different refs (develop vs main) must not cancel each other: a
+  # slow `develop` run that finishes during the `main` run would close
+  # open issues for advisories `main` still sees.
+  group: rust-audit-${{ github.workflow }}-${{ inputs.ref }}-${{ inputs.working-directory }}
   cancel-in-progress: true
 
 jobs:
   audit:
-    name: cargo audit
+    # On a pull request the ref is empty and the name stays `cargo audit`,
+    # the check name branch rules and the release PR already know.
+    name: cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,6 +72,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Each invocation audits one ref, so the checkout is the ref
+          # the caller named in its matrix. `persist-credentials: false`
+          # matches what the rest of the workflow does; a token lying in
+          # `.git/config` would let the next step exfiltrate it.
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Install toolchain
@@ -82,8 +106,32 @@ jobs:
 
       - name: Run cargo audit
         # --deny warnings so unmaintained/unsound/yanked advisories also fail,
-        # not just vulnerabilities.
-        run: cargo audit --deny warnings
+        # not just vulnerabilities. The JSON output is captured unconditionally
+        # so the report job can read the full report whether the step passed
+        # or failed; the exit code is preserved on a non-zero result so the
+        # step still fails the workflow.
+        run: |
+          if ! cargo audit --json --deny warnings > audit.json 2>audit.stderr; then
+            cat audit.stderr >&2
+            exit 1
+          fi
+
+      - name: Upload cargo audit JSON
+        # `if: always()` because the step must run when the audit failed
+        # too: the report job needs the JSON either way to decide
+        # whether to open an issue. The `hashFiles` check skips the step
+        # only when the audit crashed before writing JSON at all; an
+        # `audit.json` written by a failing step is still uploaded so
+        # the caller can read it.
+        if: always() && hashFiles('audit.json') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: audit-json-${{ inputs.ref }}
+          path: |
+            audit.json
+            audit-fuzz.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run cargo audit on the extra lockfiles
         if: inputs.extra-lockfiles != ''
@@ -96,6 +144,9 @@ jobs:
         # reports advisories this repository has already assessed. That is how
         # fuzz/Cargo.lock looked like it carried four findings when the same
         # graph audits clean from here.
+        # The fuzz audit emits JSON to `audit-fuzz.json` so the report job
+        # sees it through the same artifact path; without that, fuzz's
+        # findings are invisible to the open-issue decision.
         run: |
           set -euo pipefail
           echo "$EXTRA_LOCKFILES" | while read -r lockfile; do
@@ -104,12 +155,16 @@ jobs:
               echo "::error::$lockfile does not exist; the input is stale."
               exit 1
             fi
-            echo "Auditing $lockfile"
-            cargo audit --deny warnings --file "$lockfile"
+            stem="$(basename "$lockfile" .lock)"
+            if ! cargo audit --json --deny warnings --file "$lockfile" \
+                > "audit-${stem}.json" 2>"audit-${stem}.stderr"; then
+              cat "audit-${stem}.stderr" >&2
+              exit 1
+            fi
           done
 
   deny:
-    name: cargo deny
+    name: cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -119,6 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Install toolchain
