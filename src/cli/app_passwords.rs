@@ -319,3 +319,7 @@ pub(super) fn revoke(
 #[cfg(test)]
 #[path = "app_passwords_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "app_passwords_save_sent_tests.rs"]
+mod save_sent_tests;
