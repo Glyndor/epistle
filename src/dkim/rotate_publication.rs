@@ -23,10 +23,16 @@ pub fn publication_waits() -> Vec<std::time::Duration> {
 
 impl Rotator {
 	/// Wait until `selector` publishes the key in `txt` for every signing
-	/// domain. `Ok` when no check is configured.
-	pub(super) async fn confirm_published(&self, selector: &str, txt: &str) -> Result<(), String> {
+	/// domain. `Ok(Ok(()))` when it does or no check is configured,
+	/// `Ok(Err(reason))` when it never does, and `Err` only when a test
+	/// stopped the rotator while it waited.
+	pub(super) async fn confirm_published(
+		&self,
+		selector: &str,
+		txt: &str,
+	) -> Result<Result<(), String>, RotateError> {
 		let Some((resolver, waits)) = &self.publication_check else {
-			return Ok(());
+			return Ok(Ok(()));
 		};
 		let expected = key_of(txt);
 		let mut waits = waits.iter();
@@ -44,11 +50,14 @@ impl Rotator {
 				}
 			}
 			let Some(name) = missing else {
-				return Ok(());
+				return Ok(Ok(()));
 			};
 			match waits.next() {
-				Some(wait) => tokio::time::sleep(*wait).await,
-				None => return Err(format!("{name} does not show the new key in DNS")),
+				Some(wait) => {
+					self.checkpoint(steps::Step::Waiting)?;
+					tokio::time::sleep(*wait).await;
+				}
+				None => return Ok(Err(format!("{name} does not show the new key in DNS"))),
 			}
 		}
 	}

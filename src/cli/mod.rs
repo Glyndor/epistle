@@ -649,15 +649,15 @@ pub enum Command {
 		#[command(subcommand)]
 		action: db_upgrade::DbCli,
 	},
-	/// Show the DKIM signing key in service or force a rotation.
+	/// Show the DKIM key in service, rotate it or clean up old keys.
 	///
-	/// Rotation is queued for the running server, which stays the only writer
-	/// of keys and DNS records.
+	/// Rotation and cleanup are queued for the running server, which stays
+	/// the only writer of keys and DNS records.
 	Dkim {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
-		/// DKIM action (`show`, `rotate`).
+		/// DKIM action (`show`, `rotate`, `cleanup`).
 		#[command(subcommand)]
 		action: dkim_cli::DkimCli,
 	},

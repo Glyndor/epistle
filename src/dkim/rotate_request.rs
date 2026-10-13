@@ -68,7 +68,12 @@ impl Rotator {
 	/// and key file behind. Refuses when the selector for `now` is already the
 	/// active one (two rotations on the same UTC day would collide).
 	pub async fn force_rotate(&self, now: u64) -> Result<(), RotateError> {
+		self.sweep_temporary_files();
 		let mut state = self.load_state()?;
+		// A rotation a killed process left half done is the one to finish.
+		if state.pending.is_some() {
+			return self.resume(&mut state, now).await;
+		}
 		if selector_for(now) == state.selector {
 			return Err(RotateError(format!(
 				"selector {} is already active; a second rotation on the same UTC day would reuse its name",
@@ -113,9 +118,10 @@ impl Rotator {
 		}
 	}
 
-	/// One pass of the server's background work: the operator's request first,
-	/// then the scheduled tick when `auto_due`. A rotation just performed for a
-	/// request makes the scheduled tick pointless for this pass.
+	/// One pass of the server's background work: the operator's rotation
+	/// request first, then a cleanup request, then the scheduled tick when
+	/// `auto_due`. A rotation just performed for a request makes the
+	/// scheduled tick pointless for this pass.
 	pub async fn cycle(&self, now: u64, auto_due: bool) -> Result<(), RotateError> {
 		let performed = match self.serve_request(now).await {
 			Ok(performed) => performed,
@@ -124,6 +130,9 @@ impl Rotator {
 				false
 			}
 		};
+		if let Err(error) = self.serve_cleanup().await {
+			tracing::warn!(%error, "requested DKIM cleanup left something behind");
+		}
 		if auto_due && !performed {
 			self.tick(now).await?;
 		}

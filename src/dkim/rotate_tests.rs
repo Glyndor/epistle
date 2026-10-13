@@ -10,6 +10,7 @@ fn state(selector: &str, rotated_at: u64, previous: Option<Previous>) -> Rotatio
 		key_file: "dkim.key".into(),
 		rotated_at,
 		previous,
+		pending: None,
 	}
 }
 
@@ -70,19 +71,24 @@ fn selector_is_day_unique_and_stable() {
 
 #[cfg(unix)]
 #[test]
-fn write_key_creates_with_owner_only_perms_and_refuses_overwrite() {
+fn write_key_creates_with_owner_only_perms_and_replaces_whole() {
 	use std::os::unix::fs::PermissionsExt;
 
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = dir.path().join("dkim-sel.key");
 
-	super::write_key(&path, "PEM").expect("write");
+	super::steps::write_key(&path, "PEM").expect("write");
 	let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
 	// Never group/world readable: the private key has no permissive window.
 	assert_eq!(mode & 0o077, 0, "mode = {:o}", mode);
 
-	// A pre-existing path is an error (fail closed), not a silent overwrite.
-	assert!(super::write_key(&path, "OTHER").is_err());
+	// Only a journaled rotation whose file does not load rewrites it, and
+	// the rewrite lands whole, still owner-only, with no temporary left.
+	super::steps::write_key(&path, "OTHER").expect("rewrite");
+	assert_eq!(std::fs::read_to_string(&path).expect("read"), "OTHER");
+	let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+	assert_eq!(mode & 0o077, 0, "mode = {:o}", mode);
+	assert_eq!(std::fs::read_dir(dir.path()).expect("dir").count(), 1);
 }
 
 #[test]
@@ -196,6 +202,7 @@ mod tick_tests {
 					key_file: retired_path.clone(),
 					retire_at: 100,
 				}),
+				pending: None,
 			},
 		);
 		(dir, active_path, retired_path, rotator, provider)
@@ -280,6 +287,7 @@ mod tick_tests {
 				key_file: initial_path.clone(),
 				rotated_at: 0,
 				previous: None,
+				pending: None,
 			},
 		);
 

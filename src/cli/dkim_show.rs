@@ -18,6 +18,15 @@ pub(super) struct PreviousView {
 	retire_at: u64,
 }
 
+/// A rotation the server began and has not committed or withdrawn yet.
+#[derive(Debug, Serialize)]
+pub(super) struct InProgressView {
+	selector: String,
+	started_at: u64,
+	/// Why the rotation is being taken back, once it is.
+	withdrawing: Option<String>,
+}
+
 /// One published record compared with what the key in service implies.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub(super) struct RecordView {
@@ -43,6 +52,8 @@ pub(super) struct DkimView {
 	next_rotation_due: Option<u64>,
 	automatic_rotation: bool,
 	previous: Option<PreviousView>,
+	/// A rotation in progress; the selector above signs until it commits.
+	in_progress: Option<InProgressView>,
 	rsa_selector: Option<String>,
 	rotation_requested_at: Option<u64>,
 	last_request_error: Option<String>,
@@ -140,6 +151,14 @@ pub(super) async fn build(
 			selector: p.selector.clone(),
 			retire_at: p.retire_at,
 		}),
+		in_progress: state
+			.as_ref()
+			.and_then(|s| s.pending.as_ref())
+			.map(|p| InProgressView {
+				selector: p.selector.clone(),
+				started_at: p.started_at,
+				withdrawing: p.withdrawing.clone(),
+			}),
 		rsa_selector: dkim.rsa_selector.clone(),
 		rotation_requested_at: rotate::pending_request(&config.data_dir).map(|r| r.requested_at),
 		last_request_error: rotate::last_error(&config.data_dir),
@@ -189,6 +208,20 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 			"previous: {} (retires at {})",
 			previous.selector, previous.retire_at
 		)?;
+	}
+	if let Some(next) = &view.in_progress {
+		match &next.withdrawing {
+			Some(reason) => writeln!(
+				out,
+				"rotation to {} is being withdrawn: {reason}",
+				next.selector
+			)?,
+			None => writeln!(
+				out,
+				"rotation to {} in progress since {}; {} signs until DNS shows the new key",
+				next.selector, next.started_at, view.selector
+			)?,
+		}
 	}
 	if let Some(rsa) = &view.rsa_selector {
 		writeln!(out, "rsa selector: {rsa}")?;

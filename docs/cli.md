@@ -58,7 +58,7 @@ Every change is validated before it is written, keeps the comments in
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
-| [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle tls renew`, `epistle api-key rotate` |
+| [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
 | [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
 | [Backup and restore](#backup-and-restore) | `epistle backup`, `epistle restore` |
 
@@ -207,7 +207,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `config` | file loads | restart pending: `mail.toml` is newer than the `mail` container's start (needs the compose stack; skipped with a note otherwise) | does not load |
 | `ports` | the same check as `epistle probe`: every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, POP3 `+OK`, ManageSieve `OK`, HTTP status line), and TLS listeners present the configured certificate | no listeners | a listener refuses, is silent, greets wrongly or presents another certificate |
 | `tls` | 21 days or more left, hostname in the certificate | under 21 days | under 7 days, expired, or hostname not in the certificate; unreadable file |
-| `dns` | published records match | a lookup was inconclusive | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
+| `dns` | published records match | a lookup was inconclusive, or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
@@ -950,18 +950,20 @@ scope here):
 
 | Command | What it does |
 |---|---|
-| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, RSA selector) and whether the published TXT of each signing domain matches it. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. |
+| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, RSA selector) and whether the published TXT of each signing domain matches it. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. |
 | `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now. Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. `--dry-run` prints the selector and the TXT names and changes nothing. |
+| `epistle dkim cleanup [--dry-run] [--yes]` | List the `dkim-ed<day>.key` files and `ed<day>._domainkey` TXT records of the signing domains that neither the active, the previous, a pending nor a configured selector uses (left by crashes in older releases), ask for confirmation and queue their removal. `--dry-run` only lists; `--yes` skips the question. Refused when the rotation state cannot be read, and nothing is queued when the server does not rotate keys for this configuration. |
 | `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise `[tls]`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. `serve`, `probe` and this command resolve it the same way. |
 | `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the certificate is outside its `renew_before_days` window. |
 | `epistle api-key rotate LABEL` | Replace the secret of an API key and print the new one once. Scopes, domains, expiry and CIDR stay; the old secret stops working in the same write, when the running server's file watcher reloads `api_keys.toml`. |
 
-`dkim rotate` and `tls renew` do not rotate or issue anything themselves. The
-running server is the only writer of DKIM keys, DNS records and the ACME
-account, so these commands drop a request file in the data directory
-(`dkim-rotate.request`, `acme/renew.request`) and the server serves it within a
-minute through the same code as the scheduled rotation, removing the file on
-success. A request survives a failed publication or issuance (the reason is in
+`dkim rotate`, `dkim cleanup` and `tls renew` do not rotate, remove or issue
+anything themselves. The running server is the only writer of DKIM keys, DNS
+records and the ACME account, so these commands drop a request file in the data
+directory (`dkim-rotate.request`, `dkim-cleanup.request`, `acme/renew.request`)
+and the server serves it within a minute through the same code as the scheduled
+rotation, removing the file on success. A cleanup removes only what is still
+unused when the server serves it. A request survives a failed publication or issuance (the reason is in
 `dkim-rotate.error` or `acme/renew.error` and in `show`), and a stopped server
 serves it at its next start. DKIM signing switches in process as soon as the
 new TXT records are published, so no restart is needed. A forced DKIM rotation

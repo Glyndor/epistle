@@ -1,4 +1,5 @@
-//! `epistle dkim`: show the signing key in service and force a rotation.
+//! `epistle dkim`: show the signing key in service, force a rotation and
+//! clean up what old rotations left behind.
 //!
 //! Rotation is never done here. The running server is the only writer of the
 //! key files, the DNS records and the rotation state, so `dkim rotate`
@@ -34,6 +35,19 @@ pub enum DkimCli {
 		#[arg(long)]
 		dry_run: bool,
 	},
+	/// Remove DKIM keys and TXT records no rotation uses.
+	///
+	/// List the `dkim-ed<day>.key` files and `ed<day>._domainkey` TXT
+	/// records that neither the active, the previous nor a pending rotation
+	/// names, then ask the running server to remove them.
+	Cleanup {
+		/// List what would be removed; change nothing.
+		#[arg(long)]
+		dry_run: bool,
+		/// Do not ask for confirmation.
+		#[arg(long)]
+		yes: bool,
+	},
 }
 
 pub(super) fn now_epoch() -> u64 {
@@ -48,6 +62,7 @@ pub(super) fn run(config: &Config, action: DkimCli, out: &mut impl std::io::Writ
 	match action {
 		DkimCli::Show { json } => show(config, json, out),
 		DkimCli::Rotate { dry_run } => rotate_now(config, dry_run, now_epoch(), out),
+		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, out),
 	}
 }
 
@@ -183,6 +198,9 @@ pub(super) fn rotate_now(
 	);
 	ExitCode::SUCCESS
 }
+
+#[path = "dkim_cli_cleanup.rs"]
+mod cleanup;
 
 #[cfg(test)]
 #[path = "dkim_cli_tests.rs"]

@@ -191,9 +191,17 @@ pub fn spawn_dkim_rotation(
 			if let Some(webhook) = webhook {
 				rotator = rotator.with_webhook(webhook);
 			}
+			if let Some(dkim) = &config.dkim {
+				rotator = rotator.keeping(
+					std::iter::once(dkim.selector.clone())
+						.chain(dkim.rsa_selector.clone())
+						.collect(),
+				);
+			}
 			// Wake every minute so an operator's `dkim rotate` request is
 			// served promptly; the scheduled tick still runs hourly.
 			tokio::spawn(async move {
+				rotator.report_orphans().await;
 				let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
 				let mut minutes: u64 = 0;
 				loop {
