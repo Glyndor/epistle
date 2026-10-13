@@ -16,16 +16,17 @@
 
 set -e
 
-# Print the lowest id at or above $1 that starts a block of 65536 ids ending at
-# or below $2 and overlapping no entry of the subordinate id files named after
+# Print the lowest id at or above $1 that starts a block of $3 ids ending at or
+# below $2 and overlapping no entry of the subordinate id files named after
 # them; return 1 when there is none. A missing file counts as empty. Each pass
 # moves the candidate past every entry it overlaps, so it stops at the first
 # block that fits whole, whatever order the entries are in.
 epistle_free_subid_start() {
 	subid_min=$1
 	subid_max=$2
-	shift 2
-	cat -- "$@" 2>/dev/null | awk -F: -v min="$subid_min" -v max="$subid_max" '
+	subid_size=$3
+	shift 3
+	cat -- "$@" 2>/dev/null | awk -F: -v min="$subid_min" -v max="$subid_max" -v size="$subid_size" '
 		$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $3 > 0 { n++; lo[n] = $2 + 0; hi[n] = $2 + $3 - 1 }
 		END {
 			start = min + 0
@@ -33,15 +34,41 @@ epistle_free_subid_start() {
 			while (moved) {
 				moved = 0
 				for (i = 1; i <= n; i++) {
-					if (lo[i] <= start + 65535 && hi[i] >= start) {
+					if (lo[i] <= start + size - 1 && hi[i] >= start) {
 						start = hi[i] + 1
 						moved = 1
 					}
 				}
 			}
-			if (start + 65535 > max + 0) exit 1
+			if (start + size - 1 > max + 0) exit 1
 			printf "%d\n", start
 		}'
+}
+
+# Return 0 when a range glyndor-epistle holds in table $1 shares ids with a
+# range another account holds there.
+epistle_subid_overlaps() {
+	cat -- "$1" 2>/dev/null | awk -F: '
+		$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $3 > 0 {
+			n++; who[n] = $1; lo[n] = $2 + 0; hi[n] = $2 + $3 - 1
+		}
+		END {
+			for (i = 1; i <= n; i++) {
+				if (who[i] != "glyndor-epistle") continue
+				for (j = 1; j <= n; j++) {
+					if (who[j] != "glyndor-epistle" && lo[i] <= hi[j] && lo[j] <= hi[i]) exit 0
+				}
+			}
+			exit 1
+		}'
+}
+
+# Print the size of the first range glyndor-epistle holds in the tables named,
+# or 65536 when it holds none.
+epistle_account_subid_size() {
+	cat -- "$@" 2>/dev/null | awk -F: '
+		$1 == "glyndor-epistle" && $3 ~ /^[0-9]+$/ && $3 > 0 && size == "" { size = $3 }
+		END { print (size == "" ? 65536 : size) }'
 }
 
 # Print the numeric value of login.defs key $1 from file $3, or $2 when the
@@ -52,12 +79,14 @@ epistle_login_def() {
 		END { print (value == "" ? def : value) }'
 }
 
-# Print "<uid start> <gid start>" for a new block of 65536 subordinate ids,
-# given login.defs ($1), the subuid table ($2) and the subgid table ($3). The
-# block honours SUB_UID_MIN/MAX and SUB_GID_MIN/MAX and overlaps no existing
-# entry. The same start serves both tables when one is free in both, so the
-# uid and gid mappings line up; otherwise each table gets its own.
+# Print "<uid start> <gid start>" for a new block of $4 subordinate ids
+# (65536 when $4 is absent), given login.defs ($1), the subuid table ($2) and
+# the subgid table ($3). The block honours SUB_UID_MIN/MAX and SUB_GID_MIN/MAX
+# and overlaps no existing entry. The same start serves both tables when one
+# is free in both, so the uid and gid mappings line up; otherwise each table
+# gets its own.
 epistle_subid_starts() {
+	subid_size=${4:-65536}
 	uid_min=$(epistle_login_def SUB_UID_MIN 100000 "$1")
 	uid_max=$(epistle_login_def SUB_UID_MAX 600100000 "$1")
 	gid_min=$(epistle_login_def SUB_GID_MIN 100000 "$1")
@@ -70,12 +99,12 @@ epistle_subid_starts() {
 	if [ "$gid_max" -lt "$common_max" ]; then
 		common_max=$gid_max
 	fi
-	if common=$(epistle_free_subid_start "$common_min" "$common_max" "$2" "$3"); then
+	if common=$(epistle_free_subid_start "$common_min" "$common_max" "$subid_size" "$2" "$3"); then
 		echo "$common $common"
 		return 0
 	fi
-	uid_start=$(epistle_free_subid_start "$uid_min" "$uid_max" "$2") || return 1
-	gid_start=$(epistle_free_subid_start "$gid_min" "$gid_max" "$3") || return 1
+	uid_start=$(epistle_free_subid_start "$uid_min" "$uid_max" "$subid_size" "$2") || return 1
+	gid_start=$(epistle_free_subid_start "$gid_min" "$gid_max" "$subid_size" "$3") || return 1
 	echo "$uid_start $gid_start"
 }
 
@@ -174,6 +203,23 @@ configure)
 		fi
 	else
 		echo "epistle: could not apply /usr/lib/sysctl.d/30-glyndor-epistle.conf; epistle init will check the unprivileged port floor" >&2
+	fi
+
+	# 6. Packages up to 0.10.1 gave the account a fixed block that useradd also
+	# gives the first regular user, and the step above never moves a block the
+	# account already holds. On upgrade, an overlap is moved to a free block of
+	# the same size, chosen by the allocator a fresh install uses. `epistle
+	# move-subids` stops the stack, rewrites only the account's lines, shifts
+	# the owner of its container files, starts the stack again, and puts all
+	# of it back when a step fails. It runs before `stack update` below so the
+	# stack that update restarts is already on the new block.
+	if [ -n "${2:-}" ] && { epistle_subid_overlaps /etc/subuid || epistle_subid_overlaps /etc/subgid; }; then
+		subid_size=$(epistle_account_subid_size /etc/subuid /etc/subgid)
+		if ! subid_starts=$(epistle_subid_starts /etc/login.defs /etc/subuid /etc/subgid "$subid_size"); then
+			echo "epistle: glyndor-epistle shares subordinate ids with another account and there is no free block of $subid_size ids within SUB_UID_MIN/MAX and SUB_GID_MIN/MAX to move it to; epistle check subid shows the overlap" >&2
+		elif ! epistle move-subids --uid-start "${subid_starts% *}" --gid-start "${subid_starts#* }"; then
+			echo "epistle: could not move the subordinate ids of glyndor-epistle (see the message above for what was left in place); run sudo dpkg-reconfigure epistle to try again" >&2
+		fi
 	fi
 
 	# Only an enabled stack opts into automatic image updates on apt upgrades.

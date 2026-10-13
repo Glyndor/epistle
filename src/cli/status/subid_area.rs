@@ -6,7 +6,7 @@
 //! own files in the other's. `useradd` gives the first regular user
 //! 100000-165535 by default, which is also the block older packages of epistle
 //! assigned to `glyndor-epistle`, so an overlap is a real state on upgraded
-//! hosts and needs the manual move described in `docs/cli.md`.
+//! hosts until the postinst moves it (`docs/cli.md` describes the move).
 
 use std::path::Path;
 

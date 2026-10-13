@@ -217,35 +217,34 @@ every other area is checked from the host. If `mail` is stopped, run
 
 Packages up to 0.10.1 gave `glyndor-epistle` the fixed block
 `100000-165535`, which `useradd` also gives the first regular user on Debian
-and Ubuntu. Newer packages pick a free block on install, but they never move a
-block the account already holds. When `epistle check subid` fails, move it by
-hand. Files in the stack's named volumes (the database among them) are owned
-by host ids of the old block, which stop mapping into the containers once the
-block changes, so the data goes through a backup:
+and Ubuntu. Newer packages pick a free block on install, and on upgrade the
+postinst moves a block the account shares with another one:
+
+1. It picks a free block of the same size with the allocator a fresh install
+   uses, within `SUB_UID_MIN`/`MAX` and `SUB_GID_MIN`/`MAX`.
+2. `epistle move-subids` stops the podup unit, its update timer and the
+   account's Podman API units, and runs `podman system migrate` so the pause
+   process lets go of the old mapping.
+3. It rewrites only the account's lines in `/etc/subuid` and `/etc/subgid`
+   with one `usermod` call and checks every other line came through
+   unchanged.
+4. It shifts the owner of every file in the old block by the same offset:
+   image layers, container directories and named volumes (the database among
+   them) under the account's home and Podman runtime directory, and the
+   storage, volume and `data_dir` paths when they live elsewhere. Set-id bits
+   and file capabilities, which `chown` clears, are put back.
+5. It runs `podman system migrate` again and starts what was running.
+
+Any step that fails undoes the ones before it, and the message says the old
+ranges are back in place. A move that was killed half way leaves a journal at
+`/var/lib/glyndor/epistle/.subid-move`, and the next run undoes it before it
+tries again. To run the move again, for example after freeing room in
+`/etc/login.defs`:
 
 ```sh
-# 1. Back up while the stack runs: the database dump is taken inside `db`.
-sudo epistle backup > /root/epistle-before-subid.tar.gz
-# 2. Stop the stack.
-sudo epistle stack down
-# 3. Pick a free block: the first id past every entry in both tables.
-awk -F: '{ end = $2 + $3; if (end > max) max = end } END { print max }' /etc/subuid /etc/subgid
-# 4. Move the account (OLD is the block `check subid` printed, NEW starts at
-#    the number above and spans 65536 ids, for example 231072-296607).
-sudo usermod --del-subuids OLD --del-subgids OLD glyndor-epistle
-sudo usermod --add-subuids NEW --add-subgids NEW glyndor-epistle
-sudo runuser -u glyndor-epistle -- podman system migrate
-# 5. Remove the stack's named volumes, whose files carry the old ids
-#    (list them with `podman volume ls` as glyndor-epistle), then start the
-#    stack with empty volumes and restore into it.
-sudo epistle stack up
-sudo epistle restore < /root/epistle-before-subid.tar.gz
+sudo dpkg-reconfigure epistle
 sudo epistle check subid
 ```
-
-The restore writes every file again under the new mapping. Keep the backup
-until `epistle status` is clean and mail flows; it holds private keys, so
-handle it as [Backup and restore](#backup-and-restore) describes.
 
 ## Running the server
 
