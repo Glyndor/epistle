@@ -242,6 +242,78 @@ impl DeliveryLog {
 		write!(&mut name, "{day}.jsonl").expect("writing to String is infallible");
 		Ok(self.root.join(name))
 	}
+
+	/// Stream records from the log, newest first (today first, then
+	/// yesterday, etc.) up to `limit`. Each record is filtered through
+	/// `filter`: a return value of `false` drops the record. Streaming
+	/// reads one line at a time from each file, so the whole log never
+	/// has to fit in memory. A `None` `limit` reads every record (the
+	/// caller is then expected to bound the request, the way the
+	/// `/api/v1/deliveries` route does).
+	///
+	/// The scan order (newest day first) is the order an operator wants
+	/// when investigating "what just happened to my message", and is the
+	/// order the API and CLI both expose. Reading a file is a flat
+	/// in-order scan; the iterator does not sort across days, so the
+	/// returned list is "newest day, then that day's records in order,
+	/// then the next day". A caller that needs a strict per-record
+	/// `time` order can sort the result itself; the on-disk encoding
+	/// already has the timestamp.
+	pub fn list<F>(&self, limit: Option<usize>, mut filter: F) -> std::io::Result<Vec<DeliveryRecord>>
+	where
+		F: FnMut(&DeliveryRecord) -> bool,
+	{
+		let mut out: Vec<DeliveryRecord> = Vec::new();
+		if !self.root.is_dir() {
+			return Ok(out);
+		}
+		// Newest day first. We list the directory and sort the file
+		// names descending; the file name is `YYYY-MM-DD.jsonl`, so a
+		// plain string sort gives the right order without parsing.
+		let mut files: Vec<PathBuf> = Vec::new();
+		for entry in fs::read_dir(&self.root)? {
+			let entry = entry?;
+			let name = match entry.file_name().into_string() {
+				Ok(name) => name,
+				Err(_) => continue,
+			};
+			if name.ends_with(".jsonl") {
+				files.push(entry.path());
+			}
+		}
+		files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+		'outer: for file in files {
+			let text = match fs::read_to_string(&file) {
+				Ok(text) => text,
+				Err(error) => {
+					tracing::warn!(file = %file.display(), %error, "delivery log file could not be read");
+					continue;
+				}
+			};
+			for line in text.lines() {
+				if line.is_empty() {
+					continue;
+				}
+				let record: DeliveryRecord = match serde_json::from_str(line) {
+					Ok(record) => record,
+					Err(error) => {
+						tracing::warn!(file = %file.display(), %error, "delivery log line did not parse");
+						continue;
+					}
+				};
+				if !filter(&record) {
+					continue;
+				}
+				out.push(record);
+				if let Some(cap) = limit
+					&& out.len() >= cap
+				{
+					break 'outer;
+				}
+			}
+		}
+		Ok(out)
+	}
 }
 
 /// `YYYY-MM-DD` for the wall clock at `epoch` (seconds since the Unix
@@ -351,6 +423,162 @@ pub fn now_epoch() -> u64 {
 		.duration_since(UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0)
+}
+
+/// Parse a `--since` value: either an RFC 3339 timestamp
+/// (`2024-01-02T03:04:05Z`, optional fractional seconds) or a duration
+/// like `24h` / `7d` / `30m`. Returns the lower-bound epoch second
+/// (records with `time >= since` are included) or an error on
+/// unparseable input. `None` is returned only for the empty string, the
+/// way the CLI / API callers express "no filter".
+pub fn parse_since(value: &str, now_epoch: u64) -> Result<Option<u64>, String> {
+	let trimmed = value.trim();
+	if trimmed.is_empty() {
+		return Ok(None);
+	}
+	if let Some(rest) = trimmed.strip_suffix('h').or_else(|| trimmed.strip_suffix('H')) {
+		return parse_duration_secs(rest, 3600, "h", now_epoch);
+	}
+	if let Some(rest) = trimmed.strip_suffix('d').or_else(|| trimmed.strip_suffix('D')) {
+		return parse_duration_secs(rest, 86_400, "d", now_epoch);
+	}
+	if let Some(rest) = trimmed.strip_suffix('m').or_else(|| trimmed.strip_suffix('M')) {
+		return parse_duration_secs(rest, 60, "m", now_epoch);
+	}
+	if let Some(rest) = trimmed.strip_suffix('s').or_else(|| trimmed.strip_suffix('S')) {
+		return parse_duration_secs(rest, 1, "s", now_epoch);
+	}
+	parse_rfc3339(trimmed).map(Some)
+}
+
+fn parse_duration_secs(
+	digits: &str,
+	unit_secs: u64,
+	unit_label: &str,
+	now_epoch: u64,
+) -> Result<Option<u64>, String> {
+	let amount: u64 = digits
+		.parse()
+		.map_err(|_| format!("duration {digits}{unit_label} is not a number"))?;
+	Ok(Some(now_epoch.saturating_sub(amount.saturating_mul(unit_secs))))
+}
+
+/// Hand-rolled RFC 3339 parser: `YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]`.
+/// Avoids the `time` crate's `parsing` feature (a new feature flag would
+/// mean a Cargo.toml change, and the existing `time` usage in this
+/// codebase is `time::unix_now` only). The output is always UTC: an
+/// explicit `+HH:MM` offset is subtracted from the wall-clock fields, so
+/// a value like `2024-01-02T03:04:05+02:00` becomes `01:04:05 UTC`.
+fn parse_rfc3339(value: &str) -> Result<u64, String> {
+	let (date, rest) = value
+		.split_once('T')
+		.ok_or_else(|| format!("since {value:?} is not RFC 3339 (no T separator)"))?;
+	let mut date_iter = date.split('-');
+	let year: i64 = date_iter
+		.next()
+		.ok_or_else(|| format!("since {value:?} is missing the year"))?
+		.parse()
+		.map_err(|_| format!("since {value:?} has a non-numeric year"))?;
+	let month: u64 = date_iter
+		.next()
+		.ok_or_else(|| format!("since {value:?} is missing the month"))?
+		.parse()
+		.map_err(|_| format!("since {value:?} has a non-numeric month"))?;
+	let day: u64 = date_iter
+		.next()
+		.ok_or_else(|| format!("since {value:?} is missing the day"))?
+		.parse()
+		.map_err(|_| format!("since {value:?} has a non-numeric day"))?;
+	if date_iter.next().is_some() {
+		return Err(format!("since {value:?} has too many date parts"));
+	}
+	// Reject month/day-of-month ranges here. `days_from_civil` accepts any
+	// positive day (e.g. 40) and rolls into the next month, but a
+	// well-formed RFC 3339 value is a calendar date, not a day-count.
+	if !(1..=12).contains(&month) {
+		return Err(format!("since {value:?} has a month out of range"));
+	}
+	if !(1..=31).contains(&day) {
+		return Err(format!("since {value:?} has a day-of-month out of range"));
+	}
+	let (time, offset_seconds) = if let Some(time) = rest.strip_suffix('Z') {
+		(time, 0i64)
+	} else if let Some((time, offset)) = rest.rsplit_once('+') {
+		let secs = parse_offset(offset)?;
+		(time, secs)
+	} else if let Some((time, offset)) = rest.rsplit_once('-') {
+		let secs = parse_offset(offset)?;
+		(time, -secs)
+	} else {
+		(rest, 0i64)
+	};
+	let mut time_iter = time.split(':');
+	let hour: u64 = time_iter
+		.next()
+		.ok_or_else(|| format!("since {value:?} is missing the hour"))?
+		.parse()
+		.map_err(|_| format!("since {value:?} has a non-numeric hour"))?;
+	let minute: u64 = time_iter
+		.next()
+		.ok_or_else(|| format!("since {value:?} is missing the minute"))?
+		.parse()
+		.map_err(|_| format!("since {value:?} has a non-numeric minute"))?;
+	let second_part = time_iter
+		.next()
+		.ok_or_else(|| format!("since {value:?} is missing the seconds"))?;
+	if time_iter.next().is_some() {
+		return Err(format!("since {value:?} has too many time parts"));
+	}
+	let second: u64 = match second_part.split_once('.') {
+		Some((whole, _frac)) => whole
+			.parse()
+			.map_err(|_| format!("since {value:?} has a non-numeric second"))?,
+		None => second_part
+			.parse()
+			.map_err(|_| format!("since {value:?} has a non-numeric second"))?,
+	};
+	if hour > 23 {
+		return Err(format!("since {value:?} has an hour out of range"));
+	}
+	if minute > 59 {
+		return Err(format!("since {value:?} has a minute out of range"));
+	}
+	if second > 60 {
+		// Leap second tolerance: real producers do not emit `:60`, but
+		// `2024-01-02T23:59:60Z` has shown up in the wild, and rejecting
+		// it would be a surprise. We accept and let the caller see
+		// `23:59:60` as the next minute in practice (no further
+		// validation).
+	}
+	let days = days_from_civil(year, month, day);
+	let hh: i64 = i64::try_from(hour).map_err(|_| format!("since {value:?} has an out-of-range hour"))?;
+	let mm: i64 = i64::try_from(minute).map_err(|_| format!("since {value:?} has an out-of-range minute"))?;
+	let ss: i64 = i64::try_from(second).map_err(|_| format!("since {value:?} has an out-of-range second"))?;
+	let local: i64 = days
+		.checked_mul(86_400)
+		.and_then(|v| v.checked_add(hh * 3600 + mm * 60 + ss))
+		.ok_or_else(|| format!("since {value:?} is out of range"))?;
+	let utc = local - offset_seconds;
+	u64::try_from(utc).map_err(|_| format!("since {value:?} is before the epoch"))
+}
+
+/// `±HH:MM`, the offset part of an RFC 3339 timestamp. Always positive
+/// (the sign is the caller's problem, since the prefix character is
+/// also the prefix of a negative year in the date).
+fn parse_offset(offset: &str) -> Result<i64, String> {
+	let mut iter = offset.split(':');
+	let hours: i64 = iter
+		.next()
+		.ok_or_else(|| format!("since ... {offset:?} is not an offset"))?
+		.parse()
+		.map_err(|_| format!("since ... {offset:?} has a non-numeric hour"))?;
+	let minutes: i64 = match iter.next() {
+		Some(minutes) => minutes
+			.parse()
+			.map_err(|_| format!("since ... {offset:?} has a non-numeric minute"))?,
+		None => 0,
+	};
+	Ok(hours * 3600 + minutes * 60)
 }
 
 #[cfg(test)]

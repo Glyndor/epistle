@@ -257,6 +257,88 @@ fn header_values_extracts_a_message_id_for_the_webhook() {
 	assert_eq!(header_values(&data, "message-id"), vec!["<abc@elsewhere.example>"]);
 }
 
+#[test]
+fn list_streams_records_newest_day_first_and_respects_the_limit() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let log = DeliveryLog::open(dir.path(), 30);
+	for (day, count) in [(1_700_000_000u64, 3u32), (1_700_086_400, 2), (1_700_172_800, 1)] {
+		for offset in 0..count {
+			log.append(&sample_record(
+				day + u64::from(offset),
+				&format!("r{day}-{offset}@elsewhere.example"),
+				DeliveryOutcome::Delivered,
+			))
+			.expect("append");
+		}
+	}
+	let all = log.list(None, |_| true).expect("list");
+	assert_eq!(all.len(), 6, "every record across the three day files");
+	// Newest day first; oldest day last.
+	assert!(all[0].recipient.starts_with("r1700172800"));
+	assert!(all[5].recipient.starts_with("r1700000000"));
+
+	let one = log.list(Some(1), |_| true).expect("list with cap");
+	assert_eq!(one.len(), 1, "the cap stops the scan after the first record");
+	assert!(one[0].recipient.starts_with("r1700172800"));
+}
+
+#[test]
+fn list_filter_drops_records_that_do_not_match() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let log = DeliveryLog::open(dir.path(), 30);
+	for (i, recipient) in ["a", "b", "a", "c"].iter().enumerate() {
+		log.append(&sample_record(
+			1_700_000_000 + i as u64,
+			&format!("{recipient}@elsewhere.example"),
+			DeliveryOutcome::Delivered,
+		))
+		.expect("append");
+	}
+	let only_a = log
+		.list(None, |record| record.recipient.starts_with("a@"))
+		.expect("list");
+	assert_eq!(only_a.len(), 2);
+	assert!(only_a.iter().all(|record| record.recipient.starts_with("a@")));
+}
+
+#[test]
+fn list_returns_empty_when_the_log_directory_is_absent() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let log = DeliveryLog::open(dir.path(), 30);
+	let records = log.list(None, |_| true).expect("list");
+	assert!(records.is_empty());
+}
+
+#[test]
+fn parse_since_accepts_durations_and_rfc3339_and_rejects_garbage() {
+	let now = 1_700_000_000;
+	assert_eq!(parse_since("", now).expect("empty"), None);
+	assert_eq!(
+		parse_since("24h", now).expect("24h"),
+		Some(now - 24 * 3600)
+	);
+	assert_eq!(parse_since("7d", now).expect("7d"), Some(now - 7 * 86_400));
+	assert_eq!(parse_since("30m", now).expect("30m"), Some(now - 30 * 60));
+	assert_eq!(parse_since("5s", now).expect("5s"), Some(now - 5));
+	// 2024-01-02T03:04:05Z = 1704164645 epoch seconds
+	assert_eq!(
+		parse_since("2024-01-02T03:04:05Z", now).expect("rfc3339"),
+		Some(1_704_164_645)
+	);
+	// `+02:00` offset: 03:04:05 local is 01:04:05 UTC.
+	assert_eq!(
+		parse_since("2024-01-02T03:04:05+02:00", now).expect("offset"),
+		Some(1_704_157_445)
+	);
+	// Negative offset: 03:04:05-05:00 is 08:04:05 UTC.
+	assert_eq!(
+		parse_since("2024-01-02T03:04:05-05:00", now).expect("negative offset"),
+		Some(1_704_182_645)
+	);
+	assert!(parse_since("not-a-time", now).is_err());
+	assert!(parse_since("2024-13-40T99:99:99Z", now).is_err());
+}
+
 fn log_root(data_dir: &Path) -> std::path::PathBuf {
 	data_dir.join("deliverylog")
 }
