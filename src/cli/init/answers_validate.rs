@@ -565,6 +565,9 @@ pub(crate) fn validate(answers: &Answers) -> Result<Vec<Warning>, Vec<Invalid>> 
 	{
 		errors.push(Invalid::FirstAccount(why));
 	}
+	for (field, reason) in crate::cli::init::resources::problems(&answers.resources) {
+		errors.push(Invalid::Resources { field, reason });
+	}
 
 	if errors.is_empty() {
 		Ok(warnings)

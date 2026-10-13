@@ -64,6 +64,7 @@ pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	}
 }
 

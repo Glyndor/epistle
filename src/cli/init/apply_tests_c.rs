@@ -29,6 +29,7 @@ fn answers_minimal() -> Answers {
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	}
 }
 
@@ -192,6 +193,7 @@ fn apply_fails_when_config_path_has_no_parent() {
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	};
 	let outcome = apply(&answers);
 	let err = outcome
@@ -237,6 +239,7 @@ fn answers_with_dns_and_extra_services() -> Answers {
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	}
 }
 

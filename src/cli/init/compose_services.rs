@@ -41,6 +41,10 @@ pub(super) struct ComposeService {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	sysctls: Option<BTreeMap<String, String>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	mem_limit: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pids_limit: Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	secrets: Option<Vec<SecretMount>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	depends_on: Option<BTreeMap<String, DependsOn>>,
@@ -49,6 +53,20 @@ pub(super) struct ComposeService {
 }
 
 impl ComposeService {
+	/// Apply the memory and process limits of `name` from
+	/// [`super::super::resources::limits`].
+	pub(super) fn limited(
+		mut self,
+		name: &str,
+		overrides: &BTreeMap<String, super::super::resources::ServiceResources>,
+	) -> Self {
+		if let Some((memory, pids)) = super::super::resources::limits(overrides, name) {
+			self.mem_limit = Some(memory);
+			self.pids_limit = Some(pids);
+		}
+		self
+	}
+
 	/// Build the `mail` service. The default mode (answers
 	/// leave `image` unset) mounts the host's `/usr/bin/epistle`
 	/// bind-mounted read-only into the digest-pinned
@@ -143,6 +161,8 @@ impl ComposeService {
 			// the listeners that ship below 1024. The setting
 			// is namespaced to the container's netns and does
 			// not touch the host.
+			mem_limit: None,
+			pids_limit: None,
 			sysctls: Some({
 				let mut map = BTreeMap::new();
 				map.insert(
@@ -261,6 +281,8 @@ impl ComposeService {
 			cap_add: None,
 			read_only: Some(true),
 			tmpfs: Some(vec!["/tmp".to_string()]),
+			mem_limit: None,
+			pids_limit: None,
 			sysctls: None,
 			secrets: Some(vec![SecretMount {
 				source: "epistle_db_password".to_string(),
@@ -334,6 +356,8 @@ impl ComposeService {
 			cap_add: None,
 			read_only: Some(true),
 			tmpfs: None,
+			mem_limit: None,
+			pids_limit: None,
 			sysctls: None,
 			secrets: None,
 			depends_on: None,

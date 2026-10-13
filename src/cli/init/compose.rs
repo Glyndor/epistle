@@ -518,6 +518,12 @@ pub(super) struct ComposeFile {
 	name: String,
 	#[serde(rename = "x-epistle-managed-image")]
 	managed_image: bool,
+	/// The limits the answers set, which `stack update` reads back.
+	#[serde(
+		rename = "x-epistle-resources",
+		skip_serializing_if = "BTreeMap::is_empty"
+	)]
+	resources: BTreeMap<String, super::resources::ServiceResources>,
 	services: BTreeMap<String, ComposeService>,
 	secrets: BTreeMap<String, TopLevelSecret>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -555,9 +561,17 @@ impl ComposeFile {
 			volumes.insert("epistle-pgdata".to_string(), TopLevelVolume {});
 			volumes.insert("epistle-pgsock".to_string(), TopLevelVolume {});
 		}
+		let services = services
+			.into_iter()
+			.map(|(name, service)| {
+				let service = service.limited(&name, &answers.resources);
+				(name, service)
+			})
+			.collect();
 		Self {
 			name: "epistle".to_string(),
 			managed_image: answers.image.is_none(),
+			resources: answers.resources.clone(),
 			services,
 			secrets,
 			volumes,
@@ -625,6 +639,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 			database: false,
 		},
 		image: None,
+		resources: Default::default(),
 	}
 }
 
@@ -744,3 +759,7 @@ mod tests_capabilities;
 #[cfg(test)]
 #[path = "compose_tests_read_only.rs"]
 mod tests_read_only;
+
+#[cfg(test)]
+#[path = "compose_tests_resources.rs"]
+mod tests_resources;

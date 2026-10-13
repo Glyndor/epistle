@@ -59,6 +59,12 @@ pub(crate) fn regenerate(
 			.ok_or("compose.yaml names no image for `mail`")?;
 		Some(image.to_string())
 	};
+	let resources = match document.get("x-epistle-resources") {
+		Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+			format!("compose.yaml has an x-epistle-resources epistle init did not write: {error}")
+		})?,
+		None => Default::default(),
+	};
 	let config_dir = config_path.parent().unwrap_or(Path::new("/")).to_path_buf();
 	let answers = Answers {
 		mode: Mode::Manual,
@@ -81,6 +87,7 @@ pub(crate) fn regenerate(
 		},
 		image,
 		first_account: None,
+		resources,
 	};
 	let composed = ComposeFile::build(&answers, published_ports_for_listeners(listeners), database);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;

@@ -29,6 +29,7 @@ fn answers_minimal() -> Answers {
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	}
 }
 

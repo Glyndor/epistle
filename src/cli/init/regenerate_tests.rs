@@ -113,3 +113,33 @@ fn a_running_postgres_major_is_kept_and_the_upgrade_is_named() {
 		"a new digest on the same major is taken"
 	);
 }
+
+#[test]
+fn an_answered_resource_limit_survives() {
+	let mut answers = stack_answers();
+	answers.resources.insert(
+		"mail".to_string(),
+		crate::cli::init::resources::ServiceResources {
+			memory: None,
+			pids: Some(4096),
+		},
+	);
+	let (written, again) = round_trip(&answers);
+	assert_eq!(again, written);
+	assert!(again.contains("\"pids_limit\": 4096"));
+}
+
+#[test]
+fn a_compose_file_from_before_the_limits_gets_the_defaults() {
+	let answers = stack_answers();
+	let written = render_for(&answers, true).expect("render");
+	let mut old: serde_json::Value = serde_json::from_str(&written).unwrap();
+	for service in old["services"].as_object_mut().unwrap().values_mut() {
+		let service = service.as_object_mut().unwrap();
+		service.remove("mem_limit");
+		service.remove("pids_limit");
+	}
+	let listeners = listeners_to_write(&answers).expect("listeners");
+	let again = regenerate(&answers.data_dir, &listeners, &old.to_string()).expect("regenerate");
+	assert_eq!(again.text, written);
+}

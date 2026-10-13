@@ -17,6 +17,7 @@ pub(crate) mod images;
 mod plan;
 mod ptr;
 mod regenerate;
+pub(crate) mod resources;
 
 pub use answers::Answers;
 pub use compose::compose_file_path;
