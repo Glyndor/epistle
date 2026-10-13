@@ -53,6 +53,7 @@ mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;
 mod serve_tasks;
+mod serve_tasks_delivery;
 mod serve_tls;
 mod service;
 mod service_edit;

@@ -1,8 +1,8 @@
 //! CLI argument parsing and command tests.
 
-use std::collections::BTreeMap;
 use super::*;
 use clap::CommandFactory;
+use std::collections::BTreeMap;
 use std::io::Write;
 
 #[test]
@@ -344,27 +344,35 @@ fn queue_list_reports_and_handles_edge_cases() {
 
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "bob@example.org".into(),
-			recipients: vec!["carol@elsewhere.example".into()],
-			data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		}, None, &BTreeMap::new())
+		.store(
+			&AcceptedMessage {
+				reverse_path: "bob@example.org".into(),
+				recipients: vec!["carol@elsewhere.example".into()],
+				data: b"Subject: x\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	// A bounce uses the null reverse-path, shown as <>.
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: String::new(),
-			recipients: vec!["dave@elsewhere.example".into()],
-			data: b"x\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		}, None, &BTreeMap::new())
+		.store(
+			&AcceptedMessage {
+				reverse_path: String::new(),
+				recipients: vec!["dave@elsewhere.example".into()],
+				data: b"x\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	// A corrupt entry is listed but skipped on load.
 	std::fs::write(

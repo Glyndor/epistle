@@ -19,7 +19,9 @@ fn sample_message() -> AcceptedMessage {
 fn open_with_entry() -> (tempfile::TempDir, Arc<FsSpool>, Uuid) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("open spool"));
-	let id = spool.store(&sample_message(), None, &BTreeMap::new()).expect("store");
+	let id = spool
+		.store(&sample_message(), None, &BTreeMap::new())
+		.expect("store");
 	(dir, spool, id)
 }
 
@@ -54,7 +56,10 @@ fn an_envelope_round_trips_account_and_extra() {
 		})
 		.expect("update");
 	assert_eq!(written.account.as_deref(), Some("alice@example.org"));
-	assert_eq!(written.extra.get("campaign").map(String::as_str), Some("winter-2026"));
+	assert_eq!(
+		written.extra.get("campaign").map(String::as_str),
+		Some("winter-2026")
+	);
 
 	let on_disk = spool.load_envelope(id).expect("load");
 	assert_eq!(on_disk.account.as_deref(), Some("alice@example.org"));

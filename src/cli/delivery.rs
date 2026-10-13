@@ -12,9 +12,7 @@ use serde::Serialize;
 
 use super::style;
 use super::term::table::Table;
-use crate::storage::{
-	DeliveryLog, DeliveryOutcome, DeliveryRecord, DEFAULT_DELIVERY_LOG_DAYS,
-};
+use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 /// `epistle delivery list` arguments. Everything lives here so the
 /// `Command` enum in `cli/mod.rs` stays under the per-file line
@@ -79,7 +77,12 @@ pub(super) fn run(
 		));
 		return ExitCode::FAILURE;
 	}
-	let outcome_filter = match filters.outcome.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+	let outcome_filter = match filters
+		.outcome
+		.as_deref()
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+	{
 		Some(value) => match DeliveryOutcome::parse(value) {
 			Some(outcome) => Some(outcome),
 			None => {
@@ -92,7 +95,12 @@ pub(super) fn run(
 		},
 		None => None,
 	};
-	let since_epoch = match filters.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+	let since_epoch = match filters
+		.since
+		.as_deref()
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+	{
 		Some(value) => match crate::storage::delivery_log::parse_since(value, now) {
 			Ok(Some(epoch)) => Some(epoch),
 			Ok(None) => None,
@@ -103,8 +111,16 @@ pub(super) fn run(
 		},
 		None => None,
 	};
-	let recipient_filter = filters.recipient.as_deref().map(str::trim).filter(|s| !s.is_empty());
-	let account_filter = filters.account.as_deref().map(str::trim).filter(|s| !s.is_empty());
+	let recipient_filter = filters
+		.recipient
+		.as_deref()
+		.map(str::trim)
+		.filter(|s| !s.is_empty());
+	let account_filter = filters
+		.account
+		.as_deref()
+		.map(str::trim)
+		.filter(|s| !s.is_empty());
 
 	let outcome_ref = outcome_filter;
 	let since_ref = since_epoch;
@@ -135,7 +151,7 @@ pub(super) fn run(
 		Err(error) => {
 			style::error(format_args!("reading delivery log: {error}"));
 			return ExitCode::FAILURE;
-		},
+		}
 	};
 	if json {
 		print_json(&records, out)
@@ -196,11 +212,11 @@ fn print_table(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
 	let mut table = Table::new(&["TIME", "OUTCOME", "SPOOL", "FROM", "RECIPIENT"]);
 	for record in records {
 		table.push(vec![
-			record.time.to_string().into(),
-			record.outcome.as_str().to_string().into(),
-			record.spool_id.to_string().into(),
-			record.from.clone().into(),
-			record.recipient.clone().into(),
+			record.time.to_string(),
+			record.outcome.as_str().to_string(),
+			record.spool_id.to_string(),
+			record.from.clone(),
+			record.recipient.clone(),
 		]);
 	}
 	if let Some(decor) = super::term::stdout(false) {

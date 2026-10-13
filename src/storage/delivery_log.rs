@@ -11,14 +11,14 @@
 //! log into memory.
 //!
 //! Files are written append-only with one `write` per record and created
-//! `0600` from the start, the same way [`crate::storage::write_secret`]
+//! `0600` from the start, the same way `crate::storage::write_secret`
 //! creates any other per-recipient metadata file. The file name is always
 //! `YYYY-MM-DD.jsonl`, derived from the wall clock date the record was
 //! produced, so no caller input ever reaches the path.
 //!
 //! The sweep runs alongside the other periodic sweeps (the archive
 //! retention sweep in `serve_tasks`) and removes files whose name is
-//! older than `[storage] delivery_log_days`. `0` (the default) disables
+//! older than `[storage] delivery_log_days` (30 by default). `0` disables
 //! the log entirely: no directory is created and no records are written.
 
 use std::collections::BTreeMap;
@@ -145,8 +145,7 @@ impl DeliveryLog {
 	}
 
 	/// Whether the log is configured to keep any record. `0` retention
-	/// disables it; the operator opted in by setting
-	/// `[storage] delivery_log_days` to a positive value.
+	/// disables it.
 	pub fn is_enabled(&self) -> bool {
 		self.retention_days > 0
 	}
@@ -227,10 +226,10 @@ impl DeliveryLog {
 			let Some(date) = parse_day_filename(&name) else {
 				continue;
 			};
-			if days_between(date, today) > self.retention_days {
-				if fs::remove_file(entry.path()).is_ok() {
-					removed += 1;
-				}
+			if days_between(date, today) > self.retention_days
+				&& fs::remove_file(entry.path()).is_ok()
+			{
+				removed += 1;
 			}
 		}
 		Ok(removed)
@@ -259,7 +258,11 @@ impl DeliveryLog {
 	/// then the next day". A caller that needs a strict per-record
 	/// `time` order can sort the result itself; the on-disk encoding
 	/// already has the timestamp.
-	pub fn list<F>(&self, limit: Option<usize>, mut filter: F) -> std::io::Result<Vec<DeliveryRecord>>
+	pub fn list<F>(
+		&self,
+		limit: Option<usize>,
+		mut filter: F,
+	) -> std::io::Result<Vec<DeliveryRecord>>
 	where
 		F: FnMut(&DeliveryRecord) -> bool,
 	{
@@ -373,9 +376,18 @@ impl std::str::FromStr for Day {
 		if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
 			return Err(());
 		}
-		let y = std::str::from_utf8(&bytes[..4]).map_err(|_| ())?.parse::<u32>().map_err(|_| ())?;
-		let m = std::str::from_utf8(&bytes[5..7]).map_err(|_| ())?.parse::<u32>().map_err(|_| ())?;
-		let d = std::str::from_utf8(&bytes[8..10]).map_err(|_| ())?.parse::<u32>().map_err(|_| ())?;
+		let y = std::str::from_utf8(&bytes[..4])
+			.map_err(|_| ())?
+			.parse::<u32>()
+			.map_err(|_| ())?;
+		let m = std::str::from_utf8(&bytes[5..7])
+			.map_err(|_| ())?
+			.parse::<u32>()
+			.map_err(|_| ())?;
+		let d = std::str::from_utf8(&bytes[8..10])
+			.map_err(|_| ())?
+			.parse::<u32>()
+			.map_err(|_| ())?;
 		if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
 			return Err(());
 		}
@@ -406,7 +418,8 @@ fn days_from_civil(y: i64, m: u64, d: u64) -> i64 {
 /// look like a record file; a stray text file in the directory is left
 /// alone by the sweep.
 fn parse_day_filename(name: &str) -> Option<Day> {
-	name.strip_suffix(".jsonl").and_then(|stem| stem.parse().ok())
+	name.strip_suffix(".jsonl")
+		.and_then(|stem| stem.parse().ok())
 }
 
 /// Whole days from `earlier` to `later`. Saturates to `0` when the order
@@ -436,16 +449,28 @@ pub fn parse_since(value: &str, now_epoch: u64) -> Result<Option<u64>, String> {
 	if trimmed.is_empty() {
 		return Ok(None);
 	}
-	if let Some(rest) = trimmed.strip_suffix('h').or_else(|| trimmed.strip_suffix('H')) {
+	if let Some(rest) = trimmed
+		.strip_suffix('h')
+		.or_else(|| trimmed.strip_suffix('H'))
+	{
 		return parse_duration_secs(rest, 3600, "h", now_epoch);
 	}
-	if let Some(rest) = trimmed.strip_suffix('d').or_else(|| trimmed.strip_suffix('D')) {
+	if let Some(rest) = trimmed
+		.strip_suffix('d')
+		.or_else(|| trimmed.strip_suffix('D'))
+	{
 		return parse_duration_secs(rest, 86_400, "d", now_epoch);
 	}
-	if let Some(rest) = trimmed.strip_suffix('m').or_else(|| trimmed.strip_suffix('M')) {
+	if let Some(rest) = trimmed
+		.strip_suffix('m')
+		.or_else(|| trimmed.strip_suffix('M'))
+	{
 		return parse_duration_secs(rest, 60, "m", now_epoch);
 	}
-	if let Some(rest) = trimmed.strip_suffix('s').or_else(|| trimmed.strip_suffix('S')) {
+	if let Some(rest) = trimmed
+		.strip_suffix('s')
+		.or_else(|| trimmed.strip_suffix('S'))
+	{
 		return parse_duration_secs(rest, 1, "s", now_epoch);
 	}
 	parse_rfc3339(trimmed).map(Some)
@@ -460,7 +485,9 @@ fn parse_duration_secs(
 	let amount: u64 = digits
 		.parse()
 		.map_err(|_| format!("duration {digits}{unit_label} is not a number"))?;
-	Ok(Some(now_epoch.saturating_sub(amount.saturating_mul(unit_secs))))
+	Ok(Some(
+		now_epoch.saturating_sub(amount.saturating_mul(unit_secs)),
+	))
 }
 
 /// Hand-rolled RFC 3339 parser: `YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]`.
@@ -551,9 +578,12 @@ fn parse_rfc3339(value: &str) -> Result<u64, String> {
 		// validation).
 	}
 	let days = days_from_civil(year, month, day);
-	let hh: i64 = i64::try_from(hour).map_err(|_| format!("since {value:?} has an out-of-range hour"))?;
-	let mm: i64 = i64::try_from(minute).map_err(|_| format!("since {value:?} has an out-of-range minute"))?;
-	let ss: i64 = i64::try_from(second).map_err(|_| format!("since {value:?} has an out-of-range second"))?;
+	let hh: i64 =
+		i64::try_from(hour).map_err(|_| format!("since {value:?} has an out-of-range hour"))?;
+	let mm: i64 =
+		i64::try_from(minute).map_err(|_| format!("since {value:?} has an out-of-range minute"))?;
+	let ss: i64 =
+		i64::try_from(second).map_err(|_| format!("since {value:?} has an out-of-range second"))?;
 	let local: i64 = days
 		.checked_mul(86_400)
 		.and_then(|v| v.checked_add(hh * 3600 + mm * 60 + ss))

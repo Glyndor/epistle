@@ -30,33 +30,32 @@ impl Worker {
 	/// passes it through unchanged.
 	fn log_outcome(
 		&self,
-		envelope_id: uuid::Uuid,
-		envelope_account: Option<&str>,
-		envelope_from: &str,
+		envelope: &crate::storage::Envelope,
 		recipient: &str,
 		outcome: DeliveryOutcome,
 		remote: Option<&str>,
 		reply: Option<&str>,
 		attempt: u32,
-		extra: &BTreeMap<String, String>,
 	) {
 		let Some(log) = &self.delivery_log else {
 			return;
 		};
 		let record = DeliveryRecord {
 			time: self.now_epoch(),
-			spool_id: envelope_id,
-			account: envelope_account.map(str::to_string),
-			from: envelope_from.to_string(),
+			spool_id: envelope.id,
+			account: envelope.account.clone(),
+			from: envelope.reverse_path.clone(),
 			recipient: recipient.to_string(),
 			outcome,
-			remote: remote.filter(|value| !value.is_empty() && *value != "-").map(str::to_string),
+			remote: remote
+				.filter(|value| !value.is_empty() && *value != "-")
+				.map(str::to_string),
 			reply: reply.map(str::to_string),
 			attempt,
-			extra: extra.clone(),
+			extra: envelope.extra.clone(),
 		};
 		if let Err(error) = log.append(&record) {
-			tracing::warn!(%envelope_id, %error, "delivery log write failed");
+			tracing::warn!(id = %envelope.id, %error, "delivery log write failed");
 		}
 	}
 
@@ -106,15 +105,12 @@ impl Worker {
 			})?;
 			for recipient in &skipped {
 				self.log_outcome(
-					id,
-					entry.envelope.account.as_deref(),
-					&entry.envelope.reverse_path,
+					&entry.envelope,
 					recipient,
 					DeliveryOutcome::Suppressed,
 					None,
 					Some("recipient is on the suppression list"),
 					0,
-					&entry.envelope.extra,
 				);
 				self.notify_suppressed(id, recipient, &entry.envelope.extra);
 			}
@@ -137,15 +133,12 @@ impl Worker {
 				Ok(()) => {
 					tracing::debug!(%id, %recipient, remote, "delivered");
 					self.log_outcome(
-						id,
-						entry.envelope.account.as_deref(),
-						&entry.envelope.reverse_path,
+						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Delivered,
 						Some(remote),
 						Some("250 OK"),
 						0,
-						&entry.envelope.extra,
 					);
 					self.notify_delivered(
 						id,
@@ -160,15 +153,12 @@ impl Worker {
 					let attempts = entry.envelope.recipient_state(recipient).attempts;
 					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
 					self.log_outcome(
-						id,
-						entry.envelope.account.as_deref(),
-						&entry.envelope.reverse_path,
+						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Deferred,
 						Some(remote),
 						Some(&Self::bounded_reply(reason)),
 						attempts,
-						&entry.envelope.extra,
 					);
 					self.notify_delayed(
 						id,
@@ -184,15 +174,12 @@ impl Worker {
 					let class = verdict.class.label();
 					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
 					self.log_outcome(
-						id,
-						entry.envelope.account.as_deref(),
-						&entry.envelope.reverse_path,
+						&entry.envelope,
 						recipient,
 						DeliveryOutcome::Failed,
 						Some(remote),
 						Some(&Self::bounded_reply(reason)),
 						entry.envelope.recipient_state(recipient).attempts,
-						&entry.envelope.extra,
 					);
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
@@ -323,12 +310,7 @@ impl Worker {
 	}
 
 	/// Fire a `Suppressed` webhook for one recipient.
-	fn notify_suppressed(
-		&self,
-		id: uuid::Uuid,
-		recipient: &str,
-		extra: &BTreeMap<String, String>,
-	) {
+	fn notify_suppressed(&self, id: uuid::Uuid, recipient: &str, extra: &BTreeMap<String, String>) {
 		let Some(webhook) = &self.webhook else {
 			return;
 		};
@@ -363,23 +345,14 @@ impl Worker {
 			let remote = state.remote.as_deref().unwrap_or("-");
 			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
 			self.log_outcome(
-				id,
-				envelope.account.as_deref(),
-				&envelope.reverse_path,
+				&envelope,
 				recipient,
 				DeliveryOutcome::Failed,
 				state.remote.as_deref(),
 				Some(&Self::bounded_reply(reason)),
 				state.attempts,
-				&envelope.extra,
 			);
-			self.notify_failed(
-				id,
-				recipient,
-				reason,
-				state.remote.clone(),
-				&envelope.extra,
-			);
+			self.notify_failed(id, recipient, reason, state.remote.clone(), &envelope.extra);
 		}
 		Ok(())
 	}

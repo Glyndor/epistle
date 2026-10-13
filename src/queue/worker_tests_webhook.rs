@@ -195,7 +195,10 @@ async fn delayed_fires_once_across_several_retries() {
 	tokio::time::sleep(Duration::from_millis(50)).await;
 	let bodies = captured.lock().expect("lock").clone();
 	assert_eq!(
-		bodies.iter().filter(|body| body.contains("\"event\":\"delayed\"")).count(),
+		bodies
+			.iter()
+			.filter(|body| body.contains("\"event\":\"delayed\""))
+			.count(),
 		1,
 		"exactly one delayed event across all retries: {bodies:?}"
 	);
@@ -233,10 +236,14 @@ async fn a_suppressed_recipient_emits_a_suppressed_webhook() {
 	let suppression = crate::queue::SuppressionList::open(dir.path()).expect("suppression");
 	suppression.suppress("bob@suppressed.example");
 	let webhook = crate::webhook::Webhook::new(&url, None).expect("webhook");
-	let worker = Worker::new(spool, Arc::new(FakeRemote::default()), "mail.sender.example")
-		.with_suppression(suppression)
-		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
-		.with_webhook(Arc::new(webhook));
+	let worker = Worker::new(
+		spool,
+		Arc::new(FakeRemote::default()),
+		"mail.sender.example",
+	)
+	.with_suppression(suppression)
+	.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
+	.with_webhook(Arc::new(webhook));
 	worker.pass().await.expect("pass");
 
 	wait_for(|| !captured.lock().expect("lock").is_empty()).await;
@@ -249,5 +256,8 @@ async fn a_suppressed_recipient_emits_a_suppressed_webhook() {
 		.clone();
 	let event: serde_json::Value = serde_json::from_str(&body).expect("json");
 	assert_eq!(event["recipient"], "bob@suppressed.example");
-	assert!(event.get("extra").is_none(), "empty extra must not serialise");
+	assert!(
+		event.get("extra").is_none(),
+		"empty extra must not serialise"
+	);
 }

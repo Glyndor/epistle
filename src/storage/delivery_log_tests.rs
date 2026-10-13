@@ -52,10 +52,18 @@ fn append_writes_one_json_line_per_record_into_the_dated_file() {
 fn append_creates_files_with_owner_only_permissions() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let log = DeliveryLog::open(dir.path(), 30);
-	log.append(&sample_record(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered))
-		.expect("append");
+	log.append(&sample_record(
+		1_700_000_000,
+		"bob@elsewhere.example",
+		DeliveryOutcome::Delivered,
+	))
+	.expect("append");
 	let path = log_root(dir.path()).join("2023-11-14.jsonl");
-	let mode = std::fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+	let mode = std::fs::metadata(&path)
+		.expect("metadata")
+		.permissions()
+		.mode()
+		& 0o777;
 	assert_eq!(mode, 0o600, "the log file must be owner-only: {mode:#o}");
 }
 
@@ -63,7 +71,11 @@ fn append_creates_files_with_owner_only_permissions() {
 fn append_keeps_reply_bounded_to_200_bytes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let log = DeliveryLog::open(dir.path(), 30);
-	let mut record = sample_record(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Failed);
+	let mut record = sample_record(
+		1_700_000_000,
+		"bob@elsewhere.example",
+		DeliveryOutcome::Failed,
+	);
 	let long_reply = "x".repeat(2_000);
 	record.reply = Some(truncate_reply(&long_reply, 200));
 	log.append(&record).expect("append");
@@ -92,9 +104,16 @@ fn truncate_reply(value: &str, max: usize) -> String {
 fn append_is_a_noop_when_retention_is_zero() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let log = DeliveryLog::open(dir.path(), 0);
-	log.append(&sample_record(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered))
-		.expect("append");
-	assert!(!log_root(dir.path()).exists(), "the directory must not be created when the log is off");
+	log.append(&sample_record(
+		1_700_000_000,
+		"bob@elsewhere.example",
+		DeliveryOutcome::Delivered,
+	))
+	.expect("append");
+	assert!(
+		!log_root(dir.path()).exists(),
+		"the directory must not be created when the log is off"
+	);
 }
 
 #[test]
@@ -111,13 +130,19 @@ fn sweep_removes_only_files_older_than_the_window() {
 		(1_700_518_400, "2023-11-20.jsonl"),
 		(1_700_604_800, "2023-11-21.jsonl"),
 	] {
-		log.append(&sample_record(day, "bob@elsewhere.example", DeliveryOutcome::Delivered))
-			.expect("append");
+		log.append(&sample_record(
+			day,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		))
+		.expect("append");
 		// The file name follows the record's date. Rename if the timestamp
 		// in the record differs from the call site so the sweep's view of
 		// the directory matches the test's calendar.
-		let generated = log_root(dir.path())
-			.join(format!("{}.jsonl", crate::storage::delivery_log::Day::from_unix_days((day / 86_400) as i64)));
+		let generated = log_root(dir.path()).join(format!(
+			"{}.jsonl",
+			crate::storage::delivery_log::Day::from_unix_days((day / 86_400) as i64)
+		));
 		let target = log_root(dir.path()).join(name);
 		if generated != target {
 			std::fs::rename(&generated, &target).expect("rename");
@@ -156,15 +181,26 @@ fn sweep_with_zero_retention_clears_the_directory_and_its_files() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let log = DeliveryLog::open(dir.path(), 30);
 	let root = log_root(dir.path());
-	log.append(&sample_record(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered))
-		.expect("append");
-	log.append(&sample_record(1_700_086_400, "carol@elsewhere.example", DeliveryOutcome::Failed))
-		.expect("append");
+	log.append(&sample_record(
+		1_700_000_000,
+		"bob@elsewhere.example",
+		DeliveryOutcome::Delivered,
+	))
+	.expect("append");
+	log.append(&sample_record(
+		1_700_086_400,
+		"carol@elsewhere.example",
+		DeliveryOutcome::Failed,
+	))
+	.expect("append");
 	assert!(root.is_dir(), "writes created the directory");
 	let log_off = DeliveryLog::open(dir.path(), 0);
 	let removed = log_off.sweep(1_700_000_000 + 2 * 86_400).expect("sweep");
 	assert_eq!(removed, 2, "every file leaves when the log is off");
-	assert!(!root.exists(), "flipping the setting off removes the directory");
+	assert!(
+		!root.exists(),
+		"flipping the setting off removes the directory"
+	);
 }
 
 #[test]
@@ -241,9 +277,16 @@ fn an_entry_record_carries_the_message_id_when_present() {
 	// message body is never read at log time. This test pins that
 	// contract: the field is `spool_id` and no `message_id` is
 	// auto-populated from the message body.
-	let record = sample_record(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered);
+	let record = sample_record(
+		1_700_000_000,
+		"bob@elsewhere.example",
+		DeliveryOutcome::Delivered,
+	);
 	let json = serde_json::to_value(&record).expect("value");
-	assert!(json.get("message_id").is_none(), "no body is read for the log");
+	assert!(
+		json.get("message_id").is_none(),
+		"no body is read for the log"
+	);
 	assert!(json.get("spool_id").is_some());
 }
 
@@ -254,14 +297,21 @@ fn header_values_extracts_a_message_id_for_the_webhook() {
 	// body, but the helper used by the webhook does.
 	let data =
 		b"Message-ID: <abc@elsewhere.example>\r\nFrom: alice@example.org\r\n\r\nbody\r\n".to_vec();
-	assert_eq!(header_values(&data, "message-id"), vec!["<abc@elsewhere.example>"]);
+	assert_eq!(
+		header_values(&data, "message-id"),
+		vec!["<abc@elsewhere.example>"]
+	);
 }
 
 #[test]
 fn list_streams_records_newest_day_first_and_respects_the_limit() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let log = DeliveryLog::open(dir.path(), 30);
-	for (day, count) in [(1_700_000_000u64, 3u32), (1_700_086_400, 2), (1_700_172_800, 1)] {
+	for (day, count) in [
+		(1_700_000_000u64, 3u32),
+		(1_700_086_400, 2),
+		(1_700_172_800, 1),
+	] {
 		for offset in 0..count {
 			log.append(&sample_record(
 				day + u64::from(offset),
@@ -278,7 +328,11 @@ fn list_streams_records_newest_day_first_and_respects_the_limit() {
 	assert!(all[5].recipient.starts_with("r1700000000"));
 
 	let one = log.list(Some(1), |_| true).expect("list with cap");
-	assert_eq!(one.len(), 1, "the cap stops the scan after the first record");
+	assert_eq!(
+		one.len(),
+		1,
+		"the cap stops the scan after the first record"
+	);
 	assert!(one[0].recipient.starts_with("r1700172800"));
 }
 
@@ -298,7 +352,11 @@ fn list_filter_drops_records_that_do_not_match() {
 		.list(None, |record| record.recipient.starts_with("a@"))
 		.expect("list");
 	assert_eq!(only_a.len(), 2);
-	assert!(only_a.iter().all(|record| record.recipient.starts_with("a@")));
+	assert!(
+		only_a
+			.iter()
+			.all(|record| record.recipient.starts_with("a@"))
+	);
 }
 
 #[test]
@@ -313,10 +371,7 @@ fn list_returns_empty_when_the_log_directory_is_absent() {
 fn parse_since_accepts_durations_and_rfc3339_and_rejects_garbage() {
 	let now = 1_700_000_000;
 	assert_eq!(parse_since("", now).expect("empty"), None);
-	assert_eq!(
-		parse_since("24h", now).expect("24h"),
-		Some(now - 24 * 3600)
-	);
+	assert_eq!(parse_since("24h", now).expect("24h"), Some(now - 24 * 3600));
 	assert_eq!(parse_since("7d", now).expect("7d"), Some(now - 7 * 86_400));
 	assert_eq!(parse_since("30m", now).expect("30m"), Some(now - 30 * 60));
 	assert_eq!(parse_since("5s", now).expect("5s"), Some(now - 5));

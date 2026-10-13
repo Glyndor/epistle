@@ -60,8 +60,8 @@ pub struct Worker {
 	/// Draws the spread factor of each wait; replaced in tests so the
 	/// schedule is deterministic.
 	jitter: fn() -> f64,
-	/// Per-recipient delivery log. `None` when the operator has not opted
-	/// in (`[storage] delivery_log_days = 0`); the writer is then a no-op
+	/// Per-recipient delivery log. `None` when the operator turned it off
+	/// (`[storage] delivery_log_days = 0`); the writer is then a no-op
 	/// and no records are produced.
 	delivery_log: Option<crate::storage::DeliveryLog>,
 }

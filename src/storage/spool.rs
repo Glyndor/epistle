@@ -206,7 +206,9 @@ impl FsSpool {
 		account: Option<&str>,
 		extra: &BTreeMap<String, String>,
 	) -> std::io::Result<Uuid> {
-		let account = account.filter(|value| !value.is_empty()).map(str::to_string);
+		let account = account
+			.filter(|value| !value.is_empty())
+			.map(str::to_string);
 		let envelope = Envelope {
 			id,
 			reverse_path: message.reverse_path.clone(),
@@ -402,7 +404,9 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 
-		let id = spool.store(&sample_message(), None, &BTreeMap::new()).expect("store");
+		let id = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store");
 		let entry = spool.load(id).expect("load");
 
 		assert_eq!(entry.envelope.id, id);
@@ -420,7 +424,9 @@ mod tests {
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 		let mut message = sample_message();
 		message.require_tls = true;
-		let id = spool.store(&message, None, &BTreeMap::new()).expect("store");
+		let id = spool
+			.store(&message, None, &BTreeMap::new())
+			.expect("store");
 		assert!(spool.load(id).expect("load").envelope.require_tls);
 	}
 
@@ -429,8 +435,12 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 
-		let first = spool.store(&sample_message(), None, &BTreeMap::new()).expect("store first");
-		let second = spool.store(&sample_message(), None, &BTreeMap::new()).expect("store second");
+		let first = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store first");
+		let second = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store second");
 
 		assert_eq!(spool.list().expect("list"), vec![first, second]);
 	}
@@ -440,7 +450,9 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 
-		let id = spool.store(&sample_message(), None, &BTreeMap::new()).expect("store");
+		let id = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store");
 		spool.remove(id).expect("remove");
 
 		assert!(spool.list().expect("list").is_empty());

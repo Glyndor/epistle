@@ -98,15 +98,19 @@ async fn journal_after_one_pass(remote: Remote) -> Vec<serde_json::Value> {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@sender.example".into(),
-			recipients: vec!["bob@remote.example".into()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		}, None, &BTreeMap::new())
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@sender.example".into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	let worker =
 		Worker::new(spool, Arc::new(FakeMx(remote)), "mail.sender.example").with_tlsrpt(dir.path());

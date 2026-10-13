@@ -18,9 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::super::Principal;
 use super::super::state::{ApiState, MatchedAuth};
 use crate::api::error::ApiError;
-use crate::storage::{
-	DeliveryLog, DeliveryOutcome, DeliveryRecord, DEFAULT_DELIVERY_LOG_DAYS,
-};
+use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 /// Hard ceiling on page size: list endpoints are never unbounded.
 const MAX_LIMIT: usize = 100;
@@ -141,9 +139,14 @@ pub async fn list(
 	let account_ref = account_filter.as_deref();
 	let recipient_ref = recipient_filter.as_deref();
 	let records = log
-		.list(Some(limit), |record| match_filters(record, account_ref, recipient_ref, since_ref, outcome_ref))
+		.list(Some(limit), |record| {
+			match_filters(record, account_ref, recipient_ref, since_ref, outcome_ref)
+		})
 		.map_err(|_| ApiError::internal())?;
-	let entries = records.into_iter().map(DeliveryEntry::from_record).collect();
+	let entries = records
+		.into_iter()
+		.map(DeliveryEntry::from_record)
+		.collect();
 	Ok(Json(DeliveryPage { entries }))
 }
 

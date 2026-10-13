@@ -137,15 +137,19 @@ fn queue_list_marks_a_held_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let id = spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@example.org".into(),
-			recipients: vec!["bob@remote.example".into()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		}, None, &BTreeMap::new())
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@example.org".into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	spool
 		.update_envelope(id, |envelope| envelope.hold(1_700_000_000))

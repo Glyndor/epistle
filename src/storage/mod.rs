@@ -30,7 +30,7 @@ pub use blob_backend::{
 pub use correspondents::{CapOutcome, CorrespondentStore, Recorded};
 pub use crypto::{CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64};
 pub use delivery::LocalDelivery;
-pub use delivery_log::{DeliveryLog, DeliveryOutcome, DeliveryRecord, DEFAULT_DELIVERY_LOG_DAYS};
+pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 #[cfg(test)]
 #[path = "crypto_e2e_tests.rs"]

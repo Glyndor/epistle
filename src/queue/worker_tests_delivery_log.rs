@@ -13,9 +13,7 @@ use crate::storage::delivery_log::DeliveryLog;
 
 fn spool_with(dir: &std::path::Path, message: &AcceptedMessage) -> FsSpool {
 	let spool = FsSpool::open(dir).expect("spool");
-	spool
-		.store(message, None, &BTreeMap::new())
-		.expect("store");
+	spool.store(message, None, &BTreeMap::new()).expect("store");
 	spool
 }
 
@@ -71,7 +69,10 @@ async fn a_delivered_recipient_writes_a_record_with_the_remote_host() {
 	let records = load_records(dir.path());
 	assert_eq!(records.len(), 1);
 	assert_eq!(records[0].recipient, "bob@remote.example");
-	assert_eq!(records[0].outcome, crate::storage::DeliveryOutcome::Delivered);
+	assert_eq!(
+		records[0].outcome,
+		crate::storage::DeliveryOutcome::Delivered
+	);
 	assert_eq!(records[0].remote.as_deref(), Some("mx.remote.example"));
 	assert_eq!(records[0].reply.as_deref(), Some("250 OK"));
 	assert_eq!(records[0].from, "alice@sender.example");
@@ -104,7 +105,10 @@ async fn a_transient_failure_writes_a_deferred_record_with_the_reply() {
 
 	let records = load_records(dir.path());
 	assert_eq!(records.len(), 1);
-	assert_eq!(records[0].outcome, crate::storage::DeliveryOutcome::Deferred);
+	assert_eq!(
+		records[0].outcome,
+		crate::storage::DeliveryOutcome::Deferred
+	);
 	assert_eq!(records[0].remote.as_deref(), Some("mx.remote.example"));
 	assert_eq!(
 		records[0].reply.as_deref(),
@@ -164,15 +168,22 @@ async fn a_suppressed_recipient_writes_a_record_with_no_remote() {
 		.expect("store");
 	let suppression = SuppressionList::open(dir.path()).expect("suppression");
 	suppression.suppress("bob@suppressed.example");
-	let worker = Worker::new(spool, Arc::new(FakeRemote::default()), "mail.sender.example")
-		.with_suppression(suppression)
-		.with_delivery_log(DeliveryLog::open(dir.path(), 30));
+	let worker = Worker::new(
+		spool,
+		Arc::new(FakeRemote::default()),
+		"mail.sender.example",
+	)
+	.with_suppression(suppression)
+	.with_delivery_log(DeliveryLog::open(dir.path(), 30));
 	worker.pass().await.expect("pass");
 
 	let records = load_records(dir.path());
 	assert_eq!(records.len(), 1);
 	assert_eq!(records[0].recipient, "bob@suppressed.example");
-	assert_eq!(records[0].outcome, crate::storage::DeliveryOutcome::Suppressed);
+	assert_eq!(
+		records[0].outcome,
+		crate::storage::DeliveryOutcome::Suppressed
+	);
 	assert!(records[0].remote.is_none());
 }
 
@@ -192,7 +203,10 @@ async fn a_disabled_log_writes_no_records() {
 		},
 	);
 	let remote = FakeRemote::default();
-	remote.script("remote.example", Script::rcpt("bob@remote.example", "250 OK"));
+	remote.script(
+		"remote.example",
+		Script::rcpt("bob@remote.example", "250 OK"),
+	);
 	let worker = Worker::new(spool, Arc::new(remote), "mail.sender.example")
 		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
 		.with_delivery_log(DeliveryLog::open(dir.path(), 0));

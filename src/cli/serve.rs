@@ -312,12 +312,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					Arc::clone(&account_store),
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
-				.with_delivery_log_days(
-					config
-						.storage
-						.as_ref()
-						.map_or(0, |s| s.delivery_log_days),
-				)
+				.with_delivery_log_days(config.delivery_log_days())
 				.with_quota(
 					config
 						.quota_bytes

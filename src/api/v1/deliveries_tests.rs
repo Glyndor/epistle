@@ -5,11 +5,14 @@ use std::collections::BTreeMap;
 use crate::api::router;
 use crate::api::state::ApiState;
 use crate::api::tests::{TOKEN, request, test_state};
-use crate::storage::{
-	DeliveryLog, DeliveryOutcome, DeliveryRecord, DEFAULT_DELIVERY_LOG_DAYS,
-};
+use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
-fn record(time: u64, account: Option<&str>, recipient: &str, outcome: DeliveryOutcome) -> DeliveryRecord {
+fn record(
+	time: u64,
+	account: Option<&str>,
+	recipient: &str,
+	outcome: DeliveryOutcome,
+) -> DeliveryRecord {
 	DeliveryRecord {
 		time,
 		spool_id: uuid::Uuid::now_v7(),
@@ -44,8 +47,18 @@ async fn admin_sees_every_record() {
 	write_records(
 		dir.path(),
 		&[
-			record(1_700_000_000, Some("alice@example.org"), "bob@elsewhere.example", DeliveryOutcome::Delivered),
-			record(1_700_000_010, Some("carol@example.org"), "dan@elsewhere.example", DeliveryOutcome::Failed),
+			record(
+				1_700_000_000,
+				Some("alice@example.org"),
+				"bob@elsewhere.example",
+				DeliveryOutcome::Delivered,
+			),
+			record(
+				1_700_000_010,
+				Some("carol@example.org"),
+				"dan@elsewhere.example",
+				DeliveryOutcome::Failed,
+			),
 		],
 	);
 	let app = router(state_with_log(dir.path()));
@@ -65,8 +78,18 @@ async fn an_account_bound_key_only_sees_its_own_records() {
 			// key is bound to that name (a key's `account` is a name,
 			// not an address), so the records that the key may see are
 			// the ones tagged with `account = "alice"`.
-			record(1_700_000_000, Some("alice"), "bob@elsewhere.example", DeliveryOutcome::Delivered),
-			record(1_700_000_010, Some("carol"), "dan@elsewhere.example", DeliveryOutcome::Failed),
+			record(
+				1_700_000_000,
+				Some("alice"),
+				"bob@elsewhere.example",
+				DeliveryOutcome::Delivered,
+			),
+			record(
+				1_700_000_010,
+				Some("carol"),
+				"dan@elsewhere.example",
+				DeliveryOutcome::Failed,
+			),
 		],
 	);
 	// Install the account-bound key on alice first; the test state
@@ -103,7 +126,11 @@ async fn an_account_bound_key_only_sees_its_own_records() {
 	.await;
 	assert_eq!(status, axum::http::StatusCode::OK);
 	let entries = body["entries"].as_array().expect("entries");
-	assert_eq!(entries.len(), 1, "an account key can only see its own account's records");
+	assert_eq!(
+		entries.len(),
+		1,
+		"an account key can only see its own account's records"
+	);
 	assert_eq!(entries[0]["account"], "alice");
 
 	// Without the `account` filter, the alice key only sees her own
@@ -130,8 +157,18 @@ async fn filters_by_recipient_and_outcome() {
 	write_records(
 		dir.path(),
 		&[
-			record(1_700_000_000, Some("alice@example.org"), "bob@elsewhere.example", DeliveryOutcome::Delivered),
-			record(1_700_000_010, Some("alice@example.org"), "carol@elsewhere.example", DeliveryOutcome::Failed),
+			record(
+				1_700_000_000,
+				Some("alice@example.org"),
+				"bob@elsewhere.example",
+				DeliveryOutcome::Delivered,
+			),
+			record(
+				1_700_000_010,
+				Some("alice@example.org"),
+				"carol@elsewhere.example",
+				DeliveryOutcome::Failed,
+			),
 		],
 	);
 	let app = router(state_with_log(dir.path()));
@@ -202,7 +239,13 @@ async fn limit_caps_the_page_size() {
 		.collect();
 	write_records(dir.path(), &records);
 	let app = router(state_with_log(dir.path()));
-	let (status, body) = request(&app, "GET", "/api/v1/deliveries?limit=2", Some(TOKEN.as_str())).await;
+	let (status, body) = request(
+		&app,
+		"GET",
+		"/api/v1/deliveries?limit=2",
+		Some(TOKEN.as_str()),
+	)
+	.await;
 	assert_eq!(status, axum::http::StatusCode::OK);
 	let entries = body["entries"].as_array().expect("entries");
 	assert_eq!(entries.len(), 2);

@@ -7,9 +7,7 @@ use clap::Parser;
 
 use crate::cli::delivery::{DeliveryConfig, ListFilters, run};
 use crate::cli::{Cli, Command};
-use crate::storage::{
-	DeliveryLog, DeliveryOutcome, DeliveryRecord, DEFAULT_DELIVERY_LOG_DAYS,
-};
+use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 fn write_records(dir: &std::path::Path, records: &[DeliveryRecord]) {
 	let log = DeliveryLog::open(dir, DEFAULT_DELIVERY_LOG_DAYS);
@@ -57,8 +55,16 @@ fn lists_all_records_when_no_filter_is_given() {
 	write_records(
 		dir.path(),
 		&[
-			sample(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered),
-			sample(1_700_000_010, "carol@elsewhere.example", DeliveryOutcome::Failed),
+			sample(
+				1_700_000_000,
+				"bob@elsewhere.example",
+				DeliveryOutcome::Delivered,
+			),
+			sample(
+				1_700_000_010,
+				"carol@elsewhere.example",
+				DeliveryOutcome::Failed,
+			),
 		],
 	);
 	let (_code, text) = invoke(dir.path(), &[]);
@@ -72,7 +78,11 @@ fn prints_one_json_object_per_record() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	write_records(
 		dir.path(),
-		&[sample(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered)],
+		&[sample(
+			1_700_000_000,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		)],
 	);
 	let (_code, text) = invoke(dir.path(), &["--json"]);
 	let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
@@ -91,8 +101,16 @@ fn filters_by_recipient_account_outcome_and_since() {
 	let earlier = now - 7 * 86_400;
 	let records = [
 		sample(now, "bob@elsewhere.example", DeliveryOutcome::Delivered),
-		sample(yesterday, "carol@elsewhere.example", DeliveryOutcome::Failed),
-		sample(earlier, "alice@elsewhere.example", DeliveryOutcome::Suppressed),
+		sample(
+			yesterday,
+			"carol@elsewhere.example",
+			DeliveryOutcome::Failed,
+		),
+		sample(
+			earlier,
+			"alice@elsewhere.example",
+			DeliveryOutcome::Suppressed,
+		),
 	];
 	write_records(dir.path(), &records);
 
@@ -132,7 +150,11 @@ fn rejects_an_unknown_outcome_with_exit_code_2() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	write_records(
 		dir.path(),
-		&[sample(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered)],
+		&[sample(
+			1_700_000_000,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		)],
 	);
 	let (code, _text) = invoke(dir.path(), &["--outcome", "wonky"]);
 	assert_eq!(code, ExitCode::from(2));
@@ -143,7 +165,11 @@ fn rejects_an_unparseable_since_with_exit_code_2() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	write_records(
 		dir.path(),
-		&[sample(1_700_000_000, "bob@elsewhere.example", DeliveryOutcome::Delivered)],
+		&[sample(
+			1_700_000_000,
+			"bob@elsewhere.example",
+			DeliveryOutcome::Delivered,
+		)],
 	);
 	let (code, _text) = invoke(dir.path(), &["--since", "not-a-time"]);
 	assert_eq!(code, ExitCode::from(2));
@@ -169,7 +195,11 @@ fn limit_caps_the_number_of_printed_records() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut records = Vec::new();
 	for i in 0..5 {
-		records.push(sample(1_700_000_000 + i, &format!("r{i}@elsewhere.example"), DeliveryOutcome::Delivered));
+		records.push(sample(
+			1_700_000_000 + i,
+			&format!("r{i}@elsewhere.example"),
+			DeliveryOutcome::Delivered,
+		));
 	}
 	write_records(dir.path(), &records);
 	let (_code, text) = invoke(dir.path(), &["--limit", "2"]);

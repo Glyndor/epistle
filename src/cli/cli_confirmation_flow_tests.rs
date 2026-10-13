@@ -154,15 +154,19 @@ fn spooled() -> (tempfile::TempDir, uuid::Uuid) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let id = FsSpool::open(dir.path())
 		.expect("spool")
-		.store(&AcceptedMessage {
-			reverse_path: "alice@example.org".to_string(),
-			recipients: vec!["bob@remote.example".to_string()],
-			data: b"Subject: hello\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		}, None, &BTreeMap::new())
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@example.org".to_string(),
+				recipients: vec!["bob@remote.example".to_string()],
+				data: b"Subject: hello\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	(dir, id)
 }

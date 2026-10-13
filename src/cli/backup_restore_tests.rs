@@ -285,7 +285,9 @@ VGhpcyBpcyB0aGUgYXR0YWNobWVudC4=\r\n\
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
-	let spool_id = spool.store(&accepted, None, &std::collections::BTreeMap::new()).expect("spool store");
+	let spool_id = spool
+		.store(&accepted, None, &std::collections::BTreeMap::new())
+		.expect("spool store");
 
 	// Build a config that turns encryption on, pointing the key file at a
 	// path outside the data_dir (the way an operator would) so the warning

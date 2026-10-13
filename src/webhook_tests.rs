@@ -234,10 +234,8 @@ fn delivered_serializes_with_event_tag_and_stable_field_order() {
 		remote: Some("mx.remote.example".into()),
 		extra: extra(),
 	};
-	let json: serde_json::Value = serde_json::from_str(
-		&serde_json::to_string(&event).expect("serialize"),
-	)
-	.expect("value");
+	let json: serde_json::Value =
+		serde_json::from_str(&serde_json::to_string(&event).expect("serialize")).expect("value");
 	assert_eq!(json["event"], "delivered");
 	assert_eq!(json["spool_id"], id.to_string());
 	assert_eq!(json["recipient"], "bob@remote.example");
@@ -257,10 +255,8 @@ fn delayed_serializes_with_event_tag_and_carries_attempt_and_reason() {
 		attempt: 1,
 		extra: BTreeMap::new(),
 	};
-	let json: serde_json::Value = serde_json::from_str(
-		&serde_json::to_string(&event).expect("serialize"),
-	)
-	.expect("value");
+	let json: serde_json::Value =
+		serde_json::from_str(&serde_json::to_string(&event).expect("serialize")).expect("value");
 	assert_eq!(json["event"], "delayed");
 	assert_eq!(json["spool_id"], id.to_string());
 	assert_eq!(json["recipient"], "bob@remote.example");
@@ -282,10 +278,8 @@ fn suppressed_serializes_with_event_tag() {
 		recipient: "bob@remote.example".into(),
 		extra: BTreeMap::new(),
 	};
-	let json: serde_json::Value = serde_json::from_str(
-		&serde_json::to_string(&event).expect("serialize"),
-	)
-	.expect("value");
+	let json: serde_json::Value =
+		serde_json::from_str(&serde_json::to_string(&event).expect("serialize")).expect("value");
 	assert_eq!(json["event"], "suppressed");
 	assert_eq!(json["spool_id"], id.to_string());
 	assert_eq!(json["recipient"], "bob@remote.example");
@@ -300,10 +294,8 @@ fn canceled_serializes_with_event_tag() {
 		recipient: "bob@remote.example".into(),
 		extra: BTreeMap::new(),
 	};
-	let json: serde_json::Value = serde_json::from_str(
-		&serde_json::to_string(&event).expect("serialize"),
-	)
-	.expect("value");
+	let json: serde_json::Value =
+		serde_json::from_str(&serde_json::to_string(&event).expect("serialize")).expect("value");
 	assert_eq!(json["event"], "canceled");
 	assert_eq!(json["spool_id"], id.to_string());
 	assert_eq!(json["recipient"], "bob@remote.example");
