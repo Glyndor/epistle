@@ -81,3 +81,15 @@ fn a_copy_that_comes_back_is_bounced_with_5_4_6_and_not_forwarded() {
 		"{text}"
 	);
 }
+
+#[test]
+fn inbound_mail_is_forwarded_without_tls_required() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	sink(dir.path())
+		.deliver(inbound(b"TLS-Required: No\r\nSubject: hi\r\n\r\nbody\r\n"))
+		.expect("routed");
+	let entries = queued(dir.path());
+	assert_eq!(entries.len(), 1);
+	let text = String::from_utf8_lossy(&entries[0].data).to_ascii_lowercase();
+	assert!(!text.contains("tls-required"), "{text}");
+}

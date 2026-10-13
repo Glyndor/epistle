@@ -209,7 +209,10 @@ impl SplitDelivery {
 }
 
 impl MessageSink for SplitDelivery {
-	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
+	/// Mail from elsewhere: whatever `TLS-Required` it carries is not ours
+	/// to honour, so it never reaches a copy we store or forward.
+	fn deliver(&self, mut message: AcceptedMessage) -> Result<(), SinkError> {
+		message.data = crate::queue::tls_required::strip(message.data);
 		self.route(message, uuid::Uuid::now_v7())
 	}
 

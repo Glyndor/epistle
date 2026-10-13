@@ -18,6 +18,14 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - **TLS for the mail protocols** is the server's own job (built-in ACME, or
   manual PEM). Outbound delivery is opportunistic TLS, upgraded to *mandatory
   verified* TLS when MTA-STS enforce, DANE, or a sender's REQUIRETLS applies.
+- **`TLS-Required: No`** (RFC 8689) lets one of your own senders deliver a
+  message where MTA-STS or DANE would refuse an unverified connection, for
+  instance to tell a domain its certificate expired. The queue still uses
+  STARTTLS when the MX offers it, accepts any certificate for that message,
+  and logs each policy it set aside. The field is honoured only on mail your
+  accounts submit: inbound mail loses it before it is stored or forwarded,
+  so nobody else can downgrade your policy. REQUIRETLS on the same message
+  wins and the field is ignored (RFC 8689 section 4.1).
 
 ## Authentication
 

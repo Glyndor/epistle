@@ -383,6 +383,10 @@ mod tests_tlsrpt;
 mod tests_policy_matrix;
 
 #[cfg(test)]
+#[path = "worker_tests_tls_required.rs"]
+mod tests_tls_required;
+
+#[cfg(test)]
 #[path = "worker_tests_sts_discovery.rs"]
 mod tests_sts_discovery;
 

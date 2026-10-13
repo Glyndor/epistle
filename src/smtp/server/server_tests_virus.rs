@@ -28,7 +28,7 @@ fn message(body: &str) -> String {
 
 /// Submit `data` as alice over STARTTLS and AUTH LOGIN; the reply to the
 /// end of DATA.
-async fn submit(sink: Arc<dyn MessageSink>, data: &str) -> String {
+pub(super) async fn submit(sink: Arc<dyn MessageSink>, data: &str) -> String {
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
 	let server = Server::new("mail.example.org", sink)
 		.with_directory(directory_with_password())
