@@ -23,7 +23,7 @@ fn this_process_is_found_under_its_own_uid() {
 	let uid = unsafe { libc::getuid() };
 	let me = std::process::id().to_string();
 	assert!(
-		super::account_processes(uid)
+		super::processes_of(uid)
 			.iter()
 			.any(|(pid, _)| pid.to_string() == me)
 	);

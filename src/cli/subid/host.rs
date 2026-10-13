@@ -219,7 +219,7 @@ impl Host for System {
 		}
 		// What outlives the user manager runs outside its cgroup, like a pause
 		// process a `runuser podman` started. The stack is down, so end it.
-		for (pid, line) in account_processes(self.uid) {
+		for (pid, line) in processes_of(self.uid) {
 			self.log(&format!("stopping leftover process {line}"));
 			// SAFETY: kill only sends a signal; the pid was read from /proc
 			// for the service account a moment ago.
@@ -240,7 +240,7 @@ impl Host for System {
 	}
 
 	fn account_processes(&mut self) -> Vec<String> {
-		account_processes(self.uid)
+		processes_of(self.uid)
 			.into_iter()
 			.map(|(_, line)| line)
 			.collect()
@@ -321,7 +321,7 @@ impl System {
 	fn wait_for_no_processes(&self, limit: std::time::Duration) -> bool {
 		let deadline = std::time::Instant::now() + limit;
 		loop {
-			if account_processes(self.uid).is_empty() {
+			if processes_of(self.uid).is_empty() {
 				return true;
 			}
 			if std::time::Instant::now() >= deadline {
@@ -338,7 +338,7 @@ const PROCESS_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Every process whose real or effective uid is `uid`, as `(pid, "<pid>
 /// <command>")`, read from `/proc`. A process that ends while it is read is
 /// skipped.
-fn account_processes(uid: u32) -> Vec<(i32, String)> {
+fn processes_of(uid: u32) -> Vec<(i32, String)> {
 	let Ok(entries) = std::fs::read_dir("/proc") else {
 		return Vec::new();
 	};

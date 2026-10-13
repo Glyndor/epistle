@@ -35,10 +35,7 @@ pub(super) fn run(config: &Config, action: DbCli) -> ExitCode {
 				}
 			};
 			match flow::upgrade(&mut stack, crate::cli::init::images::postgres()) {
-				Ok(summary) => {
-					eprintln!("epistle: {summary}");
-					ExitCode::SUCCESS
-				}
+				Ok(()) => ExitCode::SUCCESS,
 				Err(error) => {
 					super::style::error(format_args!("database upgrade failed: {error}"));
 					ExitCode::FAILURE

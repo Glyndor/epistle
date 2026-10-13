@@ -191,5 +191,8 @@ fn without_a_first_account_nothing_is_created() {
 	let file = answers(dir.path(), "");
 	assert_eq!(init(file, false).0, ExitCode::from(EXIT_OK));
 	let views = store(dir.path()).account_views();
-	assert!(views.iter().all(|(_, _, dynamic)| !dynamic), "{views:?}");
+	assert!(
+		views.iter().all(|(_, _, dynamic)| !dynamic),
+		"init without a first account created a dynamic account"
+	);
 }

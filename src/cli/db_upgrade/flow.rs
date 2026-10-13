@@ -33,9 +33,10 @@ pub(crate) trait Stack {
 	fn log(&mut self, line: &str);
 }
 
-/// Move the stack's database to the major of `target`. `Ok` carries the
-/// summary; `Err` says what failed and that the old major is running again.
-pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<String, String> {
+/// Move the stack's database to the major of `target`. Each step and the
+/// closing summary go to the operator through [`Stack::log`]; `Err` says
+/// what failed and that the old major is running again.
+pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<(), String> {
 	let compose = stack.compose()?;
 	let document: serde_json::Value = serde_json::from_str(&compose)
 		.map_err(|error| format!("compose.yaml is not the JSON epistle init writes: {error}"))?;
@@ -49,9 +50,10 @@ pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<String, St
 		));
 	};
 	if from == to {
-		return Ok(format!(
+		stack.log(&format!(
 			"the stack already runs PostgreSQL {to}; nothing to upgrade"
 		));
+		return Ok(());
 	}
 	if from > to {
 		return Err(format!(
@@ -86,12 +88,13 @@ pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<String, St
 	match result {
 		Ok(saved) => {
 			stack.podup(&["up", "-d"])?;
-			Ok(format!(
+			stack.log(&format!(
 				"the database runs on PostgreSQL {to} with every table's row count unchanged. The \
 				 PostgreSQL {from} cluster is still in the epistle-pgdata volume at \
 				 /var/lib/postgresql/{from}, and the dump at {}; remove them once mail is verified",
 				saved.display()
-			))
+			));
+			Ok(())
 		}
 		Err(error) => {
 			let back = (|| -> Result<(), String> {
