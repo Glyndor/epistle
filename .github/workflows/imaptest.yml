@@ -1,0 +1,65 @@
+name: imaptest
+
+# Dovecot's imaptest scripted tests against a server built from this commit.
+# .github/scripts/imaptest.sh starts the server with an imaps listener and
+# one account, runs every script from the imaptest source, and fails on any
+# script outside its KNOWN_FAILING list, and on a listed one that passes.
+# The imaptest image is pinned by digest and its scripts by commit, so a
+# change upstream never changes the result here.
+#
+# Path filter on pull_request only, the same shape as upgrade.yml: a PR that
+# does not touch IMAP, storage or this job does not pay for it. Push to
+# `develop` or `main` runs it unconditionally.
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    paths:
+      - "src/imap/**"
+      - "src/storage/**"
+      - "src/smtp/line.rs"
+      - "tests/fixtures/imaptest.mbox"
+      - ".github/scripts/imaptest.sh"
+      - ".github/workflows/imaptest.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  imaptest:
+    name: imaptest scripted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:8e10d66bf5008a0f5d22425357fb653502f39dc83bc08367fb249edc69da546c
+      CONTAINER: docker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The scripts live in the imaptest source, not in the image. Pinned to
+      # the commit the image was built from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dovecot/imaptest
+          ref: f50b6807297befe2d3a33f3c39124f3a832520c7
+          path: imaptest-source
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install 1.98 --profile minimal
+          rustup default 1.98
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Pull imaptest
+        run: docker pull "$IMAPTEST_IMAGE"
+
+      - name: Run imaptest
+        run: .github/scripts/imaptest.sh target/debug/epistle imaptest-source
