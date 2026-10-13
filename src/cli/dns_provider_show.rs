@@ -29,6 +29,7 @@ fn describe(dns: &Dns) -> Vec<(&'static str, String)> {
 		("key_name", text(&dns.key_name)),
 		("algorithm", text(&dns.algorithm)),
 		("credentials_file", path(&dns.credentials_file)),
+		("client_ip", text(&dns.client_ip)),
 	]
 	.into_iter()
 	.filter_map(|(key, value)| value.map(|value| (key, value)))

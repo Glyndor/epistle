@@ -1,7 +1,13 @@
 //! Shared mock infrastructure for the Namecheap provider tests. The mock
-//! pretends to be the Namecheap XML API: it returns a configurable body for
-//! `getHosts` and a configurable status/body for `setHosts`, and captures
-//! every URL and POST body for assertions.
+//! answers the way the documented API does: every call carries the global
+//! parameters (`ApiUser`, `ApiKey`, `UserName`, `ClientIp`, `Command`) in
+//! the query string or, for a POST, in an `application/x-www-form-urlencoded`
+//! body, and `setHosts` takes its hosts as numbered `HostName{n}`,
+//! `RecordType{n}`, `Address{n}`, `TTL{n}` and `MXPref{n}` parameters
+//! (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>
+//! and <https://www.namecheap.com/support/api/global-parameters/>, read
+//! 2026-10-12). A request in any other shape gets an `ERROR` response, so
+//! a test against this mock fails on a body the real API would refuse.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,8 +29,50 @@ pub(super) struct MockState {
 	pub(super) set_hosts_response: Option<(u16, String)>,
 	/// Captured full URL (`path?query`) of every request, for assertions.
 	pub(super) urls: Vec<String>,
-	/// Captured POST bodies for `setHosts` calls, in order.
-	pub(super) set_hosts_bodies: Vec<String>,
+	/// Every well-formed `setHosts` call, in order.
+	pub(super) set_hosts_calls: Vec<SetHostsCall>,
+	/// The content type of every POST, in order.
+	pub(super) post_content_types: Vec<String>,
+}
+
+/// One `setHosts` call as the mock received it: every parameter, query and
+/// form body together.
+#[derive(Clone, Debug)]
+pub(super) struct SetHostsCall {
+	pub(super) params: HashMap<String, String>,
+}
+
+/// One host of a `setHosts` call, from its numbered parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SentHost {
+	pub(super) name: String,
+	pub(super) kind: String,
+	pub(super) address: String,
+	pub(super) ttl: Option<String>,
+	pub(super) mx_pref: Option<String>,
+}
+
+impl SetHostsCall {
+	/// The hosts, in parameter order.
+	pub(super) fn hosts(&self) -> Vec<SentHost> {
+		(1..)
+			.map_while(|n| {
+				let get = |key: &str| self.params.get(&format!("{key}{n}")).cloned();
+				Some(SentHost {
+					name: get("HostName")?,
+					kind: get("RecordType")?,
+					address: get("Address")?,
+					ttl: get("TTL"),
+					mx_pref: get("MXPref"),
+				})
+			})
+			.collect()
+	}
+
+	/// One non-numbered parameter.
+	pub(super) fn param(&self, key: &str) -> Option<&str> {
+		self.params.get(key).map(String::as_str)
+	}
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -34,21 +82,69 @@ pub(super) const EMPTY_ZONE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?
 pub(super) const OK_XML: &str =
 	r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/></ApiResponse>"#;
 
+/// The record types setHosts documents.
+const RECORD_TYPES: &[&str] = &[
+	"A", "AAAA", "ALIAS", "CAA", "CNAME", "MX", "MXE", "NS", "TXT", "URL", "URL301", "FRAME",
+];
+
+fn api_error(text: &str) -> axum::http::Response<String> {
+	xml_response(
+		200,
+		&format!(
+			r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="ERROR"><Errors><Error Number="2010324">{text}</Error></Errors></ApiResponse>"#
+		),
+	)
+}
+
+/// Why the documented API would refuse a setHosts call, if it would.
+fn refuse_set_hosts(params: &HashMap<String, String>) -> Option<String> {
+	for key in ["SLD", "TLD"] {
+		if !params.contains_key(key) {
+			return Some(format!("Parameter {key} is missing"));
+		}
+	}
+	let call = SetHostsCall {
+		params: params.clone(),
+	};
+	for (n, host) in call.hosts().iter().enumerate() {
+		if !RECORD_TYPES.contains(&host.kind.as_str()) {
+			return Some(format!("RecordType{} {} is not valid", n + 1, host.kind));
+		}
+		if host.kind == "MX" && host.mx_pref.is_none() {
+			return Some(format!("MXPref{} is missing", n + 1));
+		}
+	}
+	None
+}
+
 pub(super) async fn handle(
 	State(state): State<Shared>,
 	method: axum::http::Method,
 	uri: axum::http::Uri,
-	Query(params): Query<HashMap<String, String>>,
+	headers: axum::http::HeaderMap,
+	Query(mut params): Query<HashMap<String, String>>,
 	body: String,
 ) -> axum::http::Response<String> {
-	let url = uri.to_string();
-	let command = params.get("Command").cloned().unwrap_or_default();
 	let mut s = state.lock().unwrap();
-	s.urls.push(url);
+	s.urls.push(uri.to_string());
 	if method == axum::http::Method::POST {
-		s.set_hosts_bodies.push(body);
+		let content_type = headers
+			.get(axum::http::header::CONTENT_TYPE)
+			.and_then(|v| v.to_str().ok())
+			.unwrap_or("")
+			.to_string();
+		s.post_content_types.push(content_type.clone());
+		if !content_type.starts_with("application/x-www-form-urlencoded") {
+			return api_error("POST body is not form parameters");
+		}
+		params.extend(url::form_urlencoded::parse(body.as_bytes()).into_owned());
 	}
-	match command.as_str() {
+	for key in ["ApiUser", "ApiKey", "UserName", "ClientIp", "Command"] {
+		if !params.contains_key(key) {
+			return api_error(&format!("Parameter {key} is missing"));
+		}
+	}
+	match params["Command"].as_str() {
 		"namecheap.domains.dns.getHosts" => {
 			let xml = if s.get_hosts_xml.is_empty() {
 				EMPTY_ZONE_XML.to_string()
@@ -58,6 +154,10 @@ pub(super) async fn handle(
 			xml_response(200, &xml)
 		}
 		"namecheap.domains.dns.setHosts" => {
+			if let Some(reason) = refuse_set_hosts(&params) {
+				return api_error(&reason);
+			}
+			s.set_hosts_calls.push(SetHostsCall { params });
 			let (status, body) = s
 				.set_hosts_response
 				.clone()
@@ -102,6 +202,7 @@ pub(super) async fn mock(
 	});
 	let provider = NamecheapProvider::new(ScopedSecret::new("example.org", "user:key"))
 		.expect("parse token")
+		.with_client_ip(std::net::Ipv4Addr::new(192, 0, 2, 10))
 		.with_api_url(
 			crate::net::HttpsUrl::loopback_http(&format!("http://{addr}/xml.response")).unwrap(),
 		);

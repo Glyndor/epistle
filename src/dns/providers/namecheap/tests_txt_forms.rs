@@ -64,9 +64,9 @@ async fn txt_publish_list_compare_round_trip_reports_no_change() {
 			.await
 			.expect("delete");
 		let s = state.lock().unwrap();
-		assert_eq!(s.set_hosts_bodies.len(), 1, "{value}");
-		let body = &s.set_hosts_bodies[0];
-		assert_eq!(body.matches("Name=").count(), 1, "{value}: {body}");
-		assert!(body.contains("token-sibling"), "{value}: {body}");
+		assert_eq!(s.set_hosts_calls.len(), 1, "{value}");
+		let hosts = s.set_hosts_calls[0].hosts();
+		assert_eq!(hosts.len(), 1, "{value}: {hosts:?}");
+		assert_eq!(hosts[0].address, "token-sibling", "{value}");
 	}
 }

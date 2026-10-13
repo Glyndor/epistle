@@ -1,10 +1,11 @@
-//! A Namecheap DNS provider implementing [`DnsProvider`]. Namecheap's API takes
-//! `ApiUser`, `ApiKey`, and `UserName` as query parameters on every call and
-//! replaces the whole record set per `setHosts` (no record-id granularity).
-//! A/AAAA/TXT/CNAME/MX/SRV are supported via their dedicated fields; TLSA is
-//! not — Namecheap's UI/API does not publish TLSA records (DANE/TLSA must be
-//! added through an external DNS host, or the operator keeps the DANE-relevant
-//! records at a provider that does support them).
+//! A Namecheap DNS provider implementing [`DnsProvider`]. Every call carries
+//! the global parameters `ApiUser`, `ApiKey`, `UserName`, `ClientIp` and
+//! `Command`; getHosts is a GET with them in the query string, setHosts a
+//! form POST that replaces the whole host list (no record-id granularity).
+//! A/AAAA/TXT/CNAME/MX/CAA are supported; SRV and TLSA are not, because
+//! setHosts has no record type for them (DANE/TLSA must be added through an
+//! external DNS host, or the operator keeps those records at a provider that
+//! supports them).
 //!
 //! **Race warning.** `setHosts` replaces ALL records at the zone. Upserts and
 //! deletes are implemented as read-modify-write: `getHosts` → mutate →
@@ -54,6 +55,7 @@ pub struct NamecheapProvider {
 	secret: ScopedSecret,
 	api_user: String,
 	api_key: String,
+	client_ip: Option<std::net::Ipv4Addr>,
 	base: HttpsUrl,
 }
 
@@ -73,8 +75,17 @@ impl NamecheapProvider {
 			secret,
 			api_user: api_user.to_string(),
 			api_key: api_key.to_string(),
+			client_ip: None,
 			base: HttpsUrl::from_static(DEFAULT_API_URL),
 		})
+	}
+
+	/// The IPv4 address the API sees the calls come from, sent as the
+	/// `ClientIp` global parameter. The API documents it as required on
+	/// every call and accepts only IPv4.
+	pub fn with_client_ip(mut self, ip: std::net::Ipv4Addr) -> Self {
+		self.client_ip = Some(ip);
+		self
 	}
 
 	/// The Namecheap sandbox URL, for use with [`Self::with_api_url`].
@@ -89,8 +100,9 @@ impl NamecheapProvider {
 		self
 	}
 
-	/// Whether `kind` can be published through Namecheap. TLSA is not — the
-	/// API has no field for the usage/selector/matching/cert tuple.
+	/// Whether `kind` can be published through Namecheap. setHosts takes A,
+	/// AAAA, ALIAS, CAA, CNAME, MX, MXE, NS, TXT, URL, URL301 and FRAME, so
+	/// SRV and TLSA are not.
 	fn api_kind(kind: RecordKind) -> Result<&'static str, ProviderError> {
 		match kind {
 			RecordKind::A
@@ -98,9 +110,9 @@ impl NamecheapProvider {
 			| RecordKind::Txt
 			| RecordKind::Cname
 			| RecordKind::Mx
-			| RecordKind::Srv
 			| RecordKind::Caa => Ok(kind.as_str()),
-			RecordKind::Tlsa => Err(ProviderError::Unsupported),
+			// setHosts documents no SRV and no TLSA record type.
+			RecordKind::Srv | RecordKind::Tlsa => Err(ProviderError::Unsupported),
 		}
 	}
 
@@ -113,18 +125,33 @@ impl NamecheapProvider {
 		}
 	}
 
-	/// Build the full request URL with `ApiUser`/`ApiKey`/`UserName`/`Command`
-	/// plus any command-specific extras (`SLD`/`TLD`). Namecheap takes its
-	/// credentials in the query string, so the URL is an [`HttpsUrl`]: the
-	/// key cannot be put on a cleartext request, and every value is
+	/// The global parameters every call carries: `ApiUser`, `ApiKey`,
+	/// `UserName`, `ClientIp` and `Command`
+	/// (<https://www.namecheap.com/support/api/global-parameters/>, read
+	/// 2026-10-12). `ClientIp` is left out only when none was configured,
+	/// and the API then refuses the call.
+	fn global_params(&self, command: &str) -> Vec<(String, String)> {
+		let mut params = vec![
+			("ApiUser".to_string(), self.api_user.clone()),
+			("ApiKey".to_string(), self.api_key.clone()),
+			("UserName".to_string(), self.api_user.clone()),
+		];
+		if let Some(ip) = self.client_ip {
+			params.push(("ClientIp".to_string(), ip.to_string()));
+		}
+		params.push(("Command".to_string(), command.to_string()));
+		params
+	}
+
+	/// Build a GET request URL with the global parameters plus any
+	/// command-specific extras (`SLD`/`TLD`). The URL is an [`HttpsUrl`]:
+	/// the key cannot be put on a cleartext request, and every value is
 	/// percent-encoded as a query pair.
 	fn build_url(&self, command: &str, extra: &[(&str, &str)]) -> HttpsUrl {
-		let mut url = self
-			.base
-			.with_query("ApiUser", &self.api_user)
-			.with_query("ApiKey", &self.api_key)
-			.with_query("UserName", &self.api_user)
-			.with_query("Command", command);
+		let mut url = self.base.clone();
+		for (key, value) in self.global_params(command) {
+			url = url.with_query(&key, &value);
+		}
 		for (key, value) in extra {
 			url = url.with_query(key, value);
 		}
@@ -149,19 +176,29 @@ impl NamecheapProvider {
 		Ok(extract_hosts(api))
 	}
 
-	/// `setHosts` against Namecheap. Replaces ALL records at the zone with the
-	/// supplied list (empty list → no records).
+	/// `setHosts` against Namecheap: "All host records that are not
+	/// included into the API call will be deleted", so `hosts` is the whole
+	/// zone. The hosts go as numbered parameters, and the documentation
+	/// recommends a POST past ten of them
+	/// (<https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/>,
+	/// read 2026-10-12); every call is a form POST, global parameters
+	/// included, so the key stays out of the URL.
 	async fn set_hosts(&self, zone: &str, hosts: &[Host]) -> Result<(), ProviderError> {
 		let (sld, tld) = split_sld_tld(zone);
-		let url = self.build_url(
-			"namecheap.domains.dns.setHosts",
-			&[("SLD", &sld), ("TLD", &tld)],
-		);
-		let body = build_set_hosts_body(hosts);
+		let mut params = self.global_params("namecheap.domains.dns.setHosts");
+		params.push(("SLD".into(), sld));
+		params.push(("TLD".into(), tld));
+		params.extend(set_hosts_params(hosts));
+		let body = url::form_urlencoded::Serializer::new(String::new())
+			.extend_pairs(&params)
+			.finish();
 		let response = self
 			.client
-			.post(url.into_url())
-			.header(reqwest::header::CONTENT_TYPE, "application/xml")
+			.post(self.base.clone().into_url())
+			.header(
+				reqwest::header::CONTENT_TYPE,
+				"application/x-www-form-urlencoded",
+			)
 			.body(body)
 			.send()
 			.await
@@ -240,54 +277,31 @@ impl DnsProvider for NamecheapProvider {
 	}
 }
 
-/// Construct the XML body for `setHosts`: a `<request>` wrapper around the
-/// rendered host elements.
-fn build_set_hosts_body(hosts: &[Host]) -> String {
-	let inner: String = hosts.iter().map(render_host).collect();
-	format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><request>{inner}</request>"#)
-}
-
-/// Render a [`Host`] as the `<host …/>` XML element Namecheap's setHosts
-/// accepts. Only the attributes meaningful for the kind are emitted.
-fn render_host(host: &Host) -> String {
-	let name = xml_attr_escape(&host.name);
-	let kind = &host.kind;
-	let address = xml_attr_escape(&host.address);
-	let ttl = host.ttl;
-	let base = format!(r#"Name="{name}" Type="{kind}" Address="{address}" TTL="{ttl}""#);
-	match kind.as_str() {
-		"MX" => match host.mx_pref {
-			Some(p) => {
-				format!(r#"Name="{name}" Type="MX" Address="{address}" MXPref="{p}" TTL="{ttl}""#)
-			}
-			None => base,
-		},
-		"SRV" => {
-			let priority = host.priority.unwrap_or(0);
-			let weight = host.weight.unwrap_or(0);
-			let port = host.port.unwrap_or(0);
-			format!(
-				r#"Name="{name}" Type="SRV" Address="{address}" Priority="{priority}" Weight="{weight}" Port="{port}" TTL="{ttl}""#
-			)
+/// The `setHosts` parameters for `hosts`: one numbered `HostName`,
+/// `RecordType`, `Address` and `TTL` per host, `MXPref` for an MX host, and
+/// `EmailType=MX` when the zone has MX hosts. setHosts lists `EmailType`
+/// as required and defines `MX` as "custom MX records of your mail
+/// provider"; with no MX host it is left out, which is what other clients
+/// of the API do (lego never sends it).
+fn set_hosts_params(hosts: &[Host]) -> Vec<(String, String)> {
+	let mut params = Vec::with_capacity(hosts.len() * 5 + 1);
+	for (n, host) in hosts.iter().enumerate() {
+		let n = n + 1;
+		params.push((format!("HostName{n}"), host.name.clone()));
+		params.push((format!("RecordType{n}"), host.kind.clone()));
+		params.push((format!("Address{n}"), host.address.clone()));
+		if host.ttl > 0 {
+			params.push((format!("TTL{n}"), host.ttl.to_string()));
 		}
-		_ => base,
-	}
-}
-
-/// Escape XML attribute special characters.
-fn xml_attr_escape(value: &str) -> String {
-	let mut out = String::with_capacity(value.len());
-	for ch in value.chars() {
-		match ch {
-			'&' => out.push_str("&amp;"),
-			'<' => out.push_str("&lt;"),
-			'>' => out.push_str("&gt;"),
-			'"' => out.push_str("&quot;"),
-			'\'' => out.push_str("&apos;"),
-			_ => out.push(ch),
+		if host.kind == "MX" {
+			let pref = host.mx_pref.unwrap_or(10);
+			params.push((format!("MXPref{n}"), pref.to_string()));
 		}
 	}
-	out
+	if hosts.iter().any(|h| h.kind == "MX") {
+		params.push(("EmailType".into(), "MX".into()));
+	}
+	params
 }
 
 mod render;
@@ -316,3 +330,7 @@ mod tests_path;
 #[cfg(test)]
 #[path = "tests_txt_forms.rs"]
 mod tests_txt_forms;
+
+#[cfg(test)]
+#[path = "tests_wire.rs"]
+mod tests_wire;

@@ -81,6 +81,11 @@ pub struct Dns {
 	/// such as a Google Cloud service-account JSON.
 	#[serde(default)]
 	pub credentials_file: Option<PathBuf>,
+	/// Namecheap: the IPv4 address the API sees epistle's calls come from,
+	/// sent as the `ClientIp` parameter the API requires on every call. It
+	/// is the address on the account's API whitelist.
+	#[serde(default)]
+	pub client_ip: Option<String>,
 }
 
 /// Every provider name `Dns::build` recognises, in display order. Kept next
@@ -210,7 +215,16 @@ impl Dns {
 					Some(Arc::new(GcloudProvider::new(self.secret()?, account)))
 				}
 			}
-			"namecheap" => Some(Arc::new(NamecheapProvider::new(self.secret()?).ok()?)),
+			"namecheap" => {
+				// The API refuses every call without `ClientIp`, so a
+				// missing or non-IPv4 address builds no provider.
+				let client_ip = self.client_ip.as_deref()?.trim().parse().ok()?;
+				Some(Arc::new(
+					NamecheapProvider::new(self.secret()?)
+						.ok()?
+						.with_client_ip(client_ip),
+				))
+			}
 			"ovh" => {
 				let application_key = non_empty(self.access_key.clone())?;
 				let application_secret = self.aws_secret()?;
@@ -326,6 +340,7 @@ impl std::fmt::Debug for Dns {
 			.field("secret_key", &self.secret_key.as_ref().map(|_| "***"))
 			.field("secret_key_env", &self.secret_key_env)
 			.field("hosted_zone_id", &self.hosted_zone_id)
+			.field("client_ip", &self.client_ip)
 			.finish()
 	}
 }
@@ -430,10 +445,22 @@ mod tests {
 	#[test]
 	fn namecheap_with_inline_token_builds() {
 		let dns: Dns = toml::from_str(
-			"provider = \"namecheap\"\nzone = \"example.org\"\ntoken = \"user:key\"",
+			"provider = \"namecheap\"\nzone = \"example.org\"\ntoken = \"user:key\"\nclient_ip = \"192.0.2.10\"",
 		)
 		.unwrap();
 		assert!(dns.build().is_some());
+	}
+
+	/// Namecheap documents `ClientIp` as required, and IPv4 only.
+	#[test]
+	fn namecheap_without_an_ipv4_client_ip_builds_nothing() {
+		for extra in ["", "\nclient_ip = \"2001:db8::1\"", "\nclient_ip = \"\""] {
+			let dns: Dns = toml::from_str(&format!(
+				"provider = \"namecheap\"\nzone = \"example.org\"\ntoken = \"user:key\"{extra}"
+			))
+			.unwrap();
+			assert!(dns.build().is_none(), "{extra}");
+		}
 	}
 
 	#[test]

@@ -63,7 +63,9 @@ pub(crate) struct CommandResponse {
 
 #[derive(Deserialize)]
 pub(crate) struct HostsResult {
-	#[serde(rename = "host", default)]
+	// The getHosts example in the documentation writes `Host`; other
+	// clients of the API read `host`. Either is accepted.
+	#[serde(rename = "host", alias = "Host", default)]
 	pub(crate) hosts: Vec<Host>,
 }
 

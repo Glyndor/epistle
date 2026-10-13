@@ -353,7 +353,11 @@ credentials_file = "__GCLOUD_PATH__""#,
 			r#"access_key = "gd-key"
 secret_key = "gd-secret""#,
 		),
-		("namecheap", r#"token = "user:key""#),
+		(
+			"namecheap",
+			r#"token = "user:key"
+client_ip = "192.0.2.10""#,
+		),
 		(
 			"ovh",
 			r#"access_key = "ak"
