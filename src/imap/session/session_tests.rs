@@ -183,3 +183,6 @@ mod notify_status;
 
 #[path = "session_tests_uidvalidity.rs"]
 mod uidvalidity;
+
+#[path = "session_tests_fetch_whole.rs"]
+mod fetch_whole;

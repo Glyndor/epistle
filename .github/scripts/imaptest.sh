@@ -35,10 +35,8 @@ declare -A KNOWN_FAILING=(
 	[subscribe]="mailbox names: hierarchy and characters the store refuses"
 	[list]="mailbox names: hierarchy and characters the store refuses"
 	[listext]="mailbox names: hierarchy and characters the store refuses"
-	[fetch-binary-mime]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[append-binary]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 	[broken]="FETCH ENVELOPE, BINARY and STATUS replies differ"
-	[fetch-body-message-rfc822-mime]="FETCH ENVELOPE, BINARY and STATUS replies differ"
 )
 
 work=$(mktemp -d)

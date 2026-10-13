@@ -106,15 +106,16 @@ fn fetch_binary_decodes_base64_body() {
 
 	let output = session.command_line("a3 FETCH 1 (BINARY[])");
 	let response = text(&output);
-	// The 5-byte decoded payload, not the encoded text.
-	assert!(response.contains("BINARY[] {5}"), "{response}");
-	assert!(response.contains("\r\nhello"), "{response}");
+	// The whole message (RFC 3516 §4.2): the 37-byte header, then the
+	// 5-byte decoded payload, not the encoded text.
+	assert!(response.contains("BINARY[] {42}"), "{response}");
+	assert!(response.contains("base64\r\n\r\nhello"), "{response}");
 	assert!(response.contains("a3 OK FETCH completed"), "{response}");
 
 	// BINARY.SIZE[] reports the decoded length without the data.
 	let output = session.command_line("a4 FETCH 1 (BINARY.SIZE[])");
 	let response = text(&output);
-	assert!(response.contains("BINARY.SIZE[] 5"), "{response}");
+	assert!(response.contains("BINARY.SIZE[] 42"), "{response}");
 }
 
 #[test]
