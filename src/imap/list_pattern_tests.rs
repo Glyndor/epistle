@@ -56,3 +56,32 @@ fn many_stars_stay_cheap() {
 	let name = "a".repeat(4000) + "b";
 	assert!(!matches("", &pattern, &name));
 }
+
+#[test]
+fn runs_of_wildcards_match_like_one() {
+	assert!(matches("", "*%*", "a/b"));
+	assert!(matches("", "%%", "ab"));
+	assert!(!matches("", "%%", "a/b"));
+	assert!(matches("", "a%*%b", "a/x/b"));
+	assert!(!matches("", "a%%b", "a/b"));
+}
+
+#[test]
+fn a_pattern_as_long_as_a_command_line_is_cheap() {
+	// The match table is pattern by name; a long pattern of wildcards or of
+	// literals the name cannot hold must not cost that product.
+	let wild = "*%".repeat(16 * 1024);
+	let literal = format!("{wild}x{wild}");
+	let name = "n".repeat(200);
+	let started = std::time::Instant::now();
+	for _ in 0..100 {
+		assert!(matches("", &wild, &name));
+		assert!(!matches("", &literal, &name));
+		assert!(!matches("", &"a*".repeat(16 * 1024), &name));
+	}
+	assert!(
+		started.elapsed() < std::time::Duration::from_secs(1),
+		"{:?}",
+		started.elapsed()
+	);
+}
