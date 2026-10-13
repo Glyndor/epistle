@@ -20,6 +20,7 @@ mod metadata;
 mod notify;
 mod quota;
 mod search_fields;
+mod search_header;
 mod select;
 mod sort;
 mod state;
