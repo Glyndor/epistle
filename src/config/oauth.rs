@@ -33,6 +33,12 @@ pub struct Oauth {
 	/// verifier. Generate a matching pair with `epistle oauth-keygen`.
 	#[serde(default)]
 	pub signing_key: Option<String>,
+	/// A file holding the same base64 key as `signing_key`, read when the
+	/// server starts. Mutually exclusive with `signing_key`. `epistle init`
+	/// keeps one at `<data_dir>/../secrets/oauth_signing.key`, which the
+	/// stack mounts read-only into `mail` at that same path.
+	#[serde(default)]
+	pub signing_key_file: Option<std::path::PathBuf>,
 	/// Permit fetching the `jwks_uri` published by the discovery document
 	/// even when it resolves to a loopback, private (RFC 1918 / RFC 4193),
 	/// link-local or unspecified address. Off by default: a hostile or
@@ -59,6 +65,8 @@ pub enum OauthConfigError {
 	/// authorization server signs ES256 tokens that must verify against the
 	/// configured static public key, so JWKS discovery alone cannot back it.
 	SigningKeyWithoutPublicKey,
+	/// Both `signing_key` and `signing_key_file` were set.
+	AmbiguousSigningKey,
 }
 
 impl std::fmt::Display for OauthConfigError {
@@ -73,6 +81,9 @@ impl std::fmt::Display for OauthConfigError {
 			OauthConfigError::InsecureDiscoveryUrl => "`discovery_url` must be an https:// URL",
 			OauthConfigError::SigningKeyWithoutPublicKey => {
 				"`signing_key` requires a static `public_key` (the matching public point)"
+			}
+			OauthConfigError::AmbiguousSigningKey => {
+				"set `signing_key` or `signing_key_file`, not both"
 			}
 		};
 		f.write_str(message)
@@ -98,10 +109,39 @@ impl Oauth {
 		// The authorization server (signing_key) issues ES256 tokens that must
 		// verify against the static public_key; JWKS discovery alone cannot pair
 		// with it. Fail closed rather than issue tokens nothing can verify.
-		if self.signing_key.is_some() && self.public_key.is_none() {
+		if self.signing_key.is_some() && self.signing_key_file.is_some() {
+			return Err(OauthConfigError::AmbiguousSigningKey);
+		}
+		if (self.signing_key.is_some() || self.signing_key_file.is_some())
+			&& self.public_key.is_none()
+		{
 			return Err(OauthConfigError::SigningKeyWithoutPublicKey);
 		}
 		Ok(())
+	}
+
+	/// The base64 signing key: `signing_key`, or the trimmed contents of
+	/// `signing_key_file`. `Ok(None)` when neither is set, so the server
+	/// issues no tokens. A file that cannot be read is an error, so a
+	/// missing mount stops the server instead of quietly turning the
+	/// authorization server off.
+	pub fn signing_key_material(&self) -> std::io::Result<Option<String>> {
+		if let Some(key) = &self.signing_key {
+			return Ok(Some(key.clone()));
+		}
+		let Some(path) = &self.signing_key_file else {
+			return Ok(None);
+		};
+		let text = std::fs::read_to_string(path).map_err(|error| {
+			std::io::Error::new(
+				error.kind(),
+				format!(
+					"cannot read [oauth] signing_key_file {}: {error}",
+					path.display()
+				),
+			)
+		})?;
+		Ok(Some(text.trim().to_string()))
 	}
 }
 
@@ -114,6 +154,7 @@ impl std::fmt::Debug for Oauth {
 			.field("public_key", &self.public_key)
 			.field("discovery_url", &self.discovery_url)
 			.field("signing_key", &self.signing_key.as_ref().map(|_| "***"))
+			.field("signing_key_file", &self.signing_key_file)
 			.finish()
 	}
 }
@@ -246,3 +287,7 @@ discovery_url = "http://idp.example/.well-known/openid-configuration"
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "oauth_tests_signing_key_file.rs"]
+mod tests_signing_key_file;

@@ -67,17 +67,23 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 	let keys_dir = answers.data_dir.join("keys");
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
-	let storage = keys_dir.join("storage.key");
-	let oauth_private = keys_dir.join("oauth_signing.key");
+	// Both keys end up outside data_dir; an install from before that
+	// still has them under keys/, where apply moves them from.
+	use super::super::host_secrets;
+	let storage = host_secrets::storage_key(&answers.data_dir);
+	let storage_now = host_secrets::effective(&answers.data_dir, host_secrets::STORAGE_KEY);
+	let oauth_private = host_secrets::oauth_signing_key(&answers.data_dir);
+	let oauth_private_now =
+		host_secrets::effective(&answers.data_dir, host_secrets::OAUTH_SIGNING_KEY);
 	let oauth_public = keys_dir.join("oauth_public.key");
 	let cert_path = keys_dir.join("cert.pem");
 	let key_path = keys_dir.join("key.pem");
-	let oauth_private_exists = oauth_private.exists();
+	let oauth_private_exists = oauth_private_now.exists();
 	let oauth_public_exists = oauth_public.exists();
 	let oauth_pair = resolve_oauth_pair(
 		oauth_private_exists,
 		oauth_public_exists,
-		&oauth_private,
+		&oauth_private_now,
 		&oauth_public,
 	)?;
 	// Directory steps first: every write that follows needs the
@@ -114,7 +120,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		},
 		PlanStep::Storage {
 			path: storage.clone(),
-			reused: key_file_present(&storage),
+			reused: key_file_present(&storage_now),
 		},
 		PlanStep::OAuthPrivate {
 			path: oauth_private.clone(),
@@ -455,6 +461,11 @@ fn config_is_identical_to_desired(
 	)?;
 	let desired_bytes =
 		toml::to_string(&desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
+	let desired_bytes = super::super::host_secrets::with_storage_key(
+		desired_bytes,
+		Some(existing.as_str()),
+		&answers.data_dir,
+	);
 	let desired_value: toml::Value = toml::from_str(&desired_bytes)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	let existing_value: toml::Value = toml::from_str(existing).map_err(|error| {

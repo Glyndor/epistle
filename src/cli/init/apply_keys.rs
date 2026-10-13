@@ -176,6 +176,17 @@ fn ensure_key_tree(
 		});
 	}
 
+	ensure_secret_keys(storage, oauth_private, oauth_public, report)
+}
+
+/// The storage key and the OAuth pair: each reused when present, generated
+/// when absent, and the pair checked against each other.
+fn ensure_secret_keys(
+	storage: &Path,
+	oauth_private: &Path,
+	oauth_public: &Path,
+	report: &mut Report,
+) -> Result<(), ApplyError> {
 	if key_file_present(storage) {
 		report.steps.push(ReportStep::Reused(storage.to_path_buf()));
 	} else {
@@ -246,22 +257,65 @@ pub(crate) fn openssl_available() -> bool {
 }
 
 /// Materialise the keys dir + every key + the self-signed cert
-/// pair. Returns the absolute paths the apply phase needs to
+/// pair. The storage key and the OAuth private key go to
+/// `secrets_dir` instead of `keys_dir`. Returns the absolute paths the apply phase needs to
 /// write the config, or `Err(error)` on a key-write failure
 /// (the report is left in the caller's hands).
 pub(super) fn ensure_keys_and_certs(
 	keys_dir: &Path,
+	secrets_dir: &Path,
 	hostname: &str,
 	report: &mut Report,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>, PathBuf, PathBuf), ApplyError> {
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
-	let storage = keys_dir.join("storage.key");
-	let oauth_private = keys_dir.join("oauth_signing.key");
+	// The storage and OAuth signing keys live outside data_dir; see
+	// `host_secrets`. The OAuth public half is not secret and stays.
+	let storage = secrets_dir.join(super::super::host_secrets::STORAGE_KEY);
+	let oauth_private = secrets_dir.join(super::super::host_secrets::OAUTH_SIGNING_KEY);
 	let oauth_public = keys_dir.join("oauth_public.key");
 	ensure_key_tree(&s1, &s2, &storage, &oauth_private, &oauth_public, report)?;
 	let ed = key_file_present(&s1).then(|| s1.clone());
 	let rsa = key_file_present(&s2).then(|| s2.clone());
 	let (cert, key) = ensure_self_signed_cert(keys_dir, hostname, report)?;
 	Ok((ed, rsa, cert, key))
+}
+
+/// What `stack update` does to the keys before it renders a compose file
+/// that mounts them: move both out of data_dir, create any that is missing
+/// as `init` would, and point a config that named the old place at the new
+/// one. Returns one line per change for the operator.
+pub(crate) fn prepare_keys_for_update(
+	data_dir: &Path,
+	config_path: &Path,
+) -> Result<Vec<String>, String> {
+	use super::super::host_secrets;
+	let mut lines: Vec<String> = host_secrets::move_legacy_keys(data_dir)?
+		.into_iter()
+		.map(|(from, to)| format!("moved {} to {}", from.display(), to.display()))
+		.collect();
+	let mut report = Report::default();
+	ensure_secret_keys(
+		&host_secrets::storage_key(data_dir),
+		&host_secrets::oauth_signing_key(data_dir),
+		&data_dir.join("keys").join("oauth_public.key"),
+		&mut report,
+	)
+	.map_err(|error| error.to_string())?;
+	lines.extend(report.steps.iter().filter_map(|step| match step {
+		ReportStep::Wrote(path) => Some(format!("created {}", path.display())),
+		_ => None,
+	}));
+	let text = fs::read_to_string(config_path)
+		.map_err(|error| format!("cannot read {}: {error}", config_path.display()))?;
+	if let Some(text) = host_secrets::repoint_config(&text, data_dir)? {
+		crate::storage::write_secret(config_path, text.as_bytes())
+			.map_err(|error| format!("cannot write {}: {error}", config_path.display()))?;
+		lines.push(format!(
+			"pointed {} at the keys in {}",
+			config_path.display(),
+			host_secrets::dir(data_dir).display()
+		));
+	}
+	Ok(lines)
 }

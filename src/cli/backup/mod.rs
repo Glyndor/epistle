@@ -8,6 +8,7 @@
 //! stays small.
 
 mod db_dump;
+mod keys_note;
 mod restore_files;
 mod tar_format;
 
@@ -80,6 +81,7 @@ pub(super) fn run_with(
 	}
 	steps.done();
 	warn_externally_referenced(config, &entries.len(), warnings);
+	keys_note::after_backup(&config.data_dir, warnings);
 	let summary = format!("backed up {} files for this instance", entries.len());
 	if steps.is_live() {
 		steps.conclude(true, &summary);
@@ -204,6 +206,7 @@ pub(super) fn run_restore_with(
 		steps.done();
 	}
 	writeln!(out, "restored {} entries", entries.len()).ok();
+	keys_note::after_restore(&config.data_dir, &entries, status);
 	steps.conclude(true, "restore");
 	ExitCode::SUCCESS
 }

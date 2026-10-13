@@ -58,6 +58,18 @@ pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_passwor
 /// refusal at `podup up` time.
 const DATABASE_SECRET_MODE: u32 = 400;
 
+/// Where a key lives on the host, given data_dir.
+type KeyPath = fn(&Path) -> PathBuf;
+
+/// The keys `mail` reads as compose secrets, by secret name and host path.
+const KEY_SECRETS: [(&str, KeyPath); 2] = [
+	(
+		"epistle_oauth_signing_key",
+		super::host_secrets::oauth_signing_key,
+	),
+	("epistle_storage_key", super::host_secrets::storage_key),
+];
+
 /// The host path the .deb installs `epistle` at. The default compose
 /// shape bind-mounts this file into the distroless base read-only and
 /// runs it as the container's entrypoint. A source build linked
@@ -361,6 +373,14 @@ impl ComposeFile {
 			ComposeService::new_clamav(answers, true),
 		);
 		let mut secrets = BTreeMap::new();
+		for (name, path) in KEY_SECRETS {
+			secrets.insert(
+				name.to_string(),
+				TopLevelSecret {
+					file: path(&answers.data_dir).display().to_string(),
+				},
+			);
+		}
 		let mut volumes = BTreeMap::new();
 		volumes.insert("clamd-socket".to_string(), TopLevelVolume {});
 		volumes.insert("clamav-db".to_string(), TopLevelVolume {});
@@ -577,3 +597,7 @@ mod tests_read_only;
 #[cfg(test)]
 #[path = "compose_tests_resources.rs"]
 mod tests_resources;
+
+#[cfg(test)]
+#[path = "compose_tests_keys.rs"]
+mod tests_keys;

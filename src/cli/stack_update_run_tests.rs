@@ -39,6 +39,10 @@ impl UpdateHost for Fake {
 			"/data/backups/pre-0.12.0-20261012T000000Z.sql.gz",
 		))
 	}
+	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {
+		self.call("keys", String::new())?;
+		Ok(vec!["moved a key".to_string()])
+	}
 	fn write_compose(&mut self, _: &str) -> Result<(), String> {
 		self.call("write", String::new())
 	}
@@ -82,6 +86,7 @@ fn the_database_is_dumped_before_anything_changes() {
 		[
 			"dump",
 			"keep",
+			"keys",
 			"write",
 			"podup up -d",
 			"podup restart mail",
@@ -119,6 +124,7 @@ fn a_stack_without_its_own_database_is_not_dumped() {
 	assert_eq!(
 		host.calls,
 		[
+			"keys",
 			"podup up -d",
 			"podup restart mail",
 			"healthy mail",
@@ -150,5 +156,44 @@ fn a_failing_status_area_is_named_with_the_rollback() {
 	assert!(
 		error.contains("db: connection refused") && error.contains("sudo epistle stack rollback"),
 		"{error}"
+	);
+}
+
+#[test]
+fn the_keys_move_out_of_data_dir_before_the_compose_file_names_them() {
+	let mut host = Fake {
+		database: true,
+		..Fake::default()
+	};
+	execute(&mut host, &plan(true)).unwrap();
+	let at = |name: &str| host.calls.iter().position(|call| call == name).unwrap();
+	assert!(
+		at("keep") < at("keys") && at("keys") < at("write"),
+		"{:?}",
+		host.calls
+	);
+	assert!(
+		host.logged.iter().any(|line| line == "moved a key"),
+		"{:?}",
+		host.logged
+	);
+}
+
+#[test]
+fn a_key_that_cannot_move_stops_the_update_before_the_compose_file_changes() {
+	let mut host = Fake {
+		database: true,
+		fail: Some("keys"),
+		..Fake::default()
+	};
+	let error = execute(&mut host, &plan(true)).expect_err("keys");
+	assert!(error.contains("keys failed"), "{error}");
+	assert!(
+		!host
+			.calls
+			.iter()
+			.any(|call| call == "write" || call.starts_with("podup")),
+		"{:?}",
+		host.calls
 	);
 }

@@ -171,7 +171,20 @@ impl ComposeService {
 				);
 				map
 			}),
-			secrets: None,
+			// The keys kept outside data_dir, read-only, at their host path:
+			// the host commands read the same config and need the same path.
+			secrets: Some(
+				super::KEY_SECRETS
+					.iter()
+					.map(|(source, path)| SecretMount {
+						source: (*source).to_string(),
+						target: path(data_dir).display().to_string(),
+						uid: "65532".to_string(),
+						gid: "65532".to_string(),
+						mode: DATABASE_SECRET_MODE,
+					})
+					.collect(),
+			),
 			depends_on: Some({
 				let mut map = BTreeMap::new();
 				map.insert(

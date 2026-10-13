@@ -170,14 +170,25 @@ pub(super) async fn build_oauth_verifier(
 	Ok(Some(Arc::new(verifier)))
 }
 
-/// Build the built-in OAuth authorization server from `[oauth] signing_key`, or
+/// Build the built-in OAuth authorization server from `[oauth] signing_key` or
+/// `signing_key_file`, or
 /// `None` when no signing key is configured (the `/oauth/*` grant routes then
 /// stay unmounted — fail closed). The signed tokens carry the configured
 /// issuer/audience and verify against the configured `public_key`.
-pub(super) fn build_authz_server(config: &Config) -> Option<crate::api::oauth::AuthzServer> {
-	let oauth = config.oauth.as_ref()?;
-	let signing_key = oauth.signing_key.as_ref()?;
-	crate::api::oauth::AuthzServer::new(signing_key, &oauth.issuer, &oauth.audience)
+pub(super) fn build_authz_server(
+	config: &Config,
+) -> std::io::Result<Option<crate::api::oauth::AuthzServer>> {
+	let Some(oauth) = config.oauth.as_ref() else {
+		return Ok(None);
+	};
+	let Some(signing_key) = oauth.signing_key_material()? else {
+		return Ok(None);
+	};
+	Ok(crate::api::oauth::AuthzServer::new(
+		&signing_key,
+		&oauth.issuer,
+		&oauth.audience,
+	))
 }
 
 /// Map the configured algorithm name to a [`crate::jwt::Algorithm`], the default

@@ -15,6 +15,9 @@ pub(super) trait UpdateHost {
 	/// Keep the dump as `pre-<version>-<timestamp>.sql.gz` under
 	/// `data_dir/backups`, pruning older ones.
 	fn keep_dump(&mut self, sql: &[u8]) -> Result<PathBuf, String>;
+	/// Move the keys the compose file mounts out of data_dir and create
+	/// any that are missing; one line per thing done.
+	fn prepare_keys(&mut self) -> Result<Vec<String>, String>;
 	/// Replace the compose file atomically.
 	fn write_compose(&mut self, text: &str) -> Result<(), String>;
 	/// Run one podup step.
@@ -47,6 +50,11 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 			"database dumped to {} before the restart",
 			saved.display()
 		));
+	}
+	// The compose file mounts the keys from outside data_dir, so they have
+	// to be there before podup reads it.
+	for line in host.prepare_keys()? {
+		host.log(&line);
 	}
 	if let Some(text) = &plan.rewrite {
 		host.log("compose.yaml changes:");

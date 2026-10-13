@@ -104,8 +104,8 @@ fn apply_writes_keys_and_config() {
 	let report = outcome.report;
 	let s1 = data_dir.join("keys/s1.pem");
 	let s2 = data_dir.join("keys/s2.pem");
-	let storage = data_dir.join("keys/storage.key");
-	let oauth_private = data_dir.join("keys/oauth_signing.key");
+	let storage = dir.path().join("secrets/storage.key");
+	let oauth_private = dir.path().join("secrets/oauth_signing.key");
 	let oauth_public = data_dir.join("keys/oauth_public.key");
 	assert!(s1.exists());
 	assert!(storage.exists());
@@ -141,8 +141,8 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 	drop(outcome);
 	let s1 = data_dir.join("keys/s1.pem");
 	let s2 = data_dir.join("keys/s2.pem");
-	let storage = data_dir.join("keys/storage.key");
-	let oauth_private = data_dir.join("keys/oauth_signing.key");
+	let storage = dir.path().join("secrets/storage.key");
+	let oauth_private = dir.path().join("secrets/oauth_signing.key");
 	let oauth_public = data_dir.join("keys/oauth_public.key");
 	let before = [
 		sha256_of(&s1).expect("s1"),
