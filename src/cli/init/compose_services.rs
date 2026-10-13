@@ -1,5 +1,5 @@
 //! Service definitions for the generated container stack.
-use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH, POSTGRES_18_IMAGE};
+use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -215,7 +215,7 @@ impl ComposeService {
 			psql -h /var/run/postgresql -U epistle -d epistle -Atc 'select 1' >/dev/null"
 			.to_string();
 		Self {
-			image: POSTGRES_18_IMAGE.to_string(),
+			image: super::super::images::postgres().to_string(),
 			entrypoint: None,
 			command: Some(vec![
 				"postgres".to_string(),
@@ -286,7 +286,7 @@ struct Healthcheck {
 impl ComposeService {
 	pub(super) fn new_clamav(answers: &Answers, freshclam: bool) -> Self {
 		let mut service = Self {
-			image: "docker.io/clamav/clamav:1.4".to_string(),
+			image: super::super::images::clamav().to_string(),
 			entrypoint: None,
 			command: None,
 			network_mode: Some(if freshclam { "pasta" } else { "none" }.to_string()),

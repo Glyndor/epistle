@@ -33,7 +33,7 @@ fn image_default_and_override_resolve_to_the_expected_references() {
 	let from_none = super::resolve_image(None);
 	assert_eq!(
 		from_none,
-		super::DISTROLESS_BASE_IMAGE,
+		super::super::images::mail_base(),
 		"the default image must be the digest-pinned distroless base"
 	);
 	let image = super::resolve_image(Some("localhost/epistle:dev"));

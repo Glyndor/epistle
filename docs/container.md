@@ -12,7 +12,11 @@ sets `image` in the answers or pulls it directly.
 ## What the image contains
 
 The base is `gcr.io/distroless/static-debian12:nonroot`, pinned by digest
-in the `Containerfile`. The image carries the musl-statically linked
+in the `Containerfile` and in `deploy/images/Dockerfile`, which also pins
+the PostgreSQL and ClamAV images of the generated stack. The binary reads
+that file at build time, so a release that moves a digest there moves it in
+the compose file `epistle stack update` renders on every install; Dependabot
+watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
 The inventory below was produced by `podman create` of `epistle:test`
 followed by `podman export | tar -t`, on this host with

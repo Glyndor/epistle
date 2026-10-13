@@ -12,6 +12,7 @@ mod apply;
 mod assistant;
 mod compose;
 mod detect;
+mod images;
 mod plan;
 mod ptr;
 
