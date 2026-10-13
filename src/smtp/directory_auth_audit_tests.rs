@@ -81,6 +81,7 @@ impl Visit for FieldVisitor<'_> {
 /// Drive `f` with a thread-local subscriber that captures every emitted
 /// tracing event, then return the captured set.
 fn run_with_capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
+	crate::cli::tracing_capture::keep_callsites_live();
 	let cap = Capture::default();
 	let events = cap.events.clone();
 	let subscriber = Registry::default().with(LevelFilter::INFO).with(cap);
@@ -386,6 +387,7 @@ async fn a_banned_ip_is_refused_before_hashing() {
 		// The capture layer is installed for the lifetime of this scope;
 		// the authentication call happens inside `with_default` so the
 		// `auth.banned` event lands on it.
+		crate::cli::tracing_capture::keep_callsites_live();
 		let cap = Capture::default();
 		let events = cap.events.clone();
 		let subscriber = Registry::default().with(LevelFilter::INFO).with(cap);

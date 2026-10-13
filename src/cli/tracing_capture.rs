@@ -66,9 +66,52 @@ impl Visit for FieldVisitor<'_> {
 	}
 }
 
+/// A process-wide subscriber that records nothing and answers every callsite
+/// with `Interest::sometimes()`.
+///
+/// `tracing` caches each callsite's interest, and two threads rebuilding that
+/// cache at once race: the last write wins, and a thread that took its
+/// snapshot before a test's scoped subscriber existed can store `never`. The
+/// test then misses its own event (measured about once in five suite runs).
+/// With this subscriber installed as the global default every snapshot
+/// contains it, so no rebuild can store `never` and each event is checked
+/// against the live scoped subscriber.
+struct KeepCallsitesLive;
+
+impl tracing::Subscriber for KeepCallsitesLive {
+	fn register_callsite(
+		&self,
+		_metadata: &'static tracing::Metadata<'static>,
+	) -> tracing::subscriber::Interest {
+		tracing::subscriber::Interest::sometimes()
+	}
+	fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+		false
+	}
+	fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+		tracing::span::Id::from_u64(1)
+	}
+	fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+	fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+	fn event(&self, _event: &tracing::Event<'_>) {}
+	fn enter(&self, _span: &tracing::span::Id) {}
+	fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// Install [`KeepCallsitesLive`] once per test process. Every test that
+/// asserts on a captured event calls this before installing its own
+/// subscriber.
+pub(crate) fn keep_callsites_live() {
+	static ONCE: std::sync::Once = std::sync::Once::new();
+	ONCE.call_once(|| {
+		let _ = tracing::subscriber::set_global_default(KeepCallsitesLive);
+	});
+}
+
 /// Run `f` with a thread-local subscriber that captures every emitted
 /// tracing event, then return the captured set.
 pub(crate) fn run_with_capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
+	keep_callsites_live();
 	let cap = Capture::default();
 	let events = cap.events.clone();
 	let subscriber = Registry::default().with(cap);
