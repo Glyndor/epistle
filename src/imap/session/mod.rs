@@ -5,6 +5,7 @@ use super::mailbox;
 
 mod acl;
 mod auth;
+mod base_subject;
 mod codes;
 mod commands;
 mod condstore;

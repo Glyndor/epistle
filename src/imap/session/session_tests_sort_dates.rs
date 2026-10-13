@@ -13,6 +13,31 @@ pub(super) fn append_dated(session: &mut Session, date: &str, body: &str) {
 	assert!(done.contains("p OK"), "{done}");
 }
 
+/// APPEND every message of an mbox text the way imaptest does: each `From `
+/// line gives the INTERNALDATE, and the lines up to the next one, the blank
+/// separator included, become the message with CRLF line ends.
+pub(super) fn append_mbox(session: &mut Session, mbox: &str) {
+	let mut messages: Vec<(String, String)> = Vec::new();
+	for line in mbox.lines() {
+		if let Some(from) = line.strip_prefix("From ") {
+			// `user@domain  Fri Feb 22 23:00:00 2008 +0200`
+			let fields: Vec<&str> = from.split_whitespace().collect();
+			let zone = fields.get(6).copied().unwrap_or("+0000");
+			let date = format!(
+				"{}-{}-{} {} {zone}",
+				fields[3], fields[2], fields[5], fields[4]
+			);
+			messages.push((date, String::new()));
+		} else if let Some((_, body)) = messages.last_mut() {
+			body.push_str(line);
+			body.push_str("\r\n");
+		}
+	}
+	for (date, body) in messages {
+		append_dated(session, &date, &body);
+	}
+}
+
 /// Run each SORT and compare its untagged reply.
 pub(super) fn assert_sorts(session: &mut Session, cases: &[(&str, &str)]) {
 	for (keys, expected) in cases {

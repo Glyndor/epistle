@@ -1,12 +1,12 @@
 //! IMAP SORT command (RFC 5256).
 
 use super::super::command::SortKey;
+use super::base_subject::base_subject;
 use super::helpers::{header_value_raw, search_matches};
 use super::mailbox::{MessageRef, Snapshot};
 use super::sort_keys::{address_key, internal_seconds, sent_seconds};
 use super::state::State;
 use super::{Output, SearchKey, Session};
-use crate::util::encoded_word;
 
 /// A comparable SORT key value. Within one sort position every message yields
 /// the same variant, so cross-variant comparison never happens in practice.
@@ -17,47 +17,24 @@ enum SortValue {
 }
 
 /// The sort value of a message for one key. `text` is the message as read
-/// from the store, loaded only when an address key is present. SUBJECT
-/// is treated specially: the decoded subject is computed from the RAW bytes
-/// because lowercasing a B-encoded subject would mangle its base64 payload.
+/// from the store, loaded only when an address or subject key is present.
 fn sort_value(
 	key: SortKey,
 	message: &MessageRef,
 	snapshot: &Snapshot,
 	text: Option<&str>,
 ) -> SortValue {
+	let text = text.unwrap_or_default();
 	match key {
 		SortKey::Arrival => SortValue::Num(internal_seconds(message)),
 		SortKey::Date => SortValue::Num(sent_seconds(snapshot, message)),
 		SortKey::Size => SortValue::Num(i64::try_from(message.size).unwrap_or(i64::MAX)),
-		SortKey::From => SortValue::Text(address_key(text.unwrap_or_default(), "from")),
-		SortKey::To => SortValue::Text(address_key(text.unwrap_or_default(), "to")),
-		SortKey::Cc => SortValue::Text(address_key(text.unwrap_or_default(), "cc")),
-		SortKey::Subject => SortValue::Text(normalized_subject_subject(snapshot, message)),
-	}
-}
-
-/// The Subject with a leading `re:`/`fwd:` run removed (RFC 5256 base subject,
-/// simplified). Reads the raw message bytes so the RFC 2047 payload is
-/// decoded before the `re:` strip: a subject stored as
-/// `=?UTF-8?B?cmU6wqFIb2xhIQ==?=` collapses to `¡Hola!` and threads with
-/// `=?UTF-8?Q?Re:_=C2=A1Hola!?=`.
-fn normalized_subject_subject(snapshot: &Snapshot, message: &MessageRef) -> String {
-	let raw = snapshot.read(message).unwrap_or_default();
-	let text = String::from_utf8_lossy(&raw);
-	let subject = header_value_raw(&text, "subject").unwrap_or_default();
-	let mut subject = encoded_word::decode(&subject);
-	loop {
-		let trimmed = subject.trim_start();
-		let lowered = trimmed.to_ascii_lowercase();
-		let stripped = lowered
-			.strip_prefix("re:")
-			.or_else(|| lowered.strip_prefix("fwd:"))
-			.or_else(|| lowered.strip_prefix("fw:"));
-		match stripped {
-			Some(rest) => subject = rest.to_string(),
-			None => return lowered,
-		}
+		SortKey::From => SortValue::Text(address_key(text, "from")),
+		SortKey::To => SortValue::Text(address_key(text, "to")),
+		SortKey::Cc => SortValue::Text(address_key(text, "cc")),
+		SortKey::Subject => SortValue::Text(base_subject(
+			&header_value_raw(text, "subject").unwrap_or_default(),
+		)),
 	}
 }
 
@@ -75,9 +52,12 @@ impl Session {
 
 		let total = snapshot.max_identifier(false);
 		let maxima = (total, snapshot.max_identifier(true));
-		let needs_text = keys
-			.iter()
-			.any(|(_, key)| matches!(key, SortKey::From | SortKey::To | SortKey::Cc));
+		let needs_text = keys.iter().any(|(_, key)| {
+			matches!(
+				key,
+				SortKey::From | SortKey::To | SortKey::Cc | SortKey::Subject
+			)
+		});
 
 		// Collect matching messages with their sort values.
 		let mut items: Vec<(Vec<SortValue>, u32, u32)> = Vec::new();
