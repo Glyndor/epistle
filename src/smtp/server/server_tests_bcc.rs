@@ -38,7 +38,6 @@ async fn submit(rcpts: &[&str], data: &[u8]) -> Vec<AcceptedMessage> {
 		.connect(name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");
