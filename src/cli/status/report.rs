@@ -5,6 +5,7 @@ use std::io::Write;
 use serde::{Deserialize, Serialize};
 
 use super::CheckArea;
+use crate::cli::term::{self, Decor, table::Table};
 
 /// Outcome of one check. The ordering is the severity ordering, so the worst
 /// outcome of a set is its `max`.
@@ -104,12 +105,17 @@ pub(super) fn any_failed(reports: &[(CheckArea, AreaReport)]) -> bool {
 }
 
 /// Print an aligned table: one line per area, and with `show_items` the
-/// findings under each line.
+/// findings under each line. `decor` is how stdout is drawn: `None` keeps
+/// the plain form scripts read.
 pub(super) fn render_table(
 	reports: &[(CheckArea, AreaReport)],
 	show_items: bool,
+	decor: Option<Decor>,
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
+	if let Some(decor) = decor {
+		return render_decorated(reports, show_items, decor, out);
+	}
 	for (area, report) in reports {
 		writeln!(
 			out,
@@ -133,6 +139,52 @@ pub(super) fn render_table(
 	Ok(())
 }
 
+/// [`render_table`] for a terminal: a header, each area with its symbol,
+/// and with `show_items` its findings under it, every line inside the
+/// terminal's width.
+fn render_decorated(
+	reports: &[(CheckArea, AreaReport)],
+	show_items: bool,
+	decor: Decor,
+	out: &mut impl Write,
+) -> std::io::Result<()> {
+	let mut table = Table::new(&["AREA", "STATE", "DETAIL"]).state_col(1);
+	for (area, report) in reports {
+		table.push(vec![
+			area.name().to_string(),
+			report.status.as_str().to_string(),
+			report.detail.clone(),
+		]);
+	}
+	let mut lines = table.render(decor).into_iter();
+	if let Some(header) = lines.next() {
+		writeln!(out, "{header}")?;
+	}
+	for ((_, report), line) in reports.iter().zip(lines) {
+		writeln!(out, "{line}")?;
+		if show_items {
+			for item in &report.items {
+				writeln!(out, "{}", item_line(item, decor))?;
+			}
+		}
+	}
+	Ok(())
+}
+
+/// One finding under its area: `  ✘ fail  name: detail`, the text cut to
+/// the width and the state painted after the cut.
+fn item_line(item: &Item, decor: Decor) -> String {
+	let state = term::pad(&term::badge(item.status.as_str()), 6);
+	let text = term::fit(
+		&term::sanitize(&format!("{}: {}", item.name, item.detail)),
+		decor.width.saturating_sub(10),
+	);
+	let tone = term::tone_of(item.status.as_str()).unwrap_or(term::Tone::Good);
+	let painted = term::paint(tone.style(), state.trim_end(), decor.colour);
+	let padding = " ".repeat(state.len() - state.trim_end().len());
+	format!("  {painted}{padding}  {text}")
+}
+
 /// Print one JSON object keyed by area name.
 pub(super) fn render_json(
 	reports: &[(CheckArea, AreaReport)],
@@ -145,3 +197,7 @@ pub(super) fn render_json(
 	serde_json::to_writer_pretty(&mut *out, &map).map_err(std::io::Error::other)?;
 	writeln!(out)
 }
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod tests;

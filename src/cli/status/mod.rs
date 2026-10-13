@@ -168,7 +168,7 @@ fn execute(
 	let written = if json {
 		render_json(&reports, out)
 	} else {
-		render_table(&reports, show_items, out)
+		render_table(&reports, show_items, super::term::stdout(json), out)
 	};
 	if let Err(error) = written {
 		super::style::error(format_args!("cannot write the report: {error}"));

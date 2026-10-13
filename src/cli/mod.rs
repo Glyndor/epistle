@@ -63,6 +63,7 @@ mod storage_blobs;
 mod style;
 mod subid;
 mod suppression;
+mod term;
 mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
@@ -746,6 +747,10 @@ mod tests_d;
 #[cfg(test)]
 #[path = "cli_tests_e.rs"]
 mod tests_e;
+
+#[cfg(test)]
+#[path = "cli_tests_decorated.rs"]
+mod cli_tests_decorated;
 
 #[cfg(test)]
 #[path = "mta_sts_serve_tests.rs"]

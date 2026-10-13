@@ -11,6 +11,8 @@
 //! knows what to clean up first.
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -254,7 +256,7 @@ struct DomainRow {
 }
 
 /// List every configured domain plus its alias map. JSON-friendly.
-fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
+pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
 	let mut rows = Vec::new();
 	for domain in &config.domains {
 		let aliases_to: Vec<String> = config
@@ -279,6 +281,24 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()
 		serde_json::to_writer(&mut *out, &rows).map_err(std::io::Error::other)?;
 		writeln!(out)?;
 		return Ok(());
+	}
+	if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["DOMAIN", "ALIASES TO", "ALIASES FROM"]);
+		for row in &rows {
+			let joined = |list: &[String]| {
+				if list.is_empty() {
+					"-".into()
+				} else {
+					list.join(",")
+				}
+			};
+			table.push(vec![
+				row.domain.clone(),
+				joined(&row.aliases_to),
+				joined(&row.aliases_from),
+			]);
+		}
+		return table.write(decor, out);
 	}
 	writeln!(out, "{:<30} ALIASES TO   ALIASES FROM", "DOMAIN")?;
 	for row in &rows {
