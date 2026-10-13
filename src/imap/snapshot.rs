@@ -45,7 +45,7 @@ impl Snapshot {
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
 		crate::util::fs_walk::check_directories(&account_dir)?;
 		let account_root = account_name.root(data_dir)?;
-		let uid_validity = super::uidvalidity::read_or_init(&account_dir, account_root.as_path());
+		let uid_validity = super::uidvalidity::read_or_init(&account_dir, &account_root);
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
 		// doubt (missing, stale, corrupt, wrong version) falls through to the
