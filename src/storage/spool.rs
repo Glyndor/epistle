@@ -155,7 +155,13 @@ impl FsSpool {
 	/// into `new/` — envelope last, so a visible envelope guarantees a
 	/// complete message file next to it.
 	pub fn store(&self, message: &AcceptedMessage) -> std::io::Result<Uuid> {
-		let id = Uuid::now_v7();
+		self.store_as(message, Uuid::now_v7())
+	}
+
+	/// [`FsSpool::store`] under an id the caller chose, so a submission can
+	/// name its queue entry before it is routed. The id must be fresh (a
+	/// UUID v7 minted for this message); it is returned unchanged.
+	pub fn store_as(&self, message: &AcceptedMessage, id: Uuid) -> std::io::Result<Uuid> {
 		let envelope = Envelope {
 			id,
 			reverse_path: message.reverse_path.clone(),
@@ -305,7 +311,11 @@ impl FsSpool {
 
 impl MessageSink for FsSpool {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.store(&message)
+		self.submit(message, Uuid::now_v7())
+	}
+
+	fn submit(&self, message: AcceptedMessage, queue_id: Uuid) -> Result<(), SinkError> {
+		self.store_as(&message, queue_id)
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}

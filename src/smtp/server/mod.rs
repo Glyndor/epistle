@@ -647,6 +647,10 @@ mod tests;
 mod tests_auth;
 
 #[cfg(test)]
+#[path = "server_tests_bcc.rs"]
+mod tests_bcc;
+
+#[cfg(test)]
 #[path = "server_tests_urlbl.rs"]
 mod tests_urlbl;
 

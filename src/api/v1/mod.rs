@@ -10,6 +10,8 @@ mod masked;
 mod queue;
 mod send;
 mod send_from;
+mod send_message;
+mod send_request;
 mod status;
 mod suppression;
 

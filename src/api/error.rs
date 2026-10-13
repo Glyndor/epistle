@@ -112,6 +112,16 @@ impl ApiError {
 		}
 	}
 
+	/// `413` for a message that is over the size limit once built: the
+	/// encoded bodies and attachments did not fit, whatever the request size.
+	pub fn message_too_large(limit: usize) -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "message_too_large",
+			message: format!("The message is larger than {limit} bytes once built."),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

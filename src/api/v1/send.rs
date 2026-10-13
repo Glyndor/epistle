@@ -1,30 +1,18 @@
-//! `POST /api/v1/send`: transactional outbound submission. Builds a minimal
-//! RFC 5322 text message from JSON and enqueues it on the outbound spool.
+//! `POST /api/v1/send`: transactional outbound submission. Builds an
+//! RFC 5322 message from JSON (text and/or HTML, attachments, inline parts,
+//! a bounded set of extra headers) and submits it like SMTP submission does.
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+use super::send_request::SendRequest;
 use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::CapOutcome;
 use crate::util::address_reason;
-
-#[derive(Deserialize)]
-pub struct SendRequest {
-	from: String,
-	to: Vec<String>,
-	#[serde(default)]
-	subject: String,
-	#[serde(default)]
-	text: String,
-	/// The sender's name for the `From` header. Absent uses the account's
-	/// display name.
-	#[serde(default)]
-	from_name: Option<String>,
-}
 
 #[derive(Serialize)]
 pub struct Queued {
@@ -41,25 +29,24 @@ pub async fn send(
 	Extension(auth): Extension<MatchedAuth>,
 	Json(request): Json<SendRequest>,
 ) -> Result<Json<Queued>, ApiError> {
-	if request.to.is_empty() {
+	let recipients = request.recipients();
+	if recipients.is_empty() {
 		return Err(ApiError::invalid_input(
 			"At least one recipient is required.",
 		));
 	}
 	// Bound the recipient list to the same ceiling the SMTP path enforces.
-	if request.to.len() > crate::smtp::session::MAX_RECIPIENTS {
+	if recipients.len() > crate::smtp::session::MAX_RECIPIENTS {
 		return Err(ApiError::invalid_input("Too many recipients."));
 	}
-	// Header-injection guard (mandatory): no CR/LF in any header-bound field, or
-	// a caller could forge headers (classic email header injection). Also bound
-	// each field's length so no single unfolded header line is malformed.
-	let header_fields = std::iter::once(&request.from)
-		.chain(request.to.iter())
-		.chain(std::iter::once(&request.subject));
-	if header_fields
-		.into_iter()
-		.any(|v| v.contains(['\r', '\n']) || v.len() > 1000)
-	{
+	// Header-injection guard (mandatory), before anything is built: no CR,
+	// LF or other control character (a tab aside) in any header-bound field,
+	// or a caller could forge headers (classic email header injection). Also
+	// bound each field's length so no single unfolded header line is
+	// malformed. The MIME builder refuses a line break again on its own.
+	if request.header_bound().into_iter().any(|v| {
+		v.contains(['\r', '\n']) || v.chars().any(|c| c.is_control() && c != '\t') || v.len() > 1000
+	}) {
 		return Err(ApiError::invalid_input(
 			"Header fields must not contain CR or LF or exceed 1000 bytes.",
 		));
@@ -70,10 +57,11 @@ pub async fn send(
 			"Invalid sender address: {why}."
 		)));
 	}
-	if let Some(why) = request
-		.to
+	if let Some(why) = recipients
 		.iter()
-		.find_map(|to| address_reason::parse(to).err())
+		.chain(&request.reply_to)
+		.chain(&request.sender)
+		.find_map(|address| address_reason::parse(address).err())
 	{
 		return Err(ApiError::invalid_input(&format!(
 			"Invalid recipient address: {why}."
@@ -89,6 +77,11 @@ pub async fn send(
 		acting_account(&state, &principal, &request.from).ok_or_else(ApiError::forbidden_from)?;
 	crate::api::mail_from::check_mail_from(&state, &account, &request.from)
 		.map_err(|_| ApiError::forbidden_from())?;
+	// `Sender` names who actually sent the message: the same rule as From.
+	if let Some(sender) = &request.sender {
+		crate::api::mail_from::check_mail_from(&state, &account, sender)
+			.map_err(|_| ApiError::forbidden_from())?;
+	}
 
 	// Per-tenant aggregate submission rate limit. Sits on top of the
 	// existing per-account limiter (which the SMTP session enforces); the
@@ -106,7 +99,7 @@ pub async fn send(
 
 	// Reserve correspondents under the same account lock as SMTP and JMAP.
 	// Recording also runs without a cap so inbound replies remain known.
-	let recipient_refs: Vec<&str> = request.to.iter().map(String::as_str).collect();
+	let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
 	if let Some(store) = state.correspondents() {
 		match store.enforce_new_recipient_cap(
 			&account,
@@ -146,33 +139,31 @@ pub async fn send(
 			.map_err(|why| ApiError::invalid_input(&format!("Invalid from_name: {why}.")))?,
 		None => state.store().display_name(&account),
 	};
-	let data = format!(
-		"From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: {date}\r\n\
-		 Message-ID: {message_id}\r\nMIME-Version: 1.0\r\n\
-		 Content-Type: text/plain; charset=utf-8\r\n\r\n{text}",
-		from = super::send_from::from_header(display_name.as_deref(), &request.from),
-		to = request.to.join(", "),
-		subject = request.subject,
-		text = request.text,
-	)
-	.into_bytes();
+	let from = super::send_from::from_header(display_name.as_deref(), &request.from);
+	let data = super::send_message::build(
+		&request,
+		&super::send_message::Envelope {
+			from: &from,
+			date: &date,
+			message_id: &message_id,
+		},
+	)?;
 
-	if let Some(full) = crate::api::quota::full_recipient(&state, &request.to, data.len() as u64) {
+	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {
 		return Err(ApiError::mailbox_full(&full));
 	}
 	let message = AcceptedMessage {
 		reverse_path: request.from,
-		recipients: request.to,
+		recipients,
 		data,
 		require_tls: false,
 		mailbox: None,
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
-	let id = state
-		.spool()
-		.store(&message)
-		.map_err(|_| ApiError::internal())?;
+	// The same outbound path as SMTP submission: DKIM for remote mail,
+	// local recipients straight to their mailboxes.
+	let id = state.submit(message).map_err(|_| ApiError::internal())?;
 	Ok(Json(Queued {
 		queued: id.to_string(),
 	}))

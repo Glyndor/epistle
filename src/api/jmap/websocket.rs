@@ -87,7 +87,7 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
 			}
 			return;
 		}
-		for reply in handle_ws_message(&state, &principal, &text, &mut push) {
+		for reply in handle_frame(&state, &principal, &text, &mut push).await {
 			if socket.send(Message::Text(reply.into())).await.is_err() {
 				return;
 			}
@@ -144,15 +144,52 @@ pub struct PushState {
 	data_types: Option<Vec<String>>,
 }
 
-/// Handle one decoded WebSocket frame, returning the frames to send back (zero,
-/// one, or — for a state-changing `Request` with push enabled — a `Response`
-/// followed by a `StateChange`). Pure with respect to the socket so it can be
-/// unit-tested with JSON strings.
+/// [`handle_ws_message_with`] for a frame that names no uploaded blob.
+#[cfg(test)]
 pub fn handle_ws_message(
 	state: &ApiState,
 	principal: &Principal,
 	text: &str,
 	push: &mut PushState,
+) -> Vec<String> {
+	handle_ws_message_with(state, principal, text, push, &super::Uploads::default())
+}
+
+/// One text frame as the socket loop handles it: the uploads it names read
+/// first, then the frame itself.
+async fn handle_frame(
+	state: &ApiState,
+	principal: &Principal,
+	text: &str,
+	push: &mut PushState,
+) -> Vec<String> {
+	let uploads = read_ahead(state, principal, text).await;
+	handle_ws_message_with(state, principal, text, push, &uploads)
+}
+
+/// The uploaded blobs a `Request` frame's `Email/set` creates name, read
+/// before the frame is handled (see [`super::Uploads`]). Nothing for any
+/// other frame, or one over `maxSizeRequest`.
+async fn read_ahead(state: &ApiState, principal: &Principal, text: &str) -> super::Uploads {
+	if text.len() > super::MAX_SIZE_REQUEST {
+		return super::Uploads::default();
+	}
+	match serde_json::from_str::<Request>(text) {
+		Ok(request) => super::Uploads::prefetch(state, principal, &request).await,
+		Err(_) => super::Uploads::default(),
+	}
+}
+
+/// Handle one decoded WebSocket frame, returning the frames to send back (zero,
+/// one, or, for a state-changing `Request` with push enabled, a `Response`
+/// followed by a `StateChange`). Pure with respect to the socket so it can be
+/// unit-tested with JSON strings; `uploads` are the blobs read ahead for it.
+pub fn handle_ws_message_with(
+	state: &ApiState,
+	principal: &Principal,
+	text: &str,
+	push: &mut PushState,
+	uploads: &super::Uploads,
 ) -> Vec<String> {
 	let Ok(value) = serde_json::from_str::<Value>(text) else {
 		return vec![request_error("notJSON", "frame is not valid JSON").to_string()];
@@ -168,7 +205,7 @@ pub fn handle_ws_message(
 			}
 			vec![error.to_string()]
 		}
-		Some("Request") => handle_request(state, principal, &value, push),
+		Some("Request") => handle_request(state, principal, &value, push, uploads),
 		Some("WebSocketPushEnable") => {
 			push.enabled = true;
 			push.data_types = value
@@ -201,6 +238,7 @@ fn handle_request(
 	principal: &Principal,
 	value: &Value,
 	push: &PushState,
+	uploads: &super::Uploads,
 ) -> Vec<String> {
 	// The envelope is the HTTP request shape plus an optional client `id`.
 	let request: Request = match serde_json::from_value(value.clone()) {
@@ -235,7 +273,7 @@ fn handle_request(
 		}
 		return vec![error.to_string()];
 	};
-	let response = match super::dispatch_request(state, principal, request) {
+	let response = match super::dispatch_request(state, principal, request, uploads) {
 		Ok(response) => response,
 		Err(mut problem) => {
 			problem["@type"] = json!("RequestError");
@@ -303,3 +341,7 @@ mod tests;
 #[cfg(test)]
 #[path = "websocket_tests_state.rs"]
 mod tests_state;
+
+#[cfg(test)]
+#[path = "websocket_tests_upload.rs"]
+mod tests_upload;

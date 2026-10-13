@@ -154,6 +154,37 @@ pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> 
 	out
 }
 
+/// `data` without its `Bcc:` and `Resent-Bcc:` header fields, continuation
+/// lines included; the body is untouched.
+///
+/// The submission paths (authenticated SMTP, JMAP `EmailSubmission/set`)
+/// apply this before queueing: a Bcc recipient is on the envelope only, and
+/// every copy that leaves the server, local or remote, must not name it
+/// (RFC 5322 section 3.6.3, RFC 8621 section 7.5).
+pub fn strip_bcc(data: &[u8]) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let mut out = Vec::with_capacity(data.len());
+	let mut dropping = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
+		if !continuation {
+			let name = line
+				.split(|&b| b == b':')
+				.next()
+				.filter(|_| line.contains(&b':'))
+				.map(|name| name.trim_ascii_end());
+			dropping = name.is_some_and(|name| {
+				name.eq_ignore_ascii_case(b"bcc") || name.eq_ignore_ascii_case(b"resent-bcc")
+			});
+		}
+		if !dropping {
+			out.extend_from_slice(line);
+		}
+	}
+	out.extend_from_slice(&data[header_end..]);
+	out
+}
+
 /// Byte index of the body's first byte (the start of the blank-line
 /// separator that ends the header block). The header block is everything
 /// up to but not including that separator; for CRLF CRLF the separator

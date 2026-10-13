@@ -46,7 +46,8 @@ pub(super) fn email_submission_set(
 	])
 }
 
-/// Queue one submission: read its email, build the envelope, spool it.
+/// Submit one email: read it, build the envelope, route it like SMTP
+/// submission (DKIM for remote mail, local recipients to their mailboxes).
 fn submit_email(
 	state: &ApiState,
 	account: &str,
@@ -76,9 +77,13 @@ fn submit_email(
 			.filter_map(|r| r.get("email").and_then(Value::as_str))
 			.map(str::to_string)
 			.collect(),
-		None => objects::header_value(&headers, "to")
-			.map(|to| to.split(',').map(|a| a.trim().to_string()).collect())
-			.unwrap_or_default(),
+		// RFC 8621 section 7.5: without an envelope, every address in To,
+		// Cc and Bcc.
+		None => ["to", "cc", "bcc"]
+			.into_iter()
+			.filter_map(|name| objects::header_value(&headers, name))
+			.flat_map(|value| objects::header_emails(&value))
+			.collect(),
 	};
 	if recipients.is_empty() {
 		return Err("noRecipients");
@@ -105,6 +110,9 @@ fn submit_email(
 		.or_else(|| state.domains().first().map(|d| d.to_ascii_lowercase()))
 		.unwrap_or_else(|| "localhost".to_string());
 	let stamped = ensure_submission_headers(&raw, &stamp_domain, std::time::SystemTime::now());
+	// RFC 8621 section 7.5: the Bcc header never leaves; those recipients
+	// are on the envelope.
+	let stamped = crate::smtp::trace::strip_bcc(&stamped);
 	// Record recipients even without a cap so replies remain known. The
 	// rolling 24h cap uses the same reservation lock as SMTP and REST. The
 	// account name is the JMAP `accountId` argument: the client is
@@ -155,8 +163,7 @@ fn submit_email(
 		no_dsn: Vec::new(),
 	};
 	state
-		.spool()
-		.store(&message)
+		.submit(message)
 		.map(|id| id.to_string())
 		.map_err(|_| "serverFail")
 }

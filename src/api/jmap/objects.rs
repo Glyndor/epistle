@@ -4,7 +4,6 @@
 use serde_json::{Value, json};
 
 use super::address_tokenizer::{find_angle_addr, split_top_level};
-use crate::smtp::trace::ensure_submission_headers;
 use crate::util::encoded_word;
 pub(super) use crate::util::header::header_value;
 use crate::util::header::sanitize_header_value;
@@ -16,75 +15,12 @@ pub(super) mod mime;
 #[path = "mime_tests_structure.rs"]
 mod mime_tests_structure;
 
-/// Serialize a JMAP Email submission object into an RFC 5322 message (Email/set
-/// create). Only the common header set and a single text body are emitted.
-///
-/// `From:`, `To:` and `Subject:` are sanitized through
-/// [`sanitize_header_value`] before any encoding: the JMAP spec lets clients
-/// submit arbitrary strings for these fields, and a CRLF in any one of them
-/// would inject forged headers (Bcc, X-*, …) into the resulting message. The
-/// sanitizer collapses every control character to a single space and caps
-/// each value to the RFC 5322 998-octet line limit, so a single client
-/// submission cannot inflate a single header line past the standard.
-///
-/// A sanitized value that contains non-ASCII characters is then wrapped in
-/// RFC 2047 `=?UTF-8?B?...?=` encoded-words through [`encoded_word::encode`],
-/// so the stored message stays ASCII-clean and any reader, IMAP, JMAP, or
-/// a hand parser, decodes it back to the original characters.
-///
-/// `Message-ID` and `Date` are stamped when absent (matching the
-/// `EmailSubmission/set` path) so a draft already carries the id a future
-/// `EmailSubmission/set` call will queue it with; `domain` is the From
-/// address's domain, falling back to `localhost` when the spec had no
-/// address. Client-supplied Message-ID / Date are left alone.
-pub(super) fn build_rfc5322(spec: &Value) -> Vec<u8> {
-	let addresses = |field: &str| -> Option<String> {
-		let list = spec.get(field)?.as_array()?;
-		let parts: Vec<String> = list.iter().filter_map(render_address).collect();
-		(!parts.is_empty()).then(|| parts.join(", "))
-	};
-	let mut headers = String::new();
-	if let Some(from) = addresses("from") {
-		headers.push_str(&format!("From: {from}\r\n"));
-	}
-	if let Some(to) = addresses("to") {
-		headers.push_str(&format!("To: {to}\r\n"));
-	}
-	if let Some(subject) = spec.get("subject").and_then(Value::as_str) {
-		let sanitized = sanitize_header_value(subject);
-		headers.push_str(&format!(
-			"Subject: {}\r\n",
-			encoded_word::encode(&sanitized)
-		));
-	}
-	// The body is the first bodyValues entry, else empty.
-	let body = spec
-		.get("bodyValues")
-		.and_then(Value::as_object)
-		.and_then(|values| values.values().next())
-		.and_then(|part| part.get("value"))
-		.and_then(Value::as_str)
-		.unwrap_or("");
-	headers.push_str("MIME-Version: 1.0\r\n");
-	headers.push_str("Content-Type: text/plain; charset=utf-8\r\n");
-	let raw = format!("{headers}\r\n{body}").into_bytes();
-	let stamp_domain = spec
-		.get("from")
-		.and_then(Value::as_array)
-		.and_then(|list| list.first())
-		.and_then(|a| a.get("email"))
-		.and_then(Value::as_str)
-		.and_then(|email| email.split_once('@').map(|(_, d)| d.to_ascii_lowercase()))
-		.unwrap_or_else(|| "localhost".to_string());
-	ensure_submission_headers(&raw, &stamp_domain, std::time::SystemTime::now())
-}
-
 /// One RFC 5322 address (`"name" <email>` or `<email>`) built from a JMAP
 /// address object. The name, when present, is sanitized and then encoded
 /// so the stored header is pure ASCII even when the client sent non-ASCII
 /// characters. The email is sanitized too, although RFC 5322 already
 /// restricts it to ASCII; this keeps the header-injection guard uniform.
-fn render_address(addr: &Value) -> Option<String> {
+pub(super) fn render_address(addr: &Value) -> Option<String> {
 	let email = addr.get("email").and_then(Value::as_str)?;
 	let sanitized_email = sanitize_header_value(email);
 	if sanitized_email.is_empty() {
@@ -192,6 +128,10 @@ pub(super) fn email_object(
 		"subject": header("subject").map(|s| encoded_word_decode_subject(&s)),
 		"from": address_list(header("from").as_deref()),
 		"to": address_list(header("to").as_deref()),
+		"cc": address_list(header("cc").as_deref()),
+		"bcc": address_list(header("bcc").as_deref()),
+		"replyTo": address_list(header("reply-to").as_deref()),
+		"sender": address_list(header("sender").as_deref()),
 		"messageId": header("message-id").map(|m| vec![m]),
 	});
 	// Move the bounded MIME tree without recursively serializing it again.
@@ -275,6 +215,14 @@ struct ParsedAddress {
 /// tokenizer that splits at top-level commas and locates the
 /// angle-addr lives in [`super::address_tokenizer`] so the parser and
 /// its work counter can evolve independently.
+/// The email of every address in an address-list header value.
+pub(super) fn header_emails(value: &str) -> Vec<String> {
+	parse_address_list(value)
+		.into_iter()
+		.map(|address| address.email)
+		.collect()
+}
+
 fn parse_address_list(value: &str) -> Vec<ParsedAddress> {
 	let parts = split_top_level(value, ',');
 	parts

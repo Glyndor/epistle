@@ -418,6 +418,8 @@ impl Server {
 							&stamp_domain,
 							std::time::SystemTime::now(),
 						);
+						// The MSA drops Bcc: those recipients are on the envelope.
+						message.data = crate::smtp::trace::strip_bcc(&message.data);
 					}
 					let mut stamped = header.into_bytes();
 					stamped.extend_from_slice(auth_headers.as_bytes());

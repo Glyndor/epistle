@@ -272,6 +272,42 @@ Scopes are independent: holding one does not grant another.
 A key that only sends or only writes therefore cannot read the mailbox; give
 it `read` too if the client needs to.
 
+### `POST /api/v1/send`
+
+Mail sent here takes the same path as SMTP submission: DKIM-signed for the
+sender's domain, delivered at once to local recipients, queued for the rest.
+The response's `queued` id names the queue entry.
+
+| Field | Meaning |
+|---|---|
+| `from`, `from_name`, `to`, `cc`, `bcc`, `reply_to`, `sender`, `subject` | Addresses and subject. `bcc` is envelope only. `sender` must be an address the account owns, like `from`. |
+| `text`, `html` | Bodies; both make a `multipart/alternative`, text first. |
+| `attachments`, `inline` | `[{name, content_type, data, content_id}]`, `data` in base64. An empty `content_type` is detected. `inline` parts need `content_id` and go into `multipart/related` with the HTML. An attached `message/rfc822` is written unencoded with CRLF line ends. |
+| `in_reply_to`, `references` | `<id@domain>` message ids, space separated. |
+| `importance` (or `priority`) | `high`, `normal` or `low`: writes `Importance` and `X-Priority`. |
+| `list_unsubscribe`, `list_unsubscribe_post` | `mailto:` and `https://` URLs; `true` adds the RFC 8058 one-click header (needs an `https://` URL). |
+| `auto_submitted`, `feedback_id` | `Auto-Submitted` (RFC 3834 values) and `Feedback-ID`. |
+| `headers` | Custom headers, `X-` names only. |
+
+A control character in any of these is refused with `400`. A message over
+25 MiB once encoded is refused with `413 message_too_large`.
+
+### JMAP `Email/set` create
+
+A new Email is built from `textBody`, `htmlBody` and `attachments` (inline
+parts with a `cid` go beside the HTML in `multipart/related`), or from an
+explicit `bodyStructure`, with the same MIME builder as `/api/v1/send`. Text
+comes from `bodyValues` by `partId`; octets by `blobId`, from an upload or
+from a stored message or one of its parts. `bcc` is kept on the stored
+draft only: `EmailSubmission/set`, like SMTP submission, removes the Bcc
+header before sending and keeps those recipients on the envelope.
+`Content-*` headers on the Email
+itself, `bodyStructure` together with the body lists, more than one part in
+`textBody` or `htmlBody`, or a part with both or neither of `partId` and
+`blobId` are refused with `invalidProperties`; a message over 25 MiB with
+`tooLarge`. The Session's `maxSizeAttachmentsPerEmail` is the attachment
+size that still fits 25 MiB once base64-encoded (about 18 MB).
+
 ### Uploaded blob storage
 
 JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the
