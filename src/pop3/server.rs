@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
@@ -66,9 +66,18 @@ impl Server {
 
 	/// Accept connections forever, one bounded task per connection.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = accepting.next().await;
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize so the IP survives every
 			// downstream consumer (auth, audit) as a plain `IpAddr::V4`.
@@ -88,8 +97,11 @@ impl Server {
 		}
 	}
 
-	async fn handle(&self, stream: TcpStream, peer_ip: std::net::IpAddr) -> std::io::Result<()> {
-		let stream = self.tls.accept(stream).await?;
+	async fn handle<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
+	where
+		S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+	{
+		let stream = crate::tls::accept_within(&self.tls, stream).await?;
 		let backend = MailboxBackend::new_with_crypto(
 			self.directory.clone(),
 			self.data_dir.clone(),

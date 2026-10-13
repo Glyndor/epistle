@@ -11,6 +11,7 @@ use super::directory::{Directory, Resolution};
 use super::diskspace::DiskGuard;
 use super::reply::Reply;
 
+mod author;
 mod bdat;
 pub mod cap;
 mod finalise;
@@ -606,6 +607,9 @@ mod tests_quota;
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
 
+#[cfg(test)]
+#[path = "../session_tests_author.rs"]
+mod tests_author;
 #[cfg(test)]
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;

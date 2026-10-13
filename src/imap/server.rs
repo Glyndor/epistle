@@ -211,9 +211,18 @@ impl Server {
 
 	/// Accept connections forever.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = accepting.next().await;
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
 			// session consults at authentication sees a plain `IpAddr::V4`.
@@ -242,7 +251,7 @@ impl Server {
 	{
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
-				let tls = self.tls.accept(stream).await?;
+				let tls = crate::tls::accept_within(&self.tls, stream).await?;
 				let identity = tls
 					.get_ref()
 					.1
@@ -502,7 +511,7 @@ impl Server {
 				if output.upgrade_tls {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
-					let tls = self.tls.accept(stream).await?;
+					let tls = crate::tls::accept_within(&self.tls, stream).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls
 						.get_ref()
@@ -593,3 +602,7 @@ mod discard;
 #[cfg(test)]
 #[path = "server_tests_discard.rs"]
 mod tests_discard;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;

@@ -41,7 +41,7 @@ async fn delivers_to_own_server() {
 		b"Subject: hi\r\n\r\n.leading dot\r\nbody\r\n",
 		false,
 		None,
-		&[],
+		&TlsaRrset::Absent,
 		OutboundTls::Strict,
 		&mut None,
 	)
@@ -83,7 +83,7 @@ async fn permanent_rejection_is_permanent() {
 		b"body\r\n",
 		false,
 		None,
-		&[],
+		&TlsaRrset::Absent,
 		OutboundTls::Strict,
 		&mut None,
 	)
@@ -105,7 +105,7 @@ async fn deliver_against(greeting: &'static [u8]) -> Result<(), DeliveryError> {
 		b"body\r\n",
 		false,
 		None,
-		&[],
+		&TlsaRrset::Absent,
 		OutboundTls::Strict,
 		&mut None,
 	)
@@ -135,7 +135,7 @@ async fn relay_auth_without_tls_is_permanent() {
 		b"body\r\n",
 		false,
 		Some(("user", "pass")),
-		&[],
+		&TlsaRrset::Absent,
 		OutboundTls::Strict,
 		&mut None,
 	)
@@ -167,25 +167,20 @@ async fn oversized_reply_is_transient() {
 	);
 }
 
-/// The exact rule that decides PKIX authentication, mirroring `deliver`.
-fn authenticate_pkix(require_tls: bool, tlsa_empty: bool, mode: OutboundTls) -> bool {
-	require_tls || (tlsa_empty && mode == OutboundTls::Strict)
-}
-
 #[test]
 fn pkix_authentication_decision() {
 	use OutboundTls::{Opportunistic, Strict};
-	// Mandated TLS is always strict PKIX, regardless of mode or TLSA.
-	assert!(authenticate_pkix(true, true, Opportunistic));
-	assert!(authenticate_pkix(true, false, Opportunistic));
-	assert!(authenticate_pkix(true, true, Strict));
-	// TLSA present (not mandated): never PKIX: DANE authenticates instead,
-	// even in strict mode (the DANE-EE self-signed fix).
-	assert!(!authenticate_pkix(false, false, Strict));
-	assert!(!authenticate_pkix(false, false, Opportunistic));
-	// Pure opportunistic (no mandate, no TLSA): mode decides.
-	assert!(authenticate_pkix(false, true, Strict));
-	assert!(!authenticate_pkix(false, true, Opportunistic));
+	// Mandated TLS without DANE records is strict PKIX in either mode.
+	assert!(pkix_required(true, false, Opportunistic));
+	assert!(pkix_required(true, false, Strict));
+	// Usable TLSA records: never PKIX, DANE authenticates instead, even
+	// when MTA-STS enforce or REQUIRETLS mandates TLS.
+	assert!(!pkix_required(true, true, Strict));
+	assert!(!pkix_required(false, true, Strict));
+	assert!(!pkix_required(false, true, Opportunistic));
+	// Neither mandate nor DANE: mode decides.
+	assert!(pkix_required(false, false, Strict));
+	assert!(!pkix_required(false, false, Opportunistic));
 }
 
 #[test]

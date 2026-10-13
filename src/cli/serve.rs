@@ -259,7 +259,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	super::serve_tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 
-	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
+	super::serve_tasks::spawn_dkim_rotation(
+		&config,
+		&dkim_signer,
+		webhook.as_ref().map(Arc::clone),
+	);
 
 	super::serve_tasks::spawn_alert_engine(
 		&config,
@@ -353,21 +357,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(async move {
 					// Serve with the peer address attached so API-key CIDR
 					// allowlists can be enforced from `ConnectInfo`.
-					axum::serve(
-						listener,
-						router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-					)
-					.await
-					.map_err(std::io::Error::other)
+					crate::net::http_serve::serve(listener, router).await
 				}));
 			}
 			ListenerKind::Acme => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::acme::http01::router(challenge_store.clone());
 				tasks.push(tokio::spawn(async move {
-					axum::serve(listener, router)
-						.await
-						.map_err(std::io::Error::other)
+					crate::net::http_serve::serve(listener, router).await
 				}));
 			}
 			ListenerKind::Metrics => {
@@ -389,9 +386,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					}),
 				);
 				tasks.push(tokio::spawn(async move {
-					axum::serve(listener, router)
-						.await
-						.map_err(std::io::Error::other)
+					crate::net::http_serve::serve(listener, router).await
 				}));
 			}
 			ListenerKind::Imaps | ListenerKind::Imap => {

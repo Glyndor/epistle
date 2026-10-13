@@ -5,7 +5,7 @@ pub mod archive;
 pub(crate) mod changelog;
 pub mod command;
 mod compress;
-mod fetch;
+pub(crate) mod fetch;
 mod flags;
 mod index;
 pub mod junk_trainer;

@@ -7,6 +7,14 @@ epistle (0.11.0) unstable; urgency=medium
     addresses; DMARC reports go only to plain addresses the policy domain
     authorizes; SCRAM verifiers use 600000 iterations and TOTP secrets are
     encrypted at rest; account-bound keys stay within their account.
+  * Mail protocols: no second banner inside TLS after STARTTLS (mail
+    between two epistle servers failed), commands pipelined behind STARTTLS
+    are dropped, DMARC evaluates the From a reader sees, submissions with a
+    From the account does not own are refused, DKIM signs for the From
+    domain, a rotated DKIM key is used only once DNS shows it, DANE applies
+    only behind a DNSSEC-secure MX and never falls back to cleartext on a
+    bogus TLSA, every listener survives a failed accept and bounds TLS
+    handshakes and HTTP request heads.
   * JMAP: incremental sync with /changes and /queryChanges from a per-account
     change journal, push over an event source, and the limits the Session
     advertises are enforced.

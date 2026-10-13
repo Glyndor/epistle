@@ -539,9 +539,18 @@ impl Server {
 
 	/// Accept connections forever. Each connection runs in its own task.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = accepting.next().await;
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize before the address reaches
 			// SPF, DNSBL, the ban table, the greylist, the inbound rate
@@ -571,7 +580,7 @@ impl Server {
 	{
 		match (self.tls_mode, &self.tls) {
 			(TlsMode::Implicit, Some(acceptor)) => {
-				let tls_stream = acceptor.current().accept(stream).await?;
+				let tls_stream = crate::tls::accept_within(&acceptor.current(), stream).await?;
 				// A verified client certificate enables SASL EXTERNAL.
 				let identity = tls_stream
 					.get_ref()
@@ -665,3 +674,11 @@ mod tests_subjectpass;
 #[cfg(test)]
 #[path = "server_tests_dual_stack.rs"]
 mod tests_dual_stack;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;
+
+#[cfg(test)]
+#[path = "server_tests_author.rs"]
+mod tests_author;

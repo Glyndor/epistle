@@ -253,9 +253,15 @@ impl Server {
 								let dkim_results =
 									crate::dkim::verify_message(dns.as_ref(), &message.data).await;
 
-								let from = crate::dmarc::from_domain(&message.data);
-								let dmarc = match &from {
-									Some(from) => {
+								let author = crate::dmarc::author::author_domain(&message.data);
+								let from = match &author {
+									crate::dmarc::author::AuthorDomain::One(domain) => {
+										Some(domain.clone())
+									}
+									_ => None,
+								};
+								let dmarc = match &author {
+									crate::dmarc::author::AuthorDomain::One(from) => {
 										crate::dmarc::evaluate(
 											dns.as_ref(),
 											from,
@@ -264,8 +270,17 @@ impl Server {
 										)
 										.await
 									}
+									// RFC 7489 section 6.6.1: two From fields, or
+									// one naming several domains, leave no single
+									// owner to authenticate; RFC 5322 forbids the
+									// first outright. It fails rather than errs.
+									crate::dmarc::author::AuthorDomain::Multiple => {
+										crate::dmarc::DmarcOutcome::Fail
+									}
 									// No usable From header: nothing to align.
-									None => crate::dmarc::DmarcOutcome::PermError,
+									crate::dmarc::author::AuthorDomain::Missing => {
+										crate::dmarc::DmarcOutcome::PermError
+									}
 								};
 								// Record DMARC result for aggregate reporting.
 								if let (Some(report_data_dir), Some(from_domain)) =
@@ -567,7 +582,7 @@ impl Server {
 					// Bytes received before the handshake are discarded:
 					// a pipelining client cannot smuggle plaintext commands
 					// into the TLS session.
-					let tls_stream = acceptor.current().accept(stream).await?;
+					let tls_stream = crate::tls::accept_within(&acceptor.current(), stream).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls_stream
 						.get_ref()
@@ -579,7 +594,10 @@ impl Server {
 					stream = Box::new(tls_stream);
 					session.tls_started();
 					decoder = LineDecoder::new();
-					send(&mut stream, &session.greeting()).await?;
+					// No greeting inside TLS (RFC 3207 section 4.2): the
+					// session is back in the state after the 220 banner and
+					// the client speaks first with EHLO. A banner here is read
+					// as the reply to that EHLO and shifts every later reply.
 				}
 				Action::Close(reply) => {
 					send(&mut stream, &reply).await?;

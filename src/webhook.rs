@@ -52,6 +52,14 @@ pub enum WebhookEvent {
 		/// The window length in seconds (the rule's `window_secs`).
 		window_secs: u64,
 	},
+	/// A DKIM key rotation was withdrawn because the new selector never
+	/// showed its key in DNS; the previous key keeps signing.
+	DkimRotationFailed {
+		/// The selector that was published and withdrawn.
+		selector: String,
+		/// Why the rotation did not complete.
+		reason: String,
+	},
 	/// Sent only by `epistle webhook test` to check that the endpoint is
 	/// reachable and verifies signatures. Receivers should acknowledge it and
 	/// otherwise ignore it.

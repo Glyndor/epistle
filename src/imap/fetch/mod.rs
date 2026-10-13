@@ -49,6 +49,14 @@ pub(super) fn parse(raw: &[u8]) -> ParsedMessage<'_> {
 	ParsedMessage { message }
 }
 
+/// Render BODYSTRUCTURE and ENVELOPE for the whole of `raw`, the way a
+/// FETCH does, and return the response size. Entry point for the MIME
+/// fuzz target.
+pub(crate) fn render_for_fuzzing(raw: &[u8]) -> usize {
+	let message = parse(raw);
+	bodystructure::render(&message, 0, true).len() + envelope::render(&message, 0).len()
+}
+
 pub(super) fn raw_header<'a>(
 	message: &'a Message<'_>,
 	part: &MessagePart<'_>,

@@ -97,7 +97,17 @@ const COUNTERS: &[(&str, &str)] = &[
 	("tlsrpt_failed_sessions", "tlsrpt_failed_sessions"),
 	("reports_dropped", "reports_dropped"),
 	("mta_sts_connections_dropped", "mta_sts_connections_dropped"),
+	("accept_failed", "accept_failed"),
 ];
+
+/// Failed accepts on any listener. Process-wide rather than per
+/// [`Metrics`] so every accept loop counts here without carrying a handle.
+static ACCEPT_FAILED: AtomicU64 = AtomicU64::new(0);
+
+/// Count a failed `accept` on any listener.
+pub fn accept_failed() {
+	ACCEPT_FAILED.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Canonical short names of every counter, sorted.
 ///
@@ -416,6 +426,7 @@ impl Metrics {
 			"tlsrpt_failed_sessions" => &self.tlsrpt_failed_sessions,
 			"reports_dropped" => &self.reports_dropped,
 			"mta_sts_connections_dropped" => &self.mta_sts_connections_dropped,
+			"accept_failed" => &ACCEPT_FAILED,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}
@@ -568,6 +579,11 @@ impl Metrics {
 				"mail_mta_sts_connections_dropped_total",
 				"Public MTA-STS HTTPS connections dropped before the TLS handshake because the listener's concurrency cap was full.",
 				&self.mta_sts_connections_dropped,
+			),
+			(
+				"mail_accept_failed_total",
+				"Failed accepts on any listener (out of descriptors, aborted connections); the listener keeps running.",
+				&ACCEPT_FAILED,
 			),
 			(
 				"mail_llm_consulted_total",

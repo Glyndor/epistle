@@ -70,7 +70,6 @@ async fn auth_login_over_starttls_authenticates() {
 		.connect(server_name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");
@@ -134,7 +133,6 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 		.connect(server_name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");
@@ -172,9 +170,11 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 		2,
 		"MAIL FROM and RCPT TO accepted: {batch}"
 	);
-	tls.write_all(b"Subject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n")
-		.await
-		.expect("data");
+	tls.write_all(
+		b"From: alice@example.org\r\nSubject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n",
+	)
+	.await
+	.expect("data");
 	let mut tail = String::new();
 	while !tail.contains("221 ") {
 		tail.push_str(&reply(&mut tls).await);

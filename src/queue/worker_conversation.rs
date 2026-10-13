@@ -43,8 +43,11 @@ impl Worker {
 		let fetched = match &self.mta_sts {
 			Some((store, dns)) => match store.policy(dns.as_ref(), &domain).await {
 				Ok(policy) => policy,
+				// No policy could be fetched and none is cached: deliver as
+				// though the domain published none (RFC 8461 section 3.3).
 				Err(crate::mtasts::PolicyError::Temporary(reason)) => {
-					return Conversation::all(recipients, None, DeliveryError::Transient(reason));
+					tracing::warn!(%domain, %reason, "MTA-STS policy unavailable; delivering without it");
+					None
 				}
 				// Malformed/absent policies fall back to opportunistic.
 				Err(error) => {
@@ -97,7 +100,14 @@ impl Worker {
 				// starttls (required whenever AUTH is configured) forces TLS.
 				// DANE does not apply to a configured smarthost (RFC 7672 is
 				// keyed on the recipient's MX), so no TLSA records here.
-				(stream, host, auth, rule.starttls, Vec::new(), None)
+				(
+					stream,
+					host,
+					auth,
+					rule.starttls,
+					crate::dane::rrset::TlsaRrset::Absent,
+					None,
+				)
 			}
 			_ => {
 				// Direct (no rule, or kind = direct): MX delivery.
@@ -107,7 +117,15 @@ impl Worker {
 						// DANE: TLSA is published under the MX hostname. A
 						// transient TLSA lookup failure defers delivery rather
 						// than downgrading to opportunistic TLS (RFC 7672 §2.1).
-						let tlsa = match self.tlsa_for(&server_name).await {
+						// Only a secure MX answer can vouch for the host whose
+						// TLSA would authenticate it (RFC 7672 section 2.2.1);
+						// otherwise MTA-STS or opportunistic TLS decides.
+						let tlsa = if connection.mx != crate::queue::resolver::MxSecurity::Secure {
+							Ok(crate::dane::rrset::TlsaRrset::Absent)
+						} else {
+							self.tlsa_for(&server_name).await
+						};
+						let tlsa = match tlsa {
 							Ok(records) => records,
 							Err(crate::spf::DnsFailure::Temporary) => {
 								let reason =
@@ -159,7 +177,7 @@ impl Worker {
 				mx_host: &server_name,
 				sts: fetched.as_ref(),
 				sts_invalid,
-				dane: !dane.is_empty(),
+				dane: !dane.records().is_empty(),
 				local_ip,
 				peer_ip,
 			};

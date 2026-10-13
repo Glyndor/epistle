@@ -54,6 +54,7 @@ impl Connector for FakeMx {
 				host: "mx.remote.example".to_string(),
 				local_ip: Some(LOCAL),
 				peer_ip: Some(PEER),
+				mx: crate::queue::resolver::MxSecurity::Secure,
 			})
 		})
 	}

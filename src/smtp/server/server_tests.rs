@@ -309,7 +309,7 @@ async fn spf_softfail_is_accepted_and_recorded() {
 }
 
 /// Test client TLS connector trusting the given certificate.
-fn test_connector(
+pub(super) fn test_connector(
 	cert: tokio_rustls::rustls::pki_types::CertificateDer<'static>,
 ) -> tokio_rustls::TlsConnector {
 	let mut roots = tokio_rustls::rustls::RootCertStore::empty();
@@ -361,8 +361,8 @@ async fn starttls_upgrade_and_transaction() {
 		.await
 		.expect("tls handshake");
 
-	// Fresh greeting inside TLS; the session forgot the plaintext EHLO.
-	assert!(read_reply(&mut tls_client).await.starts_with("220 "));
+	// No banner inside TLS: the client speaks first and the session forgot
+	// the plaintext EHLO.
 	tls_client
 		.write_all(b"EHLO c.example.org\r\n")
 		.await

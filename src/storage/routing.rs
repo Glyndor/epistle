@@ -359,8 +359,8 @@ impl MessageSink for SplitDelivery {
 			};
 			// Sign relayed mail so receivers can verify our domain.
 			if let Some(signer) = &self.signer
-				&& let Some((_, domain)) = outbound_message.reverse_path.rsplit_once('@')
-				&& let Some(header) = signer.current().sign(domain, &outbound_message.data)
+				&& let Some(domain) = self.signing_domain(&outbound_message)
+				&& let Some(header) = signer.current().sign(&domain, &outbound_message.data)
 			{
 				let mut signed = header.into_bytes();
 				signed.extend_from_slice(&outbound_message.data);
@@ -371,6 +371,36 @@ impl MessageSink for SplitDelivery {
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		Ok(())
+	}
+}
+
+impl SplitDelivery {
+	/// The `d=` for an outbound message: the domain of its single From
+	/// header when the key is published for it, so DMARC aligns with the
+	/// domain the reader sees; otherwise the envelope domain.
+	fn signing_domain(&self, message: &AcceptedMessage) -> Option<String> {
+		let envelope = message
+			.reverse_path
+			.rsplit_once('@')
+			.map(|(_, domain)| domain.to_ascii_lowercase());
+		match crate::dmarc::author::author_domain(&message.data) {
+			crate::dmarc::author::AuthorDomain::One(from)
+				if self.directory.current().hosts_domain(&from) =>
+			{
+				Some(from)
+			}
+			crate::dmarc::author::AuthorDomain::One(from) => {
+				if let Some(envelope) = &envelope {
+					tracing::info!(
+						%from,
+						%envelope,
+						"no DKIM key for the From domain; signing for the envelope domain, so DMARC will not align"
+					);
+				}
+				envelope
+			}
+			_ => envelope,
+		}
 	}
 }
 
@@ -395,3 +425,7 @@ mod tests;
 #[cfg(test)]
 #[path = "routing_tests_dkim_rotation.rs"]
 mod tests_dkim_rotation;
+
+#[cfg(test)]
+#[path = "routing_tests_dkim_domain.rs"]
+mod tests_dkim_domain;

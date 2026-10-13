@@ -29,6 +29,8 @@ pub mod dmarc;
 pub mod dns;
 pub mod dnsbl;
 pub mod domain;
+#[doc(hidden)]
+pub mod fuzzing;
 pub mod imap;
 pub mod jwt;
 pub mod log_id;

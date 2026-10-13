@@ -99,7 +99,7 @@ key_file = \"/etc/mail/dkim.pem\"
 	// The caller (`spawn_dkim_rotation`) must leave a record at startup.
 	// We exercise it directly so the log emission is captured.
 	let events = run_with_capture(|| {
-		super::spawn_dkim_rotation(&config, &None);
+		super::spawn_dkim_rotation(&config, &None, None);
 	});
 	let notice = events
 		.iter()
@@ -138,7 +138,7 @@ token = \"abc\"
 	assert!(config.dns.is_some(), "test fixture must include [dns]");
 
 	let events = run_with_capture(|| {
-		super::spawn_dkim_rotation(&config, &None);
+		super::spawn_dkim_rotation(&config, &None, None);
 	});
 	let warning = events
 		.iter()
@@ -192,7 +192,7 @@ token = \"abc\"
 "
 	));
 	let events = run_with_capture(|| {
-		super::spawn_dkim_rotation(&config, &None);
+		super::spawn_dkim_rotation(&config, &None, None);
 	});
 	assert!(
 		!events.iter().any(|e| e.level == Level::WARN),
@@ -212,7 +212,7 @@ fn rotation_is_off_when_dkim_section_is_absent() {
 	assert_eq!(decide_dkim_rotation(&config), DkimRotationPlan::Off);
 
 	let events = run_with_capture(|| {
-		super::spawn_dkim_rotation(&config, &None);
+		super::spawn_dkim_rotation(&config, &None, None);
 	});
 	assert!(
 		events.is_empty(),
@@ -284,7 +284,7 @@ token = \"abc\"
 "
 	));
 	let events = run_with_capture(|| {
-		super::spawn_dkim_rotation(&config, &None);
+		super::spawn_dkim_rotation(&config, &None, None);
 	});
 	let warning = events
 		.iter()
@@ -348,7 +348,7 @@ token = \"abc\"
 	assert!(signing_domains.is_empty());
 	assert!(out_of_zone.is_empty());
 	let events = run_with_capture(|| {
-		super::spawn_dkim_rotation(&config, &None);
+		super::spawn_dkim_rotation(&config, &None, None);
 	});
 	assert!(
 		!events.iter().any(|e| e.level == Level::WARN),

@@ -206,7 +206,7 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 ### `[dkim]`
 Outbound DKIM signing. Ed25519 is primary; an RSA selector is also required from version 0.10 on so receivers that verify RSA alone still see a valid signature. Until then the server warns at startup and on `epistle config-check` / `epistle verify-dns` when the RSA pair is missing; the warning names `epistle dkim-keygen --rsa` as the remedy.
 
-Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
+Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. A new key starts signing only after the system resolver shows its TXT record, with that key, for every signing domain; the server checks for about an hour, and if the record never shows it withdraws the new selector, keeps signing with the current key, and reports it in `epistle dkim show`, the log and the `dkim_rotation_failed` webhook event. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
 
 | Key | Meaning |
 |---|---|
@@ -546,7 +546,9 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 | `secret` | Optional HMAC-SHA256 signing secret. |
 
 Each request is a JSON object whose `event` field names the event:
-`message_received`, `delivery_failed`, `metric_alert`, and `test`. When `secret` is
+`message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
+(a rotated DKIM key never showed up in DNS, so the previous key keeps signing),
+and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
 
 `delivery_failed` is sent per recipient when outbound delivery fails for good

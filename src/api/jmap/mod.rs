@@ -43,6 +43,7 @@ pub use limits::{
 };
 mod methods;
 mod objects;
+pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
 pub mod websocket;
 

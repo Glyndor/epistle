@@ -117,9 +117,18 @@ impl Server {
 
 	/// Accept connections forever, one bounded task per connection.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = accepting.next().await;
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize so the audit channel and the
 			// ban-aware authentication path see a plain `IpAddr::V4`.
@@ -139,11 +148,10 @@ impl Server {
 		}
 	}
 
-	async fn handle(
-		&self,
-		stream: tokio::net::TcpStream,
-		peer_ip: std::net::IpAddr,
-	) -> std::io::Result<()> {
+	async fn handle<S>(&self, stream: S, peer_ip: std::net::IpAddr) -> std::io::Result<()>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+	{
 		self.handle_inner(stream, peer_ip).await
 	}
 
@@ -321,7 +329,7 @@ where
 			let Some(tls) = tls_acceptor else {
 				return Ok(());
 			};
-			let upgraded = tls.accept(stream).await?;
+			let upgraded = crate::tls::accept_within(tls, stream).await?;
 			stream = Box::new(upgraded);
 			session.set_tls();
 			decoder = LineDecoder::new();
@@ -399,6 +407,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection for T {}
 #[cfg(test)]
 #[path = "server_tests_literals.rs"]
 mod tests_literals;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;
 
 #[path = "server_discard.rs"]
 mod discard;

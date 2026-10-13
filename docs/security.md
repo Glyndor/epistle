@@ -51,6 +51,9 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 
 - An authenticated sender may only use a `MAIL FROM` it owns — no spoofing, no
   null reverse-path from an authenticated session.
+- The message itself must carry exactly one `From` field naming one address the
+  account owns, on SMTP submission and on JMAP `EmailSubmission/set`. That is
+  the field the DKIM signature covers and the one DMARC judges at the receiver.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
 - JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,
