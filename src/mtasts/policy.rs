@@ -116,6 +116,16 @@ pub fn parse(text: &str) -> Result<Policy, PolicyError> {
 type FetchResult = Result<String, PolicyError>;
 type FetchFuture<'a> = Pin<Box<dyn Future<Output = FetchResult> + Send + 'a>>;
 
+/// Extract the `id=` attribute from a single `_mta-sts` TXT record. The
+/// record format is `v=STSv1; id=<id>[; <other>...]` per RFC 8461
+/// section 3.1; we only require the version and id fields. Returns
+/// `None` if the record is not an `STSv1` policy record or has no id.
+fn parse_txt_id(record: &str) -> Option<&str> {
+	let rest = record.strip_prefix("v=STSv1")?;
+	rest.split(';')
+		.find_map(|part| part.trim().strip_prefix("id="))
+}
+
 /// Fetches the HTTPS policy document. Abstracted for offline tests.
 pub trait PolicyFetcher: Send + Sync {
 	/// GET `https://mta-sts.<domain>/.well-known/mta-sts.txt`.
@@ -187,6 +197,12 @@ const NO_POLICY_CACHE: Duration = Duration::from_secs(600);
 struct Cached {
 	/// The policy, or `None` when the domain publishes none.
 	policy: Option<Policy>,
+	/// The `id=` parsed from the `_mta-sts` TXT record at the time the
+	/// entry was written. `None` when no v=STSv1 record was found, or
+	/// when the record had no `id=` attribute. Tracked so the next
+	/// `policy()` call can detect an id change before max_age elapses
+	/// (RFC 8461 section 3.3).
+	txt_id: Option<String>,
 	/// Until then the entry is used as is.
 	refresh: Instant,
 	/// Until then a policy still applies when a refresh fails (RFC 8461
@@ -218,6 +234,10 @@ impl PolicyStore {
 	/// policy early. Without one, a failed lookup or fetch is returned as
 	/// an error, and RFC 8461 section 3.3 has the caller deliver as
 	/// though the domain published no policy.
+	///
+	/// The TXT record is looked up on every call: RFC 8461 section 3.3
+	/// requires a refetch as soon as the published `id=` changes, which
+	/// can happen well before `max_age` runs out.
 	pub async fn policy(
 		&self,
 		dns: &dyn DnsLookup,
@@ -231,68 +251,120 @@ impl PolicyStore {
 			.expect("mta-sts cache mutex")
 			.get(&domain)
 			.cloned();
-		if let Some(entry) = &cached
-			&& now < entry.refresh
-		{
-			return Ok(entry.policy.clone());
-		}
 		let fallback = cached
-			.filter(|entry| now < entry.expires)
-			.and_then(|entry| entry.policy);
-
-		match self.discover(dns, &domain).await {
-			Ok(Some(policy)) => {
-				let max_age = Duration::from_secs(policy.max_age);
-				self.remember(
-					&domain,
-					Some(policy.clone()),
-					max_age.min(MAX_CACHE),
-					max_age,
-				);
-				Ok(Some(policy))
+			.as_ref()
+			.filter(|c| now < c.expires)
+			.and_then(|c| c.policy.clone());
+		// TXT lookup is mandatory (RFC 8461 section 3.3): if the published
+		// id differs from the cached one, refetch regardless of the refresh
+		// window. A lookup failure falls back to the cached policy only
+		// when one is still within its `max_age`; otherwise it propagates
+		// as a temporary error so the caller does not silently treat the
+		// domain as policy-free.
+		let observed = match self.observe_id(dns, &domain).await {
+			Ok(id) => id,
+			Err(error) => {
+				return match fallback {
+					Some(policy) => {
+						tracing::warn!(%domain, ?error, "MTA-STS TXT lookup failed; keeping the cached policy");
+						Ok(Some(policy))
+					}
+					None => Err(error),
+				};
 			}
-			Ok(None) => match fallback {
+		};
+		let id_changed = cached.as_ref().and_then(|c| c.txt_id.as_ref()) != observed.as_ref();
+		if !id_changed && cached.as_ref().is_some_and(|c| now < c.refresh) {
+			return Ok(cached.and_then(|c| c.policy));
+		}
+
+		match observed {
+			// Domain publishes a TXT record. The HTTPS body is fresh or we
+			// never managed to read it; either way, a refetch is required.
+			Some(id) => match self.fetcher.fetch(&domain).await {
+				Ok(body) => match parse(&body) {
+					Ok(policy) => {
+						let max_age = Duration::from_secs(policy.max_age);
+						self.remember(
+							&domain,
+							Some(policy.clone()),
+							Some(id),
+							max_age.min(MAX_CACHE),
+							max_age,
+						);
+						Ok(Some(policy))
+					}
+					Err(error) => match fallback {
+						Some(policy) => Ok(Some(policy)),
+						None => {
+							self.remember(&domain, None, Some(id), MAX_CACHE, MAX_CACHE);
+							Err(error)
+						}
+					},
+				},
+				Err(error) => match fallback {
+					Some(policy) => {
+						tracing::warn!(%domain, ?error, "MTA-STS refresh failed; keeping the cached policy");
+						Ok(Some(policy))
+					}
+					None => {
+						self.remember(&domain, None, Some(id), MAX_CACHE, MAX_CACHE);
+						Err(error)
+					}
+				},
+			},
+			// Domain publishes no v=STSv1 record. The cached policy, if
+			// any, still applies for the rest of its `max_age`; otherwise
+			// the domain has no MTA-STS policy and we say so.
+			None => match fallback {
 				Some(policy) => Ok(Some(policy)),
 				None => {
-					self.remember(&domain, None, NO_POLICY_CACHE, NO_POLICY_CACHE);
+					self.remember(&domain, None, None, NO_POLICY_CACHE, NO_POLICY_CACHE);
 					Ok(None)
 				}
-			},
-			Err(error) => match fallback {
-				Some(policy) => {
-					tracing::warn!(%domain, ?error, "MTA-STS refresh failed; keeping the cached policy");
-					Ok(Some(policy))
-				}
-				None => Err(error),
 			},
 		}
 	}
 
-	/// Discovery: the `_mta-sts` TXT record (section 3.1), then the policy.
-	async fn discover(
+	/// Parse the `id=` from the `_mta-sts` TXT record. Returns:
+	/// - `Err(Temporary)` when the TXT lookup itself failed;
+	/// - `Ok(Some(id))` when a v=STSv1 record is published and carries an id;
+	/// - `Ok(None)` when no v=STSv1 record is present (or the records
+	///   parse to one without an id, which the existing code never wrote
+	///   but tolerates).
+	async fn observe_id(
 		&self,
 		dns: &dyn DnsLookup,
 		domain: &str,
-	) -> Result<Option<Policy>, PolicyError> {
+	) -> Result<Option<String>, PolicyError> {
 		let records = match dns.txt(&format!("_mta-sts.{domain}")).await {
 			Ok(records) => records,
 			Err(DnsFailure::Temporary) => {
 				return Err(PolicyError::Temporary("TXT lookup failed".into()));
 			}
 		};
-		if !records.iter().any(|record| record.starts_with("v=STSv1")) {
-			return Ok(None);
+		for record in records {
+			if let Some(id) = parse_txt_id(&record) {
+				return Ok(Some(id.to_string()));
+			}
 		}
-		let body = self.fetcher.fetch(domain).await?;
-		parse(&body).map(Some)
+		Ok(None)
 	}
 
-	fn remember(&self, domain: &str, policy: Option<Policy>, refresh: Duration, expires: Duration) {
+	fn remember(
+		&self,
+		domain: &str,
+		policy: Option<Policy>,
+		txt_id: Option<String>,
+		refresh: Duration,
+		expires: Duration,
+	) {
 		let now = Instant::now();
 		self.cache.lock().expect("mta-sts cache mutex").insert(
 			domain.to_string(),
 			Cached {
 				policy,
+				txt_id,
 				refresh: now + refresh,
 				expires: now + expires,
 			},
