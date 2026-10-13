@@ -21,7 +21,7 @@ on:
       # `develop` because that is the branch the org uses for in-progress
       # work; weekly callers audit main by passing it through their matrix.
       ref:
-        description: Branch or ref to checkout before running the audit
+        description: Branch to audit, one of develop or main, or empty for the ref that triggered the run
         type: string
         default: "develop"
       # Pinned, not the runner's floating preinstalled Rust — see rust-ci.yml's
@@ -70,13 +70,33 @@ jobs:
     env:
       TOOL_VERSION: ${{ inputs.cargo-audit-version }}
     steps:
+      # The ref is checked against a fixed list and each branch is spelled
+      # out literally. The scheduled run executes cargo on the tree it
+      # checks out, in the default branch's context, so the ref must never
+      # be an arbitrary string a dispatch could set. `persist-credentials:
+      # false` keeps the token out of `.git/config`, where a later step
+      # could read it.
+      - name: Reject an unknown ref
+        if: inputs.ref != '' && inputs.ref != 'develop' && inputs.ref != 'main'
+        run: |
+          echo "::error::ref must be empty, develop or main."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.ref == ''
         with:
-          # Each invocation audits one ref, so the checkout is the ref
-          # the caller named in its matrix. `persist-credentials: false`
-          # matches what the rest of the workflow does; a token lying in
-          # `.git/config` would let the next step exfiltrate it.
-          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.ref == 'develop'
+        with:
+          ref: develop
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.ref == 'main'
+        with:
+          ref: main
           persist-credentials: false
 
       - name: Install toolchain
@@ -166,9 +186,28 @@ jobs:
     env:
       TOOL_VERSION: ${{ inputs.cargo-deny-version }}
     steps:
+      # Same fixed list as the audit job.
+      - name: Reject an unknown ref
+        if: inputs.ref != '' && inputs.ref != 'develop' && inputs.ref != 'main'
+        run: |
+          echo "::error::ref must be empty, develop or main."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.ref == ''
         with:
-          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.ref == 'develop'
+        with:
+          ref: develop
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.ref == 'main'
+        with:
+          ref: main
           persist-credentials: false
 
       - name: Install toolchain
