@@ -2,11 +2,13 @@
 //! (RFC 8508). Both end in a `{n}` / `{n+}` octet count whose payload the
 //! network layer collects after the command line.
 
+use super::date_time::split_date_time;
 use super::parse::{MAX_APPEND_SIZE, parse_astring};
 use super::{Command, LiteralAnnouncement, ParseError};
+use std::time::SystemTime;
 
-/// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date is
-/// accepted and ignored.
+/// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date
+/// becomes the message's INTERNALDATE.
 pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError> {
 	let bad = || ParseError::BadArguments(tag.to_string());
 	let (mailbox, rest) = parse_astring(args).ok_or_else(bad)?;
@@ -14,10 +16,11 @@ pub(super) fn parse_append(tag: &str, args: &str) -> Result<Command, ParseError>
 		return Err(bad());
 	}
 	let rest = rest.trim();
-	let (flags, literal) = parse_flags_and_literal(rest, &bad)?;
+	let (flags, date, literal) = parse_flags_and_literal(rest, &bad)?;
 	Ok(Command::Append {
 		mailbox,
 		flags,
+		date,
 		size: literal.size,
 		synchronizing: literal.synchronizing,
 		utf8: utf8_data_item(rest),
@@ -62,19 +65,20 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 	if mailbox.is_empty() {
 		return Err(bad());
 	}
-	let (flags, literal) = parse_flags_and_literal(rest.trim(), &bad)?;
+	let (flags, date, literal) = parse_flags_and_literal(rest.trim(), &bad)?;
 	Ok(Command::Replace {
 		sequence,
 		mailbox,
 		flags,
+		date,
 		size: literal.size,
 		uid,
 		synchronizing: literal.synchronizing,
 	})
 }
 
-/// Parse an optional `(flags)` group followed by the `{n}` / `{n+}` literal
-/// count shared by APPEND and REPLACE. The literal's synchronizing flag
+/// Parse an optional `(flags)` group and an optional quoted date-time
+/// followed by the `{n}` / `{n+}` literal count shared by APPEND and REPLACE. The literal's synchronizing flag
 /// (the optional `+` after the size) tells the network layer whether the
 /// client will already have sent the literal before reading the response
 /// (RFC 7888): for the non-synchronizing `{n+}` form the bytes arrive even
@@ -82,7 +86,7 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 fn parse_flags_and_literal(
 	rest: &str,
 	bad: &impl Fn() -> ParseError,
-) -> Result<(Vec<String>, LiteralAnnouncement), ParseError> {
+) -> Result<(Vec<String>, Option<SystemTime>, LiteralAnnouncement), ParseError> {
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
 		(
@@ -96,11 +100,12 @@ fn parse_flags_and_literal(
 		(Vec::new(), rest)
 	};
 
+	let (date, literal_text) = split_date_time(literal_text).map_err(|()| bad())?;
 	let literal = literal_announcement(literal_text).ok_or_else(bad)?;
 	if literal.size == 0 || literal.size > MAX_APPEND_SIZE {
 		return Err(bad());
 	}
-	Ok((flags, literal))
+	Ok((flags, date, literal))
 }
 
 /// Pull the trailing `{n}` / `{n+}` size off a literal-bearing command's

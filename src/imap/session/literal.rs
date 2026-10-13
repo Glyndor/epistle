@@ -5,6 +5,7 @@
 use super::mailbox::{self, Flag};
 use super::state::State;
 use super::{Output, PendingLiteral, Session};
+use std::time::SystemTime;
 
 /// Build the rejection `Output` for a literal-bearing command. When the
 /// command used the non-synchronizing `{n+}` form, the client already sent
@@ -18,11 +19,13 @@ fn reject_literal(tag: &str, synchronizing: bool, size: usize, response: &str) -
 }
 
 impl Session {
+	#[allow(clippy::too_many_arguments)]
 	pub(super) fn append_begin(
 		&mut self,
 		tag: &str,
 		mailbox: &str,
 		flag_tokens: &[String],
+		date: Option<SystemTime>,
 		size: usize,
 		synchronizing: bool,
 		utf8: bool,
@@ -92,6 +95,7 @@ impl Session {
 			tag: tag.to_string(),
 			mailbox: mailbox.to_string(),
 			flags,
+			date,
 			replace: None,
 		});
 		// RFC 7888 §4: a non-synchronizing literal ({n+}) has no
@@ -122,6 +126,7 @@ impl Session {
 		sequence: u32,
 		mailbox: &str,
 		flag_tokens: &[String],
+		date: Option<SystemTime>,
 		size: usize,
 		uid: bool,
 		synchronizing: bool,
@@ -203,6 +208,7 @@ impl Session {
 			tag: tag.to_string(),
 			mailbox: mailbox.to_string(),
 			flags,
+			date,
 			// Resolve the sequence to a UID at command start: a
 			// concurrent session that expunges this message (or any
 			// other change to the mailbox) between this point and
@@ -229,6 +235,7 @@ impl Session {
 			tag,
 			mailbox,
 			flags,
+			date,
 			replace,
 		} = pending;
 		let Some(account) = self.account().map(str::to_string) else {
@@ -239,11 +246,12 @@ impl Session {
 		} else {
 			"APPEND"
 		};
-		let id = match mailbox::append(
+		let id = match mailbox::append_dated(
 			&self.data_dir,
 			&account,
 			&mailbox,
 			&flags,
+			date,
 			data,
 			&self.crypto,
 		) {

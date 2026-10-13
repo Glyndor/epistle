@@ -29,9 +29,7 @@ declare -A SKIP=()
 # shrinks and every other script is held to passing.
 declare -A KNOWN_FAILING=(
 	[sort-addresses]="SORT and THREAD order differs from RFC 5256"
-	[sort-arrival]="SORT and THREAD order differs from RFC 5256"
 	[sort-date]="SORT and THREAD order differs from RFC 5256"
-	[sort-size]="SORT and THREAD order differs from RFC 5256"
 	[sort-subject]="SORT and THREAD order differs from RFC 5256"
 	[thread-orderedsubject]="SORT and THREAD order differs from RFC 5256"
 	[thread-orderedsubject2]="SORT and THREAD order differs from RFC 5256"
