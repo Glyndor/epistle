@@ -34,11 +34,13 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - **Breached / common passwords are refused locally**, with no network call.
   The bundled set merges the curated starter list under `src/password/`
   with the NCSC top-100k most-used passwords from `danielmiessler/SecLists`
-  (`Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt`, raw
-  file committed under `src/password/breached_top100k.txt` so the build
-  needs no network). SecLists is MIT-licensed; the underlying list was
-  published by the UK National Cyber Security Centre under the Open
-  Government Licence v3.0, and the carrier file ships both credits. The
+  (`Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt`,
+  committed under `src/password/breached_top100k.txt` so the build needs no
+  network, and filtered to the 1,203 entries of 12 to 64 printable-ASCII
+  characters, the only ones the lookup can reach). SecLists is MIT-licensed;
+  the underlying list was published by the UK National Cyber Security Centre
+  under the Open Government Licence v3.0. The file header and
+  `debian/copyright` carry both credits. The
   lookup is case-insensitive (the in-memory set is keyed by the
   case-folded form) and only runs on inputs that have already cleared the
   12-to-64-character printable-ASCII gate, so a strong random credential
