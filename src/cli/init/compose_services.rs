@@ -133,7 +133,9 @@ impl ComposeService {
 			// from the sysctl below, not from NET_BIND_SERVICE.
 			cap_drop: drop_all(),
 			cap_add: None,
-			read_only: None,
+			// `podman diff` after mail in, a submission and an IMAP read
+			// showed no write outside the mounts, so no tmpfs either.
+			read_only: Some(true),
 			tmpfs: None,
 			// Lower the unprivileged port start inside the
 			// container's network namespace so the mail user
@@ -330,7 +332,7 @@ impl ComposeService {
 			security_opt: vec!["no-new-privileges".to_string()],
 			cap_drop: drop_all(),
 			cap_add: None,
-			read_only: None,
+			read_only: Some(true),
 			tmpfs: None,
 			sysctls: None,
 			secrets: None,
@@ -346,6 +348,10 @@ impl ComposeService {
 			// starts. tini stays PID 1, as under /init, so SIGTERM reaches
 			// freshclam and its children are reaped.
 			service.user = Some("100:101".to_string());
+			// UpdateLogFile in the image's freshclam.conf. The tmpfs root is
+			// root's unless its mode opens it, and freshclam runs as clamav.
+			// The log stops growing at LogFileMaxSize (1 MiB by default).
+			service.tmpfs = Some(vec!["/var/log/clamav:size=16m,mode=1777".to_string()]);
 			service.entrypoint = Some(
 				[
 					"/sbin/tini",
@@ -367,6 +373,9 @@ impl ComposeService {
 			// of /run/clamav (CHOWN), chmod of the now clamav-owned
 			// directory (FOWNER), and clamd's own step down to `User
 			// clamav`, which failed in initgroups() (SETGID, SETUID).
+			// clamd's TemporaryDirectory: every INSTREAM body and every
+			// archive member it extracts lands here while it is scanned.
+			service.tmpfs = Some(vec!["/tmp:size=512m,mode=1777".to_string()]);
 			service.cap_add = Some(
 				["CHOWN", "FOWNER", "SETGID", "SETUID"]
 					.map(str::to_string)

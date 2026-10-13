@@ -740,3 +740,7 @@ mod tests_service;
 #[cfg(test)]
 #[path = "compose_tests_capabilities.rs"]
 mod tests_capabilities;
+
+#[cfg(test)]
+#[path = "compose_tests_read_only.rs"]
+mod tests_read_only;
