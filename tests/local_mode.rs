@@ -195,7 +195,14 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		port_base_str.as_str(),
 	];
 	let mut child = Child::spawn(&args, dir);
+	drive(&mut child, dir, port_base).map_err(|message| child.fail_with_stderr(message))
+}
 
+/// Probe every listener of a running child, then kill it and check
+/// what it left behind. A failure that did not already quote the
+/// child's stderr gets it from `run_once`, so a probe that broke
+/// because the child lost a bind race still carries `EADDRINUSE`.
+fn drive(child: &mut Child, dir: &Path, port_base: u16) -> Result<(), String> {
 	let bind_deadline = Instant::now() + BIND_DEADLINE;
 	let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
 	let cert_pem_path = dir.join("cert.pem");
@@ -205,12 +212,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	// and start with `220 `, otherwise the listener could pass the
 	// bind check without being SMTP.
 	let smtp_addr = SocketAddr::new(loopback, port_base + 25);
-	let mut smtp = wait_for_bind(
-		smtp_addr,
-		bind_deadline,
-		"waiting for SMTP port",
-		&mut child,
-	)?;
+	let mut smtp = wait_for_bind(smtp_addr, bind_deadline, "waiting for SMTP port", child)?;
 	let banner = read_banner(
 		&mut smtp,
 		Instant::now() + BANNER_READ_DEADLINE,
@@ -249,7 +251,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		smtp_addr,
 		bind_deadline,
 		"opening a fresh connection to the SMTP port for the negative TLS probe",
-		&mut child,
+		child,
 	)?;
 	let smtp_tls_phase = format!("SMTP port {smtp_addr} must NOT be classified as TLS");
 	probe_tls_real_must_fail(smtp_tls_stream, &smtp_tls_phase, &cert_pem_path)?;
@@ -260,7 +262,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		submission_addr,
 		bind_deadline,
 		"waiting for submission port",
-		&mut child,
+		child,
 	)?;
 	let submission_banner = read_banner(
 		&mut submission,
@@ -282,12 +284,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 
 	// IMAP (143): plaintext IMAP greeting, usually `* OK ... ready`.
 	let imap_addr = SocketAddr::new(loopback, port_base + 143);
-	let mut imap = wait_for_bind(
-		imap_addr,
-		bind_deadline,
-		"waiting for IMAP port",
-		&mut child,
-	)?;
+	let mut imap = wait_for_bind(imap_addr, bind_deadline, "waiting for IMAP port", child)?;
 	let imap_banner = read_banner(
 		&mut imap,
 		Instant::now() + BANNER_READ_DEADLINE,
@@ -316,7 +313,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 		submissions_addr,
 		bind_deadline,
 		"waiting for submissions port",
-		&mut child,
+		child,
 	)?;
 	let submissions_greeting = probe_tls_real(
 		submissions_stream,
@@ -337,12 +334,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	// IMAPS (993): implicit TLS, same shape as submissions, greeting is
 	// `* OK`.
 	let imaps_addr = SocketAddr::new(loopback, port_base + 993);
-	let imaps_stream = wait_for_bind(
-		imaps_addr,
-		bind_deadline,
-		"waiting for IMAPS port",
-		&mut child,
-	)?;
+	let imaps_stream = wait_for_bind(imaps_addr, bind_deadline, "waiting for IMAPS port", child)?;
 	let imaps_greeting = probe_tls_real(
 		imaps_stream,
 		&format!("IMAPS TLS probe at {imaps_addr}"),
@@ -363,7 +355,7 @@ fn run_once(dir: &Path, port_base: u16) -> Result<(), String> {
 	// with an `HTTP/1.` status line so the listener is HTTP, not just
 	// an open port.
 	let api_addr = SocketAddr::new(loopback, port_base + 8025);
-	let mut api = wait_for_bind(api_addr, bind_deadline, "waiting for API port", &mut child)?;
+	let mut api = wait_for_bind(api_addr, bind_deadline, "waiting for API port", child)?;
 	use std::io::Write;
 	api.set_read_timeout(Some(Duration::from_millis(500)))
 		.map_err(|error| format!("waiting for API port: set_read_timeout: {error:?}"))?;

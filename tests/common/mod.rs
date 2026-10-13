@@ -8,8 +8,10 @@
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::process::{Child as ChildProc, ChildStderr, Command, Stdio};
+use std::process::{Child as ChildProc, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Path to the binary `cargo test` builds. `CARGO_BIN_EXE_<name>` is
@@ -57,14 +59,31 @@ pub const BANNER_READ_DEADLINE: Duration = Duration::from_secs(15);
 #[allow(dead_code)] // only the `local_mode` target drives a TLS handshake; the restart target shares the constant.
 pub const TLS_PROBE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long [`Child::fail_with_stderr`] lets a failing child exit on
+/// its own before killing it. A child that lost a bind race prints
+/// `EADDRINUSE` and exits; the retry loops only recognise that case
+/// when the text is in the failure message, so the harness gives the
+/// child a moment to write it instead of killing it first.
+const CHILD_EXIT_GRACE: Duration = Duration::from_secs(2);
+
 /// Try once to open `addr` for reading. Returns `None` when the
-/// connection is refused or the kernel has not answered within the
-/// 200 ms connect timeout; the caller polls again. Anything else
-/// bubbles up with the phase name attached so the failure says which
-/// bind step tripped.
+/// connection is refused, when the kernel has not answered within the
+/// 200 ms connect timeout, or when the socket connected to itself;
+/// the caller polls again. Anything else bubbles up with the phase
+/// name attached so the failure says which bind step tripped.
+///
+/// The self-connect case is real: the listener ports sit inside
+/// Linux's ephemeral range (32768..=60999 by default), and a connect
+/// to a loopback port nobody listens on succeeds when the kernel
+/// happens to pick that same port as the source (TCP simultaneous
+/// open). Polling for a port is exactly the loop that eventually hits
+/// it, and the harness used to read that as "the child is listening".
 pub fn try_connect(addr: SocketAddr, phase: &str) -> Option<TcpStream> {
 	match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
 		Ok(stream) => {
+			if stream.local_addr().ok() == stream.peer_addr().ok() {
+				return None;
+			}
 			// Disable Nagle so the greeting lands in one read on the
 			// test side; the SMTP server is small enough that it fits.
 			let _ = stream.set_nodelay(true);
@@ -80,10 +99,21 @@ pub fn try_connect(addr: SocketAddr, phase: &str) -> Option<TcpStream> {
 	}
 }
 
-/// Block until `addr` accepts a TCP connection or `deadline` elapses.
-/// `phase` appears in every error path so the failure message says
-/// which wait tripped. If the child has already exited by the time
-/// the deadline arrives, the message quotes the child's stderr.
+/// Block until the child has logged that it bound `addr` and `addr`
+/// accepts a TCP connection, or `deadline` elapses. `phase` appears in
+/// every error path so the failure message says which wait tripped.
+/// If the child has already exited by the time the deadline arrives,
+/// the message quotes the child's stderr.
+///
+/// A successful connect alone does not prove the port is the child's:
+/// another process may hold it (a parallel test, or anything else on
+/// the host), and a connect can land on itself (see [`try_connect`]).
+/// Either way the harness would go on to talk to, or kill the child
+/// on the strength of, a listener that is not the child's. Gating on
+/// the child's own `listening addr=<addr>` log line, which `serve`
+/// prints only after the bind returned, closes both holes. That line
+/// comes after `epistle local` wrote `mail.toml`, so it also proves
+/// the directory is complete.
 pub fn wait_for_bind(
 	addr: SocketAddr,
 	deadline: Instant,
@@ -93,7 +123,9 @@ pub fn wait_for_bind(
 	let started = Instant::now();
 	let budget = deadline.saturating_duration_since(started);
 	loop {
-		if let Some(stream) = try_connect(addr, phase) {
+		if child.logged_bind(addr)
+			&& let Some(stream) = try_connect(addr, phase)
+		{
 			return Ok(stream);
 		}
 		match child.proc.try_wait() {
@@ -112,7 +144,7 @@ pub fn wait_for_bind(
 			let (_stdout, stderr) =
 				child.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, phase)?;
 			return Err(format!(
-				"{phase}: port {addr} did not start accepting within {budget:?}\nstderr:\n{}",
+				"{phase}: the child did not bind {addr} and accept on it within {budget:?}\nstderr:\n{}",
 				redact_password(&stderr)
 			));
 		}
@@ -199,14 +231,25 @@ pub fn read_banner(
 /// reap it on a failed assertion. The guard is explicit because
 /// leaving a child running across tests would pile up ports and file
 /// descriptors.
+///
+/// stderr is collected by a reader thread from the moment the child
+/// starts, so the harness can look for the child's own log lines
+/// while it is still running (see [`wait_for_bind`]) without blocking
+/// on a pipe that only reaches EOF when the child exits.
 pub struct Child {
 	pub proc: ChildProc,
-	pub stderr: ChildStderr,
+	stderr: Arc<Mutex<Vec<u8>>>,
+	reader: Option<JoinHandle<()>>,
+	/// Set once [`Child::kill_and_drain`] has handed stderr to a
+	/// caller, which then owns quoting it in its failure message.
+	drained: bool,
 }
 
 impl Child {
 	pub fn spawn(args: &[&str], _dir: &Path) -> Self {
 		let mut cmd = Command::new(binary());
+		// `NO_COLOR` keeps the log lines free of ANSI escapes, so
+		// `logged_bind` can match them as plain text.
 		cmd.args(args)
 			.env_remove("RUST_LOG")
 			.env("NO_COLOR", "1")
@@ -214,8 +257,46 @@ impl Child {
 			.stderr(Stdio::piped())
 			.stdin(Stdio::null());
 		let mut proc = cmd.spawn().expect("spawn epistle local");
-		let stderr = proc.stderr.take().expect("stderr piped");
-		Self { proc, stderr }
+		let mut pipe = proc.stderr.take().expect("stderr piped");
+		let stderr = Arc::new(Mutex::new(Vec::new()));
+		let sink = Arc::clone(&stderr);
+		let reader = std::thread::spawn(move || {
+			let mut chunk = [0u8; 4096];
+			loop {
+				match pipe.read(&mut chunk) {
+					Ok(0) => break,
+					Ok(n) => sink
+						.lock()
+						.unwrap_or_else(PoisonError::into_inner)
+						.extend_from_slice(&chunk[..n]),
+					Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+					Err(_) => break,
+				}
+			}
+		});
+		Self {
+			proc,
+			stderr,
+			reader: Some(reader),
+			drained: false,
+		}
+	}
+
+	/// Everything the child has written to stderr so far.
+	pub fn stderr_snapshot(&self) -> Vec<u8> {
+		self.stderr
+			.lock()
+			.unwrap_or_else(PoisonError::into_inner)
+			.clone()
+	}
+
+	/// True once the child has logged that it bound `addr`. `serve`
+	/// prints `listening addr=<addr> kind=<kind>` right after the bind
+	/// returns; the trailing space keeps `127.0.0.1:3300` from matching
+	/// `127.0.0.1:33000`.
+	pub fn logged_bind(&self, addr: SocketAddr) -> bool {
+		let needle = format!("listening addr={addr} ");
+		String::from_utf8_lossy(&self.stderr_snapshot()).contains(&needle)
 	}
 
 	/// Kill the child, poll for the kernel to reap it under a
@@ -225,6 +306,7 @@ impl Child {
 		deadline: Instant,
 		phase: &str,
 	) -> Result<(Vec<u8>, Vec<u8>), String> {
+		self.drained = true;
 		let _ = self.proc.kill();
 		loop {
 			match self.proc.try_wait() {
@@ -233,10 +315,9 @@ impl Child {
 				Err(error) => return Err(format!("{phase}: try_wait: {error:?}")),
 			}
 			if Instant::now() >= deadline {
-				let stderr = self.drain_stderr_only();
 				return Err(format!(
 					"{phase}: child did not exit within the deadline\nstderr:\n{}",
-					redact_password(&stderr)
+					redact_password(&self.stderr_snapshot())
 				));
 			}
 			std::thread::sleep(Duration::from_millis(20));
@@ -245,14 +326,34 @@ impl Child {
 		if let Some(mut out) = self.proc.stdout.take() {
 			let _ = out.read_to_end(&mut stdout);
 		}
-		let stderr = self.drain_stderr_only();
-		Ok((stdout, stderr))
+		// The child is reaped, so its end of the pipe is closed and the
+		// reader thread reaches EOF; joining it makes the snapshot
+		// complete.
+		if let Some(reader) = self.reader.take() {
+			let _ = reader.join();
+		}
+		Ok((stdout, self.stderr_snapshot()))
 	}
 
-	pub fn drain_stderr_only(&mut self) -> Vec<u8> {
-		let mut stderr = Vec::new();
-		let _ = self.stderr.read_to_end(&mut stderr);
-		stderr
+	/// Attach the child's stderr to `message` unless a caller already
+	/// drained it (every `kill_and_drain` caller quotes it itself). The
+	/// child gets [`CHILD_EXIT_GRACE`] to exit on its own first, so a
+	/// child that is dying of a bind race has written `EADDRINUSE`
+	/// before the retry loops look for it.
+	pub fn fail_with_stderr(&mut self, message: String) -> String {
+		if self.drained {
+			return message;
+		}
+		let grace = Instant::now() + CHILD_EXIT_GRACE;
+		while Instant::now() < grace && matches!(self.proc.try_wait(), Ok(None)) {
+			std::thread::sleep(Duration::from_millis(20));
+		}
+		match self.kill_and_drain(Instant::now() + BANNER_READ_DEADLINE, "collecting stderr") {
+			Ok((_stdout, stderr)) => {
+				format!("{message}\nstderr:\n{}", redact_password(&stderr))
+			}
+			Err(error) => format!("{message}\n{error}"),
+		}
 	}
 }
 
