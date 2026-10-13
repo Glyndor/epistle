@@ -550,3 +550,6 @@ async fn without_a_hostname_no_tags_are_sent() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+#[path = "tests_contract.rs"]
+mod contract;
