@@ -360,31 +360,13 @@ impl Server {
 
 			if rejected_tail {
 				// What follows a drained literal belongs to the rejected
-				// command: its CRLF, the `)` closing a UTF8 APPEND item, or
-				// the next message of a MULTIAPPEND. Answering it as a new
-				// command would send `* BAD` for an empty line. Drop it, and
-				// drain a further non-synchronizing literal it announces.
-				rejected_tail = false;
-				let tail = String::from_utf8_lossy(&line);
-				if let Some(literal) = super::command::literal_announcement_in_tail(&tail) {
-					if literal.size > super::command::MAX_APPEND_SIZE {
-						stream.write_all(b"* BYE literal too large\r\n").await?;
-						stream.flush().await?;
-						return Ok(());
-					}
-					if !literal.synchronizing {
-						if !discard::literal_or_close(
-							&mut *stream,
-							&mut decoder,
-							literal.size,
-							self.read_timeout,
-						)
-						.await?
-						{
-							return Ok(());
-						}
-						rejected_tail = true;
-					}
+				// command (its CRLF, a UTF8 item's `)`, a MULTIAPPEND's next
+				// message), not to a new one.
+				match discard::rejected_tail(&mut *stream, &mut decoder, &line, self.read_timeout)
+					.await?
+				{
+					Some(more) => rejected_tail = more,
+					None => return Ok(()),
 				}
 				continue;
 			}

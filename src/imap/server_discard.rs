@@ -67,3 +67,33 @@ pub(super) async fn literal_or_close<S: AsyncRead + AsyncWrite + Unpin + ?Sized>
 		Err(error) => Err(error),
 	}
 }
+
+/// Drop a line that follows a drained literal of a rejected command: its
+/// CRLF, the `)` closing a UTF8 APPEND item, or the next message of a
+/// MULTIAPPEND. Answering it as a new command would send `* BAD` for an
+/// empty line. A further non-synchronizing literal it announces is drained
+/// too. `Some(true)` means the next line is still part of that command,
+/// `Some(false)` that the command is over, `None` that the connection ends.
+pub(super) async fn rejected_tail<S: AsyncRead + AsyncWrite + Unpin + ?Sized>(
+	stream: &mut S,
+	decoder: &mut LineDecoder,
+	line: &[u8],
+	deadline: Duration,
+) -> std::io::Result<Option<bool>> {
+	let tail = String::from_utf8_lossy(line);
+	let Some(literal) = crate::imap::command::literal_announcement_in_tail(&tail) else {
+		return Ok(Some(false));
+	};
+	if literal.size > crate::imap::command::MAX_APPEND_SIZE {
+		stream.write_all(b"* BYE literal too large\r\n").await?;
+		stream.flush().await?;
+		return Ok(None);
+	}
+	if literal.synchronizing {
+		return Ok(Some(false));
+	}
+	if !literal_or_close(stream, decoder, literal.size, deadline).await? {
+		return Ok(None);
+	}
+	Ok(Some(true))
+}
