@@ -121,8 +121,9 @@ fn assistant_accepts_automatic_with_minimal_inputs() {
 	             \n";
 	let (out, result) = harness(input);
 	let text = parse_out(&out);
-	assert!(result.is_ok(), "expected ok: got {text}, err={:?}", result);
-	let filled = result.unwrap();
+	let Ok(filled) = result else {
+		panic!("the assistant refused the answers; transcript: {text}");
+	};
 	assert!(matches!(filled.answers.mode, Mode::Automatic));
 	assert!(filled.answers.dns.is_some());
 }
