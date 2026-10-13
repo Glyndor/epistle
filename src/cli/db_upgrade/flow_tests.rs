@@ -15,6 +15,8 @@ struct Fake {
 	/// Counts after the restore differ from before.
 	lossy: bool,
 	loaded: bool,
+	/// The lines reported to the operator, in order.
+	logged: Vec<String>,
 }
 
 impl Fake {
@@ -71,13 +73,15 @@ impl Stack for Fake {
 		self.loaded = true;
 		Ok(())
 	}
-	fn log(&mut self, _: &str) {}
+	fn log(&mut self, line: &str) {
+		self.logged.push(line.to_string());
+	}
 }
 
 #[test]
 fn the_data_moves_to_the_new_major_and_the_counts_are_compared() {
 	let mut stack = Fake::new();
-	let summary = upgrade(&mut stack, NEW).expect("upgrade");
+	upgrade(&mut stack, NEW).expect("upgrade");
 	assert_eq!(
 		stack.calls,
 		[
@@ -95,6 +99,7 @@ fn the_data_moves_to_the_new_major_and_the_counts_are_compared() {
 		]
 	);
 	assert!(stack.compose.contains(NEW));
+	let summary = stack.logged.last().map(String::as_str).unwrap_or_default();
 	assert!(
 		summary.contains("/var/lib/postgresql/18"),
 		"the operator is told where the old cluster stays: {summary}"
@@ -104,8 +109,11 @@ fn the_data_moves_to_the_new_major_and_the_counts_are_compared() {
 #[test]
 fn the_same_major_is_left_alone() {
 	let mut stack = Fake::new();
-	let summary = upgrade(&mut stack, "docker.io/library/postgres:18@sha256:cccc").unwrap();
-	assert!(summary.contains("already"), "{summary}");
+	upgrade(&mut stack, "docker.io/library/postgres:18@sha256:cccc").unwrap();
+	assert_eq!(
+		stack.logged,
+		["the stack already runs PostgreSQL 18; nothing to upgrade"]
+	);
 	assert!(stack.calls.is_empty());
 }
 
