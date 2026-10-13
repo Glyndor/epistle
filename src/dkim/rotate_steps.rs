@@ -273,8 +273,8 @@ impl Rotator {
 		for entry in entries.flatten() {
 			let name = entry.file_name();
 			let name = name.to_string_lossy();
-			let stale = (name.starts_with(".dkim-") && name.ends_with(".tmp"))
-				|| name == "dkim-rotation.json.tmp";
+			let ours = name.starts_with(".dkim-rotation.json.") || name.starts_with(".dkim-ed");
+			let stale = (ours && name.ends_with(".tmp")) || name == "dkim-rotation.json.tmp";
 			if stale && let Err(error) = std::fs::remove_file(entry.path()) {
 				tracing::warn!(%error, file = %name, "cannot remove a stale DKIM temporary file");
 			}

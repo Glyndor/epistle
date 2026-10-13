@@ -260,6 +260,8 @@ pub struct Rotator {
 	publication_check: Option<(Arc<dyn crate::spf::DnsLookup>, Vec<std::time::Duration>)>,
 	/// Where a rotation that could not be confirmed is reported.
 	webhook: Option<Arc<crate::webhook::Webhook>>,
+	/// Selectors outside the state that are never orphans.
+	keep: Vec<String>,
 	/// The step at which a test stops the rotator.
 	#[cfg(test)]
 	crash_at: Option<steps::Step>,
@@ -301,6 +303,7 @@ impl Rotator {
 			request_retry_at: std::sync::atomic::AtomicU64::new(0),
 			publication_check: None,
 			webhook: None,
+			keep: Vec::new(),
 			#[cfg(test)]
 			crash_at: None,
 		}
@@ -436,6 +439,14 @@ mod tests_crash;
 #[cfg(test)]
 #[path = "rotate_tests_resume.rs"]
 mod tests_resume;
+
+#[path = "rotate_orphans.rs"]
+mod orphans;
+pub use orphans::{CLEANUP_FILE, Orphans, find_orphans, request_cleanup};
+
+#[cfg(test)]
+#[path = "rotate_tests_orphans.rs"]
+mod tests_orphans;
 
 #[path = "rotate_publication.rs"]
 mod publication;

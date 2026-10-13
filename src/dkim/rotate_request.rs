@@ -118,9 +118,10 @@ impl Rotator {
 		}
 	}
 
-	/// One pass of the server's background work: the operator's request first,
-	/// then the scheduled tick when `auto_due`. A rotation just performed for a
-	/// request makes the scheduled tick pointless for this pass.
+	/// One pass of the server's background work: the operator's rotation
+	/// request first, then a cleanup request, then the scheduled tick when
+	/// `auto_due`. A rotation just performed for a request makes the
+	/// scheduled tick pointless for this pass.
 	pub async fn cycle(&self, now: u64, auto_due: bool) -> Result<(), RotateError> {
 		let performed = match self.serve_request(now).await {
 			Ok(performed) => performed,
@@ -129,6 +130,9 @@ impl Rotator {
 				false
 			}
 		};
+		if let Err(error) = self.serve_cleanup().await {
+			tracing::warn!(%error, "requested DKIM cleanup left something behind");
+		}
 		if auto_due && !performed {
 			self.tick(now).await?;
 		}

@@ -114,7 +114,11 @@ async fn temporary_files_of_killed_writes_are_swept() {
 		".dkim-ed100.key.0190f3a1.tmp",
 		"dkim-rotation.json.tmp",
 	];
-	let kept = ["dkim-rotate.tmp", ".accounts.toml.0190f3a1.tmp"];
+	let kept = [
+		"dkim-rotate.tmp",
+		".dkim-cleanup.request.0190f3a1.tmp",
+		".accounts.toml.0190f3a1.tmp",
+	];
 	for name in stale.iter().chain(&kept) {
 		std::fs::write(lab.root.join(name), "x").expect("temp file");
 	}

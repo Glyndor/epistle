@@ -49,7 +49,21 @@ impl DnsProvider for Zone {
 	}
 
 	fn list(&self, _zone: &str) -> ListOp<'_> {
-		Box::pin(async { Ok(Vec::new()) })
+		let records = self
+			.records
+			.lock()
+			.unwrap()
+			.iter()
+			.flat_map(|(name, values)| {
+				values.iter().map(move |value| DnsRecord {
+					name: format!("{name}."),
+					kind: crate::dns::provider::RecordKind::Txt,
+					value: value.clone(),
+					ttl: 300,
+				})
+			})
+			.collect();
+		Box::pin(async move { Ok(records) })
 	}
 }
 
@@ -152,7 +166,7 @@ impl Lab {
 	}
 
 	/// Write a key file and publish its TXT under `selector` for every domain.
-	fn install_key(&self, selector: &str, file: &str) -> PathBuf {
+	pub(super) fn install_key(&self, selector: &str, file: &str) -> PathBuf {
 		let (pem, record) = super::super::generate_key().expect("key");
 		let path = self.root.join(file);
 		std::fs::write(&path, pem).expect("write key");
