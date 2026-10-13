@@ -203,6 +203,49 @@ impl Host for System {
 		checked(command, "podman start")
 	}
 
+	fn stop_account(&mut self) -> Result<(), String> {
+		let manager = format!("user@{}.service", self.uid);
+		let active = Command::new("systemctl")
+			.args(["is-active", "--quiet", &manager])
+			.status()
+			.is_ok_and(|status| status.success());
+		if active {
+			let mut command = Command::new("systemctl");
+			command.args(["stop", &manager]);
+			checked(command, &format!("systemctl stop {manager}"))?;
+		}
+		if self.wait_for_no_processes(PROCESS_WAIT) {
+			return Ok(());
+		}
+		// What outlives the user manager runs outside its cgroup, like a pause
+		// process a `runuser podman` started. The stack is down, so end it.
+		for (pid, line) in account_processes(self.uid) {
+			self.log(&format!("stopping leftover process {line}"));
+			// SAFETY: kill only sends a signal; the pid was read from /proc
+			// for the service account a moment ago.
+			unsafe { libc::kill(pid, libc::SIGTERM) };
+		}
+		self.wait_for_no_processes(PROCESS_WAIT);
+		Ok(())
+	}
+
+	fn start_account(&mut self) -> Result<(), String> {
+		if !Path::new("/var/lib/systemd/linger").join(ACCOUNT).exists() {
+			return Ok(());
+		}
+		let manager = format!("user@{}.service", self.uid);
+		let mut command = Command::new("systemctl");
+		command.args(["start", &manager]);
+		checked(command, &format!("systemctl start {manager}"))
+	}
+
+	fn account_processes(&mut self) -> Vec<String> {
+		account_processes(self.uid)
+			.into_iter()
+			.map(|(_, line)| line)
+			.collect()
+	}
+
 	fn migrate(&mut self) -> Result<(), String> {
 		if !on_path("podman") {
 			return Ok(());
@@ -273,6 +316,63 @@ impl System {
 	fn journal_path(&self) -> PathBuf {
 		self.home.join(".subid-move")
 	}
+
+	/// Poll until the account has no process, at most `limit`.
+	fn wait_for_no_processes(&self, limit: std::time::Duration) -> bool {
+		let deadline = std::time::Instant::now() + limit;
+		loop {
+			if account_processes(self.uid).is_empty() {
+				return true;
+			}
+			if std::time::Instant::now() >= deadline {
+				return false;
+			}
+			std::thread::sleep(std::time::Duration::from_millis(200));
+		}
+	}
+}
+
+/// How long the account's processes get to end after each stop.
+const PROCESS_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Every process whose real or effective uid is `uid`, as `(pid, "<pid>
+/// <command>")`, read from `/proc`. A process that ends while it is read is
+/// skipped.
+fn account_processes(uid: u32) -> Vec<(i32, String)> {
+	let Ok(entries) = std::fs::read_dir("/proc") else {
+		return Vec::new();
+	};
+	let mut found = Vec::new();
+	for entry in entries.flatten() {
+		let Some(pid) = entry
+			.file_name()
+			.to_str()
+			.and_then(|name| name.parse::<i32>().ok())
+		else {
+			continue;
+		};
+		let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else {
+			continue;
+		};
+		if !owned_by(&status, uid) {
+			continue;
+		}
+		let command = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+		found.push((pid, format!("{pid} {}", command.trim())));
+	}
+	found
+}
+
+/// Whether a `/proc/<pid>/status` text has `uid` as its real or effective uid.
+pub(super) fn owned_by(status: &str, uid: u32) -> bool {
+	status
+		.lines()
+		.find_map(|line| line.strip_prefix("Uid:"))
+		.is_some_and(|ids| {
+			ids.split_whitespace()
+				.take(2)
+				.any(|id| id.parse::<u32>() == Ok(uid))
+		})
 }
 
 /// Write `text` to `path` through a temporary file, synced before the rename,
@@ -285,3 +385,7 @@ fn write_synced(path: &Path, text: &str) -> io::Result<()> {
 	file.sync_all()?;
 	std::fs::rename(&partial, path)
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

@@ -3,7 +3,9 @@
 //!
 //! The order follows podman-system-migrate(1): the running containers and
 //! the pause process that keeps the user namespace alive are stopped before
-//! the tables change, or the old mapping survives the edit. A journal is
+//! the tables change, or the old mapping survives the edit. Then the whole
+//! account stops, its systemd user manager included: `usermod` refuses to
+//! touch the ranges of a user with any process left. A journal is
 //! written before the tables change and removed only once the move is
 //! complete or undone, so a run that was killed half way is undone by the
 //! next one before it tries again.
@@ -37,6 +39,14 @@ pub(crate) trait Host {
 	fn running_containers(&mut self) -> Result<Vec<String>, String>;
 	/// `podman start` the containers, as the account.
 	fn start_containers(&mut self, ids: &[String]) -> Result<(), String>;
+	/// Stop the account's systemd user manager (`user@<uid>.service`) and
+	/// whatever it left running, waiting for the processes to end.
+	fn stop_account(&mut self) -> Result<(), String>;
+	/// Start the account's user manager again when linger is on; it brings
+	/// back the units enabled for `default.target`.
+	fn start_account(&mut self) -> Result<(), String>;
+	/// The account's running processes, as `<pid> <command>`.
+	fn account_processes(&mut self) -> Vec<String>;
 	/// `podman system migrate`, as the account.
 	fn migrate(&mut self) -> Result<(), String>;
 	/// Shift the owner of the account's files.
@@ -118,9 +128,10 @@ pub(crate) fn run(host: &mut impl Host, targets: Targets) -> Result<String, Stri
 	let result = (|| {
 		host.stop_units(&plan.units)?;
 		host.migrate()?;
+		host.stop_account()?;
 		host.set_journal(Some(&super::journal::render(&plan)))?;
 		stage = Stage::Rewritten;
-		host.usermod(&usermod_args(&plan, false))?;
+		rewrite(host, &usermod_args(&plan, false))?;
 		let (uid_after, gid_after) = host.tables()?;
 		verify(&plan, (&subuid, &subgid), (&uid_after, &gid_after))?;
 		stage = Stage::Shifted;
@@ -129,7 +140,7 @@ pub(crate) fn run(host: &mut impl Host, targets: Targets) -> Result<String, Stri
 			"shifted the owner of {} of {} files",
 			tally.changed, tally.scanned
 		));
-		host.migrate()?;
+		host.start_account()?;
 		restart(host, &plan)
 	})();
 	match result {
@@ -178,11 +189,30 @@ fn undo(host: &mut impl Host, plan: &Plan, stage: Stage) -> Result<(), String> {
 			..Plan::default()
 		};
 		if back.uid.is_some() || back.gid.is_some() {
-			host.usermod(&usermod_args(&back, true))?;
+			host.stop_account()?;
+			rewrite(host, &usermod_args(&back, true))?;
 		}
-		host.migrate()?;
 	}
+	host.start_account()?;
 	restart(host, plan)
+}
+
+/// Run `usermod` only when the account has no process left. shadow's
+/// usermod refuses to change the ranges of a user with running processes
+/// (exit 8, measured on Debian 13), and a process that survived would keep
+/// the old mapping anyway.
+fn rewrite(host: &mut impl Host, args: &[String]) -> Result<(), String> {
+	let processes = host.account_processes();
+	if !processes.is_empty() {
+		return Err(format!(
+			"{} still has {} processes after its user manager was stopped ({}), and usermod \
+			 refuses to change the ranges of an account in use",
+			table::ACCOUNT,
+			processes.len(),
+			processes.join(", ")
+		));
+	}
+	host.usermod(args)
 }
 
 /// Start what was running before the move.

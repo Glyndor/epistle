@@ -26,6 +26,8 @@ struct Fake {
 	journal: Option<String>,
 	/// usermod applies the subuid change, then fails on subgid.
 	torn_usermod: bool,
+	/// What the process probe reports once the account was stopped.
+	processes: Vec<String>,
 }
 
 impl Fake {
@@ -96,6 +98,15 @@ impl Host for Fake {
 	fn start_containers(&mut self, ids: &[String]) -> Result<(), String> {
 		self.call("podman-start", format!(" {}", ids.join(" ")))
 	}
+	fn stop_account(&mut self) -> Result<(), String> {
+		self.call("stop-account", String::new())
+	}
+	fn start_account(&mut self) -> Result<(), String> {
+		self.call("start-account", String::new())
+	}
+	fn account_processes(&mut self) -> Vec<String> {
+		self.processes.clone()
+	}
 	fn migrate(&mut self) -> Result<(), String> {
 		self.call("migrate", String::new())
 	}
@@ -146,9 +157,10 @@ fn an_overlap_is_moved_in_order_and_the_stack_comes_back() {
 		[
 			"stop podup-epistle.service podman.socket",
 			"migrate",
+			"stop-account",
 			FORWARD,
 			"shift uid 100000->165536 gid 100000->165536",
-			"migrate",
+			"start-account",
 			"start podman.socket podup-epistle.service",
 		]
 	);
@@ -229,11 +241,56 @@ fn fails_and_restores(step: &'static str, expected_tail: &[&str]) {
 fn every_failure_is_undone() {
 	let start = "start podman.socket podup-epistle.service";
 	let back_shift = "shift uid 165536->100000 gid 165536->100000";
-	fails_and_restores("stop", &["stop podup-epistle.service podman.socket", start]);
-	fails_and_restores("migrate", &["migrate", start]);
-	fails_and_restores("usermod", &[FORWARD, "migrate", start]);
-	fails_and_restores("shift", &[back_shift, BACKWARD, "migrate", start]);
-	fails_and_restores("start", &[back_shift, BACKWARD, "migrate", start]);
+	fails_and_restores(
+		"stop",
+		&[
+			"stop podup-epistle.service podman.socket",
+			"start-account",
+			start,
+		],
+	);
+	fails_and_restores("migrate", &["migrate", "start-account", start]);
+	fails_and_restores("stop-account", &["stop-account", "start-account", start]);
+	fails_and_restores("usermod", &[FORWARD, "start-account", start]);
+	fails_and_restores(
+		"shift",
+		&[back_shift, "stop-account", BACKWARD, "start-account", start],
+	);
+	fails_and_restores(
+		"start-account",
+		&[back_shift, "stop-account", BACKWARD, "start-account", start],
+	);
+	fails_and_restores(
+		"start",
+		&[back_shift, "stop-account", BACKWARD, "start-account", start],
+	);
+}
+
+#[test]
+fn usermod_is_refused_while_the_account_has_processes() {
+	let mut host = Fake::new(OVERLAP, OVERLAP);
+	host.processes = vec!["4242 catatonit".to_string(), "4250 conmon".to_string()];
+	let error = run(&mut host, TARGETS).expect_err("processes are left");
+	assert!(
+		!host.calls.iter().any(|call| call.starts_with("usermod")),
+		"usermod must not run while the account has processes: {:?}",
+		host.calls
+	);
+	assert!(
+		error.contains("4242 catatonit") && error.contains("still has 2 processes"),
+		"{error}"
+	);
+	assert!(error.contains("old ranges are back in place"), "{error}");
+	assert_eq!(
+		(host.subuid.as_str(), host.subgid.as_str()),
+		(OVERLAP, OVERLAP)
+	);
+	assert_eq!(
+		host.calls.last().map(String::as_str),
+		Some("start podman.socket podup-epistle.service"),
+		"{:?}",
+		host.calls
+	);
 }
 
 #[test]
@@ -262,11 +319,12 @@ fn an_unfinished_move_is_undone_before_trying_again() {
 		Some("subuid 100000 165536 65536\nsubgid 100000 165536 65536\nunit podman.socket\n".into());
 	run(&mut host, TARGETS).unwrap();
 	assert_eq!(
-		&host.calls[..4],
+		&host.calls[..5],
 		[
 			"shift uid 165536->100000 gid 165536->100000",
+			"stop-account",
 			"usermod --del-subuids 165536-231071 --add-subuids 100000-165535",
-			"migrate",
+			"start-account",
 			"start podman.socket",
 		],
 		"the journal is undone first"

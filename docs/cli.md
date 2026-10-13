@@ -223,8 +223,11 @@ postinst moves a block the account shares with another one:
 1. It picks a free block of the same size with the allocator a fresh install
    uses, within `SUB_UID_MIN`/`MAX` and `SUB_GID_MIN`/`MAX`.
 2. `epistle move-subids` stops the podup unit, its update timer and the
-   account's Podman API units, and runs `podman system migrate` so the pause
-   process lets go of the old mapping.
+   account's Podman API units, runs `podman system migrate` so the pause
+   process lets go of the old mapping, then stops the account's user manager
+   (`user@<uid>.service`) and anything it left behind. `usermod` refuses to
+   change the ranges of an account with a running process, so the move stops
+   here, naming the processes, if any is left.
 3. It rewrites only the account's lines in `/etc/subuid` and `/etc/subgid`
    with one `usermod` call and checks every other line came through
    unchanged.
@@ -233,7 +236,8 @@ postinst moves a block the account shares with another one:
    them) under the account's home and Podman runtime directory, and the
    storage, volume and `data_dir` paths when they live elsewhere. Set-id bits
    and file capabilities, which `chown` clears, are put back.
-5. It runs `podman system migrate` again and starts what was running.
+5. It starts the user manager again (linger brings back the units enabled for
+   it) and whatever else was running.
 
 Any step that fails undoes the ones before it, and the message says the old
 ranges are back in place. A move that was killed half way leaves a journal at
