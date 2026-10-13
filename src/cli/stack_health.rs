@@ -23,25 +23,39 @@ pub(super) fn service_status(json: &str, service: &str) -> Option<(String, Strin
 		.map(|row| (row.state, row.health))
 }
 
-/// Poll `podup ps` until `service` is running and healthy, or until
-/// `timeout`. A service without a healthcheck counts once it runs. `Err`
-/// says what it last saw.
+/// Poll `podup ps` until `service` is ready, or until `timeout`. A service
+/// whose compose definition has a healthcheck is ready only when podup
+/// reports it `healthy`: podup reports an empty health while the check is
+/// still in its start period (measured on podup 5.10.18, where `Status`
+/// said `starting` and `Health` was `""`), and treating that as healthy
+/// let `stack update` judge mail before it listened. A service without a
+/// healthcheck is ready once it runs. `Err` says what it last saw.
 pub(super) fn wait_healthy(
 	podup: &str,
 	compose: &Path,
 	service: &str,
 	timeout: Duration,
 ) -> Result<(), String> {
+	wait_with_interval(podup, compose, service, timeout, Duration::from_secs(2))
+}
+
+/// [`wait_healthy`] polling every `interval`.
+pub(super) fn wait_with_interval(
+	podup: &str,
+	compose: &Path,
+	service: &str,
+	timeout: Duration,
+	interval: Duration,
+) -> Result<(), String> {
+	let checked = std::fs::read_to_string(compose)
+		.map_err(|error| format!("cannot read {}: {error}", compose.display()))
+		.map(|text| has_healthcheck(&text, service))?;
 	let deadline = Instant::now() + timeout;
 	let mut last: String;
 	loop {
 		match super::stack_started::ps_json_with(podup, compose, Duration::from_secs(10)) {
 			Ok(json) => match service_status(&json, service) {
-				Some((state, health))
-					if state == "running" && (health == "healthy" || health.is_empty()) =>
-				{
-					return Ok(());
-				}
+				Some((state, health)) if ready(&state, &health, checked) => return Ok(()),
 				Some((state, health)) => last = format!("{state}, health {health:?}"),
 				None => last = "not listed by podup ps".to_string(),
 			},
@@ -53,8 +67,25 @@ pub(super) fn wait_healthy(
 				timeout.as_secs()
 			));
 		}
-		std::thread::sleep(Duration::from_secs(2));
+		std::thread::sleep(interval);
 	}
+}
+
+/// Whether a service in this state counts as ready.
+fn ready(state: &str, health: &str, checked: bool) -> bool {
+	state == "running" && (!checked || health == "healthy")
+}
+
+/// Whether the compose file gives `service` a healthcheck that is not
+/// switched off (`disable: true`, or a test of `["NONE"]`).
+pub(super) fn has_healthcheck(compose: &str, service: &str) -> bool {
+	let Ok(document) = serde_json::from_str::<serde_json::Value>(compose) else {
+		return true;
+	};
+	let check = &document["services"][service]["healthcheck"];
+	check.is_object()
+		&& check["disable"] != serde_json::Value::Bool(true)
+		&& check["test"] != serde_json::json!(["NONE"])
 }
 
 #[cfg(test)]
