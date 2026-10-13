@@ -366,7 +366,7 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 /// or no message matches; an empty `message_id` returns `None` without
 /// a scan. The bytes of the header are read lazily and compared byte for
 /// byte, so a CRLF-vs-LF mismatch between the writer and a follower would
-/// be detected and the caller would see `None` — the saver treats the
+/// be detected and the caller would see `None`; the saver treats the
 /// absent UID as "unknown", which still de-duplicates through the
 /// Message-ID guard.
 pub fn lookup_message_id_in_mailbox(

@@ -462,7 +462,7 @@ impl Server {
 impl Server {
 	/// Whether a copy of the message this session is about to submit
 	/// should be stored into the account's `Sent` folder. The
-	/// precedence is the one the brief lays down: the app password
+	/// precedence: the app password
 	/// that authenticated the session overrides the account-wide
 	/// setting when it carries an explicit value, otherwise the
 	/// account-wide setting decides (default "on" when absent).
