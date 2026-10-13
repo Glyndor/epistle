@@ -14,6 +14,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		false,
 	),
 	(&["serve"], false),
+	(&["db", "upgrade"], true),
 	(
 		&[
 			"move-subids",

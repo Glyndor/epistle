@@ -378,6 +378,9 @@ impl Cli {
 			Command::Completions { shell } => super::completions::run_completions(shell),
 			Command::Manpages { dir } => super::completions::run_manpages(&dir),
 			Command::MoveSubids(args) => super::subid::run(args),
+			Command::Db { config, action } => {
+				with_config(&config, |config| super::db_upgrade::run(config, action))
+			}
 		}
 	}
 }

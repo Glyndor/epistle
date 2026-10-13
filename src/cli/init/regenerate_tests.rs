@@ -80,3 +80,36 @@ fn a_file_init_did_not_write_is_refused() {
 		assert!(error.contains("compose"), "{error}");
 	}
 }
+
+#[test]
+fn a_running_postgres_major_is_kept_and_the_upgrade_is_named() {
+	let answers = stack_answers();
+	let current = render_for(&answers, true).unwrap();
+	let pinned = crate::cli::init::images::postgres();
+	let older = "docker.io/library/postgres:17@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232";
+	let old = current.replace(pinned, older);
+	let listeners = listeners_to_write(&answers).unwrap();
+	let again = regenerate(&answers.data_dir, &listeners, &old).unwrap();
+	let value: serde_json::Value = serde_json::from_str(&again.text).unwrap();
+	assert_eq!(
+		value["services"]["db"]["image"], older,
+		"a new major is never swapped in by a render"
+	);
+	assert!(
+		again
+			.notes
+			.iter()
+			.any(|note| note.contains("epistle db upgrade")),
+		"{:?}",
+		again.notes
+	);
+	let same_major = current.replace(
+		pinned,
+		"docker.io/library/postgres:18@sha256:86c951e05bf56c93d95d397747fb8820ac76cc3bedb78f43abd83eedbe3666ae",
+	);
+	let again = regenerate(&answers.data_dir, &listeners, &same_major).unwrap();
+	assert_eq!(
+		again.text, current,
+		"a new digest on the same major is taken"
+	);
+}

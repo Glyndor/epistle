@@ -76,6 +76,17 @@ pub(crate) fn mail_base() -> &'static str {
 	image("mail")
 }
 
+/// The major version in a reference's tag: `18` for `postgres:18@sha256:...`
+/// and for `postgres:18.6-alpine`. `None` without a numeric tag.
+pub(crate) fn major(reference: &str) -> Option<u32> {
+	let name = reference.split('@').next()?;
+	let digits: String = tag(name)?
+		.chars()
+		.take_while(char::is_ascii_digit)
+		.collect();
+	digits.parse().ok()
+}
+
 #[cfg(test)]
 #[path = "images_tests.rs"]
 mod tests;

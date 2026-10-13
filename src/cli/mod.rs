@@ -18,6 +18,7 @@ mod completions;
 mod config_check;
 pub mod config_edit;
 mod container_db;
+mod db_upgrade;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;
@@ -51,6 +52,8 @@ mod service;
 mod service_edit;
 mod srv;
 mod stack;
+mod stack_dumps;
+mod stack_health;
 mod stack_socket;
 mod stack_started;
 mod stack_update;
@@ -629,6 +632,15 @@ pub enum Command {
 		/// The stack sub-action.
 		#[command(subcommand)]
 		action: stack::StackCli,
+	},
+	/// Database maintenance for the stack's PostgreSQL.
+	Db {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Database action (`upgrade`).
+		#[command(subcommand)]
+		action: db_upgrade::DbCli,
 	},
 	/// Show the DKIM signing key in service or force a rotation.
 	///

@@ -618,6 +618,27 @@ and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks
 disabled with `stack down` stay disabled until `stack up`.
 
+### Moving PostgreSQL to a new major
+
+A release can pin a newer PostgreSQL major in `deploy/images/Dockerfile`. A
+new major cannot open the old one's cluster, so `stack update` keeps the db
+image the stack runs and says so; the move is a separate, explicit step:
+
+```sh
+sudo epistle db upgrade
+```
+
+It counts the rows of every table, stops `mail`, dumps the database into
+`<data_dir>/backups/pre-db-upgrade-<old>-to-<new>-<timestamp>.sql.gz`, stops
+`db`, switches its image, starts it, loads the dump in one transaction and
+counts again. The images from PostgreSQL 18 on keep each major's cluster in
+its own directory of the `epistle-pgdata` volume, so the new major starts
+empty beside the old cluster rather than over it. When the counts match, the
+whole stack starts on the new major; on any failure the old image and its
+untouched cluster come back and `mail` starts again. The old cluster stays
+in the volume at `/var/lib/postgresql/<old>` until it is removed by hand
+after mail is verified.
+
 ## Backup and restore
 
 `epistle backup --config F` writes a gzip-compressed tar to stdout

@@ -1,6 +1,6 @@
 //! Tests for the image manifest and for the compose file using it.
 
-use super::{MANIFEST, clamav, mail_base, parse, postgres};
+use super::{MANIFEST, clamav, mail_base, major, parse, postgres};
 
 fn pinned(reference: &str) -> bool {
 	let Some((name, digest)) = reference.split_once("@sha256:") else {
@@ -61,4 +61,12 @@ fn a_reference_without_a_digest_or_a_stage_name_is_refused() {
 		assert!(parse(text).is_err(), "{text:?} must be refused");
 	}
 	assert!(parse("# only a comment\n\n").is_ok());
+}
+#[test]
+fn the_major_is_the_leading_number_of_the_tag() {
+	assert_eq!(major(postgres()), Some(18));
+	assert_eq!(major("docker.io/library/postgres:18.6-alpine"), Some(18));
+	assert_eq!(major("docker.io/library/postgres:19@sha256:00"), Some(19));
+	assert_eq!(major("localhost:5000/postgres"), None);
+	assert_eq!(major("postgres:latest"), None);
 }

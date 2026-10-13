@@ -12,6 +12,7 @@ impl Command {
 		match self {
 			Command::Init { .. }
 			| Command::Stack { .. }
+			| Command::Db { .. }
 			| Command::Service { .. }
 			| Command::Limits { .. }
 			| Command::Status { .. }

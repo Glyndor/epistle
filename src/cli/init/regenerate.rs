@@ -80,13 +80,30 @@ pub(crate) fn regenerate(
 		image,
 	};
 	let composed = ComposeFile::build(&answers, published_ports_for_listeners(listeners), database);
-	let text = render_document(&composed).map_err(|error| error.to_string())?;
-	let notes = vec![format!(
+	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
+	let mut notes = Vec::new();
+	if let Some(running) = document["services"]["db"]["image"].as_str() {
+		let pinned = super::images::postgres();
+		let (from, to) = (super::images::major(running), super::images::major(pinned));
+		if from != to {
+			// A new major cannot read the old cluster: swapping the image
+			// would start an empty database. Keep the running one until
+			// the operator runs the dump and restore.
+			text = text.replace(&format!("\"{pinned}\""), &format!("\"{running}\""));
+			notes.push(format!(
+				"this release pins PostgreSQL {} and the stack runs {}; the db image was kept, \
+				 run `sudo epistle db upgrade` to move the data to the new major",
+				to.map_or("?".to_string(), |major| major.to_string()),
+				from.map_or("?".to_string(), |major| major.to_string()),
+			));
+		}
+	}
+	notes.push(format!(
 		"rendered compose.yaml with this release's code; the database, the mail image, the DNS \
 		 token and the config path came from the existing compose.yaml, and the published ports \
 		 from the listeners in {}",
 		answers.config_path.display()
-	)];
+	));
 	Ok(Regenerated { text, notes })
 }
 
