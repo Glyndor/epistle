@@ -17,10 +17,8 @@ async fn upsert_creates_when_absent() {
 	let body = &captured.set_hosts_bodies[0];
 	assert!(body.contains(r#"Name="_dmarc""#), "{body}");
 	assert!(body.contains(r#"Type="TXT""#), "{body}");
-	assert!(
-		body.contains(r#"Address="&quot;v=DMARC1; p=none&quot;""#),
-		"{body}"
-	);
+	// TXT goes as its logical value, unquoted.
+	assert!(body.contains(r#"Address="v=DMARC1; p=none""#), "{body}");
 }
 
 #[tokio::test]

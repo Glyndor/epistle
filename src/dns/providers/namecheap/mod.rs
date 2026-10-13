@@ -203,7 +203,7 @@ impl NamecheapProvider {
 					return true;
 				}
 				if record.kind == RecordKind::Txt && !record.value.is_empty() {
-					h.address.trim_matches('"') != record.value
+					!crate::dns::txt::same_txt_value(&h.address, &record.value)
 				} else {
 					false
 				}
@@ -312,3 +312,7 @@ mod tests_render;
 #[cfg(test)]
 #[path = "tests_path.rs"]
 mod tests_path;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;

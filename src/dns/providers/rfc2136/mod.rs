@@ -80,7 +80,7 @@ use tokio::net::TcpStream;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
-use crate::dns::records::txt_strings;
+use crate::dns::txt::{same_txt_value, txt_character_strings, txt_logical};
 
 /// Default TSIG fudge (RFC 8945 §5.2 — maximum tolerance between client
 /// and server clocks). Five minutes mirrors what most resolvers accept.
@@ -96,7 +96,7 @@ pub struct Rfc2136Provider {
 	signer: TSigner,
 	endpoint: String,
 	/// TXT values the provider has published at each owner, keyed by
-	/// the lowercased FQDN. Used to decide which same-purpose records
+	/// the lowercased FQDN, stored as logical values. Used to decide which same-purpose records
 	/// a TXT upsert must delete with `class NONE` before adding the
 	/// new value; see the module doc for the limitation when other
 	/// clients have written the zone.
@@ -393,7 +393,7 @@ impl DnsProvider for Rfc2136Provider {
 				let mut g = self.txt_cache.lock().unwrap();
 				let entry = g.entry(name_key).or_default();
 				entry.retain(|v| !same_txt_purpose(v, &record.value));
-				entry.push(record.value.clone());
+				entry.push(txt_logical(&record.value));
 			}
 			Ok(())
 		})
@@ -418,7 +418,7 @@ impl DnsProvider for Rfc2136Provider {
 					g.remove(&name_key);
 				} else {
 					if let Some(entry) = g.get_mut(&name_key) {
-						entry.retain(|v| v != &record.value);
+						entry.retain(|v| !same_txt_value(v, &record.value));
 					}
 				}
 			}
@@ -464,15 +464,20 @@ fn record_rdata(kind: RecordKind, value: &str) -> Result<RData, ProviderError> {
 			Ok(RData::CNAME(CNAME(target)))
 		}
 		RecordKind::Txt => {
-			// Long TXT values (RSA-2048 DKIM p= runs ~410 bytes;
-			// RSA-4096 ~755) must be split into 255-octet character
-			// strings per RFC 1035 §3.3.14. hickory refuses to encode a
-			// single character-string past 255 bytes, so the whole
-			// message fails to send otherwise. The split is on byte
-			// boundaries (the wire form is length-prefixed bytes, not
-			// Unicode), with care taken to never cut a multi-byte
-			// codepoint in the middle.
-			Ok(RData::TXT(TXT::new(txt_strings(value))))
+			// The wire RDATA is one or more length-prefixed
+			// character-strings of at most 255 octets (RFC 1035
+			// §3.3 and §3.3.14,
+			// <https://www.rfc-editor.org/rfc/rfc1035.txt>, read
+			// 2026-10-12), so nothing is quoted or escaped: a caller's
+			// quotes are presentation and are dropped, and a long value
+			// (RSA-2048 DKIM p= runs ~410 bytes) is cut into several
+			// strings. hickory refuses a single string past 255 bytes.
+			// RFC 2136 §2.5.4 deletes an RR only when its RDATA matches
+			// byte for byte, chunk boundaries included
+			// (<https://www.rfc-editor.org/rfc/rfc2136.txt>, read
+			// 2026-10-12), so the cut must be the same on every call:
+			// it is always `txt_character_strings` of the logical value.
+			Ok(RData::TXT(TXT::new(txt_character_strings(value))))
 		}
 		RecordKind::Tlsa => {
 			// TLSA in presentation form: "usage selector matching cert-hex".
@@ -597,3 +602,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;

@@ -10,7 +10,11 @@ use serde::Deserialize;
 use crate::net::HttpsUrl;
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
-use crate::dns::records::txt_strings;
+use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+/// How deSEC wants a TXT value written and lists it back; see
+/// `record_content`.
+const TXT_FORM: TxtForm = TxtForm::Presentation;
 
 /// deSEC's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://desec.io/api/v1";
@@ -89,29 +93,19 @@ impl DesecProvider {
 			.to_string()
 	}
 
-	/// deSEC stores TXT content as an array of quoted character strings
-	/// (RFC 1035 §3.3.14), each at most 255 octets; other kinds use the
-	/// value verbatim. A long value (an RSA-2048 DKIM `p=` runs ~410
-	/// bytes, an RSA-4096 ~755) has to be split into ≤255-octet
-	/// character-strings. But several entries would be several TXT
-	/// records, a single rrset only stitches the character-strings
-	/// into one logical value when they all belong to a single
-	/// records entry. The wire form is one entry carrying the quoted
-	/// pieces separated by single spaces. The per-piece backslash
-	/// and quote escaping is applied to the chunk so a mid-chunk
-	/// `\"` does not bleed across the boundary. Resolvers concatenate
-	/// the pieces back into one logical value on read.
+	/// deSEC takes every record in presentation format, and a TXT must be
+	/// quoted: "The contents of the TXT record must be enclosed in double
+	/// quotes" and "Records must be given in presentation format"
+	/// (<https://desec.readthedocs.io/en/latest/dns/rrsets.html>, read
+	/// 2026-10-12). Each `records` entry is a separate TXT record, so a long
+	/// value goes as ONE entry carrying its 255-octet character-strings
+	/// separated by spaces; several entries would be several records, which
+	/// no DKIM verifier stitches back together. deSEC lists the canonical
+	/// form, the same quoted strings, and reads `\DDD` as decimal (RFC 1035
+	/// §5.1), which is [`TXT_FORM`]. Other kinds go verbatim.
 	fn record_content(kind: RecordKind, value: &str) -> Vec<String> {
 		if kind == RecordKind::Txt {
-			let joined = txt_strings(value)
-				.into_iter()
-				.map(|piece| {
-					let escaped = piece.replace('\\', "\\\\").replace('"', "\\\"");
-					format!("\"{escaped}\"")
-				})
-				.collect::<Vec<_>>()
-				.join(" ");
-			vec![joined]
+			vec![txt_encode(value, TXT_FORM)]
 		} else {
 			vec![value.to_string()]
 		}
@@ -158,10 +152,9 @@ impl DesecProvider {
 	}
 
 	/// `GET /domains/{zone}/rrsets/` filtered to the rrset at
-	/// `(name, kind)`. Returns the live wire form (records are
-	/// quoted for TXT) so the value-bearing delete path can compare
-	/// against the caller-supplied value after the same
-	/// quote-stripping the upsert path uses.
+	/// `(name, kind)`. Returns the records as deSEC lists them
+	/// (presentation form for TXT); the value-bearing delete compares
+	/// them with the caller's value through `same_txt_value`.
 	async fn fetch_rrset(&self, name: &str, kind: &str) -> Result<Option<Rrset>, ProviderError> {
 		self.authorize_for(name)?;
 		let url = self.rrsets_url()?;
@@ -230,18 +223,16 @@ impl DnsProvider for DesecProvider {
 			// PUTs the remainder (or an empty list when the rrset
 			// is fully gone).
 			//
-			// Long TXT values are stored as one records entry with
-			// the joined character-strings form, so the needle is
-			// the same joined form on both the upsert and the
-			// listing. The matching compares the joined value
-			// verbatim against the records deSEC lists back.
+			// The match is on the logical value, so a record deSEC
+			// re-chunked or re-escaped in its canonical form is still
+			// found.
 			if record.kind == RecordKind::Txt && !record_value.is_empty() {
-				let target = Self::record_content(RecordKind::Txt, &record_value)
-					.into_iter()
-					.next()
-					.expect("TXT always produces one joined record");
 				let remainder: Vec<String> = match self.fetch_rrset(&record.name, kind).await? {
-					Some(rrset) => rrset.records.into_iter().filter(|r| r != &target).collect(),
+					Some(rrset) => rrset
+						.records
+						.into_iter()
+						.filter(|r| !same_txt_value(r, &record_value))
+						.collect(),
 					None => return Ok(()),
 				};
 				self.put_rrset(&record, remainder).await
@@ -288,7 +279,11 @@ impl DnsProvider for DesecProvider {
 					r.records.into_iter().map(move |value| DnsRecord {
 						name: name.clone(),
 						kind,
-						value: value.trim_matches('"').to_string(),
+						value: if kind == RecordKind::Txt {
+							txt_decode(&value, TXT_FORM)
+						} else {
+							value
+						},
 						ttl: r.ttl,
 					})
 				})

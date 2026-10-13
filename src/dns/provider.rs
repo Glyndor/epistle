@@ -32,9 +32,10 @@
 //!   replaces the whole set.
 //!
 //! The helper [`txt_purpose`] extracts the version tag from a TXT value
-//! (lowercase, tolerant to surrounding whitespace and the optional
-//! wire-form quotes); [`same_txt_purpose`] decides whether two values
-//! match under the contract above.
+//! (lowercase, tolerant to surrounding whitespace and to the quoted
+//! presentation form); [`same_txt_purpose`] decides whether two values
+//! match under the contract above. How a TXT value is quoted, split and
+//! escaped for each provider API lives in [`crate::dns::txt`].
 
 use std::path::Path;
 use std::pin::Pin;
@@ -116,9 +117,12 @@ pub struct DnsRecord {
 	pub name: String,
 	/// Record type.
 	pub kind: RecordKind,
-	/// Record value, formatted the way the provider's API expects for that
-	/// kind (raw IPv4/IPv6 for A/AAAA, quoted text for TXT, target host for
-	/// MX, etc.).
+	/// Record value in presentation form for its kind (raw IPv4/IPv6 for
+	/// A/AAAA, target host for MX, etc.). For TXT it is the logical text,
+	/// unquoted and unsplit; a value already in quoted presentation form is
+	/// accepted and read back through [`crate::dns::txt::txt_logical`].
+	/// Each provider encodes it for its own API and every `list` returns
+	/// the logical text again.
 	pub value: String,
 	/// Time-to-live in seconds. Providers translate to their own semantics.
 	pub ttl: u32,
@@ -158,16 +162,13 @@ impl From<crate::net::HttpsUrlError> for ProviderError {
 /// The tag is the substring before the first whitespace or `;`; the
 /// comparison is case-insensitive on the way in and the function
 /// returns the canonical spec form (`v=spf1`, `v=DMARC1`, `v=DKIM1`,
-/// `v=STSv1`, `v=TLSRPTv1`). Leading and trailing whitespace and the
-/// optional pair of surrounding double quotes (the wire form some
-/// providers use) are tolerated; an empty or whitespace-only value
-/// returns `None`.
+/// `v=STSv1`, `v=TLSRPTv1`). The value is read through
+/// [`crate::dns::txt::txt_logical`] first, so surrounding whitespace and
+/// the presentation form some providers use (one or several quoted
+/// strings) are tolerated; an empty or whitespace-only value returns
+/// `None`.
 pub fn txt_purpose(value: &str) -> Option<&'static str> {
-	let trimmed = value.trim();
-	let stripped = trimmed
-		.strip_prefix('"')
-		.and_then(|s| s.strip_suffix('"'))
-		.unwrap_or(trimmed);
+	let stripped = crate::dns::txt::txt_logical(value);
 	if stripped.is_empty() {
 		return None;
 	}
@@ -187,27 +188,16 @@ pub fn txt_purpose(value: &str) -> Option<&'static str> {
 
 /// Whether two TXT values match under the upsert/delete contract
 /// (see the module doc). Two tagged values match when their tag is
-/// the same; an untagged value matches only an identical value (after
-/// the same leading/trailing whitespace and surrounding-quote
-/// stripping); a tagged value never matches an untagged one.
+/// the same; an untagged value matches only the same logical value
+/// ([`crate::dns::txt::same_txt_value`]: whitespace, quoting and
+/// 255-octet splitting do not count); a tagged value never matches an
+/// untagged one.
 pub fn same_txt_purpose(a: &str, b: &str) -> bool {
 	match (txt_purpose(a), txt_purpose(b)) {
 		(Some(x), Some(y)) => x == y,
 		(Some(_), None) | (None, Some(_)) => false,
-		(None, None) => normalised_txt(a) == normalised_txt(b),
+		(None, None) => crate::dns::txt::same_txt_value(a, b),
 	}
-}
-
-/// Trim surrounding whitespace and one pair of wire-form quotes, the
-/// way [`txt_purpose`] does, so two untagged values compare on the
-/// same bytes.
-fn normalised_txt(value: &str) -> String {
-	let trimmed = value.trim();
-	trimmed
-		.strip_prefix('"')
-		.and_then(|s| s.strip_suffix('"'))
-		.unwrap_or(trimmed)
-		.to_string()
 }
 
 type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;

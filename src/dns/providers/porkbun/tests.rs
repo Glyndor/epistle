@@ -465,3 +465,6 @@ async fn mx_body_carries_the_notes_field() {
 	let body = state.lock().unwrap().body("/dns/create/example.org");
 	assert_eq!(body["notes"], expected_description());
 }
+
+#[path = "tests_txt_forms.rs"]
+mod txt_forms;

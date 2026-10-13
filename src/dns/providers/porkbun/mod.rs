@@ -24,6 +24,10 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 };
+use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+/// How Porkbun takes a TXT `content` and lists it back; see `upsert_inner`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// Porkbun's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.porkbun.com/api/json/v3";
@@ -222,10 +226,21 @@ impl PorkbunProvider {
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
+		// The API documents `content` only as "The record value", with
+		// no word on quoting, length or escaping for TXT
+		// (<https://porkbun.com/api/json/v3/spec>, read 2026-10-12). The
+		// logical value is the form that is the same bytes every time it
+		// is sent, and it is the one other clients of this API send
+		// (dnscontrol, lego, libdns).
+		let content = if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
+		} else {
+			record.value.clone()
+		};
 		let mut fields = serde_json::json!({
 			"name": self.label(&record.name),
 			"type": kind,
-			"content": record.value,
+			"content": content,
 			"ttl": record.ttl.max(MIN_TTL),
 			// Free-text note shown in the Porkbun panel; edit replaces it.
 			"notes": record_description(),
@@ -326,7 +341,7 @@ impl PorkbunProvider {
 					&& r.name.trim_end_matches('.').eq_ignore_ascii_case(name)
 					&& (record.kind != RecordKind::Txt
 						|| record.value.is_empty()
-						|| r.content == record.value)
+						|| same_txt_value(&r.content, &record.value))
 			})
 			.map(|r| r.id)
 			.collect::<Vec<_>>();
@@ -354,6 +369,8 @@ impl PorkbunProvider {
 					let priority = (packed >> 16) as u16;
 					let weight = (packed & 0xFFFF) as u16;
 					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
+				} else if kind == RecordKind::Txt {
+					txt_decode(&r.content, TXT_FORM)
 				} else {
 					r.content.trim_matches('"').to_string()
 				};

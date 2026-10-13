@@ -203,6 +203,28 @@ epistle retries it once without tags, stops sending them until the next
 restart, and logs a single warning. The record `id` is assigned by Cloudflare
 and cannot be set.
 
+### TXT values
+
+Each provider API wants a TXT value in its own form, so epistle encodes it per
+provider and reads it back to the plain text before comparing. A value is the
+same record whatever its quoting or 255-octet splitting, so publishing the same
+DKIM key twice changes nothing and never doubles its quotes. A value you pass
+already wrapped in quotes is read without them.
+
+| Provider | epistle sends | Over 255 octets | Read back as |
+|---|---|---|---|
+| Cloudflare, deSEC, DNSimple, Google Cloud DNS | quoted, `"` and `\` escaped | split by epistle into quoted strings | quoted strings |
+| Route 53 | quoted, octal escapes | split by epistle into quoted strings | quoted strings |
+| RFC 2136 | DNS wire format | split by epistle into character-strings | not listed |
+| Bunny, DigitalOcean, GoDaddy, Namecheap, OVH, Porkbun, Spaceship | plain text | one string, the provider splits it | plain text (OVH: quoted strings) |
+
+Bunny, DigitalOcean, GoDaddy, Namecheap, OVH, Porkbun and Spaceship do not
+document TXT quoting. epistle sends the plain text there, which is also what
+other clients of those APIs send. Those clients will not send a TXT value
+containing `"` to Namecheap or OVH, or one containing `\` to OVH or
+DigitalOcean, so such a value may be refused there. The records epistle
+publishes never contain either character.
+
 ## BIMI (optional)
 
 To show your brand logo in supporting inboxes you need DMARC at enforce

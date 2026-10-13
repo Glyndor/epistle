@@ -231,7 +231,11 @@ async fn upsert_creates_subdomain_txt_with_bearer_auth() {
 		"relative name missing: {body}"
 	);
 	assert!(body.contains("\"type\":\"TXT\""), "{body}");
-	assert!(body.contains("\"content\":\"v=DMARC1; p=none\""), "{body}");
+	// TXT content goes quoted, which DNSimple stores verbatim.
+	assert!(
+		body.contains(r#""content":"\"v=DMARC1; p=none\"""#),
+		"{body}"
+	);
 	assert!(body.contains("\"ttl\":3600"), "{body}");
 }
 
@@ -262,7 +266,7 @@ async fn upsert_patches_when_record_already_exists() {
 	assert_eq!(posts, 0, "calls: {:?}", s.calls);
 	let body = &s.bodies[0];
 	assert!(
-		body.contains("\"content\":\"v=DMARC1; p=reject\""),
+		body.contains(r#""content":"\"v=DMARC1; p=reject\"""#),
 		"{body}"
 	);
 }
@@ -427,3 +431,6 @@ async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
 	assert!(body.contains("\"flags\":0"), "{body}");
 	assert!(body.contains("\"caa_tag\":\"issue\""), "{body}");
 }
+
+#[path = "tests_txt_forms.rs"]
+mod txt_forms;

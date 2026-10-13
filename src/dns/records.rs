@@ -118,25 +118,10 @@ pub fn mta_sts_id(config: &crate::config::Config) -> String {
 /// DKIM `p=` is too long for a single string (~410 bytes for RSA-2048, ~755
 /// for RSA-4096); ed25519 fits in one. The split happens on character
 /// boundaries, never inside a multi-byte UTF-8 codepoint, because the
-/// wire form is length-prefixed bytes, not Unicode code points.
+/// wire form is length-prefixed bytes, not Unicode code points. The cut is
+/// [`crate::dns::txt::txt_character_strings`], the one every provider uses.
 pub fn txt_strings(value: &str) -> Vec<String> {
-	const MAX: usize = 255;
-	if value.len() <= MAX {
-		return vec![value.to_string()];
-	}
-	let mut out = Vec::new();
-	let mut start = 0;
-	while start < value.len() {
-		let mut end = (start + MAX).min(value.len());
-		// Walk back to the previous char boundary if a multibyte character
-		// straddles the would-be split point.
-		while end < value.len() && !value.is_char_boundary(end) {
-			end -= 1;
-		}
-		out.push(value[start..end].to_string());
-		start = end;
-	}
-	out
+	crate::dns::txt::txt_character_strings(value)
 }
 
 /// Render a TXT value for a zone file, with long values split into

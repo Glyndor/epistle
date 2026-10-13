@@ -291,7 +291,8 @@ fn record_body_uses_data_for_tlsa_and_content_otherwise() {
 		ttl: 3600,
 	};
 	let body = CloudflareProvider::record_body("TXT", &txt).expect("txt body");
-	assert!(body.contains("\"content\":\"v=spf1 -all\""), "{body}");
+	// TXT content goes quoted, the form Cloudflare's API documents.
+	assert!(body.contains(r#""content":"\"v=spf1 -all\"""#), "{body}");
 }
 
 #[test]
@@ -546,3 +547,6 @@ async fn without_a_hostname_no_tags_are_sent() {
 		.expect("upsert");
 	assert!(body_at(&state, 0).get("tags").is_none());
 }
+
+#[path = "tests_txt_forms.rs"]
+mod txt_forms;

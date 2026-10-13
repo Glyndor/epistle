@@ -19,6 +19,10 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+
+/// How Bunny takes a TXT `Value` and lists it back; see `record_body`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// Bunny's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.bunny.net";
@@ -214,6 +218,14 @@ impl BunnyProvider {
 			// Bunny expects MX as `<priority> <target>` in `Value` — Bunny's
 			// own UI shows it that way too.
 			record.value.clone()
+		} else if record.kind == RecordKind::Txt {
+			// The API reference gives `Value` as a bare nullable string
+			// with nothing on quoting, length or escaping
+			// (<https://bunny.net/docs/reference/dnszonepublic_addrecord>,
+			// read 2026-10-12). The logical value is the form that is the
+			// same bytes every time it is sent, and it is the one other
+			// clients of this API send (dnscontrol's bunnydns provider).
+			txt_encode(&record.value, TXT_FORM)
 		} else {
 			record.value.clone()
 		};
@@ -340,6 +352,8 @@ impl BunnyProvider {
 					let port = parts.next()?;
 					let target = parts.collect::<Vec<_>>().join(" ");
 					format!("0 {weight} {port} {target}")
+				} else if kind == RecordKind::Txt {
+					txt_decode(&value_raw, TXT_FORM)
 				} else {
 					value_raw
 				};
