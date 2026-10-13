@@ -257,6 +257,14 @@ sudo epistle check subid
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
 
+On SIGTERM (or SIGINT) `epistle serve` stops accepting connections and lets
+the open ones finish for up to 25 seconds: an SMTP client in the middle of a
+transaction gets its reply for the message and then `421 4.3.2`, an idle one
+gets the `421` at once, and IMAP sessions get `* BYE server shutting down`
+once their current command is done (also out of IDLE). The generated compose
+file gives `mail` a 30 second `stop_grace_period`, so podup does not kill it
+before the drain ends.
+
 ## Server limits (`epistle limits`)
 
 ```sh

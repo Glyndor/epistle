@@ -305,6 +305,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.collect();
 
 	let mut tasks = Vec::new();
+	let drain = crate::shutdown::Drain::new();
 	for listener_config in &config.listeners {
 		match listener_config.kind {
 			ListenerKind::Api => {
@@ -423,6 +424,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				}
 				imap_server = imap_server.with_scram_enabled(config.auth.scram);
 				imap_server = imap_server.with_max_connections(max_conn);
+				imap_server = imap_server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
@@ -594,6 +596,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_channel_binding(cbind.clone());
 				}
 				server = server.with_scram_enabled(config.auth.scram);
+				server = server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}
 		}
@@ -604,31 +607,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// `[privileges]` is unset). Fails closed: a failed drop aborts startup.
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
 
-	// Run until the first listener fails or a shutdown signal is received.
-	let shutdown = async {
-		tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-			.expect("register SIGTERM handler")
-			.recv()
-			.await;
-	};
-	tokio::select! {
-		result = async {
-			for task in tasks {
-				task.await
-					.map_err(|error| std::io::Error::other(error.to_string()))??;
-			}
-			Ok::<(), std::io::Error>(())
-		} => result,
-		_ = shutdown => {
-			tracing::info!("SIGTERM received, shutting down");
-			Ok(())
-		}
-		_ = tokio::signal::ctrl_c() => {
-			tracing::info!("SIGINT received, shutting down");
-			Ok(())
-		}
-	}
+	// Run until the first listener fails or a stop signal is received, then
+	// let open SMTP and IMAP connections finish.
+	wait::until_stopped(tasks, &drain).await
 }
+
+#[path = "serve_wait.rs"]
+mod wait;
 
 #[cfg(test)]
 #[path = "serve_tests.rs"]

@@ -41,12 +41,20 @@ impl Server {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
 				Ok(None) => {
-					let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer))
+					// A drain waits for an open transaction, DATA or AUTH to end.
+					let idle = mode == Mode::Commands && !session.in_transaction();
+					let drain = self.drain.as_deref().filter(|_| idle);
+					let reading = stream.read(&mut buffer);
+					let read = match crate::shutdown::or_drain(drain, COMMAND_TIMEOUT, reading)
 						.await
 					{
-						Ok(Ok(n)) => n,
-						Ok(Err(e)) => return Err(e),
-						Err(_) => {
+						None => {
+							send(&mut stream, &Reply::single(421, "4.3.2 shutting down")).await?;
+							return Ok(());
+						}
+						Some(Ok(Ok(n))) => n,
+						Some(Ok(Err(e))) => return Err(e),
+						Some(Err(_)) => {
 							tracing::debug!("SMTP command timeout, closing connection");
 							return Ok(());
 						}

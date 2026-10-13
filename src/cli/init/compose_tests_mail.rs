@@ -166,3 +166,16 @@ fn mail_image_override_takes_precedence() {
 		.expect("image is a string");
 	assert_eq!(image, "localhost/epistle:dev");
 }
+
+#[test]
+fn mail_gets_a_stop_grace_period_the_drain_fits_in() {
+	let value = render(&minimal_answers(), false);
+	assert_eq!(value["services"]["mail"]["stop_grace_period"], "30s");
+	assert!(value["services"]["db"].get("stop_grace_period").is_none());
+	assert!(
+		value["services"]["clamav"]
+			.get("stop_grace_period")
+			.is_none(),
+		"only mail drains connections"
+	);
+}

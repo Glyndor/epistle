@@ -500,6 +500,7 @@ pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<Strin
 #[path = "compose_services.rs"]
 mod services;
 use services::ComposeService;
+pub(crate) use services::MAIL_STOP_GRACE_SECS;
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {

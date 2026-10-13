@@ -285,6 +285,15 @@ impl Session {
 		self
 	}
 
+	/// Whether a mail transaction is open (`MAIL FROM` accepted, not yet
+	/// ended by the message or `RSET`).
+	pub fn in_transaction(&self) -> bool {
+		matches!(
+			self.state,
+			State::ReceivingRecipients { .. } | State::ReceivingData { .. }
+		)
+	}
+
 	/// The domain announced by the client in HELO/EHLO.
 	pub fn helo_domain(&self) -> Option<&str> {
 		self.helo_domain.as_deref()

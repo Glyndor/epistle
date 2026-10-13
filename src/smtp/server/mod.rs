@@ -128,6 +128,9 @@ pub struct Server {
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// The graceful stop this listener follows; none in tests that do not
+	/// exercise it.
+	drain: Option<Arc<crate::shutdown::Drain>>,
 	/// Mailbox quota of local recipients (see [`crate::smtp::quota`]).
 	quota: Option<Arc<crate::smtp::quota::MailboxQuota>>,
 	/// Per-account correspondent store, consulted at end-of-DATA to
@@ -181,6 +184,7 @@ impl Server {
 			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
+			drain: None,
 			quota: None,
 			correspondents: None,
 			daily_new_recipients: None,
@@ -242,6 +246,13 @@ impl Server {
 	/// limiter; the SMTP path checks both before accepting MAIL FROM.
 	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
 		self.tenant_limits = Some(limits);
+		self
+	}
+
+	/// Follow `drain`: stop accepting when it starts, let an open
+	/// transaction finish, then close with `421`.
+	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
+		self.drain = Some(drain);
 		self
 	}
 
@@ -550,7 +561,13 @@ impl Server {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = accepting.next().await;
+			let (stream, peer) = match &self.drain {
+				Some(drain) => tokio::select! {
+					accepted = accepting.next() => accepted,
+					() = drain.started() => return Ok(()),
+				},
+				None => accepting.next().await,
+			};
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize before the address reaches
 			// SPF, DNSBL, the ban table, the greylist, the inbound rate
@@ -562,8 +579,10 @@ impl Server {
 				continue;
 			};
 			let server = Arc::clone(&self);
+			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
 			tokio::spawn(async move {
 				let _permit = permit;
+				let _tracked = tracked;
 				tracing::debug!(%peer, "connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "connection ended with error");
@@ -642,6 +661,10 @@ async fn read_chunk(
 	}
 	Ok(Some(chunk))
 }
+
+#[cfg(test)]
+#[path = "server_tests_drain.rs"]
+mod tests_drain;
 
 #[cfg(test)]
 #[path = "server_tests_quota.rs"]
