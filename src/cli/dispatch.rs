@@ -437,3 +437,7 @@ impl Cli {
 		}
 	}
 }
+
+#[cfg(test)]
+#[path = "dispatch_tests_delegation.rs"]
+mod tests_delegation;

@@ -136,6 +136,7 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		true,
 	),
 	(&["app-passwords"], true),
+	(&["app-password", "list", "--json"], true),
 	(
 		&[
 			"app-password-revoke",
