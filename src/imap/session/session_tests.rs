@@ -154,3 +154,6 @@ mod flags_update;
 
 #[path = "session_tests_append_exists.rs"]
 mod append_exists;
+
+#[path = "session_tests_noop_exists.rs"]
+mod noop_exists;

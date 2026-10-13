@@ -157,6 +157,15 @@ impl Session {
 			snapshot,
 			read_only,
 		};
+		// SELECT just announced the count to the client. The NOOP path
+		// uses this value to decide whether to re-announce on the next
+		// poll, so the announcement must reach the client before any
+		// subsequent command reply could over-write it.
+		let count = match &self.state {
+			State::Selected { snapshot, .. } => snapshot.len(),
+			_ => 0,
+		};
+		self.announced_exists = Some(u32::try_from(count).unwrap_or(u32::MAX));
 		// RFC 5182 §2.1: a successful SELECT resets the search result
 		// variable to the empty sequence. Per #976 we also clear on
 		// CLOSE and UNSELECT, both of which leave the selected state.

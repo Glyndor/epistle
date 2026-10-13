@@ -303,6 +303,10 @@ impl Session {
 			return String::new();
 		};
 		*snapshot = fresh;
+		// Record that the client has now been told about this count, so
+		// the next NOOP does not re-announce the same value (RFC 9051
+		// §7.1.2: NOOP only re-announces when something has changed).
+		self.announced_exists = Some(u32::try_from(count_after).unwrap_or(u32::MAX));
 		if count_after <= count_before {
 			return String::new();
 		}
