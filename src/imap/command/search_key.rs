@@ -131,16 +131,34 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 			};
 			(key, rest)
 		}
-		"MODSEQ" => {
-			let (n_str, rest) = next_token(after);
-			(SearchKey::ModSeq(n_str.parse().ok()?), rest)
-		}
+		"MODSEQ" => parse_modseq(after)?,
 		_ => {
 			let set = parse_sequence_set(word)?;
 			(SearchKey::Sequence(set), after)
 		}
 	};
 	Some((key, rest))
+}
+
+/// `MODSEQ [<entry-name> <entry-type-req>] <mod-sequence-valzer>` (RFC 7162
+/// §3.1.5). The store keeps one mod-sequence per message, so a metadata entry
+/// is checked for syntax and the message's own mod-sequence is compared, as
+/// the RFC allows for a server without per-entry mod-sequences.
+fn parse_modseq(after: &str) -> Option<(SearchKey, &str)> {
+	let mut rest = after;
+	if rest.starts_with('"') {
+		let (_entry, tail) = parse_astring(rest)?;
+		let (entry_type, tail) = next_token(tail.trim_start());
+		if !["PRIV", "SHARED", "ALL"]
+			.iter()
+			.any(|t| entry_type.eq_ignore_ascii_case(t))
+		{
+			return None;
+		}
+		rest = tail;
+	}
+	let (n_str, rest) = next_token(rest);
+	Some((SearchKey::ModSeq(n_str.parse().ok()?), rest))
 }
 
 /// Split the next whitespace- or `(`-delimited token off `s`, returning it

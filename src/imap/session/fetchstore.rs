@@ -60,6 +60,7 @@ impl Session {
 		unchanged_since: Option<u64>,
 	) -> Output {
 		let uidonly = self.uidonly;
+		let condstore = self.condstore;
 		// Capture the SEARCHRES `$` set before the mutable borrow of
 		// `self.state`. The set is keyed by UID (§5182 §2.1); the resolver
 		// turns it into the kind of values the loop expects (UIDs for UID
@@ -217,8 +218,10 @@ impl Session {
 			if !silent {
 				// CONDSTORE: a conditional STORE reports the new mod-sequence.
 				let modseq = snapshot.by_sequence(sequence_number).map(|m| m.modseq);
-				let modseq = match (unchanged_since, modseq) {
-					(Some(_), Some(value)) => format!("MODSEQ ({value}) "),
+				// Once CONDSTORE is enabled every untagged FETCH carries
+				// MODSEQ, and UID too (RFC 7162 §3.1).
+				let modseq = match (unchanged_since.is_some() || condstore, modseq) {
+					(true, Some(value)) => format!("MODSEQ ({value}) "),
 					_ => String::new(),
 				};
 				if uidonly {
@@ -227,7 +230,7 @@ impl Session {
 						"* UIDFETCH {message_uid} ({modseq}FLAGS {stored_render})\r\n"
 					));
 				} else {
-					let uid_part = if uid {
+					let uid_part = if uid || condstore {
 						format!("UID {message_uid} ")
 					} else {
 						String::new()

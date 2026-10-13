@@ -7,6 +7,7 @@ mod acl;
 mod auth;
 mod codes;
 mod commands;
+mod condstore;
 mod defaults;
 mod expunge;
 mod fetch;
@@ -75,7 +76,7 @@ impl Session {
 				return output;
 			}
 		};
-		self.apply(tagged)
+		self.apply_enabling_condstore(tagged)
 	}
 
 	fn apply(&mut self, mut tagged: Tagged) -> Output {

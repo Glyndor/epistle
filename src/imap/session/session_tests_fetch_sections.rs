@@ -1,4 +1,4 @@
-use super::fetch_envelope::{PLAIN, exact, selected};
+use super::fetch_envelope::{CONDSTORE_ON, PLAIN, exact, selected};
 use super::fetch_structure::{ALTERNATIVE, MIXED, nested};
 
 pub(super) fn literal(label: &str, data: &[u8], suffix: &str) -> Vec<u8> {
@@ -75,7 +75,7 @@ fn fetch_section_thunderbird_uid_listing_changed_since() {
 	let command = "f UID FETCH 1:* (UID RFC822.SIZE FLAGS BODY.PEEK[HEADER.FIELDS (From To Cc Bcc Subject Date Message-ID Priority X-Priority References Newsgroups In-Reply-To Content-Type Reply-To)]) (CHANGEDSINCE 0)";
 	let headers = &PLAIN[..PLAIN.len() - 7];
 	let mut expected = format!(
-		"* 1 FETCH (UID 1 RFC822.SIZE {} FLAGS () BODY[HEADER.FIELDS ({fields})] {{{}}}\r\n",
+		"{CONDSTORE_ON}* 1 FETCH (UID 1 RFC822.SIZE {} FLAGS () BODY[HEADER.FIELDS ({fields})] {{{}}}\r\n",
 		PLAIN.len(),
 		headers.len()
 	)

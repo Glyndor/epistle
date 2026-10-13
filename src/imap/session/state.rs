@@ -117,6 +117,9 @@ pub struct Session {
 	pub(super) uidonly: bool,
 	/// Revision negotiated for the lifetime of this connection (RFC 9051 Appendix A).
 	pub(super) imap4rev2: bool,
+	/// A CONDSTORE enabling command (RFC 7162 §3.1) has been seen: untagged
+	/// FETCH replies to STORE carry UID and MODSEQ from then on.
+	pub(super) condstore: bool,
 	/// UTF8=ACCEPT (RFC 6855) enabled: mailbox names cross the wire as UTF-8.
 	pub(super) utf8_accept: bool,
 	pub(super) idle_tag: Option<String>,
@@ -233,6 +236,7 @@ impl Session {
 			pending_append: None,
 			uidonly: false,
 			imap4rev2: false,
+			condstore: false,
 			utf8_accept: false,
 			idle_tag: None,
 			notify_selected: None,

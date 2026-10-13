@@ -35,7 +35,6 @@ declare -A KNOWN_FAILING=(
 	[sort-subject]="SORT and THREAD order differs from RFC 5256"
 	[thread-orderedsubject]="SORT and THREAD order differs from RFC 5256"
 	[thread-orderedsubject2]="SORT and THREAD order differs from RFC 5256"
-	[esearch-condstore]="ESEARCH and SEARCH result sets differ"
 	[search-flags]="ESEARCH and SEARCH result sets differ"
 	[copy]="\\Recent is not tracked: epistle reports zero recent messages"
 	[select]="\\Recent is not tracked: epistle reports zero recent messages"

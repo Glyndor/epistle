@@ -70,6 +70,8 @@ mod auth_bans;
 mod basic;
 #[path = "session_tests_commands.rs"]
 mod commands_tests;
+#[path = "session_tests_condstore_search.rs"]
+mod condstore_search;
 #[path = "session_tests_encoded_search.rs"]
 mod encoded_search;
 #[path = "session_tests_esearch_sets.rs"]

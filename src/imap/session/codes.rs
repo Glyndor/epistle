@@ -4,12 +4,22 @@ use super::super::command::ReturnOpt;
 use super::mailbox;
 
 /// Build the ESEARCH reply line (RFC 4731) for the requested return options.
-pub(super) fn esearch_line(tag: &str, uid: bool, hits: &[u32], opts: &[ReturnOpt]) -> String {
+/// `modseq` is the CONDSTORE MODSEQ result (RFC 7162 §3.1.5), written last.
+pub(super) fn esearch_line(
+	tag: &str,
+	uid: bool,
+	hits: &[u32],
+	opts: &[ReturnOpt],
+	modseq: Option<u64>,
+) -> String {
 	let mut line = format!("* ESEARCH (TAG \"{tag}\")");
 	if uid {
 		line.push_str(" UID");
 	}
 	line.push_str(&esearch_results(hits, opts));
+	if let Some(modseq) = modseq {
+		line.push_str(&format!(" MODSEQ {modseq}"));
+	}
 	line.push_str("\r\n");
 	line
 }

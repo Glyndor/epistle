@@ -1,4 +1,4 @@
-use super::fetch_envelope::{PLAIN, SIMPLE, exact, selected};
+use super::fetch_envelope::{CONDSTORE_ON, PLAIN, SIMPLE, exact, selected};
 use super::fetch_sections::literal;
 use super::fetch_structure::{ALTERNATIVE, MIXED, TEXT, nested};
 
@@ -77,6 +77,7 @@ fn fetch_aliases_uid_and_changed_since() {
 		&PLAIN[..PLAIN.len() - 7],
 		" UID 1 MODSEQ (1)",
 	);
+	expected.splice(0..0, CONDSTORE_ON.bytes());
 	exact(
 		&mut session,
 		"f UID FETCH 1:* (RFC822.HEADER) (CHANGEDSINCE 0)",
