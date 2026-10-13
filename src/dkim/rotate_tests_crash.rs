@@ -308,7 +308,7 @@ pub(super) async fn crash(lab: &Lab, step: Step, visibility: Visibility) {
 		crashed
 			.as_ref()
 			.is_err_and(|error| error.to_string().contains("crash injected")),
-		"the rotator must reach {step:?}: {crashed:?}"
+		"the rotator must reach {step:?} and stop with the injected crash"
 	);
 	lab.assert_verifies(&signer, "in the crashed process").await;
 }

@@ -194,14 +194,14 @@ fn apply_fails_when_config_path_parent_is_a_regular_file() {
 	] {
 		assert!(
 			path.exists(),
-			"expected key file on disk before the failure: {path:?}"
+			"a key file written before the failure is missing"
 		);
 	}
 	for name in ["s1.pem", "oauth_public.key", "cert.pem", "key.pem"] {
 		let path = keys_dir.join(name);
 		assert!(
 			path.exists(),
-			"expected key file on disk before the failure: {path:?}"
+			"a key file written before the failure is missing"
 		);
 		assert!(
 			rendered.contains(name),

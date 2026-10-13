@@ -50,7 +50,7 @@ fn no_other_service_gets_the_keys() {
 		let secrets = value["services"][name]["secrets"].to_string();
 		assert!(
 			!secrets.contains("storage_key") && !secrets.contains("oauth_signing"),
-			"{name}: {secrets}"
+			"{name} must not mount the storage or OAuth signing key"
 		);
 	}
 }
