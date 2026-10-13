@@ -5,7 +5,7 @@
 use super::mailbox::{self, Flag};
 use super::state::State;
 use super::{Output, PendingLiteral, Session};
-use std::time::SystemTime;
+use crate::imap::internal_date::InternalDate;
 
 /// Build the rejection `Output` for a literal-bearing command. When the
 /// command used the non-synchronizing `{n+}` form, the client already sent
@@ -32,7 +32,7 @@ impl Session {
 		tag: &str,
 		mailbox: &str,
 		flag_tokens: &[String],
-		date: Option<SystemTime>,
+		date: Option<InternalDate>,
 		(size, synchronizing): (usize, bool),
 		AppendForm { utf8, binary }: AppendForm,
 	) -> Output {
@@ -133,7 +133,7 @@ impl Session {
 		sequence: u32,
 		mailbox: &str,
 		flag_tokens: &[String],
-		date: Option<SystemTime>,
+		date: Option<InternalDate>,
 		size: usize,
 		uid: bool,
 		synchronizing: bool,

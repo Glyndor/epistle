@@ -156,7 +156,7 @@ pub enum Command {
 		/// Initial flags for the appended message (may be empty).
 		flags: Vec<String>,
 		/// The INTERNALDATE the client asked for, if any.
-		date: Option<std::time::SystemTime>,
+		date: Option<crate::imap::internal_date::InternalDate>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
@@ -182,7 +182,7 @@ pub enum Command {
 		/// Initial flags for the appended message.
 		flags: Vec<String>,
 		/// The INTERNALDATE the client asked for, if any.
-		date: Option<std::time::SystemTime>,
+		date: Option<crate::imap::internal_date::InternalDate>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a

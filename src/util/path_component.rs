@@ -310,6 +310,8 @@ pub enum MessageExt {
 	Uid,
 	/// Mod-sequence sidecar.
 	Modseq,
+	/// INTERNALDATE zone sidecar.
+	Zone,
 	/// Archive deletion record.
 	Deleted,
 	/// Spool envelope.
@@ -323,6 +325,7 @@ impl MessageExt {
 			Self::Flags => ".flags",
 			Self::Uid => ".uid",
 			Self::Modseq => ".modseq",
+			Self::Zone => ".zone",
 			Self::Deleted => ".deleted",
 			Self::Json => ".json",
 		}

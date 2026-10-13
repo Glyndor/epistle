@@ -391,7 +391,12 @@ impl Snapshot {
 				}
 			}
 		}
-		for ext in [MessageExt::Eml, MessageExt::Flags, MessageExt::Uid] {
+		for ext in [
+			MessageExt::Eml,
+			MessageExt::Flags,
+			MessageExt::Uid,
+			MessageExt::Zone,
+		] {
 			if let Ok(path) = message_file(&self.account_dir, id, ext) {
 				let _ = std::fs::remove_file(path);
 			}

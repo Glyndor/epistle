@@ -289,3 +289,20 @@ fn missing_index_is_treated_as_absent() {
 	let generation = current_generation(&inbox(dir.path(), "alice"));
 	assert!(load(&inbox(dir.path(), "alice"), generation).is_none());
 }
+
+/// A non-UTC INTERNALDATE zone rides on the time field as `@<minutes>`.
+#[test]
+fn internal_zone_survives_the_index_round_trip() {
+	let id = Uuid::now_v7();
+	let when = std::time::UNIX_EPOCH + std::time::Duration::new(1_174_773_600, 0);
+	let mut original = MessageRef::from_index(3, id, 10, Vec::new(), when, 1);
+	original.internal_zone = -570;
+	let mut buf = String::new();
+	write_record(&mut buf, &original);
+	assert!(buf.contains(" 1174773600.0@-570 "), "{buf}");
+	let parsed = parse_record(buf.trim_end_matches('\n')).expect("parse");
+	assert_eq!((parsed.internal_date, parsed.internal_zone), (when, -570));
+	// A zero zone is never written, so `@0` is not a form the writer makes.
+	assert!(parse_record(&format!("{id} 1 2 3.0@0 4 ")).is_none());
+	assert!(parse_record(&format!("{id} 1 2 3.0@x 4 ")).is_none());
+}

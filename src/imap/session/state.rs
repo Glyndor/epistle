@@ -76,7 +76,7 @@ pub struct PendingLiteral {
 	/// Initial flags for the appended message.
 	pub flags: Vec<Flag>,
 	/// The INTERNALDATE the client asked for; `None` means the arrival time.
-	pub date: Option<std::time::SystemTime>,
+	pub date: Option<crate::imap::internal_date::InternalDate>,
 	/// For REPLACE only: the selected mailbox to expunge from and the source
 	/// message sequence number, resolved when the command was received.
 	pub replace: Option<(String, u32)>,

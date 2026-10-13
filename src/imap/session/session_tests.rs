@@ -189,3 +189,6 @@ mod fetch_whole;
 
 #[path = "session_tests_append_binary.rs"]
 mod append_binary;
+
+#[path = "session_tests_append_date.rs"]
+mod append_date;

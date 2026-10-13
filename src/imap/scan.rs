@@ -69,6 +69,7 @@ pub(super) fn scan_mailbox(
 			size,
 			flags: super::flags::read_flags(account_dir, *id),
 			internal_date,
+			internal_zone: super::internal_date::read_zone(account_dir, *id),
 			modseq: super::modseq::read_message(account_dir, *id),
 		});
 	}

@@ -5,7 +5,7 @@
 use super::date_time::split_date_time;
 use super::parse::{MAX_APPEND_SIZE, parse_astring};
 use super::{Command, LiteralAnnouncement, ParseError};
-use std::time::SystemTime;
+use crate::imap::internal_date::InternalDate;
 
 /// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date
 /// becomes the message's INTERNALDATE.
@@ -94,7 +94,7 @@ pub(super) fn parse_replace(tag: &str, args: &str, uid: bool) -> Result<Command,
 fn parse_flags_and_literal(
 	rest: &str,
 	bad: &impl Fn() -> ParseError,
-) -> Result<(Vec<String>, Option<SystemTime>, LiteralAnnouncement), ParseError> {
+) -> Result<(Vec<String>, Option<InternalDate>, LiteralAnnouncement), ParseError> {
 	let (flags, literal_text) = if let Some(after) = rest.strip_prefix('(') {
 		let (inside, after) = after.split_once(')').ok_or_else(bad)?;
 		(

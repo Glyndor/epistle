@@ -58,7 +58,8 @@ fn append_date_time_becomes_the_internaldate() {
 	append_dated(&mut session, "22-Feb-2008 23:00:00 +0200", "\r\n1\r\n");
 	let response = text(&session.command_line("f FETCH 1 INTERNALDATE"));
 	assert!(
-		response.contains("INTERNALDATE \"22-Feb-2008 21:00:00 +0000\""),
+		// The instant 2008-02-22T21:00:00Z, shown in the zone it came in.
+		response.contains("INTERNALDATE \"22-Feb-2008 23:00:00 +0200\""),
 		"{response}"
 	);
 	let response = text(&session.command_line("b APPEND INBOX \"31-Feb-2008 00:00:00 +0000\" {3}"));

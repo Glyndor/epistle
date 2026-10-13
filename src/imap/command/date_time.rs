@@ -1,8 +1,9 @@
 //! The quoted `date-time` of APPEND and REPLACE (RFC 9051 §9):
 //! `"dd-Mon-yyyy hh:mm:ss +zzzz"`, where a one-digit day may be padded
-//! with a space. It becomes the message's INTERNALDATE.
+//! with a space. It becomes the message's INTERNALDATE, shown in its zone.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::imap::internal_date::{InternalDate, MAX_ZONE};
+use std::time::{Duration, UNIX_EPOCH};
 
 const MONTHS: [&str; 12] = [
 	"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
@@ -11,7 +12,7 @@ const MONTHS: [&str; 12] = [
 /// Split an optional leading quoted date-time off `text`. `Ok((None, text))`
 /// when `text` does not start with a quote; `Err(())` when it does but the
 /// value is not a valid date-time, which the caller answers with BAD.
-pub(super) fn split_date_time(text: &str) -> Result<(Option<SystemTime>, &str), ()> {
+pub(super) fn split_date_time(text: &str) -> Result<(Option<InternalDate>, &str), ()> {
 	let Some(quoted) = text.strip_prefix('"') else {
 		return Ok((None, text));
 	};
@@ -20,8 +21,8 @@ pub(super) fn split_date_time(text: &str) -> Result<(Option<SystemTime>, &str), 
 	Ok((Some(time), rest.trim_start()))
 }
 
-/// Parse the inside of a date-time string into an instant.
-fn parse(value: &str) -> Option<SystemTime> {
+/// Parse the inside of a date-time string into an instant and its zone.
+fn parse(value: &str) -> Option<InternalDate> {
 	let value = value.strip_prefix(' ').unwrap_or(value);
 	let (date, rest) = value.split_once(' ')?;
 	let (time, zone) = rest.split_once(' ')?;
@@ -51,14 +52,16 @@ fn parse(value: &str) -> Option<SystemTime> {
 	let offset = zone_offset(zone)?;
 	let seconds =
 		days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second - offset;
-	Some(if seconds >= 0 {
+	let time = if seconds >= 0 {
 		UNIX_EPOCH + Duration::from_secs(seconds as u64)
 	} else {
 		UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs())
-	})
+	};
+	let zone = i16::try_from(offset / 60).ok()?;
+	Some(InternalDate { time, zone })
 }
 
-/// The `+hhmm` / `-hhmm` zone as seconds east of UTC.
+/// The `+hhmm` / `-hhmm` zone as seconds east of UTC, at most `+2359`.
 fn zone_offset(zone: &str) -> Option<i64> {
 	let sign = match zone.as_bytes().first()? {
 		b'+' => 1,
@@ -71,7 +74,7 @@ fn zone_offset(zone: &str) -> Option<i64> {
 	}
 	let hours: i64 = digits(&digits_part[..2])?;
 	let minutes: i64 = digits(&digits_part[2..])?;
-	if minutes > 59 {
+	if minutes > 59 || hours * 60 + minutes > i64::from(MAX_ZONE) {
 		return None;
 	}
 	Some(sign * (hours * 3600 + minutes * 60))
@@ -106,10 +109,11 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-	use super::{SystemTime, UNIX_EPOCH, split_date_time};
+	use super::{InternalDate, UNIX_EPOCH, split_date_time};
 
-	fn seconds(time: SystemTime) -> u64 {
-		time.duration_since(UNIX_EPOCH)
+	fn seconds(date: InternalDate) -> u64 {
+		date.time
+			.duration_since(UNIX_EPOCH)
 			.expect("after epoch")
 			.as_secs()
 	}
@@ -119,10 +123,12 @@ mod tests {
 		let (time, rest) = split_date_time("\"22-Feb-2008 23:00:00 +0200\" {5}").expect("valid");
 		// 2008-02-22T21:00:00Z.
 		assert_eq!(seconds(time.expect("date")), 1_203_714_000);
+		assert_eq!(time.expect("date").zone, 120);
 		assert_eq!(rest, "{5}");
 		let (time, _) = split_date_time("\" 2-feb-2008 01:00:00 -0130\" {5}").expect("valid");
 		// 2008-02-02T02:30:00Z.
 		assert_eq!(seconds(time.expect("date")), 1_201_919_400);
+		assert_eq!(time.expect("date").zone, -90);
 	}
 
 	#[test]
@@ -133,6 +139,7 @@ mod tests {
 			"\"22-Foo-2008 00:00:00 +0000\" {5}",
 			"\"22-Feb-2008 24:00:00 +0000\" {5}",
 			"\"22-Feb-2008 00:00:00 0000\" {5}",
+			"\"22-Feb-2008 00:00:00 +2400\" {5}",
 			"\"22-Feb-2008 00:00:00 +0000 {5}",
 		] {
 			assert!(split_date_time(bad).is_err(), "{bad}");
