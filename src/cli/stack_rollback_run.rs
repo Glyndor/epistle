@@ -12,27 +12,48 @@ use crate::config::Config;
 const INSTALLED: &str = "/usr/bin/epistle";
 
 /// `sudo epistle stack rollback [--to VERSION]`.
-pub(in crate::cli) fn run_as_root(config_path: &Path, to: Option<&str>) -> ExitCode {
-	match as_root(config_path, to) {
+pub(in crate::cli) fn run_as_root(config_path: &Path, to: Option<&str>, yes: bool) -> ExitCode {
+	match as_root(config_path, to, yes) {
 		Ok(summary) => {
 			eprintln!("epistle: {summary}");
 			ExitCode::SUCCESS
 		}
-		Err(error) => {
+		Err(Stop::Declined(code)) => code,
+		Err(Stop::Failed(error)) => {
 			crate::cli::style::error(format_args!("stack rollback failed: {error}"));
 			ExitCode::FAILURE
 		}
 	}
 }
 
-fn as_root(config_path: &Path, to: Option<&str>) -> Result<String, String> {
+/// Why the root half stopped.
+enum Stop {
+	/// The operator did not confirm; the prompt's exit code.
+	Declined(ExitCode),
+	/// A step failed.
+	Failed(String),
+}
+
+impl From<String> for Stop {
+	fn from(error: String) -> Self {
+		Stop::Failed(error)
+	}
+}
+
+impl From<&str> for Stop {
+	fn from(error: &str) -> Self {
+		Stop::Failed(error.to_string())
+	}
+}
+
+fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, Stop> {
 	// SAFETY: geteuid takes no arguments and cannot fail.
 	if unsafe { libc::geteuid() } != 0 {
 		return Err(
 			"it replaces /usr/bin/epistle, so run it as root: sudo epistle stack rollback".into(),
 		);
 	}
-	let config = Config::load(config_path).map_err(|error| error.to_string())?;
+	let config = Config::load(config_path).map_err(|error| Stop::Failed(error.to_string()))?;
 	let compose = crate::cli::stack::compose_path(&config.data_dir);
 	let user = crate::cli::rootless::lookup_user()
 		.map_err(|error| format!("cannot look up glyndor-epistle: {error}"))?
@@ -47,6 +68,12 @@ fn as_root(config_path: &Path, to: Option<&str>) -> Result<String, String> {
 	let current = env!("CARGO_PKG_VERSION");
 	let chosen = pick(&files, current, to)?;
 	let version = chosen.trim_start_matches("epistle-").to_string();
+	crate::cli::prompt::confirm_destructive(
+		&super::action(&version),
+		&super::question(current, &version),
+		yes,
+	)
+	.map_err(Stop::Declined)?;
 	eprintln!("epistle: rolling back from {current} to {version}");
 	let exe =
 		std::env::current_exe().map_err(|error| format!("cannot find this binary: {error}"))?;
@@ -55,28 +82,29 @@ fn as_root(config_path: &Path, to: Option<&str>) -> Result<String, String> {
 		.arg("--config")
 		.arg(config_path)
 		.arg("rollback-db")
-		.status();
-	if !database.is_ok_and(|status| status.success()) {
-		let _ = start_mail(&user, &compose);
-		return Err(format!(
-			"the database step failed (see above); {INSTALLED} was not changed and mail was started again on {current}"
-		));
-	}
+		.stdout(std::process::Stdio::piped())
+		.stderr(std::process::Stdio::inherit())
+		.output();
+	let restored = match &database {
+		Ok(output) if output.status.success() => {
+			super::restored(&String::from_utf8_lossy(&output.stdout))
+		}
+		_ => {
+			let _ = start_mail(&user, &compose);
+			return Err(Stop::Failed(format!(
+				"the database step failed (see above); {INSTALLED} was not changed and mail was started again on {current}"
+			)));
+		}
+	};
 	if let Err(error) = install(&Path::new(KEPT).join(&chosen)) {
 		let _ = start_mail(&user, &compose);
-		return Err(format!(
+		return Err(Stop::Failed(format!(
 			"cannot put the {version} binary in place ({error}); mail was started again on {current}, \
 			 and if the database was restored, run `sudo epistle stack rollback` again"
-		));
+		)));
 	}
 	start_mail(&user, &compose)?;
-	Ok(format!(
-		"{INSTALLED} is the {version} binary again and mail was started on it; check it with \
-		 `sudo epistle status`. dpkg still lists {current} as installed, so the next apt upgrade \
-		 replaces the binary again: hold the package with `sudo apt-mark hold epistle` until a \
-		 fixed release, and any mail the database took after the dump was taken is gone from \
-		 the database (the message files stay on disk)"
-	))
+	Ok(super::summary(current, &version, restored))
 }
 
 /// Copy `kept` over the installed binary through a temporary file in the
@@ -158,5 +186,7 @@ fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, Strin
 	}
 	crate::cli::backup::load_dump(database, &config.data_dir, sql.as_bytes())
 		.map_err(|error| format!("restoring {} failed: {error}", dump.display()))?;
+	// The root half reads this line to word its closing message.
+	println!("{}", super::RESTORED);
 	Ok(format!("the database is back to {}", dump.display()))
 }

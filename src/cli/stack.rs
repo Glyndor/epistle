@@ -91,6 +91,9 @@ pub enum StackCli {
 		/// by default.
 		#[arg(long, value_name = "VERSION")]
 		to: Option<String>,
+		/// Do not ask for confirmation.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// The database half of `rollback`, run as the service account.
 	#[command(hide = true)]

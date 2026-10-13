@@ -82,6 +82,59 @@ pub(super) fn schema_moved(dump: &BTreeSet<i64>, database: &BTreeSet<i64>) -> bo
 	!database.is_subset(dump)
 }
 
+/// The line `stack rollback-db` prints on stdout when it restored the dump;
+/// the root half reads it to say what happened to the database.
+pub(super) const RESTORED: &str = "database=restored";
+
+/// The question `stack rollback` asks before it changes anything.
+pub(super) fn question(current: &str, version: &str) -> String {
+	format!(
+		"Replace /usr/bin/epistle {current} with {version} and, if {current} already migrated \
+		 the database, restore the dump taken before the upgrade? [y/N]"
+	)
+}
+
+/// Ask [`question`] on `console`, or take `--yes`: the convention of the
+/// other destructive commands (exit 2 when not confirmed). The command runs
+/// the same check on the process's terminal through `confirm_destructive`.
+#[cfg(test)]
+pub(super) fn confirm(
+	console: &mut crate::cli::prompt::Console<'_>,
+	current: &str,
+	version: &str,
+	yes: bool,
+) -> Result<(), std::process::ExitCode> {
+	crate::cli::prompt::confirm_with(console, &action(version), &question(current, version), yes)
+}
+
+/// The action the prompt and its refusal name.
+pub(super) fn action(version: &str) -> String {
+	format!("stack rollback to {version}")
+}
+
+/// Whether the database half reported restoring the dump.
+pub(super) fn restored(stdout: &str) -> bool {
+	stdout.lines().any(|line| line.trim() == RESTORED)
+}
+
+/// The closing message, which names the lost database changes only when
+/// the dump was restored.
+pub(super) fn summary(current: &str, version: &str, restored: bool) -> String {
+	let database = if restored {
+		"The database is back to the dump taken before the upgrade, so whatever it took \
+		 after that (accounts, flags, queue state) is gone from the database; the message \
+		 files stay on disk."
+	} else {
+		"The database was kept as it was: the schema had not moved past the dump."
+	};
+	format!(
+		"/usr/bin/epistle is the {version} binary again and mail was started on it; check it \
+		 with `sudo epistle status`. {database} dpkg still lists {current} as installed, so the \
+		 next apt upgrade replaces the binary again: hold the package with `sudo apt-mark hold \
+		 epistle` until a fixed release."
+	)
+}
+
 #[path = "stack_rollback_run.rs"]
 mod run;
 pub(super) use run::{restore_db, run_as_root};
