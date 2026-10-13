@@ -57,6 +57,7 @@ mod stack_update;
 mod status;
 mod storage_blobs;
 mod style;
+mod subid;
 mod suppression;
 mod tls_cli;
 #[cfg(test)]
@@ -694,6 +695,10 @@ pub enum Command {
 		#[arg(value_enum, value_name = "SHELL")]
 		shell: completions::CompletionShell,
 	},
+	/// Move the service account off a subordinate id block another account
+	/// shares. Run by the package on upgrade, as root.
+	#[command(hide = true)]
+	MoveSubids(subid::MoveArgs),
 	/// Write `epistle.1` and one man page per subcommand into DIR.
 	///
 	/// Run by debian/rules at package build time.

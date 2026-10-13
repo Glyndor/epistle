@@ -14,6 +14,16 @@ pub(super) const CASES: &[(&[&str], bool)] = &[
 		false,
 	),
 	(&["serve"], false),
+	(
+		&[
+			"move-subids",
+			"--uid-start",
+			"165536",
+			"--gid-start",
+			"165536",
+		],
+		false,
+	),
 	(&["config-check"], true),
 	(&["dkim-keygen", "--out", "/tmp/dkim.pem"], false),
 	(&["storage-keygen"], false),

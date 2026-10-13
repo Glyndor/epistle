@@ -5,9 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 
-struct ServiceUser {
-	uid: u32,
-	home: PathBuf,
+pub(super) struct ServiceUser {
+	pub(super) uid: u32,
+	pub(super) home: PathBuf,
 }
 
 fn delegate(
@@ -67,7 +67,7 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 }
 
 #[cfg(unix)]
-fn lookup_user() -> io::Result<Option<ServiceUser>> {
+pub(super) fn lookup_user() -> io::Result<Option<ServiceUser>> {
 	use std::ffi::CStr;
 	use std::os::unix::ffi::OsStrExt;
 

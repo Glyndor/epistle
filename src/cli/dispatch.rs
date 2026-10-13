@@ -377,6 +377,7 @@ impl Cli {
 			}
 			Command::Completions { shell } => super::completions::run_completions(shell),
 			Command::Manpages { dir } => super::completions::run_manpages(&dir),
+			Command::MoveSubids(args) => super::subid::run(args),
 		}
 	}
 }

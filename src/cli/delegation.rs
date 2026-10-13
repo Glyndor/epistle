@@ -59,6 +59,7 @@ impl Command {
 			| Command::Local { .. }
 			| Command::Probe { .. }
 			| Command::Completions { .. }
+			| Command::MoveSubids(_)
 			| Command::Manpages { .. } => false,
 		}
 	}
