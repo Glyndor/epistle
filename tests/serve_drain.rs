@@ -96,7 +96,7 @@ fn sigterm_lets_an_open_transaction_finish_and_says_goodbye() {
 			break status;
 		}
 		if Instant::now() >= deadline {
-			let stderr = child.drain_stderr_only();
+			let stderr = child.stderr_snapshot();
 			panic!(
 				"the server was still running 25 s after SIGTERM\nstderr:\n{}",
 				redact_password(&stderr)
