@@ -65,6 +65,7 @@ mod stack_rollback;
 mod stack_socket;
 mod stack_started;
 mod stack_update;
+mod staging;
 mod status;
 mod storage_blobs;
 mod style;

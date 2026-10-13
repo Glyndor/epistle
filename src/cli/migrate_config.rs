@@ -177,7 +177,7 @@ fn print(
 				out,
 				"passwords: the accounts are disabled for login; their temporary passwords are in {}. \
 				 Hand each one over, then `epistle account enable NAME`",
-				path.display()
+				crate::cli::staging::shown(&path.display().to_string())
 			);
 		}
 		Some(Passwords::Reset) if !outcome.accounts_added.is_empty() => {
