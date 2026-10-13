@@ -36,12 +36,7 @@ async fn api_send_with_save_sent_off_does_not_write_to_sent() {
 			entries
 				.flatten()
 				.filter(|entry| entry.path().is_file())
-				.filter(|entry| {
-					entry
-						.path()
-						.extension()
-						.is_some_and(|ext| ext == "eml")
-				})
+				.filter(|entry| entry.path().extension().is_some_and(|ext| ext == "eml"))
 				.count()
 		})
 		.unwrap_or(0);
@@ -128,12 +123,7 @@ async fn api_send_with_save_sent_off_still_keeps_the_outbound_delivery() {
 			entries
 				.flatten()
 				.filter(|entry| entry.path().is_file())
-				.filter(|entry| {
-					entry
-						.path()
-						.extension()
-						.is_some_and(|ext| ext == "eml")
-				})
+				.filter(|entry| entry.path().extension().is_some_and(|ext| ext == "eml"))
 				.count()
 		})
 		.unwrap_or(0);

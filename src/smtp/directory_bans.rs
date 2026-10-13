@@ -155,13 +155,7 @@ impl Directory {
 		// app-password CIDR miss, a protocol allowlist denial). An unknown
 		// login never reaches the account side.
 		let account_for_record = verified_account.or(resolved_account.as_deref());
-		self.record_ban_outcome(
-			login,
-			account_for_record,
-			verified.is_some(),
-			ip,
-			protocol,
-		);
+		self.record_ban_outcome(login, account_for_record, verified.is_some(), ip, protocol);
 		verified
 	}
 

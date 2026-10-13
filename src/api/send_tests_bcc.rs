@@ -133,7 +133,11 @@ async fn api_send_bcc_to_a_local_recipient_writes_no_bcc_anywhere() {
 	// Two copies on disk: the Bcc delivery to alice (a local
 	// recipient) and the Sent folder the saver keeps by default.
 	// Neither carries a `Bcc` header.
-	assert_eq!(stored.len(), 2, "the Bcc recipient received it and the Sent copy landed");
+	assert_eq!(
+		stored.len(),
+		2,
+		"the Bcc recipient received it and the Sent copy landed"
+	);
 	assert!(
 		!headers(&stored[0]).contains("bcc:"),
 		"no Bcc header in the first copy"

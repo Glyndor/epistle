@@ -25,8 +25,13 @@ use crate::storage::locked::{EditError, edit};
 
 use super::StoreError;
 
+/// One app password as listed: label, created-at, expiry, IP CIDR and the
+/// `save_sent` override.
+pub type AppPasswordRow = (String, String, Option<u64>, Option<String>, Option<bool>);
+
 /// One app password as persisted in `app_passwords.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct AppPassword {
 	/// Human-readable label identifying the credential (e.g. "iphone").
 	pub label: String,
@@ -285,7 +290,7 @@ impl AppPasswordStore {
 	/// `Some(true)`/`Some(false)` when the credential carries an
 	/// explicit override, `None` when it defers to the account-wide
 	/// setting.
-	pub fn list(&self) -> Vec<(String, String, Option<u64>, Option<String>, Option<bool>)> {
+	pub fn list(&self) -> Vec<AppPasswordRow> {
 		let mut rows: Vec<_> = self
 			.accounts
 			.iter()

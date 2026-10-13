@@ -267,15 +267,11 @@ impl Session {
 		// the replacement of its target message; the dedup is an
 		// APPEND-only path so the IMAP4rev2 sequence number for the
 		// replacement stays coherent.
-		if replace.is_none() && mailbox.eq_ignore_ascii_case("Sent")
+		if replace.is_none()
+			&& mailbox.eq_ignore_ascii_case("Sent")
 			&& let Some(message_id) = crate::storage::first_message_id(data)
 		{
-			let dedup_outcome = self.append_skip_stored_sent(
-				&tag,
-				&account,
-				&mailbox,
-				&message_id,
-			);
+			let dedup_outcome = self.append_skip_stored_sent(&tag, &account, &mailbox, &message_id);
 			match dedup_outcome {
 				Some(output) => return output,
 				None => {
@@ -345,15 +341,9 @@ impl Session {
 				error
 			})
 			.ok()?;
-		if guard.is_recent(message_id).ok()?.is_none() {
-			return None;
-		}
-		let (validity, uid) = mailbox::appenduid_for_message_id(
-			&self.data_dir,
-			account,
-			mailbox,
-			message_id,
-		)?;
+		guard.is_recent(message_id).ok()?.as_ref()?;
+		let (validity, uid) =
+			mailbox::appenduid_for_message_id(&self.data_dir, account, mailbox, message_id)?;
 		let code = format!("[APPENDUID {validity} {uid}] ");
 		let prelude = self.append_update_selected(mailbox);
 		Some(Output::text(format!(

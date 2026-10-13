@@ -383,11 +383,7 @@ impl Server {
 							// strip, so it never names a blind-carbon
 							// copy recipient (RFC 5322 §3.6.3).
 							if self.save_sent_enabled_for(&session) {
-								self.save_sent_copy(
-									&session,
-									account,
-									&message.data,
-								);
+								self.save_sent_copy(&session, account, &message.data);
 							}
 							self.sink.submit(message, uuid::Uuid::now_v7(), account)
 						}
@@ -514,7 +510,8 @@ impl Server {
 		// so we do not produce a duplicate copy. The IMAP APPEND
 		// fast path uses the same guard and skips its own copy when
 		// the guard says the server already saved.
-		if let Ok(Some(_existing)) = crate::storage::save_sent::lookup_sent_uid(data_dir, account, &message_id)
+		if let Ok(Some(_existing)) =
+			crate::storage::save_sent::lookup_sent_uid(data_dir, account, &message_id)
 		{
 			tracing::debug!(
 				account = %crate::log_id::account(account),

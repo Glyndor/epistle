@@ -19,11 +19,11 @@ use crate::config::Account;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::smtp::auth::tests::{fixture_password, hash};
 
-const STATIC_NAME: &str = "alice";
-const DYNAMIC_NAME: &str = "bob";
+pub(super) const STATIC_NAME: &str = "alice";
+pub(super) const DYNAMIC_NAME: &str = "bob";
 const DOMAIN: &str = "example.org";
 
-struct Harness {
+pub(super) struct Harness {
 	#[allow(dead_code)]
 	dir: tempfile::TempDir,
 	config: tempfile::NamedTempFile,
@@ -37,7 +37,7 @@ fn write_config(toml: &str) -> tempfile::NamedTempFile {
 	file
 }
 
-fn build() -> Harness {
+pub(super) fn build() -> Harness {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
 		display_name: None,
@@ -83,7 +83,7 @@ fn build() -> Harness {
 
 /// Open the harness store directly so tests can read it back without
 /// going through the CLI.
-fn reload_store(harness: &Harness) -> AccountStore {
+pub(super) fn reload_store(harness: &Harness) -> AccountStore {
 	let config = crate::config::Config::load(harness.config.path()).expect("load config");
 	AccountStore::open(
 		&config.data_dir,
@@ -280,65 +280,6 @@ fn quota_setter_none_clears_the_quota() {
 	);
 	let store = reload_store(&harness);
 	assert_eq!(store.handle().current().quota_for(DYNAMIC_NAME), None);
-}
-
-#[test]
-fn parse_on_off_accepts_on_and_off_in_either_case() {
-	assert!(account::parse_on_off("on").unwrap());
-	assert!(account::parse_on_off("ON").unwrap());
-	assert!(!account::parse_on_off("off").unwrap());
-	assert!(!account::parse_on_off("OFF").unwrap());
-	assert!(account::parse_on_off("true").is_err());
-	assert!(account::parse_on_off("maybe").is_err());
-}
-
-#[test]
-fn save_sent_setter_persists_to_disk_and_rebuilds_the_directory() {
-	let harness = build();
-	let store = reload_store(&harness);
-	assert_eq!(
-		account::save_sent_with_store(&store, DYNAMIC_NAME, false),
-		ExitCode::SUCCESS
-	);
-	let store = reload_store(&harness);
-	assert_eq!(
-		store.handle().current().save_sent_for(DYNAMIC_NAME),
-		Some(false)
-	);
-	// Toggle back on.
-	let store = reload_store(&harness);
-	assert_eq!(
-		account::save_sent_with_store(&store, DYNAMIC_NAME, true),
-		ExitCode::SUCCESS
-	);
-	let store = reload_store(&harness);
-	assert_eq!(
-		store.handle().current().save_sent_for(DYNAMIC_NAME),
-		Some(true)
-	);
-}
-
-#[test]
-fn save_sent_setter_rejects_a_static_account() {
-	let harness = build();
-	let store = reload_store(&harness);
-	// The handler maps a static account to a refused exit code; the
-	// mutator returns `NotFound`, which the CLI surfaces as the
-	// "edit the config" hint.
-	assert_ne!(
-		account::save_sent_with_store(&store, STATIC_NAME, false),
-		ExitCode::SUCCESS
-	);
-}
-
-#[test]
-fn save_sent_setter_rejects_an_unknown_account() {
-	let harness = build();
-	let store = reload_store(&harness);
-	assert_ne!(
-		account::save_sent_with_store(&store, "carol", true),
-		ExitCode::SUCCESS
-	);
 }
 
 #[test]

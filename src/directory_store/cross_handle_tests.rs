@@ -139,7 +139,10 @@ fn two_app_password_handles_lose_no_writes() {
 
 	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");
 	let rows = reopened.list();
-	let labels: Vec<&str> = rows.iter().map(|(_, label, _, _, _)| label.as_str()).collect();
+	let labels: Vec<&str> = rows
+		.iter()
+		.map(|(_, label, _, _, _)| label.as_str())
+		.collect();
 	assert!(
 		labels.contains(&"phone"),
 		"phone added by the CLI must survive the server's add: {labels:?}"

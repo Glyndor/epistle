@@ -361,10 +361,7 @@ impl Directory {
 	/// Attach per-account `save_sent` preferences (account name →
 	/// enabled). `Some(true)` and `Some(false)` are both stored; an
 	/// account absent from the list keeps the default (`None`).
-	pub fn with_save_sent(
-		mut self,
-		entries: impl IntoIterator<Item = (String, bool)>,
-	) -> Self {
+	pub fn with_save_sent(mut self, entries: impl IntoIterator<Item = (String, bool)>) -> Self {
 		self.account_save_sent = entries
 			.into_iter()
 			.map(|(name, value)| (name.to_ascii_lowercase(), value))

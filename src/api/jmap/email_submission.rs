@@ -181,9 +181,7 @@ fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<S
 		.and_then(Value::as_object)
 		.and_then(|update| update.get("mailboxIds"))
 		.and_then(Value::as_object)
-		.is_some_and(|ids| {
-			ids.keys().any(|key| key.eq_ignore_ascii_case("Sent"))
-		});
+		.is_some_and(|ids| ids.keys().any(|key| key.eq_ignore_ascii_case("Sent")));
 	let sent_copy = stamped.clone();
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,

@@ -145,8 +145,8 @@ pub enum Subcommand {
 		#[arg(value_name = "SIZE")]
 		size: String,
 	},
-/// Restrict which protocols the account may sign in through.
-///
+	/// Restrict which protocols the account may sign in through.
+	///
 	/// Restrict which authentication protocols the account may sign in through.
 	/// `all` clears the restriction.
 	Protocols {
@@ -158,7 +158,7 @@ pub enum Subcommand {
 		#[arg(value_name = "LIST")]
 		list: String,
 	},
-/// Set whether the server saves a Sent copy of every send.
+	/// Set whether the server saves a Sent copy of every send.
 	SaveSent {
 		/// The account login name.
 		#[arg(value_name = "NAME")]
@@ -280,65 +280,19 @@ pub(super) fn parse_quota_size(raw: &str) -> Result<Option<u64>, String> {
 /// Parse a protocol-list argument (`imap,smtp`, `all`). Unknown
 /// protocol names are rejected with a list of the accepted ones so a
 /// typo never reaches the store. `all` (case-insensitive) returns
-/// `Ok(None)` to clear the restriction.
+/// `Ok(None)` to clear the restriction. Implementation lives in
+/// `account_actions`; the umbrella keeps only the re-export so
+/// the Subcommand enum stays close to the call site.
 pub(super) fn parse_protocol_list(raw: &str) -> Result<Option<Vec<Protocol>>, String> {
-	let trimmed = raw.trim();
-	if trimmed.is_empty() {
-		return Err("protocol list is empty (expected imap,smtp or 'all')".to_string());
-	}
-	if trimmed.eq_ignore_ascii_case("all") {
-		return Ok(None);
-	}
-	let mut out = Vec::new();
-	for token in trimmed.split(',') {
-		let name = token.trim();
-		if name.is_empty() {
-			return Err("protocol list has an empty entry".to_string());
-		}
-		let protocol = parse_protocol(name)?;
-		if !out.contains(&protocol) {
-			out.push(protocol);
-		}
-	}
-	Ok(Some(out))
+	account_actions::parse_protocol_list_inner(raw)
 }
 
 /// Parse the `on`/`off` switch the `save_sent` and quota
-/// subcommands accept. Whitespace and case are ignored; any other
-/// value is a refusal with the spelling the user typed. The CLI
-/// keeps the accepted set narrow so a typo never lands on disk:
-/// `on` and `off` are the only valid spellings; `true`/`false`/
-/// `yes`/`no` are intentionally not accepted so the operator's
-/// shell history reads the same way in every context.
+/// subcommands accept. The CLI keeps the accepted set narrow so a
+/// typo never lands on disk: `on` and `off` are the only valid
+/// spellings. Implementation lives in `account_actions`.
 pub(super) fn parse_on_off(raw: &str) -> Result<bool, String> {
-	let trimmed = raw.trim();
-	match trimmed.to_ascii_lowercase().as_str() {
-		"on" => Ok(true),
-		"off" => Ok(false),
-		other => Err(format!(
-			"expected `on` or `off`, got {other:?}"
-		)),
-	}
-}
-
-/// Parse a single protocol name. Duplicates the kebab-case spellings
-/// the TOML `Protocol` deserialiser already understands so the CLI
-/// list and the config file spell them the same way.
-fn parse_protocol(name: &str) -> Result<Protocol, String> {
-	match name.to_ascii_lowercase().as_str() {
-		"smtp" => Ok(Protocol::Smtp),
-		"submission" => Ok(Protocol::Submission),
-		"submissions" => Ok(Protocol::Submissions),
-		"api" => Ok(Protocol::Api),
-		"imap" => Ok(Protocol::Imap),
-		"imaps" => Ok(Protocol::Imaps),
-		"pop3s" => Ok(Protocol::Pop3s),
-		"managesieve" => Ok(Protocol::ManageSieve),
-		"webdav" => Ok(Protocol::WebDav),
-		other => Err(format!(
-			"unknown protocol {other:?} (expected smtp, submission, submissions, api, imap, imaps, pop3s, managesieve, webdav or 'all')"
-		)),
-	}
+	account_actions::parse_on_off(raw)
 }
 
 /// Open the store the action will mutate. Centralising the error
@@ -543,9 +497,7 @@ pub(super) fn run(
 			let value = match parse_on_off(&state) {
 				Ok(value) => value,
 				Err(error) => {
-					return crate::cli::exit::refused(format_args!(
-						"account {name}: {error}"
-					));
+					return crate::cli::exit::refused(format_args!("account {name}: {error}"));
 				}
 			};
 			let store = match prepare(config_path, &name) {

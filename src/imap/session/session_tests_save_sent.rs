@@ -28,13 +28,8 @@ fn an_append_of_a_message_id_the_server_just_saved_returns_the_existing_uid() {
 		&crate::storage::MessageCrypto::disabled(),
 	)
 	.expect("server-side save");
-	let (_validity, expected_uid) = crate::imap::mailbox::appenduid(
-		dir.path(),
-		"alice",
-		"Sent",
-		saved_uid,
-	)
-	.expect("lookup");
+	let (_validity, expected_uid) =
+		crate::imap::mailbox::appenduid(dir.path(), "alice", "Sent", saved_uid).expect("lookup");
 	// Record the Message-ID in the guard so the IMAP dedup fast
 	// path is satisfied.
 	crate::storage::save_sent::Guard::open(dir.path(), "alice")
@@ -52,7 +47,7 @@ fn an_append_of_a_message_id_the_server_just_saved_returns_the_existing_uid() {
 	let response = text(&output);
 	assert!(response.contains("a2 OK"), "{response}");
 	assert!(
-		response.contains(&format!("[APPENDUID")),
+		response.contains("[APPENDUID"),
 		"APPENDUID present: {response}"
 	);
 	assert!(
@@ -153,11 +148,7 @@ fn an_append_to_a_mailbox_other_than_sent_ignores_the_guard() {
 		&crate::storage::MessageCrypto::disabled(),
 	)
 	.expect("snapshot");
-	assert_eq!(
-		snapshot.messages().count(),
-		1,
-		"INBOX now has the message"
-	);
+	assert_eq!(snapshot.messages().count(), 1, "INBOX now has the message");
 	let sent = crate::imap::mailbox::Snapshot::open(
 		dir.path(),
 		"alice",

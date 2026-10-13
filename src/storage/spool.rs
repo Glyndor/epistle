@@ -150,9 +150,7 @@ impl FsSpool {
 	/// writes the copy under `<data_dir>/accounts/<name>/folders/Sent`
 	/// so the helper needs the data dir root.
 	pub fn data_dir(&self) -> &Path {
-		self.root
-			.parent()
-			.expect("spool root is under data_dir")
+		self.root.parent().expect("spool root is under data_dir")
 	}
 
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message

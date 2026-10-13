@@ -302,11 +302,7 @@ impl Session {
 	/// Mark this session as authenticated as `account` via the app
 	/// password labelled `label`. Test-only.
 	#[cfg(test)]
-	pub fn mark_authenticated_with_app_password_for_test(
-		&mut self,
-		account: &str,
-		label: &str,
-	) {
+	pub fn mark_authenticated_with_app_password_for_test(&mut self, account: &str, label: &str) {
 		self.authenticated = Some(account.to_string());
 		self.auth_app_password_label = Some(label.to_string());
 	}

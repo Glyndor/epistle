@@ -188,11 +188,7 @@ pub(super) fn quota_bytes(dynamic: &[DynamicAccount]) -> Vec<(String, u64)> {
 pub(super) fn save_sent(dynamic: &[DynamicAccount]) -> Vec<(String, bool)> {
 	dynamic
 		.iter()
-		.filter_map(|account| {
-			account
-				.save_sent
-				.map(|value| (account.name.clone(), value))
-		})
+		.filter_map(|account| account.save_sent.map(|value| (account.name.clone(), value)))
 		.collect()
 }
 

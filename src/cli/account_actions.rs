@@ -245,11 +245,7 @@ pub(crate) fn save_sent_changed(value: bool) -> String {
 /// Toggle the account-wide `save_sent` preference. Static accounts
 /// carry no field; the CLI refuses them with the same hint as the
 /// other mutators.
-pub(crate) fn save_sent_with_store(
-	store: &AccountStore,
-	name: &str,
-	value: bool,
-) -> ExitCode {
+pub(crate) fn save_sent_with_store(store: &AccountStore, name: &str, value: bool) -> ExitCode {
 	match store.set_save_sent(name, value) {
 		Ok(_) => {
 			println!("{}", save_sent_changed(value));
@@ -347,3 +343,67 @@ pub(crate) fn handle_error(name: &str, error: StoreError) -> ExitCode {
 	}
 	code
 }
+
+/// Parse the `on`/`off` switch the `save_sent` and quota
+/// subcommands accept. Kept here so `account.rs` can re-export the
+/// parser without keeping the whole table of accepted spellings
+/// in two places; the rules live once, callers see a short
+/// signature.
+pub(crate) fn parse_on_off(raw: &str) -> Result<bool, String> {
+	let trimmed = raw.trim();
+	match trimmed.to_ascii_lowercase().as_str() {
+		"on" => Ok(true),
+		"off" => Ok(false),
+		other => Err(format!("expected `on` or `off`, got {other:?}")),
+	}
+}
+
+/// Parse a single protocol name. Duplicates the kebab-case
+/// spellings the TOML `Protocol` deserialiser already understands
+/// so the CLI list and the config file spell them the same way.
+pub(crate) fn parse_protocol_inner(name: &str) -> Result<Protocol, String> {
+	match name.to_ascii_lowercase().as_str() {
+		"smtp" => Ok(Protocol::Smtp),
+		"submission" => Ok(Protocol::Submission),
+		"submissions" => Ok(Protocol::Submissions),
+		"api" => Ok(Protocol::Api),
+		"imap" => Ok(Protocol::Imap),
+		"imaps" => Ok(Protocol::Imaps),
+		"pop3s" => Ok(Protocol::Pop3s),
+		"managesieve" => Ok(Protocol::ManageSieve),
+		"webdav" => Ok(Protocol::WebDav),
+		other => Err(format!(
+			"unknown protocol {other:?} (expected smtp, submission, submissions, api, imap, imaps, pop3s, managesieve, webdav or 'all')"
+		)),
+	}
+}
+
+/// Parse a protocol-list argument (`imap,smtp`, `all`). Unknown
+/// protocol names are rejected with a list of the accepted ones so a
+/// typo never reaches the store. `all` (case-insensitive) returns
+/// `Ok(None)` to clear the restriction.
+pub(crate) fn parse_protocol_list_inner(raw: &str) -> Result<Option<Vec<Protocol>>, String> {
+	let trimmed = raw.trim();
+	if trimmed.is_empty() {
+		return Err("protocol list is empty (expected imap,smtp or 'all')".to_string());
+	}
+	if trimmed.eq_ignore_ascii_case("all") {
+		return Ok(None);
+	}
+	let mut out = Vec::new();
+	for token in trimmed.split(',') {
+		let name = token.trim();
+		if name.is_empty() {
+			return Err("protocol list has an empty entry".to_string());
+		}
+		let protocol = parse_protocol_inner(name)?;
+		if !out.contains(&protocol) {
+			out.push(protocol);
+		}
+	}
+	Ok(Some(out))
+}
+
+#[cfg(test)]
+#[path = "cli_account_save_sent_tests.rs"]
+mod save_sent_tests;

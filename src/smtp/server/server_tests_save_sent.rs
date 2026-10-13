@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::imap::mailbox;
+use crate::smtp::directory::Directory;
 use crate::smtp::sink::MessageSink;
 use crate::smtp::trace::{ensure_submission_headers, strip_bcc};
-use crate::smtp::directory::Directory;
 use crate::storage::{self, SplitDelivery};
 
 use super::*;
@@ -38,12 +38,8 @@ fn directory_with_account(name: &str, save_sent: Option<bool>) -> DirectoryHandl
 
 fn server_with_split_sink(data_dir: &std::path::Path, dir: DirectoryHandle) -> Server {
 	let sink = Arc::new(
-		SplitDelivery::new_with_crypto(
-			data_dir,
-			dir.clone(),
-			storage::MessageCrypto::disabled(),
-		)
-		.expect("split delivery"),
+		SplitDelivery::new_with_crypto(data_dir, dir.clone(), storage::MessageCrypto::disabled())
+			.expect("split delivery"),
 	);
 	Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
 		.with_directory(dir)
@@ -54,10 +50,7 @@ fn server_with_split_sink(data_dir: &std::path::Path, dir: DirectoryHandle) -> S
 fn an_authenticated_smtp_submission_saves_one_copy_in_sent_with_seen() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, None),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, None));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);
@@ -76,7 +69,10 @@ fn an_authenticated_smtp_submission_saves_one_copy_in_sent_with_seen() {
 	let messages: Vec<_> = snapshot.messages().collect();
 	assert_eq!(messages.len(), 1, "exactly one copy in Sent");
 	assert!(
-		messages[0].flags.iter().any(|flag| matches!(flag, mailbox::Flag::Seen)),
+		messages[0]
+			.flags
+			.iter()
+			.any(|flag| matches!(flag, mailbox::Flag::Seen)),
 		"\\Seen flag set: {:?}",
 		messages[0].flags
 	);
@@ -86,10 +82,7 @@ fn an_authenticated_smtp_submission_saves_one_copy_in_sent_with_seen() {
 fn the_saved_copy_does_not_carry_a_bcc_header() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, None),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, None));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);
@@ -130,10 +123,7 @@ fn the_saved_copy_does_not_carry_a_bcc_header() {
 fn save_sent_disabled_on_the_account_skips_the_copy() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, Some(false)),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, Some(false)));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);
@@ -150,10 +140,7 @@ fn save_sent_disabled_on_the_account_skips_the_copy() {
 fn the_save_uses_the_message_id_the_server_stamped_when_the_client_omitted_one() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, None),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, None));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);
@@ -174,10 +161,7 @@ fn the_save_uses_the_message_id_the_server_stamped_when_the_client_omitted_one()
 fn a_message_without_a_message_id_is_skipped_not_stored() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, None),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, None));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);
@@ -193,10 +177,7 @@ fn a_message_without_a_message_id_is_skipped_not_stored() {
 fn a_client_append_of_the_same_message_id_returns_the_existing_uid() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, None),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, None));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);
@@ -239,10 +220,7 @@ fn a_client_append_of_the_same_message_id_returns_the_existing_uid() {
 fn save_sent_respects_a_full_mailbox_quota() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let account = "alice";
-	let server = server_with_split_sink(
-		dir.path(),
-		directory_with_account(account, None),
-	);
+	let server = server_with_split_sink(dir.path(), directory_with_account(account, None));
 	let mut session = crate::smtp::session::Session::new("mail.example.org");
 	session.set_directory_for_test(server.directory.current());
 	session.mark_authenticated_for_test(account);

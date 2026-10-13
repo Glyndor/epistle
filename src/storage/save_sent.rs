@@ -146,16 +146,9 @@ impl LockGuard {
 			.create(true)
 			.truncate(false)
 			.open(path)?;
-		#[cfg(unix)]
-		{
-			use std::os::unix::io::AsRawFd;
-			let fd = file.as_raw_fd();
-			// Best-effort: a flock failure leaves the file unprotected
-			// but does not block the submission (the saver keeps going
-			// without the lock; two concurrent processes might race on
-			// the read-modify-write of the JSON, and one writer wins).
-			let _ = unsafe { libc::flock(fd, libc::LOCK_EX) };
-		}
+		// Best effort: if the lock cannot be taken the save goes on, and two
+		// concurrent writers race on the read-modify-write, one wins.
+		let _ = file.lock();
 		Ok(LockGuard { _file: file })
 	}
 }
@@ -222,10 +215,8 @@ impl Guard {
 		// Merge: keep everything the file already had, append the new
 		// entries. The caller already pruned the in-memory list, so
 		// the merge only adds.
-		let known: std::collections::HashSet<String> = current
-			.iter()
-			.map(|e| e.message_id.clone())
-			.collect();
+		let known: std::collections::HashSet<String> =
+			current.iter().map(|e| e.message_id.clone()).collect();
 		for entry in entries {
 			if !known.contains(&entry.message_id) {
 				current.push_back(entry.clone());
@@ -398,8 +389,7 @@ pub fn store_copy(
 	// Ensure the Sent mailbox exists. The IMAP side expects one;
 	// `ensure_defaults` creates the standard five (Sent, Drafts, ...)
 	// when the account directory is first opened.
-	mailbox::ensure_defaults(data_dir, account)
-		.map_err(|e| SaveError::Account(e.to_string()))?;
+	mailbox::ensure_defaults(data_dir, account).map_err(|e| SaveError::Account(e.to_string()))?;
 	if !mailbox::exists(data_dir, account, "Sent") {
 		mailbox::create(data_dir, account, "Sent")
 			.map_err(|e| SaveError::Account(e.to_string()))?;

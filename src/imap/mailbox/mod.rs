@@ -303,12 +303,12 @@ pub fn appenduid_for_message_id(
 	message_id: &str,
 ) -> Option<(u32, u32)> {
 	let snapshot = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()).ok()?;
-	let uid = lookup_message_id_in_mailbox(data_dir, account, mailbox, message_id).ok().flatten()?;
+	let uid = lookup_message_id_in_mailbox(data_dir, account, mailbox, message_id)
+		.ok()
+		.flatten()?;
 	// The UIDPLUS code requires UIDVALIDITY + UID; we already know
 	// the UID from the lookup, the validity comes from the snapshot.
-	let _ = snapshot
-		.messages()
-		.find(|m| m.uid == uid)?;
+	let _ = snapshot.messages().find(|m| m.uid == uid)?;
 	Some((snapshot.uid_validity(), uid))
 }
 

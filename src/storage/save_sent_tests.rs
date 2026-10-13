@@ -47,7 +47,10 @@ fn record_dedupes_when_the_same_message_id_is_added_twice() {
 	guard.record("<a@x>").expect("first record");
 	guard.record("<a@x>").expect("second record");
 	let (count, _) = guard.count_entries().expect("count");
-	assert_eq!(count, 1, "duplicate record bumps the timestamp, not the count");
+	assert_eq!(
+		count, 1,
+		"duplicate record bumps the timestamp, not the count"
+	);
 }
 
 #[test]

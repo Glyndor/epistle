@@ -21,10 +21,10 @@ pub enum AppPasswordCli {
 		#[arg(long)]
 		json: bool,
 	},
-/// Create an app password and print it once.
-///
-/// Create a new app password for an account. The plaintext secret is
-/// printed once and never stored.
+	/// Create an app password and print it once.
+	///
+	/// Create a new app password for an account. The plaintext secret is
+	/// printed once and never stored.
 	Create {
 		/// The account the app password belongs to.
 		#[arg(value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
@@ -254,13 +254,7 @@ pub(super) fn run(
 			ip_cidr,
 			save_sent,
 		} => create(
-			config,
-			&account,
-			&label,
-			expires_at,
-			ip_cidr,
-			save_sent,
-			out,
+			config, &account, &label, expires_at, ip_cidr, save_sent, out,
 		),
 		AppPasswordCli::Revoke {
 			account,

@@ -53,7 +53,15 @@ fn create_with_save_sent_off_persists_the_override() {
 	let cfg = Config::load(cfg_file.path()).expect("load");
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&cfg, "alice", "phone", None, None, Some("off".into()), &mut out),
+		create(
+			&cfg,
+			"alice",
+			"phone",
+			None,
+			None,
+			Some("off".into()),
+			&mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let store = AppPasswordStore::open(dir.path()).expect("open");
@@ -69,7 +77,15 @@ fn create_with_save_sent_on_persists_the_override() {
 	let cfg = Config::load(cfg_file.path()).expect("load");
 	let mut out = Vec::new();
 	assert_eq!(
-		create(&cfg, "alice", "phone", None, None, Some("on".into()), &mut out),
+		create(
+			&cfg,
+			"alice",
+			"phone",
+			None,
+			None,
+			Some("on".into()),
+			&mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let store = AppPasswordStore::open(dir.path()).expect("open");
