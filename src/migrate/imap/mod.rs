@@ -298,3 +298,7 @@ mod run_tests;
 #[cfg(test)]
 #[path = "run_tests_security.rs"]
 mod run_tests_security;
+
+#[cfg(test)]
+#[path = "run_tests_memory.rs"]
+mod run_tests_memory;

@@ -19,3 +19,12 @@ fn server_text_is_sanitized_and_short() {
 	assert_eq!(sanitize(b"bad\x1b[31m\xff"), "bad?[31m?");
 	assert_eq!(sanitize(&[b'a'; 500]).len(), 200);
 }
+
+#[test]
+fn a_body_may_exceed_its_declared_size_only_slightly() {
+	assert!(size_fits(1000, 1000));
+	assert!(size_fits(1000, 1000 + 100 + 4096));
+	assert!(!size_fits(1000, 1000 + 100 + 4097));
+	assert!(!size_fits(1024, 300 * 1024));
+	assert!(size_fits(0, 4096));
+}

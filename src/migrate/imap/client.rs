@@ -43,6 +43,24 @@ pub(crate) enum ClientError {
 	/// The server broke the protocol.
 	#[error("protocol error: {0}")]
 	Protocol(String),
+	/// A body differs from the size the server declared for it.
+	#[error(
+		"the server declared {declared} bytes for message UID {uid} and sent {actual}; refusing it"
+	)]
+	SizeMismatch {
+		/// The message.
+		uid: u32,
+		/// RFC822.SIZE from the listing.
+		declared: u64,
+		/// Octets received.
+		actual: u64,
+	},
+	/// The bodies of one batch outgrew what the batch may hold.
+	#[error("the server sent more than {budget} bytes for one batch; refusing it")]
+	BatchTooLarge {
+		/// The most one batch may hold.
+		budget: u64,
+	},
 	/// A name or credential cannot be sent safely.
 	#[error("{0}")]
 	Unsendable(&'static str),
@@ -346,27 +364,57 @@ impl Client {
 		Ok(listed)
 	}
 
-	/// Fetch flags, INTERNALDATE, size and body of `uids` without setting
-	/// `\Seen`.
-	pub(crate) async fn fetch(&mut self, uids: &[u32]) -> Result<Vec<Fetched>, ClientError> {
+	/// Fetch flags, INTERNALDATE, size and body of every message in `batch`
+	/// without setting `\Seen`.
+	///
+	/// The sizes in `batch` are what the server declared when listing, and
+	/// nothing the server declares is trusted for memory: every body that
+	/// arrives is checked against its declared size ([`size_fits`]), and the
+	/// bodies held for the batch may total at most `budget` octets. Either
+	/// failure ends the fetch before more is buffered.
+	pub(crate) async fn fetch(
+		&mut self,
+		batch: &[Listed],
+		budget: u64,
+	) -> Result<Vec<Fetched>, ClientError> {
+		let uids: Vec<u32> = batch.iter().map(|item| item.uid).collect();
 		let line = format!(
 			"UID FETCH {} (UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[])",
-			uid_set(uids)
+			uid_set(&uids)
 		);
-		let mut fetched = Vec::with_capacity(uids.len());
+		let mut fetched: Vec<Fetched> = Vec::with_capacity(uids.len());
+		let mut held = 0u64;
+		let mut responses = 0usize;
+		let most_responses = uids.len().saturating_mul(4).saturating_add(64);
 		self.command("FETCH", line.as_bytes(), |response| {
-			if let Some(item) =
-				parse::fetch(response).map_err(|error| ClientError::Protocol(error.to_string()))?
-				&& item.body.is_some()
-				&& uids.binary_search(&item.uid).is_ok()
-			{
-				if fetched.len() >= uids.len() {
-					return Err(ClientError::Protocol(
-						"the server returned more messages than asked for".into(),
-					));
-				}
-				fetched.push(item);
+			responses += 1;
+			if responses > most_responses {
+				return Err(ClientError::Protocol(
+					"the server sent far more responses than messages asked for".into(),
+				));
 			}
+			let Some(item) =
+				parse::fetch(response).map_err(|error| ClientError::Protocol(error.to_string()))?
+			else {
+				return Ok(());
+			};
+			let (Some(body), Ok(at)) = (&item.body, uids.binary_search(&item.uid)) else {
+				return Ok(());
+			};
+			let declared = batch[at].size;
+			let actual = body.len() as u64;
+			if !size_fits(declared, actual) {
+				return Err(ClientError::SizeMismatch {
+					uid: item.uid,
+					declared,
+					actual,
+				});
+			}
+			held = held.saturating_add(actual);
+			if held > budget || fetched.len() >= uids.len() {
+				return Err(ClientError::BatchTooLarge { budget });
+			}
+			fetched.push(item);
 			Ok(())
 		})
 		.await?;
@@ -490,6 +538,13 @@ fn quote_mailbox(name: &[u8]) -> Result<Vec<u8>, ClientError> {
 		));
 	}
 	Ok(quote(name))
+}
+
+/// Whether a body of `actual` octets is close enough to the `declared`
+/// RFC822.SIZE: servers count line endings or trailing octets slightly
+/// differently, so a tenth plus 4 KiB more is tolerated, nothing beyond.
+pub(crate) fn size_fits(declared: u64, actual: u64) -> bool {
+	actual <= declared.saturating_add(declared / 10).saturating_add(4096)
 }
 
 /// A compact UID set for sorted `uids`: runs become `a:b`.

@@ -78,18 +78,24 @@ pub(super) async fn folder(
 	};
 	progress.folder_start(report);
 	for batch in batches(&listed, settings) {
-		let wanted: Vec<u32> = batch
+		let wanted: Vec<Listed> = batch
 			.iter()
 			.filter(|item| item.size <= settings.limits.literal as u64)
-			.map(|item| item.uid)
+			.copied()
 			.collect();
 		report.too_large += (batch.len() - wanted.len()) as u64;
 		let mut fetched = if wanted.is_empty() {
 			Vec::new()
 		} else {
-			client.fetch(&wanted).await?
+			// One batch holds at most batch_bytes, plus one message that is
+			// larger on its own: what the server declared does not decide.
+			let budget = settings
+				.batch_bytes
+				.saturating_add(settings.limits.literal as u64);
+			client.fetch(&wanted, budget).await?
 		};
 		fetched.sort_by_key(|item| item.uid);
+		fetched.dedup_by_key(|item| item.uid);
 		report.vanished += (wanted.len() - fetched.len()) as u64;
 		state.in_progress = true;
 		states

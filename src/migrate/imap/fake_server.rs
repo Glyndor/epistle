@@ -71,6 +71,11 @@ pub(super) enum Fault {
 	HugeLiteral { size: u64 },
 	/// Send a line of `size` octets in the next body fetch.
 	LongLine { size: usize },
+	/// Answer the next body fetch with `count` flag updates first.
+	Flood { count: usize },
+	/// In body fetches, send the first message asked for in place of
+	/// every other one.
+	RepeatFirst,
 }
 
 /// How the fake server protects its port.
@@ -353,10 +358,15 @@ async fn fetch(
 	};
 	let wanted = matching(&messages, set);
 	let mut sent_bodies = 0;
+	let first = messages.iter().position(|m| wanted.contains(&m.uid));
 	for (sequence, message) in messages.iter().enumerate() {
 		if !wanted.contains(&message.uid) {
 			continue;
 		}
+		let (sequence, message) = match (fault, first) {
+			(Fault::RepeatFirst, Some(first)) if with_body => (first, &messages[first]),
+			_ => (sequence, message),
+		};
 		let size = message.claimed_size.unwrap_or(message.body.len() as u64);
 		if !with_body {
 			let line = format!(
@@ -385,6 +395,11 @@ async fn fetch(
 				conn.get_mut().write_all(line.as_bytes()).await?;
 				conn.get_mut().write_all(&vec![b'x'; 4096]).await?;
 				return Ok(false);
+			}
+			Fault::Flood { count } => {
+				shared.lock().expect("lock").fault = Fault::None;
+				let noise = "* 1 FETCH (FLAGS (\\Seen))\r\n".repeat(count);
+				conn.get_mut().write_all(noise.as_bytes()).await?;
 			}
 			Fault::LongLine { size } => {
 				shared.lock().expect("lock").fault = Fault::None;
