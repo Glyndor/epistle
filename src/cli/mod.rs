@@ -35,6 +35,7 @@ mod local;
 mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
+mod pick;
 mod probe;
 mod prompt;
 mod queue;
@@ -77,6 +78,7 @@ mod webhook_admin;
 /// deserialise the `epistle init --print-answers` output without
 /// depending on the otherwise-private `init` module.
 pub use init::Answers;
+pub use pick::run_from_env;
 
 use util::generate_secret;
 

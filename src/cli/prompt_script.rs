@@ -149,6 +149,13 @@ impl Pty {
 		pty
 	}
 
+	/// Type `text` on the terminal, as the operator would.
+	pub(crate) fn type_in(&self, text: &str) {
+		// SAFETY: the buffer is valid for its length and the master is ours.
+		let written = unsafe { libc::write(self.master, text.as_ptr().cast(), text.len()) };
+		assert_eq!(written, text.len() as isize, "typing on the pty");
+	}
+
 	/// Whether the terminal echoes typed input right now.
 	pub(crate) fn echo_on(&self) -> bool {
 		let mut state = std::mem::MaybeUninit::<libc::termios>::uninit();
