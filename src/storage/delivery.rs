@@ -6,6 +6,8 @@ mod io;
 mod policy;
 #[path = "delivery_reports.rs"]
 mod reports;
+#[path = "delivery_trace.rs"]
+mod trace;
 #[path = "delivery_vacation.rs"]
 mod vacation;
 
@@ -244,7 +246,8 @@ impl LocalDelivery {
 		hint: Option<&str>,
 		_ingested: &mut reports::Ingested,
 	) -> Result<Delivered, SinkError> {
-		let data = &message.data;
+		let stored = trace::final_copy(&message.reverse_path, &message.data);
+		let data = &stored;
 		if let Some(mailbox) = hint {
 			self.deliver_to_account(account, Some(mailbox), data, &[])
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
@@ -327,6 +330,10 @@ impl MessageSink for LocalDelivery {
 }
 
 #[cfg(test)]
+#[path = "delivery_tests_trace.rs"]
+mod tests_trace;
+
+#[cfg(test)]
 mod tests {
 	use super::*;
 
@@ -389,7 +396,10 @@ mod tests {
 
 		let files = list_inbox(dir.path(), "alice");
 		let content = fs::read(&files[0]).expect("read delivered file");
-		assert_eq!(content, b"Subject: hi\r\n\r\nbody\r\n");
+		assert_eq!(
+			content,
+			b"Return-Path: <sender@elsewhere.example>\r\nSubject: hi\r\n\r\nbody\r\n"
+		);
 	}
 
 	fn folder_count(root: &std::path::Path, account: &str, mailbox: &str) -> usize {

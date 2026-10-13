@@ -162,19 +162,23 @@ pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> 
 /// every copy that leaves the server, local or remote, must not name it
 /// (RFC 5322 section 3.6.3, RFC 8621 section 7.5).
 pub fn strip_bcc(data: &[u8]) -> Vec<u8> {
+	strip_headers(data, &["bcc", "resent-bcc"])
+}
+
+/// `data` without any header field whose name is one of `names` (compared
+/// case-insensitively), folded continuation lines included. The body and
+/// every other field are kept byte for byte.
+pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
 	let header_end = header_block_end(data);
 	let mut out = Vec::with_capacity(data.len());
 	let mut dropping = false;
 	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
 		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
 		if !continuation {
-			let name = line
-				.split(|&b| b == b':')
-				.next()
-				.filter(|_| line.contains(&b':'))
-				.map(|name| name.trim_ascii_end());
-			dropping = name.is_some_and(|name| {
-				name.eq_ignore_ascii_case(b"bcc") || name.eq_ignore_ascii_case(b"resent-bcc")
+			dropping = field_name(line).is_some_and(|name| {
+				names
+					.iter()
+					.any(|wanted| name.eq_ignore_ascii_case(wanted.as_bytes()))
 			});
 		}
 		if !dropping {
@@ -183,6 +187,15 @@ pub fn strip_bcc(data: &[u8]) -> Vec<u8> {
 	}
 	out.extend_from_slice(&data[header_end..]);
 	out
+}
+
+/// The name of the field a header line starts, without trailing blanks;
+/// `None` for a line with no colon.
+fn field_name(line: &[u8]) -> Option<&[u8]> {
+	line.contains(&b':')
+		.then(|| line.split(|&b| b == b':').next())
+		.flatten()
+		.map(|name| name.trim_ascii_end())
 }
 
 /// Byte index of the body's first byte (the start of the blank-line
