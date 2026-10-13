@@ -95,6 +95,11 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   drop cannot be reversed (see the [configuration reference](configuration.md)).
 - The configuration file must be owner-only (`0600`); the server refuses to load
   a group/world-readable file. Secrets stay in the environment via `${VAR}`.
+- **The container stack** runs every service with no capabilities except four
+  clamd uses to step down to its own user, on a read-only root filesystem, with
+  memory and process limits; `mail` connects to PostgreSQL as a role without
+  superuser that owns only its database. The measurements and the upgrade path
+  are in [the container stack](container.md#what-each-container-may-do).
 
 ### A private subordinate id range
 
@@ -269,9 +274,10 @@ backup, on its own, yields only ciphertext.
 - **The key must live off the encrypted disk** (otherwise encrypting files on
   the same disk is pointless against theft). Source it from `encryption_key_env`
   (the name of an environment variable holding the base64 key) or
-  `encryption_key_file` (a path the operator manages, ideally outside
-  `data_dir`). Generate one with `epistle storage-keygen`. The server never
-  auto-generates a key inside `data_dir`.
+  `encryption_key_file` (a path the operator manages, outside `data_dir`).
+  `epistle init` generates one in `secrets/` beside data_dir and names it in
+  `encryption_key_file`; `epistle storage-keygen` prints another. Nothing puts
+  a key inside `data_dir`, and backups do not carry it.
 - **Fail closed:** with `encrypt_at_rest = true` and no usable key the server
   refuses to start; a decryption failure on read is an error, never a fall-back
   to serving ciphertext.

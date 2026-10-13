@@ -620,7 +620,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](container.md#the-database-roles)). |
 | `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/glyndor/epistle/rollback`) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
 
 Keep container customizations in
@@ -852,9 +852,12 @@ What this build does:
 
 - lays the answers down under `<data_dir>/keys/` (`0700`) with mode `0600` on
   every key file: DKIM Ed25519 (`s1.pem`), DKIM RSA (`s2.pem`) via `openssl`
-  when it is on `PATH`, the at-rest storage key, and the OAuth ES256 key pair;
-  a key that already exists is reused, never regenerated, whatever the answers
-  say;
+  when it is on `PATH`, and the OAuth public key; the at-rest storage key, the
+  OAuth signing key and, with the database, the PostgreSQL admin password go to
+  `secrets/` beside data_dir instead (see [the container
+  stack](container.md#what-each-container-may-do)); a key that already exists
+  is reused, never regenerated, whatever the answers say, and one an older
+  release left under `keys/` is moved;
 - writes the configuration file at `config_path` (also `0600`) through a
   staging path that `Config::load`s the candidate before renaming, so a config
   that does not validate never reaches its destination;
