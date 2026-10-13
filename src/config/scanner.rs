@@ -49,6 +49,11 @@ pub struct Antispam {
 	pub clamd_timeout_secs: u64,
 	/// Maximum message size to send, in bytes (default 25 MiB).
 	pub clamd_max_bytes: usize,
+	/// Scan what this server's own accounts submit (SMTP after AUTH,
+	/// `/api/v1/send`, JMAP `EmailSubmission/set`) and refuse a detection,
+	/// whatever `clamd_on_found` says for inbound mail. Default `true`;
+	/// it has an effect only when `clamd_socket` is set.
+	pub scan_authenticated: bool,
 	/// The probability in `[0.0, 1.0]` at or above which an
 	/// unauthenticated message is delivered to the recipient's Junk
 	/// mailbox with `X-Spam-Status: Yes` and the score in
@@ -74,6 +79,7 @@ impl Default for Antispam {
 			clamd_on_found: ClamdOnFound::Quarantine,
 			clamd_timeout_secs: DEFAULT_TIMEOUT_SECS,
 			clamd_max_bytes: DEFAULT_MAX_BYTES,
+			scan_authenticated: true,
 			bayes_junk_at: DEFAULT_BAYES_JUNK_AT,
 			bayes_reject_at: None,
 		}

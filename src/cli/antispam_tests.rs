@@ -48,7 +48,7 @@ type Case = (Key, &'static str, Box<dyn Fn(&Config) -> bool>);
 
 #[test]
 fn set_writes_every_scalar_key_to_its_mapped_field() {
-	let cases: [Case; 11] = [
+	let cases: [Case; 12] = [
 		(
 			Key::GreylistDelay,
 			"5m",
@@ -84,6 +84,11 @@ fn set_writes_every_scalar_key_to_its_mapped_field() {
 			Key::ClamdMaxSize,
 			"16M",
 			Box::new(|c| c.antispam.clamd_max_bytes == 16 * 1024 * 1024),
+		),
+		(
+			Key::ScanAuthenticated,
+			"off",
+			Box::new(|c| !c.antispam.scan_authenticated),
 		),
 		(
 			Key::LlmEndpoint,

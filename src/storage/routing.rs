@@ -210,12 +210,23 @@ impl SplitDelivery {
 
 impl MessageSink for SplitDelivery {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.submit(message, uuid::Uuid::now_v7())
+		self.route(message, uuid::Uuid::now_v7())
 	}
 
+	fn submit(
+		&self,
+		message: AcceptedMessage,
+		queue_id: uuid::Uuid,
+		_account: &str,
+	) -> Result<(), SinkError> {
+		self.route(message, queue_id)
+	}
+}
+
+impl SplitDelivery {
 	/// Route `message`: local recipients to their mailboxes, the rest to the
 	/// outbound spool under `queue_id`, DKIM-signed when a signer is set.
-	fn submit(&self, message: AcceptedMessage, queue_id: uuid::Uuid) -> Result<(), SinkError> {
+	fn route(&self, message: AcceptedMessage, queue_id: uuid::Uuid) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
 		let mut srs_returns = Vec::new();
@@ -372,9 +383,7 @@ impl MessageSink for SplitDelivery {
 		}
 		Ok(())
 	}
-}
 
-impl SplitDelivery {
 	/// The `d=` for an outbound message: the domain of its single From
 	/// header when the key is published for it, so DMARC aligns with the
 	/// domain the reader sees; otherwise the envelope domain.

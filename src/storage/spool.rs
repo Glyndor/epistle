@@ -311,10 +311,15 @@ impl FsSpool {
 
 impl MessageSink for FsSpool {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.submit(message, Uuid::now_v7())
+		self.submit(message, Uuid::now_v7(), "")
 	}
 
-	fn submit(&self, message: AcceptedMessage, queue_id: Uuid) -> Result<(), SinkError> {
+	fn submit(
+		&self,
+		message: AcceptedMessage,
+		queue_id: Uuid,
+		_account: &str,
+	) -> Result<(), SinkError> {
 		self.store_as(&message, queue_id)
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))

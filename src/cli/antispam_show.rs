@@ -57,7 +57,7 @@ pub(super) fn list_row(name: &str, values: &[String]) -> String {
 }
 
 /// Every key the show path walks, in stable order.
-pub(super) fn all_keys() -> [Key; 15] {
+pub(super) fn all_keys() -> [Key; 16] {
 	[
 		Key::DnsblZones,
 		Key::DnsblDomainZones,
@@ -68,6 +68,7 @@ pub(super) fn all_keys() -> [Key; 15] {
 		Key::ClamdOnFound,
 		Key::ClamdTimeout,
 		Key::ClamdMaxSize,
+		Key::ScanAuthenticated,
 		Key::Subjectpass,
 		Key::LlmEndpoint,
 		Key::LlmModel,
@@ -102,6 +103,14 @@ fn render_row(config: &Config, key: Key) -> String {
 		),
 		Key::ClamdTimeout => scalar_row(key.name(), Some(config.antispam.clamd_timeout_secs)),
 		Key::ClamdMaxSize => scalar_row(key.name(), Some(config.antispam.clamd_max_bytes)),
+		Key::ScanAuthenticated => scalar_row(
+			key.name(),
+			Some(if config.antispam.scan_authenticated {
+				"on"
+			} else {
+				"off"
+			}),
+		),
 		Key::Subjectpass => scalar_row(
 			key.name(),
 			Some(if config.subjectpass.enabled {

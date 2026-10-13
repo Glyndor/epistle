@@ -134,7 +134,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		directory.clone(),
 		crypto.clone(),
 	)?;
-	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
 	// task prunes stale triplets so the map stays bounded. The store is
@@ -174,8 +173,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		disk_guard,
 		max_conn,
 		scanner_hook,
+		clamd,
 		llm_hook,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
+	// sink through `submit`; the antivirus scan wraps it there.
+	let sink: Arc<dyn MessageSink> = crate::antispam::submission_scan::ScanningSink::wrap(
+		config.antispam.scan_authenticated,
+		Arc::new(split),
+		clamd,
+		Some(metrics.clone()),
+		webhook.clone(),
+	);
 
 	// One Bayesian store and one training worker for the whole process.
 	// SMTP trains and scores through the store; IMAP and JMAP feed the

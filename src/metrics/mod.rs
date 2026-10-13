@@ -83,6 +83,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("webhook_failed", "webhook_failed"),
 	("scanner_clamd_failed", "scanner_clamd_failed"),
 	("scanner_clamd_skipped", "scanner_clamd_skipped"),
+	("outbound_virus", "outbound_virus"),
 	("database_unavailable", "database_unavailable"),
 	("clock_drift_exceeded", "clock_drift_exceeded"),
 	("auth_login_succeeded", "auth_login_succeeded"),
@@ -142,6 +143,7 @@ pub struct Metrics {
 	webhook_failed: AtomicU64,
 	scanner_clamd_failed: AtomicU64,
 	scanner_clamd_skipped: AtomicU64,
+	outbound_virus: AtomicU64,
 	database_unavailable: AtomicU64,
 	clock_drift_exceeded: AtomicU64,
 	auth_login_succeeded: AtomicU64,
@@ -175,6 +177,11 @@ impl Metrics {
 	/// Count a message skipped because it exceeded the clamd byte limit.
 	pub fn scanner_clamd_skipped(&self) {
 		self.scanner_clamd_skipped.fetch_add(1, Ordering::Relaxed);
+	}
+
+	/// Count a submission the antivirus refused: an account sent malware.
+	pub fn outbound_virus(&self) {
+		self.outbound_virus.fetch_add(1, Ordering::Relaxed);
 	}
 
 	/// Count a connection dropped by the error-streak abuse guard.
@@ -412,6 +419,7 @@ impl Metrics {
 			"webhook_failed" => &self.webhook_failed,
 			"scanner_clamd_failed" => &self.scanner_clamd_failed,
 			"scanner_clamd_skipped" => &self.scanner_clamd_skipped,
+			"outbound_virus" => &self.outbound_virus,
 			"database_unavailable" => &self.database_unavailable,
 			"clock_drift_exceeded" => &self.clock_drift_exceeded,
 			"auth_login_succeeded" => &self.auth_login_succeeded,
@@ -529,6 +537,11 @@ impl Metrics {
 				"mail_scanner_clamd_skipped_total",
 				"Messages skipped because they exceeded the clamd byte limit.",
 				&self.scanner_clamd_skipped,
+			),
+			(
+				"mail_outbound_virus_total",
+				"Submissions by local accounts that the antivirus refused.",
+				&self.outbound_virus,
 			),
 			(
 				"mail_database_unavailable_total",

@@ -45,6 +45,8 @@ pub enum Key {
 	ClamdTimeout,
 	/// clamd maximum message size, in bytes (`[antispam] clamd_max_bytes`).
 	ClamdMaxSize,
+	/// Scan what local accounts submit (`[antispam] scan_authenticated`).
+	ScanAuthenticated,
 	/// SubjectPass enabled flag (`[subjectpass] enabled`).
 	Subjectpass,
 	/// LLM chat-completions endpoint URL (`[antispam_llm] endpoint`).
@@ -71,6 +73,7 @@ impl Key {
 			Self::ClamdOnFound => "clamd-on-found",
 			Self::ClamdTimeout => "clamd-timeout",
 			Self::ClamdMaxSize => "clamd-max-size",
+			Self::ScanAuthenticated => "scan-authenticated",
 			Self::Subjectpass => "subjectpass",
 			Self::LlmEndpoint => "llm-endpoint",
 			Self::LlmModel => "llm-model",
@@ -347,6 +350,10 @@ fn set_scalar_field(document: &mut ConfigDocument, key: Key, raw: &str) -> Resul
 			let value = parse_size_bytes(raw).map_err(|e| format!("clamd-max-size: {e}"))?;
 			document.set_table_key(&["antispam"], "clamd_max_bytes", value)?;
 		}
+		Key::ScanAuthenticated => {
+			let value = parse_on_off(raw).map_err(|e| format!("scan-authenticated: {e}"))?;
+			document.set_table_key(&["antispam"], "scan_authenticated", value)?;
+		}
 		Key::Subjectpass => {
 			let value = parse_on_off(raw).map_err(|e| format!("subjectpass: {e}"))?;
 			document.set_table_key(&["subjectpass"], "enabled", value)?;
@@ -393,6 +400,7 @@ fn unset_scalar_field(document: &mut ConfigDocument, key: Key) -> Result<(), Str
 		Key::ClamdOnFound => document.remove_table_key(&["antispam"], "clamd_on_found")?,
 		Key::ClamdTimeout => document.remove_table_key(&["antispam"], "clamd_timeout_secs")?,
 		Key::ClamdMaxSize => document.remove_table_key(&["antispam"], "clamd_max_bytes")?,
+		Key::ScanAuthenticated => document.remove_table_key(&["antispam"], "scan_authenticated")?,
 		Key::Subjectpass => document.remove_table_key(&["subjectpass"], "enabled")?,
 		Key::LlmEndpoint => document.remove_table_key(&["antispam_llm"], "endpoint")?,
 		Key::LlmModel => document.remove_table_key(&["antispam_llm"], "model")?,

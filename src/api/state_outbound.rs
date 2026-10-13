@@ -19,14 +19,15 @@ impl ApiState {
 		self
 	}
 
-	/// Submit `message` and return the id of its submission: the queue id
-	/// of whatever part leaves the server. A message whose recipients are
-	/// all local is delivered at once and queues nothing under that id.
-	pub fn submit(&self, message: AcceptedMessage) -> Result<uuid::Uuid, SinkError> {
+	/// Submit `message` for `account` and return the id of its submission:
+	/// the queue id of whatever part leaves the server. A message whose
+	/// recipients are all local is delivered at once and queues nothing
+	/// under that id.
+	pub fn submit(&self, account: &str, message: AcceptedMessage) -> Result<uuid::Uuid, SinkError> {
 		let id = uuid::Uuid::now_v7();
 		match &self.inner.outbound {
-			Some(sink) => sink.submit(message, id)?,
-			None => self.inner.spool.submit(message, id)?,
+			Some(sink) => sink.submit(message, id, account)?,
+			None => self.inner.spool.submit(message, id, account)?,
 		}
 		Ok(id)
 	}

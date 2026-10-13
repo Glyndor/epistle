@@ -272,7 +272,7 @@ fn fifty_failures_warn_once_per_minute_with_injected_clock() {
 		for _ in 0..50 {
 			assert_eq!(
 				hook.failed(&"unavailable", Duration::ZERO),
-				HookVerdict::Accept
+				Inspection::Unscanned
 			);
 		}
 		assert_eq!(warnings.0.lock().expect("warnings").len(), 1);

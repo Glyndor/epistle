@@ -76,10 +76,11 @@ a connection URL.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail. Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
+| `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail, and of what local accounts submit (see `scan_authenticated`). Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
 | `clamd_on_found` | `quarantine` or `reject` | `quarantine` | Quarantine a detected message in the Rejects mailbox, or reject it during SMTP delivery. Other values are invalid. |
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26214400` (25 MiB) | Messages above this size are accepted without opening the socket. A message exactly at the limit is scanned. |
+| `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
@@ -106,6 +107,21 @@ the message is accepted and `scanner_clamd_failed` increments. This includes
 `mail_scanner_clamd_failed_total` and `mail_scanner_clamd_skipped_total`.
 Failure warnings are limited to one per minute per hook; detections log the
 signature and message size without message content.
+
+With `scan_authenticated` on, a message an account submits is scanned before
+it is routed. A detection refuses it: `554 5.7.1 message rejected: virus
+detected (<signature>)` on SMTP, `422` with the code `virus_detected` on
+`/api/v1/send`, and a `forbiddenToSend` SetError with the same text as its
+`description` on JMAP. Nothing is stored or queued. The server logs the
+account's pseudonym and the signature, counts it in `outbound_virus`
+(`mail_outbound_virus_total`), and fires the `outbound_virus` webhook event,
+because an account sending malware is usually a compromised one. A clamd
+that cannot be reached fails open here too.
+
+Every scan that fails open is also recorded in `<data_dir>/clamd-health.json`,
+and the first one that works again closes the record. `epistle status` reads
+it: while scans keep failing, the antivirus area warns with how many failed
+and since when, even if clamd answers `PING` at that moment.
 
 ## Listeners
 
@@ -548,7 +564,8 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
 (a rotated DKIM key never showed up in DNS, so the previous key keeps signing),
-and `test`. When `secret` is
+`outbound_virus` (the antivirus refused a message one of your accounts sent;
+it carries `account` and `signature`), and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
 
 `delivery_failed` is sent per recipient when outbound delivery fails for good
@@ -689,7 +706,7 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
-`scanner_clamd_skipped`.
+`scanner_clamd_skipped`, `outbound_virus`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).

@@ -170,6 +170,17 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
+  default through `scan_authenticated`). A compromised account must not
+  relay malware, so what local accounts submit over SMTP, the REST API and
+  JMAP is scanned by clamd before it is routed, for local and remote
+  recipients alike. A detection is refused (`554 5.7.1` on SMTP), logged
+  with the account's pseudonym and the signature, counted in
+  `outbound_virus` and announced with the `outbound_virus` webhook event, so
+  the operator learns that the account may be compromised. The scan fails
+  open when clamd cannot be reached, like the inbound one, and `epistle
+  status` warns while scans keep failing, so an antivirus that is silently
+  not scanning does not go unnoticed.
 - **Outbound suppression**: a reply proving the address bad (5.1.x, 551,
   553) suppresses that recipient so the server stops sending to dead
   addresses, protecting the sending IP's reputation. Policy refusals, full or

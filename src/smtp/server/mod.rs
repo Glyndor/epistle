@@ -684,6 +684,10 @@ mod tests_auth;
 mod tests_bcc;
 
 #[cfg(test)]
+#[path = "server_tests_virus.rs"]
+mod tests_virus;
+
+#[cfg(test)]
 #[path = "server_tests_urlbl.rs"]
 mod tests_urlbl;
 

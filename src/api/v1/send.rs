@@ -11,6 +11,7 @@ use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::smtp::session::AcceptedMessage;
+use crate::smtp::sink::SinkError;
 use crate::storage::CapOutcome;
 use crate::util::address_reason;
 
@@ -163,7 +164,12 @@ pub async fn send(
 	};
 	// The same outbound path as SMTP submission: DKIM for remote mail,
 	// local recipients straight to their mailboxes.
-	let id = state.submit(message).map_err(|_| ApiError::internal())?;
+	let id = state
+		.submit(&account, message)
+		.map_err(|error| match error {
+			SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
+			SinkError::Unavailable(_) => ApiError::internal(),
+		})?;
 	Ok(Json(Queued {
 		queued: id.to_string(),
 	}))

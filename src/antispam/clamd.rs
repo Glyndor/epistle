@@ -27,6 +27,19 @@ pub struct ClamdHook {
 	metrics: Option<Arc<Metrics>>,
 	started: Instant,
 	last_warning: AtomicU64,
+	health: Option<health::HealthFile>,
+}
+
+/// What a scan found, with the signature name when clamd detected one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Inspection {
+	/// clamd scanned the message and found nothing.
+	Clean,
+	/// clamd reported this signature (control characters already refused).
+	Infected(String),
+	/// The message was not scanned: clamd failed, timed out, or the message
+	/// was over the size limit. Callers fail open on it.
+	Unscanned,
 }
 
 impl ClamdHook {
@@ -40,7 +53,15 @@ impl ClamdHook {
 			metrics: None,
 			started: Instant::now(),
 			last_warning: AtomicU64::new(u64::MAX),
+			health: None,
 		}
+	}
+
+	/// Record failed scans, and the first success after them, in
+	/// `<data_dir>/clamd-health.json`, where `epistle status` reads them.
+	pub fn with_health_file(mut self, data_dir: &std::path::Path) -> Self {
+		self.health = Some(health::HealthFile::new(data_dir));
+		self
 	}
 
 	/// Set the verdict for a detected signature.
@@ -71,7 +92,7 @@ impl ClamdHook {
 		&self,
 		mut stream: impl AsyncRead + AsyncWrite + Unpin,
 		raw: &[u8],
-	) -> io::Result<HookVerdict> {
+	) -> io::Result<Option<String>> {
 		stream.write_all(b"zINSTREAM\0").await?;
 		for chunk in raw.chunks(CHUNK_BYTES) {
 			stream
@@ -91,7 +112,7 @@ impl ClamdHook {
 		let reply = std::str::from_utf8(&reply[..reply.len() - 1])
 			.map_err(|_| io::Error::other("invalid clamd reply encoding"))?;
 		if reply == "stream: OK" {
-			return Ok(HookVerdict::Accept);
+			return Ok(None);
 		}
 		if let Some(signature) = reply
 			.strip_prefix("stream: ")
@@ -103,7 +124,7 @@ impl ClamdHook {
 				message_bytes = raw.len(),
 				"clamd detected a signature"
 			);
-			return Ok(self.on_found);
+			return Ok(Some(signature.to_string()));
 		}
 		// Never include an unrecognized reply in logs: it may contain message data.
 		Err(io::Error::other(if reply.ends_with(" ERROR") {
@@ -113,9 +134,12 @@ impl ClamdHook {
 		}))
 	}
 
-	fn failed(&self, error: &dyn std::fmt::Display, now: Duration) -> HookVerdict {
+	fn failed(&self, error: &dyn std::fmt::Display, now: Duration) -> Inspection {
 		if let Some(metrics) = &self.metrics {
 			metrics.scanner_clamd_failed();
+		}
+		if let Some(health) = &self.health {
+			health.failed();
 		}
 		// Supply monotonic elapsed time so clock jumps cannot bypass the limit.
 		let now_nanos = u64::try_from(now.as_nanos()).unwrap_or(u64::MAX - 1);
@@ -129,7 +153,7 @@ impl ClamdHook {
 		{
 			tracing::warn!(%error, "clamd scan failed; accepting");
 		}
-		HookVerdict::Accept
+		Inspection::Unscanned
 	}
 
 	fn scan_with<'a, S, F>(
@@ -141,22 +165,75 @@ impl ClamdHook {
 		S: AsyncRead + AsyncWrite + Unpin + Send + 'a,
 		F: Future<Output = io::Result<S>> + Send + 'a,
 	{
+		let inspection = self.inspect_with(raw, connect);
+		Box::pin(async move {
+			match inspection.await {
+				Inspection::Infected(_) => self.on_found,
+				Inspection::Clean | Inspection::Unscanned => HookVerdict::Accept,
+			}
+		})
+	}
+
+	fn inspect_with<'a, S, F>(
+		&'a self,
+		raw: &[u8],
+		connect: F,
+	) -> Pin<Box<dyn Future<Output = Inspection> + Send + 'a>>
+	where
+		S: AsyncRead + AsyncWrite + Unpin + Send + 'a,
+		F: Future<Output = io::Result<S>> + Send + 'a,
+	{
 		if raw.len() > self.max_bytes {
 			return Box::pin(async move {
 				if let Some(metrics) = &self.metrics {
 					metrics.scanner_clamd_skipped();
 				}
-				HookVerdict::Accept
+				Inspection::Unscanned
 			});
 		}
 		let body = raw.to_vec();
 		Box::pin(async move {
 			let exchange = async { self.exchange(connect.await?, &body).await };
 			match tokio::time::timeout(self.timeout, exchange).await {
-				Ok(Ok(verdict)) => verdict,
+				Ok(Ok(found)) => {
+					if let Some(health) = &self.health {
+						health.succeeded();
+					}
+					found.map_or(Inspection::Clean, Inspection::Infected)
+				}
 				Ok(Err(error)) => self.failed(&error, self.started.elapsed()),
 				Err(error) => self.failed(&error, self.started.elapsed()),
 			}
+		})
+	}
+
+	/// Scan `raw` and say what clamd found, failing open as [`MailHook::scan`]
+	/// does.
+	pub async fn inspect(&self, raw: &[u8]) -> Inspection {
+		self.inspect_with(raw, UnixStream::connect(&self.socket))
+			.await
+	}
+
+	/// [`ClamdHook::inspect`] for synchronous callers such as a
+	/// [`crate::smtp::sink::MessageSink`]. The exchange runs on its own
+	/// thread with its own runtime, so it works whether or not the caller is
+	/// inside a Tokio runtime and of which flavour; the caller blocks for at
+	/// most the configured timeout, the way it already blocks on the fsync
+	/// of the message it is about to store.
+	pub fn inspect_blocking(&self, raw: &[u8]) -> Inspection {
+		std::thread::scope(|scope| {
+			scope
+				.spawn(|| {
+					match tokio::runtime::Builder::new_current_thread()
+						.enable_all()
+						.build()
+					{
+						Ok(runtime) => runtime.block_on(self.inspect(raw)),
+						Err(error) => self.failed(&error, self.started.elapsed()),
+					}
+				})
+				.join()
+				.unwrap_or(Inspection::Unscanned)
 		})
 	}
 }
@@ -166,6 +243,13 @@ impl MailHook for ClamdHook {
 		self.scan_with(raw, UnixStream::connect(&self.socket))
 	}
 }
+
+#[path = "clamd_health.rs"]
+pub(crate) mod health;
+
+#[cfg(test)]
+#[path = "clamd_fake.rs"]
+pub(crate) mod fake;
 
 #[cfg(test)]
 #[path = "clamd_stream_tests.rs"]

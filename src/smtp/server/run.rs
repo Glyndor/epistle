@@ -368,7 +368,14 @@ impl Server {
 					if session.authenticated().is_none() && message.mailbox.is_none() {
 						self.train_corpus(&message.data, false);
 					}
-					let reply = match self.sink.deliver(message) {
+					// Mail an account submits goes through the submission
+					// path, which applies what holds for our own senders
+					// (the antivirus on outbound mail among them).
+					let handed = match session.authenticated() {
+						Some(account) => self.sink.submit(message, uuid::Uuid::now_v7(), account),
+						None => self.sink.deliver(message),
+					};
+					let reply = match handed {
 						Ok(()) => {
 							self.metrics.accepted();
 							for report in quota_reports {
@@ -389,8 +396,10 @@ impl Server {
 							reply
 						}
 						Err(error) => {
-							tracing::warn!(%error, "delivery failed");
-							Reply::single(451, "4.3.0 temporary storage failure, try again")
+							if matches!(error, crate::smtp::sink::SinkError::Unavailable(_)) {
+								tracing::warn!(%error, "delivery failed");
+							}
+							error.smtp_reply()
 						}
 					};
 					send(&mut stream, &reply).await?;
