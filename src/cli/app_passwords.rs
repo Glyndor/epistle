@@ -104,6 +104,7 @@ pub(super) fn create(
 		hash,
 		expires_at,
 		ip_cidr,
+		save_sent: None,
 	};
 	match store.add(account, app) {
 		Ok(()) => {
@@ -184,21 +185,32 @@ pub(super) fn list(
 		.filter(|(owner, ..)| account.is_none_or(|wanted| owner.eq_ignore_ascii_case(wanted)));
 	if json {
 		let rows = rows
-			.map(|(account, label, expires_at, ip_cidr)| {
+			.map(|(account, label, expires_at, ip_cidr, save_sent)| {
 				serde_json::json!({
 					"account": account,
 					"label": label,
 					"expires_at": expires_at,
 					"ip_cidr": ip_cidr,
+					"save_sent": save_sent,
 				})
 			})
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
-	for (account, label, expires_at, ip_cidr) in rows {
+	for (account, label, expires_at, ip_cidr, save_sent) in rows {
 		let expiry = expires_at.map_or_else(|| "never".to_string(), |e| e.to_string());
 		let cidr = ip_cidr.unwrap_or_else(|| "any".to_string());
-		if writeln!(out, "{account}\t{label}\texpires={expiry}\tip={cidr}").is_err() {
+		let save_sent = match save_sent {
+			Some(true) => "save_sent=on",
+			Some(false) => "save_sent=off",
+			None => "save_sent=default",
+		};
+		if writeln!(
+			out,
+			"{account}\t{label}\texpires={expiry}\tip={cidr}\t{save_sent}"
+		)
+		.is_err()
+		{
 			return ExitCode::FAILURE;
 		}
 	}
@@ -251,7 +263,7 @@ pub(super) fn revoke(
 	let known = store
 		.list()
 		.iter()
-		.any(|(owner, name, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
+		.any(|(owner, name, _, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
 	if !known {
 		return super::exit::refused(crate::directory_store::StoreError::NotFound(format!(
 			"{}/{label}",

@@ -113,6 +113,7 @@ fn two_app_password_handles_lose_no_writes() {
 				hash: "$argon2id$cli".to_string(),
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("cli add phone");
@@ -131,13 +132,14 @@ fn two_app_password_handles_lose_no_writes() {
 				hash: "$argon2id$server".to_string(),
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("server add laptop");
 
 	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");
 	let rows = reopened.list();
-	let labels: Vec<&str> = rows.iter().map(|(_, label, _, _)| label.as_str()).collect();
+	let labels: Vec<&str> = rows.iter().map(|(_, label, _, _, _)| label.as_str()).collect();
 	assert!(
 		labels.contains(&"phone"),
 		"phone added by the CLI must survive the server's add: {labels:?}"

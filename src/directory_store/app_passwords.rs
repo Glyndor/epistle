@@ -38,6 +38,16 @@ pub struct AppPassword {
 	/// Single-CIDR allowlist (`203.0.113.0/24` or a bare IP); `None` allows any.
 	#[serde(default)]
 	pub ip_cidr: Option<String>,
+	/// Whether messages sent through this app password are saved to the
+	/// account's `Sent` folder. `None` (the default and the value on
+	/// `app_passwords.toml` files written before the field existed) defers
+	/// to the account-wide setting: the account setting wins when the
+	/// app password does not override it. An explicit `Some(false)` here
+	/// disables the save for this credential even if the account has it
+	/// on (a phone whose mail app is read-only, a relay that should not
+	/// pollute Sent).
+	#[serde(default)]
+	pub save_sent: Option<bool>,
 }
 
 impl AppPassword {
@@ -270,9 +280,12 @@ impl AppPasswordStore {
 		Ok(removed.unwrap_or(0))
 	}
 
-	/// Every `(account, label, expires_at, ip_cidr)` for listing. Secrets and
-	/// hashes are never exposed.
-	pub fn list(&self) -> Vec<(String, String, Option<u64>, Option<String>)> {
+	/// Every `(account, label, expires_at, ip_cidr, save_sent)` for
+	/// listing. Secrets and hashes are never exposed. `save_sent` is
+	/// `Some(true)`/`Some(false)` when the credential carries an
+	/// explicit override, `None` when it defers to the account-wide
+	/// setting.
+	pub fn list(&self) -> Vec<(String, String, Option<u64>, Option<String>, Option<bool>)> {
 		let mut rows: Vec<_> = self
 			.accounts
 			.iter()
@@ -283,6 +296,7 @@ impl AppPasswordStore {
 						password.label.clone(),
 						password.expires_at,
 						password.ip_cidr.clone(),
+						password.save_sent,
 					)
 				})
 			})

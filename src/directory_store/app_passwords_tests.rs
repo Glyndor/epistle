@@ -19,6 +19,7 @@ fn app_password(label: &str, secret: &str) -> AppPassword {
 		hash: crate::smtp::auth::tests::hash(secret),
 		expires_at: None,
 		ip_cidr: None,
+		save_sent: None,
 	}
 }
 
@@ -79,7 +80,7 @@ fn store_add_list_remove_roundtrip() {
 
 	let rows = store.list();
 	assert_eq!(rows.len(), 2);
-	assert!(rows.iter().any(|(a, l, _, _)| a == "alice" && l == "phone"));
+	assert!(rows.iter().any(|(a, l, _, _, _)| a == "alice" && l == "phone"));
 
 	// Reopen to confirm persistence.
 	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");

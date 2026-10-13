@@ -160,6 +160,16 @@ pub struct DynamicAccount {
 	/// [`display_name::validate`].
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub display_name: Option<String>,
+	/// Whether messages the account submits are saved to its `Sent`
+	/// folder. `None` (the default and the value on `accounts.toml`
+	/// files written before the field existed) defaults to "on"; an
+	/// explicit `Some(false)` disables the save for this account
+	/// unless an app password on the credential overrides it.
+	/// Per-request (`/api/v1/send`, JMAP `EmailSubmission`) and
+	/// per-credential (app password) overrides win over the
+	/// account-wide setting.
+	#[serde(default)]
+	pub save_sent: Option<bool>,
 }
 
 impl DynamicAccount {
@@ -206,6 +216,7 @@ impl DynamicAccount {
 			forward: Vec::new(),
 			catch_all: Vec::new(),
 			display_name: None,
+			save_sent: None,
 		})
 	}
 }
@@ -588,6 +599,12 @@ impl AccountStore {
 					.map(|bytes| (account.name.clone(), bytes))
 			})
 			.chain(build::quota_bytes(&dynamic));
+		// Per-account `save_sent` overrides are dynamic-only (static
+		// accounts do not carry the field today; the operator can edit
+		// `mail.toml` to disable saving if the static-account default is
+		// ever added). The map omits accounts whose setting is `None`,
+		// so the saver falls back to the default ("on").
+		let save_sent = build::save_sent(&dynamic);
 		let forwards = build::forwards(&self.static_accounts, &dynamic);
 		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
 		let aliases = self.aliases.iter().map(|alias| {
@@ -622,6 +639,7 @@ impl AccountStore {
 			.with_domain_quotas(self.domain_quotas.clone())
 			.with_domain_submission_limits(self.domain_submission_limits.clone())
 			.with_forwards(forwards)
+			.with_save_sent(save_sent)
 			.with_aliases(aliases)
 			.with_app_passwords(
 				self.app_passwords

@@ -59,6 +59,16 @@ pub struct Server {
 	tls: Option<crate::tls::ReloadableAcceptor>,
 	tls_mode: TlsMode,
 	directory: DirectoryHandle,
+	/// On-disk directory where the account mailboxes live; needed to save a
+	/// copy of every authenticated submission into the account's `Sent`
+	/// folder. `None` disables the save for tests that do not stand up a
+	/// real filesystem layout; production wiring in `cli/serve.rs`
+	/// always sets it from `config.data_dir`.
+	data_dir: Option<std::path::PathBuf>,
+	/// At-rest crypto for the mailboxes, used when storing the Sent copy.
+	/// Mirrors the crypto the storage layer uses; `None` means "no
+	/// at-rest crypto", the same default as the storage layer.
+	crypto: Option<Arc<crate::storage::MessageCrypto>>,
 	spf: Option<Arc<dyn crate::spf::DnsLookup>>,
 	/// DNS blocklist zones to screen unauthenticated clients against.
 	dnsbl: crate::dnsbl::Dnsbl,
@@ -163,6 +173,8 @@ impl Server {
 			tls: None,
 			tls_mode: TlsMode::Opportunistic,
 			directory: DirectoryHandle::new(Directory::default()),
+			data_dir: None,
+			crypto: None,
 			spf: None,
 			dnsbl: crate::dnsbl::Dnsbl::default(),
 			reputation: None,
@@ -495,6 +507,24 @@ impl Server {
 		self
 	}
 
+	/// Attach the on-disk data directory so the server can save a
+	/// copy of every authenticated submission into the account's
+	/// `Sent` folder. `None` (the default) disables the save; tests
+	/// that do not exercise the feature leave it unset.
+	pub fn with_data_dir(mut self, data_dir: std::path::PathBuf) -> Self {
+		self.data_dir = Some(data_dir);
+		self
+	}
+
+	/// Attach the at-rest crypto for the mailboxes; used when
+	/// storing the Sent copy so the on-disk encoding matches the
+	/// rest of the mailbox. `None` means no at-rest crypto, the
+	/// same default the storage layer uses.
+	pub fn with_crypto(mut self, crypto: Arc<crate::storage::MessageCrypto>) -> Self {
+		self.crypto = Some(crypto);
+		self
+	}
+
 	/// Enable DMARC aggregate report storage. Delivery records are written
 	/// under `data_dir/dmarc-reports/` for later flushing and sending.
 	pub fn with_report_dir(mut self, data_dir: std::path::PathBuf) -> Self {
@@ -694,6 +724,10 @@ mod tests_trace;
 #[cfg(test)]
 #[path = "server_tests_urlbl.rs"]
 mod tests_urlbl;
+
+#[cfg(test)]
+#[path = "server_tests_save_sent.rs"]
+mod tests_save_sent;
 
 #[cfg(test)]
 #[path = "server_tests_correspondents.rs"]

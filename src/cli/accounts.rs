@@ -293,7 +293,7 @@ fn removal_question(
 			passwords
 				.list()
 				.into_iter()
-				.filter(|(account, _, _, _)| account == name)
+				.filter(|(account, _, _, _, _)| account == name)
 				.count()
 		})
 		.unwrap_or(0);
