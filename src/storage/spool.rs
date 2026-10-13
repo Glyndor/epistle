@@ -139,6 +139,20 @@ impl FsSpool {
 		Self::open_with_crypto(data_dir, MessageCrypto::disabled())
 	}
 
+	/// The at-rest crypto this spool uses for stored message bodies.
+	/// The save-sent helper borrows this so the Sent copy is encoded
+	/// the same way the rest of the account's mail is.
+	pub fn crypto(&self) -> &MessageCrypto {
+		&self.crypto
+	}
+
+	/// The directory this spool lives under. The save-sent helper
+	/// writes the copy under `<data_dir>/accounts/<name>/folders/Sent`
+	/// so the helper needs the data dir root.
+	pub fn data_dir(&self) -> &Path {
+		self.root.parent().expect("spool root is under data_dir")
+	}
+
 	/// Open the spool under `data_dir`, encrypting/decrypting the raw message
 	/// (`.eml`) files through `crypto`. Envelope JSON sidecars are unaffected.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {

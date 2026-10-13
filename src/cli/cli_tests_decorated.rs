@@ -4,8 +4,8 @@
 
 use std::process::ExitCode;
 
-use super::term::table::tests::visible;
-use super::term::{Decor, fake};
+use crate::cli::term::table::tests::visible;
+use crate::cli::term::{Decor, fake};
 use crate::config::Config;
 
 fn config(dir: &std::path::Path, extra: &str) -> Config {

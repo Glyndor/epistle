@@ -162,6 +162,7 @@ fn app_password_list_json() {
 				hash: crate::smtp::auth::tests::hash(crate::test_fixtures::password()),
 				expires_at: Some(99),
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("add");
@@ -178,7 +179,7 @@ fn app_password_list_json() {
 	let value: Value = serde_json::from_slice(&out).expect("valid JSON");
 	assert_eq!(
 		value,
-		json!([{ "account": "bob", "label": "phone", "expires_at": 99, "ip_cidr": null }])
+		json!([{ "account": "bob", "label": "phone", "expires_at": 99, "ip_cidr": null, "save_sent": null }])
 	);
 }
 

@@ -14,6 +14,7 @@ pub(crate) mod lock;
 pub(crate) mod locked;
 mod routing;
 mod routing_forward;
+pub(crate) mod save_sent;
 mod spool;
 mod spool_recipients;
 
@@ -33,6 +34,10 @@ pub use delivery::LocalDelivery;
 #[path = "crypto_e2e_tests.rs"]
 mod crypto_e2e_tests;
 pub use routing::SplitDelivery;
+pub use save_sent::{
+	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason, first_message_id,
+	store_copy as save_sent_copy,
+};
 pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
 
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.

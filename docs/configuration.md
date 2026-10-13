@@ -1284,6 +1284,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
+| `save_sent` | Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
 
 ### `[[alias]]`
 A multi-target alias: one address that delivers to several local accounts.

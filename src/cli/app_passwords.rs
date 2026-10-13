@@ -38,6 +38,13 @@ pub enum AppPasswordCli {
 		/// Optional single-CIDR client-IP allowlist (e.g. `203.0.113.0/24`).
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
+		/// Optional override for this credential's `save_sent`
+		/// setting. With no override the credential inherits the
+		/// account-wide value; `on` opts this credential in (a
+		/// mailbox-only phone that should pollute its own Sent),
+		/// `off` opts it out (a relay, a read-only phone).
+		#[arg(long, value_name = "STATE")]
+		save_sent: Option<String>,
 	},
 	/// Revoke an existing app password by label.
 	Revoke {
@@ -70,11 +77,24 @@ pub(super) fn create(
 	label: &str,
 	expires_at: Option<u64>,
 	ip_cidr: Option<String>,
+	save_sent: Option<String>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if let Err(code) = ensure_known_dynamic_account(config, account) {
 		return code;
 	}
+	let save_sent = match save_sent {
+		Some(raw) => match crate::cli::account::parse_on_off(&raw) {
+			Ok(value) => Some(value),
+			Err(error) => {
+				super::style::error(format_args!(
+					"account {account}: app-password save-sent: {error}"
+				));
+				return ExitCode::FAILURE;
+			}
+		},
+		None => None,
+	};
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
 		None => {
@@ -104,6 +124,7 @@ pub(super) fn create(
 		hash,
 		expires_at,
 		ip_cidr,
+		save_sent,
 	};
 	match store.add(account, app) {
 		Ok(()) => {
@@ -184,21 +205,32 @@ pub(super) fn list(
 		.filter(|(owner, ..)| account.is_none_or(|wanted| owner.eq_ignore_ascii_case(wanted)));
 	if json {
 		let rows = rows
-			.map(|(account, label, expires_at, ip_cidr)| {
+			.map(|(account, label, expires_at, ip_cidr, save_sent)| {
 				serde_json::json!({
 					"account": account,
 					"label": label,
 					"expires_at": expires_at,
 					"ip_cidr": ip_cidr,
+					"save_sent": save_sent,
 				})
 			})
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
-	for (account, label, expires_at, ip_cidr) in rows {
+	for (account, label, expires_at, ip_cidr, save_sent) in rows {
 		let expiry = expires_at.map_or_else(|| "never".to_string(), |e| e.to_string());
 		let cidr = ip_cidr.unwrap_or_else(|| "any".to_string());
-		if writeln!(out, "{account}\t{label}\texpires={expiry}\tip={cidr}").is_err() {
+		let save_sent = match save_sent {
+			Some(true) => "save_sent=on",
+			Some(false) => "save_sent=off",
+			None => "save_sent=default",
+		};
+		if writeln!(
+			out,
+			"{account}\t{label}\texpires={expiry}\tip={cidr}\t{save_sent}"
+		)
+		.is_err()
+		{
 			return ExitCode::FAILURE;
 		}
 	}
@@ -220,7 +252,10 @@ pub(super) fn run(
 			label,
 			expires_at,
 			ip_cidr,
-		} => create(config, &account, &label, expires_at, ip_cidr, out),
+			save_sent,
+		} => create(
+			config, &account, &label, expires_at, ip_cidr, save_sent, out,
+		),
 		AppPasswordCli::Revoke {
 			account,
 			label,
@@ -251,7 +286,7 @@ pub(super) fn revoke(
 	let known = store
 		.list()
 		.iter()
-		.any(|(owner, name, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
+		.any(|(owner, name, _, _, _)| owner.eq_ignore_ascii_case(account) && name == label);
 	if !known {
 		return super::exit::refused(crate::directory_store::StoreError::NotFound(format!(
 			"{}/{label}",
@@ -278,3 +313,7 @@ pub(super) fn revoke(
 #[cfg(test)]
 #[path = "app_passwords_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "app_passwords_save_sent_tests.rs"]
+mod save_sent_tests;

@@ -153,6 +153,13 @@ pub async fn send(
 	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {
 		return Err(ApiError::mailbox_full(&full));
 	}
+	let save_sent = request.save_sent();
+	// Clone the bytes so the Sent copy can be written after the
+	// routing sink takes ownership of the original. The clone is
+	// bounded by the message body, which is small in practice; a
+	// copy at the routing boundary would tie the saver to the
+	// sink's lifetime.
+	let sent_copy = data.clone();
 	let message = AcceptedMessage {
 		reverse_path: request.from,
 		recipients,
@@ -170,6 +177,10 @@ pub async fn send(
 			SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
 			SinkError::Unavailable(_) => ApiError::internal(),
 		})?;
+	// Save a copy of what the account sent into its `Sent` folder
+	// when the per-request and account-wide settings admit it. The
+	// default is "on"; the request may opt out.
+	state.save_sent_copy(&account, &sent_copy, save_sent);
 	Ok(Json(Queued {
 		queued: id.to_string(),
 	}))

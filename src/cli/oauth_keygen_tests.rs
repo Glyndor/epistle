@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use super::util::{derive_oauth_public_from_private, oauth_keygen};
+use crate::cli::util::{derive_oauth_public_from_private, oauth_keygen};
 
 /// The value of `key = "..."` in the generated file.
 fn field(text: &str, key: &str) -> String {

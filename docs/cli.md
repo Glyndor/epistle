@@ -15,7 +15,7 @@ destructive action without `--yes`).
 
 | Resource | Actions | Older flat form (hidden, still works) |
 |---|---|---|
-| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
+| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `save-sent`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
 | `account forward` | `list`, `add`, `remove` | |
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
@@ -988,6 +988,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
+| `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
 | `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
 | `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while `srs_secret` is unset (without SRS the copy fails SPF at the next hop). |
@@ -995,7 +996,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
 | `epistle app-password list [--account N] [--json]` | App passwords (label, expiry, IP restriction), never the secret. |
-| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR]` | Create an IMAP/SMTP app password; prints it once. Dynamic accounts only. |
+| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
 | `epistle api-key list [--json]` | API keys: label, expiry, CIDR, scopes, domains, bound account. Never the key. |
 | `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N]` | Create a key; prints it once. Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |

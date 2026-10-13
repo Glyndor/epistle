@@ -95,6 +95,24 @@ impl Directory {
 		ip: Option<std::net::IpAddr>,
 		protocol: crate::config::Protocol,
 	) -> Option<String> {
+		self.authenticate_with_ip_full(login, password, ip, protocol)
+			.map(|(account, _label)| account)
+	}
+
+	/// Like [`Directory::authenticate_with_ip`], but also returns the
+	/// label of the app password that authenticated. Callers that need
+	/// per-credential overrides (`save_sent`, ...) use the label to look
+	/// them up; primary-password logins return `None` so the caller
+	/// falls through to the account-wide default. LDAP-bind logins also
+	/// return `None` (LDAP does not surface the credential that matched,
+	/// so the per-credential override cannot apply).
+	pub fn authenticate_with_ip_full(
+		&self,
+		login: &str,
+		password: &str,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) -> Option<(String, Option<String>)> {
 		// Ban check first: an active ban on the client IP or on the
 		// account is the answer, so the password verifier is never reached.
 		// The check runs before the credentials lookup so a banned IP
@@ -117,8 +135,9 @@ impl Directory {
 				self.ldap
 					.as_ref()
 					.and_then(|ldap| ldap.authenticate(login, password))
+					.map(|account| (account, None))
 			})
-			.and_then(|account| {
+			.and_then(|(account, label)| {
 				// The protocol allowlist is enforced after the local/LDAP
 				// credential check resolves an account. A restriction that
 				// denies this protocol returns None exactly like the disabled
@@ -126,15 +145,16 @@ impl Directory {
 				// "disabled", and "wrong protocol"; none reveals that the
 				// account exists at all.
 				self.is_protocol_allowed(&account, protocol)
-					.then_some(account)
+					.then_some((account, label))
 			});
-		self.record_auth_outcome(login, verified.as_deref(), ip, protocol);
+		let verified_account = verified.as_ref().map(|(account, _)| account.as_str());
+		self.record_auth_outcome(login, verified_account, ip, protocol);
 		// Key the account-side strike on the account the credential check
 		// resolved; fall back to whatever the ban check saw when the
 		// password check rejected a known login (e.g. wrong password, an
 		// app-password CIDR miss, a protocol allowlist denial). An unknown
 		// login never reaches the account side.
-		let account_for_record = verified.as_deref().or(resolved_account.as_deref());
+		let account_for_record = verified_account.or(resolved_account.as_deref());
 		self.record_ban_outcome(login, account_for_record, verified.is_some(), ip, protocol);
 		verified
 	}

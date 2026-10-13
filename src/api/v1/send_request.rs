@@ -71,6 +71,14 @@ pub struct SendRequest {
 	/// Custom headers; every name starts with `X-`.
 	#[serde(default)]
 	headers: BTreeMap<String, String>,
+	/// Whether a copy of the message lands in the account's `Sent`
+	/// folder. `None` (the default) defers to the account-wide
+	/// setting; `Some(false)` disables the save for this request;
+	/// `Some(true)` enables it. The per-request override wins over
+	/// the account-wide default; nothing here touches the credential
+	/// (the credential override is SMTP-only).
+	#[serde(default)]
+	save_sent: Option<bool>,
 }
 
 /// An attachment or inline part: base64 `data`, with the type detected
@@ -95,6 +103,16 @@ impl SendRequest {
 			.chain(&self.bcc)
 			.cloned()
 			.collect()
+	}
+
+	/// The per-request `save_sent` override. `None` means "follow the
+	/// account-wide default"; `Some(false)` opts out for this
+	/// request; `Some(true)` opts in. The request value always wins
+	/// over the account-wide setting, exactly like the SMTP path's
+	/// per-request override (which the SMTP path does not have today
+	/// but the save-sent logic accommodates).
+	pub fn save_sent(&self) -> Option<bool> {
+		self.save_sent
 	}
 
 	/// Every value that ends up on a header line, for the CR/LF and length

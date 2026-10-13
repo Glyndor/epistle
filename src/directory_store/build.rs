@@ -179,6 +179,19 @@ pub(super) fn quota_bytes(dynamic: &[DynamicAccount]) -> Vec<(String, u64)> {
 		.collect()
 }
 
+/// Per-account `save_sent` preference for every dynamic account that
+/// carries an explicit override (`Some(true)` or `Some(false)`).
+/// Accounts with `save_sent = None` (the default and the value on
+/// `accounts.toml` files written before the field existed) are
+/// omitted, so the rebuilt directory resolves them as "no preference"
+/// and the saver treats that as "on".
+pub(super) fn save_sent(dynamic: &[DynamicAccount]) -> Vec<(String, bool)> {
+	dynamic
+		.iter()
+		.filter_map(|account| account.save_sent.map(|value| (account.name.clone(), value)))
+		.collect()
+}
+
 /// Catch-all domain to account pairs: static accounts first, then dynamic
 /// ones. Both stores refuse a domain another account already catches, so
 /// no pair overwrites another in the directory's map.

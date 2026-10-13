@@ -98,6 +98,7 @@ fn seed(dir: &Path, store: &Arc<AccountStore>, spool: &FsSpool, name: &str) {
 				hash: "$argon2id$placeholder".to_string(),
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("add app pw");
@@ -383,6 +384,7 @@ async fn a_recreated_account_does_not_inherit_the_previous_app_passwords() {
 				hash: app_hash,
 				expires_at: None,
 				ip_cidr: None,
+				save_sent: None,
 			},
 		)
 		.expect("add app pw");

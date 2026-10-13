@@ -299,6 +299,7 @@ fn app_password_revoke_asks_naming_label_and_account() {
 				"phone",
 				None,
 				None,
+				None,
 				&mut Vec::new(),
 			);
 			assert_eq!(created, ExitCode::SUCCESS);

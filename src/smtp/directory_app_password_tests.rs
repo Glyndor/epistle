@@ -30,6 +30,7 @@ fn app_password(label: &str) -> (AppPassword, String) {
 		hash: crate::smtp::auth::tests::hash(&secret),
 		expires_at: None,
 		ip_cidr: None,
+		save_sent: None,
 	};
 	(password, secret)
 }

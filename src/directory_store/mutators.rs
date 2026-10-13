@@ -75,6 +75,28 @@ impl AccountStore {
 		Ok(previous.expect("closure ran"))
 	}
 
+	/// Set or clear a dynamic account's `save_sent` preference.
+	/// `Some(true)` enables the save (the default for accounts
+	/// written before the field existed), `Some(false)` opts out.
+	/// The mutator keeps the account field a tri-state so a future
+	/// "inherit" value can land without breaking the on-disk
+	/// format; today the helper accepts only the two boolean
+	/// values. `NotFound` for static and unknown accounts.
+	pub fn set_save_sent(&self, name: &str, value: bool) -> Result<Option<bool>, StoreError> {
+		let mut previous: Option<Option<bool>> = None;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			previous = Some(target.save_sent);
+			target.save_sent = Some(value);
+			Ok(())
+		})?;
+		Ok(previous.expect("closure ran"))
+	}
+
 	/// Whether `raw` already routes somewhere: a static account, a dynamic
 	/// account other than `except`, a static `[[alias]]`, or a masked
 	/// address. Callers are inside the locked mutate closure, so the

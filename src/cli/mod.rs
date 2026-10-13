@@ -85,10 +85,9 @@ pub use {init::Answers, pick::run_from_env};
 
 use {std::path::PathBuf, util::generate_secret};
 
+use clap::{Parser, Subcommand};
 #[cfg(test)]
 use std::process::ExitCode;
-
-use clap::{Parser, Subcommand};
 
 const DEFAULT_CONFIG: &str = "/etc/epistle/mail.toml";
 

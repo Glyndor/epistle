@@ -106,6 +106,13 @@ pub struct Directory {
 	/// is set; otherwise the server-wide default applies (or no limit, if
 	/// neither is configured).
 	domain_submission_limits: HashMap<String, u32>,
+	/// Per-account `save_sent` preference for outbound submission. `None`
+	/// (the account carries no preference) means "on" by default; an
+	/// explicit `Some(false)` disables the save for this account. A
+	/// per-request or per-app-password override wins over the
+	/// account-wide setting; the account-wide setting only applies when
+	/// neither override exists.
+	account_save_sent: HashMap<String, bool>,
 	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
 	/// account is also queued to each target; `keep_local` keeps the local copy.
 	forwards: HashMap<String, (Vec<String>, bool)>,
@@ -188,6 +195,7 @@ impl Directory {
 			forwards: HashMap::new(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
+			account_save_sent: HashMap::new(),
 			ldap: None,
 			masked_by_address: HashMap::new(),
 			metrics: None,
@@ -350,6 +358,17 @@ impl Directory {
 		self
 	}
 
+	/// Attach per-account `save_sent` preferences (account name →
+	/// enabled). `Some(true)` and `Some(false)` are both stored; an
+	/// account absent from the list keeps the default (`None`).
+	pub fn with_save_sent(mut self, entries: impl IntoIterator<Item = (String, bool)>) -> Self {
+		self.account_save_sent = entries
+			.into_iter()
+			.map(|(name, value)| (name.to_ascii_lowercase(), value))
+			.collect();
+		self
+	}
+
 	/// Attach per-domain default storage quotas (domain → bytes).
 	pub fn with_domain_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
 		self.domain_quotas = quotas
@@ -423,6 +442,37 @@ impl Directory {
 			.filter(|(_, name)| name.eq_ignore_ascii_case(&account))
 			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
 			.find_map(|domain| self.domain_quotas.get(domain).copied())
+	}
+
+	/// The account-wide `save_sent` preference: `Some(true)`/`Some(false)`
+	/// when the account carries an explicit override, `None` when the
+	/// preference is absent (treated as "on" by default). Callers pick the
+	/// default themselves because the per-request and per-app-password
+	/// overrides interact with it; the saver resolves the precedence.
+	pub fn save_sent_for(&self, account: &str) -> Option<bool> {
+		self.account_save_sent
+			.get(&account.to_ascii_lowercase())
+			.copied()
+	}
+
+	/// Whether the SMTP session that authenticated as `account` via
+	/// `app_password` (when the login was a secondary credential rather
+	/// than the primary password) should save a copy of every message
+	/// to Sent. `Some(false)` on the app password disables the save
+	/// unconditionally; `Some(true)` enables it; `None` defers to the
+	/// account-wide preference.
+	pub fn app_password_save_sent(
+		&self,
+		account: &str,
+		app_password: Option<&str>,
+	) -> Option<bool> {
+		let account = account.to_ascii_lowercase();
+		let passwords = self.app_passwords.get(&account)?;
+		let password = app_password?;
+		passwords
+			.iter()
+			.find(|entry| entry.label == password)
+			.and_then(|entry| entry.save_sent)
 	}
 
 	/// The per-domain submission rate limit (messages/minute) for an
@@ -503,13 +553,17 @@ impl Directory {
 	/// The local credential path: primary password (with TOTP when set), then the
 	/// account's app passwords. `None` when the login is unknown locally or no
 	/// local secret matches. Split out so [`Directory::authenticate_with_ip`] can
-	/// fall back to LDAP afterwards.
+	/// fall back to LDAP afterwards. Returns `(account, Option<label>)`:
+	/// `label` is `Some` only when the credential that authenticated is an
+	/// app password; primary-password logins return `None` so callers
+	/// looking up per-credential overrides fall through to the
+	/// account-wide default.
 	fn authenticate_local(
 		&self,
 		login: &str,
 		password: &str,
 		ip: Option<std::net::IpAddr>,
-	) -> Option<String> {
+	) -> Option<(String, Option<String>)> {
 		let (account, hash) = self.credentials(login)?;
 		// Disabled check runs after the credential lookup (which lowercases the
 		// bare-login path) but before any hashing — argon2id and SCRAM are both
@@ -532,7 +586,7 @@ impl Directory {
 		};
 		if !prepared.is_empty() && super::auth::verify_password(hash, &prepared) {
 			self.maybe_upgrade_scram(&account, &prepared);
-			return Some(account);
+			return Some((account, None));
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
 		// passwords are not subject to TOTP — they are independent secrets.
@@ -547,7 +601,7 @@ impl Directory {
 			.unwrap_or(&[])
 		{
 			if app.admits(password, &self.password_policy, ip, now) {
-				return Some(account.clone());
+				return Some((account.clone(), Some(app.label.clone())));
 			}
 		}
 		None

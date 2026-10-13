@@ -372,7 +372,21 @@ impl Server {
 					// path, which applies what holds for our own senders
 					// (the antivirus on outbound mail among them).
 					let handed = match session.authenticated() {
-						Some(account) => self.sink.submit(message, uuid::Uuid::now_v7(), account),
+						Some(account) => {
+							// Per-account settings may disable the save
+							// (`save_sent: false` on the account, on the
+							// app password that authenticated this
+							// session, or both). The default for both
+							// is "on"; the app password overrides the
+							// account when it sets a value. The copy is
+							// taken from `message.data` after the Bcc
+							// strip, so it never names a blind-carbon
+							// copy recipient (RFC 5322 §3.6.3).
+							if self.save_sent_enabled_for(&session) {
+								self.save_sent_copy(&session, account, &message.data);
+							}
+							self.sink.submit(message, uuid::Uuid::now_v7(), account)
+						}
 						None => self.sink.deliver(message),
 					};
 					let reply = match handed {
@@ -438,5 +452,96 @@ impl Server {
 				}
 			}
 		}
+	}
+}
+
+impl Server {
+	/// Whether a copy of the message this session is about to submit
+	/// should be stored into the account's `Sent` folder. The
+	/// precedence: the app password
+	/// that authenticated the session overrides the account-wide
+	/// setting when it carries an explicit value, otherwise the
+	/// account-wide setting decides (default "on" when absent).
+	pub(super) fn save_sent_enabled_for(&self, session: &crate::smtp::session::Session) -> bool {
+		let Some(account) = session.authenticated() else {
+			return false;
+		};
+		let directory = self.directory.current();
+		// App password override first: an explicit `Some(false)` here
+		// disables the save even if the account has it on.
+		if let Some(label) = session.auth_app_password_label()
+			&& let Some(value) = directory.app_password_save_sent(account, Some(label))
+		{
+			return value;
+		}
+		directory.save_sent_for(account).unwrap_or(true)
+	}
+
+	/// Store one copy of `data` into the account's `Sent` folder. The
+	/// copy carries the `\Seen` flag and never includes a `Bcc:`
+	/// header (the SMTP path strips Bcc before this is called). A
+	/// quota-exhausted mailbox or any other filesystem error is
+	/// logged and ignored: the message the client sent must still
+	/// leave the server. The duplicate-guard call uses the
+	/// `Message-ID:` the server stamped on the message when the
+	/// client omitted one.
+	pub(super) fn save_sent_copy(
+		&self,
+		session: &crate::smtp::session::Session,
+		account: &str,
+		data: &[u8],
+	) {
+		let Some(data_dir) = self.data_dir.as_ref() else {
+			return;
+		};
+		let message_id = match crate::storage::save_sent::first_message_id(data) {
+			Some(id) => id,
+			None => {
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					"save_sent: message has no Message-ID after stamping; skipping copy"
+				);
+				return;
+			}
+		};
+		// Reverse dedup: if the client appended first, a message with
+		// this Message-ID already lives in Sent; the guard does not
+		// know about it yet, but the on-disk scan does. Skip the save
+		// so we do not produce a duplicate copy. The IMAP APPEND
+		// fast path uses the same guard and skips its own copy when
+		// the guard says the server already saved.
+		if let Ok(Some(_existing)) =
+			crate::storage::save_sent::lookup_sent_uid(data_dir, account, &message_id)
+		{
+			tracing::debug!(
+				account = %crate::log_id::account(account),
+				"save_sent: Message-ID already in Sent; skipping server-side copy"
+			);
+			return;
+		}
+		let crypto = self
+			.crypto
+			.as_deref()
+			.cloned()
+			.unwrap_or_else(crate::storage::MessageCrypto::disabled);
+		match crate::storage::save_sent::store_copy(data_dir, account, data, &message_id, &crypto) {
+			Ok(_uid) => {
+				tracing::debug!(
+					account = %crate::log_id::account(account),
+					"save_sent: stored a copy in Sent"
+				);
+			}
+			Err(error) => {
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					%error,
+					"save_sent: could not store the copy; the message is still sent"
+				);
+			}
+		}
+		// The session is unused now (the message ID was already extracted)
+		// but keep the parameter so the call site documents who owns
+		// the audit log line.
+		let _ = session;
 	}
 }

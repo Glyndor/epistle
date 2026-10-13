@@ -259,6 +259,27 @@ impl Session {
 		} else {
 			"APPEND"
 		};
+		// The dedup fast path for client-side APPENDs to the `Sent`
+		// folder: when the literal carries a Message-ID the server
+		// already saved in the last 24 hours, the server returns the
+		// existing UID as if the APPEND had landed, but does not
+		// write a second copy. REPLACE always stores the literal as
+		// the replacement of its target message; the dedup is an
+		// APPEND-only path so the IMAP4rev2 sequence number for the
+		// replacement stays coherent.
+		if replace.is_none()
+			&& mailbox.eq_ignore_ascii_case("Sent")
+			&& let Some(message_id) = crate::storage::first_message_id(data)
+		{
+			let dedup_outcome = self.append_skip_stored_sent(&tag, &account, &mailbox, &message_id);
+			match dedup_outcome {
+				Some(output) => return output,
+				None => {
+					// Guard said "not recent": fall through to the
+					// normal APPEND path.
+				}
+			}
+		}
 		let id = match mailbox::append_dated(
 			&self.data_dir,
 			&account,
@@ -294,6 +315,40 @@ impl Session {
 				))
 			}
 		}
+	}
+
+	/// Try the dedup fast path: when the guard says the server already
+	/// stored a copy of `message_id` in the last 24 hours and the
+	/// on-disk scan still finds it in `Sent`, return an `OK
+	/// [APPENDUID ...]` reply that points the client at the existing
+	/// copy. Returns `None` when the guard has no entry or the on-disk
+	/// scan fails (the caller falls through to the normal APPEND
+	/// path).
+	fn append_skip_stored_sent(
+		&mut self,
+		tag: &str,
+		account: &str,
+		mailbox: &str,
+		message_id: &str,
+	) -> Option<Output> {
+		let guard = crate::storage::save_sent::Guard::open(&self.data_dir, account)
+			.map_err(|error| {
+				tracing::warn!(
+					account = %crate::log_id::account(account),
+					%error,
+					"save_sent: cannot open the dedup guard; falling back to APPEND"
+				);
+				error
+			})
+			.ok()?;
+		guard.is_recent(message_id).ok()?.as_ref()?;
+		let (validity, uid) =
+			mailbox::appenduid_for_message_id(&self.data_dir, account, mailbox, message_id)?;
+		let code = format!("[APPENDUID {validity} {uid}] ");
+		let prelude = self.append_update_selected(mailbox);
+		Some(Output::text(format!(
+			"{prelude}{tag} OK {code}APPEND completed\r\n"
+		)))
 	}
 
 	/// Bring the client up to date when the APPEND/REPLACE target is the
