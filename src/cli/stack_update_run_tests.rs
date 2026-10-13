@@ -10,6 +10,9 @@ struct Fake {
 	database: bool,
 	calls: Vec<String>,
 	fail: Option<&'static str>,
+	/// Areas `status` reports failing after the restart.
+	failing: Vec<(String, String)>,
+	logged: Vec<String>,
 }
 
 impl Fake {
@@ -42,7 +45,16 @@ impl UpdateHost for Fake {
 	fn podup(&mut self, step: &[String]) -> Result<(), String> {
 		self.call("podup", format!(" {}", step.join(" ")))
 	}
-	fn log(&mut self, _: &str) {}
+	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
+		self.call("healthy", format!(" {service}"))
+	}
+	fn failing_areas(&mut self) -> Vec<(String, String)> {
+		self.calls.push("status".into());
+		self.failing.clone()
+	}
+	fn log(&mut self, line: &str) {
+		self.logged.push(line.to_string());
+	}
 }
 
 fn plan(rewrite: bool) -> UpdatePlan {
@@ -54,6 +66,7 @@ fn plan(rewrite: bool) -> UpdatePlan {
 			Step(vec!["up".into(), "-d".into()]),
 			Step(vec!["restart".into(), "mail".into()]),
 		],
+		config_path: PathBuf::from("/etc/epistle/mail.toml"),
 	}
 }
 
@@ -66,7 +79,15 @@ fn the_database_is_dumped_before_anything_changes() {
 	execute(&mut host, &plan(true)).unwrap();
 	assert_eq!(
 		host.calls,
-		["dump", "keep", "write", "podup up -d", "podup restart mail"]
+		[
+			"dump",
+			"keep",
+			"write",
+			"podup up -d",
+			"podup restart mail",
+			"healthy mail",
+			"status"
+		]
 	);
 }
 
@@ -95,5 +116,39 @@ fn a_failed_dump_stops_the_update_before_it_changes_anything() {
 fn a_stack_without_its_own_database_is_not_dumped() {
 	let mut host = Fake::default();
 	execute(&mut host, &plan(false)).unwrap();
-	assert_eq!(host.calls, ["podup up -d", "podup restart mail"]);
+	assert_eq!(
+		host.calls,
+		[
+			"podup up -d",
+			"podup restart mail",
+			"healthy mail",
+			"status"
+		]
+	);
+}
+
+#[test]
+fn an_unhealthy_mail_names_the_rollback() {
+	let mut host = Fake {
+		fail: Some("healthy"),
+		..Fake::default()
+	};
+	let error = execute(&mut host, &plan(false)).expect_err("mail never got healthy");
+	assert!(
+		error.contains("healthy failed") && error.contains("sudo epistle stack rollback"),
+		"{error}"
+	);
+}
+
+#[test]
+fn a_failing_status_area_is_named_with_the_rollback() {
+	let mut host = Fake {
+		failing: vec![("db".into(), "connection refused".into())],
+		..Fake::default()
+	};
+	let error = execute(&mut host, &plan(false)).expect_err("db fails after the restart");
+	assert!(
+		error.contains("db: connection refused") && error.contains("sudo epistle stack rollback"),
+		"{error}"
+	);
 }

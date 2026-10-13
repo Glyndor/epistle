@@ -183,6 +183,22 @@ fn execute(
 
 /// Run the areas concurrently, each under [`AREA_DEADLINE`], and return the
 /// reports in the order requested.
+/// The areas among `areas` that fail for the config at `path`, as
+/// `(name, detail)`; used by `stack update` to judge a restart.
+pub(in crate::cli) fn failing(
+	path: &Path,
+	areas: &[CheckArea],
+) -> Result<Vec<(String, String)>, String> {
+	let runtime = tokio::runtime::Runtime::new()
+		.map_err(|error| format!("cannot start async runtime: {error}"))?;
+	let reports = runtime.block_on(run_areas(areas, Arc::new(Ctx::load(path))));
+	Ok(reports
+		.into_iter()
+		.filter(|(_, report)| report.status == report::Level::Fail)
+		.map(|(area, report)| (area.name().to_string(), report.detail))
+		.collect())
+}
+
 async fn run_areas(areas: &[CheckArea], ctx: Arc<Ctx>) -> Vec<(CheckArea, AreaReport)> {
 	let mut set = tokio::task::JoinSet::new();
 	for (index, area) in areas.iter().copied().enumerate() {

@@ -233,7 +233,20 @@ configure)
 			cd "$HOME" || exit 0
 			if runuser -u glyndor-epistle -- systemctl --user is-enabled --quiet podup-epistle.service; then
 				if ! runuser -u glyndor-epistle -- epistle stack update; then
-					echo "epistle: stack update failed; run sudo epistle stack update to retry" >&2
+					# apt shows maintainer script output, so frame it; the
+					# package stays installed either way.
+					{
+						echo
+						echo "**********************************************************************"
+						echo "epistle: the stack did not come back healthy after this upgrade."
+						echo "epistle: the error above names what failed. Fix it and run"
+						echo "epistle:   sudo epistle stack update"
+						echo "epistle: or go back to the previous version (and, if the schema"
+						echo "epistle: already moved, the database dumped before the restart) with"
+						echo "epistle:   sudo epistle stack rollback"
+						echo "**********************************************************************"
+						echo
+					} >&2
 				fi
 			fi
 		)

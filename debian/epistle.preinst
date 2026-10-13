@@ -1,0 +1,32 @@
+#!/bin/sh
+# Pre-installation script for the epistle package.
+#
+# On an upgrade, keep the binary that is about to be replaced, so `epistle
+# stack rollback` can put it back when the new release does not come up
+# healthy. Only the two highest versions are kept. A copy that cannot be made
+# only warns: it costs the rollback, never the upgrade.
+
+set -e
+
+case "$1" in
+upgrade)
+	if [ -n "${2:-}" ] && [ -x /usr/bin/epistle ] && [ -d /var/lib/glyndor/epistle ]; then
+		rollback=/var/lib/glyndor/epistle/rollback
+		if mkdir -p "$rollback" && chmod 0700 "$rollback" \
+			&& cp -p /usr/bin/epistle "$rollback/epistle-$2.partial" \
+			&& mv -f "$rollback/epistle-$2.partial" "$rollback/epistle-$2"; then
+			# sort -V orders 0.10.10 after 0.10.1; plain text order would not.
+			find "$rollback" -maxdepth 1 -type f -name 'epistle-*' ! -name '*.partial' \
+				| sort -V | head -n -2 | while IFS= read -r old; do
+					rm -f -- "$old"
+				done
+		else
+			echo "epistle: could not keep a copy of the $2 binary; epistle stack rollback will not be able to go back to it" >&2
+		fi
+	fi
+	;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -348,6 +348,10 @@ impl Cli {
 				action,
 				dry_run,
 			} => domain::run(&config, action, dry_run),
+			Command::Stack {
+				config,
+				action: stack::StackCli::Rollback { to },
+			} => super::stack_rollback::run_as_root(&config, to.as_deref()),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {

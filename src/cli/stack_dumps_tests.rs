@@ -4,7 +4,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime};
 
-use super::{KEEP, keep};
+use super::{KEEP, keep, newest};
 
 fn at(secs: u64) -> SystemTime {
 	SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -68,4 +68,7 @@ fn only_the_newest_pre_dumps_are_kept() {
 		!left.iter().any(|name| name.starts_with("pre-db-")),
 		"{left:?}"
 	);
+	let newest_dump = newest(dir.path(), "pre-0.12.1-").expect("the newest pre-0.12.1 dump");
+	assert!(newest_dump.to_string_lossy().contains("pre-0.12.1-"));
+	assert!(newest(dir.path(), "pre-9").is_none());
 }

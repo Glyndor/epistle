@@ -80,6 +80,11 @@ fn stamp(now: SystemTime) -> String {
 	)
 }
 
+/// The newest dump whose name starts with `prefix`, if any.
+pub(super) fn newest(data_dir: &Path, prefix: &str) -> Option<PathBuf> {
+	listed(&dir(data_dir), prefix).ok()?.pop()
+}
+
 #[cfg(test)]
 #[path = "stack_dumps_tests.rs"]
 mod tests;

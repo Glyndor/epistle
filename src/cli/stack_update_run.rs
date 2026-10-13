@@ -19,6 +19,11 @@ pub(super) trait UpdateHost {
 	fn write_compose(&mut self, text: &str) -> Result<(), String>;
 	/// Run one podup step.
 	fn podup(&mut self, step: &[String]) -> Result<(), String>;
+	/// Wait until `service` reports healthy.
+	fn wait_healthy(&mut self, service: &str) -> Result<(), String>;
+	/// The `status` areas a restart can break that now fail, with their
+	/// detail.
+	fn failing_areas(&mut self) -> Vec<(String, String)>;
 	/// Report a line to the operator.
 	fn log(&mut self, line: &str);
 }
@@ -55,8 +60,26 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 	for step in &plan.steps {
 		host.podup(&step.0)?;
 	}
+	host.wait_healthy("mail")
+		.map_err(|error| format!("{error}. {ROLLBACK}"))?;
+	let failing = host.failing_areas();
+	if !failing.is_empty() {
+		let named: Vec<String> = failing
+			.iter()
+			.map(|(area, detail)| format!("{area}: {detail}"))
+			.collect();
+		return Err(format!(
+			"mail restarted but status fails ({}). {ROLLBACK}",
+			named.join("; ")
+		));
+	}
+	host.log("mail is healthy and config, ports and db pass");
 	Ok(())
 }
+
+/// What a failed restart tells the operator to run.
+const ROLLBACK: &str = "To go back to the previous version and, if the schema moved, the \
+	database from before the update, run `sudo epistle stack rollback`";
 
 #[cfg(test)]
 #[path = "stack_update_run_tests.rs"]

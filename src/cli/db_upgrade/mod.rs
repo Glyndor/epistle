@@ -10,6 +10,8 @@ use crate::config::Config;
 mod flow;
 mod host;
 
+pub(super) use host::query;
+
 /// The `epistle db` actions.
 #[derive(Debug, Subcommand)]
 pub enum DbCli {

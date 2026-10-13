@@ -592,7 +592,8 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Data and volumes are kept. |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. |
+| `sudo epistle stack rollback [--to VERSION]` | Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/glyndor/epistle/rollback`) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
@@ -617,6 +618,26 @@ Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks
 disabled with `stack down` stay disabled until `stack up`.
+
+### Rolling back an upgrade
+
+`sudo epistle stack rollback` stops `mail`, compares the migrations in the
+database with those in the newest `pre-<this version>-*.sql.gz` dump, and
+restores the dump only when the schema moved past it. It then copies the
+kept binary over `/usr/bin/epistle` with one rename and starts `mail` on it.
+If there is no dump from before this version, or the restore fails, nothing
+is rolled back and `mail` starts again on the current binary.
+
+Limits:
+
+- dpkg still lists the newer version as installed, so the next `apt
+  upgrade` replaces the binary again. Hold the package with `sudo apt-mark
+  hold epistle` until a fixed release, or install the older package with apt
+  when the archive still has it.
+- Whatever the database took after the dump (new accounts, flags, queue
+  state) is gone once the dump is restored. Message files on disk are kept.
+- Only the binary and the database go back; the compose file stays as
+  `stack update` rendered it.
 
 ### Moving PostgreSQL to a new major
 

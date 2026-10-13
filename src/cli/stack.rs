@@ -81,6 +81,20 @@ pub enum StackCli {
 		#[arg(value_name = "SERVICE")]
 		service: Option<String>,
 	},
+	/// Go back to the binary the last upgrade replaced; run as root.
+	///
+	/// When the new release already migrated the schema, the database dump
+	/// `stack update` took before the restart is restored too. dpkg still
+	/// records the newer version; see docs/cli.md for the limits.
+	Rollback {
+		/// The kept version to go back to; the newest one below this release
+		/// by default.
+		#[arg(long, value_name = "VERSION")]
+		to: Option<String>,
+	},
+	/// The database half of `rollback`, run as the service account.
+	#[command(hide = true)]
+	RollbackDb,
 }
 
 impl From<StackCli> for StackAction {
@@ -100,6 +114,8 @@ impl From<StackCli> for StackAction {
 				verb: "start",
 				service,
 			},
+			StackCli::Rollback { .. } => StackAction::Rollback,
+			StackCli::RollbackDb => StackAction::RollbackDb,
 		}
 	}
 }
@@ -147,6 +163,11 @@ pub(super) enum StackAction {
 		/// Optional service name; passed as a positional.
 		service: Option<String>,
 	},
+	/// Dispatched as root before the stack is reached; here only to keep
+	/// the conversion total.
+	Rollback,
+	/// Stop mail and restore the pre-update dump if the schema moved.
+	RollbackDb,
 	/// `podup -f <compose> up -d <service>`, recreate one service from
 	/// the current compose file. A restart keeps the container as it was
 	/// created, so a change to its published ports needs this.
@@ -186,6 +207,11 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 	};
 	match action {
 		StackAction::Update => super::stack_update::run(config, &compose, podup),
+		StackAction::Rollback => {
+			super::style::error("run it as root: sudo epistle stack rollback");
+			ExitCode::FAILURE
+		}
+		StackAction::RollbackDb => super::stack_rollback::restore_db(config, &compose, podup),
 		StackAction::Up => {
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
 		}

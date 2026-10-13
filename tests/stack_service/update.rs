@@ -1,5 +1,31 @@
 use super::helpers::*;
 
+/// A podup shim that logs each call on one line and answers `ps` with a
+/// healthy mail service, so the update's health wait passes at once.
+fn healthy_shim(log: &std::path::Path) -> String {
+	format!(
+		"#!/bin/sh\n\
+		 printf '%s\\n' \"$*\" >> {log}\n\
+		 case \"$*\" in\n\
+		 \t--version) printf '\\npodup version v5.10.13\\n\\n' ;;\n\
+		 \t*' ps '*) printf '%s' '[{{\"Service\":\"mail\",\"State\":\"running\",\"Health\":\"healthy\",\"ExitCode\":0,\"Image\":\"x\"}}]' ;;\n\
+		 esac\n\
+		 exit 0\n",
+		log = log.display()
+	)
+}
+
+/// The logged podup calls that change the stack: every call but the
+/// `ps` polls of the health wait.
+fn changes(log: &std::path::Path) -> Vec<String> {
+	std::fs::read_to_string(log)
+		.unwrap()
+		.lines()
+		.filter(|line| !line.contains(" ps "))
+		.map(str::to_string)
+		.collect()
+}
+
 #[test]
 fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() {
 	// The default compose file (host binary bind-mounted on the
@@ -10,7 +36,7 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	let dir = tempfile::tempdir().unwrap();
 	let shim = dir.path().join("bin");
 	let log = dir.path().join("argv.log");
-	install_podup_shim(&shim, &recorder_shim(&log));
+	install_podup_shim(&shim, &healthy_shim(&log));
 	let data = data_dir_with_compose(dir.path());
 	let compose = data.join("compose/compose.yaml");
 	let cfg = write_config(&data);
@@ -25,15 +51,12 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	let override_path = compose.with_file_name("compose.override.yaml");
 	let override_text = "services:\n  mail:\n    mem_limit: 1g\n";
 	std::fs::write(&override_path, override_text).unwrap();
-	let podup_argv = |extra: &[&str]| {
-		let mut v = vec![
-			"-f".to_string(),
-			compose.to_str().unwrap().to_string(),
-			"-f".to_string(),
-			override_path.to_str().unwrap().to_string(),
-		];
-		v.extend(extra.iter().map(|part| part.to_string()));
-		v
+	let call = |extra: &str| {
+		format!(
+			"-f {} -f {} {extra}",
+			compose.display(),
+			override_path.display()
+		)
 	};
 	let update = || {
 		std::fs::write(&log, "").unwrap();
@@ -49,11 +72,9 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 		"{}",
 		String::from_utf8_lossy(&out.stderr)
 	);
-	let mut expected = vec!["--version".to_string()];
-	expected.extend(podup_argv(&["up", "-d"]));
 	assert_eq!(
-		read_argv_log(&log),
-		expected,
+		changes(&log),
+		["--version".to_string(), call("up -d")],
 		"the rewritten file is brought up"
 	);
 	let stderr = String::from_utf8_lossy(&out.stderr);
@@ -72,12 +93,9 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	);
 	let again = update();
 	assert_eq!(again.status.code(), Some(0));
-	let mut expected = vec!["--version".to_string()];
-	expected.extend(podup_argv(&["up", "-d"]));
-	expected.extend(podup_argv(&["restart", "mail"]));
 	assert_eq!(
-		read_argv_log(&log),
-		expected,
+		changes(&log),
+		["--version".to_string(), call("up -d"), call("restart mail")],
 		"a current file leaves mail's definition alone, so mail is restarted for the new binary"
 	);
 }
@@ -90,17 +108,19 @@ fn update_pulls_then_recreates_for_a_custom_image_compose() {
 	let dir = tempfile::tempdir().unwrap();
 	let shim = dir.path().join("bin");
 	let log = dir.path().join("argv.log");
-	install_podup_shim(&shim, &recorder_shim(&log));
+	install_podup_shim(&shim, &healthy_shim(&log));
 	let data = data_dir_with_compose(dir.path());
 	let compose = data.join("compose/compose.yaml");
+	let cfg = write_config(&data);
 	std::fs::write(
 		&compose,
-		r#"{"x-epistle-managed-image":false,"services":{"mail":{"image":"ghcr.io/example/mail:0.9.1","command":["serve","--config","/etc/epistle/mail.toml"],"volumes":["data:/data"]}},"volumes":{"data":{}}}"#,
+		format!(
+			r#"{{"x-epistle-managed-image":false,"services":{{"mail":{{"image":"ghcr.io/example/mail:0.9.1","command":["serve","--config",{cfg:?}],"volumes":["data:/data"]}}}},"volumes":{{"data":{{}}}}}}"#
+		),
 	)
 	.unwrap();
 	let override_path = compose.with_file_name("compose.override.yaml");
 	std::fs::write(&override_path, "services:\n  mail:\n    mem_limit: 1g\n").unwrap();
-	let cfg = write_config(&data);
 	let out = run_with_podup(
 		&["stack", "--config", cfg.to_str().unwrap(), "update"],
 		&shim,
@@ -110,25 +130,16 @@ fn update_pulls_then_recreates_for_a_custom_image_compose() {
 		Some(0),
 		"stack update must be accepted and complete"
 	);
-	let expected = {
-		let mut v = vec!["--version".to_string()];
-		for extra in [
-			vec!["pull".to_string()],
-			vec!["up".to_string(), "-d".to_string()],
-		] {
-			v.extend([
-				"-f".to_string(),
-				compose.to_str().unwrap().to_string(),
-				"-f".to_string(),
-				override_path.to_str().unwrap().to_string(),
-			]);
-			v.extend(extra);
-		}
-		v
+	let call = |extra: &str| {
+		format!(
+			"-f {} -f {} {extra}",
+			compose.display(),
+			override_path.display()
+		)
 	};
 	assert_eq!(
-		read_argv_log(&log),
-		expected,
+		changes(&log),
+		["--version".to_string(), call("pull"), call("up -d")],
 		"custom image mode must pull then up -d"
 	);
 	// Custom mode does not rewrite the operator's image.

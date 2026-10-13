@@ -51,6 +51,37 @@ impl Podup {
 	}
 }
 
+/// Run one SQL statement in the stack's `db` container and return its
+/// unaligned, tuples-only output. `sql` must not contain a single quote: it
+/// is single-quoted whole inside the shell script.
+pub(in crate::cli) fn query(compose: &std::path::Path, sql: &str) -> Result<String, String> {
+	if sql.contains('\'') {
+		return Err("the query contains a single quote".to_string());
+	}
+	let script = format!(
+		"PGPASSWORD=\"$(cat '{}')\" exec psql -Atq -h /var/run/postgresql -U '{}' -d '{}' -c '{sql}'",
+		crate::cli::init::DATABASE_PASSWORD_FILE,
+		crate::cli::init::DATABASE_USER,
+		crate::cli::init::DATABASE_NAME,
+	);
+	let output = super::super::stack::build_command(
+		"podup",
+		compose,
+		&["exec", "-T", "db", "sh", "-c", &script],
+	)
+	.stdin(Stdio::null())
+	.output()
+	.map_err(|error| format!("cannot run podup exec: {error}"))?;
+	if !output.status.success() {
+		return Err(format!(
+			"the query in db failed ({}): {}",
+			output.status,
+			String::from_utf8_lossy(&output.stderr).trim()
+		));
+	}
+	Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 impl Stack for Podup {
 	fn compose(&mut self) -> Result<String, String> {
 		std::fs::read_to_string(&self.compose)
@@ -80,25 +111,7 @@ impl Stack for Podup {
 	}
 
 	fn counts(&mut self) -> Result<String, String> {
-		let script = format!(
-			"PGPASSWORD=\"$(cat '{}')\" exec psql -Atq -h /var/run/postgresql -U '{}' -d '{}' -c '{COUNTS}'",
-			crate::cli::init::DATABASE_PASSWORD_FILE,
-			crate::cli::init::DATABASE_USER,
-			crate::cli::init::DATABASE_NAME,
-		);
-		let output = self
-			.command(&["exec", "-T", "db", "sh", "-c", &script])
-			.stdin(Stdio::null())
-			.output()
-			.map_err(|error| format!("cannot run podup exec: {error}"))?;
-		if !output.status.success() {
-			return Err(format!(
-				"counting rows failed ({}): {}",
-				output.status,
-				String::from_utf8_lossy(&output.stderr).trim()
-			));
-		}
-		Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+		query(&self.compose, COUNTS)
 	}
 
 	fn dump(&mut self) -> Result<Vec<u8>, String> {

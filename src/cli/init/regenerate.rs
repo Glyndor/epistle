@@ -26,6 +26,8 @@ pub(crate) struct Regenerated {
 	pub(crate) text: String,
 	/// What the operator should know about how it was derived.
 	pub(crate) notes: Vec<String>,
+	/// The config path the `mail` service serves.
+	pub(crate) config_path: PathBuf,
 }
 
 /// Re-render `existing` for an install whose config has `data_dir` and
@@ -104,7 +106,11 @@ pub(crate) fn regenerate(
 		 from the listeners in {}",
 		answers.config_path.display()
 	));
-	Ok(Regenerated { text, notes })
+	Ok(Regenerated {
+		text,
+		notes,
+		config_path: answers.config_path,
+	})
 }
 
 /// The config path `mail` serves: the argument after `--config` in its

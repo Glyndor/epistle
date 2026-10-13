@@ -1,0 +1,162 @@
+//! The two halves of `epistle stack rollback`: root swaps the binary, the
+//! service account restores the database.
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use super::{KEPT, migrations_in_dump, pick, schema_moved};
+use crate::config::Config;
+
+/// The installed binary the rollback replaces.
+const INSTALLED: &str = "/usr/bin/epistle";
+
+/// `sudo epistle stack rollback [--to VERSION]`.
+pub(in crate::cli) fn run_as_root(config_path: &Path, to: Option<&str>) -> ExitCode {
+	match as_root(config_path, to) {
+		Ok(summary) => {
+			eprintln!("epistle: {summary}");
+			ExitCode::SUCCESS
+		}
+		Err(error) => {
+			crate::cli::style::error(format_args!("stack rollback failed: {error}"));
+			ExitCode::FAILURE
+		}
+	}
+}
+
+fn as_root(config_path: &Path, to: Option<&str>) -> Result<String, String> {
+	// SAFETY: geteuid takes no arguments and cannot fail.
+	if unsafe { libc::geteuid() } != 0 {
+		return Err(
+			"it replaces /usr/bin/epistle, so run it as root: sudo epistle stack rollback".into(),
+		);
+	}
+	let config = Config::load(config_path).map_err(|error| error.to_string())?;
+	let compose = crate::cli::stack::compose_path(&config.data_dir);
+	let user = crate::cli::rootless::lookup_user()
+		.map_err(|error| format!("cannot look up glyndor-epistle: {error}"))?
+		.ok_or("there is no glyndor-epistle account")?;
+	let files: Vec<String> = std::fs::read_dir(KEPT)
+		.map(|entries| {
+			entries
+				.filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+				.collect()
+		})
+		.unwrap_or_default();
+	let current = env!("CARGO_PKG_VERSION");
+	let chosen = pick(&files, current, to)?;
+	let version = chosen.trim_start_matches("epistle-").to_string();
+	eprintln!("epistle: rolling back from {current} to {version}");
+	let exe =
+		std::env::current_exe().map_err(|error| format!("cannot find this binary: {error}"))?;
+	let database = crate::cli::rootless::account_command(&user, &exe)
+		.arg("stack")
+		.arg("--config")
+		.arg(config_path)
+		.arg("rollback-db")
+		.status();
+	if !database.is_ok_and(|status| status.success()) {
+		let _ = start_mail(&user, &compose);
+		return Err(format!(
+			"the database step failed (see above); {INSTALLED} was not changed and mail was started again on {current}"
+		));
+	}
+	if let Err(error) = install(&Path::new(KEPT).join(&chosen)) {
+		let _ = start_mail(&user, &compose);
+		return Err(format!(
+			"cannot put the {version} binary in place ({error}); mail was started again on {current}, \
+			 and if the database was restored, run `sudo epistle stack rollback` again"
+		));
+	}
+	start_mail(&user, &compose)?;
+	Ok(format!(
+		"{INSTALLED} is the {version} binary again and mail was started on it; check it with \
+		 `sudo epistle status`. dpkg still lists {current} as installed, so the next apt upgrade \
+		 replaces the binary again: hold the package with `sudo apt-mark hold epistle` until a \
+		 fixed release, and any mail the database took after the dump was taken is gone from \
+		 the database (the message files stay on disk)"
+	))
+}
+
+/// Copy `kept` over the installed binary through a temporary file in the
+/// same directory, so the swap is one rename.
+fn install(kept: &Path) -> std::io::Result<()> {
+	use std::os::unix::fs::PermissionsExt;
+	let staged = PathBuf::from(format!("{INSTALLED}.rollback-{}", std::process::id()));
+	std::fs::copy(kept, &staged)?;
+	std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+	std::fs::rename(&staged, INSTALLED).inspect_err(|_| {
+		let _ = std::fs::remove_file(&staged);
+	})
+}
+
+/// `podup start mail` as the account, with the operator's override.
+fn start_mail(user: &crate::cli::rootless::ServiceUser, compose: &Path) -> Result<(), String> {
+	let podup = crate::cli::stack::build_command("podup", compose, &["start", "mail"]);
+	let status = crate::cli::rootless::account_command(user, "podup")
+		.args(podup.get_args())
+		.status()
+		.map_err(|error| format!("cannot start mail: {error}"))?;
+	if status.success() {
+		Ok(())
+	} else {
+		Err(format!("`podup start mail` exited with {status}"))
+	}
+}
+
+/// `stack rollback-db`, as the service account: stop mail and, when the
+/// schema moved past the dump `stack update` took, restore that dump.
+pub(in crate::cli) fn restore_db(config: &Config, compose: &Path, podup: &str) -> ExitCode {
+	match restore(config, compose, podup) {
+		Ok(line) => {
+			eprintln!("epistle: {line}");
+			ExitCode::SUCCESS
+		}
+		Err(error) => {
+			crate::cli::style::error(error);
+			ExitCode::FAILURE
+		}
+	}
+}
+
+fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, String> {
+	if crate::cli::stack::run_sequence(podup, compose, &[&["stop", "mail"]]) != ExitCode::SUCCESS {
+		return Err("cannot stop mail".into());
+	}
+	let has_db = std::fs::read(compose)
+		.ok()
+		.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+		.is_some_and(|value| value["services"].get("db").is_some());
+	let Some(database) = config.database.as_ref().filter(|_| has_db) else {
+		return Ok("the stack has no database of its own; nothing to restore".into());
+	};
+	let version = env!("CARGO_PKG_VERSION");
+	let dump = crate::cli::stack_dumps::newest(&config.data_dir, &format!("pre-{version}-"))
+		.ok_or_else(|| {
+			format!(
+				"there is no dump from before {version} under {}; an older binary may not read \
+				 this schema, so nothing was rolled back",
+				crate::cli::stack_dumps::dir(&config.data_dir).display()
+			)
+		})?;
+	let mut sql = String::new();
+	std::fs::File::open(&dump)
+		.map(flate2::read::GzDecoder::new)
+		.and_then(|mut decoder| decoder.read_to_string(&mut sql))
+		.map_err(|error| format!("cannot read {}: {error}", dump.display()))?;
+	let current: std::collections::BTreeSet<i64> =
+		crate::cli::db_upgrade::query(compose, "SELECT version FROM _sqlx_migrations ORDER BY 1")?
+			.lines()
+			.filter_map(|line| line.trim().parse().ok())
+			.collect();
+	if !schema_moved(&migrations_in_dump(&sql), &current) {
+		return Ok(format!(
+			"the schema has not moved past {}; the database is kept as it is",
+			dump.display()
+		));
+	}
+	crate::cli::backup::load_dump(database, &config.data_dir, sql.as_bytes())
+		.map_err(|error| format!("restoring {} failed: {error}", dump.display()))?;
+	Ok(format!("the database is back to {}", dump.display()))
+}

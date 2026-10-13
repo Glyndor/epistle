@@ -39,6 +39,8 @@ pub(super) struct UpdatePlan {
 	pub(super) notes: Vec<String>,
 	/// The podup steps, in order.
 	pub(super) steps: Vec<Step>,
+	/// The config path the `mail` service serves, which `status` reads.
+	pub(super) config_path: std::path::PathBuf,
 }
 
 /// Read the compose file at `compose`, render it again for an install
@@ -75,6 +77,7 @@ pub(super) fn plan_update(
 		rewrite: changed.then_some(regenerated.text),
 		notes: regenerated.notes,
 		steps,
+		config_path: regenerated.config_path,
 	})
 }
 
@@ -125,6 +128,7 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 		compose,
 		podup,
 		database: plan_has_database(compose),
+		config_path: &plan.config_path,
 	};
 	match execute::execute(&mut host, &plan) {
 		Ok(()) => ExitCode::SUCCESS,
@@ -134,6 +138,20 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 		}
 	}
 }
+
+/// How long `mail` may take to report healthy after the restart: its
+/// healthcheck starts after 30 s and runs every 30 s, so this leaves room
+/// for several failed probes before the update is called failed.
+const HEALTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The `status` areas a restart can break. DNS, TLS, the queue and the
+/// antivirus depend on the world outside the restart (a recreated clamav
+/// spends minutes downloading signatures), so they do not judge it.
+const RESTART_AREAS: [super::status::CheckArea; 3] = [
+	super::status::CheckArea::Config,
+	super::status::CheckArea::Ports,
+	super::status::CheckArea::Db,
+];
 
 /// Whether the compose file on disk has a `db` service.
 fn plan_has_database(compose: &Path) -> bool {
@@ -149,6 +167,7 @@ struct Live<'a> {
 	compose: &'a Path,
 	podup: &'a str,
 	database: bool,
+	config_path: &'a Path,
 }
 
 impl execute::UpdateHost for Live<'_> {
@@ -188,6 +207,15 @@ impl execute::UpdateHost for Live<'_> {
 			code if code == ExitCode::SUCCESS => Ok(()),
 			_ => Err(format!("`podup {}` failed", args.join(" "))),
 		}
+	}
+
+	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
+		super::stack_health::wait_healthy(self.podup, self.compose, service, HEALTH_TIMEOUT)
+	}
+
+	fn failing_areas(&mut self) -> Vec<(String, String)> {
+		super::status::failing(self.config_path, &RESTART_AREAS)
+			.unwrap_or_else(|error| vec![("status".to_string(), error)])
 	}
 
 	fn log(&mut self, line: &str) {
