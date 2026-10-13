@@ -44,7 +44,9 @@ jobs:
           # remediation commit in the same range whose message carries
           # "I, <name> <email>, hereby add my Signed-off-by to this
           # commit: <full sha>", the form the DCO bot accepts. Only the
-          # commit's own author can remediate it, matched by email.
+          # commit's own author can remediate it, matched by email. The
+          # message is read as one line because a squash merge copies the PR
+          # body, and a wrapped body splits the sentence in two.
           remediated=""
           for sha in $(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}"); do
             own="$(git show -s --format='%ae' "$sha" | tr '[:upper:]' '[:lower:]')"
@@ -54,7 +56,8 @@ jobs:
               if [ -n "$target" ] && [ "$claimed" = "$own" ]; then
                 remediated="${remediated}${own} ${target}"$'\n'
               fi
-            done < <(git show -s --format='%B' "$sha" | grep -E '^I, .+ <[^>]+>, hereby add my Signed-off-by to this commit: [0-9a-f]{40}$' || true)
+            done < <(git show -s --format='%B' "$sha" | tr '\n' ' ' | tr -s ' ' \
+              | grep -oE 'I, [^<,]+ <[^>]+>, hereby add my Signed-off-by to this commit: [0-9a-f]{40}' || true)
           done
           missing=0
           for sha in $(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}"); do
