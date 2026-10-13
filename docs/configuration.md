@@ -551,6 +551,7 @@ OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 | `public_key` | The IdP's public key. |
 | `discovery_url` | OIDC discovery URL (alternative to `public_key`). |
 | `signing_key` | Base64 PKCS#8 ES256 private key; turns the server into its own OAuth 2.0 authorization server. |
+| `signing_key_file` | A file holding the same key, read at startup; instead of `signing_key`. `epistle init` keeps one at `secrets/oauth_signing.key` beside data_dir, mounted read-only into `mail`. A file that cannot be read stops the server. |
 | `allow_private_jwks` | Permit the discovery document's `jwks_uri` to resolve to a loopback, private (RFC 1918 / RFC 4193), link-local or unspecified address. Default `false`. The check exists because the `jwks_uri` is chosen by the IdP, not the operator, and a hostile or compromised IdP could pivot it at a cloud-metadata service (`169.254.169.254`) or an internal host. Set this only when the IdP genuinely lives on a private network and the trust relationship justifies it. |
 
 ### `[webhook]`

@@ -326,6 +326,7 @@ pub fn run<R: BufRead>(
 		image,
 		acme: None,
 		first_account,
+		resources: Default::default(),
 	};
 	match answers.validate() {
 		Ok(_) => Ok(Filled {

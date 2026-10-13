@@ -347,10 +347,9 @@ fn apply_refuses_when_surviving_oauth_private_key_is_unreadable() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
-	let keys_dir = data_dir.join("keys");
 	let first = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(first.error.is_none(), "first run: {:?}", first.error);
-	let oauth_private = keys_dir.join("oauth_signing.key");
+	let oauth_private = crate::cli::init::host_secrets::oauth_signing_key(&data_dir);
 	let _ = std::fs::remove_file(&oauth_private);
 	std::fs::create_dir(&oauth_private).expect("mkdir at oauth_private");
 	let second = apply(&answers_minimal(&data_dir, &config_path));

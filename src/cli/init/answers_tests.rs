@@ -30,5 +30,6 @@ pub(super) fn minimal(mode: Mode) -> Answers {
 		image: None,
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	}
 }

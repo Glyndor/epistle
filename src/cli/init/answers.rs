@@ -183,6 +183,10 @@ pub struct Answers {
 	/// `init` creates no mailbox.
 	#[serde(default)]
 	pub first_account: Option<FirstAccount>,
+	/// Memory and process limits that replace the defaults of a service,
+	/// keyed by service name (`mail`, `db`, `clamav`, `freshclam`).
+	#[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+	pub resources: std::collections::BTreeMap<String, super::resources::ServiceResources>,
 }
 
 /// A non-fatal problem the operator should see before the file is
@@ -321,12 +325,16 @@ pub enum Invalid {
 	/// `[first_account]` names an address, an account or a display
 	/// name that cannot be created. Carries the reason.
 	FirstAccount(String),
+	/// A `[resources.<service>]` table names no service of the stack, or
+	/// one of its values is not a limit podup can apply.
+	Resources { field: String, reason: String },
 }
 
 impl std::fmt::Display for Invalid {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Invalid::Hostname(why) => write!(f, "hostname: {why}"),
+			Invalid::Resources { field, reason } => write!(f, "{field}: {reason}"),
 			Invalid::DomainsEmpty => f.write_str("domains: must contain at least one domain"),
 			Invalid::Domain { value, reason } => write!(f, "domains: {value:?}: {reason}"),
 			Invalid::DomainsDuplicate { a, b } => {
@@ -464,7 +472,8 @@ impl Answers {
 		 # public_ipv6 = \"2001:db8::10\"    # global unicast, or \"none\"; left out, detected\n\
 		 data_dir = \"/var/lib/glyndor/epistle/data\"\n\
 		 config_path = \"/etc/epistle/mail.toml\"\n\
-		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\n\
+		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\
+		 # resources.clamav = { memory = \"4g\", pids = 256 }  # optional, also mail, db, freshclam; defaults: mail 1g/1024, db 1g/256, clamav 3g/128, freshclam 2g/32\n\n\
 		 # [dns]                             # only with mode = \"automatic\"\n\
 		 # provider = \"cloudflare\"          # cloudflare, route53, dnsimple, ...\n\
 		 # zone = \"example.org\"\n\
@@ -570,6 +579,10 @@ mod tests_paths_overlap;
 #[cfg(test)]
 #[path = "answers_tests_services.rs"]
 mod tests_services;
+
+#[cfg(test)]
+#[path = "answers_tests_resources.rs"]
+mod tests_resources;
 
 #[path = "answers_validate.rs"]
 mod answers_validate;

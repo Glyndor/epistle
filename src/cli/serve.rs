@@ -331,7 +331,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						.with_bayes_store(store.clone());
 				}
 				// Built-in OAuth authorization server, when a signing key is set.
-				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
+				if let Some(authz) = super::serve_tasks::build_authz_server(&config)? {
 					state = state.with_authz(authz);
 				}
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;

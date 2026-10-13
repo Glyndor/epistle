@@ -32,7 +32,7 @@ fn mandatory_clamav_stack_and_socket_config() {
 	let fresh = &value["services"]["freshclam"];
 	assert_eq!(fresh["image"], super::super::images::clamav());
 	assert_eq!(fresh["network_mode"], "pasta");
-	assert_eq!(fresh["environment"]["CLAMAV_NO_CLAMD"], "true");
+	assert_eq!(fresh["entrypoint"][2], "freshclam");
 	assert!(fresh.get("ports").is_none());
 	for service in [clamd, fresh] {
 		assert!(

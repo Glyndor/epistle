@@ -43,7 +43,7 @@ fn db_secrets_uses_long_syntax_with_uid_999_and_octal_mode() {
 	let secrets = value["services"]["db"]["secrets"]
 		.as_array()
 		.expect("secrets is an array");
-	assert_eq!(secrets.len(), 1);
+	assert_eq!(secrets.len(), 2, "epistle's password and the admin's");
 	let mount = &secrets[0];
 	assert_eq!(mount["source"], "epistle_db_password");
 	assert_eq!(mount["target"], "epistle_db_password");
@@ -110,13 +110,15 @@ fn database_off_has_no_db_no_secrets_no_volumes() {
 		value["services"].get("db").is_none(),
 		"with database off there must be no `db` service"
 	);
+	let secrets: Vec<&String> = value["secrets"]
+		.as_object()
+		.expect("secrets is an object")
+		.keys()
+		.collect();
 	assert_eq!(
-		value["secrets"]
-			.as_object()
-			.expect("secrets is an object")
-			.len(),
-		0,
-		"with database off the top-level secrets block must be empty"
+		secrets,
+		["epistle_oauth_signing_key", "epistle_storage_key"],
+		"with database off only the keys mail reads remain"
 	);
 	assert!(value["volumes"].get("epistle-pgdata").is_none());
 	assert!(value["volumes"].get("epistle-pgsock").is_none());

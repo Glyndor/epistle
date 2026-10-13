@@ -30,6 +30,7 @@ fn answers_with_image(image: Option<&str>) -> Answers {
 			database: false,
 		},
 		image: image.map(str::to_string),
+		resources: Default::default(),
 	};
 	answers.normalise();
 	answers

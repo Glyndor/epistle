@@ -46,6 +46,7 @@ pub(super) fn apply_error_name(error: &ApplyError) -> &'static str {
 		ApplyError::ExistingSecretUnreadable(..) => "ExistingSecretUnreadable",
 		ApplyError::DatabaseVolume(_) => "DatabaseVolume",
 		ApplyError::FirstAccount(_) => "FirstAccount",
+		ApplyError::KeyMove(_) => "KeyMove",
 		ApplyError::HostBinaryInvalid(_) => "HostBinaryInvalid",
 	}
 }
@@ -64,6 +65,7 @@ pub(super) fn answers_minimal(data_dir: &Path, config_path: &Path) -> Answers {
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
 		first_account: None,
+		resources: Default::default(),
 	}
 }
 
@@ -186,14 +188,16 @@ fn apply_fails_when_config_path_parent_is_a_regular_file() {
 		rendered.contains("created dir:") && rendered.contains(&data_dir.display().to_string()),
 		"data_dir creation missing from rendered report: {rendered}"
 	);
-	for name in [
-		"s1.pem",
-		"storage.key",
-		"oauth_signing.key",
-		"oauth_public.key",
-		"cert.pem",
-		"key.pem",
+	for path in [
+		crate::cli::init::host_secrets::storage_key(&data_dir),
+		crate::cli::init::host_secrets::oauth_signing_key(&data_dir),
 	] {
+		assert!(
+			path.exists(),
+			"expected key file on disk before the failure: {path:?}"
+		);
+	}
+	for name in ["s1.pem", "oauth_public.key", "cert.pem", "key.pem"] {
 		let path = keys_dir.join(name);
 		assert!(
 			path.exists(),
@@ -222,7 +226,8 @@ fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes()
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
 	let keys_dir = data_dir.join("keys");
-	std::fs::create_dir_all(keys_dir.join("storage.key")).expect("blocker dir");
+	std::fs::create_dir_all(crate::cli::init::host_secrets::storage_key(&data_dir))
+		.expect("blocker dir");
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	let err = outcome
 		.error
@@ -256,7 +261,7 @@ fn apply_fails_when_a_later_key_write_is_obstructed_and_retains_earlier_writes()
 		"s2.pem must be on disk from the earlier successful write"
 	);
 	assert!(
-		!keys_dir.join("storage.key").is_file(),
+		!crate::cli::init::host_secrets::storage_key(&data_dir).is_file(),
 		"storage.key must NOT be on disk as a key because the write failed"
 	);
 }
@@ -272,7 +277,7 @@ fn apply_does_not_leave_a_staging_temp_after_a_failed_write() {
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("mail.toml");
 	let keys_dir = data_dir.join("keys");
-	let blocker = keys_dir.join("storage.key");
+	let blocker = crate::cli::init::host_secrets::storage_key(&data_dir);
 	std::fs::create_dir_all(&blocker).expect("blocker dir");
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(
@@ -304,7 +309,7 @@ fn apply_does_not_leave_a_staging_temp_after_a_failed_write() {
 		outcome2.error.as_ref().map(apply_error_name)
 	);
 	assert!(
-		keys_dir.join("storage.key").is_file(),
+		crate::cli::init::host_secrets::storage_key(&data_dir).is_file(),
 		"storage.key must be written on retry"
 	);
 }
@@ -324,13 +329,15 @@ fn apply_derives_missing_oauth_public_from_existing_private() {
 	std::fs::create_dir_all(&keys_dir).expect("keys dir");
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(outcome.error.is_none(), "first run: {:?}", outcome.error);
-	let private = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
+	let private = std::fs::read(crate::cli::init::host_secrets::oauth_signing_key(&data_dir))
+		.expect("read private");
 	let public = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
 	let private_first = private.clone();
 	std::fs::remove_file(keys_dir.join("oauth_public.key")).expect("rm public");
 	let outcome2 = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(outcome2.error.is_none(), "second run: {:?}", outcome2.error);
-	let private_after = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
+	let private_after = std::fs::read(crate::cli::init::host_secrets::oauth_signing_key(&data_dir))
+		.expect("read private");
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
 	// Comparing PKCS#8 / SPKI byte arrays with `assert_eq!` would
 	// Debug-print the full private key on mismatch, dumping it into
@@ -361,7 +368,8 @@ fn apply_refuses_when_only_oauth_public_survives() {
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(outcome.error.is_none(), "first run: {:?}", outcome.error);
 	let public_before = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
-	std::fs::remove_file(keys_dir.join("oauth_signing.key")).expect("rm private");
+	std::fs::remove_file(crate::cli::init::host_secrets::oauth_signing_key(&data_dir))
+		.expect("rm private");
 	let outcome2 = apply(&answers_minimal(&data_dir, &config_path));
 	let err = outcome2
 		.error
@@ -384,7 +392,7 @@ fn apply_refuses_when_only_oauth_public_survives() {
 	// assertion pins the same invariant without carrying the bytes.
 	assert!(public_before == public_after);
 	assert!(
-		!keys_dir.join("oauth_signing.key").exists(),
+		!crate::cli::init::host_secrets::oauth_signing_key(&data_dir).exists(),
 		"a fresh private key must NOT have been written when only the public survived"
 	);
 }
@@ -404,22 +412,28 @@ fn apply_refuses_when_oauth_pair_does_not_correspond() {
 	// the first private with the second public.
 	let outcome_a = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(outcome_a.error.is_none(), "run a: {:?}", outcome_a.error);
-	let private_a = std::fs::read(keys_dir.join("oauth_signing.key")).expect("a private");
-	let _ = std::fs::remove_file(keys_dir.join("oauth_signing.key"));
+	let private_a = std::fs::read(crate::cli::init::host_secrets::oauth_signing_key(&data_dir))
+		.expect("a private");
+	let _ = std::fs::remove_file(crate::cli::init::host_secrets::oauth_signing_key(&data_dir));
 	let _ = std::fs::remove_file(keys_dir.join("oauth_public.key"));
 	let outcome_b = apply(&answers_minimal(&data_dir, &config_path));
 	assert!(outcome_b.error.is_none(), "run b: {:?}", outcome_b.error);
 	let public_b = std::fs::read(keys_dir.join("oauth_public.key")).expect("b public");
 	// Build the mismatched pair: private_a + public_b.
-	let _ = std::fs::remove_file(keys_dir.join("oauth_signing.key"));
-	std::fs::write(keys_dir.join("oauth_signing.key"), &private_a).expect("write private_a");
+	let _ = std::fs::remove_file(crate::cli::init::host_secrets::oauth_signing_key(&data_dir));
+	std::fs::write(
+		crate::cli::init::host_secrets::oauth_signing_key(&data_dir),
+		&private_a,
+	)
+	.expect("write private_a");
 	let outcome = apply(&answers_minimal(&data_dir, &config_path));
 	let err = outcome.error.expect("apply must refuse a mismatched pair");
 	let ApplyError::OAuthPairMismatch = &err else {
 		panic!("expected OAuthPairMismatch, got {}", apply_error_name(&err));
 	};
 	let public_after = std::fs::read(keys_dir.join("oauth_public.key")).expect("read public");
-	let private_after = std::fs::read(keys_dir.join("oauth_signing.key")).expect("read private");
+	let private_after = std::fs::read(crate::cli::init::host_secrets::oauth_signing_key(&data_dir))
+		.expect("read private");
 	// Comparing the byte arrays with `assert_eq!` would Debug-print
 	// the full PKCS#8 / SPKI on mismatch, dumping the private key
 	// (or its modified form) into the CI log. A boolean assertion
