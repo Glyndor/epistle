@@ -84,8 +84,9 @@ elapsed time, ending in a ✔ or ✘ row with the total. A command missing its
 account, alias, domain or key label offers the existing ones to pick from.
 Each stream is decided on its own, and nothing of this happens when that stream
 is not a terminal (for the pick, stdin and stderr), when `NO_COLOR` is set, when
-`TERM=dumb`, or with `--json`: the output is then the plain one scripts read,
-byte for byte, and a missing argument is a usage error with exit code 2.
+`TERM=dumb`, when `CLICOLOR=0`, or with `--json`: the output is then the plain
+one scripts read, byte for byte, and a missing argument is a usage error with
+exit code 2. `CLICOLOR_FORCE` never turns any of this on in a pipe.
 
 Four commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
@@ -135,11 +136,14 @@ On `restore`, `--yes` only answers the question: overwriting a non-empty
 `backup`'s `warnings` sink (the externally-referenced paths that are not in the
 archive) is also stderr, by the same rule.
 
-The colour decision on stderr follows the standard precedence: `NO_COLOR`
-disables it, `CLICOLOR_FORCE=1` enables it regardless of whether stderr is a
-terminal, otherwise it follows whether stderr is a terminal and `TERM`.
-`clap`'s `--help` and `--version` on stdout follow the same precedence. To
-force a specific look in a script:
+Colour (the `error:` and `warning:` prefixes, and clap's usage errors) is
+decided once, in this order: `NO_COLOR` set and not empty turns it off;
+`CLICOLOR_FORCE` set and not `0` turns it on, even in a pipe; `CLICOLOR=0`
+turns it off; otherwise the stream must be a terminal and `TERM` not `dumb`.
+`CI` and similar variables play no part. clap gets the same answer as epistle,
+so a usage error and an `error:` line are always coloured alike; `--help` and
+`--version` apply it to stdout, where they print. To force a specific look in
+a script:
 
 ```sh
 # Coloured status, plain stdout data:

@@ -27,8 +27,31 @@ fn config(dir: &Path) -> String {
 	path.to_string_lossy().into_owned()
 }
 
-/// Run `args` with `env` set, stdout and stderr on one pseudo-terminal of
-/// 100 columns; returns what the terminal received, `\r\n` read as `\n`.
+/// Every variable that changes the colour decision of the binary or of the
+/// libraries it uses. Each case starts without any of them, so the result
+/// does not depend on the shell or the CI runner the test runs in.
+const COLOUR_ENV: [&str; 6] = [
+	"TERM",
+	"NO_COLOR",
+	"CLICOLOR",
+	"CLICOLOR_FORCE",
+	"CI",
+	"GITHUB_ACTIONS",
+];
+
+/// `command` with the colour variables cleared, then `env` set.
+fn hermetic(command: &mut Command, env: &[(&str, &str)]) {
+	for name in COLOUR_ENV {
+		command.env_remove(name);
+	}
+	for (key, value) in env {
+		command.env(key, value);
+	}
+}
+
+/// Run `args` with `env` set over `TERM=xterm-256color`, stdout and stderr
+/// on one pseudo-terminal of 100 columns; returns what the terminal
+/// received, `\r\n` read as `\n`.
 fn on_pty(args: &[&str], env: &[(&str, &str)]) -> String {
 	on_pty_with(args, env, false)
 }
@@ -56,11 +79,12 @@ fn on_pty_with(args: &[&str], env: &[(&str, &str)], stdin_tty: bool) -> String {
 	// SAFETY: openpty returned two fresh descriptors owned from here on.
 	let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
 	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
+	let env: Vec<(&str, &str)> = std::iter::once(("TERM", "xterm-256color"))
+		.chain(env.iter().copied())
+		.collect();
+	hermetic(&mut command, &env);
 	command
 		.args(args)
-		.env_remove("NO_COLOR")
-		.env_remove("CLICOLOR_FORCE")
-		.env("TERM", "xterm-256color")
 		.stdin(if stdin_tty {
 			Stdio::from(slave.try_clone().expect("dup"))
 		} else {
@@ -68,9 +92,6 @@ fn on_pty_with(args: &[&str], env: &[(&str, &str)], stdin_tty: bool) -> String {
 		})
 		.stdout(slave.try_clone().expect("dup"))
 		.stderr(slave);
-	for (key, value) in env {
-		command.env(key, value);
-	}
 	let mut child = command.spawn().expect("spawn epistle");
 	drop(command);
 	let mut screen = Vec::new();
@@ -87,12 +108,13 @@ fn on_pty_with(args: &[&str], env: &[(&str, &str)], stdin_tty: bool) -> String {
 	String::from_utf8_lossy(&screen).replace("\r\n", "\n")
 }
 
-/// The same command with stdout and stderr piped, as a script runs it.
-fn piped(args: &[&str]) -> String {
-	let output = Command::new(env!("CARGO_BIN_EXE_epistle"))
+/// The same command with stdout and stderr piped, as a script runs it,
+/// with only `env` set among the colour variables.
+fn piped(args: &[&str], env: &[(&str, &str)]) -> String {
+	let mut command = Command::new(env!("CARGO_BIN_EXE_epistle"));
+	hermetic(&mut command, env);
+	let output = command
 		.args(args)
-		.env_remove("NO_COLOR")
-		.env_remove("CLICOLOR_FORCE")
 		.stdin(Stdio::null())
 		.output()
 		.expect("run epistle");
@@ -115,12 +137,18 @@ fn no_color_dumb_and_json_give_the_terminal_the_plain_bytes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let list = ["alias", "--config", config.as_str(), "list"];
-	let plain = piped(&list);
+	let plain = piped(&list, &[]);
 	assert!(plain.starts_with("ADDRESS "), "{plain:?}");
 	assert_eq!(on_pty(&list, &[("NO_COLOR", "1")]), plain, "NO_COLOR");
 	assert_eq!(on_pty(&list, &[("TERM", "dumb")]), plain, "TERM=dumb");
+	assert_eq!(on_pty(&list, &[("CLICOLOR", "0")]), plain, "CLICOLOR=0");
+	assert_eq!(
+		piped(&list, &[("CLICOLOR_FORCE", "1")]),
+		plain,
+		"CLICOLOR_FORCE colours, it never draws a table into a pipe"
+	);
 	let json = ["alias", "--config", config.as_str(), "list", "--json"];
-	assert_eq!(on_pty(&json, &[]), piped(&json), "--json");
+	assert_eq!(on_pty(&json, &[]), piped(&json, &[]), "--json");
 }
 
 #[test]
@@ -129,7 +157,7 @@ fn no_color_keeps_the_spinner_and_the_hidden_cursor_away() {
 	let config = config(dir.path());
 	let verify = ["verify", "--config", config.as_str()];
 	let screen = on_pty(&verify, &[("NO_COLOR", "1")]);
-	assert_eq!(screen, piped(&verify));
+	assert_eq!(screen, piped(&verify, &[]));
 	assert!(!screen.contains('\x1b'), "{screen:?}");
 	let drawn = on_pty(&verify, &[]);
 	assert!(
@@ -149,11 +177,47 @@ fn a_missing_account_is_offered_on_a_terminal_and_not_with_no_color() {
 		offered.starts_with("there is no account to pick from\n"),
 		"{offered:?}"
 	);
-	let plain = piped(&show);
+	let plain = piped(&show, &[]);
 	assert!(
-		plain.contains("required arguments were not provided"),
+		plain.starts_with("error: the following required arguments were not provided"),
 		"{plain:?}"
 	);
 	assert_eq!(on_pty_with(&show, &[("NO_COLOR", "1")], true), plain);
 	assert_eq!(on_pty_with(&show, &[("TERM", "dumb")], true), plain);
+	assert_eq!(
+		on_pty_with(
+			&show,
+			&[("TERM", "dumb"), ("CI", "true"), ("GITHUB_ACTIONS", "true")],
+			true
+		),
+		plain,
+		"a CI runner does not colour a dumb terminal"
+	);
+}
+
+#[test]
+fn clicolor_force_colours_clap_and_epistle_alike_without_decorating() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let show = ["account", "show", "--config", config.as_str()];
+	let forced = [("CLICOLOR_FORCE", "1")];
+	let coloured = piped(&show, &forced);
+	assert!(
+		coloured.starts_with("\x1b[1m\x1b[31merror:\x1b[0m the following required arguments"),
+		"clap's usage error is coloured in a pipe: {coloured:?}"
+	);
+	assert_eq!(
+		on_pty_with(&show, &[("CLICOLOR_FORCE", "1"), ("TERM", "dumb")], true),
+		coloured,
+		"forced colour on a dumb terminal: coloured, and nothing is offered"
+	);
+	let missing = ["config-check", "--config", "/nonexistent/mail.toml"];
+	assert!(
+		piped(&missing, &forced).starts_with("\x1b[1m\x1b[31merror:\x1b[0m"),
+		"epistle's own error prefix follows the same decision"
+	);
+	assert!(
+		!piped(&missing, &[]).contains('\x1b'),
+		"without it a pipe stays plain"
+	);
 }

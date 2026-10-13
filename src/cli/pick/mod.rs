@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use std::sync::OnceLock;
 
 use clap::error::ErrorKind;
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches, Parser};
 
 use super::{Cli, prompt};
 
@@ -43,8 +43,15 @@ pub(super) fn effective_args() -> Vec<OsString> {
 /// code of the command; a usage error exits from here with code 2.
 pub fn run_from_env() -> ExitCode {
 	let args: Vec<OsString> = std::env::args_os().collect();
-	let error = match Cli::try_parse_from(&args) {
+	let error = match parse(&args, super::term::colour_choice(true)) {
 		Ok(cli) => return cli.run(),
+		// `--help` and `--version` go to stdout: colour them for stdout.
+		Err(error) if !error.use_stderr() => {
+			match parse(&args, super::term::colour_choice(false)) {
+				Ok(cli) => return cli.run(),
+				Err(error) => error,
+			}
+		}
 		Err(error) => error,
 	};
 	// The same conditions as the rest of the terminal decoration: with
@@ -67,6 +74,20 @@ pub fn run_from_env() -> ExitCode {
 		}
 	}
 	error.exit()
+}
+
+/// Parse `args` with clap colouring its messages by `colour`, the decision
+/// epistle's own `error:` prefix uses, instead of clap reading the
+/// environment on its own (it also looks at `CI`, which colours a dumb
+/// terminal on a CI runner).
+fn parse(args: &[OsString], colour: anstream::ColorChoice) -> Result<Cli, clap::Error> {
+	let colour = match colour {
+		anstream::ColorChoice::Never => clap::ColorChoice::Never,
+		_ => clap::ColorChoice::Always,
+	};
+	let mut command = Cli::command().color(colour);
+	let matches = command.try_get_matches_from_mut(args)?;
+	Cli::from_arg_matches(&matches).map_err(|error| error.format(&mut command))
 }
 
 /// `args` with every missing pickable argument picked on the prompt

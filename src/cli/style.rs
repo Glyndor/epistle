@@ -3,8 +3,9 @@
 //! (`warn_to`) is handed [`stderr`] by `dispatch`. stdout is reserved for
 //! command data (archives, keys, listings) and is never decorated.
 //!
-//! Colour is decided by `anstream` from `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`
-//! and whether stderr is a terminal. Forced colour (`CLICOLOR_FORCE=1`) is the
+//! Colour is decided once, by `crate::cli::term::colours`, from `NO_COLOR`,
+//! `TERM`, `CLICOLOR`, `CLICOLOR_FORCE` and whether stderr is a terminal, and
+//! handed to `anstream` as a fixed choice. Forced colour (`CLICOLOR_FORCE=1`) is the
 //! gate an integration test uses to make sure stderr actually carries escape
 //! codes; the same code path serves a real user running `epistle` from a
 //! terminal.
@@ -28,12 +29,11 @@ const CLEAR_LINE: &str = "\r\x1b[2K\r";
 /// sink `dispatch` hands to a command that takes its warning writer as a
 /// parameter.
 ///
-/// All decoration routes through `anstream`, which chooses to emit ANSI
-/// sequences or pass the text through unchanged based on environment variables
-/// (`NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`) and whether the sink is a
-/// terminal. Nothing else in the CLI makes that decision.
+/// Whether it carries escapes is [`crate::cli::term::colours`] for stderr,
+/// the same answer clap gets, so an `error:` from epistle and a usage error
+/// from clap are coloured alike.
 pub(crate) fn stderr() -> anstream::AutoStream<std::io::Stderr> {
-	anstream::stderr()
+	anstream::AutoStream::new(std::io::stderr(), crate::cli::term::colour_choice(true))
 }
 
 /// Whether stderr is a terminal right now.

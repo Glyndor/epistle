@@ -3,10 +3,11 @@
 //!
 //! A stream is decorated only when all of these hold, each stream decided on
 //! its own: it is a terminal, `NO_COLOR` is unset or empty, `TERM` is not
-//! `dumb`, and the command was not asked for `--json`. Anything else gets the
-//! plain output byte for byte, which is what scripts and the tests that pin
-//! the plain form read. `CLICOLOR_FORCE` does not decorate a pipe: it forces
-//! the colour of the `error:` prefix through `anstream`, never a table or a
+//! `dumb`, `CLICOLOR` is not `0`, and the command was not asked for
+//! `--json`. Anything else gets the plain output byte for byte, which is
+//! what scripts and the tests that pin the plain form read.
+//! `CLICOLOR_FORCE` does not decorate a pipe: it forces the colour of the
+//! `error:` prefix and of clap's messages ([`colours`]), never a table or a
 //! spinner into a file.
 //!
 //! The renderers take a [`Decor`] (colour on or off, the width to fit) so the
@@ -46,27 +47,94 @@ impl Decor {
 	}
 }
 
-/// Whether a stream is decorated, from the facts that decide it. Pure, so
-/// every combination is tested without a terminal.
-pub(crate) fn decorates(
-	is_terminal: bool,
-	no_color: Option<&OsStr>,
-	term: Option<&OsStr>,
-	json: bool,
-) -> bool {
-	is_terminal
-		&& !json
-		&& no_color.is_none_or(OsStr::is_empty)
-		&& term.is_none_or(|value| value != OsStr::new("dumb"))
+/// The environment variables that decide colour and decoration.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Env<'a> {
+	/// `NO_COLOR`: set and not empty turns colour and decoration off.
+	pub(crate) no_color: Option<&'a OsStr>,
+	/// `TERM`: `dumb` turns colour and decoration off.
+	pub(crate) term: Option<&'a OsStr>,
+	/// `CLICOLOR`: `0` turns colour and decoration off.
+	pub(crate) clicolor: Option<&'a OsStr>,
+	/// `CLICOLOR_FORCE`: set and not `0` colours a stream that is not a
+	/// terminal; it never decorates one.
+	pub(crate) clicolor_force: Option<&'a OsStr>,
+}
+
+impl Env<'_> {
+	fn no_color(&self) -> bool {
+		self.no_color.is_some_and(|value| !value.is_empty())
+	}
+
+	fn forced(&self) -> bool {
+		self.clicolor_force
+			.is_some_and(|value| !value.is_empty() && value != OsStr::new("0"))
+	}
+
+	/// `TERM` and `CLICOLOR` allow colour on a terminal.
+	fn allows(&self) -> bool {
+		self.term.is_none_or(|value| value != OsStr::new("dumb"))
+			&& self.clicolor.is_none_or(|value| value != OsStr::new("0"))
+	}
+}
+
+/// The colour variables of this process. Owned, so a caller borrows them
+/// as an [`Env`].
+pub(crate) struct ProcessEnv([Option<std::ffi::OsString>; 4]);
+
+impl ProcessEnv {
+	/// Read the four variables once.
+	pub(crate) fn read() -> Self {
+		ProcessEnv(["NO_COLOR", "TERM", "CLICOLOR", "CLICOLOR_FORCE"].map(std::env::var_os))
+	}
+
+	/// The variables as an [`Env`].
+	pub(crate) fn env(&self) -> Env<'_> {
+		let [no_color, term, clicolor, clicolor_force] = &self.0;
+		Env {
+			no_color: no_color.as_deref(),
+			term: term.as_deref(),
+			clicolor: clicolor.as_deref(),
+			clicolor_force: clicolor_force.as_deref(),
+		}
+	}
+}
+
+/// Whether a stream is decorated (symbols, tables, the spinner, the pick),
+/// from the facts that decide it. Pure, so every combination is tested
+/// without a terminal.
+pub(crate) fn decorates(is_terminal: bool, env: &Env<'_>, json: bool) -> bool {
+	is_terminal && !json && !env.no_color() && env.allows()
+}
+
+/// Whether a stream carries colour escapes: never with `NO_COLOR`, always
+/// with `CLICOLOR_FORCE`, otherwise on a terminal that `TERM` and
+/// `CLICOLOR` allow. The `error:` prefix and clap's own messages use this
+/// answer, so the two never disagree; `CI` and the like play no part.
+pub(crate) fn colours(is_terminal: bool, env: &Env<'_>) -> bool {
+	!env.no_color() && (env.forced() || (is_terminal && env.allows()))
+}
+
+/// [`colours`] for this process's stderr (`stderr` set) or stdout, as the
+/// choice handed to `anstream` and clap.
+pub(crate) fn colour_choice(stderr: bool) -> anstream::ColorChoice {
+	use std::io::IsTerminal;
+	let is_terminal = if stderr {
+		std::io::stderr().is_terminal()
+	} else {
+		std::io::stdout().is_terminal()
+	};
+	if colours(is_terminal, &ProcessEnv::read().env()) {
+		anstream::ColorChoice::Always
+	} else {
+		anstream::ColorChoice::Never
+	}
 }
 
 /// The decoration for the stream on `fd`, or `None` for plain output.
 #[cfg(not(test))]
 fn for_fd(fd: libc::c_int, is_terminal: bool, json: bool) -> Option<Decor> {
-	let no_color = std::env::var_os("NO_COLOR");
-	let term = std::env::var_os("TERM");
-	decorates(is_terminal, no_color.as_deref(), term.as_deref(), json)
-		.then(|| Decor::coloured(width_of(fd)))
+	decorates(is_terminal, &ProcessEnv::read().env(), json).then(|| Decor::coloured(width_of(fd)))
 }
 
 /// How stdout is drawn for a command run with (`json`) or without `--json`.

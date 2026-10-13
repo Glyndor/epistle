@@ -6,29 +6,72 @@ use std::time::Duration;
 
 use super::*;
 
+/// The colour variables, set from `pairs` and unset otherwise.
+fn env<'a>(pairs: &[(&str, &'a str)]) -> Env<'a> {
+	let get = |name: &str| {
+		pairs
+			.iter()
+			.find(|(key, _)| *key == name)
+			.map(|(_, value)| OsStr::new(*value))
+	};
+	Env {
+		no_color: get("NO_COLOR"),
+		term: get("TERM"),
+		clicolor: get("CLICOLOR"),
+		clicolor_force: get("CLICOLOR_FORCE"),
+	}
+}
+
 #[test]
-fn only_a_terminal_without_no_color_dumb_or_json_is_decorated() {
-	let none: Option<&OsStr> = None;
-	assert!(decorates(
-		true,
-		none,
-		Some(OsStr::new("xterm-256color")),
-		false
-	));
+fn only_a_terminal_without_no_color_dumb_clicolor_0_or_json_is_decorated() {
+	let xterm = env(&[("TERM", "xterm-256color")]);
+	assert!(decorates(true, &xterm, false));
 	assert!(
-		decorates(true, Some(OsStr::new("")), none, false),
+		decorates(true, &env(&[("NO_COLOR", "")]), false),
 		"empty NO_COLOR does not count"
 	);
-	assert!(!decorates(false, none, none, false), "a pipe stays plain");
+	assert!(!decorates(false, &xterm, false), "a pipe stays plain");
 	assert!(
-		!decorates(true, Some(OsStr::new("1")), none, false),
+		!decorates(true, &env(&[("NO_COLOR", "1")]), false),
 		"NO_COLOR"
 	);
 	assert!(
-		!decorates(true, none, Some(OsStr::new("dumb")), false),
+		!decorates(true, &env(&[("TERM", "dumb")]), false),
 		"TERM=dumb"
 	);
-	assert!(!decorates(true, none, none, true), "--json");
+	assert!(
+		!decorates(true, &env(&[("CLICOLOR", "0")]), false),
+		"CLICOLOR=0"
+	);
+	assert!(!decorates(true, &xterm, true), "--json");
+	assert!(
+		!decorates(false, &env(&[("CLICOLOR_FORCE", "1")]), false),
+		"CLICOLOR_FORCE colours a pipe, it never draws a table or a spinner into one"
+	);
+}
+
+#[test]
+fn colour_follows_the_terminal_unless_no_color_or_clicolor_force_says_otherwise() {
+	assert!(colours(true, &env(&[("TERM", "xterm-256color")])));
+	assert!(!colours(false, &env(&[])), "a pipe");
+	assert!(!colours(true, &env(&[("TERM", "dumb")])), "TERM=dumb");
+	assert!(!colours(true, &env(&[("CLICOLOR", "0")])), "CLICOLOR=0");
+	assert!(
+		colours(false, &env(&[("CLICOLOR_FORCE", "1")])),
+		"forced on a pipe"
+	);
+	assert!(
+		colours(true, &env(&[("CLICOLOR_FORCE", "1"), ("TERM", "dumb")])),
+		"forced beats dumb"
+	);
+	assert!(
+		!colours(false, &env(&[("CLICOLOR_FORCE", "0")])),
+		"CLICOLOR_FORCE=0 forces nothing"
+	);
+	assert!(
+		!colours(true, &env(&[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")])),
+		"NO_COLOR wins over everything"
+	);
 }
 
 #[test]
