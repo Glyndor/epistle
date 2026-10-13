@@ -296,10 +296,7 @@ impl PolicyStore {
 					}
 					Err(error) => match fallback {
 						Some(policy) => Ok(Some(policy)),
-						None => {
-							self.remember(&domain, None, Some(id), MAX_CACHE, MAX_CACHE);
-							Err(error)
-						}
+						None => Err(error),
 					},
 				},
 				Err(error) => match fallback {
@@ -307,10 +304,7 @@ impl PolicyStore {
 						tracing::warn!(%domain, ?error, "MTA-STS refresh failed; keeping the cached policy");
 						Ok(Some(policy))
 					}
-					None => {
-						self.remember(&domain, None, Some(id), MAX_CACHE, MAX_CACHE);
-						Err(error)
-					}
+					None => Err(error),
 				},
 			},
 			// Domain publishes no v=STSv1 record. The cached policy, if

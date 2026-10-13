@@ -152,3 +152,20 @@ impl PolicyFetcher for CountingIdFetcher {
 		Box::pin(async move { Ok(ENFORCE.to_string()) })
 	}
 }
+
+/// A fetch that fails with nothing cached is not remembered: the next
+/// delivery fetches again and picks up the policy as soon as the host
+/// answers, instead of treating the domain as policy-free for a day.
+#[tokio::test]
+async fn a_failed_first_fetch_is_retried_on_the_next_call() {
+	let state = Arc::new(AtomicU8::new(FETCH_FAILS));
+	let dns = World(Arc::clone(&state));
+	let store = PolicyStore::new(Box::new(Fetcher(Arc::clone(&state))));
+	assert!(store.policy(&dns, "example.org").await.is_err());
+	state.store(OK, Ordering::Relaxed);
+	let policy = store
+		.policy(&dns, "example.org")
+		.await
+		.expect("second fetch");
+	assert_eq!(policy.map(|policy| policy.mode), Some(Mode::Enforce));
+}
