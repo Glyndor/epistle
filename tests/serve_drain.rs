@@ -22,7 +22,7 @@ use tokio_rustls::rustls::{ClientConfig, ClientConnection, RootCertStore, Stream
 
 #[allow(dead_code)]
 mod common;
-use common::{BIND_DEADLINE, Child, pick_port_base, redact_password, wait_for_bind};
+use common::{BIND_DEADLINE, Child, is_eaddrinuse, pick_port_base, redact_password, wait_for_bind};
 
 /// Read lines until one starts with `prefix`, failing after 10 s.
 fn line_starting(reader: &mut impl BufRead, prefix: &str) -> String {
@@ -85,27 +85,47 @@ fn printed_password(child: &Child) -> String {
 	}
 }
 
+/// Start `epistle local` on a fresh directory and port base and wait until
+/// it binds submissions and IMAP. A base another process already holds is
+/// retried with a new one, as the other local-mode tests do; any other
+/// failure is a real one.
+fn start_local() -> (tempfile::TempDir, u16, Child) {
+	let mut last = String::new();
+	for _ in 0..5 {
+		let dir = tempfile::tempdir().unwrap();
+		let base = pick_port_base();
+		let base_arg = base.to_string();
+		let dir_arg = dir.path().to_str().unwrap().to_string();
+		let mut child = Child::spawn(
+			&["local", "--dir", &dir_arg, "--port-base", &base_arg],
+			dir.path(),
+		);
+		let mut bound = Ok(());
+		for port in [base + 465, base + 143] {
+			let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+			bound = wait_for_bind(
+				addr,
+				Instant::now() + BIND_DEADLINE,
+				"waiting for the listeners",
+				&mut child,
+			)
+			.map(drop);
+			if bound.is_err() {
+				break;
+			}
+		}
+		match bound {
+			Ok(()) => return (dir, base, child),
+			Err(message) if is_eaddrinuse(&message) => last = message,
+			Err(message) => panic!("{message}"),
+		}
+	}
+	panic!("every port base was taken: {last}");
+}
+
 #[test]
 fn sigterm_lets_an_open_transaction_finish_and_says_goodbye() {
-	let dir = tempfile::tempdir().unwrap();
-	let base = pick_port_base();
-	let base_arg = base.to_string();
-	let dir_arg = dir.path().to_str().unwrap().to_string();
-	let mut child = Child::spawn(
-		&["local", "--dir", &dir_arg, "--port-base", &base_arg],
-		dir.path(),
-	);
-	let smtp = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), base + 465);
-	let imap = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), base + 143);
-	for addr in [smtp, imap] {
-		wait_for_bind(
-			addr,
-			Instant::now() + BIND_DEADLINE,
-			"waiting for the listeners",
-			&mut child,
-		)
-		.unwrap_or_else(|error| panic!("{error}"));
-	}
+	let (dir, base, mut child) = start_local();
 
 	let (mut imap_reader, _imap_writer) = connect(base + 143);
 	line_starting(&mut imap_reader, "* OK");
