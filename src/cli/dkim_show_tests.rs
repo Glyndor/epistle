@@ -175,3 +175,53 @@ fn json_output_carries_the_documented_fields() {
 	assert!(json["records"].is_array());
 	assert!(!String::from_utf8_lossy(&out).contains("PRIVATE"));
 }
+
+#[test]
+fn a_rotation_in_progress_is_shown_beside_the_key_that_signs() {
+	let f = fixture(true);
+	let state = rotate::RotationState {
+		selector: "original".into(),
+		key_file: f.dir.path().join("original.key"),
+		rotated_at: DAY,
+		previous: None,
+		pending: Some(rotate::Pending {
+			selector: "ed100".into(),
+			key_file: f.dir.path().join("dkim-ed100.key"),
+			domains: vec!["example.org".into()],
+			started_at: 100 * DAY,
+			withdrawing: None,
+		}),
+	};
+	let path = f.dir.path().join(rotate::STATE_FILE);
+	std::fs::write(&path, serde_json::to_vec(&state).expect("json")).expect("state");
+	let text = |view: &DkimView| {
+		let mut out = Vec::new();
+		render(view, false, &mut out);
+		String::from_utf8(out).expect("utf-8")
+	};
+	let view = view_with(&f, &[]);
+	assert_eq!(
+		view.selector, "original",
+		"the committed key is the one shown as signing"
+	);
+	assert!(
+		text(&view).contains("rotation to ed100 in progress since 8640000; original signs"),
+		"{}",
+		text(&view)
+	);
+
+	let withdrawing = rotate::RotationState {
+		pending: state.pending.clone().map(|p| rotate::Pending {
+			withdrawing: Some("ed100._domainkey.example.org does not show the new key".into()),
+			..p
+		}),
+		..state
+	};
+	std::fs::write(&path, serde_json::to_vec(&withdrawing).expect("json")).expect("state");
+	assert!(
+		text(&view_with(&f, &[]))
+			.contains("rotation to ed100 is being withdrawn: ed100._domainkey"),
+		"{}",
+		text(&view_with(&f, &[]))
+	);
+}
