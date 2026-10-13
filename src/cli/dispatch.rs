@@ -265,7 +265,7 @@ impl Cli {
 				Ok(config) => delivery::run(
 					&config.data_dir,
 					config.delivery_log_days(),
-					&args,
+					args.action,
 					queue::now_epoch(),
 					&mut std::io::stdout().lock(),
 				),

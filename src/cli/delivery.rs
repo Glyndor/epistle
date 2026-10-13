@@ -7,30 +7,59 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde::Serialize;
 
 use super::style;
 use super::term::table::Table;
 use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
-/// `epistle delivery list` arguments. Everything lives here so the
-/// `Command` enum in `cli/mod.rs` stays under the per-file line
-/// ceiling; the variant is a tuple of this struct.
+/// `epistle delivery` arguments: the configuration file and the action.
+/// The variant in `Command` is a tuple of this struct, so the enum stays
+/// under the per-file line ceiling.
 #[derive(Debug, Args)]
 pub struct DeliveryConfig {
 	/// Path to the configuration file; accepted before or after the action.
 	#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG_PATH)]
 	pub config: PathBuf,
+	/// Delivery log action (`list`).
+	#[command(subcommand)]
+	pub action: Option<DeliveryCli>,
+}
+
+/// Actions on the per-recipient delivery log. Without one, `epistle
+/// delivery` lists, like `epistle queue` does.
+#[derive(Debug, Subcommand)]
+pub enum DeliveryCli {
+	/// List delivery records (the default when no action is given).
+	List(ListArgs),
+}
+
+/// `epistle delivery list` arguments.
+#[derive(Debug, Args)]
+pub struct ListArgs {
 	/// Print one JSON array instead of a text table.
 	#[arg(long)]
 	pub json: bool,
-	/// Maximum number of records to print (default 100).
-	#[arg(long, default_value = "100")]
+	/// Maximum number of records to print.
+	#[arg(long, value_name = "N", default_value_t = DEFAULT_LIMIT)]
 	pub limit: usize,
 	#[command(flatten)]
 	pub filters: ListFilters,
 }
+
+impl Default for ListArgs {
+	/// What a bare `epistle delivery` lists: every record up to the limit.
+	fn default() -> Self {
+		Self {
+			json: false,
+			limit: DEFAULT_LIMIT,
+			filters: ListFilters::default(),
+		}
+	}
+}
+
+const DEFAULT_LIMIT: usize = 100;
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/epistle/mail.toml";
 
@@ -41,28 +70,39 @@ const DEFAULT_CONFIG_PATH: &str = "/etc/epistle/mail.toml";
 pub struct ListFilters {
 	/// Restrict to a recipient address (the `RCPT TO` value).
 	#[arg(long)]
-	recipient: Option<String>,
+	pub recipient: Option<String>,
 	/// Restrict to a sending account (the `MAIL FROM` of the submission).
 	#[arg(long)]
-	account: Option<String>,
+	pub account: Option<String>,
 	/// Lower bound on the record time: either an RFC 3339 timestamp or a
 	/// duration like `24h` / `7d` / `30m` / `5s`. The current wall clock
 	/// is the upper bound of the duration.
 	#[arg(long)]
-	since: Option<String>,
+	pub since: Option<String>,
 	/// Restrict to one outcome: `delivered`, `deferred`, `failed`,
 	/// `suppressed`, or `canceled`.
 	#[arg(long)]
-	outcome: Option<String>,
+	pub outcome: Option<String>,
 }
 
-/// Run `epistle delivery list` against the spool under `data_dir`. `now`
-/// is the wall-clock epoch second, injectable so tests can pin the
-/// `--since` interpretation. Prints to `out`.
+/// Run one `epistle delivery` action against the log under `data_dir`;
+/// no action lists. `now` is the wall-clock epoch second, injectable so
+/// tests can pin the `--since` interpretation. Prints to `out`.
 pub(super) fn run(
 	data_dir: &Path,
 	delivery_log_days: u64,
-	args: &DeliveryConfig,
+	action: Option<DeliveryCli>,
+	now: u64,
+	out: &mut impl Write,
+) -> ExitCode {
+	let DeliveryCli::List(args) = action.unwrap_or(DeliveryCli::List(ListArgs::default()));
+	list(data_dir, delivery_log_days, &args, now, out)
+}
+
+fn list(
+	data_dir: &Path,
+	delivery_log_days: u64,
+	args: &ListArgs,
 	now: u64,
 	out: &mut impl Write,
 ) -> ExitCode {
