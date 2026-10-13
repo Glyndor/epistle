@@ -102,11 +102,12 @@ holds: the namespaces are separate, the file ownership is not.
 (`SUB_UID_MIN 100000`, `SUB_UID_COUNT 65536` in `/etc/login.defs`), so a
 fixed block for the service account would collide on most hosts. The postinst
 therefore picks the lowest block of 65536 ids within `SUB_UID_MIN`/`SUB_UID_MAX`
-and `SUB_GID_MIN`/`SUB_GID_MAX` that overlaps no existing entry. It never
-moves a block the account already holds: packages up to 0.10.1 assigned the
-fixed `100000-165535`, and `epistle check subid` fails while that block, or
-any other, is shared. Moving it needs a backup and a restore; the steps are in
-the [CLI reference](cli.md#moving-an-overlapping-subordinate-id-range).
+and `SUB_GID_MIN`/`SUB_GID_MAX` that overlaps no existing entry. Packages up
+to 0.10.1 assigned the fixed `100000-165535`, and `epistle check subid` fails
+while that block, or any other, is shared. On upgrade the postinst moves a
+shared block to a free one of the same size and shifts the owner of the
+stack's files with it; the [CLI reference](cli.md#moving-an-overlapping-subordinate-id-range)
+says what it does and how to run it again.
 
 ### Port 25 without root
 

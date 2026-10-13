@@ -123,7 +123,11 @@ fn postrm_removes_the_footprint_only_on_purge() {
 
 #[test]
 fn maintainer_scripts_are_executable_in_git() {
-	let scripts = ["debian/epistle.postinst", "debian/epistle.postrm"];
+	let scripts = [
+		"debian/epistle.preinst",
+		"debian/epistle.postinst",
+		"debian/epistle.postrm",
+	];
 
 	let output = match Command::new("git")
 		.current_dir(root())
@@ -145,7 +149,7 @@ fn maintainer_scripts_are_executable_in_git() {
 	assert_eq!(
 		lines.len(),
 		scripts.len(),
-		"git ls-files must list both maintainer scripts; got: {listing}"
+		"git ls-files must list every maintainer script; got: {listing}"
 	);
 	for line in lines {
 		assert!(
@@ -196,7 +200,11 @@ fn sample_unit_runs_as_the_isolated_user() {
 
 #[test]
 fn maintainer_scripts_parse_as_posix_sh() {
-	for script in ["debian/epistle.postinst", "debian/epistle.postrm"] {
+	for script in [
+		"debian/epistle.preinst",
+		"debian/epistle.postinst",
+		"debian/epistle.postrm",
+	] {
 		let output = match Command::new("sh")
 			.arg("-n")
 			.arg(root().join(script))
@@ -265,7 +273,8 @@ fn postinst_updates_only_enabled_stacks_on_upgrade_and_warns_on_failure() {
 			&& postinst.contains("export HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS")
 			&& postinst.contains("if runuser -u glyndor-epistle -- systemctl --user is-enabled --quiet podup-epistle.service; then")
 			&& postinst.contains("if ! runuser -u glyndor-epistle -- epistle stack update; then")
-			&& postinst.contains("echo \"epistle: stack update failed; run sudo epistle stack update to retry\" >&2"),
+			&& postinst.contains("sudo epistle stack rollback")
+			&& postinst.contains("sudo epistle stack update"),
 		"postinst must update only an enabled stack on upgrade and warn without failing apt"
 	);
 	let enabled = line_of(&postinst, "is-enabled --quiet").unwrap();
@@ -299,3 +308,9 @@ mod subid_purge;
 
 #[path = "debian/completions.rs"]
 mod completions;
+
+#[path = "debian/subid_move.rs"]
+mod subid_move;
+
+#[path = "debian/preinst.rs"]
+mod preinst;

@@ -30,6 +30,9 @@ const MAX_CONNECTIONS: usize = 500;
 /// after 30 minutes of inactivity; we enforce it to kill Slowloris sessions.
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// What a session gets when the server drains.
+const SHUTTING_DOWN: &[u8] = b"* BYE server shutting down\r\n";
+
 /// How often to poll for new messages during IDLE.
 const IDLE_POLL: Duration = Duration::from_secs(30);
 
@@ -69,6 +72,8 @@ pub struct Server {
 	/// literal read for APPEND/REPLACE) may stall before the connection is
 	/// dropped. Configurable so tests can drive a short deadline.
 	read_timeout: Duration,
+	/// The graceful stop this listener follows.
+	drain: Option<Arc<crate::shutdown::Drain>>,
 	/// Days to keep expunged messages in `<account>/.archive/` before the
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
@@ -107,6 +112,7 @@ impl Server {
 			max_connections: MAX_CONNECTIONS,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			read_timeout: DEFAULT_READ_TIMEOUT,
+			drain: None,
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
@@ -143,6 +149,13 @@ impl Server {
 	/// Accept OAUTHBEARER/XOAUTH2 bearer tokens, verified by `verifier`.
 	pub fn with_oauth(mut self, verifier: Arc<crate::oauth::OauthVerifier>) -> Self {
 		self.oauth = Some(verifier);
+		self
+	}
+
+	/// Follow `drain`: stop accepting when it starts and close each
+	/// session with `* BYE` once its current command is done.
+	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
+		self.drain = Some(drain);
 		self
 	}
 
@@ -222,7 +235,13 @@ impl Server {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = accepting.next().await;
+			let (stream, peer) = match &self.drain {
+				Some(drain) => tokio::select! {
+					accepted = accepting.next() => accepted,
+					() = drain.started() => return Ok(()),
+				},
+				None => accepting.next().await,
+			};
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
 			// session consults at authentication sees a plain `IpAddr::V4`.
@@ -232,8 +251,10 @@ impl Server {
 				continue;
 			};
 			let server = Arc::clone(&self);
+			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
 			tokio::spawn(async move {
 				let _permit = permit;
+				let _tracked = tracked;
 				tracing::debug!(%peer, "imap connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "imap connection ended with error");
@@ -288,7 +309,14 @@ impl Server {
 						} else {
 							self.read_timeout
 						};
-						match tokio::time::timeout(poll, stream.read(&mut buffer)).await {
+						let reading = stream.read(&mut buffer);
+						let Some(waited) =
+							crate::shutdown::or_drain(self.drain.as_deref(), poll, reading).await
+						else {
+							let _ = stream.write_all(SHUTTING_DOWN).await;
+							return Ok(());
+						};
+						match waited {
 							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
@@ -542,27 +570,29 @@ impl Server {
 									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
 									return Ok(());
 								}
-								let read =
-									match tokio::time::timeout(IDLE_POLL, stream.read(&mut buffer))
-										.await
-									{
-										Ok(Ok(n)) => n,
-										Ok(Err(e)) => return Err(e),
-										Err(_) => {
-											// Poll interval expired; check for new messages.
-											if let Some(notification) = session.check_idle() {
-												if stream
-													.write_all(&notification.bytes)
-													.await
-													.is_err()
-												{
-													return Ok(());
-												}
-												let _ = stream.flush().await;
+								let reading = stream.read(&mut buffer);
+								let drain = self.drain.as_deref();
+								let Some(waited) =
+									crate::shutdown::or_drain(drain, IDLE_POLL, reading).await
+								else {
+									let _ = stream.write_all(SHUTTING_DOWN).await;
+									return Ok(());
+								};
+								let read = match waited {
+									Ok(Ok(n)) => n,
+									Ok(Err(e)) => return Err(e),
+									Err(_) => {
+										// Poll interval expired; check for new messages.
+										if let Some(notification) = session.check_idle() {
+											if stream.write_all(&notification.bytes).await.is_err()
+											{
+												return Ok(());
 											}
-											continue;
+											let _ = stream.flush().await;
 										}
-									};
+										continue;
+									}
+								};
 								if read == 0 {
 									return Ok(());
 								}
@@ -583,6 +613,10 @@ impl Server {
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "server_tests_drain.rs"]
+mod tests_drain;
 
 #[cfg(test)]
 #[path = "server_tests_compress.rs"]

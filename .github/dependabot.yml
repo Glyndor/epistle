@@ -9,6 +9,27 @@ updates:
     open-pull-requests-limit: 10
     target-branch: "develop"
 
+  # The images the generated stack runs (deploy/images/Dockerfile, which the
+  # binary reads at build time) and the container image's base (Containerfile).
+  # One group across both directories, because the mail base digest must be
+  # the same in the two files and a test compares them. A PostgreSQL major is
+  # ignored: it needs `epistle db upgrade`, not a new digest.
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/deploy/images"
+    schedule:
+      interval: "weekly"
+    labels: ["type:deps"]
+    open-pull-requests-limit: 5
+    target-branch: "develop"
+    groups:
+      images:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*postgres*"
+        update-types: ["version-update:semver-major"]
+
   # The crate itself. Without this entry nothing watches the dependencies a
   # mail server is actually built out of — TLS, DNS, hashing, the HTTP stack —
   # which is exactly where an advisory hurts most.

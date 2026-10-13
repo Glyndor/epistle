@@ -18,12 +18,14 @@ fn every_stack_action_repairs_an_absent_socket_before_podup() {
 		.unwrap();
 		std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755)).unwrap();
 		let data = data_dir_with_compose(dir.path());
+		let cfg = write_config(&data);
 		std::fs::write(
 			data.join("compose/compose.yaml"),
-			r#"{"services":{"mail":{"image":"operator/mail:stable"}}}"#,
+			format!(
+				r#"{{"services":{{"mail":{{"image":"operator/mail:stable","command":["serve","--config",{cfg:?}]}}}}}}"#
+			),
 		)
 		.unwrap();
-		let cfg = write_config(&data);
 		let output = Command::new(binary())
 			.args(["stack", "--config", cfg.to_str().unwrap(), action])
 			.env("PATH", path_with_shim_first(&shim))

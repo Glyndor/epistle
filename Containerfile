@@ -42,10 +42,12 @@ WORKDIR /build
 # Copy the build inputs. The committed .sqlx cache is the only sqlx
 # data the build reads (queries are checked against it under
 # `SQLX_OFFLINE=true`), so the build needs no database and no network
-# to reach one. The .deb path does the same.
+# to reach one. The .deb path does the same. deploy/images is compiled in:
+# it pins the images of the stack `epistle init` writes.
 COPY Cargo.toml Cargo.lock ./
 COPY .sqlx ./.sqlx/
 COPY migrations ./migrations
+COPY deploy/images ./deploy/images
 COPY src ./src
 COPY benches ./benches
 

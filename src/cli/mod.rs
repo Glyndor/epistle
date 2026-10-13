@@ -18,6 +18,7 @@ mod completions;
 mod config_check;
 pub mod config_edit;
 mod container_db;
+mod db_upgrade;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;
@@ -51,12 +52,16 @@ mod service;
 mod service_edit;
 mod srv;
 mod stack;
+mod stack_dumps;
+mod stack_health;
+mod stack_rollback;
 mod stack_socket;
 mod stack_started;
 mod stack_update;
 mod status;
 mod storage_blobs;
 mod style;
+mod subid;
 mod suppression;
 mod tls_cli;
 #[cfg(test)]
@@ -629,6 +634,15 @@ pub enum Command {
 		#[command(subcommand)]
 		action: stack::StackCli,
 	},
+	/// Database maintenance for the stack's PostgreSQL.
+	Db {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Database action (`upgrade`).
+		#[command(subcommand)]
+		action: db_upgrade::DbCli,
+	},
 	/// Show the DKIM signing key in service or force a rotation.
 	///
 	/// Rotation is queued for the running server, which stays the only writer
@@ -694,6 +708,10 @@ pub enum Command {
 		#[arg(value_enum, value_name = "SHELL")]
 		shell: completions::CompletionShell,
 	},
+	/// Move the service account off a subordinate id block another account
+	/// shares. Run by the package on upgrade, as root.
+	#[command(hide = true)]
+	MoveSubids(subid::MoveArgs),
 	/// Write `epistle.1` and one man page per subcommand into DIR.
 	///
 	/// Run by debian/rules at package build time.

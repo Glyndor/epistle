@@ -1,8 +1,12 @@
 //! Service definitions for the generated container stack.
-use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH, POSTGRES_18_IMAGE};
+use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// The `stop_grace_period` of the `mail` service, in seconds: how long podup
+/// waits after SIGTERM before SIGKILL. `serve` drains for 5 s less.
+pub(crate) const MAIL_STOP_GRACE_SECS: u64 = 30;
 
 // ---- internal JSON shape -----------------------------------------------
 
@@ -24,6 +28,8 @@ pub(super) struct ComposeService {
 	ports: Option<Vec<String>>,
 	environment: BTreeMap<String, String>,
 	restart: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stop_grace_period: Option<String>,
 	security_opt: Vec<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	read_only: Option<bool>,
@@ -116,6 +122,9 @@ impl ComposeService {
 			ports: Some(published_ports),
 			environment,
 			restart: "unless-stopped".to_string(),
+			// `serve` drains for a few seconds less than this on SIGTERM,
+			// so open SMTP transactions finish before podup sends SIGKILL.
+			stop_grace_period: Some(format!("{MAIL_STOP_GRACE_SECS}s")),
 			security_opt: vec!["no-new-privileges".to_string()],
 			read_only: None,
 			tmpfs: None,
@@ -215,7 +224,7 @@ impl ComposeService {
 			psql -h /var/run/postgresql -U epistle -d epistle -Atc 'select 1' >/dev/null"
 			.to_string();
 		Self {
-			image: POSTGRES_18_IMAGE.to_string(),
+			image: super::super::images::postgres().to_string(),
 			entrypoint: None,
 			command: Some(vec![
 				"postgres".to_string(),
@@ -232,6 +241,7 @@ impl ComposeService {
 			ports: None,
 			environment,
 			restart: "unless-stopped".to_string(),
+			stop_grace_period: None,
 			security_opt: vec!["no-new-privileges".to_string()],
 			read_only: Some(true),
 			tmpfs: Some(vec!["/tmp".to_string()]),
@@ -286,7 +296,7 @@ struct Healthcheck {
 impl ComposeService {
 	pub(super) fn new_clamav(answers: &Answers, freshclam: bool) -> Self {
 		let mut service = Self {
-			image: "docker.io/clamav/clamav:1.4".to_string(),
+			image: super::super::images::clamav().to_string(),
 			entrypoint: None,
 			command: None,
 			network_mode: Some(if freshclam { "pasta" } else { "none" }.to_string()),
@@ -296,6 +306,7 @@ impl ComposeService {
 			ports: None,
 			environment: BTreeMap::new(),
 			restart: "unless-stopped".to_string(),
+			stop_grace_period: None,
 			security_opt: vec!["no-new-privileges".to_string()],
 			read_only: None,
 			tmpfs: None,

@@ -217,35 +217,38 @@ every other area is checked from the host. If `mail` is stopped, run
 
 Packages up to 0.10.1 gave `glyndor-epistle` the fixed block
 `100000-165535`, which `useradd` also gives the first regular user on Debian
-and Ubuntu. Newer packages pick a free block on install, but they never move a
-block the account already holds. When `epistle check subid` fails, move it by
-hand. Files in the stack's named volumes (the database among them) are owned
-by host ids of the old block, which stop mapping into the containers once the
-block changes, so the data goes through a backup:
+and Ubuntu. Newer packages pick a free block on install, and on upgrade the
+postinst moves a block the account shares with another one:
+
+1. It picks a free block of the same size with the allocator a fresh install
+   uses, within `SUB_UID_MIN`/`MAX` and `SUB_GID_MIN`/`MAX`.
+2. `epistle move-subids` stops the podup unit, its update timer and the
+   account's Podman API units, runs `podman system migrate` so the pause
+   process lets go of the old mapping, then stops the account's user manager
+   (`user@<uid>.service`) and anything it left behind. `usermod` refuses to
+   change the ranges of an account with a running process, so the move stops
+   here, naming the processes, if any is left.
+3. It rewrites only the account's lines in `/etc/subuid` and `/etc/subgid`
+   with one `usermod` call and checks every other line came through
+   unchanged.
+4. It shifts the owner of every file in the old block by the same offset:
+   image layers, container directories and named volumes (the database among
+   them) under the account's home and Podman runtime directory, and the
+   storage, volume and `data_dir` paths when they live elsewhere. Set-id bits
+   and file capabilities, which `chown` clears, are put back.
+5. It starts the user manager again (linger brings back the units enabled for
+   it) and whatever else was running.
+
+Any step that fails undoes the ones before it, and the message says the old
+ranges are back in place. A move that was killed half way leaves a journal at
+`/var/lib/glyndor/epistle/.subid-move`, and the next run undoes it before it
+tries again. To run the move again, for example after freeing room in
+`/etc/login.defs`:
 
 ```sh
-# 1. Back up while the stack runs: the database dump is taken inside `db`.
-sudo epistle backup > /root/epistle-before-subid.tar.gz
-# 2. Stop the stack.
-sudo epistle stack down
-# 3. Pick a free block: the first id past every entry in both tables.
-awk -F: '{ end = $2 + $3; if (end > max) max = end } END { print max }' /etc/subuid /etc/subgid
-# 4. Move the account (OLD is the block `check subid` printed, NEW starts at
-#    the number above and spans 65536 ids, for example 231072-296607).
-sudo usermod --del-subuids OLD --del-subgids OLD glyndor-epistle
-sudo usermod --add-subuids NEW --add-subgids NEW glyndor-epistle
-sudo runuser -u glyndor-epistle -- podman system migrate
-# 5. Remove the stack's named volumes, whose files carry the old ids
-#    (list them with `podman volume ls` as glyndor-epistle), then start the
-#    stack with empty volumes and restore into it.
-sudo epistle stack up
-sudo epistle restore < /root/epistle-before-subid.tar.gz
+sudo dpkg-reconfigure epistle
 sudo epistle check subid
 ```
-
-The restore writes every file again under the new mapping. Keep the backup
-until `epistle status` is clean and mail flows; it holds private keys, so
-handle it as [Backup and restore](#backup-and-restore) describes.
 
 ## Running the server
 
@@ -257,6 +260,14 @@ handle it as [Backup and restore](#backup-and-restore) describes.
 | `epistle verify` | Check on-disk data integrity (run before an upgrade). |
 | `epistle local --dir DIR [--port-base N]` | Self-contained loopback test harness. NOT a deployment: see below. |
 | `epistle init` | First-run setup: answers, keys, config. See below. |
+
+On SIGTERM (or SIGINT) `epistle serve` stops accepting connections and lets
+the open ones finish for up to 25 seconds: an SMTP client in the middle of a
+transaction gets its reply for the message and then `421 4.3.2`, an idle one
+gets the `421` at once, and IMAP sessions get `* BYE server shutting down`
+once their current command is done (also out of IDLE). The generated compose
+file gives `mail` a 30 second `stop_grace_period`, so podup does not kill it
+before the drain ends.
 
 ## Server limits (`epistle limits`)
 
@@ -593,13 +604,18 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Restarts the `mail` service in default mode (a new .deb replaces the host binary the compose file bind-mounts) and runs `podup pull` followed by `podup up -d` in custom image mode to recreate changed services while retaining data. |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. |
+| `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/glyndor/epistle/rollback`) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
 permissions. Every stack invocation passes `-f compose.yaml`, then
 `-f compose.override.yaml` when it exists; later values override the base.
-Init regenerates the base file on reruns. Run stack up again after adding or
+Init regenerates the base file on reruns, and so does `stack update`: it
+takes the database choice, a custom mail image, the DNS token forwarding and
+the config path from the existing `compose.yaml`, and the published ports
+from the listeners in the config. Anything else edited in `compose.yaml` is
+replaced, so keep it in the override. Run stack up again after adding or
 removing an override so the autostart unit records the current file list.
 
 The default compose file runs the host's `/usr/bin/epistle`
@@ -614,6 +630,48 @@ Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks
 disabled with `stack down` stay disabled until `stack up`.
+
+### Rolling back an upgrade
+
+`sudo epistle stack rollback` asks first, then stops `mail`, compares the migrations in the
+database with those in the newest `pre-<this version>-*.sql.gz` dump, and
+restores the dump only when the schema moved past it. It then copies the
+kept binary over `/usr/bin/epistle` with one rename and starts `mail` on it.
+Its closing message says whether the database was restored or kept.
+If there is no dump from before this version, or the restore fails, nothing
+is rolled back and `mail` starts again on the current binary.
+
+Limits:
+
+- dpkg still lists the newer version as installed, so the next `apt
+  upgrade` replaces the binary again. Hold the package with `sudo apt-mark
+  hold epistle` until a fixed release, or install the older package with apt
+  when the archive still has it.
+- Whatever the database took after the dump (new accounts, flags, queue
+  state) is gone once the dump is restored. Message files on disk are kept.
+- Only the binary and the database go back; the compose file stays as
+  `stack update` rendered it.
+
+### Moving PostgreSQL to a new major
+
+A release can pin a newer PostgreSQL major in `deploy/images/Dockerfile`. A
+new major cannot open the old one's cluster, so `stack update` keeps the db
+image the stack runs and says so; the move is a separate, explicit step:
+
+```sh
+sudo epistle db upgrade
+```
+
+It counts the rows of every table, stops `mail`, dumps the database into
+`<data_dir>/backups/pre-db-upgrade-<old>-to-<new>-<timestamp>.sql.gz`, stops
+`db`, switches its image, starts it, loads the dump in one transaction and
+counts again. The images from PostgreSQL 18 on keep each major's cluster in
+its own directory of the `epistle-pgdata` volume, so the new major starts
+empty beside the old cluster rather than over it. When the counts match, the
+whole stack starts on the new major; on any failure the old image and its
+untouched cluster come back and `mail` starts again. The old cluster stays
+in the volume at `/var/lib/postgresql/<old>` until it is removed by hand
+after mail is verified.
 
 ## Backup and restore
 

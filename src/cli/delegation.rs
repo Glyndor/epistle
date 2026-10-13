@@ -10,8 +10,15 @@ impl Command {
 	pub(super) fn requires_service_user(&self) -> bool {
 		// Explicit arms keep new stateful commands from silently running as root.
 		match self {
+			// Rollback replaces /usr/bin/epistle as root and runs its
+			// database half as the account itself.
+			Command::Stack {
+				action: super::stack::StackCli::Rollback { .. },
+				..
+			} => false,
 			Command::Init { .. }
 			| Command::Stack { .. }
+			| Command::Db { .. }
 			| Command::Service { .. }
 			| Command::Limits { .. }
 			| Command::Status { .. }
@@ -59,6 +66,7 @@ impl Command {
 			| Command::Local { .. }
 			| Command::Probe { .. }
 			| Command::Completions { .. }
+			| Command::MoveSubids(_)
 			| Command::Manpages { .. } => false,
 		}
 	}

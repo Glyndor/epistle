@@ -348,6 +348,10 @@ impl Cli {
 				action,
 				dry_run,
 			} => domain::run(&config, action, dry_run),
+			Command::Stack {
+				config,
+				action: stack::StackCli::Rollback { to, yes },
+			} => super::stack_rollback::run_as_root(&config, to.as_deref(), yes),
 			Command::Stack { config, action } => match Config::load(&config) {
 				Ok(config) => stack::run(&config, action.into()),
 				Err(error) => {
@@ -377,6 +381,10 @@ impl Cli {
 			}
 			Command::Completions { shell } => super::completions::run_completions(shell),
 			Command::Manpages { dir } => super::completions::run_manpages(&dir),
+			Command::MoveSubids(args) => super::subid::run(args),
+			Command::Db { config, action } => {
+				with_config(&config, |config| super::db_upgrade::run(config, action))
+			}
 		}
 	}
 }

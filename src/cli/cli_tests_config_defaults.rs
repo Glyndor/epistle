@@ -36,6 +36,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeys { config })
 		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyRevoke { config, .. })
 		| Command::Reports { config, .. } => Some(config),
+		Command::MoveSubids(args) => Some(&args.config),
 		Command::Stack { config, .. }
 		| Command::Service { config, .. }
 		| Command::Limits { config, .. }
@@ -51,7 +52,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Domain { config, .. }
 		| Command::Dkim { config, .. }
 		| Command::Tls { config, .. }
-		| Command::ApiKey { config, .. } => Some(config),
+		| Command::ApiKey { config, .. }
+		| Command::Db { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

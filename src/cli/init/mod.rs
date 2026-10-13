@@ -12,13 +12,18 @@ mod apply;
 mod assistant;
 mod compose;
 mod detect;
+pub(crate) mod images;
 mod plan;
 mod ptr;
+mod regenerate;
 
 pub use answers::Answers;
 pub use compose::compose_file_path;
-pub(crate) use compose::update_listener_ports;
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, HOST_EPISTLE_PATH};
+pub(crate) use compose::{MAIL_STOP_GRACE_SECS, update_listener_ports};
+pub(crate) use regenerate::regenerate;
+#[cfg(test)]
+pub(crate) use regenerate::rendered_for_tests;
 
 use std::io::Write;
 use std::path::PathBuf;

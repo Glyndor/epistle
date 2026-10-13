@@ -153,7 +153,7 @@ fn mail_image_uses_cargo_pkg_version_by_default() {
 		.expect("image is a string");
 	assert_eq!(
 		image,
-		super::DISTROLESS_BASE_IMAGE,
+		super::super::images::mail_base(),
 		"the default mail image must be the digest-pinned distroless base; got {image:?}"
 	);
 }
@@ -165,4 +165,17 @@ fn mail_image_override_takes_precedence() {
 		.as_str()
 		.expect("image is a string");
 	assert_eq!(image, "localhost/epistle:dev");
+}
+
+#[test]
+fn mail_gets_a_stop_grace_period_the_drain_fits_in() {
+	let value = render(&minimal_answers(), false);
+	assert_eq!(value["services"]["mail"]["stop_grace_period"], "30s");
+	assert!(value["services"]["db"].get("stop_grace_period").is_none());
+	assert!(
+		value["services"]["clamav"]
+			.get("stop_grace_period")
+			.is_none(),
+		"only mail drains connections"
+	);
 }

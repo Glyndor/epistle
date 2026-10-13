@@ -39,11 +39,6 @@ pub(super) use host_binary::validate_host_binary_for;
 #[cfg(test)]
 pub(super) use host_binary::{ElfLinkKind, classify_elf_link, validate_host_binary_for};
 
-/// The digest-pinned `postgres:18` image. The CI workflow
-/// `.github/workflows/db.yml` carries the same digest; if either
-/// side moves, the other has to follow.
-pub(super) const POSTGRES_18_IMAGE: &str = "docker.io/library/postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941";
-
 /// The fixed role created by the database image entrypoint.
 pub(crate) const DATABASE_USER: &str = "epistle";
 /// The fixed database created by the database image entrypoint.
@@ -63,15 +58,6 @@ pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_passwor
 /// refusal at `podup up` time.
 const DATABASE_SECRET_MODE: u32 = 400;
 
-/// The digest-pinned `gcr.io/distroless/static-debian12:nonroot`
-/// runtime the default compose file uses. Pinned to the same digest
-/// the Containerfile's runtime `FROM` declares. The default mail
-/// service mounts the host binary on top of this image instead of
-/// pulling a fresh image per release, so the digest only matters on
-/// day one (when the .deb is installed) and at every base-image
-/// audit.
-pub(super) const DISTROLESS_BASE_IMAGE: &str = "gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d";
-
 /// The host path the .deb installs `epistle` at. The default compose
 /// shape bind-mounts this file into the distroless base read-only and
 /// runs it as the container's entrypoint. A source build linked
@@ -86,7 +72,7 @@ pub(crate) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
 pub(super) fn resolve_image(image: Option<&str>) -> String {
 	image
 		.map(str::to_string)
-		.unwrap_or_else(|| DISTROLESS_BASE_IMAGE.to_string())
+		.unwrap_or_else(|| super::images::mail_base().to_string())
 }
 
 /// The directory `init` keeps the database password in, under
@@ -514,6 +500,7 @@ pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<Strin
 #[path = "compose_services.rs"]
 mod services;
 use services::ComposeService;
+pub(crate) use services::MAIL_STOP_GRACE_SECS;
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {
@@ -538,7 +525,7 @@ pub(super) struct ComposeFile {
 }
 
 impl ComposeFile {
-	fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
+	pub(super) fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
 		let image = resolve_image(answers.image.as_deref());
 		let mut services = BTreeMap::new();
 		services.insert(
@@ -707,7 +694,7 @@ mod host_binary_tests;
 mod apply_host_binary_tests;
 
 /// Render either a generated compose document or an edited document.
-fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
+pub(super) fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
 	let mut bytes = serde_json::to_string_pretty(document)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	bytes.push('\n');

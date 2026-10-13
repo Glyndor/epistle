@@ -46,6 +46,7 @@ pub mod queue;
 pub mod reports;
 pub mod rules;
 pub mod sasl;
+pub mod shutdown;
 pub mod sieve;
 pub mod smtp;
 pub mod spf;

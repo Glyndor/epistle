@@ -6,15 +6,13 @@
 //! own files in the other's. `useradd` gives the first regular user
 //! 100000-165535 by default, which is also the block older packages of epistle
 //! assigned to `glyndor-epistle`, so an overlap is a real state on upgraded
-//! hosts and needs the manual move described in `docs/cli.md`.
+//! hosts until the postinst moves it (`docs/cli.md` describes the move).
 
 use std::path::Path;
 
+use super::super::subid::table::{ACCOUNT, Range, parse};
 use super::Ctx;
 use super::report::{AreaReport, Item, Level};
-
-/// The account the rootless stack runs under.
-const ACCOUNT: &str = "glyndor-epistle";
 
 /// Check the host's subordinate id tables.
 pub(super) async fn check(_ctx: &Ctx) -> AreaReport {
@@ -72,32 +70,6 @@ fn table_item(name: &str, path: &Path) -> (Item, Option<String>) {
 	};
 	let (level, detail, ranges) = evaluate(&text);
 	(Item::new(name, level, detail), ranges)
-}
-
-/// One `name:start:count` entry, as the inclusive interval it covers.
-struct Range<'a> {
-	owner: &'a str,
-	first: u64,
-	last: u64,
-}
-
-/// The entries of a subordinate id table. Blank lines, comments and lines
-/// that are not `name:start:count` with a positive count are skipped, the way
-/// shadow's own parser skips them.
-fn parse(text: &str) -> Vec<Range<'_>> {
-	text.lines()
-		.filter_map(|line| {
-			let mut fields = line.trim().split(':');
-			let owner = fields.next()?;
-			let first: u64 = fields.next()?.parse().ok()?;
-			let count: u64 = fields.next()?.parse().ok()?;
-			if owner.is_empty() || owner.starts_with('#') || count == 0 || fields.next().is_some() {
-				return None;
-			}
-			let last = first.checked_add(count - 1)?;
-			Some(Range { owner, first, last })
-		})
-		.collect()
 }
 
 /// Judge one table: Fail when a range of [`ACCOUNT`] shares ids with a range
