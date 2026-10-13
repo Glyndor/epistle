@@ -2,7 +2,6 @@
 //! lines, capabilities, LIST/XLIST entries, NAMESPACE, SELECT data and
 //! FETCH answers. Every parser walks its token list once.
 
-
 use super::token::{Token, tokenize};
 use super::wire::Response;
 
