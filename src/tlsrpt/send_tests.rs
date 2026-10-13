@@ -76,6 +76,7 @@ fn journal(data_dir: &Path, domain: &str, outcomes: &[TlsOutcome]) {
 			mx_host: "mx.remote.example",
 			sts: None,
 			sts_invalid: false,
+			sts_fetch_failed: false,
 			dane: false,
 			local_ip: Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5))),
 			peer_ip: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7))),

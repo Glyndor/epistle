@@ -28,6 +28,9 @@ pub struct Attempt<'a> {
 	pub sts: Option<&'a Policy>,
 	/// The domain publishes MTA-STS but its policy could not be parsed.
 	pub sts_invalid: bool,
+	/// The domain publishes MTA-STS but its policy file could not be
+	/// fetched (RFC 8460 §4.3 `sts-policy-fetch-error`).
+	pub sts_fetch_failed: bool,
 	/// DANE applied: validated TLSA records were found for the MX.
 	pub dane: bool,
 	/// Our address on the connection.
@@ -53,7 +56,7 @@ fn session(attempt: &Attempt<'_>, outcome: TlsOutcome, now: u64) -> TlsSession {
 	// DANE takes precedence over MTA-STS when both apply (RFC 8461 §2).
 	let policy_type = if attempt.dane {
 		"tlsa"
-	} else if attempt.sts.is_some() || attempt.sts_invalid {
+	} else if attempt.sts.is_some() || attempt.sts_invalid || attempt.sts_fetch_failed {
 		"sts"
 	} else {
 		"no-policy-found"

@@ -329,6 +329,57 @@ async fn attempt_message(
 	}
 }
 
+/// One delivery attempt with TLS-RPT enabled. Returns the journal lines
+/// recorded for the recipient domain on 2024-01-01 so the caller can
+/// assert which result types were written.
+pub(super) async fn attempt_with_tlsrpt(
+	dns: Arc<dyn DnsLookup>,
+	fetcher: Box<dyn crate::mtasts::PolicyFetcher>,
+	mx: Mx,
+	mx_dns: MxDns,
+) -> Vec<serde_json::Value> {
+	crate::queue::client::TEST_ROOTS.with(|roots| *roots.borrow_mut() = vec![certs().ca.clone()]);
+	const NOW: u64 = 1_704_110_400;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	spool
+		.store(&AcceptedMessage {
+			reverse_path: "alice@sender.example".into(),
+			recipients: vec!["bob@remote.example".to_string()],
+			data: b"From: alice@sender.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+			tlsrpt_verified: false,
+			no_dsn: Vec::new(),
+		})
+		.expect("store");
+	let sink = Arc::new(MemorySink::new());
+	let store = Arc::new(crate::mtasts::PolicyStore::new(fetcher));
+	let worker = Worker::new(
+		spool,
+		Arc::new(MxConnector {
+			sink: sink.clone(),
+			mx,
+			mx_dns,
+		}),
+		"mail.sender.example",
+	)
+	.with_dane(Arc::clone(&dns))
+	.with_mta_sts(store, dns)
+	.with_tlsrpt(dir.path());
+	worker.set_now(NOW);
+	worker.pass().await.expect("pass");
+	let path = dir
+		.path()
+		.join("reports/tlsrpt-outbound/20240101/remote.example.jsonl");
+	std::fs::read_to_string(&path)
+		.unwrap_or_default()
+		.lines()
+		.filter(|line| !line.is_empty())
+		.map(|line| serde_json::from_str(line).expect("json line"))
+		.collect()
+}
+
 /// What RFC 8461 and RFC 7672 call for in one cell.
 fn expected(sts: Sts, tlsa: Tlsa, mx: Mx, mode: OutboundTls, mx_dns: MxDns) -> Seen {
 	match mx_dns {
