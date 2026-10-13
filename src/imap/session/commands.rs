@@ -96,6 +96,12 @@ impl Session {
 
 		let mut response = String::new();
 		if remove_source {
+			// RFC 6851 §4.3: MOVE reports COPYUID in an untagged OK before
+			// the expunges, since by the tagged reply the source UIDs are
+			// gone.
+			if !copyuid.is_empty() {
+				response.push_str(&format!("* OK {copyuid}moved\r\n"));
+			}
 			// Remove bottom-up so earlier sequence numbers stay valid, but
 			// emit EXPUNGE top-down with renumber-correct values.
 			for (offset, sequence_number) in matched.iter().enumerate() {
@@ -115,8 +121,15 @@ impl Session {
 				));
 			}
 		}
-		let verb = if remove_source { "MOVE" } else { "COPY" };
-		response.push_str(&format!("{tag} OK {copyuid}{verb} completed\r\n"));
+		// A copy into the selected mailbox, or a change another session
+		// made meanwhile, reaches the client before the tagged reply.
+		response.push_str(&self.sync_selected(true));
+		let (code, verb) = if remove_source {
+			("", "MOVE")
+		} else {
+			(copyuid.as_str(), "COPY")
+		};
+		response.push_str(&format!("{tag} OK {code}{verb} completed\r\n"));
 		Output::text(response)
 	}
 

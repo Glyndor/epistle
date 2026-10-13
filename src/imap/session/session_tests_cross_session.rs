@@ -148,6 +148,24 @@ fn append_announces_expunges_before_the_new_count() {
 	);
 }
 
+/// imaptest `move`: the COPYUID code travels in an untagged OK before the
+/// EXPUNGE (RFC 6851 §4.3), and a MOVE into the selected mailbox
+/// announces the arrival.
+#[test]
+fn move_reports_copyuid_before_expunge_and_announces_arrival() {
+	let (_dir, mut first, _second) = two_sessions(1);
+	let validity = match &first.state {
+		State::Selected { snapshot, .. } => snapshot.uid_validity(),
+		_ => panic!("INBOX must be selected"),
+	};
+	assert_eq!(
+		text(&first.command_line("a MOVE 1 INBOX")),
+		format!(
+			"* OK [COPYUID {validity} 1 2] moved\r\n* 1 EXPUNGE\r\n* 1 EXISTS\r\na OK MOVE completed\r\n"
+		)
+	);
+}
+
 /// IDLE reports another session's flag change as FETCH (RFC 9051 §6.3.13).
 #[test]
 fn idle_reports_flag_changes_from_another_session() {
