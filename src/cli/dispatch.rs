@@ -136,6 +136,7 @@ impl Cli {
 					ExitCode::FAILURE
 				}
 			},
+			Command::Migrate(args) => super::migrate::run(args),
 			Command::Import {
 				config,
 				account,
