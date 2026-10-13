@@ -2,11 +2,12 @@
 
 /// Maximum command line length accepted, excluding CRLF and literals.
 ///
-/// RFC 7162 §4 asks servers to take at least 8000 octets, and an RFC 2971
-/// ID command at its own maximum (30 pairs of 30 and 1024 octet strings) is
-/// about 32 KiB. 64 KiB is Dovecot's default and bounds the per-connection
-/// line buffer.
-pub const MAX_COMMAND_LINE: usize = 64 * 1024;
+/// RFC 7162 §4 asks servers to take at least 8000 octets, but an RFC 2971
+/// ID command at its own maximum (30 pairs of 30 and 1024 octet strings)
+/// is 31.8 KB, so 32 KiB is the smallest round bound that holds it. The
+/// line decoder scans each byte once and the recursive parsers cap their
+/// nesting, so the bound limits memory and work per line, not stack depth.
+pub const MAX_COMMAND_LINE: usize = 32 * 1024;
 
 /// A parsed client command with its tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
