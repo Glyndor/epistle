@@ -3,13 +3,13 @@
 use super::{Output, Session, mailbox};
 
 impl Session {
-	pub(super) fn lsub(&mut self, tag: &str, pattern: &str) -> Output {
+	pub(super) fn lsub(&mut self, tag: &str, reference: &str, pattern: &str) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
 		let mut response = String::new();
 		for name in mailbox::list_subscribed(&self.data_dir, &account) {
-			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
+			let matches = crate::imap::list_pattern::matches(reference, pattern, &name);
 			if matches {
 				let wire = self.mailbox_astring(&name);
 				response.push_str(&format!("* LSUB () \"/\" {wire}\r\n"));

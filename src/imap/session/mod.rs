@@ -7,6 +7,7 @@ mod acl;
 mod auth;
 mod codes;
 mod commands;
+mod condstore;
 mod defaults;
 mod expunge;
 mod fetch;
@@ -19,9 +20,12 @@ mod lsub;
 mod metadata;
 mod notify;
 mod quota;
+mod search_fields;
+mod search_header;
 mod select;
 mod sort;
 mod state;
+mod sync;
 mod thread;
 mod utf8;
 
@@ -72,7 +76,7 @@ impl Session {
 				return output;
 			}
 		};
-		self.apply(tagged)
+		self.apply_enabling_condstore(tagged)
 	}
 
 	fn apply(&mut self, mut tagged: Tagged) -> Output {
@@ -150,15 +154,15 @@ impl Session {
 				"* BYE logging out\r\n{tag} OK LOGOUT completed\r\n"
 			)),
 			Command::List {
+				reference,
 				pattern,
 				return_status,
 				select_subscribed,
 				select_special_use,
 				return_attributes,
-				..
 			} => self.list(
 				&tag,
-				&pattern,
+				(&reference, &pattern),
 				&return_status,
 				select_subscribed,
 				select_special_use,
@@ -250,7 +254,7 @@ impl Session {
 			Command::Unsubscribe { mailbox } => self.subscription_op(&tag, |data_dir, account| {
 				mailbox::unsubscribe(data_dir, account, &mailbox)
 			}),
-			Command::Lsub { pattern, .. } => self.lsub(&tag, &pattern),
+			Command::Lsub { reference, pattern } => self.lsub(&tag, &reference, &pattern),
 			Command::GetAcl { mailbox } => self.get_acl(&tag, &mailbox),
 			Command::MyRights { mailbox } => self.my_rights(&tag, &mailbox),
 			Command::ListRights {
@@ -378,41 +382,12 @@ impl Session {
 	}
 
 	/// NOOP (RFC 9051 §7.1.2). The only required reply is the tagged OK,
-	/// but the server must re-announce the SELECTed mailbox's current
-	/// message count when it changed since the last untagged response.
-	/// Clients that track the count from untagged lines (Dovecot's
-	/// imaptest is the canonical example) rely on this for any change
-	/// that occurred while no other reply was in flight.
+	/// but NOOP is the client's poll: it carries every change to the
+	/// SELECTed mailbox since the client last heard about it, as EXPUNGE,
+	/// FETCH FLAGS and EXISTS (see [`Self::sync_selected`]).
 	fn noop(&mut self, tag: &str) -> Output {
-		let Some((account, mailbox)) = self.selected_pair() else {
-			return Output::text(format!("{tag} OK NOOP completed\r\n"));
-		};
-		let fresh = match self.open_snapshot(&account, &mailbox) {
-			Ok(snapshot) => snapshot,
-			Err(_) => return Output::text(format!("{tag} OK NOOP completed\r\n")),
-		};
-		let State::Selected { snapshot, .. } = &mut self.state else {
-			return Output::text(format!("{tag} OK NOOP completed\r\n"));
-		};
-		let count_after = u32::try_from(fresh.len()).unwrap_or(u32::MAX);
-		*snapshot = fresh;
-		// Always re-announce when the SELECTed mailbox's count differs
-		// from what we have on record for this session. The literal
-		// APPEND/REPLACE path records its own count after emitting
-		// EXISTS, so the comparison here catches any drift a concurrent
-		// session introduced (delivery, another APPEND, ...). Dovecot's
-		// imaptest strictly checks `* N EXISTS` on every reply that
-		// could carry a state delta, and the difference between
-		// "stays the same" and "changed at runtime" is the difference
-		// between a passing scripted test and a stack of
-		// `Missing N untagged replies`.
-		let pre = if self.announced_exists == Some(count_after) {
-			String::new()
-		} else {
-			self.announced_exists = Some(count_after);
-			format!("* {count_after} EXISTS\r\n")
-		};
-		Output::text(format!("{pre}{tag} OK NOOP completed\r\n"))
+		let updates = self.sync_selected(true);
+		Output::text(format!("{updates}{tag} OK NOOP completed\r\n"))
 	}
 
 	/// `(account, mailbox)` for the SELECTed state, or `None` for any

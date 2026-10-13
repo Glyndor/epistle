@@ -117,6 +117,9 @@ pub struct Session {
 	pub(super) uidonly: bool,
 	/// Revision negotiated for the lifetime of this connection (RFC 9051 Appendix A).
 	pub(super) imap4rev2: bool,
+	/// A CONDSTORE enabling command (RFC 7162 §3.1) has been seen: untagged
+	/// FETCH replies to STORE carry UID and MODSEQ from then on.
+	pub(super) condstore: bool,
 	/// UTF8=ACCEPT (RFC 6855) enabled: mailbox names cross the wire as UTF-8.
 	pub(super) utf8_accept: bool,
 	pub(super) idle_tag: Option<String>,
@@ -169,15 +172,6 @@ pub struct Session {
 	/// offered through `AUTHENTICATE`. `false` hides both on the wire
 	/// and refuses an explicit `AUTHENTICATE` against them.
 	pub(super) scram_enabled: bool,
-	/// The message count the client was last told for the SELECTed
-	/// mailbox. `None` until the first SELECT/EXAMINE or the first
-	/// post-SELECT announcement. Used by NOOP and other command replies
-	/// to emit `* N EXISTS` when the on-disk count changed but no other
-	/// untagged response covered the gap (RFC 9051 §7.1.2 + §7.4).
-	/// `u32::MAX` marks an explicit "all caught up" state, used after a
-	/// SELECT where the mailbox is empty (no future change can shrink the
-	/// count, only grow it, so MAX disables any further announcement).
-	pub(super) announced_exists: Option<u32>,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -242,6 +236,7 @@ impl Session {
 			pending_append: None,
 			uidonly: false,
 			imap4rev2: false,
+			condstore: false,
 			utf8_accept: false,
 			idle_tag: None,
 			notify_selected: None,
@@ -261,7 +256,6 @@ impl Session {
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
 			scram_enabled: true,
-			announced_exists: None,
 		}
 	}
 

@@ -70,8 +70,12 @@ mod auth_bans;
 mod basic;
 #[path = "session_tests_commands.rs"]
 mod commands_tests;
+#[path = "session_tests_condstore_search.rs"]
+mod condstore_search;
 #[path = "session_tests_encoded_search.rs"]
 mod encoded_search;
+#[path = "session_tests_esearch_sets.rs"]
+mod esearch_sets;
 #[path = "session_tests_keyword_search.rs"]
 mod keyword_search;
 #[path = "session_tests_metadata.rs"]
@@ -84,6 +88,10 @@ mod paths;
 mod quota_zero;
 #[path = "session_tests_search.rs"]
 mod search;
+#[path = "session_tests_search_headers.rs"]
+mod search_headers;
+#[path = "session_tests_search_keys.rs"]
+mod search_keys;
 
 #[path = "session_tests_rev1.rs"]
 mod rev1;
@@ -157,3 +165,6 @@ mod append_exists;
 
 #[path = "session_tests_noop_exists.rs"]
 mod noop_exists;
+
+#[path = "session_tests_cross_session.rs"]
+mod cross_session;

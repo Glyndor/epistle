@@ -10,6 +10,7 @@ mod flags;
 mod index;
 pub mod junk_trainer;
 pub mod keyword;
+mod list_pattern;
 pub mod mailbox;
 pub mod metadata;
 mod modseq;

@@ -121,6 +121,13 @@ pub(super) fn literal_announcement(args: &str) -> Option<LiteralAnnouncement> {
 	})
 }
 
+/// The literal a continuation line announces, if any: the line that follows
+/// a literal inside the same command, such as the next message of a
+/// MULTIAPPEND (`(\Seen) {12+}`).
+pub(crate) fn literal_announcement_in_tail(line: &str) -> Option<LiteralAnnouncement> {
+	literal_announcement(line)
+}
+
 /// Find the literal announcement in a full command line, but only for
 /// commands that actually carry literals (`APPEND` / `REPLACE`). The
 /// parser may have rejected the line; in that case the session uses this

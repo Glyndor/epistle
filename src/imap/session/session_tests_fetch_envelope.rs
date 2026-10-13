@@ -3,6 +3,10 @@ use super::{deliver, logged_in};
 pub(super) const PLAIN: &[u8] = b"Date: Fri, 9 Oct 2026 12:00:00 +0000\r\nSubject: hello\r\nFrom: Alice <alice@example.org>\r\nTo: bob@example.net\r\nMessage-ID: <one@example.org>\r\n\r\nhello\r\n";
 pub(super) const SIMPLE: &str = "(\"Fri, 9 Oct 2026 12:00:00 +0000\" \"hello\" ((\"Alice\" NIL \"alice\" \"example.org\")) ((\"Alice\" NIL \"alice\" \"example.org\")) ((\"Alice\" NIL \"alice\" \"example.org\")) ((NIL NIL \"bob\" \"example.net\")) NIL NIL NIL \"<one@example.org>\")";
 
+/// The untagged line the first CONDSTORE enabling command of a selected
+/// session carries (RFC 7162 §3.1), here a one-message mailbox.
+pub(super) const CONDSTORE_ON: &str = "* OK [HIGHESTMODSEQ 1] highest mod-sequence\r\n";
+
 pub(super) fn selected(raw: &[u8]) -> (tempfile::TempDir, super::Session) {
 	let dir = tempfile::tempdir_in(".").unwrap();
 	deliver(dir.path(), raw);
@@ -35,8 +39,10 @@ fn fetch_envelope_plain_and_uid_changed_since() {
 	exact(
 		&mut session,
 		"u UID FETCH 1:* (ENVELOPE) (CHANGEDSINCE 0)",
-		format!("* 1 FETCH (ENVELOPE {SIMPLE} UID 1 MODSEQ (1))\r\nu OK FETCH completed\r\n")
-			.as_bytes(),
+		format!(
+			"{CONDSTORE_ON}* 1 FETCH (ENVELOPE {SIMPLE} UID 1 MODSEQ (1))\r\nu OK FETCH completed\r\n"
+		)
+		.as_bytes(),
 		"UID ENVELOPE must preserve CHANGEDSINCE and report identifiers",
 	);
 }

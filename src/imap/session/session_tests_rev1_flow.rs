@@ -115,12 +115,12 @@ fn rev1_lsub_and_fetch_move_unselect_extensions_remain_available() {
 		);
 		let moved = text(&session.command_line("m UID MOVE 1 Sent"));
 		assert!(
-			moved.starts_with("* 1 EXPUNGE\r\nm OK [COPYUID "),
-			"UID MOVE must expunge and report COPYUID"
+			moved.starts_with("* OK [COPYUID ") && moved.contains(" 1 1] moved\r\n"),
+			"UID MOVE must report source and destination UIDs before the expunge"
 		);
 		assert!(
-			moved.ends_with(" 1 1] MOVE completed\r\n"),
-			"UID MOVE must report source and destination UIDs"
+			moved.ends_with("\r\n* 1 EXPUNGE\r\nm OK MOVE completed\r\n"),
+			"UID MOVE must expunge the source"
 		);
 		assert_eq!(
 			text(&session.command_line("q SEARCH RETURN (COUNT) ALL")),

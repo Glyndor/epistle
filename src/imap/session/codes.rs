@@ -4,12 +4,22 @@ use super::super::command::ReturnOpt;
 use super::mailbox;
 
 /// Build the ESEARCH reply line (RFC 4731) for the requested return options.
-pub(super) fn esearch_line(tag: &str, uid: bool, hits: &[u32], opts: &[ReturnOpt]) -> String {
+/// `modseq` is the CONDSTORE MODSEQ result (RFC 7162 §3.1.5), written last.
+pub(super) fn esearch_line(
+	tag: &str,
+	uid: bool,
+	hits: &[u32],
+	opts: &[ReturnOpt],
+	modseq: Option<u64>,
+) -> String {
 	let mut line = format!("* ESEARCH (TAG \"{tag}\")");
 	if uid {
 		line.push_str(" UID");
 	}
 	line.push_str(&esearch_results(hits, opts));
+	if let Some(modseq) = modseq {
+		line.push_str(&format!(" MODSEQ {modseq}"));
+	}
 	line.push_str("\r\n");
 	line
 }
@@ -55,7 +65,7 @@ fn esearch_results(hits: &[u32], opts: &[ReturnOpt]) -> String {
 			}
 			ReturnOpt::All => {
 				if !hits.is_empty() {
-					out.push_str(&format!(" ALL {}", uid_set(hits)));
+					out.push_str(&format!(" ALL {}", sequence_set(hits)));
 				}
 			}
 			// SEARCHRES (RFC 5182): SAVE writes to the session's reservation
@@ -101,6 +111,31 @@ pub(super) fn copyuid_code(
 }
 
 /// Format a UID list as a comma-separated set (no range coalescing).
+/// Write ascending `numbers` as a sequence-set, joining each run of
+/// consecutive values into a `first:last` range (`1,2,3,5` becomes `1:3,5`).
+pub(super) fn sequence_set(numbers: &[u32]) -> String {
+	let mut out = String::new();
+	let mut i = 0;
+	while i < numbers.len() {
+		let first = numbers[i];
+		let mut last = first;
+		while numbers.get(i + 1) == last.checked_add(1).as_ref() {
+			last += 1;
+			i += 1;
+		}
+		if !out.is_empty() {
+			out.push(',');
+		}
+		if first == last {
+			out.push_str(&first.to_string());
+		} else {
+			out.push_str(&format!("{first}:{last}"));
+		}
+		i += 1;
+	}
+	out
+}
+
 pub(super) fn uid_set(uids: &[u32]) -> String {
 	uids.iter()
 		.map(u32::to_string)

@@ -456,6 +456,8 @@ pub enum SearchKey {
 	Header(String, String),
 	/// Substring anywhere in the message (headers + body).
 	Text(String),
+	/// Substring in the body only, after the header block (`BODY`).
+	Body(String),
 	/// Explicit message sequence set.
 	Sequence(SequenceSet),
 	/// Explicit UID set (`UID <set>`).
@@ -472,6 +474,13 @@ pub enum SearchKey {
 	Since(u32, u8, u8),
 	/// INTERNALDATE falls within this date (midnight to midnight UTC).
 	On(u32, u8, u8),
+	/// `SENTBEFORE`: the Date header's own calendar date, time and zone
+	/// disregarded, is earlier than this date.
+	SentBefore(u32, u8, u8),
+	/// `SENTSINCE`: the Date header's calendar date is this date or later.
+	SentSince(u32, u8, u8),
+	/// `SENTON`: the Date header's calendar date is this date.
+	SentOn(u32, u8, u8),
 	/// RFC 2822 size strictly greater than n octets.
 	Larger(u32),
 	/// RFC 2822 size strictly less than n octets.
@@ -634,9 +643,10 @@ mod metadata;
 mod notify;
 mod parse;
 mod search;
+mod search_key;
 mod select_params;
 
-pub(crate) use literal::literal_announcement_in_line;
+pub(crate) use literal::{literal_announcement_in_line, literal_announcement_in_tail};
 
 pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
 pub(super) use parse::MAX_APPEND_SIZE;
