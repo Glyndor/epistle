@@ -86,17 +86,11 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          # The toolchain is part of the key: a cache built under an older
-          # pin must not survive a bump via the `command -v ... ||`
-          # short-circuit below, or the pin would be silently ignored.
-          key: cargo-audit-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cargo-audit-version }}
 
+      # No cache here: the scheduled run checks out develop and main, and a
+      # cache saved from a checked-out ref in a default-branch context is a
+      # poisoning path CodeQL flags. Installing the pinned tools takes a
+      # couple of minutes once a day.
       - name: Install cargo-audit
         # A bare "X.Y.Z" passed to `cargo install --version` already installs
         # that exact release — caret ("^") matching is a Cargo.toml dependency
@@ -184,14 +178,6 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          # Same reasoning as cargo-audit's cache key above.
-          key: cargo-deny-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cargo-deny-version }}
 
       - name: Install cargo-deny
         # Same exact-pin reasoning as cargo-audit above: the bare version is
