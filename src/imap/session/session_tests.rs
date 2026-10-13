@@ -168,3 +168,12 @@ mod noop_exists;
 
 #[path = "session_tests_cross_session.rs"]
 mod cross_session;
+
+#[path = "session_tests_sort_dates.rs"]
+mod sort_dates;
+
+#[path = "session_tests_sort_text.rs"]
+mod sort_text;
+
+#[path = "session_tests_thread_ordered.rs"]
+mod thread_ordered;

@@ -365,6 +365,7 @@ fn parses_replace_command() {
 			sequence,
 			mailbox,
 			flags,
+			date,
 			size,
 			uid,
 			synchronizing,
@@ -372,6 +373,7 @@ fn parses_replace_command() {
 			assert_eq!(sequence, 3);
 			assert_eq!(mailbox, "Archive");
 			assert_eq!(flags, vec!["\\Seen".to_string()]);
+			assert_eq!(date, None);
 			assert_eq!(size, 10);
 			assert!(!uid);
 			assert!(synchronizing);

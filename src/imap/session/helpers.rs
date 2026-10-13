@@ -169,32 +169,6 @@ pub(super) fn systemtime_to_epoch_day(t: std::time::SystemTime) -> i64 {
 	}
 }
 
-pub(super) fn header_value(lower_message: &str, name: &str) -> Option<String> {
-	let header_end = lower_message
-		.find("\r\n\r\n")
-		.unwrap_or(lower_message.len());
-	let headers = &lower_message[..header_end];
-	let mut value: Option<String> = None;
-	for line in headers.split("\r\n") {
-		if line.starts_with(' ') || line.starts_with('\t') {
-			if let Some(value) = &mut value {
-				value.push(' ');
-				value.push_str(line.trim());
-			}
-			continue;
-		}
-		if value.is_some() {
-			break;
-		}
-		if let Some(rest) = line.strip_prefix(name)
-			&& let Some(rest) = rest.strip_prefix(':')
-		{
-			value = Some(rest.trim().to_string());
-		}
-	}
-	value
-}
-
 /// The RFC 6154 special-use attribute for a well-known mailbox name, or an
 /// empty string. Matching is case-insensitive on the leaf name.
 pub(super) fn special_use_attribute(name: &str) -> &'static str {

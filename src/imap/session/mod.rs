@@ -5,6 +5,7 @@ use super::mailbox;
 
 mod acl;
 mod auth;
+mod base_subject;
 mod codes;
 mod commands;
 mod condstore;
@@ -24,6 +25,7 @@ mod search_fields;
 mod search_header;
 mod select;
 mod sort;
+mod sort_keys;
 mod state;
 mod sync;
 mod thread;
@@ -204,18 +206,29 @@ impl Session {
 			Command::Append {
 				mailbox,
 				flags,
+				date,
 				size,
 				synchronizing,
 				utf8,
-			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing, utf8),
+			} => self.append_begin(&tag, &mailbox, &flags, date, size, synchronizing, utf8),
 			Command::Replace {
 				sequence,
 				mailbox,
 				flags,
+				date,
 				size,
 				uid,
 				synchronizing,
-			} => self.replace_begin(&tag, sequence, &mailbox, &flags, size, uid, synchronizing),
+			} => self.replace_begin(
+				&tag,
+				sequence,
+				&mailbox,
+				&flags,
+				date,
+				size,
+				uid,
+				synchronizing,
+			),
 			Command::Fetch {
 				sequence,
 				items,

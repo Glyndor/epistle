@@ -28,13 +28,6 @@ declare -A SKIP=()
 # passes fails the job until it is taken off this list, so the list only
 # shrinks and every other script is held to passing.
 declare -A KNOWN_FAILING=(
-	[sort-addresses]="SORT and THREAD order differs from RFC 5256"
-	[sort-arrival]="SORT and THREAD order differs from RFC 5256"
-	[sort-date]="SORT and THREAD order differs from RFC 5256"
-	[sort-size]="SORT and THREAD order differs from RFC 5256"
-	[sort-subject]="SORT and THREAD order differs from RFC 5256"
-	[thread-orderedsubject]="SORT and THREAD order differs from RFC 5256"
-	[thread-orderedsubject2]="SORT and THREAD order differs from RFC 5256"
 	[search-flags]="no message is ever \\Recent (zero-recent policy), so RECENT, NEW and OLD differ"
 	[copy]="\\Recent is not tracked: epistle reports zero recent messages"
 	[select]="\\Recent is not tracked: epistle reports zero recent messages"

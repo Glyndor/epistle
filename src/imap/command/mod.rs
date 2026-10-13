@@ -149,6 +149,8 @@ pub enum Command {
 		mailbox: String,
 		/// Initial flags for the appended message (may be empty).
 		flags: Vec<String>,
+		/// The INTERNALDATE the client asked for, if any.
+		date: Option<std::time::SystemTime>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// `false` for the non-synchronizing `{n+}` form (RFC 7888), where
@@ -170,6 +172,8 @@ pub enum Command {
 		mailbox: String,
 		/// Initial flags for the appended message.
 		flags: Vec<String>,
+		/// The INTERNALDATE the client asked for, if any.
+		date: Option<std::time::SystemTime>,
 		/// Size of the literal body in octets.
 		size: usize,
 		/// Whether `sequence` is a UID (`UID REPLACE`) instead of a
@@ -637,6 +641,7 @@ fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
 
 mod acl;
 mod credentials;
+mod date_time;
 mod list;
 pub(super) mod literal;
 mod metadata;

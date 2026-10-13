@@ -234,6 +234,21 @@ pub fn append(
 	data: &[u8],
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Uuid> {
+	append_dated(data_dir, account, mailbox, flags, None, data, crypto)
+}
+
+/// [`append`] with the INTERNALDATE an IMAP APPEND names. The date is kept
+/// as the message file's modification time, which is where the scan reads
+/// INTERNALDATE from; `None` leaves it at the arrival time.
+pub fn append_dated(
+	data_dir: &Path,
+	account: &str,
+	mailbox: &str,
+	flags: &[Flag],
+	date: Option<std::time::SystemTime>,
+	data: &[u8],
+	crypto: &MessageCrypto,
+) -> std::io::Result<Uuid> {
 	let account = AccountName::new(account)?;
 	let account_dir = MailboxName::new(mailbox)
 		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
@@ -246,6 +261,12 @@ pub fn append(
 	let id = Uuid::now_v7();
 	let tmp = message_file(&tmp_dir, id, MessageExt::Eml)?;
 	std::fs::write(&tmp, &crypto.encode(data)?)?;
+	if let Some(date) = date {
+		std::fs::File::options()
+			.write(true)
+			.open(&tmp)?
+			.set_modified(date)?;
+	}
 	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
