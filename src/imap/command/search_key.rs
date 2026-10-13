@@ -6,8 +6,22 @@ use super::search::find_close_paren;
 use super::{SearchKey, parse_imap_date, parse_sequence_set};
 use crate::imap::mailbox::Flag;
 
+/// How deep parenthesised groups, NOT and OR may nest in one search key.
+/// Parsing, matching and dropping a key all recurse once per level, so the
+/// bound keeps a long command line from exhausting the stack; deeper input is
+/// a BAD command.
+pub(super) const MAX_SEARCH_DEPTH: usize = 64;
+
 /// Parse one search-key from the start of `s`, return `(key, remaining)`.
 pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
+	parse_key(s, 0)
+}
+
+fn parse_key(s: &str, depth: usize) -> Option<(SearchKey, &str)> {
+	if depth >= MAX_SEARCH_DEPTH {
+		return None;
+	}
+	let nested = |s| parse_key(s, depth + 1);
 	if s.starts_with('(') {
 		let close = find_close_paren(s)?;
 		let inner = s[1..close].trim();
@@ -15,7 +29,7 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 		let mut keys = Vec::new();
 		let mut inner_rest = inner;
 		while !inner_rest.is_empty() {
-			let (key, rest) = parse_search_key(inner_rest)?;
+			let (key, rest) = nested(inner_rest)?;
 			keys.push(key);
 			inner_rest = rest.trim_start();
 		}
@@ -94,12 +108,12 @@ pub(super) fn parse_search_key(s: &str) -> Option<(SearchKey, &str)> {
 			(SearchKey::UidSet(parse_sequence_set(set_text)?), rest)
 		}
 		"OR" => {
-			let (key1, rest1) = parse_search_key(after.trim_start())?;
-			let (key2, rest2) = parse_search_key(rest1.trim_start())?;
+			let (key1, rest1) = nested(after.trim_start())?;
+			let (key2, rest2) = nested(rest1.trim_start())?;
 			(SearchKey::Or(Box::new(key1), Box::new(key2)), rest2)
 		}
 		"NOT" => {
-			let (key, rest) = parse_search_key(after.trim_start())?;
+			let (key, rest) = nested(after.trim_start())?;
 			(SearchKey::Not(Box::new(key)), rest)
 		}
 		"BEFORE" | "SINCE" | "ON" | "SENTBEFORE" | "SENTSINCE" | "SENTON" => {
@@ -169,3 +183,7 @@ fn next_token(s: &str) -> (&str, &str) {
 		None => (s, ""),
 	}
 }
+
+#[cfg(test)]
+#[path = "search_key_tests_depth.rs"]
+mod tests_depth;
