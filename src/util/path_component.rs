@@ -176,7 +176,9 @@ pub enum MailboxName<'a> {
 	/// The always-present inbox (matched case-insensitively).
 	Inbox,
 	/// A folder under `folders/`. Names are ASCII letters, digits, space,
-	/// `-`, `_` and `.`; they cannot start with a dot or end with a space.
+	/// `-`, `_` and `.`, plus non-ASCII characters spelled in modified UTF-7
+	/// (`Entw&APw-rfe` for `Entwürfe`, RFC 3501 §5.1.3); they cannot start
+	/// with a dot or end with a space.
 	Folder(&'a str),
 }
 
@@ -193,13 +195,21 @@ impl<'a> MailboxName<'a> {
 	/// Accept only a folder name; `INBOX` is refused. Used for create,
 	/// delete and rename, which must never touch the inbox.
 	pub fn folder(name: &'a str) -> Result<Self, InvalidComponent> {
+		// The on-disk spelling is the canonical modified UTF-7 encoding, so
+		// it stays printable ASCII; the decoded name carries the same ASCII
+		// set as before plus any non-ASCII character that is not a control
+		// or a line/paragraph separator (Net-Unicode, RFC 5198).
+		let decoded = super::mutf7::decode(name);
 		let plain = is_plain_component(name)
 			&& !name.eq_ignore_ascii_case("INBOX")
-			&& name
-				.chars()
-				.all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
-			&& !name.starts_with('.')
-			&& !name.ends_with(' ');
+			&& decoded.is_some_and(|decoded| {
+				decoded.chars().all(|c| {
+					c.is_ascii_alphanumeric()
+						|| matches!(c, ' ' | '-' | '_' | '.')
+						|| (!c.is_ascii()
+							&& !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}'))
+				}) && !decoded.ends_with(' ')
+			}) && !name.starts_with('.');
 		if plain {
 			Ok(Self::Folder(name))
 		} else {
@@ -329,7 +339,8 @@ pub fn message_tmp_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Resul
 	contained_child(dir, &format!("{id}{}.tmp", ext.suffix()))
 }
 
-/// The fixed per-mailbox bookkeeping files.
+/// The fixed per-mailbox (and, for the JMAP journal, per-account) bookkeeping
+/// files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateFile {
 	/// Next UID counter.
@@ -342,16 +353,26 @@ pub enum StateFile {
 	Vanished,
 	/// Metadata index.
 	Index,
+	/// Per-account JMAP change journal (one line per changed object).
+	JmapJournal,
+	/// Per-account JMAP journal header: epoch and trim floor.
+	JmapState,
+	/// Per-account lock serialising every JMAP journal reader and writer.
+	JmapLock,
 }
 
 impl StateFile {
-	fn name(self) -> &'static str {
+	/// The file name inside the directory it belongs to.
+	pub(crate) fn name(self) -> &'static str {
 		match self {
 			Self::UidNext => ".uidnext",
 			Self::UidValidity => ".uidvalidity",
 			Self::ModseqCounter => ".modseqctr",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",
+			Self::JmapJournal => ".jmap_changes",
+			Self::JmapState => ".jmap_state",
+			Self::JmapLock => ".jmap_lock",
 		}
 	}
 }

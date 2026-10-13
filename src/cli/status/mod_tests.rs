@@ -109,11 +109,11 @@ fn check_lists_items_under_the_area_line_and_status_does_not() {
 		AreaReport::from_items(vec![Item::new("smtp", Level::Warn, "slow")], "1 warning"),
 	)];
 	let mut detailed = Vec::new();
-	render_table(&reports, true, &mut detailed).expect("render");
+	render_table(&reports, true, None, &mut detailed).expect("render");
 	let detailed = String::from_utf8(detailed).expect("utf8");
 	assert_eq!(detailed, "config     warn  1 warning\n  warn  smtp: slow\n");
 	let mut compact = Vec::new();
-	render_table(&reports, false, &mut compact).expect("render");
+	render_table(&reports, false, None, &mut compact).expect("render");
 	assert_eq!(
 		String::from_utf8(compact).expect("utf8"),
 		"config     warn  1 warning\n"
@@ -136,8 +136,10 @@ fn status_covers_every_area_in_a_stable_order() {
 			"dns",
 			"db",
 			"antivirus",
+			"antispam",
 			"queue",
-			"disk"
+			"disk",
+			"subid"
 		]
 	);
 }

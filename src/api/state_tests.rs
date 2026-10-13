@@ -41,6 +41,7 @@ fn key(label: &str, secret: &str) -> ApiKey {
 		// `add()` rejects empty scopes; every test-built key carries one.
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
+		account: None,
 	}
 }
 
@@ -122,6 +123,7 @@ fn owns_address_is_fail_closed_without_directory() {
 fn owns_address_consults_attached_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let accounts = crate::config::Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),

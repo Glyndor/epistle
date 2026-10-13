@@ -181,6 +181,7 @@ impl Session {
 			bytes,
 			close: false,
 			collect_literal: None,
+			literal_trailer: b"\r\n",
 			discard_literal: None,
 			idle: false,
 			upgrade_tls: false,

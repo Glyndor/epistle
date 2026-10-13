@@ -16,6 +16,38 @@ pub fn show(config: &Config, out: &mut impl std::io::Write) -> std::io::Result<(
 	Ok(())
 }
 
+/// `antispam show --json`: `{"<key>": {"value", "source"}}` with the same
+/// values and sources as the text rows. A DNSBL list is an array; every
+/// other value is the string the text form prints (`unset` when absent,
+/// `set` for a secret).
+pub fn show_json(config: &Config) -> serde_json::Value {
+	let mut keys = serde_json::Map::new();
+	for key in all_keys() {
+		let row = render_row(config, key);
+		let mut fields = row.splitn(3, '\t');
+		let (name, value, source) = (
+			fields.next().unwrap_or_default(),
+			fields.next().unwrap_or_default(),
+			fields.next().unwrap_or_default(),
+		);
+		let value = match key {
+			Key::DnsblZones | Key::DnsblDomainZones | Key::DnsblUrlZones => {
+				let values: Vec<&str> = match value {
+					"(empty)" => Vec::new(),
+					list => list.split(',').collect(),
+				};
+				serde_json::json!(values)
+			}
+			_ => serde_json::json!(value),
+		};
+		keys.insert(
+			name.to_string(),
+			serde_json::json!({ "value": value, "source": source }),
+		);
+	}
+	serde_json::Value::Object(keys)
+}
+
 pub(super) fn list_row(name: &str, values: &[String]) -> String {
 	if values.is_empty() {
 		format!("{name}\t(empty)\tdefault")
@@ -25,7 +57,7 @@ pub(super) fn list_row(name: &str, values: &[String]) -> String {
 }
 
 /// Every key the show path walks, in stable order.
-pub(super) fn all_keys() -> [Key; 15] {
+pub(super) fn all_keys() -> [Key; 16] {
 	[
 		Key::DnsblZones,
 		Key::DnsblDomainZones,
@@ -36,6 +68,7 @@ pub(super) fn all_keys() -> [Key; 15] {
 		Key::ClamdOnFound,
 		Key::ClamdTimeout,
 		Key::ClamdMaxSize,
+		Key::ScanAuthenticated,
 		Key::Subjectpass,
 		Key::LlmEndpoint,
 		Key::LlmModel,
@@ -70,6 +103,14 @@ fn render_row(config: &Config, key: Key) -> String {
 		),
 		Key::ClamdTimeout => scalar_row(key.name(), Some(config.antispam.clamd_timeout_secs)),
 		Key::ClamdMaxSize => scalar_row(key.name(), Some(config.antispam.clamd_max_bytes)),
+		Key::ScanAuthenticated => scalar_row(
+			key.name(),
+			Some(if config.antispam.scan_authenticated {
+				"on"
+			} else {
+				"off"
+			}),
+		),
 		Key::Subjectpass => scalar_row(
 			key.name(),
 			Some(if config.subjectpass.enabled {

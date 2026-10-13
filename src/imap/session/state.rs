@@ -27,6 +27,9 @@ pub struct Output {
 	/// exclusive with `collect_literal`: a command either accepts the
 	/// literal and stores it, or rejects it and discards it.
 	pub discard_literal: Option<usize>,
+	/// The octets that must follow a collected literal: CRLF, or `)` CRLF
+	/// for the RFC 6855 `UTF8 (~{n})` APPEND data item.
+	pub literal_trailer: &'static [u8],
 	/// Whether the session is now in the IDLE state; the network layer
 	/// expects `DONE` or a 29-minute timeout before resuming the pump.
 	pub idle: bool,
@@ -47,6 +50,7 @@ impl Output {
 			bytes: text.into_bytes(),
 			close: false,
 			collect_literal: None,
+			literal_trailer: b"\r\n",
 			discard_literal: None,
 			idle: false,
 			upgrade_tls: false,
@@ -113,6 +117,8 @@ pub struct Session {
 	pub(super) uidonly: bool,
 	/// Revision negotiated for the lifetime of this connection (RFC 9051 Appendix A).
 	pub(super) imap4rev2: bool,
+	/// UTF8=ACCEPT (RFC 6855) enabled: mailbox names cross the wire as UTF-8.
+	pub(super) utf8_accept: bool,
 	pub(super) idle_tag: Option<String>,
 	/// NOTIFY (RFC 5465) events requested for the selected mailbox. `None` means
 	/// NOTIFY is not active; an empty set means notifications are explicitly off.
@@ -157,6 +163,21 @@ pub struct Session {
 	/// it on a `$Junk` / `$NotJunk` change. `None` disables training and
 	/// STORE answers the same.
 	pub(super) training: Option<crate::antispam::training_queue::TrainingQueue>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are enabled on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour: both mechanisms advertised in `CAPABILITY AUTH=` and
+	/// offered through `AUTHENTICATE`. `false` hides both on the wire
+	/// and refuses an explicit `AUTHENTICATE` against them.
+	pub(super) scram_enabled: bool,
+	/// The message count the client was last told for the SELECTed
+	/// mailbox. `None` until the first SELECT/EXAMINE or the first
+	/// post-SELECT announcement. Used by NOOP and other command replies
+	/// to emit `* N EXISTS` when the on-disk count changed but no other
+	/// untagged response covered the gap (RFC 9051 §7.1.2 + §7.4).
+	/// `u32::MAX` marks an explicit "all caught up" state, used after a
+	/// SELECT where the mailbox is empty (no future change can shrink the
+	/// count, only grow it, so MAX disables any further announcement).
+	pub(super) announced_exists: Option<u32>,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -221,6 +242,7 @@ impl Session {
 			pending_append: None,
 			uidonly: false,
 			imap4rev2: false,
+			utf8_accept: false,
 			idle_tag: None,
 			notify_selected: None,
 			tls_active: true,
@@ -238,6 +260,8 @@ impl Session {
 			saved_search: None,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
+			scram_enabled: true,
+			announced_exists: None,
 		}
 	}
 
@@ -283,11 +307,11 @@ impl Session {
 	}
 
 	/// The storage quota in force for the authenticated account: its own /
-	/// domain quota from the directory, else the server default.
-	pub(super) fn effective_quota(&self) -> u64 {
-		self.account()
-			.and_then(|account| self.directory.quota_for(account))
-			.unwrap_or(self.quota_limit_bytes)
+	/// domain quota from the directory, else the server default. `None` is
+	/// no limit (a quota of 0), the same rule every delivery path applies.
+	pub(super) fn effective_quota(&self) -> Option<u64> {
+		let account = self.account()?;
+		crate::smtp::quota::limit_for(&self.directory, account, self.quota_limit_bytes)
 	}
 
 	/// Provide the `tls-server-end-point` channel-binding data (server

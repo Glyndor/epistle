@@ -45,11 +45,12 @@ fn parses_account_remove_with_each_queue_policy() {
 			flag,
 		])
 		.expect("account-remove parses");
-		let Command::AccountRemove {
+		let Command::Legacy(crate::cli::legacy::Legacy::AccountRemove {
 			config,
 			name,
 			queue,
-		} = cli.command
+			yes: _,
+		}) = cli.command
 		else {
 			panic!("expected AccountRemove, got: {:?}", cli.command);
 		};
@@ -114,6 +115,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 
@@ -145,7 +147,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 	let config = crate::config::Config::load(cfg_path).expect("load config");
 	let mut out = Vec::new();
 	assert_eq!(
-		accounts::remove(&config, "alice", QueuePolicy::Discard, &mut out),
+		accounts::remove(&config, "alice", QueuePolicy::Discard, true, &mut out),
 		ExitCode::SUCCESS
 	);
 	let text = String::from_utf8(out).expect("utf8");
@@ -186,8 +188,8 @@ fn account_remove_unknown_account_returns_failure_without_touching_storage() {
 
 	let mut out = Vec::new();
 	assert_eq!(
-		accounts::remove(&config, "ghost", QueuePolicy::Drain, &mut out),
-		ExitCode::FAILURE
+		accounts::remove(&config, "ghost", QueuePolicy::Drain, true, &mut out),
+		ExitCode::from(2)
 	);
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
@@ -232,6 +234,7 @@ fn cli_remove_routes_a_supplied_bayes_store_into_forget_scope() {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
@@ -307,6 +310,7 @@ fn cli_remove_completes_without_a_bayes_store() {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
@@ -379,7 +383,7 @@ fn cli_remove_reports_no_such_account_even_with_a_bayes_store() {
 		&mut out,
 		&mut err_stream,
 	);
-	assert_eq!(exit, ExitCode::FAILURE, "unknown account must fail");
+	assert_eq!(exit, ExitCode::from(2), "unknown account must fail");
 	let err_text = String::from_utf8(err_buf).expect("utf8");
 	let out_text = String::from_utf8(out).expect("utf8 stdout");
 	assert!(

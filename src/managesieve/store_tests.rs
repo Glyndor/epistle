@@ -32,6 +32,52 @@ fn invalid_script_is_rejected() {
 }
 
 #[test]
+fn mailbox_features_without_require_mailbox_are_rejected() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	// `mailboxexists` requires the `mailbox` extension; a script that
+	// uses it without `require "mailbox"` is malformed (RFC 5490 §3.1,
+	// RFC 5228 §3.3) and is refused at upload.
+	for script in [
+		"if mailboxexists \"Junk\" { fileinto \"Junk\"; }",
+		"fileinto :create \"Junk\";",
+	] {
+		let err = s
+			.put("mailbox", script)
+			.expect_err("script using mailbox features without require must be rejected");
+		assert!(
+			matches!(err, StoreError::InvalidScript(_)),
+			"expected InvalidScript for {script:?}, got {err:?}"
+		);
+	}
+}
+
+#[test]
+fn mailbox_features_with_require_mailbox_are_accepted() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	for script in [
+		"require \"mailbox\"; if mailboxexists \"Junk\" { fileinto \"Junk\"; }",
+		"require [\"fileinto\", \"mailbox\"]; fileinto :create \"Junk\";",
+	] {
+		s.put("mailbox", script).unwrap_or_else(|err| {
+			panic!("script with require \"mailbox\" must validate, got {err:?} for {script:?}")
+		});
+	}
+}
+
+#[test]
+fn fileinto_without_create_keeps_working() {
+	// The `mailbox` extension adds mailboxexists and `:create`; the plain
+	// `fileinto` (RFC 5228) keeps its existing semantics and does not
+	// require `require "mailbox"`.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let s = store(dir.path());
+	s.put("plain", "fileinto \"Junk\";")
+		.expect("plain fileinto validates");
+}
+
+#[test]
 fn rejects_path_traversal_names() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let s = store(dir.path());

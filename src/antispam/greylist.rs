@@ -5,7 +5,7 @@
 //! Legitimate MTAs retry on a 4xx; many spam sources do not, so a brief
 //! tempfail filters a lot of junk at almost no cost to real mail. The decision
 //! is pure given a store and a clock, so it is fully unit-testable; the store
-//! implementation (PostgreSQL) and SMTP wiring are layered on top.
+//! implementation (memory or PostgreSQL) and SMTP wiring are layered on top.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -48,33 +48,70 @@ pub enum Decision {
 	Accept,
 }
 
-/// Records when each triplet was first seen.
-pub trait GreylistStore {
-	/// The UNIX time the triplet was first seen, if ever.
-	fn first_seen(&self, key: &str) -> Option<u64>;
+/// The boxed future every [`GreylistStore`] method returns. Boxed so the
+/// production PostgreSQL store and the in-process test stub share the same
+/// `Arc<dyn GreylistStore>` shape the SMTP server holds.
+pub type StoreFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+/// Records when each triplet was first seen, and remembers the retry. The
+/// trait is object-safe and object-dispatched: SMTP holds `Arc<dyn
+/// GreylistStore>` and the production wiring in `cli/serve_tasks.rs` chooses
+/// the backing store. Both methods are async because the production
+/// PostgreSQL store is; the in-memory implementation just returns an
+/// already-ready future.
+pub trait GreylistStore: Send + Sync {
+	/// The UNIX time the triplet was first seen, if ever. `Err` means the
+	/// store could not answer (the database is unreachable), which
+	/// [`decide`] treats as "accept" rather than as a first sighting.
+	fn first_seen(&self, key: &str) -> StoreFuture<'_, Result<Option<u64>, StoreUnavailable>>;
 	/// Remember that the triplet was first seen at `now`.
-	fn record(&self, key: &str, now: u64);
+	fn record(&self, key: &str, now: u64) -> StoreFuture<'_, ()>;
+	/// Drop entries first seen more than `max_age` seconds before `now`, so
+	/// the store cannot grow without bound. Called by the periodic sweep
+	/// the `serve` task spawns; no-op on stores where expiration is the
+	/// sweeper's job.
+	fn sweep(&self, _now: u64, _max_age: u64) -> StoreFuture<'_, ()> {
+		Box::pin(async {})
+	}
 }
+
+/// The store could not be read. Carries no detail: the store logs the cause
+/// where it has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreUnavailable;
 
 /// Decide whether to accept or defer an attempt from `triplet` at `now`,
 /// accepting once `delay_secs` have passed since the first attempt.
-pub fn decide(store: &dyn GreylistStore, triplet: &Triplet, now: u64, delay_secs: u64) -> Decision {
+///
+/// A store that cannot answer accepts. Greylisting is a filter, not a gate:
+/// treating an unreachable database as a first sighting would defer every
+/// inbound message on every retry for as long as the outage lasts, until the
+/// senders give up and bounce it.
+pub async fn decide(
+	store: &dyn GreylistStore,
+	triplet: &Triplet<'_>,
+	now: u64,
+	delay_secs: u64,
+) -> Decision {
 	let key = triplet.key();
-	match store.first_seen(&key) {
+	match store.first_seen(&key).await {
+		Err(StoreUnavailable) => Decision::Accept,
 		// First sighting: remember it and defer.
-		None => {
-			store.record(&key, now);
+		Ok(None) => {
+			store.record(&key, now).await;
 			Decision::Defer
 		}
-		// Retried after the delay: a real MTA — accept.
-		Some(first_seen) if now.saturating_sub(first_seen) >= delay_secs => Decision::Accept,
+		// Retried after the delay: a real MTA, accept.
+		Ok(Some(first_seen)) if now.saturating_sub(first_seen) >= delay_secs => Decision::Accept,
 		// Retried too soon: keep deferring.
-		Some(_) => Decision::Defer,
+		Ok(Some(_)) => Decision::Defer,
 	}
 }
 
 /// An in-memory greylist store: a process-local map of first-seen times.
-/// State is ephemeral — a restart re-defers everyone once, which is harmless.
+/// State is ephemeral; a restart re-defers everyone once, which is harmless
+/// but means legitimate senders wait out the delay again. The PostgreSQL
+/// store is the alternative when persistence matters.
 #[derive(Default)]
 pub struct MemoryGreylist {
 	entries: Mutex<HashMap<String, u64>>,
@@ -97,39 +134,35 @@ impl MemoryGreylist {
 }
 
 impl GreylistStore for MemoryGreylist {
-	fn first_seen(&self, key: &str) -> Option<u64> {
-		self.entries
+	fn first_seen(&self, key: &str) -> StoreFuture<'_, Result<Option<u64>, StoreUnavailable>> {
+		// The lock is sync; performing the work inside `async {}` keeps the
+		// trait surface uniform with the SQL store and avoids a second await
+		// point in callers.
+		let value = self
+			.entries
 			.lock()
 			.expect("greylist lock")
 			.get(key)
-			.copied()
+			.copied();
+		Box::pin(async move { Ok(value) })
 	}
-	fn record(&self, key: &str, now: u64) {
+	fn record(&self, key: &str, now: u64) -> StoreFuture<'_, ()> {
 		self.entries
 			.lock()
 			.expect("greylist lock")
 			.entry(key.to_string())
 			.or_insert(now);
+		Box::pin(async {})
+	}
+	fn sweep(&self, now: u64, max_age: u64) -> StoreFuture<'_, ()> {
+		self.prune(now, max_age);
+		Box::pin(async {})
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::cell::RefCell;
-
-	/// In-memory store for tests.
-	#[derive(Default)]
-	struct MemStore(RefCell<HashMap<String, u64>>);
-
-	impl GreylistStore for MemStore {
-		fn first_seen(&self, key: &str) -> Option<u64> {
-			self.0.borrow().get(key).copied()
-		}
-		fn record(&self, key: &str, now: u64) {
-			self.0.borrow_mut().entry(key.to_string()).or_insert(now);
-		}
-	}
 
 	fn triplet() -> Triplet<'static> {
 		Triplet {
@@ -141,25 +174,54 @@ mod tests {
 
 	const DELAY: u64 = 60;
 
+	fn block_on<F: std::future::Future>(future: F) -> F::Output {
+		let runtime = tokio::runtime::Runtime::new().expect("runtime");
+		runtime.block_on(future)
+	}
+
+	/// Run the same decision cases against every implementation of the
+	/// store trait. Returns them so the per-test assertion can target a
+	/// specific outcome (deferred, recorded, accepted...) without only
+	/// asserting "did not panic" or "returned something".
+	fn run_against(store: &dyn GreylistStore) {
+		let t = triplet();
+		let key = t.key();
+		// First sighting: defer and remember it.
+		assert_eq!(block_on(decide(store, &t, 1000, DELAY)), Decision::Defer);
+		assert_eq!(block_on(store.first_seen(&key)), Ok(Some(1000)));
+		// Retry too soon: still defer (first_seen unchanged).
+		assert_eq!(block_on(decide(store, &t, 1030, DELAY)), Decision::Defer);
+		assert_eq!(block_on(store.first_seen(&key)), Ok(Some(1000)));
+		// Retry past the delay: accept.
+		assert_eq!(block_on(decide(store, &t, 1060, DELAY)), Decision::Accept);
+	}
+
 	#[test]
 	fn first_attempt_is_deferred_and_recorded() {
-		let store = MemStore::default();
-		assert_eq!(decide(&store, &triplet(), 1000, DELAY), Decision::Defer);
-		assert_eq!(store.first_seen(&triplet().key()), Some(1000));
+		let store = MemoryGreylist::new();
+		let t = triplet();
+		assert_eq!(block_on(decide(&store, &t, 1000, DELAY)), Decision::Defer);
+		assert_eq!(block_on(store.first_seen(&t.key())), Ok(Some(1000)));
 	}
 
 	#[test]
 	fn retry_before_delay_is_deferred() {
-		let store = MemStore::default();
-		decide(&store, &triplet(), 1000, DELAY);
-		assert_eq!(decide(&store, &triplet(), 1030, DELAY), Decision::Defer);
+		let store = MemoryGreylist::new();
+		block_on(decide(&store, &triplet(), 1000, DELAY));
+		assert_eq!(
+			block_on(decide(&store, &triplet(), 1030, DELAY)),
+			Decision::Defer
+		);
 	}
 
 	#[test]
 	fn retry_after_delay_is_accepted() {
-		let store = MemStore::default();
-		decide(&store, &triplet(), 1000, DELAY);
-		assert_eq!(decide(&store, &triplet(), 1060, DELAY), Decision::Accept);
+		let store = MemoryGreylist::new();
+		block_on(decide(&store, &triplet(), 1000, DELAY));
+		assert_eq!(
+			block_on(decide(&store, &triplet(), 1060, DELAY)),
+			Decision::Accept
+		);
 	}
 
 	#[test]
@@ -175,24 +237,72 @@ mod tests {
 	#[test]
 	fn memory_store_roundtrips_and_prunes() {
 		let store = MemoryGreylist::new();
-		assert_eq!(decide(&store, &triplet(), 1000, DELAY), Decision::Defer);
+		assert_eq!(
+			block_on(decide(&store, &triplet(), 1000, DELAY)),
+			Decision::Defer
+		);
 		// Recorded, so a later retry past the delay is accepted.
-		assert_eq!(decide(&store, &triplet(), 1100, DELAY), Decision::Accept);
+		assert_eq!(
+			block_on(decide(&store, &triplet(), 1100, DELAY)),
+			Decision::Accept
+		);
 		// Pruning old entries forgets the triplet; it is new again.
-		store.prune(1000 + 86_400, 3600);
-		assert_eq!(store.first_seen(&triplet().key()), None);
+		block_on(store.sweep(1000 + 86_400, 3600));
+		assert_eq!(block_on(store.first_seen(&triplet().key())), Ok(None));
 	}
 
 	#[test]
 	fn distinct_triplets_are_independent() {
-		let store = MemStore::default();
-		decide(&store, &triplet(), 1000, DELAY);
+		let store = MemoryGreylist::new();
+		block_on(decide(&store, &triplet(), 1000, DELAY));
 		let other = Triplet {
 			client_ip: "198.51.100.1".parse().unwrap(),
 			sender: "sender@example.org",
 			recipient: "bob@example.net",
 		};
 		// A different client is still on its first attempt.
-		assert_eq!(decide(&store, &other, 1100, DELAY), Decision::Defer);
+		assert_eq!(
+			block_on(decide(&store, &other, 1100, DELAY)),
+			Decision::Defer
+		);
+	}
+
+	/// A store that cannot answer (the database is down) never stands in for a
+	/// first sighting: deferring there would defer every retry for the whole
+	/// outage. The attempt is accepted and nothing is recorded.
+	#[test]
+	fn unavailable_store_accepts_and_records_nothing() {
+		struct Down(std::sync::atomic::AtomicUsize);
+		impl GreylistStore for Down {
+			fn first_seen(
+				&self,
+				_key: &str,
+			) -> StoreFuture<'_, Result<Option<u64>, StoreUnavailable>> {
+				Box::pin(async { Err(StoreUnavailable) })
+			}
+			fn record(&self, _key: &str, _now: u64) -> StoreFuture<'_, ()> {
+				self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+				Box::pin(async {})
+			}
+		}
+		let store = Down(std::sync::atomic::AtomicUsize::new(0));
+		assert_eq!(
+			block_on(decide(&store, &triplet(), 1000, DELAY)),
+			Decision::Accept
+		);
+		assert_eq!(
+			store.0.load(std::sync::atomic::Ordering::SeqCst),
+			0,
+			"an unavailable store must not be written to"
+		);
+	}
+
+	/// The memory store is the production default. Pinning it to the
+	/// shared contract catches divergence even before the SQL store test
+	/// runs (and the SQL test is gated on a live database).
+	#[test]
+	fn memory_store_matches_the_decision_contract() {
+		let store = MemoryGreylist::new();
+		run_against(&store);
 	}
 }

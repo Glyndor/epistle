@@ -21,9 +21,12 @@ use crate::smtp::scram::ScramStored;
 use super::{DynamicAccount, LdapAccount, SqlAccount};
 
 /// `(address, account)` pairs for every account across all sources.
-/// LDAP first, SQL next, then static config, then dynamic — so static
-/// config and dynamic accounts take precedence on a name or address
-/// collision (the directory's maps keep the last writer).
+/// LDAP first, SQL next, then static config, then dynamic, so static
+/// config and dynamic accounts take precedence over the external
+/// directories (the directory's maps keep the last writer). Between
+/// static and dynamic accounts the first claim of an address wins (static
+/// before dynamic, file order within each): a later claim stays on disk
+/// and is reported by `AccountStore::address_collisions`.
 pub(super) fn address_accounts<'a>(
 	ldap: &'a [LdapAccount],
 	sql: &'a [SqlAccount],
@@ -43,19 +46,27 @@ pub(super) fn address_accounts<'a>(
 				.iter()
 				.map(|address| (address.clone(), account.name.clone()))
 		}))
-		.chain(static_accounts.iter().flat_map(|account| {
-			account
-				.addresses
-				.iter()
-				.map(|address| (address.clone(), account.name.clone()))
-		}))
-		.chain(dynamic.iter().flat_map(|account| {
-			account
-				.addresses
-				.iter()
-				.map(|address| (address.clone(), account.name.clone()))
-		}))
+		.chain(first_claims(static_accounts, dynamic))
 		.collect()
+}
+
+/// Static then dynamic `(address, account)` pairs, keeping only the first
+/// claim of each address in its stored form.
+fn first_claims<'a>(
+	static_accounts: &'a [Account],
+	dynamic: &'a [DynamicAccount],
+) -> impl Iterator<Item = (String, String)> + 'a {
+	let mut seen = HashSet::new();
+	static_accounts
+		.iter()
+		.map(|account| (&account.addresses, &account.name))
+		.chain(
+			dynamic
+				.iter()
+				.map(|account| (&account.addresses, &account.name)),
+		)
+		.flat_map(|(addresses, name)| addresses.iter().map(move |a| (a.clone(), name.clone())))
+		.filter(move |(address, _)| seen.insert(crate::util::address::normalize(address)))
 }
 
 /// `(account, hash)` pairs for every account with a stored argon2id
@@ -137,15 +148,18 @@ pub(super) fn scram(dynamic: &[DynamicAccount]) -> Vec<(String, ScramStored)> {
 }
 
 /// TOTP secrets per dynamic account (RFC 6238; `None` leaves 2FA
-/// disabled).
-pub(super) fn totp(dynamic: &[DynamicAccount]) -> Vec<(String, String)> {
+/// disabled), opened with `crypto` when they are stored sealed.
+pub(super) fn totp(
+	dynamic: &[DynamicAccount],
+	crypto: &crate::storage::MessageCrypto,
+) -> Vec<(String, String)> {
 	dynamic
 		.iter()
 		.filter_map(|account| {
 			account
 				.totp_secret
-				.clone()
-				.map(|secret| (account.name.clone(), secret))
+				.as_deref()
+				.map(|stored| (account.name.clone(), super::set_totp::open(crypto, stored)))
 		})
 		.collect()
 }
@@ -163,4 +177,50 @@ pub(super) fn quota_bytes(dynamic: &[DynamicAccount]) -> Vec<(String, u64)> {
 				.map(|bytes| (account.name.clone(), bytes))
 		})
 		.collect()
+}
+
+/// Catch-all domain to account pairs: static accounts first, then dynamic
+/// ones. Both stores refuse a domain another account already catches, so
+/// no pair overwrites another in the directory's map.
+pub(super) fn catch_all<'a>(
+	static_accounts: &'a [Account],
+	dynamic: &'a [DynamicAccount],
+) -> impl Iterator<Item = (String, String)> + 'a {
+	let pairs = |name: &'a str, domains: &'a [String]| {
+		domains
+			.iter()
+			.map(move |domain| (domain.clone(), name.to_string()))
+	};
+	static_accounts
+		.iter()
+		.flat_map(move |account| pairs(&account.name, &account.catch_all))
+		.chain(
+			dynamic
+				.iter()
+				.flat_map(move |account| pairs(&account.name, &account.catch_all)),
+		)
+}
+
+/// Account to (forward targets, keep a local copy) for every account that
+/// forwards. A dynamic account always keeps its local copy: the store has
+/// no switch for pure forwarding.
+pub(super) fn forwards<'a>(
+	static_accounts: &'a [Account],
+	dynamic: &'a [DynamicAccount],
+) -> impl Iterator<Item = (String, (Vec<String>, bool))> + 'a {
+	static_accounts
+		.iter()
+		.filter(|account| !account.forward.is_empty())
+		.map(|account| {
+			(
+				account.name.clone(),
+				(account.forward.clone(), account.forward_keep_local),
+			)
+		})
+		.chain(
+			dynamic
+				.iter()
+				.filter(|account| !account.forward.is_empty())
+				.map(|account| (account.name.clone(), (account.forward.clone(), true))),
+		)
 }

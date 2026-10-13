@@ -1,6 +1,6 @@
 //! Operator-requested certificate renewal.
 //!
-//! The server owns the ACME account key and the HTTP-01 challenge listener, so
+//! The server owns the ACME account key and the challenge responders, so
 //! `epistle tls renew` cannot issue by itself. It drops a request file under
 //! `<data_dir>/acme/` and the server's renewal loop, which wakes every minute,
 //! serves it through the same issuance path as the schedule. A request

@@ -4,6 +4,8 @@
 //! config engine).
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -14,7 +16,9 @@ use crate::config::Config;
 use super::config_edit::ConfigDocument;
 use super::style;
 
-use alias_helpers::{disabled_set, find_alias, validate_alias_address, validate_member_or_sender};
+use crate::util::address::normalize;
+use alias_helpers::{disabled_set, document_address, find_alias, normalized};
+use alias_helpers::{validate_alias_address, validate_member_or_sender};
 use alias_writers::{commit_and_restart, set_enabled, upsert_alias_members, upsert_alias_senders};
 
 #[path = "alias_helpers.rs"]
@@ -41,15 +45,21 @@ pub enum AliasCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Add an alias with at least one member. Optional senders and
-	/// `--list-id` identify the alias as a mailing list. `--visible`
-	/// overrides the default hidden membership behaviour.
+	/// Add an alias with at least one member.
+	///
+	/// Optional senders and `--list-id` identify the alias as a mailing list.
+	/// `--visible` overrides the default hidden membership behaviour.
 	Add(AddArgs),
 	/// Remove an alias entirely.
 	Remove {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
 		address: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Edit one alias in place: members and senders.
 	Member(MemberArgs),
@@ -61,8 +71,10 @@ pub enum AliasCli {
 		#[arg(value_name = "ADDRESS")]
 		address: String,
 	},
-	/// Disable an alias. The alias address falls through to the next step
-	/// of delivery resolution and rejects like one that never existed.
+	/// Disable an alias.
+	///
+	/// The alias address falls through to the next step of delivery resolution
+	/// and rejects like one that never existed.
 	Disable {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -102,6 +114,7 @@ pub struct MemberArgs {
 /// Add or remove a single member.
 #[derive(Debug, Subcommand)]
 pub enum MemberSubcommand {
+	/// Add a member to the alias.
 	Add {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -110,6 +123,7 @@ pub enum MemberSubcommand {
 		#[arg(value_name = "MEMBER")]
 		member: String,
 	},
+	/// Remove a member from the alias.
 	Remove {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -130,6 +144,7 @@ pub struct SenderArgs {
 /// Add or remove a single sender.
 #[derive(Debug, Subcommand)]
 pub enum SenderSubcommand {
+	/// Allow an address to send as the alias.
 	Add {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -138,6 +153,7 @@ pub enum SenderSubcommand {
 		#[arg(value_name = "SENDER")]
 		sender: String,
 	},
+	/// Stop an address from sending as the alias.
 	Remove {
 		/// The alias address.
 		#[arg(value_name = "ADDRESS")]
@@ -151,54 +167,111 @@ pub enum SenderSubcommand {
 /// Run the chosen alias action.
 pub(super) fn run(path: &Path, action: AliasCli, dry_run: bool) -> ExitCode {
 	match execute(path, action, dry_run) {
-		Ok(code) => code,
-		Err(error) => {
+		Outcome::Code(code) => code,
+		Outcome::Error(error) => {
 			style::error(error);
 			ExitCode::FAILURE
 		}
 	}
 }
 
-fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Result<ExitCode, String> {
+/// The discriminated result of [`execute`]. Returning a structured
+/// outcome (rather than `Result<ExitCode, String>`) lets the refusal
+/// path surface exit code 2 instead of being squashed into the
+/// generic failure exit code.
+enum Outcome {
+	Code(ExitCode),
+	Error(String),
+}
+
+impl From<ExitCode> for Outcome {
+	fn from(value: ExitCode) -> Self {
+		Outcome::Code(value)
+	}
+}
+
+impl From<&str> for Outcome {
+	fn from(value: &str) -> Self {
+		Outcome::Error(value.to_string())
+	}
+}
+
+impl From<String> for Outcome {
+	fn from(value: String) -> Self {
+		Outcome::Error(value)
+	}
+}
+
+fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Outcome {
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
-	let config = Config::load(path).map_err(|e| e.to_string())?;
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => return Outcome::Error(error.to_string()),
+	};
 	match action {
-		AliasCli::List { json } => {
-			list(&config, json, &mut out).map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
-		}
-		AliasCli::Show { address, json } => {
-			show(&config, &address, json, &mut out).map_err(|e| e.to_string())?;
-			Ok(ExitCode::SUCCESS)
-		}
+		AliasCli::List { json } => match list(&config, json, &mut out) {
+			Ok(()) => Outcome::Code(ExitCode::SUCCESS),
+			Err(error) => Outcome::Error(error.to_string()),
+		},
+		AliasCli::Show { address, json } => match show(&config, &address, json, &mut out) {
+			Ok(()) => Outcome::Code(ExitCode::SUCCESS),
+			Err(error) => Outcome::Error(error.to_string()),
+		},
 		AliasCli::Add(args) => {
-			let mut document = open(path)?;
-			add_alias(&config, &mut document, &args)?;
-			commit_and_restart(
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = add_alias(&config, &mut document, &args) {
+				return Outcome::Error(error);
+			}
+			match commit_and_restart(
 				document,
-				&args.address,
+				&normalize(&args.address),
 				"added",
 				dry_run,
 				&mut out,
 				&mut err,
-			)
+			) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
-		AliasCli::Remove { address } => {
+		AliasCli::Remove { address, yes } => {
 			let owned_address = address.clone();
-			let mut document = open(path)?;
-			remove_alias(&config, &mut document, &address)?;
-			commit_and_restart(
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
+			if let Err(error) = remove_alias(&config, &mut document, &address) {
+				return Outcome::Error(error);
+			}
+			// Asked after the edit is validated; a dry run destroys nothing.
+			let question = format!("Remove alias \"{address}\"? [y/N]");
+			if !dry_run
+				&& let Err(code) =
+					super::prompt::confirm_destructive("alias remove", &question, yes)
+			{
+				return code.into();
+			}
+			match commit_and_restart(
 				document,
 				&owned_address,
 				"removed",
 				dry_run,
 				&mut out,
 				&mut err,
-			)
+			) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
 		AliasCli::Member(args) => {
-			let mut document = open(path)?;
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
 			let verb = match &args.action {
 				MemberSubcommand::Add { .. } => "member added",
 				MemberSubcommand::Remove { .. } => "member removed",
@@ -207,11 +280,19 @@ fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Result<ExitCode, Str
 				MemberSubcommand::Add { address, .. }
 				| MemberSubcommand::Remove { address, .. } => address.clone(),
 			};
-			member_edit(&config, &mut document, args)?;
-			commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err)
+			if let Err(error) = member_edit(&config, &mut document, args) {
+				return Outcome::Error(error);
+			}
+			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
 		AliasCli::Sender(args) => {
-			let mut document = open(path)?;
+			let mut document = match open(path) {
+				Ok(document) => document,
+				Err(error) => return Outcome::Error(error),
+			};
 			let verb = match &args.action {
 				SenderSubcommand::Add { .. } => "sender added",
 				SenderSubcommand::Remove { .. } => "sender removed",
@@ -220,11 +301,26 @@ fn execute(path: &Path, action: AliasCli, dry_run: bool) -> Result<ExitCode, Str
 				SenderSubcommand::Add { address, .. }
 				| SenderSubcommand::Remove { address, .. } => address.clone(),
 			};
-			sender_edit(&config, &mut document, args)?;
-			commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err)
+			if let Err(error) = sender_edit(&config, &mut document, args) {
+				return Outcome::Error(error);
+			}
+			match commit_and_restart(document, &address, verb, dry_run, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
 		}
-		AliasCli::Enable { address } => set_enabled(&config, &address, true, &mut out, &mut err),
-		AliasCli::Disable { address } => set_enabled(&config, &address, false, &mut out, &mut err),
+		AliasCli::Enable { address } => {
+			match set_enabled(&config, &address, true, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
+		}
+		AliasCli::Disable { address } => {
+			match set_enabled(&config, &address, false, &mut out, &mut err) {
+				Ok(code) => Outcome::Code(code),
+				Err(error) => Outcome::Error(error),
+			}
+		}
 	}
 }
 
@@ -244,7 +340,7 @@ fn open_store(config: &Config) -> Result<crate::directory_store::AccountStore, S
 	.map_err(|e| e.to_string())
 }
 
-fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
+pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
 	let disabled: std::collections::HashSet<String> = disabled_set(config)
 		.map(|set| set.into_iter().collect())
 		.unwrap_or_default();
@@ -268,6 +364,21 @@ fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()
 		serde_json::to_writer(&mut *out, &rows).map_err(std::io::Error::other)?;
 		writeln!(out)?;
 		return Ok(());
+	}
+	if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["ADDRESS", "STATE", "VISIBLE", "MEMBERS"]).state_col(1);
+		for alias in &config.alias {
+			let enabled = !disabled.contains(&alias.address.to_ascii_lowercase());
+			let state = if enabled { "enabled" } else { "disabled" };
+			let visible = if alias.hidden { "hidden" } else { "visible" };
+			table.push(vec![
+				alias.address.clone(),
+				state.into(),
+				visible.into(),
+				alias.members.join(","),
+			]);
+		}
+		return table.write(decor, out);
 	}
 	writeln!(
 		out,
@@ -345,16 +456,21 @@ fn add_alias(config: &Config, document: &mut ConfigDocument, args: &AddArgs) -> 
 		validate_member_or_sender("sender", sender)?;
 	}
 	let hidden = !args.visible;
+	let (address, members, senders) = (
+		normalize(&args.address),
+		normalized(&args.members),
+		normalized(&args.senders),
+	);
 	let mut members_array = toml_edit::Array::new();
-	for member in &args.members {
+	for member in &members {
 		members_array.push(toml_edit::Value::from(member.clone()));
 	}
 	let mut fields: Vec<(&str, toml_edit::Value)> = Vec::new();
-	fields.push(("address", toml_edit::Value::from(args.address.clone())));
+	fields.push(("address", toml_edit::Value::from(address.clone())));
 	fields.push(("members", toml_edit::Value::Array(members_array)));
-	if !args.senders.is_empty() {
+	if !senders.is_empty() {
 		let mut senders_array = toml_edit::Array::new();
-		for sender in &args.senders {
+		for sender in &senders {
 			senders_array.push(toml_edit::Value::from(sender.clone()));
 		}
 		fields.push(("senders", toml_edit::Value::Array(senders_array)));
@@ -365,7 +481,7 @@ fn add_alias(config: &Config, document: &mut ConfigDocument, args: &AddArgs) -> 
 	if let Some(list_id) = &args.list_id {
 		fields.push(("list_id", toml_edit::Value::from(list_id.clone())));
 	}
-	document.upsert_element("alias", "address", &args.address, &fields)?;
+	document.upsert_element("alias", "address", &address, &fields)?;
 	Ok(())
 }
 
@@ -377,7 +493,8 @@ fn remove_alias(
 	if find_alias(config, address).is_none() {
 		return Err(format!("alias {address} not found"));
 	}
-	document.remove_elements("alias", "address", address)?;
+	let key = document_address(document, address);
+	document.remove_elements("alias", "address", &key)?;
 	Ok(())
 }
 
@@ -389,13 +506,11 @@ fn member_edit(
 	match args.action {
 		MemberSubcommand::Add { address, member } => {
 			validate_member_or_sender("member", &member)?;
+			let member = normalize(&member);
 			let alias =
 				find_alias(config, &address).ok_or_else(|| format!("alias {address} not found"))?;
 			let mut members = alias.members.clone();
-			if members
-				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&member))
-			{
+			if members.iter().any(|existing| normalize(existing) == member) {
 				return Err(format!("alias {address} already has member {member}"));
 			}
 			members.push(member.clone());
@@ -413,7 +528,7 @@ fn member_edit(
 			let mut members: Vec<String> = alias
 				.members
 				.iter()
-				.filter(|existing| !existing.eq_ignore_ascii_case(&member))
+				.filter(|existing| normalize(existing) != normalize(&member))
 				.cloned()
 				.collect();
 			if members.len() == alias.members.len() {
@@ -434,13 +549,11 @@ fn sender_edit(
 	match args.action {
 		SenderSubcommand::Add { address, sender } => {
 			validate_member_or_sender("sender", &sender)?;
+			let sender = normalize(&sender);
 			let alias =
 				find_alias(config, &address).ok_or_else(|| format!("alias {address} not found"))?;
 			let mut senders = alias.senders.clone();
-			if senders
-				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&sender))
-			{
+			if senders.iter().any(|existing| normalize(existing) == sender) {
 				return Err(format!("alias {address} already allows sender {sender}"));
 			}
 			senders.push(sender.clone());
@@ -453,7 +566,7 @@ fn sender_edit(
 			let senders: Vec<String> = alias
 				.senders
 				.iter()
-				.filter(|existing| !existing.eq_ignore_ascii_case(&sender))
+				.filter(|existing| normalize(existing) != normalize(&sender))
 				.cloned()
 				.collect();
 			if senders.len() == alias.senders.len() {

@@ -24,7 +24,10 @@ use super::{Action, MAX_MESSAGE_SIZE, Reply, Session, cap};
 pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: usize) -> Action {
 	session.state = State::Greeted;
 	if running_size > MAX_MESSAGE_SIZE {
-		return Action::Continue(Reply::single(552, "message exceeds maximum size"));
+		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
+	}
+	if let Some(reply) = super::author::check(session, &message.data) {
+		return Action::Continue(reply);
 	}
 	if let Some(reply) = cap::check_or_reply(
 		session.authenticated.as_deref(),
@@ -34,7 +37,51 @@ pub fn finalise(session: &mut Session, message: AcceptedMessage, running_size: u
 	) {
 		return Action::Continue(reply);
 	}
-	Action::Deliver(Reply::ok(), message)
+	match split_over_quota(session, message, running_size as u64) {
+		Some(message) => Action::Deliver(Reply::ok(), message),
+		None => Action::Continue(Reply::single(552, "5.2.2 mailbox full")),
+	}
+}
+
+/// Take out of `message` the local recipients it would put over quota.
+/// `None` when that is every recipient: the message is refused whole. Else
+/// the message goes on for the others and the sender gets one DSN for the
+/// full mailboxes, sent by the server once the message is delivered
+/// (SMTP has no per-recipient reply after DATA).
+fn split_over_quota(
+	session: &mut Session,
+	mut message: AcceptedMessage,
+	size: u64,
+) -> Option<AcceptedMessage> {
+	let Some(quota) = session.policy.quota() else {
+		return Some(message);
+	};
+	let full = quota.overflowing(&session.directory, &message.recipients, size);
+	if full.is_empty() {
+		return Some(message);
+	}
+	if full.len() == message.recipients.len() {
+		return None;
+	}
+	message
+		.recipients
+		.retain(|recipient| !full.contains(recipient));
+	let notify: Vec<String> = full
+		.into_iter()
+		.filter(|recipient| !message.no_dsn.contains(recipient))
+		.collect();
+	if !notify.is_empty()
+		&& let Some(report) = crate::queue::bounce::build(
+			&session.hostname,
+			&message.reverse_path,
+			&notify,
+			"552 5.2.2 mailbox full",
+			&message.data,
+			std::time::SystemTime::now(),
+		) {
+		session.policy.push_quota_report(report);
+	}
+	Some(message)
 }
 
 /// Convenience used by the dot-terminated path: build the message

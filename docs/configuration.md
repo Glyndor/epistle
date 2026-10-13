@@ -50,8 +50,8 @@ a connection URL.
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
 | `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
 | `srs_secret` | string | unset | Secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Absent disables SRS. |
-| `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. |
-| `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). |
+| `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `552 5.2.2` when it fits none; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
+| `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Max messages an authenticated account may submit per minute (deferred with 450 over the limit). Absent disables it. |
 | `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default). The `init` scaffold later sets a default of 200. |
 | `domain_submission_limits` | table | `{}` | `domain → msgs/min`: per-domain override for `submission_rate_limit_per_min`. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from one of the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain. |
@@ -59,7 +59,10 @@ a connection URL.
 | `inbound_rate_limit_per_sender_per_min` | int | unset | Max messages a single envelope sender may start per minute across all clients (lowercased reverse path). Excludes the null sender used by bounces. A send over the cap is deferred with `450 4.7.1 too many messages from this sender; retry later`. Absent disables the per-sender limit. |
 | `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` disables the feature; requests above the cap return `429`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
-| `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at ~4h. |
+| `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at `queue_delay_warning_secs`. |
+| `queue_retry_base_secs` | int | 60 | Wait after a recipient's first failed attempt; each later wait doubles up to `queue_retry_cap_secs`. Every wait is spread by a random ±20% so mail deferred together does not all retry in the same second. At least 60. |
+| `queue_retry_cap_secs` | int | 3600 | Longest wait between attempts for one recipient. Not below `queue_retry_base_secs`. |
+| `queue_delay_warning_secs` | int | 4 hours | Message age at which the one "delivery delayed" DSN is sent for the recipients still pending. Below `queue_give_up_secs`. |
 | `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
 | `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
@@ -69,14 +72,17 @@ a connection URL.
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
 
-## `[antispam]` clamd scanner
+## `[antispam]` clamd scanner and Bayesian thresholds
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail. Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
+| `clamd_socket` | path | unset | Unix socket for clamd, for example `/run/clamav/clamd.sock` on a shared volume. Setting it enables scanning of unauthenticated inbound mail, and of what local accounts submit (see `scan_authenticated`). Cannot be combined with the top-level `scanner_hook_url`: only one scanner per server. |
 | `clamd_on_found` | `quarantine` or `reject` | `quarantine` | Quarantine a detected message in the Rejects mailbox, or reject it during SMTP delivery. Other values are invalid. |
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26214400` (25 MiB) | Messages above this size are accepted without opening the socket. A message exactly at the limit is scanned. |
+| `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
+| `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus. |
+| `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
 ```toml
 [antispam]
@@ -102,6 +108,21 @@ the message is accepted and `scanner_clamd_failed` increments. This includes
 Failure warnings are limited to one per minute per hook; detections log the
 signature and message size without message content.
 
+With `scan_authenticated` on, a message an account submits is scanned before
+it is routed. A detection refuses it: `554 5.7.1 message rejected: virus
+detected (<signature>)` on SMTP, `422` with the code `virus_detected` on
+`/api/v1/send`, and a `forbiddenToSend` SetError with the same text as its
+`description` on JMAP. Nothing is stored or queued. The server logs the
+account's pseudonym and the signature, counts it in `outbound_virus`
+(`mail_outbound_virus_total`), and fires the `outbound_virus` webhook event,
+because an account sending malware is usually a compromised one. A clamd
+that cannot be reached fails open here too.
+
+Every scan that fails open is also recorded in `<data_dir>/clamd-health.json`,
+and the first one that works again closes the record. `epistle status` reads
+it: while scans keep failing, the antivirus area warns with how many failed
+and since when, even if clamd answers `PING` at that moment.
+
 ## Listeners
 
 Each `[[listeners]]` opens one service. Listeners bind to **loopback by
@@ -125,8 +146,12 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `manage-sieve` | 4190 | ManageSieve (RFC 5804), STARTTLS before auth. Requires `[tls]`. |
 | `api` | 8025 | Management HTTP API. Requires `[api]`. |
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
-| `acme` | 80 | ACME HTTP-01 challenge responder. |
+| `acme` | 80 | ACME HTTP-01 challenge responder. Needed only with `[acme] challenge = "http-01"` (the default). |
 | `autoconfig` | 8091 | Serves Thunderbird autoconfig + Microsoft Autodiscover. Point `autoconfig.<domain>`/`autodiscover.<domain>` here (behind your TLS proxy). |
+
+| `acme` | 80 | ACME HTTP-01 challenge responder. |
+| `autoconfig` | 8091 | Serves Thunderbird autoconfig, Microsoft Autodiscover and the Apple profile (`/mobileconfig?email=`) over plain HTTP, for a deployment that keeps its own TLS proxy. |
+| `autoconfigs` | 443 | The same documents over HTTPS with the server certificate, so `autoconfig.<domain>`/`autodiscover.<domain>` need no proxy. Requires `[tls]`; the certificate (or `[acme] domains`) must cover both names. |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
 Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent. Operators exposing any of these externally should either configure `[tls]` itself or front the listener with a TLS proxy.
@@ -138,15 +163,15 @@ A public install has to let inbound TCP through the host firewall (or fronting l
 | Port | Protocol | Required for |
 |---|---|---|
 | 25 | SMTP | Inbound mail from other servers. |
-| 80 | HTTP | Certificate issuance: the Let's Encrypt HTTP-01 challenge responder (`acme` listener). Open to the public internet — the CA connects from outside. |
+| 80 | HTTP | Certificate issuance with `[acme] challenge = "http-01"` (the default): the HTTP-01 challenge responder (`acme` listener). Open to the public internet, the CA connects from outside. Not needed with `tls-alpn-01` or `dns-01`. |
 | 143 | IMAP+STARTTLS | Mail clients that negotiate TLS on connect. |
 | 465 | Submissions | Mail clients that use implicit TLS for submission. |
 | 587 | Submission+STARTTLS | Mail clients that submit with STARTTLS. |
 | 993 | IMAPS | Mail clients that use implicit TLS for IMAP. |
 
-Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`, `8091` (autoconfig) when the operator wants Thunderbird/Outlook autodiscovery.
+Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`, `443` (`autoconfigs`) when the operator wants Thunderbird/Outlook/Apple autodiscovery over HTTPS (or `8091`, `autoconfig`, behind a TLS proxy).
 
-Port 80 has to be open even when no certificate renewal is in flight: the ACME HTTP-01 challenge is the only mechanism Let's Encrypt uses for a fresh install, and the renewal loop runs against the same responder. Closing port 80 means the first certificate never lands.
+With the default `http-01` challenge, port 80 has to be open even when no certificate renewal is in flight: the first certificate and every renewal are validated through the same responder, so closing it means the first certificate never lands. Port 80 is needed only with `http-01`. With `tls-alpn-01` the CA connects to port 443 instead, and with `dns-01` it connects to nothing on this host (see [`[acme]`](#acme)).
 
 ## Sections
 
@@ -197,7 +222,9 @@ TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`
 ### `[dkim]`
 Outbound DKIM signing. Ed25519 is primary; an RSA selector is also required from version 0.10 on so receivers that verify RSA alone still see a valid signature. Until then the server warns at startup and on `epistle config-check` / `epistle verify-dns` when the RSA pair is missing; the warning names `epistle dkim-keygen --rsa` as the remedy.
 
-Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
+Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. A new key starts signing only after the system resolver shows its TXT record, with that key, for every signing domain; the server checks for about an hour, and if the record never shows it withdraws the new selector, keeps signing with the current key, and reports it in `epistle dkim show`, the log and the `dkim_rotation_failed` webhook event. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
+
+A rotation survives a crash or a kill at any step. It is written to `<data_dir>/dkim-rotation.json` as `pending` before its key exists, and the next tick (or start) either finishes it, reusing the key already written, or withdraws its TXT records and key file; the current key signs until the new one is committed. `epistle dkim show` lists a rotation in progress. Every save of the state is synced to disk and keeps the state it replaces as `dkim-rotation.json.bak`. If the state cannot be read, the server signs with the key the `.bak` names (its TXT is still published), logs a warning, `epistle status` reports it, and rotation stays stopped until the file is restored, for example by copying the `.bak` over it. Key files and TXT records that no rotation names, left by crashes in older releases, are logged when the rotation task starts and removed only through `epistle dkim cleanup`.
 
 | Key | Meaning |
 |---|---|
@@ -246,6 +273,58 @@ Two rules are worth knowing before you rely on this:
   be able to enumerate another tenant's account names by reading the status
   code, so an account it may not touch looks exactly like one that does not
   exist.
+
+### What each key scope reaches
+
+Scopes are independent: holding one does not grant another.
+
+- `read`: the JMAP Session, every JMAP method that returns account data
+  (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
+  `Quota/get`), downloads, the WebSocket and the event source, and the
+  `GET` routes of the management API.
+- `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
+  of the management API.
+- `send`: JMAP `EmailSubmission/set` and `POST /api/v1/send`.
+- `scim`: `/scim/v2`.
+
+A key that only sends or only writes therefore cannot read the mailbox; give
+it `read` too if the client needs to.
+
+### `POST /api/v1/send`
+
+Mail sent here takes the same path as SMTP submission: DKIM-signed for the
+sender's domain, delivered at once to local recipients, queued for the rest.
+The response's `queued` id names the queue entry.
+
+| Field | Meaning |
+|---|---|
+| `from`, `from_name`, `to`, `cc`, `bcc`, `reply_to`, `sender`, `subject` | Addresses and subject. `bcc` is envelope only. `sender` must be an address the account owns, like `from`. |
+| `text`, `html` | Bodies; both make a `multipart/alternative`, text first. |
+| `attachments`, `inline` | `[{name, content_type, data, content_id}]`, `data` in base64. An empty `content_type` is detected. `inline` parts need `content_id` and go into `multipart/related` with the HTML. An attached `message/rfc822` is written unencoded with CRLF line ends. |
+| `in_reply_to`, `references` | `<id@domain>` message ids, space separated. |
+| `importance` (or `priority`) | `high`, `normal` or `low`: writes `Importance` and `X-Priority`. |
+| `list_unsubscribe`, `list_unsubscribe_post` | `mailto:` and `https://` URLs; `true` adds the RFC 8058 one-click header (needs an `https://` URL). |
+| `auto_submitted`, `feedback_id` | `Auto-Submitted` (RFC 3834 values) and `Feedback-ID`. |
+| `headers` | Custom headers, `X-` names only. |
+
+A control character in any of these is refused with `400`. A message over
+25 MiB once encoded is refused with `413 message_too_large`.
+
+### JMAP `Email/set` create
+
+A new Email is built from `textBody`, `htmlBody` and `attachments` (inline
+parts with a `cid` go beside the HTML in `multipart/related`), or from an
+explicit `bodyStructure`, with the same MIME builder as `/api/v1/send`. Text
+comes from `bodyValues` by `partId`; octets by `blobId`, from an upload or
+from a stored message or one of its parts. `bcc` is kept on the stored
+draft only: `EmailSubmission/set`, like SMTP submission, removes the Bcc
+header before sending and keeps those recipients on the envelope.
+`Content-*` headers on the Email
+itself, `bodyStructure` together with the body lists, more than one part in
+`textBody` or `htmlBody`, or a part with both or neither of `partId` and
+`blobId` are refused with `invalidProperties`; a message over 25 MiB with
+`tooLarge`. The Session's `maxSizeAttachmentsPerEmail` is the attachment
+size that still fits 25 MiB once base64-encoded (about 18 MB).
 
 ### Uploaded blob storage
 
@@ -310,6 +389,38 @@ a message round-trips through set+get without loss. `\Deleted` is
 intentionally not exposed on the JMAP side (RFC 8621 §4.1.1: J
 MAP has a separate `isDeleted` boolean).
 
+### JMAP incremental sync
+
+`Email/changes`, `Mailbox/changes`, `Thread/changes` (RFC 8620 §5.2) and
+`Email/queryChanges`, `Mailbox/queryChanges` (§5.6) answer from a
+per-account change journal that IMAP, POP3, SMTP delivery and JMAP all
+write, so a flag set over IMAP shows up in `Email/changes`. The journal
+lives at `<data_dir>/accounts/<name>/.jmap_changes` (with `.jmap_state`
+and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
+
+- `maxChanges` pages end on an intermediate `newState` with
+  `hasMoreChanges: true`; following them loses nothing.
+- `Mailbox/changes` sets `updatedProperties` to the four count
+  properties when only counts moved. A rename is the old id destroyed
+  and the new one created (a mailbox id is its name).
+- `Email/queryChanges` covers `Email/query` with no filter or only
+  `inMailbox`, sorted newest first (no sort or `receivedAt`
+  descending); `Email/query` reports `canCalculateChanges: false` for
+  anything else. `Mailbox/queryChanges` covers every `Mailbox/query`.
+- `cannotCalculateChanges` answers a malformed state, a state of another
+  type or account, one older than the trimmed journal, and one ahead of
+  it. `epistle restore` never brings back the journal header
+  (`.jmap_state`), so after a restore every JMAP client resyncs once
+  instead of trusting positions the restore rewound.
+- Push over an event source (RFC 8620 §7.3) is served at
+  `/jmap/eventsource?types=..&closeafter=..&ping=..`. It reads the same
+  journal once a second for every account the key reaches, sends a
+  `state` event when one moved and a `ping` (1 to 300 seconds) when idle,
+  and ends once the key or its account stops being valid. No event ids
+  are sent; a reconnecting client catches up with `/changes`. One
+  credential holds at most 4 streams open at once; the next answers 429
+  with the JMAP `limit` error.
+
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in
@@ -334,8 +445,8 @@ RFC 7644 §3.7 (`{ schemas: [Error URN], status, detail }`).
 
 ### `[database]`
 PostgreSQL backing for the antispam engine (reputation, Bayes). The server
-refuses to start against a PostgreSQL major older than 14 (the oldest major
-still in upstream support today); `serve` reads `SHOW server_version_num`
+refuses to start against a PostgreSQL major older than 18 (the major the
+stack `epistle init` writes runs); `serve` reads `SHOW server_version_num`
 after the pool is built and aborts with a `ServerTooOld` error before any
 migration runs, so a server below the floor fails as a sentence at startup
 rather than as an SQL syntax error in the first query.
@@ -409,6 +520,11 @@ Automatic TLS certificates for the mail protocols (not the panel's web TLS).
 | `contacts` | Account contact URIs. |
 | `domains` | Domains to issue for (each must be a configured `domains` entry). |
 | `renew_before_days` | Renew this many days before expiry. |
+| `challenge` | How the CA validates each domain: `http-01` (default), `tls-alpn-01` or `dns-01`. |
+
+- `http-01`: the CA fetches a token from the `acme` listener on port 80.
+- `tls-alpn-01` (RFC 8737): the CA opens TLS to port 443 with the `acme-tls/1` ALPN. Requires a listener that terminates TLS on port 443 (`submissions`, `imaps` or `pop3s` with `port = 443`); the start is refused otherwise. While an order is pending that listener answers `acme-tls/1` with the challenge certificate; ordinary handshakes keep the normal certificate. TLS listeners then negotiate ALPN and offer `acme-tls/1`, `imap`, `pop3`, `managesieve` and `smtp`, so a client that offers only some other ALPN identifier is refused.
+- `dns-01`: the server publishes `_acme-challenge.<domain>` TXT through the `[dns]` provider, waits until every authoritative server of the zone returns it (up to 5 minutes, then the attempt fails with a message naming the record), asks the CA to validate, and removes the record afterwards whether the order succeeded or not. Requires a `[dns]` provider other than `manual`; the start is refused otherwise.
 
 ### `[arc]`
 ARC sealing of inbound mail (RFC 8617), so authentication survives forwarders.
@@ -417,6 +533,14 @@ ARC sealing of inbound mail (RFC 8617), so authentication survives forwarders.
 |---|---|
 | `selector` | ARC selector. |
 | `key_file` | Ed25519 sealing key (DKIM format). |
+
+### `[auth]`
+Authentication mechanisms. Absent keeps the defaults. As with every other
+section, an unknown key fails the config load.
+
+| Key | Meaning |
+|---|---|
+| `scram` | Offer SCRAM-SHA-256 (and SCRAM-SHA-256-PLUS where channel binding is available) and store a SCRAM verifier for each dynamic account (default `true`). With `false` the mechanisms are not advertised on SMTP, IMAP or ManageSieve, an `AUTH`/`AUTHENTICATE` with them is refused exactly like an unknown mechanism, no verifier is derived when an account is created or its password set (CLI, `/api/v1/accounts`, SCIM), and the next password change of an account that has one drops it. PLAIN and LOGIN stay available. |
 
 ### `[oauth]`
 OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
@@ -427,6 +551,10 @@ OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 | `audience` | Expected audience. |
 | `algorithm` | Signing algorithm (e.g. `RS256`). |
 | `public_key` | The IdP's public key. |
+| `discovery_url` | OIDC discovery URL (alternative to `public_key`). |
+| `signing_key` | Base64 PKCS#8 ES256 private key; turns the server into its own OAuth 2.0 authorization server. |
+| `signing_key_file` | A file holding the same key, read at startup; instead of `signing_key`. `epistle init` keeps one at `secrets/oauth_signing.key` beside data_dir, mounted read-only into `mail`. A file that cannot be read stops the server. |
+| `allow_private_jwks` | Permit the discovery document's `jwks_uri` to resolve to a loopback, private (RFC 1918 / RFC 4193), link-local or unspecified address. Default `false`. The check exists because the `jwks_uri` is chosen by the IdP, not the operator, and a hostile or compromised IdP could pivot it at a cloud-metadata service (`169.254.169.254`) or an internal host. Set this only when the IdP genuinely lives on a private network and the trust relationship justifies it. |
 
 ### `[webhook]`
 Outbound event notifications. The URL must be `https://` (or a loopback `http://`).
@@ -437,8 +565,21 @@ Outbound event notifications. The URL must be `https://` (or a loopback `http://
 | `secret` | Optional HMAC-SHA256 signing secret. |
 
 Each request is a JSON object whose `event` field names the event:
-`message_received`, `delivery_failed`, `metric_alert`, and `test`. When `secret` is
+`message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
+(a rotated DKIM key never showed up in DNS, so the previous key keeps signing),
+`outbound_virus` (the antivirus refused a message one of your accounts sent;
+it carries `account` and `signature`), and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
+
+`delivery_failed` is sent per recipient when outbound delivery fails for good
+(refused, or expired in the queue). `reason` is the remote reply as one line, or
+the local error when no server answered; `remote` is the server that answered
+(or `null`); `class` is one of `invalid_address`, `mailbox_full`,
+`policy_rejected`, `too_big`, `other`:
+
+```json
+{"event":"delivery_failed","recipient":"carol@example.net","reason":"550 5.1.1 no such user","class":"invalid_address","remote":"mx.example.net"}
+```
 
 `test` is sent only by `epistle webhook test`, once, to check reachability and
 signature verification. It has a single fixed field, so receivers can acknowledge
@@ -568,7 +709,7 @@ are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
 `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
 `relayed`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
 `webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
-`scanner_clamd_skipped`.
+`scanner_clamd_skipped`, `outbound_virus`.
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
@@ -590,11 +731,11 @@ guide's "Data at rest".
 
 | Key | Meaning |
 |---|---|
-| `encrypt_at_rest` | Encrypt new message writes at rest (default `false`). |
+| `encrypt_at_rest` | Encrypt new message writes at rest (default `false`). Also encrypts the TOTP secrets in `accounts.toml`. |
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
-| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. |
+| _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
 Generate a key with `epistle storage-keygen` (prints a fresh base64 32-byte key
 to stdout; place it in the env var or key file). Mirrors `epistle dkim-keygen`.
@@ -664,7 +805,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `gcloud` | Google Cloud DNS service-account JSON; RS256 JWT bearer; supports TLSA. |
 | `dnsimple` | DNSimple API token + account id; bearer auth; record-id granularity. |
 | `godaddy` | GoDaddy API key + secret; `sso-key` header; v1 REST API; production API access gated by account eligibility; see specifics below. |
-| `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
+| `namecheap` | Username + API key in `token`, plus `client_ip`; XML API; **SRV and TLSA not supported**; see limitations below. |
 | `ovh` | Application key + secret + consumer key; signed with `$1$`+SHA1; see specifics below. |
 | `porkbun` | Porkbun API key + secret; v3 JSON API; credentials in the request body, not a header; see specifics below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
@@ -897,8 +1038,12 @@ secret_key_env = "EPISTLE_PORKBUN_SECRET"     # the secret API key, prefer env
 provider = "namecheap"
 zone = "example.org"
 token = "your_username:your_api_key"      # or token_file / token_env
+client_ip = "203.0.113.25"                # IPv4 on the API whitelist
 ```
 
+- `client_ip` is required. Namecheap's API takes it as the `ClientIp`
+  parameter on every call and accepts IPv4 only; without it epistle stays in
+  manual mode. Use the server's egress address, the one on the whitelist.
 - The `token` carries **two** values separated by `:` — Namecheap's API
   requires `ApiUser`, `ApiKey`, and `UserName` on every call (the username
   doubles as both `ApiUser` and `UserName`). A missing colon, empty
@@ -911,6 +1056,8 @@ token = "your_username:your_api_key"      # or token_file / token_env
   not on the account's whitelist at
   <https://www.namecheap.com/support/api/methods/>. The server's egress IP
   must be added there or every call returns an auth-flavoured error.
+- **SRV is not supported** either: setHosts has no SRV record type, so an
+  SRV write returns `provider does not support writes`, the same as TLSA.
 - **TLSA is not supported** by Namecheap's UI or API. DANE records must be
   published at a different DNS host (or the zone must be split between
   providers) — epistle will return `provider does not support writes` for
@@ -1060,15 +1207,18 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 
+Addresses and domains here are used in lowercase (`config-check` names any written with capitals); an address claimed by two owners is kept by the first and reported in the log and `epistle status`.
+
 | Key | Meaning |
 |---|---|
 | `name` | Lowercase alphanumeric/hyphen; becomes the mailbox directory name. |
 | `addresses` | One or more addresses (each in a configured domain). |
 | `password_hash` | argon2id PHC string. Omit for receive-only. |
 | `catch_all` | Domains for which this account receives mail to unknown local users. |
-| `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. |
+| `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. `0` means no limit. |
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
+| `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
 
 ### `[[alias]]`
 A multi-target alias: one address that delivers to several local accounts.
@@ -1133,8 +1283,9 @@ Outbound queue settings. Absent keeps the secure defaults.
 | Key | Meaning |
 |---|---|
 | `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
+| `tlsrpt_reports` | Send TLS-RPT reports (RFC 8460) about our outbound TLS, default `true`. Each direct delivery to a recipient MX records its TLS outcome (success, or the failure type: `starttls-not-supported`, `certificate-expired`, `certificate-host-mismatch`, `certificate-not-trusted`, `tlsa-invalid`, `sts-policy-invalid`, `validation-failure`) under `data_dir/reports/tlsrpt-outbound/`. Once a UTC day is over, every domain with sessions that publishes a `_smtp._tls` TXT record gets one report per `rua=`: `mailto:` as a message from `postmaster@<hostname>` with the gzip report attached, queued and DKIM-signed like other mail; `https:` as a POST with `Content-Type: application/tlsrpt+gzip` (30 s timeout, no redirects, at most 1 MiB). Domains without the record get nothing, and the day's sessions are deleted once reported. Mail through a `[[transport]]` relay is not recorded. `false` records and sends nothing. |
 
-This knob never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext).
+`outbound_tls` never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext). The one exception is a message one of your accounts submitted with `TLS-Required: No` (RFC 8689) and without REQUIRETLS: for that message MTA-STS and DANE are set aside, any certificate is accepted, and STARTTLS is still used when offered. Inbound mail loses the field.
 
 ## JMAP submission
 

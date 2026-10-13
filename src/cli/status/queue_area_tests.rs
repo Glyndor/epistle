@@ -29,6 +29,7 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		held: None,
 		held_secs: 0,
 		last_error: None,
+		recipient_state: Default::default(),
 	};
 	std::fs::write(
 		new.join(format!("{id}.json")),

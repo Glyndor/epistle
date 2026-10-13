@@ -28,7 +28,12 @@ pub enum Subcommand {
 		/// The account whose archive to list.
 		#[arg(value_name = "ACCOUNT")]
 		account: String,
+		/// Print a JSON array of `{"id", "mailbox", "deleted_at"}` objects.
+		#[arg(long)]
+		json: bool,
 	},
+	/// Restore an archived message to its mailbox.
+	///
 	/// Restore an archived message to its original mailbox (or INBOX when that
 	/// mailbox no longer exists). The restored message is appended as a new
 	/// message with a fresh UID; the original `.eml` is removed from the
@@ -44,8 +49,10 @@ pub enum Subcommand {
 		#[arg(value_name = "ID")]
 		id: Uuid,
 	},
-	/// Delete archived entries. Without `--older-than-days`, every archived
-	/// entry for the account is purged.
+	/// Delete archived entries.
+	///
+	/// Without `--older-than-days`, every archived entry for the account is
+	/// purged.
 	Purge {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = super::DEFAULT_CONFIG)]
@@ -57,15 +64,24 @@ pub enum Subcommand {
 		/// entry is purged. The sweep uses the same threshold.
 		#[arg(long, value_name = "DAYS")]
 		older_than_days: Option<u64>,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 }
 
 /// Dispatch a parsed subcommand.
 pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) -> ExitCode {
 	match subcommand {
-		Subcommand::List { config, account } => match Config::load(&config) {
+		Subcommand::List {
+			config,
+			account,
+			json,
+		} => match Config::load(&config) {
 			Ok(config) => match message_crypto(&config) {
-				Ok(crypto) => list(&config.data_dir, &account, &crypto, out),
+				Ok(crypto) => list(&config.data_dir, &account, &crypto, json, out),
 				Err(code) => code,
 			},
 			Err(error) => error_exit(error),
@@ -85,8 +101,9 @@ pub(super) fn dispatch(subcommand: Subcommand, out: &mut impl std::io::Write) ->
 			config,
 			account,
 			older_than_days,
+			yes,
 		} => match Config::load(&config) {
-			Ok(config) => purge(&config.data_dir, &account, older_than_days, out),
+			Ok(config) => purge(&config.data_dir, &account, older_than_days, yes, out),
 			Err(error) => error_exit(error),
 		},
 	}
@@ -108,6 +125,7 @@ fn list(
 	data_dir: &Path,
 	account: &str,
 	_crypto: &crate::storage::MessageCrypto,
+	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	let Ok(account) = AccountName::new(account) else {
@@ -115,6 +133,19 @@ fn list(
 		return ExitCode::FAILURE;
 	};
 	match account.root(data_dir).and_then(|root| archive::list(&root)) {
+		Ok(entries) if json => {
+			let rows = entries
+				.iter()
+				.map(|entry| {
+					serde_json::json!({
+						"id": entry.id,
+						"mailbox": entry.mailbox,
+						"deleted_at": entry.deleted_at,
+					})
+				})
+				.collect();
+			super::json_out::print(out, &serde_json::Value::Array(rows))
+		}
 		Ok(entries) => {
 			render_entries(&entries, out);
 			ExitCode::SUCCESS
@@ -156,13 +187,14 @@ fn purge(
 	data_dir: &Path,
 	account: &str,
 	older_than_days: Option<u64>,
+	yes: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	let Ok(account) = AccountName::new(account) else {
+	let Ok(parsed) = AccountName::new(account) else {
 		super::style::error(format_args!("purging archive: invalid account name"));
 		return ExitCode::FAILURE;
 	};
-	let account_root = match account.root(data_dir) {
+	let account_root = match parsed.root(data_dir) {
 		Ok(root) => root,
 		Err(error) => {
 			super::style::error(format_args!("purging archive: {error}"));
@@ -181,6 +213,28 @@ fn purge(
 	} else {
 		older_than_secs.saturating_sub(1)
 	};
+	// Count what the purge will take, with the purge's own test, so the
+	// question carries the number. No selector purges everything, and the
+	// question says "all" so nobody reads it as a partial cleanup.
+	let doomed = match crate::imap::archive::list(&account_root) {
+		Ok(entries) => entries
+			.iter()
+			.filter(|entry| now.saturating_sub(entry.deleted_at) > threshold)
+			.count(),
+		Err(error) => {
+			super::style::error(format_args!("purging archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	let question = match older_than_days {
+		Some(days) => format!(
+			"Purge {doomed} archived entries older than {days} days for \"{account}\"? [y/N]"
+		),
+		None => format!("Purge all {doomed} archived entries for \"{account}\"? [y/N]"),
+	};
+	if let Err(code) = super::prompt::confirm_destructive("archive purge", &question, yes) {
+		return code;
+	}
 	match archive::purge(&account_root, threshold, now) {
 		Ok(removed) => {
 			let _ = writeln!(out, "purged {removed} archived entries");

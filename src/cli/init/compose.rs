@@ -39,11 +39,6 @@ pub(super) use host_binary::validate_host_binary_for;
 #[cfg(test)]
 pub(super) use host_binary::{ElfLinkKind, classify_elf_link, validate_host_binary_for};
 
-/// The digest-pinned `postgres:18` image. The CI workflow
-/// `.github/workflows/db.yml` carries the same digest; if either
-/// side moves, the other has to follow.
-pub(super) const POSTGRES_18_IMAGE: &str = "docker.io/library/postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941";
-
 /// The fixed role created by the database image entrypoint.
 pub(crate) const DATABASE_USER: &str = "epistle";
 /// The fixed database created by the database image entrypoint.
@@ -63,14 +58,17 @@ pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_passwor
 /// refusal at `podup up` time.
 const DATABASE_SECRET_MODE: u32 = 400;
 
-/// The digest-pinned `gcr.io/distroless/static-debian12:nonroot`
-/// runtime the default compose file uses. Pinned to the same digest
-/// the Containerfile's runtime `FROM` declares. The default mail
-/// service mounts the host binary on top of this image instead of
-/// pulling a fresh image per release, so the digest only matters on
-/// day one (when the .deb is installed) and at every base-image
-/// audit.
-pub(super) const DISTROLESS_BASE_IMAGE: &str = "gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d";
+/// Where a key lives on the host, given data_dir.
+type KeyPath = fn(&Path) -> PathBuf;
+
+/// The keys `mail` reads as compose secrets, by secret name and host path.
+const KEY_SECRETS: [(&str, KeyPath); 2] = [
+	(
+		"epistle_oauth_signing_key",
+		super::host_secrets::oauth_signing_key,
+	),
+	("epistle_storage_key", super::host_secrets::storage_key),
+];
 
 /// The host path the .deb installs `epistle` at. The default compose
 /// shape bind-mounts this file into the distroless base read-only and
@@ -86,7 +84,7 @@ pub(crate) const HOST_EPISTLE_PATH: &str = "/usr/bin/epistle";
 pub(super) fn resolve_image(image: Option<&str>) -> String {
 	image
 		.map(str::to_string)
-		.unwrap_or_else(|| DISTROLESS_BASE_IMAGE.to_string())
+		.unwrap_or_else(|| super::images::mail_base().to_string())
 }
 
 /// The directory `init` keeps the database password in, under
@@ -115,197 +113,11 @@ pub fn compose_file_path(data_dir: &Path) -> PathBuf {
 const COMPOSE_README: &str = "Bring up the stack with `sudo epistle stack up` (runs podup). \
 init regenerates compose.yaml; keep image choices in the answers and customizations in compose.override.yaml.\n";
 
-/// Mint a fresh 32-character alphanumeric password from the system
-/// CSPRNG. The alphabet excludes look-alikes (no `0`/`O`/`1`/`l`)
-/// so a value copied off the operator's screen is read back
-/// correctly. Returns `None` when the CSPRNG cannot produce bytes;
-/// the apply phase surfaces that as `ApplyError::Rng` and the run
-/// exits 1 with the report of what already landed.
-pub(super) fn generate_db_password() -> Option<String> {
-	use ring::rand::SecureRandom;
-	const ALPHABET: &[u8; 32] = b"abcdefghijkmnpqrstuvwxyz23456789";
-	let mut bytes = [0u8; 32];
-	ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
-	let mut out = String::with_capacity(32);
-	for byte in bytes {
-		// The bias from a 256-byte modular reduction against a
-		// 32-character alphabet is small enough to ignore: every
-		// character has at least 6 candidates (256 / 32 = 8) and
-		// the worst case is 8 vs 9, well within a CSPRNG's noise
-		// floor.
-		out.push(ALPHABET[byte as usize % ALPHABET.len()] as char);
-	}
-	Some(out)
-}
-
-/// Lay down `<data_dir>/secrets/epistle_db_password` and the
-/// `<data_dir>/secrets` directory. Called only when
-/// `services.database` is `true`.
-///
-/// The file is reused byte-for-byte when it already exists and
-/// is a regular file with non-empty content AND it can actually
-/// be read. Rotating it would lock epistle out of the existing
-/// database: PostgreSQL keeps the old credential in its volume
-/// and a new password would never be honoured.
-///
-/// Only a path that does not exist at all (the result of
-/// `symlink_metadata` is `NotFound`) is regenerated. Every
-/// other entry at the path is a present-but-unusable shape the
-/// operator put there on purpose (or by accident) and the apply
-/// phase refuses rather than silently rewriting it:
-/// - a regular file with empty content (a leftover zero-length
-///   file from an earlier half-written run);
-/// - a symlink (broken or not) at the path (a symlink target
-///   could be a file the operator points at from a backup, and
-///   replacing the symlink with a fresh file would lose the
-///   link without warning);
-/// - a directory, fifo, device, or socket in place of the file
-///   (`fs::read` returns `Is a directory`, a fifo would block
-///   on the read, a device node would expose the wrong API);
-/// - a non-empty file that cannot be read (`mode 0o000`, an
-///   unreadable mount, an EIO error, ...).
-///
-/// Each refusal surfaces as
-/// [`ApplyError::ExistingSecretUnreadable`] and names the path
-/// the operator must repair by hand. The Postgres entrypoint
-/// still has the old credential in its volume; minting a fresh
-/// password would lock the database out from under the operator.
-///
-/// Returns the password path; the bytes themselves are not
-/// surfaced to the apply phase.
-pub(super) fn ensure_db_password(
-	data_dir: &Path,
-	report: &mut Report,
-) -> Result<PathBuf, ApplyError> {
-	ensure_db_password_with_probe(data_dir, report, podman_volume_exists)
-}
-
-pub(super) fn podman_volume_exists(volume: &str) -> std::io::Result<bool> {
-	let output = std::process::Command::new("podman")
-		.args(["volume", "exists", volume])
-		.output()?;
-	match output.status.code() {
-		Some(0) => Ok(true),
-		Some(1) => Ok(false),
-		_ => Err(std::io::Error::other(format!(
-			"podman volume exists {volume} failed with status {}; verify Podman is available and rerun init",
-			output.status
-		))),
-	}
-}
-
-pub(super) fn ensure_db_password_with_probe(
-	data_dir: &Path,
-	report: &mut Report,
-	probe: impl FnOnce(&str) -> std::io::Result<bool>,
-) -> Result<PathBuf, ApplyError> {
-	let dir = compose_secrets_dir(data_dir);
-	fs::create_dir_all(&dir).map_err(|error| ApplyError::KeyWrite(dir.clone(), error))?;
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt;
-		fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-			.map_err(|error| ApplyError::KeyWrite(dir.clone(), error))?;
-	}
-	let path = db_password_path(data_dir);
-	match fs::symlink_metadata(&path) {
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-			// The existing database retains its original password even if the host file is lost.
-			let volume = "epistle_epistle-pgdata";
-			if probe(volume).map_err(|error| {
-				ApplyError::DatabaseVolume(format!(
-					"cannot check database volume {volume}: {error}"
-				))
-			})? {
-				return Err(ApplyError::DatabaseVolume(format!(
-					"database volume {volume} already exists but password file {} is missing; restore the password file from backup or remove the volume with `podman volume rm {volume}` and rerun init",
-					path.display()
-				)));
-			}
-			write_fresh_password(&path, report)
-		}
-		Err(error) => {
-			// A `symlink_metadata` failure other than
-			// `NotFound` is a precondition the apply phase
-			// surfaces with its own diagnostic: an
-			// unreadable parent, a permissions refusal on
-			// the secrets directory, ...
-			Err(ApplyError::ExistingSecretUnreadable(path, error))
-		}
-		Ok(metadata) => {
-			// The path resolves to something. Only a regular
-			// file with non-empty content is reusable; every
-			// other shape is refused so the operator sees the
-			// refusal rather than a silent rewrite.
-			let file_type = metadata.file_type();
-			if file_type.is_symlink() {
-				return Err(ApplyError::ExistingSecretUnreadable(
-					path,
-					std::io::Error::other(
-						"path is a symlink; remove it (or replace it with the file it pointed at) and rerun init",
-					),
-				));
-			}
-			if !file_type.is_file() {
-				return Err(ApplyError::ExistingSecretUnreadable(
-					path,
-					std::io::Error::other("path is not a regular file; remove it and rerun init"),
-				));
-			}
-			match fs::read(&path) {
-				Ok(existing) if !existing.is_empty() => {
-					// The file is a regular file with
-					// non-empty content: PostgreSQL has
-					// the matching password in its volume
-					// and rotating it would lock
-					// epistle out.
-					report.steps.push(ReportStep::Reused(path.clone()));
-					Ok(path)
-				}
-				Ok(_) => Err(ApplyError::ExistingSecretUnreadable(
-					path,
-					std::io::Error::other(
-						"file is empty; restore the password file from backup, or remove both the database volume and file before rerunning init",
-					),
-				)),
-				Err(error) => Err(ApplyError::ExistingSecretUnreadable(path, error)),
-			}
-		}
-	}
-}
-
-/// Mint a fresh database password and write it under
-/// `write_secret` so a crash mid-write cannot leave a
-/// half-written secret in place. Returns the password path on
-/// success; the bytes themselves are not surfaced.
-fn write_fresh_password(path: &Path, report: &mut Report) -> Result<PathBuf, ApplyError> {
-	let password =
-		generate_db_password().ok_or_else(|| ApplyError::Rng("database password".to_string()))?;
-	crate::storage::write_secret(path, password.as_bytes())
-		.map_err(|error| ApplyError::KeyWrite(path.to_path_buf(), error))?;
-	report.steps.push(ReportStep::Wrote(path.to_path_buf()));
-	Ok(path.to_path_buf())
-}
-
-/// Test whether the database-password file the apply phase
-/// would reuse is a regular file with non-empty content. The
-/// plan uses this to mark the `DbPassword` step `reused: true`
-/// only when the apply phase will actually reuse. A symlink
-/// at the path, a directory, an empty file, or any other
-/// present-but-unusable shape returns `false` here so the plan
-/// says `generate` and the apply phase then refuses the entry
-/// with [`ApplyError::ExistingSecretUnreadable`] before any
-/// effect.
-pub(super) fn db_password_reused(data_dir: &Path) -> bool {
-	let path = db_password_path(data_dir);
-	let Ok(metadata) = fs::symlink_metadata(&path) else {
-		return false;
-	};
-	if !metadata.file_type().is_file() {
-		return false;
-	}
-	matches!(fs::read(&path), Ok(bytes) if !bytes.is_empty())
-}
+#[path = "compose_secrets.rs"]
+mod secrets;
+pub(super) use secrets::{db_password_reused, ensure_db_admin_password, ensure_db_password};
+#[cfg(test)]
+pub(super) use secrets::{ensure_db_password_with_probe, generate_db_password};
 
 /// Compose-file step in the apply phase. The caller already
 /// passed the answers file through `ensure_db_password`; this
@@ -514,6 +326,7 @@ pub(super) fn published_ports_for_listeners(listeners: &[Listener]) -> Vec<Strin
 #[path = "compose_services.rs"]
 mod services;
 use services::ComposeService;
+pub(crate) use services::MAIL_STOP_GRACE_SECS;
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {
@@ -523,6 +336,11 @@ struct TopLevelSecret {
 #[derive(Debug, Serialize)]
 struct TopLevelVolume {}
 
+#[derive(Debug, Serialize)]
+struct TopLevelConfig {
+	content: &'static str,
+}
+
 /// The full compose file. `serde_json` writes the field order from
 /// the struct definition, so the rendered file matches the order
 /// the operator reads here.
@@ -531,14 +349,22 @@ pub(super) struct ComposeFile {
 	name: String,
 	#[serde(rename = "x-epistle-managed-image")]
 	managed_image: bool,
+	/// The limits the answers set, which `stack update` reads back.
+	#[serde(
+		rename = "x-epistle-resources",
+		skip_serializing_if = "BTreeMap::is_empty"
+	)]
+	resources: BTreeMap<String, super::resources::ServiceResources>,
 	services: BTreeMap<String, ComposeService>,
 	secrets: BTreeMap<String, TopLevelSecret>,
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	configs: BTreeMap<String, TopLevelConfig>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	volumes: BTreeMap<String, TopLevelVolume>,
 }
 
 impl ComposeFile {
-	fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
+	pub(super) fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
 		let image = resolve_image(answers.image.as_deref());
 		let mut services = BTreeMap::new();
 		services.insert(
@@ -554,6 +380,15 @@ impl ComposeFile {
 			ComposeService::new_clamav(answers, true),
 		);
 		let mut secrets = BTreeMap::new();
+		for (name, path) in KEY_SECRETS {
+			secrets.insert(
+				name.to_string(),
+				TopLevelSecret {
+					file: path(&answers.data_dir).display().to_string(),
+				},
+			);
+		}
+		let mut configs = BTreeMap::new();
 		let mut volumes = BTreeMap::new();
 		volumes.insert("clamd-socket".to_string(), TopLevelVolume {});
 		volumes.insert("clamav-db".to_string(), TopLevelVolume {});
@@ -565,14 +400,37 @@ impl ComposeFile {
 					file: db_password_path(&answers.data_dir).display().to_string(),
 				},
 			);
+			secrets.insert(
+				super::db_roles::ADMIN_SECRET.to_string(),
+				TopLevelSecret {
+					file: super::host_secrets::db_admin_password(&answers.data_dir)
+						.display()
+						.to_string(),
+				},
+			);
+			configs.insert(
+				services::DB_ROLES_CONFIG.to_string(),
+				TopLevelConfig {
+					content: super::db_roles::INIT_SCRIPT,
+				},
+			);
 			volumes.insert("epistle-pgdata".to_string(), TopLevelVolume {});
 			volumes.insert("epistle-pgsock".to_string(), TopLevelVolume {});
 		}
+		let services = services
+			.into_iter()
+			.map(|(name, service)| {
+				let service = service.limited(&name, &answers.resources);
+				(name, service)
+			})
+			.collect();
 		Self {
 			name: "epistle".to_string(),
 			managed_image: answers.image.is_none(),
+			resources: answers.resources.clone(),
 			services,
 			secrets,
+			configs,
 			volumes,
 		}
 	}
@@ -626,6 +484,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 		data_dir: std::path::PathBuf::from("/var/lib/epistle"),
 		config_path: std::path::PathBuf::from("/etc/epistle/mail.toml"),
 		acme: None,
+		first_account: None,
 		dns: None,
 		services: crate::cli::init::answers::Services {
 			imap: true,
@@ -637,6 +496,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 			database: false,
 		},
 		image: None,
+		resources: Default::default(),
 	}
 }
 
@@ -707,7 +567,7 @@ mod host_binary_tests;
 mod apply_host_binary_tests;
 
 /// Render either a generated compose document or an edited document.
-fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
+pub(super) fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
 	let mut bytes = serde_json::to_string_pretty(document)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	bytes.push('\n');
@@ -748,3 +608,23 @@ pub(crate) fn update_listener_ports(
 #[cfg(test)]
 #[path = "compose_tests_service.rs"]
 mod tests_service;
+
+#[cfg(test)]
+#[path = "compose_tests_capabilities.rs"]
+mod tests_capabilities;
+
+#[cfg(test)]
+#[path = "compose_tests_read_only.rs"]
+mod tests_read_only;
+
+#[cfg(test)]
+#[path = "compose_tests_resources.rs"]
+mod tests_resources;
+
+#[cfg(test)]
+#[path = "compose_tests_keys.rs"]
+mod tests_keys;
+
+#[cfg(test)]
+#[path = "compose_tests_db_roles.rs"]
+mod tests_db_roles;

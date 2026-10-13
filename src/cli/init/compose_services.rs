@@ -1,8 +1,13 @@
 //! Service definitions for the generated container stack.
-use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH, POSTGRES_18_IMAGE};
+use super::super::db_roles;
+use super::{Answers, DATABASE_SECRET_MODE, HOST_EPISTLE_PATH};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// The `stop_grace_period` of the `mail` service, in seconds: how long podup
+/// waits after SIGTERM before SIGKILL. `serve` drains for 5 s less.
+pub(crate) const MAIL_STOP_GRACE_SECS: u64 = 30;
 
 // ---- internal JSON shape -----------------------------------------------
 
@@ -24,7 +29,12 @@ pub(super) struct ComposeService {
 	ports: Option<Vec<String>>,
 	environment: BTreeMap<String, String>,
 	restart: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stop_grace_period: Option<String>,
 	security_opt: Vec<String>,
+	cap_drop: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	cap_add: Option<Vec<String>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	read_only: Option<bool>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -32,7 +42,13 @@ pub(super) struct ComposeService {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	sysctls: Option<BTreeMap<String, String>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	mem_limit: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pids_limit: Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	secrets: Option<Vec<SecretMount>>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	configs: Option<Vec<ConfigMount>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	depends_on: Option<BTreeMap<String, DependsOn>>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -40,6 +56,20 @@ pub(super) struct ComposeService {
 }
 
 impl ComposeService {
+	/// Apply the memory and process limits of `name` from
+	/// [`super::super::resources::limits`].
+	pub(super) fn limited(
+		mut self,
+		name: &str,
+		overrides: &BTreeMap<String, super::super::resources::ServiceResources>,
+	) -> Self {
+		if let Some((memory, pids)) = super::super::resources::limits(overrides, name) {
+			self.mem_limit = Some(memory);
+			self.pids_limit = Some(pids);
+		}
+		self
+	}
+
 	/// Build the `mail` service. The default mode (answers
 	/// leave `image` unset) mounts the host's `/usr/bin/epistle`
 	/// bind-mounted read-only into the digest-pinned
@@ -116,8 +146,17 @@ impl ComposeService {
 			ports: Some(published_ports),
 			environment,
 			restart: "unless-stopped".to_string(),
+			// `serve` drains for a few seconds less than this on SIGTERM,
+			// so open SMTP transactions finish before podup sends SIGKILL.
+			stop_grace_period: Some(format!("{MAIL_STOP_GRACE_SECS}s")),
 			security_opt: vec!["no-new-privileges".to_string()],
-			read_only: None,
+			// uid 65532 holds no capability, and the ports below 1024 come
+			// from the sysctl below, not from NET_BIND_SERVICE.
+			cap_drop: drop_all(),
+			cap_add: None,
+			// `podman diff` after mail in, a submission and an IMAP read
+			// showed no write outside the mounts, so no tmpfs either.
+			read_only: Some(true),
 			tmpfs: None,
 			// Lower the unprivileged port start inside the
 			// container's network namespace so the mail user
@@ -125,6 +164,8 @@ impl ComposeService {
 			// the listeners that ship below 1024. The setting
 			// is namespaced to the container's netns and does
 			// not touch the host.
+			mem_limit: None,
+			pids_limit: None,
 			sysctls: Some({
 				let mut map = BTreeMap::new();
 				map.insert(
@@ -133,7 +174,21 @@ impl ComposeService {
 				);
 				map
 			}),
-			secrets: None,
+			// The keys kept outside data_dir, read-only, at their host path:
+			// the host commands read the same config and need the same path.
+			configs: None,
+			secrets: Some(
+				super::KEY_SECRETS
+					.iter()
+					.map(|(source, path)| SecretMount {
+						source: (*source).to_string(),
+						target: path(data_dir).display().to_string(),
+						uid: "65532".to_string(),
+						gid: "65532".to_string(),
+						mode: DATABASE_SECRET_MODE,
+					})
+					.collect(),
+			),
 			depends_on: Some({
 				let mut map = BTreeMap::new();
 				map.insert(
@@ -197,14 +252,16 @@ impl ComposeService {
 	/// authentication round-trip works.
 	pub(super) fn new_db() -> Self {
 		let mut environment = BTreeMap::new();
+		// The image's POSTGRES_USER becomes the bootstrap superuser, which
+		// can never lose SUPERUSER; see `db_roles`.
 		environment.insert(
 			"POSTGRES_USER".to_string(),
-			super::DATABASE_USER.to_string(),
+			db_roles::ADMIN_USER.to_string(),
 		);
 		environment.insert("POSTGRES_DB".to_string(), super::DATABASE_NAME.to_string());
 		environment.insert(
 			"POSTGRES_PASSWORD_FILE".to_string(),
-			super::DATABASE_PASSWORD_FILE.to_string(),
+			db_roles::ADMIN_PASSWORD_FILE.to_string(),
 		);
 		environment.insert(
 			"POSTGRES_INITDB_ARGS".to_string(),
@@ -215,7 +272,7 @@ impl ComposeService {
 			psql -h /var/run/postgresql -U epistle -d epistle -Atc 'select 1' >/dev/null"
 			.to_string();
 		Self {
-			image: POSTGRES_18_IMAGE.to_string(),
+			image: super::super::images::postgres().to_string(),
 			entrypoint: None,
 			command: Some(vec![
 				"postgres".to_string(),
@@ -223,7 +280,12 @@ impl ComposeService {
 				"listen_addresses=".to_string(),
 			]),
 			network_mode: Some("none".to_string()),
-			user: None,
+			// The image's postgres user. Started as root, the entrypoint
+			// chowns both volumes and steps down with gosu, which under
+			// `cap_drop: [ALL]` failed on the first chmod (measured on
+			// postgres:18). As 999 it skips both, and the volumes an
+			// earlier root start initialised are already owned by 999.
+			user: Some("999:999".to_string()),
 			userns_mode: None,
 			volumes: vec![
 				VolumeMount::Named("epistle-pgdata:/var/lib/postgresql".to_string()),
@@ -232,16 +294,32 @@ impl ComposeService {
 			ports: None,
 			environment,
 			restart: "unless-stopped".to_string(),
+			stop_grace_period: None,
 			security_opt: vec!["no-new-privileges".to_string()],
+			cap_drop: drop_all(),
+			cap_add: None,
 			read_only: Some(true),
 			tmpfs: Some(vec!["/tmp".to_string()]),
+			mem_limit: None,
+			pids_limit: None,
 			sysctls: None,
-			secrets: Some(vec![SecretMount {
-				source: "epistle_db_password".to_string(),
-				target: "epistle_db_password".to_string(),
-				uid: "999".to_string(),
-				gid: "999".to_string(),
-				mode: DATABASE_SECRET_MODE,
+			// epistle's password for the healthcheck, the dumps and the role
+			// script; the admin password only here, never in mail.
+			secrets: Some(
+				["epistle_db_password", db_roles::ADMIN_SECRET]
+					.map(|name| SecretMount {
+						source: name.to_string(),
+						target: name.to_string(),
+						uid: "999".to_string(),
+						gid: "999".to_string(),
+						mode: DATABASE_SECRET_MODE,
+					})
+					.to_vec(),
+			),
+			configs: Some(vec![ConfigMount {
+				source: DB_ROLES_CONFIG.to_string(),
+				target: db_roles::INIT_SCRIPT_PATH.to_string(),
+				mode: 444,
 			}]),
 			depends_on: None,
 			healthcheck: Some(Healthcheck {
@@ -255,7 +333,13 @@ impl ComposeService {
 	}
 }
 
-#[derive(Debug, Serialize)]
+/// Every capability: each service starts from none and `cap_add` names
+/// what it was measured to need.
+fn drop_all() -> Vec<String> {
+	vec!["ALL".to_string()]
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct SecretMount {
 	source: String,
 	target: String,
@@ -265,6 +349,19 @@ struct SecretMount {
 	/// file carries the same byte, and podup reads it as the octal
 	/// mode. The string form is rejected by podup's mode parser as
 	/// decimal, so the number is the only safe shape.
+	mode: u32,
+}
+
+/// The compose config that carries [`db_roles::INIT_SCRIPT`].
+pub(super) const DB_ROLES_CONFIG: &str = "epistle_db_roles";
+
+/// A compose config mounted as a file. `mode` follows the same octal
+/// reading as [`SecretMount::mode`]: `444` is `0o444`, read-only for all,
+/// which the entrypoint sources rather than executes.
+#[derive(Debug, Serialize)]
+struct ConfigMount {
+	source: String,
+	target: String,
 	mode: u32,
 }
 
@@ -286,7 +383,7 @@ struct Healthcheck {
 impl ComposeService {
 	pub(super) fn new_clamav(answers: &Answers, freshclam: bool) -> Self {
 		let mut service = Self {
-			image: "docker.io/clamav/clamav:1.4".to_string(),
+			image: super::super::images::clamav().to_string(),
 			entrypoint: None,
 			command: None,
 			network_mode: Some(if freshclam { "pasta" } else { "none" }.to_string()),
@@ -296,24 +393,62 @@ impl ComposeService {
 			ports: None,
 			environment: BTreeMap::new(),
 			restart: "unless-stopped".to_string(),
+			stop_grace_period: None,
 			security_opt: vec!["no-new-privileges".to_string()],
-			read_only: None,
+			cap_drop: drop_all(),
+			cap_add: None,
+			read_only: Some(true),
 			tmpfs: None,
+			mem_limit: None,
+			pids_limit: None,
 			sysctls: None,
 			secrets: None,
+			configs: None,
 			depends_on: None,
 			healthcheck: None,
 		};
-		service.environment.insert(
-			if freshclam {
-				"CLAMAV_NO_CLAMD"
-			} else {
-				"CLAMAV_NO_FRESHCLAMD"
-			}
-			.to_string(),
-			"true".to_string(),
-		);
-		if !freshclam {
+		if freshclam {
+			// The image's /init chowns the database volume and creates
+			// /run/clamav as root before it starts freshclam with
+			// `--user=clamav`. Running the daemon as clamav (uid 100, gid
+			// 101 in the image) from the start needs no capability: the
+			// database volume is clamav's, from the image or from earlier
+			// starts. tini stays PID 1, as under /init, so SIGTERM reaches
+			// freshclam and its children are reaped.
+			service.user = Some("100:101".to_string());
+			// UpdateLogFile in the image's freshclam.conf. The tmpfs root is
+			// root's unless its mode opens it, and freshclam runs as clamav.
+			// The log stops growing at LogFileMaxSize (1 MiB by default).
+			service.tmpfs = Some(vec!["/var/log/clamav:size=16m,mode=1777".to_string()]);
+			service.entrypoint = Some(
+				[
+					"/sbin/tini",
+					"--",
+					"freshclam",
+					"--daemon",
+					"--foreground",
+					"--stdout",
+					"--checks=1",
+				]
+				.map(str::to_string)
+				.to_vec(),
+			);
+		} else {
+			service
+				.environment
+				.insert("CLAMAV_NO_FRESHCLAMD".to_string(), "true".to_string());
+			// Measured under `cap_drop: [ALL]`, one failure per line: chown
+			// of /run/clamav (CHOWN), chmod of the now clamav-owned
+			// directory (FOWNER), and clamd's own step down to `User
+			// clamav`, which failed in initgroups() (SETGID, SETUID).
+			// clamd's TemporaryDirectory: every INSTREAM body and every
+			// archive member it extracts lands here while it is scanned.
+			service.tmpfs = Some(vec!["/tmp:size=512m,mode=1777".to_string()]);
+			service.cap_add = Some(
+				["CHOWN", "FOWNER", "SETGID", "SETUID"]
+					.map(str::to_string)
+					.to_vec(),
+			);
 			service
 				.volumes
 				.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));

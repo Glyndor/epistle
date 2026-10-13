@@ -39,6 +39,10 @@ pub(super) struct SmtpSharedState {
 	pub max_conn: usize,
 	/// Optional external content scanner hook.
 	pub scanner_hook: Option<Arc<dyn MailHook>>,
+	/// The clamd client behind `scanner_hook` when clamd is the scanner,
+	/// shared with the submission scan so both count and record failures
+	/// in one place.
+	pub clamd: Option<Arc<ClamdHook>>,
 	/// Optional LLM-assisted antispam hook for the uncertain band.
 	pub llm_hook: Option<LlmHook>,
 }
@@ -58,19 +62,21 @@ pub(super) fn build_smtp_shared_state(
 	let daily_new_recipients = config.new_recipients_per_day;
 	let disk_guard = Arc::new(DiskGuard::new(config.data_dir.clone()));
 	let max_conn = config.max_connections_per_listener.unwrap_or(0);
+	let clamd = config.antispam.clamd_socket.as_ref().map(|socket| {
+		Arc::new(
+			ClamdHook::new(socket.clone())
+				.with_on_found(config.antispam.clamd_on_found.into())
+				.with_timeout(Duration::from_secs(config.antispam.clamd_timeout_secs))
+				.with_max_bytes(config.antispam.clamd_max_bytes)
+				.with_metrics(Arc::clone(metrics))
+				.with_health_file(&config.data_dir),
+		)
+	});
 	let scanner_hook: Option<Arc<dyn MailHook>> = match &config.scanner_hook_url {
 		Some(url) => Some(Arc::new(
 			crate::antispam::hook::HttpHook::new(url).map_err(std::io::Error::other)?,
 		)),
-		None => config.antispam.clamd_socket.as_ref().map(|socket| {
-			Arc::new(
-				ClamdHook::new(socket.clone())
-					.with_on_found(config.antispam.clamd_on_found.into())
-					.with_timeout(Duration::from_secs(config.antispam.clamd_timeout_secs))
-					.with_max_bytes(config.antispam.clamd_max_bytes)
-					.with_metrics(Arc::clone(metrics)),
-			) as Arc<dyn MailHook>
-		}),
+		None => clamd.clone().map(|clamd| clamd as Arc<dyn MailHook>),
 	};
 	let llm_hook = LlmHook::from_config(config.antispam_llm.as_ref())?;
 	Ok(SmtpSharedState {
@@ -80,6 +86,7 @@ pub(super) fn build_smtp_shared_state(
 		disk_guard,
 		max_conn,
 		scanner_hook,
+		clamd,
 		llm_hook,
 	})
 }

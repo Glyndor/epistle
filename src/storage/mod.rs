@@ -10,15 +10,21 @@ pub(crate) mod blob_backend;
 pub mod correspondents;
 mod crypto;
 mod delivery;
+pub(crate) mod lock;
+pub(crate) mod locked;
 mod routing;
+mod routing_forward;
 mod spool;
+mod spool_recipients;
 
 // KEY_LEN, MAGIC and OVERHEAD are re-exported because the public docs of the
 // items above already describe the contract in terms of them: a key is
 // "exactly KEY_LEN bytes", a file "carries MAGIC", a plaintext length is
 // "file_len - OVERHEAD". They were pub inside a private module, so a reader
 // could see the promise and not the value it refers to.
-pub use blob_backend::{BlobBackend, BlobError, FsBackend, S3Backend, build as build_blob_backend};
+pub use blob_backend::{
+	BlobAccount, BlobBackend, BlobError, FsBackend, S3Backend, build as build_blob_backend,
+};
 pub use correspondents::{CapOutcome, CorrespondentStore, Recorded};
 pub use crypto::{CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64};
 pub use delivery::LocalDelivery;
@@ -27,19 +33,31 @@ pub use delivery::LocalDelivery;
 #[path = "crypto_e2e_tests.rs"]
 mod crypto_e2e_tests;
 pub use routing::SplitDelivery;
-pub use spool::{Envelope, FsSpool, SpoolEntry};
+pub use spool::{Envelope, FsSpool, RecipientState, RecipientStatus, SpoolEntry};
 
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.
 ///
 /// The file is created `O_EXCL` at `0600` from the start — never written at the
 /// umask default and tightened afterwards — so a file holding secrets (account
 /// TOTP/credential stores, corpus keys) is never briefly group- or
-/// world-readable. Writes to a sibling temp, fsyncs, then renames onto `path`.
+/// world-readable. The temp file lives in the same directory as `path` and
+/// carries a UUID v7 suffix so two concurrent writers never share a name (the
+/// older fixed `<file>.secret.tmp` name would let a second writer `unlink`
+/// the first's temp mid-write). The temp is `fsync(2)`'d before the rename,
+/// and the parent directory is `fsync(2)`'d afterwards so the rename survives
+/// a power failure between the rename and a follow-up dirent write.
 pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 	use std::io::Write;
-	let tmp = path.with_extension("secret.tmp");
-	// A leftover temp from a crashed write would make create_new fail.
-	let _ = std::fs::remove_file(&tmp);
+	let parent = path
+		.parent()
+		.filter(|p| !p.as_os_str().is_empty())
+		.unwrap_or(std::path::Path::new("."));
+	let name = path
+		.file_name()
+		.and_then(|n| n.to_str())
+		.unwrap_or("secret");
+	let unique = uuid::Uuid::now_v7();
+	let tmp = parent.join(format!(".{name}.{unique}.tmp"));
 	let mut options = std::fs::OpenOptions::new();
 	options.write(true).create_new(true);
 	#[cfg(unix)]
@@ -47,12 +65,25 @@ pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
 		use std::os::unix::fs::OpenOptionsExt;
 		options.mode(0o600);
 	}
-	{
-		let mut file = options.open(&tmp)?;
-		file.write_all(bytes)?;
-		file.sync_all()?;
+	let mut file = options.open(&tmp)?;
+	// From here on the temp exists: any failure before the rename lands
+	// removes it, so a failed write never leaves a stray secret copy
+	// beside the destination.
+	let staged = file
+		.write_all(bytes)
+		.and_then(|()| file.sync_all())
+		.and_then(|()| {
+			drop(file);
+			std::fs::rename(&tmp, path)
+		});
+	if let Err(error) = staged {
+		let _ = std::fs::remove_file(&tmp);
+		return Err(error);
 	}
-	std::fs::rename(&tmp, path)
+	// `fsync(2)` the parent directory so the rename survives a power
+	// failure that hits the file but not the dirent write.
+	std::fs::File::open(parent).and_then(|dir| dir.sync_all())?;
+	Ok(())
 }
 
 /// Load a 32-byte per-instance key stored under `data_dir`/`name`, generating and
@@ -108,3 +139,15 @@ mod secret_write_tests {
 		);
 	}
 }
+
+#[cfg(test)]
+#[path = "lock_tests.rs"]
+mod lock_tests;
+
+#[cfg(test)]
+#[path = "locked_tests.rs"]
+mod locked_tests;
+
+#[cfg(test)]
+#[path = "secret_write_concurrency_tests.rs"]
+mod secret_write_concurrency_tests;

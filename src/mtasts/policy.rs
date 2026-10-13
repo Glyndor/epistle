@@ -116,6 +116,16 @@ pub fn parse(text: &str) -> Result<Policy, PolicyError> {
 type FetchResult = Result<String, PolicyError>;
 type FetchFuture<'a> = Pin<Box<dyn Future<Output = FetchResult> + Send + 'a>>;
 
+/// Extract the `id=` attribute from a single `_mta-sts` TXT record. The
+/// record format is `v=STSv1; id=<id>[; <other>...]` per RFC 8461
+/// section 3.1; we only require the version and id fields. Returns
+/// `None` if the record is not an `STSv1` policy record or has no id.
+fn parse_txt_id(record: &str) -> Option<&str> {
+	let rest = record.strip_prefix("v=STSv1")?;
+	rest.split(';')
+		.find_map(|part| part.trim().strip_prefix("id="))
+}
+
 /// Fetches the HTTPS policy document. Abstracted for offline tests.
 pub trait PolicyFetcher: Send + Sync {
 	/// GET `https://mta-sts.<domain>/.well-known/mta-sts.txt`.
@@ -175,13 +185,35 @@ impl PolicyFetcher for SystemFetcher {
 	}
 }
 
-/// Cap on how long a policy is cached regardless of `max_age`.
+/// How long a policy is used before it is fetched again, at most. The
+/// policy itself stays valid as a fallback for its whole `max_age`.
 const MAX_CACHE: Duration = Duration::from_secs(24 * 3600);
+
+/// How long "no policy" is remembered before discovery runs again.
+const NO_POLICY_CACHE: Duration = Duration::from_secs(600);
+
+/// One cached discovery result.
+#[derive(Clone)]
+struct Cached {
+	/// The policy, or `None` when the domain publishes none.
+	policy: Option<Policy>,
+	/// The `id=` parsed from the `_mta-sts` TXT record at the time the
+	/// entry was written. `None` when no v=STSv1 record was found, or
+	/// when the record had no `id=` attribute. Tracked so the next
+	/// `policy()` call can detect an id change before max_age elapses
+	/// (RFC 8461 section 3.3).
+	txt_id: Option<String>,
+	/// Until then the entry is used as is.
+	refresh: Instant,
+	/// Until then a policy still applies when a refresh fails (RFC 8461
+	/// section 3.3 and 5.1).
+	expires: Instant,
+}
 
 /// Discovery + cache: TXT presence check, HTTPS fetch, expiry by max_age.
 pub struct PolicyStore {
 	fetcher: Box<dyn PolicyFetcher>,
-	cache: Mutex<HashMap<String, (Option<Policy>, Instant)>>,
+	cache: Mutex<HashMap<String, Cached>>,
 }
 
 impl PolicyStore {
@@ -194,224 +226,164 @@ impl PolicyStore {
 	}
 
 	/// The policy for a recipient domain, or `None` when the domain does
-	/// not publish MTA-STS. Transient failures propagate so callers retry.
+	/// not publish MTA-STS.
+	///
+	/// A cached policy that has not reached its `max_age` keeps applying
+	/// when a refresh fails or the TXT record is gone (RFC 8461 sections
+	/// 3.3 and 5.1), so blocking the policy host cannot strip an enforce
+	/// policy early. Without one, a failed lookup or fetch is returned as
+	/// an error, and RFC 8461 section 3.3 has the caller deliver as
+	/// though the domain published no policy.
+	///
+	/// The TXT record is looked up on every call: RFC 8461 section 3.3
+	/// requires a refetch as soon as the published `id=` changes, which
+	/// can happen well before `max_age` runs out.
 	pub async fn policy(
 		&self,
 		dns: &dyn DnsLookup,
 		domain: &str,
 	) -> Result<Option<Policy>, PolicyError> {
 		let domain = domain.to_ascii_lowercase();
-		if let Some((policy, expiry)) = self
+		let now = Instant::now();
+		let cached = self
 			.cache
 			.lock()
 			.expect("mta-sts cache mutex")
 			.get(&domain)
-			.cloned() && Instant::now() < expiry
-		{
-			return Ok(policy);
+			.cloned();
+		let fallback = cached
+			.as_ref()
+			.filter(|c| now < c.expires)
+			.and_then(|c| c.policy.clone());
+		// TXT lookup is mandatory (RFC 8461 section 3.3): if the published
+		// id differs from the cached one, refetch regardless of the refresh
+		// window. A lookup failure falls back to the cached policy only
+		// when one is still within its `max_age`; otherwise it propagates
+		// as a temporary error so the caller does not silently treat the
+		// domain as policy-free.
+		let observed = match self.observe_id(dns, &domain).await {
+			Ok(id) => id,
+			Err(error) => {
+				return match fallback {
+					Some(policy) => {
+						tracing::warn!(%domain, ?error, "MTA-STS TXT lookup failed; keeping the cached policy");
+						Ok(Some(policy))
+					}
+					None => Err(error),
+				};
+			}
+		};
+		let id_changed = cached.as_ref().and_then(|c| c.txt_id.as_ref()) != observed.as_ref();
+		if !id_changed && cached.as_ref().is_some_and(|c| now < c.refresh) {
+			return Ok(cached.and_then(|c| c.policy));
 		}
 
-		// Discovery: the `_mta-sts` TXT record must exist (section 3.1).
+		match observed {
+			// Domain publishes a TXT record. The HTTPS body is fresh or we
+			// never managed to read it; either way, a refetch is required.
+			Some(id) => match self.fetcher.fetch(&domain).await {
+				Ok(body) => match parse(&body) {
+					Ok(policy) => {
+						let max_age = Duration::from_secs(policy.max_age);
+						self.remember(
+							&domain,
+							Some(policy.clone()),
+							Some(id),
+							max_age.min(MAX_CACHE),
+							max_age,
+						);
+						Ok(Some(policy))
+					}
+					Err(error) => match fallback {
+						Some(policy) => Ok(Some(policy)),
+						None => Err(error),
+					},
+				},
+				Err(error) => match fallback {
+					Some(policy) => {
+						tracing::warn!(%domain, ?error, "MTA-STS refresh failed; keeping the cached policy");
+						Ok(Some(policy))
+					}
+					None => Err(error),
+				},
+			},
+			// Domain publishes no v=STSv1 record. The cached policy, if
+			// any, still applies for the rest of its `max_age`; otherwise
+			// the domain has no MTA-STS policy and we say so.
+			None => match fallback {
+				Some(policy) => Ok(Some(policy)),
+				None => {
+					self.remember(&domain, None, None, NO_POLICY_CACHE, NO_POLICY_CACHE);
+					Ok(None)
+				}
+			},
+		}
+	}
+
+	/// Parse the `id=` from the `_mta-sts` TXT record. Returns:
+	/// - `Err(Temporary)` when the TXT lookup itself failed;
+	/// - `Ok(Some(id))` when a v=STSv1 record is published and carries an id;
+	/// - `Ok(None)` when no v=STSv1 record is present (or the records
+	///   parse to one without an id, which the existing code never wrote
+	///   but tolerates).
+	async fn observe_id(
+		&self,
+		dns: &dyn DnsLookup,
+		domain: &str,
+	) -> Result<Option<String>, PolicyError> {
 		let records = match dns.txt(&format!("_mta-sts.{domain}")).await {
 			Ok(records) => records,
 			Err(DnsFailure::Temporary) => {
 				return Err(PolicyError::Temporary("TXT lookup failed".into()));
 			}
 		};
-		let advertised = records.iter().any(|record| record.starts_with("v=STSv1"));
-		if !advertised {
-			self.cache
-				.lock()
-				.expect("mta-sts cache mutex")
-				.insert(domain, (None, Instant::now() + Duration::from_secs(600)));
-			return Ok(None);
+		for record in records {
+			if let Some(id) = parse_txt_id(&record) {
+				return Ok(Some(id.to_string()));
+			}
 		}
+		Ok(None)
+	}
 
-		let body = self.fetcher.fetch(&domain).await?;
-		let policy = parse(&body)?;
-		let ttl = Duration::from_secs(policy.max_age).min(MAX_CACHE);
-		self.cache
+	fn remember(
+		&self,
+		domain: &str,
+		policy: Option<Policy>,
+		txt_id: Option<String>,
+		refresh: Duration,
+		expires: Duration,
+	) {
+		let now = Instant::now();
+		self.cache.lock().expect("mta-sts cache mutex").insert(
+			domain.to_string(),
+			Cached {
+				policy,
+				txt_id,
+				refresh: now + refresh,
+				expires: now + expires,
+			},
+		);
+	}
+
+	/// Make the cached entry for `domain` due for refresh now, as if its
+	/// refresh time had passed.
+	#[cfg(test)]
+	pub(crate) fn due_for_refresh(&self, domain: &str) {
+		if let Some(entry) = self
+			.cache
 			.lock()
 			.expect("mta-sts cache mutex")
-			.insert(domain, (Some(policy.clone()), Instant::now() + ttl));
-		Ok(Some(policy))
+			.get_mut(domain)
+		{
+			entry.refresh = Instant::now();
+		}
 	}
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-	use std::collections::HashMap as Map;
-	use std::sync::atomic::{AtomicU32, Ordering};
+#[path = "policy_tests_cache.rs"]
+mod tests_cache;
 
-	const SAMPLE: &str = "version: STSv1\nmode: enforce\nmx: mx1.example.org\nmx: *.backup.example.org\nmax_age: 86400\n";
-
-	#[test]
-	fn parses_policy_and_matches_mx() {
-		let policy = parse(SAMPLE).expect("valid policy");
-		assert_eq!(policy.mode, Mode::Enforce);
-		assert_eq!(policy.max_age, 86400);
-		assert!(policy.permits_mx("mx1.example.org"));
-		assert!(policy.permits_mx("MX1.EXAMPLE.ORG"));
-		assert!(policy.permits_mx("a.backup.example.org"));
-		assert!(!policy.permits_mx("deep.a.backup.example.org"));
-		assert!(!policy.permits_mx("backup.example.org"));
-		assert!(!policy.permits_mx("evil.example"));
-	}
-
-	#[test]
-	fn parses_crlf_and_ignores_unknown_keys() {
-		let policy = parse(
-			"version: STSv1\r\nmode: testing\r\nmx: a.example\r\nmax_age: 60\r\nfuture: x\r\n",
-		)
-		.expect("valid policy");
-		assert_eq!(policy.mode, Mode::Testing);
-	}
-
-	#[test]
-	fn rejects_malformed_policies() {
-		assert!(parse("mode: enforce\nmx: a.example\nmax_age: 60").is_err());
-		assert!(parse("version: STSv1\nmx: a.example\nmax_age: 60").is_err());
-		assert!(parse("version: STSv1\nmode: enforce\nmax_age: 60").is_err());
-		assert!(parse("version: STSv1\nmode: enforce\nmx: a.example").is_err());
-		assert!(parse("version: STSv1\nmode: bogus\nmx: a.example\nmax_age: 1").is_err());
-		assert!(parse("version: STSv1\nmode: enforce\nmx: a.example\nmax_age: x").is_err());
-		assert!(parse("not a policy").is_err());
-	}
-
-	#[test]
-	fn mode_none_needs_no_mx() {
-		let policy = parse("version: STSv1\nmode: none\nmax_age: 60").expect("valid");
-		assert_eq!(policy.mode, Mode::None);
-	}
-
-	struct FakeDns {
-		txt: Map<String, Vec<String>>,
-	}
-
-	impl DnsLookup for FakeDns {
-		fn txt(
-			&self,
-			name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			let result = Ok(self.txt.get(name).cloned().unwrap_or_default());
-			Box::pin(async move { result })
-		}
-
-		fn addresses(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-		{
-			Box::pin(async { Ok(Vec::new()) })
-		}
-
-		fn mx(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			Box::pin(async { Ok(Vec::new()) })
-		}
-	}
-
-	struct CountingFetcher {
-		calls: std::sync::Arc<AtomicU32>,
-	}
-
-	impl PolicyFetcher for CountingFetcher {
-		fn fetch(&self, _domain: &str) -> FetchFuture<'_> {
-			self.calls.fetch_add(1, Ordering::Relaxed);
-			Box::pin(async { Ok(SAMPLE.to_string()) })
-		}
-	}
-
-	#[tokio::test]
-	async fn discovery_fetch_and_cache() {
-		let mut txt = Map::new();
-		txt.insert(
-			"_mta-sts.example.org".to_string(),
-			vec!["v=STSv1; id=2026a".to_string()],
-		);
-		let dns = FakeDns { txt };
-		let calls = std::sync::Arc::new(AtomicU32::new(0));
-		let store = PolicyStore::new(Box::new(CountingFetcher {
-			calls: calls.clone(),
-		}));
-
-		let policy = store
-			.policy(&dns, "example.org")
-			.await
-			.expect("ok")
-			.expect("policy");
-		assert_eq!(policy.mode, Mode::Enforce);
-
-		// Second lookup (case-insensitive) is served from the cache.
-		let _ = store.policy(&dns, "EXAMPLE.org").await.expect("ok");
-		assert_eq!(calls.load(Ordering::Relaxed), 1);
-	}
-
-	#[tokio::test]
-	async fn no_txt_record_means_no_policy() {
-		let dns = FakeDns { txt: Map::new() };
-		let store = PolicyStore::new(Box::new(CountingFetcher {
-			calls: std::sync::Arc::new(AtomicU32::new(0)),
-		}));
-		let policy = store.policy(&dns, "example.org").await.expect("ok");
-		assert!(policy.is_none());
-	}
-
-	struct FailingFetcher;
-	impl PolicyFetcher for FailingFetcher {
-		fn fetch(&self, _domain: &str) -> FetchFuture<'_> {
-			Box::pin(async { Err(PolicyError::Temporary("unreachable".into())) })
-		}
-	}
-
-	/// A DnsLookup whose TXT query always fails temporarily.
-	struct TempFailDns;
-	impl DnsLookup for TempFailDns {
-		fn txt(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			Box::pin(async { Err(DnsFailure::Temporary) })
-		}
-		fn addresses(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<std::net::IpAddr>, DnsFailure>> + Send + '_>>
-		{
-			Box::pin(async { Ok(Vec::new()) })
-		}
-		fn mx(
-			&self,
-			_name: &str,
-		) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
-			Box::pin(async { Ok(Vec::new()) })
-		}
-	}
-
-	#[tokio::test]
-	async fn txt_lookup_failure_is_temporary_error() {
-		let store = PolicyStore::new(Box::new(CountingFetcher {
-			calls: std::sync::Arc::new(AtomicU32::new(0)),
-		}));
-		let result = store.policy(&TempFailDns, "example.org").await;
-		assert!(matches!(result, Err(PolicyError::Temporary(_))));
-		// Exercise the unused resolver methods so the stub stays covered.
-		assert!(TempFailDns.addresses("x").await.unwrap().is_empty());
-		assert!(TempFailDns.mx("x").await.unwrap().is_empty());
-	}
-
-	#[tokio::test]
-	async fn fetch_failure_propagates() {
-		let mut txt = Map::new();
-		txt.insert(
-			"_mta-sts.example.org".to_string(),
-			vec!["v=STSv1; id=1".to_string()],
-		);
-		let dns = FakeDns { txt };
-		let store = PolicyStore::new(Box::new(FailingFetcher));
-		assert!(store.policy(&dns, "example.org").await.is_err());
-	}
-}
+#[cfg(test)]
+#[path = "policy_tests_basic.rs"]
+mod tests_basic;

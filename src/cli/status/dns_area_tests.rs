@@ -140,6 +140,56 @@ async fn after_a_rotation_the_rotated_key_and_selector_are_the_ones_checked() {
 }
 
 #[tokio::test]
+async fn an_unreadable_rotation_state_warns_while_its_last_good_copy_signs() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (configured, _) = dkim_key(dir.path(), "dkim.pem");
+	let (rotated, rotated_txt) = dkim_key(dir.path(), "dkim-ed20000.key");
+	let config = config(dir.path(), &configured, "mail");
+	let good = serde_json::json!({
+		"selector": "ed20000",
+		"key_file": rotated,
+		"rotated_at": 1,
+		"previous": null,
+	});
+	std::fs::write(config.data_dir.join("dkim-rotation.json"), "{\"selector\":").expect("torn");
+	let mut dns = FakeDns::healthy();
+	publish(&mut dns, "ed20000", &rotated_txt);
+	let without_backup = evaluate(&config, &dns).await;
+	assert!(
+		without_backup
+			.items
+			.iter()
+			.any(|i| i.name == "DKIM signing key" && i.status == Level::Fail),
+		"no last good copy: the state error stands {without_backup:?}"
+	);
+	std::fs::write(
+		config.data_dir.join("dkim-rotation.json.bak"),
+		good.to_string(),
+	)
+	.expect("backup");
+	let report = evaluate(&config, &dns).await;
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+	let item = report
+		.items
+		.iter()
+		.find(|i| i.name == "DKIM rotation state")
+		.expect("state item");
+	assert_eq!(item.status, Level::Warn);
+	assert!(
+		item.detail.contains("dkim-rotation.json.bak") && item.detail.contains("parse"),
+		"{}",
+		item.detail
+	);
+	assert!(
+		report
+			.items
+			.iter()
+			.any(|i| i.name == "DKIM key ed20000 example.org" && i.status == Level::Ok),
+		"the key from the last good state is the one compared: {report:?}"
+	);
+}
+
+#[tokio::test]
 async fn an_unreadable_signing_key_fails() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let missing = dir.path().join("nope.pem");

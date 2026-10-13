@@ -15,6 +15,11 @@ use crate::net::{HttpsUrl, HttpsUrlError};
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+
+/// How OVH takes a TXT `target` (logical) and lists it back (quoted and
+/// split, which `txt_decode` reads either way); see `upsert_inner`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// OVH endpoint URLs by region alias; the alias is the value the operator
 /// puts in `endpoint` (default `ovh-eu`).
@@ -301,10 +306,26 @@ impl OvhProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
+		// The API schema gives `target` only as "Target of the record"
+		// (<https://eu.api.ovh.com/v1/domain.json>, read 2026-10-12), and
+		// the DNS zone guide shows TXT and DKIM targets unquoted
+		// (<https://github.com/ovh/docs/blob/develop/pages/web_cloud/domains/dns_zone_records/guide.en-gb.md>,
+		// read 2026-10-12). Nothing documents quoting, splitting or
+		// escaping for the API. Other clients send the logical value
+		// unsplit because OVH refuses pre-split strings (dnscontrol's
+		// ovh provider), and OVH lists a plain TXT back quoted and split
+		// (<https://github.com/ovh/terraform-provider-ovh/issues/1225>
+		// shows a DKIM key coming back as two quoted strings). Logical
+		// out, `txt_decode` in.
+		let target = if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
+		} else {
+			record.value.clone()
+		};
 		let body = serde_json::json!({
 			"fieldType": kind,
 			"subDomain": sub,
-			"target": record.value,
+			"target": target,
 			"ttl": record.ttl,
 		})
 		.to_string();
@@ -413,17 +434,23 @@ fn parse_kind(field_type: &str) -> RecordKind {
 }
 
 /// Convert an OVH record to a [`DnsRecord`], reconstructing the FQDN and
-/// stripping the quotes the OVH API silently wraps around TXT targets.
+/// reading a TXT target, which OVH lists quoted and split, back to its
+/// logical value.
 fn record_from_ovh(rec: &OvhRecord, zone: &str) -> DnsRecord {
 	let name = if rec.sub_domain.is_empty() {
 		zone.to_string()
 	} else {
 		format!("{}.{}", rec.sub_domain, zone)
 	};
+	let kind = parse_kind(&rec.field_type);
 	DnsRecord {
 		name,
-		kind: parse_kind(&rec.field_type),
-		value: rec.target.trim_matches('"').to_string(),
+		kind,
+		value: if kind == RecordKind::Txt {
+			txt_decode(&rec.target, TXT_FORM)
+		} else {
+			rec.target.trim_matches('"').to_string()
+		},
 		ttl: rec.ttl,
 	}
 }
@@ -482,3 +509,7 @@ mod tests_b;
 #[cfg(test)]
 #[path = "tests_path.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;

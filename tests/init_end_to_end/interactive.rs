@@ -34,7 +34,7 @@ fn interactive_run_exits_2_when_stdin_eofs_mid_questions() {
 		.write_all(
 			b"manual\n\
 			  mail.example.org\n\
-			  example.org\n\n\
+			  example.org\n\n\n\
 			  \n\
 			  \n",
 		)
@@ -72,7 +72,7 @@ fn interactive_run_exits_0_when_user_declines_confirmation() {
 				format!(
 					"manual\n\
 					 mail.example.org\n\
-					 example.org\n\n\
+					 example.org\n\n\n\
 					 \n\
 					 \n\
 					 /tmp/{name}/data\n\

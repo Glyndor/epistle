@@ -13,6 +13,7 @@ pub mod directory;
 pub mod directory_scram_test_counter;
 pub mod diskspace;
 pub mod line;
+pub mod quota;
 pub mod ratelimit;
 pub mod reply;
 pub mod scram;

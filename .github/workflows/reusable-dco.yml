@@ -39,9 +39,34 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # A commit that reached a protected branch without its trailer
+          # cannot be rewritten. Its author fixes it with a later signed
+          # remediation commit in the same range whose message carries
+          # "I, <name> <email>, hereby add my Signed-off-by to this
+          # commit: <full sha>", the form the DCO bot accepts. Only the
+          # commit's own author can remediate it, matched by email. The
+          # message is read as one line because a squash merge copies the PR
+          # body, and a wrapped body splits the sentence in two.
+          remediated=""
+          for sha in $(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}"); do
+            own="$(git show -s --format='%ae' "$sha" | tr '[:upper:]' '[:lower:]')"
+            while IFS= read -r line; do
+              claimed="$(printf '%s' "$line" | sed -n 's/.*<\([^>]*\)>.*/\1/p' | tr '[:upper:]' '[:lower:]')"
+              target="$(printf '%s' "$line" | grep -oE '[0-9a-f]{40}$' || true)"
+              if [ -n "$target" ] && [ "$claimed" = "$own" ]; then
+                remediated="${remediated}${own} ${target}"$'\n'
+              fi
+            done < <(git show -s --format='%B' "$sha" | tr '\n' ' ' | tr -s ' ' \
+              | grep -oE 'I, [^<,]+ <[^>]+>, hereby add my Signed-off-by to this commit: [0-9a-f]{40}' || true)
+          done
           missing=0
           for sha in $(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}"); do
             author="$(git show -s --format='%an <%ae>' "$sha")"
+            email="$(git show -s --format='%ae' "$sha" | tr '[:upper:]' '[:lower:]')"
+            if printf '%s\n' "$remediated" | grep -qx "$email $sha"; then
+              echo "commit $sha signed off by a remediation commit from its author"
+              continue
+            fi
             if ! git show -s --format='%(trailers:key=Signed-off-by)' "$sha" \
               | grep -qi 'Signed-off-by:'; then
               echo "::error::commit $sha ($author) is missing a Signed-off-by trailer"

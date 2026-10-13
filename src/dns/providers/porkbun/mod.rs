@@ -23,7 +23,12 @@ use crate::net::HttpsUrl;
 
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
+	same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+/// How Porkbun takes a TXT `content` and lists it back; see `upsert_inner`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// Porkbun's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.porkbun.com/api/json/v3";
@@ -193,12 +198,17 @@ impl PorkbunProvider {
 		Ok(self.call(&segments, serde_json::Value::Null).await?.records)
 	}
 
-	/// The ids of every record with this fully-qualified name and type. More
-	/// than one means the zone already holds duplicates (two TXT at the same
-	/// name is the classic case), which an upsert has to collapse rather than
-	/// add to.
-	async fn matching_ids(&self, name: &str, kind: &str) -> Result<Vec<String>, ProviderError> {
-		let name = name.trim_end_matches('.');
+	/// The ids of every record an upsert of `record` replaces: same
+	/// fully-qualified name and type, and for TXT the same purpose (the
+	/// contract in `src/dns/provider.rs`), so a sibling TXT at the name is
+	/// left alone. More than one means the zone already holds duplicates,
+	/// which the upsert collapses rather than adds to.
+	async fn matching_ids(
+		&self,
+		record: &DnsRecord,
+		kind: &str,
+	) -> Result<Vec<String>, ProviderError> {
+		let name = record.name.trim_end_matches('.');
 		Ok(self
 			.retrieve()
 			.await?
@@ -206,6 +216,8 @@ impl PorkbunProvider {
 			.filter(|r| {
 				r.kind.eq_ignore_ascii_case(kind)
 					&& r.name.trim_end_matches('.').eq_ignore_ascii_case(name)
+					&& (record.kind != RecordKind::Txt
+						|| same_txt_purpose(&r.content, &record.value))
 			})
 			.map(|r| r.id)
 			.collect())
@@ -222,10 +234,21 @@ impl PorkbunProvider {
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(record.kind)?;
+		// The API documents `content` only as "The record value", with
+		// no word on quoting, length or escaping for TXT
+		// (<https://porkbun.com/api/json/v3/spec>, read 2026-10-12). The
+		// logical value is the form that is the same bytes every time it
+		// is sent, and it is the one other clients of this API send
+		// (dnscontrol, lego, libdns).
+		let content = if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
+		} else {
+			record.value.clone()
+		};
 		let mut fields = serde_json::json!({
 			"name": self.label(&record.name),
 			"type": kind,
-			"content": record.value,
+			"content": content,
 			"ttl": record.ttl.max(MIN_TTL),
 			// Free-text note shown in the Porkbun panel; edit replaces it.
 			"notes": record_description(),
@@ -286,7 +309,7 @@ impl PorkbunProvider {
 				map.insert("content".to_string(), target.into());
 			}
 		}
-		let existing = self.matching_ids(&record.name, kind).await?;
+		let existing = self.matching_ids(&record, kind).await?;
 		match existing.split_first() {
 			// Replace in place, then drop any duplicate left at the same
 			// name/type so an upsert never widens the record set.
@@ -326,7 +349,7 @@ impl PorkbunProvider {
 					&& r.name.trim_end_matches('.').eq_ignore_ascii_case(name)
 					&& (record.kind != RecordKind::Txt
 						|| record.value.is_empty()
-						|| r.content == record.value)
+						|| same_txt_value(&r.content, &record.value))
 			})
 			.map(|r| r.id)
 			.collect::<Vec<_>>();
@@ -354,6 +377,8 @@ impl PorkbunProvider {
 					let priority = (packed >> 16) as u16;
 					let weight = (packed & 0xFFFF) as u16;
 					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
+				} else if kind == RecordKind::Txt {
+					txt_decode(&r.content, TXT_FORM)
 				} else {
 					r.content.trim_matches('"').to_string()
 				};

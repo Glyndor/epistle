@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use super::address::Address;
+use crate::util::address::normalize;
 
 /// Run an async future synchronously from a non-async context. Every
 /// listener's authentication path is synchronous (the sans-IO state
@@ -135,6 +136,13 @@ pub struct Directory {
 	/// `[database]`; those fall back to the per-connection three-strikes
 	/// counters that the listeners already maintain.
 	ban_store: Option<std::sync::Arc<dyn crate::antispam::bans::BanStore>>,
+	/// Optional callback invoked after a successful cleartext (PLAIN/LOGIN)
+	/// authentication to a dynamic account whose stored SCRAM verifier was
+	/// derived with fewer than the current iteration constant. The store
+	/// regenerates the verifier with a fresh salt and persists it, so the
+	/// next exchange pays the full cost. `None` in unit tests that do not
+	/// exercise the upgrade path.
+	scram_upgrader: Option<std::sync::Arc<dyn crate::directory_store::ScramUpgrader>>,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
 	/// `with_scram_lookup_counter` so the delta they assert is
@@ -157,7 +165,7 @@ impl Directory {
 				.collect(),
 			accounts_by_address: address_accounts
 				.into_iter()
-				.map(|(address, account)| (address.to_ascii_lowercase(), account))
+				.map(|(address, account)| (normalize(&address), account))
 				.collect(),
 			password_hashes: HashMap::new(),
 			// The `+` separator is the de-facto standard, enabled by default.
@@ -178,6 +186,7 @@ impl Directory {
 			metrics: None,
 			allowed_protocols: HashMap::new(),
 			ban_store: None,
+			scram_upgrader: None,
 			#[cfg(test)]
 			scram_lookup_counter: None,
 		}
@@ -226,7 +235,7 @@ impl Directory {
 	pub fn with_masked(mut self, entries: impl IntoIterator<Item = (String, String)>) -> Self {
 		self.masked_by_address = entries
 			.into_iter()
-			.map(|(address, account)| (address.to_ascii_lowercase(), account))
+			.map(|(address, account)| (normalize(&address), account))
 			.collect();
 		self
 	}
@@ -235,7 +244,7 @@ impl Directory {
 	pub fn with_aliases(mut self, aliases: impl IntoIterator<Item = (String, AliasSpec)>) -> Self {
 		self.aliases = aliases
 			.into_iter()
-			.map(|(address, spec)| (address.to_ascii_lowercase(), spec))
+			.map(|(address, spec)| (normalize(&address), spec))
 			.collect();
 		self
 	}
@@ -243,7 +252,7 @@ impl Directory {
 	/// The member accounts of an alias address, or `None` when the address is
 	/// not an alias or its membership is hidden (privacy).
 	pub fn alias_members(&self, address: &str) -> Option<Vec<String>> {
-		let spec = self.aliases.get(&address.to_ascii_lowercase())?;
+		let spec = self.aliases.get(&normalize(address))?;
 		(!spec.hidden).then(|| spec.members.clone())
 	}
 
@@ -251,7 +260,7 @@ impl Directory {
 	/// a trailing CRLF) for an address, or `None` when it is not a list. Prepended
 	/// to delivered copies so clients can identify and leave the list (RFC 2369).
 	pub fn list_headers(&self, address: &str) -> Option<String> {
-		let spec = self.aliases.get(&address.to_ascii_lowercase())?;
+		let spec = self.aliases.get(&normalize(address))?;
 		let list_id = spec.list_id.as_ref()?;
 		Some(format!(
 			"List-Id: <{list_id}>\r\nList-Post: <mailto:{address}>\r\n\
@@ -375,6 +384,13 @@ impl Directory {
 		self.domains.iter().cloned().collect()
 	}
 
+	/// Whether `domain` is hosted here, directly or as an alias domain:
+	/// the domains the DKIM key is published for.
+	pub fn hosts_domain(&self, domain: &str) -> bool {
+		let domain = domain.to_ascii_lowercase();
+		self.domains.contains(&domain) || self.domain_aliases.contains_key(&domain)
+	}
+
 	/// The storage quota for an account: its own quota, else the quota of a
 	/// hosted domain it has an address in, else `None` (use the server default).
 	pub fn quota_for(&self, account: &str) -> Option<u64> {
@@ -493,6 +509,7 @@ impl Directory {
 		if let Some(primary) = primary
 			&& super::auth::verify_password(hash, primary)
 		{
+			self.maybe_upgrade_scram(&account, primary);
 			return Some(account);
 		}
 		// Primary failed (or its TOTP did): try the account's app passwords. App
@@ -604,7 +621,7 @@ impl Directory {
 
 	/// Whether `address` belongs to `account`.
 	pub fn owns_address(&self, account: &str, address: &Address) -> bool {
-		let key = address.to_string().to_ascii_lowercase();
+		let key = normalize(&address.to_string());
 		if let Some(owner) = self.accounts_by_address.get(&key) {
 			return owner == account;
 		}
@@ -618,7 +635,7 @@ impl Directory {
 			};
 			return permitted.iter().any(|addr| {
 				self.accounts_by_address
-					.get(&addr.to_ascii_lowercase())
+					.get(&normalize(addr))
 					.is_some_and(|owner| owner == account)
 			});
 		}
@@ -630,70 +647,16 @@ impl Directory {
 		}
 		false
 	}
-
-	/// Resolve a validated address.
-	pub fn resolve(&self, address: &Address) -> Resolution {
-		let local = address.local_part();
-		// A domain alias resolves as its target domain.
-		let domain = self
-			.domain_aliases
-			.get(address.domain())
-			.map(String::as_str)
-			.unwrap_or(address.domain());
-		if !self.domains.contains(domain) {
-			return Resolution::NotLocal;
-		}
-		let key = format!("{local}@{domain}").to_ascii_lowercase();
-		if let Some(account) = self.accounts_by_address.get(&key) {
-			return Resolution::Account(account.clone());
-		}
-		// Multi-target alias: fan out to its member accounts.
-		if let Some(spec) = self.aliases.get(&key) {
-			let accounts = spec
-				.members
-				.iter()
-				.filter_map(|member| self.accounts_by_address.get(&member.to_ascii_lowercase()))
-				.cloned()
-				.collect();
-			return Resolution::Alias(accounts);
-		}
-		// Enabled masked email address: deliver to its owner. Disabled masks
-		// are absent here, so they reject identically to unknown users.
-		if let Some(account) = self.masked_by_address.get(&key) {
-			return Resolution::Account(account.clone());
-		}
-		// Sub-addressing: strip the tag and retry the base address.
-		if let Some(base) = self.strip_subaddress(local, domain)
-			&& let Some(account) = self.accounts_by_address.get(&base)
-		{
-			return Resolution::Account(account.clone());
-		}
-		// Catch-all: a domain may funnel its unknown local users to one account.
-		if let Some(account) = self.catch_all.get(domain) {
-			return Resolution::Account(account.clone());
-		}
-		Resolution::UnknownUser
-	}
-
-	/// The base `local@domain` key (lowercased) once the earliest sub-address
-	/// separator and everything after it are removed, or `None` if the
-	/// local part carries no tag.
-	fn strip_subaddress(&self, local: &str, domain: &str) -> Option<String> {
-		let cut = self
-			.subaddress_separators
-			.iter()
-			.filter_map(|sep| local.find(*sep))
-			.min()?;
-		// A leading separator (e.g. `+tag`) leaves no base local-part.
-		if cut == 0 {
-			return None;
-		}
-		Some(format!("{}@{}", &local[..cut], domain).to_ascii_lowercase())
-	}
 }
+
+#[path = "directory_resolve.rs"]
+mod resolve;
 
 #[path = "directory_scram.rs"]
 mod scram;
+
+#[path = "directory_scram_upgrade.rs"]
+mod scram_upgrade;
 
 #[path = "directory_bans.rs"]
 pub mod bans;
@@ -721,6 +684,10 @@ mod alias_tests;
 #[cfg(test)]
 #[path = "directory_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+#[path = "directory_iteration_tests.rs"]
+mod iteration_tests;
 
 #[cfg(test)]
 #[path = "directory_totp_tests.rs"]

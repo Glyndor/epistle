@@ -23,6 +23,7 @@ mod select;
 mod sort;
 mod state;
 mod thread;
+mod utf8;
 
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
@@ -74,7 +75,10 @@ impl Session {
 		self.apply(tagged)
 	}
 
-	fn apply(&mut self, tagged: Tagged) -> Output {
+	fn apply(&mut self, mut tagged: Tagged) -> Output {
+		if self.utf8_names() {
+			utf8::to_stored_names(&mut tagged.command);
+		}
 		let tag = tagged.tag;
 		if self.imap4rev2 && helpers::recent_command(&tagged.command) {
 			return Output::text(format!("{tag} BAD invalid arguments\r\n"));
@@ -125,7 +129,7 @@ impl Session {
 				output.compress = true;
 				output
 			}
-			Command::Noop => Output::text(format!("{tag} OK NOOP completed\r\n")),
+			Command::Noop => self.noop(&tag),
 			Command::Check => self.check(&tag),
 			// One personal namespace rooted at "" with "/" separator (RFC 2342).
 			// NAMESPACE is post-auth (RFC 9051 §6.3.5); before authentication it
@@ -198,7 +202,8 @@ impl Session {
 				flags,
 				size,
 				synchronizing,
-			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing),
+				utf8,
+			} => self.append_begin(&tag, &mailbox, &flags, size, synchronizing, utf8),
 			Command::Replace {
 				sequence,
 				mailbox,
@@ -351,6 +356,10 @@ impl Session {
 					self.uidonly = true;
 					Some("UIDONLY")
 				}
+				"UTF8=ACCEPT" => {
+					self.utf8_accept = true;
+					Some("UTF8=ACCEPT")
+				}
 				_ => None,
 			})
 			.collect();
@@ -365,6 +374,56 @@ impl Session {
 		match self.idle_tag.take() {
 			Some(tag) => Output::text(format!("{tag} OK IDLE terminated\r\n")),
 			None => Output::text("* BAD not idling\r\n".to_string()),
+		}
+	}
+
+	/// NOOP (RFC 9051 §7.1.2). The only required reply is the tagged OK,
+	/// but the server must re-announce the SELECTed mailbox's current
+	/// message count when it changed since the last untagged response.
+	/// Clients that track the count from untagged lines (Dovecot's
+	/// imaptest is the canonical example) rely on this for any change
+	/// that occurred while no other reply was in flight.
+	fn noop(&mut self, tag: &str) -> Output {
+		let Some((account, mailbox)) = self.selected_pair() else {
+			return Output::text(format!("{tag} OK NOOP completed\r\n"));
+		};
+		let fresh = match self.open_snapshot(&account, &mailbox) {
+			Ok(snapshot) => snapshot,
+			Err(_) => return Output::text(format!("{tag} OK NOOP completed\r\n")),
+		};
+		let State::Selected { snapshot, .. } = &mut self.state else {
+			return Output::text(format!("{tag} OK NOOP completed\r\n"));
+		};
+		let count_after = u32::try_from(fresh.len()).unwrap_or(u32::MAX);
+		*snapshot = fresh;
+		// Always re-announce when the SELECTed mailbox's count differs
+		// from what we have on record for this session. The literal
+		// APPEND/REPLACE path records its own count after emitting
+		// EXISTS, so the comparison here catches any drift a concurrent
+		// session introduced (delivery, another APPEND, ...). Dovecot's
+		// imaptest strictly checks `* N EXISTS` on every reply that
+		// could carry a state delta, and the difference between
+		// "stays the same" and "changed at runtime" is the difference
+		// between a passing scripted test and a stack of
+		// `Missing N untagged replies`.
+		let pre = if self.announced_exists == Some(count_after) {
+			String::new()
+		} else {
+			self.announced_exists = Some(count_after);
+			format!("* {count_after} EXISTS\r\n")
+		};
+		Output::text(format!("{pre}{tag} OK NOOP completed\r\n"))
+	}
+
+	/// `(account, mailbox)` for the SELECTed state, or `None` for any
+	/// other state. Cloned names release the mutable borrow on
+	/// `self.state` so the caller can re-borrow as needed.
+	fn selected_pair(&self) -> Option<(String, String)> {
+		match &self.state {
+			State::Selected {
+				account, mailbox, ..
+			} => Some((account.clone(), mailbox.clone())),
+			_ => None,
 		}
 	}
 }

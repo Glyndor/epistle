@@ -88,13 +88,25 @@ fn only_operator_paths_that_open_a_pool_are_selected() {
 			],
 			true,
 		),
+		// The resource form of `account-remove` purges the same bayes rows.
+		(
+			vec![
+				"epistle", "account", "remove", "alice", "--queue", "discard",
+			],
+			true,
+		),
+		(vec!["epistle", "account", "list"], false),
 		(vec!["epistle", "check", "ports"], false),
 		(vec!["epistle", "probe"], false),
 		(vec!["epistle", "serve"], false),
 		(vec!["epistle", "backup"], false),
 	] {
-		let cli = super::super::Cli::try_parse_from(args).expect("CLI");
-		assert_eq!(database_config(&cli.command).is_some(), selected);
+		let cli = super::super::Cli::try_parse_from(args.clone()).expect("CLI");
+		assert_eq!(
+			database_config(&cli.command).is_some(),
+			selected,
+			"{args:?}"
+		);
 	}
 }
 
@@ -172,4 +184,51 @@ fn stopped_or_missing_mail_suggests_starting_the_stack() {
 		require_running_mail(r#"[{"Service":"mail","State":"running"}]"#),
 		Ok(())
 	);
+}
+
+/// clamd's socket lives on a volume mounted in the mail container only: a
+/// stack whose clamd socket is absent on the host asks the mail container,
+/// and an available socket, no stack, or no clamd runs the check here.
+#[test]
+fn an_absent_clamd_socket_delegates_the_antivirus_check_to_mail() {
+	let dir = tempfile::tempdir().expect("dir");
+	let mut config: Config = toml::from_str(&format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\n[antispam]\nclamd_socket = {:?}\n",
+		dir.path(),
+		dir.path().join("clamd.sock")
+	))
+	.expect("config");
+	let args = ["check", "antivirus", "--json"].map(OsString::from);
+	assert!(
+		clamd_exec_spec(&config, &args).unwrap().is_none(),
+		"without a compose stack the check runs here"
+	);
+	let compose = compose_in(dir.path());
+	let command = clamd_exec_spec(&config, &args)
+		.expect("decision")
+		.expect("a stack with an absent host clamd socket must delegate to mail");
+	assert_eq!(
+		argv(&command),
+		vec![
+			OsString::from("podup"),
+			OsString::from("-f"),
+			compose.into_os_string(),
+			OsString::from("exec"),
+			OsString::from("-T"),
+			OsString::from("mail"),
+			OsString::from("/usr/bin/epistle"),
+			OsString::from("check"),
+			OsString::from("antivirus"),
+			OsString::from("--json"),
+			OsString::from("--config"),
+			OsString::from("/mounted/config/mail.toml"),
+		]
+	);
+	std::fs::write(dir.path().join("clamd.sock"), b"").expect("socket stand-in");
+	assert!(
+		clamd_exec_spec(&config, &args).unwrap().is_none(),
+		"a clamd socket reachable here is checked here"
+	);
+	config.antispam.clamd_socket = None;
+	assert!(clamd_exec_spec(&config, &args).unwrap().is_none());
 }

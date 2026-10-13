@@ -15,6 +15,7 @@ fn state(dir: &std::path::Path, token: &str) -> ApiState {
 		ip_cidr: None,
 		scopes: vec!["read".into(), "write".into()],
 		domains: vec!["example.org".into()],
+		account: None,
 	})
 	.expect("key");
 	drop(keys);
@@ -25,6 +26,7 @@ fn state(dir: &std::path::Path, token: &str) -> ApiState {
 	]
 	.into_iter()
 	.map(|(name, domain)| crate::config::Account {
+		display_name: None,
 		name: name.into(),
 		addresses: vec![format!("{name}@{domain}")],
 		password_hash: None,
@@ -95,9 +97,17 @@ async fn email_copy_between_accessible_accounts_wire() {
 	let new_id = value["methodResponses"][0][1]["created"]["k"]["id"]
 		.as_str()
 		.unwrap_or("");
+	let old_state = value["methodResponses"][0][1]["oldState"]
+		.as_str()
+		.unwrap_or("");
+	let new_state = value["methodResponses"][0][1]["newState"]
+		.as_str()
+		.unwrap_or("");
 	let expected = json!({"methodResponses": [["Email/copy", {"accountId": "dest",
-        "fromAccountId": "source", "created": {"k": {"id": new_id, "blobId": new_id,
-            "threadId": new_id, "size": raw.len()}}, "notCreated": {}}, "c"]]});
+            "fromAccountId": "source",
+            "oldState": old_state, "newState": new_state,
+            "created": {"k": {"id": new_id, "blobId": new_id,
+                "threadId": new_id, "size": raw.len()}}, "notCreated": {}}, "c"]]});
 	assert!(
 		uuid::Uuid::parse_str(new_id).is_ok() && bytes == expected.to_string().as_bytes(),
 		"Email/copy must return an exact successful cross-account copy response using id"

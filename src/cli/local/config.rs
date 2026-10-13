@@ -36,6 +36,7 @@ pub(super) fn kind_name(kind: ListenerKind) -> &'static str {
 		ListenerKind::Metrics => "metrics",
 		ListenerKind::Acme => "acme",
 		ListenerKind::Autoconfig => "autoconfig",
+		ListenerKind::Autoconfigs => "autoconfigs",
 		ListenerKind::WebDav => "webdav",
 	}
 }
@@ -136,6 +137,7 @@ fn listener_kind_toml(kind: ListenerKind) -> &'static str {
 		ListenerKind::Metrics => "metrics",
 		ListenerKind::Acme => "acme",
 		ListenerKind::Autoconfig => "autoconfig",
+		ListenerKind::Autoconfigs => "autoconfigs",
 		ListenerKind::WebDav => "webdav",
 	}
 }

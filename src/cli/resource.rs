@@ -75,17 +75,17 @@ pub(super) fn dns_name(flag: &str, value: &str) -> Result<String, String> {
 	Ok(value.trim().to_ascii_lowercase())
 }
 
-/// Read one secret line without its line ending. The value is checked for
-/// things the configuration cannot store safely, and is never echoed.
+/// Read one secret line without its line ending: with echo off when stdin is
+/// a terminal, as one piped line otherwise. The value is checked for things
+/// the configuration cannot store safely.
 pub(super) fn read_secret(input: &mut dyn BufRead, what: &str) -> Result<String, String> {
-	let mut line = String::new();
-	let read = input
-		.read_line(&mut line)
-		.map_err(|error| format!("cannot read the {what} from stdin: {error}"))?;
-	if read == 0 {
-		return Err(format!("no {what} on stdin: pipe it in as one line"));
-	}
-	let value = line.trim_end_matches(['\n', '\r']);
+	use super::prompt::Secret;
+	let value = match super::prompt::secret_line(what, input) {
+		Secret::Read(value) => value,
+		Secret::Eof => return Err(format!("no {what} on stdin: pipe it in as one line")),
+		Secret::Blank | Secret::Mismatch => return Err(format!("the {what} on stdin is empty")),
+		Secret::Failed(error) => return Err(format!("cannot read the {what} from stdin: {error}")),
+	};
 	if value.trim().is_empty() {
 		return Err(format!("the {what} on stdin is empty"));
 	}
@@ -97,7 +97,7 @@ pub(super) fn read_secret(input: &mut dyn BufRead, what: &str) -> Result<String,
 	if value.chars().any(char::is_control) {
 		return Err(format!("the {what} contains control characters"));
 	}
-	Ok(value.to_string())
+	Ok(value)
 }
 
 /// Write a JSON value followed by a newline.

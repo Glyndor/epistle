@@ -58,6 +58,7 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 		let configured = key.value(config);
 		let default = configured.is_none() || configured == key.default_value();
 		let value = match configured.or(key.default_value()) {
+			Some(0) if matches!(key, Key::Quota) => "unlimited".into(),
 			Some(value) => match key.unit() {
 				values::Unit::Size => format!("{value} bytes"),
 				values::Unit::Duration => format!("{value} seconds"),
@@ -72,6 +73,33 @@ fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 	Ok(())
 }
 
+/// `limits show --json`: `{"<limit>": {"value", "unit", "source"}}`, where
+/// `value` is the effective number (`null` when the limit is off or left to
+/// the protocol) and `unit` is `bytes`, `seconds` or `count`.
+pub(super) fn show_json(config: &Config) -> serde_json::Value {
+	let mut limits = serde_json::Map::new();
+	for key in Key::ALL {
+		let configured = key.value(config);
+		let default = configured.is_none() || configured == key.default_value();
+		let unit = match key.unit() {
+			values::Unit::Size => "bytes",
+			values::Unit::Duration => "seconds",
+			values::Unit::Count => "count",
+		};
+		limits.insert(
+			key.name().to_string(),
+			serde_json::json!({
+				"value": configured
+					.or(key.default_value())
+					.filter(|value| !(matches!(key, Key::Quota) && *value == 0)),
+				"unit": unit,
+				"source": if default { "default" } else { "configured" },
+			}),
+		);
+	}
+	serde_json::Value::Object(limits)
+}
+
 #[cfg(test)]
 #[path = "limits_tests_config.rs"]
 mod tests_config;
@@ -80,7 +108,11 @@ mod tests_config;
 #[derive(Debug, clap::Subcommand)]
 pub enum Action {
 	/// Show effective values and built-in default markers.
-	Show,
+	Show {
+		/// Print one JSON object keyed by limit name.
+		#[arg(long)]
+		json: bool,
+	},
 	/// Save a server-wide limit in the configuration.
 	Set {
 		/// The limit to configure.
@@ -124,10 +156,16 @@ fn run_with_restart(
 	restart: impl FnOnce(&Config, super::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	let (key, domain, value) = match action {
-		Action::Show => {
+		Action::Show { json } => {
 			let result = Config::load(path)
 				.map_err(|error| error.to_string())
-				.and_then(|config| show(&config, out).map_err(|error| error.to_string()));
+				.and_then(|config| {
+					if json {
+						return writeln!(out, "{}", show_json(&config))
+							.map_err(|error| error.to_string());
+					}
+					show(&config, out).map_err(|error| error.to_string())
+				});
 			return match result {
 				Ok(()) => ExitCode::SUCCESS,
 				Err(error) => {
@@ -175,3 +213,7 @@ mod tests_cli;
 #[cfg(test)]
 #[path = "limits_tests_domains.rs"]
 mod tests_domains;
+
+#[cfg(test)]
+#[path = "limits_tests_schedule.rs"]
+mod tests_schedule;

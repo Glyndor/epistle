@@ -61,6 +61,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// API-managed dynamic accounts, hot-swapped on mutation. An optional live
 	// LDAP authenticator is attached here so per-request binds work immediately.
 	let ldap_auth = super::serve_tasks::build_ldap_authenticator(&config);
+	// At-rest encryption, loaded once and shared. Fail closed: with
+	// encryption enabled but no usable key the server refuses to start.
+	// Built before the account store, which seals TOTP secrets with it.
+	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
+		.map_err(std::io::Error::other)?;
 	let mut store = crate::directory_store::AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -71,6 +76,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	.with_domain_quotas(config.domain_quotas.clone())
 	.with_aliases(config.alias.clone())
 	.with_masked_max(config.masked_addresses_max);
+	// Two owners of one address are never merged: the first keeps it and
+	// both are named here (and in `epistle status`) until someone fixes it.
+	for collision in store.address_collisions() {
+		tracing::error!("{collision}");
+	}
 	if let Some(auth) = ldap_auth {
 		store = store.with_ldap_authenticator(auth);
 	}
@@ -101,13 +111,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		);
 		store = store.with_ban_store(ban_store);
 	}
-	let account_store = Arc::new(store);
+	// `into_shared` wires the live store as the SCRAM upgrader, so a
+	// successful cleartext login rewrites a low-iteration verifier.
+	let account_store = store
+		.with_scram_enabled(config.auth.scram)
+		.with_crypto(crypto.clone())
+		.into_shared();
 	let directory = account_store.handle();
-
-	// At-rest message encryption, loaded once and shared. Fail closed: with
-	// encryption enabled but no usable key the server refuses to start.
-	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
-		.map_err(std::io::Error::other)?;
 
 	// Local recipients go to account mailboxes; authenticated relay mail
 	// is queued in the outbound spool, DKIM-signed when configured. The
@@ -124,11 +134,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		directory.clone(),
 		crypto.clone(),
 	)?;
-	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
-	// task prunes stale triplets so the map stays bounded.
-	let greylist = super::serve_tasks::build_greylist(&config);
+	// task prunes stale triplets so the map stays bounded. The store is
+	// PostgreSQL-backed when `[database]` is configured, in-memory otherwise;
+	// the choice is logged once at startup.
+	let greylist = super::serve_tasks::build_greylist(&config, reputation_pool.as_ref()).await;
 
 	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
 	// configuration is fatal (fail closed rather than silently disable it). With
@@ -162,8 +173,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		disk_guard,
 		max_conn,
 		scanner_hook,
+		clamd,
 		llm_hook,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
+	// sink through `submit`; the antivirus scan wraps it there.
+	let sink: Arc<dyn MessageSink> = crate::antispam::submission_scan::ScanningSink::wrap(
+		config.antispam.scan_authenticated,
+		Arc::new(split),
+		clamd,
+		Some(metrics.clone()),
+		webhook.clone(),
+	)?;
 
 	// One Bayesian store and one training worker for the whole process.
 	// SMTP trains and scores through the store; IMAP and JMAP feed the
@@ -206,39 +227,24 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.spawn(std::time::Duration::from_secs(2));
 
 	// The queue worker drains the outbound spool in the background.
-	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
-	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(
-		crate::mtasts::SystemFetcher::new().map_err(|error| {
-			std::io::Error::other(format!("cannot build MTA-STS fetcher: {error:?}"))
-		})?,
-	)));
-	let mut worker = crate::queue::Worker::new(
-		crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
-		connector,
-		&config.hostname,
-	)
-	.with_bounce_sink(Arc::clone(&sink))
-	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
-	.with_dane(Arc::clone(&spf_dns))
-	.with_metrics(metrics.clone())
-	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
-	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
-	.with_transports(config.transport.clone())
-	.with_outbound_tls(config.queue.outbound_tls);
-	if let Some(webhook) = &webhook {
-		worker = worker.with_webhook(Arc::clone(webhook));
-	}
-	let worker = Arc::new(worker);
-	if config.start_queue_worker() {
-		tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
-	} else {
-		tracing::info!("outbound delivery is held: queue worker not started");
-	}
+	super::serve_queue::spawn_queue_worker(
+		&config,
+		crypto.clone(),
+		Arc::clone(&sink),
+		Arc::clone(&spf_dns),
+		&metrics,
+		webhook.as_ref(),
+	)?;
 
 	// DMARC aggregate report flush runs hourly in the background.
-	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns))?;
+	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
+	super::serve_tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 
-	super::serve_tasks::spawn_dkim_rotation(&config, &dkim_signer);
+	super::serve_tasks::spawn_dkim_rotation(
+		&config,
+		&dkim_signer,
+		webhook.as_ref().map(Arc::clone),
+	);
 
 	super::serve_tasks::spawn_alert_engine(
 		&config,
@@ -280,6 +286,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.collect();
 
 	let mut tasks = Vec::new();
+	let drain = crate::shutdown::Drain::new();
 	for listener_config in &config.listeners {
 		match listener_config.kind {
 			ListenerKind::Api => {
@@ -304,7 +311,11 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					Arc::clone(&account_store),
 					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
 				)
-				.with_quota(config.quota_bytes.unwrap_or(0))
+				.with_quota(
+					config
+						.quota_bytes
+						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+				)
 				.with_api_keys(Arc::clone(&api_keys_set))
 				.with_admins(api.admins.clone())
 				.with_crypto(crypto.clone())
@@ -312,14 +323,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				.with_blob_backend(blob_backend)
 				.with_tenant_limits(Arc::clone(&tenant_limits))
 				.with_correspondents((*correspondents).clone())
-				.with_new_recipients_per_day(daily_new_recipients);
+				.with_new_recipients_per_day(daily_new_recipients)
+				.with_outbound(Arc::clone(&sink));
 				if let Some((store, queue)) = &bayes {
 					state = state
 						.with_training(queue.clone())
 						.with_bayes_store(store.clone());
 				}
 				// Built-in OAuth authorization server, when a signing key is set.
-				if let Some(authz) = super::serve_tasks::build_authz_server(&config) {
+				if let Some(authz) = super::serve_tasks::build_authz_server(&config)? {
 					state = state.with_authz(authz);
 				}
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -327,21 +339,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				tasks.push(tokio::spawn(async move {
 					// Serve with the peer address attached so API-key CIDR
 					// allowlists can be enforced from `ConnectInfo`.
-					axum::serve(
-						listener,
-						router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-					)
-					.await
-					.map_err(std::io::Error::other)
+					crate::net::http_serve::serve(listener, router).await
 				}));
 			}
 			ListenerKind::Acme => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::acme::http01::router(challenge_store.clone());
 				tasks.push(tokio::spawn(async move {
-					axum::serve(listener, router)
-						.await
-						.map_err(std::io::Error::other)
+					crate::net::http_serve::serve(listener, router).await
 				}));
 			}
 			ListenerKind::Metrics => {
@@ -363,9 +368,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					}),
 				);
 				tasks.push(tokio::spawn(async move {
-					axum::serve(listener, router)
-						.await
-						.map_err(std::io::Error::other)
+					crate::net::http_serve::serve(listener, router).await
 				}));
 			}
 			ListenerKind::Imaps | ListenerKind::Imap => {
@@ -400,7 +403,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					imap_server = imap_server.with_channel_binding(cbind.clone());
 				}
+				imap_server = imap_server.with_scram_enabled(config.auth.scram);
 				imap_server = imap_server.with_max_connections(max_conn);
+				imap_server = imap_server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
@@ -421,15 +426,22 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				);
 				tasks.push(tokio::spawn(server.serve(listener)));
 			}
-			ListenerKind::Autoconfig => {
+			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
+				// `autoconfigs` presents the shared, renewing certificate.
+				let tls = match (listener_config.kind, &reloadable_tls) {
+					(ListenerKind::Autoconfig, _) => None,
+					(_, Some(reloadable)) => Some(reloadable.https()),
+					(_, None) => {
+						return Err(std::io::Error::other(
+							"autoconfigs listener without TLS configured",
+						));
+					}
+				};
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router =
 					crate::autodiscovery::router(config.hostname.clone(), config.domains.clone());
-				tasks.push(tokio::spawn(async move {
-					axum::serve(listener, router)
-						.await
-						.map_err(std::io::Error::other)
-				}));
+				let serve = crate::autodiscovery::serve(listener, router, tls, max_conn);
+				tasks.push(tokio::spawn(serve));
 			}
 			ListenerKind::WebDav => {
 				let listener = super::serve_tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -511,6 +523,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(store) = &greylist {
 					server = server.with_greylist(Arc::clone(store), config.greylist_delay_secs);
 				}
+				// Bayesian thresholds that decide on their own without the
+				// LLM hook: any unauthenticated, trained-corpus message
+				// scored at or above `junk_at` is delivered to Junk;
+				// above `reject_at` it is refused with `550 5.7.1`.
+				server = server.with_bayes_thresholds(
+					config.antispam.bayes_junk_at,
+					config.antispam.bayes_reject_at,
+				);
 				if let Some(limiter) = &send_limiter {
 					server = server.with_send_limiter(Arc::clone(limiter));
 				}
@@ -531,6 +551,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_tenant_limits(Arc::clone(&tenant_limits));
 				}
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
+				// Same measure and default as IMAP QUOTA.
+				server = server.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::on_disk(
+					config.data_dir.clone(),
+					crypto.clone(),
+					config
+						.quota_bytes
+						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+				)));
 				// Per-account rolling 24h new-recipient cap (plan 4.10).
 				// The shared `Arc<CorrespondentStore>` is the one already
 				// opened above; the cap itself comes from the static
@@ -548,6 +576,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(cbind) = &channel_binding {
 					server = server.with_channel_binding(cbind.clone());
 				}
+				server = server.with_scram_enabled(config.auth.scram);
+				server = server.with_drain(Arc::clone(&drain));
 				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
 			}
 		}
@@ -558,31 +588,13 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// `[privileges]` is unset). Fails closed: a failed drop aborts startup.
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
 
-	// Run until the first listener fails or a shutdown signal is received.
-	let shutdown = async {
-		tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-			.expect("register SIGTERM handler")
-			.recv()
-			.await;
-	};
-	tokio::select! {
-		result = async {
-			for task in tasks {
-				task.await
-					.map_err(|error| std::io::Error::other(error.to_string()))??;
-			}
-			Ok::<(), std::io::Error>(())
-		} => result,
-		_ = shutdown => {
-			tracing::info!("SIGTERM received, shutting down");
-			Ok(())
-		}
-		_ = tokio::signal::ctrl_c() => {
-			tracing::info!("SIGINT received, shutting down");
-			Ok(())
-		}
-	}
+	// Run until the first listener fails or a stop signal is received, then
+	// let open SMTP and IMAP connections finish.
+	wait::until_stopped(tasks, &drain).await
 }
+
+#[path = "serve_wait.rs"]
+mod wait;
 
 #[cfg(test)]
 #[path = "serve_tests.rs"]

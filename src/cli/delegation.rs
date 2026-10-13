@@ -10,8 +10,15 @@ impl Command {
 	pub(super) fn requires_service_user(&self) -> bool {
 		// Explicit arms keep new stateful commands from silently running as root.
 		match self {
+			// Rollback replaces /usr/bin/epistle as root and runs its
+			// database half as the account itself.
+			Command::Stack {
+				action: super::stack::StackCli::Rollback { .. },
+				..
+			} => false,
 			Command::Init { .. }
 			| Command::Stack { .. }
+			| Command::Db { .. }
 			| Command::Service { .. }
 			| Command::Limits { .. }
 			| Command::Status { .. }
@@ -38,19 +45,13 @@ impl Command {
 			| Command::Autodiscover { .. }
 			| Command::Suppression { .. }
 			| Command::ReportAbuse { .. }
-			| Command::Accounts { .. }
-			| Command::AccountAdd { .. }
-			| Command::AccountRemove { .. }
 			| Command::Account { .. }
+			// Every flat alias reaches a stateful account-side handler.
+			| Command::Legacy(_)
 			| Command::Queue { .. }
 			| Command::Ban { .. }
 			| Command::Masked { .. }
-			| Command::AppPasswordCreate { .. }
-			| Command::AppPasswords { .. }
-			| Command::AppPasswordRevoke { .. }
-			| Command::ApiKeyCreate { .. }
-			| Command::ApiKeys { .. }
-			| Command::ApiKeyRevoke { .. }
+			| Command::AppPassword { .. }
 			| Command::Archive { .. }
 			| Command::Dkim { .. }
 			| Command::Tls { .. }
@@ -63,7 +64,10 @@ impl Command {
 			| Command::OauthKeygen { .. }
 			| Command::TokenHash
 			| Command::Local { .. }
-			| Command::Probe { .. } => false,
+			| Command::Probe { .. }
+			| Command::Completions { .. }
+			| Command::MoveSubids(_)
+			| Command::Manpages { .. } => false,
 		}
 	}
 }

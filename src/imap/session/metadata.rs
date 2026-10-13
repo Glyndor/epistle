@@ -25,7 +25,11 @@ impl Session {
 		let untagged = if pairs.is_empty() {
 			String::new()
 		} else {
-			format!("* METADATA \"{mailbox}\" ({})\r\n", pairs.trim_start())
+			format!(
+				"* METADATA {} ({})\r\n",
+				self.mailbox_astring(mailbox),
+				pairs.trim_start()
+			)
 		};
 		Output::text(format!("{untagged}{tag} OK GETMETADATA completed\r\n"))
 	}

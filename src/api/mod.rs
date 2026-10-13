@@ -4,12 +4,17 @@
 //! mail-panel. Every endpoint requires the bearer token; the listener
 //! binds to localhost unless explicitly configured otherwise.
 
+mod account_bound;
+mod account_view;
 pub mod api_keys;
 mod audit;
 pub mod domain_scope;
 mod error;
 pub(crate) mod jmap;
+mod mail_from;
 pub mod oauth;
+mod principal;
+mod quota;
 pub mod scim;
 mod state;
 pub mod tenant_limits;
@@ -18,6 +23,7 @@ pub mod v1;
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
 pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
 pub use jmap::reclaim_blobs;
+pub use principal::{Credential, Principal};
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
 
@@ -50,17 +56,25 @@ pub fn router(state: ApiState) -> Router {
 		// JMAP over WebSocket (RFC 8887): the upgrade endpoint, under the same
 		// bearer auth as the rest of the authenticated router.
 		.route("/jmap/ws", get(jmap::websocket::ws_upgrade))
+		// JMAP push over an event source (RFC 8620 §7.3).
+		.route("/jmap/eventsource", get(jmap::event_source::event_source))
 		.route(
 			"/jmap/download/{account_id}/{blob_id}/{name}",
 			get(jmap::download),
 		)
-		// Allow the upload route a body limit matching maxSizeUpload (plus a
-		// small margin so the handler returns the spec's limit error rather
-		// than a bare transport 413); other routes keep the default cap.
+		// The upload route's body limit is maxSizeUpload; the handler answers
+		// a larger body with the spec's limit error. Other routes keep the
+		// default cap.
 		.route(
 			"/jmap/upload/{account_id}",
-			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE + 1_048_576)),
+			post(jmap::upload).layer(DefaultBodyLimit::max(jmap::MAX_UPLOAD_SIZE)),
 		)
+		// Runs after the bearer check below (layers wrap outward), so the
+		// matched credentials are already in the request.
+		.layer(middleware::from_fn_with_state(
+			state.clone(),
+			account_bound::confine,
+		))
 		// Deny all CORS: no origins, methods, or headers are allowed.
 		.layer(CorsLayer::new())
 		.layer(middleware::from_fn_with_state(
@@ -97,8 +111,20 @@ mod tests;
 mod tests_b;
 
 #[cfg(test)]
+#[path = "scram_off_tests.rs"]
+mod scram_off_tests;
+
+#[cfg(test)]
+#[path = "account_bound_tests.rs"]
+mod account_bound_tests;
+
+#[cfg(test)]
 #[path = "api_tests_newrecipients.rs"]
 mod tests_newrecipients;
+
+#[cfg(test)]
+#[path = "api_tests_quota.rs"]
+mod tests_quota;
 
 #[cfg(test)]
 #[path = "auth_tests.rs"]
@@ -111,6 +137,10 @@ mod masked_tests;
 #[cfg(test)]
 #[path = "jmap_tests.rs"]
 mod jmap_tests;
+
+#[cfg(test)]
+#[path = "jmap_tests_author.rs"]
+mod jmap_tests_author;
 
 #[cfg(test)]
 #[path = "jmap_tests_b.rs"]
@@ -145,8 +175,112 @@ mod jmap_tests_f;
 mod jmap_tests_g;
 
 #[cfg(test)]
+#[path = "jmap_tests_principal.rs"]
+mod jmap_tests_principal;
+
+#[cfg(test)]
+#[path = "jmap_tests_principal_b.rs"]
+mod jmap_tests_principal_b;
+
+#[cfg(test)]
+#[path = "jmap_tests_principal_c.rs"]
+mod jmap_tests_principal_c;
+
+#[cfg(test)]
+#[path = "jmap_tests_push.rs"]
+mod jmap_tests_push;
+
+#[cfg(test)]
+#[path = "jmap_tests_push_validation.rs"]
+mod jmap_tests_push_validation;
+
+#[cfg(test)]
+#[path = "jmap_tests_ws_revoke.rs"]
+mod jmap_tests_ws_revoke;
+
+#[cfg(test)]
+#[path = "send_tests_principal.rs"]
+mod send_tests_principal;
+
+#[cfg(test)]
+#[path = "send_tests_outbound.rs"]
+mod send_tests_outbound;
+
+#[cfg(test)]
+#[path = "send_tests_rich.rs"]
+mod send_tests_rich;
+
+#[cfg(test)]
+#[path = "send_tests_rich_headers.rs"]
+mod send_tests_rich_headers;
+
+#[cfg(test)]
+#[path = "send_tests_injection.rs"]
+mod send_tests_injection;
+
+#[cfg(test)]
+#[path = "jmap_tests_email_create.rs"]
+mod jmap_tests_email_create;
+
+#[cfg(test)]
+#[path = "send_tests_bcc.rs"]
+mod send_tests_bcc;
+
+#[cfg(test)]
+#[path = "send_tests_virus.rs"]
+mod send_tests_virus;
+
+#[cfg(test)]
+#[path = "send_tests_trace.rs"]
+mod send_tests_trace;
+
+#[cfg(test)]
+#[path = "jmap_tests_attachment_limit.rs"]
+mod jmap_tests_attachment_limit;
+
+#[cfg(test)]
+#[path = "jmap_tests_partition.rs"]
+mod jmap_tests_partition;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes_helpers.rs"]
+mod jmap_tests_changes_helpers;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes.rs"]
+mod jmap_tests_changes;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes_b.rs"]
+mod jmap_tests_changes_b;
+
+#[cfg(test)]
+#[path = "jmap_tests_query_changes.rs"]
+mod jmap_tests_query_changes;
+
+#[cfg(test)]
+#[path = "jmap_tests_changes_c.rs"]
+mod jmap_tests_changes_c;
+
+#[cfg(test)]
 #[path = "jmap_tests_limits.rs"]
 mod jmap_tests_limits;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits_objects.rs"]
+mod jmap_tests_limits_objects;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits_concurrency.rs"]
+mod jmap_tests_limits_concurrency;
+
+#[cfg(test)]
+#[path = "auth_once_tests.rs"]
+mod auth_once_tests;
+
+#[cfg(test)]
+#[path = "jmap_tests_limits_backref.rs"]
+mod jmap_tests_limits_backref;
 
 #[cfg(test)]
 #[path = "tenancy_tests.rs"]
@@ -167,3 +301,27 @@ mod api_key_reload_tests;
 #[cfg(test)]
 #[path = "secret_diagnostics_tests.rs"]
 mod secret_diagnostics_tests;
+
+#[cfg(test)]
+#[path = "jmap_tests_disabled.rs"]
+mod jmap_tests_disabled;
+
+#[cfg(test)]
+#[path = "jmap_tests_read_scope.rs"]
+mod jmap_tests_read_scope;
+
+#[cfg(test)]
+#[path = "jmap_tests_push_get.rs"]
+mod jmap_tests_push_get;
+
+#[cfg(test)]
+#[path = "jmap_tests_eventsource.rs"]
+mod jmap_tests_eventsource;
+
+#[cfg(test)]
+#[path = "api_tests_addresses.rs"]
+mod tests_addresses;
+
+#[cfg(test)]
+#[path = "api_tests_display_name.rs"]
+mod tests_display_name;

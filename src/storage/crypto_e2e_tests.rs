@@ -67,12 +67,19 @@ fn delivery_writes_ciphertext_and_imap_reads_plaintext() {
 		"plaintext must not appear on disk"
 	);
 
-	// Reading back through the IMAP mailbox API yields the plaintext.
+	// Reading back through the IMAP mailbox API yields the plaintext, as
+	// final delivery stored it (with its trace fields).
+	let delivered = [
+		b"Return-Path: <sender@elsewhere.example>\r\nDelivered-To: alice@example.org\r\n"
+			.as_slice(),
+		BODY,
+	]
+	.concat();
 	let snapshot = Snapshot::open(dir.path(), "alice", "INBOX", &crypto).expect("snapshot");
 	let msg = snapshot.messages().next().expect("one message");
-	assert_eq!(snapshot.read(msg).expect("read"), BODY);
+	assert_eq!(snapshot.read(msg).expect("read"), delivered);
 	// RFC822.SIZE reports the plaintext length, not the on-disk envelope length.
-	assert_eq!(msg.size, BODY.len() as u64);
+	assert_eq!(msg.size, delivered.len() as u64);
 }
 
 #[test]

@@ -10,10 +10,11 @@
 //!
 //! The two implementations keep the historical default behaviour intact:
 //!
-//! - `FsBackend` is exactly what the on-disk pool has done since the
-//!   sharding change landed (`blobs/ab/cd/<id>` with a fallback to the flat
-//!   layout), behind the trait so the upload / download / quota / reclaim
-//!   code paths no longer know it is touching a disk.
+//! - `FsBackend` keeps one partition per account
+//!   (`blobs/accounts/<account>/ab/cd/<id>`) and still reads the shared pool
+//!   older versions wrote (`blobs/ab/cd/<id>`, then the flat layout), behind
+//!   the trait so the upload / download / quota / reclaim code paths no
+//!   longer know it is touching a disk.
 //! - `S3Backend` does the four verbs an S3 bucket needs — `PutObject`,
 //!   `GetObject`, `DeleteObject`, `ListObjectsV2` — over HTTPS, with SigV4
 //!   signed by hand (the AWS SDK is a tree of dependencies for four HTTP
@@ -57,20 +58,54 @@ pub enum BlobError {
 	Remote(String),
 }
 
+/// The account partition a blob lives in.
+///
+/// Built only from a name that passes the same check the mailbox storage
+/// applies to account directories ([`crate::util::path_component::AccountName`]):
+/// one plain path component, never `.` or `..`, no separator or control
+/// character. A backend joins it into a path (or an object key) only
+/// through this type, so a request cannot steer a blob outside its
+/// account's partition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobAccount(String);
+
+impl BlobAccount {
+	/// Validate `name` as an account partition, `None` when it is not one
+	/// plain path component.
+	pub fn new(name: &str) -> Option<Self> {
+		crate::util::path_component::AccountName::new(name).ok()?;
+		Some(Self(name.to_string()))
+	}
+
+	/// The validated account name.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
 /// What callers can do with a blob store. All four methods are `async`.
 ///
-/// `list` returns just the ids whose **payload** is present — sidecars alone
-/// are not listed; the caller that needs them asks for them by id.
+/// Every blob belongs to one account. New blobs are written into that
+/// account's partition; reads look there first and then in the shared pool
+/// older versions wrote, where the `.owner` sidecar is what ties a blob to
+/// its account. A blob in one account's partition is never found under
+/// another account's name.
+///
+/// `list` returns just the ids whose **payload** is present, in every
+/// partition and in the shared pool. Sidecars alone are not listed; the
+/// caller that needs them asks for them by id.
 pub trait BlobBackend: Send + Sync {
-	/// Fetch the bytes for `(id, suffix)`. `None` means absent (the same
-	/// answer a fresh disk would give); `Err(BlobError)` includes `Auth`,
-	/// which the [`crate::storage::BlobError::Auth`] variant carries.
-	fn get(&self, id: Uuid, suffix: &str) -> BoxFuture<'_, Option<Vec<u8>>>;
-	/// Write the payload (or sidecar). Idempotent: re-writing overwrites.
-	fn put(&self, id: Uuid, suffix: &str, bytes: &[u8]) -> BoxFuture<'_, ()>;
-	/// Remove the payload (or sidecar). Idempotent: removing something absent
-	/// is `Ok(())`.
-	fn delete(&self, id: Uuid, suffix: &str) -> BoxFuture<'_, ()>;
+	/// Fetch the bytes for `(account, id, suffix)`. `None` means absent (the
+	/// same answer a fresh disk would give); `Err(BlobError)` includes
+	/// `Auth`, which the [`crate::storage::BlobError::Auth`] variant carries.
+	fn get(&self, account: &BlobAccount, id: Uuid, suffix: &str) -> BoxFuture<'_, Option<Vec<u8>>>;
+	/// Write the payload (or sidecar) into the account's partition.
+	/// Idempotent: re-writing overwrites.
+	fn put(&self, account: &BlobAccount, id: Uuid, suffix: &str, bytes: &[u8])
+	-> BoxFuture<'_, ()>;
+	/// Remove the payload (or sidecar) from the account's partition and from
+	/// the shared pool. Idempotent: removing something absent is `Ok(())`.
+	fn delete(&self, account: &BlobAccount, id: Uuid, suffix: &str) -> BoxFuture<'_, ()>;
 	/// Every payload id currently stored, in unspecified order.
 	fn list(&self) -> BoxFuture<'_, Vec<Uuid>>;
 }

@@ -14,6 +14,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub use super::first_account::FirstAccount;
+
 /// Top-level mode the operator chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -141,10 +143,10 @@ pub struct Answers {
 	/// Domains this server accepts mail for.
 	pub domains: Vec<String>,
 	/// Optional public IPv4 (must be global unicast when present).
-	#[serde(default)]
+	#[serde(default, deserialize_with = "super::answers_none::ipv4")]
 	pub public_ipv4: Option<Ipv4Addr>,
 	/// Optional public IPv6 (must be global unicast when present).
-	#[serde(default)]
+	#[serde(default, deserialize_with = "super::answers_none::ipv6")]
 	pub public_ipv6: Option<Ipv6Addr>,
 	/// `data_dir` written into the generated config.
 	pub data_dir: PathBuf,
@@ -177,6 +179,14 @@ pub struct Answers {
 	/// flag plus `contact`.
 	#[serde(default)]
 	pub acme: Option<AcmeAnswers>,
+	/// The first mail account and its role aliases. Optional: left out,
+	/// `init` creates no mailbox.
+	#[serde(default)]
+	pub first_account: Option<FirstAccount>,
+	/// Memory and process limits that replace the defaults of a service,
+	/// keyed by service name (`mail`, `db`, `clamav`, `freshclam`).
+	#[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+	pub resources: std::collections::BTreeMap<String, super::resources::ServiceResources>,
 }
 
 /// A non-fatal problem the operator should see before the file is
@@ -312,12 +322,19 @@ pub enum Invalid {
 	/// using `init` instead of `podup run`. The same check rejects
 	/// an explicit `:latest` tag, which is no better.
 	ImageUntagged(String),
+	/// `[first_account]` names an address, an account or a display
+	/// name that cannot be created. Carries the reason.
+	FirstAccount(String),
+	/// A `[resources.<service>]` table names no service of the stack, or
+	/// one of its values is not a limit podup can apply.
+	Resources { field: String, reason: String },
 }
 
 impl std::fmt::Display for Invalid {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Invalid::Hostname(why) => write!(f, "hostname: {why}"),
+			Invalid::Resources { field, reason } => write!(f, "{field}: {reason}"),
 			Invalid::DomainsEmpty => f.write_str("domains: must contain at least one domain"),
 			Invalid::Domain { value, reason } => write!(f, "domains: {value:?}: {reason}"),
 			Invalid::DomainsDuplicate { a, b } => {
@@ -392,6 +409,7 @@ impl std::fmt::Display for Invalid {
 				f,
 				"image {value:?}: must include a tag that is not 'latest' or a @sha256: digest"
 			),
+			Invalid::FirstAccount(why) => write!(f, "first_account: {why}"),
 		}
 	}
 }
@@ -450,11 +468,12 @@ impl Answers {
 		 mode = \"manual\"                   # \"manual\" or \"automatic\"\n\
 		 hostname = \"mail.example.org\"     # FQDN the server identifies as\n\
 		 domains = [\"example.org\"]         # at least one; not equal to hostname\n\
-		 # public_ipv4 = \"203.0.113.10\"    # optional; must be a global unicast address\n\
-		 # public_ipv6 = \"2001:db8::10\"    # optional; must be a global unicast address\n\
+		 # public_ipv4 = \"203.0.113.10\"    # global unicast, or \"none\"; left out, detected\n\
+		 # public_ipv6 = \"2001:db8::10\"    # global unicast, or \"none\"; left out, detected\n\
 		 data_dir = \"/var/lib/glyndor/epistle/data\"\n\
 		 config_path = \"/etc/epistle/mail.toml\"\n\
-		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\n\
+		 # image = \"ghcr.io/glyndor/epistle:0.8\"   # optional override; default is the build-time version\n\
+		 # resources.clamav = { memory = \"4g\", pids = 256 }  # optional, also mail, db, freshclam; defaults: mail 1g/1024, db 1g/256, clamav 3g/128, freshclam 2g/32\n\n\
 		 # [dns]                             # only with mode = \"automatic\"\n\
 		 # provider = \"cloudflare\"          # cloudflare, route53, dnsimple, ...\n\
 		 # zone = \"example.org\"\n\
@@ -469,7 +488,12 @@ impl Answers {
 		 # managesieve = false\n\
 		 # webdav = false\n\
 		 # api = false                      # enable the management API by editing the [api] section of the generated config; init does not mint an api credential\n\
-		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n"
+		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n\n\
+		 # [first_account]                  # optional first mailbox; with password_file = \"-\" the password comes from stdin\n\
+		 # address = \"alice@example.org\"   # in one of the domains; the local part is the account name\n\
+		 # display_name = \"Alice Liddell\"  # optional\n\
+		 # password_file = \"/run/secrets/alice\"  # its first line is the password; never written inline\n\
+		 # role_aliases = true               # point postmaster@ and abuse@ of every domain at it\n"
 			.to_string()
 	}
 }
@@ -555,6 +579,10 @@ mod tests_paths_overlap;
 #[cfg(test)]
 #[path = "answers_tests_services.rs"]
 mod tests_services;
+
+#[cfg(test)]
+#[path = "answers_tests_resources.rs"]
+mod tests_resources;
 
 #[path = "answers_validate.rs"]
 mod answers_validate;

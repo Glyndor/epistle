@@ -15,6 +15,7 @@ fn key(label: &str, secret: &str) -> ApiKey {
 		// `add()` rejects empty scopes, so every test-built key carries one.
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
+		account: None,
 	}
 }
 

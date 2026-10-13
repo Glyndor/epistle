@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Account, Protocol};
 use crate::directory_store::aliases::AliasStore;
-use crate::smtp::address::Address;
 use crate::smtp::directory::Directory;
+use crate::util::address_reason;
 
 pub mod app_passwords;
 pub use app_passwords::{AppPassword, AppPasswordStore};
@@ -21,6 +21,7 @@ pub mod aliases;
 pub mod masked;
 mod names;
 use names::{validate_name, with_safe_names};
+mod account_views;
 mod app_passwords_api;
 mod masked_api;
 mod reload_api;
@@ -37,13 +38,27 @@ pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
 
 mod build;
 
+#[path = "forward_catch_all_mutators.rs"]
+mod forward_catch_all_mutators;
 #[path = "mutators.rs"]
 mod mutators;
+pub mod scram_upgrade;
+
+#[path = "scram_settings.rs"]
+mod scram_settings;
+#[path = "set_totp.rs"]
+mod set_totp;
 
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
 pub use file_watcher::{ApiKeyReloader, FileWatcher};
+
+mod collisions;
+pub mod display_name;
+mod mutate_store;
+mod normalize;
+pub use normalize::account_name;
 
 /// Hot-swappable view of the directory. Cheap to clone; readers snapshot.
 #[derive(Clone)]
@@ -76,8 +91,18 @@ impl DirectoryHandle {
 	}
 }
 
-/// A dynamic account as persisted in `accounts.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Hook the directory calls back into when a cleartext authentication
+/// succeeds against a dynamic account whose stored SCRAM verifier is below
+/// the current iteration constant. See [`crate::directory_store::scram_upgrade`]
+/// for the trait + no-op default + store impl; this file only re-exports
+/// them so `mod.rs` stays under the per-file code-line budget.
+pub use crate::directory_store::scram_upgrade::{NoopScramUpgrader, ScramUpgrader};
+
+/// A dynamic account as persisted in `accounts.toml`. `Default` is an
+/// empty record for test fixtures and API constructors to fill with
+/// `..DynamicAccount::default()`; it is not a valid account on its own
+/// (`AccountStore::add` requires a password hash and an address).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DynamicAccount {
 	/// Account login name (the local part used by IMAP/SMTP AUTH, without
 	/// the `@domain`). Lowercase ASCII, no leading hyphen; validated by
@@ -115,29 +140,59 @@ pub struct DynamicAccount {
 	/// that the account exists.
 	#[serde(default)]
 	pub allowed_protocols: Option<Vec<Protocol>>,
+	/// External addresses this account's mail is also forwarded to.
+	/// Empty (the default) disables forwarding. Mirrors the static
+	/// `Account::forward` field; dynamic forwards chain onto static ones
+	/// in the directory builder so the two pools compose at delivery time.
+	#[serde(default)]
+	pub forward: Vec<String>,
+	/// Domains for which this account receives mail addressed to otherwise
+	/// unknown local users (catch-all). Empty (the default) opts out; mirrors
+	/// the static `Account::catch_all` field.
+	#[serde(default)]
+	pub catch_all: Vec<String>,
+	/// The person's name, free text used as the sender name (JMAP
+	/// `Identity.name`, the `From` that `/api/v1/send` builds). Stored as
+	/// given (trimmed), never lowercased; `None` when unset. Checked by
+	/// [`display_name::validate`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub display_name: Option<String>,
 }
 
 impl DynamicAccount {
 	/// Build an account from a plaintext password, deriving the argon2id hash
-	/// and SCRAM-SHA-256 credentials (fresh random salt, RFC 7677 ≥4096 rounds).
+	/// and SCRAM-SHA-256 credentials (fresh random salt,
+	/// [`crate::smtp::scram::SCRAM_ITERATIONS`] rounds). When
+	/// `scram_enabled` is `false`, the SCRAM verifier is omitted (`None`);
+	/// a future password change with `scram_enabled` `false` keeps it
+	/// `None`.
 	pub fn with_password(
 		name: String,
 		addresses: Vec<String>,
 		password: &str,
+		scram_enabled: bool,
 	) -> Result<Self, StoreError> {
 		let password_hash = crate::smtp::auth::hash_password(password)
 			.map_err(|_| StoreError::Invalid("cannot hash password".to_string()))?;
-		let scram = crate::smtp::scram::ScramStored::with_fresh_salt(password)
-			.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
+		let scram = if scram_enabled {
+			let stored = crate::smtp::scram::ScramStored::with_fresh_salt(password)
+				.ok_or_else(|| StoreError::Invalid("cannot generate salt".to_string()))?;
+			Some(stored)
+		} else {
+			None
+		};
 		Ok(DynamicAccount {
 			name,
 			addresses,
 			password_hash,
-			scram: Some(scram),
+			scram,
 			totp_secret: None,
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			forward: Vec::new(),
+			catch_all: Vec::new(),
+			display_name: None,
 		})
 	}
 }
@@ -236,6 +291,22 @@ pub struct AccountStore {
 	/// `None` in unit tests that do not exercise the counters — the
 	/// directory still emits the structured tracing event regardless.
 	metrics: Option<Arc<crate::metrics::Metrics>>,
+	/// Callback wired into every rebuilt directory to upgrade a dynamic
+	/// account's SCRAM verifier when its stored iteration count is below
+	/// the current constant. Set by the `serve` builder with an
+	/// `Arc<Self>` so the directory's upgrade writes round-trip to the
+	/// store; left as a no-op until then so unit tests that build a store
+	/// without a runtime never observe a real write.
+	scram_upgrader: Arc<dyn ScramUpgrader>,
+	/// Whether SCRAM-SHA-256 derivation/storage is enabled (the `[auth] scram`
+	/// knob). `true` is the historical default: account-create and
+	/// password-change paths derive a verifier and store it; the SCRAM
+	/// upgrade path is a no-op when an account has none. `false` skips
+	/// derivation entirely; the next password change of an account that
+	/// already has a verifier drops it because the mutator passes `None`.
+	scram_enabled: bool,
+	/// At-rest encryption for the TOTP secret (see `set_totp.rs`).
+	crypto: crate::storage::MessageCrypto,
 	handle: DirectoryHandle,
 }
 
@@ -250,9 +321,9 @@ impl AccountStore {
 	) -> Result<Self, StoreError> {
 		let path = data_dir.join("accounts.toml");
 		let dynamic: DynamicFile = match std::fs::read_to_string(&path) {
-			Ok(text) => {
-				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?
-			}
+			Ok(text) => normalize::file(
+				toml::from_str(&text).map_err(|error| StoreError::Invalid(error.to_string()))?,
+			),
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => DynamicFile::default(),
 			Err(error) => return Err(error.into()),
 		};
@@ -279,6 +350,9 @@ impl AccountStore {
 			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
 			ban_store: None,
 			metrics: None,
+			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,
+			scram_enabled: true,
+			crypto: crate::storage::MessageCrypto::disabled(),
 			handle: DirectoryHandle::new(Directory::default()),
 		};
 		store.handle.replace(store.build_directory());
@@ -377,59 +451,57 @@ impl AccountStore {
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
-	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
-		validate_name(&account.name)?;
-		if account.addresses.is_empty() {
-			return Err(StoreError::Invalid("addresses must not be empty".into()));
-		}
-		for raw in &account.addresses {
-			let address = Address::parse(raw)
-				.map_err(|_| StoreError::Invalid(format!("invalid address {raw}")))?;
-			if !self
-				.domains
+	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
+		account.name = normalize::account_name(&account.name);
+		normalize::account(&mut account);
+		account.display_name = display_name::stored(account.display_name.as_deref())?;
+		self.mutate_store(|state| {
+			validate_name(&account.name)?;
+			if account.addresses.is_empty() {
+				return Err(StoreError::Invalid("addresses must not be empty".into()));
+			}
+			for raw in &account.addresses {
+				let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
+				if !self
+					.domains
+					.iter()
+					.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
+				{
+					return Err(StoreError::Invalid(address_reason::not_handled(
+						address.domain(),
+					)));
+				}
+			}
+			let name_taken = self
+				.static_accounts
 				.iter()
-				.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-			{
-				return Err(StoreError::Invalid(format!(
-					"address {raw} is not in a configured domain"
-				)));
+				.map(|existing| existing.name.as_str())
+				.chain(state.accounts.iter().map(|existing| existing.name.as_str()))
+				.any(|existing| existing == account.name);
+			if name_taken {
+				return Err(StoreError::Duplicate(account.name.clone()));
 			}
-		}
-
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let name_taken = self
-			.static_accounts
-			.iter()
-			.map(|existing| existing.name.as_str())
-			.chain(dynamic.iter().map(|existing| existing.name.as_str()))
-			.any(|existing| existing == account.name);
-		if name_taken {
-			return Err(StoreError::Duplicate(account.name.clone()));
-		}
-		for raw in &account.addresses {
-			if self.address_taken(&dynamic, None, raw) {
-				return Err(StoreError::Duplicate(raw.clone()));
+			for raw in &account.addresses {
+				if self.address_taken(&state.accounts, None, raw) {
+					return Err(StoreError::Duplicate(raw.to_string()));
+				}
 			}
-		}
-
-		dynamic.push(account);
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
+			state.accounts.push(account);
+			Ok(())
+		})?;
 		Ok(())
 	}
 
 	/// Remove a dynamic account. Static accounts cannot be removed here.
 	pub fn remove(&self, name: &str) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let before = dynamic.len();
-		dynamic.retain(|account| account.name != name);
-		if dynamic.len() == before {
-			return Err(StoreError::NotFound(name.to_string()));
-		}
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
+		self.mutate_store(|state| {
+			let before = state.accounts.len();
+			state.accounts.retain(|account| account.name != name);
+			if state.accounts.len() == before {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
+			Ok(())
+		})?;
 		Ok(())
 	}
 
@@ -440,28 +512,16 @@ impl AccountStore {
 		hash: String,
 		scram: Option<crate::smtp::scram::ScramStored>,
 	) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		account.password_hash = hash;
-		account.scram = scram;
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
-		Ok(())
-	}
-
-	/// Set or clear a dynamic account's base32 TOTP secret (RFC 6238).
-	pub fn set_totp(&self, name: &str, secret: Option<String>) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		account.totp_secret = secret;
-		self.persist(&dynamic)?;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			target.password_hash = hash;
+			target.scram = scram;
+			Ok(())
+		})?;
 		Ok(())
 	}
 
@@ -470,17 +530,18 @@ impl AccountStore {
 	/// authentication rejects it while disabled. Returns the previous state
 	/// so callers can detect a no-op.
 	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let account = dynamic
-			.iter_mut()
-			.find(|account| account.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		let previous = account.disabled;
-		account.disabled = disabled;
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
-		Ok(previous)
+		let mut previous = None;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			previous = Some(target.disabled);
+			target.disabled = disabled;
+			Ok(())
+		})?;
+		Ok(previous.expect("closure ran"))
 	}
 
 	/// Whether a dynamic account is administratively disabled.
@@ -523,51 +584,39 @@ impl AccountStore {
 		name: &str,
 		replacement: DynamicAccount,
 	) -> Result<(), StoreError> {
-		let mut dynamic = self.dynamic.write().expect("store lock");
-		let slot = dynamic
-			.iter()
-			.position(|existing| existing.name == name)
-			.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-		let mut fresh = replacement;
-		fresh.name = name.to_string();
-		// The collision check on add ignores "self" — we want the same
-		// behaviour here, so seed the address map with the existing row.
-		let mut known_addresses: Vec<String> = self
-			.static_accounts
-			.iter()
-			.flat_map(|existing| existing.addresses.iter())
-			.chain(
-				dynamic
-					.iter()
-					.enumerate()
-					.filter(|(index, _)| *index != slot)
-					.flat_map(|(_, existing)| existing.addresses.iter()),
-			)
-			.map(|address| address.to_ascii_lowercase())
-			.collect();
-		known_addresses.sort();
-		for raw in &fresh.addresses {
-			if known_addresses
-				.binary_search(&raw.to_ascii_lowercase())
-				.is_ok()
-			{
-				return Err(StoreError::Duplicate(raw.clone()));
+		self.mutate_store(|state| {
+			let slot = state
+				.accounts
+				.iter()
+				.position(|existing| existing.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			let mut fresh = replacement;
+			fresh.name = name.to_string();
+			normalize::account(&mut fresh);
+			fresh.display_name = display_name::stored(fresh.display_name.as_deref())?;
+			let mut known_addresses: Vec<String> = self
+				.static_accounts
+				.iter()
+				.flat_map(|existing| existing.addresses.iter())
+				.chain(
+					state
+						.accounts
+						.iter()
+						.enumerate()
+						.filter(|(index, _)| *index != slot)
+						.flat_map(|(_, existing)| existing.addresses.iter()),
+				)
+				.map(|address| crate::util::address::normalize(address))
+				.collect();
+			known_addresses.sort();
+			for raw in &fresh.addresses {
+				if known_addresses.binary_search(raw).is_ok() {
+					return Err(StoreError::Duplicate(raw.to_string()));
+				}
 			}
-		}
-		dynamic[slot] = fresh;
-		self.persist(&dynamic)?;
-		drop(dynamic);
-		self.handle.replace(self.build_directory());
-		Ok(())
-	}
-
-	fn persist(&self, dynamic: &[DynamicAccount]) -> Result<(), StoreError> {
-		let file = DynamicFile {
-			accounts: dynamic.to_vec(),
-		};
-		let text = toml::to_string_pretty(&file)
-			.map_err(|error| StoreError::Invalid(error.to_string()))?;
-		crate::storage::write_secret(&self.path, text.as_bytes())?;
+			state.accounts[slot] = fresh;
+			Ok(())
+		})?;
 		Ok(())
 	}
 
@@ -580,14 +629,9 @@ impl AccountStore {
 		let allowed_protocols =
 			build::allowed_protocols(&self.static_accounts, &dynamic).collect::<Vec<_>>();
 		let hashes = build::password_hashes(&sql, &self.static_accounts, &dynamic);
-		let catch_all = self.static_accounts.iter().flat_map(|account| {
-			account
-				.catch_all
-				.iter()
-				.map(|domain| (domain.clone(), account.name.clone()))
-		});
+		let catch_all = build::catch_all(&self.static_accounts, &dynamic);
 		let scram = build::scram(&dynamic);
-		let totp = build::totp(&dynamic);
+		let totp = build::totp(&dynamic, &self.crypto);
 		// Disabled accounts are passed through to the directory as a name
 		// set so `authenticate_local` can reject them before any password
 		// work runs. The set rebuilds on every directory swap, mirroring
@@ -606,16 +650,7 @@ impl AccountStore {
 					.map(|bytes| (account.name.clone(), bytes))
 			})
 			.chain(build::quota_bytes(&dynamic));
-		let forwards = self
-			.static_accounts
-			.iter()
-			.filter(|account| !account.forward.is_empty())
-			.map(|account| {
-				(
-					account.name.clone(),
-					(account.forward.clone(), account.forward_keep_local),
-				)
-			});
+		let forwards = build::forwards(&self.static_accounts, &dynamic);
 		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
 		let aliases = self.aliases.iter().map(|alias| {
 			(
@@ -666,14 +701,35 @@ impl AccountStore {
 		if let Some(ban_store) = self.ban_store.clone() {
 			dir = dir.with_ban_store(ban_store);
 		}
+		dir = dir.with_scram_upgrader(self.scram_upgrader.clone());
 		dir
 	}
 }
 
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
+/// Manual Debug so the `ScramUpgrader` trait object can sit in the
+/// `Directory` struct (which derives Debug) without forcing every
+/// implementor to depend on the store's internals.
+impl std::fmt::Debug for AccountStore {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AccountStore")
+			.field("path", &self.path)
+			.field("domains", &self.domains)
+			.field(
+				"dynamic_count",
+				&self.dynamic.read().map(|g| g.len()).unwrap_or(0),
+			)
+			.finish_non_exhaustive()
+	}
+}
 
 #[cfg(test)]
 #[path = "account_mutators_tests.rs"]
 mod account_mutators_tests;
+
+#[cfg(test)]
+#[path = "cross_handle_tests.rs"]
+mod cross_handle_tests;
+
+#[cfg(test)]
+#[path = "lowercase_tests.rs"]
+mod lowercase_tests;

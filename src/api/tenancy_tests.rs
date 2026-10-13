@@ -20,12 +20,14 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: vec!["a.example".to_string()],
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
 
 	let domains = vec!["a.example".to_string(), "b.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 		password_hash: Some("$argon2id$secret".to_string()),
@@ -60,6 +62,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add bob");
 	ApiState::new(

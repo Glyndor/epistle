@@ -245,6 +245,7 @@ pub(super) fn prepare(dir: &Path, port_base: u16) -> Result<Prepared, LocalError
 			ACCOUNT_NAME.to_string(),
 			vec![format!("{ACCOUNT_NAME}@{DOMAIN}")],
 			&pwd,
+			true,
 		)
 		.map_err(|error| LocalError::Account(error.to_string()))?;
 		layout::write_account_replace(&accounts_toml_path, &account)?;

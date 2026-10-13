@@ -1,176 +1,36 @@
 //! JMAP method handlers (RFC 8621): Mailbox and Email objects.
+//!
+//! The `/changes` and `/queryChanges` dispatch helpers live in
+//! [`super::state`]; this file holds the shape-by-shape method handlers
+//! (Mailbox/get/query/set, Email/get/query, Thread/get, EmailSubmission/set,
+//! Identity/get, Quota/get). Submission and identity helpers split out
+//! into sibling files so this one stays under the per-file line cap.
 
 use serde_json::{Value, json};
 
+use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
-
-use crate::smtp::address::Address;
-use crate::smtp::trace::ensure_submission_headers;
-
-/// `Mailbox/changes`, `Email/changes`, `Thread/changes` (RFC 8620 §5.2):
-/// this server does not maintain a change log (`canCalculateChanges` is false),
-/// so the spec-correct response is the `cannotCalculateChanges` error.
-pub(super) fn cannot_calculate_changes(state: &ApiState, args: &Value, call_id: &str) -> Value {
-	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
-		return json!(["error", { "type": "invalidArguments" }, call_id]);
-	};
-	if !state.accounts().iter().any(|a| a.name == account) {
-		return json!(["error", { "type": "accountNotFound" }, call_id]);
-	}
-	json!(["error", { "type": "cannotCalculateChanges" }, call_id])
-}
-
-/// `EmailSubmission/set` (RFC 8621 §7.5): queue stored emails for delivery.
-pub(super) fn email_submission_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
-	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
-		return json!(["error", { "type": "invalidArguments" }, call_id]);
-	};
-	if !state.accounts().iter().any(|a| a.name == account) {
-		return json!(["error", { "type": "accountNotFound" }, call_id]);
-	}
-	let mut created = serde_json::Map::new();
-	let mut not_created = serde_json::Map::new();
-	if let Some(create) = args.get("create").and_then(Value::as_object) {
-		for (creation_id, submission) in create {
-			match submit_email(state, account, submission) {
-				Ok(id) => {
-					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
-				}
-				Err(reason) => {
-					not_created.insert(creation_id.clone(), json!({ "type": reason }));
-				}
-			}
-		}
-	}
-	json!([
-		"EmailSubmission/set",
-		{ "accountId": account, "oldState": "0", "newState": "0",
-		  "created": created, "notCreated": not_created },
-		call_id,
-	])
-}
-
-/// Queue one submission: read its email, build the envelope, spool it.
-fn submit_email(
-	state: &ApiState,
-	account: &str,
-	submission: &Value,
-) -> Result<String, &'static str> {
-	let email_id = submission
-		.get("emailId")
-		.and_then(Value::as_str)
-		.ok_or("invalidProperties")?;
-	let raw = objects::find_email_raw(state.data_dir(), account, email_id, state.crypto())
-		.ok_or("notFound")?;
-	let headers = String::from_utf8_lossy(&raw);
-	let envelope = submission.get("envelope");
-	let mail_from = envelope
-		.and_then(|e| e.get("mailFrom"))
-		.and_then(|m| m.get("email"))
-		.and_then(Value::as_str)
-		.or_else(|| submission.get("identityId").and_then(Value::as_str))
-		.unwrap_or("")
-		.to_string();
-	let recipients: Vec<String> = match envelope
-		.and_then(|e| e.get("rcptTo"))
-		.and_then(Value::as_array)
-	{
-		Some(list) => list
-			.iter()
-			.filter_map(|r| r.get("email").and_then(Value::as_str))
-			.map(str::to_string)
-			.collect(),
-		None => objects::header_value(&headers, "to")
-			.map(|to| to.split(',').map(|a| a.trim().to_string()).collect())
-			.unwrap_or_default(),
-	};
-	if recipients.is_empty() {
-		return Err("noRecipients");
-	}
-	// Send-as guard: the envelope mailFrom must belong to the account on whose
-	// behalf the bearer authenticated, matching what SMTP enforces at
-	// `src/smtp/session/mod.rs:380`. Empty mailFrom is the null reverse path
-	// (JMAP `Envelope.mailFrom.email: null`), legal for bounces; a non-empty
-	// mailFrom that does not parse, or that the account does not own, is
-	// rejected with the RFC 8621 §7.5.2 `forbiddenFrom` error.
-	if !mail_from.is_empty() {
-		let parsed = Address::parse(&mail_from).map_err(|_| "invalidEmail")?;
-		if !state.owns_address(account, &parsed) {
-			return Err("forbiddenFrom");
-		}
-	}
-	// Stamp Message-ID and Date on the queued copy when the client did not
-	// include them. Domain is the envelope's MAIL FROM, falling back to the
-	// first configured domain when the envelope has none (the null reverse
-	// path, bounces and similar).
-	let stamp_domain = mail_from
-		.rsplit_once('@')
-		.map(|(_, d)| d.to_ascii_lowercase())
-		.or_else(|| state.domains().first().map(|d| d.to_ascii_lowercase()))
-		.unwrap_or_else(|| "localhost".to_string());
-	let stamped = ensure_submission_headers(&raw, &stamp_domain, std::time::SystemTime::now());
-	// Record recipients even without a cap so replies remain known. The
-	// rolling 24h cap uses the same reservation lock as SMTP and REST. The
-	// account name is the JMAP `accountId` argument: the client is
-	// acting on behalf of itself, so the per-day ceiling lives there.
-	// `tooManyRecipients` is the JMAP error type that names the
-	// resource; RFC 8621 §3.6.2 carries it through. The on-wire error
-	// keeps the same wording as the SMTP / REST paths so an operator
-	// reading either log can correlate by the message.
-	if let Some(store) = state.correspondents() {
-		let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
-		match store.enforce_new_recipient_cap(
-			account,
-			&recipient_refs,
-			state.new_recipients_per_day(),
-		) {
-			Ok(crate::storage::CapOutcome::Limited {
-				new,
-				already,
-				limit,
-			}) => {
-				crate::api::log_send_limited(account, None, new.saturating_add(already), limit);
-				return Err("tooManyRecipients");
-			}
-			Ok(
-				crate::storage::CapOutcome::Allowed { .. } | crate::storage::CapOutcome::Uncapped,
-			) => {}
-			Err(error) => {
-				tracing::warn!(
-					account = %crate::log_id::account(account),
-					%error,
-					"correspondent store error; accepting"
-				);
-			}
-		}
-	}
-	let message = crate::smtp::session::AcceptedMessage {
-		reverse_path: mail_from,
-		recipients,
-		data: stamped,
-		require_tls: false,
-		mailbox: None,
-		tlsrpt_verified: false,
-		no_dsn: Vec::new(),
-	};
-	state
-		.spool()
-		.store(&message)
-		.map(|id| id.to_string())
-		.map_err(|_| "serverFail")
-}
+use super::state;
 
 /// `Quota/get` (RFC 9425): the account's storage quota in octets.
-pub(super) fn quota_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn quota_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let used = crate::imap::mailbox::account_usage(state.data_dir(), account, state.crypto());
-	let limit = state.quota_limit();
+	let limit = state.quota_for_account(account);
 	let mut quota = serde_json::Map::from_iter([
 		("id".to_string(), json!("mail")),
 		("resourceType".to_string(), json!("octets")),
@@ -179,34 +39,47 @@ pub(super) fn quota_get(state: &ApiState, args: &Value, call_id: &str) -> Value 
 		("name".to_string(), json!("Mail storage")),
 		("types".to_string(), json!(["Mail"])),
 	]);
-	// A configured limit is the hard limit; 0 means unlimited (omit it).
+	// The limit in force is the hard limit; no limit (a quota of 0) is
+	// omitted.
 	quota.insert(
 		"limit".to_string(),
-		if limit > 0 { json!(limit) } else { Value::Null },
+		limit.map_or(Value::Null, |limit| json!(limit)),
 	);
+	let quota_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Quota/get",
-		{ "accountId": account, "state": "0", "list": [quota], "notFound": [] },
+		{ "accountId": account, "state": quota_state, "list": [quota], "notFound": [] },
 		call_id,
 	])
 }
 
 /// `Identity/get` (RFC 8621 §6.1): the account's sending identities, one per
-/// configured address.
-pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+/// configured address. `name` is the account's display name, or empty when it
+/// has none (RFC 8621 allows an empty name; the account identifier is not a
+/// person's name).
+pub(super) fn identity_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
 	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	};
+	if !principal.admits_account(&view.name, &view.addresses) {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	}
 	let list: Vec<Value> = view
 		.addresses
 		.iter()
 		.map(|address| {
 			json!({
 				"id": address,
-				"name": view.name,
+				"name": view.display_name.as_deref().unwrap_or_default(),
 				"email": address,
 				"replyTo": null,
 				"bcc": null,
@@ -216,22 +89,33 @@ pub(super) fn identity_get(state: &ApiState, args: &Value, call_id: &str) -> Val
 			})
 		})
 		.collect();
+	let identity_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Identity/get",
-		{ "accountId": account, "state": "0", "list": list, "notFound": [] },
+		{ "accountId": account, "state": identity_state, "list": list, "notFound": [] },
 		call_id,
 	])
 }
 
 /// `Mailbox/set` (RFC 8621 §2.5): create, rename, and delete mailboxes.
-pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_set(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let dir = state.data_dir();
+	let old_state = state::mailbox_get_state(dir, account).unwrap_or_else(|| "0".to_string());
 	let mut created = serde_json::Map::new();
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
@@ -271,9 +155,10 @@ pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Valu
 			}
 		}
 	}
+	let new_state = state::mailbox_get_state(dir, account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Mailbox/set",
-		{ "accountId": account, "oldState": "0", "newState": "0",
+		{ "accountId": account, "oldState": old_state, "newState": new_state,
 		  "created": created, "notCreated": not_created,
 		  "updated": updated, "notUpdated": not_updated,
 		  "destroyed": destroyed, "notDestroyed": not_destroyed },
@@ -282,11 +167,19 @@ pub(super) fn mailbox_set(state: &ApiState, args: &Value, call_id: &str) -> Valu
 }
 
 /// `Mailbox/get` (RFC 8621 §2.2): return the account's mailboxes as objects.
-pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let data_dir = state.data_dir();
@@ -302,26 +195,42 @@ pub(super) fn mailbox_get(state: &ApiState, args: &Value, call_id: &str) -> Valu
 				.collect()
 		});
 
-	let list: Vec<Value> = crate::imap::mailbox::list(data_dir, account)
+	let names = crate::imap::mailbox::list(data_dir, account);
+	// `ids: null` returns every mailbox only while there are no more than
+	// `maxObjectsInGet` of them (RFC 8620 §5.1).
+	if wanted.is_none() && names.len() > super::limits::MAX_OBJECTS_IN_GET {
+		return json!(["error", { "type": "requestTooLarge" }, call_id]);
+	}
+	let list: Vec<Value> = names
 		.into_iter()
 		.filter(|name| wanted.as_ref().is_none_or(|ids| ids.contains(name)))
 		.map(|name| objects::mailbox_object(data_dir, account, &name))
 		.collect();
 
+	let mailbox_state =
+		state::mailbox_get_state(data_dir, account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Mailbox/get",
-		{ "accountId": account, "state": "0", "list": list, "notFound": [] },
+		{ "accountId": account, "state": mailbox_state, "list": list, "notFound": [] },
 		call_id,
 	])
 }
 
 /// `Thread/get` (RFC 8621 §3): each email is its own singleton thread (no
 /// server-side threading yet), so a thread's id and its one email id match.
-pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn thread_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let mut list = Vec::new();
@@ -337,29 +246,41 @@ pub(super) fn thread_get(state: &ApiState, args: &Value, call_id: &str) -> Value
 			}
 		}
 	}
+	let thread_state =
+		state::thread_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Thread/get",
-		{ "accountId": account, "state": "0", "list": list, "notFound": not_found },
+		{ "accountId": account, "state": thread_state, "list": list, "notFound": not_found },
 		call_id,
 	])
 }
 
 /// `Mailbox/query` (RFC 8621 §2.3): the account's mailbox ids, sorted by name.
-pub(super) fn mailbox_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn mailbox_query(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let ids: Vec<String> = crate::imap::mailbox::list(state.data_dir(), account);
 	let total = ids.len();
+	let query_state =
+		state::mailbox_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Mailbox/query",
 		{
 			"accountId": account,
-			"queryState": "0",
-			"canCalculateChanges": false,
+			"queryState": query_state,
+			"canCalculateChanges": true,
 			"position": 0,
 			"total": total,
 			"ids": ids,
@@ -369,11 +290,19 @@ pub(super) fn mailbox_query(state: &ApiState, args: &Value, call_id: &str) -> Va
 }
 
 /// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
-pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_query(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let mailbox = args
@@ -381,20 +310,19 @@ pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Valu
 		.and_then(|f| f.get("inMailbox"))
 		.and_then(Value::as_str)
 		.unwrap_or("INBOX");
-
-	let mut ids: Vec<String> =
-		crate::imap::mailbox::Snapshot::open(state.data_dir(), account, mailbox, state.crypto())
-			.map(|snapshot| snapshot.messages().map(|m| m.id().to_string()).collect())
-			.unwrap_or_default();
-	ids.reverse();
+	let ids = super::query_changes::email_query_ids(state, account, mailbox);
 	let total = ids.len();
+	let query_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
+	// Only the query shapes `Email/queryChanges` can replay exactly.
+	let can_calculate = super::query_changes::replayable_email_query(args).is_some();
 
 	json!([
 		"Email/query",
 		{
 			"accountId": account,
-			"queryState": "0",
-			"canCalculateChanges": false,
+			"queryState": query_state,
+			"canCalculateChanges": can_calculate,
 			"position": 0,
 			"total": total,
 			"ids": ids,
@@ -404,11 +332,19 @@ pub(super) fn email_query(state: &ApiState, args: &Value, call_id: &str) -> Valu
 }
 
 /// `Email/get` (RFC 8621 §4.1): return parsed Email objects by id.
-pub(super) fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_get(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let requested: Vec<String> = args
@@ -430,9 +366,11 @@ pub(super) fn email_get(state: &ApiState, args: &Value, call_id: &str) -> Value 
 			None => not_found.push(Value::String(id)),
 		}
 	}
+	let email_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Email/get",
-		{ "accountId": account, "state": "0", "list": list, "notFound": not_found },
+		{ "accountId": account, "state": email_state, "list": list, "notFound": not_found },
 		call_id,
 	])
 }

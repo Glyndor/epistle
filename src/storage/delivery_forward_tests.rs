@@ -43,7 +43,13 @@ fn forwards_and_keeps_local_copy() {
 	let out = delivery
 		.deliver_routed(&message_from("s@x.example", BODY), None)
 		.expect("deliver");
-	assert_eq!(out.redirects, vec!["ext@other.example".to_string()]);
+	assert_eq!(
+		out.redirects,
+		vec![Redirect {
+			to: "ext@other.example".to_string(),
+			delivered_to: "alice@example.org".to_string(),
+		}]
+	);
 	// keep_local = true keeps the INBOX copy.
 	assert_eq!(inbox_count(dir.path(), "alice"), 1);
 }
@@ -59,7 +65,13 @@ fn pure_forward_skips_local_copy() {
 	let out = delivery
 		.deliver_routed(&message_from("s@x.example", BODY), None)
 		.expect("deliver");
-	assert_eq!(out.redirects, vec!["ext@other.example".to_string()]);
+	assert_eq!(
+		out.redirects,
+		vec![Redirect {
+			to: "ext@other.example".to_string(),
+			delivered_to: "alice@example.org".to_string(),
+		}]
+	);
 	// keep_local = false stores no local copy (pure forwarding).
 	assert_eq!(inbox_count(dir.path(), "alice"), 0);
 }
@@ -191,4 +203,58 @@ fn mailing_list_prepends_list_headers() {
 	let body = std::fs::read_to_string(&files[0]).expect("read");
 	assert!(body.contains("List-Id: <announce.example.org>"), "{body}");
 	assert!(body.contains("List-Unsubscribe:"), "{body}");
+}
+
+/// alice's message coming back from the forward target: it already names
+/// her address in `Delivered-To`.
+const RETURNED: &[u8] =
+	b"Delivered-To: ext@other.example\r\nDelivered-To: Alice@Example.org\r\nSubject: hi\r\n\r\nbody\r\n";
+
+#[test]
+fn a_message_that_comes_back_to_a_forwarding_address_is_refused_as_a_loop() {
+	for keep_local in [true, false] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let delivery = LocalDelivery::new(
+			dir.path(),
+			directory_with_forward(vec!["ext@other.example".to_string()], keep_local),
+		)
+		.expect("delivery");
+		let out = delivery
+			.deliver_routed(&message_from("s@x.example", RETURNED), None)
+			.expect("deliver");
+		assert!(out.redirects.is_empty(), "not forwarded again");
+		assert_eq!(out.looped, vec!["alice@example.org".to_string()]);
+		assert_eq!(inbox_count(dir.path(), "alice"), 0, "nor stored");
+	}
+}
+
+#[test]
+fn a_sieve_redirect_loops_the_same_way() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery =
+		LocalDelivery::new(dir.path(), directory_with_forward(Vec::new(), true)).expect("delivery");
+	let account = dir.path().join("accounts").join("alice");
+	fs::create_dir_all(&account).expect("mkdir");
+	fs::write(
+		account.join("filter.sieve"),
+		"redirect \"ext@other.example\";",
+	)
+	.expect("filter");
+	let out = delivery
+		.deliver_routed(&message_from("s@x.example", RETURNED), None)
+		.expect("deliver");
+	assert!(out.redirects.is_empty());
+	assert_eq!(out.looped, vec!["alice@example.org".to_string()]);
+}
+
+#[test]
+fn without_a_forward_an_earlier_delivered_to_is_no_loop() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let delivery =
+		LocalDelivery::new(dir.path(), directory_with_forward(Vec::new(), true)).expect("delivery");
+	let out = delivery
+		.deliver_routed(&message_from("s@x.example", RETURNED), None)
+		.expect("deliver");
+	assert!(out.looped.is_empty());
+	assert_eq!(inbox_count(dir.path(), "alice"), 1);
 }

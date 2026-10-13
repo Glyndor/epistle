@@ -37,6 +37,7 @@ fn base64_encode(input: &[u8]) -> String {
 /// Build a router backed by a temp data dir with `alice` and `bob`.
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
 		password_hash: Some(crate::smtp::auth::hash_password(pw).expect("hash")),
@@ -301,7 +302,7 @@ async fn report_bad_body_is_bad_request() {
 		"/book",
 		Some(&alice()),
 		&[],
-		b"<D:sync-collection xmlns:D=\"DAV:\"/>",
+		b"<D:principal-property-search xmlns:D=\"DAV:\"/>",
 	)
 	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);

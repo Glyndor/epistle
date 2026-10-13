@@ -118,47 +118,20 @@ pub fn mta_sts_id(config: &crate::config::Config) -> String {
 /// DKIM `p=` is too long for a single string (~410 bytes for RSA-2048, ~755
 /// for RSA-4096); ed25519 fits in one. The split happens on character
 /// boundaries, never inside a multi-byte UTF-8 codepoint, because the
-/// wire form is length-prefixed bytes, not Unicode code points.
+/// wire form is length-prefixed bytes, not Unicode code points. The cut is
+/// [`crate::dns::txt::txt_character_strings`], the one every provider uses.
 pub fn txt_strings(value: &str) -> Vec<String> {
-	const MAX: usize = 255;
-	if value.len() <= MAX {
-		return vec![value.to_string()];
-	}
-	let mut out = Vec::new();
-	let mut start = 0;
-	while start < value.len() {
-		let mut end = (start + MAX).min(value.len());
-		// Walk back to the previous char boundary if a multibyte character
-		// straddles the would-be split point.
-		while end < value.len() && !value.is_char_boundary(end) {
-			end -= 1;
-		}
-		out.push(value[start..end].to_string());
-		start = end;
-	}
-	out
+	crate::dns::txt::txt_character_strings(value)
 }
 
-/// Render a TXT value for a zone file, with long values split into
-/// double-quoted strings (RFC 1035 §5). Embedded `"` and `\` are backslash
-/// escaped so the zone-file parser keeps them literal. A short value is
-/// returned as a single quoted string.
+/// Render a TXT value for a zone file (RFC 1035 §5.1): long values split
+/// into double-quoted strings of at most 255 octets separated by a space,
+/// `"` and `\` backslash-escaped, and any octet outside printable ASCII
+/// written as a `\DDD` decimal escape. A short value is one quoted string.
+/// This is [`crate::dns::txt::txt_presentation`], the form the providers
+/// that take presentation form receive.
 pub fn txt_zone_form(value: &str) -> String {
-	let mut out = String::with_capacity(value.len() + 2);
-	for part in txt_strings(value) {
-		out.push('"');
-		for byte in part.bytes() {
-			match byte {
-				b'"' | b'\\' => {
-					out.push('\\');
-					out.push(byte as char);
-				}
-				_ => out.push(byte as char),
-			}
-		}
-		out.push('"');
-	}
-	out
+	crate::dns::txt::txt_presentation(value)
 }
 
 /// The DNS zone a hostname lives in: every label except the leftmost. A

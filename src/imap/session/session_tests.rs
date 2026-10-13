@@ -80,6 +80,8 @@ mod metadata;
 mod misc;
 #[path = "session_tests_paths.rs"]
 mod paths;
+#[path = "session_tests_quota_zero.rs"]
+mod quota_zero;
 #[path = "session_tests_search.rs"]
 mod search;
 
@@ -134,3 +136,24 @@ mod fetch_edges;
 
 #[path = "session_tests_fetch_depth.rs"]
 mod fetch_depth;
+
+#[path = "session_tests_capabilities.rs"]
+mod capabilities;
+
+#[path = "session_tests_utf8.rs"]
+mod utf8;
+
+#[path = "session_tests_quota_names.rs"]
+mod quota_names;
+
+#[path = "session_tests_utf8_responses.rs"]
+mod utf8_responses;
+
+#[path = "session_tests_flags_update.rs"]
+mod flags_update;
+
+#[path = "session_tests_append_exists.rs"]
+mod append_exists;
+
+#[path = "session_tests_noop_exists.rs"]
+mod noop_exists;

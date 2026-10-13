@@ -41,12 +41,11 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 		Ok(metadata) => metadata,
 		Err(_) => return StatusCode::NOT_FOUND.into_response(),
 	};
-	let mut entries = vec![entry_for(
-		uri_path,
-		target,
-		&metadata,
-		display_name(uri_path),
-	)];
+	let mut entries: Vec<(propfind::Entry, PathBuf)> = Vec::new();
+	entries.push((
+		entry_for(uri_path, target, &metadata, display_name(uri_path)),
+		target.to_path_buf(),
+	));
 	if depth != "0"
 		&& metadata.is_dir()
 		&& let Ok(mut dir) = tokio::fs::read_dir(target).await
@@ -61,8 +60,12 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 			}
 			let name = child.file_name();
 			let name = name.to_string_lossy();
-			// Hide the addressbook/calendar markers from listings , internal flags.
-			if name == carddav::MARKER || name == caldav::MARKER {
+			// Hide the addressbook/calendar markers and the change log from
+			// listings: internal bookkeeping, not resources.
+			if name == carddav::MARKER
+				|| name == caldav::MARKER
+				|| super::super::sync::is_internal(&name)
+			{
 				continue;
 			}
 			// Defence in depth: skip a child that is itself a symlink. The
@@ -81,15 +84,23 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 				continue;
 			};
 			let href = format!("{base}/{}", href::segment(&name));
-			entries.push(entry_for(
-				&href,
-				&child.path(),
-				&child_meta,
-				name.to_string(),
+			entries.push((
+				entry_for(&href, &child.path(), &child_meta, name.to_string()),
+				child.path(),
 			));
 		}
 	}
-	xml_multistatus(propfind::multistatus(&entries))
+	// The sync token (also the ctag) of every calendar or addressbook comes
+	// from its change log, read here because `entry_for` is synchronous.
+	for (entry, disk) in &mut entries {
+		if (entry.is_addressbook || entry.is_calendar)
+			&& let Some(log) = super::super::sync::load(disk).await
+		{
+			entry.sync_token = log.token();
+		}
+	}
+	let rendered: Vec<propfind::Entry> = entries.into_iter().map(|(e, _)| e).collect();
+	xml_multistatus(propfind::multistatus(&rendered))
 }
 
 /// Answer a `PROPFIND` whose `Depth` is missing or `infinity` with
@@ -139,7 +150,8 @@ fn account_home(uri_path: &str) -> String {
 /// Build a PROPFIND [`Entry`] from filesystem metadata. A collection's href is
 /// given a trailing slash (RFC 4918); an addressbook/calendar collection is
 /// flagged so its resourcetype carries `<C:addressbook/>`/`<CAL:calendar/>`; a
-/// vCard or iCalendar file carries its content type and an ETag.
+/// vCard or iCalendar file carries its content type and an ETag. The sync
+/// token of a calendar or addressbook is filled in by the caller.
 fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: String) -> Entry {
 	let is_collection = metadata.is_dir();
 	let href = if is_collection && !href.ends_with('/') {
@@ -161,6 +173,7 @@ fn entry_for(href: &str, disk: &Path, metadata: &std::fs::Metadata, display: Str
 		} else {
 			carddav::etag(metadata)
 		},
+		sync_token: String::new(),
 	}
 }
 

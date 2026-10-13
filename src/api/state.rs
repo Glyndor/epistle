@@ -12,7 +12,6 @@ use crate::smtp::address::Address;
 use crate::storage::{FsSpool, MessageCrypto};
 
 use super::api_keys::Scope;
-use super::domain_scope::DomainScope;
 use super::error::ApiError;
 use super::tenant_limits::TenantLimits;
 
@@ -28,6 +27,10 @@ pub struct MatchedAuth {
 	/// means the IP is unknown; an IP-restricted key cannot match in that
 	/// case (fail-closed).
 	pub client_ip: Option<std::net::IpAddr>,
+	/// Whether `token` is the configured static token. Decided once, by the
+	/// middleware: the configured hash may be a legacy argon2id one, and
+	/// nothing after it compares the bearer against that hash again.
+	pub configured: bool,
 }
 
 /// State shared by every handler.
@@ -69,8 +72,11 @@ struct Inner {
 	api_keys: std::sync::Arc<super::api_keys::ApiKeySet>,
 	/// Session-scoped PushSubscription objects (RFC 8620 §7.2). Held in memory:
 	/// real out-of-band delivery is out of scope, so these only need to round-trip
-	/// through `PushSubscription/get`/`set`. Keyed by subscription id.
-	push_subscriptions: std::sync::Mutex<Vec<serde_json::Value>>,
+	/// through `PushSubscription/get`/`set`. Each carries the caller that created it.
+	push_subscriptions: std::sync::Mutex<Vec<super::jmap::push_subscription::StoredSubscription>>,
+	/// JMAP work in flight per caller and kind (event-source streams, API
+	/// requests, uploads), so one credential cannot hold more than its limits.
+	caller_slots: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
 	/// At-rest crypto for stored message bodies and uploaded blobs.
 	crypto: MessageCrypto,
 	/// The built-in OAuth 2.0 authorization server, present only when a signing
@@ -99,6 +105,9 @@ struct Inner {
 	/// store, both `None` without a database. Builders and accessors
 	/// live in `state_bayes.rs`.
 	bayes: bayes::BayesBindings,
+	/// The outbound path SMTP submission uses (routing, DKIM, local
+	/// delivery); `None` sends straight to `spool`. See `state_outbound.rs`.
+	outbound: Option<Arc<dyn crate::smtp::sink::MessageSink>>,
 }
 
 /// Sliding-window failure counter. Prevents brute force on the bearer token.
@@ -156,14 +165,7 @@ impl AuthLimiter {
 	}
 }
 
-/// What the API exposes about an account: never credentials.
-#[derive(Clone, serde::Serialize)]
-pub struct AccountView {
-	pub name: String,
-	pub addresses: Vec<String>,
-	/// Whether the account is API-managed (deletable) or from the config.
-	pub dynamic: bool,
-}
+pub use super::account_view::AccountView;
 
 impl ApiState {
 	/// Build the state from configuration data. API keys are loaded from
@@ -228,9 +230,12 @@ impl ApiState {
 				correspondents: None,
 				new_recipients_per_day: None,
 				admins: Vec::new(),
-				quota_limit: std::sync::atomic::AtomicU64::new(0),
+				quota_limit: std::sync::atomic::AtomicU64::new(
+					crate::imap::session::DEFAULT_QUOTA_BYTES,
+				),
 				api_keys,
 				push_subscriptions: std::sync::Mutex::new(Vec::new()),
+				caller_slots: Arc::default(),
 				crypto: MessageCrypto::disabled(),
 				authz: None,
 				directory: None,
@@ -238,6 +243,7 @@ impl ApiState {
 				blob_backend: Arc::new(crate::storage::blob_backend::FsBackend::new(data_dir)),
 				tenant_limits: TenantLimits::default(),
 				bayes: bayes::BayesBindings::default(),
+				outbound: None,
 			}),
 		}
 	}
@@ -328,37 +334,16 @@ impl ApiState {
 		self
 	}
 
-	/// The domains the credentials in `auth` are allowed to act on.
-	///
-	/// The static token is unrestricted. A key carries whatever it declared,
-	/// and a key that declared nothing keeps the reach every key had before
-	/// the field existed. Credentials that match no key at all admit no
-	/// domain: the middleware has already authorized the request by the time
-	/// a handler asks, so failing to identify the key here means the state
-	/// changed underneath us, and that is not a reason to widen anyone.
-	pub fn domain_scope(&self, auth: &MatchedAuth) -> DomainScope {
-		let Some(token) = auth.token.as_deref() else {
-			return DomainScope::Only(Vec::new());
-		};
-		if self.token_matches(token) {
-			return DomainScope::All;
-		}
-		let now = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.map(|d| d.as_secs())
-			.unwrap_or(0);
-		const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send, Scope::Scim];
-		self.inner
-			.api_keys
-			.snapshot()
-			.iter()
-			.find(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE))
-			.map_or_else(|| DomainScope::Only(Vec::new()), DomainScope::of_key)
-	}
-
 	/// Whether a resolved account name carries the admin-panel privilege.
 	pub fn is_admin(&self, name: &str) -> bool {
 		self.inner.admins.iter().any(|admin| admin == name)
+	}
+
+	/// The currently loaded API keys. Read-only snapshot; callers that
+	/// need to look up the key matching a token use this and walk the
+	/// snapshot themselves.
+	pub fn api_keys(&self) -> &std::sync::Arc<super::api_keys::ApiKeySet> {
+		&self.inner.api_keys
 	}
 
 	/// Replace the at-rest crypto used for stored messages and blobs. Must be set
@@ -386,6 +371,13 @@ impl ApiState {
 		self
 	}
 
+	/// The live directory, when one is wired.
+	pub(crate) fn directory_snapshot(
+		&self,
+	) -> Option<std::sync::Arc<crate::smtp::directory::Directory>> {
+		self.inner.directory.as_ref().map(|handle| handle.current())
+	}
+
 	/// Whether `account` owns `address` — used to enforce send-as on the API
 	/// path the same way SMTP does (`src/smtp/session/mod.rs`). Fail-closed:
 	/// returns `false` when no directory has been attached (e.g. in tests or
@@ -399,7 +391,9 @@ impl ApiState {
 		}
 	}
 
-	/// Set the per-account storage quota in bytes (0 = unlimited).
+	/// Set the server default per-account storage quota in bytes, the
+	/// configured `quota_bytes` (0 = unlimited). Without this call the
+	/// documented 5 GiB default applies, as in IMAP.
 	pub fn with_quota(self, bytes: u64) -> Self {
 		self.inner
 			.quota_limit
@@ -500,7 +494,18 @@ impl ApiState {
 		Arc::new(self.inner.tenant_limits.clone())
 	}
 
-	/// The configured per-account storage quota in bytes (0 = unlimited).
+	/// The quota in force for `account` (its own, its domain's, else the
+	/// server default); `None` is no limit. The rule IMAP QUOTA applies.
+	pub(crate) fn quota_for_account(&self, account: &str) -> Option<u64> {
+		match self.directory_snapshot() {
+			Some(directory) => {
+				crate::smtp::quota::limit_for(&directory, account, self.quota_limit())
+			}
+			None => Some(self.quota_limit()).filter(|bytes| *bytes != 0),
+		}
+	}
+
+	/// The server default per-account storage quota in bytes (0 = unlimited).
 	pub fn quota_limit(&self) -> u64 {
 		self.inner
 			.quota_limit
@@ -522,6 +527,7 @@ impl ApiState {
 			.account_views()
 			.into_iter()
 			.map(|(name, addresses, dynamic)| AccountView {
+				display_name: self.inner.store.display_name(&name),
 				name,
 				addresses,
 				dynamic,
@@ -556,21 +562,11 @@ impl ApiState {
 		&self.inner.data_dir
 	}
 
-	/// The current PushSubscription objects (RFC 8620 §7.2), cloned out for a
-	/// `PushSubscription/get`.
-	pub fn push_subscriptions(&self) -> Vec<serde_json::Value> {
-		self.inner
-			.push_subscriptions
-			.lock()
-			.unwrap_or_else(|p| p.into_inner())
-			.clone()
-	}
-
 	/// Run `f` against the mutable PushSubscription store, returning its result.
-	/// Used by `PushSubscription/set` to create and destroy subscriptions.
-	pub fn with_push_subscriptions<R>(
+	/// Used by `PushSubscription/get` and `/set`, which filter by caller.
+	pub(crate) fn with_push_subscriptions<R>(
 		&self,
-		f: impl FnOnce(&mut Vec<serde_json::Value>) -> R,
+		f: impl FnOnce(&mut Vec<super::jmap::push_subscription::StoredSubscription>) -> R,
 	) -> R {
 		let mut guard = self
 			.inner
@@ -580,110 +576,12 @@ impl ApiState {
 		f(&mut guard)
 	}
 
-	/// A cheap, opaque state token for an account's mail, derived from total
-	/// stored bytes. It changes whenever a message is added, removed, or resized,
-	/// which is enough for the connection-scoped WebSocket push (RFC 8887 §5) to
-	/// signal "something changed" to the client that made the change. It is not a
-	/// JMAP change-log cursor (we do not track one — see `/changes`).
-	pub fn account_state(&self, account: &str) -> String {
-		let usage =
-			crate::imap::mailbox::account_usage(&self.inner.data_dir, account, &self.inner.crypto);
-		format!("{usage}")
-	}
-
-	/// Whether `token` from `client_ip` authorizes a request that needs one
-	/// of `acceptable_scopes`: the configured token matches, or any
-	/// non-expired, IP-permitted API key's hash matches and the key carries
-	/// at least one of the acceptable scopes. Fail-closed: an expired,
-	/// IP-restricted or under-scoped key that does not match is no different
-	/// from no key at all.
-	///
-	/// The configured token has every scope — a leaked configured token is
-	/// admin-equivalent regardless. Per-key scopes only matter for the
-	/// optional, labeled keys in `api_keys.toml`.
-	///
-	/// Pass a single-element slice when the route is unambiguous (e.g.
-	/// `POST /api/v1/send` is always `Send`); pass a multi-element slice
-	/// when the coarse path/method inference is ambiguous and the handler
-	/// will tighten (e.g. `POST /jmap/api`, where the actual scope depends on
-	/// the JMAP method in the request body).
-	fn authorizes(
+	/// The per-caller counts of JMAP work in flight
+	/// ([`super::jmap::caller_slots`]).
+	pub(crate) fn caller_slots(
 		&self,
-		token: &str,
-		client_ip: Option<std::net::IpAddr>,
-		acceptable_scopes: &[Scope],
-	) -> bool {
-		if self.token_matches(token) {
-			return true;
-		}
-		let now = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.map(|d| d.as_secs())
-			.unwrap_or(0);
-		let keys = self.inner.api_keys.snapshot();
-		let matched = keys
-			.iter()
-			.find(|key| key.admits_any(token, client_ip, now, acceptable_scopes));
-		if let Some(key) = matched
-			&& key.scopes.is_empty()
-		{
-			self.warn_legacy_key_once(&key.label);
-		}
-		matched.is_some()
-	}
-
-	/// Emit the one-time-per-key warning for legacy (un-scoped) keys. The
-	/// state is shared across requests (it lives behind an `Arc`), so the
-	/// `Mutex<HashSet>` deduplicates: an operator who restarts will see one
-	/// warning per legacy key per process lifetime, not one per request.
-	fn warn_legacy_key_once(&self, label: &str) {
-		let mut warned = self
-			.inner
-			.legacy_warned
-			.lock()
-			.unwrap_or_else(|p| p.into_inner());
-		if warned.insert(label.to_string()) {
-			tracing::warn!(
-				key_label = label,
-				"API key has no scopes; granting full legacy access. \
-				 Scopes will be required in a future release; rotate this key \
-				 with `--scope read|write|send` to keep its blast radius small."
-			);
-		}
-	}
-
-	/// Re-check `auth` against `required_scope`. Used by handlers whose scope
-	/// cannot be inferred from path+method (most JMAP method calls — the same
-	/// `POST /jmap/api` route serves reads, writes and outbound submissions
-	/// depending on the request body, so the middleware's coarse inference
-	/// defaults to passing any scoped key and lets each handler tighten it).
-	pub fn require_scope(&self, auth: &MatchedAuth, scope: Scope) -> Result<(), ApiError> {
-		match &auth.token {
-			Some(token) if self.authorizes(token, auth.client_ip, &[scope]) => Ok(()),
-			_ => Err(ApiError::unauthenticated()),
-		}
-	}
-
-	fn token_matches(&self, token: &str) -> bool {
-		let stored = &self.inner.token_hash;
-		if let Some(expected_hex) = stored.strip_prefix("sha256:") {
-			// O(1) SHA-256: correct threat model for a bearer token.
-			// Comparing hex-encoded digests: timing leaks here cannot reveal
-			// the preimage (SHA-256 is pre-image resistant).
-			let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
-			let actual_hex = digest
-				.as_ref()
-				.iter()
-				.fold(String::with_capacity(64), |mut s, b| {
-					use std::fmt::Write;
-					write!(s, "{b:02x}").ok();
-					s
-				});
-			crate::util::constant_time::eq(expected_hex.as_bytes(), actual_hex.as_bytes())
-		} else {
-			// Backward compat: argon2id PHC (legacy; generate new hash with `mail token-hash`).
-			crate::smtp::auth::verify_password(stored, token)
-		}
+	) -> Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>> {
+		Arc::clone(&self.inner.caller_slots)
 	}
 }
 
@@ -778,7 +676,11 @@ pub async fn require_bearer_token(
 	// dispatcher decide per method call.
 	let acceptable_scopes = acceptable_scopes_for(request.method(), request.uri().path());
 	let token_ref = token.as_deref();
-	let authorized = token_ref.is_some_and(|t| state.authorizes(t, client_ip, &acceptable_scopes));
+	// The configured token has every scope; a leaked configured token is
+	// admin-equivalent regardless.
+	let configured = token_ref.is_some_and(|t| state.bearer_is_configured(t));
+	let authorized = configured
+		|| token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
 
 	{
 		let mut limiter = state
@@ -805,12 +707,26 @@ pub async fn require_bearer_token(
 	request.extensions_mut().insert(MatchedAuth {
 		token: token.clone(),
 		client_ip,
+		configured,
 	});
 	Ok(next.run(request).await)
 }
 
+#[cfg(test)]
+thread_local! {
+	/// How many times this thread compared a bearer against the configured
+	/// token hash, which may be a legacy argon2id one.
+	pub(crate) static CONFIGURED_HASH_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[path = "state_auth.rs"]
+mod auth;
+
 #[path = "state_bayes.rs"]
 mod bayes;
+
+#[path = "state_outbound.rs"]
+mod outbound;
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

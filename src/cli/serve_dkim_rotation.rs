@@ -90,7 +90,11 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 /// When `[dns]` is absent, rotation cannot publish the new selector's TXT
 /// and so is not started, but the inactivity is logged once at startup
 /// rather than left silent.
-pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::ReloadableSigner>) {
+pub fn spawn_dkim_rotation(
+	config: &Config,
+	dkim_signer: &Option<crate::dkim::ReloadableSigner>,
+	webhook: Option<std::sync::Arc<crate::webhook::Webhook>>,
+) {
 	match decide_dkim_rotation(config) {
 		DkimRotationPlan::Off => {
 			// Only the "no [dns]" case is interesting to log here: rotation
@@ -160,7 +164,7 @@ pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::Re
 				return;
 			};
 			let zone = dns.zone.clone();
-			let rotator = crate::dkim::Rotator::new(
+			let mut rotator = crate::dkim::Rotator::new(
 				config.data_dir.clone(),
 				signer.clone(),
 				provider,
@@ -169,9 +173,35 @@ pub fn spawn_dkim_rotation(config: &Config, dkim_signer: &Option<crate::dkim::Re
 				interval,
 				overlap,
 			);
+			// A rotated key signs only once a resolver sees it. Without a
+			// resolver there is no way to confirm that, so rotation does not
+			// run: the configured key keeps signing.
+			match crate::spf::SystemDns::uncached_from_system() {
+				Ok(resolver) => {
+					rotator = rotator.with_publication_check(
+						std::sync::Arc::new(resolver),
+						crate::dkim::publication_waits(),
+					);
+				}
+				Err(error) => {
+					tracing::warn!(%error, "[dkim] rotation is disabled: no system resolver to confirm new keys in DNS");
+					return;
+				}
+			}
+			if let Some(webhook) = webhook {
+				rotator = rotator.with_webhook(webhook);
+			}
+			if let Some(dkim) = &config.dkim {
+				rotator = rotator.keeping(
+					std::iter::once(dkim.selector.clone())
+						.chain(dkim.rsa_selector.clone())
+						.collect(),
+				);
+			}
 			// Wake every minute so an operator's `dkim rotate` request is
 			// served promptly; the scheduled tick still runs hourly.
 			tokio::spawn(async move {
+				rotator.report_orphans().await;
 				let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
 				let mut minutes: u64 = 0;
 				loop {

@@ -3,6 +3,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use super::term::table::Table;
 use crate::config::Config;
 use crate::directory_store::removal::{QueuePolicy, remove_account};
 use crate::directory_store::{AccountStore, DynamicAccount, StoreError};
@@ -25,35 +26,68 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	};
 	let mut views = store.account_views();
 	views.sort_by(|a, b| a.0.cmp(&b.0));
-	for (name, addresses, dynamic) in &views {
-		let source = if *dynamic { "dynamic" } else { "static" };
-		let _ = writeln!(out, "{name}\t{source}\t{}", addresses.join(","));
+	if let Some(decor) = super::term::stdout(false) {
+		let mut table = Table::new(&["NAME", "STATE", "SOURCE", "ADDRESSES"]).state_col(1);
+		for (name, addresses, dynamic) in &views {
+			let disabled = store.dynamic(name).is_some_and(|account| account.disabled);
+			table.push(vec![
+				name.clone(),
+				if disabled { "disabled" } else { "enabled" }.to_string(),
+				if *dynamic { "dynamic" } else { "static" }.to_string(),
+				addresses.join(","),
+			]);
+		}
+		let _ = table.write(decor, out);
+	} else {
+		for (name, addresses, dynamic) in &views {
+			let source = if *dynamic { "dynamic" } else { "static" };
+			let _ = writeln!(out, "{name}\t{source}\t{}", addresses.join(","));
+		}
 	}
 	let _ = writeln!(out, "{} accounts", views.len());
 	ExitCode::SUCCESS
 }
 
 /// Create a dynamic account with `addresses`, reading the password from
-/// `reader` (one line) and hashing it (argon2id + SCRAM). `reader` is
-/// injectable so the whole flow is testable.
+/// `reader` and hashing it (argon2id + SCRAM). On a terminal the password
+/// is typed twice with echo off; piped stdin gives one line. The policy
+/// (length, breached list) is checked before anything is written.
+#[cfg(test)]
 pub(super) fn add(
 	config: &Config,
 	name: &str,
 	addresses: Vec<String>,
 	reader: impl std::io::BufRead,
 ) -> ExitCode {
+	add_with_display_name(config, name, addresses, None, reader)
+}
+
+/// [`add`] with an optional display name, checked before the password is
+/// read so nobody types one for an account that cannot be created.
+pub(super) fn add_with_display_name(
+	config: &Config,
+	name: &str,
+	addresses: Vec<String>,
+	display_name: Option<&str>,
+	mut reader: impl std::io::BufRead,
+) -> ExitCode {
+	let name = &super::account_name::for_new_account(name);
+	let display_name = match display_name.map(crate::directory_store::display_name::validate) {
+		None => None,
+		Some(Ok(stored)) => stored,
+		Some(Err(why)) => return super::exit::refused(format_args!("account {name}: {why}")),
+	};
 	// let-else, not `match`: a match arm that returns is still an arm of the
 	// expression whose value binds to `password`, and the taint analyser follows
 	// that edge - rust/hard-coded-cryptographic-value reported the exit code in
-	// the Err arm as a password reaching `validate(&password)`. An else block has
-	// to diverge, so no value can travel from it to the binding.
-	let Ok(password) = super::read_line(reader) else {
-		return ExitCode::FAILURE;
+	// the Err arm as a password reaching the hash. An else block has to diverge,
+	// so no value can travel from it to the binding. `new_password` has already
+	// printed why it refused (no input, mismatch, or the policy rule that failed).
+	let Some(password) =
+		super::prompt::new_password(&format!("Password for \"{name}\""), &mut reader)
+	else {
+		return ExitCode::from(super::exit::REFUSED);
 	};
-	if let Err(rejection) = crate::password::validate(&password) {
-		super::style::error(rejection.message());
-		return ExitCode::FAILURE;
-	}
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -66,9 +100,18 @@ pub(super) fn add(
 			return ExitCode::FAILURE;
 		}
 	};
-	let account = match DynamicAccount::with_password(name.to_string(), addresses, &password) {
-		Ok(account) => account,
+	let account = match DynamicAccount::with_password(
+		name.to_string(),
+		addresses,
+		&password,
+		config.auth.scram,
+	) {
+		Ok(account) => DynamicAccount {
+			display_name,
+			..account
+		},
 		Err(error) => {
+			// Hashing or salt generation failed: an operation failure.
 			super::style::error(error);
 			return ExitCode::FAILURE;
 		}
@@ -79,8 +122,9 @@ pub(super) fn add(
 			ExitCode::SUCCESS
 		}
 		Err(error) => {
+			let code = super::exit::for_store_error(&error);
 			super::style::error(error);
-			ExitCode::FAILURE
+			code
 		}
 	}
 }
@@ -158,10 +202,15 @@ fn open_bayes_store(
 /// with a helpful message and no side effects. Spins up a short-lived
 /// runtime because `remove_account` is async (it consults the optional
 /// Bayesian store via sqlx).
+///
+/// On a terminal it asks before touching anything (see
+/// [`removal_question`]); `yes` (`--yes` / `-y`) skips the question, and
+/// without a terminal or `--yes` it refuses with exit code 2.
 pub(super) fn remove(
 	config: &Config,
 	name: &str,
 	queue: QueuePolicy,
+	yes: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	// Open without crypto: the removal path doesn't need to read message
@@ -181,6 +230,18 @@ pub(super) fn remove(
 			return ExitCode::FAILURE;
 		}
 	};
+	if store.is_static(name) {
+		return super::exit::refused(format_args!(
+			"account {name}: edit the config file to change a static account"
+		));
+	}
+	if store.dynamic(name).is_none() {
+		return super::exit::refused(format_args!("no such account: {name}"));
+	}
+	let question = removal_question(config, &store, name, queue);
+	if let Err(code) = super::prompt::confirm_destructive("account-remove", &question, yes) {
+		return code;
+	}
 	let spool = match FsSpool::open(&config.data_dir) {
 		Ok(spool) => spool,
 		Err(error) => {
@@ -213,6 +274,35 @@ pub(super) fn remove(
 		bayes_store.as_ref(),
 		out,
 		&mut err,
+	)
+}
+
+/// The question `account-remove` asks: the account, and the counts that
+/// are cheap to read before anything is touched (masked addresses and app
+/// passwords), plus the queue policy when queued mail will be dropped.
+fn removal_question(
+	config: &Config,
+	store: &AccountStore,
+	name: &str,
+	queue: QueuePolicy,
+) -> String {
+	let masked = store.list_masked(name).len();
+	let app_passwords = crate::directory_store::AppPasswordStore::open(&config.data_dir)
+		.map(|passwords| {
+			passwords
+				.list()
+				.into_iter()
+				.filter(|(account, _, _, _)| account == name)
+				.count()
+		})
+		.unwrap_or(0);
+	let queued = match queue {
+		QueuePolicy::Discard => ", discarding its queued mail",
+		QueuePolicy::Drain => "",
+	};
+	format!(
+		"Remove account \"{name}\" and its mailbox ({masked} masked addresses, \
+		 {app_passwords} app passwords){queued}? [y/N]"
 	)
 }
 
@@ -263,11 +353,11 @@ pub(super) fn remove_with_bayes(
 		}
 		Err(StoreError::NotFound(what)) => {
 			super::style::error_to(err, format_args!("no such dynamic account: {what}"));
-			ExitCode::FAILURE
+			ExitCode::from(super::exit::REFUSED)
 		}
 		Err(StoreError::Invalid(message)) => {
 			super::style::error_to(err, message);
-			ExitCode::FAILURE
+			ExitCode::from(super::exit::REFUSED)
 		}
 		Err(error @ StoreError::BayesPurge { .. }) => {
 			super::style::warn_to(

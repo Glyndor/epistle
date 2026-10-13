@@ -107,8 +107,13 @@ async fn run_with(
 		b"Subject: hi\r\n\r\nbody\r\n",
 		false,
 		None,
-		&tlsa,
+		&if tlsa.is_empty() {
+			crate::dane::rrset::TlsaRrset::Absent
+		} else {
+			crate::dane::rrset::TlsaRrset::Usable(tlsa)
+		},
 		mode,
+		&mut None,
 	)
 	.await;
 	let _ = task.await;

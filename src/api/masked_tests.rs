@@ -160,6 +160,7 @@ async fn limit_returns_409_not_429() {
 			vec!["example.org".to_string()],
 			std::collections::HashMap::new(),
 			vec![crate::config::Account {
+				display_name: None,
 				name: "alice".to_string(),
 				addresses: vec!["alice@example.org".to_string()],
 				password_hash: Some("$argon2id$secret".to_string()),
@@ -271,6 +272,7 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add");
 	drop(key_store);
@@ -323,6 +325,7 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 fn two_domain_state(dir: &std::path::Path) -> ApiState {
 	let domains = vec!["first.example".to_string(), "second.example".to_string()];
 	let accounts = vec![crate::config::Account {
+		display_name: None,
 		name: "bob".to_string(),
 		addresses: vec!["bob@second.example".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),

@@ -11,6 +11,7 @@ use super::directory::{Directory, Resolution};
 use super::diskspace::DiskGuard;
 use super::reply::Reply;
 
+mod author;
 mod bdat;
 pub mod cap;
 mod finalise;
@@ -93,6 +94,14 @@ pub struct Session {
 	/// does not move. Server sets this to its own `Arc<Metrics>` so the
 	/// every-listener metric lands in the same registry.
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are enabled on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour: both mechanisms advertised and accounted for in the
+	/// capability lines. `false` hides them on the wire and refuses an
+	/// explicit `AUTH` against them. Plaintext PLAIN / LOGIN are still
+	/// advertised regardless, so a SCRAM-less listener still accepts the
+	/// password.
+	scram_enabled: bool,
 }
 
 impl Session {
@@ -121,6 +130,7 @@ impl Session {
 			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
 			metrics: None,
+			scram_enabled: true,
 		}
 	}
 
@@ -159,6 +169,15 @@ impl Session {
 		limiter: std::sync::Arc<super::ratelimit::SendLimiter>,
 	) -> Self {
 		self.policy = self.policy.with_send_limiter(limiter);
+		self
+	}
+
+	/// Toggle the `[auth] scram` knob for this listener. `true` keeps the
+	/// default behaviour (both SCRAM-SHA-256 and `-PLUS` advertised when
+	/// channel binding is available); `false` hides both on the wire and
+	/// refuses an explicit `AUTH` against them.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
 		self
 	}
 
@@ -225,6 +244,19 @@ impl Session {
 		self
 	}
 
+	/// Check local recipients against their mailbox quota (see
+	/// [`crate::smtp::quota`]).
+	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
+		self.policy = self.policy.with_quota(quota);
+		self
+	}
+
+	/// The DSNs for recipients the last accepted message did not fit for;
+	/// the server sends them once that message is delivered.
+	pub fn take_quota_reports(&mut self) -> Vec<AcceptedMessage> {
+		self.policy.take_quota_reports()
+	}
+
 	/// Replace the cap state (correspondent store, daily limit, metrics
 	/// handle). Wired by the listener at session-construction time so
 	/// the end-of-DATA check has the configured pair in scope.
@@ -251,6 +283,15 @@ impl Session {
 	pub fn with_tls_active(mut self) -> Self {
 		self.tls_active = true;
 		self
+	}
+
+	/// Whether a mail transaction is open (`MAIL FROM` accepted, not yet
+	/// ended by the message or `RSET`).
+	pub fn in_transaction(&self) -> bool {
+		matches!(
+			self.state,
+			State::ReceivingRecipients { .. } | State::ReceivingData { .. }
+		)
 	}
 
 	/// The domain announced by the client in HELO/EHLO.
@@ -431,6 +472,17 @@ impl Session {
 	}
 
 	fn rcpt_to(&mut self, forward_path: String, notify: Option<super::command::Notify>) -> Action {
+		// The order is checked before the address is even looked at (RFC
+		// 5321 §4.1.4), so a RCPT out of sequence learns nothing about
+		// whether a mailbox exists or is full.
+		let open = match &self.state {
+			State::ReceivingRecipients { .. } => true,
+			State::ReceivingData { body, chunking, .. } => body.is_empty() && !*chunking,
+			_ => false,
+		};
+		if !open {
+			return Action::Continue(Reply::bad_sequence());
+		}
 		let Ok(address) = Address::parse(&forward_path) else {
 			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};
@@ -443,6 +495,16 @@ impl Session {
 			}
 			Resolution::UnknownUser => {
 				return Action::Continue(Reply::single(550, "5.1.1 no such user"));
+			}
+			// A full mailbox refuses this recipient only, temporarily: the
+			// owner may make room (RFC 3463 X.2.2).
+			Resolution::Account(account)
+				if self
+					.policy
+					.quota()
+					.is_some_and(|quota| quota.is_full(&self.directory, &account)) =>
+			{
+				return Action::Continue(Reply::single(452, "4.2.2 mailbox full"));
 			}
 			// A local account or a multi-target alias is an acceptable recipient.
 			Resolution::Account(_) | Resolution::Alias(_) => {}
@@ -543,9 +605,20 @@ impl Session {
 mod tests_basic;
 
 #[cfg(test)]
+#[path = "../session_tests_enhanced.rs"]
+mod tests_enhanced;
+
+#[cfg(test)]
+#[path = "../session_tests_quota.rs"]
+mod tests_quota;
+
+#[cfg(test)]
 #[path = "../session_tests_auth.rs"]
 mod tests_auth;
 
+#[cfg(test)]
+#[path = "../session_tests_author.rs"]
+mod tests_author;
 #[cfg(test)]
 #[path = "../session_tests_diskspace.rs"]
 mod tests_diskspace;
@@ -567,3 +640,6 @@ mod tests_scram_ban_lifecycle;
 #[cfg(test)]
 #[path = "../session_tests_scram_bans.rs"]
 mod tests_scram_bans;
+#[cfg(test)]
+#[path = "../session_tests_scram_off.rs"]
+mod tests_scram_off;

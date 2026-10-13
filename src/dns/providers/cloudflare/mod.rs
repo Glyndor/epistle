@@ -16,7 +16,12 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
 	same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 use tags as cloudflare_tags;
+
+/// How Cloudflare wants a TXT `content` written and lists it back; see
+/// `record_value`.
+const TXT_FORM: TxtForm = TxtForm::Presentation;
 
 /// Cloudflare's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.cloudflare.com/client/v4";
@@ -201,10 +206,24 @@ impl CloudflareProvider {
 				},
 			})
 		} else {
+			// A TXT `content` "must consist of quoted "character
+			// strings" (RFC 1035), each with a length of up to 255
+			// bytes. Strings exceeding this allowed maximum length are
+			// automatically split."
+			// (<https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/>,
+			// TXTRecord.content, read 2026-10-12). Only the dashboard
+			// adds missing quotes (DNS changelog, 2024-10-15); a value
+			// sent through the API unquoted is stored as given, so it
+			// goes quoted and already split, escaped the RFC 1035 way.
+			let content = if record.kind == RecordKind::Txt {
+				txt_encode(&record.value, TXT_FORM)
+			} else {
+				record.value.clone()
+			};
 			serde_json::json!({
 				"type": kind,
 				"name": record.name,
-				"content": record.value,
+				"content": content,
 				"ttl": record.ttl,
 			})
 		};
@@ -291,24 +310,36 @@ impl CloudflareProvider {
 		kind: &str,
 		value: Option<&str>,
 	) -> Result<Option<RecordRef>, ProviderError> {
+		// The TXT matching rule from `src/dns/provider.rs` is the
+		// contract: a value-bearing delete drops only the record
+		// whose content matches the value. `same_txt_purpose` carries
+		// it: two tagged values match when their tag is the same
+		// (case-insensitive), two untagged values match only when
+		// identical. A `None` value (the wholesale path) keeps the
+		// first-by-(type, name) selection.
+		Ok(self
+			.find_records(zone_id, name, kind)
+			.await?
+			.into_iter()
+			.find(|r| match value {
+				Some(v) => same_txt_purpose(&r.content, v),
+				None => true,
+			}))
+	}
+
+	/// Every record of `kind` at `name`.
+	async fn find_records(
+		&self,
+		zone_id: &str,
+		name: &str,
+		kind: &str,
+	) -> Result<Vec<RecordRef>, ProviderError> {
 		let url = self
 			.records_url(zone_id, None)?
 			.with_query("type", kind)
 			.with_query("name", name);
 		let records: ListRecords = self.get_json(url).await?;
-		// The TXT matching rule from `src/dns/provider.rs` is the
-		// contract: a value-bearing delete drops only the record
-		// whose content matches the value, and an upsert that
-		// targets the same purpose finds the existing record by
-		// the same rule. `same_txt_purpose` carries the contract:
-		// two tagged values match when their tag is the same
-		// (case-insensitive), two untagged values match only when
-		// identical. A `None` value (the wholesale path) keeps
-		// the first-by-(type, name) selection.
-		Ok(records.result.into_iter().find(|r| match value {
-			Some(v) => same_txt_purpose(&r.content, v),
-			None => true,
-		}))
+		Ok(records.result)
 	}
 
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
@@ -316,9 +347,21 @@ impl CloudflareProvider {
 		let kind = Self::api_kind(record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
-		let existing = self
-			.find_record(&zone_id, &record.name, kind, Some(&record.value))
-			.await?;
+		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
+		// only the record of the same purpose; every other kind owns its
+		// name, so the write replaces the whole set. The first record is
+		// updated in place (an A with a new address is the same record,
+		// not a second one) and any others at the name are removed.
+		let found = self.find_records(&zone_id, &record.name, kind).await?;
+		let (existing, extra) = if record.kind == RecordKind::Txt {
+			let existing = found
+				.into_iter()
+				.find(|r| same_txt_purpose(&r.content, &record.value));
+			(existing, Vec::new())
+		} else {
+			let mut found = found.into_iter();
+			(found.next(), found.collect::<Vec<_>>())
+		};
 		let operator_tags: Vec<String> = existing
 			.as_ref()
 			.map(|r| r.tags.clone())
@@ -351,8 +394,25 @@ impl CloudflareProvider {
 					"Cloudflare refused DNS record tags (they need a paid plan); records are written without them from now on"
 				);
 			}
-			return decode_ok(retry).await;
+			decode_ok(retry).await?;
+		} else {
+			decode_ok(response).await?;
 		}
+		for stale in extra {
+			self.delete_id(&zone_id, &stale.id).await?;
+		}
+		Ok(())
+	}
+
+	/// Delete the record with `id`.
+	async fn delete_id(&self, zone_id: &str, id: &str) -> Result<(), ProviderError> {
+		let response = self
+			.client
+			.delete(self.records_url(zone_id, Some(id))?.into_url())
+			.bearer_auth(self.secret.token())
+			.send()
+			.await
+			.map_err(|e| ProviderError::Remote(e.to_string()))?;
 		decode_ok(response).await
 	}
 
@@ -411,15 +471,7 @@ impl CloudflareProvider {
 		else {
 			return Ok(()); // already absent: idempotent.
 		};
-		let id = found.id;
-		let response = self
-			.client
-			.delete(self.records_url(&zone_id, Some(&id))?.into_url())
-			.bearer_auth(self.secret.token())
-			.send()
-			.await
-			.map_err(|e| ProviderError::Remote(e.to_string()))?;
-		decode_ok(response).await
+		self.delete_id(&zone_id, &found.id).await
 	}
 
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
@@ -429,11 +481,23 @@ impl CloudflareProvider {
 		Ok(records
 			.result
 			.into_iter()
-			.map(|r| DnsRecord {
-				name: r.name,
-				kind: parse_kind(&r.kind),
-				value: r.content,
-				ttl: r.ttl,
+			.map(|r| {
+				let kind = parse_kind(&r.kind);
+				// The read form is not documented. A record written by
+				// the API comes back quoted (possibly re-split), one an
+				// older release wrote unquoted comes back as it was;
+				// `txt_decode` reads both as the logical value.
+				let value = if kind == RecordKind::Txt {
+					txt_decode(&r.content, TXT_FORM)
+				} else {
+					r.content
+				};
+				DnsRecord {
+					name: r.name,
+					kind,
+					value,
+					ttl: r.ttl,
+				}
 			})
 			.collect())
 	}

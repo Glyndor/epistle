@@ -6,8 +6,18 @@
 //! length is already public on the wire.
 //!
 //! Used wherever a caller holds a high-entropy expected value (an OAuth
-//! PKCE challenge, a TOTP code, a SubjectPass token) and is asked
-//! whether an attacker-supplied candidate matches.
+//! PKCE challenge, a TOTP code, a SubjectPass token, a SCRAM stored key,
+//! an OAuth device user code, a bearer/API-key sha256 digest) and is
+//! asked whether an attacker-supplied candidate matches.
+//!
+//! The comparison is delegated to ring's
+//! [`verify_slices_are_equal`](ring::constant_time::verify_slices_are_equal),
+//! which is the same primitive but with a constant-time guarantee that
+//! is independently audited. ring deprecated the module on the way to a
+//! future replacement; the call here is the canonical one today. A
+//! mismatch of length returns `false` straight away (length is not
+//! secret; the public wire input announces it), matching ring's
+//! `Result::Err` semantics.
 
 /// Constant-time byte comparison for slices of equal length.
 ///
@@ -18,11 +28,11 @@ pub fn eq(a: &[u8], b: &[u8]) -> bool {
 	if a.len() != b.len() {
 		return false;
 	}
-	let mut diff = 0u8;
-	for (x, y) in a.iter().zip(b.iter()) {
-		diff |= x ^ y;
-	}
-	diff == 0
+	// ring's primitive: returns `Ok(())` on match, `Err(Unspecified)` on
+	// mismatch. The deprecated warning is suppressed at the call site
+	// rather than file-wide so the visibility is one line.
+	#[allow(deprecated)]
+	ring::constant_time::verify_slices_are_equal(a, b).is_ok()
 }
 
 #[cfg(test)]

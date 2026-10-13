@@ -42,7 +42,7 @@ pub(super) fn run(
 	if out.flush().is_err() {
 		return ExitCode::FAILURE;
 	}
-	eprintln!("{}", exported_summary(count));
+	super::term::live::quiet(|| eprintln!("{}", exported_summary(count)));
 	ExitCode::SUCCESS
 }
 
@@ -84,7 +84,7 @@ pub(super) fn run_maildir(
 			count += 1;
 		}
 	}
-	eprintln!("{}", exported_summary(count));
+	super::term::live::quiet(|| eprintln!("{}", exported_summary(count)));
 	ExitCode::SUCCESS
 }
 

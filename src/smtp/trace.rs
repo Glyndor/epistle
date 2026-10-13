@@ -154,6 +154,78 @@ pub fn ensure_submission_headers(data: &[u8], domain: &str, now: SystemTime) -> 
 	out
 }
 
+/// `data` without its `Bcc:` and `Resent-Bcc:` header fields, continuation
+/// lines included; the body is untouched.
+///
+/// The submission paths (authenticated SMTP, JMAP `EmailSubmission/set`)
+/// apply this before queueing: a Bcc recipient is on the envelope only, and
+/// every copy that leaves the server, local or remote, must not name it
+/// (RFC 5322 section 3.6.3, RFC 8621 section 7.5).
+pub fn strip_bcc(data: &[u8]) -> Vec<u8> {
+	strip_headers(data, &["bcc", "resent-bcc"])
+}
+
+/// `data` without any header field whose name is one of `names` (compared
+/// case-insensitively), folded continuation lines included. The body and
+/// every other field are kept byte for byte.
+pub fn strip_headers(data: &[u8], names: &[&str]) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let mut out = Vec::with_capacity(data.len());
+	let mut dropping = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		let continuation = matches!(line.first(), Some(b' ' | b'\t'));
+		if !continuation {
+			dropping = field_name(line).is_some_and(|name| {
+				names
+					.iter()
+					.any(|wanted| name.eq_ignore_ascii_case(wanted.as_bytes()))
+			});
+		}
+		if !dropping {
+			out.extend_from_slice(line);
+		}
+	}
+	out.extend_from_slice(&data[header_end..]);
+	out
+}
+
+/// The unfolded, trimmed values of every `name` field in the header block
+/// of `data`, in order. Bytes that are not UTF-8 are replaced.
+pub fn header_values(data: &[u8], name: &str) -> Vec<String> {
+	let header_end = header_block_end(data);
+	let mut values: Vec<String> = Vec::new();
+	let mut collecting = false;
+	for line in data[..header_end].split_inclusive(|&b| b == b'\n') {
+		let text = String::from_utf8_lossy(line);
+		let text = text.trim_end_matches(['\r', '\n']);
+		if matches!(line.first(), Some(b' ' | b'\t')) {
+			if collecting && let Some(value) = values.last_mut() {
+				value.push(' ');
+				value.push_str(text.trim());
+			}
+			continue;
+		}
+		collecting =
+			field_name(line).is_some_and(|field| field.eq_ignore_ascii_case(name.as_bytes()));
+		if collecting && let Some((_, value)) = text.split_once(':') {
+			values.push(value.trim().to_string());
+		}
+	}
+	for value in &mut values {
+		*value = value.trim().to_string();
+	}
+	values
+}
+
+/// The name of the field a header line starts, without trailing blanks;
+/// `None` for a line with no colon.
+fn field_name(line: &[u8]) -> Option<&[u8]> {
+	line.contains(&b':')
+		.then(|| line.split(|&b| b == b':').next())
+		.flatten()
+		.map(|name| name.trim_ascii_end())
+}
+
 /// Byte index of the body's first byte (the start of the blank-line
 /// separator that ends the header block). The header block is everything
 /// up to but not including that separator; for CRLF CRLF the separator
@@ -216,6 +288,31 @@ fn strip_cr(line: &[u8]) -> &[u8] {
 	} else {
 		line
 	}
+}
+
+/// Prepend the two spam-marking headers a downstream client uses to tell
+/// ham from junk: `X-Spam-Status: Yes` plus the raw probability in
+/// `X-Spam-Score`. The injector only fires when the corpus returned a
+/// score at or above `bayes_junk_at`: a below-threshold message must not
+/// grow headers the recipient did not ask for.
+///
+/// Header lines are inserted at the top of the existing header block (the
+/// prefix before the first blank line, CRLF or LF). The byte boundary is
+/// not re-scanned for "X-Spam-Status" already present: in practice the
+/// SMTP server runs this exactly once per accepted message, so a
+/// duplicate pass would imply a real bug in the call site, not a
+/// repeated correlate header.
+pub fn inject_spam_headers(data: &[u8], score: f64) -> Vec<u8> {
+	let header_end = header_block_end(data);
+	let (headers, body) = data.split_at(header_end);
+	// Six decimals is plenty for a probability and avoids leaking the
+	// floating-point noise that `f64::to_string` would emit.
+	let prefix = format!("X-Spam-Status: Yes\r\nX-Spam-Score: {score:.6}\r\n");
+	let mut out = Vec::with_capacity(data.len() + prefix.len());
+	out.extend_from_slice(prefix.as_bytes());
+	out.extend_from_slice(headers);
+	out.extend_from_slice(body);
+	out
 }
 
 #[cfg(test)]

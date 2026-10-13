@@ -27,8 +27,16 @@ pub enum WebhookEvent {
 	DeliveryFailed {
 		/// The recipient that could not be reached.
 		recipient: String,
-		/// The failure reason (remote response or local error).
+		/// The failure reason: the remote reply as one line
+		/// (`550 5.1.1 ...`), or the local error when no server answered.
 		reason: String,
+		/// What the failure was about: `invalid_address`, `mailbox_full`,
+		/// `policy_rejected`, `too_big` or `other`.
+		#[serde(default)]
+		class: String,
+		/// The server that gave `reason`, when one answered.
+		#[serde(default)]
+		remote: Option<String>,
 	},
 	/// A `[[alerts]]` rule crossed its threshold over its sample window.
 	MetricAlert {
@@ -43,6 +51,22 @@ pub enum WebhookEvent {
 		threshold: u64,
 		/// The window length in seconds (the rule's `window_secs`).
 		window_secs: u64,
+	},
+	/// A DKIM key rotation was withdrawn because the new selector never
+	/// showed its key in DNS; the previous key keeps signing.
+	DkimRotationFailed {
+		/// The selector that was published and withdrawn.
+		selector: String,
+		/// Why the rotation did not complete.
+		reason: String,
+	},
+	/// The antivirus refused a message one of this server's own accounts
+	/// submitted: the account may be compromised and sending malware.
+	OutboundVirus {
+		/// The account that submitted the message.
+		account: String,
+		/// The signature the antivirus reported.
+		signature: String,
 	},
 	/// Sent only by `epistle webhook test` to check that the endpoint is
 	/// reachable and verifies signatures. Receivers should acknowledge it and

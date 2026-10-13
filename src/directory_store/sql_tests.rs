@@ -12,6 +12,7 @@ use crate::smtp::directory::Resolution;
 
 fn static_account(name: &str, address: &str, password: Option<&str>) -> Account {
 	Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
 		password_hash: password.map(crate::smtp::auth::tests::hash),
@@ -25,8 +26,18 @@ fn static_account(name: &str, address: &str, password: Option<&str>) -> Account 
 
 fn store_with(static_accounts: Vec<Account>) -> AccountStore {
 	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().to_path_buf();
+	// Leak the `TempDir` so the directory stays alive for the rest of
+	// the process. The store's on-disk writes need a live parent
+	// directory (the rename-then-fsync-the-parent contract for secret
+	// writes); without this the directory drops when `store_with`
+	// returns and any mutator that follows errors out. Leaking is
+	// fine here because the storage used by a handful of unit
+	// tests amounts to a few KB per case and is collected when the
+	// test binary exits.
+	std::mem::forget(dir);
 	AccountStore::open(
-		dir.path(),
+		&path,
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
 		static_accounts,
@@ -240,16 +251,12 @@ fn sql_and_ldap_style_names_resolve_while_unsafe_ones_are_dropped() {
 #[test]
 fn creating_an_account_keeps_the_strict_policy() {
 	let store = store_with(Vec::new());
-	for name in ["john.doe", "J_Smith", "Alice"] {
+	for name in ["john.doe", "J_Smith", "../alice"] {
 		let result = store.add(crate::directory_store::DynamicAccount {
 			name: name.to_string(),
 			addresses: vec!["x@example.org".to_string()],
 			password_hash: "$argon2id$stub".to_string(),
-			scram: None,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		});
 		assert!(
 			matches!(&result, Err(crate::directory_store::StoreError::Invalid(m)) if m.contains("lowercase")),

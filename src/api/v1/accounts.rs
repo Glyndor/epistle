@@ -44,7 +44,11 @@ pub async fn list(
 /// able to enumerate another tenant's account names by reading the status
 /// code, so an account it may not touch is indistinguishable from one that
 /// does not exist.
-fn require_in_scope(state: &ApiState, scope: &DomainScope, name: &str) -> Result<(), ApiError> {
+pub(super) fn require_in_scope(
+	state: &ApiState,
+	scope: &DomainScope,
+	name: &str,
+) -> Result<(), ApiError> {
 	let known = state
 		.accounts()
 		.into_iter()
@@ -65,6 +69,8 @@ pub struct CreateAccount {
 	name: String,
 	addresses: Vec<String>,
 	password: String,
+	#[serde(default)]
+	display_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -105,22 +111,23 @@ pub async fn create(
 	check_password(&request.password)?;
 	let password_hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
+	let name = crate::directory_store::account_name(&request.name);
 	state
 		.store()
 		.add(DynamicAccount {
-			name: request.name.clone(),
+			name: name.clone(),
 			addresses: request.addresses,
 			password_hash,
-			scram: Some(derive_scram(&request.password)?),
+			scram: derive_scram(&request.password, state.store())?,
 			totp_secret: None,
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			display_name: request.display_name,
+			..DynamicAccount::default()
 		})
 		.map_err(store_error)?;
-	Ok(Json(Created {
-		created: request.name,
-	}))
+	Ok(Json(Created { created: name }))
 }
 
 #[derive(Serialize)]
@@ -200,20 +207,31 @@ pub async fn set_password(
 	check_password(&request.password)?;
 	let hash =
 		crate::smtp::auth::hash_password(&request.password).map_err(|_| ApiError::internal())?;
-	let scram = derive_scram(&request.password)?;
+	let scram = derive_scram(&request.password, state.store())?;
 	state
 		.store()
-		.set_password_hash(&name, hash, Some(scram))
+		.set_password_hash(&name, hash, scram)
 		.map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::PasswordReset, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
 }
 
 /// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
-/// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the CSPRNG
-/// cannot produce a salt rather than storing a predictable one.
-fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ApiError> {
-	crate::smtp::scram::ScramStored::with_fresh_salt(password).ok_or_else(ApiError::internal)
+/// random salt. `None` when SCRAM is disabled via `[auth] scram = false`:
+/// the password mutator passes that `None` to [`AccountStore::set_password_hash`]
+/// so an existing verifier is removed on the next password change. Fails
+/// closed if the CSPRNG cannot produce a salt rather than storing a
+/// predictable one.
+fn derive_scram(
+	password: &str,
+	store: &crate::directory_store::AccountStore,
+) -> Result<Option<crate::smtp::scram::ScramStored>, ApiError> {
+	if !store.scram_enabled() {
+		return Ok(None);
+	}
+	crate::smtp::scram::ScramStored::with_fresh_salt(password)
+		.map(Some)
+		.ok_or_else(ApiError::internal)
 }
 
 /// The enrolled TOTP secret and its `otpauth://` provisioning URI.
@@ -267,7 +285,7 @@ pub async fn disable_totp(
 	Ok(Json(PasswordChanged { updated: name }))
 }
 
-fn store_error(error: StoreError) -> ApiError {
+pub(super) fn store_error(error: StoreError) -> ApiError {
 	match error {
 		StoreError::Invalid(message) => ApiError::invalid_input(&message),
 		StoreError::Duplicate(what) => ApiError::invalid_input(&format!("{what} already exists.")),

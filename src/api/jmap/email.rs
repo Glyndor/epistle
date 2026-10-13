@@ -3,40 +3,45 @@
 
 use serde_json::{Value, json};
 
-use super::super::state::{ApiState, MatchedAuth};
+use super::super::Principal;
+use super::super::state::ApiState;
 use super::objects;
+use super::state;
 use crate::api::api_keys::Scope;
 
 /// `Email/copy` (RFC 8620 section 5.4): copy messages from an accessible
 /// source account into the destination account, leaving the source intact.
 pub(super) fn email_copy(
 	state: &ApiState,
-	auth: &MatchedAuth,
+	principal: &Principal,
 	args: &Value,
 	call_id: &str,
 ) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	let scope = state.domain_scope(auth);
 	let accounts = state.accounts();
-	let destination_allowed = accounts
-		.iter()
-		.find(|a| a.name == account)
-		.is_some_and(|a| scope.admits_account(a.addresses.iter().map(String::as_str)));
-	if !destination_allowed {
+	let Some(destination) = accounts.iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&destination.name, &destination.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
 	let Some(source) = args.get("fromAccountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	let source_allowed = accounts
-		.iter()
-		.find(|a| a.name == source)
-		.is_some_and(|a| scope.admits_account(a.addresses.iter().map(String::as_str)));
-	if !source_allowed || state.require_scope(auth, Scope::Read).is_err() {
+	let source_view = accounts.iter().find(|a| a.name == source);
+	let source_allowed =
+		source_view.is_some_and(|view| principal.admits_account(&view.name, &view.addresses));
+	if !source_allowed
+		|| state
+			.require_scope_for_principal(principal, Scope::Read)
+			.is_err()
+	{
 		return json!(["error", { "type": "fromAccountNotFound" }, call_id]);
 	}
+	let old_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	let mut created = serde_json::Map::new();
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
@@ -51,9 +56,12 @@ pub(super) fn email_copy(
 			}
 		}
 	}
+	let new_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Email/copy",
 		{ "fromAccountId": source, "accountId": account,
+		  "oldState": old_state, "newState": new_state,
 		  "created": created, "notCreated": not_created },
 		call_id,
 	])
@@ -87,23 +95,40 @@ fn copy_email(
 
 /// `Email/set` (RFC 8621 §4.6): apply keyword updates (mark read/flagged etc.).
 /// Only full `keywords` replacement on `update` is supported so far.
-pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value {
+pub(super) fn email_set(
+	state: &ApiState,
+	principal: &Principal,
+	args: &Value,
+	call_id: &str,
+	uploads: &super::Uploads,
+) -> Value {
 	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
 		return json!(["error", { "type": "invalidArguments" }, call_id]);
 	};
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return json!(["error", { "type": "accountNotFound" }, call_id]);
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return json!(["error", { "type": "accountNotFound" }, call_id]);
 	}
+	let old_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	let mut created = serde_json::Map::new();
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (cid, spec) in create {
-			match create_email(state.data_dir(), account, spec, state.crypto()) {
+			let sources = super::email_build::Sources {
+				data_dir: state.data_dir(),
+				account,
+				crypto: state.crypto(),
+				uploads,
+			};
+			match create_email(spec, &sources) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
-				Err(reason) => {
-					not_created.insert(cid.clone(), json!({ "type": reason }));
+				Err(error) => {
+					not_created.insert(cid.clone(), error);
 				}
 			}
 		}
@@ -134,9 +159,11 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 			}
 		}
 	}
+	let new_state =
+		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
 	json!([
 		"Email/set",
-		{ "accountId": account, "oldState": "0", "newState": "0",
+		{ "accountId": account, "oldState": old_state, "newState": new_state,
 		  "created": created, "notCreated": not_created,
 		  "updated": updated, "notUpdated": not_updated,
 		  "destroyed": destroyed, "notDestroyed": not_destroyed },
@@ -144,14 +171,11 @@ pub(super) fn email_set(state: &ApiState, args: &Value, call_id: &str) -> Value 
 	])
 }
 
-/// Create a message from a JMAP Email object (Email/set create): build an
-/// RFC 5322 message and deliver it to the target mailbox.
-fn create_email(
-	data_dir: &std::path::Path,
-	account: &str,
-	spec: &Value,
-	crypto: &crate::storage::MessageCrypto,
-) -> Result<Value, &'static str> {
+/// Create a message from a JMAP Email object (Email/set create): build the
+/// RFC 5322 message (RFC 8621 section 4.6) and store it in the target
+/// mailbox. The error is the SetError to answer with.
+fn create_email(spec: &Value, sources: &super::email_build::Sources<'_>) -> Result<Value, Value> {
+	let (data_dir, account, crypto) = (sources.data_dir, sources.account, sources.crypto);
 	let mailbox = spec
 		.get("mailboxIds")
 		.and_then(Value::as_object)
@@ -165,14 +189,14 @@ fn create_email(
 				if v.as_bool() != Some(true) {
 					continue;
 				}
-				out.push(keyword_to_flag(k)?);
+				out.push(keyword_to_flag(k).map_err(|reason| json!({ "type": reason }))?);
 			}
 		}
 		out
 	};
-	let raw = objects::build_rfc5322(spec);
+	let raw = super::email_build::build(spec, sources)?;
 	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
-		.map_err(|_| "serverFail")?;
+		.map_err(|_| json!({ "type": "serverFail" }))?;
 	Ok(json!({
 		"id": id.to_string(),
 		"blobId": id.to_string(),

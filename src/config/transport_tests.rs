@@ -71,3 +71,28 @@ fn non_relay_kinds_skip_relay_validation() {
 	assert!(rule(None, None, TransportKind::Direct).validate().is_ok());
 	assert!(rule(None, None, TransportKind::Fail).validate().is_ok());
 }
+
+#[test]
+fn debug_redacts_the_relay_password() {
+	let mut r = rule(None, None, TransportKind::Relay);
+	r.host = Some("smarthost.test".into());
+	r.port = Some(587);
+	r.username = Some("relay-bot".into());
+	r.password = Some("super-secret-relay-password".into());
+	r.starttls = true;
+	let rendered = format!("{r:?}");
+	assert!(
+		!rendered.contains("super-secret-relay-password"),
+		"Transport password leaked through Debug: {rendered}"
+	);
+	// The redaction marker is present so a debug impl that simply drops the
+	// field rather than redacting it is also caught.
+	assert!(
+		rendered.contains("\"***\""),
+		"Transport Debug has no `***` redaction marker: {rendered}"
+	);
+	// Non-secret fields keep printing verbatim so the log still identifies
+	// which relay a rule belongs to.
+	assert!(rendered.contains("relay-bot"));
+	assert!(rendered.contains("smarthost.test"));
+}

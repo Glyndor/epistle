@@ -16,6 +16,7 @@ use axum::http::StatusCode;
 fn test_state_with_cap(dir: &std::path::Path, limit: Option<u32>) -> ApiState {
 	let spool = FsSpool::open(dir).expect("open spool");
 	let accounts = vec![crate::config::Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some("$argon2id$secret".to_string()),

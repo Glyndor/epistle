@@ -22,6 +22,11 @@ on:
       - "src/sieve/**"
       - "src/pop3/**"
       - "src/managesieve/**"
+      - "src/dkim/**"
+      - "src/dmarc/**"
+      - "src/reports/**"
+      - "src/api/jmap/**"
+      - "src/fuzzing.rs"
       - "fuzz/**"
 
 permissions:
@@ -44,6 +49,9 @@ jobs:
             sieve_script,
             pop3_command,
             managesieve_command,
+            smtp_data,
+            dkim_signature,
+            mime,
           ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

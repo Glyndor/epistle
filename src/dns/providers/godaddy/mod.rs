@@ -23,6 +23,10 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, parse_srv, same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+
+/// How GoDaddy takes a TXT `data` and lists it back; see `record_element`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// GoDaddy's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.godaddy.com/v1";
@@ -337,8 +341,20 @@ impl GodaddyProvider {
 				"host": target.trim_end_matches('.'),
 			}));
 		}
+		// The v1 OpenAPI gives `data` as a bare string with nothing on
+		// TXT quoting, length or escaping
+		// (<https://developer.godaddy.com/openapi/domains-v1.json>,
+		// DNSRecord, read 2026-10-12). The logical value is the form that
+		// is the same bytes every time it is sent and the one other
+		// clients send (lego), and `elements_match_kind` compares logical
+		// values so a set GoDaddy hands back quoted still matches.
+		let data = if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
+		} else {
+			record.value.clone()
+		};
 		Ok(serde_json::json!({
-			"data": record.value,
+			"data": data,
 			"ttl": ttl,
 		}))
 	}
@@ -478,6 +494,8 @@ impl GodaddyProvider {
 					let port = r.port?;
 					let target = r.data.trim_end_matches('.');
 					format!("{priority} {weight} {port} {target}")
+				} else if kind == RecordKind::Txt {
+					txt_decode(&r.data, TXT_FORM)
 				} else {
 					r.data
 				};
@@ -533,8 +551,9 @@ fn parse_kind(kind: &str) -> Option<RecordKind> {
 ///   values with the same version tag match (an SPF change replaces
 ///   the SPF rather than appending a second one) and an untagged
 ///   value matches only an identical value (an ACME DNS-01 cleanup
-///   does not wipe a sibling challenge at the same owner). The bytes
-///   are never trimmed of dots; the wire form is verbatim.
+///   does not wipe a sibling challenge at the same owner). Untagged
+///   values compare as logical values (quoting and string splits do not
+///   count); dots are never trimmed.
 /// - MX / SRV / CNAME: `data` is the FQDN target. GoDaddy stores the
 ///   target with a trailing dot, epistle publishes without one; the
 ///   compare is case-insensitive and ignores one trailing dot so a
@@ -612,6 +631,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests_b.rs"]
 mod tests_b;
+
+#[cfg(test)]
+#[path = "tests_txt_forms.rs"]
+mod tests_txt_forms;
 
 #[cfg(test)]
 #[path = "tests_path.rs"]

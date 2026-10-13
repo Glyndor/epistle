@@ -59,17 +59,26 @@ impl Mechanism {
 
 /// The mechanisms the server offers, strongest first, given whether a verified
 /// client certificate is present (EXTERNAL), channel binding is available (a
-/// bound certificate hash, for `-PLUS`), and an OAuth verifier is configured.
-/// Failing closed: a mechanism whose precondition is unmet is never advertised.
-pub fn available(external: bool, channel_binding: bool, oauth: bool) -> Vec<Mechanism> {
+/// bound certificate hash, for `-PLUS`), SCRAM is enabled (`scram = true`
+/// under `[auth]`), and an OAuth verifier is configured. Failing closed: a
+/// mechanism whose precondition is unmet is never advertised.
+pub fn available(
+	external: bool,
+	channel_binding: bool,
+	scram_enabled: bool,
+	oauth: bool,
+) -> Vec<Mechanism> {
 	let mut mechanisms = Vec::with_capacity(7);
 	if external {
 		mechanisms.push(Mechanism::External);
 	}
-	if channel_binding {
+	if scram_enabled && channel_binding {
 		mechanisms.push(Mechanism::ScramSha256Plus);
 	}
-	mechanisms.extend([Mechanism::ScramSha256, Mechanism::Plain, Mechanism::Login]);
+	if scram_enabled {
+		mechanisms.push(Mechanism::ScramSha256);
+	}
+	mechanisms.extend([Mechanism::Plain, Mechanism::Login]);
 	if oauth {
 		mechanisms.extend([Mechanism::OauthBearer, Mechanism::Xoauth2]);
 	}
@@ -78,14 +87,16 @@ pub fn available(external: bool, channel_binding: bool, oauth: bool) -> Vec<Mech
 
 /// `true` when the mechanism is currently offered (advertised) under the given
 /// preconditions. The dispatch uses this to reject a mechanism a client tries
-/// without it having been advertised (e.g. `-PLUS` with no channel binding).
+/// without it having been advertised (e.g. `-PLUS` with no channel binding,
+/// or any SCRAM mechanism when `scram = false`).
 pub fn is_available(
 	mechanism: Mechanism,
 	external: bool,
 	channel_binding: bool,
+	scram_enabled: bool,
 	oauth: bool,
 ) -> bool {
-	available(external, channel_binding, oauth).contains(&mechanism)
+	available(external, channel_binding, scram_enabled, oauth).contains(&mechanism)
 }
 
 #[cfg(test)]
@@ -110,49 +121,108 @@ mod tests {
 
 	#[test]
 	fn name_round_trips_through_parse() {
-		for mechanism in available(true, true, true) {
+		for mechanism in available(true, true, true, true) {
 			assert_eq!(Mechanism::parse(mechanism.name()), Some(mechanism));
 		}
 	}
 
 	#[test]
 	fn channel_binding_gates_plus() {
-		assert!(available(false, false, false).contains(&Mechanism::ScramSha256));
-		assert!(!available(false, false, false).contains(&Mechanism::ScramSha256Plus));
-		assert!(available(false, true, false).contains(&Mechanism::ScramSha256Plus));
+		assert!(available(false, false, true, false).contains(&Mechanism::ScramSha256));
+		assert!(!available(false, false, true, false).contains(&Mechanism::ScramSha256Plus));
+		assert!(available(false, true, true, false).contains(&Mechanism::ScramSha256Plus));
 		// -PLUS is offered strongest-first (no EXTERNAL present).
-		assert_eq!(available(false, true, false)[0], Mechanism::ScramSha256Plus);
+		assert_eq!(
+			available(false, true, true, false)[0],
+			Mechanism::ScramSha256Plus
+		);
 	}
 
 	#[test]
 	fn external_gates_on_client_certificate() {
-		assert!(!available(false, false, false).contains(&Mechanism::External));
-		assert!(available(true, false, false).contains(&Mechanism::External));
+		assert!(!available(false, false, true, false).contains(&Mechanism::External));
+		assert!(available(true, false, true, false).contains(&Mechanism::External));
 		// EXTERNAL is the strongest, offered first.
-		assert_eq!(available(true, true, false)[0], Mechanism::External);
+		assert_eq!(available(true, true, true, false)[0], Mechanism::External);
 		assert_eq!(Mechanism::parse("external"), Some(Mechanism::External));
 	}
 
 	#[test]
 	fn oauth_gates_bearer_mechanisms() {
-		assert!(!available(false, false, false).contains(&Mechanism::OauthBearer));
-		assert!(available(false, false, true).contains(&Mechanism::OauthBearer));
-		assert!(available(false, false, true).contains(&Mechanism::Xoauth2));
+		assert!(!available(false, false, true, false).contains(&Mechanism::OauthBearer));
+		assert!(available(false, false, true, true).contains(&Mechanism::OauthBearer));
+		assert!(available(false, false, true, true).contains(&Mechanism::Xoauth2));
 	}
 
 	#[test]
-	fn is_available_matches_advertised() {
-		assert!(is_available(Mechanism::Plain, false, false, false));
-		assert!(!is_available(Mechanism::External, false, false, false));
-		assert!(is_available(Mechanism::External, true, false, false));
+	fn scram_off_drops_scram_mechanisms_but_keeps_plain_and_login() {
+		// `[auth] scram = false`: PLAIN and LOGIN stay in (the password still
+		// authenticates); both SCRAM-SHA-256 and `-PLUS` disappear from the
+		// advertised set and from `is_available`.
+		let advertised = available(false, false, false, false);
+		assert!(!advertised.contains(&Mechanism::ScramSha256));
+		assert!(!advertised.contains(&Mechanism::ScramSha256Plus));
+		assert!(advertised.contains(&Mechanism::Plain));
+		assert!(advertised.contains(&Mechanism::Login));
 		assert!(!is_available(
-			Mechanism::ScramSha256Plus,
+			Mechanism::ScramSha256,
+			false,
 			false,
 			false,
 			false
 		));
-		assert!(is_available(Mechanism::ScramSha256Plus, false, true, false));
-		assert!(!is_available(Mechanism::OauthBearer, false, false, false));
-		assert!(is_available(Mechanism::OauthBearer, false, false, true));
+		assert!(!is_available(
+			Mechanism::ScramSha256Plus,
+			false,
+			true,
+			false,
+			false
+		));
+		// Channel binding on its own does not re-enable -PLUS when SCRAM is
+		// off: a tls-server-end-point hash should not bring -PLUS back.
+		let with_cbind = available(false, true, false, false);
+		assert!(!with_cbind.contains(&Mechanism::ScramSha256Plus));
+		assert!(!with_cbind.contains(&Mechanism::ScramSha256));
+	}
+
+	#[test]
+	fn is_available_matches_advertised() {
+		assert!(is_available(Mechanism::Plain, false, false, true, false));
+		assert!(!is_available(
+			Mechanism::External,
+			false,
+			false,
+			true,
+			false
+		));
+		assert!(is_available(Mechanism::External, true, false, true, false));
+		assert!(!is_available(
+			Mechanism::ScramSha256Plus,
+			false,
+			false,
+			true,
+			false
+		));
+		assert!(is_available(
+			Mechanism::ScramSha256Plus,
+			false,
+			true,
+			true,
+			false
+		));
+		assert!(!is_available(
+			Mechanism::OauthBearer,
+			false,
+			false,
+			true,
+			false
+		));
+		assert!(is_available(
+			Mechanism::OauthBearer,
+			false,
+			false,
+			true,
+			true
+		));
 	}
 }

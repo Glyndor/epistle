@@ -2,13 +2,20 @@
 
 pub mod bounce;
 pub mod client;
+pub mod reply;
 pub(crate) mod resolver;
+pub mod schedule;
 pub mod srs;
 pub mod suppression;
+#[cfg(test)]
+pub(crate) mod test_remote;
+pub mod tls_outcome;
+pub(crate) mod tls_required;
 mod transport;
 pub use transport::relay_connect;
 mod worker;
 
 pub use resolver::{Connector, MxConnector};
-pub use suppression::SuppressionList;
+pub use schedule::RetrySchedule;
+pub use suppression::{Suppressed, SuppressionList};
 pub use worker::Worker;

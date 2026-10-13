@@ -3,8 +3,10 @@
 //! A client configures itself from just an email address by fetching a config
 //! document: Thunderbird's autoconfig `clientConfig` XML and Microsoft's
 //! Autodiscover v1 POX XML. Operators point `autoconfig.<domain>` and
-//! `autodiscover.<domain>` at this listener (behind their TLS proxy). The same
-//! pure builders back the `mail autoconfig` / `mail autodiscover` CLI commands.
+//! `autodiscover.<domain>` at this listener: the `autoconfigs` kind serves
+//! HTTPS with the server's certificate, the `autoconfig` kind plain HTTP for a
+//! deployment that keeps its own TLS proxy. The same pure builders back the
+//! `mail autoconfig` / `mail autodiscover` CLI commands.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,6 +16,13 @@ use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+
+mod https;
+pub mod mobileconfig;
+
+pub use https::serve;
+#[cfg(test)]
+pub(crate) use https::serve_on;
 
 /// Build the Thunderbird autoconfig `clientConfig` document for `domain`: IMAP
 /// over implicit TLS (993) and SMTP submission over STARTTLS (587),
@@ -159,6 +168,7 @@ pub fn router(hostname: String, domains: Vec<String>) -> Router {
 			"/autodiscover/autodiscover.json",
 			get(autodiscover_v2_handler),
 		)
+		.route("/mobileconfig", get(mobileconfig_handler))
 		.with_state(state)
 }
 
@@ -192,6 +202,46 @@ async fn autoconfig_handler(
 	xml(autoconfig(&domain, &state.hostname))
 }
 
+/// The address in an `email` query value when it is a plausible mailbox: a
+/// non-empty local part and domain, no whitespace or control characters.
+fn plausible_address(email: &str) -> Option<(&str, String)> {
+	if email.chars().any(|c| c.is_whitespace() || c.is_control()) {
+		return None;
+	}
+	let (local, _) = email.rsplit_once('@')?;
+	if local.is_empty() {
+		return None;
+	}
+	Some((email, domain_of(email)?))
+}
+
+/// Serve the Apple `.mobileconfig` profile for the `email` query's address
+/// when its domain is hosted. Apple has no autodiscovery URL of its own: the
+/// user opens this link in Safari (or it is handed out by the operator), and
+/// the profile installs the IMAP and submission accounts without a password.
+async fn mobileconfig_handler(
+	State(state): State<Discovery>,
+	Query(params): Query<HashMap<String, String>>,
+) -> Response {
+	let Some((email, domain)) = params.get("email").and_then(|e| plausible_address(e)) else {
+		return StatusCode::BAD_REQUEST.into_response();
+	};
+	if !state.domains.contains(&domain) {
+		return StatusCode::NOT_FOUND.into_response();
+	}
+	(
+		[
+			(header::CONTENT_TYPE, "application/x-apple-aspen-config"),
+			(
+				header::CONTENT_DISPOSITION,
+				"attachment; filename=\"mail.mobileconfig\"",
+			),
+		],
+		mobileconfig::profile(email, email, &state.hostname),
+	)
+		.into_response()
+}
+
 /// Serve the Microsoft Autodiscover v1 document (keyed on the mail hostname).
 async fn autodiscover_handler(State(state): State<Discovery>) -> Response {
 	xml(autodiscover(&state.hostname))
@@ -221,3 +271,11 @@ async fn autodiscover_v2_handler(
 #[cfg(test)]
 #[path = "autodiscovery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "autodiscovery_tests_mobileconfig.rs"]
+mod tests_mobileconfig;
+
+#[cfg(test)]
+#[path = "autodiscovery_tests_tls.rs"]
+mod tests_tls;

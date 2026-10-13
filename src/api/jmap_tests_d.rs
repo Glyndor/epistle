@@ -19,6 +19,7 @@ pub(super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiS
 	let spool = FsSpool::open(dir).expect("open spool");
 	let accounts = vec![
 		crate::config::Account {
+			display_name: None,
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: Some("$argon2id$secret".to_string()),
@@ -29,6 +30,7 @@ pub(super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiS
 			allowed_protocols: None,
 		},
 		crate::config::Account {
+			display_name: None,
 			name: "bob".to_string(),
 			addresses: vec!["bob@example.org".to_string()],
 			password_hash: Some("$argon2id$secret".to_string()),
@@ -151,7 +153,7 @@ async fn alice_uploads_then_downloads_her_own_blob() {
 	// The `.owner` sidecar carries the uploader's account name — this is what
 	// the per-account gate reads, so verifying it here makes the control
 	// explicit instead of relying on the test "just happening to work".
-	let owner = super::jmap::read_blob_owner(state.blob_backend(), &blob_id)
+	let owner = super::jmap::read_blob_owner(state.blob_backend(), "alice", &blob_id)
 		.await
 		.expect("upload must write the owner sidecar");
 	assert_eq!(

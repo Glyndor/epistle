@@ -12,7 +12,11 @@ sets `image` in the answers or pulls it directly.
 ## What the image contains
 
 The base is `gcr.io/distroless/static-debian12:nonroot`, pinned by digest
-in the `Containerfile`. The image carries the musl-statically linked
+in the `Containerfile` and in `deploy/images/Dockerfile`, which also pins
+the PostgreSQL and ClamAV images of the generated stack. The binary reads
+that file at build time, so a release that moves a digest there moves it in
+the compose file `epistle stack update` renders on every install; Dependabot
+watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
 The inventory below was produced by `podman create` of `epistle:test`
 followed by `podman export | tar -t`, on this host with
@@ -94,7 +98,7 @@ podman run --rm \
   -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.10.1
+  ghcr.io/glyndor/epistle:0.11.0
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -123,7 +127,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.10.1
+    image: ghcr.io/glyndor/epistle:0.11.0
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -140,9 +144,9 @@ let `config-check` print
 ## Bringing up the stack
 
 `epistle init` lays down the operator-facing half of the stack: the
-config file, the DKIM and storage keys, the self-signed cert pair,
-and, when `services.database = true`, the database password and the
-podup compose file. Bringing the stack up is a single command:
+config file, the DKIM, storage and OAuth keys, the self-signed cert
+pair, and, when `services.database = true`, the database passwords and
+the podup compose file. Bringing the stack up is a single command:
 
 ```sh
 podup -f /var/lib/glyndor/epistle/data/compose/compose.yaml up -d
@@ -187,6 +191,85 @@ non-loopback address; a `127.0.0.1:<p>:<p>` publish on the
 compose side is the operator's own addition to the generated
 file (or a follow-up edit after `init` runs).
 
+### What each container may do
+
+Every service starts from `cap_drop: [ALL]` with `no-new-privileges`, and
+every root filesystem is read-only. Each line below was found by starting the
+service without the capability, or without the writable path, and reading the
+failure; the writes were listed with `podman diff` after mail in, a
+submission, an IMAP read, a 20 MB message and an EICAR scan.
+
+| Service | Runs as | Capabilities | Writable besides its volumes | Memory | Processes |
+|---|---|---|---|---|---|
+| `mail` | 65532 | none | nothing | `1g` | 1024 |
+| `db` | 999 (postgres) | none | `/tmp` | `1g` | 256 |
+| `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `3g` | 128 |
+| `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `2g` | 32 |
+
+`clamav` keeps its root entrypoint: it chowns and chmods the socket volume and
+clamd then steps down to the `clamav` user. Ports below 1024 reach `mail`
+through the `ip_unprivileged_port_start` sysctl of its own network namespace,
+not through `NET_BIND_SERVICE`.
+
+The limits come from a local stack under 64 parallel SMTP sessions and 32
+IMAP sessions: `mail` peaked at 47 MB of anonymous memory and 62 tasks, `db`
+at 113 MB plus 148 MB of shared buffers, clamd at 1.99 GB while it reloaded
+its signatures (it loads the new set before it frees the old one), and
+freshclam at 860 MB while it tested a download. Podman lets each container
+swap as much again. To change a limit, put it in the answers file:
+
+```toml
+[resources.clamav]
+memory = "4g"   # a whole number with k, m or g
+pids = 256
+```
+
+`init` records the answered values in `compose.yaml` under
+`x-epistle-resources`, and `stack update` keeps them. A value in
+`compose.override.yaml` works too and wins over both.
+
+### Keys outside data_dir
+
+`mail` mounts data_dir read-write, and `epistle backup` archives it. The at-rest
+storage key and the OAuth signing key therefore live in `secrets/` beside it
+(`/var/lib/glyndor/epistle/secrets`, mode `0700`) and reach `mail` as
+read-only compose secrets. They are mounted at their host path, not under
+`/run/secrets`, because `export`, `import` and `verify` run on the host and
+read the same `mail.toml`. `init` points `[storage] encryption_key_file` at the
+storage key; turning `encrypt_at_rest` on stays your decision. The OAuth key
+is used once `[oauth] signing_key_file` names it.
+
+On an install from before this layout, `epistle stack update` (and a rerun of
+`init`) moves both keys out of `<data_dir>/keys`, rewrites a `mail.toml` that
+named the old path, and leaves both copies in place, with an error, if they
+differ. Backups do not carry these keys: save `secrets/` separately.
+
+### The database roles
+
+PostgreSQL's bootstrap superuser is `epistle_admin`, whose password is in
+`secrets/epistle_db_admin_password` and is mounted only into `db`. On the first
+start, a script the image runs creates `epistle`, the role `mail` connects as,
+with `LOGIN` and nothing else, owner of the `epistle` database, and revokes
+`CONNECT` on `postgres` and `template1` from `PUBLIC`. The migrations only
+create tables and indexes there, which the owner may do.
+
+A stack initialised before this has `epistle` as the bootstrap superuser, and
+PostgreSQL 16 and later refuse to remove `SUPERUSER` from that role. `stack
+update` therefore renames it to `epistle_admin` and creates a new `epistle`
+that takes over the database and everything in `public`, in one transaction,
+once `db` runs with the admin secret mounted; then it restarts `mail` so no
+session of the old role is left. The dump it took first is the way back.
+
+To act as the admin, for example to inspect the cluster, from a root shell
+(`sudo -s`):
+
+```sh
+cd /var/lib/glyndor/epistle
+runuser -u glyndor-epistle -- env XDG_RUNTIME_DIR=/run/user/$(id -u glyndor-epistle) \
+	podup -f data/compose/compose.yaml exec db sh -c \
+	'PGPASSWORD="$(cat /run/secrets/epistle_db_admin_password)" psql -h /var/run/postgresql -U epistle_admin -d epistle'
+```
+
 ## Backup and restore
 
 `epistle backup` and `epistle restore` detect the container stack
@@ -222,15 +305,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.10.1-amd64`, `…:0.8.0-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.11.0-amd64`, `…:0.8.0-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.10.1` the full release.
+- `ghcr.io/glyndor/epistle:0.11.0` the full release.
 - `ghcr.io/glyndor/epistle:0.8` the latest patch release in the `0.8` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.8` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.10.1 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.11.0 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -242,7 +325,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.10.1 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.11.0 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -252,7 +335,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.10.1`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.11.0`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

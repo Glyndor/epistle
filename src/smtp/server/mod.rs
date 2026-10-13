@@ -17,6 +17,7 @@ use crate::directory_store::DirectoryHandle;
 
 mod dnsbl_check;
 mod run;
+mod run_auth;
 mod run_band;
 
 /// Read buffer size per connection.
@@ -86,12 +87,28 @@ pub struct Server {
 	report_dir: Option<std::path::PathBuf>,
 	/// If set, inbound unauthenticated mail is sealed into its ARC chain.
 	arc_sealer: Option<Arc<crate::arc::sealer::ArcSealer>>,
-	/// If set, greylist unseen triplets: the store and the delay in seconds.
-	greylist: Option<(Arc<crate::antispam::greylist::MemoryGreylist>, u64)>,
+	/// If set, greylist unseen triplets: the store (in-memory or
+	/// PostgreSQL-backed) and the delay in seconds. The trait object lets
+	/// `serve` swap in the persistent store when `[database]` is configured.
+	greylist: Option<(Arc<dyn crate::antispam::greylist::GreylistStore>, u64)>,
+	/// Score thresholds for unauthenticated mail whose Bayesian
+	/// probability crosses the line:
+	/// `junk_at` routes to the Junk mailbox (default 0.95);
+	/// `reject_at`, when set, refuses the DATA phase with `550 5.7.1`.
+	/// Both are enforced only after the corpus has at least
+	/// `MIN_TRUSTED_MESSAGES` on either side, so an empty or under-trained
+	/// corpus never junks or rejects. Authenticated sessions bypass both.
+	bayes_junk_at: f64,
+	bayes_reject_at: Option<f64>,
 	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
 	cbind_data: Option<Vec<u8>>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are offered on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour; `false` hides both mechanisms on the wire and refuses an
+	/// explicit `AUTH` against them. PLAIN/LOGIN stay in.
+	scram_enabled: bool,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
 	/// Server-wide default submission rate limit (messages/min) for
@@ -112,6 +129,11 @@ pub struct Server {
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
+	/// The graceful stop this listener follows; none in tests that do not
+	/// exercise it.
+	drain: Option<Arc<crate::shutdown::Drain>>,
+	/// Mailbox quota of local recipients (see [`crate::smtp::quota`]).
+	quota: Option<Arc<crate::smtp::quota::MailboxQuota>>,
 	/// Per-account correspondent store, consulted at end-of-DATA to
 	/// enforce the rolling 24h new-recipient cap. `None` disables the
 	/// cap (the default) so the pre-feature behaviour survives in
@@ -153,6 +175,8 @@ impl Server {
 			report_dir: None,
 			arc_sealer: None,
 			greylist: None,
+			bayes_junk_at: 0.95,
+			bayes_reject_at: None,
 			oauth: None,
 			cbind_data: None,
 			send_limiter: None,
@@ -161,10 +185,13 @@ impl Server {
 			inbound_sender_limit: None,
 			tenant_limits: None,
 			disk_guard: None,
+			drain: None,
+			quota: None,
 			correspondents: None,
 			daily_new_recipients: None,
 			max_connections: MAX_CONNECTIONS,
 			auth_protocol: crate::config::Protocol::Submission,
+			scram_enabled: true,
 		}
 	}
 
@@ -223,12 +250,27 @@ impl Server {
 		self
 	}
 
+	/// Follow `drain`: stop accepting when it starts, let an open
+	/// transaction finish, then close with `421`.
+	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
+		self.drain = Some(drain);
+		self
+	}
+
 	/// Attach a shared disk-space guard for `data_dir`. The SMTP path
 	/// consults it at `MAIL FROM` and rejects with `452` when the
 	/// filesystem cannot hold another message, so the remote retries
 	/// instead of receiving `250` for a payload the spool cannot write.
 	pub fn with_disk_guard(mut self, guard: Arc<DiskGuard>) -> Self {
 		self.disk_guard = Some(guard);
+		self
+	}
+
+	/// Check local recipients against their mailbox quota: a full mailbox
+	/// is refused at `RCPT TO`, one this message would overfill at the end
+	/// of DATA (see [`crate::smtp::quota`]).
+	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
+		self.quota = Some(quota);
 		self
 	}
 
@@ -271,6 +313,14 @@ impl Server {
 		self
 	}
 
+	/// Toggle the `[auth] scram` knob for this listener. `false` hides
+	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS on the wire and refuses an
+	/// explicit `AUTH` against them; PLAIN and LOGIN stay in.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
+		self
+	}
+
 	/// Seal inbound unauthenticated mail into its ARC chain (RFC 8617).
 	pub fn with_arc_sealer(mut self, sealer: Arc<crate::arc::sealer::ArcSealer>) -> Self {
 		self.arc_sealer = Some(sealer);
@@ -278,12 +328,27 @@ impl Server {
 	}
 
 	/// Greylist unseen triplets, deferring them for `delay_secs` seconds.
+	/// The store can be either backing (`MemoryGreylist` or `PgGreylistStore`);
+	/// they implement the same trait.
 	pub fn with_greylist(
 		mut self,
-		store: Arc<crate::antispam::greylist::MemoryGreylist>,
+		store: Arc<dyn crate::antispam::greylist::GreylistStore>,
 		delay_secs: u64,
 	) -> Self {
 		self.greylist = Some((store, delay_secs));
+		self
+	}
+
+	/// Set the Bayesian thresholds that decide on their own before the
+	/// uncertain band: any unauthenticated message whose score lands at or
+	/// above `junk_at` is delivered to the recipient's Junk mailbox;
+	/// any whose score lands at or above `reject_at` is refused with
+	/// `550 5.7.1`. `reject_at` must be at least `junk_at` so the rejected
+	/// band is a subset of the junked one. Authenticated sessions ignore
+	/// both; an under-trained corpus ignores both.
+	pub fn with_bayes_thresholds(mut self, junk_at: f64, reject_at: Option<f64>) -> Self {
+		self.bayes_junk_at = junk_at;
+		self.bayes_reject_at = reject_at;
 		self
 	}
 
@@ -441,7 +506,8 @@ impl Server {
 		let mut session = Session::new(&self.hostname)
 			.with_directory(self.directory.current())
 			.with_auth_protocol(self.auth_protocol)
-			.with_metrics(Arc::clone(&self.metrics));
+			.with_metrics(Arc::clone(&self.metrics))
+			.with_scram_enabled(self.scram_enabled);
 		if let Some(verifier) = &self.oauth {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
@@ -464,6 +530,9 @@ impl Server {
 		if let Some(guard) = &self.disk_guard {
 			session = session.with_disk_guard(Arc::clone(guard));
 		}
+		if let Some(quota) = &self.quota {
+			session = session.with_quota(Arc::clone(quota));
+		}
 		// Build the cap state in one go: the listener already holds
 		// `correspondents`, `daily_new_recipients`, and a metrics handle;
 		// folding them into a `cap::Cap` keeps the session's field
@@ -482,9 +551,24 @@ impl Server {
 
 	/// Accept connections forever. Each connection runs in its own task.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = match &self.drain {
+				Some(drain) => tokio::select! {
+					accepted = accepting.next() => accepted,
+					() = drain.started() => return Ok(()),
+				},
+				None => accepting.next().await,
+			};
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize before the address reaches
 			// SPF, DNSBL, the ban table, the greylist, the inbound rate
@@ -496,8 +580,10 @@ impl Server {
 				continue;
 			};
 			let server = Arc::clone(&self);
+			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
 			tokio::spawn(async move {
 				let _permit = permit;
+				let _tracked = tracked;
 				tracing::debug!(%peer, "connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "connection ended with error");
@@ -514,7 +600,7 @@ impl Server {
 	{
 		match (self.tls_mode, &self.tls) {
 			(TlsMode::Implicit, Some(acceptor)) => {
-				let tls_stream = acceptor.current().accept(stream).await?;
+				let tls_stream = crate::tls::accept_within(&acceptor.current(), stream).await?;
 				// A verified client certificate enables SASL EXTERNAL.
 				let identity = tls_stream
 					.get_ref()
@@ -578,12 +664,32 @@ async fn read_chunk(
 }
 
 #[cfg(test)]
+#[path = "server_tests_drain.rs"]
+mod tests_drain;
+
+#[cfg(test)]
+#[path = "server_tests_quota.rs"]
+mod tests_quota;
+
+#[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
 
 #[cfg(test)]
 #[path = "server_tests_auth.rs"]
 mod tests_auth;
+
+#[cfg(test)]
+#[path = "server_tests_bcc.rs"]
+mod tests_bcc;
+
+#[cfg(test)]
+#[path = "server_tests_virus.rs"]
+mod tests_virus;
+
+#[cfg(test)]
+#[path = "server_tests_trace.rs"]
+mod tests_trace;
 
 #[cfg(test)]
 #[path = "server_tests_urlbl.rs"]
@@ -600,3 +706,11 @@ mod tests_subjectpass;
 #[cfg(test)]
 #[path = "server_tests_dual_stack.rs"]
 mod tests_dual_stack;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;
+
+#[cfg(test)]
+#[path = "server_tests_author.rs"]
+mod tests_author;

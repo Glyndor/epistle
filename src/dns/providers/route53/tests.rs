@@ -48,6 +48,12 @@ pub(super) struct MockState {
 	/// Preloaded response for the LIST endpoint; when `None`, the
 	/// mock returns an empty resource record set list.
 	pub(super) list_response: Option<String>,
+	/// Pages of the LIST endpoint keyed by the `name` query parameter
+	/// a request starts at ("" for none). When set, they take the
+	/// place of `list_response`.
+	pub(super) list_pages: std::collections::HashMap<String, String>,
+	/// The raw query of every LIST request, in order.
+	pub(super) list_queries: Vec<String>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -72,13 +78,18 @@ async fn change(
 async fn list_rrsets(
 	State(state): State<Shared>,
 	headers: axum::http::HeaderMap,
+	uri: axum::http::Uri,
+	axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::http::Response<String> {
 	let mut s = state.lock().unwrap();
 	s.auth = headers
 		.get("authorization")
 		.and_then(|v| v.to_str().ok())
 		.map(str::to_string);
-	let body = s.list_response.clone().unwrap_or_else(|| {
+	s.list_queries.push(uri.query().unwrap_or("").to_string());
+	let start = query.get("name").cloned().unwrap_or_default();
+	let page = s.list_pages.get(&start).cloned();
+	let body = page.or_else(|| s.list_response.clone()).unwrap_or_else(|| {
 		r#"<?xml version="1.0" encoding="UTF-8"?><ListResourceRecordSetsResult><ResourceRecordSets/></ListResourceRecordSetsResult>"#.to_string()
 	});
 	axum::http::Response::builder()

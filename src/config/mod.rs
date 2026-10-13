@@ -11,6 +11,7 @@ mod alias;
 mod antispam;
 mod api;
 mod arc;
+mod auth;
 mod database;
 mod dkim;
 mod dns;
@@ -32,12 +33,13 @@ pub(crate) use validate::validate_dns_name;
 mod webhook;
 
 pub use account::Account;
-pub use acme::Acme;
+pub use acme::{Acme, AcmeChallenge};
 pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};
 pub use api::Api;
 pub use arc::Arc;
+pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim};
 pub use dns::Dns;
@@ -197,6 +199,14 @@ pub struct Config {
 	/// Outbound give-up window in seconds: undelivered mail older than this is
 	/// bounced to the sender. Absent uses the built-in default (5 days).
 	pub queue_give_up_secs: Option<u64>,
+	/// Outbound wait after a recipient's first failed attempt, in seconds;
+	/// each later wait doubles. Absent uses 60 (one minute).
+	pub queue_retry_base_secs: Option<u64>,
+	/// Longest outbound wait between attempts, in seconds. Absent uses 3600.
+	pub queue_retry_cap_secs: Option<u64>,
+	/// Message age, in seconds, at which the one "delivery delayed" warning
+	/// is sent. Absent uses 14400 (four hours).
+	pub queue_delay_warning_secs: Option<u64>,
 	/// Delivery rules: route or flag locally delivered mail by sender/header.
 	#[serde(default)]
 	pub rules: Vec<crate::rules::Rule>,
@@ -341,6 +351,13 @@ pub struct Config {
 	/// Absent uses the secure defaults (strict outbound TLS).
 	#[serde(default)]
 	pub queue: Queue,
+	/// Authentication toggles. Absent keeps the historical default of
+	/// `scram = true`. Present with `scram = false` hides the mechanism on
+	/// the wire, refuses an explicit `AUTHENTICATE`/`AUTH` against it,
+	/// and prevents account-create and password-change paths from deriving
+	/// or storing a verifier.
+	#[serde(default)]
+	pub auth: Auth,
 	/// Alert rules: periodic metric comparisons that fire webhooks or email
 	/// when the configured condition holds. Absent or empty disables the
 	/// alert engine entirely (the default).
@@ -354,6 +371,11 @@ pub struct Config {
 	/// file as an unknown field, by design).
 	#[serde(skip, default)]
 	pub hold_outbound: bool,
+	/// Mail addresses and domains the file spells with capitals, each as a
+	/// line naming the entry and the lowercase form epistle uses for it.
+	/// Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub mixed_case: Vec<String>,
 }
 
 impl std::fmt::Debug for Config {
@@ -376,6 +398,9 @@ impl std::fmt::Debug for Config {
 			.field("srs_secret", &self.srs_secret.as_ref().map(|_| "***"))
 			.field("quota_bytes", &self.quota_bytes)
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
+			.field("queue_retry_base_secs", &self.queue_retry_base_secs)
+			.field("queue_retry_cap_secs", &self.queue_retry_cap_secs)
+			.field("queue_delay_warning_secs", &self.queue_delay_warning_secs)
 			.field("rules", &self.rules)
 			.field("scanner_hook_url", &self.scanner_hook_url)
 			.field("antispam", &self.antispam)
@@ -421,6 +446,7 @@ impl std::fmt::Debug for Config {
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)
+			.field("auth", &self.auth)
 			.field("alerts", &self.alerts)
 			.field("hold_outbound", &self.hold_outbound)
 			.finish()
@@ -713,3 +739,6 @@ max_connections_per_listener = 2048
 }
 
 mod parse;
+
+#[path = "normalize.rs"]
+mod normalize;

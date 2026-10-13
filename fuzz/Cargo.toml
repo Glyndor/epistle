@@ -67,5 +67,26 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "smtp_data"
+path = "fuzz_targets/smtp_data.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dkim_signature"
+path = "fuzz_targets/dkim_signature.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mime"
+path = "fuzz_targets/mime.rs"
+test = false
+doc = false
+bench = false
+
 # Detach from the parent crate's workspace.
 [workspace]

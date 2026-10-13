@@ -293,7 +293,8 @@ fn assistant_reprompts_on_a_semantically_invalid_public_ipv4() {
 	let config_path = dir.path().join("etc").join("mail.toml");
 	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
 	// The interactive assistant walks the questions in order:
-	// mode, hostname, domains (terminated by blank), public IPv4,
+	// mode, hostname, domains (terminated by blank), the first
+	// account (left blank to skip it), public IPv4,
 	// public IPv6, data dir, config path, then the six
 	// services + confirmation. The first IPv4 answer is the
 	// loopback (semantically wrong); the second is 8.8.8.8
@@ -302,6 +303,7 @@ fn assistant_reprompts_on_a_semantically_invalid_public_ipv4() {
 	let input = "manual\n\
 		mail.example.org\n\
 		example.org\n\
+		\n\
 		\n\
 		127.0.0.1\n\
 		8.8.8.8\n\

@@ -22,6 +22,18 @@ impl Session {
 			.into_iter()
 			.collect();
 		let mut response = String::new();
+		// RFC 3501 §6.3.8: `LIST "" ""` is the canonical hierarchy-
+		// separator discovery call. The reply is a `LIST` line for
+		// the root of the hierarchy with `\Noselect` (the root is
+		// never selectable itself) and the delimiter the regular
+		// mailboxes use. Skipped when the caller restricted the
+		// listing with `SUBSCRIBED` or `SPECIAL-USE`, both of which
+		// the root never has, so emitting it would be a misleading
+		// match for clients that treat the absence of `\Subscribed`
+		// as "nothing here".
+		if pattern.is_empty() && !select_subscribed && !select_special_use {
+			response.push_str("* LIST (\\Noselect) \"/\" \"\"\r\n");
+		}
 		for name in mailbox::list(&self.data_dir, &account) {
 			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
 			let special_use = helpers::special_use_attribute(&name);
@@ -53,12 +65,13 @@ impl Session {
 				}
 				attributes.push_str("\\HasNoChildren");
 			}
-			response.push_str(&format!("* LIST ({attributes}) \"/\" \"{name}\"\r\n"));
+			let wire = self.mailbox_astring(&name);
+			response.push_str(&format!("* LIST ({attributes}) \"/\" {wire}\r\n"));
 			// LIST-STATUS (RFC 5819): report the requested STATUS inline.
 			if !return_status.is_empty()
 				&& let Some(parts) = self.status_parts(&account, &name, return_status)
 			{
-				response.push_str(&format!("* STATUS \"{name}\" ({parts})\r\n"));
+				response.push_str(&format!("* STATUS {wire} ({parts})\r\n"));
 			}
 		}
 		response.push_str(&format!("{tag} OK LIST completed\r\n"));
@@ -76,7 +89,8 @@ impl Session {
 			return Output::text(format!("{tag} NO cannot open mailbox\r\n"));
 		};
 		Output::text(format!(
-			"* STATUS \"{mailbox}\" ({parts})\r\n{tag} OK STATUS completed\r\n"
+			"* STATUS {} ({parts})\r\n{tag} OK STATUS completed\r\n",
+			self.mailbox_astring(mailbox)
 		))
 	}
 
@@ -130,3 +144,7 @@ impl Session {
 #[cfg(test)]
 #[path = "list_status_tests_special_use.rs"]
 mod special_use_selection;
+
+#[cfg(test)]
+#[path = "list_status_tests_root.rs"]
+mod root_hierarchy;

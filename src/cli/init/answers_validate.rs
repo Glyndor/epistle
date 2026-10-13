@@ -35,13 +35,15 @@ fn check_domain(value: &str) -> Result<String, Invalid> {
 		Ok(norm) => Ok(norm),
 		Err(why) => {
 			let reason = match why {
-				crate::domain::DomainError::Invalid => "is not a valid FQDN".to_string(),
+				crate::domain::DomainError::Invalid => {
+					crate::util::address_reason::domain_reason(value)
+				}
 				crate::domain::DomainError::Confusable => {
 					"is confusable with another name".to_string()
 				}
 			};
 			Err(Invalid::Domain {
-				value: value.to_string(),
+				value: crate::util::address_reason::shorten(value),
 				reason,
 			})
 		}
@@ -558,6 +560,14 @@ pub(crate) fn validate(answers: &Answers) -> Result<Vec<Warning>, Vec<Invalid>> 
 	}
 	check_services(&answers.services, &mut errors, &mut warnings);
 	check_image(answers.image.as_deref(), &mut errors);
+	if let Some(first) = &answers.first_account
+		&& let Err(why) = first.check(&normalised_domains)
+	{
+		errors.push(Invalid::FirstAccount(why));
+	}
+	for (field, reason) in crate::cli::init::resources::problems(&answers.resources) {
+		errors.push(Invalid::Resources { field, reason });
+	}
 
 	if errors.is_empty() {
 		Ok(warnings)

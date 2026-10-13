@@ -30,6 +30,9 @@ const MAX_CONNECTIONS: usize = 500;
 /// after 30 minutes of inactivity; we enforce it to kill Slowloris sessions.
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// What a session gets when the server drains.
+const SHUTTING_DOWN: &[u8] = b"* BYE server shutting down\r\n";
+
 /// How often to poll for new messages during IDLE.
 const IDLE_POLL: Duration = Duration::from_secs(30);
 
@@ -56,6 +59,11 @@ pub struct Server {
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables AUTH=SCRAM-SHA-256-PLUS.
 	cbind_data: Option<Vec<u8>>,
+	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are offered on this
+	/// listener (the `[auth] scram` knob). `true` keeps the historical
+	/// behaviour; `false` hides both mechanisms in `CAPABILITY AUTH=` and
+	/// refuses an explicit `AUTHENTICATE` against them. PLAIN/LOGIN stay in.
+	scram_enabled: bool,
 	/// Max concurrent connections for this listener (back-pressure cap).
 	max_connections: usize,
 	/// At-rest crypto for stored message bodies, shared by every session.
@@ -64,6 +72,8 @@ pub struct Server {
 	/// literal read for APPEND/REPLACE) may stall before the connection is
 	/// dropped. Configurable so tests can drive a short deadline.
 	read_timeout: Duration,
+	/// The graceful stop this listener follows.
+	drain: Option<Arc<crate::shutdown::Drain>>,
 	/// Days to keep expunged messages in `<account>/.archive/` before the
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
@@ -98,9 +108,11 @@ impl Server {
 			quota_bytes: super::session::DEFAULT_QUOTA_BYTES,
 			oauth: None,
 			cbind_data: None,
+			scram_enabled: true,
 			max_connections: MAX_CONNECTIONS,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			read_timeout: DEFAULT_READ_TIMEOUT,
+			drain: None,
 			retention_days: 0,
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
@@ -140,6 +152,13 @@ impl Server {
 		self
 	}
 
+	/// Follow `drain`: stop accepting when it starts and close each
+	/// session with `* BYE` once its current command is done.
+	pub fn with_drain(mut self, drain: Arc<crate::shutdown::Drain>) -> Self {
+		self.drain = Some(drain);
+		self
+	}
+
 	/// Cap the idle / literal-read deadline. The default is 30 minutes
 	/// (RFC 9051 §5.4); production callers leave it alone, but the test
 	/// suite tightens it so a stalled APPEND/REPLACE literal does not stall
@@ -153,6 +172,14 @@ impl Server {
 	/// AUTH=SCRAM-SHA-256-PLUS.
 	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
 		self.cbind_data = Some(cert_hash);
+		self
+	}
+
+	/// Toggle the `[auth] scram` knob for this listener. `false` hides
+	/// SCRAM-SHA-256 and SCRAM-SHA-256-PLUS in `CAPABILITY AUTH=` and
+	/// refuses an explicit `AUTHENTICATE` against them; PLAIN/LOGIN stay in.
+	pub fn with_scram_enabled(mut self, enabled: bool) -> Self {
+		self.scram_enabled = enabled;
 		self
 	}
 
@@ -184,7 +211,8 @@ impl Server {
 		.with_crypto(self.crypto.clone())
 		.with_oauth(self.oauth.clone())
 		.with_retention_days(self.retention_days)
-		.with_auth_protocol(self.auth_protocol);
+		.with_auth_protocol(self.auth_protocol)
+		.with_scram_enabled(self.scram_enabled);
 		if let Some(cbind) = &self.cbind_data {
 			session = session.with_channel_binding(cbind.clone());
 		}
@@ -196,9 +224,24 @@ impl Server {
 
 	/// Accept connections forever.
 	pub async fn serve(self: Arc<Self>, listener: TcpListener) -> std::io::Result<()> {
+		self.serve_on(listener).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		self: Arc<Self>,
+		listener: A,
+	) -> std::io::Result<()> {
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		loop {
-			let (stream, peer) = listener.accept().await?;
+			let (stream, peer) = match &self.drain {
+				Some(drain) => tokio::select! {
+					accepted = accepting.next() => accepted,
+					() = drain.started() => return Ok(()),
+				},
+				None => accepting.next().await,
+			};
 			// A dual-stack `::` listener reports an IPv4 peer as
 			// `::ffff:a.b.c.d`; canonicalize so the CIDR allowlist the
 			// session consults at authentication sees a plain `IpAddr::V4`.
@@ -208,8 +251,10 @@ impl Server {
 				continue;
 			};
 			let server = Arc::clone(&self);
+			let tracked = self.drain.as_ref().map(crate::shutdown::Drain::track);
 			tokio::spawn(async move {
 				let _permit = permit;
+				let _tracked = tracked;
 				tracing::debug!(%peer, "imap connection accepted");
 				if let Err(error) = server.handle(stream, Some(peer.ip())).await {
 					tracing::debug!(%peer, %error, "imap connection ended with error");
@@ -227,7 +272,7 @@ impl Server {
 	{
 		let (mut stream, mut session): (Box<dyn Connection>, Session) = match self.tls_mode {
 			TlsMode::Implicit => {
-				let tls = self.tls.accept(stream).await?;
+				let tls = crate::tls::accept_within(&self.tls, stream).await?;
 				let identity = tls
 					.get_ref()
 					.1
@@ -264,7 +309,14 @@ impl Server {
 						} else {
 							self.read_timeout
 						};
-						match tokio::time::timeout(poll, stream.read(&mut buffer)).await {
+						let reading = stream.read(&mut buffer);
+						let Some(waited) =
+							crate::shutdown::or_drain(self.drain.as_deref(), poll, reading).await
+						else {
+							let _ = stream.write_all(SHUTTING_DOWN).await;
+							return Ok(());
+						};
+						match waited {
 							Ok(Ok(n)) => break n,
 							Ok(Err(e)) => return Err(e),
 							Err(_) => {
@@ -402,10 +454,12 @@ impl Server {
 							decoder.feed(&chunk[needed..read]);
 						}
 					}
-					// Now consume exactly two bytes for the trailer. The
-					// decoder keeps any surplus for the next command line.
-					let mut trailer = decoder.take_buffered(2);
-					while trailer.len() < 2 {
+					// Now consume exactly the trailer (CRLF, or `)` CRLF after
+					// a UTF8 APPEND literal). The decoder keeps any surplus
+					// for the next command line.
+					let expected = output.literal_trailer;
+					let mut trailer = decoder.take_buffered(expected.len());
+					while trailer.len() < expected.len() {
 						let read =
 							match tokio::time::timeout(self.read_timeout, stream.read(&mut chunk))
 								.await
@@ -421,7 +475,7 @@ impl Server {
 						if read == 0 {
 							return Ok(());
 						}
-						let needed = 2 - trailer.len();
+						let needed = expected.len() - trailer.len();
 						if read <= needed {
 							trailer.extend_from_slice(&chunk[..read]);
 						} else {
@@ -429,7 +483,7 @@ impl Server {
 							decoder.feed(&chunk[needed..read]);
 						}
 					}
-					if trailer == b"\r\n" {
+					if trailer == expected {
 						output = session.literal_done(&literal);
 					} else {
 						// Put the non-CRLF trailer bytes back into the
@@ -485,7 +539,7 @@ impl Server {
 				if output.upgrade_tls {
 					// Pre-handshake bytes are dropped: nothing buffered in
 					// plaintext can leak into the TLS session.
-					let tls = self.tls.accept(stream).await?;
+					let tls = crate::tls::accept_within(&self.tls, stream).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls
 						.get_ref()
@@ -516,27 +570,29 @@ impl Server {
 									let _ = stream.write_all(b"* BYE idle timeout\r\n").await;
 									return Ok(());
 								}
-								let read =
-									match tokio::time::timeout(IDLE_POLL, stream.read(&mut buffer))
-										.await
-									{
-										Ok(Ok(n)) => n,
-										Ok(Err(e)) => return Err(e),
-										Err(_) => {
-											// Poll interval expired; check for new messages.
-											if let Some(notification) = session.check_idle() {
-												if stream
-													.write_all(&notification.bytes)
-													.await
-													.is_err()
-												{
-													return Ok(());
-												}
-												let _ = stream.flush().await;
+								let reading = stream.read(&mut buffer);
+								let drain = self.drain.as_deref();
+								let Some(waited) =
+									crate::shutdown::or_drain(drain, IDLE_POLL, reading).await
+								else {
+									let _ = stream.write_all(SHUTTING_DOWN).await;
+									return Ok(());
+								};
+								let read = match waited {
+									Ok(Ok(n)) => n,
+									Ok(Err(e)) => return Err(e),
+									Err(_) => {
+										// Poll interval expired; check for new messages.
+										if let Some(notification) = session.check_idle() {
+											if stream.write_all(&notification.bytes).await.is_err()
+											{
+												return Ok(());
 											}
-											continue;
+											let _ = stream.flush().await;
 										}
-									};
+										continue;
+									}
+								};
 								if read == 0 {
 									return Ok(());
 								}
@@ -559,6 +615,10 @@ impl Server {
 mod tests;
 
 #[cfg(test)]
+#[path = "server_tests_drain.rs"]
+mod tests_drain;
+
+#[cfg(test)]
 #[path = "server_tests_compress.rs"]
 mod tests_compress;
 
@@ -566,9 +626,17 @@ mod tests_compress;
 #[path = "server_tests_literals.rs"]
 mod tests_literals;
 
+#[cfg(test)]
+#[path = "server_tests_utf8_append.rs"]
+mod tests_utf8_append;
+
 #[path = "server_discard.rs"]
 mod discard;
 
 #[cfg(test)]
 #[path = "server_tests_discard.rs"]
 mod tests_discard;
+
+#[cfg(test)]
+#[path = "server_tests_starttls.rs"]
+mod tests_starttls;

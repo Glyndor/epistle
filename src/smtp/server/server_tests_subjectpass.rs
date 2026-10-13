@@ -401,10 +401,15 @@ async fn the_band_scores_under_the_resolved_account_scope() {
 		sink.messages().is_empty(),
 		"no SubjectPass token was supplied, so the message must be challenged: {output}"
 	);
+	// The Bayes-thresholds pass also queries the scorer under the same
+	// resolved scope (it must, otherwise it cannot decide whether the
+	// score is above junk_at). Both passes agree on the account name:
+	// the per-recipient scope resolution is what the assertion is
+	// really about.
 	assert_eq!(
 		scorer.accounts_asked(),
-		vec!["alice".to_string()],
-		"the band asked the scorer for the envelope address, not the resolved account"
+		vec!["alice".to_string(), "alice".to_string()],
+		"both the Bayes-thresholds pass and the band asked for the resolved account, not the envelope address"
 	);
 }
 
@@ -430,8 +435,8 @@ async fn an_alias_recipient_scores_under_the_first_member_account() {
 	);
 	assert_eq!(
 		scorer.accounts_asked(),
-		vec!["bob".to_string()],
-		"the band must score the alias under its first member account"
+		vec!["bob".to_string(), "bob".to_string()],
+		"both passes asked for the alias's first member, not for sales@example.org"
 	);
 }
 

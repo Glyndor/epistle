@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
+use crate::antispam::PgGreylistStore;
 use crate::antispam::bans::BanStore;
+use crate::antispam::greylist::GreylistStore;
 use crate::config::Config;
 
 /// Bind a listener's socket and log it. Thin wrapper over the
@@ -25,49 +27,66 @@ pub(super) fn serve_http(
 	listener: TcpListener,
 	router: axum::Router,
 ) -> tokio::task::JoinHandle<std::io::Result<()>> {
-	tokio::spawn(async move {
-		axum::serve(listener, router)
-			.await
-			.map_err(std::io::Error::other)
-	})
+	tokio::spawn(crate::net::http_serve::serve(listener, router))
 }
 
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with
-/// accumulated delivery records, build the reports and queue them on the
-/// outbound spool.
+/// accumulated delivery records, build the reports and queue them through
+/// `sink` (so the outbound mail is DKIM-signed like any other).
 pub(super) fn spawn_dmarc_flush(
 	config: &Config,
 	spf_dns: Arc<dyn crate::spf::DnsLookup>,
+	sink: Arc<dyn crate::smtp::sink::MessageSink>,
 ) -> std::io::Result<()> {
 	let data_dir = config.data_dir.clone();
 	let hostname = config.hostname.clone();
-	let spool = crate::storage::FsSpool::open(&config.data_dir)?;
+	let org_email = format!("postmaster@{hostname}");
 	tokio::spawn(async move {
 		let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
 		interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 		loop {
 			interval.tick().await;
-			let ts = std::time::SystemTime::now()
+			let now = std::time::SystemTime::now();
+			let ts = now
 				.duration_since(std::time::UNIX_EPOCH)
 				.map(|d| d.as_secs())
 				.unwrap_or(0);
 			let today = crate::dmarc::aggregate::unix_to_day(ts);
-			let messages = crate::dmarc::aggregate::flush_pending(
-				&data_dir,
-				&today,
-				&hostname,
-				&format!("postmaster@{hostname}"),
-				&hostname,
-				spf_dns.as_ref(),
-			)
-			.await;
-			for message in messages {
-				if let Err(e) = spool.store(&message) {
-					tracing::warn!(%e, "failed to queue DMARC report");
-				}
-			}
+			let sender = crate::dmarc::aggregate::Sender {
+				data_dir: &data_dir,
+				org_name: &hostname,
+				org_email: &org_email,
+				reporting_domain: &hostname,
+				dns: spf_dns.as_ref(),
+				sink: sink.as_ref(),
+				now,
+			};
+			crate::dmarc::aggregate::flush_pending(&sender, &today).await;
 		}
 	});
+	Ok(())
+}
+
+/// Spawn the hourly TLS-RPT sender: each completed UTC day's recorded
+/// sessions become one report per `rua=` of the recipient domain, queued
+/// through `sink` (so `mailto:` reports are DKIM-signed like other mail) or
+/// POSTed. Not spawned with `[queue] tlsrpt_reports = false`.
+pub(super) fn spawn_tlsrpt_reports(
+	config: &Config,
+	dns: Arc<dyn crate::spf::DnsLookup>,
+	sink: Arc<dyn crate::smtp::sink::MessageSink>,
+) -> std::io::Result<()> {
+	if !config.queue.tlsrpt_reports {
+		return Ok(());
+	}
+	let poster = crate::tlsrpt::send::HttpsPoster::new().map_err(std::io::Error::other)?;
+	tokio::spawn(crate::tlsrpt::send::run(
+		config.data_dir.clone(),
+		config.hostname.clone(),
+		dns,
+		sink,
+		Arc::new(poster),
+	));
 	Ok(())
 }
 
@@ -126,12 +145,24 @@ pub(super) async fn build_oauth_verifier(
 				.redirect(reqwest::redirect::Policy::none())
 				.build()
 				.map_err(|e| std::io::Error::other(format!("oauth http client: {e}")))?;
-			let keys = crate::oauth::oidc::fetch_keys(&client, &discovery_url, default_alg)
-				.await
-				.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
+			let keys = crate::oauth::oidc::fetch_keys(
+				&client,
+				&discovery_url,
+				default_alg,
+				oauth.allow_private_jwks,
+				&crate::oauth::oidc::SystemResolver,
+			)
+			.await
+			.map_err(|e| std::io::Error::other(format!("oauth discovery: {e}")))?;
 			let verifier =
 				crate::oauth::OauthVerifier::from_jwks(&oauth.issuer, &oauth.audience, keys);
-			spawn_jwks_refresh(verifier.jwks_cache(), client, discovery_url, default_alg);
+			spawn_jwks_refresh(
+				verifier.jwks_cache(),
+				client,
+				discovery_url,
+				default_alg,
+				oauth.allow_private_jwks,
+			);
 			verifier
 		}
 		(None, None) => unreachable!("validate() rejects the no-source case"),
@@ -139,14 +170,25 @@ pub(super) async fn build_oauth_verifier(
 	Ok(Some(Arc::new(verifier)))
 }
 
-/// Build the built-in OAuth authorization server from `[oauth] signing_key`, or
+/// Build the built-in OAuth authorization server from `[oauth] signing_key` or
+/// `signing_key_file`, or
 /// `None` when no signing key is configured (the `/oauth/*` grant routes then
 /// stay unmounted — fail closed). The signed tokens carry the configured
 /// issuer/audience and verify against the configured `public_key`.
-pub(super) fn build_authz_server(config: &Config) -> Option<crate::api::oauth::AuthzServer> {
-	let oauth = config.oauth.as_ref()?;
-	let signing_key = oauth.signing_key.as_ref()?;
-	crate::api::oauth::AuthzServer::new(signing_key, &oauth.issuer, &oauth.audience)
+pub(super) fn build_authz_server(
+	config: &Config,
+) -> std::io::Result<Option<crate::api::oauth::AuthzServer>> {
+	let Some(oauth) = config.oauth.as_ref() else {
+		return Ok(None);
+	};
+	let Some(signing_key) = oauth.signing_key_material()? else {
+		return Ok(None);
+	};
+	Ok(crate::api::oauth::AuthzServer::new(
+		&signing_key,
+		&oauth.issuer,
+		&oauth.audience,
+	))
 }
 
 /// Map the configured algorithm name to a [`crate::jwt::Algorithm`], the default
@@ -167,6 +209,7 @@ fn spawn_jwks_refresh(
 	client: reqwest::Client,
 	discovery_url: crate::net::HttpsUrl,
 	default_alg: crate::jwt::Algorithm,
+	allow_private_jwks: bool,
 ) {
 	let Some(cache) = cache else {
 		return;
@@ -174,9 +217,18 @@ fn spawn_jwks_refresh(
 	tokio::spawn(async move {
 		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
 		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		let resolver = crate::oauth::oidc::SystemResolver;
 		loop {
 			ticker.tick().await;
-			match crate::oauth::oidc::fetch_keys(&client, &discovery_url, default_alg).await {
+			match crate::oauth::oidc::fetch_keys(
+				&client,
+				&discovery_url,
+				default_alg,
+				allow_private_jwks,
+				&resolver,
+			)
+			.await
+			{
 				Ok(keys) => {
 					if let Ok(mut guard) = cache.write() {
 						*guard = keys;
@@ -208,6 +260,23 @@ pub(super) async fn connect_database(
 	metrics: &crate::metrics::Metrics,
 ) -> std::io::Result<Option<sqlx::PgPool>> {
 	let Some(db) = &config.database else {
+		// No `[database]` at all: warn once about which antispam features
+		// need one and are silently off. Mail still flows; the operator
+		// sees this in the same startup window every other warning lands
+		// in, so a misconfigured install surfaces without log scraping.
+		// The warning is omitted when the install is clearly minimal
+		// (no greylist, no Bayes, no reputation-aware delivery at all):
+		// in that case the absence is not surprising.
+		let greylist_off = config.greylist_delay_secs == 0;
+		let subjectpass_off = !config.subjectpass.enabled;
+		if !greylist_off || !subjectpass_off {
+			tracing::warn!(
+				"antispam: no [database] configured. The Bayes classifier, \
+				 per-domain reputation, persistent auth-ban storage, and \
+				 greylist persistence are off; mail flows unfiltered. \
+				 Add [database] to enable them."
+			);
+		}
 		return Ok(None);
 	};
 	match crate::db::connect(
@@ -472,6 +541,10 @@ pub(super) fn spawn_ban_sweep(pool: Option<sqlx::PgPool>) {
 #[path = "serve_tasks_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "serve_tasks_tests_no_database.rs"]
+mod tests_no_database;
+
 /// Build the optional ARC sealer from `[arc]`: a DKIM-format ed25519 key
 /// under the server hostname. Absent config yields `None`; a key that does
 /// not load is fatal (fail closed), so a misconfigured sealer never lets
@@ -490,28 +563,63 @@ pub(super) fn build_arc_sealer(
 	))))
 }
 
-/// Build the shared in-memory greylist when `greylist_delay_secs` is set,
-/// and spawn the hourly prune that drops triplets older than a day so the
-/// map stays bounded. `None` when greylisting is off.
-pub(super) fn build_greylist(
+/// Build the shared greylist store when `greylist_delay_secs` is set. With
+/// a configured `[database]` the state lives in PostgreSQL and survives a
+/// restart; without one, the in-memory store is used and the operator gets
+/// a startup line saying so. In either case the hourly sweep drops triplets
+/// older than a day so the table never grows without bound. `None` when
+/// greylisting is disabled.
+pub(super) async fn build_greylist(
 	config: &Config,
-) -> Option<Arc<crate::antispam::greylist::MemoryGreylist>> {
-	(config.greylist_delay_secs > 0).then(|| {
-		let store = Arc::new(crate::antispam::greylist::MemoryGreylist::new());
-		let prune_store = Arc::clone(&store);
-		tokio::spawn(async move {
-			let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-			loop {
-				interval.tick().await;
-				let now = std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.map(|d| d.as_secs())
-					.unwrap_or(0);
-				prune_store.prune(now, 86_400);
-			}
-		});
-		store
-	})
+	pool: Option<&sqlx::PgPool>,
+) -> Option<Arc<dyn crate::antispam::greylist::GreylistStore>> {
+	if config.greylist_delay_secs == 0 {
+		return None;
+	}
+	// Lifetime in seconds for an unseen triplet. Matches the memory store's
+	// historical default (one day); the constant lives here so the
+	// sweep task and the SQL store agree.
+	const LIFETIME_SECS: u64 = 24 * 3600;
+	let store: Arc<dyn crate::antispam::greylist::GreylistStore> = match pool {
+		Some(pool) => {
+			tracing::info!("greylist: using PostgreSQL store; triplets survive restarts");
+			let pg = Arc::new(PgGreylistStore::new(pool.clone()));
+			let store = Arc::clone(&pg) as Arc<dyn crate::antispam::greylist::GreylistStore>;
+			tokio::spawn(async move {
+				let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+				loop {
+					interval.tick().await;
+					let now = std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.map(|d| d.as_secs())
+						.unwrap_or(0);
+					pg.sweep(now, LIFETIME_SECS).await;
+				}
+			});
+			store
+		}
+		None => {
+			tracing::warn!(
+				"greylist: no [database] configured; using the in-memory store. State is lost on restart, so every legitimate sender waits out the delay once per server reload. Configure [database] to make greylist persistent."
+			);
+			let mem: Arc<dyn crate::antispam::greylist::GreylistStore> =
+				Arc::new(crate::antispam::greylist::MemoryGreylist::new());
+			let prune_store = Arc::clone(&mem);
+			tokio::spawn(async move {
+				let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+				loop {
+					interval.tick().await;
+					let now = std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.map(|d| d.as_secs())
+						.unwrap_or(0);
+					prune_store.sweep(now, LIFETIME_SECS).await;
+				}
+			});
+			mem
+		}
+	};
+	Some(store)
 }
 
 #[path = "serve_bayes.rs"]

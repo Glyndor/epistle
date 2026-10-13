@@ -114,6 +114,7 @@ fn fixture(zone: &str, signing_domains: &[&str]) -> Fixture {
 		key_file,
 		rotated_at: 0,
 		previous: None,
+		pending: None,
 	};
 	std::fs::write(
 		root.join("dkim-rotation.json"),
@@ -225,6 +226,7 @@ async fn rotate_keeps_old_selector_when_one_upsert_fails() {
 		key_file: key_file.clone(),
 		rotated_at: 0,
 		previous: None,
+		pending: None,
 	};
 	std::fs::write(
 		root.join("dkim-rotation.json"),
@@ -288,6 +290,7 @@ async fn rotate_skips_when_signing_domains_list_is_empty() {
 		key_file,
 		rotated_at: 0,
 		previous: None,
+		pending: None,
 	};
 	std::fs::write(
 		root.join("dkim-rotation.json"),

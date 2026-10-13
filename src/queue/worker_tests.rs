@@ -29,10 +29,11 @@ impl Connector for LoopbackConnector {
 			.with_directory(directory);
 			let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
 			tokio::spawn(async move { server.handle(server_stream, None).await });
-			Ok((
+			Ok(crate::queue::resolver::Connection::new(
 				Box::new(client_stream) as BoxedStream,
 				"mx.remote.example".to_string(),
-			))
+			)
+			.with_mx(crate::queue::resolver::MxSecurity::Secure))
 		})
 	}
 }
@@ -76,13 +77,13 @@ impl crate::spf::DnsLookup for DaneDns {
 		_name: &str,
 	) -> std::pin::Pin<
 		Box<
-			dyn Future<Output = Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure>>
+			dyn Future<Output = Result<crate::dane::rrset::TlsaRrset, crate::spf::DnsFailure>>
 				+ Send
 				+ '_,
 		>,
 	> {
 		let record = self.record.clone();
-		Box::pin(async move { Ok(vec![record]) })
+		Box::pin(async move { Ok(crate::dane::rrset::TlsaRrset::Usable(vec![record])) })
 	}
 }
 
@@ -124,7 +125,7 @@ impl crate::spf::DnsLookup for TlsaTempFailDns {
 		_name: &str,
 	) -> std::pin::Pin<
 		Box<
-			dyn Future<Output = Result<Vec<crate::dane::tlsa::TlsaRecord>, crate::spf::DnsFailure>>
+			dyn Future<Output = Result<crate::dane::rrset::TlsaRrset, crate::spf::DnsFailure>>
 				+ Send
 				+ '_,
 		>,
@@ -134,7 +135,7 @@ impl crate::spf::DnsLookup for TlsaTempFailDns {
 }
 
 /// Connector that always fails with a transient error.
-struct DownConnector;
+pub(super) struct DownConnector;
 
 impl Connector for DownConnector {
 	fn connect(&self, _domain: &str, _policy: Option<&crate::mtasts::Policy>) -> ConnectFuture<'_> {

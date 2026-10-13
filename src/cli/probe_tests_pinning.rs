@@ -233,3 +233,29 @@ fn probe_pins_the_acme_certificate_serve_presents() {
 		"probe must pin the renewed certificate, not the bootstrap one"
 	);
 }
+
+#[tokio::test]
+async fn autoconfigs_listener_is_probed_over_tls() {
+	// The HTTPS autodiscovery listener: the probe completes the pinned
+	// handshake and then reads an HTTP status line inside it.
+	let pair = Pair::build();
+	let port = spawn_tls_server(
+		pair.a_der.clone(),
+		pair.a_key_pem.clone(),
+		b"HTTP/1.1 404 Not Found\r\n\r\n",
+	)
+	.await;
+	let listener = listener(ListenerKind::Autoconfigs, port);
+	let (config, _dir) = config_with_tls(
+		listener,
+		Some(pair.a_path.clone()),
+		Some(pair.a_path.clone()),
+	);
+	let cert_path = config.tls.as_ref().unwrap().cert_file.clone();
+	let results = probe_all(&config.listeners, Some(cert_path.as_path()))
+		.await
+		.expect("probe");
+	let line = &results[0];
+	assert!(line.ok, "HTTPS autoconfig listener must probe ok: {line:?}");
+	assert_eq!(line.kind, "autoconfigs");
+}

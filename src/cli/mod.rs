@@ -1,6 +1,8 @@
 //! Command-line interface: argument parsing and command dispatch.
 
 mod account;
+mod account_json;
+mod account_name;
 mod accounts;
 mod alert;
 mod alias;
@@ -12,30 +14,40 @@ mod autoconfig;
 mod autodiscover;
 mod backup;
 mod ban;
+mod completions;
 mod config_check;
 pub mod config_edit;
 mod container_db;
+mod db_harden;
+mod db_upgrade;
 mod dkim_cli;
 mod dkim_show;
 mod dns_provider;
 mod dns_records;
 mod domain;
+mod exit;
 mod export;
 mod import;
 mod init;
+mod json_out;
+mod legacy;
 mod limits;
 mod local;
 mod masked;
 mod mobileconfig;
 mod mta_sts_serve;
+mod pick;
 mod probe;
+mod prompt;
 mod queue;
 mod relay;
 mod report_abuse;
 mod reports;
 mod resource;
+mod role_addresses;
 mod serve;
 mod serve_dkim;
+mod serve_queue;
 mod serve_ratelimit;
 mod serve_smtp_state;
 mod serve_tasks;
@@ -44,13 +56,18 @@ mod service;
 mod service_edit;
 mod srv;
 mod stack;
+mod stack_dumps;
+mod stack_health;
+mod stack_rollback;
 mod stack_socket;
 mod stack_started;
 mod stack_update;
 mod status;
 mod storage_blobs;
 mod style;
+mod subid;
 mod suppression;
+mod term;
 mod tls_cli;
 #[cfg(test)]
 pub(crate) mod tracing_capture;
@@ -64,8 +81,9 @@ mod webhook_admin;
 /// deserialise the `epistle init --print-answers` output without
 /// depending on the otherwise-private `init` module.
 pub use init::Answers;
+pub use pick::run_from_env;
 
-use util::{generate_secret, read_line};
+use util::generate_secret;
 
 use std::path::PathBuf;
 
@@ -74,12 +92,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::directory_store::removal::QueuePolicy;
-
 const DEFAULT_CONFIG: &str = "/etc/epistle/mail.toml";
 
-/// Headless mail server: SMTP, IMAP and modern email security through an
-/// API and CLI.
+/// Headless mail server: SMTP, IMAP and email security, run by API and CLI.
 #[derive(Debug, Parser)]
 #[command(name = "epistle", version, disable_help_subcommand = true)]
 pub struct Cli {
@@ -137,21 +152,27 @@ pub enum Command {
 		#[arg(long, value_name = "BITS", default_value_t = 2048)]
 		bits: u32,
 	},
+	/// Generate an at-rest message-encryption key and print it.
+	///
 	/// Generate a base64 32-byte at-rest message-encryption key and print it to
-	/// stdout. Store it off the data disk (an env var or a key file), then point
-	/// `[storage]` at it; never written into data_dir.
+	/// stdout. Store it off the data disk (an env var or a key file), then
+	/// point `[storage]` at it; never written into data_dir.
 	StorageKeygen,
-	/// Generate an ES256 key pair for the built-in OAuth authorization server and
-	/// write it to a file only the owner can read: the base64 PKCS#8 private key
-	/// for `[oauth] signing_key` and the matching base64 public point for
-	/// `[oauth] public_key`. The private key is never printed.
+	/// Generate the ES256 key pair for the built-in OAuth server.
+	///
+	/// Generate an ES256 key pair for the built-in OAuth authorization server
+	/// and write it to a file only the owner can read: the base64 PKCS#8
+	/// private key for `[oauth] signing_key` and the matching base64 public
+	/// point for `[oauth] public_key`. The private key is never printed.
 	OauthKeygen {
 		/// Where to write the key pair (mode 0600; an existing file is refused).
 		#[arg(long, value_name = "FILE")]
 		out: PathBuf,
 	},
-	/// Export an account's mailboxes to an mbox stream on stdout (backup), or to
-	/// a Maildir tree with `--maildir`.
+	/// Export an account's mail as mbox on stdout or as Maildir.
+	///
+	/// Export an account's mailboxes to an mbox stream on stdout (backup), or
+	/// to a Maildir tree with `--maildir`.
 	Export {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
@@ -163,6 +184,8 @@ pub enum Command {
 		#[arg(long, value_name = "DIR")]
 		maildir: Option<PathBuf>,
 	},
+	/// Import mail into an account from mbox on stdin or a Maildir.
+	///
 	/// Import mail into an account (migration): an mbox stream from stdin, or a
 	/// Maildir tree with `--maildir`.
 	Import {
@@ -177,6 +200,8 @@ pub enum Command {
 		#[arg(long, value_name = "DIR")]
 		maildir: Option<PathBuf>,
 	},
+	/// Write a consistent backup snapshot (gzip tar) to stdout.
+	///
 	/// Write a consistent backup snapshot (gzip tar) to stdout: the filesystem
 	/// mail store plus a pg_dump when a database is configured.
 	Backup {
@@ -184,14 +209,34 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
+	/// Restore a backup tar.gz read from stdin.
+	///
 	/// Replay a backup tar.gz (read from stdin) over the data directory and,
-	/// when a database is configured, into the database. The hard rule
-	/// matches `backup`: a `database.sql` in the archive that cannot be
-	/// loaded is a restore error, not a silent skip.
+	/// when a database is configured, into the database. The hard rule matches
+	/// `backup`: a `database.sql` in the archive that cannot be loaded is a
+	/// restore error, not a silent skip. Refuses to overwrite an existing
+	/// `data_dir` or run against a live mail service unless `--force` is set;
+	/// `--dry-run` lists the entries that would be written and changes nothing.
+	/// `--yes` skips the interactive confirmation that restore prompts on a
+	/// terminal; it does not imply `--force`.
 	Restore {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// Allow overwriting a non-empty data dir or restoring while the
+		/// mail service is running. Without this flag, the restore
+		/// refuses so a stray command cannot destroy live data.
+		#[arg(long)]
+		force: bool,
+		/// List the entries the restore would write, then exit without
+		/// touching `data_dir` or restarting the service.
+		#[arg(long)]
+		dry_run: bool,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Verify on-disk data integrity (run before an upgrade).
 	Verify {
@@ -199,6 +244,8 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
+	/// Check published DNS records against what epistle expects.
+	///
 	/// Check published DNS records against what epistle expects and report
 	/// drift (read-only; queries DNS, changes nothing).
 	VerifyDns {
@@ -206,6 +253,8 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
+	/// Print the DNS records this deployment should publish.
+	///
 	/// Print the DNS records this deployment should publish (SPF, DKIM, DMARC,
 	/// MTA-STS, MX and a DANE TLSA record when a certificate is present).
 	DnsRecords {
@@ -213,6 +262,8 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
+	/// Print an Apple `.mobileconfig` profile for an account.
+	///
 	/// Print an Apple `.mobileconfig` profile for an account (for the user to
 	/// install on iOS/macOS to auto-configure Mail).
 	Mobileconfig {
@@ -223,12 +274,14 @@ pub enum Command {
 		#[arg(long, value_name = "NAME")]
 		account: String,
 	},
-	/// Print the RFC 6186 service-discovery SRV records to publish in DNS.
+	/// Print the RFC 6186 SRV records to publish in DNS.
 	SrvRecords {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
+	/// Print the Thunderbird autoconfig XML for a domain.
+	///
 	/// Print the Thunderbird autoconfig XML for a domain (host it at
 	/// `autoconfig.<domain>/mail/config-v1.1.xml`).
 	Autoconfig {
@@ -239,6 +292,8 @@ pub enum Command {
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
 	},
+	/// Print the Microsoft Autodiscover v1 XML for a domain.
+	///
 	/// Print the Microsoft Autodiscover v1 XML for a domain (host it at
 	/// `autodiscover.<domain>/autodiscover/autodiscover.xml`).
 	Autodiscover {
@@ -249,22 +304,27 @@ pub enum Command {
 		#[arg(long, value_name = "DOMAIN")]
 		domain: Option<String>,
 	},
-	/// List the outbound suppression list (addresses that hard-bounced),
-	/// remove one with `--remove`, or add one with `add`.
+	/// Manage the outbound suppression list.
+	///
+	/// Addresses land on the list when they hard-bounce; mail queued for a
+	/// suppressed address is dropped without a bounce. Without an action
+	/// the command lists, like `suppression list`.
 	Suppression {
-		/// Path to the configuration file; accepted before or after `add`.
+		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
-		/// Suppression action; without one the command lists or removes.
+		/// Suppression action (`list`, `add`, `remove`).
 		#[command(subcommand)]
 		action: Option<suppression::SuppressionCli>,
-		/// Remove this address from the suppression list instead of listing.
-		#[arg(long, value_name = "ADDRESS")]
+		/// Older form of `suppression remove ADDRESS`.
+		#[arg(long, value_name = "ADDRESS", hide = true)]
 		remove: Option<String>,
-		/// Operate on this sending account's per-account list, not the global one.
-		#[arg(long, value_name = "ACCOUNT")]
+		/// Older form of `--account` for the list/remove without an action.
+		#[arg(long, value_name = "ACCOUNT", hide = true)]
 		account: Option<String>,
 	},
+	/// Turn a message on stdin into an RFC 5965 ARF abuse report.
+	///
 	/// Read an offending message on stdin and print an RFC 5965 ARF abuse
 	/// report (send it to the offending sender's abuse address).
 	ReportAbuse {
@@ -272,48 +332,18 @@ pub enum Command {
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 	},
-	/// List the configured mail accounts.
-	Accounts {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-	},
-	/// Create a mail account, reading the password from stdin (one line).
-	AccountAdd {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-		/// The account name.
-		#[arg(long, value_name = "NAME")]
-		name: String,
-		/// An email address for the account (repeatable).
-		#[arg(long = "address", value_name = "ADDR", required = true)]
-		addresses: Vec<String>,
-	},
-	/// Remove a dynamic account and its whole footprint (mailbox,
-	/// masked addresses, app passwords, per-account suppression,
-	/// queued outbound mail). `--queue` chooses what to do with mail
-	/// in the outbound queue on behalf of the account: `discard` drops
-	/// it, `drain` leaves it to be delivered. The choice is required:
-	/// dropping mail silently is the worse default.
-	AccountRemove {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-		/// The account name.
-		#[arg(long, value_name = "NAME")]
-		name: String,
-		/// What to do with queued outbound mail from the account:
-		/// `discard` (drop it) or `drain` (leave it for delivery).
-		#[arg(long = "queue", value_name = "POLICY", value_parser = accounts::parse_queue_policy)]
-		queue: QueuePolicy,
-	},
+	/// The older flat commands (`accounts`, `account-add`, `app-passwords`,
+	/// `api-key-create`, ...), kept so existing scripts still parse.
+	#[command(flatten)]
+	Legacy(legacy::Legacy),
+	/// Manage accounts: list, add, remove, and change one in place.
+	///
 	/// Operate on a single dynamic account in place: change its password,
-	/// enable or disable authentication, add or remove a delivery address,
-	/// set the storage quota and the protocol allowlist, or print the
-	/// public view. Each subcommand refuses a static account with a hint
-	/// to edit the config file. The legacy top-level `account-add` and
-	/// `account-remove` commands remain available for compatibility.
+	/// enable or disable authentication, add or remove a delivery address, set
+	/// the storage quota and the protocol allowlist, or print the public view.
+	/// Each subcommand refuses a static account with a hint to edit the config
+	/// file. The legacy top-level `account-add` and `account-remove` commands
+	/// remain available for compatibility.
 	Account {
 		/// Path to the configuration file. Global so it can appear
 		/// before or after the sub-action; the dispatch test passes it
@@ -329,8 +359,9 @@ pub enum Command {
 		#[command(subcommand)]
 		action: account::Subcommand,
 	},
-	/// Inspect and steer the outbound delivery queue. Without an action it
-	/// lists the queue, like `queue list`.
+	/// Inspect and steer the outbound delivery queue.
+	///
+	/// Without an action it lists the queue, like `queue list`.
 	Queue {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
@@ -339,6 +370,8 @@ pub enum Command {
 		#[command(subcommand)]
 		action: Option<queue::QueueCli>,
 	},
+	/// Manage authentication bans and the allow list.
+	///
 	/// Manage authentication bans and the allow list (needs `[database]`).
 	/// Changes apply to the running server immediately.
 	Ban {
@@ -349,8 +382,10 @@ pub enum Command {
 		#[command(subcommand)]
 		action: ban::BanCli,
 	},
-	/// Manage an account's masked addresses. Changes apply to the running
-	/// server within a couple of seconds, with no restart.
+	/// Manage an account's masked addresses.
+	///
+	/// Changes apply to the running server within a couple of seconds, with no
+	/// restart.
 	Masked {
 		/// Path to the configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
@@ -359,94 +394,22 @@ pub enum Command {
 		#[command(subcommand)]
 		action: masked::MaskedCli,
 	},
+	/// Manage app passwords (extra IMAP/SMTP credentials).
+	AppPassword {
+		/// Path to the configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// App password action (`list`, `create`, `revoke`).
+		#[command(subcommand)]
+		action: app_passwords::AppPasswordCli,
+	},
 	/// Hash a bearer token for use in `[api] token_hash`.
 	///
 	/// Reads the plaintext token from stdin (one line). Prints a
 	/// `sha256:<hex>` string to stdout, ready to paste into the config file.
 	TokenHash,
-	/// Create an app password for an account (a secondary IMAP/SMTP credential).
-	/// The generated secret is printed once and never stored.
-	AppPasswordCreate {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-		/// The account the app password belongs to.
-		#[arg(long, value_name = "NAME")]
-		account: String,
-		/// A label identifying this app password (e.g. "iphone").
-		#[arg(long, value_name = "LABEL")]
-		label: String,
-		/// Optional expiry as Unix epoch seconds.
-		#[arg(long, value_name = "EPOCH")]
-		expires_at: Option<u64>,
-		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
-		#[arg(long, value_name = "CIDR")]
-		ip_cidr: Option<String>,
-	},
-	/// List every account's app passwords (never the secret).
-	AppPasswords {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-	},
-	/// Revoke an account's app password by label.
-	AppPasswordRevoke {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-		/// The account the app password belongs to.
-		#[arg(long, value_name = "NAME")]
-		account: String,
-		/// The label of the app password to revoke.
-		#[arg(long, value_name = "LABEL")]
-		label: String,
-	},
-	/// Create a management API key. The generated key is printed once and never
-	/// stored.
-	ApiKeyCreate {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-		/// A label identifying this API key (e.g. "ci").
-		#[arg(long, value_name = "LABEL")]
-		label: String,
-		/// Optional expiry as Unix epoch seconds.
-		#[arg(long, value_name = "EPOCH")]
-		expires_at: Option<u64>,
-		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).
-		#[arg(long, value_name = "CIDR")]
-		ip_cidr: Option<String>,
-		/// Permissions granted to this key (repeat to grant more than one:
-		/// `read`, `write`, `send`, `scim`). Required at least once — an
-		/// unscoped key is admin-equivalent, which is exactly what the scopes
-		/// field exists to prevent.
-		#[arg(
-			long = "scope",
-			value_name = "SCOPE",
-			value_parser = api_keys::parse_scope,
-		)]
-		scopes: Vec<String>,
-		/// Confine this key to a domain (repeat for more). Omitted, the key
-		/// reaches every configured domain, which is what every key did
-		/// before this option existed.
-		#[arg(long = "domain", value_name = "DOMAIN")]
-		domains: Vec<String>,
-	},
-	/// List the management API keys (never the key).
-	ApiKeys {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-	},
-	/// Revoke a management API key by label.
-	ApiKeyRevoke {
-		/// Path to the configuration file.
-		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
-		config: PathBuf,
-		/// The label of the API key to revoke.
-		#[arg(long, value_name = "LABEL")]
-		label: String,
-	},
+	/// Inspect and restore an account's expunged-message archive.
+	///
 	/// Inspect and operate on the per-account expunged-message archive
 	/// (`<account>/.archive/`), enabled by `[storage] deleted_retention_days`.
 	/// Each subcommand targets one account.
@@ -455,9 +418,11 @@ pub enum Command {
 		#[command(subcommand)]
 		action: archive::Subcommand,
 	},
-	/// Summarise what receivers told us via DMARC aggregate reports and
-	/// TLS-RPT reports for the last `--days` days (default 7). Reads the
-	/// JSONL store under `data_dir/reports/`; never writes to it.
+	/// Summarise recent DMARC aggregate and TLS-RPT reports.
+	///
+	/// Summarise what receivers told us via DMARC aggregate reports and TLS-RPT
+	/// reports for the last `--days` days (default 7). Reads the JSONL store
+	/// under `data_dir/reports/`; never writes to it.
 	Reports {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
@@ -467,10 +432,12 @@ pub enum Command {
 		#[arg(long, value_name = "N", default_value_t = reports::DEFAULT_DAYS)]
 		days: u32,
 	},
+	/// Run a self-contained loopback test server.
+	///
 	/// Self-contained loopback server: a test harness that touches nothing
 	/// outside `--dir` and the loopback interface. Generates a working
-	/// directory on first run, reuses it byte for byte on later runs,
-	/// and never opens an outbound SMTP connection. Not a deployment.
+	/// directory on first run, reuses it byte for byte on later runs, and never
+	/// opens an outbound SMTP connection. Not a deployment.
 	Local {
 		/// Directory the harness writes its state into. Created if missing.
 		#[arg(long, value_name = "DIR")]
@@ -481,11 +448,13 @@ pub enum Command {
 		#[arg(long, value_name = "N", default_value_t = local::DEFAULT_PORT_BASE)]
 		port_base: u16,
 	},
+	/// First-run setup: check answers, make keys, write the config.
+	///
 	/// First-run setup: validate the answers, generate the keys, write the
-	/// configuration file. Interactive when no `--answers` file is given.
-	/// DNS publishing and public-address detection are not implemented in
-	/// this build; the plan reports those steps as not implemented so the
-	/// operator knows what to expect.
+	/// configuration file. Interactive when no `--answers` file is given. DNS
+	/// publishing and public-address detection are not implemented in this
+	/// build; the plan reports those steps as not implemented so the operator
+	/// knows what to expect.
 	Init {
 		/// Read answers from this TOML file instead of asking interactively.
 		#[arg(long, value_name = "FILE")]
@@ -497,6 +466,8 @@ pub enum Command {
 		#[arg(long)]
 		print_answers: bool,
 	},
+	/// Manage the configured mail domains and domain aliases.
+	///
 	/// Operate on the configured mail domains: list, show, add, remove, or edit
 	/// the `domain_aliases` map.
 	Domain {
@@ -596,6 +567,8 @@ pub enum Command {
 		#[command(subcommand)]
 		action: service::ServiceCli,
 	},
+	/// Report whether the mail server is working, area by area.
+	///
 	/// Report whether the mail server is working: one line per area (config,
 	/// ports, tls, dns, db, antivirus, queue, disk). Exits 1 when any area
 	/// fails. Sends no mail and authenticates nothing.
@@ -619,7 +592,9 @@ pub enum Command {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Show or edit antispam knobs (DNSBL lists, greylist delay, clamd, LLM).
+	/// Show or edit the antispam settings.
+	///
+	/// DNSBL lists, greylist delay, clamd and the LLM classifier.
 	Antispam {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
@@ -631,7 +606,9 @@ pub enum Command {
 		#[command(subcommand)]
 		action: antispam::AntispamCli,
 	},
-	/// Show, add, remove or edit multi-target aliases; enable or disable them.
+	/// Manage multi-target aliases.
+	///
+	/// Show, add, remove or edit them; enable or disable them.
 	Alias {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
@@ -643,11 +620,12 @@ pub enum Command {
 		#[command(subcommand)]
 		action: alias::AliasCli,
 	},
-	/// Drive the `podup` command-line against the compose file
-	/// `epistle init` writes under `<data_dir>/compose/compose.yaml`.
-	/// Subcommands: `up`, `down`, `ps [--json]`, `logs [--follow] [<service>]`,
-	/// `restart [<service>]`, `update`. Runs `podup` underneath; never replaces
-	/// it.
+	/// Drive `podup` against the compose file `epistle init` writes.
+	///
+	/// Drive the `podup` command-line against the compose file `epistle init`
+	/// writes under `<data_dir>/compose/compose.yaml`. Subcommands: `up`,
+	/// `down`, `ps [--json]`, `logs [--follow] [<service>]`, `restart
+	/// [<service>]`, `update`. Runs `podup` underneath; never replaces it.
 	Stack {
 		/// Configuration file, defaults to the path written by packaged init.
 		/// Global so it can appear before or after the stack subcommand.
@@ -662,19 +640,31 @@ pub enum Command {
 		#[command(subcommand)]
 		action: stack::StackCli,
 	},
-	/// Show the DKIM signing key in service or force a rotation. Rotation is
-	/// queued for the running server, which stays the only writer of keys and
-	/// DNS records.
+	/// Database maintenance for the stack's PostgreSQL.
+	Db {
+		/// Configuration file; accepted before or after the action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Database action (`upgrade`).
+		#[command(subcommand)]
+		action: db_upgrade::DbCli,
+	},
+	/// Show the DKIM key in service, rotate it or clean up old keys.
+	///
+	/// Rotation and cleanup are queued for the running server, which stays
+	/// the only writer of keys and DNS records.
 	Dkim {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
-		/// DKIM action (`show`, `rotate`).
+		/// DKIM action (`show`, `rotate`, `cleanup`).
 		#[command(subcommand)]
 		action: dkim_cli::DkimCli,
 	},
-	/// Show the TLS certificate the server presents or ask it to renew the
-	/// ACME certificate now.
+	/// Show the server's TLS certificate or renew it now.
+	///
+	/// Show the TLS certificate the server presents or ask it to renew the ACME
+	/// certificate now.
 	Tls {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
@@ -683,16 +673,16 @@ pub enum Command {
 		#[command(subcommand)]
 		action: tls_cli::TlsCli,
 	},
-	/// Operate on one existing management API key (`rotate`).
+	/// Manage the management API keys.
 	ApiKey {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
-		/// API key action.
+		/// API key action (`list`, `create`, `revoke`, `rotate`).
 		#[command(subcommand)]
 		action: api_keys::ApiKeyCli,
 	},
-	/// Probe each enabled listener and report whether it is answering.
+	/// Probe each enabled listener and report whether it answers.
 	///
 	/// Dials every `[[listeners]]` entry on its loopback equivalent
 	/// (`127.0.0.1` for `0.0.0.0`, `::1` for `::`), reads the
@@ -713,6 +703,29 @@ pub enum Command {
 		/// `error` field on failure.
 		#[arg(long)]
 		json: bool,
+	},
+	/// Print a shell completion script on stdout.
+	///
+	/// The Debian package already installs all three; this is for a binary
+	/// installed by hand, for example
+	/// `epistle completions bash > ~/.local/share/bash-completion/completions/epistle`.
+	Completions {
+		/// The shell to write the script for.
+		#[arg(value_enum, value_name = "SHELL")]
+		shell: completions::CompletionShell,
+	},
+	/// Move the service account off a subordinate id block another account
+	/// shares. Run by the package on upgrade, as root.
+	#[command(hide = true)]
+	MoveSubids(subid::MoveArgs),
+	/// Write `epistle.1` and one man page per subcommand into DIR.
+	///
+	/// Run by debian/rules at package build time.
+	#[command(hide = true)]
+	Manpages {
+		/// Directory to write the pages into; created when missing.
+		#[arg(value_name = "DIR")]
+		dir: PathBuf,
 	},
 }
 
@@ -741,6 +754,10 @@ mod tests_d;
 mod tests_e;
 
 #[cfg(test)]
+#[path = "cli_tests_decorated.rs"]
+mod cli_tests_decorated;
+
+#[cfg(test)]
 #[path = "mta_sts_serve_tests.rs"]
 mod mta_sts_serve_tests;
 
@@ -759,6 +776,66 @@ mod cli_account_subcommand_tests;
 #[cfg(test)]
 #[path = "cli_account_subcommand_tests_b.rs"]
 mod cli_account_subcommand_tests_b;
+
+#[cfg(test)]
+#[path = "cli_confirmation_flow_tests.rs"]
+mod cli_confirmation_flow_tests;
+
+#[cfg(test)]
+#[path = "cli_account_scram_tests.rs"]
+mod cli_account_scram_tests;
+
+#[cfg(test)]
+#[path = "cli_account_resource_tests.rs"]
+mod cli_account_resource_tests;
+
+#[cfg(test)]
+#[path = "cli_account_forward_catch_all_tests.rs"]
+mod cli_account_forward_catch_all_tests;
+
+#[cfg(test)]
+#[path = "cli_account_catch_all_rules_tests.rs"]
+mod cli_account_catch_all_rules_tests;
+
+#[cfg(test)]
+#[path = "cli_account_forward_rules_tests.rs"]
+mod cli_account_forward_rules_tests;
+
+#[cfg(test)]
+#[path = "cli_account_two_factor_tests.rs"]
+mod cli_account_two_factor_tests;
+
+#[cfg(test)]
+#[path = "cli_account_2fa_cli_tests.rs"]
+mod cli_account_2fa_cli_tests;
+
+#[cfg(test)]
+#[path = "cli_app_password_resource_tests.rs"]
+mod cli_app_password_resource_tests;
+
+#[cfg(test)]
+#[path = "cli_app_password_list_tests.rs"]
+mod cli_app_password_list_tests;
+
+#[cfg(test)]
+#[path = "cli_api_key_account_tests.rs"]
+mod cli_api_key_account_tests;
+
+#[cfg(test)]
+#[path = "cli_api_key_resource_tests.rs"]
+mod cli_api_key_resource_tests;
+
+#[cfg(test)]
+#[path = "cli_consistency_tests.rs"]
+mod cli_consistency_tests;
+
+#[cfg(test)]
+#[path = "cli_json_shape_tests.rs"]
+mod cli_json_shape_tests;
+
+#[cfg(test)]
+#[path = "cli_suppression_resource_tests.rs"]
+mod cli_suppression_resource_tests;
 
 #[cfg(test)]
 #[path = "cli_account_log_id_tests.rs"]

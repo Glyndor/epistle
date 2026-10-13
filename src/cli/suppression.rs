@@ -8,16 +8,44 @@ use clap::Subcommand;
 use crate::config::Config;
 use crate::queue::SuppressionList;
 
-/// Actions beside the flat `epistle suppression [--remove ADDR]` form.
+/// Actions on the outbound suppression list (`epistle suppression
+/// list|add|remove`).
 #[derive(Debug, Subcommand)]
 pub enum SuppressionCli {
-	/// Stop delivering to an address: mail queued for it is dropped without
-	/// a bounce, as after a hard bounce.
+	/// Print every suppressed address, one per line.
+	///
+	/// A hard bounce also gives when it happened and the remote reply, tab
+	/// separated after the address. With `--account`, list that sending
+	/// account's per-account list instead of the global one.
+	List {
+		/// Restrict the list to this sending account.
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: Option<String>,
+		/// Print a JSON array of `{"address", "account", "since", "reason"}`
+		/// objects (`since` and `reason` are null when not recorded).
+		#[arg(long)]
+		json: bool,
+	},
+	/// Stop delivering to an address.
+	///
+	/// Mail queued for it is dropped without a bounce, as after a hard
+	/// bounce.
 	Add {
 		/// Recipient address to suppress.
 		address: String,
 		/// Suppress it for this sending account only, not for everyone.
-		#[arg(long, value_name = "ACCOUNT")]
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
+		account: Option<String>,
+	},
+	/// Resume delivering to an address.
+	///
+	/// Drops the suppression marker, from the global list or, with
+	/// `--account`, from that sender's list.
+	Remove {
+		/// Recipient address to resume delivering to.
+		address: String,
+		/// Remove the per-account suppression for this sender only.
+		#[arg(long, value_name = "ACCOUNT", value_parser = crate::cli::account_name::parse)]
 		account: Option<String>,
 	},
 }
@@ -31,9 +59,8 @@ pub(super) fn add(
 ) -> ExitCode {
 	// Anything that is not a deliverable address would sit in the list
 	// forever and match nothing, so refuse it up front.
-	if crate::smtp::address::Address::parse(address).is_err() {
-		super::style::error(format_args!("{address:?} is not a valid email address"));
-		return ExitCode::FAILURE;
+	if let Err(why) = crate::util::address_reason::parse(address) {
+		return super::exit::refused(format_args!("cannot suppress: {why}"));
 	}
 	let list = match SuppressionList::open(&config.data_dir) {
 		Ok(list) => list,
@@ -42,14 +69,19 @@ pub(super) fn add(
 			return ExitCode::FAILURE;
 		}
 	};
-	let address = address.to_ascii_lowercase();
+	let address = crate::util::address::normalize(address);
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|elapsed| elapsed.as_secs())
+		.unwrap_or(0);
+	const REASON: &str = "added by hand (epistle suppression add)";
 	let line = match account {
 		Some(account) => {
-			list.suppress_for(account, &address);
+			list.suppress_for_because(account, &address, REASON, now);
 			format!("suppressed {address} for {account}")
 		}
 		None => {
-			list.suppress(&address);
+			list.suppress_because(&address, REASON, now);
 			format!("suppressed {address}")
 		}
 	};
@@ -57,12 +89,11 @@ pub(super) fn add(
 	ExitCode::SUCCESS
 }
 
-/// List suppressed addresses, or remove `remove` if given. With `account`, the
-/// operation targets that sending account's per-account list instead of the
-/// global one.
-pub(super) fn run(
+/// Remove one address from the suppression list (the per-account
+/// table when `account` is `Some`).
+pub(super) fn remove(
 	config: &Config,
-	remove: Option<&str>,
+	address: &str,
 	account: Option<&str>,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -73,24 +104,97 @@ pub(super) fn run(
 			return ExitCode::FAILURE;
 		}
 	};
-	if let Some(address) = remove {
-		let result = match account {
-			Some(account) => list.remove_for(account, address),
-			None => list.remove(address),
-		};
-		if let Err(error) = result {
+	let result = match account {
+		Some(account) => list.remove_for(account, address),
+		None => list.remove(address),
+	};
+	match result {
+		Ok(()) => {
+			let _ = writeln!(out, "removed {address}");
+			ExitCode::SUCCESS
+		}
+		Err(error) => {
 			super::style::error(format_args!("cannot remove {address}: {error}"));
+			ExitCode::FAILURE
+		}
+	}
+}
+
+/// Run every suppression action. Each branch opens the list itself so
+/// the dispatchers (resource form and the legacy `--remove` form)
+/// share the same exit-code and error wording.
+pub(super) fn run(
+	config: &Config,
+	action: SuppressionCli,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	match action {
+		SuppressionCli::List { account, json } => list(config, account.as_deref(), json, out),
+		SuppressionCli::Add { address, account } => add(config, &address, account.as_deref(), out),
+		SuppressionCli::Remove { address, account } => {
+			remove(config, &address, account.as_deref(), out)
+		}
+	}
+}
+
+/// Compatibility shim for the legacy `epistle suppression` (no action)
+/// and `epistle suppression --remove ADDR` forms. The flat forms stay
+/// supported as hidden aliases, but the resource form is the entry
+/// point the help text shows.
+pub(super) fn run_legacy(
+	config: &Config,
+	address_to_remove: Option<&str>,
+	account: Option<&str>,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	if let Some(address) = address_to_remove {
+		return remove(config, address, account, out);
+	}
+	list(config, account, false, out)
+}
+
+/// Print every suppressed address in `account`'s scope (global when
+/// `account` is `None`), one per line or, with `json`, as an array.
+fn list(
+	config: &Config,
+	account: Option<&str>,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let list = match SuppressionList::open(&config.data_dir) {
+		Ok(list) => list,
+		Err(error) => {
+			super::style::error(format_args!("cannot open suppression list: {error}"));
 			return ExitCode::FAILURE;
 		}
-		let _ = writeln!(out, "removed {address}");
-		return ExitCode::SUCCESS;
-	}
-	let addresses = match account {
-		Some(account) => list.list_for(account),
-		None => list.list(),
 	};
-	for address in addresses {
-		if writeln!(out, "{address}").is_err() {
+	let entries = match account {
+		Some(account) => list.entries_for(account),
+		None => list.entries(),
+	};
+	let since = |entry: &crate::queue::Suppressed| entry.since.map(crate::clock::rfc3339);
+	if json {
+		let rows: Vec<_> = entries
+			.iter()
+			.map(|entry| {
+				serde_json::json!({
+					"address": entry.address,
+					"account": account,
+					"since": since(entry),
+					"reason": entry.reason,
+				})
+			})
+			.collect();
+		return super::json_out::print(out, &serde_json::Value::Array(rows));
+	}
+	// One address per line; when the date and the reason were recorded they
+	// follow, tab separated, so `cut -f1` still yields the bare addresses.
+	for entry in &entries {
+		let line = match (since(entry), &entry.reason) {
+			(Some(since), Some(reason)) => format!("{}\t{since}\t{reason}", entry.address),
+			_ => entry.address.clone(),
+		};
+		if writeln!(out, "{line}").is_err() {
 			return ExitCode::FAILURE;
 		}
 	}
@@ -100,3 +204,7 @@ pub(super) fn run(
 #[cfg(test)]
 #[path = "suppression_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "suppression_tests_reason.rs"]
+mod tests_reason;

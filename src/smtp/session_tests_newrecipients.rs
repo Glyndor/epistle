@@ -42,6 +42,9 @@ fn submit_to(session: &mut Session, recipients: &[&str]) -> u16 {
 		session.command_line("DATA"),
 		Action::CollectData(_)
 	));
+	// The sender's own From: an authenticated submission must carry it.
+	assert!(session.data_line(b"From: alice@example.org").is_none());
+	assert!(session.data_line(b"").is_none());
 	let Some(action) = session.data_line(b".") else {
 		panic!("DATA did not produce a final action");
 	};

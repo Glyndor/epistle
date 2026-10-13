@@ -6,6 +6,7 @@
 //! sends mail or authenticates. `status` runs every check; `check <area>`
 //! runs one and lists its findings.
 
+mod antispam_area;
 mod av_area;
 mod clock;
 mod config_area;
@@ -14,13 +15,17 @@ mod disk_area;
 mod dns_area;
 mod dns_dkim;
 #[cfg(test)]
-mod dns_fake;
+pub(crate) mod dns_fake;
+mod in_stack;
 mod ports;
 mod queue_area;
 mod report;
+mod subid_area;
 #[cfg(test)]
 mod test_support;
 mod tls_area;
+
+pub(crate) use dns_area::TimeoutDns;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -55,10 +60,14 @@ pub enum CheckArea {
 	Db,
 	/// The configured clamd answers `PING`.
 	Antivirus,
+	/// Antispam engine state: which features are on, which are off and why.
+	Antispam,
 	/// The outbound queue is draining: count, oldest age, deferred.
 	Queue,
 	/// The data filesystem has room.
 	Disk,
+	/// The service account's subordinate id ranges overlap no other account's.
+	Subid,
 }
 
 impl CheckArea {
@@ -70,8 +79,10 @@ impl CheckArea {
 		CheckArea::Dns,
 		CheckArea::Db,
 		CheckArea::Antivirus,
+		CheckArea::Antispam,
 		CheckArea::Queue,
 		CheckArea::Disk,
+		CheckArea::Subid,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -83,8 +94,10 @@ impl CheckArea {
 			CheckArea::Dns => "dns",
 			CheckArea::Db => "db",
 			CheckArea::Antivirus => "antivirus",
+			CheckArea::Antispam => "antispam",
 			CheckArea::Queue => "queue",
 			CheckArea::Disk => "disk",
+			CheckArea::Subid => "subid",
 		}
 	}
 }
@@ -119,19 +132,18 @@ impl Ctx {
 }
 
 /// `epistle status [--json]`: every area, one line each.
-pub(super) fn run_status(path: &Path, json: bool) -> ExitCode {
-	execute(
-		path,
-		CheckArea::ALL,
-		json,
-		false,
-		&mut std::io::stdout().lock(),
-	)
+pub(super) fn run_status(path: &Path, json: bool, out: &mut impl Write) -> ExitCode {
+	execute(path, CheckArea::ALL, json, false, out)
 }
 
 /// `epistle check <area> [--json]`: one area with its findings.
-pub(super) fn run_check(path: &Path, area: CheckArea, json: bool) -> ExitCode {
-	execute(path, &[area], json, true, &mut std::io::stdout().lock())
+pub(super) fn run_check(
+	path: &Path,
+	area: CheckArea,
+	json: bool,
+	out: &mut impl Write,
+) -> ExitCode {
+	execute(path, &[area], json, true, out)
 }
 
 /// Run `areas`, print the result to `out` and map it to an exit code: 0 when
@@ -155,7 +167,7 @@ fn execute(
 	let written = if json {
 		render_json(&reports, out)
 	} else {
-		render_table(&reports, show_items, out)
+		render_table(&reports, show_items, super::term::stdout(json), out)
 	};
 	if let Err(error) = written {
 		super::style::error(format_args!("cannot write the report: {error}"));
@@ -170,6 +182,22 @@ fn execute(
 
 /// Run the areas concurrently, each under [`AREA_DEADLINE`], and return the
 /// reports in the order requested.
+/// The areas among `areas` that fail for the config at `path`, as
+/// `(name, detail)`; used by `stack update` to judge a restart.
+pub(in crate::cli) fn failing(
+	path: &Path,
+	areas: &[CheckArea],
+) -> Result<Vec<(String, String)>, String> {
+	let runtime = tokio::runtime::Runtime::new()
+		.map_err(|error| format!("cannot start async runtime: {error}"))?;
+	let reports = runtime.block_on(run_areas(areas, Arc::new(Ctx::load(path))));
+	Ok(reports
+		.into_iter()
+		.filter(|(_, report)| report.status == report::Level::Fail)
+		.map(|(area, report)| (area.name().to_string(), report.detail))
+		.collect())
+}
+
 async fn run_areas(areas: &[CheckArea], ctx: Arc<Ctx>) -> Vec<(CheckArea, AreaReport)> {
 	let mut set = tokio::task::JoinSet::new();
 	for (index, area) in areas.iter().copied().enumerate() {
@@ -205,8 +233,10 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Dns => dns_area::check(ctx).await,
 		CheckArea::Db => db_area::check(ctx).await,
 		CheckArea::Antivirus => av_area::check(ctx).await,
+		CheckArea::Antispam => antispam_area::check(ctx).await,
 		CheckArea::Queue => queue_area::check(ctx).await,
 		CheckArea::Disk => disk_area::check(ctx).await,
+		CheckArea::Subid => subid_area::check(ctx).await,
 	}
 }
 

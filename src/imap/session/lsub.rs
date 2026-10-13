@@ -11,7 +11,8 @@ impl Session {
 		for name in mailbox::list_subscribed(&self.data_dir, &account) {
 			let matches = pattern == "*" || pattern == "%" || pattern.eq_ignore_ascii_case(&name);
 			if matches {
-				response.push_str(&format!("* LSUB () \"/\" \"{name}\"\r\n"));
+				let wire = self.mailbox_astring(&name);
+				response.push_str(&format!("* LSUB () \"/\" {wire}\r\n"));
 			}
 		}
 		response.push_str(&format!("{tag} OK LSUB completed\r\n"));

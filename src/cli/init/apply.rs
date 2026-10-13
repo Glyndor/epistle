@@ -57,6 +57,27 @@ pub enum ReportStep {
 	/// A directory was created (typically the parent of `config_path`,
 	/// which never existed on a fresh install).
 	CreatedDir(PathBuf),
+	/// The first mail account was created.
+	AccountCreated {
+		/// The account name.
+		name: String,
+		/// The account's address.
+		address: String,
+	},
+	/// A role address was made an alias of the first account.
+	AliasAdded {
+		/// The role address.
+		address: String,
+		/// The address it delivers to.
+		target: String,
+	},
+	/// A key was moved out of data_dir to where it now lives.
+	Moved {
+		/// Where it was.
+		from: PathBuf,
+		/// Where it is now.
+		to: PathBuf,
+	},
 	/// A step was skipped because its precondition did not hold (e.g.
 	/// `openssl` was not on `PATH` for the RSA DKIM key).
 	Skipped {
@@ -79,8 +100,17 @@ impl Report {
 					writeln!(out, "  config identical: {}", p.display())?
 				}
 				ReportStep::CreatedDir(p) => writeln!(out, "  created dir: {}", p.display())?,
+				ReportStep::Moved { from, to } => {
+					writeln!(out, "  moved:  {} to {}", from.display(), to.display())?
+				}
 				ReportStep::Skipped { name, reason } => {
 					writeln!(out, "  skipped: {name} ({reason})")?
+				}
+				ReportStep::AccountCreated { name, address } => {
+					writeln!(out, "  account: {name} <{address}>")?
+				}
+				ReportStep::AliasAdded { address, target } => {
+					writeln!(out, "  alias:  {address} -> {target}")?
 				}
 			}
 		}
@@ -96,6 +126,9 @@ impl Report {
 pub enum ApplyError {
 	/// The database volume exists without credentials, or its state cannot be checked.
 	DatabaseVolume(String),
+	/// The first account or its role aliases could not be created after
+	/// the configuration was written. Carries the reason.
+	FirstAccount(String),
 	/// The data directory could not be created or its `keys/` child
 	/// could not be created with mode `0700`.
 	KeysDir(PathBuf, std::io::Error),
@@ -178,12 +211,15 @@ pub enum ApplyError {
 	/// the failing reason and what the operator needs to do
 	/// (install the .deb, or set `image` in the answers).
 	HostBinaryInvalid(String),
+	/// A key under data_dir could not be moved to the directory beside it.
+	KeyMove(String),
 }
 
 impl std::fmt::Display for ApplyError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			ApplyError::DatabaseVolume(message) => f.write_str(message),
+			ApplyError::FirstAccount(why) => write!(f, "first account: {why}"),
 			ApplyError::KeysDir(path, error) => write!(
 				f,
 				"cannot create keys directory {}: {error}",
@@ -239,6 +275,7 @@ impl std::fmt::Display for ApplyError {
 				path.display()
 			),
 			ApplyError::HostBinaryInvalid(message) => f.write_str(message),
+			ApplyError::KeyMove(message) => f.write_str(message),
 		}
 	}
 }
@@ -363,8 +400,27 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 		}
 	};
 
+	match super::host_secrets::move_legacy_keys(&answers.data_dir) {
+		Ok(moved) => report.steps.extend(
+			moved
+				.into_iter()
+				.map(|(from, to)| ReportStep::Moved { from, to }),
+		),
+		Err(message) => {
+			return ApplyOutcome {
+				report,
+				error: Some(ApplyError::KeyMove(message)),
+			};
+		}
+	}
+	let secrets_dir = super::host_secrets::dir(&answers.data_dir);
 	let (dkim_ed25519_path, dkim_rsa_path, cert_path, key_path) =
-		match apply_keys::ensure_keys_and_certs(&keys_dir, &answers.hostname, &mut report) {
+		match apply_keys::ensure_keys_and_certs(
+			&keys_dir,
+			&secrets_dir,
+			&answers.hostname,
+			&mut report,
+		) {
 			Ok(paths) => paths,
 			Err(error) => {
 				return ApplyOutcome {
@@ -433,6 +489,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// opens `[database] password_file` to validate the URL.
 	if answers.services.database
 		&& let Err(error) = super::compose::ensure_db_password(&answers.data_dir, &mut report)
+			.and_then(|_| super::compose::ensure_db_admin_password(&answers.data_dir, &mut report))
 	{
 		return ApplyOutcome {
 			report,
@@ -466,6 +523,11 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			};
 		}
 	};
+	let desired_bytes = super::host_secrets::with_storage_key(
+		desired_bytes,
+		existing.as_ref().map(|existing| existing.text.as_str()),
+		&answers.data_dir,
+	);
 	let keep_existing_listeners =
 		match apply_config::listeners_from_existing(&answers.config_path, existing.as_ref()) {
 			Ok(listeners) => listeners.is_some(),
@@ -526,6 +588,7 @@ mod apply_plan;
 
 #[path = "apply_keys.rs"]
 mod apply_keys;
+pub(crate) use apply_keys::prepare_keys_for_update;
 
 pub use apply_plan::plan;
 
@@ -560,6 +623,10 @@ mod tests_c;
 #[cfg(test)]
 #[path = "apply_tests_d.rs"]
 mod tests_d;
+#[cfg(test)]
+#[path = "apply_tests_secrets.rs"]
+mod tests_secrets;
+
 #[cfg(test)]
 #[path = "apply_failures_tests.rs"]
 mod tests_failures;

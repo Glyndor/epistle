@@ -1,4 +1,5 @@
-//! A resolver with canned answers for the DNS check tests.
+//! A resolver with canned answers for the DNS check tests, shared by the
+//! `status` DNS area and the reverse-DNS block of `init`.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -8,19 +9,21 @@ use crate::spf::{DnsFailure, DnsLookup};
 type Lookup<'a, T> = std::pin::Pin<Box<dyn Future<Output = Result<T, DnsFailure>> + Send + 'a>>;
 
 #[derive(Default)]
-pub(super) struct FakeDns {
-	pub(super) txt: HashMap<String, Vec<String>>,
-	pub(super) mx: HashMap<String, Vec<String>>,
-	pub(super) addresses: HashMap<String, Vec<IpAddr>>,
-	pub(super) ptr: HashMap<IpAddr, Vec<String>>,
+pub(crate) struct FakeDns {
+	pub(crate) txt: HashMap<String, Vec<String>>,
+	pub(crate) mx: HashMap<String, Vec<String>>,
+	pub(crate) addresses: HashMap<String, Vec<IpAddr>>,
+	pub(crate) ptr: HashMap<IpAddr, Vec<String>>,
 	/// Names whose TXT lookup fails temporarily.
-	pub(super) txt_errors: Vec<String>,
+	pub(crate) txt_errors: Vec<String>,
+	/// Addresses whose PTR lookup fails temporarily.
+	pub(crate) ptr_errors: Vec<IpAddr>,
 }
 
 impl FakeDns {
 	/// Publish everything a healthy `example.org` / `mail.example.org` needs,
 	/// except DKIM.
-	pub(super) fn healthy() -> Self {
+	pub(crate) fn healthy() -> Self {
 		let mut dns = FakeDns::default();
 		dns.mx
 			.insert("example.org".into(), vec!["mail.example.org".into()]);
@@ -58,7 +61,14 @@ impl DnsLookup for FakeDns {
 		Box::pin(async move { Ok(found) })
 	}
 	fn ptr(&self, ip: IpAddr) -> Lookup<'_, Vec<String>> {
+		let failed = self.ptr_errors.contains(&ip);
 		let found = self.ptr.get(&ip).cloned().unwrap_or_default();
-		Box::pin(async move { Ok(found) })
+		Box::pin(async move {
+			if failed {
+				Err(DnsFailure::Temporary)
+			} else {
+				Ok(found)
+			}
+		})
 	}
 }

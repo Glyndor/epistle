@@ -36,12 +36,13 @@ const COMPOSE_FILE: &str = "compose.yaml";
 /// separate so the tests can build the action without clap).
 #[derive(Debug, Subcommand)]
 pub enum StackCli {
-	/// Pull images and recreate changed services, updating the default mail image.
+	/// Render compose.yaml again with this release, then recreate what changed.
 	Update,
 	/// Start the stack in the background.
 	Up,
-	/// Stop the stack. The compose volumes are not removed: the
-	/// database lives in one of them.
+	/// Stop the stack.
+	///
+	/// The compose volumes are not removed: the database lives in one of them.
 	Down,
 	/// List the running services (table by default, JSON with
 	/// `--json`).
@@ -65,6 +66,38 @@ pub enum StackCli {
 		#[arg(value_name = "SERVICE")]
 		service: Option<String>,
 	},
+	/// Stop the whole stack, or one service, without removing containers.
+	///
+	/// Stop the whole stack, or a single service (for example `mail` before a
+	/// restore, keeping `db` up), without removing containers.
+	Stop {
+		/// Optional service name to stop.
+		#[arg(value_name = "SERVICE")]
+		service: Option<String>,
+	},
+	/// Start what `stop` stopped.
+	Start {
+		/// Optional service name to start.
+		#[arg(value_name = "SERVICE")]
+		service: Option<String>,
+	},
+	/// Go back to the binary the last upgrade replaced; run as root.
+	///
+	/// When the new release already migrated the schema, the database dump
+	/// `stack update` took before the restart is restored too. dpkg still
+	/// records the newer version; see docs/cli.md for the limits.
+	Rollback {
+		/// The kept version to go back to; the newest one below this release
+		/// by default.
+		#[arg(long, value_name = "VERSION")]
+		to: Option<String>,
+		/// Do not ask for confirmation.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
+	/// The database half of `rollback`, run as the service account.
+	#[command(hide = true)]
+	RollbackDb,
 }
 
 impl From<StackCli> for StackAction {
@@ -76,6 +109,16 @@ impl From<StackCli> for StackAction {
 			StackCli::Ps { json } => StackAction::Ps { as_json: json },
 			StackCli::Logs { follow, service } => StackAction::Logs { follow, service },
 			StackCli::Restart { service } => StackAction::Restart { service },
+			StackCli::Stop { service } => StackAction::Passthrough {
+				verb: "stop",
+				service,
+			},
+			StackCli::Start { service } => StackAction::Passthrough {
+				verb: "start",
+				service,
+			},
+			StackCli::Rollback { .. } => StackAction::Rollback,
+			StackCli::RollbackDb => StackAction::RollbackDb,
 		}
 	}
 }
@@ -86,7 +129,7 @@ impl From<StackCli> for StackAction {
 /// arguments verbatim.
 #[derive(Debug)]
 pub(super) enum StackAction {
-	/// Refresh the default mail image, pull images, and recreate changed services.
+	/// Render the compose file again, then recreate changed services and restart mail.
 	Update,
 	/// `podup -f <compose> up -d`, start the stack in the background.
 	Up,
@@ -116,6 +159,18 @@ pub(super) enum StackAction {
 		/// Optional service name to restart; passed as a positional.
 		service: Option<String>,
 	},
+	/// `podup -f <compose> <verb> [<service>]` for `stop` and `start`.
+	Passthrough {
+		/// The podup subcommand.
+		verb: &'static str,
+		/// Optional service name; passed as a positional.
+		service: Option<String>,
+	},
+	/// Dispatched as root before the stack is reached; here only to keep
+	/// the conversion total.
+	Rollback,
+	/// Stop mail and restore the pre-update dump if the schema moved.
+	RollbackDb,
 	/// `podup -f <compose> up -d <service>`, recreate one service from
 	/// the current compose file. A restart keeps the container as it was
 	/// created, so a change to its published ports needs this.
@@ -154,24 +209,12 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Err(code) => return code,
 	};
 	match action {
-		StackAction::Update => {
-			let steps = match super::stack_update::stack_update_steps(&compose) {
-				Ok(steps) => steps,
-				Err(error) => {
-					super::style::error(format_args!(
-						"cannot update {}: {error}",
-						compose.display()
-					));
-					return ExitCode::FAILURE;
-				}
-			};
-			let argv_refs: Vec<Vec<&str>> = steps
-				.iter()
-				.map(|step| step.0.iter().map(String::as_str).collect())
-				.collect();
-			let borrowed: Vec<&[&str]> = argv_refs.iter().map(Vec::as_slice).collect();
-			run_sequence(podup, &compose, &borrowed)
+		StackAction::Update => super::stack_update::run(config, &compose, podup),
+		StackAction::Rollback => {
+			super::style::error("run it as root: sudo epistle stack rollback");
+			ExitCode::FAILURE
 		}
+		StackAction::RollbackDb => super::stack_rollback::restore_db(config, &compose, podup),
 		StackAction::Up => {
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
 		}
@@ -238,6 +281,13 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			}
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
 			run_inherited(podup, &compose, &extra_ref)
+		}
+		StackAction::Passthrough { verb, service } => {
+			let mut extra: Vec<&str> = vec![verb];
+			if let Some(name) = service.as_deref() {
+				extra.push(name);
+			}
+			run_inherited(podup, &compose, &extra)
 		}
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])
@@ -338,7 +388,7 @@ fn parse_version(input: &str) -> Result<Vec<u64>, std::num::ParseIntError> {
 /// shell would have shown, and propagate the exit code. The one-line
 /// error names the exact argv, so a `podup` failure points at the
 /// command that produced it.
-fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> ExitCode {
+pub(super) fn run_sequence(podup: &str, compose: &Path, steps: &[&[&str]]) -> ExitCode {
 	for step in steps {
 		let code = run_inherited(podup, compose, step);
 		if code != ExitCode::SUCCESS {

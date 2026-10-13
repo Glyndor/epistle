@@ -45,6 +45,8 @@ pub enum Key {
 	ClamdTimeout,
 	/// clamd maximum message size, in bytes (`[antispam] clamd_max_bytes`).
 	ClamdMaxSize,
+	/// Scan what local accounts submit (`[antispam] scan_authenticated`).
+	ScanAuthenticated,
 	/// SubjectPass enabled flag (`[subjectpass] enabled`).
 	Subjectpass,
 	/// LLM chat-completions endpoint URL (`[antispam_llm] endpoint`).
@@ -71,6 +73,7 @@ impl Key {
 			Self::ClamdOnFound => "clamd-on-found",
 			Self::ClamdTimeout => "clamd-timeout",
 			Self::ClamdMaxSize => "clamd-max-size",
+			Self::ScanAuthenticated => "scan-authenticated",
 			Self::Subjectpass => "subjectpass",
 			Self::LlmEndpoint => "llm-endpoint",
 			Self::LlmModel => "llm-model",
@@ -92,7 +95,13 @@ impl Key {
 #[derive(Debug, Subcommand)]
 pub enum AntispamCli {
 	/// Print every antispam key and its current value (never secrets).
-	Show,
+	Show {
+		/// Print one JSON object keyed by antispam key.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Set one antispam key, or replace a DNSBL list.
+	///
 	/// Replace the value of a single key (or replace the whole list for the
 	/// DNSBL zones). For list keys the trailing values replace the list.
 	Set {
@@ -103,8 +112,10 @@ pub enum AntispamCli {
 		#[arg(required = true)]
 		value: Vec<String>,
 	},
-	/// Remove a key, restoring the built-in default. Refuses for the DNSBL
-	/// zones; use `remove <key> <value>` to take entries out one at a time.
+	/// Remove a key, restoring the built-in default.
+	///
+	/// Refuses for the DNSBL zones; use `remove <key> <value>` to take entries
+	/// out one at a time.
 	Unset {
 		/// The antispam key to remove.
 		#[arg(value_enum)]
@@ -145,8 +156,14 @@ fn execute(path: &Path, action: AntispamCli, dry_run: bool) -> Result<ExitCode, 
 	let mut out = std::io::stdout().lock();
 	let mut err = style::stderr();
 	match action {
-		AntispamCli::Show => {
+		AntispamCli::Show { json } => {
 			let config = Config::load(path).map_err(|e| e.to_string())?;
+			if json {
+				return Ok(super::json_out::print(
+					&mut out,
+					&antispam_show::show_json(&config),
+				));
+			}
 			show_keys(&config, &mut out).map_err(|e| e.to_string())?;
 			Ok(ExitCode::SUCCESS)
 		}
@@ -333,6 +350,10 @@ fn set_scalar_field(document: &mut ConfigDocument, key: Key, raw: &str) -> Resul
 			let value = parse_size_bytes(raw).map_err(|e| format!("clamd-max-size: {e}"))?;
 			document.set_table_key(&["antispam"], "clamd_max_bytes", value)?;
 		}
+		Key::ScanAuthenticated => {
+			let value = parse_on_off(raw).map_err(|e| format!("scan-authenticated: {e}"))?;
+			document.set_table_key(&["antispam"], "scan_authenticated", value)?;
+		}
 		Key::Subjectpass => {
 			let value = parse_on_off(raw).map_err(|e| format!("subjectpass: {e}"))?;
 			document.set_table_key(&["subjectpass"], "enabled", value)?;
@@ -379,6 +400,7 @@ fn unset_scalar_field(document: &mut ConfigDocument, key: Key) -> Result<(), Str
 		Key::ClamdOnFound => document.remove_table_key(&["antispam"], "clamd_on_found")?,
 		Key::ClamdTimeout => document.remove_table_key(&["antispam"], "clamd_timeout_secs")?,
 		Key::ClamdMaxSize => document.remove_table_key(&["antispam"], "clamd_max_bytes")?,
+		Key::ScanAuthenticated => document.remove_table_key(&["antispam"], "scan_authenticated")?,
 		Key::Subjectpass => document.remove_table_key(&["subjectpass"], "enabled")?,
 		Key::LlmEndpoint => document.remove_table_key(&["antispam_llm"], "endpoint")?,
 		Key::LlmModel => document.remove_table_key(&["antispam_llm"], "model")?,

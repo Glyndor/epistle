@@ -42,63 +42,13 @@ impl DmarcOutcome {
 }
 
 /// Extract the domain of the RFC5322.From header from a raw message.
-/// Multiple From headers or no parseable address yield `None`.
+/// Multiple From headers, a From naming more than one domain, or no
+/// parseable address yield `None` (see [`super::author::author_domain`]).
 pub fn from_domain(raw: &[u8]) -> Option<String> {
-	let header_end = raw
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.map(|p| p + 2)
-		.unwrap_or(raw.len());
-	let headers = std::str::from_utf8(&raw[..header_end]).ok()?;
-
-	let mut from_value: Option<String> = None;
-	let mut current: Option<String> = None;
-	let mut in_from = false;
-	for line in headers.split_inclusive("\r\n") {
-		let content = line.strip_suffix("\r\n").unwrap_or(line);
-		if content.starts_with(' ') || content.starts_with('\t') {
-			if in_from && let Some(value) = &mut current {
-				value.push(' ');
-				value.push_str(content.trim());
-			}
-			continue;
-		}
-		if in_from {
-			// A second From header is an attack vector: refuse to choose.
-			if from_value.is_some() {
-				return None;
-			}
-			from_value = current.take();
-			in_from = false;
-		}
-		if let Some(rest) = content
-			.get(..5)
-			.filter(|head| head.eq_ignore_ascii_case("from:"))
-			.map(|_| &content[5..])
-		{
-			in_from = true;
-			current = Some(rest.trim().to_string());
-		}
+	match super::author::author_domain(raw) {
+		super::author::AuthorDomain::One(domain) => Some(domain),
+		super::author::AuthorDomain::Missing | super::author::AuthorDomain::Multiple => None,
 	}
-	if in_from {
-		if from_value.is_some() {
-			return None;
-		}
-		from_value = current.take();
-	}
-
-	let value = from_value?;
-	// `Display <user@domain>` or bare `user@domain`.
-	let address = match (value.rfind('<'), value.rfind('>')) {
-		(Some(open), Some(close)) if open < close => &value[open + 1..close],
-		_ => value.trim(),
-	};
-	let (_, domain) = address.rsplit_once('@')?;
-	let domain = domain.trim().to_ascii_lowercase();
-	if domain.is_empty() || domain.contains(' ') {
-		return None;
-	}
-	Some(domain)
 }
 
 /// Evaluate DMARC for a message: `from_domain` is the RFC5322.From domain,
@@ -219,7 +169,9 @@ fn aligned(mode: Alignment, identifier: &str, from_domain: &str) -> bool {
 
 /// Return the organizational (registrable) domain using the Mozilla PSL.
 /// Falls back to the rightmost two labels when the PSL returns no result.
-fn organizational_domain(domain: &str) -> String {
+/// `pub(crate)` so the report sender can compare the `rua=` domain to the
+/// policy domain for the external-destination check (RFC 7489 §7.1).
+pub(crate) fn organizational_domain(domain: &str) -> String {
 	use psl::Psl;
 	if let Some(d) = psl::List.domain(domain.as_bytes())
 		&& let Ok(s) = std::str::from_utf8(d.as_bytes())
@@ -237,3 +189,7 @@ fn organizational_domain(domain: &str) -> String {
 #[cfg(test)]
 #[path = "evaluate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "evaluate_tests_author.rs"]
+mod tests_author;

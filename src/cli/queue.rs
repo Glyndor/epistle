@@ -6,6 +6,8 @@
 //! worker's own writes. No command here ever reads or prints a message body.
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,6 +31,9 @@ pub enum QueueCli {
 	Show {
 		/// Spool id of the entry.
 		id: Uuid,
+		/// Print one JSON object instead of `key: value` lines.
+		#[arg(long)]
+		json: bool,
 	},
 	/// Make the next delivery attempt happen now, skipping the backoff.
 	Retry(Target),
@@ -40,6 +45,11 @@ pub enum QueueCli {
 	Remove {
 		/// Spool id of the entry.
 		id: Uuid,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 }
 
@@ -70,7 +80,8 @@ pub(super) fn run(
 	match action {
 		QueueCli::List { json: false } => list(data_dir, out),
 		QueueCli::List { json: true } => list_json(&spool, out),
-		QueueCli::Show { id } => show(&spool, id, now, out),
+		QueueCli::Show { id, json: false } => show(&spool, id, now, out),
+		QueueCli::Show { id, json: true } => show_json(&spool, id, out),
 		QueueCli::Retry(target) => edit_many(&spool, &target, "retried", out, |e| {
 			e.next_attempt = 0;
 		}),
@@ -78,13 +89,32 @@ pub(super) fn run(
 		QueueCli::Release(target) => edit_many(&spool, &target, "released", out, |e| {
 			e.release(now);
 		}),
-		QueueCli::Remove { id } => match spool.remove(id) {
-			Ok(()) => {
-				let _ = writeln!(out, "removed {id}");
-				ExitCode::SUCCESS
+		QueueCli::Remove { id, yes } => {
+			let envelope = match spool.load_envelope(id) {
+				Ok(envelope) => envelope,
+				Err(error) => return entry_error(id, &error),
+			};
+			let sender = if envelope.reverse_path.is_empty() {
+				"<>"
+			} else {
+				envelope.reverse_path.as_str()
+			};
+			let question = format!(
+				"Remove queued message {id} from {sender} to {} recipients? \
+				 It will not be delivered and no bounce is sent. [y/N]",
+				envelope.recipients.len()
+			);
+			if let Err(code) = super::prompt::confirm_destructive("queue remove", &question, yes) {
+				return code;
 			}
-			Err(error) => entry_error(id, &error),
-		},
+			match spool.remove(id) {
+				Ok(()) => {
+					let _ = writeln!(out, "removed {id}");
+					ExitCode::SUCCESS
+				}
+				Err(error) => entry_error(id, &error),
+			}
+		}
 	}
 }
 
@@ -103,7 +133,7 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
 
 fn entry_error(id: Uuid, error: &std::io::Error) -> ExitCode {
 	if error.kind() == std::io::ErrorKind::NotFound {
-		fail(format_args!("no such queue entry: {id}"))
+		super::exit::refused(format_args!("no such queue entry: {id}"))
 	} else {
 		fail(format_args!("queue entry {id}: {error}"))
 	}
@@ -120,6 +150,29 @@ pub(super) fn list(data_dir: &Path, out: &mut impl Write) -> ExitCode {
 		Ok(ids) => ids,
 		Err(error) => return fail(format_args!("reading spool: {error}")),
 	};
+	if let Some(decor) = super::term::stdout(false) {
+		let mut table = Table::new(&["ID", "STATE", "ATTEMPTS", "FROM", "TO"]).state_col(1);
+		for id in &ids {
+			let Ok(envelope) = spool.load_envelope(*id) else {
+				continue;
+			};
+			let state = match (envelope.held.is_some(), envelope.attempts) {
+				(true, _) => "held",
+				(false, 0) => "queued",
+				(false, _) => "deferred",
+			};
+			table.push(vec![
+				id.to_string(),
+				state.into(),
+				envelope.attempts.to_string(),
+				sender(&envelope).to_string(),
+				envelope.recipients.join(","),
+			]);
+		}
+		let _ = table.write(decor, out);
+		let _ = writeln!(out, "{} queued", ids.len());
+		return ExitCode::SUCCESS;
+	}
 	for id in &ids {
 		let Ok(envelope) = spool.load_envelope(*id) else {
 			continue;
@@ -225,6 +278,27 @@ fn show(spool: &FsSpool, id: Uuid, now: u64, out: &mut impl Write) -> ExitCode {
 		envelope.last_error.as_deref().unwrap_or("none")
 	);
 	ExitCode::SUCCESS
+}
+
+/// `queue show --json`: the envelope fields of `queue list --json`, plus
+/// when the hold started and whether TLS is required.
+fn show_json(spool: &FsSpool, id: Uuid, out: &mut impl Write) -> ExitCode {
+	let envelope = match spool.load_envelope(id) {
+		Ok(envelope) => envelope,
+		Err(error) => return entry_error(id, &error),
+	};
+	let view = serde_json::json!({
+		"id": envelope.id,
+		"reverse_path": envelope.reverse_path,
+		"recipients": envelope.recipients,
+		"attempts": envelope.attempts,
+		"next_attempt": envelope.next_attempt,
+		"held": envelope.held.is_some(),
+		"held_since": envelope.held,
+		"require_tls": envelope.require_tls,
+		"last_error": envelope.last_error,
+	});
+	super::json_out::print(out, &view)
 }
 
 /// Apply `edit` to one entry or to every entry, then say how many changed.

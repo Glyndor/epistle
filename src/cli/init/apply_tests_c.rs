@@ -28,6 +28,8 @@ fn answers_minimal() -> Answers {
 		services: Services::default(),
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
+		first_account: None,
+		resources: Default::default(),
 	}
 }
 
@@ -190,6 +192,8 @@ fn apply_fails_when_config_path_has_no_parent() {
 		services: Services::default(),
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
+		first_account: None,
+		resources: Default::default(),
 	};
 	let outcome = apply(&answers);
 	let err = outcome
@@ -234,6 +238,8 @@ fn answers_with_dns_and_extra_services() -> Answers {
 		},
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,
+		first_account: None,
+		resources: Default::default(),
 	}
 }
 
@@ -389,7 +395,7 @@ fn apply_refuses_an_orphan_oauth_public_key() {
 	);
 	drop(outcome1);
 	// Delete only the private half so the public half is left over.
-	let oauth_private = data_dir.join("keys").join("oauth_signing.key");
+	let oauth_private = crate::cli::init::host_secrets::oauth_signing_key(&data_dir);
 	let oauth_public = data_dir.join("keys").join("oauth_public.key");
 	let public_before = std::fs::read(&oauth_public).expect("read public");
 	assert!(

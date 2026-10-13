@@ -1,0 +1,449 @@
+From epistle-ci@example.org Mon Jan 15 09:00:00 2024
+Return-Path: <alice@example.org>
+From: Alice Example <alice@example.org>
+To: Tester <tester@epistle.test>
+Subject: Hello, plain text
+Date: Mon, 15 Jan 2024 09:00:00 +0000
+Message-ID: <imaptest-001@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+This is a plain ASCII body. It is short.
+
+From epistle-ci@example.org Mon Jan 15 09:01:00 2024
+Return-Path: <bob@example.org>
+From: =?UTF-8?B?Qm9iIEV4YW1wbGU=?= <bob@example.org>
+To: Tester <tester@epistle.test>
+Subject: =?UTF-8?Q?Caf=C3=A9_=E2=98=95?=
+Date: Mon, 15 Jan 2024 09:01:00 +0000
+Message-ID: <imaptest-002@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Body with UTF-8: café, résumé, naïve.
+Multi-line: line one
+line two with trailing spaces   
+line three.
+
+From epistle-ci@example.org Mon Jan 15 09:02:00 2024
+Return-Path: <carol@example.org>
+From: Carol Example <carol@example.org>
+To: Tester <tester@epistle.test>
+Cc: =?UTF-8?B?RGF2aWQ=?= <david@example.org>
+Subject: Multipart alternative with text and HTML
+Date: Mon, 15 Jan 2024 09:02:00 +0000
+Message-ID: <imaptest-003@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt-bound-003"
+
+--alt-bound-003
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Plain text version.
+
+--alt-bound-003
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<html><body><p>HTML version with <b>bold</b> and a <a href="https://example.org">link</a>.</p></body></html>
+
+--alt-bound-003--
+
+From epistle-ci@example.org Mon Jan 15 09:03:00 2024
+Return-Path: <eve@example.org>
+From: Eve Example <eve@example.org>
+To: Tester <tester@epistle.test>
+Subject: Multipart mixed with attachment
+Date: Mon, 15 Jan 2024 09:03:00 +0000
+Message-ID: <imaptest-004@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed-bound-004"
+
+--mixed-bound-004
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+See attached.
+
+--mixed-bound-004
+Content-Type: application/octet-stream; name="hello.bin"
+Content-Disposition: attachment; filename="hello.bin"
+Content-Transfer-Encoding: base64
+
+SGVsbG8sIGF0dGFjaG1lbnQhCg==
+
+--mixed-bound-004--
+
+From epistle-ci@example.org Mon Jan 15 09:04:00 2024
+Return-Path: <frank@example.org>
+From: Frank Example <frank@example.org>
+To: Tester <tester@epistle.test>
+Subject: Long headers and folded subject
+Date: Mon, 15 Jan 2024 09:04:00 +0000
+Message-ID: <imaptest-005@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+X-Custom-Header: A very long custom header value that should be folded across lines according to RFC 5322 if any line exceeds 78 octets, which is a property the IMAP parser must respect
+
+Folded body line that is intentionally broken so a folding parser must recombine it.
+
+From epistle-ci@example.org Mon Jan 15 09:05:00 2024
+Return-Path: <grace@example.org>
+From: Grace Example <grace@example.org>
+To: Tester <tester@epistle.test>
+Subject: Quoted-printable text
+Date: Mon, 15 Jan 2024 09:05:00 +0000
+Message-ID: <imaptest-006@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+=52=65=6E=64=65=72=65=64 =62=6F=64=79 =77=69=74=68 =71=75=6F=74=65=64=
+=2D=70=72=69=6E=74=61=62=6C=65 =65=6E=63=6F=64=69=6E=67=2E
+
+From epistle-ci@example.org Mon Jan 15 09:06:00 2024
+Return-Path: <hank@example.org>
+From: Hank Example <hank@example.org>
+To: Tester <tester@epistle.test>
+Subject: Address list and groups
+Date: Mon, 15 Jan 2024 09:06:00 +0000
+Message-ID: <imaptest-007@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+Recipients: friends: Alice <alice@example.org>, Bob <bob@example.org>; team: Carol <carol@example.org>;
+
+From epistle-ci@example.org Mon Jan 15 09:07:00 2024
+Return-Path: <ivy@example.org>
+From: Ivy Example <ivy@example.org>
+To: Tester <tester@epistle.test>
+Subject: Reply above the line
+Date: Mon, 15 Jan 2024 09:07:00 +0000
+Message-ID: <imaptest-008@example.org>
+In-Reply-To: <imaptest-001@example.org>
+References: <imaptest-001@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+On Mon, 15 Jan 2024 09:00:00 +0000, Alice Example wrote:
+> This is a plain ASCII body. It is short.
+
+Yes, agreed.
+
+From epistle-ci@example.org Mon Jan 15 09:08:00 2024
+Return-Path: <jack@example.org>
+From: Jack Example <jack@example.org>
+To: Tester <tester@epistle.test>
+Subject: Empty body
+Date: Mon, 15 Jan 2024 09:08:00 +0000
+Message-ID: <imaptest-009@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+From epistle-ci@example.org Mon Jan 15 09:09:00 2024
+Return-Path: <kate@example.org>
+From: Kate Example <kate@example.org>
+To: Tester <tester@epistle.test>
+Subject: Body with NUL byte
+Date: Mon, 15 Jan 2024 09:09:00 +0000
+Message-ID: <imaptest-010@example.org>
+MIME-Version: 1.0
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: binary
+
+Tab	separated	line.
+
+From epistle-ci@example.org Mon Jan 15 09:10:00 2024
+Return-Path: <liam@example.org>
+From: Liam Example <liam@example.org>
+To: Tester <tester@epistle.test>
+Subject: Subject with leading and trailing spaces
+Date: Mon, 15 Jan 2024 09:10:00 +0000
+Message-ID: <imaptest-011@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+A subject with trailing whitespace should be normalized.
+
+From epistle-ci@example.org Mon Jan 15 09:11:00 2024
+Return-Path: <mia@example.org>
+From: Mia Example <mia@example.org>
+To: Tester <tester@epistle.test>
+Subject: Multiple recipients
+Date: Mon, 15 Jan 2024 09:11:00 +0000
+Message-ID: <imaptest-012@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+To many.
+
+From epistle-ci@example.org Mon Jan 15 09:12:00 2024
+Return-Path: <noah@example.org>
+From: Noah Example <noah@example.org>
+To: Tester <tester@epistle.test>
+Subject: Nested multipart
+Date: Mon, 15 Jan 2024 09:12:00 +0000
+Message-ID: <imaptest-013@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer-013"
+
+--outer-013
+Content-Type: multipart/alternative; boundary="inner-013"
+
+--inner-013
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Nested plain.
+
+--inner-013
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<html><body><p>Nested HTML.</p></body></html>
+
+--inner-013--
+
+--outer-013
+Content-Type: application/octet-stream; name="data.txt"
+Content-Disposition: attachment; filename="data.txt"
+Content-Transfer-Encoding: 7bit
+
+data
+
+--outer-013--
+
+From epistle-ci@example.org Mon Jan 15 09:13:00 2024
+Return-Path: <olive@example.org>
+From: Olive Example <olive@example.org>
+To: Tester <tester@epistle.test>
+Subject: UTF-8 with emojis
+Date: Mon, 15 Jan 2024 09:13:00 +0000
+Message-ID: <imaptest-014@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Hello 👋 world 🌍!
+Multiple emojis: 🎉 🚀 🐱 🐶.
+
+From epistle-ci@example.org Mon Jan 15 09:14:00 2024
+Return-Path: <paul@example.org>
+From: Paul Example <paul@example.org>
+To: Tester <tester@epistle.test>
+Subject: ISO-8859-1 fallback
+Date: Mon, 15 Jan 2024 09:14:00 +0000
+Message-ID: <imaptest-015@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+caf=E9.
+
+From epistle-ci@example.org Mon Jan 15 09:15:00 2024
+Return-Path: <quinn@example.org>
+From: Quinn Example <quinn@example.org>
+To: Tester <tester@epistle.test>
+Subject: Long body
+Date: Mon, 15 Jan 2024 09:15:00 +0000
+Message-ID: <imaptest-016@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+This message has a body long enough to be split across many lines.
+It serves as a baseline test for SEARCH BODY, FETCH BODY[], FETCH BODY.PEEK[], FETCH BODY[TEXT], FETCH BODY[HEADER.FIELDS], FETCH ENVELOPE, FETCH RFC822.SIZE and FETCH UID.
+01234567890123456789012345678901234567890123456789012345678901234567890123456789
+
+From epistle-ci@example.org Mon Jan 15 09:16:00 2024
+Return-Path: <ruby@example.org>
+From: Ruby Example <ruby@example.org>
+To: Tester <tester@epistle.test>
+Subject: X-priority header
+Date: Mon, 15 Jan 2024 09:16:00 +0000
+Message-ID: <imaptest-017@example.org>
+X-Priority: 1 (Highest)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+High priority body.
+
+From epistle-ci@example.org Mon Jan 15 09:17:00 2024
+Return-Path: <sam@example.org>
+From: Sam Example <sam@example.org>
+To: Tester <tester@epistle.test>
+Subject: Long subject
+Date: Mon, 15 Jan 2024 09:17:00 +0000
+Message-ID: <imaptest-018@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+A subject that is fairly long but still single-byte encoded is fine.
+
+From epistle-ci@example.org Mon Jan 15 09:18:00 2024
+Return-Path: <tina@example.org>
+From: Tina Example <tina@example.org>
+To: Tester <tester@epistle.test>
+Subject: Tabbed body
+Date: Mon, 15 Jan 2024 09:18:00 +0000
+Message-ID: <imaptest-019@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+col1	col2	col3
+val1	val2	val3
+
+From epistle-ci@example.org Mon Jan 15 09:19:00 2024
+Return-Path: <umar@example.org>
+From: Umar Example <umar@example.org>
+To: Tester <tester@epistle.test>
+Subject: Special characters in headers
+Date: Mon, 15 Jan 2024 09:19:00 +0000
+Message-ID: <imaptest-020@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+A subject that contains "quotes" and \\backslashes\\ and [brackets] is OK in UTF-8 bodies.
+
+From epistle-ci@example.org Mon Jan 15 09:20:00 2024
+Return-Path: <vera@example.org>
+From: Vera Example <vera@example.org>
+To: Tester <tester@epistle.test>
+Subject: Short
+Date: Mon, 15 Jan 2024 09:20:00 +0000
+Message-ID: <imaptest-021@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+x.
+
+From epistle-ci@example.org Mon Jan 15 09:21:00 2024
+Return-Path: <will@example.org>
+From: Will Example <will@example.org>
+To: Tester <tester@epistle.test>
+Subject: Another short
+Date: Mon, 15 Jan 2024 09:21:00 +0000
+Message-ID: <imaptest-022@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+y.
+
+From epistle-ci@example.org Mon Jan 15 09:22:00 2024
+Return-Path: <xena@example.org>
+From: Xena Example <xena@example.org>
+To: Tester <tester@epistle.test>
+Subject: Third short
+Date: Mon, 15 Jan 2024 09:22:00 +0000
+Message-ID: <imaptest-023@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+z.
+
+From epistle-ci@example.org Mon Jan 15 09:23:00 2024
+Return-Path: <yves@example.org>
+From: Yves Example <yves@example.org>
+To: Tester <tester@epistle.test>
+Subject: Fourth short
+Date: Mon, 15 Jan 2024 09:23:00 +0000
+Message-ID: <imaptest-024@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+w.
+
+From epistle-ci@example.org Mon Jan 15 09:24:00 2024
+Return-Path: <zara@example.org>
+From: Zara Example <zara@example.org>
+To: Tester <tester@epistle.test>
+Subject: Fifth short
+Date: Mon, 15 Jan 2024 09:24:00 +0000
+Message-ID: <imaptest-025@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+v.
+
+From epistle-ci@example.org Mon Jan 15 09:25:00 2024
+Return-Path: <adam@example.org>
+From: Adam Example <adam@example.org>
+To: Tester <tester@epistle.test>
+Subject: Sixth short
+Date: Mon, 15 Jan 2024 09:25:00 +0000
+Message-ID: <imaptest-026@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+u.
+
+From epistle-ci@example.org Mon Jan 15 09:26:00 2024
+Return-Path: <bea@example.org>
+From: Bea Example <bea@example.org>
+To: Tester <tester@epistle.test>
+Subject: Seventh short
+Date: Mon, 15 Jan 2024 09:26:00 +0000
+Message-ID: <imaptest-027@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+t.
+
+From epistle-ci@example.org Mon Jan 15 09:27:00 2024
+Return-Path: <cleo@example.org>
+From: Cleo Example <cleo@example.org>
+To: Tester <tester@epistle.test>
+Subject: Eighth short
+Date: Mon, 15 Jan 2024 09:27:00 +0000
+Message-ID: <imaptest-028@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+s.
+
+From epistle-ci@example.org Mon Jan 15 09:28:00 2024
+Return-Path: <dan@example.org>
+From: Dan Example <dan@example.org>
+To: Tester <tester@epistle.test>
+Subject: Ninth short
+Date: Mon, 15 Jan 2024 09:28:00 +0000
+Message-ID: <imaptest-029@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+r.
+
+From epistle-ci@example.org Mon Jan 15 09:29:00 2024
+Return-Path: <ed@example.org>
+From: Ed Example <ed@example.org>
+To: Tester <tester@epistle.test>
+Subject: Tenth short
+Date: Mon, 15 Jan 2024 09:29:00 +0000
+Message-ID: <imaptest-030@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+q.

@@ -39,9 +39,9 @@ fn result_name(result: &Result<u32, DbError>) -> String {
 /// A `server_version_num` at the floor decodes to the floor and passes.
 #[test]
 fn major_at_the_floor_passes() {
-	match major_meets_floor(140_012, MIN_SERVER_VERSION) {
-		Ok(14) => {}
-		other => panic!("expected Ok(14), got {}", result_name(&other)),
+	match major_meets_floor(180_001, MIN_SERVER_VERSION) {
+		Ok(18) => {}
+		other => panic!("expected Ok(18), got {}", result_name(&other)),
 	}
 }
 
@@ -49,9 +49,9 @@ fn major_at_the_floor_passes() {
 /// passes.
 #[test]
 fn major_above_the_floor_passes() {
-	match major_meets_floor(180_001, MIN_SERVER_VERSION) {
-		Ok(18) => {}
-		other => panic!("expected Ok(18), got {}", result_name(&other)),
+	match major_meets_floor(190_002, MIN_SERVER_VERSION) {
+		Ok(19) => {}
+		other => panic!("expected Ok(19), got {}", result_name(&other)),
 	}
 }
 
@@ -59,13 +59,13 @@ fn major_above_the_floor_passes() {
 /// `found` and `required` pair the operator will read in the startup error.
 #[test]
 fn major_below_the_floor_is_refused() {
-	match major_meets_floor(130_015, MIN_SERVER_VERSION) {
+	match major_meets_floor(170_006, MIN_SERVER_VERSION) {
 		Err(DbError::ServerTooOld {
-			found: 13,
-			required: 14,
+			found: 17,
+			required: 18,
 		}) => {}
 		other => panic!(
-			"expected ServerTooOld {{ found: 13, required: 14 }}, got {}",
+			"expected ServerTooOld {{ found: 17, required: 18 }}, got {}",
 			result_name(&other)
 		),
 	}

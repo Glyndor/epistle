@@ -40,6 +40,7 @@ fn write_config(toml: &str) -> tempfile::NamedTempFile {
 fn build() -> Harness {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
+		display_name: None,
 		name: STATIC_NAME.to_string(),
 		addresses: vec![format!("{STATIC_NAME}@{DOMAIN}")],
 		password_hash: Some(hash(fixture_password())),
@@ -65,6 +66,7 @@ fn build() -> Harness {
 		disabled: false,
 		quota_bytes: None,
 		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	store.add(dynamic).expect("add dynamic");
 	let config = write_config(&format!(
@@ -362,7 +364,7 @@ fn address_add_rejects_static_address() {
 	let store = reload_store(&harness);
 	assert_eq!(
 		account::address_add_with_store(&store, DYNAMIC_NAME, &format!("{STATIC_NAME}@{DOMAIN}")),
-		ExitCode::FAILURE,
+		ExitCode::from(2),
 		"address owned by a static account must be refused"
 	);
 }
@@ -377,7 +379,7 @@ fn address_add_rejects_foreign_domain() {
 			DYNAMIC_NAME,
 			&format!("{DYNAMIC_NAME}@elsewhere.example")
 		),
-		ExitCode::FAILURE
+		ExitCode::from(2)
 	);
 }
 
@@ -422,7 +424,7 @@ fn static_account_refused_with_edit_config_hint() {
 		account::quota_with_store(&store, STATIC_NAME, Some(1024)),
 		account::protocols_with_store(&store, STATIC_NAME, None),
 	] {
-		assert_eq!(code, ExitCode::FAILURE, "static account must be refused");
+		assert_eq!(code, ExitCode::from(2), "static account must be refused");
 	}
 }
 
@@ -451,14 +453,35 @@ fn show_prints_public_view_without_secrets() {
 }
 
 #[test]
-fn show_refuses_static_account() {
+fn show_prints_static_view_without_secrets() {
 	let harness = build();
 	let store = reload_store(&harness);
 	let mut out = Vec::new();
 	assert_eq!(
 		account::show_with_store(&store, STATIC_NAME, &mut out),
-		ExitCode::FAILURE,
-		"a static account is not addressable through `account show`"
+		ExitCode::SUCCESS,
+		"static accounts are addressable through `account show` (read-only)"
+	);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(text.contains("name: alice"), "{text}");
+	assert!(text.contains("source: static"), "{text}");
+	assert!(text.contains("addresses: alice@example.org"), "{text}");
+	assert!(text.contains("quota_bytes: server default"), "{text}");
+	assert!(text.contains("protocols: all"), "{text}");
+	// The static view must never carry the password hash.
+	assert!(!text.contains("argon2id"), "{text}");
+	assert!(!text.contains("password_hash"), "{text}");
+}
+
+#[test]
+fn show_refuses_unknown_account() {
+	let harness = build();
+	let store = reload_store(&harness);
+	let mut out = Vec::new();
+	assert_eq!(
+		account::show_with_store(&store, "nobody", &mut out),
+		ExitCode::from(2),
+		"a name that exists nowhere must say so",
 	);
 }
 

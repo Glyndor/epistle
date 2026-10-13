@@ -8,8 +8,8 @@ use crate::smtp::line::LineDecoder;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{Action, Session};
 use crate::smtp::trace::{
-	RECEIVED_HOP_LIMIT, ensure_submission_headers, format_auth_results, line_error_reply,
-	received_header, received_hop_count, spf_domain,
+	RECEIVED_HOP_LIMIT, ensure_submission_headers, line_error_reply, received_header,
+	received_hop_count,
 };
 
 use super::{COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, read_chunk, send};
@@ -41,12 +41,20 @@ impl Server {
 			let line = match decoder.next_line() {
 				Ok(Some(line)) => line,
 				Ok(None) => {
-					let read = match tokio::time::timeout(COMMAND_TIMEOUT, stream.read(&mut buffer))
+					// A drain waits for an open transaction, DATA or AUTH to end.
+					let idle = mode == Mode::Commands && !session.in_transaction();
+					let drain = self.drain.as_deref().filter(|_| idle);
+					let reading = stream.read(&mut buffer);
+					let read = match crate::shutdown::or_drain(drain, COMMAND_TIMEOUT, reading)
 						.await
 					{
-						Ok(Ok(n)) => n,
-						Ok(Err(e)) => return Err(e),
-						Err(_) => {
+						None => {
+							send(&mut stream, &Reply::single(421, "4.3.2 shutting down")).await?;
+							return Ok(());
+						}
+						Some(Ok(Ok(n))) => n,
+						Some(Ok(Err(e))) => return Err(e),
+						Some(Err(_)) => {
 							tracing::debug!("SMTP command timeout, closing connection");
 							return Ok(());
 						}
@@ -133,6 +141,9 @@ impl Server {
 					send(&mut stream, &reply).await?;
 				}
 				Action::Deliver(reply, mut message) => {
+					// DSNs for recipients this message did not fit for; sent
+					// only if the message itself is delivered.
+					let quota_reports = session.take_quota_reports();
 					// Loop guard: reject mail that has already traversed too many
 					// hops before adding our own Received header (RFC 5321 §6.3).
 					if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
@@ -145,9 +156,6 @@ impl Server {
 						.await?;
 						continue;
 					}
-					// SPF and DKIM apply to unauthenticated mail from a
-					// known peer.
-					let mut auth_headers = String::new();
 					// DNSBL screening: reject an unauthenticated client whose
 					// IP, envelope sender domain, or URL host in the body is
 					// listed. All three lists fail open on `Unavailable`, so a
@@ -174,7 +182,10 @@ impl Server {
 						);
 					}
 					// Greylisting: defer an unseen triplet's first attempt. A real
-					// MTA retries and is then accepted.
+					// MTA retries and is then accepted. The store is the
+					// in-memory one by default and the PostgreSQL-backed one
+					// when `[database]` is configured, so a restart does not
+					// re-defer legitimate senders when persistence is enabled.
 					if known_correspondent.is_none()
 						&& let (Some((store, delay)), Some(ip), None) =
 							(&self.greylist, peer, session.authenticated())
@@ -190,7 +201,7 @@ impl Server {
 							recipient,
 						};
 						if crate::antispam::greylist::decide(store.as_ref(), &triplet, now, *delay)
-							== crate::antispam::greylist::Decision::Defer
+							.await == crate::antispam::greylist::Decision::Defer
 						{
 							tracing::info!(%ip, "greylisting: deferring first attempt");
 							send(
@@ -201,182 +212,16 @@ impl Server {
 							continue;
 						}
 					}
-					if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated())
-					{
-						let domain = spf_domain(&message.reverse_path, session.helo_domain());
-						let outcome = match &domain {
-							Some(domain) => {
-								let helo = session.helo_domain().unwrap_or("");
-								crate::spf::check_host(
-									dns.as_ref(),
-									ip,
-									domain,
-									&message.reverse_path,
-									helo,
-								)
-								.await
+					// SPF and DKIM apply to unauthenticated mail from a
+					// known peer.
+					let auth_headers =
+						match self.authenticate_inbound(&message, &session, peer).await {
+							Ok(headers) => headers,
+							Err(reply) => {
+								send(&mut stream, &reply).await?;
+								continue;
 							}
-							None => crate::spf::SpfOutcome::None,
 						};
-						match outcome {
-							crate::spf::SpfOutcome::Fail => {
-								self.metrics.rejected(crate::metrics::RejectReason::Spf);
-								send(
-									&mut stream,
-									&Reply::single(550, "5.7.23 SPF validation failed"),
-								)
-								.await?;
-								continue;
-							}
-							crate::spf::SpfOutcome::TempError => {
-								send(
-									&mut stream,
-									&Reply::single(451, "4.4.3 SPF check temporarily failed"),
-								)
-								.await?;
-								continue;
-							}
-							outcome => {
-								auth_headers.push_str(&format!(
-									"Received-SPF: {} (domain of {}) client-ip={ip}\r\n",
-									outcome.as_str(),
-									domain.as_deref().unwrap_or("unknown"),
-								));
-
-								// DKIM is recorded; DMARC decides policy.
-								let dkim_results =
-									crate::dkim::verify_message(dns.as_ref(), &message.data).await;
-
-								let from = crate::dmarc::from_domain(&message.data);
-								let dmarc = match &from {
-									Some(from) => {
-										crate::dmarc::evaluate(
-											dns.as_ref(),
-											from,
-											(outcome, domain.as_deref()),
-											&dkim_results,
-										)
-										.await
-									}
-									// No usable From header: nothing to align.
-									None => crate::dmarc::DmarcOutcome::PermError,
-								};
-								// Record DMARC result for aggregate reporting.
-								if let (Some(report_data_dir), Some(from_domain)) =
-									(&self.report_dir, &from)
-								{
-									let disposition = match &dmarc {
-										crate::dmarc::DmarcOutcome::Reject => "reject",
-										_ => "none",
-									};
-									let ts = std::time::SystemTime::now()
-										.duration_since(std::time::UNIX_EPOCH)
-										.map(|d| d.as_secs())
-										.unwrap_or(0);
-									let best_dkim = dkim_results.first();
-									let record = crate::dmarc::report::DeliveryRecord {
-										timestamp: ts,
-										source_ip: peer.map(|p| p.to_string()).unwrap_or_default(),
-										envelope_from: domain.as_deref().unwrap_or("").to_owned(),
-										header_from: from_domain.clone(),
-										spf: outcome.as_str().to_owned(),
-										dkim: best_dkim
-											.map(|r| r.outcome.as_str())
-											.unwrap_or("none")
-											.to_owned(),
-										dkim_domain: best_dkim
-											.and_then(|r| r.domain.clone())
-											.unwrap_or_default(),
-										dmarc: dmarc.as_str().to_owned(),
-										disposition: disposition.to_owned(),
-										policy_domain: from_domain.clone(),
-										published_policy: String::new(),
-										pct: 100,
-									};
-									let today =
-										crate::dmarc::aggregate::unix_to_day(record.timestamp);
-									crate::dmarc::aggregate::record_delivery(
-										report_data_dir,
-										&today,
-										&record,
-									);
-								}
-
-								match dmarc {
-									crate::dmarc::DmarcOutcome::Reject => {
-										self.metrics.rejected(crate::metrics::RejectReason::Dmarc);
-										self.train_corpus(&message.data, true);
-										send(
-											&mut stream,
-											&Reply::single(550, "5.7.1 rejected by DMARC policy"),
-										)
-										.await?;
-										continue;
-									}
-									crate::dmarc::DmarcOutcome::TempError => {
-										send(
-											&mut stream,
-											&Reply::single(
-												451,
-												"4.4.3 DMARC check temporarily failed",
-											),
-										)
-										.await?;
-										continue;
-									}
-									_ => {}
-								}
-
-								let mut methods: Vec<String> = Vec::new();
-
-								let mut spf_result = format!("spf={}", outcome.as_str());
-								if let Some(domain) = &domain {
-									spf_result.push_str(&format!(" smtp.mailfrom={domain}"));
-								}
-								methods.push(spf_result);
-
-								if dkim_results.is_empty() {
-									methods.push("dkim=none".to_string());
-								} else {
-									for dkim in &dkim_results {
-										let mut entry = format!("dkim={}", dkim.outcome.as_str());
-										if let Some(d) = &dkim.domain {
-											entry.push_str(&format!(" header.d={d}"));
-										}
-										methods.push(entry);
-									}
-								}
-
-								let mut dmarc_result = format!("dmarc={}", dmarc.as_str());
-								if let Some(from) = &from {
-									dmarc_result.push_str(&format!(" header.from={from}"));
-								}
-								methods.push(dmarc_result);
-
-								auth_headers
-									.push_str(&format_auth_results(&self.hostname, &methods));
-
-								// ARC: seal this hop so downstream forwarders can
-								// trust our authentication results even if they
-								// break SPF/DKIM. cv reflects any inbound chain.
-								if let Some(sealer) = &self.arc_sealer {
-									let cv =
-										crate::arc::validate::validate(dns.as_ref(), &message.data)
-											.await;
-									let prior = crate::arc::chain::extract(&message.data)
-										.ok()
-										.flatten()
-										.unwrap_or_default();
-									let summary = methods.join("; ");
-									if let Some(arc_headers) =
-										sealer.seal(&message.data, &summary, &prior, cv)
-									{
-										auth_headers.push_str(&arc_headers);
-									}
-								}
-							}
-						}
-					}
 					if let Some(dns) = &self.spf
 						&& message.recipients.iter().any(|recipient| {
 							recipient
@@ -412,6 +257,8 @@ impl Server {
 							&stamp_domain,
 							std::time::SystemTime::now(),
 						);
+						// The MSA drops Bcc: those recipients are on the envelope.
+						message.data = crate::smtp::trace::strip_bcc(&message.data);
 					}
 					let mut stamped = header.into_bytes();
 					stamped.extend_from_slice(auth_headers.as_bytes());
@@ -476,13 +323,34 @@ impl Server {
 							crate::antispam::hook::HookVerdict::Accept => {}
 						}
 					}
+					// Bayesian thresholds that decide on their own: a score at or above
+					// `bayes_junk_at` routes to Junk with the spam-marking
+					// headers stamped on it; a score at or above
+					// `bayes_reject_at` (when configured) refuses the DATA
+					// phase with `550 5.7.1`. Runs before the uncertain band
+					// so a high-confidence verdict never burns an LLM call.
+					match self
+						.handle_bayes_thresholds(
+							&mut message,
+							session.authenticated().is_some(),
+							&mut stream,
+						)
+						.await?
+					{
+						super::run_band::BayesOutcome::Rejected => continue,
+						super::run_band::BayesOutcome::SendToJunk
+						| super::run_band::BayesOutcome::Continue => {}
+					}
 					// Uncertain-band logic: SubjectPass (if enabled) accepts
 					// the retry that carries a valid token in the subject,
 					// otherwise the band consults the LLM hook if one is
 					// configured, otherwise (no LLM verdict) it refuses with
 					// a 550 5.7.1 challenge and a fresh token. The check runs
 					// after DNSBL, SPF, DMARC and the scanner hook, so a
-					// valid token never overrides a hard rejection.
+					// valid token never overrides a hard rejection. The
+					// Bayes path has already set the message's mailbox when
+					// it decided, so the band's "stay out of an upstream
+					// decision" guard skips it naturally.
 					if matches!(
 						self.handle_uncertain_band(
 							&mut message,
@@ -500,9 +368,21 @@ impl Server {
 					if session.authenticated().is_none() && message.mailbox.is_none() {
 						self.train_corpus(&message.data, false);
 					}
-					let reply = match self.sink.deliver(message) {
+					// Mail an account submits goes through the submission
+					// path, which applies what holds for our own senders
+					// (the antivirus on outbound mail among them).
+					let handed = match session.authenticated() {
+						Some(account) => self.sink.submit(message, uuid::Uuid::now_v7(), account),
+						None => self.sink.deliver(message),
+					};
+					let reply = match handed {
 						Ok(()) => {
 							self.metrics.accepted();
+							for report in quota_reports {
+								if let Err(error) = self.sink.deliver(report) {
+									tracing::warn!(%error, "mailbox-full report not delivered");
+								}
+							}
 							if let (Some(pool), Some(domain), None) =
 								(&self.reputation, rep_domain, session.authenticated())
 							{
@@ -516,8 +396,10 @@ impl Server {
 							reply
 						}
 						Err(error) => {
-							tracing::warn!(%error, "delivery failed");
-							Reply::single(451, "4.3.0 temporary storage failure, try again")
+							if matches!(error, crate::smtp::sink::SinkError::Unavailable(_)) {
+								tracing::warn!(%error, "delivery failed");
+							}
+							error.smtp_reply()
 						}
 					};
 					send(&mut stream, &reply).await?;
@@ -533,7 +415,7 @@ impl Server {
 					// Bytes received before the handshake are discarded:
 					// a pipelining client cannot smuggle plaintext commands
 					// into the TLS session.
-					let tls_stream = acceptor.current().accept(stream).await?;
+					let tls_stream = crate::tls::accept_within(&acceptor.current(), stream).await?;
 					// A verified client certificate enables SASL EXTERNAL.
 					let identity = tls_stream
 						.get_ref()
@@ -545,7 +427,10 @@ impl Server {
 					stream = Box::new(tls_stream);
 					session.tls_started();
 					decoder = LineDecoder::new();
-					send(&mut stream, &session.greeting()).await?;
+					// No greeting inside TLS (RFC 3207 section 4.2): the
+					// session is back in the state after the 220 banner and
+					// the client speaks first with EHLO. A banner here is read
+					// as the reply to that EHLO and shifts every later reply.
 				}
 				Action::Close(reply) => {
 					send(&mut stream, &reply).await?;

@@ -22,10 +22,67 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Ok(config) => config,
 		Err(report) => return report,
 	};
-	match &config.antispam.clamd_socket {
-		Some(socket) => evaluate(socket, epoch(ctx.now), NET_TIMEOUT).await,
-		None => AreaReport::ok("no [antispam] clamd_socket is configured"),
+	let Some(socket) = &config.antispam.clamd_socket else {
+		return AreaReport::ok("no [antispam] clamd_socket is configured");
+	};
+	// With the container stack clamd's socket lives on a volume mounted in
+	// the mail container only: ask the mail container, as the db area does.
+	match crate::cli::container_db::clamd_exec_spec(
+		config,
+		&["check".into(), "antivirus".into(), "--json".into()],
+	) {
+		Ok(Some(command)) => super::in_stack::run(config, command, "antivirus", "antivirus").await,
+		Ok(None) => {
+			let now = epoch(ctx.now);
+			let report = evaluate(socket, now, NET_TIMEOUT).await;
+			with_scan_health(report, &config.data_dir, now)
+		}
+		Err(error) => AreaReport::fail(error),
 	}
+}
+
+/// Add what the server recorded about scans that failed open: clamd may
+/// answer `PING` now and still have let mail through unscanned, or answer
+/// it and fail every `INSTREAM`. A run of failures that has not ended
+/// warns; one that ended is mentioned without changing the verdict.
+fn with_scan_health(mut report: AreaReport, data_dir: &Path, now: i64) -> AreaReport {
+	let Some(health) = crate::antispam::clamd::health::read(data_dir) else {
+		return report;
+	};
+	let when = |epoch: Option<u64>| epoch.map(crate::clock::rfc3339).unwrap_or_default();
+	let item = if health.failures > 0 {
+		let since = health.failing_since.unwrap_or_default();
+		let hours = (now - i64::try_from(since).unwrap_or(now)).max(0) / 3600;
+		Item::new(
+			"scans",
+			Level::Warn,
+			format!(
+				"{} scan{} failed open since {} ({hours} h), the last at {}: that mail was accepted unscanned",
+				health.failures,
+				if health.failures == 1 { "" } else { "s" },
+				when(health.failing_since),
+				when(health.last_failure),
+			),
+		)
+	} else if health.last_failure.is_some() {
+		Item::new(
+			"scans",
+			Level::Ok,
+			format!(
+				"scanning again since {}; the last failure was at {}",
+				when(health.recovered_at),
+				when(health.last_failure),
+			),
+		)
+	} else {
+		return report;
+	};
+	if item.status > report.status {
+		report.status = item.status;
+		report.detail = format!("{}; {}", report.detail, item.detail);
+	}
+	report.items.push(item);
+	report
 }
 
 async fn evaluate(socket: &Path, now: i64, limit: Duration) -> AreaReport {

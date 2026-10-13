@@ -66,6 +66,73 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for a submission whose envelope sender the acting account does
+	/// not own. One answer for every such sender, owned by another account
+	/// or by none, so the refusal says nothing about which addresses exist.
+	pub fn forbidden_from() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden_from",
+			message: "The sender address is not owned by an account this credential may act for."
+				.to_string(),
+		}
+	}
+
+	/// `403` for an account-bound API key on a route outside JMAP and
+	/// `/api/v1/send`.
+	pub fn account_bound_route() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: "This key is bound to one account and only reaches JMAP and /api/v1/send."
+				.to_string(),
+		}
+	}
+
+	/// `403` for an account-bound API key whose account is disabled or no
+	/// longer exists. One answer for both, the same refusal the JMAP
+	/// WebSocket gives such a key mid-connection.
+	pub fn bound_account_unavailable() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: "The account this key is bound to is disabled or no longer exists."
+				.to_string(),
+		}
+	}
+
+	/// `507` for a local recipient whose mailbox is full, or would be with
+	/// this message: nothing was queued; the recipient has to make room or
+	/// be left out.
+	pub fn mailbox_full(recipient: &str) -> Self {
+		ApiError {
+			status: StatusCode::INSUFFICIENT_STORAGE,
+			code: "mailbox_full",
+			message: format!("The mailbox of {recipient} is full; nothing was sent."),
+		}
+	}
+
+	/// `413` for a message that is over the size limit once built: the
+	/// encoded bodies and attachments did not fit, whatever the request size.
+	pub fn message_too_large(limit: usize) -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "message_too_large",
+			message: format!("The message is larger than {limit} bytes once built."),
+		}
+	}
+
+	/// `422` for a message the antivirus refused: nothing was sent, and
+	/// sending it again is refused again. The signature tells the sender
+	/// what was found.
+	pub fn virus_detected(signature: &str) -> Self {
+		ApiError {
+			status: StatusCode::UNPROCESSABLE_ENTITY,
+			code: "virus_detected",
+			message: format!("The message was rejected: virus detected ({signature})."),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

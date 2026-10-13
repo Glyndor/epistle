@@ -343,6 +343,19 @@ async fn obtain_times_out_when_authorization_never_valid() {
 	assert!(result.is_err(), "perpetual pending must time out");
 }
 
+/// Every published TXT value is reported visible at once.
+struct AlwaysVisible;
+
+impl crate::acme::challenge::TxtVisibility for AlwaysVisible {
+	fn visible<'a>(
+		&'a self,
+		_name: &'a str,
+		_value: &'a str,
+	) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+		Box::pin(async { true })
+	}
+}
+
 /// An in-memory DnsProvider that records upserts and deletes.
 #[derive(Default)]
 struct RecordingProvider {
@@ -449,9 +462,11 @@ async fn obtain_certificate_dns01_publishes_and_cleans_up() {
 		.await
 		.expect("register");
 
-	let provider = RecordingProvider::default();
+	let provider = std::sync::Arc::new(RecordingProvider::default());
+	let responder =
+		crate::acme::challenge::Dns01::new(provider.clone(), std::sync::Arc::new(AlwaysVisible));
 	let (chain, key_pem) = client
-		.obtain_certificate_dns01(&["mail.example.org".to_string()], &provider, 3)
+		.obtain_certificate(&["mail.example.org".to_string()], &responder, 3)
 		.await
 		.expect("obtain");
 	assert!(chain.starts_with("-----BEGIN CERTIFICATE-----"));

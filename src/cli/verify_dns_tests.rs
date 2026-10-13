@@ -272,6 +272,7 @@ fn dkim_selectors_prefer_rotation_state_selector_over_configured() {
 		key_file: std::path::PathBuf::from("rotated.key"),
 		rotated_at: 31 * 86_400,
 		previous: None,
+		pending: None,
 	};
 	std::fs::write(
 		dir.path().join("dkim-rotation.json"),
@@ -340,5 +341,36 @@ fn dkim_selectors_fail_on_invalid_rotation_state() {
 	assert!(
 		error.to_string().contains("dkim-rotation.json"),
 		"error must name the state file, got: {error}"
+	);
+}
+
+#[test]
+fn on_a_terminal_each_record_carries_its_symbol_inside_the_width() {
+	use crate::cli::term::table::tests::visible;
+	use crate::cli::term::{Decor, fake};
+	let dns = FakeDns::default();
+	let mut out = Vec::new();
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	fake::with_stdout(Decor::coloured(40), || {
+		runtime.block_on(report(
+			&["example.org".to_string()],
+			"mail.example.org",
+			None,
+			None,
+			&[],
+			&dns,
+			&mut out,
+			crate::cli::style::Progress::start("checking"),
+		))
+	});
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(text.contains("\x1b[31m✘ missing"), "{text}");
+	for line in text.lines().map(visible) {
+		assert!(line.chars().count() <= 40, "{line:?}");
+		assert!(!line.contains("MISS"), "{line:?}");
+	}
+	assert!(
+		text.lines().any(|line| visible(line) == "example.org:"),
+		"{text}"
 	);
 }

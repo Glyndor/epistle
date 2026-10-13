@@ -61,7 +61,7 @@ fn limits_show_command_writes_data_without_restart() {
 	let calls = Cell::new(0);
 	let code = run_with_restart(
 		file.path(),
-		Action::Show,
+		Action::Show { json: false },
 		false,
 		&mut out,
 		&mut status,

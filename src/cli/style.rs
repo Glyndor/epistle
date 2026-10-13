@@ -3,8 +3,9 @@
 //! (`warn_to`) is handed [`stderr`] by `dispatch`. stdout is reserved for
 //! command data (archives, keys, listings) and is never decorated.
 //!
-//! Colour is decided by `anstream` from `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`
-//! and whether stderr is a terminal. Forced colour (`CLICOLOR_FORCE=1`) is the
+//! Colour is decided once, by `crate::cli::term::colours`, from `NO_COLOR`,
+//! `TERM`, `CLICOLOR`, `CLICOLOR_FORCE` and whether stderr is a terminal, and
+//! handed to `anstream` as a fixed choice. Forced colour (`CLICOLOR_FORCE=1`) is the
 //! gate an integration test uses to make sure stderr actually carries escape
 //! codes; the same code path serves a real user running `epistle` from a
 //! terminal.
@@ -28,12 +29,11 @@ const CLEAR_LINE: &str = "\r\x1b[2K\r";
 /// sink `dispatch` hands to a command that takes its warning writer as a
 /// parameter.
 ///
-/// All decoration routes through `anstream`, which chooses to emit ANSI
-/// sequences or pass the text through unchanged based on environment variables
-/// (`NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`) and whether the sink is a
-/// terminal. Nothing else in the CLI makes that decision.
+/// Whether it carries escapes is [`crate::cli::term::colours`] for stderr,
+/// the same answer clap gets, so an `error:` from epistle and a usage error
+/// from clap are coloured alike.
 pub(crate) fn stderr() -> anstream::AutoStream<std::io::Stderr> {
-	anstream::stderr()
+	anstream::AutoStream::new(std::io::stderr(), crate::cli::term::colour_choice(true))
 }
 
 /// Whether stderr is a terminal right now.
@@ -67,13 +67,18 @@ const ERROR_PREFIX: anstyle::Style = anstyle::Style::new()
 /// `AutoStream<Stderr>`) which keeps them when stderr is a terminal. A raw
 /// `Vec<u8>` writes the codes through verbatim, which is why every test wraps
 /// its sink.
+///
+/// A spinner row on the terminal is erased first (see
+/// [`crate::cli::term::live::quiet`]), so the message never lands on it.
 pub(crate) fn error_to(out: &mut impl Write, msg: impl std::fmt::Display) {
-	let _ = writeln!(
-		out,
-		"{prefix}error:{reset} {msg}",
-		prefix = ERROR_PREFIX,
-		reset = anstyle::Reset,
-	);
+	crate::cli::term::live::quiet(|| {
+		let _ = writeln!(
+			out,
+			"{prefix}error:{reset} {msg}",
+			prefix = ERROR_PREFIX,
+			reset = anstyle::Reset,
+		);
+	});
 }
 
 /// Prefix style for `warning:` lines. The literal `warning:` is bold yellow.
@@ -90,13 +95,17 @@ const WARNING_PREFIX: anstyle::Style = anstyle::Style::new()
 /// `AutoStream<Stderr>`) which keeps them when stderr is a terminal. A raw
 /// `Vec<u8>` writes the codes through verbatim, which is why every test wraps
 /// its sink.
+///
+/// A spinner row on the terminal is erased first, as for [`error_to`].
 pub(crate) fn warn_to(out: &mut impl Write, msg: impl std::fmt::Display) {
-	let _ = writeln!(
-		out,
-		"{prefix}warning:{reset} {msg}",
-		prefix = WARNING_PREFIX,
-		reset = anstyle::Reset,
-	);
+	crate::cli::term::live::quiet(|| {
+		let _ = writeln!(
+			out,
+			"{prefix}warning:{reset} {msg}",
+			prefix = WARNING_PREFIX,
+			reset = anstyle::Reset,
+		);
+	});
 }
 
 /// A single rewritable progress line on stderr.
@@ -119,8 +128,12 @@ impl Progress {
 	/// Start a progress line for `label`. The label is the fixed prefix the
 	/// operator sees (e.g. `importing`). Whether stderr is a terminal is read
 	/// once, here.
+	///
+	/// While a spinner is drawing, the spinner is the progress: the ticks
+	/// are not drawn and only the summary is printed.
 	pub(crate) fn start(label: &str) -> Self {
-		Self::with_sink(label, stderr(), stderr_is_terminal())
+		let on_terminal = stderr_is_terminal() && !crate::cli::term::live::active();
+		Self::with_sink(label, stderr(), on_terminal)
 	}
 }
 
@@ -166,10 +179,12 @@ impl<W: Write> Progress<W> {
 	/// on top of each other. The summary itself is plain text; no `ok:`
 	/// prefix.
 	pub(crate) fn finish(mut self, summary: &str) {
-		if self.on_terminal {
-			let _ = write!(self.out, "{CLEAR_LINE}");
-		}
-		let _ = writeln!(self.out, "{summary}");
+		crate::cli::term::live::quiet(|| {
+			if self.on_terminal {
+				let _ = write!(self.out, "{CLEAR_LINE}");
+			}
+			let _ = writeln!(self.out, "{summary}");
+		});
 	}
 }
 

@@ -1,0 +1,41 @@
+//! The upsert contract against the deSEC mock: a TXT upsert replaces the
+//! record of the same purpose and leaves every other TXT at the name alone.
+//! deSEC's bulk PUT replaces the whole rrset, so the upsert has to carry the
+//! siblings it read.
+
+use super::*;
+use crate::dns::txt::fixtures::{NEW_DKIM, OLD_DKIM, SIBLING};
+use crate::dns::txt::txt_presentation;
+
+const NAME: &str = "sel._domainkey.example.org";
+
+async fn upsert_over(existing: &[&str]) -> Vec<String> {
+	let records: Vec<String> = existing.iter().map(|v| txt_presentation(v)).collect();
+	let (provider, state) = mock(serde_json::json!([{
+		"subname": "sel._domainkey", "type": "TXT", "ttl": 3600, "records": records,
+	}]))
+	.await;
+	provider
+		.upsert("example.org", txt(NAME, NEW_DKIM))
+		.await
+		.expect("upsert");
+	let body = state.lock().unwrap().puts[0].clone();
+	let mut put = extract_records(&body);
+	put.sort();
+	put
+}
+
+#[tokio::test]
+async fn txt_upsert_keeps_a_sibling_of_another_purpose() {
+	let put = upsert_over(&[SIBLING]).await;
+	assert!(put.contains(&txt_presentation(SIBLING)), "{put:?}");
+	assert!(put.contains(&txt_presentation(NEW_DKIM)), "{put:?}");
+}
+
+#[tokio::test]
+async fn txt_rotation_leaves_one_record_of_that_purpose() {
+	let put = upsert_over(&[SIBLING, OLD_DKIM]).await;
+	let mut expected = vec![txt_presentation(SIBLING), txt_presentation(NEW_DKIM)];
+	expected.sort();
+	assert_eq!(put, expected);
+}

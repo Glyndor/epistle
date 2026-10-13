@@ -3,6 +3,7 @@
 use std::io;
 use std::path::Path;
 
+use crate::imap::changelog::{Change, Op};
 use crate::util::path_component::{AccountName, FixedDir};
 use crate::util::path_containment::{contained_child, contained_subdir};
 
@@ -12,14 +13,21 @@ pub(crate) fn ensure_defaults(data_dir: &Path, account: &str) -> io::Result<()> 
 	std::fs::create_dir_all(root.child(FixedDir::Tmp)?)?;
 	let folders = root.child(FixedDir::Folders)?;
 	std::fs::create_dir_all(&folders)?;
+	let mut created = Vec::new();
 	for name in ["Rejects", "Sent", "Drafts", "Trash", "Archive"] {
 		let folder = contained_subdir(&folders, name)?;
 		// Existing folders belong to the user, including their contents and metadata.
 		match std::fs::create_dir(&folder) {
-			Ok(()) => std::fs::create_dir(contained_child(&folder, "new")?)?,
+			Ok(()) => {
+				std::fs::create_dir(contained_child(&folder, "new")?)?;
+				created.push(Change::mailbox(Op::Created, name));
+			}
 			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
 			Err(error) => return Err(error),
 		}
+	}
+	if !created.is_empty() {
+		crate::imap::changelog::note(root.as_path(), &created);
 	}
 	Ok(())
 }

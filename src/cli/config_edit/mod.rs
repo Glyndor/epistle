@@ -5,6 +5,7 @@ mod diff;
 mod edits;
 mod elements;
 mod file;
+mod lookup;
 mod restart;
 mod rules;
 mod tables;
@@ -79,6 +80,8 @@ impl ConfigDocument {
 	}
 }
 
+#[cfg(test)]
+mod tests_dry_run;
 #[cfg(test)]
 mod tests_file;
 #[cfg(test)]

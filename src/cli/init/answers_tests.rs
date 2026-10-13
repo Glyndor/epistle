@@ -29,5 +29,7 @@ pub(super) fn minimal(mode: Mode) -> Answers {
 		services: Services::default(),
 		image: None,
 		acme: None,
+		first_account: None,
+		resources: Default::default(),
 	}
 }

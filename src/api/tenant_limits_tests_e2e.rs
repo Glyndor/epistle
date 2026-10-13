@@ -24,12 +24,14 @@ fn unscoped_state(dir: &std::path::Path) -> ApiState {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
 
 	let domains = vec!["a.example".to_string(), "b.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 		password_hash: Some("$argon2id$secret".to_string()),
@@ -81,12 +83,14 @@ fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
 
 	let domains = vec!["a.example".to_string(), "b.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 		password_hash: Some("$argon2id$secret".to_string()),
@@ -231,11 +235,13 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
 	let domains = vec!["a.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 		password_hash: Some("$argon2id$secret".to_string()),
@@ -303,11 +309,13 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 			ip_cidr: None,
 			scopes: vec!["read".to_string(), "send".to_string()],
 			domains: Vec::new(),
+			account: None,
 		})
 		.expect("add key");
 	drop(key_store);
 	let domains = vec!["a.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
 		password_hash: Some("$argon2id$secret".to_string()),

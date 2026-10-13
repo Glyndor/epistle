@@ -155,6 +155,9 @@ pub enum Command {
 		/// the client already sent the bytes; the server must consume or
 		/// discard them when it rejects the command.
 		synchronizing: bool,
+		/// The message came as `UTF8 (~{n})` (RFC 6855 §4): it may carry
+		/// UTF-8 header fields, and a `)` follows the literal.
+		utf8: bool,
 	},
 	/// `REPLACE <seq> <mailbox> [(flags)] {literal}` (RFC 8508): append a new
 	/// message to `mailbox`, then expunge message `sequence` from the selected
@@ -633,7 +636,7 @@ mod parse;
 mod search;
 mod select_params;
 
-pub(super) use literal::literal_announcement_in_line;
+pub(crate) use literal::literal_announcement_in_line;
 
 pub use credentials::{AuthenticateRequest, Line, LoginRequest, Secret, parse_line};
 pub(super) use parse::MAX_APPEND_SIZE;
@@ -646,3 +649,7 @@ mod tests;
 #[cfg(test)]
 #[path = "command_tests_rfc9051_sequence.rs"]
 mod tests_rfc9051_sequence;
+
+#[cfg(test)]
+#[path = "command_tests_utf8_append.rs"]
+mod tests_utf8_append;

@@ -1,3 +1,81 @@
+epistle (0.11.0) unstable; urgency=medium
+
+  * Security: API and JMAP push subscriptions belong to their creator; a
+    WebSocket or event-source session closes once its credential is revoked
+    or its account disabled; HTTP routes refuse a disabled account's key;
+    JMAP reads need the read scope; TLS-RPT reports are posted only to public
+    addresses; DMARC reports go only to plain addresses the policy domain
+    authorizes; SCRAM verifiers use 600000 iterations and TOTP secrets are
+    encrypted at rest; account-bound keys stay within their account.
+  * Mail protocols: no second banner inside TLS after STARTTLS (mail
+    between two epistle servers failed), commands pipelined behind STARTTLS
+    are dropped, DMARC evaluates the From a reader sees, submissions with a
+    From the account does not own are refused, DKIM signs for the From
+    domain, a rotated DKIM key is used only once DNS shows it, DANE applies
+    only behind a DNSSEC-secure MX and never falls back to cleartext on a
+    bogus TLSA, every listener survives a failed accept and bounds TLS
+    handshakes and HTTP request heads.
+  * Sending: the API and JMAP go through the same path as SMTP submission
+    (DKIM signed, local recipients delivered directly) and build complete
+    messages (text and HTML, attachments, inline parts, threading and list
+    headers); Bcc never leaves the server; mail the server's own accounts
+    send is scanned for viruses; every stored copy gets Return-Path and
+    Delivered-To, and a forwarding loop is bounced; TLS-Required: No is
+    honoured for our own senders.
+  * MTA-STS: a policy fetch failure is reported in TLS-RPT and a new
+    policy id is picked up before max_age.
+  * IMAP: new keywords are announced in FLAGS before the FETCH that uses
+    them, new messages are announced after APPEND and on NOOP, and a
+    LITERAL+ APPEND gets no stray continuation.
+  * DNS providers: TXT values reach each of the 13 providers in the form
+    its API expects, an update replaces only the record of the same
+    purpose, and Namecheap uses the request its API documents (it needs
+    `[dns] client_ip` now).
+  * DKIM rotation is journalled: a crash at any step completes or rolls
+    back on the next start, and `epistle dkim cleanup` removes orphans.
+  * JMAP: incremental sync with /changes and /queryChanges from a per-account
+    change journal, push over an event source, and the limits the Session
+    advertises are enforced.
+  * CLI: every resource answers to epistle <resource> <action> with --json
+    and consistent exit codes; destructive commands ask first (--yes skips),
+    passwords are read without echo, shell completions and man pages ship
+    in the package; the account stores lock across CLI and server.
+  * Delivery: greylisting persists in PostgreSQL, DMARC reports are signed
+    and well formed, ACME supports TLS-ALPN-01 and DNS-01, TLS-RPT reports
+    are sent, autoconfig is served on 443, Sieve gains the mailbox
+    extension, CalDAV/CardDAV support sync-collection and filters.
+  * Mail addresses, aliases and domains are stored in lowercase whoever
+    writes them; a refused address names the rule it breaks; accounts get
+    a free-text display name used by JMAP, SCIM and the send API.
+  * Outbound delivery decides per recipient: one refused address no longer
+    stops the others, no recipient is sent twice, and the remote reply is
+    classified by its enhanced status code (mailbox full is retried, policy
+    rejections are bounced but never suppress the address, a null MX fails
+    at once). Retry timing is configurable and spread with jitter.
+  * Inbound SMTP enforces the mailbox quota with 452 4.2.2, answers RCPT
+    before MAIL with 503, and every error reply carries an enhanced code.
+  * epistle status checks clamd from the mail container when the stack
+    holds its socket.
+  * The service account gets a subordinate id range no other account holds;
+    an upgrade moves a range 0.10.1 shared with the first user.
+  * Upgrades: stack update renders the compose file again, pins images by
+    digest, dumps the database before restarting, checks health after it,
+    and `epistle stack rollback` goes back to the previous binary;
+    `epistle db upgrade` moves PostgreSQL to a new major; on SIGTERM the
+    server drains open SMTP and IMAP sessions.
+  * Stack: the server's PostgreSQL role is no longer a superuser, keys live
+    outside data_dir, containers drop every capability they do not need,
+    run read-only and have memory and process limits.
+  * `epistle backup` works on servers that have sent mail (paths over 100
+    bytes failed since 0.10.0).
+  * The CLI marks states with symbols and colour on a terminal, shows
+    progress on long commands, offers a list when an account, alias or
+    domain is missing, and `epistle init` creates the first account with
+    postmaster@ and abuse@.
+  * PostgreSQL 18 is the minimum supported server.
+
+ -- Glyndor <packages@glyndor.net>  Tue, 13 Oct 2026 08:49:51 +0000
+
 epistle (0.10.1) unstable; urgency=medium
 
   * DNS records epistle writes carry its version as their description
@@ -48,7 +126,7 @@ epistle (0.10.0) unstable; urgency=medium
   * IMAP LOGIN and AUTHENTICATE credentials never travel through the
     general command type.
 
- -- Glyndor <packages@glyndor.net>  dom, 11 oct 2026 19:24:44 +0000
+ -- Glyndor <packages@glyndor.net>  Sun, 11 Oct 2026 19:24:44 +0000
 
 epistle (0.9.2) unstable; urgency=medium
 

@@ -27,6 +27,10 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
+
+/// How DNSimple takes a TXT `content` and lists it back; see `upsert_inner`.
+const TXT_FORM: TxtForm = TxtForm::Presentation;
 
 /// DNSimple's API root. The account id goes in the path (`/v2/{id}/...`), so
 /// the base stops at `/v2` and we append `<account_id>` per request.
@@ -262,10 +266,23 @@ impl DnsimpleProvider {
 			})
 			.to_string()
 		} else {
+			// DNSimple serializes an unquoted TXT itself, but content
+			// already in double quotes "will store and publish this
+			// content verbatim", splitting past 255 is automatic, and
+			// pre-split "chunk1" "chunk2" is stored as is
+			// (<https://support.dnsimple.com/articles/txt-record-format/>,
+			// read 2026-10-12). Sending the presentation form makes the
+			// stored content exactly what was sent, the same bytes every
+			// time, with the escaping under our control.
+			let content = if record.kind == RecordKind::Txt {
+				txt_encode(&record.value, TXT_FORM)
+			} else {
+				record.value.clone()
+			};
 			serde_json::json!({
 				"name": relative,
 				"type": kind,
-				"content": record.value,
+				"content": content,
 				"ttl": record.ttl,
 			})
 			.to_string()
@@ -375,6 +392,8 @@ impl DnsimpleProvider {
 						}
 						_ => return None,
 					}
+				} else if kind == RecordKind::Txt {
+					txt_decode(&r.content, TXT_FORM)
 				} else {
 					r.content
 				};

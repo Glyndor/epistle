@@ -60,15 +60,24 @@ impl Server {
 		self
 	}
 
-	/// Serve a bound socket until cancelled or an accept error occurs.
+	/// Serve a bound socket until cancelled; a failed accept does not end it.
 	/// Dropping this future aborts its active connections.
-	pub async fn serve(mut self, listener: TcpListener, metrics: Arc<Metrics>) -> io::Result<()> {
+	pub async fn serve(self, listener: TcpListener, metrics: Arc<Metrics>) -> io::Result<()> {
+		self.serve_on(listener, metrics).await
+	}
+
+	/// [`Self::serve`] over any source of connections.
+	pub(crate) async fn serve_on<A: crate::net::accept::Accept>(
+		mut self,
+		listener: A,
+		metrics: Arc<Metrics>,
+	) -> io::Result<()> {
+		let mut accepting = crate::net::accept::Accepting::new(listener);
 		let semaphore = Arc::new(Semaphore::new(self.max_connections));
 		let mut connections = JoinSet::new();
 		loop {
 			tokio::select! {
-				accepted = listener.accept() => {
-					let (stream, _) = accepted?;
+				(stream, _) = accepting.next() => {
 					let tls = self.tls.current();
 					let router = self.router.clone();
 					let semaphore = Arc::clone(&semaphore);

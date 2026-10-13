@@ -32,9 +32,35 @@ pub(super) fn eval_test(
 		"size" => size_test(test, message),
 		"date" => date_test(test, message),
 		"currentdate" => currentdate_test(test, message),
+		"mailboxexists" => mailboxexists_test(test, message),
 		// Unknown test: fail safe.
 		_ => false,
 	}
+}
+
+/// `mailboxexists <mailbox-names>` (RFC 5490 §3.1): true when every named
+/// mailbox exists for the recipient account and the account may deliver
+/// into it. Names go through the same modified UTF-7 encoding `fileinto`
+/// uses (the names IMAP stores on disk). A mailbox set the caller did
+/// not attach leaves the test false, so a script without context is
+/// fail-safe and never matches by accident.
+fn mailboxexists_test(test: &Test, message: &Message) -> bool {
+	let names = compare::positional_strings(&test.args);
+	let Some(mailboxes) = &message.mailboxes else {
+		return false;
+	};
+	names.iter().all(|name| mailbox_exists(name, mailboxes))
+}
+
+/// Whether the given Sieve name maps to an existing mailbox in `mailboxes`.
+/// INBOX is always present for a valid account, regardless of the supplied
+/// list, so a script can rely on it. Other names are looked up under their
+/// IMAP on-disk spelling (modified UTF-7).
+fn mailbox_exists(name: &str, mailboxes: &[String]) -> bool {
+	if name.eq_ignore_ascii_case("INBOX") {
+		return true;
+	}
+	mailboxes.contains(&crate::util::mutf7::encode(name))
 }
 
 /// `date [match-type] [comparator] <header-name> <date-part> <key-list>`

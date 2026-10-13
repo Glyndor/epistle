@@ -64,7 +64,7 @@ async fn upsert_existing_replaces_with_deletions_plus_additions() {
 		name: "_dmarc.example.org.".into(),
 		kind: "TXT".into(),
 		ttl: 300,
-		rrdatas: vec!["\"old\"".into()],
+		rrdatas: vec!["\"v=DMARC1; p=none\"".into()],
 	}];
 	{
 		let mut s = state.lock().unwrap();
@@ -72,23 +72,32 @@ async fn upsert_existing_replaces_with_deletions_plus_additions() {
 		s.rrsets = serde_json::json!({ "rrsets": initial });
 	}
 	provider
-		.upsert("example.org", txt("_dmarc.example.org", "new-value"))
+		.upsert(
+			"example.org",
+			txt("_dmarc.example.org", "v=DMARC1; p=reject"),
+		)
 		.await
 		.expect("upsert");
 	let body = state.lock().unwrap().changes.last().unwrap().clone();
 	// One change carries both the old (deletion) and the new (addition).
 	assert!(body.contains("\"deletions\":[{"), "{body}");
-	assert!(body.contains("\"rrdatas\":[\"\\\"old\\\"\"]"), "{body}");
+	assert!(
+		body.contains(r#""rrdatas":["\"v=DMARC1; p=none\""]"#),
+		"{body}"
+	);
 	assert!(body.contains("\"additions\":[{"), "{body}");
 	assert!(
-		body.contains("\"rrdatas\":[\"\\\"new-value\\\"\"]"),
+		body.contains(r#""rrdatas":["\"v=DMARC1; p=reject\""]"#),
 		"{body}"
 	);
 	// Calling upsert again with the same value must NOT submit a no-op change
 	// (avoids the "two TXT for the same name" foot-gun).
 	let before = state.lock().unwrap().changes.len();
 	provider
-		.upsert("example.org", txt("_dmarc.example.org", "new-value"))
+		.upsert(
+			"example.org",
+			txt("_dmarc.example.org", "v=DMARC1; p=reject"),
+		)
 		.await
 		.expect("upsert");
 	assert_eq!(

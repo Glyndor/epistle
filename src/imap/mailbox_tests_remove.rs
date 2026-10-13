@@ -92,3 +92,48 @@ fn remove_at_drops_exactly_the_message_at_that_sequence() {
 	assert!(snapshot.remove_at(0).is_err(), "sequences start at 1");
 	assert_eq!(snapshot.len(), 4);
 }
+
+/// An expunge in a folder is logged for `VANISHED (EARLIER)` exactly like one
+/// in INBOX: the folder's log path is not mistaken for an account path.
+#[test]
+fn expunge_in_a_folder_logs_vanished_uids() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"inbox\r\n");
+	create(dir.path(), "alice", "Work").expect("create folder");
+	let crypto = MessageCrypto::disabled();
+	append(dir.path(), "alice", "Work", &[], b"one\r\n", &crypto).expect("append");
+	let mut snapshot = Snapshot::open(dir.path(), "alice", "Work", &crypto).expect("snapshot");
+	snapshot.store_flags(1, vec![Flag::Deleted]).expect("store");
+	let base = snapshot.highest_modseq();
+	snapshot.expunge().expect("expunge");
+	let folder_dir = mailbox_dir(dir.path(), "alice", "Work").expect("folder dir");
+	assert_eq!(
+		crate::imap::vanished::since(&folder_dir, base),
+		vec![1],
+		"the folder expunge must be in the folder's vanished log"
+	);
+}
+
+/// Deleting a mailbox destroys its messages for JMAP as well as the mailbox.
+#[test]
+fn deleting_a_mailbox_records_its_messages_as_destroyed() {
+	use crate::imap::changelog::Change;
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"inbox\r\n");
+	create(dir.path(), "alice", "Old").expect("create folder");
+	let crypto = MessageCrypto::disabled();
+	let id = append(dir.path(), "alice", "Old", &[], b"one\r\n", &crypto).expect("append");
+	let root = dir.path().join("accounts").join("alice");
+	let before = crate::imap::changelog::current(&root).expect("current");
+	delete(dir.path(), "alice", "Old").expect("delete");
+	let (_, entries) =
+		crate::imap::changelog::since(&root, before.epoch, before.current).expect("since");
+	let changes: Vec<Change> = entries.into_iter().map(|e| e.change).collect();
+	assert_eq!(
+		changes,
+		vec![
+			Change::email(crate::imap::changelog::Op::Destroyed, id),
+			Change::mailbox(crate::imap::changelog::Op::Destroyed, "Old"),
+		]
+	);
+}

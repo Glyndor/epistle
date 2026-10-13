@@ -84,6 +84,7 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 	let inbox = dir.path().join("accounts/alice/new");
@@ -92,7 +93,7 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 	std::fs::write(&email, b"Subject: hi\r\n\r\nbody\r\n").expect("write message");
 
 	let mut out = Vec::new();
-	let exit = accounts::remove(&config, "alice", QueuePolicy::Discard, &mut out);
+	let exit = accounts::remove(&config, "alice", QueuePolicy::Discard, true, &mut out);
 	assert_eq!(
 		exit,
 		ExitCode::FAILURE,
@@ -170,6 +171,7 @@ fn cli_remove_error_lines_do_not_pollute_stdout() {
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
+			..crate::directory_store::DynamicAccount::default()
 		})
 		.expect("add alice");
 	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");

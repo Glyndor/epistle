@@ -3,11 +3,15 @@
 mod accounts;
 mod archive;
 mod auth;
+mod display_name;
 mod domains;
 mod mailboxes;
 mod masked;
 mod queue;
 mod send;
+mod send_from;
+mod send_message;
+mod send_request;
 mod status;
 mod suppression;
 
@@ -28,6 +32,10 @@ pub fn router() -> Router<ApiState> {
 		.route(
 			"/accounts/{name}/password",
 			axum::routing::put(accounts::set_password),
+		)
+		.route(
+			"/accounts/{name}/display_name",
+			axum::routing::put(display_name::set),
 		)
 		.route(
 			"/accounts/{name}/totp",

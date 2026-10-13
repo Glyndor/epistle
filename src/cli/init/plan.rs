@@ -153,6 +153,13 @@ pub enum PlanStep {
 		/// and `init` will not touch it.
 		reused: bool,
 	},
+	/// The password of the PostgreSQL admin role, beside data_dir.
+	DbAdminPassword {
+		/// Path the password file will live at.
+		path: PathBuf,
+		/// `true` when a non-empty file is already there.
+		reused: bool,
+	},
 	/// The compose file `podup` brings up. Always listed; the
 	/// compose file is written whether or not the database
 	/// service is on, because the `mail` service is the same in
@@ -170,6 +177,22 @@ pub enum PlanStep {
 		/// apply phase will overwrite it (the operator sees
 		/// `update` instead of `write`).
 		file_exists: bool,
+	},
+	/// The first mail account, created once the configuration is
+	/// written (`[first_account]`).
+	Account {
+		/// The account name.
+		name: String,
+		/// The account's address.
+		address: String,
+	},
+	/// A role address (`postmaster@`, `abuse@`) made an alias of the
+	/// first account.
+	RoleAlias {
+		/// The role address.
+		address: String,
+		/// The first account's address it delivers to.
+		target: String,
 	},
 }
 
@@ -323,6 +346,10 @@ impl fmt::Display for PlanStep {
 				let verb = if *reused { "reuse" } else { "generate" };
 				write!(f, "database password: {verb} {}", path.display())
 			}
+			PlanStep::DbAdminPassword { path, reused } => {
+				let verb = if *reused { "reuse" } else { "generate" };
+				write!(f, "database admin password: {verb} {}", path.display())
+			}
 			PlanStep::ComposeFile {
 				path,
 				identical,
@@ -338,6 +365,12 @@ impl fmt::Display for PlanStep {
 					let verb = if *file_exists { "update" } else { "write" };
 					write!(f, "compose file: {verb} {}", path.display())
 				}
+			}
+			PlanStep::Account { name, address } => {
+				write!(f, "account: create {name} <{address}>")
+			}
+			PlanStep::RoleAlias { address, target } => {
+				write!(f, "alias: {address} -> {target}")
 			}
 		}
 	}

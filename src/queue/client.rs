@@ -16,8 +16,10 @@ use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, S
 
 use crate::config::OutboundTls;
 use crate::dane::policy::DaneOutcome;
-use crate::dane::tlsa::TlsaRecord;
+use crate::dane::rrset::TlsaRrset;
 use crate::dane::verify::verify_chain;
+
+use super::tls_outcome::{STARTTLS_NOT_SUPPORTED, TLSA_INVALID, TlsOutcome, classify_handshake};
 
 /// Whether the attempt may be retried later.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +31,17 @@ pub enum DeliveryError {
 }
 
 impl DeliveryError {
-	fn from_reply(code: u16, line: &str) -> Self {
-		if code >= 500 {
-			DeliveryError::Permanent(format!("{code} {line}"))
+	/// The error for a reply that was not the one expected. `raw` is the
+	/// whole reply as received; the reason keeps it as one line. Whether it
+	/// is worth retrying follows the reply's enhanced status when it has one
+	/// (a 552 5.2.2 full mailbox is retried), else its basic code.
+	fn from_reply(code: u16, raw: &str) -> Self {
+		let reason = super::reply::normalize(code, raw);
+		let text = reason.get(4..).unwrap_or_default();
+		if code >= 500 && super::reply::classify(code, text).permanent {
+			DeliveryError::Permanent(reason)
 		} else {
-			DeliveryError::Transient(format!("{code} {line}"))
+			DeliveryError::Transient(reason)
 		}
 	}
 }
@@ -41,23 +49,31 @@ impl DeliveryError {
 /// One outbound delivery attempt over an established stream.
 ///
 /// `server_name` is the MX hostname used for TLS verification when the remote
-/// offers STARTTLS. `tlsa` are the DNSSEC-validated TLSA records for this MX (an
-/// empty slice means none): when present they make STARTTLS mandatory and the
-/// presented certificate is authenticated against them (RFC 7672). TLS is
-/// otherwise opportunistic: a remote without STARTTLS and no TLSA still gets the
-/// mail. Fail closed: a TLSA mismatch, or DANE-mandated STARTTLS the remote does
-/// not offer, returns a transient error so the message is retried, never sent in
-/// the clear.
+/// offers STARTTLS. `tlsa` is the classified TLSA RRset of this MX: any secure
+/// RRset, usable or not, makes STARTTLS mandatory (RFC 7672 section 2.2), and
+/// usable records authenticate the presented certificate. Without TLSA and
+/// without a mandate, TLS is opportunistic: a remote without STARTTLS still
+/// gets the mail. Fail closed: a TLSA mismatch, or mandatory STARTTLS the
+/// remote does not offer, returns a transient error so the message is
+/// retried, never sent in the clear.
 ///
-/// How the STARTTLS certificate is authenticated depends on three inputs:
-/// * `require_tls` (MTA-STS enforce / REQUIRETLS) → strict PKIX (webpki +
-///   hostname), always.
-/// * `tlsa` present → accept-any handshake, then `verify_chain` authenticates
-///   the chain against the TLSA records (DANE-EE certificates are commonly
-///   self-signed, so PKIX must not run first).
-/// * neither: `mode` decides — [`OutboundTls::Strict`] (the default) uses strict
-///   PKIX, [`OutboundTls::Opportunistic`] completes the handshake with any
-///   certificate (encryption without authentication, the SMTP norm).
+/// How the STARTTLS certificate is authenticated:
+/// * usable TLSA records: accept-any handshake, then `verify_chain`
+///   authenticates the chain against them (DANE-EE certificates are commonly
+///   self-signed, so PKIX must not run first). This holds under MTA-STS
+///   enforce and REQUIRETLS too.
+/// * otherwise `require_tls` (MTA-STS enforce / REQUIRETLS): strict PKIX
+///   (webpki + hostname).
+/// * otherwise `mode` decides: [`OutboundTls::Strict`] (the default) uses
+///   strict PKIX, [`OutboundTls::Opportunistic`] completes the handshake with
+///   any certificate (encryption without authentication, the SMTP norm).
+///
+/// `tls` receives how the TLS part ended (for TLS-RPT), once the attempt gets
+/// as far as the STARTTLS decision; it stays `None` before that.
+///
+/// This is the all-or-nothing form: any recipient the remote refuses fails
+/// the call. The queue uses [`deliver_each`], which keeps one answer per
+/// recipient.
 #[allow(clippy::too_many_arguments)]
 pub async fn deliver<S>(
 	stream: S,
@@ -68,19 +84,76 @@ pub async fn deliver<S>(
 	data: &[u8],
 	require_tls: bool,
 	auth: Option<(&str, &str)>,
-	tlsa: &[TlsaRecord],
+	tlsa: &TlsaRrset,
 	mode: OutboundTls,
+	tls: &mut Option<TlsOutcome>,
 ) -> Result<(), DeliveryError>
 where
 	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+	let results = deliver_each(
+		stream,
+		server_name,
+		ehlo_hostname,
+		reverse_path,
+		recipients,
+		data,
+		require_tls,
+		auth,
+		tlsa,
+		mode,
+		tls,
+	)
+	.await?;
+	match results.into_iter().find_map(|(_, result)| result.err()) {
+		Some(error) => Err(error),
+		None => Ok(()),
+	}
+}
+
+/// The remote's answer for one recipient of a conversation.
+pub type RecipientResult = (String, Result<(), DeliveryError>);
+
+/// One outbound conversation with an answer per recipient (RFC 5321 §3.3).
+///
+/// Every recipient gets its own `RCPT TO`, and a refusal applies to that
+/// recipient alone. DATA is sent when at least one recipient was accepted,
+/// and its outcome applies to the accepted ones. `Err` means the
+/// conversation broke before any recipient had an answer of its own (the
+/// connection, the greeting, EHLO, STARTTLS, AUTH, `MAIL FROM`, or the
+/// connection dropping mid-`RCPT`); it applies to every recipient. The other
+/// arguments are those of [`deliver`].
+#[allow(clippy::too_many_arguments)]
+pub async fn deliver_each<S>(
+	stream: S,
+	server_name: &str,
+	ehlo_hostname: &str,
+	reverse_path: &str,
+	recipients: &[String],
+	data: &[u8],
+	require_tls: bool,
+	auth: Option<(&str, &str)>,
+	tlsa: &TlsaRrset,
+	mode: OutboundTls,
+	tls: &mut Option<TlsOutcome>,
+) -> Result<Vec<RecipientResult>, DeliveryError>
+where
+	S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+	// Any secure TLSA RRset makes TLS mandatory, even when none of its
+	// records can authenticate the server (RFC 7672 section 2.2).
+	let tls_mandatory = require_tls || *tlsa != TlsaRrset::Absent;
+	let tlsa = tlsa.records();
 	let mut conn = Conn::new(Box::new(stream));
 	conn.expect(220).await?;
 
 	conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 	let offers_starttls = conn.last_reply_contains("STARTTLS");
+	if !offers_starttls {
+		*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
+	}
 	// DANE presence makes STARTTLS mandatory (RFC 7672 §2.2): never downgrade.
-	if (require_tls || !tlsa.is_empty()) && !offers_starttls {
+	if tls_mandatory && !offers_starttls {
 		return Err(DeliveryError::Transient(
 			"TLS required (MTA-STS/DANE) but remote offers no STARTTLS".into(),
 		));
@@ -88,25 +161,34 @@ where
 
 	let mut tls_active = false;
 	if offers_starttls {
-		conn.command("STARTTLS", 220).await?;
+		if let Err(error) = conn.command("STARTTLS", 220).await {
+			*tls = Some(TlsOutcome::Failure(STARTTLS_NOT_SUPPORTED));
+			return Err(error);
+		}
 		let inner = conn.into_inner();
-		// Authenticate the certificate via PKIX (webpki + hostname) only when TLS
-		// is mandated, or when it is purely opportunistic AND strict mode is set.
-		// With TLSA present, DANE (below) authenticates instead, so the handshake
-		// accepts any certificate — a DANE-EE leaf is normally self-signed.
-		let authenticate_pkix = require_tls || (tlsa.is_empty() && mode == OutboundTls::Strict);
-		let (tls, peer_chain) = tls_connect(inner, server_name, authenticate_pkix).await?;
+		// Authenticate the certificate via PKIX (webpki + hostname) unless usable
+		// TLSA records do it (DANE, below), when TLS is mandated or strict mode
+		// is set; a DANE-EE leaf is normally self-signed.
+		let authenticate_pkix = pkix_required(require_tls, !tlsa.is_empty(), mode);
+		let (stream, peer_chain) = tls_connect(inner, server_name, authenticate_pkix)
+			.await
+			.map_err(|(error, result_type)| {
+				*tls = Some(TlsOutcome::Failure(result_type));
+				error
+			})?;
 		// DANE: authenticate the presented chain against validated TLSA records.
 		// With none, this is a no-op (opportunistic); a mismatch fails closed.
 		match verify_chain(tlsa, &peer_chain) {
 			DaneOutcome::Authenticated | DaneOutcome::NoRecords => {}
 			DaneOutcome::Mismatch => {
+				*tls = Some(TlsOutcome::Failure(TLSA_INVALID));
 				return Err(DeliveryError::Transient(format!(
 					"DANE: no TLSA record matches the certificate of {server_name}"
 				)));
 			}
 		}
-		conn = Conn::new(Box::new(tls));
+		*tls = Some(TlsOutcome::Success);
+		conn = Conn::new(Box::new(stream));
 		conn.command(&format!("EHLO {ehlo_hostname}"), 250).await?;
 		tls_active = true;
 	}
@@ -126,14 +208,44 @@ where
 
 	conn.command(&format!("MAIL FROM:<{reverse_path}>"), 250)
 		.await?;
+	let mut results = Vec::with_capacity(recipients.len());
 	for recipient in recipients {
-		conn.command(&format!("RCPT TO:<{recipient}>"), 250).await?;
+		conn.send(&format!("RCPT TO:<{recipient}>")).await?;
+		// A reply refuses this recipient only; a broken connection (no
+		// reply at all) is the `?` and leaves every recipient unanswered.
+		let (code, text) = conn.reply().await?;
+		let outcome = match code / 100 {
+			2 => Ok(()),
+			_ => Err(DeliveryError::from_reply(code, &text)),
+		};
+		results.push((recipient.clone(), outcome));
 	}
-	conn.command("DATA", 354).await?;
-	conn.send_data(data).await?;
-	conn.expect(250).await?;
+	if results.iter().any(|(_, outcome)| outcome.is_ok()) {
+		let sent = async {
+			conn.command("DATA", 354).await?;
+			conn.send_data(data).await?;
+			conn.expect(250).await
+		}
+		.await;
+		if let Err(error) = sent {
+			for (_, outcome) in results.iter_mut().filter(|(_, outcome)| outcome.is_ok()) {
+				*outcome = Err(error.clone());
+			}
+		}
+	}
 	let _ = conn.command("QUIT", 221).await;
-	Ok(())
+	Ok(results)
+}
+
+/// Whether the STARTTLS certificate must pass PKIX (webpki roots and the
+/// MX name). Usable TLSA records authenticate the server instead: DANE
+/// takes precedence over MTA-STS (RFC 8461 section 2) and satisfies
+/// REQUIRETLS (RFC 8689 section 4.2.1), and a DANE-EE certificate is
+/// usually self-signed, so PKIX must not run in front of it. Without
+/// them, a mandate (MTA-STS enforce, REQUIRETLS) or strict mode requires
+/// PKIX.
+fn pkix_required(require_tls: bool, dane_records: bool, mode: OutboundTls) -> bool {
+	!dane_records && (require_tls || mode == OutboundTls::Strict)
 }
 
 /// Complete a STARTTLS handshake, returning the encrypted stream and the DER
@@ -144,7 +256,7 @@ where
 /// accepts any certificate (encryption only): the caller authenticates the
 /// returned chain by another means (DANE via `verify_chain`) or accepts
 /// unauthenticated TLS (opportunistic mode). The peer chain is captured in both
-/// cases so DANE can run on it.
+/// cases so DANE can run on it. A failure carries its RFC 8460 result type.
 async fn tls_connect(
 	stream: Box<dyn Stream>,
 	server_name: &str,
@@ -154,12 +266,18 @@ async fn tls_connect(
 		tokio_rustls::client::TlsStream<Box<dyn Stream>>,
 		Vec<Vec<u8>>,
 	),
-	DeliveryError,
+	(DeliveryError, &'static str),
 > {
 	crate::tls::ensure_crypto_provider();
 	let config = if authenticate {
 		let mut roots = RootCertStore::empty();
 		roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+		#[cfg(test)]
+		TEST_ROOTS.with(|extra| {
+			for root in extra.borrow().iter() {
+				let _ = roots.add(root.clone());
+			}
+		});
 		ClientConfig::builder()
 			.with_root_certificates(roots)
 			.with_no_client_auth()
@@ -169,12 +287,21 @@ async fn tls_connect(
 			.with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert::new()))
 			.with_no_client_auth()
 	};
-	let name = ServerName::try_from(server_name.to_string())
-		.map_err(|_| DeliveryError::Transient(format!("invalid TLS name {server_name}")))?;
+	let name = ServerName::try_from(server_name.to_string()).map_err(|_| {
+		(
+			DeliveryError::Transient(format!("invalid TLS name {server_name}")),
+			"validation-failure",
+		)
+	})?;
 	let tls = TlsConnector::from(Arc::new(config))
 		.connect(name, stream)
 		.await
-		.map_err(|error| DeliveryError::Transient(format!("TLS handshake failed: {error}")))?;
+		.map_err(|error| {
+			(
+				DeliveryError::Transient(format!("TLS handshake failed: {error}")),
+				classify_handshake(&error),
+			)
+		})?;
 	let peer_chain = tls
 		.get_ref()
 		.1
@@ -182,6 +309,14 @@ async fn tls_connect(
 		.map(|certs| certs.iter().map(|cert| cert.as_ref().to_vec()).collect())
 		.unwrap_or_default();
 	Ok((tls, peer_chain))
+}
+
+#[cfg(test)]
+thread_local! {
+	/// Trust anchors added to the webpki roots for PKIX in tests on this
+	/// thread: no test certificate chains to a public root.
+	pub(crate) static TEST_ROOTS: std::cell::RefCell<Vec<CertificateDer<'static>>> =
+		const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A `rustls` certificate verifier that accepts ANY server certificate without
@@ -284,12 +419,17 @@ impl Conn {
 	}
 
 	async fn command(&mut self, line: &str, expected: u16) -> Result<(), DeliveryError> {
+		self.send(line).await?;
+		self.expect(expected).await
+	}
+
+	/// Write one command line.
+	async fn send(&mut self, line: &str) -> Result<(), DeliveryError> {
 		self.stream
 			.write_all(format!("{line}\r\n").as_bytes())
 			.await
 			.map_err(io_transient)?;
-		self.stream.flush().await.map_err(io_transient)?;
-		self.expect(expected).await
+		self.stream.flush().await.map_err(io_transient)
 	}
 
 	/// Send message data with dot-stuffing and the final terminator.
@@ -311,16 +451,23 @@ impl Conn {
 
 	/// Read one (possibly multiline) reply and require `expected`.
 	async fn expect(&mut self, expected: u16) -> Result<(), DeliveryError> {
+		let (code, text) = self.reply().await?;
+		if code != expected {
+			return Err(DeliveryError::from_reply(code, &text));
+		}
+		Ok(())
+	}
+
+	/// Read one (possibly multiline) reply: its code and its full text. `Err`
+	/// only when no well-formed reply arrived.
+	async fn reply(&mut self) -> Result<(u16, String), DeliveryError> {
 		let reply = self.read_reply().await?;
 		let code: u16 = reply
 			.get(..3)
 			.and_then(|head| head.parse().ok())
 			.ok_or_else(|| DeliveryError::Transient(format!("malformed reply: {reply}")))?;
-		self.last_reply = reply;
-		if code != expected {
-			return Err(DeliveryError::from_reply(code, &self.last_reply));
-		}
-		Ok(())
+		self.last_reply = reply.clone();
+		Ok((code, reply))
 	}
 
 	async fn read_reply(&mut self) -> Result<String, DeliveryError> {
@@ -367,211 +514,8 @@ fn complete_reply(buffer: &[u8]) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn detects_complete_single_line_reply() {
-		assert_eq!(complete_reply(b"250 ok\r\n"), Some(8));
-		assert_eq!(complete_reply(b"250 ok"), None);
-	}
-
-	#[test]
-	fn detects_multiline_reply() {
-		let reply = b"250-a\r\n250-b\r\n250 c\r\n";
-		assert_eq!(complete_reply(reply), Some(reply.len()));
-		assert_eq!(complete_reply(b"250-a\r\n"), None);
-	}
-
-	#[tokio::test]
-	async fn delivers_to_own_server() {
-		use crate::smtp::directory::Directory;
-		use crate::smtp::server::Server;
-		use crate::smtp::sink::{MemorySink, MessageSink};
-
-		let sink = Arc::new(MemorySink::new());
-		let directory = crate::directory_store::DirectoryHandle::new(Directory::new(
-			["example.org".to_string()],
-			[("bob@example.org".to_string(), "bob".to_string())],
-		));
-		let server = Server::new("mx.example.org", sink.clone() as Arc<dyn MessageSink>)
-			.with_directory(directory);
-
-		let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
-		let task = tokio::spawn(async move { server.handle(server_stream, None).await });
-
-		deliver(
-			client_stream,
-			"mx.example.org",
-			"mail.sender.example",
-			"alice@sender.example",
-			&["bob@example.org".to_string()],
-			b"Subject: hi\r\n\r\n.leading dot\r\nbody\r\n",
-			false,
-			None,
-			&[],
-			OutboundTls::Strict,
-		)
-		.await
-		.expect("delivery succeeds");
-
-		task.abort();
-		let messages = sink.messages();
-		assert_eq!(messages.len(), 1);
-		assert_eq!(messages[0].reverse_path, "alice@sender.example");
-		let data = String::from_utf8(messages[0].data.clone()).expect("ascii");
-		// Dot-stuffing round-trips.
-		assert!(data.ends_with(".leading dot\r\nbody\r\n"), "{data}");
-	}
-
-	#[tokio::test]
-	async fn permanent_rejection_is_permanent() {
-		use crate::smtp::directory::Directory;
-		use crate::smtp::server::Server;
-		use crate::smtp::sink::{MemorySink, MessageSink};
-
-		let sink = Arc::new(MemorySink::new());
-		let server = Server::new("mx.example.org", sink as Arc<dyn MessageSink>).with_directory(
-			crate::directory_store::DirectoryHandle::new(Directory::new(
-				["example.org".to_string()],
-				[],
-			)),
-		);
-
-		let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
-		let task = tokio::spawn(async move { server.handle(server_stream, None).await });
-
-		let result = deliver(
-			client_stream,
-			"mx.example.org",
-			"mail.sender.example",
-			"alice@sender.example",
-			&["unknown@example.org".to_string()],
-			b"body\r\n",
-			false,
-			None,
-			&[],
-			OutboundTls::Strict,
-		)
-		.await;
-
-		task.abort();
-		assert!(matches!(result, Err(DeliveryError::Permanent(_))));
-	}
-
-	/// Drive `deliver` against a canned server response (writes are discarded).
-	async fn deliver_against(greeting: &'static [u8]) -> Result<(), DeliveryError> {
-		let stream = tokio::io::join(greeting, tokio::io::sink());
-		deliver(
-			stream,
-			"mx.example.org",
-			"mail.sender.example",
-			"alice@sender.example",
-			&["bob@example.org".to_string()],
-			b"body\r\n",
-			false,
-			None,
-			&[],
-			OutboundTls::Strict,
-		)
-		.await
-	}
-
-	#[tokio::test]
-	async fn malformed_greeting_is_transient() {
-		let result = deliver_against(b"not-a-code\r\n").await;
-		assert!(
-			matches!(result, Err(DeliveryError::Transient(_))),
-			"{result:?}"
-		);
-	}
-
-	#[tokio::test]
-	async fn relay_auth_without_tls_is_permanent() {
-		// Greeting then an EHLO reply offering no STARTTLS.
-		let canned: &[u8] = b"220 mx ready\r\n250-mx.example.org\r\n250 SIZE 0\r\n";
-		let stream = tokio::io::join(canned, tokio::io::sink());
-		let result = deliver(
-			stream,
-			"mx.example.org",
-			"mail.sender.example",
-			"alice@sender.example",
-			&["bob@example.org".to_string()],
-			b"body\r\n",
-			false,
-			Some(("user", "pass")),
-			&[],
-			OutboundTls::Strict,
-		)
-		.await;
-		// AUTH credentials must never cross plaintext: fail closed.
-		assert!(
-			matches!(result, Err(DeliveryError::Permanent(_))),
-			"{result:?}"
-		);
-	}
-
-	#[tokio::test]
-	async fn connection_closed_before_greeting_is_transient() {
-		let result = deliver_against(b"").await;
-		assert!(
-			matches!(result, Err(DeliveryError::Transient(_))),
-			"{result:?}"
-		);
-	}
-
-	#[tokio::test]
-	async fn oversized_reply_is_transient() {
-		// 70 KiB with no CRLF: the reply never completes and trips the cap.
-		const HUGE: &[u8] = &[b'a'; 70 * 1024];
-		let result = deliver_against(HUGE).await;
-		assert!(
-			matches!(result, Err(DeliveryError::Transient(_))),
-			"{result:?}"
-		);
-	}
-
-	/// The exact rule that decides PKIX authentication, mirroring `deliver`.
-	fn authenticate_pkix(require_tls: bool, tlsa_empty: bool, mode: OutboundTls) -> bool {
-		require_tls || (tlsa_empty && mode == OutboundTls::Strict)
-	}
-
-	#[test]
-	fn pkix_authentication_decision() {
-		use OutboundTls::{Opportunistic, Strict};
-		// Mandated TLS is always strict PKIX, regardless of mode or TLSA.
-		assert!(authenticate_pkix(true, true, Opportunistic));
-		assert!(authenticate_pkix(true, false, Opportunistic));
-		assert!(authenticate_pkix(true, true, Strict));
-		// TLSA present (not mandated): never PKIX — DANE authenticates instead,
-		// even in strict mode (the DANE-EE self-signed fix).
-		assert!(!authenticate_pkix(false, false, Strict));
-		assert!(!authenticate_pkix(false, false, Opportunistic));
-		// Pure opportunistic (no mandate, no TLSA): mode decides.
-		assert!(authenticate_pkix(false, true, Strict));
-		assert!(!authenticate_pkix(false, true, Opportunistic));
-	}
-
-	#[test]
-	fn accept_any_verifier_asserts_and_advertises_schemes() {
-		crate::tls::ensure_crypto_provider();
-		let verifier = AcceptAnyServerCert::new();
-		// Any chain is accepted without PKIX (the leaf can be unparseable here:
-		// verify_server_cert never inspects it).
-		let leaf = CertificateDer::from(vec![0u8; 8]);
-		let verified = verifier.verify_server_cert(
-			&leaf,
-			&[],
-			&ServerName::try_from("mx.example.org").expect("name"),
-			&[],
-			UnixTime::now(),
-		);
-		assert!(verified.is_ok());
-		// The schemes come from the provider, so the offered set is non-empty and
-		// matches what the signature checks can verify.
-		assert!(!verifier.supported_verify_schemes().is_empty());
-	}
-}
+#[path = "client_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "client_tls_tests.rs"]

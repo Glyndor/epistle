@@ -18,9 +18,9 @@ pub(super) struct SigningKey {
 }
 
 /// The keys in use: the active Ed25519 key as the server resolves it
-/// ([`crate::dkim::rotate::active_ed25519`], an unreadable rotation state is
-/// an error), plus the RSA key when configured. Empty without a `[dkim]`
-/// section.
+/// ([`crate::dkim::rotate::active_ed25519`]: an unreadable rotation state
+/// is an error unless its last good copy stands in, see [`state_item`]),
+/// plus the RSA key when configured. Empty without a `[dkim]` section.
 pub(super) fn signing_keys(config: &Config) -> Result<Vec<SigningKey>, String> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
@@ -82,6 +82,22 @@ pub(super) fn compare(key: &SigningKey, domain: &str, published: &[String]) -> O
 		format!(
 			"published p= does not match the signing key {}; update the TXT record",
 			key.file.display()
+		),
+	))
+}
+
+/// A warning when the rotation state cannot be read and the server signs
+/// with its last good copy instead: mail is still signed, but rotation
+/// stays stopped until the operator restores the file.
+pub(super) fn state_item(config: &Config) -> Option<Item> {
+	use crate::dkim::rotate::{STATE_BACKUP_FILE, STATE_FILE, state_fallback};
+	config.dkim.as_ref()?;
+	let error = state_fallback(&config.data_dir)?;
+	Some(Item::new(
+		"DKIM rotation state",
+		Level::Warn,
+		format!(
+			"{error}; signing with the last good state in {STATE_BACKUP_FILE}, and rotation is stopped until {STATE_FILE} is restored from it"
 		),
 	))
 }

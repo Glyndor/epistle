@@ -8,7 +8,9 @@
 //! stays small.
 
 mod db_dump;
+mod keys_note;
 mod restore_files;
+mod tar_format;
 
 use restore_files::lay_files;
 
@@ -17,9 +19,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use flate2::Compression;
-use flate2::write::GzEncoder;
-
+use super::term::live::{Steps, quiet};
 use crate::config::{BlobBackendConfig, Config};
 
 use db_dump::{DATABASE_SQL_NAME, collect_dump_with, load_dump_with};
@@ -43,35 +43,51 @@ pub(super) fn run_with(
 	warnings: &mut impl Write,
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> ExitCode {
+	let mut steps = Steps::start(&["files", "database", "archive"], false);
+	steps.begin("files");
 	let mut entries = match collect_files(&config.data_dir) {
 		Ok(entries) => entries,
 		Err(error) => {
+			steps.fail();
 			super::style::error(format_args!("reading data dir: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
+	steps.done();
 	if let Some(db) = &config.database {
+		steps.begin("database");
 		let dump = match collect_dump_with(db, &config.data_dir, resolver) {
 			Ok(dump) => dump,
 			Err(error) => {
+				steps.fail();
 				super::style::error(format_args!("database dump: {error}"));
 				return ExitCode::FAILURE;
 			}
 		};
 		entries.push((DATABASE_SQL_NAME.to_string(), 0o644, dump));
+		steps.done();
 	}
+	steps.begin("archive");
 	let archive = match tar_gz(&entries) {
 		Ok(archive) => archive,
 		Err(error) => {
+			steps.fail();
 			super::style::error(format_args!("building archive: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
-	if out.write_all(&archive).and_then(|()| out.flush()).is_err() {
+	if quiet(|| out.write_all(&archive).and_then(|()| out.flush())).is_err() {
 		return ExitCode::FAILURE;
 	}
+	steps.done();
 	warn_externally_referenced(config, &entries.len(), warnings);
-	eprintln!("backed up {} files for this instance", entries.len());
+	keys_note::after_backup(&config.data_dir, warnings);
+	let summary = format!("backed up {} files for this instance", entries.len());
+	if steps.is_live() {
+		steps.conclude(true, &summary);
+	} else {
+		eprintln!("{summary}");
+	}
 	ExitCode::SUCCESS
 }
 
@@ -80,8 +96,28 @@ pub(super) fn run_with(
 /// the configured database when the archive carries one. The hard rule is
 /// the same as the backup path: a `database.sql` in the archive that cannot
 /// be loaded is a restore error, never a silent skip.
-pub(super) fn run_restore(config: &Config, archive: &[u8], out: &mut impl Write) -> ExitCode {
-	run_restore_with(config, archive, out, &db_dump::default_program_resolver)
+///
+/// `force` bypasses the safety checks (`refuse_unsafe_targets` returns
+/// `None`), `dry_run` lists the entries the restore would write without
+/// touching `data_dir` or the database. Status messages go to `status`
+/// so the operator can tell them apart from the archive stream.
+pub(super) fn run_restore(
+	config: &Config,
+	archive: &[u8],
+	force: bool,
+	dry_run: bool,
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> ExitCode {
+	run_restore_with(
+		config,
+		archive,
+		force,
+		dry_run,
+		out,
+		status,
+		&db_dump::default_program_resolver,
+	)
 }
 
 /// Same as [`run_restore`] with a custom program resolver. The test
@@ -91,41 +127,182 @@ pub(super) fn run_restore(config: &Config, archive: &[u8], out: &mut impl Write)
 pub(super) fn run_restore_with(
 	config: &Config,
 	archive: &[u8],
+	force: bool,
+	dry_run: bool,
 	out: &mut impl Write,
+	status: &mut impl Write,
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> ExitCode {
+	let mut steps = if dry_run {
+		Steps::off()
+	} else {
+		Steps::start(&["archive", "files", "database"], false)
+	};
+	steps.begin("archive");
 	let tar = match gunzip_archive(archive) {
 		Ok(tar) => tar,
+		Err(error) => {
+			steps.fail();
+			super::style::error(format_args!("reading archive: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	let entries = match tar_format::read_entries(&tar) {
+		Ok(entries) => entries,
 		Err(error) => {
 			super::style::error(format_args!("reading archive: {error}"));
 			return ExitCode::FAILURE;
 		}
 	};
-	let entries = read_tar_entries_pub(&tar);
 	if entries.is_empty() {
+		steps.fail();
 		super::style::error("archive is empty");
 		return ExitCode::FAILURE;
 	}
+	steps.done();
+	if let Err(message) = quiet(|| refuse_unsafe_targets(config, force, dry_run, status)) {
+		super::style::error(format_args!("{message}"));
+		return ExitCode::FAILURE;
+	}
+	if dry_run {
+		let _ = writeln!(out, "would restore {} entries:", entries.len());
+		for (name, _mode, content) in &entries {
+			if name == DATABASE_SQL_NAME {
+				let _ = writeln!(
+					out,
+					"  database.sql ({} bytes, replayed to psql)",
+					content.len()
+				);
+			} else {
+				let _ = writeln!(out, "  data/{name}");
+			}
+		}
+		let _ = writeln!(out, "no files written; rerun without --dry-run to apply");
+		return ExitCode::SUCCESS;
+	}
+	steps.begin("files");
 	if let Err(error) = lay_files(&entries, &config.data_dir) {
+		steps.fail();
 		super::style::error(format_args!("laying down files: {error}"));
 		return ExitCode::FAILURE;
 	}
+	steps.done();
 	if let Some(db) = &config.database {
+		steps.begin("database");
 		let Some((_, sql)) = entries
 			.iter()
 			.find(|(name, _, _)| name == DATABASE_SQL_NAME)
 			.map(|(n, _, c)| (n.clone(), c.clone()))
 		else {
+			steps.fail();
 			super::style::error("archive has no database.sql but [database] is configured");
 			return ExitCode::FAILURE;
 		};
 		if let Err(error) = load_dump_with(db, &config.data_dir, &sql, resolver) {
+			steps.fail();
 			super::style::error(format_args!("database load: {error}"));
 			return ExitCode::FAILURE;
 		}
+		steps.done();
 	}
 	writeln!(out, "restored {} entries", entries.len()).ok();
+	keys_note::after_restore(&config.data_dir, &entries, status);
+	steps.conclude(true, "restore");
 	ExitCode::SUCCESS
+}
+
+/// Refuse to restore when `data_dir` already has account data or the
+/// mail service is running, unless `--force` was supplied. The check
+/// happens before `lay_files` so the byte-identity of `data_dir` is
+/// preserved on refusal. The dry-run path also wants to know whether
+/// a real restore would be allowed, so it is included in the check.
+/// Each offender the operator can act on is named on its own line,
+/// followed by a one-line suggestion that points at the matching
+/// command (stop the service, pass `--force`).
+pub(in crate::cli) fn refuse_unsafe_targets(
+	config: &Config,
+	force: bool,
+	dry_run: bool,
+	status: &mut impl Write,
+) -> Result<(), String> {
+	if force {
+		return Ok(());
+	}
+	if let Err(reason) = data_dir_has_accounts(&config.data_dir) {
+		let _ = writeln!(
+			status,
+			"refusing to restore: {} already holds account data in {}",
+			reason,
+			config.data_dir.display()
+		);
+		let _ = writeln!(
+			status,
+			"  stop the mail service, move the directory aside, or pass --force"
+		);
+		return Err("data_dir already holds account data".to_string());
+	}
+	if mail_service_is_running(&config.data_dir) {
+		let _ = writeln!(
+			status,
+			"refusing to restore: the mail service is reported running by the compose stack in {}",
+			config.data_dir.display()
+		);
+		let _ = writeln!(
+			status,
+			"  stop it first and keep the database up (`epistle stack stop mail`), or pass --force"
+		);
+		return Err("mail service is running".into());
+	}
+	let _ = dry_run;
+	Ok(())
+}
+
+/// True when `data_dir` has any of the artefacts a previously running
+/// server would have produced: an account store, masked addresses,
+/// per-account files, or any regular file under `accounts/`. The
+/// presence of a `database.sql` artefact from an earlier aborted
+/// restore is also a sign the directory is not fresh.
+///
+/// Returns the offender file name so the error message names the
+/// actual artefact found, not a generic `data_dir is non-empty`.
+fn data_dir_has_accounts(data_dir: &Path) -> Result<(), String> {
+	for relative in [
+		"accounts.toml",
+		"masked.json",
+		"queue.toml",
+		"bayes.json",
+		"database.sql",
+	] {
+		if data_dir.join(relative).exists() {
+			return Err(relative.to_string());
+		}
+	}
+	let accounts_dir = data_dir.join("accounts");
+	if accounts_dir.is_dir()
+		&& let Ok(read) = std::fs::read_dir(&accounts_dir)
+	{
+		for entry in read.flatten().take(1) {
+			if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+				return Err(format!("accounts/{}", entry.file_name().to_string_lossy()));
+			}
+		}
+	}
+	Ok(())
+}
+
+/// Detect whether the mail service is currently running by asking the
+/// compose stack. The compose file lives at `<data_dir>/compose/compose.yaml`;
+/// without it (the standalone host install, or a setup the operator
+/// built by hand) there is no stack to talk to and the answer is "not
+/// running": the operator has nothing to stop. When the compose file
+/// exists, the `podup ps` listing is the source of truth. The probe
+/// shares the live `podup` binary the rest of the CLI calls, so the
+/// answer is what the operator sees.
+fn mail_service_is_running(data_dir: &Path) -> bool {
+	super::stack_started::mail_started_at(data_dir, "podup")
+		.ok()
+		.flatten()
+		.is_some()
 }
 
 /// Gunzip an archive and return its raw tar bytes. Tiny wrapper over
@@ -137,32 +314,6 @@ fn gunzip_archive(data: &[u8]) -> std::io::Result<Vec<u8>> {
 	let mut out = Vec::new();
 	decoder.read_to_end(&mut out)?;
 	Ok(out)
-}
-
-/// Walk a tar's 512-byte blocks, returning (name, mode, content) for each
-/// file. The mode is read from the 8-byte octal mode field at offset 100.
-fn read_tar_entries_pub(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
-	let mut out = Vec::new();
-	let mut offset = 0;
-	while offset + 512 <= tar.len() {
-		let header = &tar[offset..offset + 512];
-		if header.iter().all(|&b| b == 0) {
-			break; // end-of-archive zero block
-		}
-		if &header[257..262] != b"ustar" {
-			break;
-		}
-		let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
-		let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
-		let mode_str = String::from_utf8_lossy(&header[100..108]);
-		let mode = u32::from_str_radix(mode_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		let size_str = String::from_utf8_lossy(&header[124..135]);
-		let size = usize::from_str_radix(size_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-		offset += 512;
-		out.push((name, mode, tar[offset..offset + size].to_vec()));
-		offset += size.div_ceil(512) * 512;
-	}
-	out
 }
 
 /// Write to `warnings` a description of every path the configuration references
@@ -291,57 +442,9 @@ fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 	Ok(out)
 }
 
-/// Build a gzip-compressed USTAR archive from named byte entries.
-fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
-	let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-	for (name, mode, data) in entries {
-		encoder.write_all(&ustar_header(name, *mode, data.len())?)?;
-		encoder.write_all(data)?;
-		// Pad the file content to a 512-byte boundary.
-		let pad = (512 - data.len() % 512) % 512;
-		encoder.write_all(&vec![0u8; pad])?;
-	}
-	// Two zero blocks mark the end of the archive.
-	encoder.write_all(&[0u8; 1024])?;
-	encoder.finish()
-}
-
-/// One 512-byte USTAR header for a regular file.
-///
-/// `mode` is the permission bits to write into the header, masked to the lower
-/// 12 bits (perm + setuid/setgid/sticky) so the file-type bits from
-/// `Permissions::mode()` don't leak into the tar mode field.
-fn ustar_header(name: &str, mode: u32, size: usize) -> std::io::Result<[u8; 512]> {
-	if name.len() > 100 {
-		return Err(std::io::Error::other(format!("path too long: {name}")));
-	}
-	let mut header = [0u8; 512];
-	header[..name.len()].copy_from_slice(name.as_bytes());
-	write_field(&mut header, 100, 8, &format!("{:07o}", mode & 0o7777)); // mode
-	write_field(&mut header, 108, 8, "0000000"); // uid
-	write_field(&mut header, 116, 8, "0000000"); // gid
-	write_field(&mut header, 124, 12, &format!("{size:011o}")); // size (octal)
-	write_field(&mut header, 136, 12, "00000000000"); // mtime
-	header[156] = b'0'; // typeflag: regular file
-	header[257..263].copy_from_slice(b"ustar\0");
-	header[263..265].copy_from_slice(b"00");
-
-	// Checksum: sum of all bytes with the checksum field treated as spaces.
-	// Computed after the mode is written, a checksum over the wrong mode
-	// produces a tar `tar` itself rejects.
-	header[148..156].copy_from_slice(b"        ");
-	let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
-	let chksum = format!("{sum:06o}\0 ");
-	header[148..148 + chksum.len()].copy_from_slice(chksum.as_bytes());
-	Ok(header)
-}
-
-/// Write a NUL-terminated field into the header at `offset` (length `len`).
-fn write_field(header: &mut [u8; 512], offset: usize, len: usize, value: &str) {
-	let bytes = value.as_bytes();
-	let n = bytes.len().min(len - 1);
-	header[offset..offset + n].copy_from_slice(&bytes[..n]);
-	// The remaining bytes stay NUL (already zeroed).
+/// Build the gzip-compressed archive; see [`tar_format`].
+pub(in crate::cli) fn tar_gz(entries: &[(String, u32, Vec<u8>)]) -> std::io::Result<Vec<u8>> {
+	tar_format::tar_gz(entries)
 }
 
 // The database dump/load code is split out into `db_dump` (the
@@ -383,73 +486,8 @@ pub(super) use db_dump::run_command_capturing_stdout;
 pub(crate) use db_dump::{BackupError, CommandSpec, split_url_password};
 
 #[cfg(test)]
-mod helpers {
-	use std::path::Path;
-
-	/// Gunzip an archive and return its raw tar bytes. Kept under
-	/// `helpers` so the existing `use super::helpers::*;` glob in the
-	/// sibling test files picks it up unchanged.
-	pub(super) fn gunzip(data: &[u8]) -> Vec<u8> {
-		let mut decoder = flate2::read::GzDecoder::new(data);
-		let mut out = Vec::new();
-		std::io::Read::read_to_end(&mut decoder, &mut out).expect("gunzip");
-		out
-	}
-
-	/// Walk a tar's 512-byte blocks, returning (name, content) for each
-	/// file.
-	pub(super) fn read_tar(tar: &[u8]) -> Vec<(String, Vec<u8>)> {
-		read_tar_entries(tar)
-			.into_iter()
-			.map(|(name, _mode, content)| (name, content))
-			.collect()
-	}
-
-	/// Walk a tar's 512-byte blocks, returning (name, mode, content).
-	pub(super) fn read_tar_entries(tar: &[u8]) -> Vec<(String, u32, Vec<u8>)> {
-		let mut out = Vec::new();
-		let mut offset = 0;
-		while offset + 512 <= tar.len() {
-			let header = &tar[offset..offset + 512];
-			if header.iter().all(|&b| b == 0) {
-				break; // end-of-archive zero block
-			}
-			if &header[257..262] != b"ustar" {
-				break;
-			}
-			let name_end = header[..100].iter().position(|&b| b == 0).unwrap_or(100);
-			let name = String::from_utf8_lossy(&header[..name_end]).into_owned();
-			let mode_str = String::from_utf8_lossy(&header[100..108]);
-			let mode = u32::from_str_radix(mode_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-			let size_str = String::from_utf8_lossy(&header[124..135]);
-			let size = usize::from_str_radix(size_str.trim_matches('\0').trim(), 8).unwrap_or(0);
-			offset += 512;
-			out.push((name, mode, tar[offset..offset + size].to_vec()));
-			offset += size.div_ceil(512) * 512;
-		}
-		out
-	}
-
-	/// Extract the gunzipped tar bytes into `target`, stripping the `data/`
-	/// prefix `collect_files` adds.
-	pub(super) fn extract_to(archive_gz: &[u8], target: &Path) {
-		let tar = gunzip(archive_gz);
-		for (name, mode, content) in read_tar_entries(&tar) {
-			let stripped = name.strip_prefix("data/").unwrap_or(&name);
-			let dest = target.join(stripped);
-			if let Some(parent) = dest.parent() {
-				std::fs::create_dir_all(parent).expect("mkdir parent");
-			}
-			std::fs::write(&dest, &content).expect("write entry");
-			#[cfg(unix)]
-			{
-				use std::os::unix::fs::PermissionsExt;
-				std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode))
-					.expect("chmod");
-			}
-		}
-	}
-}
+#[path = "helpers_tests.rs"]
+mod helpers;
 
 #[cfg(test)]
 #[path = "../backup_tests.rs"]
@@ -472,5 +510,17 @@ mod tests_container;
 mod tests_restore_run;
 
 #[cfg(test)]
+#[path = "../backup_db_sql_tests.rs"]
+mod tests_db_sql;
+
+#[cfg(test)]
+#[path = "../backup_restore_guards_tests.rs"]
+mod tests_restore_guards;
+
+#[cfg(test)]
 #[path = "../backup_tests_paths.rs"]
 mod tests_paths;
+
+#[cfg(test)]
+#[path = "../backup_tests_long_paths.rs"]
+mod tests_long_paths;

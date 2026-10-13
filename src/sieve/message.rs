@@ -11,6 +11,11 @@ pub struct Message {
 	pub(super) envelope_to: Vec<String>,
 	/// Evaluation time (Unix seconds) for `currentdate`; tests inject it.
 	pub(super) now: Option<u64>,
+	/// Mailbox names the recipient account has, in their on-disk spelling
+	/// (INBOX plus the IMAP modified UTF-7 names). `None` when the
+	/// delivery path did not supply one, so the `mailboxexists` test
+	/// fails safe. Sorted for deterministic membership checks.
+	pub(super) mailboxes: Option<Vec<String>>,
 }
 
 impl Message {
@@ -56,6 +61,7 @@ impl Message {
 			envelope_from: None,
 			envelope_to: Vec::new(),
 			now: None,
+			mailboxes: None,
 		}
 	}
 
@@ -69,6 +75,17 @@ impl Message {
 	/// Fix the evaluation time (Unix seconds) used by `currentdate` (tests).
 	pub fn with_now(mut self, now: u64) -> Self {
 		self.now = Some(now);
+		self
+	}
+
+	/// Attach the recipient account's mailbox list, in their IMAP
+	/// on-disk spelling (UTF-8 names go through modified UTF-7, the way
+	/// `imap::mailbox::list` returns them). Used by the `mailboxexists`
+	/// test (RFC 5490). `None` leaves the test failing safe, so a script
+	/// is never true on a missing mailbox set.
+	pub fn with_mailboxes(mut self, mailboxes: &mut [String]) -> Self {
+		mailboxes.sort();
+		self.mailboxes = Some(mailboxes.to_vec());
 		self
 	}
 

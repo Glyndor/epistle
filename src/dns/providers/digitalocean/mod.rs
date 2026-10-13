@@ -14,6 +14,10 @@ use crate::net::HttpsUrl;
 use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
+use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+
+/// How DigitalOcean takes a TXT `data` and lists it back; see `record_body`.
+const TXT_FORM: TxtForm = TxtForm::Logical;
 
 /// DigitalOcean's API base; overridable for tests.
 const DEFAULT_BASE: &str = "https://api.digitalocean.com";
@@ -256,10 +260,15 @@ impl DigitaloceanProvider {
 		}
 	}
 
-	/// Build the create/update JSON body. DigitalOcean stores TXT content
-	/// unquoted (the API adds the DNS wire-format quotes server-side), so we
-	/// pass `record.value` straight through for TXT and never re-quote. SRV
-	/// splits the presentation form into the dedicated fields.
+	/// Build the create/update JSON body. The API reference describes
+	/// `data` only as "Variable data depending on record type" and the
+	/// product guide shows a TXT value unquoted
+	/// (<https://docs.digitalocean.com/reference/api/reference/domain-records/>
+	/// and <https://docs.digitalocean.com/products/networking/dns/how-to/manage-records/>,
+	/// read 2026-10-12); quoting, splitting past 255 octets and escaping are
+	/// not documented. A TXT goes as its logical value, which other clients
+	/// send too (lego, dnscontrol) and which DigitalOcean lists back as
+	/// written. SRV splits the presentation form into the dedicated fields.
 	fn record_body(kind: &str, rel: &str, record: &DnsRecord) -> Result<String, ProviderError> {
 		if record.kind == RecordKind::Srv {
 			let (priority, weight, port, target) = parse_srv(&record.value)
@@ -320,10 +329,15 @@ impl DigitaloceanProvider {
 			})
 			.to_string());
 		}
+		let data = if record.kind == RecordKind::Txt {
+			txt_encode(&record.value, TXT_FORM)
+		} else {
+			record.value.clone()
+		};
 		Ok(serde_json::json!({
 			"type": kind,
 			"name": rel,
-			"data": record.value,
+			"data": data,
 			"ttl": record.ttl,
 		})
 		.to_string())
@@ -377,7 +391,7 @@ impl DigitaloceanProvider {
 		match existing.into_iter().find(|r| {
 			r.kind == kind
 				&& r.name == rel
-				&& (record.kind != RecordKind::Txt || r.data == record.value)
+				&& (record.kind != RecordKind::Txt || same_txt_value(&r.data, &record.value))
 		}) {
 			Some(prev) => self.delete_record(zone, prev.id).await,
 			None => Ok(()), // already absent: idempotent.
@@ -407,6 +421,8 @@ impl DigitaloceanProvider {
 						Some(p) => format!("{p} {}", r.data.trim_end_matches('.')),
 						_ => return None,
 					}
+				} else if kind == RecordKind::Txt {
+					txt_decode(&r.data, TXT_FORM)
 				} else {
 					r.data
 				};

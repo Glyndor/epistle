@@ -8,8 +8,9 @@ use super::MAX_BODY;
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
 
 /// One record as Namecheap returns it from `getHosts` (and as we re-emit it
-/// to `setHosts`). `address` carries the kind-specific payload verbatim — for
-/// TXT that includes the surrounding quotes Namecheap stores.
+/// to `setHosts`). `address` carries the kind-specific payload verbatim; for
+/// TXT it is the value as getHosts returned it, which `host_to_record` reads
+/// through `txt_logical`.
 #[derive(Clone, Deserialize)]
 pub(crate) struct Host {
 	#[serde(rename = "@Name", default)]
@@ -62,7 +63,9 @@ pub(crate) struct CommandResponse {
 
 #[derive(Deserialize)]
 pub(crate) struct HostsResult {
-	#[serde(rename = "host", default)]
+	// The getHosts example in the documentation writes `Host`; other
+	// clients of the API read `host`. Either is accepted.
+	#[serde(rename = "host", alias = "Host", default)]
 	pub(crate) hosts: Vec<Host>,
 }
 
@@ -149,7 +152,10 @@ pub(crate) fn host_to_record(host: Host, zone: &str) -> Option<DnsRecord> {
 		_ => return None,
 	};
 	let value = match kind {
-		RecordKind::Txt => host.address.trim_matches('"').to_string(),
+		// getHosts does not document the TXT form either; a value this
+		// provider wrote comes back as written, and one written quoted
+		// (an older release did) reads as the same logical value.
+		RecordKind::Txt => crate::dns::txt::txt_logical(&host.address),
 		RecordKind::Mx => {
 			let p = host.mx_pref?;
 			format!("{} {}", p, host.address.trim_end_matches('.'))

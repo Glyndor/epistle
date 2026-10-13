@@ -8,6 +8,8 @@
 //! (`masked_addresses_max`) and the label rules are the same in both places.
 
 use std::io::Write;
+
+use super::term::table::Table;
 use std::process::ExitCode;
 
 use clap::Subcommand;
@@ -21,6 +23,7 @@ pub enum MaskedCli {
 	/// List an account's masked addresses.
 	List {
 		/// Account that owns the addresses.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// Print a JSON array instead of text lines.
 		#[arg(long)]
@@ -29,6 +32,7 @@ pub enum MaskedCli {
 	/// Mint a new masked address for an account.
 	Add {
 		/// Account that will receive the mail.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// Human-readable label; its slug starts the address.
 		#[arg(long, default_value = "mask")]
@@ -41,13 +45,20 @@ pub enum MaskedCli {
 	/// Delete a masked address.
 	Remove {
 		/// Account that owns the address.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The masked address to delete.
 		address: String,
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
 	},
 	/// Let a disabled masked address receive mail again.
 	Enable {
 		/// Account that owns the address.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The masked address to enable.
 		address: String,
@@ -55,6 +66,7 @@ pub enum MaskedCli {
 	/// Stop delivery to a masked address without deleting it.
 	Disable {
 		/// Account that owns the address.
+		#[arg(value_parser = crate::cli::account_name::parse)]
 		account: String,
 		/// The masked address to disable.
 		address: String,
@@ -94,7 +106,7 @@ pub(super) fn run(
 	// would then resolve to an account that cannot log in. Refuse it here.
 	let Some(first_address) = first_address(&store, account) else {
 		super::style::error_to(err, format_args!("no such account: {account}"));
-		return ExitCode::FAILURE;
+		return ExitCode::from(super::exit::REFUSED);
 	};
 	let result = match action {
 		MaskedCli::List { json, .. } => return list(&store, account, json, out, err),
@@ -103,16 +115,31 @@ pub(super) fn run(
 				Ok(domain) => domain,
 				Err(message) => {
 					super::style::error_to(err, message);
-					return ExitCode::FAILURE;
+					return ExitCode::from(super::exit::REFUSED);
 				}
 			};
 			store
 				.add_masked(account, &label, &domain, now)
 				.map(|entry| entry.address)
 		}
-		MaskedCli::Remove { address, .. } => store
-			.remove_masked(account, &address)
-			.map(|()| format!("removed {address}")),
+		MaskedCli::Remove { address, yes, .. } => {
+			// An address the account does not own goes straight to the
+			// store, which refuses it; there is nothing to confirm.
+			let owned = store
+				.list_masked(account)
+				.iter()
+				.any(|masked| masked.address.eq_ignore_ascii_case(&address));
+			let question = format!("Remove masked address \"{address}\" from \"{account}\"? [y/N]");
+			if owned
+				&& let Err(code) =
+					super::prompt::confirm_destructive("masked remove", &question, yes)
+			{
+				return code;
+			}
+			store
+				.remove_masked(account, &address)
+				.map(|()| format!("removed {address}"))
+		}
 		MaskedCli::Enable { address, .. } => store
 			.set_masked_enabled(account, &address, true)
 			.map(|_| format!("enabled {address}")),
@@ -127,7 +154,7 @@ pub(super) fn run(
 		}
 		Err(error) => {
 			super::style::error_to(err, describe(&error));
-			ExitCode::FAILURE
+			super::exit::for_store_error(&error)
 		}
 	}
 }
@@ -188,6 +215,17 @@ fn list(
 				super::style::error_to(err, format_args!("cannot encode the list: {error}"));
 				ExitCode::FAILURE
 			}
+		};
+	}
+	if let Some(decor) = super::term::stdout(json) {
+		let mut table = Table::new(&["ADDRESS", "LABEL", "STATE"]).state_col(2);
+		for row in rows {
+			let state = if row.enabled { "enabled" } else { "disabled" };
+			table.push(vec![row.address, row.label, state.into()]);
+		}
+		return match table.write(decor, out) {
+			Ok(()) => ExitCode::SUCCESS,
+			Err(_) => ExitCode::FAILURE,
 		};
 	}
 	for row in rows {

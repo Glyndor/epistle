@@ -20,9 +20,11 @@ pub struct SuppressionList {
 	dir: PathBuf,
 }
 
-/// SHA-256 hex of a lowercased value, safe as a filename.
+/// SHA-256 hex of the stored form of a value (see
+/// [`crate::util::address::normalize`]), safe as a filename.
 fn digest_name(value: &str) -> String {
-	let digest = ring::digest::digest(&ring::digest::SHA256, value.to_ascii_lowercase().as_bytes());
+	let stored = crate::util::address::normalize(value);
+	let digest = ring::digest::digest(&ring::digest::SHA256, stored.as_bytes());
 	digest.as_ref().iter().fold(String::new(), |mut acc, byte| {
 		use std::fmt::Write;
 		let _ = write!(acc, "{byte:02x}");
@@ -51,7 +53,21 @@ impl SuppressionList {
 	/// Add an address to the global suppression list (idempotent). The marker
 	/// stores the address so it can be listed back.
 	pub fn suppress(&self, address: &str) {
-		let _ = fs::write(self.path(address), address.to_ascii_lowercase().as_bytes());
+		let _ = fs::write(
+			self.path(address),
+			crate::util::address::normalize(address).as_bytes(),
+		);
+	}
+
+	/// Add an address to the global list, recording when (epoch seconds) and
+	/// why: the remote reply that proved the address bad.
+	pub fn suppress_because(&self, address: &str, reason: &str, now: u64) {
+		let _ = fs::write(self.path(address), marker(address, reason, now));
+	}
+
+	/// Every globally suppressed address with its date and reason, sorted.
+	pub fn entries(&self) -> Vec<Suppressed> {
+		read_entries(&self.dir)
 	}
 
 	/// Whether an address is suppressed globally.
@@ -75,9 +91,22 @@ impl SuppressionList {
 		if fs::create_dir_all(&dir).is_ok() {
 			let _ = fs::write(
 				dir.join(digest_name(address)),
-				address.to_ascii_lowercase().as_bytes(),
+				crate::util::address::normalize(address).as_bytes(),
 			);
 		}
+	}
+
+	/// Suppress an address for one sending account, recording when and why.
+	pub fn suppress_for_because(&self, account: &str, address: &str, reason: &str, now: u64) {
+		let dir = self.account_dir(account);
+		if fs::create_dir_all(&dir).is_ok() {
+			let _ = fs::write(dir.join(digest_name(address)), marker(address, reason, now));
+		}
+	}
+
+	/// Every address suppressed for `account` with its date and reason, sorted.
+	pub fn entries_for(&self, account: &str) -> Vec<Suppressed> {
+		read_entries(&self.account_dir(account))
 	}
 
 	/// Whether an address is suppressed for a specific account.
@@ -144,25 +173,80 @@ fn remove_marker(path: &Path) -> std::io::Result<()> {
 	}
 }
 
-/// Read every address marker (a regular file) in a directory, sorted. The
-/// `accounts/` subdirectory is skipped because it is not a regular file.
-fn read_addresses(dir: &Path) -> Vec<String> {
-	let mut addresses = Vec::new();
+/// One suppressed address, with when and why when that was recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suppressed {
+	/// The suppressed address (lowercased).
+	pub address: String,
+	/// Epoch seconds it was suppressed at, when recorded.
+	pub since: Option<u64>,
+	/// Why: the remote reply that proved the address bad, when recorded.
+	pub reason: Option<String>,
+}
+
+/// The content of a marker: the address on the first line, then the epoch
+/// and the reason (control characters flattened) separated by a tab. A
+/// marker holding only the address, as `suppress` and older releases
+/// write it, is still valid.
+fn marker(address: &str, reason: &str, now: u64) -> String {
+	let reason: String = reason
+		.chars()
+		.map(|c| if c.is_control() { ' ' } else { c })
+		.take(512)
+		.collect();
+	format!(
+		"{}\n{now}\t{}\n",
+		address.to_ascii_lowercase(),
+		reason.trim()
+	)
+}
+
+/// Parse a marker written by [`marker`] or by `suppress`.
+fn parse_marker(content: &str) -> Option<Suppressed> {
+	let mut lines = content.lines();
+	let address = lines.next()?.trim().to_string();
+	if address.is_empty() {
+		return None;
+	}
+	let (since, reason) = match lines.next().and_then(|line| line.split_once('\t')) {
+		Some((since, reason)) => (since.trim().parse().ok(), Some(reason.trim().to_string())),
+		None => (None, None),
+	};
+	Some(Suppressed {
+		address,
+		since,
+		reason: reason.filter(|reason| !reason.is_empty()),
+	})
+}
+
+/// Read every marker (a regular file) in a directory, sorted by address.
+/// The `accounts/` subdirectory is skipped because it is not a regular file.
+fn read_entries(dir: &Path) -> Vec<Suppressed> {
+	let mut found = Vec::new();
 	if let Ok(entries) = crate::util::fs_walk::read_dir(dir) {
 		for entry in entries.flatten() {
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;
 			}
-			if let Ok(address) = fs::read_to_string(entry.path()) {
-				let address = address.trim().to_string();
-				if !address.is_empty() {
-					addresses.push(address);
-				}
+			if let Some(parsed) = fs::read_to_string(entry.path())
+				.ok()
+				.as_deref()
+				.and_then(parse_marker)
+			{
+				found.push(parsed);
 			}
 		}
 	}
-	addresses.sort();
-	addresses
+	found.sort_by(|a, b| a.address.cmp(&b.address));
+	found
+}
+
+/// Every address in a directory's markers, sorted.
+fn read_addresses(dir: &Path) -> Vec<String> {
+	read_entries(dir)
+		.into_iter()
+		.map(|entry| entry.address)
+		.collect()
 }
 
 #[cfg(test)]

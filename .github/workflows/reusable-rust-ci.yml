@@ -101,6 +101,15 @@ jobs:
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
+      # fuzz/ is its own workspace with its own Cargo.lock, and nothing else
+      # resolves it on a pull request: fuzz.yml is path-filtered and nightly.
+      # A dependency bump at the root left that lockfile stale twice, and both
+      # times only the nightly run on main noticed. `cargo metadata --locked`
+      # fails when the lockfile would have to change, without compiling.
+      - name: fuzz lockfile in sync
+        if: hashFiles('fuzz/Cargo.toml') != ''
+        run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+
   test:
     name: Test
     runs-on: ubuntu-latest

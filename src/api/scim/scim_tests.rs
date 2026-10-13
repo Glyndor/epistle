@@ -53,6 +53,7 @@ pub(super) fn build_state() -> (tempfile::TempDir, ApiState) {
 		ip_cidr: None,
 		scopes: vec![Scope::Scim.as_str().to_string()],
 		domains: Vec::new(),
+		account: None,
 	})
 	.expect("add scim key");
 	keys.add(ApiKey {
@@ -62,6 +63,7 @@ pub(super) fn build_state() -> (tempfile::TempDir, ApiState) {
 		ip_cidr: None,
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
+		account: None,
 	})
 	.expect("add read key");
 	drop(keys);

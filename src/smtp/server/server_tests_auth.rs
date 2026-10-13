@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::*;
 use crate::smtp::sink::MemorySink;
 
-fn directory_with_password() -> DirectoryHandle {
+pub(super) fn directory_with_password() -> DirectoryHandle {
 	DirectoryHandle::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -20,7 +20,7 @@ fn directory_with_password() -> DirectoryHandle {
 	)
 }
 
-fn connector(
+pub(super) fn connector(
 	cert: tokio_rustls::rustls::pki_types::CertificateDer<'static>,
 ) -> tokio_rustls::TlsConnector {
 	let mut roots = tokio_rustls::rustls::RootCertStore::empty();
@@ -32,7 +32,7 @@ fn connector(
 	tokio_rustls::TlsConnector::from(Arc::new(config))
 }
 
-async fn reply<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> String {
+pub(super) async fn reply<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> String {
 	let mut buffer = [0u8; 1024];
 	let read = reader.read(&mut buffer).await.expect("read");
 	String::from_utf8_lossy(&buffer[..read]).to_string()
@@ -70,7 +70,6 @@ async fn auth_login_over_starttls_authenticates() {
 		.connect(server_name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");
@@ -134,7 +133,6 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 		.connect(server_name, client)
 		.await
 		.expect("handshake");
-	assert!(reply(&mut tls).await.starts_with("220 "));
 	tls.write_all(b"EHLO c.example.org\r\n")
 		.await
 		.expect("ehlo");
@@ -172,9 +170,11 @@ async fn an_authenticated_submission_without_message_id_gets_one() {
 		2,
 		"MAIL FROM and RCPT TO accepted: {batch}"
 	);
-	tls.write_all(b"Subject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n")
-		.await
-		.expect("data");
+	tls.write_all(
+		b"From: alice@example.org\r\nSubject: no id and no date\r\n\r\nbody\r\n.\r\nQUIT\r\n",
+	)
+	.await
+	.expect("data");
 	let mut tail = String::new();
 	while !tail.contains("221 ") {
 		tail.push_str(&reply(&mut tls).await);

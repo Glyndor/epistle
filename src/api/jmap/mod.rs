@@ -9,19 +9,16 @@
 //! are wired in the dispatch below.
 
 use axum::Json;
-use axum::extract::{Extension, Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::extract::{Extension, FromRequest, Path, State};
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::Principal;
 use super::state::{ApiState, MatchedAuth};
 use crate::api::api_keys::Scope;
-
-/// Maximum accepted upload size, mirroring the `maxSizeUpload` advertised in the
-/// Session resource (RFC 8620 §6.1). Uploads above this are rejected with a
-/// `urn:ietf:params:jmap:error:limit` problem-details response.
-pub const MAX_UPLOAD_SIZE: usize = 50_000_000;
+use caller_slots::{CallerSlot, Work};
 
 /// Default media type when none is supplied or recorded (RFC 8620 §6.1).
 const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
@@ -29,14 +26,33 @@ const DEFAULT_BLOB_TYPE: &str = "application/octet-stream";
 mod address_tokenizer;
 pub(crate) mod blob_path;
 mod blobs;
+pub(crate) mod caller_slots;
+mod dispatcher;
 mod download;
 mod email;
+mod email_build;
+pub mod event_source;
 pub use download::download;
-mod limits;
-pub use limits::{MAX_CALLS_IN_REQUEST, MAX_SIZE_REQUEST};
+mod email_submission;
+mod uploads;
+pub use uploads::Uploads;
+pub(crate) mod limits;
+pub use limits::{
+	MAX_CALLS_IN_REQUEST, MAX_CONCURRENT_REQUESTS, MAX_CONCURRENT_UPLOAD, MAX_OBJECTS_IN_GET,
+	MAX_OBJECTS_IN_SET, MAX_SIZE_REQUEST, MAX_UPLOAD_SIZE,
+};
 mod methods;
 mod objects;
+pub(crate) use objects::email_body_for_fuzzing;
+pub(crate) mod push_subscription;
 pub mod websocket;
+
+mod fold;
+mod query_changes;
+pub(crate) mod state;
+
+pub(crate) use dispatcher::MAX_REQUEST_LIMITS;
+use dispatcher::{ResolveError, Resolver};
 
 pub use blobs::{account_usage_bytes, backfill_blob_ownership, reclaim_blobs};
 
@@ -55,9 +71,14 @@ const QUOTA_CAPABILITY: &str = "urn:ietf:params:jmap:quota";
 const WEBSOCKET_CAPABILITY: &str = "urn:ietf:params:jmap:websocket";
 
 /// `GET /jmap/session`: the Session resource (RFC 8620 §2).
-pub async fn session(State(state): State<ApiState>) -> Json<Value> {
-	let accounts: serde_json::Map<String, Value> = state
-		.accounts()
+pub async fn session(
+	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
+) -> Json<Value> {
+	let principal = Principal::for_token(&state, &auth);
+	let views = state.accounts();
+	let accounts: serde_json::Map<String, Value> = principal
+		.admissible_accounts(&views)
 		.into_iter()
 		.map(|account| {
 			(
@@ -84,20 +105,20 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 	Json(json!({
 		"capabilities": {
 			CORE_CAPABILITY: {
-				"maxSizeUpload": 50_000_000u64,
-				"maxConcurrentUpload": 4u32,
+				"maxSizeUpload": MAX_UPLOAD_SIZE as u64,
+				"maxConcurrentUpload": MAX_CONCURRENT_UPLOAD as u32,
 				"maxSizeRequest": MAX_SIZE_REQUEST as u64,
-				"maxConcurrentRequests": 4u32,
+				"maxConcurrentRequests": MAX_CONCURRENT_REQUESTS as u32,
 				"maxCallsInRequest": MAX_CALLS_IN_REQUEST as u32,
-				"maxObjectsInGet": 500u32,
-				"maxObjectsInSet": 500u32,
+				"maxObjectsInGet": MAX_OBJECTS_IN_GET as u32,
+				"maxObjectsInSet": MAX_OBJECTS_IN_SET as u32,
 				"collationAlgorithms": [],
 			},
 			MAIL_CAPABILITY: {
 				"maxMailboxesPerEmail": null,
 				"maxMailboxDepth": null,
 				"maxSizeMailboxName": 128u32,
-				"maxSizeAttachmentsPerEmail": 50_000_000u64,
+				"maxSizeAttachmentsPerEmail": limits::MAX_SIZE_ATTACHMENTS_PER_EMAIL as u64,
 				"emailQuerySortOptions": [],
 				"mayCreateTopLevelMailbox": true,
 			},
@@ -120,7 +141,8 @@ pub async fn session(State(state): State<ApiState>) -> Json<Value> {
 		"apiUrl": "/jmap/api",
 		"downloadUrl": "/jmap/download/{accountId}/{blobId}/{name}",
 		"uploadUrl": "/jmap/upload/{accountId}",
-		"eventSourceUrl": "/jmap/eventsource",
+		// RFC 8620 §7.3: a URI Template carrying the three variables.
+		"eventSourceUrl": "/jmap/eventsource?types={types}&closeafter={closeafter}&ping={ping}",
 		"state": "0",
 	}))
 }
@@ -148,9 +170,36 @@ pub struct Response {
 pub async fn api(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
-	Json(request): Json<Request>,
+	request: axum::extract::Request,
 ) -> axum::response::Response {
-	match dispatch_request(&state, &auth, request) {
+	let principal = Principal::for_token(&state, &auth);
+	// The slot is held from before the body is read until the response is
+	// built, so a request counts against `maxConcurrentRequests` for as long
+	// as the server is busy with it.
+	let Some(_slot) = CallerSlot::take(
+		&state,
+		&principal,
+		Work::Request,
+		limits::MAX_CONCURRENT_REQUESTS,
+	) else {
+		let problem =
+			limits::too_many_concurrent("maxConcurrentRequests", limits::MAX_CONCURRENT_REQUESTS);
+		return (StatusCode::TOO_MANY_REQUESTS, Json(problem)).into_response();
+	};
+	// A body over the route's cap (`maxSizeRequest`) is answered with the
+	// RFC 8620 `limit` problem naming it, not axum's plain-text 413.
+	let request = match Json::<Request>::from_request(request, &()).await {
+		Ok(Json(request)) => request,
+		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+			let problem = limits::request_too_large();
+			return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+		}
+		Err(rejection) => return rejection.into_response(),
+	};
+	// Uploaded blobs an `Email/set` create names are read here, where the
+	// blob backend can be awaited; dispatch itself is synchronous.
+	let uploads = Uploads::prefetch(&state, &principal, &request).await;
+	match dispatch_request(&state, &principal, request, &uploads) {
 		Ok(response) => Json(response).into_response(),
 		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
 	}
@@ -166,25 +215,33 @@ pub async fn api(
 /// returns in its own framing.
 pub fn dispatch_request(
 	state: &ApiState,
-	auth: &MatchedAuth,
+	principal: &Principal,
 	request: Request,
+	uploads: &Uploads,
 ) -> Result<Response, Value> {
 	let calls = request.method_calls.len();
 	if calls > limits::MAX_CALLS_IN_REQUEST {
 		return Err(limits::too_many_calls());
 	}
+	// `PushSubscription/*` and `Core/echo` are session-scoped: they do not
+	// carry an `accountId`. `Core/echo` touches nothing; the push
+	// subscriptions are filtered by the caller that created them. The rest
+	// of the methods need an account check: the scope each call needs is
+	// checked below with `state.require_scope_for_principal`, and the
+	// per-method handler does the principal check on the `accountId` it
+	// pulls out of the arguments.
 	let mut method_responses = Vec::with_capacity(calls);
 	let mut resolver = Resolver::new(MAX_REQUEST_LIMITS);
 	for MethodCall(name, args, call_id) in request.method_calls {
 		// Resolve result back-references (`#`-prefixed args) against earlier
-		// responses. The resolver bounds the cumulative cost of a chain
-		// a request where each call's argument is a `#ResultOf`
-		// reference to the previous result would, without the bound,
-		// double the materialised data every step and reach hundreds
-		// of MB on a 25-call chain. The first call that crosses the
-		// bound is refused with `requestTooLarge` (RFC 8620 §3.7.2 /
-		// §3.6.2); an unresolvable reference fails with
-		// `invalidResultReference`.
+		// responses. Without a bound, a request where each call's argument
+		// is a `#ResultOf` reference to the previous result would double
+		// the materialised data every step and reach hundreds of MB on a
+		// 25-call chain. A call with a reference resolving to more
+		// objects than maxObjectsInGet/maxObjectsInSet, or whose
+		// references push the request's resolved bytes past
+		// maxSizeRequest, is refused with `requestTooLarge`; an
+		// unresolvable reference fails with `invalidResultReference`.
 		let args = match resolver.resolve(&args, &method_responses) {
 			Ok(args) => args,
 			Err(ResolveError::TooLarge) => {
@@ -204,55 +261,81 @@ pub fn dispatch_request(
 				continue;
 			}
 		};
-		// Scope tightening: the middleware infers `Read` for any `POST
-		// /jmap/api`, but mutating methods need `Write` (or `Send` for
-		// outbound submission). A read-only key hitting the dispatcher would
-		// otherwise reach `Mailbox/set`, `EmailSubmission/set`, etc.
+		// Scope tightening: the middleware lets any scoped key through to
+		// `POST /jmap/api`, so each method call is checked here against the
+		// scope it needs ([`required_scope`]). Scopes are independent: a key
+		// issued only to write or only to send does not read the mailbox, and
+		// a read-only key does not reach `Mailbox/set`,
+		// `EmailSubmission/set`, etc. The check runs against the resolved
+		// principal so handlers do not re-look-up the bearer.
+		if let Some(scope) = required_scope(&name)
+			&& state.require_scope_for_principal(principal, scope).is_err()
+		{
+			let response = jmap_scope_error(&call_id);
+			method_responses.push(response);
+			continue;
+		}
+		if limits::too_many_objects(&name, &args) {
+			let response = json!(["error", { "type": "requestTooLarge" }, call_id]);
+			method_responses.push(response);
+			continue;
+		}
 		let response = match name.as_str() {
 			// Core/echo returns its arguments unchanged (RFC 8620 §4).
 			"Core/echo" => json!([name, args, call_id]),
-			"Mailbox/set" => match state.require_scope(auth, Scope::Write) {
-				Ok(()) => methods::mailbox_set(state, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"Email/set" => match state.require_scope(auth, Scope::Write) {
-				Ok(()) => email::email_set(state, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"Email/copy" => match state.require_scope(auth, Scope::Write) {
-				Ok(()) => email::email_copy(state, auth, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"EmailSubmission/set" => match state.require_scope(auth, Scope::Send) {
-				Ok(()) => methods::email_submission_set(state, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"PushSubscription/set" => match state.require_scope(auth, Scope::Write) {
-				Ok(()) => websocket::push_subscription_set(state, &args, &call_id),
-				Err(_) => jmap_scope_error(&call_id),
-			},
-			"Mailbox/get" => methods::mailbox_get(state, &args, &call_id),
-			"Mailbox/query" => methods::mailbox_query(state, &args, &call_id),
-			"Email/query" => methods::email_query(state, &args, &call_id),
-			"Email/get" => methods::email_get(state, &args, &call_id),
-			"Thread/get" => methods::thread_get(state, &args, &call_id),
-			// We do not track a change log, so /changes and /queryChanges are
-			// not calculable (RFC 8620 §5.2, §5.6); report it per spec rather
-			// than unknownMethod.
-			"Mailbox/changes"
-			| "Email/changes"
-			| "Thread/changes"
-			| "Mailbox/queryChanges"
-			| "Email/queryChanges" => methods::cannot_calculate_changes(state, &args, &call_id),
-			"Identity/get" => methods::identity_get(state, &args, &call_id),
-			"Quota/get" => methods::quota_get(state, &args, &call_id),
-			"PushSubscription/get" => websocket::push_subscription_get(state, &args, &call_id),
+			"Mailbox/set" => methods::mailbox_set(state, principal, &args, &call_id),
+			"Email/set" => email::email_set(state, principal, &args, &call_id, uploads),
+			"Email/copy" => email::email_copy(state, principal, &args, &call_id),
+			"EmailSubmission/set" => {
+				email_submission::email_submission_set(state, principal, &args, &call_id)
+			}
+			"PushSubscription/set" => push_subscription::set(state, principal, &args, &call_id),
+			"Mailbox/get" => methods::mailbox_get(state, principal, &args, &call_id),
+			"Mailbox/query" => methods::mailbox_query(state, principal, &args, &call_id),
+			"Email/query" => methods::email_query(state, principal, &args, &call_id),
+			"Email/get" => methods::email_get(state, principal, &args, &call_id),
+			"Thread/get" => methods::thread_get(state, principal, &args, &call_id),
+			// `/changes` answers against the per-type change log
+			// (RFC 8620 §5.2). The method name tells the handler which
+			// counter to compare the since-state against.
+			"Mailbox/changes" | "Email/changes" | "Thread/changes" => {
+				state::changes(state, principal, &args, &call_id, name.as_str())
+			}
+			"Mailbox/queryChanges" => query_changes::mailbox(state, principal, &args, &call_id),
+			"Email/queryChanges" => query_changes::email(state, principal, &args, &call_id),
+			"Identity/get" => methods::identity_get(state, principal, &args, &call_id),
+			"Quota/get" => methods::quota_get(state, principal, &args, &call_id),
+			"PushSubscription/get" => push_subscription::get(state, principal, &args, &call_id),
 			_ => json!(["error", { "type": "unknownMethod" }, call_id]),
 		};
-		resolver.record_result(&response);
 		method_responses.push(response);
 	}
 	Ok(Response { method_responses })
+}
+
+/// The scope a method call needs: `Write` to change stored data or push
+/// subscriptions, `Send` to submit mail, `Read` for everything that returns
+/// account data. `None` for `Core/echo`, which touches nothing, and for a
+/// method this server does not know, which is answered `unknownMethod`.
+fn required_scope(method: &str) -> Option<Scope> {
+	match method {
+		"Mailbox/set" | "Email/set" | "Email/copy" | "PushSubscription/set" => Some(Scope::Write),
+		"EmailSubmission/set" => Some(Scope::Send),
+		"Mailbox/get"
+		| "Mailbox/query"
+		| "Mailbox/changes"
+		| "Mailbox/queryChanges"
+		| "Email/get"
+		| "Email/query"
+		| "Email/changes"
+		| "Email/queryChanges"
+		| "Thread/get"
+		| "Thread/changes"
+		| "Identity/get"
+		| "Quota/get"
+		| "PushSubscription/get" => Some(Scope::Read),
+		_ => None,
+	}
 }
 
 /// The JMAP spec does not define a "forbidden" method error; `forbidden` is
@@ -262,311 +345,52 @@ fn jmap_scope_error(call_id: &str) -> Value {
 	json!(["error", { "type": "forbidden" }, call_id])
 }
 
-/// Replace each `#`-prefixed argument (a ResultReference) with the value pulled
-/// from an earlier method's result, per RFC 8620 §3.7. The unbounded
-/// version kept for unit tests; the production dispatcher goes through
-/// `Resolver::resolve` instead so it can bound the cumulative cost.
-#[cfg(test)]
-fn resolve_references(mut args: Value, prior: &[Value]) -> Result<Value, ()> {
-	let Some(object) = args.as_object_mut() else {
-		return Ok(args);
-	};
-	let references: Vec<String> = object
-		.keys()
-		.filter(|key| key.starts_with('#'))
-		.cloned()
-		.collect();
-	for key in references {
-		let reference = object.remove(&key).expect("key present");
-		let resolved = resolve_reference(&reference, prior).ok_or(())?;
-		object.insert(key[1..].to_string(), resolved);
-	}
-	Ok(args)
-}
-
-/// Per-request limits used by the back-reference resolver. Mirrors the
-/// values advertised in the Session resource (RFC 8620 §6.1): the
-/// `maxSizeRequest` byte cap and the sum of `maxObjectsInGet` and
-/// `maxObjectsInSet`. A request whose chain of `#`-prefixed arguments
-/// would materialise more than this is refused with `requestTooLarge`
-/// on the first call that crosses the bound.
-pub(crate) struct RequestLimits {
-	/// Cumulative bytes of resolved arguments across the request. A
-	/// request whose chain would materialise more than this is
-	/// rejected on the first call that crosses the bound.
-	pub max_size_request: u64,
-	/// Cumulative element count of resolved arguments across the
-	/// request. Mirrors the spec's `maxObjectsInGet + maxObjectsInSet`
-	/// cap; a request whose chain would materialise more leaves than
-	/// this is rejected the same way.
-	pub max_objects_total: u64,
-}
-
-/// The default per-request limits, matching the Session resource.
-pub(crate) const MAX_REQUEST_LIMITS: RequestLimits = RequestLimits {
-	// The Session's `maxSizeRequest`.
-	max_size_request: MAX_SIZE_REQUEST as u64,
-	// maxObjectsInGet (500) + maxObjectsInSet (500). The cap is on
-	// total resolved leaves, not on objects returned by a single
-	// method, so this is the conservative sum.
-	max_objects_total: 200,
-};
-
-/// Count the number of leaves (scalars, empty objects/arrays) in a
-/// JSON value, recursively. Used by the resolver to bound a chain of
-/// `#`-prefixed arguments: a back-reference loop that doubles the
-/// materialised size every call would, without this bound, blow past
-/// any reasonable cap.
-fn element_count(value: &Value) -> u64 {
-	match value {
-		Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => 1,
-		Value::Array(items) => {
-			if items.is_empty() {
-				1
-			} else {
-				items.iter().map(element_count).sum()
-			}
-		}
-		Value::Object(map) => {
-			if map.is_empty() {
-				1
-			} else {
-				map.values().map(element_count).sum()
-			}
-		}
-	}
-}
-
-/// Byte size of a JSON value when serialised, in bytes. Used by the
-/// resolver to bound a chain of back-references against
-/// `maxSizeRequest`. `serde_json::to_vec` is the canonical answer; we
-/// use it to keep the accounting honest with what the wire would see.
-fn byte_size(value: &Value) -> u64 {
-	serde_json::to_vec(value)
-		.map(|v| v.len() as u64)
-		.unwrap_or(0)
-}
-
-/// A request-scoped counter that bounds the cumulative work the
-/// back-reference resolver does for a single JMAP request. Without
-/// this, a request of N `Core/echo` calls each carrying two
-/// references to the previous result would double the materialised
-/// data N times, so 25 calls could push a few KB into hundreds of MB
-/// the request would be processed and the answer would be huge.
-/// The resolver instead refuses the first call that crosses either
-/// bound with `requestTooLarge` (RFC 8620 §3.7.2 / §3.6.2).
-pub(crate) struct Resolver {
-	limits: RequestLimits,
-	/// Cumulative resolved bytes materialised so far in the request.
-	resolved_bytes: u64,
-	/// Cumulative resolved elements materialised so far in the
-	/// request.
-	resolved_elements: u64,
-}
-
-impl Resolver {
-	/// Build a resolver that enforces the given limits.
-	pub fn new(limits: RequestLimits) -> Self {
-		Self {
-			limits,
-			resolved_bytes: 0,
-			resolved_elements: 0,
-		}
-	}
-
-	/// Bytes and elements materialised so far. Read by the dispatcher
-	/// when it needs to attribute work to a particular call.
-	#[cfg(test)]
-	pub fn materialised(&self) -> (u64, u64) {
-		(self.resolved_bytes, self.resolved_elements)
-	}
-
-	/// Record the cost of a method response just produced, so the next
-	/// call's references resolve against a counter that already
-	/// includes the new bytes.
-	pub fn record_result(&mut self, response: &Value) {
-		if let Some(args) = response.get(1) {
-			self.resolved_bytes = self.resolved_bytes.saturating_add(byte_size(args));
-			self.resolved_elements = self.resolved_elements.saturating_add(element_count(args));
-		}
-	}
-
-	/// Resolve the `#`-prefixed arguments of `args` against the
-	/// accumulated `prior` responses. The two failure modes have
-	/// distinct sentinels: `Ok` for a fully resolved `Value`,
-	/// `Err(ResolveError::TooLarge)` when materialising this value
-	/// would push the request over the per-request limits, and
-	/// `Err(ResolveError::Unresolvable)` when a reference points to a
-	/// missing call. The dispatcher turns each into the matching
-	/// JMAP error type.
-	pub fn resolve(&mut self, args: &Value, prior: &[Value]) -> Result<Value, ResolveError> {
-		let mut args = args.clone();
-		// Walk the whole argument tree for `#`-prefixed keys. JMAP
-		// `ResultReference` values can appear at any depth; a chain
-		// whose references are nested inside a wrapper key like
-		// `{"x": {#k0: ref, #k1: ref}}` would otherwise slip past the
-		// bound.
-		let mut additions: Vec<(String, Value, u64, u64)> = Vec::new();
-		match resolve_references_recursive(&mut args, prior, &mut additions) {
-			Ok(true) => {}
-			Ok(false) => return Err(ResolveError::Unresolvable),
-			Err(()) => return Err(ResolveError::Unresolvable),
-		}
-		// Sum the per-reference cost; the whole call's materialised
-		// value is the cap-relevant quantity.
-		let total_bytes: u64 = additions.iter().map(|(_, _, b, _)| *b).sum();
-		let total_elements: u64 = additions.iter().map(|(_, _, _, e)| *e).sum();
-		if self.resolved_bytes.saturating_add(total_bytes) > self.limits.max_size_request
-			|| self.resolved_elements.saturating_add(total_elements) > self.limits.max_objects_total
-		{
-			return Err(ResolveError::TooLarge);
-		}
-		self.resolved_bytes = self.resolved_bytes.saturating_add(total_bytes);
-		self.resolved_elements = self.resolved_elements.saturating_add(total_elements);
-		Ok(args)
-	}
-}
-
-/// Recursively walk `value` looking for `#`-prefixed keys. Each match
-/// resolves the `ResultReference` against `prior`, appends the cost
-/// to `additions`, and substitutes the resolved value (with the
-/// prefix stripped) in place. Returns `Ok(true)` on success,
-/// `Ok(false)` when a reference cannot be resolved.
-fn resolve_references_recursive(
-	value: &mut Value,
-	prior: &[Value],
-	additions: &mut Vec<(String, Value, u64, u64)>,
-) -> Result<bool, ()> {
-	match value {
-		Value::Object(map) => {
-			let refs: Vec<String> = map
-				.keys()
-				.filter(|key| key.starts_with('#'))
-				.cloned()
-				.collect();
-			for key in refs {
-				let reference = map.remove(&key).expect("key present");
-				let resolved = match resolve_reference(&reference, prior) {
-					Some(r) => r,
-					None => return Ok(false),
-				};
-				let bytes = byte_size(&resolved);
-				let elements = element_count(&resolved);
-				additions.push((key.clone(), resolved.clone(), bytes, elements));
-				map.insert(key[1..].to_string(), resolved);
-			}
-			let keys: Vec<String> = map.keys().cloned().collect();
-			for k in keys {
-				if let Some(v) = map.get_mut(&k)
-					&& !resolve_references_recursive(v, prior, additions)?
-				{
-					return Ok(false);
-				}
-			}
-			Ok(true)
-		}
-		Value::Array(items) => {
-			for item in items.iter_mut() {
-				if !resolve_references_recursive(item, prior, additions)? {
-					return Ok(false);
-				}
-			}
-			Ok(true)
-		}
-		_ => Ok(true),
-	}
-}
-
-/// Failure modes for the bounded resolver; the dispatcher maps each
-/// to the matching JMAP error type (`requestTooLarge` or
-/// `invalidResultReference`).
-#[derive(Debug)]
-pub(crate) enum ResolveError {
-	/// Adding the resolved value would push the cumulative bytes or
-	/// element count over the per-request cap. The first call that
-	/// crosses the bound is rejected.
-	TooLarge,
-	/// A `#ResultOf` reference pointed at a missing call or path.
-	Unresolvable,
-}
-
-/// Resolve one ResultReference `{resultOf, name, path}` against the prior
-/// `[name, arguments, callId]` responses.
-fn resolve_reference(reference: &Value, prior: &[Value]) -> Option<Value> {
-	let result_of = reference.get("resultOf")?.as_str()?;
-	let name = reference.get("name")?.as_str()?;
-	let path = reference.get("path")?.as_str()?;
-	let response = prior.iter().find(|response| {
-		response.get(0).and_then(Value::as_str) == Some(name)
-			&& response.get(2).and_then(Value::as_str) == Some(result_of)
-	})?;
-	pointer_with_wildcard(response.get(1)?, path)
-}
-
-/// JSON Pointer (RFC 6901) extended with the JMAP `*` wildcard: a `/*` segment
-/// maps the rest of the path over an array, flattening one level of array
-/// results (RFC 8620 §3.7).
-fn pointer_with_wildcard(value: &Value, path: &str) -> Option<Value> {
-	let Some(star) = path.find("/*") else {
-		return value.pointer(path).cloned();
-	};
-	let (before, rest) = path.split_at(star);
-	let rest = &rest[2..]; // drop the "/*"
-	let array = value.pointer(before)?.as_array()?;
-	let mut out = Vec::new();
-	for item in array {
-		let resolved = if rest.is_empty() {
-			item.clone()
-		} else {
-			pointer_with_wildcard(item, rest)?
-		};
-		match resolved {
-			Value::Array(items) => out.extend(items),
-			other => out.push(other),
-		}
-	}
-	Some(Value::Array(out))
-}
-
-#[cfg(test)]
-#[path = "jmap_backref_tests.rs"]
-mod backref_tests;
-
-#[cfg(test)]
-#[path = "jmap_backref_caps_tests.rs"]
-mod backref_caps_tests;
-
 /// `POST /jmap/upload/{accountId}` (RFC 8620 §6.1): store an uploaded blob and
-/// return its id, type and size. Blobs live under `<data_dir>/blobs/<uuid>`.
+/// return its id, type and size. Blobs live in the account's partition,
+/// `<data_dir>/blobs/accounts/<account>/`.
 pub async fn upload(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Path(account): Path<String>,
-	headers: HeaderMap,
-	body: axum::body::Bytes,
+	request: axum::extract::Request,
 ) -> impl IntoResponse {
+	let principal = Principal::for_token(&state, &auth);
 	// `Write` scope: a read-only key must not be able to fill the quota or
 	// the blob store with arbitrary bytes.
-	if state.require_scope(&auth, Scope::Write).is_err() {
+	if state
+		.require_scope_for_principal(&principal, Scope::Write)
+		.is_err()
+	{
 		return jmap_error(StatusCode::UNAUTHORIZED, "forbidden", "missing write scope");
 	}
-	if !state.accounts().iter().any(|a| a.name == account) {
+	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
+		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
+	};
+	if !principal.admits_account(&view.name, &view.addresses) {
 		return jmap_error(StatusCode::NOT_FOUND, "notFound", "account not found");
 	}
-	// Reject anything over the advertised maxSizeUpload with the spec's limit
-	// error (RFC 8620 §6.1) rather than a transport-level 413.
-	if body.len() > MAX_UPLOAD_SIZE {
-		return (
-			StatusCode::PAYLOAD_TOO_LARGE,
-			Json(json!({
-				"type": "urn:ietf:params:jmap:error:limit",
-				"limit": "maxSizeUpload",
-				"status": 413,
-				"detail": "upload exceeds maxSizeUpload",
-			})),
-		)
-			.into_response();
-	}
+	let Some(_slot) = CallerSlot::take(
+		&state,
+		&principal,
+		Work::Upload,
+		limits::MAX_CONCURRENT_UPLOAD,
+	) else {
+		let problem =
+			limits::too_many_concurrent("maxConcurrentUpload", limits::MAX_CONCURRENT_UPLOAD);
+		return (StatusCode::TOO_MANY_REQUESTS, Json(problem)).into_response();
+	};
+	let headers = request.headers().clone();
+	// The route caps the body at the advertised maxSizeUpload; anything
+	// larger is answered with the spec's limit error (RFC 8620 §6.1) rather
+	// than a transport-level 413.
+	let body = match axum::body::Bytes::from_request(request, &()).await {
+		Ok(body) => body,
+		Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+			let problem = limits::upload_too_large();
+			return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+		}
+		Err(rejection) => return rejection.into_response(),
+	};
 	// Enforce the account's storage quota before persisting (RFC 8620 §6.1:
 	// upload may be refused once a limit is reached). A configured limit is the
 	// hard cap; 0 means unlimited. Fail closed — reject when the blob would push
@@ -576,8 +400,7 @@ pub async fn upload(
 	// hit, distinguishing an over-quota rejection from the per-request
 	// `maxSizeUpload` one above. The HTTP status is 507 Insufficient Storage,
 	// the closest standard code for "would exceed the account's storage".
-	let limit = state.quota_limit();
-	if limit > 0 {
+	if let Some(limit) = state.quota_for_account(&account) {
 		let usage = blobs::account_usage_bytes(state.data_dir(), &account, state.crypto());
 		if usage.saturating_add(body.len() as u64) > limit {
 			return (
@@ -643,13 +466,23 @@ pub async fn upload(
 			);
 		}
 	};
+	// The blob goes into the account's partition. An account whose name is
+	// not one plain path component cannot have one, so the upload fails
+	// rather than landing anywhere shared.
 	let backend = state.blob_backend();
-	if backend.put(blob_id, "", &stored).await.is_err()
+	let Some(partition) = crate::storage::BlobAccount::new(&account) else {
+		return jmap_error(
+			StatusCode::INTERNAL_SERVER_ERROR,
+			"serverFail",
+			"cannot store blob",
+		);
+	};
+	if backend.put(&partition, blob_id, "", &stored).await.is_err()
 		|| backend
-			.put(blob_id, ".type", content_type.as_bytes())
+			.put(&partition, blob_id, ".type", content_type.as_bytes())
 			.await
 			.is_err()
-		|| blobs::write_blob_owner(backend, blob_id, &account)
+		|| blobs::write_blob_owner(backend, blob_id, &partition)
 			.await
 			.is_err()
 	{

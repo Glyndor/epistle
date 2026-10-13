@@ -11,7 +11,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Export { config, .. }
 		| Command::Import { config, .. }
 		| Command::Backup { config }
-		| Command::Restore { config }
+		| Command::Restore { config, .. }
 		| Command::Verify { config }
 		| Command::VerifyDns { config }
 		| Command::DnsRecords { config }
@@ -21,20 +21,22 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Autodiscover { config, .. }
 		| Command::Suppression { config, .. }
 		| Command::ReportAbuse { config }
-		| Command::Accounts { config }
-		| Command::AccountAdd { config, .. }
-		| Command::AccountRemove { config, .. }
+		| Command::Legacy(crate::cli::legacy::Legacy::Accounts { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::AccountAdd { config, .. })
+		| Command::Legacy(crate::cli::legacy::Legacy::AccountRemove { config, .. })
 		| Command::Account { config, .. }
 		| Command::Queue { config, .. }
 		| Command::Ban { config, .. }
 		| Command::Masked { config, .. }
-		| Command::AppPasswordCreate { config, .. }
-		| Command::AppPasswords { config }
-		| Command::AppPasswordRevoke { config, .. }
-		| Command::ApiKeyCreate { config, .. }
-		| Command::ApiKeys { config }
-		| Command::ApiKeyRevoke { config, .. }
+		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordCreate { config, .. })
+		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswords { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::AppPasswordRevoke { config, .. })
+		| Command::AppPassword { config, .. }
+		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyCreate { config, .. })
+		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeys { config })
+		| Command::Legacy(crate::cli::legacy::Legacy::ApiKeyRevoke { config, .. })
 		| Command::Reports { config, .. } => Some(config),
+		Command::MoveSubids(args) => Some(&args.config),
 		Command::Stack { config, .. }
 		| Command::Service { config, .. }
 		| Command::Limits { config, .. }
@@ -50,7 +52,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Domain { config, .. }
 		| Command::Dkim { config, .. }
 		| Command::Tls { config, .. }
-		| Command::ApiKey { config, .. } => Some(config),
+		| Command::ApiKey { config, .. }
+		| Command::Db { config, .. } => Some(config),
 		Command::Archive { action } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }
@@ -62,6 +65,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::OauthKeygen { .. }
 		| Command::TokenHash
 		| Command::Local { .. }
+		| Command::Completions { .. }
+		| Command::Manpages { .. }
 		| Command::Init { .. } => None,
 	}
 }

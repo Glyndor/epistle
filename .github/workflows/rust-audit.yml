@@ -1,15 +1,25 @@
 name: Rust audit
 
-# No push trigger. The audit answers "are dependencies clean of new
-# advisories or license issues on a fixed tree?", which the weekly
-# schedule on main handles. workflow_dispatch is for ad hoc reruns.
-# pull_request is path-filtered to changes that touch Cargo.toml,
-# Cargo.lock, or deny.toml.
+# Daily + on dispatch, auditing both `develop` and `main` against the
+# RustSec advisory database. The weekly cadence in this file used to be
+# enough until the 2026-09-28 run failed and nobody saw it; a weekly red
+# check is the same as no check at all. A daily run plus an issue that
+# opens itself the moment something fails is what makes the gap loud.
+#
+# Dependabot does not cover RustSec advisories that are not yet in GHSA
+# (RUSTSEC-2026-0338/0340/0343 on quinn-proto were found only by the
+# 0.11.0 release PR's audit), so cargo-audit on the lockfile is the
+# only line of defence for the few hours between the RUSTSEC PR and the
+# GHSA mirror.
 
 on:
   schedule:
-    # Weekly, Monday 06:00 UTC: catch new RUSTSEC advisories on a fixed tree.
-    - cron: "0 6 * * 1"
+    # Daily, 05:37 UTC. An off-peak minute so the run does not queue
+    # behind the on-the-hour crowd; GitHub schedules run hours late in
+    # any case. The same minute is used by `dependabot-security-watch.yml`
+    # for the same reason, so an operator looking at one report sees the
+    # other if either fires.
+    - cron: "37 5 * * *"
   workflow_dispatch:
   pull_request:
     paths:
@@ -20,10 +30,14 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "deny.toml"
-      # The reusable this calls, and the ignore policy the audit reads. A
-      # change to either alters what the job accepts, so neither should land
-      # without the job having run.
+      # The reusable this calls, the Python scripts the report job runs,
+      # and the ignore policy the audit reads. A change to any of them
+      # alters what the job accepts, so none should land without the job
+      # having run.
       - ".github/workflows/reusable-rust-audit.yml"
+      - ".github/scripts/rust_audit_combine.py"
+      - ".github/scripts/test_rust_audit_combine.py"
+      - ".github/scripts/test_rust_audit_lookup.py"
       - ".cargo/audit.toml"
 
 permissions:
@@ -31,12 +45,132 @@ permissions:
 
 jobs:
   audit:
+    # Two shapes. On schedule and workflow_dispatch the matrix is
+    # `[develop, main]` so a finding on either branch opens an issue
+    # the day it appears. On pull_request the matrix is `[""]` so the
+    # reusable audits the PR's own lockfile (an empty `ref` makes
+    # `actions/checkout` use the pull-request head). A PR that bumps a
+    # crate to a vulnerable version is caught at the pull request, not
+    # by the next day's main run. `fail-fast: false` keeps both halves
+    # independent: a slow or dirty ref's report still publishes.
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(github.event_name == 'pull_request' && '[""]' || '["develop","main"]') }}
     uses: ./.github/workflows/reusable-rust-audit.yml
     with:
-      # fuzz/ is a second workspace with its own lockfile and its own graph,
-      # and nothing looked at it until now. It is audited from the repository
-      # root rather than from inside fuzz/, because `cargo audit` reads
-      # `.cargo/audit.toml` relative to the process directory: running it in
-      # fuzz/ drops the ignore policy and reports advisories already assessed
-      # here, which is why that lockfile appeared to carry four findings.
+      ref: ${{ matrix.ref }}
+      # fuzz/ is a second workspace with its own lockfile and its own
+      # graph, and nothing looked at it until #1095. It is audited from
+      # the repository root rather than from inside fuzz/, because
+      # `cargo audit` reads `.cargo/audit.toml` relative to the process
+      # directory: running it in fuzz/ drops the ignore policy and reports
+      # advisories already this repository has already assessed, which is
+      # why that lockfile appeared to carry four findings.
       extra-lockfiles: fuzz/Cargo.lock
+
+  report:
+    # Runs only when at least one matrix entry of `audit` failed, AND
+    # only on schedule or workflow_dispatch. A pull_request run would
+    # open an issue on every PR audit failure (the matrix is single
+    # there, so any failure is a real PR-introduced vulnerability);
+    # that is not what an issue owned by this workflow is for. The
+    # matrix on PR is for the per-PR required check, the open-issue
+    # behaviour is for the daily cadence.
+    needs: audit
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Download every cargo audit JSON
+        uses: actions/download-artifact@9000827ccba6bdab643e8b65d33ac0654aef8333 # v8.0.2
+        with:
+          # The reusable names each artifact `audit-json-<ref>`, so the
+          # pattern below downloads both into per-artifact subdirectories
+          # of the same path. `merge-multiple: true` is what turns the
+          # multi-artifact download into one directory tree; without it
+          # the step picks the first match and silently drops the other.
+          pattern: audit-json-*
+          path: audits
+          merge-multiple: true
+
+      - name: Open or comment on the advisory issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # The full URL of this run; included in the failure-issue body
+          # so an operator can click straight to the red logs.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # The combine script decides whether to open an advisory issue
+        # or a non-advisory failure issue. The advisory branch runs
+        # when at least one ref's JSON listed advisories; the failure
+        # branch runs when the reusable failed without surfacing
+        # advisories (cargo-deny policy, tool install error, missing
+        # lockfile, or a JSON shape the combine script could not
+        # parse). The script looks up any existing issue with the
+        # same title so the run comments rather than opens a duplicate.
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/rust_audit_combine.py audits --repo "$REPO" \
+            --run-url "$RUN_URL" > combined.json
+          cat combined.json
+          clean="$(python3 -c 'import json; print(json.load(open("combined.json"))["clean"])')"
+          title="$(python3 -c 'import json; print(json.load(open("combined.json"))["title"] or "")')"
+          body_file="$(mktemp)"
+          python3 -c 'import json,sys; open(sys.argv[1], "w").write(json.load(open("combined.json"))["body"] or "")' "$body_file"
+          existing="$(python3 -c 'import json; print(json.load(open("combined.json"))["existing"] or "")')"
+          labels="type:security,type:deps,prio:P1,area:meta"
+          if [ -n "$existing" ]; then
+            echo "::notice::commenting on existing issue #$existing"
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
+          else
+            echo "::notice::opening a new issue: $title"
+            gh issue create --repo "$REPO" --title "$title" --body-file "$body_file" --label "$labels"
+          fi
+          # A clean combine alongside a failed reusable is still a
+          # failure that needs to keep the run summary red. The issue
+          # already opened (or commented on) names the run via the
+          # URL, so an operator has somewhere to look.
+          if [ "$clean" = "True" ]; then
+            exit 1
+          fi
+
+  close:
+    # Runs only when every matrix entry of `audit` succeeded, AND only
+    # on schedule or workflow_dispatch. The matrix on pull_request is
+    # single (the PR head), so a green PR run would close every still
+    # open advisory issue this workflow opened on develop/main. The
+    # close signal belongs to the daily cadence, not the per-PR
+    # required check.
+    needs: audit
+    if: success() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close stale advisory issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LABELS: "type:security,type:deps,prio:P1,area:meta"
+        run: |
+          set -euo pipefail
+
+          # The four labels identify the issues this workflow owns. No
+          # other workflow labels issues with all four at the same time;
+          # dependabot-security-watch opens pull requests, not issues,
+          # and the supply-chain gate labels only `type:deps` without
+          # `prio:P1`. `gh issue list --label` matches every issue that
+          # carries all four labels (AND semantics), and pagination is
+          # handled internally by the `gh` wrapper, so the loop walks
+          # every result without an explicit page counter.
+          for number in $(gh issue list \
+              --repo "$REPO" --state open \
+              --label "type:security" --label "type:deps" \
+              --label "prio:P1" --label "area:meta" \
+              --json number --jq '.[].number'); do
+            echo "::notice::closing stale advisory issue #$number"
+            gh issue close "$number" --repo "$REPO" \
+              --comment "Both refs are clean on this run; closing automatically."
+          done

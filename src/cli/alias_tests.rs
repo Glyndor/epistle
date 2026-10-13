@@ -173,9 +173,9 @@ fn add_refuses_an_alias_address_outside_configured_domains() {
 		visible: false,
 	};
 	let err = add_alias(&config, &mut document, &args).unwrap_err();
-	assert!(
-		err.contains("not in a configured domain"),
-		"unexpected message: {err}"
+	assert_eq!(
+		err,
+		"alias address: other.org is not a domain this server handles"
 	);
 }
 
@@ -379,16 +379,14 @@ fn add_alias_address_validates_against_the_store() {
 	let config = load(file.path());
 	let store = open_store(&config).expect("store must open");
 	assert!(validate_alias_address(&config, "alice@example.org", &store).is_ok());
-	assert!(
-		validate_alias_address(&config, "team@other.org", &store)
-			.unwrap_err()
-			.contains("not in a configured domain"),
+	assert_eq!(
+		validate_alias_address(&config, "team@other.org", &store).unwrap_err(),
+		"alias address: other.org is not a domain this server handles",
 		"address outside configured domains must be refused"
 	);
-	assert!(
-		validate_alias_address(&config, "not-an-email", &store)
-			.unwrap_err()
-			.contains("not a valid email address"),
+	assert_eq!(
+		validate_alias_address(&config, "not-an-email", &store).unwrap_err(),
+		"alias address: not-an-email has no @",
 		"a malformed address must be refused"
 	);
 }
@@ -396,10 +394,9 @@ fn add_alias_address_validates_against_the_store() {
 #[test]
 fn invalid_member_or_sender_address_is_refused() {
 	assert!(validate_member_or_sender("member", "alice@example.org").is_ok());
-	assert!(
-		validate_member_or_sender("member", "bad")
-			.unwrap_err()
-			.contains("not a valid email address")
+	assert_eq!(
+		validate_member_or_sender("member", "bad").unwrap_err(),
+		"member address: bad has no @"
 	);
 }
 

@@ -376,8 +376,16 @@ fn no_sealer_leaves_the_forwarded_copy_unchanged() {
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let ids = spool.list().expect("list");
 	let entry = spool.load(ids[0]).expect("load");
-	// Without a sealer the copy is forwarded byte-for-byte.
-	assert_eq!(entry.data, FORWARD_BODY);
+	// Without a sealer the copy is forwarded byte-for-byte, under the
+	// Delivered-To of the address that forwarded it.
+	assert_eq!(
+		entry.data,
+		[
+			b"Delivered-To: alice@example.org\r\n".as_slice(),
+			FORWARD_BODY
+		]
+		.concat()
+	);
 }
 
 #[test]
@@ -404,8 +412,10 @@ fn a_chain_we_already_sealed_is_not_resealed() {
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let ids = spool.list().expect("list");
 	let entry = spool.load(ids[0]).expect("load");
-	// No second set: the forwarded copy is identical to the already-sealed input.
-	assert_eq!(entry.data, sealed, "our domain must not double-seal");
+	// No second set: the forwarded copy is the already-sealed input under
+	// its Delivered-To.
+	let expected = [b"Delivered-To: alice@example.org\r\n".as_slice(), &sealed].concat();
+	assert_eq!(entry.data, expected, "our domain must not double-seal");
 	// Exactly one instance is present (i=1, no i=2).
 	let chain = crate::arc::chain::extract(&entry.data)
 		.expect("extract")

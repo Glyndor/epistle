@@ -48,7 +48,7 @@ fn render_user(account: &DynamicAccount) -> User {
 		schemas: vec![USER_SCHEMA.to_string()],
 		external_id: None,
 		user_name: account.name.clone(),
-		display_name: Some(account.name.clone()),
+		display_name: account.display_name.clone(),
 		active: !account.disabled,
 		emails,
 		name: Some(Name::default()),
@@ -96,10 +96,20 @@ fn check_password(password: &str) -> Result<(), ScimError> {
 }
 
 /// Derive SCRAM-SHA-256 credentials from a plaintext password with a fresh
-/// random salt (RFC 7677 minimum 4096 iterations). Fails closed if the
-/// CSPRNG cannot produce a salt rather than storing a predictable one.
-fn derive_scram(password: &str) -> Result<crate::smtp::scram::ScramStored, ScimError> {
-	crate::smtp::scram::ScramStored::with_fresh_salt(password).ok_or_else(ScimError::internal)
+/// random salt. `None` when SCRAM is disabled via `[auth] scram = false`,
+/// so a PUT that changes the password for an account that already has a
+/// verifier drops the verifier. Fails closed if the CSPRNG cannot produce
+/// a salt rather than storing a predictable one.
+fn derive_scram(
+	password: &str,
+	store: &crate::directory_store::AccountStore,
+) -> Result<Option<crate::smtp::scram::ScramStored>, ScimError> {
+	if !store.scram_enabled() {
+		return Ok(None);
+	}
+	crate::smtp::scram::ScramStored::with_fresh_salt(password)
+		.map(Some)
+		.ok_or_else(ScimError::internal)
 }
 
 /// Hash a plaintext password with the global argon2id KDF. The `password`
@@ -118,15 +128,12 @@ fn resolve_addresses(emails: &[Email], fallback: &[String]) -> Result<Vec<String
 	}
 	let mut out: Vec<String> = Vec::with_capacity(emails.len());
 	for email in emails {
-		let lower = email.value.trim().to_ascii_lowercase();
+		let lower = crate::util::address::normalize(&email.value);
 		if lower.is_empty() {
 			return Err(ScimError::invalid("email value must not be empty"));
 		}
-		if !lower.contains('@') {
-			return Err(ScimError::invalid(format!(
-				"invalid email \"{}\"",
-				email.value
-			)));
+		if let Err(why) = crate::util::address_reason::parse(&lower) {
+			return Err(ScimError::invalid(format!("email: {why}")));
 		}
 		out.push(lower);
 	}
@@ -225,14 +232,14 @@ pub async fn create_user(
 	State(state): State<ApiState>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
-	let name = body.user_name.trim().to_string();
+	let name = crate::directory_store::account_name(&body.user_name);
 	if name.is_empty() {
 		return Err(ScimError::invalid("userName must not be empty"));
 	}
 
 	let (password_hash, scram) = if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
-		(hash_password(plain)?, Some(derive_scram(plain)?))
+		(hash_password(plain)?, derive_scram(plain, state.store())?)
 	} else {
 		// No password supplied: create the account with an inert hash and
 		// no SCRAM credentials. The IdP can PATCH `password` later, or the
@@ -243,7 +250,7 @@ pub async fn create_user(
 	let addresses = resolve_addresses(&body.emails, &[])?;
 	let active = body.active;
 	let account = DynamicAccount {
-		name,
+		name: name.clone(),
 		addresses,
 		password_hash,
 		scram,
@@ -251,9 +258,11 @@ pub async fn create_user(
 		disabled: !active,
 		quota_bytes: None,
 		allowed_protocols: None,
+		display_name: body.display_name.clone(),
+		..DynamicAccount::default()
 	};
 	state.store().add(account).map_err(store_to_scim)?;
-	let stored = lookup(&state, &body.user_name)?;
+	let stored = lookup(&state, &name)?;
 	Ok(scim_resource(StatusCode::CREATED, render_user(&stored)))
 }
 
@@ -302,7 +311,7 @@ pub async fn put_user(
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let existing = lookup(&state, &id)?;
-	if body.user_name != id {
+	if crate::directory_store::account_name(&body.user_name) != id {
 		return Err(ScimError::invalid(
 			"userName cannot be changed via PUT; use DELETE then POST",
 		));
@@ -311,10 +320,10 @@ pub async fn put_user(
 	if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
 		let hash = hash_password(plain)?;
-		let scram = derive_scram(plain)?;
+		let scram = derive_scram(plain, state.store())?;
 		state
 			.store()
-			.set_password_hash(&id, hash, Some(scram))
+			.set_password_hash(&id, hash, scram)
 			.map_err(store_to_scim)?;
 	}
 
@@ -332,6 +341,8 @@ pub async fn put_user(
 				disabled: !body.active,
 				quota_bytes: None,
 				allowed_protocols: existing.allowed_protocols.clone(),
+				display_name: body.display_name.clone(),
+				..DynamicAccount::default()
 			},
 		)
 		.map_err(store_to_scim)?;
@@ -383,15 +394,24 @@ fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<()
 				.ok_or_else(|| ScimError::invalid("password must be a string"))?;
 			check_password(plain)?;
 			let hash = hash_password(plain)?;
-			let scram = derive_scram(plain)?;
+			let scram = derive_scram(plain, state.store())?;
 			state
 				.store()
-				.set_password_hash(id, hash, Some(scram))
+				.set_password_hash(id, hash, scram)
+				.map_err(store_to_scim)?;
+			Ok(())
+		}
+		("replace", Some("displayName")) | ("add", Some("displayName")) => {
+			let display_name = op.value.as_str().unwrap_or_default();
+			state
+				.store()
+				.set_display_name(id, display_name)
 				.map_err(store_to_scim)?;
 			Ok(())
 		}
 		("replace", Some(path)) | ("add", Some(path)) => Err(ScimError::invalid(format!(
-			"`{path}` cannot be modified via PATCH; only `active` and `password` are accepted"
+			"`{path}` cannot be modified via PATCH; only `active`, `password` and \
+			 `displayName` are accepted"
 		))),
 		("replace", None) | ("add", None) => {
 			Err(ScimError::invalid("a `path` is required for replace/add"))

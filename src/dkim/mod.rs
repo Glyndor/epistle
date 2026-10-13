@@ -3,14 +3,16 @@
 pub(crate) mod canon;
 pub mod rotate;
 mod sign;
-mod signature;
+pub(crate) mod signature;
 mod spki;
 mod verify;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use rotate::{ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator};
+pub use rotate::{
+	ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator, publication_waits,
+};
 pub(crate) use sign::load_ed25519_key;
 pub use sign::{Signer, SignerError, generate_key};
 pub(crate) use spki::spki_for_rsa;

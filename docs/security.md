@@ -18,6 +18,14 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - **TLS for the mail protocols** is the server's own job (built-in ACME, or
   manual PEM). Outbound delivery is opportunistic TLS, upgraded to *mandatory
   verified* TLS when MTA-STS enforce, DANE, or a sender's REQUIRETLS applies.
+- **`TLS-Required: No`** (RFC 8689) lets one of your own senders deliver a
+  message where MTA-STS or DANE would refuse an unverified connection, for
+  instance to tell a domain its certificate expired. The queue still uses
+  STARTTLS when the MX offers it, accepts any certificate for that message,
+  and logs each policy it set aside. The field is honoured only on mail your
+  accounts submit: inbound mail loses it before it is stored or forwarded,
+  so nobody else can downgrade your policy. REQUIRETLS on the same message
+  wins and the field is ignored (RFC 8689 section 4.1).
 
 ## Authentication
 
@@ -28,9 +36,22 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
   certificate is configured; under ACME (where the certificate is renewed at
   runtime) it is omitted and clients use SCRAM-SHA-256.
+- **SCRAM verifiers** stored next to the argon2id hash are derived with
+  600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
+  verifier is not a cheaper target than the hash for someone who reads
+  `accounts.toml`. A verifier from an older version keeps the iteration
+  count it was derived with, which the server announces in the exchange,
+  and is rewritten at 600000 under a fresh salt the next time the account
+  logs in successfully with PLAIN or LOGIN. Accounts in `mail.toml` carry
+  no verifier and are never rewritten. `[auth] scram = false` turns SCRAM
+  off entirely: the mechanisms are no longer offered and no verifier is
+  stored for new passwords, so `accounts.toml` holds only argon2id hashes
+  once every account has changed its password.
 - **OAuth2/OIDC** (OAUTHBEARER/XOAUTH2) bearer tokens are verified against the
   configured issuer/audience/key.
-- **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths.
+- **TOTP** two-factor (RFC 6238) is checked in the IMAP/SMTP auth paths. The
+  secret is encrypted at rest only when at-rest encryption is on (see "Data at
+  rest").
 - **No user-enumeration oracle**: an unknown user fails exactly like a wrong
   password, and repeated failures close the connection.
 
@@ -38,8 +59,34 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 
 - An authenticated sender may only use a `MAIL FROM` it owns — no spoofing, no
   null reverse-path from an authenticated session.
+- The message itself must carry exactly one `From` field naming one address the
+  account owns, on SMTP submission and on JMAP `EmailSubmission/set`. That is
+  the field the DKIM signature covers and the one DMARC judges at the receiver.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
+- JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,
+  never for an `accountId` the request names:
+  - **Admin**: the configured token, or an API key with neither `domains` nor
+    `account`. Reaches every account.
+  - **Domains**: an API key with `domains`. Reaches only accounts whose
+    addresses all sit in those domains.
+  - **Account**: an API key with `account = "<name>"` in `api_keys.toml`.
+    Reaches that one account, and only through JMAP and `/api/v1/send`:
+    every other route (`/api/v1/accounts`, `domains`, `queue`, SCIM, ...)
+    refuses it with `403 forbidden`.
+  A credential that matches no key reaches nothing. Every JMAP method, upload,
+  download and the WebSocket check the account against the principal; a
+  refused account gets the same `accountNotFound` (HTTP 404 on upload and
+  download) as one that does not exist, and the Session lists only the
+  accounts the principal reaches.
+- `/api/v1/send` acts for the bound account, or for the account that owns
+  `from` if the principal reaches it. `from` must be owned by that account,
+  the same check `EmailSubmission/set` applies to `mailFrom`; otherwise
+  `403 forbidden_from`, before any rate limit is spent.
+- Uploaded blobs live in a partition per account
+  (`<data_dir>/blobs/accounts/<account>/`). A blob is never found under
+  another account's name, whoever asks. Blobs from older versions in the
+  shared pool are served only to the owner their `.owner` sidecar records.
 
 ## Process and host
 
@@ -48,6 +95,32 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   drop cannot be reversed (see the [configuration reference](configuration.md)).
 - The configuration file must be owner-only (`0600`); the server refuses to load
   a group/world-readable file. Secrets stay in the environment via `${VAR}`.
+- **The container stack** runs every service with no capabilities except four
+  clamd uses to step down to its own user, on a read-only root filesystem, with
+  memory and process limits; `mail` connects to PostgreSQL as a role without
+  superuser that owns only its database. The measurements and the upgrade path
+  are in [the container stack](container.md#what-each-container-may-do).
+
+### A private subordinate id range
+
+Rootless Podman runs each container of the `glyndor-epistle` stack in a user
+namespace whose ids map onto the block of host ids listed for the account in
+`/etc/subuid` and `/etc/subgid`. Those host ids are what owns the files the
+containers write, in volumes and in image storage. If another account's block
+covers the same host ids, a process in its containers runs as the owner of the
+mail stack's files (the database volume included), and the reverse also
+holds: the namespaces are separate, the file ownership is not.
+
+`useradd` on Debian and Ubuntu gives the first regular user `100000-165535`
+(`SUB_UID_MIN 100000`, `SUB_UID_COUNT 65536` in `/etc/login.defs`), so a
+fixed block for the service account would collide on most hosts. The postinst
+therefore picks the lowest block of 65536 ids within `SUB_UID_MIN`/`SUB_UID_MAX`
+and `SUB_GID_MIN`/`SUB_GID_MAX` that overlaps no existing entry. Packages up
+to 0.10.1 assigned the fixed `100000-165535`, and `epistle check subid` fails
+while that block, or any other, is shared. On upgrade the postinst moves a
+shared block to a free one of the same size and shifts the owner of the
+stack's files with it; the [CLI reference](cli.md#moving-an-overlapping-subordinate-id-range)
+says what it does and how to run it again.
 
 ### Port 25 without root
 
@@ -110,9 +183,28 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
-- **Outbound suppression**: a hard bounce (permanent 5xx) suppresses the
-  recipient so the server stops sending to dead addresses, protecting the
-  sending IP's reputation.
+- **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
+  default through `scan_authenticated`). A compromised account must not
+  relay malware, so what local accounts submit over SMTP, the REST API and
+  JMAP is scanned by clamd before it is routed, for local and remote
+  recipients alike. A detection is refused (`554 5.7.1` on SMTP), logged
+  with the account's pseudonym and the signature, counted in
+  `outbound_virus` and announced with the `outbound_virus` webhook event, so
+  the operator learns that the account may be compromised. The scan fails
+  open when clamd cannot be reached, like the inbound one, and `epistle
+  status` warns while scans keep failing, so an antivirus that is silently
+  not scanning does not go unnoticed.
+- **Forwarding loops.** Every copy stored in a mailbox starts with
+  `Return-Path` (any one the message arrived with is removed) and the
+  `Delivered-To` of the address it was delivered to, and a forwarded copy
+  carries the `Delivered-To` of the address that forwarded it. A message
+  that comes back to an address about to forward it again (an account
+  forward or a Sieve `redirect`) is refused with a `554 5.4.6` bounce
+  instead of going round, on top of the `Received` hop limit.
+- **Outbound suppression**: a reply proving the address bad (5.1.x, 551,
+  553) suppresses that recipient so the server stops sending to dead
+  addresses, protecting the sending IP's reputation. Policy refusals, full or
+  disabled mailboxes and oversized messages never suppress.
 - The outbound queue gives up by **message age** (5 days), not a low attempt
   count, so transient outages don't lose mail; a delay-warning DSN is sent once.
 - **ARF** abuse reports can be generated for offending messages
@@ -182,9 +274,10 @@ backup, on its own, yields only ciphertext.
 - **The key must live off the encrypted disk** (otherwise encrypting files on
   the same disk is pointless against theft). Source it from `encryption_key_env`
   (the name of an environment variable holding the base64 key) or
-  `encryption_key_file` (a path the operator manages, ideally outside
-  `data_dir`). Generate one with `epistle storage-keygen`. The server never
-  auto-generates a key inside `data_dir`.
+  `encryption_key_file` (a path the operator manages, outside `data_dir`).
+  `epistle init` generates one in `secrets/` beside data_dir and names it in
+  `encryption_key_file`; `epistle storage-keygen` prints another. Nothing puts
+  a key inside `data_dir`, and backups do not carry it.
 - **Fail closed:** with `encrypt_at_rest = true` and no usable key the server
   refuses to start; a decryption failure on read is an error, never a fall-back
   to serving ciphertext.
@@ -194,6 +287,14 @@ backup, on its own, yields only ciphertext.
 - **Backups stay encrypted:** `epistle backup` archives the on-disk bytes
   verbatim, so a backup of an encrypted store remains ciphertext — restore it on
   a host with the same key. Use `epistle export` for a decrypted copy.
+- **TOTP secrets** in `accounts.toml` are encrypted with the same key
+  (stored as `enc:v1:<base64>`) when `encrypt_at_rest = true`, and are
+  protected only then: without at-rest encryption they are stored in
+  cleartext, guarded by the `0600` file mode and the disk encryption alone.
+  A secret written before encryption was turned on keeps working and is
+  encrypted the next time the server writes `accounts.toml`. If a stored
+  secret cannot be decrypted (key missing or wrong), that account's
+  password login fails instead of skipping the second factor.
 
 ## Logs and account names
 

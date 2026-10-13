@@ -126,12 +126,11 @@ fn init_exits_one_when_a_later_key_write_fails_and_prints_partial_report() {
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("etc").join("mail.toml");
 	std::fs::create_dir_all(config_path.parent().unwrap()).expect("mkdir etc");
-	let keys_dir = data_dir.join("keys");
-	// `storage::write_secret` stages to a sibling `.secret.tmp`; a
-	// directory at that exact path makes the storage-key write fail
-	// with `AlreadyExists` once the ed25519 and RSA keys have
-	// already landed.
-	std::fs::create_dir_all(keys_dir.join("storage.secret.tmp")).expect("blocker dir");
+	// A directory where the storage key should land, in `secrets/`
+	// beside data_dir: init tries to write the key and the `rename(2)`
+	// onto the directory fails with `EISDIR` (for root too) once the
+	// ed25519 and RSA keys have already landed.
+	std::fs::create_dir_all(dir.path().join("secrets").join("storage.key")).expect("blocker dir");
 	let body = format!(
 		"mode = \"manual\"\n\
 		 hostname = \"mail.example.org\"\n\
@@ -206,7 +205,7 @@ fn init_refuses_when_only_oauth_public_survives() {
 	);
 	let public_bytes =
 		std::fs::read(data_dir.join("keys").join("oauth_public.key")).expect("read public");
-	std::fs::remove_file(data_dir.join("keys").join("oauth_signing.key")).expect("rm private");
+	std::fs::remove_file(dir.path().join("secrets").join("oauth_signing.key")).expect("rm private");
 	let second = run_init(&answers);
 	assert_eq!(
 		second.status.code(),
@@ -220,7 +219,10 @@ fn init_refuses_when_only_oauth_public_survives() {
 		"the error must name the missing private key: {stderr}"
 	);
 	assert!(
-		!data_dir.join("keys").join("oauth_signing.key").exists(),
+		!dir.path()
+			.join("secrets")
+			.join("oauth_signing.key")
+			.exists(),
 		"a fresh private key must NOT have been written"
 	);
 	let public_after =
@@ -258,7 +260,7 @@ fn init_derives_missing_oauth_public_from_existing_private() {
 		String::from_utf8_lossy(&first.stderr)
 	);
 	let private_bytes =
-		std::fs::read(data_dir.join("keys").join("oauth_signing.key")).expect("read private");
+		std::fs::read(dir.path().join("secrets").join("oauth_signing.key")).expect("read private");
 	let public_bytes =
 		std::fs::read(data_dir.join("keys").join("oauth_public.key")).expect("read public");
 	std::fs::remove_file(data_dir.join("keys").join("oauth_public.key")).expect("rm public");
@@ -269,7 +271,7 @@ fn init_derives_missing_oauth_public_from_existing_private() {
 		String::from_utf8_lossy(&second.stderr)
 	);
 	let private_after =
-		std::fs::read(data_dir.join("keys").join("oauth_signing.key")).expect("read private");
+		std::fs::read(dir.path().join("secrets").join("oauth_signing.key")).expect("read private");
 	let public_after =
 		std::fs::read(data_dir.join("keys").join("oauth_public.key")).expect("read public");
 	assert_eq!(

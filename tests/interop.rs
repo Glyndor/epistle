@@ -150,8 +150,9 @@ async fn outbound_client_delivers_to_postfix() {
 		b"Subject: epistle interop\r\n\r\nDelivered by epistle's SMTP client.\r\n",
 		false,
 		None,
-		&[],
+		&epistle::dane::rrset::TlsaRrset::Absent,
 		epistle::config::OutboundTls::Opportunistic,
+		&mut None,
 	)
 	.await;
 

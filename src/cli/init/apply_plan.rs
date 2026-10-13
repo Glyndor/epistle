@@ -9,6 +9,7 @@ use super::Answers;
 use super::ApplyError;
 use super::apply_config;
 use super::apply_config_acme;
+use super::apply_keys::key_file_present;
 use crate::cli::init::compose;
 use crate::cli::init::plan::{ListenerEntry, Plan, PlanStep};
 
@@ -66,17 +67,23 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 	let keys_dir = answers.data_dir.join("keys");
 	let s1 = keys_dir.join("s1.pem");
 	let s2 = keys_dir.join("s2.pem");
-	let storage = keys_dir.join("storage.key");
-	let oauth_private = keys_dir.join("oauth_signing.key");
+	// Both keys end up outside data_dir; an install from before that
+	// still has them under keys/, where apply moves them from.
+	use super::super::host_secrets;
+	let storage = host_secrets::storage_key(&answers.data_dir);
+	let storage_now = host_secrets::effective(&answers.data_dir, host_secrets::STORAGE_KEY);
+	let oauth_private = host_secrets::oauth_signing_key(&answers.data_dir);
+	let oauth_private_now =
+		host_secrets::effective(&answers.data_dir, host_secrets::OAUTH_SIGNING_KEY);
 	let oauth_public = keys_dir.join("oauth_public.key");
 	let cert_path = keys_dir.join("cert.pem");
 	let key_path = keys_dir.join("key.pem");
-	let oauth_private_exists = oauth_private.exists();
+	let oauth_private_exists = oauth_private_now.exists();
 	let oauth_public_exists = oauth_public.exists();
 	let oauth_pair = resolve_oauth_pair(
 		oauth_private_exists,
 		oauth_public_exists,
-		&oauth_private,
+		&oauth_private_now,
 		&oauth_public,
 	)?;
 	// Directory steps first: every write that follows needs the
@@ -104,16 +111,16 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 	steps.extend([
 		PlanStep::DkimEd25519 {
 			path: s1.clone(),
-			reused: s1.exists(),
+			reused: key_file_present(&s1),
 		},
 		PlanStep::DkimRsa {
 			path: s2.clone(),
-			reused: s2.exists(),
+			reused: key_file_present(&s2),
 			openssl_available: openssl_available(),
 		},
 		PlanStep::Storage {
 			path: storage.clone(),
-			reused: storage.exists(),
+			reused: key_file_present(&storage_now),
 		},
 		PlanStep::OAuthPrivate {
 			path: oauth_private.clone(),
@@ -189,6 +196,10 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		// as `reused: false` (the apply will mint a new one).
 		let reused = crate::cli::init::compose::db_password_reused(&answers.data_dir);
 		steps.push(PlanStep::DbPassword { path, reused });
+		let path = crate::cli::init::host_secrets::db_admin_password(&answers.data_dir);
+		let reused = std::fs::symlink_metadata(&path)
+			.is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0);
+		steps.push(PlanStep::DbAdminPassword { path, reused });
 	}
 	steps.push(PlanStep::Config {
 		path: answers.config_path.clone(),
@@ -214,6 +225,19 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 			provider: dns.provider.clone(),
 			zone: dns.zone.clone(),
 		});
+	}
+	if let Some(first) = &answers.first_account {
+		let address = first.stored_address();
+		steps.push(PlanStep::Account {
+			name: first.name(),
+			address: address.clone(),
+		});
+		for role in first.role_addresses(&answers.domains) {
+			steps.push(PlanStep::RoleAlias {
+				address: role,
+				target: address.clone(),
+			});
+		}
 	}
 	Ok(Plan { steps })
 }
@@ -425,12 +449,12 @@ fn config_is_identical_to_desired(
 	// if the file already exists. The plan reads the same signals so
 	// the desired config it builds matches the one apply will write
 	// a moment later.
-	let dkim_rsa_for_desired: Option<&std::path::Path> = if dkim_rsa.exists() || openssl_available()
-	{
-		Some(dkim_rsa)
-	} else {
-		None
-	};
+	let dkim_rsa_for_desired: Option<&std::path::Path> =
+		if key_file_present(dkim_rsa) || openssl_available() {
+			Some(dkim_rsa)
+		} else {
+			None
+		};
 	let desired = apply_config::build_config(
 		answers,
 		mail_addr,
@@ -441,6 +465,11 @@ fn config_is_identical_to_desired(
 	)?;
 	let desired_bytes =
 		toml::to_string(&desired).map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
+	let desired_bytes = super::super::host_secrets::with_storage_key(
+		desired_bytes,
+		Some(existing.as_str()),
+		&answers.data_dir,
+	);
 	let desired_value: toml::Value = toml::from_str(&desired_bytes)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	let existing_value: toml::Value = toml::from_str(existing).map_err(|error| {

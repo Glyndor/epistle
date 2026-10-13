@@ -5,9 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 
-struct ServiceUser {
-	uid: u32,
-	home: PathBuf,
+pub(super) struct ServiceUser {
+	pub(super) uid: u32,
+	pub(super) home: PathBuf,
 }
 
 fn delegate(
@@ -46,6 +46,25 @@ fn delegate(
 	Ok(Some(ExitCode::from(status.code().unwrap_or(1) as u8)))
 }
 
+/// `runuser -u glyndor-epistle -- <program>`, with the runtime directory,
+/// session bus and home the account's user manager and rootless Podman
+/// expect, for a root command that does part of its work as the account.
+pub(super) fn account_command(user: &ServiceUser, program: impl AsRef<std::ffi::OsStr>) -> Command {
+	let runtime = PathBuf::from(format!("/run/user/{}", user.uid));
+	let mut command = Command::new("runuser");
+	command
+		.args(["-u", "glyndor-epistle", "--"])
+		.arg(program)
+		.env(
+			"DBUS_SESSION_BUS_ADDRESS",
+			format!("unix:path={}/bus", runtime.display()),
+		)
+		.env("XDG_RUNTIME_DIR", runtime)
+		.env("HOME", &user.home)
+		.current_dir(&user.home);
+	command
+}
+
 pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 	#[cfg(unix)]
 	{
@@ -56,7 +75,7 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 			lookup_user,
 			Path::is_dir,
 			&std::env::current_exe()?,
-			&std::env::args_os().skip(1).collect::<Vec<_>>(),
+			&super::pick::effective_args(),
 			|command| command.status(),
 		)
 	}
@@ -67,7 +86,7 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 }
 
 #[cfg(unix)]
-fn lookup_user() -> io::Result<Option<ServiceUser>> {
+pub(super) fn lookup_user() -> io::Result<Option<ServiceUser>> {
 	use std::ffi::CStr;
 	use std::os::unix::ffi::OsStrExt;
 

@@ -154,7 +154,9 @@ async fn txt_upsert_replaces_existing_long_record_without_duplicating() {
 	// Seed the live rrsets with the joined form of the OLD long
 	// value (one rrdatas entry, two quoted pieces). The mock's
 	// list_rrsets handler reads `live_rrsets`.
-	let old = "a".repeat(400);
+	// Both values carry the DKIM tag, so the new one replaces the old
+	// one under the upsert contract; each is 400 octets.
+	let old = format!("v=DKIM1; p={}", "a".repeat(389));
 	let initial = vec![Rrset {
 		name: "s2._domainkey.example.org.".into(),
 		kind: "TXT".into(),
@@ -163,7 +165,7 @@ async fn txt_upsert_replaces_existing_long_record_without_duplicating() {
 	}];
 	let (base, state) = start_mock(initial).await;
 	let provider = provider_for(&base);
-	let new_value: String = "b".repeat(400);
+	let new_value = format!("v=DKIM1; p={}", "b".repeat(389));
 	provider
 		.upsert("example.org", txt("s2._domainkey.example.org", &new_value))
 		.await

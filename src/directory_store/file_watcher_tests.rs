@@ -19,6 +19,7 @@ use crate::{
 
 fn static_alice() -> Account {
 	Account {
+		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: Some(crate::smtp::auth::tests::hash(fixture_password())),
@@ -45,11 +46,7 @@ fn dynamic(name: &str, address: &str) -> DynamicAccount {
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
 		password_hash: "$argon2id$stub".to_string(),
-		scram: None,
-		totp_secret: None,
-		disabled: false,
-		quota_bytes: None,
-		allowed_protocols: None,
+		..DynamicAccount::default()
 	};
 	account.password_hash = crate::smtp::auth::tests::hash(fixture_password());
 	account
@@ -341,6 +338,7 @@ fn poll_picks_up_a_write_from_a_separate_store_instance() {
 		"carol".to_string(),
 		vec!["carol@example.org".to_string()],
 		fixture_password(),
+		true,
 	)
 	.expect("hashed account");
 	cli.add(cli_account).expect("cli add");

@@ -25,26 +25,41 @@ impl Session {
 		flag_tokens: &[String],
 		size: usize,
 		synchronizing: bool,
+		utf8: bool,
 	) -> Output {
+		// A rejected `UTF8 (~{n+})` also drains the `)` after the literal.
+		let wire_size = size + usize::from(utf8);
 		let Some(account) = self.account().map(str::to_string) else {
-			return reject_literal(tag, synchronizing, size, "NO not authenticated\r\n");
+			return reject_literal(tag, synchronizing, wire_size, "NO not authenticated\r\n");
 		};
+		// RFC 6855 §4: the UTF8 data item is only meaningful once enabled.
+		if utf8 && !self.utf8_accept {
+			return reject_literal(
+				tag,
+				synchronizing,
+				wire_size,
+				"BAD UTF8 APPEND requires ENABLE UTF8=ACCEPT\r\n",
+			);
+		}
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			return reject_literal(
 				tag,
 				synchronizing,
-				size,
+				wire_size,
 				"NO [TRYCREATE] no such mailbox\r\n",
 			);
 		}
 		// Quota enforcement (RFC 9208): refuse before reading the literal.
 		let projected =
 			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
-		if projected > self.effective_quota() {
+		if self
+			.effective_quota()
+			.is_some_and(|limit| projected > limit)
+		{
 			return reject_literal(
 				tag,
 				synchronizing,
-				size,
+				wire_size,
 				"NO [OVERQUOTA] storage quota exceeded\r\n",
 			);
 		}
@@ -53,7 +68,12 @@ impl Session {
 			match Flag::parse(token) {
 				Some(flag) => flags.push(flag),
 				None => {
-					return reject_literal(tag, synchronizing, size, "BAD unsupported flag\r\n");
+					return reject_literal(
+						tag,
+						synchronizing,
+						wire_size,
+						"BAD unsupported flag\r\n",
+					);
 				}
 			}
 		}
@@ -64,7 +84,7 @@ impl Session {
 			return reject_literal(
 				tag,
 				synchronizing,
-				size,
+				wire_size,
 				"BAD too many keywords (max {})\r\n",
 			);
 		}
@@ -74,8 +94,22 @@ impl Session {
 			flags,
 			replace: None,
 		});
-		let mut output = Output::text("+ ready for literal data\r\n".to_string());
+		// RFC 7888 §4: a non-synchronizing literal ({n+}) has no
+		// continuation response. The client already sent the payload
+		// in the same write as the command line, and Dovecot's
+		// imaptest (and any IMAP4rev2 client using LITERAL+) crashes
+		// when the server replies with `+ ready for literal data`
+		// because its APPEND state machine expects the tagged
+		// response next.
+		let mut output = if synchronizing {
+			Output::text("+ ready for literal data\r\n".to_string())
+		} else {
+			Output::text(String::new())
+		};
 		output.collect_literal = Some(size);
+		if utf8 {
+			output.literal_trailer = b")\r\n";
+		}
 		output
 	}
 
@@ -137,7 +171,10 @@ impl Session {
 		}
 		let projected =
 			mailbox::account_usage(&self.data_dir, &account, &self.crypto) + size as u64;
-		if projected > self.effective_quota() {
+		if self
+			.effective_quota()
+			.is_some_and(|limit| projected > limit)
+		{
 			return reject_literal(
 				tag,
 				synchronizing,
@@ -173,7 +210,12 @@ impl Session {
 			// a different message.
 			replace: Some((selected, target_uid)),
 		});
-		let mut output = Output::text("+ ready for literal data\r\n".to_string());
+		// See the matching note in `append_begin` above.
+		let mut output = if synchronizing {
+			Output::text("+ ready for literal data\r\n".to_string())
+		} else {
+			Output::text(String::new())
+		};
 		output.collect_literal = Some(size);
 		output
 	}
@@ -213,25 +255,76 @@ impl Session {
 			Some((validity, uid)) => format!("[APPENDUID {validity} {uid}] "),
 			None => String::new(),
 		};
+		// RFC 9051 §7.4: a successful APPEND (or the append half of REPLACE)
+		// on the SELECTed mailbox must announce the new message count via an
+		// untagged `* N EXISTS` before the tagged completion. Dovecot's
+		// imaptest maintains the mailbox's per-session message count and
+		// the per-mailbox keyword set from the untagged responses, and
+		// surfaces the missing line as `Missing N untagged replies`.
+		// The live snapshot is refreshed here so a STORE or FETCH that
+		// follows the APPEND inside the same command sees the new message.
+		let prelude = self.append_update_selected(&account, &mailbox);
 		match replace {
-			None => Output::text(format!("{tag} OK {code}APPEND completed\r\n")),
-			Some((selected, seq)) => self.replace_expunge(&tag, &account, &selected, seq, &code),
+			None => Output::text(format!("{prelude}{tag} OK {code}APPEND completed\r\n")),
+			Some((selected, seq)) => {
+				let expunge = self.replace_expunge_response(&tag, &account, &selected, seq);
+				Output::text(format!(
+					"{prelude}{expunge}{tag} OK {code}REPLACE completed\r\n"
+				))
+			}
 		}
+	}
+
+	/// Refresh the live snapshot when the APPEND/REPLACE target is the
+	/// SELECTed mailbox, and emit `* N EXISTS` so the client can keep its
+	/// count in sync. Returns the empty string when no mailbox is selected
+	/// or the target is a different mailbox (the append takes effect on
+	/// disk, but the client will not see a stale count from this session).
+	fn append_update_selected(&mut self, account: &str, mailbox: &str) -> String {
+		// Names are cloned so the mutable borrow of `self.state` ends
+		// before `open_snapshot` takes `&self`.
+		let (selected, count_before) = match &self.state {
+			State::Selected {
+				snapshot,
+				mailbox: selected,
+				..
+			} => (selected.clone(), snapshot.len()),
+			_ => return String::new(),
+		};
+		if !selected.eq_ignore_ascii_case(mailbox) {
+			return String::new();
+		}
+		let fresh = match self.open_snapshot(account, mailbox) {
+			Ok(fresh) => fresh,
+			Err(_) => return String::new(),
+		};
+		let count_after = fresh.len();
+		let State::Selected { snapshot, .. } = &mut self.state else {
+			return String::new();
+		};
+		*snapshot = fresh;
+		// Record that the client has now been told about this count, so
+		// the next NOOP does not re-announce the same value (RFC 9051
+		// §7.1.2: NOOP only re-announces when something has changed).
+		self.announced_exists = Some(u32::try_from(count_after).unwrap_or(u32::MAX));
+		if count_after <= count_before {
+			return String::new();
+		}
+		format!("* {count_after} EXISTS\r\n")
 	}
 
 	/// Finish REPLACE: expunge the source message from the selected mailbox and
 	/// refresh the live snapshot. The new message is already appended.
-	fn replace_expunge(
+	fn replace_expunge_response(
 		&mut self,
 		tag: &str,
 		account: &str,
 		selected: &str,
 		uid: u32,
-		code: &str,
-	) -> Output {
+	) -> String {
 		let mut snapshot = match self.open_snapshot(account, selected) {
 			Ok(snapshot) => snapshot,
-			Err(_) => return Output::text(format!("{tag} NO REPLACE failed\r\n")),
+			Err(_) => return format!("{tag} NO REPLACE failed\r\n"),
 		};
 		// Compute the sequence number the target occupies in the current
 		// snapshot before we remove it. When the target is no longer
@@ -250,7 +343,7 @@ impl Session {
 		// generic expunge path (which only removes \Deleted messages)
 		// would not work.
 		if snapshot.remove_uids(&[uid]).is_err() {
-			return Output::text(format!("{tag} NO REPLACE failed\r\n"));
+			return format!("{tag} NO REPLACE failed\r\n");
 		}
 		// Keep the live selected snapshot consistent with the expunge.
 		if let State::Selected {
@@ -267,12 +360,9 @@ impl Session {
 		// already gone (reordered by a concurrent expunge) this is
 		// `None` and we skip the EXPUNGE line; the UID-based
 		// deletion above keeps the target correct regardless.
-		let expunge_line = removed_seq
+		removed_seq
 			.map(|s| format!("* {s} EXPUNGE\r\n"))
-			.unwrap_or_default();
-		Output::text(format!(
-			"{expunge_line}{tag} OK {code}REPLACE completed\r\n"
-		))
+			.unwrap_or_default()
 	}
 
 	/// Reject an APPEND/REPLACE whose literal was not followed by CRLF
