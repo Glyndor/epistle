@@ -169,15 +169,6 @@ pub struct Session {
 	/// offered through `AUTHENTICATE`. `false` hides both on the wire
 	/// and refuses an explicit `AUTHENTICATE` against them.
 	pub(super) scram_enabled: bool,
-	/// The message count the client was last told for the SELECTed
-	/// mailbox. `None` until the first SELECT/EXAMINE or the first
-	/// post-SELECT announcement. Used by NOOP and other command replies
-	/// to emit `* N EXISTS` when the on-disk count changed but no other
-	/// untagged response covered the gap (RFC 9051 §7.1.2 + §7.4).
-	/// `u32::MAX` marks an explicit "all caught up" state, used after a
-	/// SELECT where the mailbox is empty (no future change can shrink the
-	/// count, only grow it, so MAX disables any further announcement).
-	pub(super) announced_exists: Option<u32>,
 }
 
 /// A SEARCHRES-saved result set (RFC 5182).
@@ -261,7 +252,6 @@ impl Session {
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
 			scram_enabled: true,
-			announced_exists: None,
 		}
 	}
 

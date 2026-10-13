@@ -242,6 +242,23 @@ impl Snapshot {
 		Ok(&self.messages[index].flags)
 	}
 
+	/// Give every message this snapshot shares with `known` the flags and
+	/// mod-sequence `known` has for it: the client has not been told about
+	/// a change yet, so the next refresh that reports flags still sees it.
+	pub fn keep_flags_of(&mut self, known: &Snapshot) {
+		let told: std::collections::HashMap<u32, &super::mailbox::MessageRef> = known
+			.messages
+			.iter()
+			.map(|message| (message.uid, message))
+			.collect();
+		for message in &mut self.messages {
+			if let Some(old) = told.get(&message.uid) {
+				message.flags.clone_from(&old.flags);
+				message.modseq = old.modseq;
+			}
+		}
+	}
+
 	/// Remove one message (file + sidecar) by sequence number.
 	pub fn remove_at(&mut self, sequence: u32) -> std::io::Result<()> {
 		let index = usize::try_from(sequence)

@@ -157,3 +157,6 @@ mod append_exists;
 
 #[path = "session_tests_noop_exists.rs"]
 mod noop_exists;
+
+#[path = "session_tests_cross_session.rs"]
+mod cross_session;

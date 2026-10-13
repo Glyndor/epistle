@@ -29,7 +29,7 @@ fn next_flags(mode: StoreMode, current: &[Flag], flags: &[Flag]) -> Vec<Flag> {
 /// places a keyword on a message so the response can advertise it via
 /// an updated FLAGS line (RFC 9051 7.3.5) before the FETCH that
 /// mentions the keyword.
-fn collect_mailbox_keywords(snapshot: &Snapshot) -> Vec<String> {
+pub(super) fn collect_mailbox_keywords(snapshot: &Snapshot) -> Vec<String> {
 	let mut out: Vec<String> = Vec::new();
 	for message in snapshot.messages() {
 		for keyword in super::mailbox::keywords_in(&message.flags) {

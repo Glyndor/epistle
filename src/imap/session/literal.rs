@@ -263,7 +263,7 @@ impl Session {
 		// surfaces the missing line as `Missing N untagged replies`.
 		// The live snapshot is refreshed here so a STORE or FETCH that
 		// follows the APPEND inside the same command sees the new message.
-		let prelude = self.append_update_selected(&account, &mailbox);
+		let prelude = self.append_update_selected(&mailbox);
 		match replace {
 			None => Output::text(format!("{prelude}{tag} OK {code}APPEND completed\r\n")),
 			Some((selected, seq)) => {
@@ -275,42 +275,18 @@ impl Session {
 		}
 	}
 
-	/// Refresh the live snapshot when the APPEND/REPLACE target is the
-	/// SELECTed mailbox, and emit `* N EXISTS` so the client can keep its
-	/// count in sync. Returns the empty string when no mailbox is selected
-	/// or the target is a different mailbox (the append takes effect on
-	/// disk, but the client will not see a stale count from this session).
-	fn append_update_selected(&mut self, account: &str, mailbox: &str) -> String {
-		// Names are cloned so the mutable borrow of `self.state` ends
-		// before `open_snapshot` takes `&self`.
-		let (selected, count_before) = match &self.state {
+	/// Bring the client up to date when the APPEND/REPLACE target is the
+	/// SELECTed mailbox, so it hears `* N EXISTS` for the new message and
+	/// anything else that changed, and a STORE or FETCH that follows sees
+	/// the new message. Returns the empty string when no mailbox is
+	/// selected or the target is a different one.
+	fn append_update_selected(&mut self, mailbox: &str) -> String {
+		match &self.state {
 			State::Selected {
-				snapshot,
-				mailbox: selected,
-				..
-			} => (selected.clone(), snapshot.len()),
-			_ => return String::new(),
-		};
-		if !selected.eq_ignore_ascii_case(mailbox) {
-			return String::new();
+				mailbox: selected, ..
+			} if selected.eq_ignore_ascii_case(mailbox) => self.sync_selected(true),
+			_ => String::new(),
 		}
-		let fresh = match self.open_snapshot(account, mailbox) {
-			Ok(fresh) => fresh,
-			Err(_) => return String::new(),
-		};
-		let count_after = fresh.len();
-		let State::Selected { snapshot, .. } = &mut self.state else {
-			return String::new();
-		};
-		*snapshot = fresh;
-		// Record that the client has now been told about this count, so
-		// the next NOOP does not re-announce the same value (RFC 9051
-		// §7.1.2: NOOP only re-announces when something has changed).
-		self.announced_exists = Some(u32::try_from(count_after).unwrap_or(u32::MAX));
-		if count_after <= count_before {
-			return String::new();
-		}
-		format!("* {count_after} EXISTS\r\n")
 	}
 
 	/// Finish REPLACE: expunge the source message from the selected mailbox and

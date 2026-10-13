@@ -24,7 +24,11 @@ impl Session {
 		if !self.notify_active() {
 			return None;
 		}
-		self.poll_selected_messages()
+		let flags = self
+			.notify_selected
+			.as_ref()
+			.is_some_and(|events| events.contains(&NotifyEvent::FlagChange));
+		self.poll_selected_messages(flags)
 	}
 
 	/// Whether this session has NOTIFY enabled with selected-mailbox message
