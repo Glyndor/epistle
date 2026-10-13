@@ -290,7 +290,9 @@ async fn txt_upsert_long_value_escapes_per_piece() {
 /// carries the new entries only.
 #[tokio::test]
 async fn txt_upsert_replaces_existing_long_record_without_duplicating() {
-	let old = "a".repeat(400);
+	// Both values carry the DKIM tag, so the new one replaces the old
+	// one under the upsert contract; each is 400 octets.
+	let old = format!("v=DKIM1; p={}", "a".repeat(389));
 	let rrsets = serde_json::json!([{
 		"subname": "s2._domainkey",
 		"type": "TXT",
@@ -298,7 +300,7 @@ async fn txt_upsert_replaces_existing_long_record_without_duplicating() {
 		"records": [records_joined_form(&old)],
 	}]);
 	let (provider, state) = mock(rrsets).await;
-	let new_value: String = "b".repeat(400);
+	let new_value = format!("v=DKIM1; p={}", "b".repeat(389));
 	provider
 		.upsert("example.org", txt("s2._domainkey.example.org", &new_value))
 		.await
@@ -598,3 +600,6 @@ async fn upsert_body_has_only_the_documented_rrset_fields() {
 
 #[path = "tests_txt_forms.rs"]
 mod txt_forms;
+
+#[path = "tests_contract.rs"]
+mod contract;

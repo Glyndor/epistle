@@ -161,6 +161,30 @@ fn invalid_requests_are_refused_and_leave_the_file_untouched() {
 		(
 			vec![
 				"set",
+				"namecheap",
+				"--zone",
+				"example.org",
+				"--token-env",
+				"T",
+			],
+			"namecheap needs --client-ip".to_string(),
+		),
+		(
+			vec![
+				"set",
+				"namecheap",
+				"--zone",
+				"example.org",
+				"--token-env",
+				"T",
+				"--client-ip",
+				"2001:db8::1",
+			],
+			"--client-ip must be an IPv4 address".to_string(),
+		),
+		(
+			vec![
+				"set",
 				"ovh",
 				"--zone",
 				"example.org",
@@ -259,7 +283,10 @@ fn every_supported_provider_is_settable_and_buildable_where_it_can_be() {
 		("bunny", vec!["--token-env", "PATH"]),
 		("desec", vec!["--token-env", "PATH"]),
 		("digitalocean", vec!["--token-env", "PATH"]),
-		("namecheap", vec!["--token-env", "PATH"]),
+		(
+			"namecheap",
+			vec!["--token-env", "PATH", "--client-ip", "192.0.2.10"],
+		),
 		("dnsimple", vec!["--token-env", "PATH", "--account-id", "1"]),
 		(
 			"spaceship",

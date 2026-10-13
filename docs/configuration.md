@@ -785,7 +785,7 @@ stops asking the operator to add records by hand. Absent or unmatched
 | `gcloud` | Google Cloud DNS service-account JSON; RS256 JWT bearer; supports TLSA. |
 | `dnsimple` | DNSimple API token + account id; bearer auth; record-id granularity. |
 | `godaddy` | GoDaddy API key + secret; `sso-key` header; v1 REST API; production API access gated by account eligibility; see specifics below. |
-| `namecheap` | Username + API key in `token`; XML API; **TLSA not supported**; see limitations below. |
+| `namecheap` | Username + API key in `token`, plus `client_ip`; XML API; **SRV and TLSA not supported**; see limitations below. |
 | `ovh` | Application key + secret + consumer key; signed with `$1$`+SHA1; see specifics below. |
 | `porkbun` | Porkbun API key + secret; v3 JSON API; credentials in the request body, not a header; see specifics below. |
 | `route53` | AWS access key + secret + hosted zone id; signed with SigV4. |
@@ -1018,8 +1018,12 @@ secret_key_env = "EPISTLE_PORKBUN_SECRET"     # the secret API key, prefer env
 provider = "namecheap"
 zone = "example.org"
 token = "your_username:your_api_key"      # or token_file / token_env
+client_ip = "203.0.113.25"                # IPv4 on the API whitelist
 ```
 
+- `client_ip` is required. Namecheap's API takes it as the `ClientIp`
+  parameter on every call and accepts IPv4 only; without it epistle stays in
+  manual mode. Use the server's egress address, the one on the whitelist.
 - The `token` carries **two** values separated by `:` — Namecheap's API
   requires `ApiUser`, `ApiKey`, and `UserName` on every call (the username
   doubles as both `ApiUser` and `UserName`). A missing colon, empty
@@ -1032,6 +1036,8 @@ token = "your_username:your_api_key"      # or token_file / token_env
   not on the account's whitelist at
   <https://www.namecheap.com/support/api/methods/>. The server's egress IP
   must be added there or every call returns an auth-flavoured error.
+- **SRV is not supported** either: setHosts has no SRV record type, so an
+  SRV write returns `provider does not support writes`, the same as TLSA.
 - **TLSA is not supported** by Namecheap's UI or API. DANE records must be
   published at a different DNS host (or the zone must be split between
   providers) — epistle will return `provider does not support writes` for

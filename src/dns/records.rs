@@ -124,26 +124,14 @@ pub fn txt_strings(value: &str) -> Vec<String> {
 	crate::dns::txt::txt_character_strings(value)
 }
 
-/// Render a TXT value for a zone file, with long values split into
-/// double-quoted strings (RFC 1035 §5). Embedded `"` and `\` are backslash
-/// escaped so the zone-file parser keeps them literal. A short value is
-/// returned as a single quoted string.
+/// Render a TXT value for a zone file (RFC 1035 §5.1): long values split
+/// into double-quoted strings of at most 255 octets separated by a space,
+/// `"` and `\` backslash-escaped, and any octet outside printable ASCII
+/// written as a `\DDD` decimal escape. A short value is one quoted string.
+/// This is [`crate::dns::txt::txt_presentation`], the form the providers
+/// that take presentation form receive.
 pub fn txt_zone_form(value: &str) -> String {
-	let mut out = String::with_capacity(value.len() + 2);
-	for part in txt_strings(value) {
-		out.push('"');
-		for byte in part.bytes() {
-			match byte {
-				b'"' | b'\\' => {
-					out.push('\\');
-					out.push(byte as char);
-				}
-				_ => out.push(byte as char),
-			}
-		}
-		out.push('"');
-	}
-	out
+	crate::dns::txt::txt_presentation(value)
 }
 
 /// The DNS zone a hostname lives in: every label except the leftmost. A

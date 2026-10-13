@@ -246,10 +246,16 @@ impl BunnyProvider {
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
 		let body = self.record_body(&record, rtype)?;
-		let existing = detail
-			.records
-			.into_iter()
-			.find(|r| r.rtype == rtype && r.name.as_deref() == Some(name.as_str()));
+		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
+		// only the record of the same purpose, so a sibling at the name
+		// (an ACME challenge, a verification token) is never written
+		// over. Other kinds take the first record at (type, name).
+		let existing = detail.records.into_iter().find(|r| {
+			r.rtype == rtype
+				&& r.name.as_deref() == Some(name.as_str())
+				&& (record.kind != RecordKind::Txt
+					|| same_txt_purpose(r.value.as_deref().unwrap_or(""), &record.value))
+		});
 		let response = if let Some(rec) = existing {
 			let url = self.record_url(zone_id, Some(rec.id))?;
 			self.send_write(reqwest::Method::POST, url, body).await?

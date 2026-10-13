@@ -13,17 +13,18 @@ async fn upsert_creates_when_absent() {
 		.await
 		.expect("upsert");
 	let captured = state.lock().unwrap();
-	assert_eq!(captured.set_hosts_bodies.len(), 1, "setHosts not called");
-	let body = &captured.set_hosts_bodies[0];
-	assert!(body.contains(r#"Name="_dmarc""#), "{body}");
-	assert!(body.contains(r#"Type="TXT""#), "{body}");
+	assert_eq!(captured.set_hosts_calls.len(), 1, "setHosts not called");
+	let hosts = captured.set_hosts_calls[0].hosts();
+	assert_eq!(hosts.len(), 1, "{hosts:?}");
+	assert_eq!(hosts[0].name, "_dmarc");
+	assert_eq!(hosts[0].kind, "TXT");
 	// TXT goes as its logical value, unquoted.
-	assert!(body.contains(r#"Address="v=DMARC1; p=none""#), "{body}");
+	assert_eq!(hosts[0].address, "v=DMARC1; p=none");
 }
 
 #[tokio::test]
 async fn upsert_updates_when_present() {
-	let existing = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="abc" Name="_dmarc" Type="TXT" Address="&quot;old&quot;" TTL="3600"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
+	let existing = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="abc" Name="_dmarc" Type="TXT" Address="&quot;v=DMARC1; p=none&quot;" TTL="3600"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
 	let (provider, state) = mock(existing, None).await;
 	provider
 		.upsert(
@@ -32,14 +33,15 @@ async fn upsert_updates_when_present() {
 		)
 		.await
 		.expect("upsert");
-	let body = state.lock().unwrap().set_hosts_bodies[0].clone();
+	let hosts = state.lock().unwrap().set_hosts_calls[0].hosts();
+	let addresses: Vec<&str> = hosts.iter().map(|h| h.address.as_str()).collect();
 	assert!(
-		!body.contains("p=none") && !body.contains("&quot;old&quot;"),
-		"old value leaked: {body}"
+		!addresses.contains(&"\"old\""),
+		"old value leaked: {hosts:?}"
 	);
 	assert!(
-		body.contains("v=DMARC1; p=reject"),
-		"new value missing: {body}"
+		addresses.contains(&"v=DMARC1; p=reject"),
+		"new value missing: {hosts:?}"
 	);
 }
 
@@ -52,9 +54,9 @@ async fn delete_idempotent_when_absent() {
 		.expect("delete");
 	let captured = state.lock().unwrap();
 	assert!(
-		captured.set_hosts_bodies.is_empty(),
+		captured.set_hosts_calls.is_empty(),
 		"setHosts called unexpectedly: {:?}",
-		captured.set_hosts_bodies
+		captured.set_hosts_calls
 	);
 }
 
@@ -66,9 +68,10 @@ async fn delete_removes_record() {
 		.delete("example.org", txt("_dmarc.example.org", "old"))
 		.await
 		.expect("delete");
-	let body = state.lock().unwrap().set_hosts_bodies[0].clone();
-	assert!(!body.contains("_dmarc"), "record still in body: {body}");
-	assert!(!body.contains("<host"), "record still in body: {body}");
+	let s = state.lock().unwrap();
+	assert_eq!(s.set_hosts_calls.len(), 1, "setHosts not called");
+	let hosts = s.set_hosts_calls[0].hosts();
+	assert!(hosts.is_empty(), "record still sent: {hosts:?}");
 }
 
 /// A TXT delete with a value must remove only the matching record
@@ -89,12 +92,9 @@ async fn txt_delete_with_a_value_keeps_the_sibling_challenge() {
 		)
 		.await
 		.expect("delete one of two challenges");
-	let body = state.lock().unwrap().set_hosts_bodies[0].clone();
-	assert!(
-		!body.contains("token-aaaa"),
-		"matching value still in body: {body}"
-	);
-	assert!(body.contains("token-bbbb"), "sibling value dropped: {body}");
+	let hosts = state.lock().unwrap().set_hosts_calls[0].hosts();
+	let addresses: Vec<&str> = hosts.iter().map(|h| h.address.as_str()).collect();
+	assert_eq!(addresses, vec!["\"token-bbbb\""], "{hosts:?}");
 }
 
 #[tokio::test]
@@ -111,8 +111,10 @@ async fn tlsa_returns_unsupported_without_network() {
 	assert!(state.lock().unwrap().urls.is_empty(), "made network call");
 }
 
+/// MX goes with its preference in `MXPref{n}`. SRV is not among the record
+/// types setHosts documents, so it is refused before any network call.
 #[tokio::test]
-async fn mx_and_srv_supported() {
+async fn mx_is_supported_and_srv_refused() {
 	let (provider, state) = mock("", None).await;
 	let mx = crate::dns::provider::DnsRecord {
 		name: "example.org".into(),
@@ -127,23 +129,20 @@ async fn mx_and_srv_supported() {
 		value: "10 5 5060 sip.example.org".into(),
 		ttl: 3600,
 	};
-	provider
-		.upsert("example.org", srv)
-		.await
-		.expect("srv upsert");
+	assert_eq!(
+		provider.upsert("example.org", srv).await,
+		Err(ProviderError::Unsupported)
+	);
 	let captured = state.lock().unwrap();
-	let mx_body = &captured.set_hosts_bodies[0];
-	let srv_body = &captured.set_hosts_bodies[1];
-	assert!(
-		mx_body.contains(r#"Name="@" Type="MX" Address="mail.example.org" MXPref="10""#),
-		"{mx_body}"
+	assert_eq!(captured.set_hosts_calls.len(), 1);
+	let call = &captured.set_hosts_calls[0];
+	let mx = &call.hosts()[0];
+	assert_eq!(
+		(mx.name.as_str(), mx.kind.as_str(), mx.address.as_str()),
+		("@", "MX", "mail.example.org")
 	);
-	assert!(
-		srv_body.contains(
-			r#"Name="_sip._tcp" Type="SRV" Address="sip.example.org" Priority="10" Weight="5" Port="5060""#
-		),
-		"{srv_body}"
-	);
+	assert_eq!(mx.mx_pref.as_deref(), Some("10"));
+	assert_eq!(call.param("EmailType"), Some("MX"));
 }
 
 #[tokio::test]

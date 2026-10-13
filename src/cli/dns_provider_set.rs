@@ -45,6 +45,9 @@ pub struct ProviderArgs {
 	/// Google Cloud: service-account JSON file.
 	#[arg(long, value_name = "FILE")]
 	pub credentials_file: Option<String>,
+	/// Namecheap: the IPv4 address on the account's API whitelist.
+	#[arg(long, value_name = "IPV4")]
+	pub client_ip: Option<String>,
 }
 
 /// One setting the user can pass, with the TOML key it becomes.
@@ -60,6 +63,7 @@ enum Setting {
 	KeyName,
 	Algorithm,
 	CredentialsFile,
+	ClientIp,
 }
 
 use Setting::*;
@@ -67,7 +71,8 @@ use Setting::*;
 /// Required and optional settings per provider, taken from `Dns::build`.
 fn rules(provider: &str) -> Option<(&'static [Setting], &'static [Setting])> {
 	Some(match provider {
-		"cloudflare" | "bunny" | "desec" | "digitalocean" | "namecheap" => (&[Token], &[]),
+		"cloudflare" | "bunny" | "desec" | "digitalocean" => (&[Token], &[]),
+		"namecheap" => (&[Token, ClientIp], &[]),
 		"dnsimple" => (&[Token, AccountId], &[]),
 		"spaceship" | "godaddy" | "porkbun" => (&[AccessKey, SecretKeyEnv], &[]),
 		"gcloud" => (&[Token, CredentialsFile], &[]),
@@ -92,6 +97,7 @@ impl Setting {
 			KeyName => "--key-name",
 			Algorithm => "--algorithm",
 			CredentialsFile => "--credentials-file",
+			ClientIp => "--client-ip",
 		}
 	}
 
@@ -107,11 +113,12 @@ impl Setting {
 			KeyName => args.key_name.is_some(),
 			Algorithm => args.algorithm.is_some(),
 			CredentialsFile => args.credentials_file.is_some(),
+			ClientIp => args.client_ip.is_some(),
 		}
 	}
 }
 
-const ALL: [Setting; 10] = [
+const ALL: [Setting; 11] = [
 	Token,
 	AccessKey,
 	SecretKeyEnv,
@@ -122,6 +129,7 @@ const ALL: [Setting; 10] = [
 	KeyName,
 	Algorithm,
 	CredentialsFile,
+	ClientIp,
 ];
 
 fn check_env(flag: &str, name: &str) -> Result<(), String> {
@@ -232,6 +240,11 @@ pub(super) fn fields(
 	if let Some(endpoint) = &args.endpoint {
 		check_endpoint(&provider, endpoint)?;
 	}
+	if let Some(ip) = &args.client_ip
+		&& ip.parse::<std::net::Ipv4Addr>().is_err()
+	{
+		return Err("--client-ip must be an IPv4 address".into());
+	}
 	if let Some(algorithm) = &args.algorithm
 		&& !matches!(
 			algorithm.as_str(),
@@ -256,5 +269,6 @@ pub(super) fn fields(
 		("key_name", text(&args.key_name)),
 		("algorithm", text(&args.algorithm)),
 		("credentials_file", text(&args.credentials_file)),
+		("client_ip", text(&args.client_ip)),
 	])
 }

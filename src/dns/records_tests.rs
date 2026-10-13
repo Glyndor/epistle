@@ -342,6 +342,26 @@ fn zone_form_escapes_quotes_and_backslashes() {
 	assert_eq!(txt_zone_form(r#"a"b\c"#), r#""a\"b\\c""#.to_string());
 }
 
+/// An octet outside printable ASCII is a `\DDD` decimal escape in zone
+/// file syntax (RFC 1035 §5.1); writing each byte as a character turned
+/// `é` into `Ã©`.
+#[test]
+fn zone_form_escapes_non_ascii_octets_in_decimal() {
+	assert_eq!(txt_zone_form("café"), r#""caf\195\169""#);
+	assert_eq!(txt_zone_form("tab\there"), r#""tab\009here""#);
+}
+
+/// The strings of a long value are separated by a space, the way every
+/// provider that takes presentation form gets them.
+#[test]
+fn zone_form_separates_the_strings_of_a_long_value() {
+	let value = "a".repeat(300);
+	assert_eq!(
+		txt_zone_form(&value),
+		format!("\"{}\" \"{}\"", "a".repeat(255), "a".repeat(45))
+	);
+}
+
 #[test]
 fn zone_form_wraps_long_values_in_multiple_quoted_strings() {
 	let value: String = "a".repeat(600);
