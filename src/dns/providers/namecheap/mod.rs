@@ -24,7 +24,9 @@
 
 use std::pin::Pin;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, same_txt_purpose,
+};
 use crate::dns::providers::namecheap::render::{host_from_record, host_label, split_sld_tld};
 use crate::dns::providers::namecheap::xml::{Host, extract_hosts, parse_response};
 use crate::net::HttpsUrl;
@@ -213,8 +215,16 @@ impl NamecheapProvider {
 		let mut hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
-		// Drop any existing record at the same (name, kind) — we are replacing it.
-		hosts.retain(|h| !(h.name == label && h.kind == kind_str));
+		// Drop the record this one replaces. Under the contract in
+		// `src/dns/provider.rs` that is, for TXT, only the one of the
+		// same purpose (an ACME challenge or verification token at the
+		// name stays); every other kind owns its name and replaces the
+		// whole set.
+		hosts.retain(|h| {
+			!(h.name == label
+				&& h.kind == kind_str
+				&& (record.kind != RecordKind::Txt || same_txt_purpose(&h.address, &record.value)))
+		});
 		hosts.push(host_from_record(&record, zone)?);
 		self.set_hosts(zone, &hosts).await
 	}
@@ -334,3 +344,7 @@ mod tests_txt_forms;
 #[cfg(test)]
 #[path = "tests_wire.rs"]
 mod tests_wire;
+
+#[cfg(test)]
+#[path = "tests_contract.rs"]
+mod tests_contract;

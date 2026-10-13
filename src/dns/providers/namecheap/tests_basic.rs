@@ -24,7 +24,7 @@ async fn upsert_creates_when_absent() {
 
 #[tokio::test]
 async fn upsert_updates_when_present() {
-	let existing = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="abc" Name="_dmarc" Type="TXT" Address="&quot;old&quot;" TTL="3600"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
+	let existing = r#"<?xml version="1.0" encoding="UTF-8"?><ApiResponse Status="OK"><Errors/><CommandResponse Type="namecheap.domains.dns.getHosts"><DomainDNSGetHostsResult Domain="example.org"><host HostId="abc" Name="_dmarc" Type="TXT" Address="&quot;v=DMARC1; p=none&quot;" TTL="3600"/></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
 	let (provider, state) = mock(existing, None).await;
 	provider
 		.upsert(
