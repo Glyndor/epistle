@@ -143,6 +143,7 @@ fn snapshot_lists_every_counter_and_keeps_it_sorted() {
 		"webhook_failed",
 		"scanner_clamd_failed",
 		"scanner_clamd_skipped",
+		"outbound_virus",
 		"database_unavailable",
 		"clock_drift_exceeded",
 		"auth_login_succeeded",

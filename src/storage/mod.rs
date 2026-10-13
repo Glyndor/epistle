@@ -13,6 +13,7 @@ mod delivery;
 pub(crate) mod lock;
 pub(crate) mod locked;
 mod routing;
+mod routing_forward;
 mod spool;
 mod spool_recipients;
 

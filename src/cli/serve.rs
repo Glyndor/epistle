@@ -134,7 +134,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		directory.clone(),
 		crypto.clone(),
 	)?;
-	let sink: Arc<dyn MessageSink> = Arc::new(split);
 
 	// Optional greylisting store, shared across SMTP listeners. A background
 	// task prunes stale triplets so the map stays bounded. The store is
@@ -174,8 +173,18 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		disk_guard,
 		max_conn,
 		scanner_hook,
+		clamd,
 		llm_hook,
 	} = super::serve_smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
+	// sink through `submit`; the antivirus scan wraps it there.
+	let sink: Arc<dyn MessageSink> = crate::antispam::submission_scan::ScanningSink::wrap(
+		config.antispam.scan_authenticated,
+		Arc::new(split),
+		clamd,
+		Some(metrics.clone()),
+		webhook.clone(),
+	)?;
 
 	// One Bayesian store and one training worker for the whole process.
 	// SMTP trains and scores through the store; IMAP and JMAP feed the
@@ -218,42 +227,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.spawn(std::time::Duration::from_secs(2));
 
 	// The queue worker drains the outbound spool in the background.
-	let connector = Arc::new(crate::queue::MxConnector::from_system()?);
-	let mta_sts = Arc::new(crate::mtasts::PolicyStore::new(Box::new(
-		crate::mtasts::SystemFetcher::new().map_err(|error| {
-			std::io::Error::other(format!("cannot build MTA-STS fetcher: {error:?}"))
-		})?,
-	)));
-	let mut worker = crate::queue::Worker::new(
-		crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
-		connector,
-		&config.hostname,
-	)
-	.with_bounce_sink(Arc::clone(&sink))
-	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
-	.with_dane(Arc::clone(&spf_dns))
-	.with_metrics(metrics.clone())
-	.with_max_age(config.queue_give_up_secs.unwrap_or(0))
-	.with_retry_schedule(crate::queue::RetrySchedule::from_config(
-		config.queue_retry_base_secs,
-		config.queue_retry_cap_secs,
-		config.queue_delay_warning_secs,
-	))
-	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
-	.with_transports(config.transport.clone())
-	.with_outbound_tls(config.queue.outbound_tls);
-	if let Some(webhook) = &webhook {
-		worker = worker.with_webhook(Arc::clone(webhook));
-	}
-	if config.queue.tlsrpt_reports {
-		worker = worker.with_tlsrpt(&config.data_dir);
-	}
-	let worker = Arc::new(worker);
-	if config.start_queue_worker() {
-		tokio::spawn(worker.run(std::time::Duration::from_secs(30)));
-	} else {
-		tracing::info!("outbound delivery is held: queue worker not started");
-	}
+	super::serve_queue::spawn_queue_worker(
+		&config,
+		crypto.clone(),
+		Arc::clone(&sink),
+		Arc::clone(&spf_dns),
+		&metrics,
+		webhook.as_ref(),
+	)?;
 
 	// DMARC aggregate report flush runs hourly in the background.
 	super::serve_tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;

@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
-use super::evaluate;
-use crate::cli::status::report::Level;
+use super::{evaluate, with_scan_health};
+use crate::antispam::clamd::health::HealthFile;
+use crate::cli::status::report::{AreaReport, Level};
 
 /// 2026-10-09T08:00:00Z.
 const BUILT: i64 = 1_791_532_800;
@@ -130,4 +131,34 @@ async fn without_clamd_configured_there_is_nothing_to_check() {
 	let report = super::check(&ctx).await;
 	assert_eq!(report.status, Level::Ok);
 	assert_eq!(report.detail, "no [antispam] clamd_socket is configured");
+}
+
+#[test]
+fn scans_that_keep_failing_open_turn_a_healthy_clamd_into_a_warning() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let healthy = || AreaReport::ok("clamd answers; ClamAV 1.0.1");
+	assert_eq!(
+		with_scan_health(healthy(), dir.path(), BUILT),
+		healthy(),
+		"nothing recorded, nothing added"
+	);
+	let file = HealthFile::new(dir.path());
+	file.failed();
+	file.failed();
+	let report = with_scan_health(healthy(), dir.path(), BUILT);
+	assert_eq!(report.status, Level::Warn, "{report:?}");
+	assert!(
+		report.detail.contains("2 scans failed open since"),
+		"{report:?}"
+	);
+	assert!(report.detail.contains("accepted unscanned"), "{report:?}");
+	let broken = with_scan_health(AreaReport::fail("cannot connect"), dir.path(), BUILT);
+	assert_eq!(broken.status, Level::Fail, "a failure stays a failure");
+	file.succeeded();
+	let report = with_scan_health(healthy(), dir.path(), BUILT);
+	assert_eq!(report.status, Level::Ok, "{report:?}");
+	assert!(
+		report.items[0].detail.starts_with("scanning again since"),
+		"{report:?}"
+	);
 }

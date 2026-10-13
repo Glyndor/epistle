@@ -92,3 +92,10 @@ fn clamd_on_found_refuses_delete_and_accepts_supported_actions() {
 		_ => panic!("expected invalid clamd action parse error"),
 	}
 }
+
+#[test]
+fn scan_authenticated_defaults_on_and_can_be_turned_off() {
+	assert!(load("").expect("defaults").antispam.scan_authenticated);
+	let config = load("[antispam]\nscan_authenticated = false").expect("off");
+	assert!(!config.antispam.scan_authenticated);
+}

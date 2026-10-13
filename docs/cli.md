@@ -541,6 +541,7 @@ epistle antispam show
 epistle antispam set greylist-delay 5m
 epistle antispam set clamd-socket /run/clamav/clamd.sock
 epistle antispam set clamd-on-found reject
+epistle antispam set scan-authenticated off
 epistle antispam unset greylist-delay
 epistle antispam add dnsbl-zones zen.spamhaus.org
 epistle antispam remove dnsbl-zones zen.spamhaus.org

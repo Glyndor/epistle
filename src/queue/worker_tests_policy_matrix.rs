@@ -265,20 +265,40 @@ pub(super) async fn attempt_with(
 	mode: OutboundTls,
 	mx_dns: MxDns,
 ) -> Seen {
+	let message = AcceptedMessage {
+		reverse_path: "alice@sender.example".into(),
+		recipients: vec!["bob@remote.example".to_string()],
+		data: b"From: alice@sender.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		no_dsn: Vec::new(),
+	};
+	attempt_message(dns, fetcher, mx, mode, mx_dns, &message).await
+}
+
+/// One delivery attempt for the cell, of `message` (to bob@remote.example).
+pub(super) async fn attempt_cell(
+	(sts, tlsa, mx, mode, mx_dns): (Sts, Tlsa, Mx, OutboundTls, MxDns),
+	message: &AcceptedMessage,
+) -> Seen {
+	let dns: Arc<dyn DnsLookup> = Arc::new(Dns { sts, tlsa });
+	attempt_message(dns, Box::new(Fetcher(sts)), mx, mode, mx_dns, message).await
+}
+
+/// [`attempt_with`] for a given spooled `message`.
+async fn attempt_message(
+	dns: Arc<dyn DnsLookup>,
+	fetcher: Box<dyn crate::mtasts::PolicyFetcher>,
+	mx: Mx,
+	mode: OutboundTls,
+	mx_dns: MxDns,
+	message: &AcceptedMessage,
+) -> Seen {
 	crate::queue::client::TEST_ROOTS.with(|roots| *roots.borrow_mut() = vec![certs().ca.clone()]);
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
-	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@sender.example".into(),
-			recipients: vec!["bob@remote.example".to_string()],
-			data: b"From: alice@sender.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
-		.expect("store");
+	spool.store(message).expect("store");
 	let sink = Arc::new(MemorySink::new());
 	let store = Arc::new(crate::mtasts::PolicyStore::new(fetcher));
 	let worker = Worker::new(

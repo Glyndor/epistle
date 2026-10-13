@@ -18,6 +18,14 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 - **TLS for the mail protocols** is the server's own job (built-in ACME, or
   manual PEM). Outbound delivery is opportunistic TLS, upgraded to *mandatory
   verified* TLS when MTA-STS enforce, DANE, or a sender's REQUIRETLS applies.
+- **`TLS-Required: No`** (RFC 8689) lets one of your own senders deliver a
+  message where MTA-STS or DANE would refuse an unverified connection, for
+  instance to tell a domain its certificate expired. The queue still uses
+  STARTTLS when the MX offers it, accepts any certificate for that message,
+  and logs each policy it set aside. The field is honoured only on mail your
+  accounts submit: inbound mail loses it before it is stored or forwarded,
+  so nobody else can downgrade your policy. REQUIRETLS on the same message
+  wins and the field is ignored (RFC 8689 section 4.1).
 
 ## Authentication
 
@@ -170,6 +178,24 @@ and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
   flapping pool returns `None` to the ban check and bumps the
   `database_unavailable` counter, the same discipline the reputation
   screen follows.
+- **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
+  default through `scan_authenticated`). A compromised account must not
+  relay malware, so what local accounts submit over SMTP, the REST API and
+  JMAP is scanned by clamd before it is routed, for local and remote
+  recipients alike. A detection is refused (`554 5.7.1` on SMTP), logged
+  with the account's pseudonym and the signature, counted in
+  `outbound_virus` and announced with the `outbound_virus` webhook event, so
+  the operator learns that the account may be compromised. The scan fails
+  open when clamd cannot be reached, like the inbound one, and `epistle
+  status` warns while scans keep failing, so an antivirus that is silently
+  not scanning does not go unnoticed.
+- **Forwarding loops.** Every copy stored in a mailbox starts with
+  `Return-Path` (any one the message arrived with is removed) and the
+  `Delivered-To` of the address it was delivered to, and a forwarded copy
+  carries the `Delivered-To` of the address that forwarded it. A message
+  that comes back to an address about to forward it again (an account
+  forward or a Sieve `redirect`) is refused with a `554 5.4.6` bounce
+  instead of going round, on top of the `Received` hop limit.
 - **Outbound suppression**: a reply proving the address bad (5.1.x, 551,
   553) suppresses that recipient so the server stops sending to dead
   addresses, protecting the sending IP's reputation. Policy refusals, full or

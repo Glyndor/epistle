@@ -2,6 +2,7 @@
 //! domain, and the answer it gives for each recipient.
 
 use super::Worker;
+use crate::dane::rrset::TlsaRrset;
 use crate::queue::client::{self, DeliveryError, RecipientResult};
 use crate::queue::tls_outcome::{STS_POLICY_INVALID, TlsOutcome};
 use crate::storage::SpoolEntry;
@@ -60,6 +61,18 @@ impl Worker {
 		let policy = fetched
 			.clone()
 			.filter(|policy| policy.mode == crate::mtasts::Mode::Enforce);
+		// TLS-Required: No from one of our senders sets the recipient's
+		// policy aside (RFC 8689 section 3), unless REQUIRETLS asks for the
+		// opposite on the same message.
+		let tls_optional =
+			!entry.envelope.require_tls && crate::queue::tls_required::optional(&entry.data);
+		let policy = match policy {
+			Some(_) if tls_optional => {
+				tracing::info!(%domain, "TLS-Required: No; not enforcing the MTA-STS policy");
+				None
+			}
+			policy => policy,
+		};
 		// MTA-STS enforce or a sender's REQUIRETLS both mandate verified TLS.
 		let require_tls = policy.is_some() || entry.envelope.require_tls;
 
@@ -126,7 +139,14 @@ impl Worker {
 							self.tlsa_for(&server_name).await
 						};
 						let tlsa = match tlsa {
+							Ok(records) if tls_optional && records != TlsaRrset::Absent => {
+								tracing::info!(%server_name, "TLS-Required: No; not applying DANE");
+								TlsaRrset::Absent
+							}
 							Ok(records) => records,
+							Err(crate::spf::DnsFailure::Temporary) if tls_optional => {
+								TlsaRrset::Absent
+							}
 							Err(crate::spf::DnsFailure::Temporary) => {
 								let reason =
 									format!("transient TLSA lookup failure for {server_name}");
@@ -162,7 +182,13 @@ impl Worker {
 			tls_required,
 			auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
 			&dane,
-			self.outbound_tls,
+			// Any certificate will do when the sender made TLS optional:
+			// encrypted if the MX offers it, delivered either way.
+			if tls_optional {
+				crate::config::OutboundTls::Opportunistic
+			} else {
+				self.outbound_tls
+			},
 			&mut tls,
 		)
 		.await;

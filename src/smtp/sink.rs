@@ -9,13 +9,21 @@ pub trait MessageSink: Send + Sync {
 	/// answer with a transient failure so the client retries later.
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError>;
 
-	/// [`MessageSink::deliver`], with the outbound queue entry (if the
-	/// message leaves the server) stored under `queue_id`, so the submitter
-	/// can hand that id back to its client. A sink that never queues has
-	/// nothing to name and delivers as usual; a sink that queues overrides
-	/// this.
-	fn submit(&self, message: AcceptedMessage, queue_id: uuid::Uuid) -> Result<(), SinkError> {
-		let _ = queue_id;
+	/// Take a message that `account`, one of this server's own accounts,
+	/// submitted (SMTP after AUTH, `/api/v1/send`, JMAP
+	/// `EmailSubmission/set`), where [`MessageSink::deliver`] takes mail
+	/// that arrived from elsewhere. The outbound queue entry (if the message
+	/// leaves the server) is stored under `queue_id`, so the submitter can
+	/// hand that id back to its client. A sink that never queues has nothing
+	/// to name and delivers as usual; a sink that queues, or that treats
+	/// submissions differently, overrides this.
+	fn submit(
+		&self,
+		message: AcceptedMessage,
+		queue_id: uuid::Uuid,
+		account: &str,
+	) -> Result<(), SinkError> {
+		let _ = (queue_id, account);
 		self.deliver(message)
 	}
 }
@@ -28,6 +36,26 @@ pub enum SinkError {
 	/// with a 4xx so the client retries later.
 	#[error("storage unavailable: {0}")]
 	Unavailable(String),
+	/// The antivirus found this signature in a submitted message. Permanent:
+	/// the same message is refused again however often it is retried.
+	#[error("virus detected ({0})")]
+	VirusDetected(String),
+}
+
+impl SinkError {
+	/// The SMTP reply that refuses the message for this reason.
+	pub fn smtp_reply(&self) -> crate::smtp::reply::Reply {
+		use crate::smtp::reply::Reply;
+		match self {
+			SinkError::Unavailable(_) => {
+				Reply::single(451, "4.3.0 temporary storage failure, try again")
+			}
+			SinkError::VirusDetected(signature) => Reply::single(
+				554,
+				&format!("5.7.1 message rejected: virus detected ({signature})"),
+			),
+		}
+	}
 }
 
 /// In-memory sink: collects messages, for tests and early development.

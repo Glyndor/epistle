@@ -122,6 +122,17 @@ impl ApiError {
 		}
 	}
 
+	/// `422` for a message the antivirus refused: nothing was sent, and
+	/// sending it again is refused again. The signature tells the sender
+	/// what was found.
+	pub fn virus_detected(signature: &str) -> Self {
+		ApiError {
+			status: StatusCode::UNPROCESSABLE_ENTITY,
+			code: "virus_detected",
+			message: format!("The message was rejected: virus detected ({signature})."),
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

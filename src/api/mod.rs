@@ -227,6 +227,14 @@ mod jmap_tests_email_create;
 mod send_tests_bcc;
 
 #[cfg(test)]
+#[path = "send_tests_virus.rs"]
+mod send_tests_virus;
+
+#[cfg(test)]
+#[path = "send_tests_trace.rs"]
+mod send_tests_trace;
+
+#[cfg(test)]
 #[path = "jmap_tests_attachment_limit.rs"]
 mod jmap_tests_attachment_limit;
 

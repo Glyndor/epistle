@@ -17,6 +17,7 @@ use crate::directory_store::DirectoryHandle;
 
 mod dnsbl_check;
 mod run;
+mod run_auth;
 mod run_band;
 
 /// Read buffer size per connection.
@@ -681,6 +682,14 @@ mod tests_auth;
 #[cfg(test)]
 #[path = "server_tests_bcc.rs"]
 mod tests_bcc;
+
+#[cfg(test)]
+#[path = "server_tests_virus.rs"]
+mod tests_virus;
+
+#[cfg(test)]
+#[path = "server_tests_trace.rs"]
+mod tests_trace;
 
 #[cfg(test)]
 #[path = "server_tests_urlbl.rs"]

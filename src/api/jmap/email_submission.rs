@@ -32,8 +32,8 @@ pub(super) fn email_submission_set(
 				Ok(id) => {
 					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
 				}
-				Err(reason) => {
-					not_created.insert(creation_id.clone(), json!({ "type": reason }));
+				Err(refusal) => {
+					not_created.insert(creation_id.clone(), refusal.to_json());
 				}
 			}
 		}
@@ -48,11 +48,7 @@ pub(super) fn email_submission_set(
 
 /// Submit one email: read it, build the envelope, route it like SMTP
 /// submission (DKIM for remote mail, local recipients to their mailboxes).
-fn submit_email(
-	state: &ApiState,
-	account: &str,
-	submission: &Value,
-) -> Result<String, &'static str> {
+fn submit_email(state: &ApiState, account: &str, submission: &Value) -> Result<String, Refusal> {
 	let email_id = submission
 		.get("emailId")
 		.and_then(Value::as_str)
@@ -61,13 +57,24 @@ fn submit_email(
 		.ok_or("notFound")?;
 	let headers = String::from_utf8_lossy(&raw);
 	let envelope = submission.get("envelope");
-	let mail_from = envelope
+	// RFC 8621 section 7.5: without an envelope, MAIL FROM is the Sender
+	// header if there is one, else the From header. The null reverse path
+	// is for bounces only and never comes out of a missing envelope. Either
+	// address is checked below like an explicit one.
+	let mail_from = match envelope
 		.and_then(|e| e.get("mailFrom"))
 		.and_then(|m| m.get("email"))
 		.and_then(Value::as_str)
-		.or_else(|| submission.get("identityId").and_then(Value::as_str))
-		.unwrap_or("")
-		.to_string();
+	{
+		Some(email) => email.to_string(),
+		None => ["sender", "from"]
+			.into_iter()
+			.find_map(|name| {
+				objects::header_value(&headers, name)
+					.and_then(|value| objects::header_emails(&value).into_iter().next())
+			})
+			.unwrap_or_default(),
+	};
 	let recipients: Vec<String> = match envelope
 		.and_then(|e| e.get("rcptTo"))
 		.and_then(Value::as_array)
@@ -86,7 +93,7 @@ fn submit_email(
 			.collect(),
 	};
 	if recipients.is_empty() {
-		return Err("noRecipients");
+		return Err("noRecipients".into());
 	}
 	// Send-as guard: the envelope mailFrom must belong to the account on whose
 	// behalf the bearer authenticated, matching what SMTP enforces at
@@ -103,7 +110,7 @@ fn submit_email(
 	// The same rule for the message itself: its single From must be an
 	// address the account owns (RFC 8621 section 7.5.2, `forbiddenFrom`).
 	if !crate::api::mail_from::owns_author(state, account, &raw) {
-		return Err("forbiddenFrom");
+		return Err("forbiddenFrom".into());
 	}
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
@@ -139,7 +146,7 @@ fn submit_email(
 				limit,
 			}) => {
 				crate::api::log_send_limited(account, None, new.saturating_add(already), limit);
-				return Err("tooManyRecipients");
+				return Err("tooManyRecipients".into());
 			}
 			Ok(
 				crate::storage::CapOutcome::Allowed { .. } | crate::storage::CapOutcome::Uncapped,
@@ -156,7 +163,7 @@ fn submit_email(
 	// A full local mailbox is refused now, not bounced days later
 	// (RFC 8620 §5.3 `overQuota`).
 	if crate::api::quota::full_recipient(state, &recipients, stamped.len() as u64).is_some() {
-		return Err("overQuota");
+		return Err("overQuota".into());
 	}
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,
@@ -168,7 +175,39 @@ fn submit_email(
 		no_dsn: Vec::new(),
 	};
 	state
-		.submit(message)
+		.submit(account, message)
 		.map(|id| id.to_string())
-		.map_err(|_| "serverFail")
+		.map_err(|error| match error {
+			// RFC 8621 section 7.5.2: the server refuses to send this message.
+			crate::smtp::sink::SinkError::VirusDetected(signature) => Refusal {
+				kind: "forbiddenToSend",
+				description: Some(format!("message rejected: virus detected ({signature})")),
+			},
+			crate::smtp::sink::SinkError::Unavailable(_) => "serverFail".into(),
+		})
+}
+
+/// A `SetError` (RFC 8620 section 5.3): its type, and a description when
+/// the type alone does not say why.
+struct Refusal {
+	kind: &'static str,
+	description: Option<String>,
+}
+
+impl From<&'static str> for Refusal {
+	fn from(kind: &'static str) -> Self {
+		Refusal {
+			kind,
+			description: None,
+		}
+	}
+}
+
+impl Refusal {
+	fn to_json(&self) -> Value {
+		match &self.description {
+			Some(description) => json!({ "type": self.kind, "description": description }),
+			None => json!({ "type": self.kind }),
+		}
+	}
 }

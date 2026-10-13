@@ -60,6 +60,14 @@ pub enum WebhookEvent {
 		/// Why the rotation did not complete.
 		reason: String,
 	},
+	/// The antivirus refused a message one of this server's own accounts
+	/// submitted: the account may be compromised and sending malware.
+	OutboundVirus {
+		/// The account that submitted the message.
+		account: String,
+		/// The signature the antivirus reported.
+		signature: String,
+	},
 	/// Sent only by `epistle webhook test` to check that the endpoint is
 	/// reachable and verifies signatures. Receivers should acknowledge it and
 	/// otherwise ignore it.

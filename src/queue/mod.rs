@@ -10,6 +10,7 @@ pub mod suppression;
 #[cfg(test)]
 pub(crate) mod test_remote;
 pub mod tls_outcome;
+pub(crate) mod tls_required;
 mod transport;
 pub use transport::relay_connect;
 mod worker;
