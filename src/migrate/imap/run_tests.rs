@@ -131,7 +131,9 @@ pub(super) fn local(dir: &std::path::Path, mailbox: &str) -> Vec<(Vec<Flag>, Sys
 }
 
 fn date(text: &str) -> SystemTime {
-	crate::imap::command::parse_date_time(text).expect("date")
+	crate::imap::command::parse_date_time(text)
+		.expect("date")
+		.time
 }
 
 pub(super) async fn migrate(

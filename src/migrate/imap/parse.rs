@@ -2,7 +2,6 @@
 //! lines, capabilities, LIST/XLIST entries, NAMESPACE, SELECT data and
 //! FETCH answers. Every parser walks its token list once.
 
-use std::time::SystemTime;
 
 use super::token::{Token, tokenize};
 use super::wire::Response;
@@ -222,8 +221,9 @@ pub(crate) struct Fetched {
 	pub(crate) uid: u32,
 	/// The flags as sent, without case folding.
 	pub(crate) flags: Vec<String>,
-	/// The INTERNALDATE, when present and well formed.
-	pub(crate) internal_date: Option<SystemTime>,
+	/// The INTERNALDATE with its zone, when present and well formed, so the
+	/// copy shows the date the way the source did.
+	pub(crate) internal_date: Option<crate::imap::internal_date::InternalDate>,
 	/// The RFC822.SIZE the server claimed.
 	pub(crate) size: Option<u64>,
 	/// The message octets.
