@@ -592,13 +592,17 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Restarts the `mail` service in default mode (a new .deb replaces the host binary the compose file bind-mounts) and runs `podup pull` followed by `podup up -d` in custom image mode to recreate changed services while retaining data. |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Data and volumes are kept. |
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
 permissions. Every stack invocation passes `-f compose.yaml`, then
 `-f compose.override.yaml` when it exists; later values override the base.
-Init regenerates the base file on reruns. Run stack up again after adding or
+Init regenerates the base file on reruns, and so does `stack update`: it
+takes the database choice, a custom mail image, the DNS token forwarding and
+the config path from the existing `compose.yaml`, and the published ports
+from the listeners in the config. Anything else edited in `compose.yaml` is
+replaced, so keep it in the override. Run stack up again after adding or
 removing an override so the autostart unit records the current file list.
 
 The default compose file runs the host's `/usr/bin/epistle`

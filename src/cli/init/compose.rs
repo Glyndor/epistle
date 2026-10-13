@@ -524,7 +524,7 @@ pub(super) struct ComposeFile {
 }
 
 impl ComposeFile {
-	fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
+	pub(super) fn build(answers: &Answers, published_ports: Vec<String>, database: bool) -> Self {
 		let image = resolve_image(answers.image.as_deref());
 		let mut services = BTreeMap::new();
 		services.insert(
@@ -693,7 +693,7 @@ mod host_binary_tests;
 mod apply_host_binary_tests;
 
 /// Render either a generated compose document or an edited document.
-fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
+pub(super) fn render_document(document: &impl Serialize) -> Result<String, ApplyError> {
 	let mut bytes = serde_json::to_string_pretty(document)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
 	bytes.push('\n');

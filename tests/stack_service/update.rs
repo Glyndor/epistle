@@ -1,62 +1,84 @@
 use super::helpers::*;
 
 #[test]
-fn update_restarts_the_mail_service_for_the_default_host_binary_shape() {
+fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() {
 	// The default compose file (host binary bind-mounted on the
-	// distroless base) does not pull anything: a new .deb replaces
-	// the host binary and a restart of the `mail` service picks it
-	// up through the bind-mount. The compose file is left
-	// untouched.
+	// distroless base) is rendered again with this release's code: an
+	// older file is replaced and `up -d` recreates what changed. Once the
+	// file is current, the update only has to restart `mail`, which picks
+	// up the new host binary through the bind-mount.
 	let dir = tempfile::tempdir().unwrap();
 	let shim = dir.path().join("bin");
 	let log = dir.path().join("argv.log");
 	install_podup_shim(&shim, &recorder_shim(&log));
 	let data = data_dir_with_compose(dir.path());
 	let compose = data.join("compose/compose.yaml");
+	let cfg = write_config(&data);
 	let distroless = "gcr.io/distroless/static-debian12:nonroot@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d";
 	std::fs::write(
 		&compose,
 		format!(
-			r#"{{"x-epistle-managed-image":true,"services":{{"mail":{{"image":"{distroless}","volumes":["data:/data"]}}}},"volumes":{{"data":{{}}}}}}"#,
+			r#"{{"x-epistle-managed-image":true,"services":{{"mail":{{"image":"{distroless}","command":["serve","--config",{cfg:?}],"volumes":["data:/data"]}}}},"volumes":{{"data":{{}}}}}}"#,
 		),
 	)
 	.unwrap();
 	let override_path = compose.with_file_name("compose.override.yaml");
-	std::fs::write(&override_path, "services:\n  mail:\n    mem_limit: 1g\n").unwrap();
-	let cfg = write_config(&data);
-	let out = run_with_podup(
-		&["stack", "--config", cfg.to_str().unwrap(), "update"],
-		&shim,
-	);
-	assert_eq!(
-		out.status.code(),
-		Some(0),
-		"stack update must be accepted and complete"
-	);
-	let expected = {
-		let mut v = vec!["--version".to_string()];
-		v.extend([
+	let override_text = "services:\n  mail:\n    mem_limit: 1g\n";
+	std::fs::write(&override_path, override_text).unwrap();
+	let podup_argv = |extra: &[&str]| {
+		let mut v = vec![
 			"-f".to_string(),
 			compose.to_str().unwrap().to_string(),
 			"-f".to_string(),
 			override_path.to_str().unwrap().to_string(),
-			"restart".to_string(),
-			"mail".to_string(),
-		]);
+		];
+		v.extend(extra.iter().map(|part| part.to_string()));
 		v
 	};
+	let update = || {
+		std::fs::write(&log, "").unwrap();
+		run_with_podup(
+			&["stack", "--config", cfg.to_str().unwrap(), "update"],
+			&shim,
+		)
+	};
+	let out = update();
+	assert_eq!(
+		out.status.code(),
+		Some(0),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let mut expected = vec!["--version".to_string()];
+	expected.extend(podup_argv(&["up", "-d"]));
 	assert_eq!(
 		read_argv_log(&log),
 		expected,
-		"default mode must restart mail, not pull or rewrite the image"
+		"the rewritten file is brought up"
 	);
-	// The compose image stays at the distroless base; nothing in
-	// the file moved.
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(
+		stderr.contains("+") && stderr.contains("freshclam"),
+		"the change is shown before it is applied: {stderr}"
+	);
 	let value: serde_json::Value =
-		serde_json::from_slice(&std::fs::read(compose).unwrap()).unwrap();
+		serde_json::from_slice(&std::fs::read(&compose).unwrap()).unwrap();
+	assert_eq!(value["services"]["mail"]["image"], distroless);
+	assert!(value["services"]["freshclam"].is_object());
 	assert_eq!(
-		value["services"]["mail"]["image"], distroless,
-		"default mode must leave the distroless image untouched"
+		std::fs::read_to_string(&override_path).unwrap(),
+		override_text,
+		"the operator's override is never touched"
+	);
+	let again = update();
+	assert_eq!(again.status.code(), Some(0));
+	let mut expected = vec!["--version".to_string()];
+	expected.extend(podup_argv(&["up", "-d"]));
+	expected.extend(podup_argv(&["restart", "mail"]));
+	assert_eq!(
+		read_argv_log(&log),
+		expected,
+		"a current file leaves mail's definition alone, so mail is restarted for the new binary"
 	);
 }
 
@@ -73,7 +95,7 @@ fn update_pulls_then_recreates_for_a_custom_image_compose() {
 	let compose = data.join("compose/compose.yaml");
 	std::fs::write(
 		&compose,
-		r#"{"x-epistle-managed-image":false,"services":{"mail":{"image":"ghcr.io/example/mail:0.9.1","volumes":["data:/data"]}},"volumes":{"data":{}}}"#,
+		r#"{"x-epistle-managed-image":false,"services":{"mail":{"image":"ghcr.io/example/mail:0.9.1","command":["serve","--config","/etc/epistle/mail.toml"],"volumes":["data:/data"]}},"volumes":{"data":{}}}"#,
 	)
 	.unwrap();
 	let override_path = compose.with_file_name("compose.override.yaml");

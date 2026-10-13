@@ -20,7 +20,7 @@ fn every_stack_action_repairs_an_absent_socket_before_podup() {
 		let data = data_dir_with_compose(dir.path());
 		std::fs::write(
 			data.join("compose/compose.yaml"),
-			r#"{"services":{"mail":{"image":"operator/mail:stable"}}}"#,
+			r#"{"services":{"mail":{"image":"operator/mail:stable","command":["serve","--config","/etc/epistle/mail.toml"]}}}"#,
 		)
 		.unwrap();
 		let cfg = write_config(&data);
