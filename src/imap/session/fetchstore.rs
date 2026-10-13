@@ -151,7 +151,7 @@ impl Session {
 		// the loop lets the comparison stay cheap (a single pass over the
 		// messages) and gives a deterministic answer when many messages
 		// gain the same new keyword.
-		let pre_keywords = collect_mailbox_keywords(&snapshot);
+		let pre_keywords = collect_mailbox_keywords(snapshot);
 		for sequence_number in 1..=total {
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;
@@ -223,7 +223,7 @@ impl Session {
 		// keyword leaves the mailbox keyword set unchanged, and
 		// emitting a redundant FLAGS line in that case would just be
 		// more bytes on the wire.
-		let post_keywords = collect_mailbox_keywords(&snapshot);
+		let post_keywords = collect_mailbox_keywords(snapshot);
 		let newly_added: Vec<String> = post_keywords
 			.into_iter()
 			.filter(|name| {

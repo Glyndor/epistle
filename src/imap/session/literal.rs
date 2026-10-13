@@ -360,10 +360,9 @@ impl Session {
 		// already gone (reordered by a concurrent expunge) this is
 		// `None` and we skip the EXPUNGE line; the UID-based
 		// deletion above keeps the target correct regardless.
-		let expunge_line = removed_seq
+		removed_seq
 			.map(|s| format!("* {s} EXPUNGE\r\n"))
-			.unwrap_or_default();
-		expunge_line
+			.unwrap_or_default()
 	}
 
 	/// Reject an APPEND/REPLACE whose literal was not followed by CRLF
