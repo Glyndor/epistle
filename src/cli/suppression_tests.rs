@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::queue::SuppressionList;
+use std::collections::BTreeMap;
 
 fn config(data_dir: &std::path::Path) -> Config {
 	let toml = format!(
@@ -194,15 +195,19 @@ async fn deliver_once(data_dir: &std::path::Path) -> (usize, usize) {
 	use crate::smtp::session::AcceptedMessage;
 	let spool = crate::storage::FsSpool::open(data_dir).expect("spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@example.org".into(),
-			recipients: vec!["bob@example.net".to_string()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@example.org".into(),
+				recipients: vec!["bob@example.net".to_string()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	let connector = std::sync::Arc::new(CountingConnector(Default::default()));
 	let worker = crate::queue::Worker::new(spool, connector.clone(), "mail.example.org")

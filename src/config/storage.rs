@@ -5,6 +5,25 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// Days of per-recipient delivery log kept when the operator sets none.
+pub const DEFAULT_DELIVERY_LOG_DAYS: u64 = 30;
+
+fn default_delivery_log_days() -> u64 {
+	DEFAULT_DELIVERY_LOG_DAYS
+}
+
+impl super::Config {
+	/// Days of delivery log to keep: `[storage] delivery_log_days`, or 30
+	/// when the section or the key is absent. `0` turns the log off.
+	pub fn delivery_log_days(&self) -> u64 {
+		self.storage
+			.as_ref()
+			.map_or(DEFAULT_DELIVERY_LOG_DAYS, |storage| {
+				storage.delivery_log_days
+			})
+	}
+}
+
 /// Storage options: optional at-rest encryption of stored message files,
 /// the retention window for expunged messages, and where uploaded JMAP
 /// blobs live. Secure by default: encryption is off, blobs live on the
@@ -41,6 +60,14 @@ pub struct Storage {
 	/// message).
 	#[serde(default)]
 	pub deleted_retention_days: u64,
+	/// Days to keep one line of per-recipient delivery state under
+	/// `<data_dir>/deliverylog/`, 30 by default. The log records one JSON
+	/// line per outcome (delivered, deferred, failed, suppressed, canceled)
+	/// and the hourly sweep removes files older than this window. `0`
+	/// disables it: no records are written and an existing directory is
+	/// removed by the next sweep.
+	#[serde(default = "default_delivery_log_days")]
+	pub delivery_log_days: u64,
 	/// Where uploaded JMAP blobs live. Absent (or `backend = "fs"`) keeps the
 	/// historical default of putting them on disk under `<data_dir>/blobs/`;
 	/// `backend = "s3"` redirects to a remote bucket.
@@ -172,6 +199,8 @@ mod tests {
 		// The current behaviour is the default: zero days retention, so
 		// expunge deletes in the act.
 		assert_eq!(storage.deleted_retention_days, 0);
+		// The delivery log keeps 30 days unless the operator says otherwise.
+		assert_eq!(storage.delivery_log_days, DEFAULT_DELIVERY_LOG_DAYS);
 		// No `[storage.blobs]` section → no override.
 		assert!(storage.blobs.is_none());
 	}
@@ -201,6 +230,12 @@ encryption_key_file = "/etc/epistle/mail.key"
 	fn parses_retention_days() {
 		let storage: Storage = toml::from_str("deleted_retention_days = 30").expect("parse");
 		assert_eq!(storage.deleted_retention_days, 30);
+	}
+
+	#[test]
+	fn parses_delivery_log_days() {
+		let storage: Storage = toml::from_str("delivery_log_days = 14").expect("parse");
+		assert_eq!(storage.delivery_log_days, 14);
 	}
 
 	#[test]

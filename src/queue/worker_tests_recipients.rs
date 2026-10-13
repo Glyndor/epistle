@@ -6,21 +6,26 @@ use crate::queue::SuppressionList;
 use crate::queue::test_remote::{FakeRemote, Received, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink};
+use std::collections::BTreeMap;
 
 const SENDER: &str = "alice@sender.example";
 
 fn spool_to(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
 	let spool = FsSpool::open(dir).expect("open spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: SENDER.into(),
-			recipients: recipients.iter().map(|r| r.to_string()).collect(),
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: SENDER.into(),
+				recipients: recipients.iter().map(|r| r.to_string()).collect(),
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	spool
 }

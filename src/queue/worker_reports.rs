@@ -1,14 +1,78 @@
 //! What the worker does with the outcome of a recipient: suppression, the
 //! failure webhook, the failure report (DSN) and the delay warning.
 
+use std::collections::BTreeMap;
+
 use super::Worker;
 use super::conversation::Conversation;
 use crate::queue::bounce::ReportRecipient;
 use crate::queue::client::DeliveryError;
 use crate::queue::reply::{FailureClass, classify_reason};
-use crate::storage::{RecipientStatus, SpoolEntry};
+use crate::smtp::trace::header_values;
+use crate::storage::{DeliveryOutcome, DeliveryRecord, RecipientStatus, SpoolEntry};
+
+/// Extract the `Message-ID:` header from a spooled message, when one
+/// is present. None is returned when the message body does not
+/// carry the header or when the worker has not loaded the body
+/// (the entry is delivered without reading the bytes after the
+/// envelope settles).
+fn message_id_of(entry: &SpoolEntry) -> Option<String> {
+	let value = header_values(&entry.data, "message-id");
+	value.into_iter().next()
+}
 
 impl Worker {
+	/// Write one per-recipient outcome to the delivery log, when the log
+	/// is enabled. A best-effort writer: a failed `append` is logged and
+	/// otherwise ignored, the same as the webhook and the bounce sink
+	/// (mail flow must not be blocked by a logging error). The `reply`
+	/// field is truncated to 200 bytes of UTF-8 by the caller; the worker
+	/// passes it through unchanged.
+	fn log_outcome(
+		&self,
+		envelope: &crate::storage::Envelope,
+		recipient: &str,
+		outcome: DeliveryOutcome,
+		remote: Option<&str>,
+		reply: Option<&str>,
+		attempt: u32,
+	) {
+		let Some(log) = &self.delivery_log else {
+			return;
+		};
+		let record = DeliveryRecord {
+			time: self.now_epoch(),
+			spool_id: envelope.id,
+			account: envelope.account.clone(),
+			from: envelope.reverse_path.clone(),
+			recipient: recipient.to_string(),
+			outcome,
+			remote: remote
+				.filter(|value| !value.is_empty() && *value != "-")
+				.map(str::to_string),
+			reply: reply.map(str::to_string),
+			attempt,
+			extra: envelope.extra.clone(),
+		};
+		if let Err(error) = log.append(&record) {
+			tracing::warn!(id = %envelope.id, %error, "delivery log write failed");
+		}
+	}
+
+	/// Truncate `reply` to the first 200 bytes of UTF-8 (the first
+	/// 200 bytes of the remote SMTP reply line; longer values are not
+	/// interesting to log).
+	fn bounded_reply(reply: &str) -> String {
+		let mut out = String::new();
+		for ch in reply.chars() {
+			if out.len() + ch.len_utf8() > 200 {
+				break;
+			}
+			out.push(ch);
+		}
+		out
+	}
+
 	/// The recipients of `entry` due at `now`, minus those on a suppression
 	/// list (globally or for the sending account). Those hard-bounced before:
 	/// they are recorded as failed with no second report, and never contacted.
@@ -39,6 +103,17 @@ impl Worker {
 				}
 				envelope.settle();
 			})?;
+			for recipient in &skipped {
+				self.log_outcome(
+					&entry.envelope,
+					recipient,
+					DeliveryOutcome::Suppressed,
+					None,
+					Some("recipient is on the suppression list"),
+					0,
+				);
+				self.notify_suppressed(id, recipient, &entry.envelope.extra);
+			}
 		}
 		Ok(due)
 	}
@@ -52,17 +127,60 @@ impl Worker {
 		conversation: &Conversation,
 	) {
 		let remote = conversation.remote.as_deref().unwrap_or("-");
+		let message_id = message_id_of(entry);
 		for (recipient, result) in &conversation.results {
 			match result {
-				Ok(()) => tracing::debug!(%id, %recipient, remote, "delivered"),
+				Ok(()) => {
+					tracing::debug!(%id, %recipient, remote, "delivered");
+					self.log_outcome(
+						&entry.envelope,
+						recipient,
+						DeliveryOutcome::Delivered,
+						Some(remote),
+						Some("250 OK"),
+						0,
+					);
+					self.notify_delivered(
+						id,
+						recipient,
+						message_id.clone(),
+						conversation.remote.clone(),
+						&entry.envelope.extra,
+					);
+				}
 				Err(DeliveryError::Transient(reason)) => {
 					let class = classify_reason(reason, false).class.label();
+					let attempts = entry.envelope.recipient_state(recipient).attempts;
 					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
+					self.log_outcome(
+						&entry.envelope,
+						recipient,
+						DeliveryOutcome::Deferred,
+						Some(remote),
+						Some(&Self::bounded_reply(reason)),
+						attempts,
+					);
+					self.notify_delayed(
+						id,
+						recipient,
+						reason,
+						conversation.remote.clone(),
+						attempts,
+						&entry.envelope.extra,
+					);
 				}
 				Err(DeliveryError::Permanent(reason)) => {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
 					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					self.log_outcome(
+						&entry.envelope,
+						recipient,
+						DeliveryOutcome::Failed,
+						Some(remote),
+						Some(&Self::bounded_reply(reason)),
+						entry.envelope.recipient_state(recipient).attempts,
+					);
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
 						// us. The operator has to look at the sending side.
@@ -81,7 +199,13 @@ impl Worker {
 					if verdict.suppress {
 						self.suppress(&entry.envelope.reverse_path, recipient, reason);
 					}
-					self.notify_failed(recipient, reason, conversation.remote.clone());
+					self.notify_failed(
+						id,
+						recipient,
+						reason,
+						conversation.remote.clone(),
+						&entry.envelope.extra,
+					);
 				}
 			}
 		}
@@ -102,17 +226,101 @@ impl Worker {
 
 	/// Fire the advisory delivery-failure webhook for one recipient, with
 	/// the class of the failure and the server that answered.
-	fn notify_failed(&self, recipient: &str, reason: &str, remote: Option<String>) {
+	fn notify_failed(
+		&self,
+		id: uuid::Uuid,
+		recipient: &str,
+		reason: &str,
+		remote: Option<String>,
+		extra: &BTreeMap<String, String>,
+	) {
 		if let Some(webhook) = &self.webhook {
 			let webhook = webhook.clone();
 			let event = crate::webhook::WebhookEvent::DeliveryFailed {
+				spool_id: Some(id),
 				recipient: recipient.to_string(),
 				reason: reason.to_string(),
 				class: classify_reason(reason, true).class.label().to_string(),
 				remote,
+				extra: extra.clone(),
 			};
 			tokio::spawn(async move { webhook.notify(&event).await });
 		}
+	}
+
+	/// Fire a `Delivered` webhook for one recipient. The recipient is
+	/// the one the remote server accepted; the `message_id` is the
+	/// `Message-ID:` of the message (when one was stamped before the
+	/// queue took the entry).
+	fn notify_delivered(
+		&self,
+		id: uuid::Uuid,
+		recipient: &str,
+		message_id: Option<String>,
+		remote: Option<String>,
+		extra: &BTreeMap<String, String>,
+	) {
+		let Some(webhook) = &self.webhook else {
+			return;
+		};
+		let webhook = webhook.clone();
+		let event = crate::webhook::WebhookEvent::Delivered {
+			spool_id: id,
+			recipient: recipient.to_string(),
+			message_id,
+			remote,
+			extra: extra.clone(),
+		};
+		tokio::spawn(async move { webhook.notify(&event).await });
+	}
+
+	/// Fire a `Delayed` webhook for one recipient. Sent at most once
+	/// per (recipient, message). The caller passes `attempts_before`:
+	/// the recipient's `attempts` counter BEFORE this conversation
+	/// incremented it. `attempts_before == 0` means "this was the first
+	/// attempt that failed transiently" so we fire the event; any later
+	/// deferral stays quiet so retries do not spam the endpoint. The
+	/// JSON carries `attempt = attempts_before + 1`, the attempt number
+	/// that produced the deferral (the first attempt is `1`).
+	fn notify_delayed(
+		&self,
+		id: uuid::Uuid,
+		recipient: &str,
+		reason: &str,
+		remote: Option<String>,
+		attempts_before: u32,
+		extra: &BTreeMap<String, String>,
+	) {
+		let Some(webhook) = &self.webhook else {
+			return;
+		};
+		if attempts_before > 0 {
+			return;
+		}
+		let webhook = webhook.clone();
+		let event = crate::webhook::WebhookEvent::Delayed {
+			spool_id: id,
+			recipient: recipient.to_string(),
+			reason: reason.to_string(),
+			remote,
+			attempt: attempts_before + 1,
+			extra: extra.clone(),
+		};
+		tokio::spawn(async move { webhook.notify(&event).await });
+	}
+
+	/// Fire a `Suppressed` webhook for one recipient.
+	fn notify_suppressed(&self, id: uuid::Uuid, recipient: &str, extra: &BTreeMap<String, String>) {
+		let Some(webhook) = &self.webhook else {
+			return;
+		};
+		let webhook = webhook.clone();
+		let event = crate::webhook::WebhookEvent::Suppressed {
+			spool_id: id,
+			recipient: recipient.to_string(),
+			extra: extra.clone(),
+		};
+		tokio::spawn(async move { webhook.notify(&event).await });
 	}
 
 	/// Give up on the pending recipients of an expired message: each fails
@@ -136,7 +344,15 @@ impl Worker {
 			let class = classify_reason(reason, false).class.label();
 			let remote = state.remote.as_deref().unwrap_or("-");
 			tracing::warn!(%id, %recipient, remote, class, %reason, "giving up: message expired");
-			self.notify_failed(recipient, reason, state.remote.clone());
+			self.log_outcome(
+				&envelope,
+				recipient,
+				DeliveryOutcome::Failed,
+				state.remote.as_deref(),
+				Some(&Self::bounded_reply(reason)),
+				state.attempts,
+			);
+			self.notify_failed(id, recipient, reason, state.remote.clone(), &envelope.extra);
 		}
 		Ok(())
 	}

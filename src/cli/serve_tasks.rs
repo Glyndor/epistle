@@ -512,6 +512,7 @@ pub(super) fn spawn_storage_maintenance(config: &Config) {
 	spawn_blob_reclamation(config);
 	spawn_archive_sweep(config);
 	spawn_reports_sweep(config);
+	super::serve_tasks_delivery::spawn_delivery_log_sweep(config);
 }
 
 /// Hourly ban sweep: drops `auth_failure` rows older than 24 hours and

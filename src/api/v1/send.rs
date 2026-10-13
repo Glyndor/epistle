@@ -160,6 +160,11 @@ pub async fn send(
 	// copy at the routing boundary would tie the saver to the
 	// sink's lifetime.
 	let sent_copy = data.clone();
+	// The same outbound path as SMTP submission: DKIM for remote mail,
+	// local recipients straight to their mailboxes. The `extra` correlation
+	// map is already validated and bounded in the request body, and the
+	// spool / delivery log carry it without ever writing it into the message.
+	let extra = request.validated_extra()?;
 	let message = AcceptedMessage {
 		reverse_path: request.from,
 		recipients,
@@ -169,10 +174,8 @@ pub async fn send(
 		tlsrpt_verified: false,
 		no_dsn: Vec::new(),
 	};
-	// The same outbound path as SMTP submission: DKIM for remote mail,
-	// local recipients straight to their mailboxes.
 	let id = state
-		.submit(&account, message)
+		.submit(&account, message, &extra)
 		.map_err(|error| match error {
 			SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
 			SinkError::Unavailable(_) => ApiError::internal(),

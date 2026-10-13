@@ -1,5 +1,6 @@
 //! Delivery routing: local recipients to mailboxes, remote to the queue.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::directory_store::DirectoryHandle;
@@ -213,23 +214,32 @@ impl MessageSink for SplitDelivery {
 	/// to honour, so it never reaches a copy we store or forward.
 	fn deliver(&self, mut message: AcceptedMessage) -> Result<(), SinkError> {
 		message.data = crate::queue::tls_required::strip(message.data);
-		self.route(message, uuid::Uuid::now_v7())
+		self.route(message, uuid::Uuid::now_v7(), None, &BTreeMap::new())
 	}
 
 	fn submit(
 		&self,
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
-		_account: &str,
+		account: &str,
+		extra: &BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
-		self.route(message, queue_id)
+		self.route(message, queue_id, Some(account), extra)
 	}
 }
 
 impl SplitDelivery {
 	/// Route `message`: local recipients to their mailboxes, the rest to the
 	/// outbound spool under `queue_id`, DKIM-signed when a signer is set.
-	fn route(&self, message: AcceptedMessage, queue_id: uuid::Uuid) -> Result<(), SinkError> {
+	/// `account` is the local account that submitted, when known; `extra` is
+	/// the caller-supplied correlation map (the API may attach one).
+	fn route(
+		&self,
+		message: AcceptedMessage,
+		queue_id: uuid::Uuid,
+		account: Option<&str>,
+		extra: &BTreeMap<String, String>,
+	) -> Result<(), SinkError> {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
 		let mut srs_returns = Vec::new();
@@ -311,7 +321,7 @@ impl SplitDelivery {
 					.flatten()
 				{
 					self.outbound
-						.store(&bounce)
+						.store(&bounce, account, extra)
 						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 				}
 			}
@@ -319,7 +329,7 @@ impl SplitDelivery {
 			self.bounce_loops(&message, &delivered.looped)?;
 			for reply in delivered.replies {
 				self.outbound
-					.store(&reply)
+					.store(&reply, account, extra)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 				if let Some(metrics) = &self.metrics {
 					metrics.vacation_sent();
@@ -338,7 +348,7 @@ impl SplitDelivery {
 				no_dsn: Vec::new(),
 			};
 			self.outbound
-				.store(&returned)
+				.store(&returned, account, extra)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		if !remote.is_empty() {
@@ -356,7 +366,7 @@ impl SplitDelivery {
 				outbound_message.data = signed;
 			}
 			self.outbound
-				.store_as(&outbound_message, queue_id)
+				.store_as(&outbound_message, queue_id, account, extra)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		Ok(())
@@ -365,7 +375,7 @@ impl SplitDelivery {
 	/// Store `message` in the outbound spool.
 	pub(super) fn store_outbound(&self, message: &AcceptedMessage) -> Result<(), SinkError> {
 		self.outbound
-			.store(message)
+			.store(message, None, &BTreeMap::new())
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}

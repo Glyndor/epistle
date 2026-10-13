@@ -2,6 +2,7 @@
 //! its symbol, every row inside the width. The plain form each list printed
 //! before is pinned by the command's own tests and stays as it was.
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use crate::cli::term::table::tests::visible;
@@ -136,15 +137,19 @@ fn queue_list_marks_a_held_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let id = spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@example.org".into(),
-			recipients: vec!["bob@remote.example".into()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@example.org".into(),
+				recipients: vec!["bob@remote.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	spool
 		.update_envelope(id, |envelope| envelope.hold(1_700_000_000))

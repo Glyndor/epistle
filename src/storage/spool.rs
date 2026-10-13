@@ -60,6 +60,20 @@ pub struct Envelope {
 	/// envelope written before it existed, which reads as all pending.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub recipient_state: BTreeMap<String, RecipientState>,
+	/// The local account that submitted the message, when the submission went
+	/// through one of this server's submission paths (SMTP after AUTH, the
+	/// API, JMAP). `None` when the sender is an external relay or the entry
+	/// was written before this field existed, which the delivery log records
+	/// as "submitted by an unknown account".
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub account: Option<String>,
+	/// The caller-supplied correlation map the API allows on a `send`. Kept
+	/// alongside the message in the envelope so the delivery log and the
+	/// delivery webhooks can copy it onto every record they emit, but never
+	/// written into the message itself (the field is a server-side tag, not
+	/// a header). Empty in every envelope written before this field existed.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub extra: BTreeMap<String, String>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -167,15 +181,34 @@ impl FsSpool {
 	///
 	/// Both files are first written and fsynced under `tmp/`, then renamed
 	/// into `new/` — envelope last, so a visible envelope guarantees a
-	/// complete message file next to it.
-	pub fn store(&self, message: &AcceptedMessage) -> std::io::Result<Uuid> {
-		self.store_as(message, Uuid::now_v7())
+	/// complete message file next to it. `account` is the local account that
+	/// submitted the message (used by the delivery log); pass `None` for the
+	/// SMTP relay hop that has none. The caller-supplied `extra` correlation
+	/// map is the `extra` object the API path may attach to a submission;
+	/// the delivery log and webhooks copy it onto every record they emit,
+	/// but it is never written into the message itself.
+	pub fn store(
+		&self,
+		message: &AcceptedMessage,
+		account: Option<&str>,
+		extra: &BTreeMap<String, String>,
+	) -> std::io::Result<Uuid> {
+		self.store_as(message, Uuid::now_v7(), account, extra)
 	}
 
 	/// [`FsSpool::store`] under an id the caller chose, so a submission can
 	/// name its queue entry before it is routed. The id must be fresh (a
 	/// UUID v7 minted for this message); it is returned unchanged.
-	pub fn store_as(&self, message: &AcceptedMessage, id: Uuid) -> std::io::Result<Uuid> {
+	pub fn store_as(
+		&self,
+		message: &AcceptedMessage,
+		id: Uuid,
+		account: Option<&str>,
+		extra: &BTreeMap<String, String>,
+	) -> std::io::Result<Uuid> {
+		let account = account
+			.filter(|value| !value.is_empty())
+			.map(str::to_string);
 		let envelope = Envelope {
 			id,
 			reverse_path: message.reverse_path.clone(),
@@ -189,6 +222,8 @@ impl FsSpool {
 			held_secs: 0,
 			last_error: None,
 			recipient_state: BTreeMap::new(),
+			account,
+			extra: extra.clone(),
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;
@@ -325,16 +360,17 @@ impl FsSpool {
 
 impl MessageSink for FsSpool {
 	fn deliver(&self, message: AcceptedMessage) -> Result<(), SinkError> {
-		self.submit(message, Uuid::now_v7(), "")
+		self.submit(message, Uuid::now_v7(), "", &BTreeMap::new())
 	}
 
 	fn submit(
 		&self,
 		message: AcceptedMessage,
 		queue_id: Uuid,
-		_account: &str,
+		account: &str,
+		extra: &BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
-		self.store_as(&message, queue_id)
+		self.store_as(&message, queue_id, Some(account), extra)
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}
@@ -368,7 +404,9 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 
-		let id = spool.store(&sample_message()).expect("store");
+		let id = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store");
 		let entry = spool.load(id).expect("load");
 
 		assert_eq!(entry.envelope.id, id);
@@ -386,7 +424,9 @@ mod tests {
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 		let mut message = sample_message();
 		message.require_tls = true;
-		let id = spool.store(&message).expect("store");
+		let id = spool
+			.store(&message, None, &BTreeMap::new())
+			.expect("store");
 		assert!(spool.load(id).expect("load").envelope.require_tls);
 	}
 
@@ -395,8 +435,12 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 
-		let first = spool.store(&sample_message()).expect("store first");
-		let second = spool.store(&sample_message()).expect("store second");
+		let first = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store first");
+		let second = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store second");
 
 		assert_eq!(spool.list().expect("list"), vec![first, second]);
 	}
@@ -406,7 +450,9 @@ mod tests {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let spool = FsSpool::open(dir.path()).expect("open spool");
 
-		let id = spool.store(&sample_message()).expect("store");
+		let id = spool
+			.store(&sample_message(), None, &BTreeMap::new())
+			.expect("store");
 		spool.remove(id).expect("remove");
 
 		assert!(spool.list().expect("list").is_empty());

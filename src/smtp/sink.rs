@@ -17,13 +17,20 @@ pub trait MessageSink: Send + Sync {
 	/// hand that id back to its client. A sink that never queues has nothing
 	/// to name and delivers as usual; a sink that queues, or that treats
 	/// submissions differently, overrides this.
+	///
+	/// `extra` is the caller-supplied correlation map the API may attach to
+	/// a submission (see `POST /api/v1/send`); the spool stores it on the
+	/// envelope so the delivery log and webhooks can copy it onto every
+	/// record they emit, but it is never written into the message itself.
+	/// The SMTP submission path passes an empty map.
 	fn submit(
 		&self,
 		message: AcceptedMessage,
 		queue_id: uuid::Uuid,
 		account: &str,
+		extra: &std::collections::BTreeMap<String, String>,
 	) -> Result<(), SinkError> {
-		let _ = (queue_id, account);
+		let _ = (queue_id, account, extra);
 		self.deliver(message)
 	}
 }

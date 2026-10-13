@@ -7,6 +7,7 @@ use crate::smtp::directory::Directory;
 use crate::smtp::server::Server;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink};
+use std::collections::BTreeMap;
 
 /// Connector that hands out duplex pipes served by an in-process server.
 struct LoopbackConnector {
@@ -146,15 +147,19 @@ impl Connector for DownConnector {
 fn spool_with_message(dir: &std::path::Path, recipient: &str) -> FsSpool {
 	let spool = FsSpool::open(dir).expect("open spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@sender.example".into(),
-			recipients: vec![recipient.to_string()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@sender.example".into(),
+				recipients: vec![recipient.to_string()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	spool
 }
@@ -360,15 +365,19 @@ async fn permanent_failure_suppresses_then_drops_silently() {
 	// A new message to the suppressed recipient is dropped with no new bounce.
 	worker
 		.spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@sender.example".into(),
-			recipients: vec!["carol@remote.example".to_string()],
-			data: b"Subject: again\r\n\r\nx\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			no_dsn: Vec::new(),
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@sender.example".into(),
+				recipients: vec!["carol@remote.example".to_string()],
+				data: b"Subject: again\r\n\r\nx\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				no_dsn: Vec::new(),
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	assert_eq!(worker.pass().await.expect("pass"), 0);
 	assert!(worker.spool.list().expect("list").is_empty());
@@ -450,16 +459,20 @@ async fn notify_never_suppresses_the_bounce() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	spool
-		.store(&AcceptedMessage {
-			reverse_path: "alice@sender.example".into(),
-			recipients: vec!["carol@remote.example".into()],
-			data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
-			require_tls: false,
-			mailbox: None,
-			tlsrpt_verified: false,
-			// The sender asked for no failure DSN.
-			no_dsn: vec!["carol@remote.example".into()],
-		})
+		.store(
+			&AcceptedMessage {
+				reverse_path: "alice@sender.example".into(),
+				recipients: vec!["carol@remote.example".into()],
+				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				// The sender asked for no failure DSN.
+				no_dsn: vec!["carol@remote.example".into()],
+			},
+			None,
+			&BTreeMap::new(),
+		)
 		.expect("store");
 	let connector = Arc::new(LoopbackConnector {
 		sink: Arc::new(MemorySink::new()),

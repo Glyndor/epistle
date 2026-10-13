@@ -385,7 +385,12 @@ impl Server {
 							if self.save_sent_enabled_for(&session) {
 								self.save_sent_copy(&session, account, &message.data);
 							}
-							self.sink.submit(message, uuid::Uuid::now_v7(), account)
+							self.sink.submit(
+								message,
+								uuid::Uuid::now_v7(),
+								account,
+								&std::collections::BTreeMap::new(),
+							)
 						}
 						None => self.sink.deliver(message),
 					};

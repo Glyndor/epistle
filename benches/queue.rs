@@ -73,12 +73,13 @@ fn spool(c: &mut Criterion) {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("open spool");
 	let msg = sample_message();
+	let extra = std::collections::BTreeMap::new();
 
 	c.bench_function("spool_store", |b| {
-		b.iter(|| black_box(spool.store(black_box(&msg)).expect("store")));
+		b.iter(|| black_box(spool.store(black_box(&msg), None, &extra).expect("store")));
 	});
 
-	let id = spool.store(&msg).expect("store");
+	let id = spool.store(&msg, None, &extra).expect("store");
 	c.bench_function("spool_load", |b| {
 		b.iter(|| black_box(spool.load(black_box(id)).expect("load")));
 	});
