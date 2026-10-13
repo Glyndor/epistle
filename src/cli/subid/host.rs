@@ -98,16 +98,20 @@ impl System {
 		}
 	}
 
+	/// `systemctl --user <verb>` each unit in turn. One call per unit keeps
+	/// the order: given together, systemd runs the jobs in parallel, and the
+	/// podup unit's `ExecStop` needs the Podman socket that a stop of
+	/// `podman.socket` in the same call could take away first.
 	fn systemctl(&self, verb: &str, units: &[String]) -> Result<(), String> {
 		if !self.user_manager() {
 			return Ok(());
 		}
-		let mut command = self.account("systemctl");
-		command.args(["--user", verb]).args(units);
-		checked(
-			command,
-			&format!("systemctl --user {verb} {}", units.join(" ")),
-		)
+		for unit in units {
+			let mut command = self.account("systemctl");
+			command.args(["--user", verb, unit]);
+			checked(command, &format!("systemctl --user {verb} {unit}"))?;
+		}
+		Ok(())
 	}
 }
 

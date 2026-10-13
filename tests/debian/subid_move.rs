@@ -36,7 +36,10 @@ fn upgrade(subuid: &str, subgid: &str, login_defs: &str, exit: u8) -> Run {
 		("loginctl", "exit 0".to_string()),
 		("runuser", "exit 0".to_string()),
 		("podman", "exit 0".to_string()),
-		("usermod", "echo usermod must not run here >&2; exit 1".to_string()),
+		(
+			"usermod",
+			"echo usermod must not run here >&2; exit 1".to_string(),
+		),
 		(
 			"epistle",
 			format!("printf '%s\\n' \"$*\" >> \"$EPISTLE_LOG\"; exit {exit}"),
@@ -119,7 +122,11 @@ fn the_block_keeps_the_accounts_size() {
 #[test]
 fn a_failed_move_warns_and_never_fails_the_upgrade() {
 	let run = upgrade(OVERLAP, OVERLAP, "", 1);
-	assert_eq!(run.code, Some(0), "apt must not fail on a move it could not do");
+	assert_eq!(
+		run.code,
+		Some(0),
+		"apt must not fail on a move it could not do"
+	);
 	assert!(
 		run.stderr
 			.contains("epistle: could not move the subordinate ids of glyndor-epistle"),
