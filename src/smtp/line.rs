@@ -23,6 +23,10 @@ pub enum LineError {
 pub struct LineDecoder {
 	buffer: Vec<u8>,
 	max_line: usize,
+	/// Bytes at the front of `buffer` already checked by [`Self::next_line`]
+	/// and found to hold no CR, LF or NUL. Resuming there keeps the work per
+	/// line linear when a client sends it in many small pieces.
+	scanned: usize,
 }
 
 impl Default for LineDecoder {
@@ -43,6 +47,7 @@ impl LineDecoder {
 		Self {
 			buffer: Vec::new(),
 			max_line,
+			scanned: 0,
 		}
 	}
 
@@ -55,6 +60,7 @@ impl LineDecoder {
 	/// arrived in the same read as their command line).
 	pub fn take_buffered(&mut self, max: usize) -> Vec<u8> {
 		let take = self.buffer.len().min(max);
+		self.scanned = 0;
 		self.buffer.drain(..take).collect()
 	}
 
@@ -62,6 +68,7 @@ impl LineDecoder {
 	/// for them. Any following command stays in the decoder.
 	pub fn discard_buffered(&mut self, max: usize) -> usize {
 		let take = self.buffer.len().min(max);
+		self.scanned = 0;
 		self.buffer.drain(..take);
 		take
 	}
@@ -74,7 +81,7 @@ impl LineDecoder {
 	/// Try to extract the next complete line (without CRLF). Returns
 	/// `Ok(None)` when more bytes are needed.
 	pub fn next_line(&mut self) -> Result<Option<Vec<u8>>, LineError> {
-		let mut i = 0;
+		let mut i = self.scanned;
 		while i < self.buffer.len() {
 			match self.buffer[i] {
 				0 => return Err(LineError::NulByte),
@@ -87,22 +94,32 @@ impl LineDecoder {
 							}
 							let line = self.buffer[..i].to_vec();
 							self.buffer.drain(..i + 2);
+							self.scanned = 0;
 							return Ok(Some(line));
 						}
 						Some(_) => return Err(LineError::BareControlCharacter),
-						// CR is the last byte so far: wait for more input.
-						None => return Ok(None),
+						// CR is the last byte so far: wait for more input,
+						// and look at it again then.
+						None => {
+							self.scanned = i;
+							return Ok(None);
+						}
 					}
 				}
 				_ => i += 1,
 			}
 		}
+		self.scanned = i;
 		if self.buffer.len() > self.max_line + 1 {
 			return Err(LineError::TooLong);
 		}
 		Ok(None)
 	}
 }
+
+#[cfg(test)]
+#[path = "line_tests_resume.rs"]
+mod tests_resume;
 
 #[cfg(test)]
 mod tests {
