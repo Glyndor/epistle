@@ -73,6 +73,7 @@ fn startup_with_a_torn_state_signs_with_the_last_good_state() {
 		rotated_at: 1,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		root.join(crate::dkim::rotate::STATE_BACKUP_FILE),
@@ -120,8 +121,10 @@ async fn restart_signs_with_current_rotation_key() {
 					selector: "original".into(),
 					key_file: root.join("original.key"),
 					retire_at,
+					rsa: None,
 				}),
 				pending: None,
+				rsa: None,
 			};
 			std::fs::write(
 				root.join("dkim-rotation.json"),

@@ -24,6 +24,7 @@ mod subid_area;
 #[cfg(test)]
 mod test_support;
 mod tls_area;
+mod tls_tlsa;
 
 pub(crate) use dns_area::TimeoutDns;
 

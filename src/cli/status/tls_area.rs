@@ -1,5 +1,6 @@
 //! The `tls` check: the certificate the server uses is readable, not close
-//! to expiry, and names the mail hostname.
+//! to expiry, renewed by something when it is, names the mail hostname, and
+//! matches the DANE TLSA record when one is published.
 
 use std::path::PathBuf;
 
@@ -25,10 +26,23 @@ const FAIL_DAYS: i64 = 7;
 struct Leaf {
 	not_after: i64,
 	names: Vec<String>,
+	/// The whole chain (DER), leaf first, for the TLSA comparison.
+	chain: Vec<Vec<u8>>,
 }
 
-/// Check the served certificate.
+/// Fewer days than this left on a certificate nothing renews: warn.
+const UNRENEWED_WARN_DAYS: i64 = 14;
+
+/// Check the served certificate with the system resolver.
 pub(super) async fn check(ctx: &Ctx) -> AreaReport {
+	match crate::spf::SystemDns::from_system() {
+		Ok(resolver) => evaluate(ctx, &super::dns_area::TimeoutDns(resolver)).await,
+		Err(_) => evaluate(ctx, &NoDns).await,
+	}
+}
+
+/// Check the served certificate, looking its TLSA record up through `dns`.
+pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> AreaReport {
 	let config = match ctx.loaded() {
 		Ok(config) => config,
 		Err(report) => return report,
@@ -45,16 +59,19 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 			));
 		}
 	};
-	let items = vec![
-		expiry_item(leaf.not_after - epoch(ctx.now)),
+	let remaining = leaf.not_after - epoch(ctx.now);
+	let mut items = vec![
+		expiry_item(remaining),
 		names_item(&config.hostname, &leaf.names),
+		renewal_item(config.acme.is_some(), remaining),
 	];
+	items.extend(super::tls_tlsa::tlsa_item(&config.hostname, &leaf.chain, dns).await);
 	// Reversed so the first item wins a tie: the expiry reads best first.
 	let worst = items
 		.iter()
 		.rev()
 		.max_by_key(|item| item.status)
-		.expect("two items");
+		.expect("three items");
 	let summary = match worst.status {
 		Level::Ok => format!("{} {}", config.hostname, items[0].detail),
 		_ => format!("{}: {}", config.hostname, worst.detail),
@@ -69,7 +86,12 @@ fn served_certificate(config: &Config) -> Option<PathBuf> {
 }
 
 fn read_leaf(path: &std::path::Path) -> Result<Leaf, String> {
-	let der = CertificateDer::from_pem_file(path).map_err(|error| error.to_string())?;
+	let chain: Vec<Vec<u8>> = CertificateDer::pem_file_iter(path)
+		.map_err(|error| error.to_string())?
+		.map(|cert| cert.map(|cert| cert.as_ref().to_vec()))
+		.collect::<Result<_, _>>()
+		.map_err(|error| error.to_string())?;
+	let der = chain.first().ok_or("no certificate in the file")?;
 	let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der.as_ref())
 		.map_err(|error| error.to_string())?;
 	let names = cert
@@ -90,6 +112,7 @@ fn read_leaf(path: &std::path::Path) -> Result<Leaf, String> {
 	Ok(Leaf {
 		not_after: cert.validity().not_after.timestamp(),
 		names,
+		chain: chain.clone(),
 	})
 }
 
@@ -119,6 +142,27 @@ fn expiry_item(remaining: i64) -> Item {
 	Item::new("expiry", level, format!("expires in {}", plural(days)))
 }
 
+/// Whether something renews the certificate: ACME does; without it the
+/// operator replaces the files, and a certificate close to expiry is worth a
+/// warning of its own.
+fn renewal_item(acme: bool, remaining: i64) -> Item {
+	if acme {
+		return Item::new("renewal", Level::Ok, "renewed by ACME");
+	}
+	if remaining < UNRENEWED_WARN_DAYS * DAY {
+		return Item::new(
+			"renewal",
+			Level::Warn,
+			"expires soon and nothing renews it (no [acme]): replace cert_file and key_file; the server picks the new pair up within a minute",
+		);
+	}
+	Item::new(
+		"renewal",
+		Level::Ok,
+		"not renewed automatically (no [acme]); replace the files before it expires",
+	)
+}
+
 fn names_item(hostname: &str, names: &[String]) -> Item {
 	if names.iter().any(|name| covers(name, hostname)) {
 		Item::new("names", Level::Ok, format!("{hostname} is covered"))
@@ -145,6 +189,29 @@ fn covers(pattern: &str, host: &str) -> bool {
 	}
 }
 
+/// A resolver for when the system one cannot start: no TLSA is found, so
+/// the comparison is skipped rather than failed.
+struct NoDns;
+
+type Lookup<'a, T> =
+	std::pin::Pin<Box<dyn Future<Output = Result<T, crate::spf::DnsFailure>> + Send + 'a>>;
+
+impl crate::spf::DnsLookup for NoDns {
+	fn txt(&self, _name: &str) -> Lookup<'_, Vec<String>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+	fn addresses(&self, _name: &str) -> Lookup<'_, Vec<std::net::IpAddr>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+	fn mx(&self, _name: &str) -> Lookup<'_, Vec<String>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
 #[cfg(test)]
 #[path = "tls_area_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tls_area_tests_renewal.rs"]
+mod tests_renewal;

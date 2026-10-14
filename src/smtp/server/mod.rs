@@ -113,7 +113,7 @@ pub struct Server {
 	/// If set, OAUTHBEARER/XOAUTH2 tokens are accepted, verified by this.
 	oauth: Option<Arc<crate::oauth::OauthVerifier>>,
 	/// `tls-server-end-point` hash; enables SCRAM-SHA-256-PLUS on TLS sessions.
-	cbind_data: Option<Vec<u8>>,
+	cbind_data: Option<crate::tls::EndPoint>,
 	/// Whether SCRAM-SHA-256 / SCRAM-SHA-256-PLUS are offered on this
 	/// listener (the `[auth] scram` knob). `true` keeps the historical
 	/// behaviour; `false` hides both mechanisms on the wire and refuses an
@@ -314,7 +314,7 @@ impl Server {
 
 	/// Provide the `tls-server-end-point` certificate hash, enabling
 	/// SCRAM-SHA-256-PLUS once a session is inside TLS.
-	pub fn with_channel_binding(mut self, cert_hash: Vec<u8>) -> Self {
+	pub fn with_channel_binding(mut self, cert_hash: crate::tls::EndPoint) -> Self {
 		self.cbind_data = Some(cert_hash);
 		self
 	}
@@ -542,7 +542,7 @@ impl Server {
 			session = session.with_oauth(Arc::clone(verifier));
 		}
 		if let Some(cbind) = &self.cbind_data {
-			session = session.with_channel_binding(cbind.clone());
+			session = session.with_channel_binding(cbind.current());
 		}
 		if let Some(limiter) = &self.send_limiter {
 			session = session.with_send_limiter(Arc::clone(limiter));

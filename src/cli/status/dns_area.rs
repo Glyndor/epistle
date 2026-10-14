@@ -138,6 +138,10 @@ impl<D: DnsLookup> DnsLookup for TimeoutDns<D> {
 		let query = self.0.ptr(ip);
 		Box::pin(async move { bounded(query).await })
 	}
+	fn tlsa(&self, name: &str) -> Lookup<'_, crate::dane::rrset::TlsaRrset> {
+		let query = self.0.tlsa(name);
+		Box::pin(async move { bounded(query).await })
+	}
 }
 
 async fn bounded<T>(query: Lookup<'_, T>) -> Result<T, DnsFailure> {

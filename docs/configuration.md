@@ -213,6 +213,10 @@ hostname. Supply that certificate and its private key with `--cert` and `--key`.
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
 
+Without `[acme]` the pair is yours to renew (certbot, a Cloudflare origin certificate, one you made). The server looks at both files every minute and, when either changed, loads the new pair, checks that every certificate of the chain parses and that the key belongs to the certificate, and only then puts it in service on every listener: SMTP, submission, IMAP, POP3, ManageSieve, the HTTPS API and autoconfig, and DAV. Open connections keep the certificate they started with; no restart is needed. A pair that does not load (half written, a key from another certificate, a broken chain) is logged once and the certificate in service stays until the files form a valid pair. SCRAM-SHA-256-PLUS follows the new certificate. Replace the files by writing them beside and renaming them over the old ones when you can; the server retries a pair it caught mid-write as soon as the files change again.
+
+The DANE TLSA record (`_25._tcp.<hostname>`, `3 0 1 <sha256 of the certificate>`) changes with the certificate. When a `[dns]` provider is configured, the server publishes the new record through it, as ACME renewal does. Without one, or when the provider refuses, it logs a warning with the record to publish by hand. `epistle status` fails the `tls` check while a DNSSEC-signed TLSA record does not match the certificate in use, and warns when the certificate expires within 14 days and nothing renews it. With `[acme]`, ACME renews and reloads its own pair and the files are not watched.
+
 | Key | Meaning |
 |---|---|
 | `cert_file` | PEM certificate chain. |
@@ -226,12 +230,14 @@ Key rotation is **automatic and always on** when a `[dns]` provider is configure
 
 A rotation survives a crash or a kill at any step. It is written to `<data_dir>/dkim-rotation.json` as `pending` before its key exists, and the next tick (or start) either finishes it, reusing the key already written, or withdraws its TXT records and key file; the current key signs until the new one is committed. `epistle dkim show` lists a rotation in progress. Every save of the state is synced to disk and keeps the state it replaces as `dkim-rotation.json.bak`. If the state cannot be read, the server signs with the key the `.bak` names (its TXT is still published), logs a warning, `epistle status` reports it, and rotation stays stopped until the file is restored, for example by copying the `.bak` over it. Key files and TXT records that no rotation names, left by crashes in older releases, are logged when the rotation task starts and removed only through `epistle dkim cleanup`.
 
+With `rsa_selector` and `rsa_key_file` set (dual signing), each rotation also replaces the RSA key: a new 2048-bit key (made with `openssl genpkey`, as `epistle dkim-keygen --rsa` does) under its own selector `rsa<day>`, written to `<data_dir>/dkim-rsa<day>.key`. Both keys are journaled in the same `pending` entry, published and confirmed in every signing domain, and switch together in the one save that commits the rotation, so the server never signs with one new key and one that receivers cannot look up yet. If either key cannot be made, published or seen in DNS, the whole rotation is withdrawn and both current keys keep signing. The RSA key a rotation replaces stays published for the same 14-day overlap and is then retired with the previous ed25519 selector. The first rotation replaces the configured RSA key, whose file and TXT record are left in place, the same as the configured ed25519 key; `dkim-rotation.json` names the RSA key in service from then on, and a state file written by an older release, without RSA entries, still loads. Turning dual signing off withdraws a rotation in progress that covered RSA, and the next rotation retires the RSA key the state named. There is no command to go back to an earlier key once a rotation is committed.
+
 | Key | Meaning |
 |---|---|
 | `selector` | Ed25519 selector (the `s=` tag). |
 | `key_file` | Ed25519 private key (PKCS#8 PEM); generate with `epistle dkim-keygen`. |
 | `rsa_selector` | RSA selector. Required from the version above; a startup warning is logged before that whenever the field is absent. |
-| `rsa_key_file` | RSA private key paired with `rsa_selector`. Required from the version above. Generate with `epistle dkim-keygen --rsa`. |
+| `rsa_key_file` | RSA private key paired with `rsa_selector`. Required from the version above. Generate with `epistle dkim-keygen --rsa`. Automatic rotation replaces this key under an `rsa<day>` selector (see above); the configured pair is used until the first rotation. |
 | `rotate_days` | **Deprecated.** Ignored. Kept so existing configs keep parsing; a one-shot warning is logged at startup when present. Will be removed in a future release. |
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 

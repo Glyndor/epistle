@@ -138,3 +138,33 @@ fn rotate_queues_one_request_for_the_server() {
 		"the CLI must not write keys itself"
 	);
 }
+
+#[test]
+fn dry_run_with_dual_signing_names_both_keys() {
+	let dir = tempfile::tempdir().expect("dir");
+	let dual =
+		format!("rsa_selector = 'rsa-configured'\nrsa_key_file = '/nonexistent/rsa.key'\n{DNS}");
+	let config = config_with(dir.path(), "['example.org', 'sub.example.org']", &dual);
+	let state = format!(
+		r#"{{"selector":"ed3","key_file":"original.key","rotated_at":{},"previous":{{"selector":"ed1","key_file":"","retire_at":{},"rsa":{{"selector":"rsa1","key_file":""}}}},"rsa":{{"selector":"rsa3","key_file":"dkim-rsa3.key"}}}}"#,
+		3 * DAY,
+		4 * DAY
+	);
+	std::fs::write(dir.path().join(STATE_FILE), state).expect("state");
+	let mut out = Vec::new();
+	assert_eq!(
+		rotate_now(&config, true, 5 * DAY, &mut out),
+		ExitCode::SUCCESS
+	);
+	let text = String::from_utf8(out).expect("utf8");
+	for line in [
+		"rotate ed3 -> ed5",
+		"rotate rsa3 -> rsa5",
+		"publish TXT ed5._domainkey.example.org",
+		"publish TXT rsa5._domainkey.example.org",
+		"publish TXT rsa5._domainkey.sub.example.org",
+		"retire ed1 and rsa1 now",
+	] {
+		assert!(text.contains(line), "the dry run prints {line:?}");
+	}
+}

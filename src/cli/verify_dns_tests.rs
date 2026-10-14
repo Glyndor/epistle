@@ -273,6 +273,7 @@ fn dkim_selectors_prefer_rotation_state_selector_over_configured() {
 		rotated_at: 31 * 86_400,
 		previous: None,
 		pending: None,
+		rsa: None,
 	};
 	std::fs::write(
 		dir.path().join("dkim-rotation.json"),
