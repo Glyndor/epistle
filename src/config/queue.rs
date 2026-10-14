@@ -129,7 +129,8 @@ impl super::Config {
 
 	/// The outbound retry schedule must make sense: a first wait of at least
 	/// a minute, a cap not below it, and a delay warning that comes before
-	/// the give-up window closes.
+	/// the give-up window closes. The conversation caps and the backoff of
+	/// the `[queue]` section are checked with it.
 	pub(super) fn validate_retry_schedule(&self) -> Result<(), super::ConfigError> {
 		use crate::queue::schedule::{MIN_BASE_SECS, RetrySchedule};
 		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
@@ -161,7 +162,7 @@ impl super::Config {
 				schedule.delay_warning
 			));
 		}
-		Ok(())
+		self.validate_queue_limits()
 	}
 }
 
