@@ -303,3 +303,34 @@ async fn a_452_that_takes_no_recipient_is_an_ordinary_deferral() {
 		);
 	}
 }
+
+#[tokio::test]
+async fn a_hold_lasts_the_backoff_step_whatever_the_retry_schedule_of_its_recipient() {
+	// A recipient deferred many times before (its next retry an hour off)
+	// meets a rate limit: the whole destination is held for the backoff
+	// step, not for that one recipient's hour.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let remote = FakeRemote::default();
+	remote.script(DOMAIN, greeting("421 4.7.0 slow down"));
+	let (worker, now) = worker_for(dir.path(), &["bob@busy.example"], &remote);
+	let id = worker.spool.list().expect("list")[0];
+	worker
+		.spool
+		.update_envelope(id, |envelope| {
+			let mut state = envelope.recipient_state("bob@busy.example");
+			state.attempts = 6;
+			envelope.set_recipient_state("bob@busy.example", state);
+		})
+		.expect("update");
+
+	worker.pass().await.expect("pass");
+
+	assert_eq!(
+		hold(&worker, &Destination::domain(DOMAIN), now).map(|hold| hold.until),
+		Some(now + 60)
+	);
+	assert_eq!(
+		hold(&worker, &Destination::exchanger(HOST), now).map(|hold| hold.until),
+		Some(now + 60)
+	);
+}

@@ -369,8 +369,12 @@ impl Worker {
 						state.throttled = 0;
 						if let Some(slow) = &slow {
 							// The destination asked to slow down: wait for
-							// the next step of the backoff, at the least.
-							state.next_attempt = state.next_attempt.max(slow.until);
+							// the next step of the backoff, and no longer.
+							// The recipient's wait is the hold of the whole
+							// destination, so a recipient far into its own
+							// retry schedule must not hold every other
+							// message to it for that long.
+							state.next_attempt = slow.until;
 							state.throttled = slow.deferrals;
 							state.last_error = Some(slow.reason.clone());
 							state.remote = slow.host.clone().or(state.remote);
