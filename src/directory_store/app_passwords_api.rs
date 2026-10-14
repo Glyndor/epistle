@@ -9,6 +9,10 @@ use super::AccountStore;
 use super::StoreError;
 use super::app_passwords::{AppPassword, AppPasswordStore};
 
+#[cfg(test)]
+#[path = "app_passwords_api_mirror_tests.rs"]
+mod mirror_tests;
+
 impl AccountStore {
 	/// Append an app password to both the disk store and the in-memory
 	/// mirror, then rebuild the directory so the new credential is
@@ -18,14 +22,28 @@ impl AccountStore {
 	/// when done; the in-memory mirror matters for the long-running
 	/// server path. `Duplicate` if `account` already has an entry with
 	/// the same `label`.
+	///
+	/// The in-memory mirror is rebuilt from the post-write disk state
+	/// rather than patched with the new entry alone: another writer
+	/// may have added credentials to the same account while this
+	/// store was open, and `push`ing only the just-written entry would
+	/// silently overwrite that sibling write in the mirror (the file
+	/// is fine — `AppPasswordStore::add` reads fresh under the
+	/// sibling `flock` — but the long-running server's directory
+	/// would still hold the older set).
 	pub fn add_app_password(&self, account: &str, app: AppPassword) -> Result<(), StoreError> {
 		let data_dir = self.path.parent().ok_or_else(|| {
 			StoreError::Invalid("account store path has no parent directory".to_string())
 		})?;
 		let mut disk_store = AppPasswordStore::open(data_dir)?;
-		disk_store.add(account, app.clone())?;
+		disk_store.add(account, app)?;
+		// The in-memory mirror now reflects the post-write state
+		// (everything that was on disk, plus the new entry, plus
+		// anything a sibling writer committed between the
+		// AccountStore's open and our flock).
 		let mut in_memory = self.app_passwords.write().expect("app-passwords lock");
-		in_memory.push((account.to_ascii_lowercase(), app));
+		in_memory.clear();
+		in_memory.extend(disk_store.entries());
 		drop(in_memory);
 		self.handle.replace(self.build_directory());
 		Ok(())
@@ -44,9 +62,25 @@ impl AccountStore {
 		let mut disk_store = AppPasswordStore::open(data_dir)?;
 		let removed = disk_store.remove_account(name)?;
 		let mut in_memory = self.app_passwords.write().expect("app-passwords lock");
-		in_memory.retain(|(owner, _)| !owner.eq_ignore_ascii_case(name));
+		in_memory.clear();
+		in_memory.extend(disk_store.entries());
 		drop(in_memory);
 		self.handle.replace(self.build_directory());
 		Ok(removed)
+	}
+
+	/// The in-memory mirror's view of one account's app passwords, in
+	/// insertion order. Read-only; used by the tests that pin the
+	/// mirror-rebuild behaviour of `add_app_password` /
+	/// `remove_all_app_passwords`.
+	#[cfg(test)]
+	pub(crate) fn for_account(&self, account: &str) -> Vec<AppPassword> {
+		self.app_passwords
+			.read()
+			.expect("app-passwords lock")
+			.iter()
+			.filter(|(owner, _)| owner == &account.to_ascii_lowercase())
+			.map(|(_, app)| app.clone())
+			.collect()
 	}
 }
