@@ -462,14 +462,8 @@ impl std::fmt::Debug for Config {
 				"max_connections_per_listener",
 				&self.max_connections_per_listener,
 			)
-			.field(
-				"max_connections_per_ip",
-				&self.max_connections_per_ip,
-			)
-			.field(
-				"message_memory_budget",
-				&self.message_memory_budget,
-			)
+			.field("max_connections_per_ip", &self.max_connections_per_ip)
+			.field("message_memory_budget", &self.message_memory_budget)
 			.field("transport", &self.transport)
 			.field("otel", &self.otel)
 			.field("alias", &self.alias)

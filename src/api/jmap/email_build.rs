@@ -27,7 +27,11 @@ pub(super) struct Sources<'a> {
 }
 
 /// The message for `spec`, or the SetError to answer with.
-pub(super) fn build(spec: &Value, sources: &Sources<'_>, max_message_size: usize) -> Result<Vec<u8>, Value> {
+pub(super) fn build(
+	spec: &Value,
+	sources: &Sources<'_>,
+	max_message_size: usize,
+) -> Result<Vec<u8>, Value> {
 	refuse_content_headers(spec)?;
 	let root = parts::body(spec, sources)?;
 	let raw = compose::write(&headers(spec)?, &root).map_err(|_| invalid(&["bodyStructure"]))?;

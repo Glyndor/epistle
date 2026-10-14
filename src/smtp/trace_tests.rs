@@ -293,7 +293,12 @@ fn strip_bcc_in_place_matches_the_allocating_variant() {
 		let mut buffer = original.to_vec();
 		let expected = super::strip_bcc(original);
 		super::strip_bcc_in_place(&mut buffer);
-		assert_eq!(buffer, expected, "input: {:?}", String::from_utf8_lossy(original));
+		assert_eq!(
+			buffer,
+			expected,
+			"input: {:?}",
+			String::from_utf8_lossy(original)
+		);
 	}
 }
 
@@ -330,7 +335,8 @@ fn fewer_copies_in_post_data_stamping_path_avoids_full_body_copies() {
 	};
 	// Old path: two body-sized intermediate Vecs, each holding
 	// a full copy of the message while the next step runs.
-	let after_ensure = super::ensure_submission_headers(&raw, "example.org", std::time::SystemTime::now());
+	let after_ensure =
+		super::ensure_submission_headers(&raw, "example.org", std::time::SystemTime::now());
 	let old_ensure_capacity = after_ensure.capacity();
 	let after_strip = super::strip_bcc(&after_ensure);
 	let old_strip_capacity = after_strip.capacity();

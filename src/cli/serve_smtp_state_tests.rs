@@ -42,8 +42,7 @@ fn max_connections_per_ip_config_threads_through_smtp_shared_state() {
 	// the SMTP listener's built-in default so a configured zero (or no
 	// entry at all) means "use the protocol default", never "0
 	// concurrent connections per peer".
-	let default =
-		build_smtp_shared_state(&build_config(dir.path(), ""), &metrics).expect("state");
+	let default = build_smtp_shared_state(&build_config(dir.path(), ""), &metrics).expect("state");
 	assert_eq!(
 		default.max_connections_per_ip,
 		crate::smtp::server::DEFAULT_MAX_CONNECTIONS_PER_IP,

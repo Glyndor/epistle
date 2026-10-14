@@ -21,7 +21,8 @@ async fn an_attachment_of_the_advertised_size_is_accepted() {
 	// `max_message_size` to its built-in default via `with_max_message_size`.
 	let expected = (crate::smtp::session::MAX_MESSAGE_SIZE
 		- crate::api::jmap::limits::ATTACHMENT_HEADROOM)
-		/ 78 * 76 / 4 * 3;
+		/ 78 * 76
+		/ 4 * 3;
 	assert_eq!(
 		size, expected,
 		"the Session reports the limit the server enforces"

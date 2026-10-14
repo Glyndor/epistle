@@ -436,8 +436,9 @@ fn declared_oversize_is_rejected_at_mail_time() {
 #[test]
 fn configured_max_message_size_applies_to_smtp_size_end_of_data_and_bdat() {
 	let cap = 1024;
-	let mut session =
-		Session::new("mail.example.org").with_directory(test_directory()).with_max_message_size(cap);
+	let mut session = Session::new("mail.example.org")
+		.with_directory(test_directory())
+		.with_max_message_size(cap);
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("EHLO");
 	};
@@ -451,18 +452,21 @@ fn configured_max_message_size_applies_to_smtp_size_end_of_data_and_bdat() {
 	let oversize = session.command_line(&format!("MAIL FROM:<a@example.org> SIZE={}", cap + 1));
 	assert_eq!(reply_code(&oversize), 552);
 	// SIZE at the cap itself is admitted.
-	let at_cap = session.command_line(&format!(
-		"MAIL FROM:<a@example.org> SIZE={cap}"
-	));
+	let at_cap = session.command_line(&format!("MAIL FROM:<a@example.org> SIZE={cap}"));
 	assert_eq!(reply_code(&at_cap), 250);
 	// A fresh session with the same cap refuses a BDAT chunk over it.
-	let mut bdat_session =
-		Session::new("mail.example.org").with_directory(test_directory()).with_max_message_size(cap);
+	let mut bdat_session = Session::new("mail.example.org")
+		.with_directory(test_directory())
+		.with_max_message_size(cap);
 	bdat_session.command_line("EHLO client.example.org");
 	bdat_session.command_line("MAIL FROM:<a@example.org>");
 	bdat_session.command_line("RCPT TO:<b@example.org>");
 	let action = bdat_session.command_line(&format!("BDAT {} LAST", cap + 1));
-	assert_eq!(reply_code(&action), 552, "BDAT over the configured cap must be refused with 552");
+	assert_eq!(
+		reply_code(&action),
+		552,
+		"BDAT over the configured cap must be refused with 552"
+	);
 }
 
 #[test]

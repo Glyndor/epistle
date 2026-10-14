@@ -115,12 +115,8 @@ pub async fn session(
 	// per-attachment bound is the same base minus the headroom that the
 	// rest of the message needs for headers and the body itself.
 	let max_message_size = state.max_message_size();
-	let max_size_attachments_per_email = max_message_size
-		.saturating_sub(limits::ATTACHMENT_HEADROOM)
-		/ 78
-		* 76
-		/ 4
-		* 3;
+	let max_size_attachments_per_email =
+		max_message_size.saturating_sub(limits::ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
 	Json(json!({
 		"capabilities": {
 			CORE_CAPABILITY: {

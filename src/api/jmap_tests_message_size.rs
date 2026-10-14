@@ -34,10 +34,10 @@ async fn configured_max_message_size_advertises_max_size_attachments_in_session(
 	let app = router(super::tests::test_state(dir.path(), 0).with_max_message_size(configured));
 	let (status, session) = request(&app, "GET", "/jmap/session", Some(TOKEN.as_str())).await;
 	assert_eq!(status, StatusCode::OK);
-	let advertised = session["capabilities"]["urn:ietf:params:jmap:mail"]
-		["maxSizeAttachmentsPerEmail"]
-		.as_u64()
-		.expect("maxSizeAttachmentsPerEmail");
+	let advertised =
+		session["capabilities"]["urn:ietf:params:jmap:mail"]["maxSizeAttachmentsPerEmail"]
+			.as_u64()
+			.expect("maxSizeAttachmentsPerEmail");
 	// The advertised value is the configured cap minus the per-message
 	// headroom, base64-encoded four-of-three.
 	let expected = (configured - crate::api::jmap::limits::ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
@@ -54,13 +54,17 @@ async fn configured_max_message_size_smaller_than_default_rejects_what_default_a
 	let small = 64 * 1024;
 	let app = router(super::tests::test_state(dir.path(), 0).with_max_message_size(small));
 	let payload = vec![0u8; 1024 * 1024];
-	let (status, body) = post_raw_ct(&app, "/jmap/upload/alice", TOKEN.as_str(), None, &payload).await;
+	let (status, body) =
+		post_raw_ct(&app, "/jmap/upload/alice", TOKEN.as_str(), None, &payload).await;
 	assert_eq!(
 		status,
 		StatusCode::PAYLOAD_TOO_LARGE,
 		"a 1 MiB upload under a 64 KiB cap must be refused at the upload route's body limit"
 	);
-	assert_eq!(body["limit"], "maxSizeUpload", "the JMAP limit problem must name maxSizeUpload");
+	assert_eq!(
+		body["limit"], "maxSizeUpload",
+		"the JMAP limit problem must name maxSizeUpload"
+	);
 }
 
 /// `Email/set` create refuses to build a message that would exceed the
@@ -76,7 +80,11 @@ async fn email_set_respects_the_configured_message_size_cap() {
 	// characters builds past the 8 KiB cap. The request itself fits
 	// `maxSizeRequest` (10 MiB); only the post-build size trips the cap.
 	let text = "=".repeat(4 * 1024);
-	let response = create(&app, serde_json::json!({"textBody": [{"partId": "t"}], "bodyValues": {"t": {"value": text}}})).await;
+	let response = create(
+		&app,
+		serde_json::json!({"textBody": [{"partId": "t"}], "bodyValues": {"t": {"value": text}}}),
+	)
+	.await;
 	let not_created = &response["notCreated"]["e"];
 	assert_eq!(
 		not_created["type"], "tooLarge",
@@ -100,15 +108,14 @@ async fn post_raw_ct(
 	if let Some(content_type) = content_type {
 		builder = builder.header(header::CONTENT_TYPE, content_type);
 	}
-	let request = builder
-		.body(Body::from(body.to_vec()))
-		.expect("request");
+	let request = builder.body(Body::from(body.to_vec())).expect("request");
 	let response = app.clone().oneshot(request).await.expect("response");
 	let status = response.status();
 	let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
 		.await
 		.expect("body");
-	let value: serde_json::Value = serde_json::from_slice(&bytes)
-		.unwrap_or_else(|_| serde_json::json!({"raw": String::from_utf8_lossy(&bytes).to_string()}));
+	let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(
+		|_| serde_json::json!({"raw": String::from_utf8_lossy(&bytes).to_string()}),
+	);
 	(status, value)
 }
