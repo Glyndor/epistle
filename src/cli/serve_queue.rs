@@ -45,6 +45,11 @@ pub(super) fn spawn_queue_worker(
 	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
 	.with_transports(config.transport.clone())
 	.with_outbound_tls(config.queue.outbound_tls)
+	.with_concurrency(
+		config.queue.concurrency,
+		config.queue.per_domain_concurrency,
+	)
+	.with_backoff(config.queue.backoff_steps.clone())
 	.with_delivery_log(crate::storage::DeliveryLog::open(
 		&config.data_dir,
 		config.delivery_log_days(),

@@ -33,10 +33,17 @@ pub enum Key {
 	FirstTimeSenderDelay,
 	/// Greylist deferral window.
 	GreylistDelay,
+	/// Outbound conversations at once, all destinations together.
+	QueueConcurrency,
+	/// Outbound conversations at once with one recipient domain.
+	QueuePerDomainConcurrency,
+	/// How long a destination that asks to slow down is held off, one
+	/// wait per deferral in a row (a comma-separated list).
+	QueueBackoff,
 }
 
 impl Key {
-	pub(super) const ALL: [Self; 13] = [
+	pub(super) const ALL: [Self; 16] = [
 		Self::Quota,
 		Self::SubmissionRate,
 		Self::NewRecipientsPerDay,
@@ -50,6 +57,9 @@ impl Key {
 		Self::MaskedAddressesMax,
 		Self::FirstTimeSenderDelay,
 		Self::GreylistDelay,
+		Self::QueueConcurrency,
+		Self::QueuePerDomainConcurrency,
+		Self::QueueBackoff,
 	];
 
 	pub(super) fn name(self) -> &'static str {
@@ -67,6 +77,9 @@ impl Key {
 			Self::MaskedAddressesMax => "masked-addresses-max",
 			Self::FirstTimeSenderDelay => "first-time-sender-delay",
 			Self::GreylistDelay => "greylist-delay",
+			Self::QueueConcurrency => "queue-concurrency",
+			Self::QueuePerDomainConcurrency => "queue-per-domain-concurrency",
+			Self::QueueBackoff => "queue-backoff",
 		}
 	}
 
@@ -85,6 +98,37 @@ impl Key {
 			Self::MaskedAddressesMax => "masked_addresses_max",
 			Self::FirstTimeSenderDelay => "first_time_sender_delay_secs",
 			Self::GreylistDelay => "greylist_delay_secs",
+			Self::QueueConcurrency => "concurrency",
+			Self::QueuePerDomainConcurrency => "per_domain_concurrency",
+			Self::QueueBackoff => "backoff_steps",
+		}
+	}
+
+	/// The table the key lives in, when it is not a top-level one.
+	pub(super) fn table(self) -> Option<&'static str> {
+		match self {
+			Self::QueueConcurrency | Self::QueuePerDomainConcurrency | Self::QueueBackoff => {
+				Some("queue")
+			}
+			_ => None,
+		}
+	}
+
+	/// Whether the key takes a comma-separated list of values.
+	pub(super) fn is_list(self) -> bool {
+		matches!(self, Self::QueueBackoff)
+	}
+
+	/// The values of a list key in effect, and whether they are the
+	/// built-in default.
+	pub(super) fn list(self, config: &Config) -> Option<(Vec<u64>, bool)> {
+		match self {
+			Self::QueueBackoff => {
+				let steps = config.queue.backoff_steps.clone();
+				let default = steps == crate::queue::backoff::DEFAULT_STEPS;
+				Some((steps, default))
+			}
+			_ => None,
 		}
 	}
 
@@ -96,7 +140,8 @@ impl Key {
 			| Self::QueueRetryCap
 			| Self::QueueDelayWarning
 			| Self::FirstTimeSenderDelay
-			| Self::GreylistDelay => Unit::Duration,
+			| Self::GreylistDelay
+			| Self::QueueBackoff => Unit::Duration,
 			_ => Unit::Count,
 		}
 	}
@@ -110,6 +155,10 @@ impl Key {
 			Self::MaxConnectionsPerListener | Self::MaskedAddressesMax => {
 				(usize::MAX as u64).min(i64::MAX as u64)
 			}
+			Self::QueueConcurrency | Self::QueuePerDomainConcurrency => {
+				crate::queue::limits::MAX_CONCURRENCY as u64
+			}
+			Self::QueueBackoff => crate::queue::backoff::MAX_STEP_SECS,
 			_ => i64::MAX as u64,
 		}
 	}
@@ -134,6 +183,9 @@ impl Key {
 			Self::MaskedAddressesMax => Some(config.masked_addresses_max as u64),
 			Self::FirstTimeSenderDelay => Some(config.first_time_sender_delay_secs),
 			Self::GreylistDelay => Some(config.greylist_delay_secs),
+			Self::QueueConcurrency => Some(config.queue.concurrency as u64),
+			Self::QueuePerDomainConcurrency => Some(config.queue.per_domain_concurrency as u64),
+			Self::QueueBackoff => None,
 		}
 	}
 
@@ -146,6 +198,10 @@ impl Key {
 			Self::QueueDelayWarning => Some(crate::queue::schedule::DEFAULT_DELAY_WARNING_SECS),
 			Self::MaskedAddressesMax => Some(100),
 			Self::FirstTimeSenderDelay | Self::GreylistDelay => Some(0),
+			Self::QueueConcurrency => Some(crate::queue::limits::DEFAULT_CONCURRENCY as u64),
+			Self::QueuePerDomainConcurrency => {
+				Some(crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY as u64)
+			}
 			_ => None,
 		}
 	}

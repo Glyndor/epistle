@@ -56,6 +56,7 @@ impl Connector for FakeMx {
 				local_ip: Some(LOCAL),
 				peer_ip: Some(PEER),
 				mx: crate::queue::resolver::MxSecurity::Secure,
+				opened: true,
 			})
 		})
 	}

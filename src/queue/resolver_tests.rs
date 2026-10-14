@@ -139,3 +139,169 @@ fn a_set_of_proofs_is_as_strong_as_its_weakest_record() {
 	assert_eq!(summarize([Proof::Bogus, Proof::Secure]), Proof::Bogus);
 	assert_eq!(summarize([]), Proof::Insecure);
 }
+
+/// Open `host`, except that the hosts in `hung` never answer.
+fn opener(
+	hung: &'static [&'static str],
+) -> impl FnMut(&str) -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<String>>>> {
+	move |host: &str| {
+		let host = host.to_string();
+		Box::pin(async move {
+			if hung.contains(&host.as_str()) {
+				std::future::pending::<()>().await;
+			}
+			Ok(format!("stream to {host}"))
+		})
+	}
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connect_that_times_out_moves_on_to_the_next_exchanger() {
+	let hosts = vec!["mx1.example.net".to_string(), "mx2.example.net".to_string()];
+	let started = tokio::time::Instant::now();
+	let reached = first_reachable("example.net", &hosts, opener(&["mx1.example.net"])).await;
+	assert_eq!(
+		reached,
+		Ok((
+			"mx2.example.net".to_string(),
+			"stream to mx2.example.net".to_string()
+		))
+	);
+	assert_eq!(started.elapsed(), timeouts::CONNECT);
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_exchanger_timing_out_is_a_transient_failure() {
+	let hosts = vec!["mx1.example.net".to_string(), "mx2.example.net".to_string()];
+	let started = tokio::time::Instant::now();
+	let reached = first_reachable(
+		"example.net",
+		&hosts,
+		opener(&["mx1.example.net", "mx2.example.net"]),
+	)
+	.await;
+	assert_eq!(
+		reached,
+		Err(DeliveryError::Transient(
+			"connect to mx2.example.net:25 timed out after 30s".into()
+		))
+	);
+	assert_eq!(started.elapsed(), timeouts::CONNECT * 2);
+}
+
+fn hosts(names: &[&str]) -> Vec<String> {
+	names.iter().map(|name| name.to_string()).collect()
+}
+
+#[test]
+fn the_next_exchanger_comes_after_the_last_one_tried() {
+	let all = hosts(&["mx1.example.net", "mx2.example.net", "mx3.example.net"]);
+	assert_eq!(
+		candidates("example.net", all.clone(), None, &[]),
+		Ok(all.clone())
+	);
+	assert_eq!(
+		candidates(
+			"example.net",
+			all.clone(),
+			None,
+			&hosts(&["mx2.example.net"])
+		),
+		Ok(hosts(&["mx3.example.net"])),
+		"mx1 failed to connect before mx2 answered, so it is not tried again"
+	);
+	assert_eq!(
+		candidates(
+			"example.net",
+			all.clone(),
+			None,
+			&hosts(&["mx1.example.net", "mx2.example.net"])
+		),
+		Ok(hosts(&["mx3.example.net"]))
+	);
+	assert_eq!(
+		candidates("example.net", all, None, &hosts(&["mx3.example.net"])),
+		Err(DeliveryError::Transient(
+			"no further exchanger for example.net".into()
+		))
+	);
+}
+
+#[test]
+fn the_next_exchanger_is_still_one_the_policy_permits() {
+	let policy = Policy {
+		mode: crate::mtasts::Mode::Enforce,
+		mx: vec!["mx1.example.net".into(), "mx3.example.net".into()],
+		max_age: 86_400,
+	};
+	let all = hosts(&["mx1.example.net", "mx2.example.net", "mx3.example.net"]);
+	assert_eq!(
+		candidates(
+			"example.net",
+			all.clone(),
+			Some(&policy),
+			&hosts(&["mx1.example.net"])
+		),
+		Ok(hosts(&["mx3.example.net"]))
+	);
+	let unlisted = Policy {
+		mx: vec!["other.example.org".into()],
+		..policy
+	};
+	assert_eq!(
+		candidates("example.net", all, Some(&unlisted), &[]),
+		Err(DeliveryError::Transient(
+			"no MTA-STS-permitted MX for example.net".into()
+		))
+	);
+}
+
+#[test]
+fn a_domain_with_many_exchangers_is_tried_on_a_few() {
+	let many: Vec<String> = (0..200).map(|n| format!("mx{n}.example.net")).collect();
+	let first = candidates("example.net", many.clone(), None, &[]).expect("candidates");
+	assert_eq!(first.len(), crate::queue::limits::MAX_EXCHANGERS);
+	assert_eq!(
+		candidates("example.net", many, None, &first[first.len() - 1..]),
+		Err(DeliveryError::Transient(
+			"no further exchanger for example.net".into()
+		))
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_exchanger_with_many_addresses_is_tried_on_two_within_the_connect_limit() {
+	let addresses: Vec<std::net::SocketAddr> = (1..=50)
+		.map(|n| std::net::SocketAddr::from(([192, 0, 2, n], 25)))
+		.collect();
+	let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+	let seen = opened.clone();
+	let started = tokio::time::Instant::now();
+	let result: std::io::Result<()> = connect_any(&addresses, move |address| {
+		seen.lock().expect("opened").push(address);
+		std::future::pending()
+	})
+	.await;
+	let error = result.expect_err("every address hangs");
+	assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+	assert_eq!(*opened.lock().expect("opened"), addresses[..2].to_vec());
+	assert_eq!(started.elapsed(), timeouts::CONNECT);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_second_address_answers_when_the_first_hangs() {
+	let addresses = [
+		std::net::SocketAddr::from(([192, 0, 2, 1], 25)),
+		std::net::SocketAddr::from(([192, 0, 2, 2], 25)),
+	];
+	let started = tokio::time::Instant::now();
+	let reached = connect_any(&addresses, |address| async move {
+		if address == addresses[0] {
+			std::future::pending::<()>().await;
+		}
+		Ok(address)
+	})
+	.await;
+	assert_eq!(reached.expect("second address"), addresses[1]);
+	assert_eq!(started.elapsed(), timeouts::CONNECT / 2);
+}

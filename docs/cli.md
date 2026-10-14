@@ -292,6 +292,9 @@ epistle limits set quota 5G
 epistle limits set submission-rate 120
 epistle limits set queue-give-up 12h
 epistle limits set queue-retry-base 5m
+epistle limits set queue-concurrency 16
+epistle limits set queue-per-domain-concurrency 4
+epistle limits set queue-backoff 1m,5m,15m,1h
 epistle limits set quota --domain example.org 10G
 epistle limits set submission-rate --domain example.org 50
 epistle limits unset quota --domain example.org
@@ -319,6 +322,9 @@ Values equal to a built-in default are marked `default`, even when configured.
 | `masked-addresses-max` | Masked addresses per account, default 100. |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |
+| `queue-concurrency` | Outbound SMTP conversations at once, default 8, between 1 and 1024 (`[queue] concurrency`). |
+| `queue-per-domain-concurrency` | Outbound conversations at once with one recipient domain, default 2, between 1 and `queue-concurrency` (`[queue] per_domain_concurrency`). |
+| `queue-backoff` | Holds of a destination that asks to slow down, comma-separated durations, one per deferral in a row, default `1m,5m,15m,1h` (shown in seconds), 1 to 16 steps of 1 second to 1 day (`[queue] backoff_steps`). |
 
 Sizes accept whole bytes or binary suffixes `K`, `M`, `G`, `T` (case insensitive);
 `5G` means 5 GiB. Durations accept whole seconds or `s`, `m`, `h`, `d`, `w`.
@@ -1044,7 +1050,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](migration.md). |
 | `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
-| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--outcome O] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, deferred, failed, suppressed or canceled recipient, newest day first, at most `N` records (default 100). `--since` takes an RFC 3339 time or a duration such as `24h` or `7d`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
+| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--outcome O] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100). `--since` takes an RFC 3339 time or a duration such as `24h` or `7d`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
@@ -1065,6 +1071,8 @@ decides whether to attempt it.
 | `epistle queue retry <id>\|--all` | Make the next attempt happen now, skipping the backoff. The attempt count is kept, and a held entry stays held. |
 | `epistle queue hold <id>\|--all` | Never attempt the entry until it is released. |
 | `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
+| `epistle queue destinations [--json]` | The recipient domains and exchanger hosts on hold because they asked to slow down, as the spool shows them: until when, after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
+| `epistle queue release-destination <domain>\|<host>\|--all` | Make every recipient waiting for that hold due at once, its run of deferrals forgotten; the running worker picks it up at its next scan. |
 | `epistle queue remove <id> [--yes\|-y]` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). Asks first; `--yes` skips the question. |
 
 A held entry is not attempted and its time on hold does not count toward the

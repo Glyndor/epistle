@@ -54,6 +54,21 @@ pub struct RecipientState {
 	/// sent, or deliberately skipped, so it goes out once.
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
 	pub reported: bool,
+	/// Deferrals in a row in which the destination asked the queue to slow
+	/// down (see [`crate::queue::backoff`]). It picks the next backoff step
+	/// and holds the destination while the recipient waits; any other
+	/// answer sets it back to zero.
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub throttled: u32,
+	/// `deferred` records the delivery log holds for this recipient, so a
+	/// remote that words each deferral differently cannot add one record
+	/// per retry (see [`crate::queue::limits::MAX_DEFERRALS_LOGGED`]).
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub deferrals_logged: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+	*value == 0
 }
 
 impl Envelope {

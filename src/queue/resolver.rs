@@ -6,6 +6,19 @@ use tokio::net::TcpStream;
 use crate::mtasts::Policy;
 
 use super::client::DeliveryError;
+use super::limits::{MAX_ADDRESSES, MAX_EXCHANGERS};
+use super::timeouts;
+
+/// Whether an exchanger, by host name, is on hold.
+pub type Held<'a> = dyn Fn(&str) -> bool + Sync + 'a;
+
+/// No exchanger is on hold.
+fn none_held(_host: &str) -> bool {
+	false
+}
+
+/// A [`Held`] for which no exchanger is on hold.
+pub const NONE_HELD: &Held<'static> = &none_held;
 
 /// A bidirectional stream the SMTP client can drive.
 pub type BoxedStream = Box<dyn DynStream>;
@@ -27,6 +40,10 @@ pub struct Connection {
 	pub peer_ip: Option<std::net::IpAddr>,
 	/// Whether the MX answer that named this host was DNSSEC-secure.
 	pub mx: MxSecurity,
+	/// `false` when the host is on hold and was named without being
+	/// connected to (see [`Connector::connect_skipping`]): nothing may be
+	/// said on `stream`.
+	pub opened: bool,
 }
 
 /// The DNSSEC state of the MX lookup that named an exchanger.
@@ -107,6 +124,17 @@ impl Connection {
 			local_ip: None,
 			peer_ip: None,
 			mx: MxSecurity::Insecure,
+			opened: true,
+		}
+	}
+
+	/// The exchanger `host`, named but not connected to because it is on
+	/// hold. Its stream carries nothing.
+	pub fn unopened(host: String) -> Self {
+		let (stream, _) = tokio::io::duplex(1);
+		Connection {
+			opened: false,
+			..Connection::new(Box::new(stream), host)
 		}
 	}
 
@@ -127,6 +155,34 @@ pub trait Connector: Send + Sync {
 	/// Connect to an exchanger for `domain`. With an enforce-mode policy,
 	/// only policy-permitted MX hosts may be contacted.
 	fn connect(&self, domain: &str, policy: Option<&Policy>) -> ConnectFuture<'_>;
+
+	/// Connect to the next exchanger for `domain`, leaving out the hosts in
+	/// `tried`, which already failed this delivery attempt. A connector
+	/// that only knows one way in has nothing after the first.
+	///
+	/// `held` says whether an exchanger is on hold: when the next one is,
+	/// it is returned unopened, never connected to, so a provider that
+	/// asked to slow down does not see a connection opened and dropped for
+	/// each of its other domains. A connector that cannot tell the host
+	/// before connecting ignores it; the worker still says nothing to a
+	/// held host.
+	fn connect_skipping<'a>(
+		&'a self,
+		domain: &str,
+		policy: Option<&Policy>,
+		tried: &[String],
+		_held: &'a Held<'a>,
+	) -> ConnectFuture<'a> {
+		if tried.is_empty() {
+			return self.connect(domain, policy);
+		}
+		let domain = domain.to_string();
+		Box::pin(async move {
+			Err(DeliveryError::Transient(format!(
+				"no further exchanger for {domain}"
+			)))
+		})
+	}
 }
 
 /// Real connector: system resolver for MX records, TCP to port 25.
@@ -281,43 +337,142 @@ impl MxConnector {
 
 impl Connector for MxConnector {
 	fn connect(&self, domain: &str, policy: Option<&Policy>) -> ConnectFuture<'_> {
+		self.connect_skipping(domain, policy, &[], NONE_HELD)
+	}
+
+	fn connect_skipping<'a>(
+		&'a self,
+		domain: &str,
+		policy: Option<&Policy>,
+		tried: &[String],
+		held: &'a Held<'a>,
+	) -> ConnectFuture<'a> {
 		let domain = domain.to_string();
 		let policy = policy.cloned();
+		let tried = tried.to_vec();
 		Box::pin(async move {
-			let (mut hosts, mx) = self.exchangers(&domain).await?;
-			if let Some(policy) = &policy {
-				hosts.retain(|host| policy.permits_mx(host));
-				if hosts.is_empty() {
-					// Never contact unlisted hosts under enforce: retry later.
-					return Err(DeliveryError::Transient(format!(
-						"no MTA-STS-permitted MX for {domain}"
-					)));
-				}
-			}
-			let mut last_error = DeliveryError::Transient(format!("no exchangers for {domain}"));
-			for host in hosts {
-				match TcpStream::connect((host.as_str(), 25)).await {
-					Ok(stream) => {
-						let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
-						let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
-						return Ok(Connection {
-							stream: Box::new(stream),
-							host,
-							local_ip,
-							peer_ip,
-							mx,
-						});
+			let (hosts, mx) = self.exchangers(&domain).await?;
+			let hosts = candidates(&domain, hosts, policy.as_ref(), &tried)?;
+			let (host, stream) = first_reachable(&domain, &hosts, |host| {
+				let host = host.to_string();
+				let on_hold = held(&host);
+				async move {
+					if on_hold {
+						return Ok(None);
 					}
-					Err(error) => {
-						last_error = DeliveryError::Transient(format!(
-							"connect to {host}:25 failed: {error}"
-						));
-					}
+					let addresses: Vec<std::net::SocketAddr> =
+						tokio::net::lookup_host((host.as_str(), 25))
+							.await?
+							.collect();
+					connect_any(&addresses, TcpStream::connect).await.map(Some)
 				}
-			}
-			Err(last_error)
+			})
+			.await?;
+			let Some(stream) = stream else {
+				return Ok(Connection::unopened(host).with_mx(mx));
+			};
+			let local_ip = stream.local_addr().ok().map(|addr| addr.ip());
+			let peer_ip = stream.peer_addr().ok().map(|addr| addr.ip());
+			Ok(Connection {
+				stream: Box::new(stream),
+				host,
+				local_ip,
+				peer_ip,
+				mx,
+				opened: true,
+			})
 		})
 	}
+}
+
+/// The exchangers to try, in preference order: those `policy` permits
+/// (never an unlisted host under MTA-STS enforce), at most
+/// [`MAX_EXCHANGERS`] of them, and only those after the last one in `tried`,
+/// which already turned this attempt away.
+pub(crate) fn candidates(
+	domain: &str,
+	mut hosts: Vec<String>,
+	policy: Option<&Policy>,
+	tried: &[String],
+) -> Result<Vec<String>, DeliveryError> {
+	if let Some(policy) = policy {
+		hosts.retain(|host| policy.permits_mx(host));
+		if hosts.is_empty() {
+			// Never contact unlisted hosts under enforce: retry later.
+			return Err(DeliveryError::Transient(format!(
+				"no MTA-STS-permitted MX for {domain}"
+			)));
+		}
+	}
+	hosts.truncate(MAX_EXCHANGERS);
+	let after = hosts
+		.iter()
+		.rposition(|host| tried.contains(host))
+		.map_or(0, |index| index + 1);
+	let rest = hosts.split_off(after);
+	if rest.is_empty() {
+		return Err(DeliveryError::Transient(format!(
+			"no further exchanger for {domain}"
+		)));
+	}
+	Ok(rest)
+}
+
+/// Open a connection to the first of `addresses` (one exchanger's) that
+/// answers, trying at most [`MAX_ADDRESSES`] of them, each for an equal
+/// share of [`timeouts::CONNECT`]: the exchanger's whole connect stays
+/// within that limit however many addresses it publishes, and one address
+/// that never answers does not use up the time of the next.
+pub(crate) async fn connect_any<S, F, Fut>(
+	addresses: &[std::net::SocketAddr],
+	mut open: F,
+) -> std::io::Result<S>
+where
+	F: FnMut(std::net::SocketAddr) -> Fut,
+	Fut: Future<Output = std::io::Result<S>>,
+{
+	let tried = addresses.len().clamp(1, MAX_ADDRESSES);
+	let share = timeouts::CONNECT / u32::try_from(tried).unwrap_or(1);
+	let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, "no address to connect to");
+	for address in addresses.iter().take(MAX_ADDRESSES) {
+		last = match tokio::time::timeout(share, open(*address)).await {
+			Ok(Ok(stream)) => return Ok(stream),
+			Ok(Err(error)) => error,
+			Err(_) => std::io::Error::new(
+				std::io::ErrorKind::TimedOut,
+				format!("{address} did not answer within {}s", share.as_secs()),
+			),
+		};
+	}
+	Err(last)
+}
+
+/// Open a connection to the first of `hosts` that answers, in order, giving
+/// each [`timeouts::CONNECT`] before moving on to the next (RFC 5321
+/// section 5.1). The error is the last host's.
+pub(crate) async fn first_reachable<S, F, Fut>(
+	domain: &str,
+	hosts: &[String],
+	mut open: F,
+) -> Result<(String, S), DeliveryError>
+where
+	F: FnMut(&str) -> Fut,
+	Fut: Future<Output = std::io::Result<S>>,
+{
+	let mut last_error = DeliveryError::Transient(format!("no exchangers for {domain}"));
+	for host in hosts {
+		last_error = match tokio::time::timeout(timeouts::CONNECT, open(host)).await {
+			Ok(Ok(stream)) => return Ok((host.clone(), stream)),
+			Ok(Err(error)) => {
+				DeliveryError::Transient(format!("connect to {host}:25 failed: {error}"))
+			}
+			Err(_) => DeliveryError::Transient(format!(
+				"connect to {host}:25 timed out after {}s",
+				timeouts::CONNECT.as_secs()
+			)),
+		};
+	}
+	Err(last_error)
 }
 
 #[cfg(test)]
