@@ -72,16 +72,13 @@ fn show_dynamic_reports_forwards_catch_all_and_two_factor() {
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
 		text.contains("forwards: outside@example.com"),
-		"missing forwards line: {text}"
+		"missing forwards line"
 	);
 	assert!(
 		text.contains("catch_all: example.org"),
-		"missing catch_all line: {text}"
+		"missing catch_all line"
 	);
-	assert!(
-		text.contains("two_factor: no"),
-		"missing two_factor line: {text}"
-	);
+	assert!(text.contains("two_factor: no"), "missing two_factor line");
 }
 
 #[test]
@@ -95,7 +92,7 @@ fn show_dynamic_two_factor_yes_when_totp_enrolled() {
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: hash(fixture_password()),
 			scram: None,
-			totp_secret: Some("1234".to_string()),
+			totp_secret: Some(crate::test_fixtures::fresh_secret()),
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,
@@ -114,7 +111,7 @@ fn show_dynamic_two_factor_yes_when_totp_enrolled() {
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
 		text.contains("two_factor: yes"),
-		"enrolled TOTP must print as yes: {text}"
+		"enrolled TOTP must print as yes"
 	);
 }
 
@@ -141,21 +138,18 @@ password_hash = "stub"
 	// A static account has no disabled flag and no TOTP enrolment; the
 	// text view must still print those fields so a script can grep a
 	// single shape.
-	assert!(
-		text.contains("disabled: no"),
-		"static must report disabled: {text}"
-	);
+	assert!(text.contains("disabled: no"), "static must report disabled");
 	assert!(
 		text.contains("forwards: outside@example.com"),
-		"static must report forwards: {text}"
+		"static must report forwards"
 	);
 	assert!(
 		text.contains("catch_all: example.org"),
-		"static must report catch_all: {text}"
+		"static must report catch_all"
 	);
 	assert!(
 		text.contains("two_factor: no"),
-		"static must report two_factor: {text}"
+		"static must report two_factor"
 	);
 }
 
@@ -179,11 +173,11 @@ password_hash = "stub"
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
 		text.contains("forwards: (none)"),
-		"empty forwards list must read as (none): {text}"
+		"empty forwards list must read as (none)"
 	);
 	assert!(
 		text.contains("catch_all: (none)"),
-		"empty catch_all list must read as (none): {text}"
+		"empty catch_all list must read as (none)"
 	);
 }
 
