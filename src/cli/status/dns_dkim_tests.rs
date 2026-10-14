@@ -42,8 +42,8 @@ fn the_rotated_rsa_key_is_the_one_compared() {
 	))
 	.expect("config");
 	let keys = signing_keys(&config).unwrap_or_else(|_| panic!("the signing keys load"));
-	let selectors: Vec<&str> = keys.iter().map(|key| key.selector.as_str()).collect();
+	let selectors: Vec<&str> = keys.iter().map(|key| key.key.selector.as_str()).collect();
 	assert_eq!(selectors, ["ed7", "rsa7"]);
-	assert_eq!(keys[1].public, super::public_value(&rsa_value));
-	assert_eq!(keys[1].file, dir.path().join("dkim-rsa7.key"));
+	assert_eq!(keys[1].key.public, super::public_value(&rsa_value));
+	assert_eq!(keys[1].key.file, dir.path().join("dkim-rsa7.key"));
 }

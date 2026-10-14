@@ -177,6 +177,13 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 /// `public_ipv4` / `public_ipv6` are the hostname's A and AAAA addresses when
 /// the operator has set them in the config; when present, both are emitted in
 /// the zone of the hostname's domain, once (not per served domain), before
+/// Per-domain DKIM selectors and their record values. A domain absent
+/// from the map keeps the configured default; the map's keys are
+/// lowercased to match the way the validator and the routing layer
+/// compare domains. Used by [`build_records`] to publish only the
+/// selectors that actually sign each domain.
+pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
+
 /// the MX: an MX pointing at a name that does not resolve yet tries the
 /// resolver, fails, and yields a hard bounce instead of falling back to the
 /// next MX. Parameter order matches the read-the-config order.
@@ -184,7 +191,8 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 pub fn build_records(
 	domains: &[String],
 	hostname: &str,
-	dkim: &[(String, String)],
+	dkim_default: &[(String, String)],
+	dkim_per_domain: &DomainDkim,
 	tlsa: Option<&str>,
 	mta_sts_id: &str,
 	services: Services,
@@ -285,8 +293,16 @@ pub fn build_records(
 		});
 		// DKIM public keys, one per configured selector. Two are typical
 		// (the ed25519 key plus the optional RSA dual-signing selector);
-		// nothing about the format limits that to two.
-		for (selector, value) in dkim {
+		// nothing about the format limits that to two. Per-domain
+		// overrides take precedence over the default: a domain listed
+		// in `dkim_per_domain` publishes only its own selectors, every
+		// other domain publishes the default list.
+		let dkim_for_domain: &[(String, String)] =
+			match dkim_per_domain.get(&domain.to_ascii_lowercase()) {
+				Some(pairs) => pairs.as_slice(),
+				None => dkim_default,
+			};
+		for (selector, value) in dkim_for_domain {
 			records.push(txt(
 				format!("{selector}._domainkey.{domain}"),
 				value.clone(),

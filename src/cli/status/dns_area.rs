@@ -40,10 +40,13 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	// When the signing key cannot be resolved the failure is already
 	// reported; the DNS records are still checked with whatever selectors
 	// can be named, and with none if the rotation state itself is broken.
-	let selectors: Vec<String> = if signing_key_failed {
-		crate::cli::verify_dns::dkim_selectors(config).unwrap_or_default()
+	let default_selectors: Vec<String> = if signing_key_failed {
+		crate::cli::verify_dns::dkim_default_selectors(config).unwrap_or_default()
 	} else {
-		keys.iter().map(|key| key.selector.clone()).collect()
+		keys.iter()
+			.filter(|k| k.domain.is_none())
+			.map(|k| k.key.selector.clone())
+			.collect()
 	};
 
 	let mut records = dns::check_host(
@@ -54,6 +57,15 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	)
 	.await;
 	for domain in &config.domains {
+		// Each domain is checked against its own selectors: a per-domain
+		// override replaces the default, otherwise the default applies.
+		let selectors = if signing_key_failed {
+			crate::cli::verify_dns::dkim_selectors_for(config, domain)
+				.unwrap_or_else(|_| default_selectors.clone())
+		} else {
+			crate::cli::verify_dns::dkim_selectors_for(config, domain)
+				.unwrap_or(default_selectors.clone())
+		};
 		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
 	}
 	let mut items: Vec<Item> = records.iter().map(record_item).collect();
@@ -63,8 +75,20 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 
 	let mut mismatches = 0;
 	for domain in &config.domains {
+		let key_lower = domain.to_ascii_lowercase();
 		for key in &keys {
-			if let Some(item) = key_item(key, domain, dns).await {
+			// A per-domain override replaces the default for the
+			// domain it names: the default key is not checked there,
+			// and an override for a different domain is not checked
+			// here.
+			let applies = match &key.domain {
+				None => true,
+				Some(d) => d == &key_lower,
+			};
+			if !applies {
+				continue;
+			}
+			if let Some(item) = key_item(&key.key, domain, dns).await {
 				mismatches += usize::from(item.status == Level::Fail);
 				findings.push(item);
 			}
