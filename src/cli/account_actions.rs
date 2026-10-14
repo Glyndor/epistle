@@ -88,19 +88,11 @@ pub(crate) fn set_name_with_store(store: &AccountStore, name: &str, raw: &str) -
 	}
 }
 
-/// Wait for the server to have reloaded the just-written accounts file,
-/// using the in-memory path the store keeps. Returns the wait's exit
-/// code; the caller forwards it. A success or "no server" path
-/// returns `ExitCode::SUCCESS` (i.e. the wait was a no-op) and the
-/// caller reports success; a timeout returns `ExitCode::FAILURE`
-/// and the caller surfaces the warning the wait function printed.
+/// Wait for the running server to load the accounts file the store
+/// just wrote; see [`crate::cli::account_reload::wait_after_write`].
+/// The store holds no lock once its mutator has returned.
 fn wait_after_write(store: &AccountStore) -> ExitCode {
-	match crate::cli::account_reload::wait_for_reload_or_warn(
-		store.store_path(),
-		&mut super::style::stderr(),
-	) {
-		Ok(code) | Err(code) => code,
-	}
+	crate::cli::account_reload::wait_after_write(store.store_path(), &mut style::stderr())
 }
 
 /// Render the protocol allowlist. `None` is the pre-restriction

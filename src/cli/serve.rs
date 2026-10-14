@@ -222,10 +222,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	// the polling interval sits well inside the 5 s deadline the
 	// operators see on the CLI. The same loop watches `api_keys.toml`
 	// and feeds the API-key reloader below.
-	let _watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
+	let watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
 		.with_api_keys(Arc::clone(&api_keys_set)
 			as Arc<dyn crate::directory_store::file_watcher::ApiKeyReloader>)
-		.spawn(std::time::Duration::from_secs(2));
+		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 
 	// The queue worker drains the outbound spool in the background.
 	super::serve_queue::spawn_queue_worker(
@@ -596,7 +596,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
 	// Run until the first listener fails or a stop signal is received, then
 	// let open SMTP and IMAP connections finish.
-	wait::until_stopped(tasks, &drain).await
+	let stopped = wait::until_stopped(tasks, &drain).await;
+	// Stop the watcher before removing its status file, so a poll cannot
+	// write it back; a status left behind would make the CLI wait on a
+	// server that is gone.
+	watcher.abort();
+	let _ = watcher.await;
+	crate::directory_store::remove_reload_status(&config.data_dir);
+	stopped
 }
 
 #[path = "serve_wait.rs"]

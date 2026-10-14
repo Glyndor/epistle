@@ -56,9 +56,12 @@ mod set_totp;
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
 pub mod file_watcher;
-pub use file_watcher::{
-	ApiKeyReloader, FileWatcher, ReloadStatus, WaitError, read_reload_status, reload_fingerprint,
-	wait_for_reload,
+pub use file_watcher::{ApiKeyReloader, FileWatcher, reload_fingerprint};
+/// What the file watcher publishes for the CLI to wait on. See
+/// [`reload_status`].
+pub mod reload_status;
+pub use reload_status::{
+	ReloadStatus, ReloadWait, WaitError, read_reload_status, remove_reload_status, wait_for_reload,
 };
 
 mod collisions;
