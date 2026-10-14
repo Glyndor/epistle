@@ -165,6 +165,19 @@ impl FsSpool {
 		Self::open_with_crypto(data_dir, MessageCrypto::disabled())
 	}
 
+	/// Open the spool under `data_dir` with the at-rest crypto that `storage`
+	/// configures, exactly as the server does. Every operator command that
+	/// reads envelopes opens the spool this way: with `encrypt_at_rest` on, a
+	/// spool opened without the key cannot read a single envelope.
+	pub fn open_configured(
+		data_dir: &Path,
+		storage: Option<&crate::config::Storage>,
+	) -> std::io::Result<Self> {
+		let crypto = MessageCrypto::from_config(storage)
+			.map_err(|error| std::io::Error::other(format!("spool key: {error}")))?;
+		Self::open_with_crypto(data_dir, crypto)
+	}
+
 	/// The at-rest crypto this spool uses for stored message bodies.
 	/// The save-sent helper borrows this so the Sent copy is encoded
 	/// the same way the rest of the account's mail is.

@@ -256,7 +256,7 @@ pub(super) fn remove(
 	if let Err(code) = super::prompt::confirm_destructive("account-remove", &question, yes) {
 		return code;
 	}
-	let spool = match FsSpool::open(&config.data_dir) {
+	let spool = match FsSpool::open_configured(&config.data_dir, config.storage.as_ref()) {
 		Ok(spool) => spool,
 		Err(error) => {
 			super::style::error(format_args!("opening spool: {error}"));
