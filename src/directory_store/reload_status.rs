@@ -9,7 +9,7 @@
 //! The CLI reads both halves. It waits until the fingerprint of the
 //! file it just wrote shows up in the status, and it returns at once
 //! when the status file is missing or its mtime is older than the
-//! [`LIVENESS_WINDOW`], because a server that stopped or crashed leaves
+//! `LIVENESS_WINDOW`, because a server that stopped or crashed leaves
 //! nothing behind to wait for.
 
 use std::collections::BTreeMap;
